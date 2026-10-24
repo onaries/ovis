@@ -43,10 +43,10 @@ describe("command invocation syntax", () => {
     expect(commandInvocations("opencode", "Use @review", [skill])).toHaveLength(1);
     expect(commandInvocations("opencode", "Read @path", [skill])).toEqual([]);
   });
-  it("keeps unknown leading commands and selects specific, wildcard and other forms", () => {
+  it("keeps unknown leading commands and selects specific and other forms", () => {
     expect(commandInvocations("pi", "/myext run", [])).toMatchObject([{ form: null }]);
     expect(commandInvocations("pi", "$myext run", [])).toEqual([]);
-    const model: SlashCommand = { ...row("model"), forms: [{ match: "bare", interaction: "dialog" }, { match: { sub: "*" }, interaction: "none" }] };
+    const model: SlashCommand = { ...row("model"), forms: [{ match: "bare", interaction: "dialog" }, { match: "other", interaction: "none" }] };
     expect(commandInvocations("pi", "/model test-model", [model])[0]?.form?.interaction).toBe("none");
   });
   it("keeps absolute paths plain unless the catalog explicitly names that invocation", () => {

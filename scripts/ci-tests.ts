@@ -3,7 +3,10 @@
  *
  * The unit suite runs its files in parallel processes: UNIT_TEST_WORKERS sets the count
  * (default: min(cores/2, 8) locally, 2-4 in CI). Files run independently with no shared
- * state; each process gets a subset balanced by file size.
+ * state; each process gets a subset balanced by file size. Each file runs in a process group of
+ * its own: a test that signals its own group (kill(0), kill(-pgid)) ends only its file, which then
+ * fails by that signal, instead of the whole run, which `bun run check` runs in one group and
+ * which would otherwise end with no failure named. What a file leaves running is ended with it.
  *
  * The integration suite runs its files side by side: a few workers take files off one
  * queue, each worker on a herdr session of its own (`<session>-<n>`), so no two files
@@ -14,7 +17,7 @@ import { availableParallelism } from "node:os";
 
 const suite = process.argv[2];
 if (suite !== "unit" && suite !== "integration") throw new Error("Usage: bun scripts/ci-tests.ts unit|integration");
-const files = [...new Bun.Glob("{src,shared,server,scripts,telemetry,integrations}/**/*.test.ts").scanSync({ cwd: process.cwd() })].sort();
+const files = [...new Bun.Glob("{src,shared,server,scripts,telemetry,push-relay,integrations}/**/*.test.ts").scanSync({ cwd: process.cwd() })].sort();
 // The legacy updater suite mixes Git-only cases with real bridge restart/rollback cases.
 const needsHerdr = (file: string) => file.endsWith(".contract.test.ts") || file === "server/updater.test.ts" || file.startsWith("server/herdr/") || file.startsWith("server/pty/");
 const selected = files.filter((file) => needsHerdr(file) === (suite === "integration"));
@@ -51,15 +54,49 @@ if (suite === "unit") {
   const failed: string[] = [];
   const unread: string[] = [];
   const startedAt = Date.now();
+  // The files' groups are not this process's: a Ctrl+C, or check.ts ending its step, reaches only
+  // this one, and check.ts cannot reach them either. It passes the signal on to every file still
+  // running, gives them a moment to end, then kills whatever is left in their groups, and only
+  // then ends itself.
+  const running = new Map<number, Promise<number>>();
+  let stopping = false;
+  for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]] as const) {
+    process.on(signal, () => {
+      if (stopping) return;
+      stopping = true;
+      // no file starts after this
+      queue.length = 0;
+      const groups = [...running];
+      for (const [group] of groups) try { process.kill(-group, signal); } catch { /* already gone */ }
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      void Promise.race([
+        Promise.all(groups.map(([, exited]) => exited)),
+        new Promise((resolve) => { grace = setTimeout(resolve, 5_000); }),
+      ]).then(() => {
+        clearTimeout(grace);
+        for (const [group] of groups) try { process.kill(-group, "SIGKILL"); } catch { /* already gone */ }
+        process.exit(code);
+      });
+    });
+  }
 
   async function unitWork(workerId: number): Promise<void> {
     for (let file = queue.shift(); file; file = queue.shift()) {
       const fileStartedAt = Date.now();
       const child = Bun.spawn(["sh", "-c", 'exec "$@" 2>&1', "sh", process.execPath, "test", "--timeout", "60000", `./${file}`], {
         env: { ...process.env, HERDR_TEST_MODE: suite! },
-        stdin: "ignore", stdout: "pipe", stderr: "inherit",
+        // Windows (Git's sh on PATH) has no process groups for the kills below to reach
+        stdin: "ignore", stdout: "pipe", stderr: "inherit", detached: process.platform !== "win32",
       });
-      const [output, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+      running.set(child.pid, child.exited);
+      const read = new Response(child.stdout).text();
+      const code = await child.exited;
+      // what the file left in its group, which may still hold its output open
+      let leftover = false;
+      try { process.kill(-child.pid, "SIGKILL"); leftover = true; } catch { /* the group is gone */ }
+      running.delete(child.pid);
+      const output = (await read) + (leftover ? "\nci-tests: ended processes the file left running" : "")
+        + (child.signalCode ? `\nci-tests: the file's test process was ended by ${child.signalCode}` : "");
       const plain = output.replace(/\x1b\[[0-9;]*m/g, "");
       const count = (word: keyof typeof totals) => Number(new RegExp(`^\\s*(\\d+) ${word}$`, "m").exec(plain)?.[1] ?? 0);
       for (const word of ["pass", "fail", "skip"] as const) totals[word] += count(word);

@@ -1,29 +1,37 @@
 /**
  * One real push through a deployed relay, to check the whole path after a deploy: registration,
- * the relay's request to APNs (which takes HTTP/2 only, so only a real APNs shows it works) and the
- * phone. It registers the given device token with a throwaway VAPID key, then sends one push
+ * the relay's request to APNs (which takes HTTP/2 only, so only a real APNs shows it works) or to
+ * FCM (after signing in to Google with the relay's service account, which only Google can check),
+ * and the phone. It registers the given token with a throwaway VAPID key, then sends one push
  * signed and encrypted with web-push as server/push.ts does. The keys are made here, not the
  * app's, so the phone cannot decrypt it and shows the fallback line ("herdr needs you").
  *
  *   bun push-relay/test-push.ts <APNs device token, hex> [production|sandbox] [relay origin]
+ *   bun push-relay/test-push.ts fcm <FCM registration token> [relay origin]
  *
- * The relay answers 201 once APNs took the push. The endpoint it registered is never pushed to
- * again and expires with the others (ENDPOINT_TTL_SECONDS).
+ * The relay answers 201 once APNs or FCM took the push. The endpoint it registered is never pushed
+ * to again and expires with the others (ENDPOINT_TTL_SECONDS). An FCM token FCM calls invalid
+ * (a made-up one) is answered 410, which only comes once the relay has signed in to Google.
  */
 
 import webpush from "web-push";
 
-const [token, environment = "production", relay = "https://push.ovis.sh"] = process.argv.slice(2);
-if (!token || (environment !== "production" && environment !== "sandbox")) {
+const fcm = process.argv[2] === "fcm";
+const [token, ...rest] = process.argv.slice(fcm ? 3 : 2);
+const environment = fcm ? undefined : rest.shift() ?? "production";
+const relay = rest[0] ?? "https://push.ovis.sh";
+if (!token || (environment !== undefined && environment !== "production" && environment !== "sandbox")) {
   console.error("usage: bun push-relay/test-push.ts <APNs device token, hex> [production|sandbox] [relay origin]");
+  console.error("       bun push-relay/test-push.ts fcm <FCM registration token> [relay origin]");
   process.exit(2);
 }
+const service = fcm ? "FCM" : "APNs";
 
 const pc = webpush.generateVAPIDKeys();
 const registered = await fetch(`${relay}/v1/register`, {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ token, environment, vapid_key: pc.publicKey }),
+  body: JSON.stringify(fcm ? { service: "fcm", token, vapid_key: pc.publicKey } : { token, environment, vapid_key: pc.publicKey }),
 });
 console.log(`register: ${registered.status}`);
 if (registered.status !== 201) process.exit(1);
@@ -37,5 +45,9 @@ const details = webpush.generateRequestDetails({ endpoint, keys: device }, JSON.
 const headers: Record<string, string> = {};
 for (const [name, value] of Object.entries(details.headers)) headers[name] = String(value);
 const pushed = await fetch(details.endpoint, { method: "POST", headers, body: new Uint8Array(details.body) });
-console.log(`push: ${pushed.status}${pushed.status === 201 ? " (APNs took it: the phone should show \"herdr needs you\")" : ""}`);
+const notes: Record<number, string> = {
+  201: `${service} took it: the phone should show "herdr needs you"`,
+  410: `${service} called the token gone or invalid${fcm ? ", after the relay signed in to Google" : ""}`,
+};
+console.log(`push: ${pushed.status}${notes[pushed.status] ? ` (${notes[pushed.status]})` : ""}`);
 process.exit(pushed.status === 201 ? 0 : 1);

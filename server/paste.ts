@@ -6,13 +6,14 @@
  *
  * Files land in `<pane cwd>/.ovis/`, not /tmp, on purpose: agents ask before
  * reading outside their project directory, and a path inside the project keeps the
- * attachment visible (and git-ignorable) next to the conversation. A pane without a
+ * attachment visible next to the conversation. That folder ignores itself (a `.gitignore`
+ * of `*`), so attachments stay out of Git status while their paths still open. A pane without a
  * known cwd (or one the OS no longer has) falls back to the OS temp dir - the path still works, it just may cost
  * the agent a read-permission prompt. `OVIS_PASTE_DIR` sends every attachment to
  * one directory instead, for those who would rather keep them out of the working tree.
  */
 
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { imageType } from "./codex-images.ts";
@@ -98,7 +99,7 @@ export function pasteDirectoryForPane(cwd: string | null | undefined): string {
 
 /** Where a pane's attachments go: `OVIS_PASTE_DIR` when set, else `<cwd>/.ovis`. */
 export function pasteDirectory(cwd: string | null | undefined): string {
-  const override = process.env["OVIS_PASTE_DIR"]?.trim();
+  const override = pasteDirectoryOverride();
   if (override) {
     // the plugin's env file is not a shell: expand a leading ~ here, before either separator.
     // The separators are dropped with it: a leading one would make the rest an absolute path
@@ -106,6 +107,29 @@ export function pasteDirectory(cwd: string | null | undefined): string {
     return home ? resolve(homedir(), home[1] ?? "") : resolve(override);
   }
   return join(cwd ?? join(tmpdir(), "ovis"), ".ovis");
+}
+
+function pasteDirectoryOverride(): string {
+  return process.env["OVIS_PASTE_DIR"]?.trim() ?? "";
+}
+
+/**
+ * Creates the attachment directory and returns it. The default one also gets a `.gitignore`
+ * of `*`, created exclusively so an ignore file (or link) already there is never followed or
+ * replaced; a directory the user named in `OVIS_PASTE_DIR` is theirs and gets none. Nor does a `.ovis` that is a
+ * link: the ignore file would land in the link's target, another folder or repository, and hide files it never wrote.
+ */
+export function preparePasteDirectory(cwd: string | null | undefined): string {
+  const directory = pasteDirectory(cwd);
+  mkdirSync(directory, { recursive: true });
+  if (pasteDirectoryOverride() === "" && !lstatSync(directory).isSymbolicLink()) {
+    try {
+      writeFileSync(join(directory, ".gitignore"), "*\n", { flag: "wx", mode: 0o600 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  return directory;
 }
 
 const EXTENSIONS: Record<string, string> = {
@@ -162,8 +186,7 @@ export async function savePaneImage(options: {
 
   const pane = await paneGet(options.paneId);
 
-  const directory = pasteDirectoryForPane(pane.cwd);
-  mkdirSync(directory, { recursive: true });
+  const directory = preparePasteDirectory(existingDirectory(pane.cwd));
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
   const unique = `${stamp}-${crypto.randomUUID().slice(0, 8)}`;
   const name = named === null ? `paste-${unique}.${imageExtension}` : `${named.base}-${unique}.${named.extension}`;

@@ -93,6 +93,7 @@ export const DEVICES_KO: Record<string, string> = {
   "Send test": "테스트 보내기",
   "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "푸시 알림은 HTTPS 또는 localhost가 필요하고, iPhone에서는 홈 화면 앱이어야 합니다.",
   "Allow notifications in your browser settings, then try again.": "브라우저 설정에서 알림을 허용한 뒤 다시 시도하세요.",
+  "Allow notifications for Ovis in the phone's Settings, then try again.": "휴대폰 설정에서 Ovis 알림을 허용한 뒤 다시 시도하세요.",
   "Test notification sent. Check this device for the alert.": "테스트 알림을 보냈습니다. 이 기기에 알림이 도착했는지 확인하세요.",
   "This device's push subscription is missing. Turn alerts on again.": "이 기기의 푸시 구독이 없습니다. 알림을 다시 켜세요.",
   "The push service retired this device's subscription. Turn alerts on again to make a new one.": "푸시 서비스가 이 기기의 구독을 끝냈습니다. 알림을 다시 켜세요.",

@@ -156,7 +156,9 @@ try {
       if (!value || typeof value !== "object") return value;
       if (Array.isArray(value)) { value.forEach(fix); return value; }
       if (value.pane_id === TARGET && "agent_status" in value) {
-        if ("agent" in value) Object.assign(value, { agent: window.fitCase.agent, background_tasks: 2 });
+        // the chip without its step in progress: this script measures the model label's room, which
+        // the step (plan-chip-demo-regression.ts) is drawn after and may take from
+        if ("agent" in value) Object.assign(value, { agent: window.fitCase.agent, background_tasks: 2, ...(value.plan ? { plan: { ...value.plan, current: null } } : {}) });
         value.agent_status = window.fitCase.status;
       }
       if ("prompt" in value && window.fitCase.suggestion !== undefined) value.suggestion = window.fitCase.suggestion;

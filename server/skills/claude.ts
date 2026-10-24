@@ -59,8 +59,8 @@ const BUNDLED: ReadonlySet<string> = new Set([
   "run-skill-generator", "schedule", "simplify", "slides", "update-config", "verify", "workflow-authoring",
 ]);
 
-/** Every name the Claude menu knows as its own, bundled skills included: what a reader that filters builtins needs. */
-export const claudeBuiltinNames = (): string[] => [...REFERENCE];
+/** Claude's own commands, without the bundled skills: an echo of one of these is a command, not a skill. */
+export const claudeCommandNames = (): string[] => REFERENCE.filter((name) => !BUNDLED.has(name));
 
 /** Whitespace and the Unicode default-ignorable code points (soft hyphen, joiners, variation selectors, BOM...). */
 const IGNORED = /[\s\p{Default_Ignorable_Code_Point}]/gu;

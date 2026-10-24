@@ -50,6 +50,7 @@ import { usePageVisible } from "../lib/visibility.ts";
 import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useFacesArrived } from "../lib/fontFaces.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
+import { toolPathLabel, toolPathRoot } from "../lib/workspacePath.ts";
 import { linkFilePaths } from "./FilePathLink.tsx";
 import { patchText } from "../../shared/patch.ts";
 import { workRowLabel } from "../lib/workRowLabel.ts";
@@ -82,6 +83,8 @@ const ChatHistoryContext = createContext("");
  * output while the viewer is open), and it must not take the open viewer with it.
  */
 const ImageViewerContext = createContext<(images: GalleryImage[], index: number) => void>(() => {});
+/** The pane's folder a tool card's file labels read from (toolPathRoot), or null: labels as written. */
+const ToolPathRootContext = createContext<string | null>(null);
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
 import type { AgentStatus, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, SlashCommand } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
@@ -138,7 +141,6 @@ export interface ChatViewProps {
   finishEpoch?: string;
   finishId?: number;
   paneId: string;
-  cwd?: string | null;
   onOpenDiff?: (target: RepoDiffTarget) => void;
   /** Only the active pane owns the chat-local Mod+F shortcut. */
   active?: boolean;
@@ -156,6 +158,12 @@ export interface ChatViewProps {
   onTerminalOutput?: (listener: (() => void) | null) => void;
   /** bumped when a composer message goes out, before the transcript holds it */
   sentKey?: number;
+  /** bumped once this browser's own message from the box was accepted at once, with the navigation
+   * generation it went out at: the chat follows it to the end unless the reader navigated since */
+  localSend?: { key: number; navigationGeneration: number };
+  /** the reader's navigation generation, shared with the sender: scrolling or paging back, a jump, a
+   * restored place, a replaced history and leaving the pane raise it */
+  navigation?: { current: number };
   connected: boolean;
   ended: boolean;
   agent: string | null;
@@ -198,6 +206,27 @@ export interface ChatViewProps {
   interactive?: boolean;
   /** a message's "Rewind in terminal" (Claude Code, grok, agy): the pane opens its terminal with a hint to run the agent's own rewind; nothing is sent */
   onRewindInTerminal?: () => void;
+  /** the pane's folder: a tool card's file reads from it (`app/src/a.ts`), while its title and what it opens stay the path as written */
+  cwd?: string | null;
+  /** the text selected inside one assistant reply of this chat, as a copy would carry it; null when the selection is not that */
+  onReplySelection?: (text: string | null) => void;
+  /** a press on the pane's quote action is under way: the rows of the selection it may clear stay pinned */
+  holdReplySelection?: boolean;
+}
+
+/**
+ * The selected text when the selection lies wholly in one assistant reply's answer in `root`:
+ * never a range reaching a user message, a work block, the reply's own copy row, another pane or
+ * a field. Null for an empty selection.
+ */
+function selectedReplyText(selection: Selection | null, root: Element): string | null {
+  if (selection === null || selection.isCollapsed || selection.rangeCount !== 1) return null;
+  const range = selection.getRangeAt(0);
+  const reply = (node: Node): Element | null => (node instanceof Element ? node : node.parentElement)?.closest("[data-chat-reply]") ?? null;
+  const owner = reply(range.startContainer);
+  if (owner === null || owner !== reply(range.endContainer) || !root.contains(owner)) return null;
+  const text = selection.toString();
+  return text.trim() === "" ? null : text;
 }
 
 
@@ -302,8 +331,11 @@ function ompEditLineClass(line: string): string | undefined {
 function ToolFile({ path, suffix }: { path: string; suffix?: string }) {
   const t = useT();
   const open = useContext(OpenFileContext);
-  if (open === null) return <p className="chat-tool-file">{path}{suffix}</p>;
-  return <p className="chat-tool-file"><button type="button" className="chat-tool-file-link" title={t("Open {path}", { path })} onClick={() => open(path)}>{path}</button>{suffix}</p>;
+  // shorter to read only: the title, the viewer and every copy keep the path as written (a copy
+  // of the whole label takes data-raw-path: lib/markdownClipboard.ts)
+  const shown = toolPathLabel(path, useContext(ToolPathRootContext));
+  if (open === null) return <p className="chat-tool-file" title={path}><span data-raw-path={path}>{shown}</span>{suffix}</p>;
+  return <p className="chat-tool-file"><button type="button" className="chat-tool-file-link" title={t("Open {path}", { path })} data-raw-path={path} onClick={() => open(path)}>{shown}</button>{suffix}</p>;
 }
 
 /** An edit's old and new text as one diff: the unchanged lines once, the changes in place. */
@@ -889,7 +921,10 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
     {goal !== null && <GoalActivity goal={goal} />}
     {/* the pending head stands only above no answer: one above words would leave a gap when the turn ends */}
     {(work.length > 0 || (live && answer.length === 0)) && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} pendingHead={answer.length === 0} />}
-    {answer.map((part, index) => <Markdown key={index} skills={skills}>{part.text}</Markdown>)}
+    {/* the reply's own words, which a selection may quote into the message box: no layout of its own */}
+    {answer.length > 0 && <div className="chat-reply" data-chat-reply="">
+      {answer.map((part, index) => <Markdown key={index} skills={skills}>{part.text}</Markdown>)}
+    </div>}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
       {/* a mouse reads one copy glyph and the words "Plain text"; touch reads the two formats */}
       <CopyButton className="chat-meta-btn" text={answerText} label={t("Copy as markdown")} onResult={copied}><span className="chat-meta-fmt">MD</span></CopyButton>
@@ -960,7 +995,7 @@ function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolea
 }
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, onRewindInTerminal }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, localSend, navigation, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, onRewindInTerminal, onOpenDiff, cwd = null, onReplySelection, holdReplySelection = false }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -1037,7 +1072,30 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   const sentKeyRef = useRef(sentKey);
   sentKeyRef.current = sentKey;
   const [promptPollKey, setPromptPollKey] = useState(0);
+  const ownNavigation = useRef(0);
+  const navigationRef = navigation ?? ownNavigation;
+  /** the reader chose a place: a local send already on its way no longer takes them to the end */
+  const navigated = (): void => { navigationRef.current += 1; };
+  // a local send accepted before this chat mounted (another pane, another lens) is not followed here
+  const seenLocalSend = useRef(localSend?.key ?? 0);
   const scroller = useRef<HTMLDivElement>(null);
+  // a selection inside one reply is told to the pane, which offers to quote it; only changes are told
+  const replySelection = useRef<string | null>(null);
+  useEffect(() => {
+    if (onReplySelection === undefined) return;
+    const changed = () => {
+      const root = scroller.current;
+      const text = root === null ? null : selectedReplyText(getSelection(), root);
+      if (text === replySelection.current) return;
+      replySelection.current = text;
+      onReplySelection(text);
+    };
+    document.addEventListener("selectionchange", changed);
+    return () => {
+      document.removeEventListener("selectionchange", changed);
+      if (replySelection.current !== null) { replySelection.current = null; onReplySelection(null); }
+    };
+  }, [onReplySelection]);
   const timeline = useRef<LegendListRef>(null);
   const ChatTimeline = useChatTimeline();
   const stickToBottom = useRef(true);
@@ -1217,6 +1275,7 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
           if (cancelled || generation !== olderGeneration.current) return;
         }
         if (history.current !== conversation.history_id) {
+          if (history.current !== undefined) navigated();
           dropOlder(); generation = olderGeneration.current;
           history.current = conversation.history_id; setHistoryId(conversation.history_id);
           pagingAway.current = false; stickToBottom.current = true; setNewMessages(false); setAway(false);
@@ -1375,21 +1434,21 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   // Prompts belong to the visible screen, not the native transcript: a Codex directory-trust
   // menu can appear while idle without any file mutation. Keep their independent 2s poll.
   const [promptStale, setPromptStale] = useState(false);
+  const failedPromptReads = useRef(0);
   const pollPrompt = connected && !ended && agent !== null;
   useEffect(() => {
-    if (!pollPrompt) { setPrompt(null); setPromptStale(false); setCompacting(false); setCapacityErrorOwner(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
+    if (!pollPrompt) { setPrompt(null); setPromptStale(false); setCompacting(false); setCapacityErrorOwner(null); failedPromptReads.current = 0; setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
     if (!visible) return;
     let cancelled = false;
     let timer = 0;
-    // a restart (the page shown again, a refused answer) keeps the notice: only a read that answers clears it
-    let failedReads = 0;
+    // a restart (the page shown again, a refused answer) keeps the notice and the count of failed reads: only a read that answers clears them
     const readPrompt = async (): Promise<void> => {
       // the same prompt keeps its object: the composer and the card only change with it
       const sent = sentKeyRef.current;
       try {
         const next = await fetchPanePromptState(paneId);
-        failedReads = 0;
         if (!cancelled) {
+          failedPromptReads.current = 0;
           setPromptStale(false);
           setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
           setCompacting(next.compacting);
@@ -1408,7 +1467,8 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
       // a read that failed (a network error, a server hiccup) says nothing about the screen: the card,
       // the suggestion and the restored send stay as they are until the next read answers. Reads that
       // keep failing let the card say so (#1335): answering stays safe, the server re-reads first
-      catch { failedReads += 1; if (!cancelled && failedReads >= PROMPT_STALE_READS) setPromptStale(true); }
+      // a read the restart cancelled counts for neither side: the new poll's count is its own
+      catch { if (!cancelled) { failedPromptReads.current += 1; if (failedPromptReads.current >= PROMPT_STALE_READS) setPromptStale(true); } }
       finally { if (!cancelled) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS); }
     };
     void readPrompt();
@@ -1571,7 +1631,9 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
     // An upward move right after upward input is reading intent beyond the 1 px rounding tolerance; one
     // without it (a growing composer shrinking the viewport before the bottom correction) keeps
     // following within 48 px. The end presentation stays exact in measureEnd.
-    const allowance = performance.now() - scrollInputAt.current < SCROLL_INPUT_MS ? 1 : 48;
+    const byReader = performance.now() - scrollInputAt.current < SCROLL_INPUT_MS;
+    const allowance = byReader ? 1 : 48;
+    if (scrollingUp && byReader) navigated();
     // Reaching the rounded endpoint clears reading intent unless still paging upward.
     if ((!pagingAway.current || scrollingDown) && distanceFromBottom <= 1) pagingAway.current = false;
     if (scrollingUp && distanceFromBottom > allowance && stickToBottom.current) {
@@ -1622,19 +1684,33 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
     else node.scrollTo({ top: node.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     measureEnd();
   };
+  // This browser's own message, taken by the bridge at once: the reader goes back to the end and
+  // follows the turn there as it is written, unless they navigated after it went out. Each key is
+  // taken once; an upward scroll before the turn shows ends the follow as it always does.
+  useLayoutEffect(() => {
+    if (localSend === undefined || seenLocalSend.current === localSend.key) return;
+    seenLocalSend.current = localSend.key;
+    if (localSend.navigationGeneration === navigationRef.current) scrollToBottom();
+  }, [localSend]);
+  // leaving the pane (a retained pane stays mounted off-tab) or the chat lens is navigation: a
+  // receipt still on its way follows nothing
+  useEffect(() => { if (!paneVisible) navigationRef.current += 1; }, [paneVisible, navigationRef]);
+  useEffect(() => () => { navigationRef.current += 1; }, [navigationRef]);
   useLayoutEffect(() => {
     // under a peek the page keys and the shortcuts page the terminal (TerminalViewportTools)
     if (!pageScroll || covered) return;
     const scroll = (direction: -1 | 1) => {
       const node = scroller.current;
       if (!node) return;
-      const prose = node.querySelector<HTMLElement>(".chat-turn-agent > .markdown, .chat-bubble") ?? node;
+      const prose = node.querySelector<HTMLElement>(".chat-reply > .markdown, .chat-bubble") ?? node;
       const style = getComputedStyle(prose);
       const lineHeight = parseFloat(style.lineHeight);
       const rowHeight = Number.isFinite(lineHeight) ? lineHeight : parseFloat(style.fontSize);
       const distance = pageScrollDistance(node.clientHeight, rowHeight, PAGE_OVERLAP_ROWS);
       const before = node.scrollTop;
       node.scrollTo({ top: before + direction * distance, behavior: "instant" });
+      // paging back is navigation; paging toward the end keeps a follow on its way, as a wheel down does
+      if (direction < 0 && node.scrollTop !== before) navigated();
       // A physical end may still report a positive subpixel gap, even with no movement.
       if (direction > 0 && node.scrollHeight - node.clientHeight - node.scrollTop <= 1) {
         pagingAway.current = false;
@@ -1721,6 +1797,7 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
     if (index === null || list === null || node === null) return;
     const key = timelineRows[index]!.key;
     pagingAway.current = true; stickToBottom.current = false; setAway(true);
+    navigated();
     void list.scrollToIndex({ index, viewPosition: 0, viewOffset: saved.offset, animated: false });
     const olderAt = olderCount.current;
     let frame = 0, frames = 0, stable = 0;
@@ -1757,8 +1834,11 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   // a tick takes the reader to its turn: reading there, follow left off
   const jumpToTurn = useCallback((index: number) => {
     pagingAway.current = true; stickToBottom.current = false; setAway(true);
+    navigationRef.current += 1;
     void timeline.current?.scrollToIndex({ index, animated: false, viewPosition: 0 });
-  }, []);
+  }, [navigationRef]);
+  // the rail scrolls the chat from outside it, where the input listeners do not see the wheel
+  const minimapWheel = useCallback((deltaY: number) => { if (deltaY < 0) scrollInputAt.current = performance.now(); }, []);
   // a chip's action: the card's first control (the card is drawn into the dock, outside the
   // transcript), or the terminal lens where the command's screen is
   const focusPrompt = useCallback(() => {
@@ -1858,7 +1938,7 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   </>;
   const jump = newMessages ? <button type="button" className="btn chat-new-messages chat-virtual-jump" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>
     : away && <button type="button" className="btn chat-new-messages chat-virtual-jump is-icon" aria-label={t("Jump to latest")} title={t("Jump to latest")} onClick={scrollToBottom}><ArrowDown aria-hidden="true" /></button>;
-  return <ChatDiffContext.Provider value={diffContext}><ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><ImageViewerContext.Provider value={openViewer}>
+  return <ChatDiffContext.Provider value={diffContext}><ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><ImageViewerContext.Provider value={openViewer}><ToolPathRootContext.Provider value={toolPathRoot(cwd)}>
     {/* a reader away from the end has not seen the answer a finish lands there: presented only at the end */}
     <div className="chat-frame" data-pane-content={active && visible && !covered && connected && !ended && loaded && error === null && !away && !newMessages
       && endPresentation?.state === state && endPresentation.key === presentationKey
@@ -1887,13 +1967,14 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
       label={logLabel}
       onScroll={onScroll}
       renderRow={renderTurn}
+      holdSelection={holdReplySelection}
     /> : <div className="chat-view" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={logLabel}>
       <div className="chat-transcript" data-conversation-source={state.conversationSource}>
         <ChatFallback paneId={paneId} agent={agent} visible={visible} messages={state.messages} outcomes={outcomes} restored={restored} actions={outcomeActions} skills={skillMatcher} />
         {footer}
       </div>
     </div>}
-    {state.source === "conversation" && <ChatMinimap turns={minimap} rowKeys={rowKeys} scroller={scroller} onJump={jumpToTurn} />}
+    {state.source === "conversation" && <ChatMinimap turns={minimap} rowKeys={rowKeys} scroller={scroller} onJump={jumpToTurn} onWheel={minimapWheel} />}
     {jump}
     </div>
     </div>
@@ -1913,5 +1994,5 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
       onPendingAnswerDone?.(paneId, prompt.id);
     }} />, promptDock)}
   {viewer !== null && <ImageLightbox images={viewer.images} index={viewer.index} onClose={closeViewer} />}
-  </ImageViewerContext.Provider></ChatHistoryContext.Provider></ChatPaneContext.Provider></ChatDiffContext.Provider>;
+  </ToolPathRootContext.Provider></ImageViewerContext.Provider></ChatHistoryContext.Provider></ChatPaneContext.Provider></ChatDiffContext.Provider>;
 });

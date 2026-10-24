@@ -74,6 +74,45 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
     expect(routed({ EVENT_NAME: "push", CONFIGURED_LABELS: labels })).toEqual(JSON.parse(labels));
   });
 
+  it("routes a push to main to CI_MAIN_SELF_HOSTED_LABELS over CI_SELF_HOSTED_LABELS", () => {
+    const main = '["self-hosted","self-hosted-ovis-main"]';
+    const push = { EVENT_NAME: "push", REF: "refs/heads/main" };
+    expect(routed({ ...push, MAIN_LABELS: main })).toEqual(["self-hosted", "self-hosted-ovis-main"]);
+    expect(routed({ ...push, MAIN_LABELS: main, CONFIGURED_LABELS: labels })).toEqual(["self-hosted", "self-hosted-ovis-main"]);
+    expect(routed({ ...push, MAIN_LABELS: '"ubuntu-24.04"' })).toBe("ubuntu-24.04");
+    expect(routed({ ...push, MAIN_LABELS: '"ubuntu-24.04"', CONFIGURED_LABELS: labels })).toBe("ubuntu-24.04");
+    // unset or blank: main shares the pull requests' runners, as before
+    expect(routed(push)).toEqual(["self-hosted", "self-hosted-ovis"]);
+    expect(routed({ ...push, MAIN_LABELS: " " })).toEqual(["self-hosted", "self-hosted-ovis"]);
+    expect(routed({ ...push, MAIN_LABELS: " ", CONFIGURED_LABELS: labels })).toEqual(JSON.parse(labels));
+  });
+
+  it("keeps every run but a push to main off main's runners", () => {
+    const main = '["self-hosted","self-hosted-ovis-main"]';
+    expect(routed({ EVENT_NAME: "pull_request", HEAD_REPO: repo, REF: "refs/pull/1/merge", MAIN_LABELS: main })).toEqual(["self-hosted", "self-hosted-ovis"]);
+    expect(routed({ EVENT_NAME: "pull_request", HEAD_REPO: repo, MAIN_LABELS: main, CONFIGURED_LABELS: labels })).toEqual(JSON.parse(labels));
+    expect(routed({ EVENT_NAME: "pull_request", HEAD_REPO: "someone/fork", MAIN_LABELS: main })).toBe("ubuntu-24.04");
+    for (const ref of ["refs/heads/other", "refs/tags/v1.0.0", ""]) {
+      expect(routed({ EVENT_NAME: "push", REF: ref, MAIN_LABELS: main })).toEqual(["self-hosted", "self-hosted-ovis"]);
+    }
+    expect(routed({ EVENT_NAME: "workflow_dispatch", REF: "refs/heads/main", MAIN_LABELS: main })).toBe("ubuntu-24.04");
+    expect(routed({ EVENT_NAME: "workflow_dispatch", REF: "refs/heads/main", MAIN_LABELS: main, REQUESTED_LABELS: labels })).toEqual(JSON.parse(labels));
+  });
+
+  it("keeps main hosted too when CI_SELF_HOSTED_LABELS names the GitHub-hosted image", () => {
+    expect(routed({ EVENT_NAME: "push", REF: "refs/heads/main", MAIN_LABELS: '["self-hosted","self-hosted-ovis-main"]', CONFIGURED_LABELS: '"ubuntu-24.04"' }))
+      .toBe("ubuntu-24.04");
+  });
+
+  it("refuses a CI_MAIN_SELF_HOSTED_LABELS that is not self-hosted labels or the hosted image", () => {
+    for (const value of ['["self-hosted",', '["self-hosted-ovis-main"]', '"self-hosted"', "[]"]) {
+      const result = route({ EVENT_NAME: "push", REF: "refs/heads/main", MAIN_LABELS: value });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("::error::repository variable CI_MAIN_SELF_HOSTED_LABELS");
+    }
+  });
+
   it("refuses malformed JSON", () => {
     const result = route({ EVENT_NAME: "push", CONFIGURED_LABELS: '["self-hosted",' });
     expect(result.status).toBe(1);

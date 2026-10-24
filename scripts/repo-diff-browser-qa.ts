@@ -7,8 +7,10 @@
  * native selection and a real copy that keep blank lines and leave the gutters out; binary,
  * too-large, conflicted, deleted, untracked and renamed files and their notes; a folder that is no
  * repository and a commit that does not exist; the file itself opened on the owning PC; Escape,
- * Back and Close with the focus returned; a remote PC's routes; the rows in the app's palette; and
- * the static demo's fixture.
+ * Back and Close with the focus returned; a remote PC's routes; the rows in the app's palette; Find
+ * in the 10 000-line diff (folded context at the top, the middle and the end, both sides, split and
+ * wrap, Escape order, and a loading, refused, offline or watch-only patch with nothing to search);
+ * and the static demo's fixture.
  *
  * The browser is Playwright's headless shell, whose clipboard is its own: a real Cmd+C here never
  * touches the clipboard of the PC running the check.
@@ -54,7 +56,7 @@ const MONEY_NEW = MONEY_OLD
   .replace("  return (cents / 100).toFixed(2);", "  return `$${(cents / 100).toFixed(2)}`;");
 
 /** Two real repositories and a plain folder, as the panes of the fixture would sit in them. */
-function fixtures(): { main: string; detached: string; plain: string } {
+function fixtures(): { main: string; detached: string; plain: string; long: string } {
   const main = join(root, "repo");
   mkdirSync(join(main, "src"), { recursive: true });
   mkdirSync(join(main, "docs"));
@@ -108,7 +110,16 @@ function fixtures(): { main: string; detached: string; plain: string } {
 
   const plain = join(root, "plain");
   mkdirSync(plain);
-  return { main, detached, plain };
+
+  // one line longer than any screen, its match 600 characters in, beside a short one
+  const long = join(root, "long");
+  mkdirSync(join(long, "src"), { recursive: true });
+  git(long, "init", "-q", "-b", "main");
+  writeFileSync(join(long, "src/long.ts"), `export const short = 1;\nexport const wide = "${"x".repeat(600)} old";\n`);
+  git(long, "add", ".");
+  git(long, "commit", "-q", "-m", "long");
+  writeFileSync(join(long, "src/long.ts"), `export const short = 1;\nexport const wide = "${"x".repeat(600)} needle";\n`);
+  return { main, detached, plain, long };
 }
 
 const repos = fixtures();
@@ -134,7 +145,10 @@ const deepRoots = [1, 2, 3, 4].map((depth) => {
   return path;
 });
 panes.set("pane-discovery", discovery);
+panes.set("pane-long", repos.long);
 const requests: string[] = [];
+/** a patch request for `pane-held` waits on this until the check lets it through */
+let held = Promise.withResolvers<void>();
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 let demoServer: ReturnType<typeof Bun.serve> | undefined;
@@ -148,6 +162,10 @@ async function api(request: Request, url: URL): Promise<Response | null> {
     const base = paneId !== null ? panes.get(paneId) : undefined;
     const directory = url.searchParams.get("directory");
     const cwd = directory ? (isAbsolute(directory) ? directory : resolve(base ?? root, directory)) : base;
+    // a PC that is offline, a device that may only watch, and a patch held on its way, each as the real routes answer
+    if (diff[1] === "offline-pc") return Response.json({ error: { code: "machine_offline", message: "that PC is offline" } }, { status: 503 });
+    if (paneId === "pane-watch") return Response.json({ error: { code: "read_only", message: "this device can only watch" } }, { status: 403 });
+    if (paneId === "pane-held") { await held.promise; return repoDiffResponse(diff[2] === "files" ? "files" : "file", repos.main, url.searchParams); }
     if (!cwd) return Response.json({ error: { code: "pane_not_found", message: "no such pane" } }, { status: 404 });
     return repoDiffResponse(diff[2] === "repositories" ? "repositories" : diff[2] === "files" ? "files" : "file", cwd, url.searchParams);
   }
@@ -270,6 +288,53 @@ async function copied(page: Page): Promise<string> {
   await page.keyboard.press("ControlOrMeta+c");
   return page.evaluate(() => navigator.clipboard.readText());
 }
+/** Find in the diff: the bar's count and place, its hint, its input, the marked row and the painted text. */
+interface Found { count: string; place: string; hint: string; enabled: boolean; marked: { line: number; type: string | null; column: "old" | "new" | "unified"; inView: boolean }[]; painted: string[]; rows: number }
+async function found(page: Page): Promise<Found> {
+  return page.evaluate(() => {
+    const bar = document.querySelector(".repo-diff-find");
+    const status = bar?.querySelector(".find-bar-count");
+    const shadow = document.querySelector(".repo-diff diffs-container")?.shadowRoot ?? null;
+    const view = document.querySelector(".repo-diff-scroll")?.getBoundingClientRect();
+    const marked = [...(shadow?.querySelectorAll<HTMLElement>("[data-line][data-find-active]") ?? [])].map((row) => {
+      const rect = row.getBoundingClientRect();
+      const code = row.closest("code");
+      return { line: Number(row.dataset["line"]), type: row.dataset["lineType"] ?? null, column: code?.hasAttribute("data-deletions") ? "old" as const : code?.hasAttribute("data-additions") ? "new" as const : "unified" as const, inView: view !== undefined && rect.top >= view.top - 1 && rect.bottom <= view.bottom + 1 };
+    });
+    const highlight = CSS.highlights.get("repo-diff-find");
+    return {
+      count: [...(status?.childNodes ?? [])].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join(""),
+      place: bar?.querySelector(".repo-diff-find-place")?.textContent ?? "",
+      hint: bar?.querySelector(".find-bar-hint")?.textContent ?? "",
+      enabled: bar?.querySelector<HTMLInputElement>("input")?.disabled === false,
+      marked,
+      painted: highlight ? [...highlight].map((range) => (range as Range).toString()) : [],
+      rows: shadow?.querySelectorAll("[data-line]").length ?? 0,
+    };
+  });
+}
+/** Waits until the find bar says `count` and `place` and the active row is marked, in view, with its text painted. */
+async function foundAt(page: Page, count: string, place: string, step: string): Promise<Found> {
+  try {
+    await page.waitForFunction(([count, place]) => {
+      const bar = document.querySelector(".repo-diff-find");
+      const status = [...(bar?.querySelector(".find-bar-count")?.childNodes ?? [])].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join("");
+      if (status !== count || (bar?.querySelector(".repo-diff-find-place")?.textContent ?? "") !== place) return false;
+      const row = document.querySelector(".repo-diff diffs-container")?.shadowRoot?.querySelector<HTMLElement>("[data-line][data-find-active]");
+      const view = document.querySelector(".repo-diff-scroll")?.getBoundingClientRect();
+      if (!row || !view) return false;
+      const rect = row.getBoundingClientRect();
+      return rect.top >= view.top - 1 && rect.bottom <= view.bottom + 1 && (CSS.highlights.get("repo-diff-find")?.size ?? 0) === 1;
+    }, [count, place] as const);
+  } catch (error) {
+    throw new Error(`${step}: the find never settled on ${count} / ${place}: ${JSON.stringify(await found(page))}`, { cause: error });
+  }
+  return found(page);
+}
+async function findShot(page: Page, width: number, theme: string, state: string): Promise<void> {
+  if (evidence) await page.screenshot({ path: join(evidence, `diff-find-${width}-${theme}-${state}.png`) });
+}
+
 /** What the unified rows of a patch's first hunk say, in order, as the viewer draws them: deletions before additions within a change. */
 function hunkRowTexts(patch: string, count: number): string[] {
   const body = patch.slice(patch.indexOf("\n@@"));
@@ -302,7 +367,7 @@ try {
   for (const [width, theme] of [[1440, "dark"], [1440, "light"], [390, "dark"], [390, "light"]] as const) {
     const label = `${width}px ${theme}`;
     const phone = width === 390;
-    const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, isMobile: phone, hasTouch: phone, colorScheme: theme });
+    const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, deviceScaleFactor: phone ? 3 : 1, isMobile: phone, hasTouch: phone, colorScheme: theme });
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await context.addInitScript((theme) => {
       // once: a reload keeps what the page saved since (the diff layout)
@@ -318,7 +383,7 @@ try {
     page.on("console", (message) => {
       if (message.type() !== "error") return;
       // the refusals asked for on purpose (a missing commit, a folder outside git) are logged by the browser as failed loads
-      if (/Failed to load resource/.test(message.text()) && /\/workspace\/diff\//.test(message.location().url ?? "") && /status of (?:404|409)/.test(message.text())) return;
+      if (/Failed to load resource/.test(message.text()) && /\/workspace\/diff\//.test(message.location().url ?? "") && /status of (?:403|404|409|503)/.test(message.text())) return;
       errors.push(`console: ${message.text()}`);
     });
     await page.goto(origin);
@@ -663,6 +728,211 @@ try {
     await closeFiles(page);
     console.log(`PASS ${label}: all four discovery depths apply to independent repositories`);
 
+
+    // Find in the 10 000-line diff: the whole loaded patch, its folded context and its rows not mounted
+    await openFiles(page, "pane-main");
+    await changeRows(page);
+    await openChange(page, "src/big.ts");
+    await waitRows(page);
+    await page.getByRole("button", { name: "Fold context", exact: true }).click();
+    await page.locator(".repo-diff[data-folded]").waitFor();
+    const findButton = page.getByRole("button", { name: "Find in diff", exact: true });
+    // a phone taps the header's Find; a keyboard presses Ctrl/Cmd+F with the focus on Fold context, which gets it back
+    if (phone) await findButton.tap();
+    else await page.keyboard.press("ControlOrMeta+f");
+    const query = page.getByRole("searchbox", { name: "Find in diff", exact: true });
+    await query.waitFor();
+    assert.equal(await query.evaluate((input) => input === document.activeElement), true, `${label}: the query takes the focus`);
+    if (!phone) {
+      // a second Ctrl/Cmd+F on the open bar keeps the focus in the query, and Fold context keeps the return (checked at Escape)
+      await page.keyboard.press("ControlOrMeta+f");
+      assert.equal(await query.evaluate((input) => input === document.activeElement), true, `${label}: Ctrl/Cmd+F again keeps the query focused`);
+    }
+    assert.equal(await page.getByRole("dialog", { name: "Files", exact: true }).count(), 1, `${label}: the Files list stays beneath`);
+    const hint = (await found(page)).hint;
+    assert.equal(hint, "Searches this loaded patch, including context. Content outside the patch is not searched.", `${label}: the bar says what it searches`);
+    // top, middle and end, each a context line the folded rows leave out
+    for (const [text, line, where] of [["line_00002 ", 2, "top"], ["line_05002 ", 5002, "middle"], ["line_09998 ", 9998, "end"]] as const) {
+      if (where !== "top") {
+        await page.getByRole("button", { name: "Fold context", exact: true }).click();
+        await page.locator(".repo-diff[data-folded]").waitFor();
+      }
+      await query.fill(text);
+      const at = await foundAt(page, "1 of 1", `Unchanged line ${line.toLocaleString("en")}`, `${label} ${where}`);
+      assert.equal(await page.locator(".repo-diff[data-folded]").count(), 0, `${label} ${where}: a folded-away hit shows the context whole`);
+      assert.deepEqual(at.marked.map((row) => [row.line, row.type, row.inView]), [[line, "context", true]], `${label} ${where}: the hit's row is marked and in view: ${JSON.stringify(at)}`);
+      assert.deepEqual(at.painted, [text], `${label} ${where}: the hit's text is painted`);
+      assert.ok(at.rows > 0 && at.rows < 600, `${label} ${where}: the rows stay a bounded window: ${at.rows}`);
+      if (where === "top") await findShot(page, width, theme, "folded");
+      if (where === "end") await findShot(page, width, theme, "end");
+    }
+    // next and previous across both sides, wrapping
+    await query.fill("line 9996");
+    let at = await foundAt(page, "1 of 2", "Removed line 9,996", `${label} first`);
+    assert.deepEqual(at.marked.map((row) => [row.line, row.type]), [[9996, "change-deletion"]], `${label}: the first hit is the removed line: ${JSON.stringify(at)}`);
+    await query.press("Enter");
+    at = await foundAt(page, "2 of 2", "Added line 9,996", `${label} next`);
+    assert.deepEqual(at.marked.map((row) => [row.line, row.type]), [[9996, "change-addition"]], `${label}: Enter moves to the added line: ${JSON.stringify(at)}`);
+    await query.press("Enter");
+    await foundAt(page, "1 of 2", "Removed line 9,996", `${label} wrap`);
+    await query.press("Shift+Enter");
+    await foundAt(page, "2 of 2", "Added line 9,996", `${label} previous`);
+    if (!phone) {
+      // the same logical match through split, wrap and back
+      await page.getByRole("button", { name: "Split", exact: true }).click();
+      at = await foundAt(page, "2 of 2", "Added line 9,996", `${label} split`);
+      assert.deepEqual(at.marked.map((row) => [row.line, row.column]), [[9996, "new"]], `${label}: split marks the new side's row: ${JSON.stringify(at)}`);
+      await findShot(page, width, theme, "split-added");
+      await page.getByRole("button", { name: "Previous match", exact: true }).click();
+      at = await foundAt(page, "1 of 2", "Removed line 9,996", `${label} split previous`);
+      assert.deepEqual(at.marked.map((row) => [row.line, row.column]), [[9996, "old"]], `${label}: split marks the old side's row: ${JSON.stringify(at)}`);
+      await findShot(page, width, theme, "split-deleted");
+      await page.evaluate(() => window.repoDiffQA.settings({ wrapCode: true }));
+      at = await foundAt(page, "1 of 2", "Removed line 9,996", `${label} wrap on`);
+      await page.getByRole("button", { name: "Unified", exact: true }).click();
+      at = await foundAt(page, "1 of 2", "Removed line 9,996", `${label} unified`);
+      assert.deepEqual(at.marked.map((row) => [row.line, row.type]), [[9996, "change-deletion"]], `${label}: unified keeps the match: ${JSON.stringify(at)}`);
+      await page.evaluate(() => window.repoDiffQA.settings({ wrapCode: false }));
+      await foundAt(page, "1 of 2", "Removed line 9,996", `${label} wrap off`);
+    }
+    // literal punctuation, an absent term
+    await query.fill("= 9996; // changed");
+    await foundAt(page, "1 of 1", "Added line 9,996", `${label} punctuation`);
+    for (const absent of ["line_0999.", "line_.*", "LINE_09998"]) {
+      await query.fill(absent);
+      await page.locator(".repo-diff-find .find-bar-count").filter({ hasText: "No matches" }).waitFor();
+      const none = await found(page);
+      assert.deepEqual([none.marked, none.painted], [[], []], `${label}: "${absent}" finds nothing and marks nothing: ${JSON.stringify(none)}`);
+    }
+    await query.fill("line 9996");
+    await query.press("Enter");
+    await foundAt(page, "2 of 2", "Added line 9,996", `${label} before close`);
+    // Escape closes Find, then the diff; the focus goes back to what opened Find
+    await page.keyboard.press("Escape");
+    await query.waitFor({ state: "detached" });
+    await page.locator(".repo-diff-viewer").waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? null), phone ? "Find in diff" : "Fold context", `${label}: the focus returns to the control that opened Find`);
+    assert.equal((await found(page)).marked.length, 0, `${label}: no row stays marked`);
+    // reopened untouched, Find shows the same query, count and active match again
+    if (phone) await findButton.tap();
+    else await findButton.click();
+    await query.waitFor();
+    assert.equal(await query.inputValue(), "line 9996", `${label}: the query is kept`);
+    await foundAt(page, "2 of 2", "Added line 9,996", `${label} reopened`);
+    await page.keyboard.press("Escape");
+    await query.waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? null), "Find in diff", `${label}: the focus returns to Find, which reopened it`);
+    await page.keyboard.press("Escape");
+    await page.locator(".repo-diff-viewer").waitFor({ state: "detached" });
+    await page.getByRole("dialog", { name: "Files", exact: true }).waitFor();
+    console.log(`PASS ${label}: Find reaches folded context at the top, middle and end of 10 000 lines, steps across both sides${phone ? "" : " through split and wrap"}, takes punctuation literally, closes before the viewer${phone ? "" : " with a repeated Ctrl/Cmd+F"} and reopens on the same match`);
+
+    // unwrapped rows: a match past the screen's right edge is scrolled into view across, and back for one at the start
+    await page.evaluate(() => window.repoDiffQA.settings({ wrapCode: false }));
+    await page.evaluate((directory) => window.repoDiffQA.openDiff({ machineId: "local", paneId: "pane-long", directory, scope: "workspace", base: null, head: null, path: "src/long.ts", oldPath: null }), repos.long);
+    await waitRows(page);
+    if (phone) await findButton.tap();
+    else await page.keyboard.press("ControlOrMeta+f");
+    await query.waitFor();
+    const across = (): Promise<{ text: string; left: number; right: number; from: number; to: number; scrolled: number }> => page.evaluate(() => {
+      const range = [...(CSS.highlights.get("repo-diff-find") ?? [])][0] as Range | undefined;
+      const row = document.querySelector(".repo-diff diffs-container")?.shadowRoot?.querySelector<HTMLElement>("[data-line][data-find-active]");
+      const scroller = row?.closest<HTMLElement>("[data-code]");
+      if (!range || !scroller) return { text: "", left: 0, right: 0, from: 0, to: 0, scrolled: -1 };
+      const rect = range.getBoundingClientRect();
+      const box = scroller.getBoundingClientRect();
+      const gutter = scroller.querySelector("[data-gutter]")?.getBoundingClientRect().right ?? box.left;
+      return { text: range.toString(), left: rect.left, right: rect.right, from: Math.max(box.left, gutter), to: box.left + scroller.clientWidth, scrolled: scroller.scrollLeft };
+    });
+    const inViewAcross = async (step: string): Promise<{ scrolled: number }> => {
+      try {
+        await page.waitForFunction(() => {
+          const range = [...(CSS.highlights.get("repo-diff-find") ?? [])][0] as Range | undefined;
+          const scroller = document.querySelector(".repo-diff diffs-container")?.shadowRoot?.querySelector<HTMLElement>("[data-line][data-find-active]")?.closest<HTMLElement>("[data-code]");
+          if (!range || !scroller) return false;
+          const rect = range.getBoundingClientRect();
+          const box = scroller.getBoundingClientRect();
+          const gutter = scroller.querySelector("[data-gutter]")?.getBoundingClientRect().right ?? box.left;
+          return rect.left >= Math.max(box.left, gutter) && rect.right <= box.left + scroller.clientWidth;
+        });
+      } catch (error) {
+        throw new Error(`${label} ${step}: the match never came into view across: ${JSON.stringify(await across())}`, { cause: error });
+      }
+      return across();
+    };
+    await query.fill("needle");
+    await foundAt(page, "1 of 1", "Added line 2", `${label} long line`);
+    const far = await inViewAcross("needle");
+    assert.ok(far.scrolled > 0, `${label}: the rows scrolled across to the match: ${JSON.stringify(far)}`);
+    await findShot(page, width, theme, "long-line");
+    await query.fill("export const wide");
+    await foundAt(page, "1 of 2", "Removed line 2", `${label} line start`);
+    const near = await inViewAcross("line start");
+    assert.ok(near.scrolled < far.scrolled, `${label}: the rows scrolled back for a match at the start: ${JSON.stringify(near)}`);
+    if (!phone) {
+      await page.getByRole("button", { name: "Split", exact: true }).click();
+      await query.fill("needle");
+      await foundAt(page, "1 of 1", "Added line 2", `${label} long line split`);
+      await inViewAcross("needle in split");
+      await page.getByRole("button", { name: "Unified", exact: true }).click();
+    }
+    await page.keyboard.press("Escape");
+    await query.waitFor({ state: "detached" });
+    await closeDiff(page);
+    assert.deepEqual(errors, [], `${label}: no errors after the long line`);
+    console.log(`PASS ${label}: a match past the right edge of an unwrapped row is scrolled into view across${phone ? "" : ", in split too"}, and back for one at the start`);
+
+    // a comparison changed under live results drops them; a patch on its way, an offline PC and a watch-only device have none to search.
+    // The Files list stays open beneath, as when a row opens a diff: closing a phone's sheet goes Back in history, which would race the next open
+    const target = { machineId: "local", paneId: "pane-main", directory: repos.main, scope: "commit" as const, base: "HEAD~1", head: "HEAD", path: "src/money.ts", oldPath: null };
+    await page.evaluate((target) => window.repoDiffQA.openDiff(target), target);
+    await waitRows(page);
+    await findButton.click();
+    await query.fill("add");
+    await foundAt(page, "1 of 1", "Added line 11", `${label} commit`);
+    held = Promise.withResolvers<void>();
+    await page.evaluate((target) => window.repoDiffQA.openDiff(target), { ...target, paneId: "pane-held" });
+    await page.locator(".repo-diff-loading").waitFor();
+    const loading = await found(page);
+    assert.deepEqual([loading.count, loading.place, loading.enabled, loading.marked, loading.painted, loading.hint], ["", "", false, [], [], "There is no loaded patch to search."], `${label}: a patch on its way has nothing to search: ${JSON.stringify(loading)}`);
+    await findShot(page, width, theme, "loading");
+    held.resolve();
+    await waitRows(page);
+    const fresh = await found(page);
+    assert.deepEqual([fresh.count, fresh.enabled, fresh.marked, await query.inputValue()], ["", true, [], ""], `${label}: the new patch starts with no stale anchor: ${JSON.stringify(fresh)}`);
+    await query.fill("add");
+    await foundAt(page, "1 of 1", "Added line 11", `${label} commit again`);
+    await page.evaluate((target) => window.repoDiffQA.openDiff(target), { ...target, base: "nope" });
+    assert.equal(await note(page), "No commit by that name.", `${label}: the refused comparison says why`);
+    const refused = await found(page);
+    assert.deepEqual([refused.count, refused.enabled, refused.marked, refused.painted, refused.hint], ["", false, [], [], "There is no loaded patch to search."], `${label}: a refused comparison drops the results: ${JSON.stringify(refused)}`);
+    await findShot(page, width, theme, "error");
+    await page.keyboard.press("Escape");
+    await query.waitFor({ state: "detached" });
+    assert.equal(await findButton.isDisabled(), true, `${label}: Find is off without a patch`);
+    await page.keyboard.press("Escape");
+    await page.locator(".repo-diff-viewer").waitFor({ state: "detached" });
+    for (const [state, override, words] of [["offline", { machineId: "offline-pc" }, "That PC is not reachable right now."], ["watch", { paneId: "pane-watch" }, "This device can only watch."]] as const) {
+      await page.evaluate((target) => window.repoDiffQA.openDiff(target), { ...target, scope: "workspace" as const, base: null, head: null, ...override });
+      assert.equal(await note(page), words, `${label}: ${state} says why`);
+      assert.equal(await findButton.isDisabled(), true, `${label}: Find is off when ${state}`);
+      assert.equal(await findButton.getAttribute("title"), "There is no loaded patch to search.", `${label}: and says why when ${state}`);
+      if (!phone) {
+        await page.keyboard.press("ControlOrMeta+f");
+        assert.equal(await query.count(), 0, `${label}: Ctrl/Cmd+F opens nothing when ${state}`);
+      }
+      await findShot(page, width, theme, state);
+      await closeDiff(page);
+    }
+    for (const path of ["assets/pic.bin", "src/large.txt"]) {
+      await page.evaluate((target) => window.repoDiffQA.openDiff(target), { ...target, scope: "workspace" as const, base: null, head: null, path });
+      await note(page);
+      assert.equal(await findButton.isDisabled(), true, `${label}: Find is off for ${path}`);
+      await closeDiff(page);
+    }
+    await closeFiles(page);
+    assert.deepEqual(errors, [], `${label}: no errors after Find`);
+    console.log(`PASS ${label}: a changed comparison drops live results; loading, refused, offline, watch-only, binary and too-large patches leave Find off and say why`);
     await context.close();
   }
 

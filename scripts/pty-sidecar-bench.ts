@@ -43,8 +43,7 @@ assert.ok(RUST_HOST, `build the Rust host first (${RUST_SIDECAR_BUILD}) or set O
 const TICK_MS = 1000 / Number(Bun.spawnSync(["getconf", "CLK_TCK"]).stdout.toString().trim() || 100);
 
 function use(host: Host): void {
-  if (host === "rust") process.env["OVIS_PTY_SIDECAR"] = "rust";
-  else delete process.env["OVIS_PTY_SIDECAR"];
+  process.env["OVIS_PTY_SIDECAR"] = host;
 }
 
 function stat(pid: number): string[] | null {
@@ -99,6 +98,7 @@ function start(host: Host, options: Omit<PtySessionOptions, "onData" | "onExit">
     },
     onExit: () => {},
   });
+  assert.equal(session.host, host, `${host}: PTY host fell back`);
   const until = (label: string, check: (output: string) => boolean, limitMs = 15_000) => new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => { waiters.delete(test); reject(new Error(`${host}: no ${label} in ${limitMs} ms`)); }, limitMs);
     const test = () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { resolveWorkspaceRoot, workspaceRelativePath } from "./workspacePath.ts";
+import { resolveWorkspaceRoot, toolPathLabel, toolPathRoot, workspaceRelativePath } from "./workspacePath.ts";
 
 describe("workspace-relative paths", () => {
   it("resolves the root from the typed start", () => {
@@ -16,5 +16,44 @@ describe("workspace-relative paths", () => {
     expect(workspaceRelativePath("/home/u/code/app2", root, "~/code/app2")).toBe("~/code/app2");
     expect(workspaceRelativePath("/home/u", root, "~")).toBe("~");
     expect(workspaceRelativePath("/a", null, "/a")).toBe("/a");
+  });
+  // a chat's tool-file label: the pane's folder as the root, the path as written as the fallback
+  const label = (path: string, cwd: string | null): string => toolPathLabel(path, toolPathRoot(cwd));
+  it("keeps raw tool paths outside a trusted root", () => {
+    expect(label("/work/app/src/a.ts", "/work/app")).toBe("app/src/a.ts");
+    expect(label("/work/app/src/a.ts", "/work/app/")).toBe("app/src/a.ts");
+    expect(label("/work/app/src/a.ts", "/work/app//")).toBe("app/src/a.ts");
+    expect(label("/work/app", "/work/app")).toBe("app");
+    // no folder known, the filesystem root, or one that is not an absolute POSIX path
+    expect(toolPathRoot(null)).toBeNull();
+    expect(toolPathRoot(undefined)).toBeNull();
+    expect(toolPathRoot("")).toBeNull();
+    expect(toolPathRoot("/")).toBeNull();
+    expect(toolPathRoot("~/work/app")).toBeNull();
+    expect(toolPathRoot("work/app")).toBeNull();
+    expect(toolPathRoot("C:\\work\\app")).toBeNull();
+    expect(toolPathRoot("C:/work/app")).toBeNull();
+    expect(toolPathRoot("\\\\server\\share\\app")).toBeNull();
+    expect(label("/work/app/src/a.ts", null)).toBe("/work/app/src/a.ts");
+    expect(label("/work/app/src/a.ts", "/")).toBe("/work/app/src/a.ts");
+    expect(label("C:\\work\\app\\src\\a.ts", "C:\\work\\app")).toBe("C:\\work\\app\\src\\a.ts");
+    expect(label("\\\\server\\share\\app\\a.ts", "\\\\server\\share\\app")).toBe("\\\\server\\share\\app\\a.ts");
+    // outside the folder, relative to nothing known, or a Windows path under a POSIX folder
+    expect(label("/etc/hosts", "/work/app")).toBe("/etc/hosts");
+    expect(label("/work", "/work/app")).toBe("/work");
+    expect(label("src/a.ts", "/work/app")).toBe("src/a.ts");
+    expect(label("./src/a.ts", "/work/app")).toBe("./src/a.ts");
+    expect(label("C:\\work\\app\\a.ts", "/work/app")).toBe("C:\\work\\app\\a.ts");
+    // a `.` or `..` segment: the path may leave the folder however it starts
+    expect(label("/work/app/../etc/passwd", "/work/app")).toBe("/work/app/../etc/passwd");
+    expect(label("/work/app/src/../a.ts", "/work/app")).toBe("/work/app/src/../a.ts");
+    expect(label("/work/app/./src/a.ts", "/work/app")).toBe("/work/app/./src/a.ts");
+    expect(label("/work/app/src/..a.ts", "/work/app")).toBe("app/src/..a.ts");
+  });
+  it("does not mistake a sibling prefix for a descendant", () => {
+    expect(label("/work/app-2/a.ts", "/work/app")).toBe("/work/app-2/a.ts");
+    expect(label("/work/app2", "/work/app")).toBe("/work/app2");
+    expect(label("/work/application/a.ts", "/work/app/")).toBe("/work/application/a.ts");
+    expect(label("/work/app-2/a.ts", "/work/app-2")).toBe("app-2/a.ts");
   });
 });

@@ -1,0 +1,40 @@
+
+           Claude Code v2.1.304
+ ▐▛███▛█   Sonnet 4.5
+▝▜██████▀  API Usage Billing
+ ▝▝   ▝▝   /tmp/t32rec.aQb4cG/proj
+
+⚠ Remote managed settings failed to load
+  (authentication rejected (401)) · no
+  remote policy applied · /status for
+  details
+
+❯ apple
+
+● Apple noted.
+
+❯ banana
+
+● Banana noted.
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Rewind
+
+   Restore the code and/or
+   conversation to the point before…
+
+     apple
+     ⚠ No code restore
+
+   ❯ banana
+     ⚠ No code restore
+
+
+     ↓ 1 more
+
+   Enter to continue · Esc to cancel

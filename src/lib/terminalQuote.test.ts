@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { appendQuote, formatTerminalQuote, quoteHeading, quotedText } from "./terminalQuote.ts";
+import { appendQuote, formatReplyQuote, formatTerminalQuote, quoteHeading, quotedText } from "./terminalQuote.ts";
 
 describe("terminal quote", () => {
   test("names the pane and counts lines from 1", () => {
@@ -29,5 +29,23 @@ describe("terminal quote", () => {
     expect(appendQuote("why?\n", "Q", 100)).toBe("why?\n\nQ\n");
     expect(appendQuote("why?\n\n", "Q", 100)).toBe("why?\n\nQ\n");
     expect(appendQuote("why?", "Q", 5)).toBeNull();
+  });
+});
+
+describe("reply quote", () => {
+  test("reply quote uses selected visible text", () => {
+    // the browser's selection text, as a copy carries it: indentation kept, no markdown rebuilt
+    expect(formatReplyQuote("\n\nDone. Retries are now safe:\r\n\nconst cached = await lookup(key);\n  if (cached) return;\n"))
+      .toBe("From your reply:\n```\nDone. Retries are now safe:\n\nconst cached = await lookup(key);\n  if (cached) return;\n```");
+    // a plain label: no line numbers or range are made up for a reply
+    expect(formatReplyQuote("one line")!.split("\n")[0]).toBe("From your reply:");
+    expect(formatReplyQuote(" \n\t\r\n")).toBeNull();
+  });
+
+  test("fence survives nested backticks", () => {
+    const block = formatReplyQuote("Use:\n```ts\nrun()\n```\nor `````raw`````")!;
+    expect(block).toBe("From your reply:\n``````\nUse:\n```ts\nrun()\n```\nor `````raw`````\n``````");
+    // inline backticks shorter than a fence leave the plain fence
+    expect(formatReplyQuote("call `run` twice")).toBe("From your reply:\n```\ncall `run` twice\n```");
   });
 });

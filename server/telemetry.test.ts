@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SUPPORTED_AGENT_KINDS } from "../shared/supported-agents.ts";
-import { ACTIVE_LATE_DAYS, NOTICE_VERSION, TELEMETRY_HARNESSES, type TelemetryActive, type TelemetryChange, type TelemetryEvent, type TelemetrySettings } from "../shared/telemetry.ts";
+import { ACTIVE_LATE_DAYS, harnessOf, NOTICE_VERSION, TELEMETRY_HARNESSES, type TelemetryActive, type TelemetryChange, type TelemetryEvent, type TelemetrySettings } from "../shared/telemetry.ts";
 import { DEFAULT_SETTINGS, telemetrySettingsSnapshot, type Settings } from "../src/lib/settings.ts";
 import { handleTelemetryRequest, installMethod, Telemetry, telemetryBlocked } from "./telemetry.ts";
 
@@ -407,8 +407,11 @@ describe("daily active message", () => {
     expect(telemetry.status().active).toEqual({ ...before, harnesses: ["claude", "codex"] });
   });
 
-  test("(h) every supported agent kind is a telemetry harness", () => {
-    const missing = [...SUPPORTED_AGENT_KINDS].filter((kind) => !(TELEMETRY_HARNESSES as readonly string[]).includes(kind));
+  test("(h) every supported agent kind is a telemetry harness, or other until the Worker lists it", () => {
+    // the deployed Worker refuses a harness it does not list, so these count as other until a deploy adds them
+    const undeployed = new Set(["letta"]);
+    for (const kind of undeployed) expect(harnessOf(kind)).toBe("other");
+    const missing = [...SUPPORTED_AGENT_KINDS].filter((kind) => !undeployed.has(kind) && !(TELEMETRY_HARNESSES as readonly string[]).includes(kind));
     if (missing.length > 0) throw new Error(`${missing.join(", ")}: add it to TELEMETRY_HARNESSES and deploy the Worker`);
     expect(missing).toEqual([]);
   });

@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+import { architectures, NAME as PTY_SIDECAR } from "./pty-sidecar.ts";
 
 const root = resolve(import.meta.dir, "..");
 const hostPlatform = `${process.platform}-${process.arch}`;
@@ -138,8 +139,21 @@ try {
       chmodSync(join(stage, "bin", name), 0o755);
       if (mac) verifyMachO(join(stage, "bin", name));
     }
+    // the Rust PTY host built for this platform (scripts/pty-sidecar.ts build), where server/pty/host.ts
+    // looks beside the server; the bundle's Node sidecar stays its fallback
+    const ptySidecar = process.env["HERDR_BUNDLE_PTY_SIDECAR"];
+    if (ptySidecar) {
+      const want = `${mac ? "macho" : "elf"}-${platform.endsWith("arm64") ? "aarch64" : "x86_64"}`;
+      if (!architectures(ptySidecar).includes(want)) throw new Error(`${ptySidecar} has no ${want} code: ${architectures(ptySidecar).join(", ")}`);
+      cpSync(ptySidecar, join(stage, "bin", PTY_SIDECAR));
+      chmodSync(join(stage, "bin", PTY_SIDECAR), 0o755);
+      // the record server/pty/host.ts checks before it runs an installed host: this bundle's package.json version
+      writeFileSync(join(stage, "bin", `${PTY_SIDECAR}.json`), `${JSON.stringify({ crate: null, sha256: digest(readFileSync(ptySidecar)), version: REMOTE_BUNDLE_VERSION })}\n`);
+    } else {
+      console.log(`${platform}: HERDR_BUNDLE_PTY_SIDECAR is not set, so this bundle has no Rust PTY host`);
+    }
     writeFileSync(join(stage, "package.json"), JSON.stringify({ type: "module", version: REMOTE_BUNDLE_VERSION }));
-    writeFileSync(join(stage, "bundle.json"), JSON.stringify({ version: REMOTE_BUNDLE_VERSION, platform, herdr: "0.9.3", bun: bunVersion, node: nodeVersion, native_smoke_tested: platform === hostPlatform }));
+    writeFileSync(join(stage, "bundle.json"), JSON.stringify({ version: REMOTE_BUNDLE_VERSION, platform, herdr: "0.9.3", bun: bunVersion, node: nodeVersion, pty_sidecar: Boolean(ptySidecar), native_smoke_tested: platform === hostPlatform }));
     if (platform === hostPlatform) command([join(stage, "bin/node"), join(stage, "server/pty/smoke.mjs")], stage);
     else console.log(`${platform}: verified binary architecture and checksums; PTY execution is checked on the destination before activation`);
 

@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
-import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "./index.ts";
-import { forgetTranscriptState } from "./conversation.ts";
+import { claudePaneSession, forgetTranscriptState } from "./conversation.ts";
 import { claudeProjectDir } from "./claude-store.ts";
 import { startFakePushService } from "./push.fake.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "./herdr/client.ts";
@@ -442,4 +442,151 @@ it.skipIf(!NATIVE)("uses each process's config dir before the server's store, wi
     });
     expect((await read(fallback.pane)).turns.at(-1)?.parts[0]).toMatchObject({ text: "Server's other answer" });
   } finally { delete process.env["CLAUDE_CONFIG_DIR"]; }
+});
+
+/** A `claude attach` stand-in: it tells the test its pid and runs until the pane closes. */
+const ATTACH_STAND_IN = `require("node:net").connect(Number(process.env.ATTACH_READY), "127.0.0.1", function () { this.end(String(process.pid)); });
+process.stdin.resume();
+`;
+
+/** A job's state with the fields Claude requires of it, made before any client in this file starts. */
+function jobState(job: string, state: Record<string, unknown>): void {
+  const made = "2026-01-01T00:00:00.000Z";
+  mkdirSync(join(root, ".claude", "jobs", job), { recursive: true });
+  writeFileSync(join(root, ".claude", "jobs", job, "state.json"), JSON.stringify({
+    state: "working", detail: "", template: "bg", intent: `task of ${job}`, sessionId: `${job}-0000-4000-8000-000000000000`,
+    cwd: root, createdAt: made, updatedAt: made, ...state,
+  }));
+}
+
+/**
+ * A pane whose foreground runs `claude <args>` with the native build's argv, and no PID record: the
+ * renamed Node runs `attach` in the workspace folder as its script, so the arguments stay as typed.
+ */
+async function attachPane(args: readonly string[], before?: (pane: string) => Promise<void>): Promise<{ pane: string; pid: number }> {
+  const created = await herdrRpc<Awaited<ReturnType<typeof workspaceCreate>>>("workspace.create", { cwd: root, label: "ovis-test-claude-attach", focus: false });
+  workspaces.push(created.workspace.workspace_id);
+  const paneId = created.root_pane.pane_id;
+  await before?.(paneId);
+  writeFileSync(join(root, "attach"), ATTACH_STAND_IN);
+  let ready: (pid: number) => void = () => {};
+  const signal = new Promise<number>((resolve) => { ready = resolve; });
+  const listener = Bun.listen({
+    hostname: "127.0.0.1", port: 0,
+    socket: { data(socket, data) { ready(Number(data.toString())); socket.end(); } },
+  });
+  const timeout = setTimeout(() => ready(0), 10_000);
+  try {
+    await herdrRpc("pane.send_text", {
+      pane_id: paneId, text: `cd ${JSON.stringify(root)} && exec env -u CLAUDE_CONFIG_DIR -u CLAUDE_CODE_SESSION_KIND ATTACH_READY=${listener.port} ${[join(root, "claude"), ...args].map((arg) => JSON.stringify(arg)).join(" ")}\n`,
+    });
+    const pid = await signal;
+    if (!pid) throw new Error("claude attach stand-in did not signal readiness");
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "claude", state: "idle" });
+    return { pane: paneId, pid };
+  } finally { clearTimeout(timeout); listener.stop(true); }
+}
+
+// The stand-in is the renamed Node, which takes `attach` for its script; the macOS one above is Bun.
+it.skipIf(process.platform !== "linux")("follows a `claude attach <job>` pane to the job's conversation, with no start time of its own (#1645)", async () => {
+  // the job's state names the session it started with and the one /clear moved it on to
+  const job = "4c1d2e3f";
+  const started = `${job}-0000-4000-8000-000000000001`;
+  const resumed = "6e5d4c3b-2a19-4807-b6a5-948372615f0e";
+  transcript(started);
+  transcript(resumed);
+  mkdirSync(join(root, ".claude", "jobs", job), { recursive: true });
+  writeFileSync(join(root, ".claude", "jobs", job, "state.json"), JSON.stringify({ sessionId: started, resumeSessionId: resumed, state: "running" }));
+  const attach = await attachPane(["attach", job]);
+  // an attach client keeps no PID record of its own: only the job's state names what it shows
+  expect(existsSync(join(root, ".claude", "sessions", `${attach.pid}.json`))).toBe(false);
+  const conversation = await read(attach.pane);
+  expect(conversation.source).toBe("claude-transcript");
+  expect(conversation.turns.at(-1)?.parts[0]).toMatchObject({ text: `Answer ${resumed}` });
+  // the job ran before the client attached: the client's start would leave the job's earlier background work lost
+  expect(await claudePaneSession({ pane_id: attach.pane, cwd: root, foreground_cwd: root } as HerdrPane))
+    .toEqual({ path: join(project, `${resumed}.jsonl`), startedAt: null, pid: attach.pid });
+});
+
+it.skipIf(process.platform !== "linux")("shows the attached job's conversation, not a session an earlier Claude in the pane reported (#1645)", async () => {
+  const job = "7a8b9c0d";
+  const shown = "1f2e3d4c-5b6a-4798-8a7b-6c5d4e3f2a1b";
+  transcript(shown);
+  mkdirSync(join(root, ".claude", "jobs", job), { recursive: true });
+  writeFileSync(join(root, ".claude", "jobs", job, "state.json"), JSON.stringify({ sessionId: shown, state: "running" }));
+  // a reused pane: the Claude that ran here before reported its session through the hook
+  const attach = await attachPane(["attach", job], async (paneId) => {
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "claude", state: "idle" });
+    await herdrRpc("pane.report_agent_session", {
+      pane_id: paneId, source: "herdr:claude", agent: "claude", seq: 1, agent_session_id: FIRST,
+    });
+  });
+  // herdr still reports that earlier session once `claude attach` is the foreground process
+  const info = await herdrRpc<{ agent: { agent_session?: { value?: unknown } } }>("agent.get", { target: attach.pane });
+  expect(info.agent.agent_session?.value).toBe(FIRST);
+  const conversation = await read(attach.pane);
+  expect(conversation.source).toBe("claude-transcript");
+  expect(conversation.turns.at(-1)?.parts[0]).toMatchObject({ text: `Answer ${shown}` });
+});
+
+it.skipIf(process.platform !== "linux")("keeps the terminal of a reused pane attached to a shell-command job, which has no session (#1645)", async () => {
+  const job = "5e6f7a8b";
+  mkdirSync(join(root, ".claude", "jobs", job), { recursive: true });
+  writeFileSync(join(root, ".claude", "jobs", job, "state.json"), JSON.stringify({ command: "sleep 100", state: "running" }));
+  // the Claude that ran here before reported its session through the hook, and herdr still has it
+  const attach = await attachPane(["attach", job], async (paneId) => {
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "claude", state: "idle" });
+    await herdrRpc("pane.report_agent_session", {
+      pane_id: paneId, source: "herdr:claude", agent: "claude", seq: 1, agent_session_id: FIRST,
+    });
+  });
+  const info = await herdrRpc<{ agent: { agent_session?: { value?: unknown } } }>("agent.get", { target: attach.pane });
+  expect(info.agent.agent_session?.value).toBe(FIRST);
+  // the job shows no conversation: the earlier Claude's would be another session's
+  expect((await read(attach.pane)).source).toBe("scrollback");
+});
+
+it.skipIf(process.platform !== "linux")("follows a pane whose `claude` takes options before `attach` (#1645)", async () => {
+  const job = "6b7c8d9e";
+  const shown = "2a3b4c5d-6e7f-4809-9a1b-2c3d4e5f6a7b";
+  transcript(shown);
+  jobState(job, { sessionId: shown, state: "working" });
+  // `-r <value>` is a root option Claude reads before `attach` (--resume), and one the renamed Node
+  // takes too (--require), so the stand-in still runs `attach` with the arguments as typed
+  writeFileSync(join(root, "resumed.js"), "");
+  const attach = await attachPane(["-r", "./resumed.js", "attach", job]);
+  const conversation = await read(attach.pane);
+  expect(conversation.source).toBe("claude-transcript");
+  expect(conversation.turns.at(-1)?.parts[0]).toMatchObject({ text: `Answer ${shown}` });
+});
+
+it.skipIf(process.platform !== "linux")("follows a pane attached by the start of a job's id or by part of its name (#1645)", async () => {
+  const byId = "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f";
+  const byName = "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a";
+  transcript(byId);
+  transcript(byName);
+  jobState("3a9b8c7d", { sessionId: byId, intent: "check the build", state: "working" });
+  jobState("2b3c4d5e", { sessionId: byName, name: "Contract release notes", intent: "draft the notes", state: "working" });
+  const prefix = await read((await attachPane(["attach", "3a9b"])).pane);
+  expect(prefix.source).toBe("claude-transcript");
+  expect(prefix.turns.at(-1)?.parts[0]).toMatchObject({ text: `Answer ${byId}` });
+  const named = await read((await attachPane(["attach", "release notes"])).pane);
+  expect(named.source).toBe("claude-transcript");
+  expect(named.turns.at(-1)?.parts[0]).toMatchObject({ text: `Answer ${byName}` });
+});
+
+it.skipIf(process.platform !== "linux")("keeps the terminal of a reused pane whose `claude attach` names no one job (#1645)", async () => {
+  // both jobs start with 8e9f: Claude opens neither, and neither does the pane
+  jobState("8e9f0a1b", { sessionId: SECOND, state: "working" });
+  jobState("8e9f2c3d", { sessionId: NEXT, state: "working" });
+  const attach = await attachPane(["attach", "8e9f"], async (paneId) => {
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "claude", state: "idle" });
+    await herdrRpc("pane.report_agent_session", {
+      pane_id: paneId, source: "herdr:claude", agent: "claude", seq: 1, agent_session_id: FIRST,
+    });
+  });
+  const info = await herdrRpc<{ agent: { agent_session?: { value?: unknown } } }>("agent.get", { target: attach.pane });
+  expect(info.agent.agent_session?.value).toBe(FIRST);
+  // neither the earlier Claude's session, nor a guess between the two jobs
+  expect((await read(attach.pane)).source).toBe("scrollback");
 });

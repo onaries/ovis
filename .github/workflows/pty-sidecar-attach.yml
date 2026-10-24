@@ -1,0 +1,57 @@
+name: Attach the Rust PTY host
+# Gives a published release that has none the Rust PTY host binaries and their manifest, built from
+# its tag by the Rust PTY host binaries workflow. Release attaches them itself; this is the repair.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release to attach the Rust PTY host to (vX.Y.Z)'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: pty-sidecar-attach-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$RELEASE_TAG' is not a release tag (vX.Y.Z)." >&2
+            exit 1
+          fi
+  build:
+    needs: gate
+    uses: ./.github/workflows/pty-sidecar.yml
+    with:
+      ref: refs/tags/${{ inputs.tag }}
+  attach:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/download-artifact@v8
+        with:
+          name: ovis-pty-sidecar
+          path: pty-sidecar
+      # nothing is uploaded unless the release's assets were read (scripts/pty-sidecar.test.ts runs it with a failing gh)
+      - name: Attach the Rust PTY host to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: bash scripts/pty-sidecar-attach.sh "$RELEASE_TAG" pty-sidecar

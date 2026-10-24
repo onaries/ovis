@@ -12,8 +12,8 @@ Extension, a later build; see [Later builds](#later-builds)).
 | Setting | Value | Where |
 |---|---|---|
 | Bundle ID | `sh.ovis.app` | `PRODUCT_BUNDLE_IDENTIFIER`, `app/ios/App/App.xcodeproj` |
-| Version | `1.0` | `MARKETING_VERSION` |
-| Build | `1` | `CURRENT_PROJECT_VERSION`; raise it by one for every upload, TestFlight included |
+| Version | `1.0` | `MARKETING_VERSION`, in the project's build settings, which the app and its extension share (not a target's General tab) |
+| Build | `1` | `CURRENT_PROJECT_VERSION`, in the project's build settings too; raise it by one for every upload, TestFlight included |
 | Devices | iPhone and iPad | `TARGETED_DEVICE_FAMILY = "1,2"`, so the listing needs iPad screenshots too |
 | Minimum iOS | 15.0 | `IPHONEOS_DEPLOYMENT_TARGET` |
 | Signing | Automatic, no team yet | the owner picks the team in Xcode (section 3) |
@@ -180,4 +180,5 @@ connect screen, QR pairing, the bundled demo, and push notifications in a coming
   token goes to the push relay ("Device ID", app functionality, linked, as the relay keeps it per
   device, not tracking), and so does the privacy manifest.
 - Every upload: raise `CURRENT_PROJECT_VERSION`; raise `MARKETING_VERSION` for each public
-  release.
+  release. Both are the project's build settings, so the app and its extension keep one version
+  ([docs/native-app.md](../../docs/native-app.md#the-app-app)).

@@ -1,9 +1,10 @@
-import { expect, it } from "bun:test";
+import { expect, it, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrPane } from "../shared/protocol.ts";
 import { heldRuntime, heldSessionIds, isOmoProcess, omoAgentDir, omoProcessIdentity, omoSessionFolder, omoCandidates, omoTranscriptsOfCwd, selectOmoTranscript, withOmoDescendants, type OmoRuntime, type ProcessInfo } from "./omo.ts";
+import * as processStart from "./process-start.ts";
 import { processStartedAt } from "./process-start.ts";
 import { parseOmpTranscript } from "./transcript-records.ts";
 import type { ProcessRow } from "./windows-processes.ts";
@@ -266,14 +267,14 @@ it("identifies an argv-silent omo runtime only through verified native holders",
     holdRecord(dir, "sess-1", pid, { pid, processStartedAtMs: processStartedAt(pid), cwd });
     // a launcher whose name and argv say nothing about omo still binds, by its store
     expect(omoProcessIdentity({ pid, argv: neutral, cwd }, cwd, home, () => env))
-      .toEqual({ agentDir, heldIds: ["sess-1"], custom: true });
+      .toEqual({ agentDir, heldIds: ["sess-1"], custom: true, held: true });
     // the process's own cwd counts when the caller does not supply the pane's
     expect(omoProcessIdentity({ pid, argv: neutral, cwd }, "", home, () => env)?.custom).toBeTrue();
     // the same holder in the default store needs no environment entry at all
     const defaultDir = join(home, ".omo", "agent", "sessions", omoSessionFolder(cwd));
     holdRecord(defaultDir, "home-sess", pid, { pid, processStartedAtMs: processStartedAt(pid), cwd });
     expect(omoProcessIdentity({ pid, argv: neutral, cwd }, cwd, home, () => ["PATH=/bin"]))
-      .toEqual({ agentDir: join(home, ".omo", "agent"), heldIds: ["home-sess"], custom: true });
+      .toEqual({ agentDir: join(home, ".omo", "agent"), heldIds: ["home-sess"], custom: true, held: true });
     // a store moved only by senpi's or pi's variable is not an omo identity
     expect(omoProcessIdentity({ pid, argv: neutral, cwd }, cwd, home, () => [`SENPI_CODING_AGENT_DIR=${agentDir}`])).toBeNull();
     expect(omoProcessIdentity({ pid, argv: neutral, cwd }, cwd, home, () => [`PI_CODING_AGENT_DIR=${agentDir}`])).toBeNull();
@@ -284,6 +285,24 @@ it("identifies an argv-silent omo runtime only through verified native holders",
     // a bun -g hoisted engine is the same legacy identity
     const modules = "/home/u/.bun/install/global/node_modules";
     expect(omoProcessIdentity({ pid, argv: ["bun", `${modules}/@code-yeongyu/senpi/dist/bundle/cli.js`, "--extension", `${modules}/omo-ai/plugin`], cwd }, cwd, home, () => null)?.custom).toBeFalse();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("counts an omo's holder as held only while the process's start is readable", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-omo-held-")));
+  try {
+    const home = join(root, "home");
+    const cwd = join(root, "project");
+    const pid = process.pid;
+    // the start is the test's own, so the case reads the same on a platform with no readable start (Windows)
+    const start = spyOn(processStart, "processStartedAt").mockReturnValue(1_792_000_000_000);
+    try {
+      holdRecord(join(home, ".omo", "agent", "sessions", omoSessionFolder(cwd)), "sess-1", pid, { pid, processStartedAtMs: 1_792_000_000_000, cwd });
+      expect(omoProcessIdentity({ pid, argv: ["omo"], cwd }, cwd, home, () => null)).toMatchObject({ heldIds: ["sess-1"], held: true });
+      // no readable start (Windows, a gone pid): the record may name a reused pid, so nothing is held
+      start.mockReturnValue(null);
+      expect(omoProcessIdentity({ pid, argv: ["omo"], cwd }, cwd, home, () => null)).toMatchObject({ custom: false, held: false });
+    } finally { start.mockRestore(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

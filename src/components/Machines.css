@@ -232,11 +232,11 @@
   }
 }
 
-/* only the removal in flight (MachineSidebar.tsx marks it aria-busy) keeps most of its tint, so its
-   warning stays readable while the request runs; disabled because another action of the panel is
-   running, it dims like its neighbours */
+/* only the removal in flight (MachineSidebar.tsx marks it aria-busy) keeps its full strength, so its
+   warning stays readable while the request runs: dimmed even to 0.9, its text fell under 4.5:1 in
+   Tokyo Night. Disabled because another action of the panel is running, it dims like its neighbours */
 .machine-controls .btn-danger[aria-busy="true"] {
-  opacity: 0.85;
+  opacity: 1;
 }
 
 .machine-dialog {

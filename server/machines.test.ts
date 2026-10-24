@@ -698,8 +698,9 @@ describe("terminal attach capability", () => {
       return path;
     };
     try {
-      expect(isRealNode(stand("node", "echo"))).toBe(true);
-      expect(isRealNode(stand("bun-as-node", "echo 1.4.2"))).toBe(false);
+      expect(isRealNode(stand("node", "echo 22.23.2"))).toBe(true);
+      expect(isRealNode(stand("old-node", "echo 16.20.2"))).toBe(false);
+      expect(isRealNode(stand("bun-as-node", "echo bun"))).toBe(false);
       expect(isRealNode(stand("broken", "exit 1"))).toBe(false);
       expect(isRealNode(join(dir, "absent"))).toBe(false);
       // a node that never answers is given up on, not waited for

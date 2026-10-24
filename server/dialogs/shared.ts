@@ -4,6 +4,20 @@ import { createHash } from "node:crypto";
 import type { ReaderContext } from "./registry.ts";
 import type { InteractionPlan } from "./interaction-plan.ts";
 
+/**
+ * A parser that several readers call on the same screen, run once per read: the readers of one
+ * parsePrompt pass are given the same screen and the same context object in turn.
+ */
+export function onePerPass<T>(parse: (screen: string, ctx: ReaderContext) => T): (screen: string, ctx: ReaderContext) => T {
+  let last: { screen: string; ctx: ReaderContext; value: T } | null = null;
+  return (screen, ctx) => {
+    if (last?.screen === screen && last.ctx === ctx) return last.value;
+    const value = parse(screen, ctx);
+    last = { screen, ctx, value };
+    return value;
+  };
+}
+
 export interface DialogReader {
   id: string;
   agents: readonly string[];

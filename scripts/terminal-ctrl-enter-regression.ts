@@ -85,7 +85,7 @@ process.stdin.on("data", (data) => {
       const before = inputs.length;
       await input.press(shortcut);
       await until(() => inputs.length > before, shortcut);
-      await page.waitForTimeout(NO_SEND_WAIT_MS);
+      await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: no second copy of the sequence may arrive
       assert.deepEqual(inputs.slice(before), [expected], `${shortcut} must send ${JSON.stringify(expected)} exactly once`);
     };
     const reads = (): string[] => readFileSync(received, "utf8").split("\n").filter(Boolean);
@@ -112,7 +112,7 @@ process.stdin.on("data", (data) => {
       await input.dispatchEvent("keydown", {
         key: "Enter", code: "Enter", ctrlKey: true, ...composition, bubbles: true, cancelable: true,
       });
-      await page.waitForTimeout(NO_SEND_WAIT_MS);
+      await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: no modified Ctrl+Enter sequence may arrive during composition
       assert.equal(inputs.slice(before).some(isModifiedCtrlEnter), false,
         "an IME commit must not receive the modified Ctrl+Enter");
     }
@@ -131,7 +131,7 @@ process.stdin.on("data", (data) => {
       textarea.dispatchEvent(new KeyboardEvent("keyup", enter));
     });
     await until(() => inputs.length >= beforeCommit + 2, "IME commit followed by Ctrl+Enter");
-    await page.waitForTimeout(NO_SEND_WAIT_MS);
+    await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: nothing beyond the commit and one Ctrl+Enter may arrive
     assert.deepEqual(inputs.slice(beforeCommit), [typed("한"), ctrlEnter(true)],
       "pending IME text must precede Ctrl+Enter without duplicates");
     // the program gives modifyOtherKeys up: Enter again

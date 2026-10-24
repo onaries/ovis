@@ -224,8 +224,11 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
   if (!planShown && !tasksShown) return null;
   const tasksLabel = count === 0 ? t("Background tasks") : t(count === 1 ? "{n} background task" : "{n} background tasks", { n: count });
   const planLabel = plan ? t("Plan: {done} of {total} done", { done: plan.done, total: plan.total }) : null;
-  const label = [planLabel, tasksShown ? tasksLabel : null].filter((part) => part !== null).join(" · ");
-  const title = plan?.current ? `${label} · ${plan.current}` : label;
+  // the step in progress is drawn after the figures, cut to the room the chip gives it (BackgroundTasks.css),
+  // and whole in the button's name and title, before the tasks. No step in progress (between steps, or all
+  // done): the figures alone
+  const current = plan?.current ? plan.current : null;
+  const name = [planLabel, current, tasksShown ? tasksLabel : null].filter((part) => part !== null).join(" · ");
   const busy = count > 0 || (plan !== null && plan.done < plan.total);
   const stepWords: Record<PlanStep["status"], string> = { pending: t("waiting"), in_progress: t("running"), completed: t("done") };
   const stepRow = (step: PlanStep) => {
@@ -243,8 +246,8 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
   };
   // a phone's status line has one row: there the words give way to the icons and the numbers
   return <span className="bg-tasks" ref={root}>
-    <button type="button" ref={toggle} className={`bg-tasks-toggle${busy ? "" : " is-idle"}`} aria-label={label} title={title} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
-      {plan && <><ListChecks aria-hidden="true" /><span className="bg-tasks-label">{t("Plan")}</span><span className="bg-tasks-plan" aria-hidden="true">{plan.done}/{plan.total}</span></>}
+    <button type="button" ref={toggle} className={`bg-tasks-toggle${busy ? "" : " is-idle"}`} aria-label={name} title={name} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
+      {plan && <><ListChecks aria-hidden="true" /><span className="bg-tasks-label">{t("Plan")}</span><span className="bg-tasks-plan" aria-hidden="true">{plan.done}/{plan.total}</span>{current && <span className="bg-tasks-current" aria-hidden="true">{current}</span>}</>}
       {plan && tasksShown && count > 0 && <span className="bg-tasks-sep" aria-hidden="true" />}
       {(!plan || count > 0) && tasksShown && <><Layers aria-hidden="true" /><span className={`bg-tasks-label${plan ? " is-secondary" : ""}`}>{tasksLabel}</span>{count > 0 && <span className="bg-tasks-count" aria-hidden="true">{count}</span>}</>}
     </button>

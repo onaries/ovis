@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, chmodSync, closeSync, constants as fsConstants, copyFileSync, mkdirSync, mkdtempSync, existsSync, readFileSync, readdirSync, realpathSync, openSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, constants as fsConstants, copyFileSync, mkdirSync, mkdtempSync, existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, openSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, watch, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -41,8 +41,11 @@ import { loginPathProbe, ShellAgentLocator, type LoginPathProbe } from "./shell-
 let server: { port: number; stop: () => void };
 const stateDir = mkdtempSync(join(tmpdir(), "ovis-contract-"));
 
-beforeAll(() => {
-  server = createServer({ port: 0, stateDir, alertTiming: { short: 0, long: 0, longTurn: 0 }, pushLoopbackHttp: true });
+beforeAll(async () => {
+  const started = createServer({ port: 0, stateDir, alertTiming: { short: 0, long: 0, longTurn: 0 }, pushLoopbackHttp: true });
+  server = started;
+  // herdr's events are heard from here on: a workspace a test creates is pushed as session-changed
+  await started.statusReady;
 });
 
 afterAll(() => {
@@ -1591,9 +1594,12 @@ describe("workspace and discovery endpoints", () => {
   }, 20_000);
 
   it("pushes session-changed when POST /api/workspace/close answers, not after the collector's debounce", async () => {
-    const closing = await workspaceCreate({ cwd: tmpdir(), label: "ovis-test-close-push" });
+    // connected before the creation: its frame comes from the collector, debounced, and on a busy PC
+    // it could go out before a socket connected afterwards subscribed, which then waited in vain
     const socket = await RecordingSocket.connect(`ws://localhost:${server.port}/ws`);
+    let closing: Awaited<ReturnType<typeof workspaceCreate>> | null = null;
     try {
+      closing = await workspaceCreate({ cwd: tmpdir(), label: "ovis-test-close-push" });
       // the creation's own frame, debounced, is not the close's
       await socket.waitFor((frame) => frame.type === "session-changed", "session-changed after create", 5_000);
       const before = new Set(socket.seen);
@@ -1608,7 +1614,7 @@ describe("workspace and discovery endpoints", () => {
       expect(await changed - answered).toBeLessThan(250);
     } finally {
       socket.close();
-      await herdrRpc("workspace.close", { workspace_id: closing.workspace.workspace_id }).catch(() => undefined);
+      if (closing) await herdrRpc("workspace.close", { workspace_id: closing.workspace.workspace_id }).catch(() => undefined);
     }
   }, 20_000);
 
@@ -2108,7 +2114,27 @@ describe("POST /api/pane/image", () => {
   afterAll(async () => {
     if (qaWorkspaceId) await herdrRpc("workspace.close", { workspace_id: qaWorkspaceId });
     if (qaCwd) rmSync(qaCwd, { recursive: true, force: true });
+    for (const project of gitProjects.splice(0)) {
+      await herdrRpc("workspace.close", { workspace_id: project.workspaceId });
+      rmSync(project.cwd, { recursive: true, force: true });
+    }
   });
+
+  /** A pane of its own whose cwd is a fresh Git project, so `git status` sees what an upload leaves. */
+  const gitProjects: { cwd: string; workspaceId: string }[] = [];
+  const gitProjectPane = async (label: string) => {
+    const cwd = mkdtempSync(join(tmpdir(), "ovis-image-git-"));
+    expect(Bun.spawnSync(["git", "init", "-q", cwd]).exitCode).toBe(0);
+    const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>(
+      "workspace.create",
+      { label, cwd, focus: false },
+    );
+    gitProjects.push({ cwd, workspaceId: created.workspace.workspace_id });
+    return { cwd, paneId: created.root_pane.pane_id };
+  };
+  const git = (cwd: string, ...args: string[]) => Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
+  const gitStatus = (cwd: string) => git(cwd, "status", "--porcelain", "--untracked-files=all").stdout.toString().split("\n").filter(Boolean);
+  const pathOf = async (res: Response) => ((await res.json()) as { path: string }).path;
 
   it("stores a pasted image under the pane cwd and returns its absolute path", async () => {
     const res = await post({ pane_id: qaPaneId, content_type: "image/png", data_base64: TINY_PNG_BASE64 });
@@ -2209,6 +2235,101 @@ describe("POST /api/pane/image", () => {
     // no name, or one without a usable extension: still stored, as .bin
     const bare = (await (await post({ pane_id: qaPaneId, content_type: "", data_base64: svg })).json()) as { path: string };
     expect(basename(bare.path)).toMatch(/^file-.*\.bin$/);
+  });
+
+  it("keeps a pasted image and a named file out of Git status, each readable by its returned path", async () => {
+    const { cwd, paneId } = await gitProjectPane("ovis-test-image-git");
+    const png = Buffer.from(TINY_PNG_BASE64, "base64");
+    const json = Buffer.from('{"tool":"herdr","ok":true}\n');
+    // both at once: whichever creates the folder's ignore file first, the other finds it there
+    const answers = await Promise.all([
+      post({ pane_id: paneId, content_type: "image/png", data_base64: png.toString("base64") }),
+      post({ pane_id: paneId, content_type: "application/json", data_base64: json.toString("base64"), name: "report.json" }),
+    ]);
+    expect(answers.map((res) => res.status)).toEqual([200, 200]);
+    const paths = await Promise.all(answers.map(pathOf));
+    expect(readFileSync(join(cwd, ".ovis", ".gitignore"), "utf8")).toBe("*\n");
+    expect(gitStatus(cwd)).toEqual([]);
+    for (const [index, path] of paths.entries()) {
+      const ignored = git(cwd, "check-ignore", path);
+      expect(ignored.exitCode).toBe(0);
+      expect(ignored.stdout.toString().trim()).toBe(path);
+      // ignored is not unreachable: the explicit path still opens, on disk and through the viewer's route
+      const bytes = index === 0 ? png : json;
+      expect(readFileSync(path).equals(bytes)).toBe(true);
+      const opened = await fetch(`${base()}/api/fs/file?pane_id=${encodeURIComponent(paneId)}&path=${encodeURIComponent(path)}`);
+      expect(opened.status).toBe(200);
+      expect(Buffer.from(await opened.arrayBuffer()).equals(bytes)).toBe(true);
+    }
+  });
+
+  it("preserves an existing ignore file during concurrent uploads", async () => {
+    const upload = (paneId: string) => Promise.all(Array.from({ length: 6 }, (_, index) => post({
+      pane_id: paneId,
+      content_type: "application/json",
+      data_base64: Buffer.from(`{"n":${index}}`).toString("base64"),
+      name: `n${index}.json`,
+    })));
+    const own = await gitProjectPane("ovis-test-image-own-ignore");
+    mkdirSync(join(own.cwd, ".ovis"));
+    const rules = "# kept by hand\n*.png\n!keep.txt";
+    writeFileSync(join(own.cwd, ".ovis", ".gitignore"), rules);
+    expect((await upload(own.paneId)).map((res) => res.status)).toEqual(Array(6).fill(200));
+    expect(readFileSync(join(own.cwd, ".ovis", ".gitignore"), "utf8")).toBe(rules);
+    // the user's own rules still decide: they leave .json files, and the ignore file itself, visible
+    expect(gitStatus(own.cwd)).toHaveLength(7);
+    if (process.platform === "win32") return; // creating a symlink needs developer mode there
+    const outside = mkdtempSync(join(tmpdir(), "ovis-image-rules-"));
+    try {
+      writeFileSync(join(outside, "rules"), "shared\n");
+      for (const target of [join(outside, "rules"), join(outside, "missing")]) {
+        const linked = await gitProjectPane("ovis-test-image-linked-ignore");
+        mkdirSync(join(linked.cwd, ".ovis"));
+        symlinkSync(target, join(linked.cwd, ".ovis", ".gitignore"));
+        expect((await upload(linked.paneId)).map((res) => res.status)).toEqual(Array(6).fill(200));
+        expect(lstatSync(join(linked.cwd, ".ovis", ".gitignore")).isSymbolicLink()).toBe(true);
+        expect(readlinkSync(join(linked.cwd, ".ovis", ".gitignore"))).toBe(target);
+      }
+      // nothing was written through either link
+      expect(readFileSync(join(outside, "rules"), "utf8")).toBe("shared\n");
+      expect(existsSync(join(outside, "missing"))).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("writes no ignore file into a OVIS_PASTE_DIR override, even one naming the default folder", async () => {
+    const { cwd, paneId } = await gitProjectPane("ovis-test-image-override");
+    const previous = process.env["OVIS_PASTE_DIR"];
+    const elsewhere = mkdtempSync(join(tmpdir(), "ovis-image-override-"));
+    try {
+      for (const override of [`  ${elsewhere}  `, join(cwd, ".ovis")]) {
+        process.env["OVIS_PASTE_DIR"] = override;
+        const answers = await Promise.all([0, 1].map(() => post({ pane_id: paneId, content_type: "image/png", data_base64: TINY_PNG_BASE64 })));
+        expect(answers.map((res) => res.status)).toEqual([200, 200]);
+        for (const path of await Promise.all(answers.map(pathOf))) expect(path.startsWith(join(override.trim(), "paste-"))).toBe(true);
+        expect(existsSync(join(override.trim(), ".gitignore"))).toBe(false);
+      }
+      // a folder the user picked shows in Git status like any other
+      expect(gitStatus(cwd)).toHaveLength(2);
+    } finally {
+      if (previous === undefined) delete process.env["OVIS_PASTE_DIR"]; else process.env["OVIS_PASTE_DIR"] = previous;
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("answers an error, not a path, when the ignore file cannot be created", async () => {
+    const { cwd, paneId } = await gitProjectPane("ovis-test-image-unwritable");
+    mkdirSync(join(cwd, ".ovis"));
+    chmodSync(join(cwd, ".ovis"), 0o500);
+    try {
+      const res = await post({ pane_id: paneId, content_type: "image/png", data_base64: TINY_PNG_BASE64 });
+      expect(res.status).toBe(500);
+      expect(((await res.json()) as { path?: string }).path).toBeUndefined();
+      expect(existsSync(join(cwd, ".ovis", ".gitignore"))).toBe(false);
+    } finally {
+      chmodSync(join(cwd, ".ovis"), 0o700);
+    }
   });
 
   it("stores a 20 MiB file whole (regression: 413 while the ceiling was 8 MiB)", async () => {

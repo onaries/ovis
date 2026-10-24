@@ -14,7 +14,7 @@ import type { TerminalPeek } from "./terminalPeek.ts";
 import type { NotificationTarget } from "./notificationTarget.ts";
 import type { SelectionMark } from "./selectionMark.ts";
 import type { SplitState } from "./split.ts";
-import { deviceInUse, followsHerdrFocus } from "./followFocus.ts";
+import { deviceInUse, followsHerdrFocus, movingHerdrFocusOn } from "./followFocus.ts";
 import type { usePreferencesSync } from "./preferencesSync.ts";
 import type { useAlertSignals } from "./useAlerts.ts";
 
@@ -224,7 +224,7 @@ export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequest
       if (message.type === "pane-focused" && followsHerdrFocus({
         enabled: followFocusRef.current, machineId: machine.id, paneId: message.pane_id, selection: selectionRef.current,
         splitOther: splitShownRef.current ? splitRef.current?.other ?? null : null, linkPending: pendingLink.current !== null,
-        busy: deviceInUse(selectionRef.current),
+        busy: deviceInUse(selectionRef.current), ownMove: movingHerdrFocusOn(machine.id),
       })) {
         selectionHint.current = null;
         setSelectedPaneId(message.pane_id);

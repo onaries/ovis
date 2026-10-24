@@ -119,8 +119,9 @@ const MAX_CATALOG_BYTES = 4 * 1024 * 1024;
 /**
  * A regular file's text, or null. It opens non-blocking and checks the descriptor, so a FIFO
  * swapped in after the stat cannot hold the server's thread (a regular file ignores the flag).
+ * Exported for the test that hands it that pipe.
  */
-function readRegularText(path: string): string | null {
+export function readRegularText(path: string): string | null {
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));

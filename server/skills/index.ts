@@ -37,8 +37,8 @@ export interface AgentCommandSource {
   readonly terminalBound?: readonly string[];
   /** builtins the agent's own menu hides: listed with visibility `agent-hidden`, still sent when typed */
   readonly agentHidden?: readonly string[];
-  /** the agent version the builtin list was checked against (compared by major.minor) */
-  readonly pin?: string;
+  /** the agent version the builtin list was checked against (compared by major.minor); one per TUI when the agent ships two */
+  readonly pin?: string | readonly string[];
   /** a skill or custom command named like a builtin replaces it when typed the same way */
   readonly skillsOverrideBuiltins?: boolean;
 }

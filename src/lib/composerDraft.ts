@@ -1,3 +1,5 @@
+import { appendQuote } from "./terminalQuote.ts";
+
 /** Drafts and in-flight sends belong to their pane, even while its composer is unmounted. */
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 interface Draft { text: string; sending: boolean }
@@ -87,6 +89,17 @@ export class ComposerDraftStore {
       this.unsaved.delete(key);
     } catch { this.unsaved.add(key); }
     this.notify();
+  }
+  /**
+   * Add a quote after the draft's newest text (another tab's edit included), never in place of it.
+   * False, with the draft untouched, when the result would pass `max` characters.
+   */
+  appendQuote(key: string, block: string, max: number): boolean {
+    this.refresh(key);
+    const next = appendQuote(this.read(key).text, block, max);
+    if (next === null) return false;
+    this.set(key, next);
+    return true;
   }
   /** `sent`: the draft text this send carries, settled once it is acknowledged */
   begin(key: string, sent?: string): boolean {

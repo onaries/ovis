@@ -166,7 +166,7 @@ export const SETTINGS_KO: Record<string, string> = {
   "Use alongside herdr's own window": "터미널의 herdr와 같이 쓰기",
   "Turn this on if this PC also shows herdr in a terminal window. A second after you switch to another window, this tab only watches the pane, so herdr's window keeps the pane at its own size instead of this window's. Click the tab to type again. While it watches, the pane is drawn at herdr's size and may not fill this window.": "이 PC의 터미널 창에서도 herdr를 띄워 쓴다면 켜세요. 다른 창으로 옮기고 1초가 지나면 이 탭은 패널을 보기만 해서, herdr 창이 패널을 이 창 크기가 아닌 자기 크기로 유지합니다. 다시 입력하려면 탭을 클릭하세요. 보는 동안 패널은 herdr 크기로 그려져 이 창을 다 채우지 않을 수 있습니다.",
   "Follow herdr's focus": "herdr 포커스 따라가기",
-  "When herdr moves to another pane, by a click in its window, a herdr command or a script, this device opens that pane too. Only on the PC open here, and only on this device.": "herdr가 다른 패널로 옮겨 가면(herdr 창에서 클릭, herdr 명령, 스크립트) 이 기기도 그 패널을 엽니다. 여기서 연 PC에서만, 이 기기에서만 적용됩니다.",
+  "When herdr moves to another pane, by a click in its window, a herdr command or a script, this device opens that pane too. Only on the PC open here, and only on this device. A PC on Ovis older than 0.4.13 does not report herdr's focus: update it first.": "herdr가 다른 패널로 옮겨 가면(herdr 창에서 클릭, herdr 명령, 스크립트) 이 기기도 그 패널을 엽니다. 여기서 연 PC에서만, 이 기기에서만 적용됩니다. Ovis 0.4.13보다 오래된 PC는 herdr 포커스를 알리지 않으니 먼저 업데이트하세요.",
   "Without a key the browser recognizes the speech: Chrome and Edge send the audio to Google or Microsoft. Nothing is recorded until you press the mic.": "키가 없으면 브라우저가 음성을 인식합니다. Chrome과 Edge는 오디오를 Google이나 Microsoft로 보냅니다. 마이크를 누르기 전에는 녹음되지 않습니다.",
   "Drops fillers and fixes spacing; code and paths stay as spoken": "군말을 지우고 띄어쓰기를 고칩니다. 코드와 경로는 말한 그대로 둡니다",
   "In chat": "채팅",

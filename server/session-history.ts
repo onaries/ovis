@@ -722,11 +722,12 @@ function withDatabase<T>(budget: Budget, storeDir: string, path: string, read: (
     if (!first.immutable) return answer?.value ?? null;
     // an immutable read is only sound while nobody writes: SQLite gives undefined results (stale rows,
     // SQLITE_CORRUPT) when the file changes under it. A writer is spotted by the file's modification
-    // time, change time and size, and by a -wal appearing (a filesystem with 1-2 s timestamps can hide
-    // a same-size rewrite within one tick: the limit). Unchanged: the answer holds, or, when the read
-    // failed, nothing is listed (reading again would fail the same way). Changed: read once more, as
-    // SQLite reads a store being written only when both its -wal and -shm are there (no listing may
-    // make either), else immutable again, which must find the file unchanged too; at most two reads
+    // time, change time and size, and by a -wal appearing. Coarse timestamp ticks (Linux's too) can
+    // hide a same-size rewrite within one tick: the limit. Unchanged: the answer holds, or, when the
+    // read failed, nothing is listed (reading again would fail the same way). Changed: read once
+    // more, as SQLite reads a store being written only when both its -wal and -shm are there at the
+    // check (see openDatabase's departing-writer limit), else immutable again, which must find the
+    // file unchanged too; at most two reads
     const unchanged = (since: BigIntStats) => {
       const now = budget.fstatOf(fd!, true) as BigIntStats;
       return now.mtimeNs === since.mtimeNs && now.ctimeNs === since.ctimeNs && now.size === since.size && (budget.modified(`${real}-wal`) !== null) === logBefore;
@@ -745,23 +746,24 @@ function withDatabase<T>(budget: Budget, storeDir: string, path: string, read: (
 }
 
 /**
- * Whether a WAL store's writer is live: both its -wal and -shm are there. SQLite makes whichever is
- * missing when it opens a WAL store as such, so with one of them missing (a store restored with its
- * -wal and no -shm, say) it is read immutable: nothing is written, and what only that -wal holds is
- * not seen.
+ * Whether a WAL store has both -wal and -shm at the check, not a guarantee its writer stays live.
+ * SQLite makes whichever is missing when it opens a WAL store as such, so with one of them missing
+ * (a store restored with its -wal and no -shm, say) it is read immutable: nothing is written, and
+ * what only that -wal holds is not seen.
  */
 const liveLog = (budget: Budget, real: string): boolean => budget.modified(`${real}-wal`) !== null && budget.modified(`${real}-shm`) !== null;
 
 /**
- * SQLite on the checked database, read-only, writing nothing into the user's store.
+ * SQLite on the checked database, read-only; immutable opens create no side files.
  *
  * - A WAL database with no `-wal` beside it has nothing in its log: it opens `immutable=1`, so SQLite
  *   neither locks it nor makes a `-wal` and `-shm` (a plain read-only open would make both). That read
  *   holds only while nobody writes; withDatabase checks the file after it and reads it once more when
  *   it changed: as such when a writer's -wal is live then, else immutable again, checked again.
- * - A WAL database whose `-wal` and `-shm` both exist (its agent writes now) opens as such, so the
- *   sessions still in its log are read; its side files are there already. With only one of them it
- *   reads immutable (liveLog).
+ * - A WAL database whose `-wal` and `-shm` both exist at the check opens as such, so the sessions
+ *   still in its log are read. If the writer closes between that check and the first query, SQLite
+ *   can recreate the side files it removed; reading live-log rows cannot exclude this race.
+ *   With only one side file at the check it reads immutable (liveLog).
  * - A rollback-journal database opens as such, with SQLite's locks against a writer mid-change.
  *
  * On Linux and macOS SQLite opens the checked descriptor as /dev/fd/N: macOS opens the descriptor

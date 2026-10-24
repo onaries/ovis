@@ -10,6 +10,8 @@ export interface ChatMinimapProps {
   rowKeys: readonly string[];
   scroller: RefObject<HTMLDivElement | null>;
   onJump: (row: number) => void;
+  /** a wheel over the rail, which scrolls the chat from outside it: the chat counts it as the reader's input */
+  onWheel?: (deltaY: number) => void;
 }
 
 const SPACING_PX = 8;
@@ -20,7 +22,7 @@ const MARGIN_REM = 12;
  * A tick per turn the user sent, beside the chat column; the turn in view is marked. A rail too
  * short for every turn gives a tick to each run of turns, so loading older history adds no buttons.
  */
-export function ChatMinimap({ turns, rowKeys, scroller, onJump }: ChatMinimapProps) {
+export function ChatMinimap({ turns, rowKeys, scroller, onJump, onWheel }: ChatMinimapProps) {
   const t = useT();
   const [current, setCurrent] = useState<number | null>(null);
   const [fits, setFits] = useState(false);
@@ -84,7 +86,7 @@ export function ChatMinimap({ turns, rowKeys, scroller, onJump }: ChatMinimapPro
     style={{ height: `min(${(count - 1) * SPACING_PX}px, calc(100% - ${MARGIN_REM}rem))`, "--minimap-steps": slots - 1 } as CSSProperties}
     onKeyDown={onKeyDown}
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocusIndex(null); }}
-    onWheel={(event) => scroller.current?.scrollBy({ top: event.deltaY })}
+    onWheel={(event) => { onWheel?.(event.deltaY); scroller.current?.scrollBy({ top: event.deltaY }); }}
   >
     {Array.from({ length: slots }, (_, index) => {
       const turnIndex = minimapSlotTarget(index, slots, count);

@@ -18,15 +18,23 @@ export function windowsArgv(commandLine: string): string[] {
   return words;
 }
 
-/** Every process below `pid`, nearest first, by its number and its argv; the executable's full path stands for argv[0]. */
+/**
+ * Every process below `pid`, nearest first, by its number and its argv; the executable's full path
+ * stands for argv[0]. Windows keeps a process's parent number after that parent exits, and hands
+ * the number on: a process that started before the one now holding its parent's number is not its
+ * child (when both starts are known), and neither is anything below it.
+ */
 export function descendantProcesses(rows: readonly ProcessRow[], pid: number): { pid: number; argv: string[] }[] {
   const found: { pid: number; argv: string[] }[] = [];
   const seen = new Set<number>([pid]);
+  const started = new Map(rows.map((row) => [row.pid, row.started]));
   let level = [pid];
   while (level.length > 0) {
     const next: number[] = [];
     for (const row of rows) {
       if (!level.includes(row.parent) || seen.has(row.pid)) continue;
+      const parentStarted = started.get(row.parent);
+      if (row.started !== undefined && parentStarted !== undefined && row.started < parentStarted) continue;
       seen.add(row.pid);
       next.push(row.pid);
       const argv = windowsArgv(row.commandLine ?? "");

@@ -1,6 +1,6 @@
 /** Build in a private checkout. The source tree and the serving build stay intact. */
 import { spawn } from "node:child_process";
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { CHECKOUT_CHANGED_REASON, noInstalledNotes, noUpdateNotes, unmanagedUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../shared/update.ts";
 import { compareVersions, releaseNotes, releaseSummaries, SUMMARIES_FILE } from "./release-notes.ts";
@@ -428,6 +428,11 @@ export class Updater {
         await run([process.execPath, "run", "typecheck"], 120_000);
         this.patch({ step: "build" });
         await run([process.execPath, "run", "build"], 120_000);
+        // the release's Rust PTY host, checked against its manifest; without it the release runs the Node sidecar
+        if (existsSync(join(stage, "scripts", "pty-sidecar.ts"))) {
+          try { console.log((await run([process.execPath, "scripts/pty-sidecar.ts", "install"], 120_000))); }
+          catch (error) { console.error("Rust PTY host install failed; the release uses the Node PTY sidecar", error); }
+        }
         const reason = await this.sourceBlock();
         if (reason) throw new Error(reason);
         this.controller.signal.throwIfAborted();

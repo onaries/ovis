@@ -12,6 +12,7 @@
     <h1 data-ko="PC에 연결할 수 없습니다">Can't reach your PC</h1>
     <p id="what">The app could not open it.</p>
     <p class="error" id="reason"></p>
+    <p id="tailscale" hidden data-ko="Tailscale 주소입니다. 이 휴대폰에서 Tailscale이 꺼져 있을 수 있습니다. Tailscale 앱에서 연결을 켠 뒤 다시 시도를 누르세요.">This is a Tailscale address, and Tailscale may be off on this phone. Turn it on in the Tailscale app, then tap Try again.</p>
     <p data-ko="PC가 켜져 있는지, 거기서 Ovis가 실행 중인지, 이 휴대폰이 PC에 닿을 수 있는지(Tailscale이면 둘 다 같은 tailnet에 있는지) 확인하세요.">Check that the PC is on, that Ovis runs there, and that this phone can reach it (on Tailscale, both in the same tailnet).</p>
     <div class="row">
       <button type="button" class="primary" id="retry" data-ko="다시 시도">Try again</button>
@@ -46,6 +47,12 @@
       ? (korean ? `앱이 ${state.last}을(를) 열지 못했습니다.` : `The app could not open ${state.last}.`)
       : (korean ? "앱이 PC를 열지 못했습니다." : "The app could not open it.");
     document.getElementById("reason").textContent = state.failure ?? "";
+    // a MagicDNS name or a Tailscale IP that sent no answer (an HTTP error came through Tailscale) (100.64.0.0/10, fd7a:115c:a1e0::/48) opens only while Tailscale is connected on the phone
+    let host = "";
+    const pc = state.current || state.last;
+    try { host = pc ? new URL(pc).hostname.replace(/^\[|\]$/g, "").toLowerCase() : ""; } catch {}
+    const ipv4 = host.match(/^100\.(\d+)\.\d+\.\d+$/);
+    document.getElementById("tailscale").hidden = /^HTTP \d{3}\b/.test(state.failure ?? "") || !(host.endsWith(".ts.net") || (ipv4 && Number(ipv4[1]) >= 64 && Number(ipv4[1]) <= 127) || host.startsWith("fd7a:115c:a1e0:"));
   </script>
 </body>
 </html>

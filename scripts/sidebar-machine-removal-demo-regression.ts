@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { chromium, type Locator, type Page } from "playwright-core";
 import { chromePath } from "./chrome-path.ts";
 import { prepareMachineControlsDemo } from "./sidebar-machine-controls-fixture.ts";
+import { SUPPORTED_ENTRIES } from "../src/lib/themes.ts";
 
 const app = mkdtempSync(join(tmpdir(), "herdr-sidebar-machine-removal-"));
 const evidenceDir = process.env.UI_EVIDENCE_DIR;
@@ -44,6 +45,7 @@ interface DangerStyle {
   textMatches: boolean;
   opacity: number;
   focusVisible: boolean;
+  borderColor: string;
   outlineStyle: string;
   outlineWidth: number;
   boxShadow: string;
@@ -111,6 +113,7 @@ async function dangerStyle(button: Locator): Promise<DangerStyle> {
       textMatches: same(text, expectedText),
       opacity,
       focusVisible: element.matches(":focus-visible"),
+      borderColor: style.borderTopColor,
       outlineStyle: focus.outlineStyle,
       outlineWidth: Number.parseFloat(focus.outlineWidth) || 0,
       boxShadow: focus.boxShadow,
@@ -152,6 +155,8 @@ async function checkDangerPresentation(page: Page, theme: Scenario["theme"], sta
     assert.ok(style.borderContrast >= 3, `${theme} ${stage} ${state} border contrast is ${style.borderContrast.toFixed(2)}:1`);
     console.log(`CONTRAST ${theme} ${stage} ${state}: text ${style.textContrast.toFixed(2)}:1, border ${style.borderContrast.toFixed(2)}:1`);
   }
+  assert.notEqual(hover.boxShadow, normal.boxShadow, `${theme} ${stage} hover shows on the danger button: ${JSON.stringify({ normal, hover })}`);
+  assert.ok(hover.boxShadow.includes(hover.borderColor) && hover.boxShadow.includes("inset"), `${theme} ${stage} the hover ring is drawn inside, in the button's own border color: ${JSON.stringify(hover)}`);
   assert.ok(focus.focusVisible && (focus.outlineStyle !== "none" && focus.outlineWidth > 0 || focus.boxShadow !== "none"), `${theme} ${stage} danger button has a visible keyboard focus indicator: ${JSON.stringify(focus)}`);
 }
 
@@ -166,10 +171,23 @@ async function checkDisabledDanger(button: Locator, neighbour: Locator, theme: S
   assert.ok(style.tintMatches, `${theme} disabled confirmation keeps the danger tint token: ${JSON.stringify(style)}`);
   assert.ok(style.borderMatches, `${theme} disabled confirmation keeps the blocked border token: ${JSON.stringify(style)}`);
   assert.ok(style.textMatches, `${theme} disabled confirmation keeps the danger text token: ${JSON.stringify(style)}`);
-  assert.ok(style.opacity < 1 && style.opacity > neighbourOpacity, `${theme} pending removal is dimmed, but less than the disabled Rename beside it (${neighbourOpacity}): ${style.opacity}`);
+  assert.ok(style.opacity === 1 && neighbourOpacity < 1, `${theme} pending removal keeps its full strength while the disabled Rename beside it dims (${neighbourOpacity}): ${style.opacity}`);
   assert.ok(style.textContrast >= 4.5, `${theme} disabled confirmation text stays readable: ${style.textContrast.toFixed(2)}:1`);
   assert.ok(style.borderContrast >= 3, `${theme} disabled confirmation border stays visible: ${style.borderContrast.toFixed(2)}:1`);
   console.log(`CONTRAST ${theme} disabled (opacity ${style.opacity}, Rename ${neighbourOpacity}): actual text ${style.textContrast.toFixed(2)}:1, border ${style.borderContrast.toFixed(2)}:1`);
+  // every theme block of this mode behind the pending removal: its warning stays readable in each
+  const page = button.page();
+  const shown = await page.evaluate(() => document.documentElement.dataset.palette);
+  for (const { id: palette } of SUPPORTED_ENTRIES.filter((entry) => entry.mode === theme)) {
+    await page.evaluate((palette) => { document.documentElement.dataset.palette = palette; }, palette);
+    await settleButton(button);
+    const themed = await dangerStyle(button);
+    assert.ok(themed.tintMatches && themed.borderMatches && themed.textMatches, `${palette} ${theme} pending removal keeps its danger tokens: ${JSON.stringify(themed)}`);
+    assert.ok(themed.textContrast >= 4.5, `${palette} ${theme} pending removal text stays readable: ${themed.textContrast.toFixed(2)}:1`);
+    assert.ok(themed.borderContrast >= 3, `${palette} ${theme} pending removal border stays visible: ${themed.borderContrast.toFixed(2)}:1`);
+    console.log(`CONTRAST ${palette} ${theme} pending removal: text ${themed.textContrast.toFixed(2)}:1, border ${themed.borderContrast.toFixed(2)}:1`);
+  }
+  await page.evaluate((palette) => { if (palette === undefined) delete document.documentElement.dataset.palette; else document.documentElement.dataset.palette = palette; }, shown);
 }
 
 /** Disabled only because a rename runs, Remove PC dims exactly like the Rename button that runs it. */

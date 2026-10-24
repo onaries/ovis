@@ -83,7 +83,6 @@ export function commandInvocations(agent: string, text: string, commands: readon
     const form = row?.visibility === "terminal" || (agent === "omp" && name === "btw") ? { match: "bare" as const, interaction: "terminal" as const }
       : argument === "" ? bare
       : forms.find((form) => typeof form.match === "object" && form.match.sub.toLocaleLowerCase() === sub)
-        ?? forms.find((form) => typeof form.match === "object" && form.match.sub === "*")
         ?? forms.find((form) => form.match === "other") ?? bare;
     matches.push({ name, argument, form: form ?? null });
   }

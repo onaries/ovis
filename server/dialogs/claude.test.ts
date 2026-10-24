@@ -28,6 +28,12 @@ describe("Claude Code's terminal rewind", () => {
       expect(claudeRewindOpen(rewind("confirm-apple-esc-esc", width))).toBe(false);
     });
   }
+
+  test("protects the rewind's message list, the screen it opens on, without offering a card", () => {
+    const screen = rewind("select-banana", 40);
+    expect(claudeRewindOpen(screen)).toBe(true);
+    expect(parseInteractivePrompt("claude", screen)).toBeNull();
+  });
 });
 
 describe("Claude Code's bare /goal", () => {

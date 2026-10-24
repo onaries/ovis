@@ -15,6 +15,9 @@ export const OMP_CLIPPED_SINGLE_HINT_RE = /(?:enter|⏎)\s+select.*\bn\s+note.*�
 
 export const OMP_MULTI_HINT_RE = /(?:space\/enter toggle|(?:space|␠|␣)\s+toggle.*(?:enter|⏎)\s+(?:submit|next)).*↑\/↓\s*move.*(?:esc|⎋)\s*cancel/i;
 
+// A narrow multi-select footer clips inside the cancel label after its question keys (omp 18.12.6 at 60 columns: `⎋ cance…`).
+export const OMP_MULTI_CLIPPED_HINT_RE = /(?:space|␠|␣)\s+toggle.*(?:enter|⏎)\s+(?:submit|next).*↑\/↓\s*move.*(?:esc|⎋)(?:\s+c(?:a(?:n(?:c(?:e(?:l)?)?)?)?)?)?(?:…|\.{3})(?=\s|$)/i;
+
 export const OMP_REVIEW_HINT_RE = /(?:enter|⏎)\s+submit.*↑\/↓\s*scroll.*(?:esc|⎋)\s*cancel/i;
 
 const OMP_TABS_HINT_RE = /(?:tab|⇥).*?(?:←|left).*?(?:→|right)|(?:←|left).*?(?:→|right).*?(?:tab|⇥)/i;
@@ -179,7 +182,8 @@ function parseOmpQuestion(screen: string): ParsedPrompt | null {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const clippedHintIndex = findLastIndex(lines, (_, index) => OMP_SINGLE_CLIPPED_HINT_RE.test(wrapped(lines, index)));
   const hintIndex = findLastIndex(lines, (_, index) => OMP_SINGLE_HINT_RE.test(wrapped(lines, index))
-    || OMP_CLIPPED_SINGLE_HINT_RE.test(wrapped(lines, index)) || OMP_SINGLE_CLIPPED_HINT_RE.test(wrapped(lines, index)) || OMP_MULTI_HINT_RE.test(wrapped(lines, index)));
+    || OMP_CLIPPED_SINGLE_HINT_RE.test(wrapped(lines, index)) || OMP_SINGLE_CLIPPED_HINT_RE.test(wrapped(lines, index)) || OMP_MULTI_HINT_RE.test(wrapped(lines, index))
+    || OMP_MULTI_CLIPPED_HINT_RE.test(wrapped(lines, index)));
   if (hintIndex < 0) return null;
   const dividers = findMenuDividers(lines, hintIndex);
   if (!dividers) return null;
@@ -191,7 +195,7 @@ function parseOmpQuestion(screen: string): ParsedPrompt | null {
   const customIndex = rows.findIndex((row) => /^Other \(type your own\)$/i.test(row.label));
   const optionRows = rows.filter((_, index) => index !== customIndex);
   const hint = wrapped(lines, hintIndex);
-  const multiSelect = OMP_MULTI_HINT_RE.test(hint);
+  const multiSelect = OMP_MULTI_HINT_RE.test(hint) || OMP_MULTI_CLIPPED_HINT_RE.test(hint);
   const currentMulti = /(?:space|␠|␣)\s+toggle.*(?:enter|⏎)\s+(?:submit|next)/i.test(hint);
   const question = ompQuestionText(lines, startDivider, OMP_TABS_HINT_RE.test(hint));
   if (!question || selectedIndex < 0 || optionRows.length === 0 || customIndex !== rows.length - 1

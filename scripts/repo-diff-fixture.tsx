@@ -11,9 +11,10 @@ import { OpenFileContext } from "../src/lib/filePaths.ts";
 import { SettingsProvider, useSettings, type Settings } from "../src/lib/settings.ts";
 import { useFileViewer } from "../src/lib/useFileViewer.ts";
 import { useRepoDiffViewer } from "../src/lib/useRepoDiffViewer.ts";
+import type { RepoDiffTarget } from "../src/lib/repoDiff.ts";
 
 interface Files { machine: string; paneId: string; directory: string }
-declare global { interface Window { repoDiffQA: { openFiles: (machine: string, paneId: string, directory: string) => void; openTurn: (machine: string, paneId: string, directory: string) => void; closeFiles: () => void; settings: (patch: Partial<Settings>) => void } } }
+declare global { interface Window { repoDiffQA: { openFiles: (machine: string, paneId: string, directory: string) => void; openTurn: (machine: string, paneId: string, directory: string) => void; closeFiles: () => void; settings: (patch: Partial<Settings>) => void; openDiff: (target: RepoDiffTarget) => void } } }
 
 /** The Files dialog, the diff above it and a file above that, wired as App.tsx wires them. */
 function Fixture() {
@@ -22,7 +23,7 @@ function Fixture() {
   const { viewing: file, openFile, closeFile } = useFileViewer();
   const { viewing: diff, openDiff, closeDiff } = useRepoDiffViewer();
   const { update } = useSettings();
-  window.repoDiffQA = { openFiles: (machine, paneId, directory) => { setTurnOnly(false); setFiles({ machine, paneId, directory }); }, openTurn: (machine, paneId, directory) => { setTurnOnly(true); setFiles({ machine, paneId, directory }); }, closeFiles: () => setFiles(null), settings: update };
+  window.repoDiffQA = { openFiles: (machine, paneId, directory) => { setTurnOnly(false); setFiles({ machine, paneId, directory }); }, openTurn: (machine, paneId, directory) => { setTurnOnly(true); setFiles({ machine, paneId, directory }); }, closeFiles: () => setFiles(null), settings: update, openDiff };
   return <main>
     <button type="button" id="outside">Outside</button>
     {files && <MachineContext.Provider value={files.machine}>

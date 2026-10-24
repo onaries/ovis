@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { ptyHost } from "./host.ts";
+import { disableRustHost, rustSidecar, spawnErrorReason } from "./host.ts";
+import { nodeSidecarAvailable, realNode } from "./sidecar.ts";
 
 const HOST_SCRIPT = join(import.meta.dir, "pty-host.mjs");
 
@@ -27,11 +28,12 @@ export function writeLine(sink: import("bun").FileSink, line: string): boolean {
 }
 
 /**
- * A command running on a real PTY, hosted by a Node sidecar (see pty-host.mjs for
+ * A command running on a real PTY, hosted by the Rust host or, as the fallback, the Node sidecar (see pty-host.mjs for
  * why output flow control currently needs node-pty, and why it is the prebuilt
  * @lydell/node-pty distribution of it).
  */
 export class PtySession {
+  readonly host: "node" | "rust";
   readonly exited: Promise<void>;
   private readonly proc: ReturnType<typeof Bun.spawn>;
   private closed = false;
@@ -42,14 +44,39 @@ export class PtySession {
     const env = { ...process.env, ...options.env };
     delete env["OVIS_TOKEN"];
     delete env["HERDR_WEB_TOKEN"];
-    this.proc = Bun.spawn(
-      [...ptyHost(HOST_SCRIPT), String(options.cols), String(options.rows), options.command, ...options.args],
-      { stdin: "pipe", stdout: "pipe", stderr: "inherit", env },
-    );
+    const args = [String(options.cols), String(options.rows), options.command, ...options.args];
+    const spawnOptions = { stdin: "pipe", stdout: "pipe", stderr: "inherit", env } as const;
+    // only a real Node runs pty-host.mjs: `bun run` puts a `node` that is Bun on a PC without one
+    const node = () => {
+      const executable = nodeSidecarAvailable() ? realNode(env) : null;
+      if (!executable) throw new Error("no PTY host: the Rust host cannot run and this PC has no Node for the PTY sidecar");
+      return Bun.spawn([executable, HOST_SCRIPT, ...args], spawnOptions);
+    };
+    const rust = rustSidecar();
+    if (rust) {
+      try {
+        this.proc = Bun.spawn([rust, ...args], spawnOptions);
+        this.host = "rust";
+      } catch (error) {
+        const reason = `${rust} could not be started (${spawnErrorReason(error)})`;
+        if (!nodeSidecarAvailable()) throw new Error(`no PTY host: ${reason}, and this PC has no Node for the PTY sidecar`);
+        this.proc = node();
+        this.host = "node";
+        disableRustHost(reason);
+      }
+    } else {
+      this.proc = node();
+      this.host = "node";
+    }
 
     // Process exit can precede the final stdout read. Deliver every byte before
     // onExit lets the server remove the attachment.
     this.exited = Promise.all([this.proc.exited, this.pump()]).then(([code]) => {
+      // with no Node to fall back to, switching the Rust host off would leave every later attach without a host
+      if (this.host === "rust" && !this.closed && this.proc.signalCode !== null) {
+        if (nodeSidecarAvailable()) disableRustHost(`the Rust PTY host ended by ${this.proc.signalCode}`);
+        else console.error(`Rust PTY host: ended by ${this.proc.signalCode}; kept, as this PC has no Node for the PTY sidecar`);
+      }
       if (this.closed) return;
       this.closed = true;
       options.onExit(code ?? null);

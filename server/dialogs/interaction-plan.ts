@@ -1,13 +1,14 @@
 import { KEY, type AnswerStep, type ParsedPrompt } from "./shared.ts";
 
 export interface InteractionPlan {
-  readonly identity: string;
   /** Position after the reversible moves sent so far, in the original drawing's rows. */
   cursor: number;
   moves(answer: number): AnswerStep[];
   matches(screen: string): boolean;
-  readonly commit: AnswerStep;
-  readonly terminalFallback: boolean;
+  /** The irreversible step that picks the answer's row, from that answer's own key sequence. */
+  commit(answer: number): AnswerStep;
+  /** Whether the answer's commit has no safe key and is left to the terminal. */
+  terminalFallback(answer: number): boolean;
 }
 
 /** Bind a reader's existing key sequences to its own row identity, not a card's viewport hash. */
@@ -19,7 +20,6 @@ export function pickerPlan(
 ): InteractionPlan {
   let seen = parsed;
   const plan: InteractionPlan = {
-    identity: parsed.id,
     cursor: parsed.selectedIndex,
     moves: (answer) => sequences[answer]?.slice(0, -1) ?? [],
     matches: (screen) => {
@@ -29,11 +29,11 @@ export function pickerPlan(
       return true;
     },
     // Codex's footer belongs to the freshly highlighted row, not the row we started on.
-    get commit() {
-      const step = sequences[0]?.at(-1) ?? { pick: true };
+    commit: (answer) => {
+      const step = sequences[answer]?.at(-1) ?? { pick: true };
       return step.pick ? seen.rowKey ?? { pick: true } : step;
     },
-    get terminalFallback() { return plan.commit.pick === true; },
+    terminalFallback: (answer) => plan.commit(answer).pick === true,
   };
   return plan;
 }
@@ -64,7 +64,7 @@ export async function executeInteractionPlan(
     }
     walked = true;
   }
-  if (!await matches() || !io.active() || io.cancelled() || plan.terminalFallback) return "prompt_changed";
-  await io.send(plan.commit, true);
+  if (!await matches() || !io.active() || io.cancelled() || plan.terminalFallback(answer)) return "prompt_changed";
+  await io.send(plan.commit(answer), true);
   return "answered";
 }

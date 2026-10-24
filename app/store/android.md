@@ -5,8 +5,8 @@ the app reach production only after a **closed test with at least 12 testers who
 for 14 days in a row**. This page is everything for that first closed-test release: the build,
 the upload key, the store listing, the App content answers, and the clicks in Play Console.
 
-The first test build has no push notifications (Android push through FCM comes in a later
-build; see [Later builds](#later-builds)).
+The first test build, 1.0 (1), had no push notifications. 1.0 (2) is the first with them: it is
+built with `google-services.json` (FCM), and the data safety answers below cover its push token.
 
 ## 1. The upload key (the owner runs this, once)
 
@@ -57,7 +57,8 @@ test build has backups off and the error page reasons):
 git switch main && git pull
 bun install && (cd app && bun install)
 cd app && bun run build:web && bunx cap sync android
-cd android && OVIS_UPLOAD_PROPERTIES=~/.config/ovis-android/upload.properties ./gradlew bundleRelease
+cd android && OVIS_GOOGLE_SERVICES=~/.config/ovis-push/google-services.json \
+  OVIS_UPLOAD_PROPERTIES=~/.config/ovis-android/upload.properties ./gradlew bundleRelease   # without OVIS_GOOGLE_SERVICES the bundle has no push
 # app/android/app/build/outputs/bundle/release/app-release.aab
 keytool -printcert -jarfile app/build/outputs/bundle/release/app-release.aab   # shows your upload key
 ```
@@ -65,7 +66,7 @@ keytool -printcert -jarfile app/build/outputs/bundle/release/app-release.aab   #
 | Field | Now | Rule |
 |---|---|---|
 | `applicationId` | `sh.ovis.app` | never changes once uploaded |
-| `versionCode` | `1` | raise it by one for every upload, test tracks included (`defaultConfig` in `app/android/app/build.gradle`) |
+| `versionCode` | `3` | raise it by one for every upload, test tracks included (`defaultConfig` in `app/android/app/build.gradle`) |
 | `versionName` | `1.0` | what people see; raise it for each public release |
 | `targetSdkVersion` | 36 | Play asks new apps for a recent target |
 
@@ -126,10 +127,10 @@ emulator; no real PC or session is in them.
 | Advertising ID | No, the app does not use it |
 | Data safety | below |
 
-**Data safety** (as of this test build, without push). Google counts as collected anything the
+**Data safety** (as of 1.0 (2), with push). Google counts as collected anything the
 app sends off the phone, wherever it goes, so what travels to the user's own PC counts too. Its
 exception for data a user sends to their own storage needs an app that "never collects or
-accesses" that data, and Ovis shows it, so it does not apply. Two routes leave the phone:
+accesses" that data, and Ovis shows it, so it does not apply. Three routes leave the phone:
 
 - **To the user's own PC**: everything the app shows and sends while it is open.
 - **On to the developer, from the PC**: the Ovis server on the PC sends anonymous usage counts to
@@ -137,6 +138,9 @@ accesses" that data, and Ovis shows it, so it does not apply. Two routes leave t
   phone opens tells the PC its settings (`TelemetryNotice` in
   `src/components/TelemetryControls.tsx`), and the PC puts the settings of the last browser or
   phone that told it into those counts. Details below.
+- **To the developer's push relay, from the phone**: once alerts are turned on, the app registers
+  its FCM push token with `push.ovis.sh` (`push-relay/`), which keeps it to forward the PC's
+  end-to-end encrypted alerts through FCM.
 
 Answers:
 
@@ -158,7 +162,7 @@ Answers:
 | Files and docs | files the user attaches in the composer, and files opened in the file viewer | optional, user-initiated | App functionality |
 | App activity > Other user-generated content | what is typed into terminals | required | App functionality |
 | App activity > App interactions | the app settings the user chose (theme, font sizes, language, alert and voice options and the like), in the PC's usage counts to the developer | optional (can be turned off) | Analytics |
-| Device or other IDs | the sign-in cookie a PC gives the phone when it is paired (to the PC); the random ID the PC makes for its usage counts (to the developer) | required (cookie); optional (ID) | App functionality (cookie); Analytics (ID) |
+| Device or other IDs | the sign-in cookie a PC gives the phone when it is paired (to the PC); the random ID the PC makes for its usage counts (to the developer); the phone's FCM push token, kept by the developer's push relay to forward the PC's encrypted alerts, only once alerts are turned on | required (cookie); optional (ID, push token) | App functionality (cookie, push token); Analytics (ID) |
 | Location > Approximate location | the country (two letters) the developer's receiver reads from the address the usage counts come from; the address is not stored | optional (can be turned off) | Analytics |
 | App info and performance > Diagnostics | connection traces the page reports to the PC for troubleshooting | required | Analytics |
 
@@ -166,9 +170,11 @@ The composer's attachment picker takes any file (`src/components/Composer.tsx`,
 `uploadPaneImage` in `src/lib/api.ts`), so every file-like type above is listed as optional and
 user-initiated: nothing is sent unless the user picks it. None of it is "shared": the PC is the
 user's own, the transcription provider is one the user chose and is sent to on the user's own
-action, and the developer's receiver runs on Cloudflare as a service provider.
+action, and the developer's receiver and push relay run on Cloudflare, and FCM carries the
+encrypted alerts, as service providers.
 
-**The usage counts, in full** (the only data that reaches the developer):
+**The usage counts, in full** (with the push token above, the only data that reaches the
+developer):
 
 - **When**: one event when the server is installed and one per new version, plus one message per
   UTC day it is in use. Nothing goes out before the client has shown its one-line notice ("Ovis
@@ -202,8 +208,9 @@ action, and the developer's receiver runs on Cloudflare as a service provider.
    or URL, Save.
 6. **First release**: in that track, Create new release. App signing: accept Play App Signing
    (Google makes the app signing key). Upload `app-release.aab` (section 2). Release name
-   `1.0 (1)`, release notes `First test build.` Next > Save > Go to overview > Send changes for
-   review (Publishing overview).
+   `1.0 (1)`, release notes `First test build.` (for the push build: `1.0 (2)`,
+   `Push notifications.`; then `1.0 (3)`, `The page stays above the navigation buttons.`)
+   Next > Save > Go to overview > Send changes for review (Publishing overview).
 7. **Invite**: once Google approves (hours to a few days), open the track's Testers tab and copy
    the opt-in link ("Join on the web"). Send it to the group. Each tester opens it, taps Become a
    tester, then installs Ovis from Play with the same Google account.
@@ -215,9 +222,7 @@ action, and the developer's receiver runs on Cloudflare as a service provider.
 
 ## Later builds
 
-- **Push (FCM)** needs a Firebase project and `google-services.json` from the owner, and changes
-  the data safety answer: the phone's FCM token goes to the push relay, which the developer
-  runs, so "Device or other IDs" then also covers that token (app functionality, not shared,
-  optional: only once alerts are turned on). The privacy policy gets the same line. That build
-  raises `versionCode`.
+- **Push (FCM)**, from 1.0 (2): built with `OVIS_GOOGLE_SERVICES` naming the Firebase project's
+  `google-services.json` (without it the app builds with push unavailable). The phone's FCM token
+  goes to the push relay, so "Device or other IDs" covers it (above), as does the privacy policy.
 - Every new upload: raise `versionCode`, build as in section 2, upload to the track.

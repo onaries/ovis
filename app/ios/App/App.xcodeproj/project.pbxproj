@@ -7,6 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A67F098E31CE4D459B240001 /* OvisPushPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A67F098E31CE4D459B240002 /* OvisPushPlugin.swift */; };
+		A67F098E31CE4D459B240003 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A67F098E31CE4D459B240004 /* NotificationService.swift */; };
+		A67F098E31CE4D459B240005 /* OvisPushCore in Frameworks */ = {isa = PBXBuildFile; productRef = A67F098E31CE4D459B240006 /* OvisPushCore */; };
+		A67F098E31CE4D459B240007 /* OvisPushCore in Frameworks */ = {isa = PBXBuildFile; productRef = A67F098E31CE4D459B240008 /* OvisPushCore */; };
+		A67F098E31CE4D459B240009 /* OvisNotifications.appex in Embed Foundation Extensions */ = {
+			isa = PBXBuildFile;
+			fileRef = A67F098E31CE4D459B24000A /* OvisNotifications.appex */;
+			settings = {
+				ATTRIBUTES = (
+					RemoveHeadersOnCopy,
+				);
+			};
+		};
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
@@ -21,7 +34,37 @@
 		4E5244520000000000000002 /* HerdrBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E5244520000000000000001 /* HerdrBridgeViewController.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		A67F098E31CE4D459B24000B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A67F098E31CE4D459B24000C;
+			remoteInfo = OvisNotifications;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A67F098E31CE4D459B24000D /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A67F098E31CE4D459B240009 /* OvisNotifications.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		A67F098E31CE4D459B240002 /* OvisPushPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OvisPushPlugin.swift; sourceTree = "<group>"; };
+		A67F098E31CE4D459B240004 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		A67F098E31CE4D459B24000A /* OvisNotifications.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OvisNotifications.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A67F098E31CE4D459B24000E /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
+		A67F098E31CE4D459B24000F /* OvisNotifications.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OvisNotifications.entitlements; sourceTree = "<group>"; };
+		A67F098E31CE4D459B240010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -39,22 +82,42 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		A67F098E31CE4D459B240011 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A67F098E31CE4D459B240007 /* OvisPushCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		504EC3011FED79650016851F /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */,
+				A67F098E31CE4D459B240005 /* OvisPushCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		A67F098E31CE4D459B240012 /* OvisNotifications */ = {
+			isa = PBXGroup;
+			children = (
+				A67F098E31CE4D459B240004 /* NotificationService.swift */,
+				A67F098E31CE4D459B240010 /* Info.plist */,
+				A67F098E31CE4D459B24000F /* OvisNotifications.entitlements */,
+			);
+			path = OvisNotifications;
+			sourceTree = "<group>";
+		};
 		504EC2FB1FED79650016851F = {
 			isa = PBXGroup;
 			children = (
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				504EC3061FED79650016851F /* App */,
+				A67F098E31CE4D459B240012 /* OvisNotifications */,
 				504EC3051FED79650016851F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -63,6 +126,7 @@
 			isa = PBXGroup;
 			children = (
 				504EC3041FED79650016851F /* App.app */,
+				A67F098E31CE4D459B24000A /* OvisNotifications.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -72,6 +136,8 @@
 			children = (
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
 				4E5244520000000000000003 /* HerdrShellPlugin.swift */,
+				A67F098E31CE4D459B240002 /* OvisPushPlugin.swift */,
+				A67F098E31CE4D459B24000E /* App.entitlements */,
 				4E5244520000000000000001 /* HerdrBridgeViewController.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
@@ -89,6 +155,26 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		A67F098E31CE4D459B24000C /* OvisNotifications */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A67F098E31CE4D459B240013 /* Build configuration list for PBXNativeTarget "OvisNotifications" */;
+			buildPhases = (
+				A67F098E31CE4D459B240014 /* Sources */,
+				A67F098E31CE4D459B240011 /* Frameworks */,
+				A67F098E31CE4D459B240015 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OvisNotifications;
+			packageProductDependencies = (
+				A67F098E31CE4D459B240008 /* OvisPushCore */,
+			);
+			productName = OvisNotifications;
+			productReference = A67F098E31CE4D459B24000A /* OvisNotifications.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		504EC3031FED79650016851F /* App */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 504EC3161FED79650016851F /* Build configuration list for PBXNativeTarget "App" */;
@@ -96,14 +182,17 @@
 				504EC3001FED79650016851F /* Sources */,
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
+				A67F098E31CE4D459B24000D /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A67F098E31CE4D459B240016 /* OvisNotifications */,
 			);
 			name = App;
 			packageProductDependencies = (
 				4D22ABE82AF431CB00220026 /* CapApp-SPM */,
+				A67F098E31CE4D459B240006 /* OvisPushCore */,
 			);
 			productName = App;
 			productReference = 504EC3041FED79650016851F /* App.app */;
@@ -135,6 +224,7 @@
 			);
 			mainGroup = 504EC2FB1FED79650016851F;
 			packageReferences = (
+				A67F098E31CE4D459B240017 /* XCLocalSwiftPackageReference "OvisPushCore" */,
 				D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */,
 			);
 			productRefGroup = 504EC3051FED79650016851F /* Products */;
@@ -142,11 +232,19 @@
 			projectRoot = "";
 			targets = (
 				504EC3031FED79650016851F /* App */,
+				A67F098E31CE4D459B24000C /* OvisNotifications */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		A67F098E31CE4D459B240015 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		504EC3021FED79650016851F /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -164,6 +262,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		A67F098E31CE4D459B240014 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A67F098E31CE4D459B240003 /* NotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		504EC3001FED79650016851F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -171,11 +277,20 @@
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				4E5244520000000000000004 /* HerdrShellPlugin.swift in Sources */,
+				A67F098E31CE4D459B240001 /* OvisPushPlugin.swift in Sources */,
 				4E5244520000000000000002 /* HerdrBridgeViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A67F098E31CE4D459B240016 /* OvisNotifications */ = {
+			isa = PBXTargetDependency;
+			target = A67F098E31CE4D459B24000C /* OvisNotifications */;
+			targetProxy = A67F098E31CE4D459B24000B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
 		504EC30B1FED79650016851F /* Main.storyboard */ = {
@@ -197,6 +312,48 @@
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
+		A67F098E31CE4D459B240018 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = OvisNotifications/OvisNotifications.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = OvisNotifications/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = sh.ovis.app.notifications;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A67F098E31CE4D459B240019 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = OvisNotifications/OvisNotifications.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = OvisNotifications/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = sh.ovis.app.notifications;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		504EC3141FED79650016851F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
@@ -229,6 +386,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -247,6 +405,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -286,6 +445,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -298,6 +458,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -311,16 +472,16 @@
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
+				OVIS_PUSH_RELAY = "https://push.ovis.sh";
 				PRODUCT_BUNDLE_IDENTIFIER = sh.ovis.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -333,15 +494,15 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				OVIS_PUSH_RELAY = "https://push.ovis.sh";
 				PRODUCT_BUNDLE_IDENTIFIER = sh.ovis.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
@@ -353,6 +514,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A67F098E31CE4D459B240013 /* Build configuration list for PBXNativeTarget "OvisNotifications" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A67F098E31CE4D459B240018 /* Debug */,
+				A67F098E31CE4D459B240019 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		504EC2FF1FED79650016851F /* Build configuration list for PBXProject "App" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -374,6 +544,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		A67F098E31CE4D459B240017 /* XCLocalSwiftPackageReference "OvisPushCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../OvisPushCore";
+		};
 		D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "CapApp-SPM";
@@ -381,6 +555,16 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A67F098E31CE4D459B240006 /* OvisPushCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A67F098E31CE4D459B240017 /* XCLocalSwiftPackageReference "OvisPushCore" */;
+			productName = OvisPushCore;
+		};
+		A67F098E31CE4D459B240008 /* OvisPushCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A67F098E31CE4D459B240017 /* XCLocalSwiftPackageReference "OvisPushCore" */;
+			productName = OvisPushCore;
+		};
 		4D22ABE82AF431CB00220026 /* CapApp-SPM */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */;

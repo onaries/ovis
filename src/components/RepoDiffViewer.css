@@ -230,6 +230,43 @@
   resize: none;
 }
 
+/* Find in this diff: the terminal find bar's markup and tokens, between the header and the rows */
+.repo-diff-find .find-bar-count {
+  display: inline-flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+  /* clear of Previous's focus ring, which is drawn outside the button */
+  margin-inline-end: var(--space-2);
+}
+
+.repo-diff-find-place {
+  color: var(--text);
+}
+
+/* the bar's own words are read, not glanced at: the body size on a computer, the reading size on a
+   phone (below); its name stays in view beside the query once something is typed; and its buttons
+   keep a finger's gap between them */
+.repo-diff-find .find-bar-controls {
+  gap: var(--space-2);
+}
+
+.repo-diff-find .find-bar-count,
+.repo-diff-find .find-bar-hint,
+.repo-diff-find-label {
+  font-size: var(--fs-md);
+}
+
+.repo-diff-find-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (min-width: 641px) {
+  .repo-diff-find .input {
+    font-size: var(--fs-md);
+  }
+}
+
 /* on a narrow screen the name and Close keep the first row; the actions take the second */
 @media (max-width: 600px) {
   .repo-diff-header {
@@ -246,6 +283,11 @@
     row-gap: var(--space-1);
   }
   .repo-diff-path { flex-basis: 100%; }
+  .repo-diff-find .find-bar-count,
+  .repo-diff-find .find-bar-hint,
+  .repo-diff-find-label {
+    font-size: var(--fs-chat);
+  }
   .repo-diff-header .repo-diff-close {
     grid-area: close;
     align-self: start;
@@ -286,5 +328,10 @@
   .repo-diff-action {
     width: max(44px, var(--touch-target));
     height: max(44px, var(--touch-target));
+  }
+
+  /* the find query is a touch target as tall as the buttons beside it */
+  .repo-diff-find .input {
+    min-height: max(44px, var(--touch-target));
   }
 }

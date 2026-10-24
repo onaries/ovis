@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { serialBrowserScripts } from "./ci-browser-parallel.ts";
 
 // Exercise the whole lane without installing Chromium, building, or opening a browser.
 const stub = `
@@ -75,53 +76,9 @@ describe("browser lane", () => {
   it("summarizes every script and exits zero on success without enabling local evidence", async () => {
     const { text, code, evidence } = await lane();
     expect(code).toBe(0);
-    expect(rows(text)).toHaveLength(86);
+    expect(rows(text).map((row) => row.script)).toEqual(["scripts/demo-build.ts", ...serialBrowserScripts()]);
     expect(rows(text).map((row) => row.script)).toContain("scripts/codex-status-browser-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/phone-glass-header-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/replay-clipboard-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/theme-first-paint-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/opencode-prompt-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/session-history-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/command-outcome-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/chat-outcome-note-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/sidebar-machine-layout-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/sidebar-machine-removal-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/sidebar-machine-layout-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/sidebar-machine-removal-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/cliproxy-settings-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/gjc-status-browser-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/pane-input-focus-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/shortcut-exact-modifiers-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/chat-virtual-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/pwa-update-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/omo-chat-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/omo-plan-browser-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/agent-skill-menu-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/portal-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/omo-queue-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/codex-queue-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/agy-chat-browser-qa.ts");
-    expect(rows(text).filter((row) => row.script === "scripts/ui-contexts-regression.ts")).toHaveLength(1);
-    expect(rows(text).map((row) => row.script)).toContain("scripts/pending-pane-switch-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/lan-exposure-notice-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/chat-fallback-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/file-preview-text-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/virtual-source-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/repo-diff-browser-qa.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/terminal-viewport-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/omo-question-wheel-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/mirror-scroll-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/files-prompt-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/terminal-cjk-punctuation-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/pane-paging-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/application-paging-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/palette-machines-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/restored-draft-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/render-crash-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/terminal-autoswitch-demo-regression.ts");
-    expect(rows(text).map((row) => row.script)).toContain("scripts/health-flap-demo-regression.ts");
     expect(rows(text).every((row) => row.code === 0 && row.seconds >= 0)).toBe(true);
-    expect(rows(text).at(-1)?.script).toBe("scripts/herdr-profiles-browser-qa.ts");
     expect(evidence).toBe(false);
     expect(text).not.toMatch(/EVIDENCE=.+/);
     expect(text).toMatch(/^\[\d{4}-\d\d-\d\dT[^\]]+\] SERVER listening on http:\/\/127\.0\.0\.1:3000$/m);
@@ -147,5 +104,72 @@ describe("browser lane", () => {
     expect(evidence).toBe(true);
     expect(text).toMatch(/^\[[^\]]+\] STEP=scripts\/file-viewer-regression\.ts EVIDENCE=.ci\/browser-evidence$/m);
     expect(text).toMatch(/^Browser lane total: seconds=\d+ exit=0$/m);
+  });
+});
+
+// Browser scripts that CI does not run: they are run by hand. A new browser script belongs in
+// scripts/ci-browser.sh, or here when CI cannot run it.
+const MANUAL_BROWSER_SCRIPTS = [
+  "scripts/android-ime-regression.ts", // an Android emulator over ADB (docs/terminal-input.md)
+  "scripts/chat-browser-qa.ts", // docs/development.md
+  "scripts/font-swap-demo-regression.ts", // docs/development.md
+  "scripts/keyboard-viewport-demo-regression.ts", // docs/development.md
+  "scripts/machines-browser-qa.ts", // an SSH_TEST_KEEP=1 fixture (docs/remote-pcs.md)
+  "scripts/output-browser-qa.ts", // docs/terminal-flow-control.md
+  "scripts/pi-image-browser-qa.ts",
+  "scripts/rewind-browser-qa.ts",
+  "scripts/skill-activity-browser-qa.ts", // docs/chat-skill-activity.md
+  "scripts/terminal-file-links-regression.ts",
+  "scripts/update-browser-qa.ts", // a private Git remote and install (docs/app-updates.md)
+  "scripts/windows-lens-browser-qa.ts",
+  "scripts/windows-terminal-browser-qa.ts", // native Windows
+];
+
+/**
+ * Every script the lane runs, plus every script those import (`from "./x.ts"`, `import("./x.ts")`)
+ * or spawn (`spawn([..., join(import.meta.dir, "x.ts")`), transitively. A path built anywhere else
+ * (a Bun.build entry, say) is not a run. A spawn counts only from a file that runs as a script: an
+ * imported helper's spawn usually sits under `import.meta.main`.
+ */
+function laneReach(lane: string[]): Set<string> {
+  const reached = new Set<string>();
+  const ran = new Set<string>();
+  const pending = lane.map((script) => ({ script, runs: true }));
+  for (let next = pending.pop(); next; next = pending.pop()) {
+    const { script, runs } = next;
+    const path = join(import.meta.dir, "..", script);
+    // A name with no file behind it (terminal-dispose-fixture.ts is an in-memory Bun.build entry) has nothing to read.
+    if ((runs ? ran : reached).has(script) || !existsSync(path)) continue;
+    reached.add(script);
+    if (runs) ran.add(script);
+    const source = readFileSync(path, "utf8");
+    for (const match of source.matchAll(/(?:from|import)\s*\(?\s*["']\.\/([\w.-]+\.tsx?)["']/g)) {
+      pending.push({ script: `scripts/${match[1]}`, runs: false });
+    }
+    if (!runs) continue;
+    for (const match of source.matchAll(/spawn(?:Sync)?\(\s*\[[^\]]*?import\.meta\.dir,\s*["']([\w.-]+\.tsx?)["']/g)) {
+      pending.push({ script: `scripts/${match[1]}`, runs: true });
+    }
+  }
+  return reached;
+}
+
+describe("browser lane assignment", () => {
+  const lane = serialBrowserScripts();
+  const onDisk = readdirSync(import.meta.dir).filter((name) => /-(regression|browser-qa)\.ts$/.test(name)).map((name) => `scripts/${name}`);
+
+  it("runs each script once, and only scripts that exist", () => {
+    expect(new Set(lane).size).toBe(lane.length);
+    expect(lane.filter((script) => !existsSync(join(import.meta.dir, "..", script)))).toEqual([]);
+  });
+
+  it("runs every browser script on disk, directly or through a script it runs, unless it is manual", () => {
+    const reached = laneReach(lane);
+    expect(onDisk.filter((script) => !reached.has(script) && !MANUAL_BROWSER_SCRIPTS.includes(script))).toEqual([]);
+  });
+
+  it("keeps the manual list to scripts that exist and that CI does not run", () => {
+    const reached = laneReach(lane);
+    expect(MANUAL_BROWSER_SCRIPTS.filter((script) => !onDisk.includes(script) || reached.has(script))).toEqual([]);
   });
 });

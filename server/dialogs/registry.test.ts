@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readers } from "./index.ts";
-import { readersFor, type DialogReader } from "./registry.ts";
+import { readersFor, type DialogReader, type ReaderContext } from "./registry.ts";
+import { onePerPass } from "./shared.ts";
 
-// Copied from the moved/list/sideways responder sets in prompt.ts at f736a9c4.
+// Copied from the moved/list/sideways responder sets in prompt.ts at 3df0824e, the base of #1435.
 const snapshot: Record<string, readonly [DialogReader["reread"], DialogReader["list"]]> = {
   "claude-question": ["none", "none"],
   "claude-submit": ["none", "none"],
@@ -75,4 +76,43 @@ test("keeps fallback readers last for known and unknown agents", () => {
   for (const agent of ["claude", "codex", "omp", "omo", "pi", "hermes", "gjc", "opencode", "grok", "agy", "devin", "cmd", "", "unknown"]) {
     expect(readersFor(agent).slice(-3).map((reader) => reader.id)).toEqual(["fallback-menu", "fallback-gjc-menu", "fallback-keys"]);
   }
+});
+
+/** The readers each agent's screen is offered to, first to last: the first that reads it gives the card. */
+const order: Record<string, readonly string[]> = {
+  "": ["omo-model", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  claude: ["claude-goal", "claude-question", "claude-submit", "claude-approval", "claude-plan", "claude-confirm", "claude-model", "claude-effort", "claude-held", "omo-model", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  cmd: ["cmd-question", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  codex: ["codex-menu", "codex-question", "codex-async-question", "codex-approval", "codex-model", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  hermes: ["hermes-question", "hermes-input", "hermes-status", "hermes-version", "hermes-profile", "hermes-reload-skills", "hermes-help", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  omo: ["omo-model", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  omp: ["omp-question", "omp-submit", "omp-approval", "omp-model", "omp-handoff", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  opencode: ["opencode-question", "opencode-v1-question", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  pi: ["pi-model", "omo-model", "pi-question", "pi-confirm", "pi-input", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+};
+
+describe("dialog reader order", () => {
+  test("covers every agent a reader names", () => {
+    const agents = [...new Set(readers.flatMap((reader) => reader.agents))].filter((agent) => agent !== "*").sort();
+    expect(agents).toEqual(Object.keys(order).sort());
+  });
+
+  for (const [agent, ids] of Object.entries(order)) {
+    test(`offers ${agent || "an unnamed agent"}'s screen to its readers in a fixed order`, () => {
+      expect(readersFor(agent).map((reader) => reader.id)).toEqual([...ids]);
+    });
+  }
+});
+
+test("a parser several readers share runs once per screen and read pass", () => {
+  let runs = 0;
+  const read = onePerPass((screen) => { runs += 1; return screen.length; });
+  const pass = (): ReaderContext => ({ agent: "claude", omoAsk: null, omoTrusted: true, omoOpen: [], sent: null, working: false });
+  const first = pass();
+  expect([read("menu", first), read("menu", first), read("menu", first)]).toEqual([4, 4, 4]);
+  expect(runs).toBe(1);
+  read("other", first);
+  expect(runs).toBe(2);
+  read("other", pass());
+  expect(runs, "a new read pass parses again").toBe(3);
 });

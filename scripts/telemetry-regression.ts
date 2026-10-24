@@ -198,7 +198,7 @@ export async function checkTelemetrySettings(browser: Browser): Promise<void> {
     await page.reload();
     await statusRead;
     await page.locator(".conn-live").waitFor();
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(500); // fixed wait: an opted-out install may send no settings snapshot
     assert.equal(changes.slice(beforeReload).some((change) => change.settings !== undefined), false, "an opted-out install sends no settings snapshot to its server");
     assert.deepEqual(errors, []);
     console.log("PASS telemetry settings: current notice reacknowledged, snapshot first with the acknowledgement, safe preview and snapshot update, opt-out stops pending delivery and later snapshots");

@@ -8,8 +8,9 @@
  *   at ~/.claude/projects/<project>/<session>.jsonl (claude-store.ts finds it).
  * - omp: herdr's agent.get hands us the session jsonl path outright under
  *   ~/.omp/agent/sessions/<cwd-slug>/, or ~/.omp/profiles/<name>/agent/sessions/<cwd-slug>/
- *   for `omp --profile <name>` — same shape of truth, one less hop. When herdr names none, the
- *   pane's omp process does (omp.ts).
+ *   for `omp --profile <name>` — same shape of truth, one less hop. The path is held to the store
+ *   the pane's omp process writes to, which its argv and environment may move (omp.ts
+ *   ompStoreLayout); when herdr names none of it, the pane's omp process does.
  * - omo: herdr knows nothing about its store and its label for the pane flips
  *   between `pi` and `claude` as omo spawns model CLIs, so the pane's process
  *   tree routes it and process/session evidence selects a unique transcript
@@ -44,11 +45,11 @@ import { herdrRpc, paneRead, sessionSnapshot, type ProcessInfo } from "./herdr/c
 import { resolveAgent } from "./pane-context.ts";
 import { codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
 import { CODEX_IMAGE_REF, codexTranscriptImage } from "./codex-images.ts";
-import { AmbiguousClaudeStore, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
+import { AmbiguousClaudeStore, claudeAttachSession, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
 import { forgetGjcPane, forgetGjcState, gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
 import { isOmoProcess, omoProcessIdentity, omoSessionForPane, processEnviron } from "./omo.ts";
 import { processStartedAt } from "./process-start.ts";
-import { ompHeldTranscript } from "./omp.ts";
+import { ompPaneRoute, ompRouteOwns, ompRouteStore, ompRouteTranscript } from "./omp.ts";
 import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_IMAGE_REF, opencodeConversation, opencodeDatabasePath, opencodeImage, opencodeReadKey, opencodeSessionId, opencodeToolOutput } from "./opencode.ts";
 import { piTranscriptInStore, piTranscriptPath, unwrittenSession } from "./pi.ts";
 import { cmdTranscriptPath } from "./cmd.ts";
@@ -328,6 +329,8 @@ interface SettledTurns {
   inherited: Map<string, string>;
   /** End of the live turn the last poll actually read; replay never scans unseen skipped history. */
   observedEnd: number;
+  /** the pi agent directory whose catalogs the metadata's window was read from (transcriptPage) */
+  piAgentDir?: string | null;
 }
 const settledTurns = new Map<string, SettledTurns>();
 
@@ -558,12 +561,12 @@ function metadataHead(path: string, stream: TranscriptStream, source: Recognized
  * The newest page's turns from `start`: the settled ones (before the last turn start)
  * from memory, extended by any turn that has since been followed, plus the live last turn.
  */
-function liveTurns(path: string, stream: TranscriptStream, source: RecognizedConversation["source"], start: number, starts: number[]): { turns: ConversationTurn[]; metadata: ConversationMetadata } {
+function liveTurns(path: string, stream: TranscriptStream, source: RecognizedConversation["source"], start: number, starts: number[], piAgentDir?: string | null): { turns: ConversationTurn[]; metadata: ConversationMetadata } {
   // starts ascend: the last one, when it lies past the page start
   const last = Math.max(start, starts[starts.length - 1] ?? start);
   const key = `${path}\0${start}`;
   let settled = settledTurns.get(key);
-  if (!settled || settled.id !== stream.id || settled.end > last || bytesBefore(stream, settled.end) !== settled.tail) {
+  if (!settled || settled.id !== stream.id || settled.end > last || bytesBefore(stream, settled.end) !== settled.tail || settled.piAgentDir !== piAgentDir) {
     const head = start > stream.floor ? metadataHead(path, stream, source, start) : "";
     // a page that starts past the turn that started a task keeps the title that turn gave it,
     // as long as this stream was watched while the title was on a page (a cold read cannot).
@@ -581,11 +584,11 @@ function liveTurns(path: string, stream: TranscriptStream, source: RecognizedCon
       if (to > from) parseTurns(source, path, readStream(stream, from, to).toString("utf8"), inherited);
     }
     settled = { source, id: stream.id, start, end: start, turns: [], metadata: parseConversationMetadata(`${head}
-`, source), tail: bytesBefore(stream, start), taskTitles: new Map(inherited), noticed: new Set(), inherited, observedEnd: stream.length };
+`, source, undefined, piAgentDir), tail: bytesBefore(stream, start), taskTitles: new Map(inherited), noticed: new Set(), inherited, observedEnd: stream.length, piAgentDir };
   }
   if (settled.end < last) {
     const text = readStream(stream, settled.end, last).toString("utf8");
-    settled = { ...settled, end: last, turns: [...settled.turns, ...parseTurns(source, path, text, settled.taskTitles, settled.noticed)], metadata: parseConversationMetadata(text, source, settled.metadata), tail: bytesBefore(stream, last) };
+    settled = { ...settled, end: last, turns: [...settled.turns, ...parseTurns(source, path, text, settled.taskTitles, settled.noticed)], metadata: parseConversationMetadata(text, source, settled.metadata, piAgentDir), tail: bytesBefore(stream, last) };
   }
   settled.observedEnd = stream.length;
   rememberPage(settledTurns, key, settled, 8);
@@ -596,7 +599,7 @@ function liveTurns(path: string, stream: TranscriptStream, source: RecognizedCon
   const text = readStream(stream, last, stream.length).toString("utf8");
   // the live turn is parsed again on every poll: its titles and completions are kept only
   // once it settles, so a read titles a task exactly as a cold read of the same bytes does
-  return { turns: [...settled.turns, ...parseTurns(source, path, text, new Map(settled.taskTitles), new Set(settled.noticed))], metadata: parseConversationMetadata(text, source, settled.metadata) };
+  return { turns: [...settled.turns, ...parseTurns(source, path, text, new Map(settled.taskTitles), new Set(settled.noticed))], metadata: parseConversationMetadata(text, source, settled.metadata, piAgentDir) };
 }
 
 /** Retention diagnostics only: counts/budget adherence, never transcript contents. */
@@ -757,9 +760,17 @@ export async function paneProcessRoots(paneId: string, agent: string | null | un
   }));
   const matched = agent && ["claude", "codex", "omp", "gjc", "pi", "opencode", "devin", "grok", "hermes", "agy"].includes(agent)
     ? agentProcesses(foreground, agent)[0] ?? null : null;
+  // the omo process that holds a session wins over an omo-looking one listed before it (omo's bundled
+  // Claude SDK binary under /omo-ai/, a helper script): typing follows the held one
+  let chosen: { process: (typeof foreground)[number]; identity: NonNullable<ReturnType<typeof omoProcessIdentity>> } | null = null;
   for (const process of foreground) {
     const identity = omoProcessIdentity(process, "", home);
-    if (!identity) continue;
+    if (!identity || (chosen !== null && !identity.held)) continue;
+    chosen = { process, identity };
+    if (identity.held) break;
+  }
+  if (chosen !== null) {
+    const { process, identity } = chosen;
     const agentDir = directory(identity.agentDir);
     const argv = process.argv.map((word) => word.replace(/\\/g, "/"));
     const extension = argv.find((word, index) => argv[index - 1] === "--extension" && /\/omo-ai\/plugin\/?$/.test(word));
@@ -786,10 +797,7 @@ export async function paneProcessRoots(paneId: string, agent: string | null | un
         catch { /* no readable installed plugin */ }
       }
     }
-    // a holder counts only while this pid's start is readable: without it (Windows) a crashed omo's
-    // record could name a pid another process reuses
-    const held = identity.heldIds.length > 0 && processStartedAt(process.pid) !== null;
-    return { omo: { agentDir, pluginDir, held }, environ: processEnviron(process.pid), pid: process.pid, cwd: process.cwd || null, ...(processes ? { processes } : {}) };
+    return { omo: { agentDir, pluginDir, held: identity.held }, environ: processEnviron(process.pid), pid: process.pid, cwd: process.cwd || null, ...(processes ? { processes } : {}) };
   }
   return { omo: null, environ: matched ? processEnviron(matched.pid) : null, pid: matched?.pid ?? null, cwd: matched?.cwd || null, ...(processes ? { processes } : {}) };
 }
@@ -830,15 +838,17 @@ export async function claudePanePid(pane: HerdrPane): Promise<number | null> {
 
 /**
  * Claude's transcript: Herdr's hook, or a unique live Claude's native PID record, in the config dir
- * of the pane's Claude process (a launcher can give each environment its own CLAUDE_CONFIG_DIR).
+ * of the pane's Claude process (a launcher can give each environment its own CLAUDE_CONFIG_DIR). A
+ * `claude attach <id|name>` keeps no PID record: only the state of the job it opened, found as Claude
+ * finds it, names the session it shows, never the hook's. `onProcess` learns that process, and
+ * whether it is such an attach client.
  */
-async function claudeTranscriptPath(paneId: string, cwds: readonly (string | null | undefined)[], onProcess?: (pid: number) => void): Promise<string> {
+async function claudeTranscriptPath(paneId: string, cwds: readonly (string | null | undefined)[], onProcess?: (pid: number, attach: boolean) => void): Promise<string> {
   const info = await herdrRpc<{ agent: { agent_session?: { value?: unknown } } }>("agent.get", { target: paneId });
   let session = info.agent.agent_session?.value;
   const home = process.env["HOME"] ?? "";
   const processes = await claudeProcesses(paneId);
   const only = processes.length === 1 ? processes[0] : undefined;
-  if (only) onProcess?.(only.pid);
   let processDir: string | null = null;
   try {
     processDir = only ? await processClaudeConfigDir(only.pid, only.argv ?? [only.argv0 ?? only.name ?? ""], home) : null;
@@ -848,7 +858,15 @@ async function claudeTranscriptPath(paneId: string, cwds: readonly (string | nul
     throw error;
   }
   const configDir = processDir || defaultClaudeConfigDir(home);
-  if ((typeof session !== "string" || !SESSION_ID.test(session)) && only) session = await claudeProcessSession(home, only.pid, configDir);
+  const attach = only ? await claudeAttachSession(configDir, only.pid, only.argv) : null;
+  if (only) onProcess?.(only.pid, attach !== null);
+  if (attach !== null) {
+    // only the job's state names what the attach shows: a session an earlier Claude in this pane
+    // reported through the hook can still be herdr's, and a job with none (a shell command) keeps the terminal
+    session = attach.session;
+  } else if ((typeof session !== "string" || !SESSION_ID.test(session)) && only) {
+    session = await claudeProcessSession(home, only.pid, configDir);
+  }
   if (typeof session !== "string" || !SESSION_ID.test(session)) throw new ConversationUnavailable("no_session_id");
   const path = await claudeTranscriptFile(home, session, cwds, configDir);
   // Claude writes the file with its first message: until then the session it reports holds nothing
@@ -859,9 +877,11 @@ async function claudeTranscriptPath(paneId: string, cwds: readonly (string | nul
 /** A Claude pane's transcript and when its Claude process started (null when it cannot be told), or null while it has no transcript. */
 export async function claudePaneSession(pane: HerdrPane): Promise<{ path: string; startedAt: number | null; pid: number | null } | null> {
   let pid: number | null = null;
+  let attach = false;
   try {
-    const path = await claudeTranscriptPath(pane.pane_id, [pane.cwd, pane.foreground_cwd], (found) => { pid = found; });
-    return { path, startedAt: pid === null ? null : processStartedAt(pid), pid };
+    const path = await claudeTranscriptPath(pane.pane_id, [pane.cwd, pane.foreground_cwd], (found, attached) => { pid = found; attach = attached; });
+    // an attach client starts after the job it shows: its start would leave the job's earlier background work lost (#1645)
+    return { path, startedAt: pid === null || attach ? null : processStartedAt(pid), pid };
   } catch (error) {
     if (error instanceof ConversationUnavailable) return null;
     throw error;
@@ -885,32 +905,40 @@ export function ompSessionStore(value: unknown, home: string, paths: PlatformPat
 }
 
 /**
- * omp's transcript: herdr hands over the absolute path, accepted only inside the user's own
- * stores. When herdr names none (or another agent's session), the pane's omp process does.
+ * omp's transcript: herdr hands over the absolute path, accepted only inside the store the pane's
+ * omp processes write to (omp.ts ompPaneRoute, from their own argv and environment), as a session
+ * of the pane's directory; else the pane's omp process names it. Only where herdr shows no omp
+ * process, and on Windows, which shows no process's environment, is herdr's path held to the
+ * user's own default and profile stores instead.
  */
 async function ompTranscriptPath(paneId: string, cwd: string): Promise<string> {
   const info = await herdrRpc<{ agent: { agent_session?: { kind?: unknown; value?: unknown } } }>("agent.get", { target: paneId });
   const session = info.agent.agent_session;
   const path = session?.kind === "path" && typeof session.value === "string" ? session.value : null;
   // a Windows bridge starts with HOME set to the profile directory (remote-entry.ts)
-  const store = ompSessionStore(path, process.env["HOME"] ?? "");
-  if (path === null || store === null) {
-    const held = await ompHeldTranscript(paneId, cwd);
-    if (held === null) throw new ConversationUnavailable("no_session_path");
-    return held;
+  const home = process.env["HOME"] ?? "";
+  const route = process.platform === "win32" ? null : await ompPaneRoute(paneId);
+  // an omp whose store nothing proves, or two keeping different ones
+  if (route === "unproved") throw new ConversationUnavailable("no_session_path");
+  const store = route === null ? ompSessionStore(path, home) : path === null ? null : ompRouteStore(route, path);
+  if (path !== null && store !== null) {
+    // omp names its session file at start and writes it with the first answer
+    const unwritten = unwrittenSession(path, store);
+    if (unwritten !== null) throw new ConversationNotStarted(unwritten.id, "omp-transcript", unwritten.path);
+    // the check above is lexical: a link out of the store is no transcript of this pane
+    const inStore = piTranscriptInStore(path, store);
+    if (inStore !== null && (route === null || ompRouteOwns(route, inStore, cwd))) return inStore;
+    if (route === null) throw new ConversationUnavailable("no_session_path");
   }
-  // omp names its session file at start and writes it with the first answer
-  const unwritten = unwrittenSession(path, store);
-  if (unwritten !== null) throw new ConversationNotStarted(unwritten.id, "omp-transcript", unwritten.path);
-  // the check above is lexical: a link out of the store is no transcript of this pane
-  const inStore = piTranscriptInStore(path, store);
-  if (inStore === null) throw new ConversationUnavailable("no_session_path");
-  return inStore;
+  // herdr names no session of this store (or another agent's): the pane's omp process does
+  const held = route === null ? null : ompRouteTranscript(route, cwd);
+  if (held === null) throw new ConversationUnavailable("no_session_path");
+  return held;
 }
 
 /** Where a pane's conversation is: a transcript file, or a session in OpenCode's database. */
 type ResolvedTranscript =
-  | { source: StreamSource | "dsh-transcript"; path: string; codexHome?: string; agy?: AgyStore }
+  | { source: StreamSource | "dsh-transcript"; path: string; codexHome?: string; agy?: AgyStore; piAgentDir?: string | null }
   | { source: "opencode-transcript"; path: string; session: string }
   | { source: "hermes-transcript"; path: string; sessionId: string };
 
@@ -1006,7 +1034,7 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
       const found = await piTranscriptPath(paneId);
       if (found === null) throw new ConversationUnavailable("no_session_path");
       if ("unwritten" in found) throw new ConversationNotStarted(found.unwritten.id, "pi-transcript", found.unwritten.path);
-      return { source: "pi-transcript", path: found.path };
+      return { source: "pi-transcript", path: found.path, piAgentDir: found.agentDir };
     }
     if (agent === "cmd") {
       const found = await cmdTranscriptPath(paneId);
@@ -1172,7 +1200,7 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     : resolved.source === "claude-transcript" ? nodePath.basename(resolved.path, ".jsonl")
     : resolved.source === "pi-transcript" || resolved.source === "cmd-transcript" || resolved.source === "omp-transcript" ? realpathSync(resolved.path) : null;
   rememberPaneRead(paneId, resolved.path);
-  const answer = transcriptPage(resolved.source, resolved.path, page, resolved.codexHome ?? codexHome);
+  const answer = transcriptPage(resolved.source, resolved.path, page, resolved.codexHome ?? codexHome, resolved.piAgentDir);
   const status = snapshot.panes.find((pane) => pane.pane_id === paneId)?.agent_status;
   if (resolved.source === "grok-transcript" && answer.turns.length === 0 && page.before === undefined
     && (status === "working" || status === "blocked")) {
@@ -1280,8 +1308,11 @@ export async function readCommandTranscript(paneId: string, codexHome?: string):
   return answer;
 }
 
-/** One page of a resolved transcript (paneConversation's `page`). */
-export function transcriptPage(source: StreamSource | "dsh-transcript", path: string, page: ConversationPage = {}, codexHome?: string): RecognizedConversation {
+/**
+ * One page of a resolved transcript (paneConversation's `page`). `piAgentDir` is the pane's pi
+ * agent directory, whose catalogs state a pi model's context window (parseConversationMetadata).
+ */
+export function transcriptPage(source: StreamSource | "dsh-transcript", path: string, page: ConversationPage = {}, codexHome?: string, piAgentDir?: string | null): RecognizedConversation {
   if (source === "dsh-transcript") {
     try { return dshConversation(path, page); }
     catch (error) {
@@ -1296,10 +1327,10 @@ export function transcriptPage(source: StreamSource | "dsh-transcript", path: st
       throw new ConversationUnavailable("transcript_missing");
     }
   }
-  return transcriptPageRead(source, path, page, codexHome);
+  return transcriptPageRead(source, path, page, codexHome, undefined, undefined, piAgentDir);
 }
 
-function transcriptPageRead(source: StreamSource, path: string, page: ConversationPage, codexHome?: string, agy?: AgyProjection, fd?: number): RecognizedConversation {
+function transcriptPageRead(source: StreamSource, path: string, page: ConversationPage, codexHome?: string, agy?: AgyProjection, fd?: number, piAgentDir?: string | null): RecognizedConversation {
   let stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
   try {
     stat = statSync(path);
@@ -1319,7 +1350,9 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   // an older page never changes while its file and the rollouts before it stay the same
   // (the stream's id names both); the newest one changes with every append
   const key = page.before !== undefined ? `${path}\0before:${page.before}:${page.since ?? ""}` : `${path}\0from:${page.from ?? ""}`;
-  const signature = page.before !== undefined ? stream.id : `${stream.id}:${stream.length}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  // the catalogs a pi window is read from are the pane's: another pane's answer is not this one's
+  const catalogs = piAgentDir === undefined ? "" : `:${piAgentDir}`;
+  const signature = page.before !== undefined ? `${stream.id}${catalogs}` : `${stream.id}:${stream.length}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}${catalogs}`;
   const cached = cache.get(key);
   // the answer is a function of the page asked for and the file's state, so they name it
   const version = answerVersion(key, signature);
@@ -1349,7 +1382,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
       // in between with `before` + `since`: no poll reads more than a page.
       if (newest !== null) {
         start = held !== null && held >= newest.start ? held : newest.start;
-        live = liveTurns(path, stream, source, start, newest.starts);
+        live = liveTurns(path, stream, source, start, newest.starts, piAgentDir);
         text = "";
       } else {
         // no turn starts in the window: the page begins mid-turn, read whole as before
@@ -1369,7 +1402,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   // session shape while herdr may be calling that same pane `claude`. The page
   // bounds the turns, so none are cut: they must meet the next page exactly.
   const turns = live?.turns ?? parseTurns(source, path, text);
-  const metadata = live?.metadata ?? parseConversationMetadata(`${head}\n${text}`, source);
+  const metadata = live?.metadata ?? parseConversationMetadata(`${head}\n${text}`, source, undefined, piAgentDir);
   // Record the stat from BEFORE the read: an append during parsing must cause
   // another read on the next poll, not permanently cache a torn tail.
   cache.delete(key);

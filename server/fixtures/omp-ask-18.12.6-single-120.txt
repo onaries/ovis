@@ -1,0 +1,48 @@
+
+                                            ████████████
+                                               ██  ██       ▄▀▀▄ █▀▄▀▄ █▀▀▄
+                                               ██  ██       ▀▄▄▀ █ █ █ █▄▄▀
+                                               ▒▒  ██                  █
+                                                   ██       v18.12.6
+
+                         Tip: `/shake` rips heavy tool results out of context to reclaim tokens
+                              without a full /compact — `/shake images` drops just images
+
+
+ Please run the synthetic Ask capture scenario.
+
+
+╭─── Ask 2 questions ──────────────────────────────────────────────────────────────────────────────────────────────────╮
+├─── [route] · options:2 ──────────────────────────────────────────────────────────────────────────────────────────────┤
+│  Which route should carry the fictional session?                                                                     │
+│  ○ Local socket                                                                                                      │
+│    ↳ Keeps the session on this PC.                                                                                   │
+│  ○ Remote relay                                                                                                      │
+│    ↳ Uses the fictional remote endpoint.                                                                             │
+├─── [targets] · multi · options:3 ────────────────────────────────────────────────────────────────────────────────────┤
+│  Which synthetic targets should be checked?                                                                          │
+│  ☐ Desktop                                                                                                           │
+│    ↳ Wide terminal layout.                                                                                           │
+│  ☐ Phone                                                                                                             │
+│    ↳ Narrow terminal layout.                                                                                         │
+│  ☐ Tablet                                                                                                            │
+│    ↳ Medium terminal layout.                                                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  ⎋ Working…
+
+╭─ Ask ────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  Transport    Targets    Submit                                                                                      │
+│ Which route should carry the fictional session?                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ❯ ○ Local socket                                                                                                     │
+│       Keeps the session on this PC.                                                                                  │
+│   ○ Remote relay                                                                                                     │
+│       Uses the fictional remote endpoint.                                                                            │
+│   ○ Other (type your own)                                                                                            │
+│                                                                                                                      │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ⏎ select · n note · ↑/↓ move · ⇥/←/→ question · ⎋ cancel · Alt+H hide                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ ⠋ 0s · ⬢ Ask fixture · 🗑 omp-ask-fixture-2xrPsA/home/fixture · ◫ 5.7%/131K ⟲

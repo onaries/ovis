@@ -1,11 +1,13 @@
 import type { HerdrIdentity } from "../../shared/machines.ts";
+import { rustSidecar } from "./host.ts";
 
 /**
- * A terminal attach runs on the PTY sidecar: `node pty-host.mjs`, which imports
- * @lydell/node-pty. A runtime without either (the win32 remote bundle ships Bun alone)
- * cannot start it, whatever herdr itself can do, so its panes stay mirrored.
+ * A terminal attach runs on a PTY host: the Rust one (server/pty/host.ts) where it passes its check,
+ * else `node pty-host.mjs`, which imports @lydell/node-pty. A runtime with neither (Windows, whose
+ * remote bundle ships Bun alone) cannot start one, whatever herdr itself can do, so its panes stay mirrored.
  */
 export interface SidecarRuntime {
+  rust?: () => boolean;
   node: () => boolean;
   pty: () => boolean;
 }
@@ -13,18 +15,39 @@ export interface SidecarRuntime {
 /** a node that hangs must not hold the server: no answer in this long counts as no Node */
 const PROBE_TIMEOUT_MS = 3000;
 
+/** the oldest Node pty-host.mjs runs on (top-level await, its syntax) */
+const MIN_NODE_MAJOR = 18;
+
 /**
  * `bun run` puts a `node` that is Bun itself first on PATH when the PC has none, and
- * node-pty must not load in Bun (oven-sh/bun#18546): only a `node` that is Node counts.
- * The probe is written for any Node, however old (no `??`).
+ * node-pty must not load in Bun (oven-sh/bun#18546): only a `node` that is Node 18 or newer counts.
+ * The probe is written for any Node, however old (no `??`), so an old one answers and is refused.
  */
 export function isRealNode(executable: string, env: Record<string, string | undefined> = process.env, timeoutMs = PROBE_TIMEOUT_MS): boolean {
   try {
-    const asked = Bun.spawnSync([executable, "-p", "process.versions.bun || ''"], { env, windowsHide: true, stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: timeoutMs });
-    return asked.success && asked.stdout.toString().trim() === "";
+    const asked = Bun.spawnSync([executable, "-p", "process.versions.bun ? 'bun' : process.versions.node"], { env, windowsHide: true, stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: timeoutMs });
+    const major = /^(\d+)\./.exec(asked.stdout.toString().trim())?.[1];
+    return asked.success && major !== undefined && Number(major) >= MIN_NODE_MAJOR;
   } catch {
     return false;
   }
+}
+
+const probed = new Map<string, boolean>();
+
+/**
+ * The Node a PTY sidecar spawned with `env` runs, as an absolute path, when it is real Node: resolved
+ * on that spawn's own PATH, so the check and the spawn can never find two different `node`s.
+ */
+export function realNode(env: Record<string, string | undefined>): string | null {
+  const found = Bun.which("node", { PATH: env["PATH"] ?? "" });
+  if (found === null) return null;
+  let ok = probed.get(found);
+  if (ok === undefined) {
+    ok = isRealNode(found, env);
+    probed.set(found, ok);
+  }
+  return ok ? found : null;
 }
 
 /**
@@ -38,6 +61,7 @@ function nodeOnPath(): boolean {
 }
 
 const here: SidecarRuntime = {
+  rust: () => rustSidecar() !== null,
   node: nodeOnPath,
   pty: () => {
     try {
@@ -49,12 +73,40 @@ const here: SidecarRuntime = {
   },
 };
 
+let node: boolean | null = null;
 let known: boolean | null = null;
 
-/** This runtime's answer is taken once: every caller (attach, /api/health, /api/bridge) gets the same one. */
+/**
+ * Whether the Node sidecar can run here, taken once: a real Node and node-pty. PtySession asks before
+ * it falls back to Node, so a `node` that is Bun never loads node-pty (AGENTS.md).
+ */
+export function nodeSidecarAvailable(): boolean {
+  node ??= here.pty() && here.node();
+  return node;
+}
+
+/** One rule for every runtime, this one included: the Rust host needs no Node; the Node sidecar needs Node and node-pty. */
+const attaches = (runtime: SidecarRuntime, node: () => boolean): boolean => (runtime.rust?.() ?? false) || node();
+
+/** Forgets what was taken of this runtime. Tests only. */
+export function resetSidecarForTests(): void {
+  node = null;
+  known = null;
+  probed.clear();
+}
+
+/**
+ * This runtime's answer is taken once, at startup, where the Rust host's check runs and says which host
+ * attaches: every caller (attach, /api/health, /api/bridge) gets the same one. The Rust host needs no Node.
+ */
 export function sidecarAvailable(runtime?: SidecarRuntime): boolean {
-  if (runtime) return runtime.pty() && runtime.node();
-  if (known === null) known = here.pty() && here.node();
+  if (runtime) return attaches(runtime, () => runtime.pty() && runtime.node());
+  if (known === null) {
+    const rust = here.rust!();
+    known = attaches({ ...here, rust: () => rust }, nodeSidecarAvailable);
+    // the Rust host announces itself; without it, say which way the panes go
+    if (!rust && process.platform !== "win32") console.log(known ? "PTY host: Node" : "PTY host: none (no Rust host and no Node for the sidecar), so panes are mirrored");
+  }
   return known;
 }
 

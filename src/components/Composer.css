@@ -528,15 +528,18 @@
   }
 }
 
-.composer-text::-webkit-scrollbar {
+.composer-text::-webkit-scrollbar,
+.composer-measure::-webkit-scrollbar {
   width: var(--space-2);
 }
 
-.composer-text::-webkit-scrollbar-track {
+.composer-text::-webkit-scrollbar-track,
+.composer-measure::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.composer-text::-webkit-scrollbar-thumb {
+.composer-text::-webkit-scrollbar-thumb,
+.composer-measure::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border-radius: var(--radius-pill);
 }

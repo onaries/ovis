@@ -15,9 +15,9 @@ import { registry } from "./dialogs/registry.ts";
 import { ANSI_RE, type AnswerStep, KEY, type OmoAsk, type ParsedPrompt, finishPrompt, keySteps, navigationKeys, parsedByPublicPrompt, publicPrompt } from "./dialogs/shared.ts";
 import { executeInteractionPlan } from "./dialogs/interaction-plan.ts";
 import { liveScreen, parsePrompt, promptTailIsActive } from "./dialogs/live.ts";
-import { CODEX_WORKING_RE, codexFooterLine, codexModelListWaits, codexRuntimeError } from "./dialogs/codex.ts";
+import { CODEX_WORKING_RE, codexFooterLine, codexRuntimeError } from "./dialogs/codex.ts";
 import { sameText } from "./dialogs/omo.ts";
-import { CLAUDE_EFFORT_GUARD_RE, INVISIBLE_CHAR_RE, claudeModelListWaits } from "./dialogs/claude.ts";
+import { INVISIBLE_CHAR_RE } from "./dialogs/claude.ts";
 import { parsePiDialog } from "./dialogs/pi.ts";
 import { parseFallbackPrompt } from "./dialogs/fallback.ts";
 import { sgrRuns, SUGGESTION_READ_MS, claudeHeldIsGrey, claudeInputDraft, claudeRestoredDraft, parseClaudeSuggestion, viewportShowsLive } from "./claude-input.ts";
@@ -225,11 +225,6 @@ export function lastChatSubmitted(paneId: string): string | null {
   return chatSent.get(paneId)?.text ?? null;
 }
 
-/** The last chat send remains owned when Claude puts a cancelled send back in its input box. */
-export async function chatOwnedInput(paneId: string): Promise<string | null> {
-  return lastChatSubmitted(paneId);
-}
-
 /** Native observers must name the send they correlated; a timestamp or idle transition alone is not an event. */
 export function noteCommandEvidence(paneId: string, id: string, evidence: NonNullable<Parameters<typeof commandOutcome>[2]["evidence"]>): void {
   const commands = chatSent.get(paneId)?.commands ?? [];
@@ -358,14 +353,6 @@ export function heldCandidate(paneId: string): string | null {
   if (!entry) return null;
   if (Date.now() - entry.at > HELD_WINDOW_MS) { heldCandidates.delete(paneId); return null; }
   return entry.text;
-}
-
-/**
- * Whether a model list of Claude Code's or Codex's holds the end of the screen, read or not. Enter
- * there saves a default, so nothing that ends in Enter is typed while one is open.
- */
-export function modelListWaits(agent: string, screen: string): boolean {
-  return registry.waits(agent, screen);
 }
 
 /**
@@ -565,7 +552,8 @@ const QUEUE_ROLLOUT_MS = 15_000;
  * viewportShowsLive verifies they show that screen.
  */
 async function restoredOnLiveScreen(paneId: string, viewport: string): Promise<string | null> {
-  const sent = await chatOwnedInput(paneId);
+  // the last chat send remains owned when Claude puts a cancelled send back in its input box
+  const sent = lastChatSubmitted(paneId);
   const plain = (text: string): string => text.replace(ANSI_RE, "").replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "");
   if (claudeRestoredDraft(plain(viewport), viewport, sent) === null) return null;
   const detection = async (): Promise<string> => (await paneRead({ paneId, source: "detection", format: "text", timeoutMs: SUGGESTION_READ_MS })).text;
@@ -608,8 +596,8 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   const screen = known.screen ?? await liveScreen(paneId);
   // Codex's collapsed question queue reads blocked while its main prompt takes a message; a
   // model list of Claude Code's or Codex's that no reader could read is left to the terminal
-  // (claudeModelListWaits, codexModelListWaits)
-  if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexModelListWaits(screen) || codexRuntimeError(screen) !== null)) || claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE)) {
+  // (registry.waits)
+  if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexRuntimeError(screen) !== null)) || registry.waits(agent, screen)) {
     fallbackLogged.delete(paneId);
     return { agent, status, prompt: asked(paneId, null, turns), pane, panes, screen };
   }

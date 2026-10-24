@@ -23,7 +23,7 @@
 import { mergeEnvLayers } from "../server/legacy-env.ts";
 import { defaultStateDir } from "../server/update-state.ts";
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 
@@ -254,18 +254,53 @@ function warnShadowed(): void {
 
 /**
  * A start's failure, in full to herdr's plugin log and in one line to server.log: the Windows
- * launcher runs this in a hidden console, so the log is all it can show.
+ * launcher runs this in a hidden console, so the log is all it can show. A start that opened its
+ * server's log passes that handle, so the line stays with its run if the log has moved meanwhile.
  */
-function failStart(message: string, detail = ""): number {
+function failStart(message: string, detail = "", log: number | string = LOG_FILE): number {
   process.stderr.write(`${message}${detail}\n`);
-  appendFileSync(LOG_FILE, `start: ${message}\n`);
+  appendFileSync(log, `start: ${message}\n`);
   return 1;
 }
 
-/** What the server wrote since `offset`: its own error is in the last lines. */
-function logSince(offset: number): string {
-  const lines = readFileSync(LOG_FILE).subarray(offset).toString("utf8").split("\n").filter((line) => line.trim() !== "");
+/** A failed start reads at most this much of the log's end, so a log of any size costs the same. */
+const LOG_TAIL_BYTES = 64 * 1024;
+
+/**
+ * What the server wrote to `log` since `offset`: its own error is in the last lines. Read through
+ * the start's own handle, so a log another start has moved meanwhile is still this run's.
+ */
+function logSince(log: number, offset: number): string {
+  const size = fstatSync(log).size;
+  // a cut read's first byte only shows whether the next one starts a line
+  const from = Math.max(offset, size - LOG_TAIL_BYTES);
+  const bytes = Buffer.alloc(Math.max(0, size - from));
+  let text = bytes.subarray(0, readSync(log, bytes, 0, bytes.length, from)).toString("utf8");
+  // a read that starts mid-file drops its cut-off first piece, unless that piece is all there is
+  if (from > offset) {
+    const rest = text.slice(text.indexOf("\n") + 1);
+    if (rest.trim() !== "") text = rest;
+  }
+  const lines = text.split("\n").filter((line) => line.trim() !== "");
   return lines.length === 0 ? "(nothing)" : lines.slice(-15).join("\n");
+}
+
+/**
+ * Keeps the run before this one as server.log.1 rather than appending every run to one file. A
+ * recorded server that is still alive may still write the log, so it is appended to then, as is a
+ * log that cannot be moved (Windows refuses while some program holds it open without sharing).
+ */
+function keepPreviousLog(): void {
+  if (recordedPid() !== null) return;
+  try {
+    renameSync(LOG_FILE, `${LOG_FILE}.1`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    const message = `appending to ${LOG_FILE}: it could not be moved to ${LOG_FILE}.1 (${(error as Error).message})`;
+    process.stdout.write(`${message}\n`);
+    // the Windows launcher's console is hidden: the log is where this can be read
+    appendFileSync(LOG_FILE, `start: ${message}\n`);
+  }
 }
 
 /**
@@ -336,8 +371,10 @@ async function start(): Promise<number> {
       renameSync(`${PORT_FILE}.tmp`, PORT_FILE);
     }
   }
-  const log = openSync(LOG_FILE, "a");
-  const logged = statSync(LOG_FILE).size;
+  keepPreviousLog();
+  // readable too: a failed start reads its server's last lines back through this handle
+  const log = openSync(LOG_FILE, "a+");
+  const logged = fstatSync(log).size;
   const child = spawn(process.execPath, [join(ROOT, "server", "managed.ts")], {
     cwd: ROOT,
     detached: true,
@@ -375,7 +412,7 @@ async function start(): Promise<number> {
   const why = child.exitCode === null
     ? `server did not answer ${origin}/api/health within ${READY_TIMEOUT_MS / 1000}s`
     : `the server stopped (exit ${child.exitCode}) before it answered ${origin}/api/health`;
-  return failStart(why, `; ${LOG_FILE} ends with:\n${logSince(logged)}`);
+  return failStart(why, `; ${LOG_FILE} ends with:\n${logSince(log, logged)}`, log);
 }
 
 /**
@@ -471,8 +508,12 @@ export async function stop(dependencies: StopDependencies = stopDependencies): P
     const deadline = Date.now() + 10_000;
     let exited = false;
     while (Date.now() < deadline) {
+      // the process table (a PowerShell query, seconds on a busy PC) only tells a reused number from
+      // a member still running: once every number is free, the tree is gone without asking it
+      const alive = tree.filter(member => dependencies.isAlive(member.pid));
+      if (alive.length === 0) { exited = true; break; }
       const currentProcesses = await dependencies.processTable(Math.max(1, deadline - Date.now()));
-      const running = tree.some(member => {
+      const running = alive.some(member => {
         if (!dependencies.isAlive(member.pid)) return false;
         const current = currentProcesses.find(row => row.pid === member.pid);
         return !(member.started !== undefined && current?.started !== undefined && current.started !== member.started);

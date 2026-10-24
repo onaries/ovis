@@ -16,25 +16,30 @@ web server on port `7317` and never replaces herdr, its sessions or the user's o
   their own.
 - Never print, log or commit the token. Write it only to the config file named below and tell the
   user where it is.
-- Do not install herdr, Bun or Node yourself unless the user agrees. Say which one is missing and how
-  to install it.
+- Do not install herdr or Bun yourself unless the user agrees. Say which one is missing and how to
+  install it. Node is optional (below), so never install it only for Ovis. The one exception is the
+  one-line installer (C): it adds Node 22 when the PC has no Node 18 or newer and the Rust PTY host
+  does not run there. Say so, and get the user's agreement, before recommending C in that case.
 - Do not stop or restart the user's herdr server (`herdr server stop`). Restarting Ovis is fine.
 
 ## 1. Check prerequisites
 
 ```bash
 bun --version        # need 1.4 or newer
-node --version       # Linux/macOS only: need v18 or newer for the terminal-attach sidecar
 herdr --version      # need 0.9.0 or newer
 herdr status server  # the herdr server must be running
 git --version
 ```
 
 - A missing tool: **Ask** the user before installing it. Bun: `curl -fsSL https://bun.sh/install | bash`.
-  herdr: <https://herdr.dev>. Node: the user's usual manager (nvm, Homebrew, distro packages).
+  herdr: <https://herdr.dev>.
 - herdr not running: ask the user to start `herdr` in a terminal, then check again.
-- Supported platforms: Linux x64 and arm64, macOS, Windows x64. Windows uses the [screen mirror](docs/remote-pcs.md#windows-pcs), so Node is not needed there. No compiler or Python is needed: the terminal
-  addon is prebuilt for these platforms. Other platforms (Alpine, 32-bit ARM) have no build.
+- Node is not needed. On Linux and macOS, terminals run on the Rust PTY host that each release ships
+  (`bin/ovis-pty-sidecar`, installed by the plugin's build and checked against the release's SHA-256).
+  Node 18 or newer, when the PC already has it, is only the fallback for a host that is missing or
+  fails its startup check; with neither, panes are mirrored instead of attached.
+- Supported platforms: Linux x64 and arm64, macOS, Windows x64. Windows uses the [screen mirror](docs/remote-pcs.md#windows-pcs) and has no Rust PTY host. No compiler or Python is needed: the terminal
+  host is prebuilt for Linux and macOS. Other platforms (Alpine, 32-bit ARM) have no build.
 
 ## 2. Choose the install method
 
@@ -42,11 +47,12 @@ git --version
 | --- | --- | --- |
 | **A. herdr plugin** (default) | The user wants it to start with herdr | In-app: Settings → About |
 | **B. Source checkout** | The user wants to develop it, or asks for a clone | In-app, while the checkout stays on a clean `main` |
-| **C. One-line installer** | The user agrees to install what is missing (herdr, Bun, Node) and to let Tailscale serve the app | In-app, like A |
+| **C. One-line installer** | The user agrees to install what is missing (herdr, Bun, and Node 22 only when the Rust PTY host does not run on the PC and it has no Node 18 or newer) and to let Tailscale serve the app | In-app, like A |
 
 Use A unless the user says otherwise. C is A plus the prerequisites and step 5 in one command,
-`curl -fsSL https://ovis.sh/install.sh | sh`: it installs herdr, Bun and
-Node 22 for the user only (no sudo) when they are missing, installs the plugin, starts it when herdr
+`curl -fsSL https://ovis.sh/install.sh | sh`: it installs herdr and Bun for the user only (no sudo)
+when they are missing (and Node 22 only when the release's Rust PTY host cannot be installed on the
+PC and it has no Node 18 or newer), installs the plugin, starts it when herdr
 runs, and, when Tailscale runs on the PC, serves the app to the tailnet (`tailscale serve`) and
 prints the address as a QR code. It changes the user's Tailscale configuration, so it needs the
 same **Ask** as step 5. Running it again keeps what is there. On a first install it prints a link
@@ -69,9 +75,9 @@ herdr clones the repository, runs `bun install` and `bun run build`, then regist
 takes about a minute.
 
 - Success: the command exits 0 and `herdr plugin list` shows `devswha.ovis`.
-- The first build step is a check that prints, in one line, what is missing (`bun`, `node`, or a
-  version too old) and how to fix it. `bun` or `node` not found means herdr runs build commands
-  with **its own** environment: make sure they are on the `PATH` of the shell that started herdr
+- The first build step is a check that prints, in one line, what is missing (`bun`, or a version
+  too old) and how to fix it. `bun` not found means herdr runs build commands
+  with **its own** environment: make sure it is on the `PATH` of the shell that started herdr
   (Bun installs to `~/.bun/bin`), ask the user to restart herdr from that shell, then retry.
 - On Windows, the plugin launcher reads the current user PATH and Bun's user-local directory,
   so installing Bun while herdr is running does not require restarting herdr.
@@ -132,6 +138,11 @@ bun run start
 `bun run start` runs in the foreground. Start it in a separate herdr pane, or under the user's
 service manager, so it keeps running. Settings are environment variables on that command.
 `bun run server` and `bun run dev` are development commands and do not update themselves.
+
+A checkout has no Rust PTY host until one is put in `bin/`: on a release tag,
+`bun scripts/pty-sidecar.ts install` fetches that release's, checked; on any branch,
+`cargo build --release --manifest-path crates/pty-sidecar/Cargo.toml` builds one. Without either,
+terminals run on Node 18+ where the PC has it, and are mirrored where it has none.
 
 ## 4. Verify
 

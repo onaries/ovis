@@ -57,6 +57,8 @@ interface PaletteAction {
   label: string;
   icon: ComponentType;
   shortcut?: ShortcutId;
+  /** a second line under the label: the Settings page a group of it is on */
+  detail?: string;
   /** the palette stays open after it: it changes the palette's own list */
   keepOpen?: boolean;
   run: () => void;
@@ -319,10 +321,19 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
     { id: "refresh", label: t("Refresh"), icon: RefreshCw, run: actions.refresh },
   ], [actions, splitPane, zoomPane, tabPanes, zoom, view, t, selectedPaneId, online, browseTo, browseStart, home]);
 
-  // Settings pages are found by a query only, and open on the page itself: the dialog reads the request as it mounts
+  // Settings pages and groups are found by a query only, and open on the page itself, a group's
+  // scrolled to and focused: the dialog reads the request as it mounts
   const settingsActions = useMemo(() => {
     const icons = new Map(PAGES.map(({ id, icon }) => [id, icon]));
-    return settingsPageEntries(t).map((entry) => ({ action: { id: `settings-${entry.id}`, label: entry.label, icon: icons.get(entry.id) ?? Settings, run: () => { requestSettingsPage(entry.id); actions.openSettings(); } } satisfies PaletteAction, aliases: entry.aliases }));
+    const entries = settingsPageEntries(t);
+    const pageLabel = new Map(entries.filter((entry) => entry.section === undefined).map((entry) => [entry.id, entry.label]));
+    return entries.map(({ id, section, label, aliases }) => ({ action: {
+      id: section === undefined ? `settings-${id}` : `settings-${id}-${section}`,
+      label,
+      detail: section === undefined ? undefined : pageLabel.get(id),
+      icon: icons.get(id) ?? Settings,
+      run: () => { requestSettingsPage({ page: id, section }); actions.openSettings(); },
+    } satisfies PaletteAction, aliases }));
   }, [actions, t]);
   const aliasesByAction = useMemo(() => actionAliases(t), [t]);
 
@@ -662,7 +673,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
                 }
                 if (row.kind === "action") {
                   const Icon = row.action.icon;
-                  return <button key={row.action.id} id={`palette-item-${index}`} type="button" role="option" className="menu-item" aria-selected={activeIndex === index} onFocus={() => select(index)} onMouseMove={() => select(index)} onClick={() => runAction(row.action)}><Icon /><span className="menu-item-main">{row.action.label}</span><ShortcutHint shortcutId={row.action.shortcut} /></button>;
+                  return <button key={row.action.id} id={`palette-item-${index}`} type="button" role="option" className="menu-item" aria-selected={activeIndex === index} onFocus={() => select(index)} onMouseMove={() => select(index)} onClick={() => runAction(row.action)}><Icon />{row.action.detail === undefined ? <span className="menu-item-main">{row.action.label}</span> : <span className="menu-item-main"><span className="palette-row-title">{row.action.label}</span><span className="palette-row-subtitle">{row.action.detail}</span></span>}<ShortcutHint shortcutId={row.action.shortcut} /></button>;
                 }
                 const { pane } = row;
                 const workspace = row.machine.snapshot?.workspaces.find((item) => item.workspace_id === pane.workspace_id);

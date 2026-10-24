@@ -141,7 +141,8 @@ export const source: AgentCommandSource = {
   forms: FORMS,
   // the screens Chat cannot represent: listed, but only the terminal runs them
   terminalBound: ["agents", "connect", "editor", "sessions", "skills", "themes"],
-  pin: "1.19.3",
+  // the shared builtins were checked against both TUIs
+  pin: [V1_PIN, V2_PIN],
   discover(ctx) {
     const v2 = isV2(ctx.version);
     const env = environRecord(ctx.env);

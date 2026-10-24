@@ -1,0 +1,34 @@
+
+              ████████████
+                 ██  ██       ▄▀▀▄ █▀▄▀▄ █▀▀▄
+                 ██  ██       ▀▄▄▀ █ █ █ █▄▄▀
+                 ▒▒  ██                  █
+                     ██       v18.12.6
+
+  Tip: `/shake` rips heavy tool results out of context to
+  reclaim tokens without a full /compact — `/shake images`
+                     drops just images
+
+
+ Please run the synthetic Ask capture scenario.
+
+
+╭─── ✔ Ask 2 questions ────────────────────────────────────╮
+├─── [route] ──────────────────────────────────────────────┤
+│  Which route should carry the fictional session?         │
+│  ◉ Local socket                                          │
+│  ○ Remote relay                                          │
+├─── [targets] ────────────────────────────────────────────┤
+│  Which synthetic targets should be checked?              │
+│  ☑ Desktop                                               │
+│  ☐ Phone                                                 │
+│  ☐ Tablet                                                │
+╰──────────────────────────────────────────────────────────╯
+
+ CAPTURE_SETTLED: Later agent output after answering the
+ Ask panel.
+
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+ π · ⬢ Ask fixture · 🗑 …2xrPsA/home/fixture · ◫ 5.7%/131K ⟲

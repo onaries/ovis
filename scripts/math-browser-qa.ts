@@ -137,7 +137,7 @@ try {
   write("```mermaid\ngraph LR\n  A[Start --> \n```");
   await diagrams.evaluate(() => window.qa.refresh());
   await diagrams.locator(".markdown-code").first().waitFor();
-  await diagrams.waitForTimeout(800);
+  await diagrams.waitForTimeout(800); // fixed wait: no reload notice may appear for the syntax error
   assert.equal(await diagrams.locator(".update-notice").count(), 0, "a syntax error asks for no reload");
   const goneChunk = diagrams.waitForEvent("requestfailed", { predicate: (request) => /\/sequenceDiagram-[^/]+\.js$/.test(request.url()), timeout: 5_000 });
   await diagrams.route(/\/sequenceDiagram-[^/]+\.js$/, (route) => route.abort());

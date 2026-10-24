@@ -14,6 +14,7 @@ let agent: string;
 /** whether herdr's omp integration has reported the pane's session (omp's session_start) */
 let reported: boolean;
 let ompPid: number;
+let ompArgv: string[];
 let calls: { method: string; params: Record<string, unknown> }[];
 let onPaneGet: (() => void) | undefined;
 let refusePrompt: boolean;
@@ -25,6 +26,7 @@ beforeEach(() => {
   agent = "omp";
   reported = false;
   ompPid = 1;
+  ompArgv = ["omp"];
   calls = [];
   onPaneGet = undefined;
   refusePrompt = false;
@@ -54,7 +56,7 @@ beforeEach(() => {
         const session = reported ? { agent_session: { agent: "omp", kind: "path", source: "herdr:omp", value: join(root, "session.jsonl") } } : {};
         const result = request.method === "pane.get"
           ? { pane: { pane_id: "w:p1", workspace_id: "w", tab_id: "w:t1", terminal_id: "w:p1", cwd: root, focused: false, revision: 0, agent, ...session } }
-          : request.method === "pane.process_info" ? { process_info: { foreground_processes: [{ pid: ompPid, argv: ["omp"], cwd: root }] } }
+          : request.method === "pane.process_info" ? { process_info: { foreground_processes: [{ pid: ompPid, argv: ompArgv, cwd: root }] } }
           : request.method === "agent.prompt" || request.method === "pane.send_keys" || request.method === "pane.send_text" ? {}
           : null;
         if (result === null) throw new Error(`unexpected RPC ${request.method}`);
@@ -174,6 +176,24 @@ describe("a message sent to omp", () => {
     await submitter()("w:p1", "/effort", "/effort", Date.now());
     expect(count("agent.prompt")).toBe(1);
     expect(count("pane.get")).toBe(1);
+  });
+
+  for (const equals of [false, true]) it.skipIf(!posix)(`waits for the integration report with --session-dir${equals ? "=" : " "}X`, async () => {
+    // Given: sessions moved, but herdr's integration remains in the normal agent directory.
+    ompPid = await startedNow();
+    const sessions = join(root, "sessions");
+    ompArgv = ["omp", ...(equals ? [`--session-dir=${sessions}`] : ["--session-dir", sessions])];
+    onPaneGet = () => {
+      if (count("pane.get") !== 2) return;
+      expect(count("agent.prompt"), "nothing is sent before the integration reports").toBe(0);
+      reported = true;
+    };
+    // When: a chat message arrives before the integration reports.
+    await submitter()("w:p1", "/effort", "/effort", Date.now());
+    // Then: delivery follows the report, once, without extra keys.
+    expect(reported).toBe(true);
+    expect(count("agent.prompt")).toBe(1);
+    expect(count("pane.send_keys")).toBe(0);
   });
 
   it("sends at once to an omp that has run for long, which may have no integration", async () => {

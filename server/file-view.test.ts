@@ -587,6 +587,21 @@ describe("locateFile", () => {
     expect(locateFile("demo.mp4", root)).toMatchObject({ info: { path: join(root, "recordings/demo.mp4") } });
   });
 
+  it("opens an explicitly named ignored paste", () => {
+    const root = temp();
+    expect(Bun.spawnSync(["git", "init", "-q", root]).exitCode).toBe(0);
+    mkdirSync(join(root, ".ovis"));
+    writeFileSync(join(root, ".ovis/.gitignore"), "*\n");
+    const path = join(root, ".ovis/notes-20261021-120000-0123abcd.json");
+    writeFileSync(path, '{"a":1}');
+    clearFileCache();
+    // ignored keeps it out of Git status, not out of reach: the absolute path the upload answered
+    // and the project-relative one both open it
+    expect(Bun.spawnSync(["git", "-C", root, "check-ignore", "-q", path]).exitCode).toBe(0);
+    expect(locateFile(path, root)).toMatchObject({ info: { path } });
+    expect(locateFile(".ovis/notes-20261021-120000-0123abcd.json", root)).toMatchObject({ info: { path } });
+  });
+
   it("walks the subfolders of a folder holding thousands of files outside a repository", () => {
     const root = temp();
     for (let index = 0; index < 1_500; index += 1) writeFileSync(join(root, `page-${index}.txt`), "");

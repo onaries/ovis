@@ -225,7 +225,7 @@ try {
   }
   assert.equal(await log.getByText(answer, { exact: true }).count(), 1, "send refresh must not blank existing history");
   const beforeWait = requests;
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(2500); // fixed wait: no second refresh request may start while a slow one is out
   assert.equal(requests, beforeWait, "slow refreshes must not overlap");
   release();
   await page.unrouteAll({ behavior: "wait" });

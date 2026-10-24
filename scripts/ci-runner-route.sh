@@ -5,7 +5,10 @@
 # CI_SELF_HOSTED_LABELS. With neither, a push or a same-repository pull request goes to the
 # maintainer PC's runners (scripts/self-hosted-runner/, label self-hosted-ovis) and any other event
 # stays on ubuntu-24.04. The variable value "ubuntu-24.04" (a JSON string, which pages.yml and
-# release.yml also accept) keeps every job hosted while that PC is offline. This script runs from the
+# release.yml also accept) keeps every job hosted while that PC is offline. A push to main takes the
+# repository variable CI_MAIN_SELF_HOSTED_LABELS over CI_SELF_HOSTED_LABELS when it is set, so main's
+# runs go to runners pull requests never use (run.sh --reserved); "ubuntu-24.04" there keeps only
+# main hosted, and deleting it puts main back on the shared runners. This script runs from the
 # checked-out revision, which a fork pull request controls; the runner itself refuses fork code
 # (scripts/self-hosted-runner/job-started.sh).
 set -euo pipefail
@@ -15,6 +18,7 @@ default_labels='["self-hosted","self-hosted-ovis"]'
 event="${EVENT_NAME:-}"
 requested="${REQUESTED_LABELS:-}"
 configured="${CONFIGURED_LABELS:-}"
+main_configured="${MAIN_LABELS:-}"
 
 choose_labels() {
   local source="$1" value="$2" compact
@@ -34,6 +38,13 @@ elif [[ -n "${requested//[[:space:]]/}" ]]; then
 elif [[ "${configured//[[:space:]]/}" == "$hosted" ]]; then
   echo "Runner: ubuntu-24.04 (from repository variable CI_SELF_HOSTED_LABELS)" >&2
   echo "linux=$hosted"
+elif [[ "$event" == push && "${REF:-}" == refs/heads/main && -n "${main_configured//[[:space:]]/}" ]]; then
+  if [[ "${main_configured//[[:space:]]/}" == "$hosted" ]]; then
+    echo "Runner: ubuntu-24.04 (push to main, from repository variable CI_MAIN_SELF_HOSTED_LABELS)" >&2
+    echo "linux=$hosted"
+  else
+    choose_labels "repository variable CI_MAIN_SELF_HOSTED_LABELS" "$main_configured"
+  fi
 elif [[ -n "${configured//[[:space:]]/}" ]]; then
   choose_labels "repository variable CI_SELF_HOSTED_LABELS" "$configured"
 elif [[ "$event" == push || "$event" == pull_request ]]; then

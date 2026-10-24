@@ -113,7 +113,7 @@ try {
           content.style.minHeight = "0"; content.style.height = "200.75px"; content.style.overflow = "hidden";
           const style = document.createElement("style");
           // a line taller than the view leaves each page one pixel
-          style.textContent = "[data-fractional-paging]::before { display: none; } [data-fractional-paging] :is(.chat-turn-agent > .markdown, .chat-bubble) { line-height: 1000px; }";
+          style.textContent = "[data-fractional-paging]::before { display: none; } [data-fractional-paging] :is(.chat-reply > .markdown, .chat-bubble) { line-height: 1000px; }";
           document.head.append(style);
           node.scrollTop = node.scrollHeight;
           node.dispatchEvent(new Event("scroll", { bubbles: true }));
@@ -204,7 +204,7 @@ try {
           await transcript.evaluate((node) => { node.scrollTop = node.scrollHeight; });
           await settled(page);
           const plainBottom = await transcript.evaluate((node) => node.scrollTop);
-          const plainStep = await transcript.evaluate((node) => Math.max(1, node.clientHeight - parseFloat(getComputedStyle(node.querySelector(".chat-turn-agent > .markdown, .chat-bubble") ?? node).lineHeight)));
+          const plainStep = await transcript.evaluate((node) => Math.max(1, node.clientHeight - parseFloat(getComputedStyle(node.querySelector(".chat-reply > .markdown, .chat-bubble") ?? node).lineHeight)));
           await page.keyboard.press("PageUp");
           await settled(page);
           assert.ok(Math.abs(plainBottom - await transcript.evaluate((node) => node.scrollTop) - plainStep) <= 1, "plain chat PageUp keeps one line between pages");
@@ -235,7 +235,7 @@ try {
             await transcript.evaluate((node) => { node.scrollTop = node.scrollHeight; });
             await settled(page);
             const bottom = await transcript.evaluate((node) => node.scrollTop);
-            const step = await transcript.evaluate((node) => Math.max(1, node.clientHeight - parseFloat(getComputedStyle(node.querySelector(".chat-turn-agent > .markdown, .chat-bubble") ?? node).lineHeight)));
+            const step = await transcript.evaluate((node) => Math.max(1, node.clientHeight - parseFloat(getComputedStyle(node.querySelector(".chat-reply > .markdown, .chat-bubble") ?? node).lineHeight)));
             await page.keyboard.press("Meta+Shift+PageUp");
             // The first frame already has the new position and has stopped following output.
             assert.ok(Math.abs(bottom - await transcript.evaluate((node) => node.scrollTop) - step) <= 1, "chat instantly pages, keeping one line");

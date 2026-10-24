@@ -42,10 +42,12 @@ jobs:
         name: Choose the Linux runner
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
           REQUESTED_LABELS: ${{ inputs.self_hosted_labels }}
           CONFIGURED_LABELS: ${{ vars.CI_SELF_HOSTED_LABELS }}
+          MAIN_LABELS: ${{ vars.CI_MAIN_SELF_HOSTED_LABELS }}
         run: bash scripts/ci-runner-route.sh >> "$GITHUB_OUTPUT"
       - id: filter
         env:
@@ -129,6 +131,48 @@ jobs:
         if: needs.changes.outputs.draft != 'true'
       - run: bun test ./server/claude-store.test.ts ./server/process-start.test.ts
         if: needs.changes.outputs.draft != 'true'
+  rust-pty-host:
+    # The Rust PTY host (crates/pty-sidecar) is the default where it is installed or built, and its
+    # PtySession checks skip without a build. The self-hosted runners have no Rust toolchain, so this job always runs on
+    # GitHub's image, which has one: it builds the host and runs the same checks on it as on Node.
+    name: Rust PTY host
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      HERDR_TEST_MODE: unit
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+        with:
+          node: 'true'
+      - name: Skip heavy tests on draft PRs
+        if: needs.changes.outputs.draft == 'true'
+        run: |
+          echo "Draft PR detected, skipping the Rust PTY host checks"
+          exit 0
+      - name: Build the Rust PTY host
+        if: needs.changes.outputs.draft != 'true'
+        run: |
+          cargo --version
+          cargo build --release --locked --manifest-path crates/pty-sidecar/Cargo.toml
+      - name: Rust unit tests
+        if: needs.changes.outputs.draft != 'true'
+        run: cargo test --locked --manifest-path crates/pty-sidecar/Cargo.toml
+      - run: bun install --frozen-lockfile
+        if: needs.changes.outputs.draft != 'true'
+      - name: PtySession on both hosts
+        if: needs.changes.outputs.draft != 'true'
+        run: bun test ./server/pty/host.test.ts
+      - name: The Node host's own checks, on the Rust host
+        if: needs.changes.outputs.draft != 'true'
+        env:
+          OVIS_PTY_SIDECAR: rust
+        run: bun test ./server/pty/session.test.ts
   fast:
     name: Fast checks
     needs: changes

@@ -166,7 +166,7 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Use alongside herdr's own window": "与终端里的 herdr 一起使用",
   "Turn this on if this PC also shows herdr in a terminal window. A second after you switch to another window, this tab only watches the pane, so herdr's window keeps the pane at its own size instead of this window's. Click the tab to type again. While it watches, the pane is drawn at herdr's size and may not fill this window.": "如果这台电脑的终端窗口里也开着 herdr，请打开此项。切换到其他窗口一秒后，此标签页只查看窗格，herdr 窗口会按自己的尺寸而不是此窗口的尺寸保留窗格。点击标签页即可再次输入。查看期间窗格按 herdr 的尺寸绘制，可能不会填满此窗口。",
   "Follow herdr's focus": "跟随 herdr 的焦点",
-  "When herdr moves to another pane, by a click in its window, a herdr command or a script, this device opens that pane too. Only on the PC open here, and only on this device.": "herdr 切换到另一个窗格时（在 herdr 窗口中点击、herdr 命令或脚本），此设备也会打开该窗格。仅适用于这里打开的 PC，且仅适用于此设备。",
+  "When herdr moves to another pane, by a click in its window, a herdr command or a script, this device opens that pane too. Only on the PC open here, and only on this device. A PC on Ovis older than 0.4.13 does not report herdr's focus: update it first.": "herdr 切换到另一个窗格时（在 herdr 窗口中点击、herdr 命令或脚本），此设备也会打开该窗格。仅适用于这里打开的 PC，且仅适用于此设备。Ovis 版本早于 0.4.13 的 PC 不会报告 herdr 的焦点，请先更新。",
   "Without a key the browser recognizes the speech: Chrome and Edge send the audio to Google or Microsoft. Nothing is recorded until you press the mic.": "没有密钥时由浏览器识别语音：Chrome 和 Edge 会把音频发送给 Google 或 Microsoft。按下麦克风前不会录音。",
   "Drops fillers and fixes spacing; code and paths stay as spoken": "去掉口头禅并修正空格；代码和路径保持原样",
   "In chat": "聊天",

@@ -10,7 +10,7 @@ nor Google can read a push.
 
 | File | Does |
 |---|---|
-| `OvisPushPlugin` | the `OvisPush` Capacitor plugin the client calls: `subscribe()`, `getSubscription()`, `unsubscribe()` |
+| `OvisPushPlugin` | the `OvisPush` Capacitor plugin the client calls: `checkPermissions()`, `requestPermissions()`, `subscribe()`, `getSubscription()`, `unsubscribe()` |
 | `OvisMessagingService` | receives FCM data messages, decrypts the `ovis` field, shows the notification (the fallback line "herdr needs you" when it cannot) |
 | `WebPushDecrypt`, `PushKeys` | RFC 8291 / RFC 8188 (`aes128gcm`) decryption and the phone's P-256 keys, tested against RFC 8291's own example |
 | `PushStore` | the keys and each PC's relay endpoint, in the app's private preferences |
@@ -32,8 +32,12 @@ const { subscription } = await Capacitor.nativePromise("OvisPush", "subscribe", 
 // { endpoint: "https://push.ovis.sh/v1/push/<id>", expirationTime: null, keys: { p256dh, auth } }
 ```
 
-That object goes to the PC exactly as a browser's `PushSubscription.toJSON()` does (step 4 of
-the plan, in `src/lib/push.ts`, is a separate change). `subscribe()` asks for notifications on
+That object goes to the PC exactly as a browser's `PushSubscription.toJSON()` does; the client
+does this in `src/lib/push.ts`, and reads the permission from `checkPermissions()` and
+`requestPermissions()` (`{ notifications }`, Capacitor's permission states) where a browser has
+`Notification.permission`. Before Android 13 those answer whether the app's notifications are on,
+as there is no permission to ask. The iOS app's plugin answers the same calls
+(`app/ios/App/App/OvisPushPlugin.swift`). `subscribe()` asks for notifications on
 Android 13 and later, gets the FCM token, and registers it with the relay once per PC, with that
 PC's key, which the relay pins to the endpoint from the start. A new FCM token or a new PC key
 makes a new endpoint at the next `subscribe()`; the old one answers 404 or 410 to the PC, which

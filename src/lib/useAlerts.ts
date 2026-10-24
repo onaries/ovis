@@ -9,6 +9,7 @@ import type { Translate } from "./i18n.ts";
 import type { SelectionMark } from "./selectionMark.ts";
 import {
   notificationState,
+  refreshNotificationState,
   requestNotificationPermission,
   shouldNotifyStatus,
   alertStatus,
@@ -18,6 +19,7 @@ import {
   type NotificationState,
 } from "./notifications.ts";
 import { ensurePushSubscription, pushSupported, removePushSubscription } from "./push.ts";
+import { hasNativePlugin, PUSH_PLUGIN } from "./nativeApp.ts";
 import type { NotificationTarget } from "./notificationTarget.ts";
 import { dropletAllows, endedTurn, seedStatuses, showDroplet, trackTurn, type DropletKind } from "./droplet.ts";
 import { canPlayAlertSound, playAlertSound, unlockAlertSound, type AlertSoundKind } from "./alertSound.ts";
@@ -50,6 +52,25 @@ export function useAlertPrefs({ settings }: { settings: Settings }) {
 /** The browser's notification permission and whether this device has a push subscription. */
 export function useNotificationState() {
   const [notifications, setNotifications] = useState<NotificationState>(() => notificationState());
+  // in the phone app the permission is the app's (lib/notifications.ts): read from the app at load,
+  // and again whenever the page comes back, as it may have been changed in the phone's Settings
+  // meanwhile. A browser page keeps the permission it read at load, as before.
+  useEffect(() => {
+    if (!hasNativePlugin(PUSH_PLUGIN)) return;
+    let current = true;
+    const read = () => {
+      // the newest permission known once the check answers, not the check's own reading: a tap's
+      // answer that overtook it must not be put back to what the check read (lib/notifications.ts)
+      refreshNotificationState().then(() => { if (current) setNotifications(notificationState()); }, (err) => console.warn("could not read the notification permission", err));
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") read(); };
+    read();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      current = false;
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
   // this device has a server-side push subscription: alerts come from the server, not the tab
   const [pushOn, setPushOn] = useState(false);
   const pushOnRef = useRef(pushOn);
@@ -207,6 +228,19 @@ export function useNotificationSwitch({ updateSettings, locked, notifications, s
     setPushOn(false);
     await removePushSubscription().catch((err) => console.warn("could not drop the push subscription", err));
   }, [updateSettings]);
+
+  // in the app, alerts turned off while the PC could not be told keep the app's endpoint (lib/push.ts),
+  // and the phone goes on getting this PC's alerts until the PC forgets it. With alerts off the removal
+  // is tried again at load and whenever the app comes back into view (as when one of those alerts opens
+  // it); it does nothing once the app holds no endpoint for this PC
+  useEffect(() => {
+    if (locked !== false || alertsOn || !hasNativePlugin(PUSH_PLUGIN)) return;
+    const retry = () => { removePushSubscription().catch((err) => console.warn("could not drop the push subscription", err)); };
+    const onVisible = () => { if (document.visibilityState === "visible") retry(); };
+    retry();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [locked, alertsOn]);
 
   // a device that already allowed alerts re-registers on every load: idempotent, and it
   // brings the device back if the server lost its subscriptions; a changed choice of

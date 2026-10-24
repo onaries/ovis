@@ -33,15 +33,26 @@ file. Chat follows the session Herdr reported only when that process holds its
 written more recently than every other held session's `events.jsonl`. Older open session
 files do not hide it. Duplicate held IDs remain ambiguous even when only one directory has
 `updates.jsonl`; tied write times also use the terminal view.
-For a held path shaped as `<group>/<session>/<file>`, with an accepted session ID and a
-file name starting with `events.jsonl`, a deleted file, a suffix rename such as
-`events.jsonl.old`, or a file that cannot be resolved and statted as a real file uses the
-terminal. Its device and inode must match the held descriptor; a replacement file at the
-same path also uses the terminal. Write times come from the held descriptors, not path
-replacements. Other file names and paths whose session IDs fail the filter are ignored.
-Renaming to `old-events.jsonl` or moving a session to `.archived-resumed` can therefore hide
-a newer held session and leave the previous conversation visible. Which other files real
-Grok builds legitimately keep open in the store still needs native descriptor captures.
+A held file in the store that may be a session's events file under another name uses the
+terminal, since that session could be the newest one written:
+
+- a held file whose name starts with `events.jsonl` anywhere in the store other than a
+  resolved real `<group>/<session>/events.jsonl` with an accepted session ID: deleted, renamed
+  with a suffix such as `events.jsonl.old`, in a session directory renamed to a name the ID
+  filter skips (`.archived-resumed`), or deeper in the store;
+- any other file held in a directory of a cwd group (a session's, or one renamed past the ID
+  filter) that has no `events.jsonl` on disk, as when the held events file was renamed to
+  `old-events.jsonl`, or renamed along with its directory.
+
+A held `events.jsonl` must also match its path's device and inode; a replacement file at the
+same path uses the terminal. Write times come from the held descriptors, not path
+replacements. Other held files are ignored, so a held events file moved to a place that still
+has an `events.jsonl`, or to no session directory at all, is not detected and can leave the
+previous conversation visible: renamed with a new `events.jsonl` created beside it, moved into
+another session's directory, moved up to its cwd group, or moved out of `sessions/`. Treating
+every unexpected held file as ambiguous would catch these, but which files real Grok builds
+keep open in the store needs native descriptor captures first; without them, that rule could
+send ordinary sessions to the terminal.
 
 The newest file only confirms Herdr's ID; it never chooses another session. A missing held
 file or a newer write to another held session uses the terminal view. An in-TUI `/resume`

@@ -8,6 +8,7 @@ import type { AgentStatus, InteractivePrompt, PromptAnswer } from "../../shared/
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
 import { plainError } from "./paneTerminalShared.ts";
 import type { Translate } from "./i18n.ts";
+import type { MachineSession } from "./machineSession.ts";
 
 export interface ComposerSendsDeps {
   agent: string | null;
@@ -24,6 +25,11 @@ export interface ComposerSendsDeps {
   paneId: string | null;
   paneRef: MutableRefObject<string | null>;
   pendingScopeRef: MutableRefObject<string | null>;
+  /** the chat's navigation generation, read as a message goes out (ChatView `navigation`) */
+  chatNavigation: MutableRefObject<number>;
+  /** advanced once this browser's own message from the box was accepted at once (ChatView `localSend`) */
+  setChatLocalSend: (update: (current: { key: number; navigationGeneration: number }) => { key: number; navigationGeneration: number }) => void;
+  sessionRef: MutableRefObject<MachineSession | null>;
   queueOwner: string | null;
   queueStore: unknown;
   machineId: string;
@@ -42,7 +48,7 @@ export interface ComposerSendsDeps {
 }
 
 export function useComposerSends(deps: ComposerSendsDeps) {
-  const { agent, agentStatus, answerPanePrompt, answering, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputRowNow, knownOutcomes, observeRef, paneId, paneRef, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t } = deps;
+  const { agent, agentStatus, answerPanePrompt, answering, chatNavigation, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputRowNow, knownOutcomes, observeRef, paneId, paneRef, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, sessionRef, setChatLocalSend, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t } = deps;
   const composerSend = useCallback(
     (text: string, clearDraft?: string, sendAnyway = false): boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal> => {
       const pane = paneRef.current;
@@ -89,9 +95,17 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       if (sendAnyway && delivery !== "immediate") return t("Not sent: the agent started working since. Check the terminal, then send again.");
       const known = knownOutcomes(pane);
       const seen = inputRowNow() === "ready";
+      // before the receipt is awaited: navigation while it is on its way cancels the follow
+      const navigation = chatNavigation.current;
+      const socket = socketRef.current, session = sessionRef.current;
       const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway);
       return result === null ? false : result.then((answer) => {
         if (!answer.ok) return submitRefusal(answer.code, answer.message, answer.draft, answer.box, agent);
+        // only a receipt that says the pane took it at once, on the connection and pane it left from
+        if (delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed
+          && paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
+          setChatLocalSend((current) => ({ key: current.key + 1, navigationGeneration: navigation }));
+        }
         if (pane !== null && delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed) showSentCommand(pane, text, known, seen);
         return true;
       });

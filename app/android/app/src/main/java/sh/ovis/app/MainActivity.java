@@ -6,6 +6,7 @@ import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.View;
 import android.view.Window;
 import android.webkit.CookieManager;
 import android.webkit.WebResourceError;
@@ -13,7 +14,10 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import androidx.core.graphics.ColorUtils;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
@@ -22,9 +26,11 @@ import com.getcapacitor.JSObject;
 import com.getcapacitor.WebViewListener;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -53,6 +59,9 @@ public class MainActivity extends BridgeActivity {
 
     /** Whether the page itself (not a picture or a frame in it) failed since it started. */
     private boolean pageFailed;
+
+    /** Whether a page has shown in this activity: from then on a user could have followed a link from it. */
+    private boolean pageShown;
 
     /** The page's theme-color the system bars took, put back after a configuration change. */
     private Integer barColor;
@@ -89,6 +98,7 @@ public class MainActivity extends BridgeActivity {
                 .create();
         }
         super.onCreate(savedInstanceState);
+        keepClearOfNavigationButtons();
         String appOrigin = bridge.getScheme() + "://" + bridge.getHost();
         followThemeColor(host == null ? Collections.singleton(appOrigin) : new HashSet<>(Arrays.asList(appOrigin, origin)));
         if (host != null) {
@@ -138,6 +148,15 @@ public class MainActivity extends BridgeActivity {
                                 return true;
                             }
                         }
+                        // Capacitor gives the browser any other host or scheme, redirects included. Until the
+                        // first page shows, a redirect can only come from the address being opened
+                        if (!pageShown && request.isForMainFrame() && request.isRedirect()) {
+                            String next = PCStore.origin(url.toString());
+                            if (next != null && !next.equals(origin)) {
+                                followRedirect(origin, url.toString());
+                                return true;
+                            }
+                        }
                         return super.shouldOverrideUrlLoading(view, request);
                     }
 
@@ -175,6 +194,12 @@ public class MainActivity extends BridgeActivity {
                     }
 
                     @Override
+                    public void onPageCommitVisible(WebView webView, String url) {
+                        // the main frame's first page is on screen, before its pictures or scripts finish
+                        pageShown = true;
+                    }
+
+                    @Override
                     public void onPageLoaded(WebView webView) {
                         // Chromium reports a page that failed as loaded too, before the error page;
                         // only a page of this very origin (scheme, host and port) counts
@@ -183,6 +208,7 @@ public class MainActivity extends BridgeActivity {
                         // the PC's page is up: a pairing link has done its work, and the PC is one worth keeping
                         PCStore.pendingStart = null;
                         PCStore.failure = null;
+                        PCStore.redirects = 0;
                         PCStore.remember(MainActivity.this, origin);
                     }
                 }
@@ -219,6 +245,41 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
+     * Keeps the page clear of navigation buttons (3-button navigation: the bottom bar, or the side bar
+     * of a phone in landscape). On a WebView that gives the page its safe areas itself (140 and
+     * later), Capacitor's SystemBars lets the page draw under the system bars and leaves the room to
+     * the page's CSS, and the client lets its message box and key bar sit partly into the bottom safe
+     * area, as an iPhone's home indicator allows: there the buttons cover them. The client's layout
+     * pads its sides for a side bar; the page is kept clear of one too, so that nothing on it has to.
+     * A gesture bar has no tappable inset, so the page stays under it. A docked
+     * keyboard covers a bottom bar, and SystemBars keeps the page above both. A floating keyboard
+     * takes no bottom inset, so on WebView 144 and later the bar is kept clear under it; before 144
+     * SystemBars passes the page no bottom inset while any keyboard shows, so nothing is padded then.
+     * On an older WebView SystemBars keeps the page out from under the bars itself, so the page gets
+     * no such insets and nothing changes.
+     */
+    private void keepClearOfNavigationButtons() {
+        View page = (View) bridge.getWebView().getParent();
+        int bars = WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout();
+        ViewCompat.setOnApplyWindowInsetsListener(page, (view, insets) -> {
+            Insets under = insets.getInsets(bars);
+            Insets buttons = insets.getInsets(WindowInsetsCompat.Type.tappableElement());
+            boolean keyboard = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom > 0;
+            Insets clear = Insets.of(
+                Math.min(buttons.left, under.left),
+                0,
+                Math.min(buttons.right, under.right),
+                keyboard ? 0 : Math.min(buttons.bottom, under.bottom)
+            );
+            // the strip shows the window's background: the page's theme-color once it has sent one
+            // (paintBars), the app's dark background before
+            view.setPadding(clear.left, 0, clear.right, clear.bottom);
+            if (clear.equals(Insets.NONE)) return insets;
+            return new WindowInsetsCompat.Builder(insets).setInsets(bars, Insets.subtract(under, clear)).build();
+        });
+    }
+
+    /**
      * The color behind the system bars (the strip Capacitor leaves when the page does not draw under
      * them) and icons that stand out on it, light or dark.
      */
@@ -247,6 +308,41 @@ public class MainActivity extends BridgeActivity {
         CookieManager.getInstance().flush();
     }
 
+    /**
+     * A redirect of the address being opened to another origin, held back: when that origin answers as
+     * Ovis it becomes the PC and opens as the first page, with the bridge (http to https, an IP address
+     * to the PC's name, another port). Anything else, such as a sign-in page, gets no bridge and the
+     * error page names it: a PC address that leads elsewhere is not a PC. The address's own page would
+     * get the bridge too, so the place it leads to gets nothing more. Once the first page shows,
+     * Capacitor decides on redirects again: one could then come from a link to a page that is not the
+     * PC's (another port on its host), which must not choose the PC. A way that goes over public plain
+     * http, or from https to http, does not switch on its own: the connect screen warns before a
+     * public http address.
+     */
+    private void followRedirect(String from, String target) {
+        boolean tooMany = PCStore.redirects >= PCStore.MAX_REDIRECTS;
+        new Thread(() -> {
+            List<String> path = new ArrayList<>();
+            String ovis = tooMany ? null : PCStore.ovisOrigin(target, PCStore.PROBE_BUDGET_MS, path);
+            String insecure = ovis == null ? null : PCStore.insecureHop(from, path);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (insecure != null) {
+                    PCStore.failure = "It redirected over plain http to " + insecure + ", which the app does not follow on its own. If " + ovis + " is your PC, open it itself.";
+                    bridge.getWebView().loadUrl(bridge.getErrorUrl());
+                } else if (ovis != null) {
+                    PCStore.redirects++;
+                    PCStore.open(this, ovis, PCStore.startOn(ovis, target));
+                    reopen();
+                } else {
+                    String place = PCStore.origin(target);
+                    PCStore.failure = tooMany ? "Too many redirects" : "It redirected to " + place + ", which did not answer as Ovis. If that is your PC, open " + place + " itself.";
+                    bridge.getWebView().loadUrl(bridge.getErrorUrl());
+                }
+            });
+        }, "ovis-redirect").start();
+    }
+
     /** The path and query of a pairing link on `origin`, else the PC's root. */
     static String startPath(String start, String origin) {
         if (start == null || !origin.equals(PCStore.origin(start))) return "/";
@@ -260,6 +356,7 @@ public class MainActivity extends BridgeActivity {
     /** Opens the current PC again from its first page. */
     void retry() {
         PCStore.failure = null;
+        PCStore.redirects = 0;
         reopen();
     }
 

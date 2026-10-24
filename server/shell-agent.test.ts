@@ -1,5 +1,6 @@
 import { afterEach, expect, it, jest, mock, spyOn } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as client from "./herdr/client.ts";
@@ -50,6 +51,16 @@ it("finds what runs under a pane's shell in the process table", () => {
   expect(under.some(isGjcProcess)).toBe(true);
   // the same walk, with each process's number
   expect(descendantProcesses(table, 41948).map((entry) => entry.pid)).toEqual([12156, 700]);
+  // Windows keeps a dead parent's number on its children: one that started before the process now
+  // holding that number is not its child, and nor is anything below it
+  const reused = [
+    { pid: 50, parent: 0, path: null, commandLine: "shell", started: 1000 },
+    { pid: 51, parent: 50, path: null, commandLine: "child", started: 1001 },
+    { pid: 52, parent: 50, path: null, commandLine: "stray", started: 10 },
+    { pid: 53, parent: 52, path: null, commandLine: "under stray", started: 20 },
+    { pid: 54, parent: 50, path: null, commandLine: "no start" },
+  ];
+  expect(descendantProcesses(reused, 50).map((entry) => entry.pid)).toEqual([51, 54]);
   // another pane's shell has no gjc under it, though one runs elsewhere on the PC
   expect(descendantArgv(table, 26540).length).toBe(3);
   expect(descendantArgv(table, 4242)).toEqual([]);
@@ -117,22 +128,24 @@ async function running(pid: number): Promise<boolean> {
   return state !== "" && !state.startsWith("Z");
 }
 
-/** Resolves once `file` exists with content; bounded, so a probe that never got there fails the test. */
-function written(file: string, timeoutMs = 5000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const check = (): boolean => {
-      if (!existsSync(file)) return false;
-      const text = readFileSync(file, "utf8").trim();
-      if (text === "") return false;
-      watcher.close();
-      clearTimeout(timer);
-      resolve(text);
-      return true;
-    };
-    const watcher = watch(join(file, ".."), () => { check(); });
-    const timer = setTimeout(() => { watcher.close(); reject(new Error(`${file} was not written`)); }, timeoutMs);
-    check();
+/**
+ * What a fixture shell writes into `file`, made here as a FIFO before the shell starts: the read
+ * ends when the shell has written and closed it. Not a watched file: a PC near its inotify instance
+ * limit (every agent's file watchers count) refuses fs.watch with EMFILE. Bounded, so a shell that
+ * never writes fails the test; the bound opens the write end itself, which ends the pending read.
+ */
+function fifo(file: string, timeoutMs = 5000): Promise<string> {
+  if (Bun.spawnSync(["mkfifo", file]).exitCode !== 0) throw new Error(`mkfifo ${file} failed`);
+  const text = readFile(file, "utf8");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      // ENXIO: the read had not opened the FIFO yet, so there is nothing to end
+      try { closeSync(openSync(file, constants.O_WRONLY | constants.O_NONBLOCK)); } catch { /* no reader yet */ }
+      reject(new Error(`${file} was not written`));
+    }, timeoutMs);
   });
+  return Promise.race([text.then((said) => said.trim()), deadline]).finally(() => clearTimeout(timer));
 }
 
 /** `promise`, or a failure after `ms`: a probe that hangs fails the test instead of stalling it. */
@@ -310,11 +323,14 @@ it("says why the login shell gave no PATH once each time the reason changes", as
 
 it("hung or oversized login probe is killed and reaped, and each miss says why", async () => {
   // a profile that hangs, with a child of its own
-  const hung = fixture(`sleep 30 & echo $! > "${"$"}HOME/child.tmp"; mv "${"$"}HOME/child.tmp" "${"$"}HOME/child.pid"; echo $$ > "${"$"}HOME/shell.tmp"; mv "${"$"}HOME/shell.tmp" "${"$"}HOME/shell.pid"; wait`);
+  const hung = fixture(`sleep 30 & echo $! > "${"$"}HOME/child.pid"; echo $$ > "${"$"}HOME/shell.pid"; wait`);
   // stopped only once the profile has started both, so a slow start on a busy machine cannot end it first
+  // in the order the shell writes them
+  const pidsWritten = Promise.all([fifo(join(hung.home, "child.pid")), fifo(join(hung.home, "shell.pid"))]);
   const stop = new AbortController();
   const stopping = loginPathProbe({ shell: hung.shell, env: hung.env, timeoutMs: 60_000 })(stop.signal);
-  const pids = [await written(join(hung.home, "shell.pid")), await written(join(hung.home, "child.pid"))];
+  const pids = (await pidsWritten).map(Number);
+  for (const pid of pids) expect(pid).toBeGreaterThan(0);
   stop.abort();
   expect((await stopping).path).toBeNull();
   for (const pid of pids) expect(await running(Number(pid))).toBe(false);
@@ -328,14 +344,21 @@ it("hung or oversized login probe is killed and reaped, and each miss says why",
   const noisy = fixture(`echo $$ > "${"$"}HOME/shell.pid"; head -c 200000 /dev/zero | tr '\\\\0' x`);
   const flooded = await once(loginPathProbe({ shell: noisy.shell, env: noisy.env, timeoutMs: 5000 }));
   expect(flooded.path).toBeNull();
-  expect(await running(Number(await written(join(noisy.home, "shell.pid"))))).toBe(false);
+  // written first thing, before the flood: there once the probe answered
+  const noisyPid = Number(readFileSync(join(noisy.home, "shell.pid"), "utf8"));
+  expect(noisyPid).toBeGreaterThan(0);
+  expect(await running(noisyPid)).toBe(false);
   // stderr counts against the same limit: a flood on stderr alone, and one split across both streams
   const loud = fixture(`echo $$ > "${"$"}HOME/shell.pid"; head -c 200000 /dev/zero | tr '\\\\0' x >&2`);
   expect((await once(loginPathProbe({ shell: loud.shell, env: loud.env, timeoutMs: 5000 }))).path).toBeNull();
-  expect(await running(Number(await written(join(loud.home, "shell.pid"))))).toBe(false);
+  const loudPid = Number(readFileSync(join(loud.home, "shell.pid"), "utf8"));
+  expect(loudPid).toBeGreaterThan(0);
+  expect(await running(loudPid)).toBe(false);
   const mixed = fixture(`echo $$ > "${"$"}HOME/shell.pid"; head -c 40000 /dev/zero | tr '\\\\0' x; head -c 40000 /dev/zero | tr '\\\\0' y >&2`);
   expect((await once(loginPathProbe({ shell: mixed.shell, env: mixed.env, timeoutMs: 5000 }))).path).toBeNull();
-  expect(await running(Number(await written(join(mixed.home, "shell.pid"))))).toBe(false);
+  const mixedPid = Number(readFileSync(join(mixed.home, "shell.pid"), "utf8"));
+  expect(mixedPid).toBeGreaterThan(0);
+  expect(await running(mixedPid)).toBe(false);
 
   // a chatty profile under the limit is fine; a shell that is not there or fails says nothing
   const chatty = fixture("echo 'PATH=/not/this'; echo __OVIS_LOGIN_PATH_END__");
@@ -364,7 +387,8 @@ it("hung or oversized login probe is killed and reaped, and each miss says why",
 });
 
 it("answers a shell SIGKILL does not end within the bound, and reaps it once it exits", async () => {
-  const f = fixture(`echo $$ > "${"$"}HOME/shell.tmp"; mv "${"$"}HOME/shell.tmp" "${"$"}HOME/shell.pid"; exec sleep 30`);
+  const f = fixture(`echo $$ > "${"$"}HOME/shell.pid"; exec sleep 30`);
+  const shellPid = fifo(join(f.home, "shell.pid"));
   const realKill = process.kill.bind(process);
   // the kills reach nothing while `stuck`, as for a shell blocked in the kernel; the exit's own group kill is seen
   let stuck = true;
@@ -378,7 +402,7 @@ it("answers a shell SIGKILL does not end within the bound, and reaps it once it 
   }) as typeof process.kill);
   try {
     const answer = once(loginPathProbe({ shell: f.shell, env: f.env, timeoutMs: 300, graceMs: 200 }));
-    pid = Number(await written(join(f.home, "shell.pid")));
+    pid = Number(await shellPid);
     const result = await within(answer, 5000, "the probe waited on a shell SIGKILL did not end");
     expect(result.path).toBeNull();
     // answered while the shell still runs
@@ -391,7 +415,9 @@ it("answers a shell SIGKILL does not end within the bound, and reaps it once it 
   } finally {
     stuck = false;
     kill.mockRestore();
-    try { realKill(pid, "SIGKILL"); } catch { /* reaped */ }
+    // pid stays 0 when the shell never wrote its pid file, and kill(0) would end this test's own
+    // process group: every test file of the run beside it, with no failure reported
+    if (pid > 0) try { realKill(pid, "SIGKILL"); } catch { /* reaped */ }
   }
 });
 
@@ -455,14 +481,15 @@ it("Windows does not invoke a Unix login shell", async () => {
 });
 
 it("stop cancels refresh without leaking a child", async () => {
-  const f = fixture(`echo $$ > "${"$"}HOME/shell.tmp"; mv "${"$"}HOME/shell.tmp" "${"$"}HOME/shell.pid"; exec sleep 30`);
+  const f = fixture(`echo $$ > "${"$"}HOME/shell.pid"; exec sleep 30`);
+  const shellPid = fifo(join(f.home, "shell.pid"));
   const { probe, runs } = counted(loginPathProbe({ shell: f.shell, env: f.env, timeoutMs: 30_000 }));
   let clock = 0;
   const locator = new ShellAgentLocator({ platform: "linux", servicePath: f.servicePath, probe, now: () => clock });
   const warn = spyOn(console, "warn").mockImplementation(() => undefined);
   try {
     const read = locator.executable("gjc");
-    const pid = Number(await written(join(f.home, "shell.pid")));
+    const pid = Number(await shellPid);
     expect(await running(pid)).toBe(true);
     const started = Date.now();
     await locator.stop();

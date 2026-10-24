@@ -25,7 +25,7 @@ import { composerLift, greetingMemory, greetingFits, greetingFolder, roomOverCom
 import { DETACHED, usePaneBranch } from "../lib/paneBranch.ts";
 import { answerHint } from "../lib/promptAnswer.ts";
 import { composerDrafts } from "../lib/composerDraft.ts";
-import { appendQuote, formatTerminalQuote } from "../lib/terminalQuote.ts";
+import { appendQuote, formatReplyQuote, formatTerminalQuote } from "../lib/terminalQuote.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useSessionHistoryOffered } from "../lib/useSessionHistoryOffered.ts";
 import { paneStorageId } from "../../shared/machines.ts";
@@ -493,11 +493,44 @@ export function PaneTerminal({
   const [dismissedNotices, setDismissedNotices] = useState<DismissedNotices>(NO_DISMISSALS);
   // the text of the last drag, offered to the chat draft while its highlight stays (herdr's rows when it gave them)
   const [selectionQuote, setSelectionQuote] = useState<{ pane: string; text: string; range: { start: number; end: number } | null } | null>(null);
+  // the text selected in one of the chat's replies, with the draft it was selected for. A press on
+  // its button holds it: a tap that clears the selection on its way must not take the button away
+  const [replyQuote, setReplyQuote] = useState<{ pane: string; draft: string; text: string } | null>(null);
+  const latestReply = useRef<{ pane: string; draft: string; text: string } | null>(null);
+  // a ref for the selection handler, which runs between renders; the state pins the chat's rows
+  const replyHold = useRef(false);
+  const [replyHeld, setReplyHeld] = useState(false);
+  const holdReply = useCallback((on: boolean) => { replyHold.current = on; setReplyHeld(on); }, []);
+  const onReplySelection = useCallback((text: string | null) => {
+    latestReply.current = text === null || paneId === null ? null
+      : { pane: paneId, draft: `ovis:composer-draft:${paneStorageId(machineId, paneId)}`, text };
+    if (latestReply.current === null && replyHold.current) return;
+    setReplyQuote(latestReply.current);
+  }, [machineId, paneId]);
+  const releaseReply = useCallback(() => {
+    if (!replyHold.current) return;
+    holdReply(false);
+    setReplyQuote(latestReply.current);
+  }, [holdReply]);
+  // a press that lifts off the button clicks nothing: the hold ends there
+  useEffect(() => {
+    const lifted = (event: PointerEvent) => {
+      if (!(event.target instanceof Element && event.target.closest(".chat-quote"))) releaseReply();
+    };
+    window.addEventListener("pointerup", lifted, true);
+    return () => window.removeEventListener("pointerup", lifted, true);
+  }, [releaseReply]);
   // Explicit sends refresh immediately; continuous transcript invalidations are rate-limited.
   const [chatRefresh, setChatRefresh] = useState(0);
   const [chatInvalidation, setChatInvalidation] = useState(0);
   const { autoPeek, onCommandScreenClosed, stillOpen, stillOpenRef, setStillOpen, pendingOpenRef, undecidedOpenRef, chatHistoryRef, stillOpenNotedRef, onInputRowFrameRef, stillOpenNote, showStillOpen } = usePeekReturn({ activeRef, agent, agentRef, agentStatus, chatMounted, coarseRef, compositionCommitPendingRef, composingRef, draftHeldForRef, ended, findOpenRef, frameGateRef, inputRowNow, lineComposingRef, onEndPeekRef, onOpenTerminal, onPeekRef, paneId, paneRef, peek, peekRef, presented, receiptRowRef, stackRef, termRef, terminalId, t, heldRef, unsupportedRef });
   const { conversationPushes, setConversationPushes, onConversationWatch, chatOutputRef, onTerminalOutput, chatSent, setChatSent, redrawGreeting, onChatRead, greetingRoom, setGreetingRoom, greetingRef, chatPrompt, promptRefresh, setPromptRefresh, chatSuggestion, chatRestored, pendingAnswer, setPendingAnswer, promptDock, setPromptDock, onPromptAnswered, clearPendingAnswer, onChatPrompt, onChatMetadata, onChatSuggestion, onChatRestored } = useChatCallbacks({ activeRef, agentStatus, chatHistoryRef, chatViewRef, findOpenRef, machineId, pendingOpenRef, setChatMetadata, setStillOpen, socketRef, stackRef, stillOpenRef, undecidedOpenRef });
+  // This browser's own message from the box that the bridge took at once (ok, nothing pending), with
+  // the chat's navigation generation from when it went out: the chat follows it to the end unless
+  // the reader scrolled, paged or jumped since (ChatView `localSend`). A refusal, an uncertain or
+  // pending answer, a queued or Send now delivery and another browser's message never advance it.
+  const [chatLocalSend, setChatLocalSend] = useState({ key: 0, navigationGeneration: 0 });
+  const chatNavigation = useRef(0);
   const queueStore = messageQueues;
   const queueOwner = paneId === null ? null : paneStorageId(machineId, paneId);
   const queued = useSyncExternalStore(queueStore.subscribe, () => queueStore.read(queueOwner ?? ""));
@@ -732,8 +765,38 @@ export function PaneTerminal({
       setDismissedNotices((dismissed) => dismissNotice(dismissed, notice));
     }} />
     : null;
+  // A reply's selected words go to this pane's draft only: nothing is sent, and a connection that
+  // only watches has no draft to change (no composer is mounted for it). The action is a row of the
+  // composer's, over the card: in the flow of the stack, never over the transcript, so it covers no
+  // selected word wherever the reader scrolled the selection, and the browser's handles keep theirs
+  const replyQuoteRow = paneId !== null && role === "interact" && replyQuote?.pane === paneId ? (
+    <div className="composer-quote-row">
+      <button type="button" className="chat-quote"
+        onPointerDown={() => { holdReply(true); }}
+        onPointerCancel={releaseReply}
+        onMouseDown={(event) => { event.preventDefault(); }}
+        onClick={() => {
+          holdReply(false);
+          const block = formatReplyQuote(replyQuote.text);
+          if (block === null) return;
+          if (!composerDrafts.appendQuote(replyQuote.draft, block, MAX_COMPOSER_CHARS)) {
+            setReplyQuote(latestReply.current);
+            noteClipboard(t("Too long for the message draft"));
+            return;
+          }
+          latestReply.current = null;
+          setReplyQuote(null);
+          getSelection()?.removeAllRanges();
+          // the box takes the quote on this render; focused now, its caret lands after it
+          stackRef.current?.querySelector<HTMLTextAreaElement>(".composer-text")?.focus();
+          noteClipboard(t("Added to the message draft"));
+        }}>
+        <Quote aria-hidden="true" />{t("Quote in message")}
+      </button>
+    </div>
+  ) : null;
 
-  const { composerSend, actOnPending } = useComposerSends({ agent, agentStatus, answerPanePrompt, answering, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputRowNow, knownOutcomes, observeRef, paneId, paneRef, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t });
+  const { composerSend, actOnPending } = useComposerSends({ agent, agentStatus, answerPanePrompt, answering, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputRowNow, knownOutcomes, observeRef, paneId, paneRef, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t, chatNavigation, setChatLocalSend, sessionRef });
 
 
   // Capture the owner's pane for the entire upload batch, even across a pane switch.
@@ -1008,6 +1071,8 @@ export function PaneTerminal({
             conversationPushes={conversationPushes && !released}
             onTerminalOutput={onTerminalOutput}
             sentKey={chatSent}
+            localSend={chatLocalSend}
+            navigation={chatNavigation}
             connected={connected}
             ended={ended}
             agent={agent}
@@ -1031,6 +1096,8 @@ export function PaneTerminal({
             onOutcomes={onChatOutcomes}
             interactive={!observing && role === "interact"}
             onRewindInTerminal={onOpenTerminal ? rewindInTerminal : undefined}
+            onReplySelection={onReplySelection}
+            holdReplySelection={replyHeld}
           />
           </RenderBoundary>
         )}
@@ -1150,7 +1217,7 @@ export function PaneTerminal({
           // no suggestion under any card, a fallback or queued one included
           suggestion={chatPrompt?.pane !== paneId && chatSuggestion?.pane === paneId ? chatSuggestion.value : null}
           restored={chatPrompt?.pane !== paneId && chatRestored?.pane === paneId ? chatRestored.value : null}
-          notices={composerNotices}
+          notices={composerNotices !== null || replyQuoteRow !== null ? <>{composerNotices}{replyQuoteRow}</> : null}
           role={observing ? "observe" : role}
           onOpenHistory={historyOffered ? onOpenHistory : undefined}
           onOpenNewSession={onOpenNewSession}

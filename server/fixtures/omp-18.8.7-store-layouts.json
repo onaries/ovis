@@ -1,0 +1,779 @@
+{
+  "provenance": {
+    "omp": "omp/18.8.7",
+    "platform": "linux",
+    "command": "bun scripts/omp-store-layout-probe.ts --fixture",
+    "home": "$CASE/home",
+    "start": "$CASE/home/project",
+    "unsupported": [
+      "relative PI_CODING_AGENT_DIR",
+      "relative session-dir",
+      "relative cwd and relative session-dir"
+    ]
+  },
+  "cases": [
+    {
+      "name": "default",
+      "args": [],
+      "env": {},
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "profile flag",
+      "args": [
+        "--profile",
+        "work"
+      ],
+      "env": {},
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "profile flag named default",
+      "args": [
+        "--profile",
+        "default"
+      ],
+      "env": {},
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "profile flag with spaces",
+      "args": [
+        "--profile",
+        " work "
+      ],
+      "env": {},
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "OMP_PROFILE",
+      "args": [],
+      "env": {
+        "OMP_PROFILE": "work"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "OMP_PROFILE named default",
+      "args": [],
+      "env": {
+        "OMP_PROFILE": "default"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_PROFILE",
+      "args": [],
+      "env": {
+        "PI_PROFILE": "work"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "profile flag over OMP_PROFILE",
+      "args": [
+        "--profile",
+        "work"
+      ],
+      "env": {
+        "OMP_PROFILE": "other"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "empty OMP_PROFILE with PI_PROFILE",
+      "args": [],
+      "env": {
+        "OMP_PROFILE": "",
+        "PI_PROFILE": "work"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_PROFILE and OMP_PROFILE",
+      "args": [],
+      "env": {
+        "PI_PROFILE": "pi",
+        "OMP_PROFILE": "omp"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CONFIG_DIR",
+      "args": [],
+      "env": {
+        "PI_CONFIG_DIR": ".omp-alt"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp-alt/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp-alt/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CONFIG_DIR with profile flag",
+      "args": [
+        "--profile",
+        "work"
+      ],
+      "env": {
+        "PI_CONFIG_DIR": ".omp-alt"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp-alt/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp-alt/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_DIR",
+      "args": [],
+      "env": {
+        "PI_CODING_AGENT_DIR": "$CASE/custom-agent"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/custom-agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/custom-agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_DIR with profile flag",
+      "args": [
+        "--profile",
+        "work"
+      ],
+      "env": {
+        "PI_CODING_AGENT_DIR": "$CASE/custom-agent"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_DIR with OMP_PROFILE",
+      "args": [],
+      "env": {
+        "PI_CODING_AGENT_DIR": "$CASE/custom-agent",
+        "OMP_PROFILE": "work"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_DIR with PI_PROFILE",
+      "args": [],
+      "env": {
+        "PI_CODING_AGENT_DIR": "$CASE/custom-agent",
+        "PI_PROFILE": "work"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_DIR handed down by PI_PROFILE, OMP_PROFILE empty",
+      "args": [],
+      "env": {
+        "OMP_PROFILE": "",
+        "PI_PROFILE": "work",
+        "PI_CODING_AGENT_DIR": "$CASE/home/.omp/profiles/work/agent"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_DIR handed down by OMP_PROFILE, profile flag named default",
+      "args": [
+        "--profile",
+        "default"
+      ],
+      "env": {
+        "OMP_PROFILE": "work",
+        "PI_CODING_AGENT_DIR": "$CASE/home/.omp/profiles/work/agent"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "session-dir flag",
+      "args": [
+        "--session-dir",
+        "$CASE/custom-sessions"
+      ],
+      "env": {},
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/custom-sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "session-dir flag, equals form",
+      "args": [
+        "--session-dir=$CASE/custom-sessions"
+      ],
+      "env": {},
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/custom-sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "session-dir flag naming the managed store",
+      "args": [
+        "--session-dir",
+        "$CASE/home/.omp/agent/sessions"
+      ],
+      "env": {},
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_SESSION_DIR",
+      "args": [],
+      "env": {
+        "PI_CODING_AGENT_SESSION_DIR": "$CASE/env-sessions"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/env-sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_SESSION_DIR with profile flag",
+      "args": [
+        "--profile",
+        "work"
+      ],
+      "env": {
+        "PI_CODING_AGENT_SESSION_DIR": "$CASE/env-sessions"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/env-sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_SESSION_DIR with PI_CODING_AGENT_DIR",
+      "args": [],
+      "env": {
+        "PI_CODING_AGENT_SESSION_DIR": "$CASE/env-sessions",
+        "PI_CODING_AGENT_DIR": "$CASE/custom-agent"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/env-sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/custom-agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_SESSION_DIR with XDG omp roots existing",
+      "args": [],
+      "env": {
+        "PI_CODING_AGENT_SESSION_DIR": "$CASE/env-sessions",
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data/omp",
+        "$CASE/xdg-state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/env-sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/xdg-state/omp/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "session-dir flag over PI_CODING_AGENT_SESSION_DIR",
+      "args": [
+        "--session-dir",
+        "$CASE/custom-sessions"
+      ],
+      "env": {
+        "PI_CODING_AGENT_SESSION_DIR": "$CASE/env-sessions"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/custom-sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "session-dir flag with profile flag",
+      "args": [
+        "--profile",
+        "work",
+        "--session-dir",
+        "$CASE/custom-sessions"
+      ],
+      "env": {},
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/custom-sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "PI_CODING_AGENT_DIR with session-dir flag",
+      "args": [
+        "--session-dir",
+        "$CASE/custom-sessions"
+      ],
+      "env": {
+        "PI_CODING_AGENT_DIR": "$CASE/custom-agent"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/custom-sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/custom-agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "empty PI_CODING_AGENT_SESSION_DIR",
+      "args": [],
+      "env": {
+        "PI_CODING_AGENT_SESSION_DIR": ""
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "empty PI_CODING_AGENT_DIR",
+      "args": [],
+      "env": {
+        "PI_CODING_AGENT_DIR": ""
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG roots absent",
+      "args": [],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG roots existing",
+      "args": [],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data",
+        "$CASE/xdg-state"
+      ],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG omp roots existing",
+      "args": [],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data/omp",
+        "$CASE/xdg-state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/xdg-data/omp/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/xdg-state/omp/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG data omp root only",
+      "args": [],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/xdg-data/omp/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG state omp root only",
+      "args": [],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state"
+      },
+      "mkdirs": [
+        "$CASE/xdg-state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/xdg-state/omp/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG omp roots existing with profile flag",
+      "args": [
+        "--profile",
+        "work"
+      ],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data/omp",
+        "$CASE/xdg-state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG omp profile roots existing with profile flag",
+      "args": [
+        "--profile",
+        "work"
+      ],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data/omp/profiles/work",
+        "$CASE/xdg-state/omp/profiles/work"
+      ],
+      "observed": {
+        "sessions": "$CASE/xdg-data/omp/profiles/work/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/xdg-state/omp/profiles/work/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG omp roots existing with OMP_PROFILE",
+      "args": [],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state",
+        "OMP_PROFILE": "work"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data/omp",
+        "$CASE/xdg-state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/home/.omp/profiles/work/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/profiles/work/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG omp roots existing with PI_CODING_AGENT_DIR",
+      "args": [],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state",
+        "PI_CODING_AGENT_DIR": "$CASE/custom-agent"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data/omp",
+        "$CASE/xdg-state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/custom-agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/custom-agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG omp roots existing with PI_CODING_AGENT_DIR naming the default agent",
+      "args": [],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state",
+        "PI_CODING_AGENT_DIR": "$CASE/home/.omp/agent"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data/omp",
+        "$CASE/xdg-state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/xdg-data/omp/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/xdg-state/omp/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG omp roots existing with PI_CODING_AGENT_DIR naming the default agent with a trailing slash",
+      "args": [],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state",
+        "PI_CODING_AGENT_DIR": "$CASE/home/.omp/agent/"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data/omp",
+        "$CASE/xdg-state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/xdg-data/omp/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/xdg-state/omp/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG omp roots existing with session-dir flag",
+      "args": [
+        "--session-dir",
+        "$CASE/custom-sessions"
+      ],
+      "env": {
+        "XDG_DATA_HOME": "$CASE/xdg-data",
+        "XDG_STATE_HOME": "$CASE/xdg-state"
+      },
+      "mkdirs": [
+        "$CASE/xdg-data/omp",
+        "$CASE/xdg-state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/custom-sessions",
+        "depth": 1,
+        "terminalSessions": "$CASE/xdg-state/omp/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "XDG unset, default XDG omp roots existing",
+      "args": [],
+      "env": {},
+      "mkdirs": [
+        "$CASE/home/.local/share/omp",
+        "$CASE/home/.local/state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "empty XDG roots, default XDG omp roots existing",
+      "args": [],
+      "env": {
+        "XDG_DATA_HOME": "",
+        "XDG_STATE_HOME": ""
+      },
+      "mkdirs": [
+        "$CASE/home/.local/share/omp",
+        "$CASE/home/.local/state/omp"
+      ],
+      "observed": {
+        "sessions": "$CASE/home/.omp/agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "relative PI_CODING_AGENT_DIR",
+      "args": [],
+      "env": {
+        "PI_CODING_AGENT_DIR": "rel-agent"
+      },
+      "mkdirs": [],
+      "observed": {
+        "sessions": "$CASE/home/project/rel-agent/sessions",
+        "depth": 2,
+        "terminalSessions": "$CASE/home/project/rel-agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    },
+    {
+      "name": "relative cwd and relative session-dir",
+      "args": [
+        "--cwd",
+        "sub",
+        "--session-dir",
+        "rel-sessions"
+      ],
+      "env": {},
+      "mkdirs": [],
+      "observed": {
+        "sessions": null,
+        "depth": null,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project/sub"
+      }
+    },
+    {
+      "name": "relative session-dir",
+      "args": [
+        "--session-dir",
+        "rel-sessions"
+      ],
+      "env": {},
+      "mkdirs": [],
+      "observed": {
+        "sessions": null,
+        "depth": null,
+        "terminalSessions": "$CASE/home/.omp/agent/terminal-sessions",
+        "cwd": "$CASE/home/project"
+      }
+    }
+  ]
+}

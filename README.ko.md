@@ -27,15 +27,13 @@ Ovis는 herdr를 위한 브라우저·휴대폰 클라이언트입니다.
   <a href="docs/guide.md#on-your-phone"><img src="https://img.shields.io/badge/PWA-installable-666666?labelColor=333333" alt="Installable PWA"></a>
 </p>
 
+**Claude Code와 Codex를 폰에서.** 컴퓨터에서 돌아가는 에이전트 세션을 채팅으로 읽고 답하고, 필요할 때는 실제 터미널로 넘어갑니다. 이전 이름은 herdr web UI입니다.
+
 ---
 
 https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 <p align="center"><sub>하나의 Claude Code 세션을 herdr 터미널에서 브라우저의 터미널과 채팅으로, 이어서 폰으로. 폰에서는 새 워크트리를 바로 옆에 띄웁니다 · 실제 화면 녹화, 컷 없음</sub></p>
-
-**Claude Code와 Codex를 폰에서.**
-
-[herdr](https://github.com/herdrdev/herdr)를 브라우저와 폰에서 쓰는 클라이언트입니다. 컴퓨터에서 돌아가는 에이전트 세션을 그대로, 데스크톱에서든 폰에서든 채팅으로 읽고 답합니다. 필요할 때는 터미널로 넘어갑니다.
 
 <table>
   <tr>
@@ -96,7 +94,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 curl -fsSL https://ovis.sh/install.sh | sh
 ```
 
-glibc 기반 Linux(x64, arm64)와 macOS(Intel, Apple Silicon)를 지원하며, Alpine(musl)과 32비트 ARM은 지원하지 않습니다. `curl`, Git, `tar`가 필요하며 Bun이 없다면 Bash와 `unzip`도 필요합니다. herdr 0.9.0 이상, Bun 1.4 이상, Node 18 이상이 필요합니다. 없는 도구는 현재 사용자 계정에 설치하고, 오래된 Bun은 업데이트하며, Node가 없거나 18보다 오래됐다면 Node 22를 설치한 뒤 앱을 herdr 플러그인으로 설치합니다. 이미 설치된 herdr가 0.9.0보다 오래됐다면 herdr를 직접 업데이트하고 다시 시작한 다음 설치 스크립트를 다시 실행하세요.
+glibc 기반 Linux(x64, arm64)와 macOS(Intel, Apple Silicon)를 지원하며, Alpine(musl)과 32비트 ARM은 지원하지 않습니다. `curl`, Git, `tar`가 필요하며 Bun이 없다면 Bash와 `unzip`도 필요합니다. herdr 0.9.0 이상과 Bun 1.4 이상이 필요하며, Node는 필요 없습니다. 없는 도구는 현재 사용자 계정에 설치하고, 오래된 Bun은 업데이트한 뒤 앱을 herdr 플러그인으로 설치합니다. 터미널은 릴리스마다 함께 배포되는 Rust PTY 호스트에서 돌아가며, 설치할 때 SHA-256으로 검증합니다. PC에 이미 있는 Node 18 이상은 대비용으로만 씁니다. 이미 설치된 herdr가 0.9.0보다 오래됐다면 herdr를 직접 업데이트하고 다시 시작한 다음 설치 스크립트를 다시 실행하세요.
 
 기본 수신 주소를 쓰고 Tailscale이 켜져 있으면, HTTPS 설정이 끝났을 때 tailnet 주소와 QR 코드가 나옵니다. 별도 접근 토큰을 설정하지 않은 경우, `tailscale serve`가 이 PC 소유자와 같은 로그인임을 알려 주는 자신의 기기는 보통 코드 없이 들어갑니다. 그래도 자신의 폰이 페어링을 요구받는다면 `OVIS_TAILSCALE_SERVE_ONLY=1`은 Tailscale이 로그인이 하나뿐이고 태그된 기기가 없는 tailnet임을 확인하며 serve가 이 포트의 유일한 접근 경로일 때만 로그인 정보가 없는 접속을 허용합니다. 공용 프록시나 터널 등 다른 경로로 이 포트에 접근할 수 있다면 설정하지 마세요 ([접근과 안전](docs/guide.md#access-and-safety)).
 
@@ -109,10 +107,10 @@ irm https://ovis.sh/install.ps1 | iex
 [Git for Windows](https://git-scm.com/download/win)가 필요합니다. 없는 herdr와 Bun을 현재 사용자 계정에 설치한 뒤 같은 플러그인을 설치합니다. Node나 WSL은 필요 없습니다. 폰에서 쓰려면 herdr에서 **Phone setup**을 여세요. herdr가 Windows에서 터미널 attach를 지원하기 전까지 Windows 터미널은 입력은 되고 격자 크기는 고정된 [화면 미러](docs/remote-pcs.md#windows-pcs)로 보입니다.
 
 <p align="center">
-  <img src="docs/screenshots/install.png" width="720" alt="설치 스크립트 출력: Bun, Node, herdr 플러그인이 설치되고 tailscale serve가 앱을 공개한 뒤 폰용 QR 코드가 나옵니다.">
+  <img src="docs/screenshots/install.png" width="720" alt="설치 스크립트 출력: Bun과 herdr 플러그인이 설치되고 tailscale serve가 앱을 공개한 뒤 폰용 QR 코드가 나옵니다.">
 </p>
 
-herdr 0.9.0 이상, Bun 1.4 이상, Node 18 이상이 이미 있다면 플러그인만 설치해도 됩니다. Windows에서는 Node가 필요 없습니다.
+herdr 0.9.0 이상과 Bun 1.4 이상이 이미 있다면 플러그인만 설치해도 됩니다.
 
 ```bash
 herdr plugin install devswha/ovis

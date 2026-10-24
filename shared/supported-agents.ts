@@ -4,4 +4,4 @@
  *
  * Its own file: the browser imports the value, and shared/protocol.ts reads `process.env` as it loads.
  */
-export const SUPPORTED_AGENT_KINDS: ReadonlySet<string> = new Set(["claude", "codex", "omp", "omo", "gjc", "pi", "opencode", "devin", "grok", "hermes", "agy"]);
+export const SUPPORTED_AGENT_KINDS: ReadonlySet<string> = new Set(["claude", "codex", "omp", "omo", "gjc", "pi", "opencode", "devin", "grok", "hermes", "agy", "letta"]);

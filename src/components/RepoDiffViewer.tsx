@@ -1,6 +1,7 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Check, Columns2, Copy, CopySlash, FileText, FoldVertical, Rows3, TriangleAlert, X } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowDown, ArrowUp, Check, Columns2, Copy, CopySlash, FileText, FoldVertical, Rows3, Search, TriangleAlert, X } from "lucide-react";
 
+import "./FindBar.css";
 import "./RepoDiffViewer.css";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { Skeleton } from "./Skeleton.tsx";
@@ -10,9 +11,10 @@ import { ApiError } from "../lib/api.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { pathParts } from "../lib/filePaths.ts";
 import { canHighlight, languageForPath } from "../lib/highlight.ts";
-import { useT } from "../lib/i18n.ts";
+import { useT, type Translate } from "../lib/i18n.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { comparisonWord, diffColorable, diffErrorMessage, diffStyleFor, repositoryFilePath, statusWord, unavailableMessage, type RepoDiffTarget } from "../lib/repoDiff.ts";
+import { DIFF_FIND_MAX_QUERY, diffFindLines, findInDiff, stepMatch, type DiffFindMatch } from "../lib/repoDiffFind.ts";
 import { useSettings } from "../lib/settings.ts";
 import { SHEET_QUERY, useSheetSwipe } from "../lib/sheets.ts";
 import { skeletonRows } from "../lib/skeleton.ts";
@@ -55,6 +57,16 @@ function CopyButton({ text, label, doneLabel, icon, onShowText }: { text: string
   </button>;
 }
 
+/** Where the active match is, in words: its kind and its line on its side, so it is not told by the row's tint alone. */
+function matchPlace(t: Translate, match: DiffFindMatch): string {
+  const line = match.line.toLocaleString();
+  switch (match.kind) {
+    case "addition": return t("Added line {line}", { line });
+    case "deletion": return t("Removed line {line}", { line });
+    case "context": return t("Unchanged line {line}", { line });
+  }
+}
+
 const DIFF_SKELETON_ROWS = 6;
 
 /** Rows the size of a diff's, a number and a line each, while the patch is read or its viewer loads: the dialog holds its shape. */
@@ -85,6 +97,18 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
   const [folded, setFolded] = useState(false);
   const [shown, setShown] = useState<Shown | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  // Find in this diff: local to the dialog, over the loaded patch only
+  const [finding, setFinding] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  // each open (the button, Ctrl/Cmd+F) focuses the query, also on a bar already open
+  const [findRequest, setFindRequest] = useState(0);
+  const findInput = useRef<HTMLInputElement>(null);
+  const findButton = useRef<HTMLButtonElement>(null);
+  // the control that opened Find, which gets the focus back when it closes
+  const findOpener = useRef<HTMLElement | null>(null);
+  const findingRef = useRef(finding);
+  findingRef.current = finding;
   useSheetSwipe(surface, onClose);
 
   const { paneId, directory, scope, base, head, path, oldPath } = target;
@@ -99,12 +123,57 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
     return () => { live = false; };
   }, [fetchRepoDiffFile, paneId, directory, scope, base, head, path, oldPath]);
 
+  const patchText = load.status === "ready" ? load.answer.patch : null;
+  // a new file, comparison or patch drops the query and its active match: their lines were another patch's
+  useEffect(() => {
+    setQuery("");
+    setActiveIndex(null);
+  }, [patchText]);
+
+  const openFind = useCallback((): void => {
+    const focused = document.activeElement;
+    // Ctrl/Cmd+F again on an open bar only refocuses the query: the control that first opened it keeps the return
+    if (!findingRef.current || findOpener.current?.isConnected !== true) findOpener.current = focused instanceof HTMLElement && focused !== findInput.current ? focused : findButton.current;
+    // the copy fallback's text stands in for the diff: Find goes back to the rows it marks
+    setShown(null);
+    setFinding(true);
+    setFindRequest((request) => request + 1);
+  }, []);
+  useLayoutEffect(() => {
+    if (findRequest === 0) return;
+    findInput.current?.focus();
+    findInput.current?.select();
+  }, [findRequest]);
+  // the query and its active match stay for a reopen, which shows them again; a new patch drops both (above)
+  const closeFind = useCallback((): void => {
+    setFinding(false);
+    const opener = findOpener.current;
+    findOpener.current = null;
+    (opener?.isConnected === true ? opener : findButton.current)?.focus();
+  }, []);
+
   useEffect(() => {
     if (!keyboardActive) return;
-    const onKey = (event: KeyboardEvent): void => { if (event.key === "Escape" && !nativeModalOver(surface.current)) onClose(); };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.isComposing || event.keyCode === 229 || nativeModalOver(surface.current)) return;
+      // Ctrl/Cmd+F is this dialog's: the browser's own find cannot reach the rows not mounted
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+        // a dialog above the viewer (the palette) keeps its own keys while it has the focus
+        const focused = document.activeElement;
+        const owner = focused instanceof Element && surface.current?.contains(focused) !== true ? focused.closest("dialog, [aria-modal='true']") : null;
+        if (owner !== null && surface.current !== null && !owner.contains(surface.current)) return;
+        event.preventDefault();
+        if (patchText !== null || findingRef.current) openFind();
+        return;
+      }
+      if (event.key !== "Escape") return;
+      // Escape closes Find first, the viewer on the next press
+      if (findingRef.current) { event.preventDefault(); closeFind(); return; }
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, keyboardActive, surface]);
+  }, [onClose, keyboardActive, surface, patchText, openFind, closeFind]);
 
   useLayoutEffect(() => {
     if (shown === null) return;
@@ -125,6 +194,13 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
   const { stem, extension } = pathParts(path);
   const { folder } = pathParts(path);
   const openable = answer !== null && file !== null && file.status !== "deleted";
+  const findLines = useMemo(() => diffFindLines(patch), [patch]);
+  const matches = useMemo(() => findInDiff(findLines, query), [findLines, query]);
+  const current = activeIndex !== null && activeIndex < matches.length ? activeIndex : null;
+  const activeMatch = current === null ? null : matches[current] ?? null;
+  const step = (direction: 1 | -1): void => setActiveIndex(stepMatch(current, matches.length, direction));
+  const unfold = useCallback(() => setFolded(false), []);
+  const findCount = query === "" ? "" : current !== null ? t("{current} of {total}", { current: current + 1, total: matches.length }) : matches.length === 0 ? t("No matches") : "";
 
   const body = (() => {
     if (shown !== null) return <textarea ref={textRef} className="repo-diff-select-source" readOnly value={shown.text} aria-label={shown.kind === "patch" ? t("Patch") : t("Path")} spellCheck={false} />;
@@ -137,7 +213,7 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
     if (unavailable !== null || patch === null) return <p className="repo-diff-note">{unavailable ?? t("No lines changed.")}</p>;
     return <RenderBoundary resetKey={patch} fallback={() => <p className="repo-diff-note" role="alert">{t("This change can't be shown.")}</p>}>
       <Suspense fallback={<DiffSkeleton label={t("Opening…")} />}>
-        <RepoDiff patch={patch} style={style} folded={folded} wrap={settings.wrapCode} theme={resolvedEntry.mode} colored={colored} />
+        <RepoDiff patch={patch} style={style} folded={folded} wrap={settings.wrapCode} theme={resolvedEntry.mode} colored={colored} active={finding ? activeMatch : null} onUnfold={unfold} />
       </Suspense>
     </RenderBoundary>;
   })();
@@ -174,6 +250,7 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
               <button type="button" aria-pressed={style === "split"} disabled={narrow} title={narrow ? t("Split view needs a wider screen") : undefined} onClick={() => update({ diffStyle: "split" })}><Columns2 aria-hidden="true" /><span className="repo-diff-style-word">{t("Split")}</span></button>
             </div>
             <div className="repo-diff-group">
+              <button ref={findButton} type="button" className="icon-button repo-diff-action" aria-pressed={finding} aria-label={t("Find in diff")} title={patch === null && !finding ? t("There is no loaded patch to search.") : t("Find in diff")} disabled={patch === null && !finding} onClick={() => (finding ? closeFind() : openFind())}><Search aria-hidden="true" /></button>
               <button type="button" className="icon-button repo-diff-action" aria-pressed={folded} aria-label={t("Fold context")} title={folded ? t("Showing one line around each change") : t("Fold context")} disabled={patch === null} onClick={() => setFolded((value) => !value)}><FoldVertical aria-hidden="true" /></button>
               <button type="button" className="icon-button repo-diff-action" aria-label={t("Open file")} title={t("Open file")} disabled={!openable} onClick={() => answer !== null && onOpenFile(repositoryFilePath(answer.repository.root, path))}><FileText aria-hidden="true" /></button>
               {shown === null && <>
@@ -184,6 +261,28 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
           </div>
           <button type="button" className="icon-button repo-diff-action repo-diff-close" aria-label={t("Close diff")} title={t("Close diff")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>
+        {finding && <form className="find-bar repo-diff-find" role="search" aria-label={t("Find in diff")} onSubmit={(event) => { event.preventDefault(); step(1); }}>
+          <div className="find-bar-controls">
+            <label className="find-bar-query">
+              <Search size={16} aria-hidden="true" />
+              <span className="repo-diff-find-label">{t("Find in diff")}</span>
+              <input ref={findInput} className="input" type="search" value={query} maxLength={DIFF_FIND_MAX_QUERY} disabled={patch === null} spellCheck={false}
+                onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }}
+                onKeyDown={(event) => {
+                  if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+                  if (event.key === "Enter") { event.preventDefault(); step(event.shiftKey ? -1 : 1); }
+                }} />
+            </label>
+            <span className="find-bar-count" role="status">
+              {findCount}
+              {activeMatch !== null && <span className="repo-diff-find-place">{matchPlace(t, activeMatch)}</span>}
+            </span>
+            <button className="icon-button repo-diff-action" type="button" aria-label={t("Previous match")} title={t("Previous match")} disabled={matches.length === 0} onClick={() => step(-1)}><ArrowUp size={16} aria-hidden="true" /></button>
+            <button className="icon-button repo-diff-action" type="button" aria-label={t("Next match")} title={t("Next match")} disabled={matches.length === 0} onClick={() => step(1)}><ArrowDown size={16} aria-hidden="true" /></button>
+            <button className="icon-button repo-diff-action" type="button" aria-label={t("Close search")} title={t("Close search")} onClick={closeFind}><X size={16} aria-hidden="true" /></button>
+          </div>
+          <p className="find-bar-hint">{patch === null ? t("There is no loaded patch to search.") : t("Searches this loaded patch, including context. Content outside the patch is not searched.")}</p>
+        </form>}
         <div className="repo-diff-body">{body}</div>
       </section>
     </div>

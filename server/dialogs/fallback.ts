@@ -1,7 +1,7 @@
 import type { DialogReader } from "./registry.ts";
 import { type InteractivePrompt } from "../../shared/protocol.ts";
 import { createHash } from "node:crypto";
-import { ANSI_RE, type AnswerStep, KEY, type MenuRow, NUMBERED_OPTION_RE, type NumberedRow, type ParsedPrompt, SELECTED_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parseNumberedRows, publicPrompt, sequentialRows, parsedByPublicPrompt } from "./shared.ts";
+import { ANSI_RE, type AnswerStep, KEY, type MenuRow, NUMBERED_OPTION_RE, type NumberedRow, type ParsedPrompt, SELECTED_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parseNumberedRows, publicPrompt, sequentialRows } from "./shared.ts";
 
 /**
  * The last resort, for a pane herdr reports blocked that none of the readers above know (a
@@ -274,29 +274,13 @@ function fallbackGjcSelectionMenu(agent: string, lines: string[], shown: number[
   return { start, rows, selectedIndex };
 }
 
+/**
+ * The fallback cards' answer behaviour, found by their responder when one is answered. They read no
+ * screen here: parseFallbackPrompt draws a fallback card only once herdr reports the pane blocked
+ * and no reader knows its screen (prompt.ts).
+ */
 export const readers: readonly DialogReader[] = [
-  {
-    id: "fallback-menu", agents: ["*"], priority: 1000,
-    reread: "none", list: "none",
-    parse: (screen, ctx) => {
-      const parsed = ctx.fallback ? parsedByPublicPrompt.get(parseFallbackPrompt(ctx.agent, screen)) ?? null : null;
-      return parsed?.responder === "fallback-menu" ? parsed : null;
-    },
-  },
-  {
-    id: "fallback-gjc-menu", agents: ["*"], priority: 1000,
-    reread: "before-commit", list: "none",
-    parse: (screen, ctx) => {
-      const parsed = ctx.fallback ? parsedByPublicPrompt.get(parseFallbackPrompt(ctx.agent, screen)) ?? null : null;
-      return parsed?.responder === "fallback-gjc-menu" ? parsed : null;
-    },
-  },
-  {
-    id: "fallback-keys", agents: ["*"], priority: 1000,
-    reread: "none", list: "none",
-    parse: (screen, ctx) => {
-      const parsed = ctx.fallback ? parsedByPublicPrompt.get(parseFallbackPrompt(ctx.agent, screen)) ?? null : null;
-      return parsed?.responder === "fallback-keys" ? parsed : null;
-    },
-  },
+  { id: "fallback-menu", agents: ["*"], priority: 1000, reread: "none", list: "none", parse: () => null },
+  { id: "fallback-gjc-menu", agents: ["*"], priority: 1000, reread: "before-commit", list: "none", parse: () => null },
+  { id: "fallback-keys", agents: ["*"], priority: 1000, reread: "none", list: "none", parse: () => null },
 ];

@@ -109,6 +109,18 @@ describe("connection diagnostics", () => {
     expect(records()).toHaveLength(130);
   });
 
+  it("evicts the least recently used key, not the oldest inserted", () => {
+    const { diagnostics, records } = fixture();
+    for (let i = 0; i < 128; i++) diagnostics.failed(`peer-${i}`, "timeout", { operation: "session.snapshot" });
+    diagnostics.failed("peer-0", "timeout", { operation: "session.snapshot" });
+    diagnostics.failed("peer-128", "timeout", { operation: "session.snapshot" });
+    const before = records().length;
+    diagnostics.recovered("peer-0", { operation: "session.snapshot" });
+    expect(records()).toHaveLength(before + 1);
+    diagnostics.recovered("peer-1", { operation: "session.snapshot" });
+    expect(records()).toHaveLength(before + 1);
+  });
+
   it("does not change connection handling when the log writer throws", () => {
     const diagnostics = new ConnectionDiagnostics("machine.local", () => { throw new Error("log unavailable"); });
     expect(() => diagnostics.failed("peer", "refresh_failed", { operation: "snapshot" })).not.toThrow();

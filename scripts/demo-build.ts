@@ -27,9 +27,17 @@ export async function buildDemoApp(app: string, shared: string | undefined = pro
   await build(app);
 }
 
+/**
+ * The same client on React's development build, as `bun run dev` serves it: StrictMode (src/main.tsx)
+ * runs every effect, its cleanup and the effect again as it mounts. Always built, never the lane's copy.
+ */
+export async function buildDevelopmentDemoApp(app: string): Promise<void> {
+  await build(app, true);
+}
+
 /** The build itself: the app with a relative base, and the demo's transport beside it. */
-async function build(app: string): Promise<void> {
-  const client = Bun.spawnSync([process.execPath, "--bun", join(repo, "node_modules/.bin/vite"), "build", "--base", "./", "--outDir", app, "--emptyOutDir", "--logLevel", "warn"], { cwd: repo, env: { ...process.env, HERDR_TEST_HOOKS: "1" } });
+async function build(app: string, development = false): Promise<void> {
+  const client = Bun.spawnSync([process.execPath, "--bun", join(repo, "node_modules/.bin/vite"), "build", "--base", "./", "--outDir", app, "--emptyOutDir", "--logLevel", "warn", ...(development ? ["--mode", "development"] : [])], { cwd: repo, env: { ...process.env, HERDR_TEST_HOOKS: "1", ...(development ? { NODE_ENV: "development" } : {}) } });
   if (client.exitCode !== 0) throw new Error(`the demo's client did not build:\n${new TextDecoder().decode(client.stderr)}`);
   const transport = await Bun.build({
     entrypoints: [join(repo, "site/demo/transport.ts")], outdir: app,

@@ -102,6 +102,61 @@ describe("the herdr socket", () => {
   });
 });
 
+describe("server.log", () => {
+  /** starts a stand-in server that runs `body` and exits before it answers, so the start fails */
+  const failedStart = async (body: string) => {
+    const root = join(scratch, "root");
+    mkdirSync(join(root, "server"), { recursive: true });
+    writeFileSync(join(root, "server", "managed.ts"), `${body}\nprocess.exit(1);\n`);
+    const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+    const port = probe.port;
+    await probe.stop(true);
+    return run("start", { HERDR_PLUGIN_ROOT: root, PORT: String(port) });
+  };
+  const state = (name: string) => join(scratch, "state", name);
+
+  it("keeps the run before as server.log.1 and starts a new server.log", async () => {
+    mkdirSync(join(scratch, "state"));
+    writeFileSync(state("server.log"), "older run\n");
+    writeFileSync(state("server.log.1"), "oldest run\n");
+    const started = await failedStart(`console.log("this run");`);
+    expect(started.exitCode).toBe(1);
+    expect(readFileSync(state("server.log.1"), "utf8")).toBe("older run\n");
+    const log = readFileSync(state("server.log"), "utf8");
+    expect(log).toStartWith("this run\n");
+    expect(log).toContain("start: the server stopped (exit 1)");
+  });
+
+  it("appends while the recorded server is still alive", async () => {
+    mkdirSync(join(scratch, "state"));
+    writeFileSync(state("server.log"), "live run\n");
+    // this test's own process stands in for a server that is still running
+    writeFileSync(state("server.pid"), `${process.pid}\n`);
+    await failedStart(`console.log("this run");`);
+    expect(readFileSync(state("server.log"), "utf8")).toStartWith("live run\nthis run\n");
+    expect(existsSync(state("server.log.1"))).toBe(false);
+  });
+
+  /** the lines a failed start showed from the log */
+  const shown = (err: string) => err.slice(err.indexOf("ends with:\n") + "ends with:\n".length).trimEnd().split("\n");
+
+  it("reads only the log's end, without the line the read cut", async () => {
+    const started = await failedStart(`process.stdout.write("x".repeat(100_000) + "\\nline 0\\nline 1\\n");`);
+    expect(started.exitCode).toBe(1);
+    expect(shown(started.err)).toEqual(["line 0", "line 1"]);
+  });
+
+  it("shows the end of a line too long to read whole", async () => {
+    const started = await failedStart(`process.stdout.write("x".repeat(100_000) + "end\\n");`);
+    expect(shown(started.err)).toEqual([`${"x".repeat(64 * 1024 - 4)}end`]);
+  });
+
+  it("shows the last 15 lines", async () => {
+    const started = await failedStart(`console.log(Array.from({ length: 40 }, (_, i) => "line " + i).join("\\n"));`);
+    expect(shown(started.err)).toEqual(Array.from({ length: 15 }, (_, i) => `line ${i + 25}`));
+  });
+});
+
 describe("port", () => {
   const keep = (port: number) => {
     mkdirSync(join(scratch, ".config", "ovis"), { recursive: true });

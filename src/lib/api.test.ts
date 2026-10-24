@@ -1,7 +1,7 @@
 import { afterEach, expect, it, jest } from "bun:test";
 import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
 import { NOTICE_VERSION } from "../../shared/telemetry.ts";
-import { AttachmentTooLargeError, ApiError, changeTelemetry, fetchTelemetry, uploadPaneImage, verifySourceBoot } from "./api.ts";
+import { AttachmentTooLargeError, ApiError, changeTelemetry, fetchAgentKinds, fetchTelemetry, uploadPaneImage, verifySourceBoot } from "./api.ts";
 import { DEFAULT_SETTINGS, telemetrySettingsSnapshot } from "./settings.ts";
 
 const realFetch = globalThis.fetch;
@@ -149,4 +149,22 @@ it("ends a source boot check when the caller aborts it or after 20 s, without Ab
   expect(requests[2]!.signal.aborted).toBe(false);
   jest.advanceTimersByTime(1);
   expect(await slow).toMatchObject({ name: "AbortError" });
+});
+
+it("offers Letta Code in the agent menus where it is installed, and from an older bridge that does not say", async () => {
+  const requests: string[] = [];
+  const letta = { kind: "letta", label: "Letta Code", installed: true };
+  const unsaid = { kind: "letta", label: "letta" };
+  let agents: object[] = [letta, { kind: "someagent", label: "someagent", installed: true }];
+  globalThis.fetch = (async (url: string) => {
+    requests.push(url);
+    return Response.json({ agents });
+  }) as typeof fetch;
+
+  expect(await fetchAgentKinds()).toEqual([letta]);
+  agents = [{ ...letta, installed: false }];
+  expect(await fetchAgentKinds()).toEqual([]);
+  agents = [unsaid];
+  expect(await fetchAgentKinds("remote-pc")).toEqual([unsaid]);
+  expect(requests).toEqual(["/api/agents", "/api/agents", "/api/machines/remote-pc/agents"]);
 });

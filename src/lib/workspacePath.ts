@@ -1,6 +1,7 @@
 /**
  * Paths in the file browser read from the folder it was opened on (the pane's directory), as
- * "root/sub/dir", instead of from home. Adapted from t3code's formatWorkspaceRelativePath.
+ * "root/sub/dir", instead of from home. Adapted from t3code's formatWorkspaceRelativePath. A chat's
+ * tool-file labels read the same way from the pane's folder.
  */
 
 /** The absolute folder the browser was opened on: `start` typed as `~`, `~/…` or an absolute path. */
@@ -12,6 +13,27 @@ export function resolveWorkspaceRoot(start: string, home: string): string | null
   else return null;
   root = root.replace(/\/+$/, "");
   return root === "" ? null : root;
+}
+
+/**
+ * The folder a chat's tool paths read from: the pane's `cwd` when it is an absolute POSIX path
+ * (trailing slashes trimmed, never `/` itself), else null and the paths stay as written. A Windows
+ * drive or UNC folder is not guessed at.
+ */
+export function toolPathRoot(cwd: string | null | undefined): string | null {
+  if (cwd == null || !cwd.startsWith("/")) return null;
+  const root = cwd.replace(/\/+$/, "");
+  return root === "" ? null : root;
+}
+
+/**
+ * A chat tool-file label: `path` read from `root` (toolPathRoot) when it is inside it, else as
+ * written. A path with a `.` or `..` segment stays as written: agent output can name
+ * `/work/app/../etc/passwd`, which is not inside `/work/app` however it starts.
+ */
+export function toolPathLabel(path: string, root: string | null): string {
+  if (path.split("/").some((segment) => segment === "." || segment === "..")) return path;
+  return workspaceRelativePath(path, root, path);
 }
 
 /**

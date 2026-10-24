@@ -195,19 +195,22 @@ export function omoProcessIdentity(
   cwd: string,
   home: string,
   environOf: (pid: number) => readonly string[] | null = processEnviron,
-): { agentDir: string; heldIds: string[]; custom: boolean } | null {
+): { agentDir: string; heldIds: string[]; custom: boolean; held: boolean } | null {
   const dir = processCwd(process, cwd);
   const environ = environOf(process.pid);
   const agentDir = omoAgentDir(environ, home, dir);
   const startedAt = processStartedAt(process.pid);
   if (isOmoProcess(process.argv ?? [])) {
-    return { agentDir, heldIds: heldSessionIds(sessionDir(dir, agentDir), process.pid, startedAt), custom: false };
+    const heldIds = heldSessionIds(sessionDir(dir, agentDir), process.pid, startedAt);
+    // a holder counts only while this pid's start is readable: without it (Windows) a crashed omo's
+    // record could name a pid another process reuses
+    return { agentDir, heldIds, custom: false, held: heldIds.length > 0 && startedAt !== null };
   }
   if (!dir || startedAt === null) return null;
   const omoStore = environ?.some((word) => word.startsWith("OMO_CODING_AGENT_DIR=")) === true || agentDir === defaultOmoAgentDir(home);
   if (!omoStore) return null;
   const heldIds = heldSessionIds(sessionDir(dir, agentDir), process.pid, startedAt, dir);
-  return heldIds.length === 0 ? null : { agentDir, heldIds, custom: true };
+  return heldIds.length === 0 ? null : { agentDir, heldIds, custom: true, held: true };
 }
 
 /**

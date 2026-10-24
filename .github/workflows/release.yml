@@ -39,8 +39,14 @@ jobs:
   validate:
     needs: preflight
     uses: ./.github/workflows/ci.yml
+  # the Rust PTY host for Linux and macOS, attached when the release is created: installs read it by tag
+  pty-sidecar:
+    needs: preflight
+    uses: ./.github/workflows/pty-sidecar.yml
+    with:
+      ref: ${{ github.sha }}
   publish:
-    needs: validate
+    needs: [validate, pty-sidecar]
     runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
@@ -50,6 +56,10 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: ovis-pty-sidecar
+          path: ${{ runner.temp }}/pty-sidecar
       - name: Publish the validated commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,4 +73,21 @@ jobs:
             echo 'Tag appeared during validation; refusing to publish it.' >&2
             exit 1
           fi
-          gh release create "v$RELEASE_VERSION" --target "$GITHUB_SHA" --title "Ovis v$RELEASE_VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
+          # shellcheck disable=SC2016 # JavaScript, not shell
+          test "$(bun -e 'console.log((await Bun.file(process.argv[1]).json()).version)' "$RUNNER_TEMP/pty-sidecar/ovis-pty-sidecar.json")" = "$RELEASE_VERSION"
+          gh release create "v$RELEASE_VERSION" "$RUNNER_TEMP"/pty-sidecar/* --target "$GITHUB_SHA" --title "Ovis v$RELEASE_VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --latest=false
+  windows-app:
+    needs: publish
+    uses: ./.github/workflows/windows-app.yml
+    with:
+      tag: v${{ inputs.version }}
+    permissions:
+      contents: write
+  mac-dmg:
+    needs: publish
+    uses: ./.github/workflows/mac-dmg.yml
+    with:
+      tag: v${{ inputs.version }}
+    secrets: inherit
+    permissions:
+      contents: write

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { registry, type ReaderContext } from "./registry.ts";
-import { executeInteractionPlan } from "./interaction-plan.ts";
+import { executeInteractionPlan, pickerPlan } from "./interaction-plan.ts";
 import type { AnswerStep } from "./shared.ts";
 
 const context: ReaderContext = {
@@ -105,7 +105,7 @@ describe("picker interaction plans", () => {
       expect(result).toBe("answered");
       expect(sent).toEqual([{ keys: [fixture.move] }, fixture.commit]);
       expect(plan.cursor).toBe(1);
-      expect(plan.terminalFallback).toBe(false);
+      expect(plan.terminalFallback(1)).toBe(false);
     });
   }
 
@@ -168,6 +168,41 @@ describe("picker interaction plans", () => {
     });
     expect(result).toBe("prompt_changed");
     expect(sent).toEqual([{ keys: ["down"] }]);
-    expect(plan.terminalFallback).toBe(true);
+    expect(plan.terminalFallback(1)).toBe(true);
+  });
+
+  test("stops after a move when the asking ends under it, sending no further key", async () => {
+    const plan = planFor("codex-model", codexModel(120, 0));
+    const sent: AnswerStep[] = [];
+    let active = true;
+    let cursor = 0;
+    const result = await executeInteractionPlan(plan, 2, {
+      rereadMoves: true,
+      active: () => active,
+      cancelled: () => false,
+      read: async () => codexModel(120, cursor),
+      send: async (step, commit) => { sent.push(step); if (!commit) cursor += 1; active = false; },
+    });
+    expect(result).toBe("prompt_changed");
+    expect(sent, "one move went out before the asking ended; nothing after it").toEqual([{ keys: ["down"] }]);
+  });
+
+  test("commits with the chosen answer's own last key, not the first answer's", async () => {
+    const screen = codexModel(120, 0);
+    const parsed = registry.readerFor("codex-model")!.parse(screen, context)!;
+    const plan = pickerPlan(parsed, (shown) => registry.readerFor("codex-model")!.parse(shown, context),
+      [[{ keys: ["enter"] }], [{ keys: ["down"] }, { text: "s" }]], (shown, cursor) => shown.menuLabels[cursor]);
+    const sent: AnswerStep[] = [];
+    let cursor = 0;
+    const result = await executeInteractionPlan(plan, 1, {
+      rereadMoves: true,
+      active: () => true,
+      cancelled: () => false,
+      read: async () => codexModel(120, cursor),
+      send: async (step, commit) => { sent.push(step); if (!commit) cursor += 1; },
+    });
+    expect(result).toBe("answered");
+    expect(sent).toEqual([{ keys: ["down"] }, { text: "s" }]);
+    expect(plan.commit(0)).toEqual({ keys: ["enter"] });
   });
 });

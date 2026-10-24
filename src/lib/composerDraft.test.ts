@@ -1,5 +1,6 @@
 import { expect, it, setSystemTime } from "bun:test";
 import { ComposerDraftStore, SEND_LEASE_MS, storageEventDraft } from "./composerDraft.ts";
+import { appendQuote } from "./terminalQuote.ts";
 function fixture() {
   const data = new Map<string, string>();
   const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
@@ -154,4 +155,32 @@ it("lets a tab send again once another tab's abandoned lease runs out, and tells
   } finally {
     setSystemTime();
   }
+});
+it("exact maximum fits and overflow preserves draft", () => {
+  const { store, data } = fixture();
+  store.set("a", "why?");
+  const block = "Q".repeat(10);
+  const exact = "why?\n\n".length + block.length + 1;
+  expect(appendQuote("why?", block, exact)).toHaveLength(exact);
+  // one character short: nothing of the quote goes in, and the draft is what it was
+  expect(store.appendQuote("a", block, exact - 1)).toBe(false);
+  expect(store.read("a").text).toBe("why?");
+  expect(data.get("a")).toBe("why?");
+  expect(store.appendQuote("a", block, exact)).toBe(true);
+  expect(store.read("a").text).toBe(`why?\n\n${block}\n`);
+});
+it("insertion preserves newer draft edits", () => {
+  const { store, data } = fixture();
+  store.set("a", "first");
+  // another tab typed on after this tab last read the draft: the quote goes after that text
+  data.set("a", "first and more");
+  expect(store.appendQuote("a", "Q", 100)).toBe(true);
+  expect(store.read("a").text).toBe("first and more\n\nQ\n");
+  // a send on its way keeps its text; the quote added meanwhile stays as the unsent rest
+  store.set("a", "sent");
+  expect(store.begin("a", "sent")).toBe(true);
+  expect(store.appendQuote("a", "Q", 100)).toBe(true);
+  expect(store.settle("a", "sent")).toEqual({ text: "\n\nQ\n", edited: false });
+  store.end("a");
+  expect(store.read("a")).toEqual({ text: "\n\nQ\n", sending: false });
 });

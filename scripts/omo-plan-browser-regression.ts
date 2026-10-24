@@ -1,8 +1,15 @@
-/** Synthetic native OmO todo answers through the real bridge, sidebar and plan panel. */
+/**
+ * Synthetic native OmO todo answers through the real bridge, sidebar and plan panel, then the
+ * plan chip's step in progress (#1040) as the fixture moves on: each later `todo` answer is appended
+ * to the native transcript and the exact plan the bridge pushes for it is awaited on a socket of
+ * this script's own, never a timer; a running task record beside it, a label that cannot break, a
+ * list with no step in progress, every step done, a cleared list, and the pane split in herdr so
+ * the chat's card is narrower than a phone.
+ */
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,7 +19,8 @@ import { workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { omoSessionFolder } from "../server/omo.ts";
 import { startShellAgent } from "../server/shell-agent.ts";
 import { UsageService } from "../server/usage.ts";
-import type { HerdrPane, ServerMessage } from "../shared/protocol.ts";
+import type { HerdrPane, PlanSummary, ServerMessage } from "../shared/protocol.ts";
+import type { Page } from "playwright-core";
 
 const root = mkdtempSync(join(tmpdir(), "omo-plan-browser-"));
 const evidence = process.env.UI_EVIDENCE_DIR || join(root, "evidence");
@@ -26,6 +34,15 @@ mkdirSync(readyDir);
 mkdirSync(sessions, { recursive: true });
 const transcript = join(sessions, `2026-10-17T00-00-00-000Z_${id}.jsonl`);
 const answer = "Overall: 1/3 done\n  Build:\n    - [X] Read the source\n    - [ ] Implement OmO plans (in progress)\n  Verify:\n    - [ ] Run isolated validation";
+const LONG = "Verify-the-plan-chip-against-an-unbroken-label-that-never-wraps-and-stays-whole-in-the-button-name";
+/** the fixture's later answers, as OmO's todo tool writes them, appended in this order */
+const LATER: Record<string, { answer: string; plan: PlanSummary | null }> = {
+  advanced: { answer: "Overall: 2/3 done\n  Build:\n    - [X] Read the source\n    - [X] Implement OmO plans\n  Verify:\n    - [ ] Run isolated validation (in progress)", plan: { done: 2, total: 3, current: "Run isolated validation" } },
+  long: { answer: `Overall: 3/4 done\n  Build:\n    - [X] Read the source\n    - [X] Implement OmO plans\n  Verify:\n    - [X] Run isolated validation\n    - [ ] ${LONG} (in progress)`, plan: { done: 3, total: 4, current: LONG } },
+  between: { answer: `Overall: 3/4 done\n  Build:\n    - [X] Read the source\n    - [X] Implement OmO plans\n  Verify:\n    - [X] Run isolated validation\n    - [ ] ${LONG}`, plan: { done: 3, total: 4, current: null } },
+  done: { answer: `Overall: 4/4 done\n  Build:\n    - [X] Read the source\n    - [X] Implement OmO plans\n  Verify:\n    - [X] Run isolated validation\n    - [X] ${LONG}`, plan: { done: 4, total: 4, current: null } },
+  cleared: { answer: "Todo list cleared.", plan: null },
+};
 const records = [
   { type: "session", version: 3, id, cwd: root, timestamp: "2026-10-17T00:00:00.000Z" },
   { type: "message", id: "u1", parentId: null, message: { role: "user", content: [{ type: "text", text: "Show this synthetic plan" }] } },
@@ -49,10 +66,72 @@ let workspaceId: string | undefined;
 let server: ReturnType<typeof createServer> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let socket: WebSocket | undefined;
+let appended = 0;
+/** One more `todo` answer in the native transcript, as a turn of its own, so the pane's status stands. */
+function publish(text: string): void {
+  const n = ++appended;
+  const at = new Date(Date.parse("2026-10-17T00:01:00.000Z") + n * 60_000).toISOString();
+  const rows = [
+    { type: "message", id: `u${n + 1}`, parentId: `a${n + 1}`, message: { role: "user", content: [{ type: "text", text: "Go on" }] } },
+    { type: "message", id: `a${n + 1}c`, parentId: `u${n + 1}`, message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: `t${n + 1}`, name: "todo", arguments: { op: "view" } }] } },
+    { type: "message", id: `t${n + 1}`, parentId: `a${n + 1}c`, timestamp: at, message: { role: "toolResult", toolName: "todo", toolCallId: `t${n + 1}`, content: [{ type: "text", text }] } },
+    { type: "message", id: `a${n + 2}`, parentId: `t${n + 1}`, message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Synthetic plan moved on" }] } },
+  ];
+  appendFileSync(transcript, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+}
+/** The next pane-status frame for the pane that says `want` of its plan and background count. */
+function pushed(want: (plan: PlanSummary | null | undefined, background: number | undefined) => boolean, what: string): Promise<{ plan: PlanSummary | null | undefined; background: number | undefined }> {
+  return new Promise((resolve, reject) => {
+    const signal = AbortSignal.timeout(20_000);
+    const listener = (event: MessageEvent): void => {
+      const frame: ServerMessage = JSON.parse(String(event.data));
+      if (frame.type !== "pane-status" || frame.pane_id !== paneIdOf()) return;
+      if (!want(frame.plan, frame.background_tasks)) return;
+      socket?.removeEventListener("message", listener);
+      resolve({ plan: frame.plan, background: frame.background_tasks });
+    };
+    signal.addEventListener("abort", () => { socket?.removeEventListener("message", listener); reject(new Error(`${what}: the bridge never pushed it`)); }, { once: true });
+    socket?.addEventListener("message", listener);
+  });
+}
+let paneIdOf = (): string => "";
+/** The chip as the page draws it. */
+const chip = (page: Page) => page.evaluate(() => {
+  const toggle = document.querySelector<HTMLElement>(".bg-tasks-toggle");
+  const current = toggle?.querySelector<HTMLElement>(".bg-tasks-current") ?? null;
+  const figures = toggle?.querySelector<HTMLElement>(".bg-tasks-plan") ?? null;
+  const count = toggle?.querySelector<HTMLElement>(".bg-tasks-count") ?? null;
+  const inside = (inner: HTMLElement | null): boolean => {
+    const a = inner?.getBoundingClientRect(), b = toggle?.getBoundingClientRect();
+    return !!a && !!b && a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && a.top >= b.top - 0.5 && a.bottom <= b.bottom + 0.5;
+  };
+  return toggle && {
+    name: toggle.getAttribute("aria-label"), title: toggle.getAttribute("title"), idle: toggle.classList.contains("is-idle"),
+    height: toggle.getBoundingClientRect().height, minHeight: parseFloat(getComputedStyle(toggle).minHeight), focused: document.activeElement === toggle,
+    figures: figures && { text: figures.textContent, inside: inside(figures), clipped: figures.scrollWidth > figures.clientWidth },
+    current: current && { text: current.textContent, inside: inside(current), clipped: current.scrollHeight > current.clientHeight || current.scrollWidth > current.clientWidth, height: current.getBoundingClientRect().height },
+    count: count && { text: count.textContent, drawn: count.getBoundingClientRect().width > 1, inside: inside(count) },
+    card: document.querySelector(".composer-surface")?.getBoundingClientRect().width ?? 0, compact: document.querySelector(".composer-surface")?.hasAttribute("data-compact") ?? false,
+    overflowing: document.documentElement.scrollWidth > window.innerWidth,
+  };
+});
+type Chip = NonNullable<Awaited<ReturnType<typeof chip>>>;
+function oneRow(drawn: Chip | null, what: string): asserts drawn is Chip {
+  assert.ok(drawn, `${what}: the chip is drawn`);
+  assert.ok(drawn.height <= drawn.minHeight + 1, `${what}: the chip is one line: ${JSON.stringify(drawn)}`);
+  assert.ok(drawn.figures && drawn.figures.inside && !drawn.figures.clipped, `${what}: done/total is whole: ${JSON.stringify(drawn.figures)}`);
+  if (drawn.current) assert.ok(drawn.current.inside && drawn.current.height <= drawn.minHeight, `${what}: the step shares the line: ${JSON.stringify(drawn.current)}`);
+  assert.equal(drawn.overflowing, false, `${what}: no sideways page scroll`);
+}
+const focusedPane = async (origin: string): Promise<string | null | undefined> => {
+  const body: { snapshot: { focused_pane_id?: string | null } } = await (await fetch(`${origin}/api/session`, { signal: AbortSignal.timeout(5000) })).json();
+  return body.snapshot.focused_pane_id;
+};
 try {
   const created = await workspaceCreate({ cwd: root, label: "Synthetic OmO plan" });
   workspaceId = created.workspace.workspace_id;
   const paneId = created.root_pane.pane_id;
+  paneIdOf = () => paneId;
   // Subscribe before starting the fixture: the holder's publication is the readiness signal.
   const watcher = watch(readyDir);
   try {
@@ -120,6 +199,158 @@ try {
   }
   assert.deepEqual(errors, []);
   console.log(`PASS pane.plan ${JSON.stringify(pane.plan)}`);
+
+  // The chip follows the fixture live, on a desktop window and a phone at once; herdr's own focus
+  // is read before and after, since nothing the chip does may move it.
+  const advances: Array<Record<string, unknown>> = [];
+  const desktop = await browser.newContext({ viewport: { width: 1280, height: 844 }, colorScheme: "dark", locale: "en-US" });
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, colorScheme: "light", locale: "en-US" });
+  try {
+    const pages: Array<{ page: Page; what: string }> = [];
+    for (const [context, what, theme] of [[desktop, "1280px dark", "dark"], [phone, "390px light", "light"]] as const) {
+      await context.addInitScript(({ paneId, theme }) => {
+        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme }));
+        localStorage.setItem(`ovis:view:${paneId}`, "chat");
+      }, { paneId, theme });
+      const page = await context.newPage();
+      page.setDefaultTimeout(20_000);
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}&view=chat`);
+      await page.locator(".conn-live").waitFor();
+      await page.locator(".terminal-stack.is-chat").waitFor();
+      await page.locator(".bg-tasks-current").waitFor();
+      pages.push({ page, what });
+    }
+    const focusBefore = await focusedPane(origin);
+    for (const { page, what } of pages) {
+      const drawn = await chip(page);
+      oneRow(drawn, `${what} at rest`);
+      assert.equal(drawn.current?.text, "Implement OmO plans", `${what}: the step in progress is in the chip`);
+      assert.equal(drawn.figures?.text, "1/3");
+      assert.equal(drawn.name, "Plan: 1 of 3 done · Implement OmO plans · Background tasks", `${what}: the name says the whole step, then the OmO pane's tasks`);
+      assert.equal(drawn.title, drawn.name);
+    }
+    // the desktop's keyboard rests on the chip while the fixture moves on
+    const { page: desk } = pages[0]!;
+    await desk.getByRole("textbox", { name: "Message", exact: true }).focus();
+    for (let step = 0; step < 8 && !(await desk.evaluate(() => document.activeElement?.classList.contains("bg-tasks-toggle"))); step++) await desk.keyboard.press("Tab");
+    assert.equal(await desk.evaluate(() => document.activeElement?.classList.contains("bg-tasks-toggle")), true, "Tab reaches the chip");
+
+    let frame = pushed((plan) => plan?.done === 2 && plan.current === "Run isolated validation", "the advanced plan");
+    publish(LATER.advanced!.answer);
+    advances.push({ state: "advanced", pushed: await frame });
+    for (const { page, what } of pages) {
+      await page.locator(".bg-tasks-current").filter({ hasText: "Run isolated validation" }).waitFor();
+      const drawn = await chip(page);
+      oneRow(drawn, `${what} advanced`);
+      assert.equal(drawn.figures?.text, "2/3", `${what}: the figures moved with the step`);
+      assert.equal(drawn.name, "Plan: 2 of 3 done · Run isolated validation · Background tasks");
+      advances.push({ what, state: "advanced", chip: drawn });
+    }
+    assert.equal((await chip(desk))?.focused, true, "the pushed step leaves the keyboard where it was");
+    // the list opens on the new step as before
+    await pages[1]!.page.locator(".bg-tasks-toggle").tap();
+    const list = pages[1]!.page.locator(".bg-tasks-menu");
+    await list.locator(".bg-step.is-in_progress").getByText("Run isolated validation", { exact: true }).waitFor();
+    assert.deepEqual(await list.locator(".bg-step.is-completed .bg-task-title").allTextContents(), ["Read the source", "Implement OmO plans"]);
+    await pages[1]!.page.screenshot({ path: join(evidence, "native-390-light-advanced-open.png") });
+    await pages[1]!.page.keyboard.press("Escape");
+    await list.waitFor({ state: "detached" });
+
+    // a background task of the session: its count joins the chip, the step stays
+    const taskDir = join(root, ".omo", "senpi-task", "tasks");
+    mkdirSync(taskDir, { recursive: true });
+    const taskFile = join(taskDir, "st_00000001.json");
+    frame = pushed((_plan, background) => background === 1, "one running task");
+    writeFileSync(taskFile, JSON.stringify({ task_id: "st_00000001", parent_session_id: id, status: "running", task_summary: "Synthetic subagent", started_at: new Date().toISOString() }));
+    advances.push({ state: "task", pushed: await frame });
+    for (const { page, what } of pages) {
+      await page.locator(".bg-tasks-count").waitFor();
+      const drawn = await chip(page);
+      oneRow(drawn, `${what} with a task`);
+      assert.ok(drawn.count?.drawn && drawn.count.inside && drawn.count.text === "1", `${what}: the task count is whole beside the plan: ${JSON.stringify(drawn.count)}`);
+      assert.equal(drawn.current?.text, "Run isolated validation");
+      assert.equal(drawn.name, "Plan: 2 of 3 done · Run isolated validation · 1 background task");
+    }
+
+    // a step whose label cannot break: cut in the chip, whole in its name, the figures and the count untouched
+    frame = pushed((plan) => plan?.current === LONG, "the unbroken step");
+    publish(LATER.long!.answer);
+    advances.push({ state: "long", pushed: await frame });
+    for (const { page, what } of pages) {
+      await page.locator(".bg-tasks-current").filter({ hasText: LONG }).waitFor();
+      const drawn = await chip(page);
+      oneRow(drawn, `${what} long`);
+      assert.equal(drawn.current?.clipped, true, `${what}: the long step is cut: ${JSON.stringify(drawn.current)}`);
+      assert.equal(drawn.figures?.text, "3/4");
+      assert.ok(drawn.count?.drawn && drawn.count.inside, `${what}: the count stays whole beside a long step`);
+      assert.equal(drawn.name, `Plan: 3 of 4 done · ${LONG} · 1 background task`, `${what}: the name says the whole step`);
+      advances.push({ what, state: "long", chip: drawn });
+      await page.screenshot({ path: join(evidence, `native-${what.split("px")[0]}-${what.split(" ")[1]}-long.png`) });
+    }
+    assert.equal(await focusedPane(origin), focusBefore, "herdr's own focus did not move for the chip");
+
+    // the pane split in herdr: the chat's card is narrower than a phone's, the chip keeps its row
+    const split = await desk.evaluate(async (pane) => { const response = await fetch("/api/pane/split", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pane_id: pane, direction: "right", focus: false }) }); return { status: response.status, text: await response.text() }; }, paneId);
+    assert.equal(split.status, 200, `the bridge split the pane: ${split.text}`);
+    await desk.waitForFunction(() => document.querySelectorAll(".pane-frame").length === 2);
+    await desk.setViewportSize({ width: 1000, height: 844 });
+    await desk.waitForFunction(() => { const card = document.querySelector(".composer-surface")?.getBoundingClientRect().width ?? 0; return card > 0 && card < 360; });
+    await desk.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    {
+      const drawn = await chip(desk);
+      oneRow(drawn, "a narrow split");
+      assert.equal(drawn.compact, true, "a narrow split's card is compact");
+      assert.equal(drawn.current?.clipped, true);
+      assert.ok(drawn.count?.drawn && drawn.count.inside, `the count is whole in a narrow split: ${JSON.stringify(drawn)}`);
+      assert.equal(await desk.locator(".composer-controls-right .composer-send, .composer-controls-right .composer-stop").evaluate((button) => { const card = button.closest(".composer-surface")!.getBoundingClientRect(); const box = button.getBoundingClientRect(); return box.right <= card.right + 0.5 && box.left >= card.left - 0.5; }), true, "the round button keeps its place in a narrow split");
+      advances.push({ what: "1000px split", state: "split", chip: drawn });
+      await desk.screenshot({ path: join(evidence, "native-1000-dark-split.png") });
+    }
+
+    // no step in progress: the figures alone, still at work; then every step done and the task gone: quiet
+    frame = pushed((plan) => plan?.done === 3 && plan.current === null, "a plan between steps");
+    publish(LATER.between!.answer);
+    advances.push({ state: "between", pushed: await frame });
+    for (const { page, what } of pages) {
+      await page.waitForFunction(() => document.querySelector(".bg-tasks-toggle") !== null && document.querySelector(".bg-tasks-current") === null);
+      const drawn = await chip(page);
+      oneRow(drawn, `${what} between steps`);
+      assert.equal(drawn.figures?.text, "3/4");
+      assert.equal(drawn.name, "Plan: 3 of 4 done · 1 background task", `${what}: no step, no separator`);
+      assert.equal(drawn.idle, false);
+    }
+    frame = pushed((_plan, background) => background === 0, "the task gone");
+    writeFileSync(taskFile, JSON.stringify({ task_id: "st_00000001", parent_session_id: id, status: "completed", task_summary: "Synthetic subagent", started_at: new Date(Date.now() - 60_000).toISOString(), terminal_at: new Date().toISOString() }));
+    advances.push({ state: "task-ended", pushed: await frame });
+    frame = pushed((plan) => plan?.done === 4 && plan.total === 4, "every step done");
+    publish(LATER.done!.answer);
+    advances.push({ state: "done", pushed: await frame });
+    for (const { page, what } of pages) {
+      await page.locator(".bg-tasks-toggle.is-idle").waitFor();
+      const drawn = await chip(page);
+      oneRow(drawn, `${what} done`);
+      assert.equal(drawn.figures?.text, "4/4");
+      assert.equal(drawn.current, null);
+      assert.equal(drawn.count, null, `${what}: the ended task counts no more`);
+    }
+    // the list cleared: no plan, the OmO pane's chip is its background tasks alone
+    frame = pushed((plan) => plan === null, "the cleared plan");
+    publish(LATER.cleared!.answer);
+    advances.push({ state: "cleared", pushed: await frame });
+    for (const { page, what } of pages) {
+      await page.waitForFunction(() => document.querySelector(".bg-tasks-toggle") !== null && document.querySelector(".bg-tasks-plan") === null);
+      const drawn = await chip(page);
+      assert.ok(drawn && drawn.current === null && drawn.figures === null, `${what}: no figures and no step without a plan`);
+      assert.equal(drawn.name, "Background tasks");
+    }
+    writeFileSync(join(evidence, "current-step-advances.json"), JSON.stringify(advances, null, 2) + "\n");
+    console.log("PASS the chip's step follows the fixture: advanced, with a task, unbroken, split, between steps, done and cleared, with herdr's focus where it was");
+  } finally {
+    await phone.close();
+    await desktop.close();
+  }
+  assert.deepEqual(errors, []);
   console.log(`Evidence: ${evidence}`);
 } finally {
   socket?.close();

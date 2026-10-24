@@ -1086,7 +1086,9 @@ setInterval(() => {}, 1000);`);
       expect(() => process.kill(Number(readFileSync(pidFile, "utf8")), 0)).toThrow();
     } finally {
       // the child ignores SIGTERM: whatever happened above, it only ever ends by its own pid
-      if (existsSync(pidFile)) { try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch { /* already dead */ } }
+      // a pid file caught half written reads 0, and kill(0) would end this run's whole process group
+      const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0;
+      if (pid > 0) { try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ } }
     }
   });
 

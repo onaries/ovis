@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 
 import { forgetTranscriptState, paneConversation } from "./conversation.ts";
 import * as herdr from "./herdr/client.ts";
 import { terminalBreadcrumb } from "./gjc-runtime.ts";
-import { isOmpHelper, isOmpProcess, ompAgentDir, ompHeldTranscript, ompLaunch, ompLaunchDir } from "./omp.ts";
+import { isOmpHelper, isOmpProcess, ompAgentDir, ompHeldTranscript, ompLaunch, ompLaunchDir, ompStoreLayout } from "./omp.ts";
+import layouts from "./fixtures/omp-18.8.7-store-layouts.json";
 import * as ompProbe from "./omp-process.ts";
 import * as omo from "./omo.ts";
 
@@ -44,7 +45,7 @@ it("keeps a process's sessions where its profile puts them, and nowhere it canno
 });
 
 it("reads omp's cwd and store options from its argv the way omp does", () => {
-  const cases: [string[], { profile: string | null; sessionDir: boolean; cwd: string | null } | null][] = [
+  const cases: [string[], { profile: string | null; sessionDir: boolean; cwd: string | null; sessionDirValue?: string } | null][] = [
     [["omp"], { profile: null, sessionDir: false, cwd: null }],
     // split and equal forms, the last one winning
     [["omp", "--cwd", "/a", "--cwd=/b"], { profile: null, sessionDir: false, cwd: "/b" }],
@@ -72,7 +73,7 @@ it("reads omp's cwd and store options from its argv the way omp does", () => {
     [["omp", "fix --cwd /x", "--cwd", "/a"], { profile: null, sessionDir: false, cwd: "/a" }],
     // interpreter-launched: options start after omp's script
     [["bun", "/opt/omp/dist/omp.js", "--cwd", "/a"], { profile: null, sessionDir: false, cwd: "/a" }],
-    [["omp", "--session-dir=/s", "--cwd", "/a"], { profile: null, sessionDir: true, cwd: "/a" }],
+    [["omp", "--session-dir=/s", "--cwd", "/a"], { profile: null, sessionDir: true, cwd: "/a", sessionDirValue: "/s" }],
     // omp ignores a trailing cwd option and stays where it started on an empty one
     [["omp", "--cwd"], { profile: null, sessionDir: false, cwd: null }],
     [["omp", "--cwd", "/a", "--cwd"], { profile: null, sessionDir: false, cwd: "/a" }],
@@ -135,12 +136,76 @@ it("reads omp's breadcrumb, whose transcript starts with a title record before t
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
+it("keeps each process's store where native omp put it", () => {
+  expect(layouts.provenance.omp).toBe("omp/18.8.7");
+  const unsupported = new Set(layouts.provenance.unsupported);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-layouts-")));
+  try {
+    for (const [index, entry] of layouts.cases.entries()) {
+      const at = join(root, String(index));
+      const fill = (value: string) => value.replaceAll("$CASE", at);
+      for (const dir of entry.mkdirs) mkdirSync(fill(dir), { recursive: true });
+      // the probe started every case in its own home, which the case may replace
+      const env: Record<string, string> = { HOME: join(at, "home"), ...entry.env as Record<string, string> };
+      const environ = Object.entries(env).map(([key, value]) => `${key}=${fill(value)}`);
+      const layout = ompStoreLayout(["omp", ...entry.args.map(fill)], environ, "linux");
+      const { sessions, terminalSessions, depth } = entry.observed;
+      const expected = unsupported.has(entry.name) ? null : { sessions: fill(sessions!), terminalSessions: fill(terminalSessions!), depth };
+      expect<unknown[]>([entry.name, layout]).toEqual([entry.name, expected]);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("reads a process's store from its own argv and environment, and nothing it cannot prove", () => {
+  const home = "/home/u";
+  const managed = (agent: string) => ({ sessions: join(agent, "sessions"), terminalSessions: join(agent, "terminal-sessions"), depth: 2 as const });
+  const own = (agent: string, sessions: string) => ({ ...managed(agent), sessions, depth: 1 as const });
+  const env = (...words: string[]) => [`HOME=${home}`, ...words];
+  // the process's own home and config folder, never the bridge's; an unset or empty home is the account's
+  expect(ompStoreLayout(["omp"], env(), "linux")).toEqual(managed("/home/u/.omp/agent"));
+  expect(ompStoreLayout(["omp"], env("PI_CONFIG_DIR=.alt"), "linux")).toEqual(managed("/home/u/.alt/agent"));
+  for (const environ of [[], ["HOME="]]) expect(ompStoreLayout(["omp"], environ, "linux")).toEqual(managed(join(userInfo().homedir, ".omp/agent")));
+  // a relative home, or a variable given twice, proves nothing
+  expect(ompStoreLayout(["omp"], ["HOME=rel"], "linux")).toBeNull();
+  expect(ompStoreLayout(["omp"], env("HOME=/other"), "linux")).toBeNull();
+  // profile names as omp reads them: trimmed, `default` naming none, a refused one starting nothing
+  expect(ompStoreLayout(["omp", "--profile", "default"], env("OMP_PROFILE=work"), "linux")).toEqual(managed("/home/u/.omp/agent"));
+  expect(ompStoreLayout(["omp", "--profile", " work "], env(), "linux")).toEqual(managed("/home/u/.omp/profiles/work/agent"));
+  expect(ompStoreLayout(["omp", "--profile", "work"], env("OMP_PROFILE=Bad!"), "linux")).toEqual(managed("/home/u/.omp/profiles/work/agent"));
+  expect(ompStoreLayout(["omp"], env("OMP_PROFILE=", "PI_PROFILE=work"), "linux")).toEqual(managed("/home/u/.omp/agent"));
+  for (const name of ["Bad!", "..", "con", "a."]) expect(ompStoreLayout(["omp"], env(`OMP_PROFILE=${name}`), "linux")).toBeNull();
+  // a profile ignores PI_CODING_AGENT_DIR, and so does omp when the environment's profile handed it down
+  expect(ompStoreLayout(["omp"], env("PI_CODING_AGENT_DIR=/a/../agent/"), "linux")).toEqual(managed("/agent"));
+  expect(ompStoreLayout(["omp", "--profile", "work"], env("PI_CODING_AGENT_DIR=/agent"), "linux")).toEqual(managed("/home/u/.omp/profiles/work/agent"));
+  expect(ompStoreLayout(["omp"], env("OMP_PROFILE=", "PI_PROFILE=work", "PI_CODING_AGENT_DIR=/home/u/.omp/profiles/work/agent"), "linux")).toEqual(managed("/home/u/.omp/agent"));
+  expect(ompStoreLayout(["omp"], env("PI_CODING_AGENT_DIR=rel"), "linux")).toBeNull();
+  // a session directory of its own: the last flag, else the variable; nothing after `--`
+  expect(ompStoreLayout(["omp", "--session-dir=/a", "--session-dir", "/b/"], env("PI_CODING_AGENT_SESSION_DIR=/c"), "linux")).toEqual(own("/home/u/.omp/agent", "/b"));
+  expect(ompStoreLayout(["omp"], env("PI_CODING_AGENT_SESSION_DIR=/c", "PI_CODING_AGENT_DIR=/agent"), "linux")).toEqual(own("/agent", "/c"));
+  expect(ompStoreLayout(["omp", "--", "--session-dir", "/s"], env("PI_CODING_AGENT_SESSION_DIR="), "linux")).toEqual(managed("/home/u/.omp/agent"));
+  for (const argv of [["omp", "--session-dir="], ["omp", "--session-dir"], ["omp", "--session-dir", "rel"]]) expect(ompStoreLayout(argv, env(), "linux")).toBeNull();
+  expect(ompStoreLayout(["omp", "--profile"], env(), "linux")).toBeNull();
+  // an environment that could not be read proves nothing, not even the default store
+  for (const platform of ["linux", "darwin", "win32"] as const) expect(ompStoreLayout(["omp", "--profile", "work"], null, platform)).toBeNull();
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-xdg-")));
+  try {
+    mkdirSync(join(root, "data", "omp"), { recursive: true });
+    const xdg = env(`XDG_DATA_HOME=${join(root, "data")}`, `XDG_STATE_HOME=${join(root, "state")}`);
+    expect(ompStoreLayout(["omp"], xdg, "linux")).toEqual({ ...managed("/home/u/.omp/agent"), sessions: join(root, "data/omp/sessions") });
+    // omp reads XDG roots on macOS only from 18.12: which one runs is not known
+    expect(ompStoreLayout(["omp"], xdg, "darwin")).toBeNull();
+    expect(ompStoreLayout(["omp"], env(), "darwin")).toEqual(managed("/home/u/.omp/agent"));
+    expect(ompStoreLayout(["omp"], env("XDG_DATA_HOME=rel"), "linux")).toBeNull();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 describe("an omp pane's chat", () => {
   let home = "";
   let savedHome: string | undefined;
   let agentSession: unknown;
   let processes: { pid: number; name?: string; argv?: string[] }[] = [];
   let pane: HerdrPane;
+  let readProcess: typeof ompProbe.ompProcessMemory;
   const restores: Array<() => void> = [];
   const transcript = (cwd: string) => [
     JSON.stringify({ type: "title", v: 1, title: "t" }),
@@ -162,7 +227,11 @@ describe("an omp pane's chat", () => {
       if (method === "pane.process_info") return { process_info: { foreground_processes: processes } } as never;
       throw new Error(`unexpected RPC: ${method}`);
     });
-    restores.push(() => snapshot.mockRestore(), () => rpc.mockRestore());
+    // the real helper reads each process, with a deadline no busy PC reaches: it is a bun that can
+    // take over the default second to start there (omp-process.test.ts)
+    readProcess = ompProbe.createOmpProcessProbe({ timeoutMs: 30_000 });
+    const memory = spyOn(ompProbe, "ompProcessMemory").mockImplementation(readProcess);
+    restores.push(() => snapshot.mockRestore(), () => rpc.mockRestore(), () => memory.mockRestore());
   });
   afterEach(() => {
     for (const restore of restores.splice(0)) restore();
@@ -192,7 +261,8 @@ describe("an omp pane's chat", () => {
     const move = moveTo === undefined ? "" : `process.chdir(${JSON.stringify(moveTo)}); `;
     writeFileSync(script, `${move}for (const file of ${JSON.stringify(held)}) require("node:fs").openSync(file, "a"); console.log("ready"); setInterval(() => {}, 1000);`);
     const argv = [process.execPath, script, ...options];
-    const child = Bun.spawn(argv, { cwd, env: env ? { ...process.env, ...env } : undefined, stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    // the test's HOME: omp keeps its store under its own home, and a spawn would inherit the real one
+    const child = Bun.spawn(argv, { cwd, env: { ...process.env, ...env }, stdout: "pipe", stderr: "ignore", stdin: "ignore" });
     reaped.push(async () => { child.kill(); await child.exited; });
     const first = await Promise.race([
       child.stdout.getReader().read(),
@@ -361,7 +431,7 @@ describe("an omp pane's chat", () => {
     let helperArgv: string[] = [];
     const wsl = spyOn(ompProbe, "isWsl").mockReturnValue(true);
     const probe = spyOn(ompProbe, "ompProcessMemory").mockImplementation(async (pid: number) =>
-      ({ argv: pid === install.pid ? helperArgv : launched.argv, environ: [] }));
+      ({ argv: pid === install.pid ? helperArgv : launched.argv, environ: [`HOME=${home}`] }));
     restores.push(() => wsl.mockRestore(), () => probe.mockRestore());
     for (const argv of [[binary, "add", "--cwd", env, "--ignore-scripts", "lodash"], [binary, "__omp_worker_tts"]]) {
       helperArgv = argv;
@@ -422,7 +492,7 @@ describe("an omp pane's chat", () => {
     mkdirSync(bin);
     const script = join(bin, "omp.js");
     writeFileSync(script, `require("node:fs").openSync(${JSON.stringify(path)}, "a"); console.log("ready"); setInterval(() => {}, 1000);`);
-    const child = Bun.spawn([process.execPath, script], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const child = Bun.spawn([process.execPath, script], { env: { ...process.env }, stdout: "pipe", stderr: "ignore", stdin: "ignore" });
     try {
       const reader = child.stdout.getReader();
       const first = await Promise.race([
@@ -454,7 +524,7 @@ describe("an omp pane's chat", () => {
     const script = join(bin, "omp.js");
     writeFileSync(script, `require("node:fs").openSync(${JSON.stringify(path)}, "a"); console.log("ready"); setInterval(() => {}, 1000);`);
     const argv = [process.execPath, script, ...(profile === null ? [] : ["--profile", profile])];
-    const child = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const child = Bun.spawn(argv, { env: { ...process.env }, stdout: "pipe", stderr: "ignore", stdin: "ignore" });
     try {
       const reader = child.stdout.getReader();
       const first = await Promise.race([
@@ -482,25 +552,38 @@ describe("an omp pane's chat", () => {
     }
   });
 
-  it.skipIf(process.platform !== "linux")("on WSL a failed probe with supplied argv never falls back to a synchronous environment read", async () => {
-    const wsl = spyOn(ompProbe, "isWsl").mockReturnValue(true);
+  it.skipIf(process.platform !== "linux")("a failed probe with supplied argv never falls back to a synchronous environment read, and shows no chat", async () => {
     const probe = spyOn(ompProbe, "ompProcessMemory").mockResolvedValue(null);
-    restores.push(() => wsl.mockRestore());
-    const environ = spyOn(omo, "processEnviron").mockImplementation(() => { throw new Error("unsafe synchronous read"); });
-    restores.push(() => probe.mockRestore(), () => environ.mockRestore());
+    restores.push(() => probe.mockRestore());
     processes = [{ pid: process.pid, argv: ["omp"] }];
+    // herdr's path in the user's own default store is no answer for an omp whose store is unproved
+    agentSession = { agent: "omp", kind: "path", value: storeTranscript(pane.cwd!) };
+    await unavailable();
+    const environ = spyOn(omo, "processEnviron").mockImplementation(() => { throw new Error("unsafe synchronous read"); });
+    restores.push(() => environ.mockRestore());
+    probe.mockClear();
     expect(await ompHeldTranscript(pane.pane_id, pane.cwd!)).toBeNull();
     expect(probe).toHaveBeenCalledWith(process.pid, false);
     expect(environ).not.toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform !== "linux")("a native Linux pane whose argv herdr supplies keeps the direct read and spawns no helper", async () => {
+  it.skipIf(process.platform !== "linux")("a native Linux pane whose argv herdr supplies reads its environment through the bounded helper", async () => {
+    const path = storeTranscript(pane.cwd!);
+    const omp = await standIn([], [path]);
     const wsl = spyOn(ompProbe, "isWsl").mockReturnValue(false);
     const probe = spyOn(ompProbe, "ompProcessMemory");
-    restores.push(() => wsl.mockRestore(), () => probe.mockRestore());
-    processes = [{ pid: process.pid, argv: ["omp"] }];
-    expect(await ompHeldTranscript(pane.pane_id, pane.cwd!)).toBeNull();
-    expect(probe).not.toHaveBeenCalled();
+    const environ = spyOn(omo, "processEnviron").mockImplementation(() => { throw new Error("unsafe synchronous read"); });
+    const read = fs.readFileSync;
+    const files = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+      if (String(file).endsWith("/environ")) throw new Error(`unsafe synchronous read of ${String(file)}`);
+      return read(file, options as never);
+    }) as typeof fs.readFileSync);
+    restores.push(() => wsl.mockRestore(), () => probe.mockRestore(), () => environ.mockRestore(), () => files.mockRestore());
+    processes = [{ pid: omp.pid, name: "omp", argv: omp.argv }];
+    expect(await ompHeldTranscript(pane.pane_id, pane.cwd!)).toBe(path);
+    expect(probe).toHaveBeenCalledWith(omp.pid, false);
+    expect(environ).not.toHaveBeenCalled();
+    expect(files.mock.calls.some(([file]) => String(file).endsWith("/environ"))).toBe(false);
   });
 
   it.skipIf(process.platform !== "linux")("a successful probe's environment finds the tmux breadcrumb with no synchronous environ read", async () => {
@@ -511,7 +594,7 @@ describe("an omp pane's chat", () => {
     writeFileSync(path, transcript(pane.cwd!));
     mkdirSync(join(agentDir, "terminal-sessions"));
     writeFileSync(join(agentDir, "terminal-sessions", "tmux-%4242"), `${pane.cwd}\n${path}\n`);
-    const probe = spyOn(ompProbe, "ompProcessMemory").mockResolvedValue({ argv: ["omp"], environ: ["TMUX=/tmp/tmux-1/default,1,0", "TMUX_PANE=%4242"] });
+    const probe = spyOn(ompProbe, "ompProcessMemory").mockResolvedValue({ argv: ["omp"], environ: [`HOME=${home}`, "TMUX=/tmp/tmux-1/default,1,0", "TMUX_PANE=%4242"] });
     const environ = spyOn(omo, "processEnviron").mockImplementation(() => { throw new Error("unsafe synchronous read"); });
     const read = fs.readFileSync;
     const files = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
@@ -524,5 +607,219 @@ describe("an omp pane's chat", () => {
     expect(probe).toHaveBeenCalledWith(process.pid, true);
     expect(environ).not.toHaveBeenCalled();
     expect(files.mock.calls.some(([file]) => String(file).endsWith("/environ"))).toBe(false);
+  });
+
+  /** A transcript at `path` whose header names `cwd`, answering `answer`, of session `version`. */
+  const writeTranscript = (path: string, cwd: string, { answer = "synthetic answer", version = 3 }: { answer?: string; version?: number } = {}) => {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, transcript(cwd).replace("synthetic answer", answer).replace('"version":3', `"version":${version}`));
+    return path;
+  };
+  const slug = (cwd: string) => cwd.replaceAll("/", "-");
+  const unavailable = async () => {
+    forgetTranscriptState();
+    await expect(paneConversation(pane.pane_id)).rejects.toThrow("no_session_path");
+  };
+  const only = async (omp: { pid: number; argv: string[] }) => {
+    processes = [{ pid: omp.pid, name: "omp", argv: omp.argv }];
+  };
+  const reapAll = async () => { for (const reap of reaped.splice(0)) await reap(); };
+
+  it.skipIf(process.platform !== "linux")("finds a moved store's session through the held file, the breadcrumb and herdr's path", async () => {
+    const own = join(home, "own-sessions");
+    // omp keeps a session directory of its own flat: <id>.jsonl
+    const path = writeTranscript(join(own, "2026-10-01_s1.jsonl"), pane.cwd!);
+    for (const [options, env] of [[[], { PI_CODING_AGENT_SESSION_DIR: own }], [["--session-dir", own], {}], [[`--session-dir=${own}/`], {}]] as const) {
+      await only(await standIn([...options], [path], { env }));
+      for (const session of [undefined, otherAgent, { agent: "omp", kind: "path", value: path }]) {
+        agentSession = session;
+        expect(await chat()).toEqual(synthetic);
+      }
+      await reapAll();
+    }
+    // the breadcrumb stays where the agent directory puts it: here the XDG state root
+    const data = join(home, "xdg-data"), state = join(home, "xdg-state");
+    mkdirSync(join(data, "omp"), { recursive: true });
+    mkdirSync(join(state, "omp", "terminal-sessions"), { recursive: true });
+    await only(await standIn([], [], { env: { PI_CODING_AGENT_SESSION_DIR: own, XDG_DATA_HOME: data, XDG_STATE_HOME: state, TMUX: "/tmp/tmux-1/default,1,0", TMUX_PANE: "%4260" } }));
+    agentSession = undefined;
+    // a breadcrumb where this process does not write names nothing
+    mkdirSync(join(home, ".omp/agent/terminal-sessions"), { recursive: true });
+    writeFileSync(join(home, ".omp/agent/terminal-sessions/tmux-%4260"), `${pane.cwd}\n${path}\n`);
+    expect(await ompHeldTranscript(pane.pane_id, pane.cwd!)).toBeNull();
+    writeFileSync(join(state, "omp/terminal-sessions/tmux-%4260"), `${pane.cwd}\n${path}\n`);
+    expect(await chat()).toEqual(synthetic);
+    await reapAll();
+    // a custom agent directory's managed store, and the XDG data root's
+    const custom = join(home, "custom-agent");
+    const managed = writeTranscript(join(custom, "sessions", slug(pane.cwd!), "2026-10-02_s2.jsonl"), pane.cwd!);
+    const xdgManaged = writeTranscript(join(data, "omp", "sessions", slug(pane.cwd!), "2026-10-03_s3.jsonl"), pane.cwd!);
+    for (const [held, env] of [[managed, { PI_CODING_AGENT_DIR: custom }], [xdgManaged, { XDG_DATA_HOME: data }]] as const) {
+      await only(await standIn([], [held], { env }));
+      for (const session of [undefined, { agent: "omp", kind: "path", value: held }]) {
+        agentSession = session;
+        expect(await chat()).toEqual(synthetic);
+      }
+      await reapAll();
+    }
+  });
+
+  it.skipIf(process.platform !== "linux")("holds herdr's path to the store the pane's omp process writes to", async () => {
+    const own = join(home, "own-sessions");
+    const mine = writeTranscript(join(own, "2026-10-01_s1.jsonl"), pane.cwd!);
+    // a session of the pane's directory in the default store, which this omp does not write to
+    const decoy = writeTranscript(join(home, ".omp/agent/sessions", slug(pane.cwd!), "2026-10-02_decoy.jsonl"), pane.cwd!, { answer: "decoy answer" });
+    const decoyChat = [synthetic[0], { kind: "text" as const, text: "decoy answer" }];
+    agentSession = { agent: "omp", kind: "path", value: decoy };
+    // the session it holds is the answer, not the decoy
+    await only(await standIn(["--session-dir", own], [mine]));
+    expect(await chat()).toEqual(synthetic);
+    await reapAll();
+    // and with nothing held, there is none
+    await only(await standIn([], [], { env: { PI_CODING_AGENT_SESSION_DIR: own } }));
+    await unavailable();
+    await reapAll();
+    // a profile's process does not write to the default store either
+    await only(await standIn(["--profile", "other"], []));
+    await unavailable();
+    await reapAll();
+    // a session of another directory in the process's own flat store is not this pane's
+    const elsewhere = writeTranscript(join(own, "2026-10-03_s3.jsonl"), join(home, "elsewhere"), { answer: "decoy answer" });
+    await only(await standIn(["--session-dir", own], []));
+    agentSession = { agent: "omp", kind: "path", value: elsewhere };
+    await unavailable();
+    await reapAll();
+    // a plain omp's own default store: herdr's path reads, the decoy among them
+    await only(await standIn([], []));
+    agentSession = { agent: "omp", kind: "path", value: decoy };
+    expect(await chat()).toEqual(decoyChat);
+    await reapAll();
+    // where herdr shows no omp process, its path in the user's own default store reads as before
+    processes = [];
+    expect(await chat()).toEqual(decoyChat);
+  });
+
+  it.skipIf(process.platform !== "linux")("refuses links out of the store and session versions omp does not read", async () => {
+    const env = { TMUX: "/tmp/tmux-1/default,1,0", TMUX_PANE: "%4261" };
+    const breadcrumb = (path: string) => {
+      mkdirSync(join(home, ".omp/agent/terminal-sessions"), { recursive: true });
+      writeFileSync(join(home, ".omp/agent/terminal-sessions/tmux-%4261"), `${pane.cwd}\n${path}\n`);
+    };
+    // a flat store nested in the default store: a link out of it stays out, though it lands in the default store
+    const outside = writeTranscript(join(home, ".omp/agent/sessions", slug(pane.cwd!), "2026-10-01_s1.jsonl"), pane.cwd!);
+    const nested = join(home, ".omp/agent/sessions/private");
+    mkdirSync(nested, { recursive: true });
+    const linked = join(nested, "2026-10-01_s1.jsonl");
+    symlinkSync(outside, linked);
+    await only(await standIn(["--session-dir", nested], [linked], { env }));
+    breadcrumb(linked);
+    expect(await ompHeldTranscript(pane.pane_id, pane.cwd!)).toBeNull();
+    for (const value of [linked, outside]) {
+      agentSession = { agent: "omp", kind: "path", value };
+      await unavailable();
+    }
+    await reapAll();
+    // a subagent's file whose session links out of the store
+    const own = join(home, "own-sessions");
+    const subagent = writeTranscript(join(own, "2026-10-02_s2", "task.jsonl"), pane.cwd!);
+    symlinkSync(outside, join(own, "2026-10-02_s2.jsonl"));
+    await only(await standIn(["--session-dir", own], [subagent], { env }));
+    breadcrumb(subagent);
+    agentSession = undefined;
+    expect(await ompHeldTranscript(pane.pane_id, pane.cwd!)).toBeNull();
+    await reapAll();
+    // a session version omp does not read, held, named by its breadcrumb or by herdr
+    const future = writeTranscript(join(own, "2026-10-03_s3.jsonl"), pane.cwd!, { version: 4 });
+    await only(await standIn(["--session-dir", own], [future], { env }));
+    breadcrumb(future);
+    expect(await ompHeldTranscript(pane.pane_id, pane.cwd!)).toBeNull();
+    agentSession = { agent: "omp", kind: "path", value: future };
+    await unavailable();
+    // the version omp writes reads
+    writeTranscript(future, pane.cwd!);
+    expect(await chat()).toEqual(synthetic);
+  });
+
+  it.skipIf(process.platform !== "linux")("reads herdr's path in a moved store with nothing held, and waits on one omp has not written", async () => {
+    const own = join(home, "own-sessions");
+    const path = writeTranscript(join(own, "2026-10-01_s1.jsonl"), pane.cwd!);
+    await only(await standIn([], [], { env: { PI_CODING_AGENT_SESSION_DIR: own } }));
+    expect(await ompHeldTranscript(pane.pane_id, pane.cwd!)).toBeNull();
+    agentSession = { agent: "omp", kind: "path", value: path };
+    expect(await chat()).toEqual(synthetic);
+    // omp names its session file at start and writes it with the first answer
+    agentSession = { agent: "omp", kind: "path", value: join(own, "2026-10-02_s2.jsonl") };
+    forgetTranscriptState();
+    expect(await paneConversation(pane.pane_id)).toMatchObject({ source: "omp-transcript", turns: [], history_id: "unwritten:2026-10-02_s2" });
+  });
+
+  it.skipIf(process.platform !== "linux")("reads herdr's path in a managed store whose session names a folder that is gone", async () => {
+    // omp resumes a session of a deleted folder without moving, so its header and herdr's directory differ
+    const gone = join(home, "gone");
+    const path = writeTranscript(join(home, ".omp/agent/sessions", slug(gone), "2026-10-01_s1.jsonl"), gone);
+    await only(await standIn([], []));
+    agentSession = { agent: "omp", kind: "path", value: path };
+    expect(await chat()).toEqual(synthetic);
+  });
+
+  it.skipIf(process.platform !== "linux")("herdr's path to the launch directory's session never outranks the live directory's", async () => {
+    const a = join(home, "A"), b = join(home, "B"), own = join(home, "own-sessions");
+    mkdirSync(a); mkdirSync(b);
+    // started in A, then resumed a session of B, which it holds; herdr still names A's
+    const old = writeTranscript(join(own, "2026-10-01_old.jsonl"), a, { answer: "decoy answer" });
+    const current = writeTranscript(join(own, "2026-10-02_current.jsonl"), b);
+    const omp = await standIn(["--cwd", a, "--session-dir", own], [current], { moveTo: b });
+    await only(omp);
+    pane.foreground_cwd = liveDir(omp.pid);
+    agentSession = { agent: "omp", kind: "path", value: old };
+    expect(await chat()).toEqual(synthetic);
+    // herdr's path to a session of the live directory reads as named, over the held one
+    const named = writeTranscript(join(own, "2026-10-03_named.jsonl"), b, { answer: "named answer" });
+    agentSession = { agent: "omp", kind: "path", value: named };
+    expect(await chat()).toEqual([synthetic[0], { kind: "text", text: "named answer" }]);
+  });
+
+  it.skipIf(process.platform !== "linux")("an agent process whose argv cannot be read, alone or beside a readable omp, shows no chat", async () => {
+    const plain = await standIn([], [storeTranscript(pane.cwd!)]);
+    const unread = await standIn(["--session-dir", join(home, "other")], []);
+    // herdr leaves out the argv of a process it takes for an agent; the helper cannot read this one
+    const read = readProcess;
+    const probe = spyOn(ompProbe, "ompProcessMemory").mockImplementation(async (pid: number, argv: boolean) => pid === unread.pid ? null : read(pid, argv));
+    restores.push(() => probe.mockRestore());
+    processes = [{ pid: plain.pid, name: "omp", argv: plain.argv }, { pid: unread.pid, name: "omp" }];
+    agentSession = { agent: "omp", kind: "path", value: storeTranscript(pane.cwd!) };
+    await unavailable();
+    expect(await ompHeldTranscript(pane.pane_id, pane.cwd!)).toBeNull();
+    // alone, it proves no store either: herdr's path in the bridge's own default store is no answer
+    processes = [{ pid: unread.pid, name: "omp" }];
+    await unavailable();
+    // once that process is gone, the readable one's store is the pane's
+    await reapAll();
+    await only(await standIn([], [storeTranscript(pane.cwd!)]));
+    processes.push({ pid: unread.pid, name: "omp" });
+    expect(await chat()).toEqual(synthetic);
+  });
+
+  it.skipIf(process.platform !== "linux")("omp processes keeping different stores, or one whose environment cannot be read, show no chat", async () => {
+    const a = join(home, "a"), b = join(home, "b");
+    const mine = writeTranscript(join(a, "2026-10-01_s1.jsonl"), pane.cwd!);
+    const theirs = writeTranscript(join(b, "2026-10-01_s2.jsonl"), pane.cwd!);
+    const first = await standIn([], [mine], { env: { PI_CODING_AGENT_SESSION_DIR: a } });
+    const second = await standIn([], [theirs], { env: { PI_CODING_AGENT_SESSION_DIR: b } });
+    processes = [first, second].map((omp) => ({ pid: omp.pid, name: "omp", argv: omp.argv }));
+    expect(await ompHeldTranscript(pane.pane_id, pane.cwd!)).toBeNull();
+    for (const value of [mine, theirs]) {
+      agentSession = { agent: "omp", kind: "path", value };
+      await unavailable();
+    }
+    // alone, each finds its own
+    await only(first);
+    agentSession = undefined;
+    expect(await chat()).toEqual(synthetic);
+    // with its environment unreadable, not even herdr's path in the default store reads
+    const probe = spyOn(ompProbe, "ompProcessMemory").mockResolvedValue(null);
+    restores.push(() => probe.mockRestore());
+    agentSession = { agent: "omp", kind: "path", value: storeTranscript(pane.cwd!) };
+    await unavailable();
   });
 });

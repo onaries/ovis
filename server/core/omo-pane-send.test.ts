@@ -112,6 +112,28 @@ const submitter = () => createSubmitText({
   SUBMIT_DEADLINE_MS: 20_000, TYPED_SETTLE_MS: 0, DRAFT_CLEAR_WAIT_MS: 0, DRAFT_CLEAR_POLL_MS: 0, SUBMIT_DELAY_MS: 0,
 });
 
+// These need no /proc: they run on every platform
+it("keeps Claude's draft refusal when only a script from an omo-ai checkout runs beside Claude", async () => {
+  screens["w:p1"] = DRAFT_SCREEN;
+  panes["w:p1"] = { agent: "claude", process: [{ pid: 2147483646, argv: ["/usr/bin/claude"], cwd: root }, { ...OMO_AI_SCRIPT, cwd: root }] };
+  const refused = await submitter()("w:p1", "hello", "hello", Date.now()).catch((error: unknown) => error);
+  expect(refused).toBeInstanceOf(HerdrError);
+  expect((refused as HerdrError).code).toBe("input_draft");
+  expect(calls.some((call) => call.method === "agent.prompt")).toBeFalse();
+});
+
+it("neither reads nor types into a Hermes pane once the device loses its access while its processes are looked up", async () => {
+  screens["w:p1"] = "";
+  panes["w:p1"] = { agent: "hermes", process: [{ pid: 2147483646, argv: ["/usr/bin/hermes"], cwd: root }] };
+  let revoked = false;
+  onProcessInfo = () => { revoked = true; };
+  const authorize = () => { if (revoked) throw new HerdrError("forbidden", "access revoked"); };
+  const refused = await submitter()("w:p1", "hello", "hello", Date.now(), false, authorize).catch((error: unknown) => error);
+  expect((refused as HerdrError).code).toBe("forbidden");
+  expect(calls.some((call) => call.method === "pane.process_info")).toBeTrue();
+  expect(calls.some((call) => ["pane.read", "agent.prompt", "pane.send_text", "pane.send_keys"].includes(call.method))).toBeFalse();
+});
+
 // omo's identity is read from /proc (its environment) and its holder records
 describe.skipIf(process.platform !== "linux")("omo panes", () => {
 it("sends into a Claude-labelled omo pane without Claude's draft refusal, and still refuses a real Claude pane", async () => {
@@ -142,15 +164,6 @@ it("pastes a multiline message into an unlabelled omo pane as one bracketed past
   expect(await sent("w:p1")).toBe("\u001b[200~a\nb\u001b[201~");
   expect(await sent("w:p2")).toBe("a\nb");
   expect(await sent("w:p3"), "a script from an omo-ai checkout gets no omo paste markers").toBe("a\nb");
-});
-
-it("keeps Claude's draft refusal when only a script from an omo-ai checkout runs beside Claude", async () => {
-  screens["w:p1"] = DRAFT_SCREEN;
-  panes["w:p1"] = { agent: "claude", process: [{ pid: 2147483646, argv: ["/usr/bin/claude"], cwd: root }, { ...OMO_AI_SCRIPT, cwd: root }] };
-  const refused = await submitter()("w:p1", "hello", "hello", Date.now()).catch((error: unknown) => error);
-  expect(refused).toBeInstanceOf(HerdrError);
-  expect((refused as HerdrError).code).toBe("input_draft");
-  expect(calls.some((call) => call.method === "agent.prompt")).toBeFalse();
 });
 
 it("sends nothing when the device loses its access while the pane's processes are looked up", async () => {

@@ -60,6 +60,14 @@
       el.dataset.copy = button.copy;
       el.dataset.tip = "Copy install command";
       shipped.replaceWith(el);
+    } else {
+      // the shipped button links to the Mac download; a phone app not out yet gets a note instead
+      el = document.createElement("span");
+      el.className = shipped.className;
+      el.tabIndex = 0;
+      el.setAttribute("role", "note");
+      el.dataset.tip = "Coming soon";
+      shipped.replaceWith(el);
     }
     el.setAttribute("aria-label", button.aria);
     el.replaceChildren(svg, label);

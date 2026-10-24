@@ -4,7 +4,7 @@ import { registry } from "./registry.ts";
 import { CODEX_ASK_HINT_RE, CODEX_ASYNC_ASK_HINT_RE, CODEX_CONTINUE_HINT_RE } from "./codex.ts";
 import { OMO_FOOTER_LINES, OMO_HINT_LINES, OMO_NOT_FOOTER_RE, OMO_OPTIONS_HINT_RE, OMO_PENDING_HINT_RE, OMO_REVIEW_HINT_RE, OMO_TYPING_HINT_RE, omoModelListWaits } from "./omo.ts";
 import { CLAUDE_ASK_HINT_RE, CLAUDE_CONFIRM_HINT_RE, CLAUDE_EFFORT_HINT_RE, claudeModelListWaits, withoutClaudeTasks } from "./claude.ts";
-import { OMP_CLIPPED_SINGLE_HINT_RE, OMP_MULTI_HINT_RE, OMP_REVIEW_HINT_RE, OMP_SINGLE_CLIPPED_HINT_RE, OMP_SINGLE_HINT_RE } from "./omp.ts";
+import { OMP_CLIPPED_SINGLE_HINT_RE, OMP_MULTI_CLIPPED_HINT_RE, OMP_MULTI_HINT_RE, OMP_REVIEW_HINT_RE, OMP_SINGLE_CLIPPED_HINT_RE, OMP_SINGLE_HINT_RE } from "./omp.ts";
 import { HERMES_HINT_RE } from "./hermes.ts";
 import { PI_INPUT_HINT_RE, PI_MENU_HINT_RE } from "./pi.ts";
 import { openCodeV1QuestionActive } from "./opencode.ts";
@@ -24,6 +24,26 @@ const OMO_TASK_WRAP_MAX = 32;
 const OMO_HINT_END_RE = /\besc (?:cancel|back|discard)$/;
 /** OmO's apparently empty input box; never sufficient evidence for sending text into it. */
 const OMO_EMPTY_BOX_RE = /^[❯›>]$/;
+
+/**
+ * omp's status row (18.12.6 with `composer.shape: pi`): a spinner and the elapsed time while the agent waits, or
+ * `π` at rest, then its ` · `-separated fields, e.g. ` ⠋ 0s · ⬢ Ask fixture · 🗑 …/home/fixture · ◫ 5.7%/131K ⟲`.
+ */
+const OMP_STATUS_ROW_RE = /^(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \S+|π) · /u;
+const OMP_PANEL_BOTTOM_RE = /^╰─+╯$/u;
+
+/**
+ * omp prints its status row right under the Ask panel's bottom border while the question waits (#1644): that row,
+ * there and nowhere else, is not later output. Alone it proves nothing; the border right above it does, and only
+ * as the panel's own: right under the panel's last row, the last line shown once the row is left out. Another
+ * box drawn under an old panel ends in a border too, but its own (empty) rows sit between that border and the hint.
+ */
+function withoutOmpStatusRow(visible: string[], cleanLines: string[]): string[] {
+  const end = findLastIndex(cleanLines, (line) => line !== "");
+  if (end < 2 || !OMP_STATUS_ROW_RE.test(cleanLines[end]!) || !OMP_PANEL_BOTTOM_RE.test(cleanLines[end - 1]!)
+    || cleanLines[end - 2] !== visible.at(-2)) return visible;
+  return visible.slice(0, -1);
+}
 
 /** the last row of Claude's review of several answers, which ends it in place of a hint */
 /** the last row of Claude's review of several answers, which ends it in place of a hint */
@@ -65,14 +85,16 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   const visible = cleanLines.filter((line) => line && !isDivider(line));
   // Claude's review has no hint of its own: its last row ends the panel, the session's rule and task list come after it
   const shown = prompt.responder === "claude-submit" ? withoutClaudeTasks(visible, (lines, end) => CLAUDE_SUBMIT_TAIL_RE.test(lines[end - 1] ?? ""))
-    : prompt.responder.startsWith("claude-") ? withoutClaudeTasks(visible) : visible;
+    : prompt.responder.startsWith("claude-") ? withoutClaudeTasks(visible)
+    : prompt.responder === "omp-question" || prompt.responder === "omp-submit" ? withoutOmpStatusRow(visible, cleanLines) : visible;
   const last = shown.at(-1) ?? "";
   // The menu is still at the bottom. A narrow pane wraps its hint, so the last line alone can
   // be the hint's tail (`cancel`): the lines before it count only when the match runs into
   // the last one, never for a hint that ended above later output (an answered, stale menu).
   const ends = (re: RegExp): boolean => [1, 2, 3].some((span) =>
     re.test(shown.slice(-span).join(" ")) && (span === 1 || !re.test(shown.slice(-span, -1).join(" "))));
-  if (prompt.responder === "omp-question") return ends(OMP_SINGLE_HINT_RE) || ends(OMP_CLIPPED_SINGLE_HINT_RE) || ends(OMP_SINGLE_CLIPPED_HINT_RE) || ends(OMP_MULTI_HINT_RE);
+  if (prompt.responder === "omp-question") return ends(OMP_SINGLE_HINT_RE) || ends(OMP_CLIPPED_SINGLE_HINT_RE) || ends(OMP_SINGLE_CLIPPED_HINT_RE) || ends(OMP_MULTI_HINT_RE)
+    || ends(OMP_MULTI_CLIPPED_HINT_RE);
   if (prompt.responder === "omp-submit") return ends(OMP_REVIEW_HINT_RE);
   // Hermes keeps its status line (and maybe the hint's wrapped tail) under the hint; an answered
   // question leaves the screen, so a hint among the last few lines is the live one
@@ -190,9 +212,13 @@ function hintAtEnd(shown: string[], atEnd: RegExp, footerLines: number, span = 3
 
 export function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = [], sent: string | null = null, working = false): ParsedPrompt | null {
   const ctx = { agent, omoAsk, omoTrusted, omoOpen, sent, working };
-  // a result reader reads only below a send's own echo (outcome.ts), never a card on the whole screen
-  const candidates = registry.readersFor(agent).filter((reader) => reader.kind !== "result").map((reader) => reader.parse(screen, ctx));
-  return candidates.find((candidate): candidate is ParsedPrompt => candidate !== null && promptTailIsActive(candidate, screen)) ?? null;
+  for (const reader of registry.readersFor(agent)) {
+    // a result reader reads only below a send's own echo (outcome.ts), never a card on the whole screen
+    if (reader.kind === "result") continue;
+    const candidate = reader.parse(screen, ctx);
+    if (candidate !== null && promptTailIsActive(candidate, screen)) return candidate;
+  }
+  return null;
 }
 
 /**

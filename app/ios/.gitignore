@@ -3,6 +3,8 @@ App/Pods
 App/output
 App/App/public
 DerivedData
+OvisPushCore/.build
+OvisPushCore/.swiftpm
 xcuserdata
 
 # Cordova plugins for Capacitor

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- .NET Framework 4.8 ships with Windows 10 (1903 and later) and 11, so Ovis.exe needs no runtime of its own. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <AssemblyName>Ovis</AssemblyName>
+    <RootNamespace>Ovis</RootNamespace>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon Condition="Exists('build\Ovis.ico')">build\Ovis.ico</ApplicationIcon>
+    <Version>0.0.0</Version>
+    <Product>Ovis</Product>
+    <Company>Ovis</Company>
+    <Copyright>Ovis contributors</Copyright>
+    <Description>Ovis for Windows</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src\*.cs" />
+    <!-- the licence notices travel inside Ovis.exe, shown from its Licences link -->
+    <EmbeddedResource Include="NOTICE.txt" LogicalName="NOTICE.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- the reference assemblies, so it builds without a Visual Studio install (and off Windows, for a compile check) -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

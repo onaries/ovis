@@ -228,6 +228,11 @@
   color: var(--text);
 }
 
+/* the answer's parts, marked for a selection to be quoted from; they stay items of the turn's column */
+.chat-reply {
+  display: contents;
+}
+
 .chat-agent-meta {
   gap: var(--space-2);
 }
@@ -1315,6 +1320,17 @@
 .chat-tool-file-link:hover {
   color: var(--accent);
   text-decoration-style: solid;
+}
+
+/* a finger's floor: the link itself grows to it, so the files of a patch, one per line, never share
+   a hit area */
+@media (pointer: coarse) {
+  .chat-tool-file-link {
+    display: inline-flex;
+    align-items: center;
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
 }
 
 /* the way back to the end while reading up: the pill's round, wordless form */

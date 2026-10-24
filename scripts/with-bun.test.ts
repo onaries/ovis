@@ -179,6 +179,7 @@ describe.skipIf(process.platform === "win32")("Unix Bun discovery", () => {
     expect(commands).toEqual([
       ["sh", "scripts/with-bun.sh", "install"],
       ["sh", "scripts/with-bun.sh", "run", "build"],
+      ["sh", "scripts/with-bun.sh", "scripts/pty-sidecar.ts", "install"],
       ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "start"],
       ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "start"],
       ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "stop"],

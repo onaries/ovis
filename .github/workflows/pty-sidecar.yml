@@ -1,0 +1,99 @@
+name: Rust PTY host binaries
+# Builds the Rust PTY host (crates/pty-sidecar) that each release ships for Linux and macOS: a static
+# (musl) binary for linux-x64 and linux-arm64, and a universal (arm64 + x86_64), ad-hoc signed one
+# for macOS, plus ovis-pty-sidecar.json (version, the crate's git tree, SHA-256 per platform) and
+# SHA256SUMS. scripts/pty-sidecar.ts install fetches them by package.json's version.
+# Release calls this before it publishes and attaches the files to the release it creates, so a
+# tag never exists without them. pty-sidecar-attach.yml runs it by hand for a release that has none.
+# It only reads: a called workflow keeps its caller's event and may not ask for more permissions.
+# A pull request touching the host or the PTY code runs the same builds, cargo test, and on Linux
+# the PtySession checks on the built binary.
+on:
+  pull_request:
+    paths:
+      - 'crates/pty-sidecar/**'
+      - 'scripts/pty-sidecar.ts'
+      - 'server/pty/**'
+      - '.github/workflows/pty-sidecar.yml'
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Commit to build'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: pty-sidecar-${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  build:
+    name: build (${{ matrix.asset }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { asset: linux-x64, os: ubuntu-24.04 }
+          - { asset: linux-arm64, os: ubuntu-24.04-arm }
+          - { asset: darwin-universal, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Rust toolchain
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl -fsSL --proto '=https' --tlsv1.2 https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Rust unit tests
+        run: cargo test --locked --manifest-path crates/pty-sidecar/Cargo.toml
+      - name: Build ${{ matrix.asset }}
+        run: bun scripts/pty-sidecar.ts build ${{ matrix.asset }} pty-sidecar
+      - uses: actions/setup-node@v7
+        if: runner.os == 'Linux'
+        with:
+          node-version: '22'
+      - if: runner.os == 'Linux'
+        run: bun install --frozen-lockfile
+      - name: PtySession on the built binary, beside the Node sidecar
+        if: runner.os == 'Linux'
+        env:
+          HERDR_TEST_MODE: unit
+          OVIS_PTY_SIDECAR: rust
+          OVIS_PTY_SIDECAR_BIN: ${{ github.workspace }}/pty-sidecar/ovis-pty-sidecar-${{ matrix.asset }}
+        run: bun test ./server/pty/host.test.ts ./server/pty/session.test.ts
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pty-sidecar-${{ matrix.asset }}
+          path: pty-sidecar/*
+          if-no-files-found: error
+  manifest:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: pty-sidecar-*
+          path: pty-sidecar
+          merge-multiple: true
+      - run: bun scripts/pty-sidecar.ts manifest pty-sidecar
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ovis-pty-sidecar
+          path: pty-sidecar/*
+          if-no-files-found: error

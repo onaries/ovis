@@ -1,5 +1,5 @@
 import type { DialogReader } from "./registry.ts";
-import { ANSI_RE, type AnswerStep, KEY, type ParsedPrompt, findLastIndex, finishPrompt, keySteps, navigationKeys } from "./shared.ts";
+import { ANSI_RE, onePerPass, type AnswerStep, KEY, type ParsedPrompt, findLastIndex, finishPrompt, keySteps, navigationKeys } from "./shared.ts";
 
 /**
  * Hermes's clarify question, as its Ink TUI draws it (ui-tui/src/components/prompts.tsx):
@@ -290,20 +290,22 @@ const resultReader = (id: HermesResultReader): DialogReader => ({
   parse: (below, ctx) => parseHermesResult(below, ctx.sent, id),
 });
 
+const clarifyRead = onePerPass((screen) => parseHermesClarify(screen));
+
 export const readers: readonly DialogReader[] = [
   {
     id: "hermes-question", agents: ["hermes"], priority: 10,
     reread: "none", list: "none",
-    parse: (screen) => {
-      const parsed = parseHermesClarify(screen);
+    parse: (screen, ctx) => {
+      const parsed = clarifyRead(screen, ctx);
       return parsed?.responder === "hermes-question" ? parsed : null;
     },
   },
   {
     id: "hermes-input", agents: ["hermes"], priority: 10,
     reread: "none", list: "none",
-    parse: (screen) => {
-      const parsed = parseHermesClarify(screen);
+    parse: (screen, ctx) => {
+      const parsed = clarifyRead(screen, ctx);
       return parsed?.responder === "hermes-input" ? parsed : null;
     },
   },

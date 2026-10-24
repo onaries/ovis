@@ -26,6 +26,7 @@ const AGENT_LABELS: Record<string, string> = {
   agy: "Antigravity",
   devin: "Devin",
   cmd: "Command Code",
+  letta: "Letta Code",
 };
 
 /** The answer for the agent catalog route, or null when the path is not it. `shellAgents`: the server's own locator, which starts them too. */

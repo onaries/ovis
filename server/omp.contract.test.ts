@@ -69,7 +69,8 @@ beforeAll(async () => {
   const split = await herdrRpc<{ pane: { pane_id: string } }>("pane.split", { target_pane_id: paneId, direction: "down", focus: false });
   handoffPaneId = split.pane.pane_id;
   const screens = ["generating-narrow.txt", "cancelled-narrow.txt"].map((name) => fileURLToPath(new URL(`./fixtures/omp-handoff-18.8.7-${name}`, import.meta.url)));
-  await herdrRpc("pane.send_text", { pane_id: handoffPaneId, text: `exec '${join(handoffBin, "omp")}' '${join(root, "handoff.js")}' '${screens[0]}' '${screens[1]}' '${handoffMarker}'\n` });
+  // omp keeps its sessions under its own home, which the bridge reads from the process
+  await herdrRpc("pane.send_text", { pane_id: handoffPaneId, text: `HOME='${root}' exec '${join(handoffBin, "omp")}' '${join(root, "handoff.js")}' '${screens[0]}' '${screens[1]}' '${handoffMarker}'\n` });
   for (const deadline = Date.now() + 5_000; (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === handoffPaneId)?.agent !== "omp";) {
     if (Date.now() > deadline) throw new Error("the stand-in omp did not start in the handoff pane");
     await Bun.sleep(50);

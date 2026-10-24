@@ -472,7 +472,7 @@ describe("listSessions", () => {
 
   const sideFiles = (dir: string) => readdirSync(dir).filter((name) => /-(wal|shm)$/.test(name)).sort();
 
-  it("writes no -wal or -shm into a WAL store it reads", () => {
+  it("writes no -wal or -shm into a closed WAL store when no writer arrives", () => {
     const home = newHome();
     install("hermes", home);
     const db = join(home, ".hermes", "state.db");
@@ -552,6 +552,37 @@ describe("listSessions", () => {
     expect(sideFiles(dirname(db))).toEqual(afterWriter!);
     expect(rows.map((row) => row.firstMessage)).toEqual(["rewritten prompt", "rewritten prompt"]);
     expect(reads).toBe(2);
+  });
+
+  it("lists nothing when a writer changes the WAL store during both immutable reads", () => {
+    // Given a closed WAL store and a writer that checkpoints and closes during each open.
+    const home = newHome();
+    install("hermes", home);
+    const db = join(home, ".hermes", "state.db");
+    const setup = new Database(db);
+    setup.exec("PRAGMA journal_mode = WAL");
+    setup.close();
+    const modes: boolean[] = [];
+
+    // When both immutable reads race a change to the main file.
+    const rows = listSessions("hermes", CWD, {
+      home, env: {},
+      opened: (_path, immutable) => {
+        modes.push(immutable);
+        const writer = new Database(db);
+        try {
+          writer.query("UPDATE messages SET content = ? WHERE role = 'user'").run(`rewritten prompt ${modes.length}`);
+          writer.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        } finally { writer.close(); }
+        // Distinct fixed mtimes expose each change even within one filesystem timestamp tick.
+        const seconds = 1_790_000_000 + modes.length;
+        utimesSync(db, seconds, seconds);
+      },
+    });
+
+    // Then the second immutable result is discarded, with no third attempt.
+    expect(modes).toEqual([true, true]);
+    expect(rows).toEqual([]);
   });
 
   it("lists nothing, and writes nothing into it, from a WAL store whose first read failed with no writer", () => {

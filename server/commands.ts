@@ -30,8 +30,8 @@ export function builtinCommands(agent: string | null | undefined, version?: stri
   if (!agent || !Object.hasOwn(AGENT_SOURCES, agent)) return [];
   const source = AGENT_SOURCES[agent];
   if (!source) return [];
-  const pinned = majorMinor(source.pin);
-  const verified = pinned !== null && pinned === majorMinor(version);
+  const running = majorMinor(version);
+  const verified = running !== null && [source.pin ?? []].flat().some((pin) => majorMinor(pin) === running);
   const builtinNames = [...new Set([...source.builtins, ...(source.terminalBound ?? []), ...(source.agentHidden ?? [])])];
   return builtinNames.map((name) => ({
     name, description: source.descriptions?.[name] ?? DESCRIPTIONS[name] ?? `Run /${name}`, source: "builtin",

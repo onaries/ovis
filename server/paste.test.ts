@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 import type { PaneInfo } from "../shared/protocol.ts";
 import * as client from "./herdr/client.ts";
-import { MAX_IMAGE_BYTES, PasteImageError, pasteDirectory, savePaneImage } from "./paste.ts";
+import { MAX_IMAGE_BYTES, PasteImageError, pasteDirectory, preparePasteDirectory, savePaneImage } from "./paste.ts";
 
 describe("pasteDirectory", () => {
   const previous = process.env["OVIS_PASTE_DIR"];
@@ -156,5 +156,110 @@ describe("savePaneImage", () => {
       expect(readFileSync(path).equals(data)).toBe(true);
     }
     expect(paneGet).toHaveBeenCalledTimes(5);
+  });
+});
+
+describe("preparePasteDirectory", () => {
+  const saved = { dir: process.env["OVIS_PASTE_DIR"], tmp: process.env["TMPDIR"] };
+  const roots: string[] = [];
+  const temp = () => { const root = mkdtempSync(join(tmpdir(), "herdr-paste-dir-")); roots.push(root); return root; };
+  afterEach(() => {
+    if (saved.dir === undefined) delete process.env["OVIS_PASTE_DIR"]; else process.env["OVIS_PASTE_DIR"] = saved.dir;
+    if (saved.tmp === undefined) delete process.env["TMPDIR"]; else process.env["TMPDIR"] = saved.tmp;
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("creates a self-ignoring default paste directory", () => {
+    for (const value of [undefined, "", "   "]) {
+      if (value === undefined) delete process.env["OVIS_PASTE_DIR"]; else process.env["OVIS_PASTE_DIR"] = value;
+      const cwd = temp();
+      const directory = preparePasteDirectory(cwd);
+      expect(directory).toBe(join(cwd, ".ovis"));
+      expect(readFileSync(join(directory, ".gitignore"), "utf8")).toBe("*\n");
+      if (process.platform !== "win32") expect(statSync(join(directory, ".gitignore")).mode & 0o777).toBe(0o600);
+      // the next paste finds it there and leaves it
+      expect(preparePasteDirectory(cwd)).toBe(directory);
+      expect(readFileSync(join(directory, ".gitignore"), "utf8")).toBe("*\n");
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("ignores the temp-dir fallback of a pane without a cwd too", () => {
+    delete process.env["OVIS_PASTE_DIR"];
+    const tmp = temp();
+    process.env["TMPDIR"] = tmp;
+    const directory = preparePasteDirectory(null);
+    expect(directory).toBe(join(tmp, "ovis", ".ovis"));
+    expect(readFileSync(join(directory, ".gitignore"), "utf8")).toBe("*\n");
+  });
+
+  it("keeps an ignore file that is already there, a link included, byte for byte", () => {
+    delete process.env["OVIS_PASTE_DIR"];
+    const custom = temp();
+    mkdirSync(join(custom, ".ovis"));
+    writeFileSync(join(custom, ".ovis", ".gitignore"), "# mine\n*.png\n!keep.txt");
+    preparePasteDirectory(custom);
+    expect(readFileSync(join(custom, ".ovis", ".gitignore"), "utf8")).toBe("# mine\n*.png\n!keep.txt");
+    if (process.platform === "win32") return; // creating a symlink needs developer mode there
+    const outside = temp();
+    writeFileSync(join(outside, "rules"), "shared\n");
+    for (const target of [join(outside, "rules"), join(outside, "missing")]) {
+      const cwd = temp();
+      mkdirSync(join(cwd, ".ovis"));
+      symlinkSync(target, join(cwd, ".ovis", ".gitignore"));
+      preparePasteDirectory(cwd);
+      expect(lstatSync(join(cwd, ".ovis", ".gitignore")).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(join(cwd, ".ovis", ".gitignore"))).toBe(target);
+    }
+    // neither the link's file nor a dangling link's target is written through it
+    expect(readFileSync(join(outside, "rules"), "utf8")).toBe("shared\n");
+    expect(existsSync(join(outside, "missing"))).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("writes no ignore file through a .ovis that is a link to another folder", () => {
+    delete process.env["OVIS_PASTE_DIR"];
+    const outside = temp();
+    writeFileSync(join(outside, "user-file"), "theirs\n");
+    const cwd = temp();
+    symlinkSync(outside, join(cwd, ".ovis"));
+    expect(preparePasteDirectory(cwd)).toBe(join(cwd, ".ovis"));
+    // the link's target, another repository's root for example, is left as it was
+    expect(readdirSync(outside)).toEqual(["user-file"]);
+  });
+
+  it("never creates an ignore in a trimmed nonempty override", () => {
+    const cwd = temp();
+    const override = join(temp(), "pastes");
+    process.env["OVIS_PASTE_DIR"] = `  ${override}  `;
+    expect(preparePasteDirectory(cwd)).toBe(override);
+    expect(statSync(override).isDirectory()).toBe(true);
+    expect(existsSync(join(override, ".gitignore"))).toBe(false);
+    // an override naming the default path is still the user's own directory
+    process.env["OVIS_PASTE_DIR"] = join(cwd, ".ovis");
+    expect(preparePasteDirectory(cwd)).toBe(join(cwd, ".ovis"));
+    expect(existsSync(join(cwd, ".ovis", ".gitignore"))).toBe(false);
+    // and so is one under ~, expanded against a home of the test's own (a child reads HOME at start)
+    const home = temp();
+    const child = Bun.spawnSync([process.execPath, "-e", `const { preparePasteDirectory } = await import(${JSON.stringify(join(import.meta.dir, "paste.ts"))}); console.log(preparePasteDirectory(${JSON.stringify(cwd)}));`], {
+      env: { ...process.env, HOME: home, USERPROFILE: home, OVIS_PASTE_DIR: " ~/pastes " },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(child.stderr.toString()).toBe("");
+    expect(child.stdout.toString().trim()).toBe(join(home, "pastes"));
+    expect(statSync(join(home, "pastes")).isDirectory()).toBe(true);
+    expect(existsSync(join(home, "pastes", ".gitignore"))).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("reports an ignore file it could not create", () => {
+    delete process.env["OVIS_PASTE_DIR"];
+    const cwd = temp();
+    mkdirSync(join(cwd, ".ovis"));
+    chmodSync(join(cwd, ".ovis"), 0o500);
+    try {
+      expect(() => preparePasteDirectory(cwd)).toThrow(expect.objectContaining({ code: "EACCES" }));
+      expect(existsSync(join(cwd, ".ovis", ".gitignore"))).toBe(false);
+    } finally {
+      chmodSync(join(cwd, ".ovis"), 0o700);
+    }
   });
 });

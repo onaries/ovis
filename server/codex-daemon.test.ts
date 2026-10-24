@@ -230,11 +230,24 @@ describe("codex daemon skills", () => {
     const root = temp("codex-home-deleted-");
     const cwd = join(root, "gone");
     mkdirSync(cwd);
-    const child = Bun.spawn(["sleep", "60"], {
-      cwd, env: { ...process.env, CODEX_HOME: "." }, stdout: "ignore", stderr: "ignore",
+    // Read only once it is up: until its exec, a child spawned a moment ago still shows the parent's
+    // environment in /proc, without this CODEX_HOME (most reads right after spawn, on this PC). The
+    // shell that says so is the process read: it waits in a read, with no exec after it
+    const child = Bun.spawn(["/bin/sh", "-c", "echo READY; read _"], {
+      cwd, env: { ...process.env, CODEX_HOME: "." }, stdin: "pipe", stdout: "pipe", stderr: "ignore",
     });
     try {
+      const reader = child.stdout.getReader();
+      const decoder = new TextDecoder();
+      for (let said = ""; !said.includes("READY\n");) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error(`the child exited before it was up: ${said}`);
+        said += decoder.decode(chunk.value, { stream: true });
+      }
+      reader.releaseLock();
       rmSync(cwd, { recursive: true });
+      // control: the home is to come from this CODEX_HOME, so a null below is the deleted cwd's
+      expect(processEnviron(child.pid)).toContain("CODEX_HOME=.");
       // When discovering the home from the live child's real /proc files.
       const home = await paneDaemonHome("any-pane", undefined, "linux", {
         lookup: async () => ({ pid: child.pid }),

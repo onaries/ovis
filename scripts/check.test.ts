@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { CI_NODE_MAJOR, MAX_LOCK_PORT, MAX_RUNS_LIMIT, acquire, acquireWaiting, checkoutIdentity, describeGroup, describeHolders, endGroup, isolate, lock, lockPort, maxRuns, needsLock, plan, sanitizeCommand, stopSessions, teardown, waitSeconds, warnNodeVersionMismatch } from "./check.ts";
+import { CI_NODE_MAJOR, DESK_WAIT_MS, HOST_LIMITS, MAX_LOCK_PORT, MAX_RUNS_LIMIT, acquire, acquireWaiting, takeTicket, ticketDesk, ticketPorts, applyHostLimits, checkoutIdentity, describeGroup, describeHolders, endGroup, isolate, lock, lockPort, maxRuns, needsLock, plan, sanitizeCommand, stopSessions, teardown, waitSeconds, warnNodeVersionMismatch } from "./check.ts";
 
 const made: string[] = [];
 afterEach(() => { for (const path of made.splice(0)) rmSync(path, { recursive: true, force: true }); });
@@ -14,6 +14,25 @@ afterEach(() => { for (const path of made.splice(0)) rmSync(path, { recursive: t
 // that a socket inside a directory made there is past the limit `isolate` enforces
 const scratchBase = existsSync("/tmp") ? realpathSync("/tmp") : tmpdir();
 const scratch = (): string => { const dir = mkdtempSync(join(scratchBase, "hwc-")); made.push(dir); return dir; };
+/**
+ * A lock base whose `count` slot ports, admission port, ticket desk and ticket ports above them
+ * nothing listens on, held for a moment to make sure, then given back. The queue's ports too:
+ * acquire() asks them, and a run waiting there (another runner's test, or a real check on a CI host)
+ * would come ahead of the test's run.
+ */
+function freePortRange(count: number): number {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const base = 20_000 + Math.floor(Math.random() * 30_000);
+    const held: { stop: (force?: boolean) => void }[] = [];
+    try {
+      for (let index = 0; base + index <= ticketPorts(base, count, count).at(-1)!; index++) held.push(Bun.listen({ hostname: "127.0.0.1", port: base + index, socket: { data() {} } }));
+      return base;
+    } catch { /* taken: another base */ } finally {
+      for (const listener of held) listener.stop(true);
+    }
+  }
+  throw new Error("no free port range");
+}
 const git = (cwd: string, ...args: string[]): void => {
   const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(result.stderr || `git ${args.join(" ")} failed`);
@@ -58,15 +77,18 @@ describe("check environment", () => {
 
   it("acquires every slot and the admission port at the highest CHECK_LOCK_PORT it accepts", async () => {
     const base = lockPort({ CHECK_LOCK_PORT: String(MAX_LOCK_PORT) });
-    // the most slots a run can ask for, so the admission port is the highest one acquire() uses.
+    // the queue's last ticket port is the highest one a run uses
+    expect(ticketPorts(base, MAX_RUNS_LIMIT, MAX_RUNS_LIMIT).at(-1)).toBe(65535);
+    // the most slots a run can ask for, so the admission port is the highest slot-range port acquire() uses.
     // CI's runners share one loopback: a checkout of this run's own, and a wait, let two runs of
     // this test meet at the top range without refusing each other
     const top = { slots: MAX_RUNS_LIMIT, scan: MAX_RUNS_LIMIT, pid: process.pid, checkout: `/top-${process.pid}` };
     const held = await acquireWaiting({ ...top, base }, { waitMs: 10_000, pollMs: 20 });
     if (!("release" in held)) throw new Error(`the top lock range is held on this PC: ${describeHolders(held.holders)}`);
     held.release();
-    // one port higher and the admission port would be past 65535
-    await expect(acquire({ ...top, base: MAX_LOCK_PORT + 1 })).rejects.toThrow("65536");
+    // one port higher and the last ticket port would be past 65535: that base is refused
+    expect(ticketPorts(MAX_LOCK_PORT + 1, MAX_RUNS_LIMIT, MAX_RUNS_LIMIT).at(-1)).toBe(65536);
+    expect(() => lockPort({ CHECK_LOCK_PORT: String(MAX_LOCK_PORT + 1) })).toThrow("CHECK_LOCK_PORT");
   });
 
   it("warns only when the local Node major differs from CI", () => {
@@ -156,8 +178,9 @@ describe("isolate", () => {
 
   it("refuses to run in the herdr the user works in, and hands on nothing that names it", () => {
     expect(() => isolate({ HERDR_TEST_LIVE: "1" }, scratch())).toThrow("HERDR_TEST_LIVE");
-    // as a shell inside one of the user's panes has them
-    const { env } = isolate({ HERDR_SOCKET: "/live.sock", HERDR_SOCKET_PATH: "/live.sock", HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_TAB_ID: "w1:t1", HERDR_WORKSPACE_ID: "w1", OVIS_HERDR_BIN: "/bin/herdr" }, scratch());
+    // as a shell inside one of the user's panes has them, and a herdr config of the user's own,
+    // which the run's herdr and every server it starts would otherwise read
+    const { env } = isolate({ HERDR_SOCKET: "/live.sock", HERDR_SOCKET_PATH: "/live.sock", HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_TAB_ID: "w1:t1", HERDR_WORKSPACE_ID: "w1", HERDR_CONFIG_PATH: "/home/me/herdr.toml", OVIS_HERDR_BIN: "/bin/herdr" }, scratch());
     expect(Object.keys(env).filter((name) => name.startsWith("HERDR_") || name.startsWith("OVIS_")).sort()).toEqual(["HERDR_SOCKET", "HERDR_TEST_DISPOSABLE_CONFIG", "HERDR_TEST_SESSION", "HERDR_TEST_SHARDS", "OVIS_HERDR_BIN", "OVIS_STATE_DIR"]);
     // the socket it hands on is the run's own session's, where scripts/test-herdr.ts starts it
     expect(env["HERDR_SOCKET"]).toBe(join(env["XDG_CONFIG_HOME"]!, "herdr", "sessions", env["HERDR_TEST_SESSION"]!, "herdr.sock"));
@@ -217,23 +240,25 @@ describe("lock", () => {
 });
 
 describe("slots", () => {
-  /** `count` consecutive ports nothing listens on, held for a moment to make sure, then given back */
-  const freeRange = async (count: number): Promise<number> => {
-    for (let attempt = 0; attempt < 50; attempt++) {
-      const base = 20_000 + Math.floor(Math.random() * 30_000);
-      const held: { stop: (force?: boolean) => void }[] = [];
-      try {
-        for (let index = 0; index <= count; index++) held.push(Bun.listen({ hostname: "127.0.0.1", port: base + index, socket: { data() {} } }));
-        return base;
-      } catch { /* taken: another base */ } finally {
-        for (const listener of held) listener.stop(true);
-      }
-    }
-    throw new Error("no free port range");
-  };
+  const freeRange = async (count: number): Promise<number> => freePortRange(count);
   const release = (result: Awaited<ReturnType<typeof acquire>> | Awaited<ReturnType<typeof lock>>): void => {
     if ("release" in result) result.release();
   };
+  /**
+   * The wait between a waiting run's rounds, driven by the test: `asleep` resolves once the run is
+   * between rounds, and `wake` lets it ask again. No timer runs.
+   */
+  const stepper = () => {
+    let asleep = Promise.withResolvers<void>();
+    let wake = Promise.withResolvers<void>();
+    return {
+      sleep: async () => { const woken = wake; asleep.resolve(); await woken.promise; },
+      asleep: () => asleep.promise,
+      wake: () => { asleep = Promise.withResolvers(); const woken = wake; wake = Promise.withResolvers(); woken.resolve(); },
+    };
+  };
+  /** the slot range and the queue's ticket ports above it, for slots/scan of 3 */
+  const queueRange = () => freeRange(3);
 
   it("takes the first free slot when another checkout holds an earlier one", async () => {
     const base = await freeRange(3);
@@ -443,7 +468,11 @@ describe("slots", () => {
     const busy = await lock(base, 111, "/a");
     try {
       let waits = 0;
-      const late = await acquireWaiting({ slots: 1, scan: 3, base, pid: 222, checkout: "/b" }, { waitMs: 60, pollMs: 20, onWait: () => { waits += 1; } });
+      // the clock moves only between rounds, by the poll interval: three rounds fit in the wait, whatever the PC's load
+      let clock = 0;
+      const late = await acquireWaiting({ slots: 1, scan: 3, base, pid: 222, checkout: "/b" }, {
+        waitMs: 60, pollMs: 20, onWait: () => { waits += 1; }, now: () => clock, sleep: async (ms) => { clock += ms; },
+      });
       expect(late).toEqual({ refused: "busy", holders: [{ port: base, heldBy: 111, checkout: "/a" }] });
       expect(waits).toBe(1);
       const now = await acquireWaiting({ slots: 2, scan: 3, base, pid: 222, checkout: "/a" }, { waitMs: 10_000, pollMs: 20, onWait: () => { waits += 1; } });
@@ -451,6 +480,242 @@ describe("slots", () => {
       expect(waits).toBe(1);
     } finally {
       release(busy);
+    }
+  });
+
+  it("gives a freed slot to the run that has waited, not to one that arrives after it (#1881)", async () => {
+    const base = await queueRange();
+    const holder = await lock(base, 111, "/a");
+    const waiter = stepper();
+    // a run that found the PC busy, now between two rounds of its wait
+    const waiting = acquireWaiting({ slots: 1, scan: 3, base, pid: 222, checkout: "/b" }, { waitMs: 60_000, now: () => 1_000, sleep: waiter.sleep });
+    await waiter.asleep();
+    release(holder);
+    // the slot is free, and a run that arrives now would take it ahead of the one that waited
+    const ticket = ticketPorts(base, 1, 3)[0]!;
+    expect(await acquire({ slots: 1, scan: 3, base, pid: 333, checkout: "/c" }))
+      .toEqual({ refused: "busy", holders: [{ port: ticket, heldBy: 222, checkout: "/b", queuedAt: 1_000 }] });
+    waiter.wake();
+    const admitted = await waiting;
+    try {
+      expect(admitted).toMatchObject({ port: base });
+      // its place in the queue went with it: only the slot it now holds keeps the newer run out
+      expect(await acquire({ slots: 1, scan: 3, base, pid: 333, checkout: "/c" }))
+        .toEqual({ refused: "busy", holders: [{ port: base, heldBy: 222, checkout: "/b" }] });
+    } finally {
+      release(admitted);
+    }
+  });
+
+  it("serves waiting runs in the order they first found the PC busy, whichever asks first", async () => {
+    const base = await queueRange();
+    const holder = await lock(base, 111, "/a");
+    const [first, second] = [stepper(), stepper()];
+    // the earlier run takes the higher ticket port, so the order can only come from the time
+    const lowest = await lock(ticketPorts(base, 1, 3)[0]!, 999, "/filler");
+    const earlier = acquireWaiting({ slots: 1, scan: 3, base, pid: 201, checkout: "/first" }, { waitMs: 60_000, now: () => 1_000, sleep: first.sleep });
+    await first.asleep();
+    release(lowest);
+    const later = acquireWaiting({ slots: 1, scan: 3, base, pid: 202, checkout: "/second" }, { waitMs: 60_000, now: () => 2_000, sleep: second.sleep });
+    await second.asleep();
+    expect((await acquire({ slots: 1, scan: 3, base, pid: 203, checkout: "/probe" }))).toMatchObject({
+      refused: "busy", holders: [{ port: ticketPorts(base, 1, 3)[1], queuedAt: 1_000 }, { port: ticketPorts(base, 1, 3)[0], queuedAt: 2_000 }],
+    });
+    // as the later run sees it, from its lower port: only the earlier run is ahead, its place being
+    // by time, not by port
+    expect(await acquire({ slots: 1, scan: 3, base, pid: 202, checkout: "/second", retry: true, ticket: { at: 2_000, port: ticketPorts(base, 1, 3)[0]! } }))
+      .toEqual({ refused: "busy", holders: [{ port: ticketPorts(base, 1, 3)[1], heldBy: 201, checkout: "/first", queuedAt: 1_000 }] });
+    release(holder);
+    // the later run asks first, finds the slot free, and still lets the earlier one go first
+    second.wake();
+    await second.asleep();
+    first.wake();
+    const one = await earlier;
+    expect(one).toMatchObject({ port: base });
+    release(one);
+    second.wake();
+    const two = await later;
+    try {
+      expect(two).toMatchObject({ port: base });
+    } finally {
+      release(two);
+    }
+  });
+
+  it("leaves the admission port to the head of the queue: a run behind it never takes the port", async () => {
+    const base = await queueRange();
+    // the admission port is held, as by the head of the queue in the middle of its own round
+    const admissionPort = base + 3;
+    const head = await takeTicket({ base, slots: 1, scan: 3, at: 1_000, pid: 201, checkout: "/head" });
+    const admission = await lock(admissionPort, 201, "/head");
+    const behind = await takeTicket({ base, slots: 1, scan: 3, at: 2_000, pid: 202, checkout: "/behind" });
+    try {
+      // the run behind finds its place without reaching for the port: refused by the head's ticket,
+      // not by the port; were it to hold the port while it looked, the head could not get in
+      expect(await acquire({ slots: 1, scan: 3, base, pid: 202, checkout: "/behind", ticket: behind!.ticket }))
+        .toEqual({ refused: "busy", holders: [{ port: head!.ticket.port, heldBy: 201, checkout: "/head", queuedAt: 1_000 }] });
+      // a run that just arrived holds no place yet: it meets its claims first, then the port
+      expect(await acquire({ slots: 1, scan: 3, base, pid: 203, checkout: "/new" }))
+        .toEqual({ refused: "busy", holders: [{ port: admissionPort, heldBy: 201, checkout: "/head" }] });
+      // one that waits without a ticket (every ticket was held) stays off the port too
+      expect(await acquire({ slots: 1, scan: 3, base, pid: 204, checkout: "/overflow", retry: true }))
+        .toMatchObject({ refused: "busy", holders: [{ port: head!.ticket.port, heldBy: 201 }, { port: behind!.ticket.port, heldBy: 202 }] });
+    } finally {
+      release(admission);
+      head?.release();
+      behind?.release();
+    }
+  });
+
+  it("tells a second run in the same checkout so at once, also while runs wait in the queue", async () => {
+    const base = await queueRange();
+    const checkoutLock = join(scratch(), "checkout.lock");
+    const first = await acquire({ slots: 2, scan: 3, base, pid: process.pid, checkout: "/same", checkoutLock });
+    const waiting = await takeTicket({ base, slots: 2, scan: 3, at: 1_000, pid: 301, checkout: "/other" });
+    try {
+      expect("release" in first).toBe(true);
+      expect(await acquire({ slots: 2, scan: 3, base, pid: process.pid, checkout: "/same", checkoutLock })).toMatchObject({ refused: "same-checkout" });
+    } finally {
+      waiting?.release();
+      release(first);
+    }
+  });
+
+  it("does not wait on a ticket port whose listener keeps talking, ticket-like or not", async () => {
+    const base = await queueRange();
+    // one says a ticket's first word and then trickles, one chatters: neither ever closes
+    const talkers = ["ticket\n", "hello\n"].map((first, index) => {
+      const server = createServer((socket) => {
+        socket.on("error", () => undefined);
+        socket.write(first);
+        // fixed wait: a peer that keeps a connection busy, which is what the lookup must not wait on
+        const trickle = setInterval(() => socket.write("1"), 20);
+        socket.on("close", () => clearInterval(trickle));
+      });
+      server.listen(ticketPorts(base, 1, 3)[index]!, "127.0.0.1");
+      return server;
+    });
+    try {
+      await Promise.all(talkers.map((server) => new Promise((resolve) => server.once("listening", resolve))));
+      // neither is a waiting run, so the slot is this run's, and the lookup ended on its own
+      const admitted = await acquire({ slots: 1, scan: 3, base, pid: 222, checkout: "/b" });
+      expect(admitted).toMatchObject({ port: base });
+      release(admitted);
+    } finally {
+      for (const server of talkers) server.close();
+    }
+  });
+
+  it("tells a waiting run that its checkout is in use at once, not after its turn in the queue", async () => {
+    const base = await queueRange();
+    const checkoutLock = join(scratch(), "checkout.lock");
+    const first = await acquire({ slots: 2, scan: 3, base, pid: process.pid, checkout: "/same", checkoutLock });
+    const older = await takeTicket({ base, slots: 2, scan: 3, at: 1_000, pid: 301, checkout: "/other" });
+    const mine = await takeTicket({ base, slots: 2, scan: 3, at: 2_000, pid: process.pid, checkout: "/same" });
+    try {
+      expect("release" in first).toBe(true);
+      expect(await acquire({ slots: 2, scan: 3, base, pid: process.pid, checkout: "/same", checkoutLock, retry: true, ticket: mine!.ticket }))
+        .toMatchObject({ refused: "same-checkout" });
+    } finally {
+      older?.release();
+      mine?.release();
+      release(first);
+    }
+  });
+
+  it("takes places one run at a time: a run waits for the ticket desk, then takes the next place", async () => {
+    const base = await queueRange();
+    // another run looking at the places taken, about to take its own: a desk that stays taken past
+    // the wait leaves the run without a place for this round
+    const other = await lock(ticketDesk(base, 1, 3), 501, "/other");
+    try {
+      expect(await takeTicket({ base, slots: 1, scan: 3, at: 900, pid: 502, checkout: "/mine", deskWaitMs: 0 })).toBeNull();
+      // one that frees the desk while this run waits for it lets it take its place in the same round
+      const waiting = takeTicket({ base, slots: 1, scan: 3, at: 900, pid: 502, checkout: "/mine", deskWaitMs: 60_000 });
+      release(other);
+      const mine = await waiting;
+      expect(mine).not.toBeNull();
+      mine?.release();
+    } finally {
+      release(other);
+    }
+    // once it has its place, the next run takes one after it, whatever its clock says
+    const first = await takeTicket({ base, slots: 1, scan: 3, at: 1_000, pid: 501, checkout: "/other" });
+    const next = await takeTicket({ base, slots: 1, scan: 3, at: 900, pid: 502, checkout: "/mine" });
+    try {
+      expect(next!.ticket.at).toBeGreaterThan(first!.ticket.at);
+    } finally {
+      first?.release();
+      next?.release();
+    }
+  });
+
+  it("waits for the ticket desk no longer than CHECK_WAIT_SECONDS leaves", async () => {
+    const base = await queueRange();
+    const holder = await lock(base, 111, "/a");
+    const desk = await lock(ticketDesk(base, 1, 3), 501, "/other");
+    let clock = 1_000;
+    try {
+      const started = performance.now();
+      // a wait of 1 ms, far shorter than the desk's own: the desk stays taken, and the run gives up within its wait
+      const held = await acquireWaiting({ slots: 1, scan: 3, base, pid: 222, checkout: "/b" }, { waitMs: 1, now: () => clock, sleep: async (ms) => { clock += ms + 1; } });
+      expect(held).toMatchObject({ refused: "busy" });
+      expect(performance.now() - started).toBeLessThan(DESK_WAIT_MS / 2);
+    } finally {
+      release(desk);
+      release(holder);
+    }
+  });
+
+  it("keeps the order when the clock steps back: a later place still comes after every waiting one", async () => {
+    const base = await queueRange();
+    const earlier = await takeTicket({ base, slots: 1, scan: 3, at: 1_000, pid: 401, checkout: "/earlier" });
+    // the clock was set back between the two
+    const later = await takeTicket({ base, slots: 1, scan: 3, at: 900, pid: 402, checkout: "/later" });
+    try {
+      expect(later!.ticket.at).toBeGreaterThan(earlier!.ticket.at);
+      expect(await acquire({ slots: 1, scan: 3, base, pid: 402, checkout: "/later", retry: true, ticket: later!.ticket }))
+        .toEqual({ refused: "busy", holders: [{ port: earlier!.ticket.port, heldBy: 401, checkout: "/earlier", queuedAt: 1_000 }] });
+      const head = await acquire({ slots: 1, scan: 3, base, pid: 401, checkout: "/earlier", retry: true, ticket: earlier!.ticket });
+      expect(head).toMatchObject({ port: base });
+      release(head);
+    } finally {
+      earlier?.release();
+      later?.release();
+    }
+  });
+
+  it("gives its place up when it stops waiting, and waits without one when every ticket is held", async () => {
+    const base = await queueRange();
+    const holder = await lock(base, 111, "/a");
+    let clock = 1_000;
+    const waiter = stepper();
+    const late = acquireWaiting({ slots: 1, scan: 3, base, pid: 222, checkout: "/b" }, { waitMs: 5_000, now: () => clock, sleep: waiter.sleep });
+    await waiter.asleep();
+    clock = 6_000;
+    waiter.wake();
+    expect(await late).toMatchObject({ refused: "busy" });
+    release(holder);
+    // out of time, it left no place behind to hold the next run back
+    const next = await acquire({ slots: 1, scan: 3, base, pid: 333, checkout: "/c" });
+    expect(next).toMatchObject({ port: base });
+    // every ticket port taken: a run still waits, and is served when the slot frees
+    // one after another: the ticket desk takes one run at a time
+    const tickets: Awaited<ReturnType<typeof takeTicket>>[] = [];
+    for (const _ of ticketPorts(base, 1, 3)) tickets.push(await takeTicket({ base, slots: 1, scan: 3, at: 500, pid: 444, checkout: "/queued" }));
+    expect(tickets.every((ticket) => ticket !== null)).toBe(true);
+    expect(await takeTicket({ base, slots: 1, scan: 3, at: 600, pid: 555, checkout: "/none" })).toBeNull();
+    const overflow = stepper();
+    const crowded = acquireWaiting({ slots: 1, scan: 3, base, pid: 555, checkout: "/none" }, { waitMs: 60_000, now: () => 700, sleep: overflow.sleep });
+    await overflow.asleep();
+    release(next);
+    for (const ticket of tickets) ticket?.release();
+    overflow.wake();
+    const served = await crowded;
+    try {
+      expect(served).toMatchObject({ port: base });
+    } finally {
+      release(served);
     }
   });
 
@@ -473,6 +738,33 @@ describe("slots", () => {
     expect(maxRuns({ CHECK_MAX_RUNS: "1" }, 32)).toBe(1);
     expect(maxRuns({ CHECK_MAX_RUNS: "8" }, 4)).toBe(8);
     for (const value of ["0", "9", "-1", "1.5", "two", " 3"]) expect(() => maxRuns({ CHECK_MAX_RUNS: value }, 32)).toThrow("CHECK_MAX_RUNS");
+  });
+
+  it("lets a CI host's own limits replace the workflow's, and leaves them when the host names none", () => {
+    const workflow = { CHECK_MAX_RUNS: "3", HERDR_TEST_SHARDS: "4", BROWSER_WORKERS: "6", UNIT_TEST_WORKERS: "4" };
+    const host: Record<string, string | undefined> = { ...workflow, CHECK_HOST_MAX_RUNS: "6", CHECK_HOST_TEST_SHARDS: "8", CHECK_HOST_BROWSER_WORKERS: "12", CHECK_HOST_UNIT_WORKERS: "" };
+    applyHostLimits(host);
+    expect(host).toMatchObject({ CHECK_MAX_RUNS: "6", HERDR_TEST_SHARDS: "8", BROWSER_WORKERS: "12", UNIT_TEST_WORKERS: "4" });
+    expect(maxRuns(host, 4)).toBe(6);
+    const plain: Record<string, string | undefined> = { ...workflow };
+    applyHostLimits(plain);
+    expect(plain).toEqual(workflow);
+    const bad: Record<string, string | undefined> = { CHECK_MAX_RUNS: "3", CHECK_HOST_MAX_RUNS: "12" };
+    applyHostLimits(bad);
+    expect(() => maxRuns(bad, 32)).toThrow("CHECK_MAX_RUNS");
+  });
+
+  it("applies a CI host's limits before a run takes a slot", () => {
+    // the workflow's 3 is valid; only the host's 12, applied by main(), stops the run, before any herdr starts
+    const env: Record<string, string | undefined> = { ...process.env, CHECK_MAX_RUNS: "3", CHECK_HOST_MAX_RUNS: "12" };
+    delete env["CHECK_DIR"];
+    delete env["CHECK_REPORT"];
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL("./check.ts", import.meta.url)), "run", "--", "true"], {
+      env, encoding: "utf8", timeout: 30_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("CHECK_MAX_RUNS must be a whole number from 1 to 8, not \"12\"");
   });
 
   it("refuses the paused contender when an earlier holder turns over to its checkout", async () => {
@@ -865,14 +1157,19 @@ describe("check CLI teardown", () => {
     const env: Record<string, string | undefined> = {
       ...process.env,
       CHECK_REPORT: ".check/report.json",
-      // a slot of its own beside the PC's real runs, and a wait for the admission port they share (#1225)
+      // slots, an admission port and a queue of its own: on the PC's (or a CI host's) shared lock
+      // range these throwaway runs would wait in line behind every real run waiting for a slot
+      CHECK_LOCK_PORT: String(freePortRange(MAX_RUNS_LIMIT)),
       CHECK_MAX_RUNS: "8",
       CHECK_WAIT_SECONDS: "90",
       OVIS_HERDR_BIN: herdr,
       STUB_LOG: join(root, "stops.log"),
       STUB_STOP_FAIL: stopFails ? "1" : "",
     };
-    for (const name of ["CHECK_DIR", "GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "HERDR_TEST_LIVE"]) delete env[name];
+    // A runner host's own limits (CHECK_HOST_*, from its env file) outrank CHECK_MAX_RUNS in the
+    // check: left in, they would set these throwaway runs' slot count to the host's, not the 8 asked
+    // for here (#1875).
+    for (const name of ["CHECK_DIR", "GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "HERDR_TEST_LIVE", ...Object.keys(HOST_LIMITS)]) delete env[name];
     const stops = (): string[] => existsSync(join(root, "stops.log")) ? readFileSync(join(root, "stops.log"), "utf8").split("\n").filter(Boolean).sort() : [];
     const report = (path = join(cwd, ".check", "report.json")): Report => JSON.parse(readFileSync(path, "utf8")) as Report;
     const isolated = (stdout: string): string => /config and state in (\S+)/.exec(stdout)?.[1] ?? "";
@@ -1033,7 +1330,9 @@ describe("check CLI teardown", () => {
     } finally {
       check.kill("SIGKILL");
       await exited;
-      if (existsSync(pidFile)) expect((await endGroup(Number(readFileSync(pidFile, "utf8")), "SIGKILL")).result).toBe("gone");
+      // a pid file caught half written reads 0, and group 0 is this test's own process group
+      const escaped = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0;
+      if (escaped > 0) expect((await endGroup(escaped, "SIGKILL")).result).toBe("gone");
     }
   }, 180_000);
 

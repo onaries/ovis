@@ -117,7 +117,7 @@ try {
         await waitQuery(page, "machine", null);
         await waitQuery(page, "pane", INFRA);
         assert.equal(await selected(page), INFRA, "the app stays on the pane it showed");
-        await page.waitForTimeout(300);
+        await page.waitForTimeout(300); // fixed wait: no New workspace dialog may open
         assert.equal(await page.getByRole("dialog", { name: /New workspace/ }).count(), 0, "no New workspace dialog for a PC that is gone");
         await page.goForward();
         await waitQuery(page, "pane", INFRA);
@@ -285,7 +285,7 @@ try {
         await dialog.locator(".agent-picker-label", { hasText: /codex/i }).waitFor();
         const workspaces = async () => (await page.evaluate(async () => (await (await fetch("/api/session")).json()).snapshot.workspaces.length)) as number;
         const before = await workspaces();
-        await page.waitForTimeout(800);
+        await page.waitForTimeout(800); // fixed wait: no workspace may be created by the link
         assert.equal(await workspaces(), before, "a link fills the form; Create is still the user's");
         await waitQuery(page, "name", "Fix backup");
         await dialog.getByRole("textbox", { name: "Name" }).fill("Fix the nightly backup");
@@ -587,7 +587,7 @@ try {
         await page.getByRole("button", { name: "Rename pane", exact: true }).tap();
         const creation = page.getByRole("dialog", { name: "Rename pane", exact: true });
         await creation.waitFor();
-        await page.waitForTimeout(150);
+        await page.waitForTimeout(150); // fixed wait: the Rename pane dialog may not close
         assert.equal(await creation.isVisible(), true, "the Rename pane dialog stays up after the sheet's entry settles");
         assert.equal(await page.evaluate(() => history.length), length + 1, "the dialog took the sheet's entry");
         await page.goBack();

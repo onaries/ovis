@@ -237,7 +237,17 @@ describe("exact store lookup", () => {
     { name: "the newest held events file is renamed", otherGroup: "group", otherSession: "resumed-session", otherMtime: 300, binds: false, change: "rename" },
     { name: "a replacement reported file has a newer timestamp", otherGroup: "group", otherSession: "resumed-session", otherMtime: 300, binds: false, replacement: "current" },
     { name: "a replacement competing file has an older timestamp", otherGroup: "group", otherSession: "resumed-session", otherMtime: 300, binds: false, replacement: "other" },
-  ]) {
+    // a newer held events file moved to a name or a folder the session filter does not take
+    { name: "the newest held events file is renamed without its prefix", otherGroup: "group", otherSession: "resumed-session", otherMtime: 300, binds: false, change: "rename-away" },
+    { name: "the newest held session's folder is renamed past the id filter", otherGroup: "group", otherSession: "resumed-session", otherMtime: 300, binds: false, change: "rename-folder" },
+    // older write times: these must not bind as merely older held sessions either
+    { name: "an older held session's folder is renamed past the id filter", otherGroup: "group", otherSession: "older-session", otherMtime: 100, binds: false, change: "rename-folder" },
+    { name: "an events-named file is held deeper in the store", otherGroup: "group", otherSession: "older-session", otherMtime: 100, binds: false, nested: true },
+    { name: "a held events file is renamed in a folder renamed past the id filter", otherGroup: "group", otherSession: "older-session", otherMtime: 100, binds: false, change: "rename-both" },
+    // another file held in a session folder: its events file beside it says nothing moved away
+    { name: "another file is held beside an older session's events file", otherGroup: "group", otherSession: "older-session", otherMtime: 100, binds: true, heldLock: "beside events.jsonl" },
+    { name: "another file is held in a session folder with no events file", otherGroup: "group", otherSession: "older-session", otherMtime: 100, binds: false, heldLock: "alone" },
+  ] as { name: string; otherGroup: string; otherSession: string; otherMtime: number; binds: boolean; change?: string; replacement?: string; nested?: boolean; heldLock?: string }[]) {
     test.skipIf(process.platform !== "linux" || !existsSync("/proc/self/fd"))(`resolves Herdr's session safely when ${scenario.name}`, async () => {
       const home = realpathSync(root);
       const transcript = join(home, "sessions", "%2Ffiction", session, "updates.jsonl");
@@ -260,7 +270,25 @@ describe("exact store lookup", () => {
       const executable = join(home, "grok");
       // Use our runtime, not a sleep executable that may dispatch by its copied name.
       copyFileSync(process.execPath, executable);
-      const fds = [current, other, retained, outside].map((file) => openSync(file, "r"));
+      const held = [current, other, retained, outside];
+      if (scenario.heldLock !== undefined) {
+        const lock = join(home, "sessions", "group", "closed-session", "updates.jsonl.lock");
+        mkdirSync(dirname(lock), { recursive: true });
+        writeFileSync(lock, "");
+        if (scenario.heldLock !== "alone") writeFileSync(join(dirname(lock), "events.jsonl"), "");
+        // a file held at the store's root (Grok's session index) is no session's
+        const index = join(home, "sessions", "session_search.sqlite");
+        writeFileSync(index, "");
+        held.push(lock, index);
+      }
+      if (scenario.nested) {
+        const nested = join(home, "sessions", "group", "older-session", "checkpoint", "events.jsonl");
+        mkdirSync(dirname(nested), { recursive: true });
+        writeFileSync(nested, "");
+        utimesSync(nested, 100, 100);
+        held.push(nested);
+      }
+      const fds = held.map((file) => openSync(file, "r"));
       const child = spawn(executable, ["-e", "process.stdin.resume()"], { stdio: ["pipe", "ignore", "ignore", ...fds] });
       const pane: HerdrPane = {
         pane_id: "grok-fixture", agent: "grok", agent_status: "ready", focused: false,
@@ -288,9 +316,13 @@ describe("exact store lookup", () => {
       }));
       try {
         await once(child, "spawn", { signal: AbortSignal.timeout(2000) });
-        if ("change" in scenario) {
-          if (scenario.change === "unlink") unlinkSync(other);
-          else renameSync(other, `${other}.old`);
+        if (scenario.change === "unlink") unlinkSync(other);
+        else if (scenario.change === "rename") renameSync(other, `${other}.old`);
+        else if (scenario.change === "rename-away") renameSync(other, join(dirname(other), "old-events.jsonl"));
+        else if (scenario.change === "rename-folder") renameSync(dirname(other), join(dirname(dirname(other)), ".archived-resumed"));
+        else if (scenario.change === "rename-both") {
+          renameSync(other, join(dirname(other), "old-events.jsonl"));
+          renameSync(dirname(other), join(dirname(dirname(other)), ".archived-older"));
         }
         expect(await resolveGrokStore(pane, home)).toBe(scenario.binds ? transcript : null);
       } finally {

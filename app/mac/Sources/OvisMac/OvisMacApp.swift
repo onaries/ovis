@@ -83,7 +83,7 @@ struct ContentView: View {
             Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red).font(.headline)
             logView
             HStack {
-                Button(L("Try again", "다시 시도")) { Task { await model.install() } }.buttonStyle(.borderedProminent)
+                Button(L("Try again", "다시 시도")) { Task { await model.retry() } }.buttonStyle(.borderedProminent)
                 Button(L("Copy the log", "오류 내용 복사")) { model.copyLog() }
                 Spacer()
                 Button(L("Get help", "도움 받기")) { model.open(Ovis.support) }

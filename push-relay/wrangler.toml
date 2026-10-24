@@ -41,5 +41,5 @@ namespace_id = "1696"
 [[d1_databases]]
 binding = "DB"
 database_name = "ovis-push-relay"
-# database_id: from `wrangler d1 create ovis-push-relay` (README.md), an id, not a secret. The
-# database is not created yet; add its id here when it is.
+# database_id: from `wrangler d1 create ovis-push-relay` (README.md), an id, not a secret.
+database_id = "1bdfce07-d5b5-40e9-8a56-77cc88b033fa"

@@ -2,9 +2,14 @@ import type { Translate } from "./i18n.ts";
 
 export type SettingsPageId = "appearance" | "chat" | "terminal" | "alerts" | "voice" | "usage" | "shortcuts" | "devices" | "remote" | "integrations" | "about";
 
-/** What the palette shows for one Settings page: its name and the words a user may look for it by. */
+/**
+ * What the palette shows for one Settings page, or for one group on it: its name and the words a
+ * user may look for it by. A group's entry names the group (`section`, its `data-section`) as well
+ * as the page it is on, and opens on the group.
+ */
 export interface SettingsPageEntry {
   id: SettingsPageId;
+  section?: string;
   label: string;
   aliases: string;
 }
@@ -12,13 +17,18 @@ export interface SettingsPageEntry {
 /**
  * The Settings pages as the palette lists them. The aliases are one translated phrase per page, so
  * a user finds a page by the words of their own language ("theme", "font", "sound"); every phrase is
- * a literal key, which keeps it in the translation files.
+ * a literal key, which keeps it in the translation files. A setting's own label is added where
+ * Japanese and Chinese write it as one word the phrase lacks (Chat font size, Terminal font size).
+ *
+ * After the pages come the groups a setting is looked for by but whose page's words do not say it,
+ * as Zed's settings search lands on the setting: each is found by its heading and the labels of the
+ * settings it holds, a touch screen's and a desktop's alike. Within a rank a page comes before its groups.
  */
 export function settingsPageEntries(t: Translate): SettingsPageEntry[] {
   return [
     { id: "appearance", label: t("Appearance"), aliases: t("theme themes palette dark light mode colors density language sidebar logos") },
-    { id: "chat", label: t("Chat"), aliases: t("chat font size message width composer enter send thinking code") },
-    { id: "terminal", label: t("Terminal"), aliases: t("terminal font size key bar keyboard clipboard") },
+    { id: "chat", label: t("Chat"), aliases: `${t("chat font size message width composer enter send thinking code")} ${t("Chat font size")}` },
+    { id: "terminal", label: t("Terminal"), aliases: `${t("terminal font size key bar keyboard clipboard")} ${t("Terminal font size")}` },
     { id: "alerts", label: t("Alerts"), aliases: t("notifications sound push bell needs input finished") },
     { id: "voice", label: t("Voice input"), aliases: t("dictation microphone speech openai") },
     { id: "usage", label: t("Subscription usage"), aliases: t("plan limits quota meters") },
@@ -27,6 +37,10 @@ export function settingsPageEntries(t: Translate): SettingsPageEntry[] {
     { id: "remote", label: t("Remote PCs"), aliases: t("machines computers ssh bridge plugins") },
     { id: "integrations", label: t("Agent integrations"), aliases: t("agents hooks claude codex") },
     { id: "about", label: t("About"), aliases: t("version update release herdr") },
+    { id: "appearance", section: "typography", label: t("Typography"), aliases: t("Interface font size") },
+    { id: "chat", section: "composer", label: t("Composer"), aliases: [t("Enter sends"), t("Return inserts a new line"), t("Send queued messages automatically"), t("New tab button"), t("Suggestion chip")].join(" ") },
+    { id: "chat", section: "quick-replies", label: t("Quick replies"), aliases: t("Show above the message box") },
+    { id: "voice", section: "openai-key", label: t("OpenAI API key"), aliases: "" },
   ];
 }
 
@@ -85,17 +99,23 @@ export function rankByTitle<T>(query: string, rows: readonly SearchableRow<T>[])
   return found.sort((a, b) => b.rank - a.rank || a.index - b.index).map((entry) => entry.item);
 }
 
+/** A page the palette asks Settings to open, and the group on it to land on, when it names one. */
+export interface SettingsPageRequest {
+  page: SettingsPageId;
+  section?: string;
+}
+
 /**
  * The page the palette asked Settings to open. The dialog mounts per opening and reads it when it
  * mounts; it clears it once it has, and the palette clears it on its own opening, so a request the
  * dialog never saw cannot steer a later opening.
  */
-let requested: SettingsPageId | null = null;
+let requested: SettingsPageRequest | null = null;
 
-export function requestSettingsPage(page: SettingsPageId | null): void {
-  requested = page;
+export function requestSettingsPage(request: SettingsPageRequest | null): void {
+  requested = request;
 }
 
-export function requestedSettingsPage(): SettingsPageId | null {
+export function requestedSettingsPage(): SettingsPageRequest | null {
   return requested;
 }

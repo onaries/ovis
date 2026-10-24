@@ -13,6 +13,10 @@ async function fixture() {
   const path = join(root, "private-herdr.sock");
   let mode: "stall" | "success" | "bad_frame" | "refuse" = "stall";
   let requests = 0;
+  // A request marked stall is never answered. It is counted apart: on a busy PC the client's 30 ms
+  // can run out before its request is written, or the bytes it wrote can be read only after the
+  // test moved on to answering, so how many of them arrive is not the test's to fix.
+  let stalled = 0;
   const sockets = new Set<Socket>();
   const daemon = createServer((socket) => {
     sockets.add(socket);
@@ -24,6 +28,7 @@ async function fixture() {
       if (!buffer.includes("\n")) return;
       const request = JSON.parse(buffer.split("\n")[0]!);
       buffer = "";
+      if (request.params?.stall === true) { stalled++; return; }
       requests++;
       if (mode === "stall") return;
       if (mode === "bad_frame") { socket.end("private-provider-secret\n"); return; }
@@ -40,17 +45,18 @@ async function fixture() {
     warn.mockRestore();
     rmSync(root, { recursive: true, force: true });
   });
-  return { path, root, lines, set: (value: typeof mode) => { mode = value; }, requests: () => requests, records: () => lines.map((line) => JSON.parse(line)) };
+  return { path, root, lines, set: (value: typeof mode) => { mode = value; }, requests: () => requests, stalled: () => stalled, records: () => lines.map((line) => JSON.parse(line)) };
 }
 
 describe("RPC diagnostic wiring", () => {
   it("logs a timeout once, then one recovery without private parameters or socket paths", async () => {
     const f = await fixture();
-    await expect(herdrRpc("fixture.read", { token: "private-input-secret" }, f.path, 30)).rejects.toBeInstanceOf(HerdrError);
-    await expect(herdrRpc("fixture.read", {}, f.path, 30)).rejects.toThrow("timed out");
+    // long enough to connect on a busy PC, so the timeout it logs is the response's
+    await expect(herdrRpc("fixture.read", { token: "private-input-secret", stall: true }, f.path, 500)).rejects.toBeInstanceOf(HerdrError);
+    await expect(herdrRpc("fixture.read", { stall: true }, f.path, 30)).rejects.toThrow("timed out");
     expect(f.records()).toHaveLength(1);
-    expect(f.records()[0]).toMatchObject({ event: "herdr.rpc.failed", code: "timeout", operation: "fixture.read", phase: "response", timeout_ms: 30 });
-    expect(f.records()[0].elapsed_ms).toBeGreaterThanOrEqual(25);
+    expect(f.records()[0]).toMatchObject({ event: "herdr.rpc.failed", code: "timeout", operation: "fixture.read", phase: "response", timeout_ms: 500 });
+    expect(f.records()[0].elapsed_ms).toBeGreaterThanOrEqual(495);
     f.set("success");
     expect(await herdrRpc<{ ok: boolean }>("fixture.read", {}, f.path, 1000)).toEqual({ ok: true });
     await herdrRpc("fixture.read", {}, f.path, 1000);
@@ -58,7 +64,11 @@ describe("RPC diagnostic wiring", () => {
     expect(f.records()[1]).toMatchObject({ event: "herdr.rpc.recovered", episode_id: f.records()[0].episode_id, failures: 2, suppressed: 1 });
     expect(f.lines.join("\n")).not.toContain(f.root);
     expect(f.lines.join("\n")).not.toContain("private-input-secret");
-    expect(f.requests()).toBe(4);
+    // one request per call, none sent again
+    expect(f.requests()).toBe(2);
+    // the first, with 500 ms, always arrives; the second's 30 ms may run out before it is written
+    expect(f.stalled()).toBeGreaterThanOrEqual(1);
+    expect(f.stalled()).toBeLessThanOrEqual(2);
   });
 
   it("logs a bad frame without the daemon's raw text", async () => {

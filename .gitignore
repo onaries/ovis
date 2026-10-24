@@ -13,6 +13,10 @@ evidence/
 
 remote-bundles/
 
+# the release's Rust PTY host, installed by scripts/pty-sidecar.ts
+/bin/
+/pty-sidecar/
+
 # README demo videos: uploaded to GitHub, not committed (docs/development.md)
 docs/screenshots/*.mp4
 

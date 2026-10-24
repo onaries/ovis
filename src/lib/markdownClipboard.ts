@@ -48,13 +48,47 @@ function fromDom(node: Node): ClipboardNode {
   return { tag: node.tagName, attrs, children: [...node.childNodes].map(fromDom) };
 }
 
+/**
+ * A tool-file label reads shortened (`app/src/a.ts`) while its `data-raw-path` is the path as written
+ * (`/work/app/src/a.ts`): a selection that takes the whole label copies that path. The missing head
+ * goes into the label's own text for the copy alone and comes out again, so no boundary moves.
+ */
+function withRawToolPaths<T>(selection: Selection, root: Element, read: () => T): T {
+  const grown: { text: Text; head: number }[] = [];
+  try {
+    for (const label of root.querySelectorAll<HTMLElement>("[data-raw-path]")) {
+      const text = label.firstChild;
+      const raw = label.dataset["rawPath"] ?? "";
+      if (!(text instanceof Text) || label.childNodes.length !== 1 || text.data === raw || !raw.endsWith(text.data)) continue;
+      const whole = [...Array(selection.rangeCount).keys()].some((index) => {
+        const range = selection.getRangeAt(index);
+        return range.comparePoint(text, 0) === 0 && range.comparePoint(text, text.length) === 0;
+      });
+      if (!whole) continue;
+      const head = raw.slice(0, raw.length - text.data.length);
+      text.insertData(0, head);
+      grown.push({ text, head: head.length });
+    }
+    return read();
+  } finally {
+    for (const { text, head } of grown) text.deleteData(0, head);
+  }
+}
+
 /** Only claim ranges wholly in this chat; composer fields and the terminal keep native copy. */
 export function chatSelectionClipboardPayload(selection: Selection, root: Element): ClipboardPayload | null {
   if (selection.isCollapsed || selection.rangeCount === 0) return null;
-  const nodes: ClipboardNode[] = [];
   for (let index = 0; index < selection.rangeCount; index++) {
     const range = selection.getRangeAt(index);
     if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
+  }
+  return withRawToolPaths(selection, root, () => selectionPayload(selection));
+}
+
+function selectionPayload(selection: Selection): ClipboardPayload | null {
+  const nodes: ClipboardNode[] = [];
+  for (let index = 0; index < selection.rangeCount; index++) {
+    const range = selection.getRangeAt(index);
     const ancestor = range.commonAncestorContainer;
     const element = ancestor instanceof Element ? ancestor : ancestor.parentElement;
     if (element?.closest("input, textarea, [contenteditable=true]")) return null;

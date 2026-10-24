@@ -33,7 +33,8 @@ it("names a model and an effort for the agents whose CLI documents them, and a p
   expect(launchCapabilities("claude")).toEqual({ model: true, efforts: CLAUDE_EFFORTS, positionalPrompt: false });
   // clap takes everything after `--` as the PROMPT positional (codex -- logout started the TUI)
   expect(launchCapabilities("codex")).toEqual({ model: true, efforts: CODEX_EFFORTS, positionalPrompt: true });
-  for (const kind of ["omp", "pi", "gemini", "opencode", ""]) expect(launchCapabilities(kind)).toEqual({ model: false, efforts: [], positionalPrompt: false });
+  // Letta Code takes a prompt only with `-p`, its headless mode (letta-code 0.34.23, src/cli/args.ts)
+  for (const kind of ["omp", "pi", "gemini", "opencode", "letta", ""]) expect(launchCapabilities(kind)).toEqual({ model: false, efforts: [], positionalPrompt: false });
   expect(modelSuggestions("claude")).toEqual(["sonnet", "opus", "haiku"]);
   expect(modelSuggestions("codex")).toEqual([]);
 });

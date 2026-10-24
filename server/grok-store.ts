@@ -92,14 +92,26 @@ export function grokHomeFromEnvironment(environment: string): string | null {
   return home && isAbsolute(home) ? home : null;
 }
 
-/** Held events.jsonl directories and descriptor write times. Null on an unreadable or oversized
- * table, or an events.jsonl-prefixed file in a three-part path with an accepted session ID
- * that is deleted, renamed, replaced or not a resolved real file. Other names are ignored. */
+/**
+ * Held events.jsonl directories and descriptor write times. Null on an unreadable or oversized
+ * table, or on a held file that may be a session's events file under another name, since that
+ * session could be the newest one written:
+ * - a file whose name starts with `events.jsonl` that is not a resolved real
+ *   `<group>/<session>/events.jsonl` with an accepted session ID: deleted, renamed with a suffix
+ *   (`events.jsonl.old`), moved into a folder the ID filter skips (`.archived-resumed`) or
+ *   deeper into the store, or replaced at its path;
+ * - any other file held in a folder of a cwd group (a session's, or one renamed past the ID
+ *   filter) that has no `events.jsonl` of its own on disk: its events file moved away, perhaps to
+ *   that held name (`old-events.jsonl`).
+ * Other held files are ignored: which ones Grok keeps open is not known from native captures.
+ */
 export function grokHeldSessions(pid: number, home: string): Map<string, number> | null {
   try {
     const store = realpathSync(join(home, "sessions"));
     const fds = opendirSync(`/proc/${pid}/fd`);
     const sessions = new Map<string, number>();
+    /** folders of a cwd group the process holds some other file in */
+    const others = new Set<string>();
     let count = 0;
     try {
       for (let fd = fds.readSync(); fd; fd = fds.readSync()) {
@@ -108,18 +120,27 @@ export function grokHeldSessions(pid: number, home: string): Map<string, number>
         let target: string;
         // a descriptor closed since the listing is not a held file
         try { target = readlinkSync(descriptor); } catch { continue; }
-        if (!inside(store, target) || !basename(target).startsWith("events.jsonl")) continue;
+        if (!inside(store, target)) continue;
         const parts = relative(store, target).split(sep);
-        if (parts.length !== 3 || !SESSION.test(parts[1]!)) continue;
-        // Do not silently drop events.jsonl (deleted) or events.jsonl.old: that could
-        // make an older held session look newest after an unreported /resume.
-        if (basename(target) !== "events.jsonl" || realpathSync(target) !== target) return null;
+        if (!basename(target).startsWith("events.jsonl")) {
+          if (parts.length >= 3) others.add(join(store, parts[0]!, parts[1]!));
+          continue;
+        }
+        // Do not silently drop events.jsonl (deleted), events.jsonl.old or one moved out of
+        // the session's shape: that could make an older held session look newest after an
+        // unreported /resume.
+        if (parts.length !== 3 || !SESSION.test(parts[1]!) || basename(target) !== "events.jsonl" || realpathSync(target) !== target) return null;
         const held = statSync(descriptor);
         const named = statSync(target);
         if (!held.isFile() || !named.isFile() || held.dev !== named.dev || held.ino !== named.ino) return null;
         sessions.set(dirname(target), held.mtimeMs);
       }
     } finally { fds.closeSync(); }
+    for (const folder of others) {
+      if (sessions.has(folder)) continue;
+      // a folder whose events file is gone may hold it under the other name
+      if (!statSync(join(folder, "events.jsonl"), { throwIfNoEntry: false })?.isFile()) return null;
+    }
     return sessions;
   } catch { return null; }
 }

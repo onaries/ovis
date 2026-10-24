@@ -24,6 +24,9 @@ export const SKILL_SYNTAX: Readonly<Record<string, SkillSyntax>> = {
   opencode: { skillTriggers: ["/"], inline: [], namespaced: false, chipForms: [] },
   grok: { skillTriggers: ["/"], inline: [], namespaced: false, chipForms: [] },
   agy: { skillTriggers: ["/"], inline: [], namespaced: false, chipForms: [] },
+  // its menu opens only on a leading `/`, and lists skills as bare `/<skill-id>` rows
+  // (letta-code 0.34.23, src/cli/components/SlashCommandAutocomplete.tsx)
+  letta: { skillTriggers: ["/"], inline: [], namespaced: false, chipForms: [] },
 };
 
 export function skillSyntax(agent: string | null | undefined): SkillSyntax {

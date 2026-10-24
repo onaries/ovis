@@ -166,4 +166,27 @@ describe("context use", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("reads pi's window from the pane's own agent dir, not the bridge's", () => {
+    const bridge = mkdtempSync(join(tmpdir(), "herdr-meta-bridge-"));
+    const pane = mkdtempSync(join(tmpdir(), "herdr-meta-pane-"));
+    const previous = process.env["PI_CODING_AGENT_DIR"];
+    writeFileSync(join(bridge, "models.json"), JSON.stringify({ providers: { lwsa: { models: [{ id: "qwen-test", contextWindow: 215_000 }] } } }));
+    writeFileSync(join(pane, "models.json"), JSON.stringify({ providers: { lwsa: { models: [{ id: "qwen-test", contextWindow: 400_000 }] } } }));
+    process.env["PI_CODING_AGENT_DIR"] = bridge;
+    forgetPiModels();
+    try {
+      const entry = jsonl({ type: "message", message: { role: "assistant", model: "qwen-test", provider: "lwsa", usage: { totalTokens: 100_000 } } });
+      expect(parseConversationMetadata(entry, "pi-transcript", undefined, pane).context).toEqual({ used: 100_000, window: 400_000 });
+      // a pane whose pi processes name different agent dirs has no catalog of its own to read
+      expect(parseConversationMetadata(entry, "pi-transcript", undefined, null).context).toEqual({ used: 100_000, window: null });
+      // a reader that names no pane keeps the bridge's
+      expect(parseConversationMetadata(entry, "pi-transcript").context).toEqual({ used: 100_000, window: 215_000 });
+    } finally {
+      if (previous === undefined) delete process.env["PI_CODING_AGENT_DIR"]; else process.env["PI_CODING_AGENT_DIR"] = previous;
+      forgetPiModels();
+      rmSync(bridge, { recursive: true, force: true });
+      rmSync(pane, { recursive: true, force: true });
+    }
+  });
 });

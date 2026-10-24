@@ -1,0 +1,141 @@
+name: Mac app
+# Builds Ovis for Mac (app/mac) from a release's tag, signs it with the Developer ID, notarizes and
+# staples it, and attaches it to that release as Ovis.dmg, which https://ovis.sh/Ovis.dmg hands out
+# through releases/latest. Release calls it after publishing (a release made with GITHUB_TOKEN fires
+# no release event, so nothing else would). Run it by hand to give an existing release its dmg.
+# Without the signing secrets it skips with a notice; app/mac/README.md lists them.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag (vX.Y.Z)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release to attach Ovis.dmg to (vX.Y.Z)'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: mac-dmg-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  gate:
+    runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: Check the release and the signing secrets
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          HAS_MAC_DEVELOPER_ID_P12: ${{ secrets.MAC_DEVELOPER_ID_P12 != '' }}
+          HAS_MAC_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_P12_PASSWORD != '' }}
+          HAS_MAC_NOTARY_KEY_P8: ${{ secrets.MAC_NOTARY_KEY_P8 != '' }}
+          HAS_MAC_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID != '' }}
+          HAS_MAC_NOTARY_ISSUER: ${{ secrets.MAC_NOTARY_ISSUER != '' }}
+        run: |
+          if [ "$RELEASE_REF" != refs/heads/main ]; then
+            echo "::error::Run this from main, not $RELEASE_REF." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$RELEASE_TAG' is not a release tag (vX.Y.Z)." >&2
+            exit 1
+          fi
+          missing=""
+          for name in MAC_DEVELOPER_ID_P12 MAC_DEVELOPER_ID_P12_PASSWORD MAC_NOTARY_KEY_P8 MAC_NOTARY_KEY_ID MAC_NOTARY_ISSUER; do
+            has="HAS_$name"; [ "${!has}" = true ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice title=Ovis.dmg skipped::$RELEASE_TAG gets no Ovis.dmg: these repository secrets are not set:$missing. Set them (app/mac/README.md), then run the Mac app workflow with tag $RELEASE_TAG; it marks the release latest once Ovis.dmg and Ovis.exe are attached."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" != false ]; then
+            echo "::error::$RELEASE_TAG is not a published release." >&2
+            exit 1
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+  dmg:
+    needs: gate
+    if: needs.gate.outputs.ready == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - name: Import the Developer ID into a temporary keychain
+        id: keychain
+        env:
+          MAC_DEVELOPER_ID_P12: ${{ secrets.MAC_DEVELOPER_ID_P12 }}
+          MAC_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/ovis-signing.keychain-db"
+          password=$(openssl rand -base64 32)
+          printf '%s' "$MAC_DEVELOPER_ID_P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          # the intermediate the Developer ID certificate chains to, in case the .p12 lacks it
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -f pkcs12 -P "$MAC_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain"
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          # shellcheck disable=SC2046 # keep the existing keychains, one word each
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/^ *[0-9]*) [0-9A-F]* "\(Developer ID Application: [^"]*\)".*$/\1/p' | head -n 1)
+          if [ -z "$identity" ]; then
+            echo "::error::MAC_DEVELOPER_ID_P12 holds no Developer ID Application identity." >&2
+            exit 1
+          fi
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+      - name: Build, sign, notarize and staple Ovis.dmg
+        env:
+          MAC_NOTARY_KEY_P8: ${{ secrets.MAC_NOTARY_KEY_P8 }}
+          OVIS_SIGN_IDENTITY: ${{ steps.keychain.outputs.identity }}
+          OVIS_KEYCHAIN: ${{ steps.keychain.outputs.keychain }}
+          OVIS_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+          OVIS_NOTARY_ISSUER: ${{ secrets.MAC_NOTARY_ISSUER }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          export OVIS_NOTARY_KEY="$RUNNER_TEMP/notary-key.p8"
+          (umask 077 && printf '%s' "$MAC_NOTARY_KEY_P8" | base64 --decode > "$OVIS_NOTARY_KEY")
+          export OVIS_MAC_VERSION="${RELEASE_TAG#v}" OVIS_MAC_BUILD="${RELEASE_TAG#v}"
+          app/mac/build.sh
+          xcrun stapler validate app/mac/build/Ovis.dmg
+      - name: Attach Ovis.dmg to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release upload "$RELEASE_TAG" app/mac/build/Ovis.dmg --clobber
+          # Release publishes without marking it latest, so ovis.sh/Ovis.dmg and ovis.sh/Ovis.exe keep the
+          # previous files until this release has both (the Windows app job does the same check); a run
+          # for an older tag leaves the newest release latest
+          git fetch --quiet --tags origin
+          if [ "$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)" = "$RELEASE_TAG" ] &&
+             [ "$(gh release view "$RELEASE_TAG" --json assets --jq '[.assets[].name] | (index("Ovis.dmg") != null and index("Ovis.exe") != null)')" = true ]; then
+            gh release edit "$RELEASE_TAG" --latest
+          fi
+      - name: Remove the keychain and the keys
+        if: always()
+        env:
+          KEYCHAIN: ${{ steps.keychain.outputs.keychain }}
+        run: |
+          [ -z "$KEYCHAIN" ] || security delete-keychain "$KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-key.p8"

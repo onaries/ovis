@@ -10,7 +10,8 @@ import { sameTarget, type SplitTarget } from "./split.ts";
  * `pane-focused` frame says so. This device opens that pane too, only when it asked to and only on
  * the PC it has open: another PC's focus is that PC's business, and a pane already in front (the
  * selected one, or the other half of a split) stays where it is. A link still landing goes first,
- * and someone using this device (`busy`, deviceInUse) keeps the pane they are on.
+ * someone using this device (`busy`, deviceInUse) keeps the pane they are on, and a move this device
+ * asked for itself (`ownMove`, movingHerdrFocus) is opened by its own answer.
  */
 export function followsHerdrFocus(input: {
   enabled: boolean;
@@ -23,10 +24,46 @@ export function followsHerdrFocus(input: {
   linkPending: boolean;
   /** this device is in use: following would drop the keyboard, close what is open or leave an unsent message (#1470) */
   busy: boolean;
+  /** this device's own request is moving herdr's focus on that PC (movingHerdrFocus) */
+  ownMove: boolean;
 }): boolean {
-  if (!input.enabled || input.linkPending || input.busy) return false;
+  if (!input.enabled || input.linkPending || input.busy || input.ownMove) return false;
   if (input.machineId !== input.selection.machineId || input.paneId === input.selection.paneId) return false;
   return !sameTarget(input.splitOther, { machineId: input.machineId, paneId: input.paneId });
+}
+
+/** This device's requests that move herdr's focus, still unanswered, by PC. */
+const ownMoves = new Map<string, number>();
+/**
+ * How long a request this device made leaves herdr's focus to it at most: a PC that never answers
+ * (a stalled connection, neither refused nor closed) must not turn following off until a reload.
+ */
+export const OWN_MOVE_HOLD_MS = 10_000;
+
+/**
+ * A request from this device that moves herdr's focus (a split that opens its new pane): herdr's
+ * pane-focused frame may come before the answer, and following it would open the pane as an
+ * automatic pick, with no keyboard and no Back entry, before the caller opens it as its own (#1470).
+ * Until the request settles, or OWN_MOVE_HOLD_MS passes, frames from that PC are left to the
+ * caller; its own `then` runs after.
+ */
+export function movingHerdrFocus<T>(machineId: string, request: Promise<T>): Promise<T> {
+  ownMoves.set(machineId, (ownMoves.get(machineId) ?? 0) + 1);
+  let held = true;
+  const release = (): void => {
+    if (!held) return;
+    held = false;
+    const left = (ownMoves.get(machineId) ?? 1) - 1;
+    if (left > 0) ownMoves.set(machineId, left);
+    else ownMoves.delete(machineId);
+  };
+  const bound = setTimeout(release, OWN_MOVE_HOLD_MS);
+  return request.finally(() => { clearTimeout(bound); release(); });
+}
+
+/** A request from this device is moving herdr's focus on that PC (movingHerdrFocus). */
+export function movingHerdrFocusOn(machineId: string): boolean {
+  return ownMoves.has(machineId);
 }
 
 /**

@@ -36,6 +36,7 @@ public class HerdrShellPlugin: CAPPlugin, CAPBridgedPlugin {
         PCStore.last = origin
         PCStore.pendingStart = text
         PCStore.failure = nil
+        PCStore.redirects = 0
         call.resolve()
         DispatchQueue.main.async { HerdrBridgeViewController.reopen() }
     }
@@ -55,6 +56,7 @@ public class HerdrShellPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Opens the current PC again from its first page.
     @objc func retry(_ call: CAPPluginCall) {
         PCStore.failure = nil
+        PCStore.redirects = 0
         call.resolve()
         DispatchQueue.main.async { HerdrBridgeViewController.reopen() }
     }

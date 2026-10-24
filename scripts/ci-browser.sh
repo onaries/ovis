@@ -79,17 +79,20 @@ run_script scripts/portal-regression.ts
 run_script scripts/deep-link-demo-regression.ts
 run_script scripts/chat-history-browser-qa.ts
 run_script scripts/omo-queue-browser-qa.ts
+run_script scripts/dsh-session-switch-browser-regression.ts
 run_script scripts/codex-queue-browser-qa.ts
 run_script scripts/session-history-browser-qa.ts
 run_script scripts/new-session-skills-browser-qa.ts
 run_script scripts/chat-virtual-browser-qa.ts
 run_script scripts/chat-scroll-padding-regression.ts
 run_script scripts/chat-selection-copy-regression.ts
+run_script scripts/reply-quote-demo-regression.ts
 run_script scripts/codex-status-browser-regression.ts
 run_script scripts/chat-fallback-browser-qa.ts
 run_script scripts/grok-chat-browser-qa.ts
 run_script scripts/omo-chat-browser-qa.ts
 run_script scripts/omo-plan-browser-regression.ts
+run_script scripts/plan-chip-demo-regression.ts
 run_script scripts/agent-skill-menu-demo-regression.ts
 run_script scripts/terminal-autoswitch-demo-regression.ts
 run_script scripts/agy-chat-browser-qa.ts
@@ -102,6 +105,7 @@ run_script scripts/revision-bound-update-demo-regression.ts
 run_script scripts/file-preview-text-browser-qa.ts
 run_script scripts/virtual-source-browser-qa.ts
 run_script scripts/repo-diff-browser-qa.ts
+run_script scripts/diff-find-demo-regression.ts
 run_script scripts/keyboard-viewport-regression.ts
 run_script scripts/file-viewer-mobile-regression.ts
 run_script scripts/file-viewer-table-scroll-regression.ts
@@ -109,6 +113,8 @@ run_script scripts/droplet-demo-regression.ts
 run_script scripts/phone-glass-header-demo-regression.ts
 run_script scripts/chat-greeting-demo-regression.ts
 run_script scripts/restored-draft-demo-regression.ts
+run_script scripts/chat-local-send-follow-demo-regression.ts
+run_script scripts/chat-tool-paths-demo-regression.ts
 run_script scripts/composer-fit-demo-regression.ts
 run_script scripts/held-rows-demo-regression.ts
 run_script scripts/replay-clipboard-demo-regression.ts

@@ -46,13 +46,15 @@ export class ConnectionDiagnostics {
   failed(key: string, code: FailureCode, fields: Fields): void {
     const now = this.now();
     let failure = this.failures.get(key);
-    if (!failure) {
+    if (failure) {
+      this.failures.delete(key); // re-insert: the oldest entry is then the least recently used
+    } else {
       // Retain recent healthy keys too: clearing their throttle lets rapid failure/recovery
       // cycles flood the log. This one bounded map owns both episodes and throttle history.
       if (this.failures.size >= MAX_FAILURES) this.failures.delete(this.failures.keys().next().value!);
       failure = { id: randomUUID(), since: now, loggedAt: -Infinity, code, count: 0, suppressed: 0, active: false, visible: false };
-      this.failures.set(key, failure);
     }
+    this.failures.set(key, failure);
     if (!failure.active && failure.count === 0) {
       failure.id = randomUUID();
       failure.since = now;

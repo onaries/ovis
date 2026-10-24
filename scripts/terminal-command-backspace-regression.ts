@@ -63,7 +63,7 @@ export async function checkCommandBackspace(browser: Browser, origin: string, pa
       await input.dispatchEvent("keydown", {
         key: "Backspace", code: "Backspace", metaKey: true, ...composition, bubbles: true, cancelable: true,
       });
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(300); // fixed wait: a composing Backspace may send no line-delete byte
       assert.equal(inputs.slice(before).some(({ text }) => text === "\x15"), false,
         "an active composition must not receive a line-deletion sequence");
     }

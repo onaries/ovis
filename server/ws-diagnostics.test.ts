@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { createServer } from "./index.ts";
 import { socketAddress } from "./herdr/client.ts";
 
+const realServe = Bun.serve;
+
 it("records abnormal browser closes without their reason, coalesces repeats and ignores normal closes", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-ws-diagnostics-"));
   const path = join(root, "herdr.sock");
@@ -31,6 +33,31 @@ it("records abnormal browser closes without their reason, coalesces repeats and 
     });
   });
   let app: ReturnType<typeof createServer> | undefined;
+  // Resolves once Bun's server-side close handler has finished for the nth closed connection: the
+  // client sees "close" first in some runs, so its event alone proves nothing about the server.
+  let serverCloses = 0;
+  const serverCloseWaiters: { count: number; resolve: () => void }[] = [];
+  const serve = spyOn(Bun, "serve").mockImplementation(((options: Parameters<typeof realServe>[0]) => {
+    const handler = options.websocket!;
+    return realServe({
+      ...options,
+      websocket: {
+        ...handler,
+        close(ws: never, code: number, reason: string) {
+          try { return handler.close?.(ws, code, reason); } finally {
+            serverCloses++;
+            for (const waiter of serverCloseWaiters) if (serverCloses >= waiter.count) waiter.resolve();
+          }
+        },
+      },
+    } as never);
+  }) as never);
+  const serverClosed = (count: number) => new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("server did not close the WebSocket")), 2000);
+    serverCloseWaiters.push({ count, resolve: () => { clearTimeout(timer); resolve(); } });
+    if (serverCloses >= count) { clearTimeout(timer); resolve(); }
+  });
+  let closed = 0;
   async function close(code: number): Promise<void> {
     const ws = new WebSocket(`ws://127.0.0.1:${app!.port}/ws`);
     browsers.add(ws);
@@ -40,6 +67,7 @@ it("records abnormal browser closes without their reason, coalesces repeats and 
       ws.addEventListener("message", () => ws.close(code, "private-token/private-path"), { once: true });
       ws.addEventListener("close", () => { clearTimeout(timer); resolve(); }, { once: true });
     });
+    await serverClosed(++closed);
   }
   try {
     await new Promise<void>((resolve, reject) => { daemon.once("error", reject); daemon.listen(socketAddress(path), resolve); });
@@ -48,11 +76,6 @@ it("records abnormal browser closes without their reason, coalesces repeats and 
     await close(1000);
     expect(records()).toHaveLength(0);
     await close(4001);
-    const deadline = Date.now() + 1000;
-    while (records().length === 0) {
-      if (Date.now() > deadline) throw new Error("close was not recorded");
-      await Bun.sleep(5);
-    }
     expect(records()).toHaveLength(1);
     expect(records()[0]).toMatchObject({ operation: "local", code: "closed", close_code: 4001 });
     await close(4002);
@@ -65,6 +88,7 @@ it("records abnormal browser closes without their reason, coalesces repeats and 
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => daemon.close(() => resolve()));
     warn.mockRestore();
+    serve.mockRestore();
     if (previousSocket === undefined) delete process.env.HERDR_SOCKET;
     else process.env.HERDR_SOCKET = previousSocket;
     rmSync(root, { recursive: true, force: true });

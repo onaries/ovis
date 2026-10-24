@@ -61,8 +61,8 @@ const submit = () => createSubmitText({
 });
 const typed = () => calls.filter((call) => ["agent.prompt", "pane.send_text", "pane.send_keys"].includes(call.method));
 
-it("refuses a Chat send while Claude Code's rewind dialog is open, the add-context field included, typing nothing", async () => {
-  for (const shown of ["confirm-apple-summarize-from", "confirm-apple-summarize-up-to", "confirm-apple-restore", "confirm-apple-never-mind", "confirm-apple-restore-esc"]) {
+it("refuses a Chat send while Claude Code's rewind dialog is open, from its message list to the add-context field, typing nothing", async () => {
+  for (const shown of ["select-banana", "confirm-apple-summarize-from", "confirm-apple-summarize-up-to", "confirm-apple-restore", "confirm-apple-never-mind", "confirm-apple-restore-esc"]) {
     screen = recorded(shown);
     calls = [];
     const refused = await submit()("w:p1", "hello from chat", "hello from chat", Date.now()).catch((error: unknown) => error);

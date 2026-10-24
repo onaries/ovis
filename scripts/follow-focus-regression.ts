@@ -3,7 +3,8 @@
  * brings to the front by itself (`herdr tab create --focus`, as a script does) is opened here only
  * once this device asked for it, and herdr's focus moving back brings this device back too. It
  * never takes the view while this window is in front and someone types into it or has a dialog
- * open (#1470). Imported by ui-regression.ts, with Settings closed; it ends on the pane selected
+ * open, and a split this device opens itself stays its own pick when herdr's frame for it comes
+ * first (#1470). Imported by ui-regression.ts, with Settings closed; it ends on the pane selected
  * when it began and with the setting off, also when it fails.
  */
 import assert from "node:assert/strict";
@@ -49,6 +50,7 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
   assert.ok(before, "a pane is selected before the check");
   const tabs: string[] = [];
   let following = false;
+  let releaseSplit = (): void => undefined;
   try {
     // off, as it starts: herdr's focus is herdr's, and this device stays where it is
     const ignored = await focusedTab("follow focus off");
@@ -90,13 +92,48 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
+    // a split this device opens itself: herdr's frame for the new pane comes before the split's
+    // answer, held here until that frame has been handled. The pane is still this device's own pick,
+    // with the keyboard in it and a Back entry to the pane it was split from
+    const splitFrom = followed.root_pane.pane_id;
+    let made: string | undefined;
+    const answerHeld = new Promise<void>((resolve) => { releaseSplit = () => resolve(); });
+    await page.route("**/api/pane/split", async (route) => {
+      // nobody types here and no dialog is open when herdr's frame comes
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      const response = await route.fetch();
+      made = ((await response.json()) as { pane: { pane_id: string } }).pane.pane_id;
+      await answerHeld;
+      await route.fulfill({ response });
+    });
+    await page.keyboard.press("ControlOrMeta+Shift+k");
+    const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+    await palette.getByRole("searchbox", { name: "Search panes and actions", exact: true }).fill("Split pane right and open it");
+    await palette.getByRole("option", { name: "Split pane right and open it", exact: true }).click();
+    await until(async () => made !== undefined, "herdr made the split");
+    // a tab made after the split is listed here: herdr's frame for the split, sent before it, has been handled
+    const marker = await herdrRpc<{ tab: { tab_id: string } }>("tab.create", { workspace_id: fixture.workspaceId, label: "follow focus split marker", focus: false });
+    tabs.push(marker.tab.tab_id);
+    await listed("follow focus split marker");
+    assert.equal(await selectedPaneId(), splitFrom, "herdr's frame for this device's own split is left to the split's answer");
+    releaseSplit();
+    await until(async () => await selectedPaneId() === made, "the split's answer opens its new pane");
+    const keyboardIn = (paneId: string) => page.evaluate((paneId) => document.activeElement?.closest("[data-layout-pane]")?.getAttribute("data-layout-pane") === paneId, paneId);
+    await until(() => keyboardIn(made!), "the keyboard is in the pane this device split off");
+    await page.unroute("**/api/pane/split");
+    await page.goBack();
+    await until(async () => await selectedPaneId() === splitFrom && await keyboardIn(splitFrom), "Back opens the pane it was split from");
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
     // herdr's focus goes back where this device was: so does this device
     await herdrRpc("pane.focus", { pane_id: before });
     await until(async () => await selectedPaneId() === before, "herdr's focus moving back brings this device back");
     await follow(false);
     following = false;
-    console.log("PASS herdr's focus is followed only once this device asks for it, to a new tab and back, and never while this device types or has a dialog open");
+    console.log("PASS herdr's focus is followed only once this device asks for it, to a new tab and back, never while this device types or has a dialog open, and a split this device opens stays its own pick");
   } finally {
+    releaseSplit();
+    await page.unroute("**/api/pane/split").catch(() => undefined);
     for (const tab of tabs) await tabClose(tab).catch(() => undefined);
     // a check that stopped partway leaves the setting as it found it, for the checks after it
     if (following) await follow(false).catch(() => undefined);

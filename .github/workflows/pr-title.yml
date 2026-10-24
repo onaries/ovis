@@ -1,0 +1,47 @@
+name: PR title
+# PRs are squash merged, so a pull request's title becomes its commit on main: CONTRIBUTING.md's
+# `type(scope): summary`. This is a workflow of its own because an edited title must be checked
+# again, and an `edited` trigger in ci.yml would cancel and restart every CI job (on the
+# self-hosted PC) whenever a title or description changes. The title is read from the event
+# payload as data and never printed, so it cannot run or write workflow commands.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+permissions: {}
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  title:
+    name: Pull request title
+    # GitHub-hosted: it needs Node only and checks out nothing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the pull request title
+        shell: node {0}
+        run: |
+          const fs = require("fs");
+          if (process.env.GITHUB_EVENT_NAME !== "pull_request") {
+            console.log("Not a pull request: no title to check.");
+            process.exit(0);
+          }
+          const fail = (reason) => {
+            console.log(`::error title=Pull request title::The title must read type(scope): summary, for example fix(chat): keep the finished turn finished after Send. ${reason}`);
+            process.exit(1);
+          };
+          let title;
+          try {
+            title = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")).pull_request?.title;
+          } catch {
+            fail("The event payload could not be read.");
+          }
+          if (typeof title !== "string") fail("The event payload has no pull request title.");
+          if (/[\u0000-\u001f\u007f\u2028\u2029]/u.test(title)) fail("It must be one line without control characters.");
+          if (title !== title.trim()) fail("It must not start or end with whitespace.");
+          const match = /^([a-z][a-z0-9-]*)\(([^()]*)\): (.*)$/u.exec(title);
+          if (!match) fail("It needs a lowercase type, a scope in parentheses, then a colon and one space.");
+          const [, , scope, summary] = match;
+          if (scope.trim() === "" || scope !== scope.trim()) fail("The scope must be nonempty, without surrounding whitespace.");
+          if (summary.trim() === "" || summary !== summary.trim()) fail("The summary must be nonempty and follow exactly one space.");
+          console.log("The title matches type(scope): summary.");

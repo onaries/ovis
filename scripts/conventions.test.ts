@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, sep } from "node:path";
 import { fixedSleepCounts, fixedSleeps, sleepFiles } from "./fixed-sleeps.ts";
 import { fail, files, lineOf, read, repo, stripComments } from "./source-scan.ts";
 
@@ -201,5 +202,194 @@ describe("names from before Ovis", () => {
     if (grep.status === null || grep.status > 1) return;
     const offenders = grep.stdout.split("\n").filter((file) => file !== "" && !(file in CARRY_OVER));
     fail(offenders, "Use the Ovis names: OVIS_* for settings, ovis_token and ovis_device for cookies, ovis:* for browser storage keys, .ovis for pasted files. The old names are read only by the files in CARRY_OVER (scripts/conventions.test.ts), which carry an older install over.");
+  });
+});
+
+describe("raw NUL bytes", () => {
+  // A raw 0x00 in a source file still compiles, but git and review tools then show the file's
+  // diff as binary, so whatever else changed in it goes unreviewed. Tracked text is read as bytes
+  // (offsets are byte offsets), listed with `git ls-files -z` (a path may hold a newline).
+  // Every tracked file is text except these binary formats. git's own binary flag cannot choose:
+  // a text file with a NUL in it is exactly what git starts calling binary.
+  const BINARY_SUFFIXES = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".icns", ".woff", ".woff2", ".ttf", ".otf", ".webm", ".mp4", ".mov", ".mp3", ".wav", ".pdf", ".zip", ".gz", ".tgz", ".jar", ".wasm", ".dmg"]);
+
+  /** Whether a repository-relative path is text: any name without a binary suffix. */
+  const isText = (path: string): boolean => {
+    const name = path.split("/").at(-1)!;
+    const dot = name.lastIndexOf(".");
+    return dot < 0 || !BINARY_SUFFIXES.has(name.slice(dot).toLowerCase());
+  };
+
+  /** The offender line for a file's bytes: its JSON-escaped path and the zero-based byte offset of the first raw NUL, or null. */
+  const nulAt = (path: string, bytes: Uint8Array): string | null => {
+    const at = bytes.indexOf(0);
+    return at < 0 ? null : `${JSON.stringify(path)}: raw NUL at byte ${at}`;
+  };
+
+  /**
+   * Tracked text files of the checkout at `root` holding a raw NUL, and how many were read. A
+   * failed `git ls-files` or an unreadable file is an offender, never an empty scan; a tracked
+   * file deleted from the checkout is skipped, and a symlink is not followed.
+   */
+  const scanNul = (root: string, env: Record<string, string | undefined> = process.env): { scanned: number; offenders: string[] } => {
+    const listed = spawnSync("git", ["ls-files", "-z", "--cached"], { cwd: root, env, maxBuffer: 256 * 1024 * 1024 });
+    if (listed.error || listed.status !== 0) {
+      return { scanned: 0, offenders: [`git ls-files -z --cached failed in ${root}: ${listed.error?.message ?? `exit ${listed.status}, ${listed.stderr.toString().trim()}`}`] };
+    }
+    const top = realpathSync(root) + sep;
+    let scanned = 0;
+    // git lists raw name bytes: a name that is not valid UTF-8 cannot be opened by its decoded name
+    const names: string[] = [];
+    const badNames: string[] = [];
+    for (let start = 0; start < listed.stdout.length;) {
+      const end = listed.stdout.indexOf(0, start);
+      const raw = listed.stdout.subarray(start, end < 0 ? listed.stdout.length : end);
+      start = end < 0 ? listed.stdout.length : end + 1;
+      if (!raw.length) continue;
+      const name = raw.toString("utf8");
+      (Buffer.from(name, "utf8").equals(raw) ? names : badNames).push(name);
+    }
+    const offenders = [...new Set(badNames)].map((name) => `${JSON.stringify(name)}: path is not valid UTF-8, so it cannot be read`).concat([...new Set(names)].filter(isText).flatMap((path) => {
+      const file = join(root, path);
+      let bytes: Uint8Array;
+      try {
+        const entry = lstatSync(file, { throwIfNoEntry: false });
+        if (!entry || entry.isSymbolicLink() || !realpathSync(file).startsWith(top)) return [];
+        if (!entry.isFile()) return [`${JSON.stringify(path)}: not a regular file`];
+        bytes = readFileSync(file);
+      } catch (error) {
+        return [`${JSON.stringify(path)}: unreadable, ${(error as Error).message}`];
+      }
+      scanned += 1;
+      const found = nulAt(path, bytes);
+      return found ? [found] : [];
+    }));
+    return { scanned, offenders };
+  };
+
+  it("keeps tracked text free of raw NUL bytes", () => {
+    const { scanned, offenders } = scanNul(repo);
+    fail(offenders, "Remove the raw NUL (0x00) bytes from these tracked text files: one makes git and review tools show the file's diff as binary, which hides the rest of the change from review. Write the escape (\"\\0\", \"\\u0000\", \"\\x00\") in source instead, and give a binary asset a binary suffix (BINARY_SUFFIXES in scripts/conventions.test.ts).");
+    expect(scanned).toBeGreaterThan(1000);
+  });
+
+  /** A throwaway repository holding `tracked` in its index and `untracked` beside it; `run` gets its root and a git environment that cannot reach another repository. */
+  const withRepo = (tracked: Record<string, string | Uint8Array>, untracked: Record<string, string | Uint8Array>, run: (root: string, env: Record<string, string | undefined>) => void) => {
+    const dir = mkdtempSync(join(tmpdir(), "tracked-text-"));
+    const root = join(dir, "repo");
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+    Object.assign(env, { GIT_CEILING_DIRECTORIES: dir, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(dir, "gitconfig") });
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", args, { cwd: root, env, encoding: "utf8" });
+      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.error?.message ?? result.stderr}`);
+    };
+    try {
+      mkdirSync(root);
+      git("init", "-q");
+      for (const [path, content] of Object.entries({ ...tracked, ...untracked })) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), content);
+      }
+      if (Object.keys(tracked).length) git("add", "--", ...Object.keys(tracked));
+      run(root, env);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("tracked text reports first raw NUL byte offset", () => {
+    expect(nulAt("a.ts", Buffer.from("\0a\0"))).toBe("\"a.ts\": raw NUL at byte 0");
+    // "é" and "한" are 2 and 3 bytes, so the NUL is at byte 18 though it is character 15
+    expect(nulAt("src/new\nline.ts", Buffer.from("const s = \"é한\";\0\0"))).toBe("\"src/new\\nline.ts\": raw NUL at byte 18");
+    expect(nulAt("a.ts", Buffer.from("clean"))).toBeNull();
+    // Windows forbids a newline in a file name
+    if (process.platform !== "win32") withRepo({ "docs/zero.md": "\0# Title\n", "src/new\nline.ts": "const s = \"é한\";\0\n" }, {}, (root, env) => {
+      expect(scanNul(root, env)).toEqual({ scanned: 2, offenders: ["\"docs/zero.md\": raw NUL at byte 0", "\"src/new\\nline.ts\": raw NUL at byte 18"] });
+    });
+  });
+
+  it("reads tracked text in any directory and with any name", () => {
+    // the two misses the allowlist had: a lock file it did not list, and a new top-level directory
+    withRepo({ "crates/pty-sidecar/Cargo.lock": "version = 4\n\0", "tools/new.ts": "export {};\0", "Brewfile": "\0" }, {}, (root, env) => {
+      expect(scanNul(root, env)).toEqual({ scanned: 3, offenders: ["\"Brewfile\": raw NUL at byte 0", "\"crates/pty-sidecar/Cargo.lock\": raw NUL at byte 12", "\"tools/new.ts\": raw NUL at byte 10"] });
+    });
+  });
+
+  it("escaped NUL source remains text", () => {
+    withRepo({ "src/escaped.ts": "const a = \"\\0\";\nconst b = \"\\u0000\";\nconst c = /\\x00/;\n", "server/x.sql": "SELECT char(0);\n" }, {}, (root, env) => {
+      expect(scanNul(root, env)).toEqual({ scanned: 2, offenders: [] });
+    });
+  });
+
+  it("fails closed on a tracked name that is not valid UTF-8", () => {
+    withRepo({}, {}, (root, env) => {
+      // in the index only: macOS and Windows refuse such a name on disk, and the scan reports it before looking there
+      const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: root, env, input: "a\0", encoding: "utf8" }).stdout.trim();
+      const entry = Buffer.concat([Buffer.from(`100644 ${blob}\tsrc/x`), Buffer.from([0xff]), Buffer.from(".md\n")]);
+      expect(spawnSync("git", ["update-index", "--add", "--index-info"], { cwd: root, env, input: entry }).status).toBe(0);
+      expect(scanNul(root, env)).toEqual({ scanned: 0, offenders: ["\"src/x\uFFFD.md\": path is not valid UTF-8, so it cannot be read"] });
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("NUL-delimited filenames survive spaces newlines and Unicode", () => {
+    const tracked = { "src/with space.ts": "a\0", "src/two\nlines.ts": "ab\0", "src/日本 語.md": "日\0", "src/conflict.ts": "abcd\0" };
+    withRepo(tracked, {}, (root, env) => {
+      // an unmerged path is listed once per stage; it is still read and reported once
+      const blob = spawnSync("git", ["hash-object", "-w", "--", "src/conflict.ts"], { cwd: root, env, encoding: "utf8" }).stdout.trim();
+      const stages = spawnSync("git", ["update-index", "--index-info"], { cwd: root, env, input: [1, 2, 3].map((stage) => `100644 ${blob} ${stage}\tsrc/conflict.ts\n`).join("") });
+      expect(stages.status).toBe(0);
+      expect(scanNul(root, env).offenders.sort()).toEqual([
+        "\"src/conflict.ts\": raw NUL at byte 4",
+        "\"src/two\\nlines.ts\": raw NUL at byte 2",
+        "\"src/with space.ts\": raw NUL at byte 1",
+        "\"src/日本 語.md\": raw NUL at byte 3",
+      ]);
+    });
+  });
+
+  it("binary, untracked, deleted and linked files are not read", () => {
+    const nul = Buffer.from([0x77, 0x4f, 0x46, 0x32, 0, 1, 0, 0]);
+    expect(["bun.lock", "crates/pty-sidecar/Cargo.lock", "tools/new.ts", "LICENSE", "src/README", "app/ios/App.swift", "scripts/fixtures/a.ansi", "dist/index.js"].filter((path) => !isText(path))).toEqual([]);
+    expect(["src/fonts/a.woff2", "src/icon.png", "app/Icon.PNG", "ovis-site/a.webp", "ovis-site/a.jpg", "public/favicon.ico", "app/android/gradle/wrapper/gradle-wrapper.jar", "site/clip.webm"].filter(isText)).toEqual([]);
+    const outside = mkdtempSync(join(tmpdir(), "tracked-text-outside-"));
+    try {
+      writeFileSync(join(outside, "target.ts"), "\0");
+      withRepo({
+        "src/fonts/inter.woff2": nul, "public/fonts/inter.woff2": nul, "app/icon.png": nul, "src/gone.ts": "\0", "src/ok.ts": "export {};\n",
+      }, { "src/untracked.ts": "\0" }, (root, env) => {
+        rmSync(join(root, "src/gone.ts"));
+        symlinkSync(join(outside, "target.ts"), join(root, "src/link.ts"));
+        expect(spawnSync("git", ["add", "--", "src/link.ts"], { cwd: root, env }).status).toBe(0);
+        expect(scanNul(root, env)).toEqual({ scanned: 1, offenders: [] });
+      });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when git or a tracked text file cannot be read", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tracked-text-nogit-"));
+    try {
+      const { offenders } = scanNul(dir, { ...process.env, GIT_DIR: join(dir, "missing"), GIT_CEILING_DIRECTORIES: dir });
+      expect(offenders).toHaveLength(1);
+      expect(offenders[0]).toStartWith(`git ls-files -z --cached failed in ${dir}: exit `);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    withRepo({ "src/a.ts": "a\n" }, {}, (root, env) => {
+      rmSync(join(root, "src/a.ts"));
+      mkdirSync(join(root, "src/a.ts"));
+      expect(scanNul(root, env).offenders).toEqual(["\"src/a.ts\": not a regular file"]);
+    });
+  });
+
+  // root reads any file whatever its mode, so only another user can see a read fail
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("fails closed on a tracked text file it may not read", () => {
+    withRepo({ "src/locked.ts": "a\n" }, {}, (root, env) => {
+      chmodSync(join(root, "src/locked.ts"), 0o000);
+      const { offenders } = scanNul(root, env);
+      expect(offenders).toHaveLength(1);
+      expect(offenders[0]).toStartWith("\"src/locked.ts\": unreadable, EACCES");
+    });
   });
 });

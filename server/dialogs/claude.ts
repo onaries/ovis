@@ -1,7 +1,7 @@
 import type { DialogReader } from "./registry.ts";
 import { pickerPlan } from "./interaction-plan.ts";
 import { type InteractivePromptAnswer } from "../../shared/protocol.ts";
-import { ANSI_RE, KEY, NUMBERED_OPTION_RE, type ParsedPrompt, SELECTED_RE, SOLID_RULE_RE, cleanLine, findLastIndex, finishPrompt, isDivider, joinWrapped, keySteps, listNames, listRows, menuRows, navigationKeys, nearestQuestion, normalizeText, parseNumberedRows, screenWidth, sequentialRows, sliderKeys, wrapped } from "./shared.ts";
+import { ANSI_RE, onePerPass, KEY, NUMBERED_OPTION_RE, type ParsedPrompt, SELECTED_RE, SOLID_RULE_RE, cleanLine, findLastIndex, finishPrompt, isDivider, joinWrapped, keySteps, listNames, listRows, menuRows, navigationKeys, nearestQuestion, normalizeText, parseNumberedRows, screenWidth, sequentialRows, sliderKeys, wrapped } from "./shared.ts";
 
 // several questions navigate between tabs: "Tab/Arrow keys to navigate"
 export const CLAUDE_ASK_HINT_RE = /enter to select.*(?:↑\/↓|tab\/arrow keys) to navigate.*esc to cancel/i;
@@ -780,6 +780,8 @@ export function withoutClaudeTasks(shown: string[], hintEnds: (lines: string[], 
   return end < shown.length && hintEnds(shown, end) ? shown.slice(0, end) : shown;
 }
 
+const approvalRead = onePerPass((screen) => parseClaudeApproval(screen));
+
 export const readers: readonly DialogReader[] = [
   {
     id: "claude-goal", agents: ["claude"], priority: 5,
@@ -809,16 +811,16 @@ export const readers: readonly DialogReader[] = [
   {
     id: "claude-approval", agents: ["claude"], priority: 30,
     reread: "none", list: "none",
-    parse: (screen) => {
-      const parsed = parseClaudeApproval(screen);
+    parse: (screen, ctx) => {
+      const parsed = approvalRead(screen, ctx);
       return parsed?.responder === "claude-approval" ? parsed : null;
     },
   },
   {
     id: "claude-plan", agents: ["claude"], priority: 30,
     reread: "none", list: "none",
-    parse: (screen) => {
-      const parsed = parseClaudeApproval(screen);
+    parse: (screen, ctx) => {
+      const parsed = approvalRead(screen, ctx);
       return parsed?.responder === "claude-plan" ? parsed : null;
     },
   },

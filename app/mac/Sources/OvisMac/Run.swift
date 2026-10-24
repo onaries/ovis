@@ -2,6 +2,8 @@ import Foundation
 
 enum Ovis {
     static let pluginID = "devswha.ovis"
+    /// Releases 0.4.13 and older install, run and update under this id, and install.sh keeps them there.
+    static let legacyPluginID = "devswha.herdr-web-ui"
     static let agentLabel = "sh.ovis.herdr-server"
     static let installScript = URL(string: "https://ovis.sh/install.sh")!
     static let support = URL(string: "https://ovis.sh/support/")!
@@ -76,7 +78,9 @@ final class LineCollector: @unchecked Sendable {
 }
 
 /// Runs a program to its end with the PATH above. stdin is empty, so nothing it runs can wait for an answer.
-func run(_ executable: String, _ arguments: [String], env extra: [String: String] = [:], keepStderr: Bool = true, onLine: (@Sendable (String) -> Void)? = nil) async -> RunResult {
+/// With a timeout, a program still running after it is terminated (killed 5 s later if it ignores that), so a
+/// hung check cannot hold the window.
+func run(_ executable: String, _ arguments: [String], env extra: [String: String] = [:], keepStderr: Bool = true, timeout: TimeInterval? = nil, onLine: (@Sendable (String) -> Void)? = nil) async -> RunResult {
     await withCheckedContinuation { continuation in
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -114,6 +118,16 @@ func run(_ executable: String, _ arguments: [String], env extra: [String: String
         }
         do {
             try process.run()
+            if let timeout {
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    guard process.isRunning else { return }
+                    process.terminate()
+                    // a program that ignores SIGTERM still has to end, or the window waits with it
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    }
+                }
+            }
         } catch {
             reader.readabilityHandler = nil
             continuation.resume(returning: RunResult(status: -1, output: error.localizedDescription))

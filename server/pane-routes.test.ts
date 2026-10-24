@@ -66,15 +66,17 @@ it("names an omo pane that herdr labels pi omo in the commands route, and types 
   // an ordinary pi stays pi
   expect(await paneAgentOf("w:p2")).toBe("pi");
 
-  // omo's own palette says "Quit omo"; pi's says something else
+  // omo's catalog describes /quit in its own words, pi's in others: the route answers with the pane's
   const quit = async (paneId: string) => {
     const url = new URL(`http://x/api/pane/commands?pane_id=${paneId}`);
     const response = await handlePaneRequest(new Request(url), url, "/api/pane/commands", {});
     return ((await response!.json()) as { commands: { name: string; description: string }[] }).commands.find((command) => command.name === "quit")?.description;
   };
-  expect(paneCommands("omo", root).find((command) => command.name === "quit")?.description).toBe("Quit omo");
-  expect(await quit("w:p1")).toBe("Quit omo");
-  expect(await quit("w:p2")).toBe(paneCommands("pi", root).find((command) => command.name === "quit")?.description);
+  const omoQuit = paneCommands("omo", root).find((command) => command.name === "quit")?.description;
+  const piQuit = paneCommands("pi", root).find((command) => command.name === "quit")?.description;
+  expect(omoQuit).not.toBe(piQuit);
+  expect(await quit("w:p1")).toBe(omoQuit);
+  expect(await quit("w:p2")).toBe(piQuit);
 });
 
 /** a Hermes pane in the fake herdr, its skills under a HOME of the test's own */

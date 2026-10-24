@@ -164,7 +164,7 @@ it("rejects a holder the pane's cwd names when the process runs elsewhere", () =
     // once the record names where the process actually runs, it is recognized
     holdRecord(join(storeA, "sessions", omoSessionFolder(other)), "moved", pid, { pid, processStartedAtMs: processStartedAt(pid), cwd: other });
     expect(omoProcessIdentity({ pid, argv: NEUTRAL, cwd: other }, cwd, home, () => env))
-      .toEqual({ agentDir: storeA, heldIds: ["moved"], custom: true });
+      .toEqual({ agentDir: storeA, heldIds: ["moved"], custom: true, held: true });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

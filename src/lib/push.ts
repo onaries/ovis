@@ -1,27 +1,45 @@
 import type { AlertPrefs } from "../../shared/notify-policy.ts";
 import { ApiError, fetchPushKey, registerPushSubscription, sendTestPush, unregisterPushSubscription } from "./api.ts";
+import { callNative, hasNativePlugin, PUSH_PLUGIN } from "./nativeApp.ts";
+import { notificationState } from "./notifications.ts";
 
 /**
  * This device's web push subscription: pane alerts that arrive with the app closed.
  *
- * Needs a service worker and PushManager, which exist only in secure contexts (https or
- * localhost) - and on iPhone only in the app added to the home screen. Everywhere else
- * pushSupported() is false and the bell keeps tab-only alerts (lib/notifications.ts).
+ * A browser needs a service worker and PushManager, which exist only in secure contexts (https or
+ * localhost) - and on iPhone only in the app added to the home screen. The phone app's web view
+ * has neither: there the app's push plugin (lib/nativeApp.ts) makes the subscription. Its endpoint
+ * is on the push relay (push-relay/) and only the app holds its keys; it has the shape a browser
+ * hands over, so the server takes it as one more browser's. Everywhere else pushSupported() is
+ * false and the bell keeps tab-only alerts (lib/notifications.ts).
  */
 
 /** How long to wait for the service worker before giving up on push for this page load. */
 const WORKER_READY_TIMEOUT_MS = 10_000;
 
+/** A subscription the app made for this PC: a browser's PushSubscriptionJSON, its endpoint on the push relay. */
+interface AppSubscription {
+  endpoint: string;
+  expirationTime: null;
+  keys: { p256dh: string; auth: string };
+}
+
+const appPush = (): boolean => hasNativePlugin(PUSH_PLUGIN);
+
+/** This PC's subscription in the app, without making one. */
+async function appSubscription(): Promise<AppSubscription | null> {
+  return (await callNative<{ subscription: AppSubscription | null }>(PUSH_PLUGIN, "getSubscription")).subscription;
+}
+
 export function pushSupported(): boolean {
-  return typeof navigator !== "undefined" && "serviceWorker" in navigator && typeof globalThis.PushManager !== "undefined";
+  return appPush() || (typeof navigator !== "undefined" && "serviceWorker" in navigator && typeof globalThis.PushManager !== "undefined");
 }
 
 /** Test the existing subscription without repairing it first, so stale registrations stay visible. */
 export async function testDevicePush(): Promise<"sent" | "unsupported" | "permission" | "missing"> {
   if (!pushSupported()) return "unsupported";
-  if (globalThis.Notification?.permission !== "granted") return "permission";
-  const registration = await navigator.serviceWorker.getRegistration();
-  const subscription = await registration?.pushManager.getSubscription();
+  if (notificationState() !== "granted") return "permission";
+  const subscription = appPush() ? await appSubscription() : await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription();
   if (!subscription) return "missing";
   await sendTestPush(subscription.endpoint);
   return "sent";
@@ -80,7 +98,8 @@ export function ensurePushSubscription(alerts?: AlertPrefs): Promise<string | nu
 }
 
 async function subscribeDevice(alerts?: AlertPrefs): Promise<string | null> {
-  if (!pushSupported() || globalThis.Notification?.permission !== "granted") return null;
+  if (!pushSupported() || notificationState() !== "granted") return null;
+  if (appPush()) return subscribeApp(alerts);
   const registration = await workerRegistration();
   if (!registration) return null;
   const key = keyBytes(await fetchPushKey());
@@ -106,7 +125,28 @@ async function subscribeDevice(alerts?: AlertPrefs): Promise<string | null> {
   return subscription.endpoint;
 }
 
-/** Stops pushes to this device: the server forgets it first, then the browser drops it. */
+/**
+ * The app's subscription for this PC. The app keeps the relay endpoint it made for this PC's key
+ * and hands it over again, so registering on every load costs the relay nothing.
+ */
+async function subscribeApp(alerts?: AlertPrefs): Promise<string> {
+  const applicationServerKey = await fetchPushKey();
+  const subscribe = async () => (await callNative<{ subscription: AppSubscription }>(PUSH_PLUGIN, "subscribe", { applicationServerKey })).subscription;
+  let subscription = await subscribe();
+  try {
+    await registerPushSubscription(subscription, alerts);
+  } catch (error) {
+    // the relay dropped the endpoint the app kept (unused for 60 days, or the phone's token is
+    // gone) and the PC remembers it as retired: the app forgets it and registers a new one
+    if (!(error instanceof ApiError && error.code === "subscription_gone")) throw error;
+    await callNative(PUSH_PLUGIN, "unsubscribe");
+    subscription = await subscribe();
+    await registerPushSubscription(subscription, alerts);
+  }
+  return subscription.endpoint;
+}
+
+/** Stops pushes to this device: the server forgets it first, then the browser (or the app) drops it. */
 export function removePushSubscription(): Promise<void> {
   // A later enable must enqueue a new registration after this removal, not join the old one.
   pending = null;
@@ -116,6 +156,16 @@ export function removePushSubscription(): Promise<void> {
 }
 
 async function unsubscribeDevice(): Promise<void> {
+  if (appPush()) {
+    const subscription = await appSubscription();
+    if (!subscription) return;
+    // the app forgets its endpoint only once the PC has: unlike a browser's, an endpoint the app
+    // drops stays live at the relay, so the phone would go on getting this PC's alerts with nothing
+    // left here to remove them by. A removal the PC did not take is tried again (lib/useAlerts.ts).
+    await unregisterPushSubscription(subscription.endpoint);
+    await callNative(PUSH_PLUGIN, "unsubscribe");
+    return;
+  }
   if (!pushSupported()) return;
   const registration = await navigator.serviceWorker.getRegistration();
   const subscription = await registration?.pushManager.getSubscription();

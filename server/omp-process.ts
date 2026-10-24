@@ -4,7 +4,21 @@ import { readFileSync } from "node:fs";
 export interface ProcessMemory { argv: string[]; environ: string[] }
 const MAX_OUTPUT = 1024 * 1024;
 const MAX_CACHED = 64;
-/** Only what omp's store and terminal lookups read: the rest of the environment may hold secrets. */
+/**
+ * The variables omp's store and terminal lookups read (omp.ts ompStoreLayout, gjcTerminal): the
+ * rest of the environment may hold secrets, so nothing else leaves the read.
+ */
+const ROUTING = /^(?:HOME|OMP_PROFILE|PI_PROFILE|PI_CONFIG_DIR|PI_CODING_AGENT_DIR|PI_CODING_AGENT_SESSION_DIR|XDG_DATA_HOME|XDG_STATE_HOME|TMUX|TMUX_PANE)=/;
+
+/**
+ * The routing words of a process's environment, or null when it could not be read. An environment
+ * read empty is a process gone or not ours to read, not one without the variables.
+ */
+export function ompRoutingEnviron(environ: readonly string[] | null): string[] | null {
+  if (environ === null || !environ.some((word) => word !== "")) return null;
+  return environ.filter((word) => ROUTING.test(word));
+}
+
 const SCRIPT = `
 const fs = require("node:fs"), pid = process.argv[1];
 try {
@@ -17,7 +31,9 @@ try {
     if (words.at(-1) === "") words.pop();
     return words;
   };
-  const environ = read("environ").filter(word => /^(?:OMP_PROFILE|TMUX|TMUX_PANE)=/.test(word));
+  const raw = read("environ");
+  if (!raw.some(word => word !== "")) process.exit(1);
+  const environ = raw.filter(word => ${ROUTING}.test(word));
   console.log(JSON.stringify({ start: fields[19], argv: process.argv[2] === "1" ? read("cmdline") : [], environ }));
 } catch { process.exit(1); }
 `;

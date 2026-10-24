@@ -93,6 +93,7 @@ export const DEVICES_JA: Record<string, string> = {
   "Send test": "テスト送信",
   "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "プッシュ通知には HTTPS または localhost が必要です。iPhone ではホーム画面に追加したアプリを使ってください。",
   "Allow notifications in your browser settings, then try again.": "ブラウザーの設定で通知を許可してから、もう一度お試しください。",
+  "Allow notifications for Ovis in the phone's Settings, then try again.": "スマートフォンの設定で Ovis の通知を許可してから、もう一度お試しください。",
   "Test notification sent. Check this device for the alert.": "テスト通知を送信しました。このデバイスに通知が届いたか確認してください。",
   "This device's push subscription is missing. Turn alerts on again.": "このデバイスのプッシュ通知の登録がありません。通知をもう一度オンにしてください。",
   "The push service retired this device's subscription. Turn alerts on again to make a new one.": "プッシュサービスがこのデバイスの登録を無効にしました。通知をもう一度オンにすると新しく登録します。",

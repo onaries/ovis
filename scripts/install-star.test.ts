@@ -1,5 +1,5 @@
-import { afterAll, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, watch, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, it, setDefaultTimeout } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,23 @@ const ROOT = join(import.meta.dir, "..");
 const MENTION = "a GitHub star helps other herdr users find it";
 const QUESTION = "star it now with the GitHub account gh is signed in to? [y/N]";
 const CTRL_C = "\x03";
+/** the read install.sh asks its question with, which the bash stand-in recognises (see Pc.answerRead) */
+const QUESTION_READ = "read -r -t 20";
+/**
+ * When a run of install.sh counts as hung: it ends in about a second alone, in many on a PC busy
+ * with other checks, and 20 seconds later when its question waits out an answer. Each test waits
+ * for the installer's own end (and for its question before typing), bounded by this.
+ */
+const RUN_ENDS_WITHIN_MS = 45_000;
+// only a backstop, above the bound: what a test waits for is the installer, not a set time
+setDefaultTimeout(RUN_ENDS_WITHIN_MS + 15_000);
+
+/** Ends `child` once it has run RUN_ENDS_WITHIN_MS. The function it returns stops that clock and tells whether it ran out. */
+function deadline(child: { kill: (signal?: NodeJS.Signals) => void }): () => boolean {
+  let hung = false;
+  const timer = setTimeout(() => { hung = true; child.kill("SIGKILL"); }, RUN_ENDS_WITHIN_MS);
+  return () => { clearTimeout(timer); return hung; };
+}
 /** what the stand-in gh answers: the status line `gh api --include` prints, what it says on stderr, and its exit code */
 type Gh = "starred" | "not" | "refuses" | "denied" | "upstream" | "signed-out" | "hangs" | "stubborn" | "lingering";
 const STAND_INS: Record<string, string> = {
@@ -54,10 +71,11 @@ esac`,
   open: `echo "$*" > "$SCRATCH/open.tmp" && mv "$SCRATCH/open.tmp" "$SCRATCH/open.calls"`,
   gh: `echo "$*" >> "$SCRATCH/gh.calls"
 mode=$(cat "$SCRATCH/gh.mode")
-[ "$mode" != hangs ] || exec sleep 60
-[ "$mode" != stubborn ] || { trap '' TERM; exec sleep 60; }
+# the gh that never answers leaves its pid, for the test to see it was ended rather than done
+[ "$mode" != hangs ] || { echo $$ > "$SCRATCH/gh.pid"; exec sleep 60; }
+[ "$mode" != stubborn ] || { echo $$ > "$SCRATCH/gh.pid"; trap '' TERM; exec sleep 60; }
 # a child that keeps gh's output open after gh itself has answered and gone
-[ "$mode" != lingering ] || { sleep 60 & }
+[ "$mode" != lingering ] || { sleep 60 & echo $! > "$SCRATCH/gh-child.pid"; }
 case "$*" in
   *"--method PUT"*) [ "$mode" != refuses ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; exit 0 ;;
 esac
@@ -87,7 +105,11 @@ class Pc {
     for (const tool of ["sh", "bash", "cat", "uname", "ldd", "grep", "git", "tar", "awk", "sed", "mktemp", "rm", "sleep", "perl", "mv", "mkdir", "cp"]) {
       if (tool === "perl" && options.perl === false) continue;
       const real = Bun.which(tool);
-      if (real) symlinkSync(real, join(bin, tool));
+      if (!real) continue;
+      if (tool !== "bash") { symlinkSync(real, join(bin, tool)); continue; }
+      // bash as the PC has it, which also leaves how the question's read ended for answerRead()
+      writeFileSync(join(bin, "bash"), `#!/bin/sh\ncase "$*" in\n  *"${QUESTION_READ}"*) '${real}' "$@"; status=$?; echo "$status" > "$SCRATCH/read.status"; exit "$status" ;;\nesac\nexec '${real}' "$@"\n`);
+      chmodSync(join(bin, "bash"), 0o755);
     }
     symlinkSync(process.execPath, join(bin, "bun"));
     for (const name of gh ? ["herdr", "node", "curl", "xdg-open", "open", "gh"] : ["herdr", "node", "curl", "xdg-open", "open"]) {
@@ -125,21 +147,11 @@ class Pc {
     // The script backgrounds the opener only when it opens.
     if (existing !== null || !wait) return existing;
 
-    let finish!: (value: string | null) => void;
-    const result = new Promise<string | null>((resolve) => { finish = resolve; });
-    const watcher = watch(this.scratch, (_event, filename) => {
-      if (filename?.toString() !== "open.calls") return;
+    // polled, not watched: a PC busy with other checks can be out of inotify instances (EMFILE)
+    for (const deadline = Date.now() + RUN_ENDS_WITHIN_MS; ;) {
       const value = readCalls();
-      if (value !== null) finish(value);
-    });
-    const timer = setTimeout(() => finish(null), 5_000);
-    try {
-      const afterWatch = readCalls();
-      if (afterWatch !== null) finish(afterWatch);
-      return await result;
-    } finally {
-      watcher.close();
-      clearTimeout(timer);
+      if (value !== null || Date.now() > deadline) return value;
+      await Bun.sleep(25);
     }
   }
   /** the plugin id the manifest at the ref names, and herdr installs it under */
@@ -153,6 +165,20 @@ class Pc {
     return existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [];
   }
   stars(): number { return this.ghCalls().filter((call) => call.includes("--method PUT")).length; }
+  /** whether the process whose pid the stand-in gh left in `file` still runs */
+  alive(file: "gh.pid" | "gh-child.pid"): boolean {
+    const pid = Number(readFileSync(join(this.scratch, file), "utf8"));
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  }
+  /**
+   * How the question's read ended, by its exit status: 0 an answer read, 1 the end of input, 142
+   * (128 + SIGALRM) its 20 seconds ran out, 130 a Ctrl-C; null when it never ran or its shell was
+   * ended before it could tell. Written before the installer goes on.
+   */
+  answerRead(): number | null {
+    const file = join(this.scratch, "read.status");
+    return existsSync(file) ? Number(readFileSync(file, "utf8").trim()) : null;
+  }
   private environment(extra: Record<string, string> = {}): Record<string, string> {
     return { PATH: join(this.scratch, "bin"), HOME: this.scratch, SCRATCH: this.scratch, SHELL: "/bin/sh", TERM: "xterm", OVIS_REF: "v0.0.0", ...extra };
   }
@@ -160,7 +186,9 @@ class Pc {
   /** as a script or an agent runs it: the script on stdin, and no terminal */
   async unattended(extra?: Record<string, string>): Promise<{ out: string; exitCode: number }> {
     const child = Bun.spawn(["sh"], { cwd: this.scratch, env: this.environment(extra), stdin: Bun.file(join(ROOT, "install.sh")), stdout: "pipe", stderr: "pipe" });
+    const ended = deadline(child);
     const [out, err, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (ended()) throw new Error(`install.sh did not end within ${RUN_ENDS_WITHIN_MS} ms; it printed:\n${out + err}`);
     return { out: out + err, exitCode };
   }
 
@@ -179,27 +207,48 @@ class Pc {
     let answered = false;
     let askedAt: number | null = null;
     let again: ReturnType<typeof setInterval> | undefined;
-    const type = (text: string) => { child.stdin.write(text); child.stdin.flush(); };
+    // The installer can end before what is typed reaches it (Ctrl-C is pressed until it lands). As
+    // script(1) exits it closes its end of the pipe, and until it is reaped a write there throws
+    // EPIPE: nobody is left to read the keys, and the test's own checks tell whether that was right.
+    const type = (text: string) => {
+      try {
+        child.stdin.write(text);
+        child.stdin.flush();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EPIPE") throw error;
+      }
+    };
+    const ended = deadline(child);
     if (typedAhead) type(typedAhead);
     const decoder = new TextDecoder();
-    for await (const chunk of child.stdout) {
-      out += decoder.decode(chunk, { stream: true });
-      if (askedAt === null && out.includes(QUESTION)) askedAt = Date.now();
-      if (answered || typed === null || !out.includes(QUESTION)) continue;
-      answered = true;
-      type(typed);
-      // The question is on the terminal a moment before the installer reads the answer. Typed text
-      // waits in the terminal for that; Ctrl-C is a signal and does not, so it is pressed until it lands.
-      if (typed === CTRL_C) again = setInterval(() => type(CTRL_C), 100);
+    try {
+      // the terminal's output ends with the installer (or when deadline() ends script(1))
+      for await (const chunk of child.stdout) {
+        out += decoder.decode(chunk, { stream: true });
+        if (askedAt === null && out.includes(QUESTION)) askedAt = Date.now();
+        if (answered || typed === null || !out.includes(QUESTION)) continue;
+        answered = true;
+        type(typed);
+        // The question is on the terminal a moment before the installer reads the answer. Typed text
+        // waits in the terminal for that; Ctrl-C is a signal and does not, so it is pressed until it lands.
+        if (typed === CTRL_C) again = setInterval(() => type(CTRL_C), 100);
+      }
+      await child.exited;
+    } finally {
+      clearInterval(again);
     }
-    clearInterval(again);
-    await child.exited;
     child.stdin.end();
+    if (ended()) throw new Error(`install.sh did not end within ${RUN_ENDS_WITHIN_MS} ms at a terminal; it printed:\n${out}`);
     return { out, exitCode: Number(/exit=(\d+)/.exec(out)?.[1] ?? -1), asked: out.includes(QUESTION), askedAt };
   }
 }
 const pcs: string[] = [];
 afterAll(() => { for (const scratch of pcs) rmSync(scratch, { recursive: true, force: true }); });
+
+it("asks its question with the read the tests' bash stand-in records", () => {
+  // otherwise every answered test would read a null status, with nothing to say why
+  expect(readFileSync(join(ROOT, "install.sh"), "utf8")).toContain(`bash -c '${QUESTION_READ} answer </dev/tty`);
+});
 
 it("extracts only the URL from a PID-bearing Windows status line", () => {
   // Exercise the installer's actual pattern, whose regex syntax is shared by .NET and JavaScript.
@@ -333,33 +382,33 @@ describe.skipIf(platform() === "win32")("install.sh without a terminal", () => {
     expect(pc.ghCalls()).toEqual([]);
   });
 
+  // gh sleeps 60 seconds: the installer ended within RUN_ENDS_WITHIN_MS, so it did not wait for gh, and gh is gone
   it.concurrent("goes on with the link when gh does not answer", async () => {
     const pc = new Pc("hangs");
-    const started = Date.now();
     const { out, exitCode } = await pc.unattended();
     expect(exitCode).toBe(0);
     expect(out).toContain(MENTION);
-    expect(Date.now() - started).toBeLessThan(20_000);
-  }, 30_000);
+    expect(pc.alive("gh.pid")).toBe(false);
+  });
 
   it.concurrent("is not held by a child of gh that keeps its output open after gh answered", async () => {
     const pc = new Pc("lingering");
-    const started = Date.now();
     const { out, exitCode } = await pc.unattended();
     expect(exitCode).toBe(0);
     expect(out).toContain(MENTION);
-    expect(Date.now() - started).toBeLessThan(8_000);
-  }, 30_000);
+    // the installer ended while that child still held gh's output
+    expect(pc.alive("gh-child.pid")).toBe(true);
+    process.kill(Number(readFileSync(join(pc.scratch, "gh-child.pid"), "utf8")));
+  });
 
   it.concurrent("kills a gh that ignores TERM, and goes on with the link", async () => {
     const pc = new Pc("stubborn");
-    const started = Date.now();
     const { out, exitCode } = await pc.unattended();
     expect(exitCode).toBe(0);
     expect(out).toContain(MENTION);
-    // 10 seconds for gh, 2 more before it is killed
-    expect(Date.now() - started).toBeLessThan(20_000);
-  }, 30_000);
+    // 10 seconds for gh, then TERM, which it ignores, and KILL 2 seconds later: the installer waited for gh, and gh is gone long before its 60
+    expect(pc.alive("gh.pid")).toBe(false);
+  });
 });
 
 // the browser: opened once, after a first install, on a desktop that has someone at it
@@ -426,12 +475,14 @@ describe.skipIf(platform() !== "linux" || !Bun.which("script"))("install.sh at a
     expect(pc.stars()).toBe(1);
   });
 
-  for (const [name, typed] of [["Enter alone", "\n"], ["n", "n\n"], ["anything but y or yes", "yy\n"], ["the end of input", "\x04"]] as const) {
+  // the read's status tells the answer apart from the 20 seconds running out, which stars nothing either
+  for (const [name, typed, read] of [["Enter alone", "\n", 0], ["n", "n\n", 0], ["anything but y or yes", "yy\n", 0], ["the end of input", "\x04", 1]] as const) {
     it.concurrent(`does not star on ${name}`, async () => {
       const pc = new Pc("not");
       const { asked, exitCode } = await pc.atTerminal(typed);
       expect(asked).toBe(true);
       expect(exitCode).toBe(0);
+      expect(pc.answerRead()).toBe(read);
       expect(pc.stars()).toBe(0);
     });
   }
@@ -441,6 +492,8 @@ describe.skipIf(platform() !== "linux" || !Bun.which("script"))("install.sh at a
     const { asked, exitCode } = await pc.atTerminal("\n", {}, "y\n");
     expect(asked).toBe(true);
     expect(exitCode).toBe(0);
+    // the Enter typed after the question was read, not the y before it
+    expect(pc.answerRead()).toBe(0);
     expect(pc.stars()).toBe(0);
   });
 
@@ -455,13 +508,13 @@ describe.skipIf(platform() !== "linux" || !Bun.which("script"))("install.sh at a
 
   it.concurrent("asks nothing from a background job, which the terminal would stop for reaching it", async () => {
     const pc = new Pc("not");
-    const started = Date.now();
     const { out, asked, exitCode } = await pc.atTerminal(null, {}, undefined, true);
     expect(exitCode).toBe(0);
     expect(out).toContain(MENTION);
     expect(asked).toBe(false);
+    // nor did it wait on the terminal without asking
+    expect(pc.answerRead()).toBeNull();
     expect(pc.stars()).toBe(0);
-    expect(Date.now() - started).toBeLessThan(15_000);
   });
 
   it.concurrent("ends well, with no star, when the question is left with Ctrl-C", async () => {
@@ -469,6 +522,9 @@ describe.skipIf(platform() !== "linux" || !Bun.which("script"))("install.sh at a
     const { asked, exitCode } = await pc.atTerminal(CTRL_C);
     expect(asked).toBe(true);
     expect(exitCode).toBe(0);
+    // Ctrl-C ended the read (130, SIGINT) or the shell around it first (no status); a question that
+    // only ran out its 20 seconds, as when the Ctrl-C never reached the installer, records 142
+    expect([null, 130]).toContain(pc.answerRead());
     expect(pc.stars()).toBe(0);
   });
 
@@ -505,11 +561,12 @@ describe.skipIf(platform() !== "linux" || !Bun.which("script"))("install.sh at a
     const ended = Date.now();
     expect(asked).toBe(true);
     expect(exitCode).toBe(0);
+    expect(pc.answerRead()).toBeGreaterThan(128);
     expect(pc.stars()).toBe(0);
     // the 20 seconds are the question's, from the moment it is on the terminal
     expect(askedAt).not.toBeNull();
     expect(ended - askedAt!).toBeGreaterThanOrEqual(19_000);
     expect(ended - askedAt!).toBeLessThan(27_000);
     expect(ended - started).toBeLessThan(40_000);
-  }, 60_000);
+  });
 });

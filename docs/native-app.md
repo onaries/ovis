@@ -3,7 +3,11 @@
 Status: Phase 1 step 2 built for iOS (checked in a simulator) and Android (checked in an emulator),
 2026-10-19. To run them, see [The app (app/)](#the-app-app) and
 [The Android app](#the-android-app). Step 3, the push relay, is built in
-[`push-relay/`](../push-relay/README.md) with its tests, 2026-10-23, and not deployed yet.
+[`push-relay/`](../push-relay/README.md) with its tests, 2026-10-23, for iOS (APNs) and Android
+(FCM), and deployed at `push.ovis.sh` on 2026-10-24, where its APNs and FCM credentials passed
+their authentication tests. Steps 4 and 5, the client's push through the app and the iOS
+Notification Service Extension, are built, 2026-10-24 (see [Push in the app](#push-in-the-app));
+a push received on a real device is still to be checked. iOS 1.0 (build 2) is in App Review.
 
 Ovis ships as a store app for iOS first, Android later. The goal is reach: the app is
 found in the App Store and installs in one tap, where the web app needs "Add to Home Screen". It
@@ -24,7 +28,7 @@ also opens the door to features a home-screen web app cannot have.
 
 ```
 PC: Ovis server ──UI, API, WebSocket──▶ app WebView (the same client as the browser)
-PC: server/push.ts ──encrypted push──▶ relay (Cloudflare Worker) ──▶ APNs ──▶ app
+PC: server/push.ts ──encrypted push──▶ relay (Cloudflare Worker) ──▶ APNs (iOS) / FCM (Android) ──▶ app
 ```
 
 ### The app
@@ -65,8 +69,15 @@ choices) and changes little:
 The relay's code lives in this repo next to `telemetry/`, in
 [`push-relay/`](../push-relay/README.md), open so anyone can run their own, and keeps no logs,
 like the telemetry Worker. It answers at `push.ovis.sh`. Its APNs key is a secret of the
-project's Cloudflare account (`APNS_KEY`). Android (FCM) gets a second route in the same Worker
-later.
+project's Cloudflare account (`APNS_KEY`).
+
+Android takes the same steps through Firebase Cloud Messaging, in the same Worker: the app
+registers its FCM token (`{ "service": "fcm", "token", "vapid_key" }`), the relay sends the
+ciphertext in an FCM data message, which the app's
+[`ovis-push`](../app/android/ovis-push/README.md) module decrypts, and FCM calling a token gone or
+invalid becomes a 410 as well. One service calling a token gone never deletes the other's endpoints. The
+relay's FCM credentials are a service account key of the app's Firebase project, the secret
+`FCM_SERVICE_ACCOUNT`; without it the relay takes no FCM token.
 
 ## Phase 1: first store release
 
@@ -77,18 +88,26 @@ later.
    [The app (app/)](#the-app-app). QR scanning still needs a physical iPhone (the simulator
    has no camera).
 3. Relay Worker with tests (VAPID pinning, rate limit, gone tokens). Built 2026-10-23 in
-   [`push-relay/`](../push-relay/README.md), at `push.ovis.sh`; deploying it needs the D1
-   database and the APNs secrets its README lists, then one real push (`push-relay/test-push.ts`).
-4. `src/lib/push.ts`: subscribe through the native bridge inside the app.
-5. Notification Service Extension that decrypts.
-6. App Store listing, privacy answers, review notes pointing at the demo mode.
+   [`push-relay/`](../push-relay/README.md), at `push.ovis.sh`. Deployed 2026-10-24 with its D1
+   database, APNs and FCM credentials, which passed their authentication tests; a push received
+   on a real device is still to be checked (`push-relay/test-push.ts`).
+4. `src/lib/push.ts`: subscribe through the native bridge inside the app. Built 2026-10-24, on
+   iOS and Android alike, see [Push in the app](#push-in-the-app).
+5. Notification Service Extension that decrypts. Built 2026-10-24 (`OvisNotifications`), see
+   [Push in the app](#push-in-the-app).
+6. App Store listing, privacy answers, review notes pointing at the demo mode. Version 1.0
+   (build 2) was submitted for review on 2026-10-24, to be released by hand once approved.
 
 ## Phase 2 and later
 
 - Live Activity for a running agent, home-screen widgets (both need Swift, and pushes through
   the same relay).
-- The FCM route for Android pushes. The Android app itself exists already (see
-  [The Android app](#the-android-app)): the maintainer tests on a Galaxy, not an iPhone.
+- Android pushes. The relay's FCM route, the app's receiving module
+  ([`ovis-push`](../app/android/ovis-push/README.md)) and the client's subscribe through it (step 4)
+  are built, and the relay is deployed with its FCM credentials. A release build needs
+  `google-services.json` from the Firebase project (see that README). The Android app itself exists
+  already (see [The Android app](#the-android-app)): the maintainer tests on a Galaxy, not an
+  iPhone.
 - Speed: measure what is slow before changing anything; bundling the UI in the app is off the
   table while the PC serves it.
 
@@ -179,7 +198,21 @@ What is there:
   built from this checkout's client, into `app/www` for Capacitor to copy.
 - `app/ios/App/App/HerdrBridgeViewController.swift`: a Capacitor view controller that opens the
   chosen PC as the WebView's first page (`instanceDescriptor().serverURL`). It also lets the
-  PC's whole host stay in the app and shows `error.html` when the first load fails. The
+  PC's whole host stay in the app and shows `error.html` when the first load fails. Until the
+  PC answers, a native cover says which PC is opening and offers Change PC; when a PC
+  sends no answer within 20 seconds, the cover itself says so, with Try again and Change PC, and
+  for a Tailscale address that Tailscale may be off on the phone (WebKit alone waits a minute or
+  more, which is what a phone with Tailscale off sees for a `.ts.net` address, and while that
+  connection hangs it did not paint the error page either). When a Tailscale address fails to
+  load, `error.html` (on Android too) adds the same note. A redirect of the address being opened
+  to another origin is handled as on Android (see [The Android app](#the-android-app)), where
+  Capacitor would send another host to Safari.
+  WebKit has no public mark for a redirect, so until the first page commits,
+  `NavigationFailureProxy` takes any main-frame action to another origin that comes while the
+  main frame's navigation has not committed for one. Its question to `/api/health` is a
+  `URLSession` request, which App Transport Security keeps to https and local names (`localhost`,
+  `.local`, a one-word name): a redirect to plain http on a tailnet address or name ends on the
+  error page, which names the address to open directly (the web view itself may load it). The
   `HerdrShell` plugin (`HerdrShellPlugin.swift`) opens, forgets and leaves PCs. Opening or
   leaving one builds a fresh view controller, so the next page is again a first load, and the old
   one goes with its web view. `@capacitor/barcode-scanner` kept every old one alive (its scanner
@@ -190,6 +223,7 @@ What is there:
   - Settings → Phone & devices has a Change PC row, and so does the pairing screen (a PC that
     asks for pairing would otherwise leave the app no way out).
   - The app counts as installed, so Install app is not offered.
+  - Alerts are pushed through the app (see [Push in the app](#push-in-the-app)).
 - The app is called Ovis (Latin for sheep, the herd herdr tends). Other apps in both stores are
   already named Ovis, so the store listing can say "Ovis for herdr". The project owns `ovis.sh`,
   so the bundle ID and Android application ID are `sh.ovis.app`.
@@ -215,6 +249,13 @@ In Xcode, pick a simulator and press Run. For a physical iPhone:
    Xcode says it is taken.
 2. Connect the iPhone, or pair it over Wi-Fi under Window → Devices and Simulators. Turn on
    Developer Mode on the phone when it asks, then pick it as the run destination and press Run.
+
+The app and its Notification Service Extension share one version: Xcode and App Store Connect flag
+an extension whose version or build number differs from its app's. `MARKETING_VERSION` (the version
+people see) and `CURRENT_PROJECT_VERSION` (the build number) are set once, in the build settings
+of the App project rather than of a target, and both targets take them from there. Raise
+`CURRENT_PROJECT_VERSION` for every upload. Version and Build in a target's General tab set
+them on that target alone, so change them under the project's Build Settings instead.
 
 What was checked on 2026-10-19 (iPhone 18 Pro Simulator, iOS 27.0, a Debug build), against a
 server on an isolated herdr session:
@@ -255,6 +296,53 @@ Still open:
 - Not tried: QR scanning (needs a camera), keyboard and IME in the app, a physical iPhone,
   Release signing.
 
+### Push in the app
+
+The app's web view has no service worker, so a PC's alerts reach it through the app, as
+[Notifications](#notifications) plans. Where a browser has `Notification.permission` and
+`pushManager.subscribe`, the client asks the app's `OvisPush` plugin, and hands the PC what the
+plugin returns, shaped like a browser's `PushSubscription.toJSON()`: `server/push.ts` takes it as
+one more browser's and is unchanged.
+
+- `src/lib/push.ts` and `src/lib/notifications.ts` use the plugin when the app announces it
+  (`hasNativePlugin` in `src/lib/nativeApp.ts`, from Capacitor's plugin headers). An app built
+  before the plugin has none, and the client keeps in-app alerts as before; on iOS a call to a
+  plugin the app lacks would never settle.
+- Turning alerts on asks for notifications (the phone's own prompt), then subscribes, and the PC
+  sends its confirmation push, as in a browser. The app shows an alert that arrives while it is
+  open too. Tapping one opens the app, not yet the pane as a browser's does.
+- The plugin is `app/ios/App/App/OvisPushPlugin.swift` on iOS and
+  [`app/android/ovis-push`](../app/android/ovis-push/README.md) on Android, with the same calls:
+  `checkPermissions()` and `requestPermissions()` (`{ notifications }`, Capacitor's permission
+  states), `subscribe({ applicationServerKey })`, `getSubscription()` and `unsubscribe()`.
+  `subscribe` gets the device token (APNs, or FCM on Android) and registers it with the relay
+  once for each PC, with that PC's key, keeping the endpoint with the token and key it was made
+  for: a new token or key makes a new one. When the PC answers that the endpoint is retired (the
+  relay dropped it), the client has the app forget it and register again.
+- The keys: one P-256 key pair and auth secret per phone, made by the app on first use. On iOS
+  they are in a keychain group shared with the extension (`sh.ovis.app.push`) and readable once
+  the phone has been unlocked after a restart, so an alert that arrives while it is locked still
+  decrypts.
+- `OvisNotifications`, the Notification Service Extension (`app/ios/App/OvisNotifications`,
+  bundle ID `sh.ovis.app.notifications`), decrypts the push's `ovis` field and shows the PC's
+  title and body. A newer alert for the same pane replaces the older one, as the service worker's
+  tag does. An alert it cannot decrypt shows "herdr needs you" (in Korean when the phone's first
+  language is Korean).
+- The decryption and the keychain code are a local Swift package, `app/ios/OvisPushCore`, used
+  by the app and the extension. `swift test` there on a Mac checks it against RFC 8291's own
+  example.
+- The relay's address is the App target's `OVIS_PUSH_RELAY` build setting
+  (`https://push.ovis.sh`), passed on as `OvisPushRelay` in its Info.plist; a self-hosted relay
+  goes there.
+- Signing: both targets carry the keychain group, and the app the Push Notifications entitlement
+  (`aps-environment`). A device build needs a team whose App IDs for `sh.ovis.app` and
+  `sh.ovis.app.notifications` have those capabilities, which Xcode's automatic signing adds. The
+  app tells the relay which APNs environment its token belongs to from its provisioning profile
+  (a development build's is `sandbox`; App Store and TestFlight builds carry none and are
+  `production`).
+- Privacy: the APNs token goes to the relay, which keeps it to forward pushes. The App Store
+  privacy answers (step 6) should say so, as the Android README says for Google Play.
+
 ## The Android app
 
 The same `app/` pages and client run in Capacitor's Android shell (`app/android`). The native
@@ -291,8 +379,37 @@ pieces are the Java twins of the iOS ones, in `app/android/app/src/main/java/sh/
   `OvisBars` listener open to the app's and the PC's origins. Until then, and on a WebView without
   those features, they sit on the app's dark background (`colors.xml`), as does Android 12's own
   launch screen (`windowSplashScreenBackground`).
+- With 3-button navigation the page stays clear of the buttons, at the bottom or, on a phone in
+  landscape, at the side. On a WebView that gives the page its safe areas itself (140 and later),
+  Capacitor's SystemBars lets the page draw under the system bars and leaves the room to the CSS,
+  and the client's message box and key bar sit partly into the bottom safe area (the room an
+  iPhone's home indicator leaves), so the buttons covered them on a Galaxy. The client's layout
+  pads its sides for a side bar itself. `MainActivity` keeps the WebView clear of the bars'
+  tappable part (`WindowInsetsCompat.Type.tappableElement()`, which a pinned taskbar on a large
+  screen has too), and the strip beside it shows the window's background: the page's
+  `theme-color` once the page has sent it, the app's dark background before. A gesture bar has no
+  tappable part, so the page still draws under it. A docked keyboard covers a bottom bar, and
+  SystemBars keeps the page above both. A floating keyboard takes no bottom inset, so on WebView
+  144 and later the bar is kept clear under it; before 144 SystemBars passes the page no bottom
+  inset while any keyboard shows, and the page sits under the bar then, as it did before. On an
+  older WebView SystemBars keeps the page out from under the bars itself, and this changes
+  nothing.
 - A link to the PC's host over the other scheme (http for an https PC) opens in the browser: it is
   another origin, which gets no bridge.
+- A redirect is not a link. Capacitor would hand a redirect to another host or scheme to the
+  browser (Firefox opened the PC for testers whose default browser it was), and a page on another
+  port would have no bridge. So until the first page shows (`onPageCommitVisible`), `MainActivity`
+  holds a redirect of the address being opened to another origin back and asks that origin's
+  `/api/health?scope=bridge`, which Ovis answers to anyone (`PCStore.ovisOrigin`, following up
+  to five redirects of that request and giving up after about ten seconds in all; a slow name
+  lookup, which Android cannot cut short, can add a few). An origin that answers as Ovis
+  (http to https, an IP address to the PC's name, another port) becomes the PC and opens again as
+  the first page, with the bridge: it gets nothing the address's own page would not have had.
+  Anything else, such as a sign-in page, another site or a loop, gets no bridge and is not saved,
+  and the error page names where the address led. After five PCs in a row made this way, the next
+  redirect ends on the error page too. Once the first page shows, Capacitor decides on redirects
+  as before: one could then come from a link to a page that is not the PC's (another port on its
+  host), which must not choose the PC.
 - `file_paths.xml` shares only the app's external Pictures folder, where Capacitor puts a photo
   taken for a file input.
 - `build-web.ts` leaves out the client build's `.gz` and `.br` sidecars. The app reads files

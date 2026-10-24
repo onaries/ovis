@@ -6,6 +6,8 @@ on:
       - 'shared/**'
       - 'scripts/build-remote-bundle.ts'
       - 'scripts/remote-bundle-smoke.ts'
+      - 'scripts/pty-sidecar.ts'
+      - 'crates/pty-sidecar/**'
       - 'scripts/ssh-*.ts'
       - 'package.json'
       - 'bun.lock'
@@ -24,8 +26,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+        include:
+          - { os: ubuntu-24.04, pty: linux-x64 }
+          - { os: ubuntu-24.04-arm, pty: linux-arm64 }
+          - { os: macos-15, pty: darwin-universal }
+          - { os: macos-15-intel, pty: darwin-universal }
     runs-on: ${{ matrix.os }}
+    env:
+      # the Rust PTY host each bundle carries beside its Node sidecar (scripts/pty-sidecar.ts)
+      HERDR_BUNDLE_PTY_SIDECAR: ${{ github.workspace }}/pty-sidecar/ovis-pty-sidecar-${{ matrix.pty }}
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -36,6 +45,7 @@ jobs:
           node-version: '22'
       - run: bun install --frozen-lockfile
       - run: bun run typecheck && bun run build
+      - run: bun scripts/pty-sidecar.ts build ${{ matrix.pty }} pty-sidecar
       - run: bun run scripts/build-remote-bundle.ts
       - run: bun run scripts/remote-bundle-smoke.ts
       - uses: actions/upload-artifact@v7

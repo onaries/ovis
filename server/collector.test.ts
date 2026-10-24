@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, jest } from "bun:test";
 import type { HerdrPane } from "../shared/protocol.ts";
 import { HerdrError, type EventFrame } from "./herdr/client.ts";
 import { parseFocusFrame, parseStatusFrame, parseStructureFrame, startStatusCollector, type StatusCollectorDeps, type StatusCollectorHandlers } from "./collector.ts";
@@ -68,6 +68,33 @@ describe("parseFocusFrame", () => {
 });
 
 describe("lifecycle invalidations", () => {
+  it("tells when the lifecycle subscription is live, also when only a reopened one starts", async () => {
+    // a structure change before this is not heard of: a caller that creates a workspace waits for it
+    const herdr = fakeHerdr([]);
+    const collector = startStatusCollector(recorder().handlers, herdr.deps);
+    let live = false;
+    void collector.structureReady.then(() => { live = true; });
+    try {
+      await collector.ready;
+      await settled();
+      expect(live).toBe(false);
+      herdr.lifecycle().start();
+      await collector.structureReady;
+    } finally { collector.stop(); }
+    // the first connection closed before it started: the reopened one's start is what counts
+    const reopened = fakeHerdr([]);
+    const again = startStatusCollector(recorder().handlers, reopened.deps);
+    let reopenedLive = false;
+    void again.structureReady.then(() => { reopenedLive = true; });
+    try {
+      reopened.lifecycle().drop();
+      await until(() => reopened.lifecycles().length === 2, "the reopened lifecycle subscription");
+      expect(reopenedLive).toBe(false);
+      reopened.lifecycle().start();
+      await again.structureReady;
+    } finally { again.stop(); }
+  });
+
   it("reports a tracked pane missing when the first lifecycle subscription starts", async () => {
     // Given: the pane exists when tracked, but the lifecycle stream has not started.
     const herdr = fakeHerdr([]);
@@ -191,7 +218,7 @@ describe("lifecycle invalidations", () => {
       // When: the same line again, then a new one, then none
       stream.emit(line("agent · working"));
       // fixed wait: proving no refresh comes for the same line (the debounce is 5 ms)
-      await tick(30);
+      await Bun.sleep(30);
       expect(log.structure).toBe(0);
       stream.emit(line("needs a login · 8m ago"));
       await until(() => log.structure === 1, "the refresh for the new line");
@@ -420,7 +447,23 @@ function fakeHerdr(initial: HerdrPane[]) {
   };
 }
 
-const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
+/** promise chains already under way run to their end: setImmediate is not one of the timers bun fakes */
+const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
+/**
+ * The recovery tests run the collector's timers on the test's clock (bun's fake timers). `elapse(ms)`
+ * moves it on a millisecond at a time and lets what each step started settle, so a busy PC cannot
+ * hold a debounce, a snapshot retry or a replay's settle back past the moment a test reads what
+ * they did. `elapse()` runs what is due now, as a 0 ms timeout would have.
+ */
+const elapse = async (ms = 0): Promise<void> => {
+  await settled();
+  jest.advanceTimersByTime(0);
+  await settled();
+  for (let step = 0; step < ms; step += 1) {
+    jest.advanceTimersByTime(1);
+    await settled();
+  }
+};
 const until = async (done: () => boolean, what: string): Promise<void> => {
   for (const deadline = Date.now() + 5_000; !done();) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
@@ -455,15 +498,18 @@ function recorder() {
 }
 
 describe("startStatusCollector recovery", () => {
+  beforeEach(() => { jest.useFakeTimers(); });
+  afterEach(() => { jest.useRealTimers(); });
+
   it("snapshots again once the status subscription has started, without resyncing", async () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "idle")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     expect(herdr.status()?.paneIds).toEqual(["w1:p1"]);
     expect(herdr.snapshotCalls()).toBe(1);
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     expect(herdr.snapshotCalls()).toBe(2);
     expect(log.resyncs).toEqual([]);
     collector.stop();
@@ -473,14 +519,14 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     const first = herdr.status()!;
     // a pane opens elsewhere: the connection is reopened with both, and p1 finishes meanwhile
     herdr.setPanes([paneOf("w1:p1", "working"), paneOf("w2:p1", "idle")]);
     herdr.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(20);
+    await elapse(20);
     const second = herdr.status()!;
     expect(second).not.toBe(first);
     expect(second.paneIds).toEqual(["w1:p1", "w2:p1"]);
@@ -488,7 +534,7 @@ describe("startStatusCollector recovery", () => {
     expect(log.statuses).toEqual([]);
     log.order.length = 0;
     second.start();
-    await tick(20);
+    await elapse(20);
     // once, as the event would have been; a pane first seen is no change; nothing was "lost"
     expect(log.statuses).toEqual(["w1:p1:idle (was working)"]);
     expect(log.resyncs).toEqual([]);
@@ -497,11 +543,11 @@ describe("startStatusCollector recovery", () => {
     // the same snapshot again tells nothing more, and an event since outranks an older snapshot
     herdr.hold();
     herdr.lifecycle().emit({ event: "pane_closed", data: { type: "pane_closed" } });
-    await tick(20);
+    await elapse(20);
     log.order.length = 0;
     second.emit(statusFrame("w1:p1", "working"));
     herdr.answerAll();
-    await tick();
+    await elapse();
     expect(log.statuses).toEqual(["w1:p1:idle (was working)", "w1:p1:working"]);
     // and that snapshot is not handed on for the pane the event spoke of
     expect(log.order).toEqual(["w1:p1:working", "reconciled w2:p1:idle"]);
@@ -512,15 +558,15 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working"), paneOf("w9:p1", "idle")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     // w9:p1 closed between the snapshot and the subscribe: herdr refuses the batch, and p1 finishes meanwhile
     herdr.setPanes([paneOf("w1:p1", "idle")]);
     herdr.status()!.drop("pane_not_found");
-    await tick();
+    await elapse();
     const reopened = herdr.status()!;
     expect(reopened.paneIds).toEqual(["w1:p1"]);
     reopened.start();
-    await tick(20);
+    await elapse(20);
     expect(log.statuses).toEqual(["w1:p1:idle (was working)"]);
     expect(log.resyncs).toEqual([]);
     collector.stop();
@@ -530,21 +576,21 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, { ...herdr.deps, backstopMs: 15 });
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     herdr.status()!.emit(statusFrame("w1:p1", "done"));
     // the backstop's snapshot reads the same finish as idle: no change, and no undoing of the done
     herdr.setPanes([paneOf("w1:p1", "idle")]);
-    await tick(40);
+    await elapse(40);
     expect(herdr.snapshotCalls()).toBeGreaterThan(2);
     expect(log.statuses).toEqual(["w1:p1:done"]);
     // around a gap it is passed on with what the pane was last told as: whoever shows the pane decides if that is a change
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w2:p1", "idle")]);
     herdr.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(30);
+    await elapse(30);
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     expect(log.statuses).toEqual(["w1:p1:done", "w1:p1:idle (was done)"]);
     collector.stop();
   });
@@ -553,16 +599,16 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     // p1 finishes and a pane opens: herdr's snapshot shows both, its event for p1 is still unread when the connection closes
     herdr.setPanes([paneOf("w1:p1", "unknown"), paneOf("w2:p1", "idle")]);
     herdr.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(20);
+    await elapse(20);
     expect(log.statuses).toEqual(["w1:p1:unknown (was working)"]);
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     expect(log.statuses).toEqual(["w1:p1:unknown (was working)"]);
     collector.stop();
   });
@@ -571,20 +617,20 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "blocked")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, { ...herdr.deps, replaySettleMs: 40 });
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     herdr.setPanes([paneOf("w1:p1", "blocked"), paneOf("w2:p1", "idle")]);
     herdr.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(70);
+    await elapse(70);
     // answered, worked and finished right after the new subscription started: the snapshot says idle before its two events are read
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w2:p1", "idle")]);
     const live = herdr.status()!;
     live.start();
-    await tick(10);
+    await elapse(10);
     live.emit(statusFrame("w1:p1", "working"));
     live.emit(statusFrame("w1:p1", "idle"));
-    await tick(60);
+    await elapse(60);
     // told once each, in the order they happened, and no finish before the work
     expect(log.statuses).toEqual(["w1:p1:working", "w1:p1:idle"]);
     collector.stop();
@@ -594,36 +640,36 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working"), paneOf("w1:p2", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, { ...herdr.deps, replaySettleMs: 40 });
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     herdr.setPanes([paneOf("w1:p1", "working"), paneOf("w1:p2", "working"), paneOf("w2:p1", "idle")]);
     herdr.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(70);
+    await elapse(70);
     // both finish in the gap; while the replay waits, p1 is closed (no exit frame)
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w1:p2", "idle"), paneOf("w2:p1", "idle")]);
     herdr.status()!.start();
-    await tick(10);
+    await elapse(10);
     herdr.lifecycle().emit({ event: "pane_closed", data: { type: "pane_closed", pane_id: "w1:p1" } });
-    await tick(60);
+    await elapse(60);
     expect(log.statuses).toEqual(["w1:p2:idle (was working)"]);
     collector.stop();
 
     const lost = fakeHerdr([paneOf("w1:p1", "working")]);
     const second = recorder();
     const other = startStatusCollector(second.handlers, { ...lost.deps, replaySettleMs: 40 });
-    await tick();
+    await elapse();
     lost.status()!.start();
-    await tick(20);
+    await elapse(20);
     lost.setPanes([paneOf("w1:p1", "working"), paneOf("w2:p1", "idle")]);
     lost.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(70);
+    await elapse(70);
     lost.setPanes([paneOf("w1:p1", "idle"), paneOf("w2:p1", "idle")]);
     lost.status()!.start();
-    await tick(10);
+    await elapse(10);
     // herdr drops the new subscription while the replay waits: from here on nobody knows what was missed
     lost.status()!.drop();
-    await tick(60);
+    await elapse(60);
     expect(second.log.statuses).toEqual([]);
     other.stop();
   });
@@ -632,22 +678,22 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working"), paneOf("w1:p2", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     herdr.setPanes([paneOf("w1:p1", "working"), paneOf("w1:p2", "working"), paneOf("w2:p1", "idle")]);
     herdr.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(20);
+    await elapse(20);
     // both finish in the gap
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w1:p2", "idle"), paneOf("w2:p1", "idle")]);
     herdr.hold();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     // the snapshot that will replay is asked for; p1 exits and p2 is brought to the front before it answers
     herdr.lifecycle().emit({ event: "pane_exited", data: { type: "pane_exited", pane_id: "w1:p1" } });
     herdr.subscriptions.find((s) => s.types[0] === "pane.focused")!.emit({ event: "pane_focused", data: { type: "pane_focused", pane_id: "w1:p2" } });
     herdr.answerAll();
-    await tick();
+    await elapse();
     expect(log.statuses).toEqual([]);
     collector.stop();
   });
@@ -656,17 +702,17 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working"), paneOf("w1:p2", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     // p1 is brought to the front; later a gap, in which both read idle
     herdr.subscriptions.find((s) => s.types[0] === "pane.focused")!.emit({ event: "pane_focused", data: { type: "pane_focused", pane_id: "w1:p1" } });
     herdr.setPanes([paneOf("w1:p1", "working"), paneOf("w1:p2", "working"), paneOf("w2:p1", "idle")]);
     herdr.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(20);
+    await elapse(20);
     herdr.setPanes([paneOf("w1:p1", "working"), paneOf("w1:p2", "idle"), paneOf("w2:p1", "idle")]);
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     // p2's finish is told; p1 was taken in anew by the snapshot that saw the new pane, and did not change since
     expect(log.statuses).toEqual(["w1:p2:idle (was working)"]);
     collector.stop();
@@ -676,19 +722,19 @@ describe("startStatusCollector recovery", () => {
     let failing = false;
     const snapshot = broken.deps.snapshot!;
     const flaky = startStatusCollector(second.handlers, { ...broken.deps, snapshot: () => failing ? Promise.reject(new HerdrError("timeout", "no answer")) : snapshot() });
-    await tick();
+    await elapse();
     broken.status()!.start();
-    await tick(20);
+    await elapse(20);
     broken.setPanes([paneOf("w1:p1", "working"), paneOf("w2:p1", "idle")]);
     broken.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(20);
+    await elapse(20);
     // herdr stops answering snapshots inside the gap, for nobody knows how long; p1 finishes meanwhile
     failing = true;
     broken.status()!.start();
-    await tick(20);
+    await elapse(20);
     broken.setPanes([paneOf("w1:p1", "idle"), paneOf("w2:p1", "idle")]);
     failing = false;
-    await tick(30);
+    await elapse(30);
     expect(second.log.statuses).toEqual([]);
     expect(second.log.resyncs).toHaveLength(1);
     flaky.stop();
@@ -698,16 +744,16 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     herdr.subscriptions.find((s) => s.types[0] === "pane.focused")!.emit({ event: "pane_focused", data: { type: "pane_focused", pane_id: "w1:p1" } });
     herdr.setPanes([paneOf("w1:p1", "working"), paneOf("w2:p1", "idle")]);
     herdr.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(30);
+    await elapse(30);
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w2:p1", "idle")]);
     herdr.status()!.start();
-    await tick(30);
+    await elapse(30);
     expect(log.statuses).toEqual(["w1:p1:idle (was working)"]);
     collector.stop();
   });
@@ -716,19 +762,19 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, { ...herdr.deps, replaySettleMs: 40 });
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     const live = herdr.status()!;
     // brought to the front: what p1 was told as is forgotten, so the snapshot has nothing to measure it against
     herdr.subscriptions.find((s) => s.types[0] === "pane.focused")!.emit({ event: "pane_focused", data: { type: "pane_focused", pane_id: "w1:p1" } });
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w2:p1", "idle")]);
     herdr.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(20);
+    await elapse(20);
     // the finish arrives on the old connection while the collector waits before closing it
     expect(live.closedByCollector).toBe(false);
     live.emit(statusFrame("w1:p1", "idle"));
-    await tick(60);
+    await elapse(60);
     expect(live.closedByCollector).toBe(true);
     expect(log.statuses).toEqual(["w1:p1:idle"]);
     collector.stop();
@@ -738,18 +784,18 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     herdr.setPanes([paneOf("w1:p1", "working"), paneOf("w2:p1", "idle")]);
     herdr.lifecycle().emit({ event: "pane_created", data: { type: "pane_created", pane_id: "w2:p1" } });
-    await tick(20);
+    await elapse(20);
     // herdr cannot be reached: nobody knows for how long nothing listened
     herdr.status()!.drop("connect_failed");
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w2:p1", "idle")]);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     expect(log.statuses).toEqual([]);
     expect(log.resyncs).toHaveLength(1);
     collector.stop();
@@ -759,20 +805,20 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working"), paneOf("w1:p2", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     const lost = herdr.status()!;
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w1:p2", "blocked")]);
     lost.drop();
-    await tick();
+    await elapse();
     const reopened = herdr.status()!;
     expect(reopened).not.toBe(lost);
     // nothing is resynced before the new subscription is live
     expect(log.resyncs).toEqual([]);
     const before = herdr.snapshotCalls();
     reopened.start();
-    await tick(20);
+    await elapse(20);
     expect(herdr.snapshotCalls()).toBe(before + 1);
     expect(log.resyncs).toEqual([{ panes: ["w1:p1", "w1:p2"], newer: [] }]);
     expect(log.structure).toBe(1);
@@ -785,21 +831,26 @@ describe("startStatusCollector recovery", () => {
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
     try {
-      await until(() => herdr.status() !== undefined, "the status subscription");
+      await elapse();
       herdr.status()!.start();
-      await until(() => log.baselines >= 2, "the snapshot after the start");
+      await elapse(20);
+      expect(log.baselines).toBeGreaterThanOrEqual(2);
       const lost = herdr.status()!;
       herdr.setPanes([{ ...paneOf("w1:p1", "idle"), display_agent: "B" } as HerdrPane]);
       lost.drop();
-      await until(() => herdr.status() !== undefined && herdr.status() !== lost, "the reopened subscription");
+      await elapse();
+      expect(herdr.status()).toBeDefined();
+      expect(herdr.status()).not.toBe(lost);
       herdr.status()!.start();
       // the resync tells clients to read the panes again: they now show B
-      await until(() => log.structure === 1, "the resync's refresh");
+      await elapse(20);
+      expect(log.structure).toBe(1);
       // When: herdr says A again
       herdr.setPanes([{ ...paneOf("w1:p1", "idle"), display_agent: "A" } as HerdrPane]);
       herdr.status()!.emit({ event: "pane.agent_status_changed", data: { pane_id: "w1:p1", agent_status: "idle", agent: "claude", display_agent: "A" } });
       // Then: that is a change from what clients show, and they read the panes again
-      await until(() => log.structure === 2, "the refresh for A");
+      await elapse(20);
+      expect(log.structure).toBe(2);
     } finally { collector.stop(); }
   });
 
@@ -807,20 +858,20 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working"), paneOf("w1:p2", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w1:p2", "idle")]);
     herdr.status()!.drop();
-    await tick();
+    await elapse();
     herdr.hold();
     herdr.status()!.start();
-    await tick();
+    await elapse();
     // p1 is brought to the front, p2 exits, while the recovery snapshot is on its way
     herdr.subscriptions.find((s) => s.types[0] === "pane.focused")!.emit({ event: "pane_focused", data: { type: "pane_focused", pane_id: "w1:p1" } });
     herdr.lifecycle().emit({ event: "pane_exited", data: { type: "pane_exited", pane_id: "w1:p2" } });
     herdr.answerAll();
-    await tick(20);
+    await elapse(20);
     expect(log.resyncs).toEqual([{ panes: ["w1:p1", "w1:p2"], newer: ["w1:p2"] }]);
     collector.stop();
   });
@@ -829,18 +880,18 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working"), paneOf("w1:p2", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     herdr.status()!.drop();
-    await tick();
+    await elapse();
     herdr.hold();
     const reopened = herdr.status()!;
     reopened.start();
-    await tick(20);
+    await elapse(20);
     reopened.emit(statusFrame("w1:p2", "idle"));
     herdr.answerAll();
-    await tick();
+    await elapse();
     expect(log.statuses).toEqual(["w1:p2:idle"]);
     expect(log.resyncs).toEqual([{ panes: ["w1:p1", "w1:p2"], newer: ["w1:p2"] }]);
     collector.stop();
@@ -850,18 +901,18 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "idle")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.lifecycle().start();
-    await tick(20);
+    await elapse(20);
     expect(log.structure).toBe(0);
     const calls = herdr.snapshotCalls();
     // a pane created while the lifecycle stream was lost
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w1:p2", "idle")]);
     herdr.lifecycle().drop();
-    await tick(10);
+    await elapse(10);
     expect(herdr.lifecycles().length).toBe(2);
     herdr.lifecycle().start();
-    await tick(20);
+    await elapse(20);
     expect(log.structure).toBe(1);
     expect(herdr.snapshotCalls()).toBeGreaterThan(calls);
     expect(herdr.status()?.paneIds).toEqual(["w1:p1", "w1:p2"]);
@@ -871,55 +922,60 @@ describe("startStatusCollector recovery", () => {
   it("backs off while a subscription keeps closing before it starts, and resets once one starts", async () => {
     const herdr = fakeHerdr([]);
     const { handlers } = recorder();
-    // long enough that a busy runner's timer lateness stays small beside the doubling
-    const collector = startStatusCollector(handlers, { ...herdr.deps, reconnectMinMs: 20, reconnectMaxMs: 160 });
-    const opened: number[] = [];
-    const t0 = Date.now();
-    for (let i = 0; i < 4; i++) {
-      herdr.lifecycle().drop("connect_failed");
+    // the clock is the test's: a busy PC's late timers cannot shift the delays it reads
+    jest.useFakeTimers();
+    let collector: ReturnType<typeof startStatusCollector> | undefined;
+    /** reopens after exactly `delay` ms of the clock, not one ms sooner */
+    const reopensAfter = (delay: number): void => {
       const count = herdr.lifecycles().length;
-      while (herdr.lifecycles().length === count) await tick(1);
-      opened.push(Date.now() - t0);
+      jest.advanceTimersByTime(delay - 1);
+      expect(herdr.lifecycles().length).toBe(count);
+      jest.advanceTimersByTime(1);
+      expect(herdr.lifecycles().length).toBe(count + 1);
+    };
+    try {
+      collector = startStatusCollector(handlers, { ...herdr.deps, reconnectMinMs: 20, reconnectMaxMs: 160 });
+      // doubling from the first delay up to the cap, while none starts
+      for (const delay of [20, 40, 80, 160, 160]) {
+        herdr.lifecycle().drop("connect_failed");
+        reopensAfter(delay);
+      }
+      // back to the first delay once one started
+      herdr.lifecycle().start();
+      herdr.lifecycle().drop();
+      reopensAfter(20);
+    } finally {
+      collector?.stop();
+      jest.useRealTimers();
     }
-    const gaps = opened.map((at, i) => at - (opened[i - 1] ?? 0));
-    // 20, 40, 80, 160 ms
-    expect(gaps[3]!).toBeGreaterThanOrEqual(120);
-    herdr.lifecycle().start();
-    const count = herdr.lifecycles().length;
-    const dropped = Date.now();
-    herdr.lifecycle().drop();
-    while (herdr.lifecycles().length === count) await tick(1);
-    // back to the first delay once one started
-    expect(Date.now() - dropped).toBeLessThan(100);
-    collector.stop();
   });
 
   it("does not let a snapshot asked for a subscription that closed meanwhile end the recovery", async () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     herdr.status()!.drop();
-    await tick();
+    await elapse();
     herdr.hold();
     const second = herdr.status()!;
     second.start();
-    await tick(20);
+    await elapse(20);
     // the snapshot for `second` is on its way when `second` is lost too
     second.drop();
-    await tick();
+    await elapse();
     herdr.setPanes([paneOf("w1:p1", "idle")]);
     herdr.answerAll();
-    await tick(10);
+    await elapse(10);
     expect(log.resyncs).toEqual([]);
     const third = herdr.status()!;
     expect(third).not.toBe(second);
     third.start();
     // answer whatever is asked, including the reconcile queued behind an earlier one
-    for (let i = 0; i < 4; i++) { await tick(5); herdr.answerAll(); }
-    await tick(10);
+    for (let i = 0; i < 4; i++) { await elapse(5); herdr.answerAll(); }
+    await elapse(10);
     expect(log.resyncs).toEqual([{ panes: ["w1:p1"], newer: [] }]);
     collector.stop();
   });
@@ -928,13 +984,13 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "idle")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.setPanes([paneOf("w1:p1", "idle"), paneOf("w1:p2", "idle")]);
     herdr.lifecycle().drop("connect_failed");
-    await tick(10);
+    await elapse(10);
     const calls = herdr.snapshotCalls();
     herdr.lifecycle().start();
-    await tick(20);
+    await elapse(20);
     expect(log.structure).toBe(1);
     expect(herdr.snapshotCalls()).toBeGreaterThan(calls);
     collector.stop();
@@ -944,14 +1000,14 @@ describe("startStatusCollector recovery", () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "working")]);
     const { log, handlers } = recorder();
     const collector = startStatusCollector(handlers, herdr.deps);
-    await tick();
+    await elapse();
     herdr.status()!.start();
-    await tick(20);
+    await elapse(20);
     herdr.status()!.drop();
     herdr.lifecycle().drop();
     collector.stop();
     const subscriptions = herdr.subscriptions.length;
-    await tick(60);
+    await elapse(60);
     expect(herdr.subscriptions.length).toBe(subscriptions);
     expect(log.resyncs).toEqual([]);
   });

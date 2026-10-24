@@ -40,15 +40,12 @@ else
   echo "Install it (https://bun.sh), start herdr from a shell where 'bun --version' works, then install again."
   fail=1
 fi
+# Node is optional: terminals run on the Rust PTY host, which the next build step installs. An old
+# Node is only reported, since the server uses Node only when the Rust host cannot run.
 if command -v node >/dev/null 2>&1; then
-  major=$(node --version 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/')
+  major=$(node --version 2>/dev/null | sed 's/^\([^0-9]*\)\([0-9]*\).*/\2/')
   if [ "${major:-0}" -lt 18 ]; then
-    echo "Ovis needs Node 18 or newer for its terminal sidecar; this is Node $(node --version)."
-    fail=1
+    echo "Ovis: Node $(node --version) is older than 18. Terminals run on the Rust PTY host; if that cannot run, the Node fallback may fail on this Node."
   fi
-else
-  echo "Ovis needs Node 18 or newer for its terminal sidecar, and 'node' is not on the PATH of the shell that started herdr."
-  echo "Install it (nodejs.org, nvm, Homebrew or your distro), start herdr from a shell where 'node --version' works, then install again."
-  fail=1
 fi
 exit $fail

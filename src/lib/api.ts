@@ -81,6 +81,7 @@ import type { VoiceConfigUpdate, VoiceStatus } from "../../shared/voice.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
 import { t } from "./i18n.ts";
 import { chatReadDeadlineMs, withChatReadDeadline } from "./chatReadDeadline.ts";
+import { movingHerdrFocus } from "./followFocus.ts";
 import type { UsageLoginAccounts, UsageLoginProvider, UsageLoginRequest, UsageLoginStarted } from "../../shared/usage-login.ts";
 
 export function fetchUsageLoginProviders(signal: AbortSignal): Promise<{ providers: readonly UsageLoginProvider[] }> {
@@ -561,12 +562,14 @@ export async function renameAgent(paneId: string, name: string | null, machineId
 
 /**
  * POST /api/pane/split: a new pane beside this one in herdr (its prefix+v / prefix+-), answered as
- * herdr lists it. herdr's focus stays put unless `focus` asks for the new pane; the sidebar and the
- * tab strip learn of it from the server's session-changed broadcast.
+ * herdr lists it. herdr's focus stays put unless `focus` asks for the new pane, which the caller then
+ * opens itself (movingHerdrFocus); the sidebar and the tab strip learn of it from the server's
+ * session-changed broadcast.
  */
 export async function splitPane(paneId: string, direction: SplitPaneDirection, focus = false, machineId = "local"): Promise<PaneInfo> {
-  const response = await sendJson(machinePath(machineId, "pane/split"), "POST", { pane_id: paneId, direction, ...(focus ? { focus: true } : {}) } satisfies SplitPaneRequest);
-  return ((await response.json()) as PaneSplit).pane;
+  const request = sendJson(machinePath(machineId, "pane/split"), "POST", { pane_id: paneId, direction, ...(focus ? { focus: true } : {}) } satisfies SplitPaneRequest)
+    .then(async (response) => ((await response.json()) as PaneSplit).pane);
+  return focus ? movingHerdrFocus(machineId, request) : request;
 }
 
 /** POST /api/pane/zoom: herdr's prefix+z on that pane; `zoomed` is the tab's state after it. */

@@ -27,15 +27,13 @@ Ovis，herdr 的浏览器和手机客户端。
   <a href="docs/guide.md#on-your-phone"><img src="https://img.shields.io/badge/PWA-installable-666666?labelColor=333333" alt="可安装的 PWA"></a>
 </p>
 
+**在手机上使用 Claude Code 和 Codex。** 以聊天方式阅读并回复你电脑上正在运行的智能体会话，需要时可切换到真正的终端。原名 herdr web UI。
+
 ---
 
 https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 <p align="center"><sub>同一个 Claude Code 会话：从 herdr 终端到浏览器的终端和聊天，再到手机，在手机上紧挨着它启动一个新的 worktree · 实机录制，无剪辑</sub></p>
-
-**在手机上使用 Claude Code 和 Codex。**
-
-[herdr](https://github.com/herdrdev/herdr) 的浏览器与手机客户端。无论在电脑还是手机上，都能以聊天方式阅读并回复你电脑上正在运行的同一批智能体会话，需要时可切换到终端。
 
 <table>
   <tr>
@@ -96,7 +94,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 curl -fsSL https://ovis.sh/install.sh | sh
 ```
 
-支持基于 glibc 的 Linux（x64、arm64）和 macOS（Intel、Apple Silicon）；不支持 Alpine/musl 或 32 位 ARM。需预先安装 `curl`、Git 和 `tar`；如果没有 Bun，还需要 Bash 和 `unzip`。所需版本为 herdr 0.9.0+、Bun 1.4+ 和 Node 18+。安装程序为当前用户安装缺少的工具、升级旧版 Bun，并在 Node 缺失或低于 18 时安装 Node 22，然后将应用安装为 herdr 插件。如果已安装的 herdr 低于 0.9.0，请先自行更新并重启 herdr，再重新运行安装程序。
+支持基于 glibc 的 Linux（x64、arm64）和 macOS（Intel、Apple Silicon）；不支持 Alpine/musl 或 32 位 ARM。需预先安装 `curl`、Git 和 `tar`；如果没有 Bun，还需要 Bash 和 `unzip`。所需版本为 herdr 0.9.0+ 和 Bun 1.4+，无需 Node。安装程序为当前用户安装缺少的工具、升级旧版 Bun，然后将应用安装为 herdr 插件。终端运行在每个版本随附的 Rust PTY 主机上，安装时按 SHA-256 校验；电脑上已有的 Node 18+ 仅作后备。如果已安装的 herdr 低于 0.9.0，请先自行更新并重启 herdr，再重新运行安装程序。
 
 使用默认监听地址且 Tailscale 正在运行时，HTTPS 配置成功后会提供 tailnet 内的地址和二维码。未配置访问令牌时，如果 `tailscale serve` 报告的登录名与这台电脑的所有者相同，你自己的设备通常无需验证码即可进入。如果自己的手机仍被要求配对，`OVIS_TAILSCALE_SERVE_ONLY=1` 只会在 Tailscale 确认整个 tailnet 由一个登录名拥有、没有带标签的节点，且 serve 是此端口唯一访问途径时，允许没有登录信息的连接。公共代理、隧道或其他转发服务也能访问该端口时，切勿启用此设置（[访问与安全](docs/guide.md#access-and-safety)）。
 
@@ -109,10 +107,10 @@ irm https://ovis.sh/install.ps1 | iex
 需要 [Git for Windows](https://git-scm.com/download/win)。安装程序会为当前用户补齐 herdr 和 Bun，然后安装同一个插件，无需 Node 或 WSL。要在手机上使用，请在 herdr 中打开 **Phone setup**。在 herdr 支持 Windows 终端附加之前，Windows 上的终端是一个可以输入、网格固定的[屏幕镜像](docs/remote-pcs.md#windows-pcs)。
 
 <p align="center">
-  <img src="docs/screenshots/install.png" width="720" alt="安装程序输出：安装 Bun、Node 和 herdr 插件，然后通过 tailscale serve 提供应用访问地址，并显示供手机扫描的二维码。">
+  <img src="docs/screenshots/install.png" width="720" alt="安装程序输出：安装 Bun 和 herdr 插件，然后通过 tailscale serve 提供应用访问地址，并显示供手机扫描的二维码。">
 </p>
 
-已安装 herdr 0.9.0+、Bun 1.4+ 和 Node 18+（Windows 无需 Node）？只需安装插件：
+已安装 herdr 0.9.0+ 和 Bun 1.4+？只需安装插件：
 
 ```bash
 herdr plugin install devswha/ovis

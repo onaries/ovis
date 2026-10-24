@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneCommands } from "../commands.ts";
-import { claudeBuiltinNames, comparableName, source } from "./claude.ts";
+import { claudeCommandNames, comparableName, source } from "./claude.ts";
 import type { AgentCommandContext } from "./index.ts";
 
 const roots: string[] = [];
@@ -332,9 +332,10 @@ describe("Claude discovery", () => {
     expect(rows.find((row) => row.name === "verify")).toBeUndefined();
   });
 
-  it("gives every reader the whole builtin name set", () => {
-    expect(claudeBuiltinNames()).toEqual(expect.arrayContaining(["compact", "doctor", "code-review", "plugin-authoring", "config", "heapdump"]));
-    expect(new Set(claudeBuiltinNames()).size).toBe(claudeBuiltinNames().length);
+  it("names Claude's own commands apart from its bundled skills", () => {
+    expect(claudeCommandNames()).toEqual(expect.arrayContaining(["compact", "plugin-authoring", "config", "heapdump"]));
+    for (const skill of ["doctor", "code-review", "simplify"]) expect(claudeCommandNames()).not.toContain(skill);
+    expect(new Set(claudeCommandNames()).size).toBe(claudeCommandNames().length);
   });
 
   it("gives every discovered row a stable id", () => {

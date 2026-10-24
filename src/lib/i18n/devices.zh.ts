@@ -93,6 +93,7 @@ export const DEVICES_ZH: Record<string, string> = {
   "Send test": "发送测试",
   "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "推送通知需要 HTTPS 或 localhost。在 iPhone 上请使用添加到主屏幕的应用。",
   "Allow notifications in your browser settings, then try again.": "请在浏览器设置中允许通知，然后重试。",
+  "Allow notifications for Ovis in the phone's Settings, then try again.": "请在手机的设置中允许 Ovis 的通知，然后重试。",
   "Test notification sent. Check this device for the alert.": "测试通知已发送。请检查此设备是否收到通知。",
   "This device's push subscription is missing. Turn alerts on again.": "此设备的推送订阅不存在。请重新开启提醒。",
   "The push service retired this device's subscription. Turn alerts on again to make a new one.": "推送服务已停用此设备的订阅。重新开启提醒即可创建新的订阅。",

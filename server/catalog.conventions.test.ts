@@ -210,7 +210,8 @@ describe("agent command catalog conventions", () => {
   it("pins every static builtin table", () => {
     for (const [agent, source] of Object.entries(AGENT_SOURCES)) {
       if (source.builtins.length > 0) {
-        expect(source.pin?.trim(), `${agent} has builtins but no version pin`).toBeTruthy();
+        const pins = [source.pin ?? []].flat();
+        expect(pins.length > 0 && pins.every((pin) => pin.trim() !== ""), `${agent} has builtins but no version pin`).toBeTrue();
       }
     }
   });

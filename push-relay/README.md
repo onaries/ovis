@@ -78,8 +78,9 @@ t=..., k=...` header (RFC 8292) whose token names this relay's origin as its aud
   relay signs in with the service account (Google's OAuth JWT flow) and reuses the access token
   for 50 minutes; FCM refusing it makes the relay get a new one and send the push once more.
 - The answer is `201` once APNs or FCM takes the push. APNs saying the token is gone (`410`, or
-  `400` with `BadDeviceToken` or `DeviceTokenNotForTopic`), or FCM saying so (`UNREGISTERED` or
-  `SENDER_ID_MISMATCH`), deletes that token's endpoints for the same service (for APNs, the same
+  `400` with `BadDeviceToken` or `DeviceTokenNotForTopic`), or FCM saying so (`UNREGISTERED`,
+  `SENDER_ID_MISMATCH`, or `INVALID_ARGUMENT` naming no field but `message.token`, its answer to a
+  token that is not one), deletes that token's endpoints for the same service (for APNs, the same
   environment) and answers `410`, which the PC takes as an unsubscribe; an unknown endpoint is
   `404`, which it takes the same way (another PC's next push to the token's endpoints gets it).
   Endpoints of the token in the other APNs environment, or for the other service, stay: APNs
@@ -104,8 +105,9 @@ request log keeps the address either.
 
 The relay needs the `ovis.sh` zone on the Cloudflare account it deploys to (the route in
 `wrangler.toml` makes `push.ovis.sh` a custom domain of the Worker), and an APNs auth key
-(a `.p8` file) from the Apple developer account that owns `sh.ovis.app`. Create the database and
-apply the schema once:
+(a `.p8` file) from the Apple developer account that owns `sh.ovis.app`; for Android, a service
+account key of the app's Firebase project ([app/android/ovis-push](../app/android/ovis-push/README.md)).
+Create the database and apply the schema once:
 
 ```sh
 cd push-relay
@@ -114,7 +116,7 @@ bunx wrangler d1 create ovis-push-relay   # then put its database_id in wrangler
 bunx wrangler d1 execute ovis-push-relay --remote --file schema.sql
 ```
 
-The APNs credentials are Worker secrets, never files in the repository:
+The APNs and FCM credentials are Worker secrets, never files in the repository:
 
 | Secret | Value |
 |---|---|
@@ -148,11 +150,23 @@ It registers the token with a throwaway VAPID key and sends one push as `server/
 `push: 201` means APNs took it, and the phone shows "herdr needs you" (it cannot decrypt a push
 made with throwaway keys). Anything else is APNs' or the relay's answer to look into.
 
+For Android, the same through FCM, with the FCM registration token of a phone that has the app:
+
+```sh
+bun push-relay/test-push.ts fcm <FCM registration token>
+```
+
+The tests use a fake Google too, so only this shows that the relay signs in with
+`FCM_SERVICE_ACCOUNT` and that FCM takes its message. `push: 201` means FCM took it. A made-up
+token (any 32 letters) checks the sign-in without a phone: FCM calls it invalid, and the relay
+answers `410` only once Google took its sign-in. Anything else is Google's, FCM's or the relay's
+answer to look into.
+
 ## Running your own
 
 The relay is open so anyone can run one: change `name`, the route and `APNS_TOPIC` in
 `wrangler.toml` to your own domain and app, and follow the steps above with your own Cloudflare
-and Apple accounts. Endpoints name the origin the registration came to, so they follow the
+and Apple accounts (and Firebase project, for Android). Endpoints name the origin the registration came to, so they follow the
 domain without a code change.
 
 ## Tests
@@ -160,5 +174,5 @@ domain without a code change.
 `bun test ./push-relay` from the repository root. The tests sign and encrypt pushes with
 `web-push`, as `server/push.ts` does, and run the Worker over a real SQLite table built from
 `schema.sql`, a fake registration limiter, a fake APNs, and a fake FCM with Google's token
-endpoint (`test-push.ts` above is the check against the real APNs). They run in CI in the Push relay workflow
-(`.github/workflows/push-relay.yml`); the typecheck runs in Fast checks.
+endpoint (`test-push.ts` above is the check against the real APNs and FCM). In CI they run with
+the unit tests in Fast checks (`scripts/ci-tests.ts`), as does the typecheck.

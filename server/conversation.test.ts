@@ -67,7 +67,7 @@ describe("omo skill roots", () => {
     const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({
       process_info: { foreground_processes: [{ pid: -1, argv: ["omo"] }] },
     });
-    const identity = spyOn(omo, "omoProcessIdentity").mockReturnValue({ agentDir, heldIds: [], custom: false });
+    const identity = spyOn(omo, "omoProcessIdentity").mockReturnValue({ agentDir, heldIds: [], custom: false, held: false });
     try {
       expect((await paneProcessRoots("omo-cwd-fixture", "omo")).omo?.agentDir).toBe(agentDir);
     } finally {
@@ -78,6 +78,30 @@ describe("omo skill roots", () => {
 });
 
 describe("pane process roots", () => {
+  it("binds an omo pane to the omo process holding a session, not an omo-looking one listed before it", async () => {
+    const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({
+      process_info: { foreground_processes: [
+        { pid: 301, argv: ["/install/omo-ai/node_modules/claude-sdk/cli.js"], cwd: "/repo" },
+        { pid: 302, argv: ["omo"], cwd: "/repo" },
+      ] },
+    });
+    const identity = spyOn(omo, "omoProcessIdentity").mockImplementation((process) =>
+      ({ agentDir: "/fixture-agent", heldIds: process.pid === 302 ? ["sess-1"] : [], custom: false, held: process.pid === 302 }));
+    const environ = spyOn(omo, "processEnviron").mockReturnValue(null);
+    try {
+      const roots = await paneProcessRoots("omo-held-fixture", "claude");
+      expect(roots.pid).toBe(302);
+      expect(roots.omo?.held).toBeTrue();
+      // with none held, the first omo process still answers, unheld, as before
+      identity.mockImplementation(() => ({ agentDir: "/fixture-agent", heldIds: [], custom: false, held: false }));
+      expect(await paneProcessRoots("omo-held-fixture", "claude")).toMatchObject({ pid: 301, omo: { held: false } });
+    } finally {
+      environ.mockRestore();
+      identity.mockRestore();
+      rpc.mockRestore();
+    }
+  });
+
   for (const agent of ["claude", "codex", "omp", "gjc", "pi", "opencode", "devin", "grok", "hermes", "agy"]) {
     it(`reads ${agent}'s environment from its foreground executable`, async () => {
       const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({

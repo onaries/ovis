@@ -27,15 +27,13 @@ Ovis, the browser and phone client for herdr.
   <a href="docs/guide.md#on-your-phone"><img src="https://img.shields.io/badge/PWA-installable-666666?labelColor=333333" alt="Installable PWA"></a>
 </p>
 
+**Claude Code and Codex, from your phone.** Read and reply to the agent sessions running on your computer as a chat, with the live terminal when you need it. Formerly herdr web UI.
+
 ---
 
 https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 <p align="center"><sub>One Claude Code session: in herdr's terminal, then the browser's Terminal and Chat, then the phone, where a new worktree starts beside it · recorded live, no cuts</sub></p>
-
-**Claude Code and Codex, from your phone.**
-
-A browser and phone client for [herdr](https://github.com/herdrdev/herdr). Read and reply to the same agent sessions running on your computer — on desktop or phone, as chat, with the terminal when you need it.
 
 <table>
   <tr>
@@ -94,7 +92,7 @@ A browser and phone client for [herdr](https://github.com/herdrdev/herdr). Read 
 curl -fsSL https://ovis.sh/install.sh | sh
 ```
 
-Linux with glibc (x64, arm64) or macOS (Intel, Apple Silicon); not Alpine/musl or 32-bit ARM. Have `curl`, Git and `tar` installed; installing a missing Bun also needs Bash and `unzip`. Requires herdr 0.9.0+, Bun 1.4+ and Node 18+. The installer adds missing prerequisites for your user, upgrades an older Bun and installs Node 22 if Node is missing or older than 18, then installs the app as a herdr plugin. If an existing herdr installation is older than 0.9.0, update and restart herdr yourself before rerunning the installer.
+Linux with glibc (x64, arm64) or macOS (Intel, Apple Silicon); not Alpine/musl or 32-bit ARM. Have `curl`, Git and `tar` installed; installing a missing Bun also needs Bash and `unzip`. Requires herdr 0.9.0+ and Bun 1.4+; Node is not needed. The installer adds missing prerequisites for your user, upgrades an older Bun, then installs the app as a herdr plugin. Terminals run on the Rust PTY host each release ships, checked against its SHA-256; a Node 18+ already on the PC is only its fallback. If an existing herdr installation is older than 0.9.0, update and restart herdr yourself before rerunning the installer.
 
 With the default listen address and Tailscale running, successful HTTPS setup provides a tailnet address and QR code. Without a configured token, your devices normally get in without a code when `tailscale serve` reports the same login as this PC's owner. If your own phone is asked to pair anyway, `OVIS_TAILSCALE_SERVE_ONLY=1` allows the no-login path only when Tailscale confirms one login owns the tailnet with no tagged nodes, and serve is the sole route to this port. Never enable it when a public proxy, tunnel or other forwarding server also reaches the port ([Access and safety](docs/guide.md#access-and-safety)).
 
@@ -107,10 +105,10 @@ irm https://ovis.sh/install.ps1 | iex
 Requires [Git for Windows](https://git-scm.com/download/win). Installs missing herdr and Bun for your user, then installs the same plugin. No Node or WSL is needed. Open **Phone setup** in herdr for phone access. Windows terminals use the [screen mirror](docs/remote-pcs.md#windows-pcs), with typing and a fixed grid, until herdr supports terminal attach there.
 
 <p align="center">
-  <img src="docs/screenshots/install.png" width="720" alt="Installer output: Bun, Node and the herdr plugin install, then tailscale serve publishes the app and a QR code for the phone appears.">
+  <img src="docs/screenshots/install.png" width="720" alt="Installer output: Bun and the herdr plugin install, then tailscale serve publishes the app and a QR code for the phone appears.">
 </p>
 
-Already have herdr 0.9.0+, Bun 1.4+ and Node 18+ (Node isn't needed on Windows)? Install just the plugin:
+Already have herdr 0.9.0+ and Bun 1.4+? Install just the plugin:
 
 ```bash
 herdr plugin install devswha/ovis

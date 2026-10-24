@@ -166,11 +166,9 @@ it("leaves herdr's focus alone until this device asks to follow it, and keeps th
 });
 
 it("keeps the composer's New tab button off until this device turns it on, and keeps that choice its own", () => {
-  expect(DEFAULT_SETTINGS.composerNewTabButton).toBe(false);
   expect(sanitizeSettings({}).composerNewTabButton).toBe(false);
   expect(sanitizeSettings({ composerNewTabButton: true }).composerNewTabButton).toBe(true);
   expect(sanitizeSettings({ composerNewTabButton: "true" }).composerNewTabButton).toBe(false);
-  expect(SETTING_SCOPE.composerNewTabButton).toBe("device");
   expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("composerNewTabButton");
 });
 

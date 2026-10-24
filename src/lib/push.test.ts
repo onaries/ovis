@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { createElement } from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
-import { ensurePushSubscription, removePushSubscription, testDevicePush } from "./push.ts";
+import { DEFAULT_ALERTS } from "../../shared/notify-policy.ts";
+import { ensurePushSubscription, pushSupported, removePushSubscription, testDevicePush } from "./push.ts";
 import { ApiError } from "./api.ts";
+import { notificationState, refreshNotificationState, requestNotificationPermission } from "./notifications.ts";
+import { useNotificationSwitch } from "./useAlerts.ts";
 
 /**
  * The device-side subscription flow against a stand-in browser whose PushManager, like
@@ -226,6 +231,236 @@ it("still cleans up the browser subscription when registration fails", async () 
   await Promise.all([enable, disable]);
   expect(subscription.unsubscribed).toBe(true);
   expect(live).toBeNull();
+});
+
+describe("in the phone app", () => {
+  /**
+   * The app's OvisPush plugin as app/ios and app/android answer: one relay endpoint per PC, kept
+   * until unsubscribe, with the phone's keys. The page has no service worker and no Notification.
+   */
+  const KEYS = { p256dh: Buffer.from(new Uint8Array(65).fill(9)).toString("base64url"), auth: Buffer.from(new Uint8Array(16).fill(3)).toString("base64url") };
+  /** `checkGate`: holds a check's answer, which keeps the permission it read when it was asked */
+  let app: { permission: string; answer: string; saved: string | null; made: number; calls: string[]; checkGate: Promise<void> | null };
+  let sent: Array<{ url: string; method: string | undefined; body: unknown }>;
+  const subscription = (endpoint: string) => ({ endpoint, expirationTime: null, keys: KEYS });
+
+  function standInApp(plugins: string[]) {
+    (globalThis as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      PluginHeaders: plugins.map((name) => ({ name })),
+      nativePromise: async (plugin: string, method: string, options: Record<string, unknown>) => {
+        app.calls.push(`${plugin}.${method}`);
+        if (method === "checkPermissions") {
+          const reading = app.permission;
+          if (app.checkGate) await app.checkGate;
+          return { notifications: reading };
+        }
+        if (method === "requestPermissions") {
+          if (app.permission.startsWith("prompt")) app.permission = app.answer;
+          return { notifications: app.permission };
+        }
+        if (method === "subscribe") {
+          expect(options).toEqual({ applicationServerKey: SERVER_KEY });
+          app.saved ??= `https://push.ovis.sh/v1/push/${++app.made}`;
+          return { subscription: subscription(app.saved) };
+        }
+        if (method === "getSubscription") return { subscription: app.saved === null ? null : subscription(app.saved) };
+        if (method === "unsubscribe") app.saved = null;
+        return undefined;
+      },
+    };
+  }
+
+  beforeEach(async () => {
+    delete (globalThis.navigator as { serviceWorker?: unknown }).serviceWorker;
+    Object.assign(globalThis, { PushManager: undefined, Notification: undefined });
+    app = { permission: "granted", answer: "granted", saved: null, made: 0, calls: [], checkGate: null };
+    sent = [];
+    const server = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (url !== "/api/push") sent.push({ url, method: init?.method, body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) });
+      return url === "/api/push/test" ? new Response(null, { status: 204 }) : server(url, init);
+    }) as typeof fetch;
+    standInApp(["HerdrShell", "OvisPush"]);
+    await refreshNotificationState();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { Capacitor?: unknown }).Capacitor;
+  });
+
+  it("asks the app whether it may notify, as the page has no Notification", async () => {
+    for (const [answer, state] of [["granted", "granted"], ["denied", "denied"], ["prompt", "default"], ["prompt-with-rationale", "default"]] as const) {
+      app.permission = answer;
+      expect(await refreshNotificationState()).toBe(state);
+      expect(notificationState()).toBe(state);
+    }
+    expect(await requestNotificationPermission()).toBe("granted");
+    expect(notificationState()).toBe("granted");
+    expect(app.calls.filter((call) => call === "OvisPush.requestPermissions")).toHaveLength(1);
+  });
+
+  // the page came back into view as the user tapped Alerts: its check read the permission before
+  // the user answered the prompt, and its answer arrives after the tap's
+  it("keeps the permission the user just gave when an older check answers after it, and subscribes", async () => {
+    app.permission = "prompt";
+    await refreshNotificationState();
+    const held = deferred();
+    app.checkGate = held.promise;
+    const late = refreshNotificationState();
+    app.checkGate = null;
+    expect(await requestNotificationPermission()).toBe("granted");
+    held.resolve();
+    expect(await late).toBe("granted");
+    expect(notificationState()).toBe("granted");
+    expect(await ensurePushSubscription()).toBe("https://push.ovis.sh/v1/push/1");
+    expect(app.calls).toContain("OvisPush.subscribe");
+    expect(registered).toEqual(["https://push.ovis.sh/v1/push/1"]);
+    // a check asked after the answer still counts: notifications turned off in the phone's Settings
+    app.permission = "denied";
+    expect(await refreshNotificationState()).toBe("denied");
+  });
+
+  it("subscribes through the app with the PC's key and hands the PC the app's subscription", async () => {
+    expect(pushSupported()).toBe(true);
+    const endpoint = await ensurePushSubscription({ input: true, done: "long" });
+    expect(endpoint).toBe("https://push.ovis.sh/v1/push/1");
+    expect(sent).toEqual([{ url: "/api/push/subscribe", method: "POST", body: { subscription: subscription(endpoint!), alerts: { input: true, done: "long" } } }]);
+    // a later load hands over the endpoint the app kept: the relay registers nothing new
+    expect(await ensurePushSubscription()).toBe(endpoint);
+    expect(app.made).toBe(1);
+    expect(registered).toEqual([endpoint!, endpoint!]);
+  });
+
+  it("does not subscribe until the app may notify", async () => {
+    app.permission = "denied";
+    await refreshNotificationState();
+    expect(await ensurePushSubscription()).toBeNull();
+    expect(app.calls).not.toContain("OvisPush.subscribe");
+    expect(sent).toEqual([]);
+  });
+
+  it("has the app make a new relay endpoint when the PC says the kept one is retired", async () => {
+    const first = await ensurePushSubscription();
+    retired.add(first!);
+    app.calls = [];
+    const repaired = await ensurePushSubscription();
+    expect(repaired).toBe("https://push.ovis.sh/v1/push/2");
+    expect(app.calls).toEqual(["OvisPush.subscribe", "OvisPush.unsubscribe", "OvisPush.subscribe"]);
+    expect(registered).toEqual([first!, repaired!]);
+  });
+
+  it("has the PC forget the subscription first, then the app, when alerts are turned off", async () => {
+    const endpoint = await ensurePushSubscription();
+    sent = [];
+    await removePushSubscription();
+    expect(sent).toEqual([{ url: "/api/push/subscribe", method: "DELETE", body: { endpoint } }]);
+    expect(app.saved).toBeNull();
+    // nothing left to remove: neither the PC nor the app is asked again
+    app.calls = [];
+    await removePushSubscription();
+    expect(app.calls).toEqual(["OvisPush.getSubscription"]);
+  });
+
+  /**
+   * The PC refuses to forget a subscription until `answer` lets it (the PC is unreachable meanwhile).
+   * `nextRefusal`, asked before what triggers it, settles when the next removal is refused.
+   */
+  function pcRefusesRemoval() {
+    const server = globalThis.fetch;
+    let refusal = deferred();
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (url !== "/api/push/subscribe" || init?.method !== "DELETE") return server(url, init);
+      refusal.resolve();
+      return new Response(null, { status: 503 });
+    }) as typeof fetch;
+    return {
+      nextRefusal: () => { refusal = deferred(); return refusal.promise; },
+      answer: () => { globalThis.fetch = server; },
+    };
+  }
+
+  // the relay keeps an endpoint the app forgot live: the phone would get this PC's alerts with alerts
+  // off, and nothing left in the app to remove them by
+  it("keeps the app's endpoint when the PC could not forget it, so the next removal still reaches the PC", async () => {
+    const endpoint = await ensurePushSubscription();
+    sent = [];
+    const pc = pcRefusesRemoval();
+    await expect(removePushSubscription()).rejects.toBeInstanceOf(ApiError);
+    expect(app.saved).toBe(endpoint);
+    expect(app.calls).not.toContain("OvisPush.unsubscribe");
+    pc.answer();
+    await removePushSubscription();
+    expect(sent).toEqual([{ url: "/api/push/subscribe", method: "DELETE", body: { endpoint } }]);
+    expect(app.saved).toBeNull();
+  });
+
+  it("tries a removal the PC did not take again at load and when the app comes back into view", async () => {
+    const endpoint = await ensurePushSubscription();
+    const pc = pcRefusesRemoval();
+    await expect(removePushSubscription()).rejects.toBeInstanceOf(ApiError);
+    sent = [];
+    function Page({ alertsOn }: { alertsOn: boolean }) {
+      useNotificationSwitch({ updateSettings: () => {}, locked: false, notifications: "granted", setNotifications: () => {}, alerts: DEFAULT_ALERTS,
+        alertsRef: { current: DEFAULT_ALERTS }, alertsOn, setPushOn: () => {} });
+      return null;
+    }
+    // the app forgets the endpoint last, once the PC has: that is a retry's removal done
+    const forgotten = deferred();
+    const capacitor = (globalThis as unknown as { Capacitor: { nativePromise: (plugin: string, method: string, options?: Record<string, unknown>) => Promise<unknown> } }).Capacitor;
+    const native = capacitor.nativePromise;
+    capacitor.nativePromise = async (plugin, method, options) => {
+      const answer = await native(plugin, method, options);
+      if (method === "unsubscribe") forgotten.resolve();
+      return answer;
+    };
+    const view = Object.assign(new EventTarget(), { visibilityState: "visible" });
+    const saved = (name: string) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const;
+    const restore = [saved("document"), saved("IS_REACT_ACT_ENVIRONMENT")];
+    Object.defineProperty(globalThis, "document", { configurable: true, value: view });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    let page: ReactTestRenderer | null = null;
+    try {
+      // the PC is still out of reach as the app loads: that try is refused too, and the endpoint stays
+      const refusedAtLoad = pc.nextRefusal();
+      await act(async () => { page = create(createElement(Page, { alertsOn: false })); });
+      await refusedAtLoad;
+      expect(app.saved).toBe(endpoint);
+      // the PC answers again, and the app comes back into view (one of the alerts opened it)
+      pc.answer();
+      view.dispatchEvent(new Event("visibilitychange"));
+      await forgotten.promise;
+      expect(sent).toEqual([{ url: "/api/push/subscribe", method: "DELETE", body: { endpoint } }]);
+      expect(app.saved).toBeNull();
+    } finally {
+      await act(async () => { page?.unmount(); });
+      for (const [name, descriptor] of restore) {
+        if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+        else delete (globalThis as Record<string, unknown>)[name];
+      }
+    }
+  });
+
+  it("tests the app's kept subscription without making one", async () => {
+    expect(await testDevicePush()).toBe("missing");
+    expect(app.calls).not.toContain("OvisPush.subscribe");
+    const endpoint = await ensurePushSubscription();
+    sent = [];
+    expect(await testDevicePush()).toBe("sent");
+    expect(sent).toEqual([{ url: "/api/push/test", method: "POST", body: { endpoint } }]);
+  });
+
+  // an app from before its push plugin: on iOS a call to a missing plugin would never settle
+  it("never calls an app that has no push plugin", async () => {
+    standInApp(["HerdrShell"]);
+    app.calls = [];
+    expect(pushSupported()).toBe(false);
+    expect(notificationState()).toBe("unsupported");
+    expect(await ensurePushSubscription()).toBeNull();
+    expect(await testDevicePush()).toBe("unsupported");
+    await removePushSubscription();
+    expect(app.calls).toEqual([]);
+  });
 });
 
 it("preserves a rapid on-off-on sequence instead of reusing a subscription being removed", async () => {

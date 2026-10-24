@@ -26,7 +26,7 @@ const MACHINES = "shared/machines.ts";
  * node_modules (bun.lock, patches/) and the builder's own pins. dist/ is left out: a bridge's page
  * is never opened, the connection server's is. Docs and test fixtures are copied but never run.
  */
-export const BUNDLE_PATHSPECS = ["server", "shared", "integrations", "patches", "bun.lock", "scripts/build-remote-bundle.ts", "scripts/install-gjc-integration.ts"];
+export const BUNDLE_PATHSPECS = ["server", "shared", "integrations", "patches", "bun.lock", "scripts/build-remote-bundle.ts", "scripts/install-gjc-integration.ts", "scripts/pty-sidecar.ts", "crates/pty-sidecar"];
 export const bundleInput = (path: string): boolean => BUNDLE_PATHSPECS.some((spec) => path === spec || path.startsWith(`${spec}/`))
   && !path.endsWith(".test.ts") && !path.endsWith(".md") && !path.startsWith("server/fixtures/");
 /** The Linux bundles carry the bun that builds them (process.execPath), so its pin in this workflow is a bundle input too. */

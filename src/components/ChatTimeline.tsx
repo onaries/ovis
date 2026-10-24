@@ -25,10 +25,12 @@ export interface ChatTimelineProps<Row extends ChatTimelineRow> {
   label: string;
   onScroll: () => void;
   renderRow: (row: Row, index: number) => ReactNode;
+  /** A press on the reply's quote action is under way: a selection it clears keeps its rows pinned until the press resolves. */
+  holdSelection?: boolean;
 }
 
 /** One scroll owner; selected and focused rows stay real DOM nodes outside its window. */
-export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source, scroller, listRef, following, smoothFollow, memories, header, footer, label, onScroll, renderRow }: ChatTimelineProps<Row>) {
+export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source, scroller, listRef, following, smoothFollow, memories, header, footer, label, onScroll, renderRow, holdSelection = false }: ChatTimelineProps<Row>) {
   const [selectionKeys, setSelectionKeys] = useState<string[]>([]);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   useLayoutEffect(() => {
@@ -36,6 +38,15 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     setFocusKey(null);
   }, [scope]);
   const manualLayout = useRef(false);
+  // read by the selection handler, which may run before a passive effect would have seen the press
+  const holding = useRef(holdSelection);
+  const recompute = useRef<(() => void) | null>(null);
+  useLayoutEffect(() => {
+    const ended = holding.current && !holdSelection;
+    holding.current = holdSelection;
+    // a hold that ended: the selection as it is now decides
+    if (ended) recompute.current?.();
+  }, [holdSelection]);
   const rowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
   const positions = useMemo(() => new Map(rowKeys.map((key, index) => [key, index])), [rowKeys]);
   const pinned = useMemo(() => [...new Set(focusKey === null ? selectionKeys : [...selectionKeys, focusKey])], [selectionKeys, focusKey]);
@@ -72,8 +83,10 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
         }
       }
       const keys = last >= first ? rowKeys.slice(first, last + 1) : [];
+      if (keys.length === 0 && holding.current) return;
       setSelectionKeys((previous) => previous.length === keys.length && previous.every((key, index) => key === keys[index]) ? previous : keys);
     };
+    recompute.current = selectionChanged;
     const focusChanged = () => setFocusKey(rowFor(document.activeElement));
     const focusOut = () => queueMicrotask(focusChanged);
     const interaction = (event: Event) => {
@@ -96,6 +109,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     node.addEventListener("copy", copy);
     return () => {
       document.removeEventListener("selectionchange", selectionChanged);
+      recompute.current = null;
       node.removeEventListener("focusin", focusChanged);
       node.removeEventListener("focusout", focusOut);
       node.removeEventListener("click", interaction, true);

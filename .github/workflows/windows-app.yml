@@ -1,0 +1,168 @@
+name: Windows app
+# Builds Ovis for Windows (app/windows): Ovis.exe, the unsigned direct download that
+# https://ovis.sh/Ovis.exe hands out through releases/latest, and Ovis.msix, the package for the
+# Microsoft Store. Release calls it after publishing to attach them to the release; run it by hand to
+# give an existing release its files. A pull request that touches the app builds it and keeps the
+# files as a run artifact, attached to nothing. Ovis.msix is attached only when the Store identity
+# variables are set (app/windows/README.md); without them the job attaches Ovis.exe alone.
+# A release ships what its tag holds: a tag from before app/windows gets nothing, unless a maintainer
+# names a commit on main to build it from (app_ref), which the attached files' label records.
+on:
+  pull_request:
+    paths:
+      - 'app/windows/**'
+      - '.github/workflows/windows-app.yml'
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag (vX.Y.Z)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release to attach Ovis.exe to (vX.Y.Z)'
+        required: true
+        type: string
+      app_ref:
+        description: 'Only for a tag from before app/windows, as a maintainer exception: the full commit on main to build the app from'
+        required: false
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: windows-app-${{ inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  gate:
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    steps:
+      - name: Check the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$RELEASE_REF" != refs/heads/main ]; then
+            echo "::error::Run this from main, not $RELEASE_REF." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$RELEASE_TAG' is not a release tag (vX.Y.Z)." >&2
+            exit 1
+          fi
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" != false ]; then
+            echo "::error::$RELEASE_TAG is not a published release." >&2
+            exit 1
+          fi
+  build:
+    needs: gate
+    # a pull request skips the gate
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    outputs:
+      skip: ${{ steps.source.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Pick the source to build
+        id: source
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          APP_REF: ${{ inputs.app_ref }}
+        run: |
+          $built = git rev-parse HEAD
+          if (-not (Test-Path app/windows/build.ps1)) {
+            if (-not $env:APP_REF) {
+              Write-Output "::notice title=Ovis for Windows skipped::$env:RELEASE_TAG predates app/windows, so it gets no Ovis.exe: a release ships what its tag holds. The next release gets one, or a maintainer can name a commit on main (app_ref) as an exception."
+              "skip=true" >> $env:GITHUB_OUTPUT
+              exit 0
+            }
+            if ($env:APP_REF -notmatch '^[0-9a-f]{40}$') { Write-Output "::error::app_ref must be a full commit id, not '$env:APP_REF'."; exit 1 }
+            git merge-base --is-ancestor $env:APP_REF origin/main
+            if ($LASTEXITCODE -ne 0) { Write-Output "::error::app_ref $env:APP_REF is not on main."; exit 1 }
+            git checkout $env:APP_REF -- app/windows app/mac/Resources/AppIcon-1024.png
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            $built = $env:APP_REF
+            Write-Output "::notice title=Ovis for Windows::$env:RELEASE_TAG predates app/windows; by a maintainer's exception the app is built from main at $built, and the release's files say so."
+          }
+          New-Item -ItemType Directory -Force -Path app/windows/build | Out-Null
+          "skip=false" >> $env:GITHUB_OUTPUT
+          $built | Out-File -Encoding ascii -NoNewline app/windows/build-source.txt
+      - name: Build Ovis.exe and Ovis.msix
+        if: steps.source.outputs.skip != 'true'
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          OVIS_MSIX_NAME: ${{ vars.OVIS_MSIX_NAME }}
+          OVIS_MSIX_PUBLISHER: ${{ vars.OVIS_MSIX_PUBLISHER }}
+          OVIS_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.OVIS_MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          $version = if ($env:RELEASE_TAG) { $env:RELEASE_TAG.Substring(1) } else { '0.0.0' }
+          powershell -NoProfile -ExecutionPolicy Bypass -File app/windows/build.ps1 -Version $version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Move-Item app/windows/build-source.txt app/windows/build/build-source.txt
+      - uses: actions/upload-artifact@v7
+        if: steps.source.outputs.skip != 'true'
+        with:
+          name: ovis-windows
+          path: |
+            app/windows/build/Ovis.exe
+            app/windows/build/Ovis.msix
+            app/windows/build/build-source.txt
+          if-no-files-found: error
+  # the only job with a token that can write, and never for a pull request
+  attach:
+    needs: build
+    if: github.event_name != 'pull_request' && needs.build.outputs.skip != 'true'
+    runs-on: ${{ vars.CI_SELF_HOSTED_LABELS && fromJSON(vars.CI_SELF_HOSTED_LABELS) || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: ovis-windows
+          path: build
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          HAS_STORE_IDENTITY: ${{ vars.OVIS_MSIX_NAME != '' && vars.OVIS_MSIX_PUBLISHER != '' && vars.OVIS_MSIX_PUBLISHER_DISPLAY_NAME != '' }}
+        run: |
+          files=(Ovis.exe)
+          if [ "$HAS_STORE_IDENTITY" = true ]; then
+            files+=(Ovis.msix)
+          else
+            echo "::notice title=Ovis.msix skipped::$RELEASE_TAG gets Ovis.exe but no Ovis.msix: set the repository variables OVIS_MSIX_NAME, OVIS_MSIX_PUBLISHER and OVIS_MSIX_PUBLISHER_DISPLAY_NAME from Partner Center (app/windows/README.md)."
+          fi
+          # all or nothing: the release's files always come from one build (app/windows/release-attach.sh)
+          bash app/windows/release-attach.sh attach build "${files[@]}"
+          # ovis.sh/Ovis.exe and ovis.sh/Ovis.dmg both follow releases/latest: the newest release becomes
+          # latest once it has both (the Mac app job does the same check)
+          if [ "$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)" = "$RELEASE_TAG" ] &&
+             [ "$(gh release view "$RELEASE_TAG" --json assets --jq '[.assets[].name] | (index("Ovis.dmg") != null and index("Ovis.exe") != null)')" = true ]; then
+            gh release edit "$RELEASE_TAG" --latest
+          fi
+      # Also when the step above failed or the run was cancelled mid-swap: undo or finish the swap, so the release
+      # is left with one build's files. A runner that dies outright is repaired by the next run for the tag.
+      - name: Leave the release with one build's files
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: bash app/windows/release-attach.sh recover build Ovis.exe Ovis.msix

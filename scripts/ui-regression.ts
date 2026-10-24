@@ -358,7 +358,7 @@ try {
   assert.equal(await runDot.evaluate((dot) => getComputedStyle(dot).animationName), "sidebar-breathe", "the dot breathes");
   releasePoll();
   await until(() => pollFinished, "stale machines response released");
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(300); // fixed wait: the stale poll may not revert the RUN badge
   assert.equal(await badge.getAttribute("data-status"), "working", "stale poll must not revert RUN to INPUT");
   assert.equal(await agentRow(paneA).locator(".badge").getAttribute("data-status"), "working",
     "a stale poll must not revert the separate Agents list either");
@@ -609,7 +609,7 @@ try {
     await terminalInput.focus();
     const beforeCtrlV = inputs.length;
     await page.keyboard.press("Control+v");
-    await page.waitForTimeout(NO_SEND_WAIT_MS);
+    await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: Ctrl+V may send no control key
     assert.deepEqual(inputs.slice(beforeCtrlV), [], "Ctrl+V must never send the image-paste control key");
   }
   for (const [shortcut, text] of [
@@ -646,7 +646,7 @@ try {
     const beforeEnter = inputs.length;
     await page.keyboard.press(shortcut!);
     await until(() => inputs.length > beforeEnter, `terminal ${shortcut}`);
-    await page.waitForTimeout(NO_SEND_WAIT_MS);
+    await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: no second copy of the shortcut sequence may arrive
     assert.deepEqual(inputs.slice(beforeEnter).map(({ pane_id, text }) => ({ pane_id, text })),
       [{ pane_id: paneA, text: expected }], `${shortcut} must send its sequence exactly once`);
   }
@@ -656,7 +656,7 @@ try {
     await terminalInput.dispatchEvent("keydown", {
       key: "Enter", code: "Enter", shiftKey: true, ...composition, bubbles: true, cancelable: true,
     });
-    await page.waitForTimeout(NO_SEND_WAIT_MS);
+    await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: no ESC-CR may be sent during composition
     assert.equal(inputs.slice(beforeIme).some(({ text }) => text === "\x1b\r"), false,
       "IME commits must not receive the custom Shift+Enter sequence");
   }
@@ -679,7 +679,7 @@ try {
     textarea.dispatchEvent(new KeyboardEvent("keyup", enter));
   });
   await until(() => inputs.length >= beforeCommittedIme + 2, "IME commit followed by Shift+Enter");
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: nothing beyond the commit and one Shift+Enter may arrive
   assert.deepEqual(inputs.slice(beforeCommittedIme).map(({ pane_id, text }) => ({ pane_id, text })),
     [{ pane_id: paneA, text: "한" }, { pane_id: paneA, text: "\x1b\r" }],
     "a pending IME commit must precede Shift+Enter without a delayed duplicate");
@@ -702,7 +702,7 @@ try {
     const beforeSwitch = inputs.length;
     await page.keyboard.press(key);
     await until(async () => !(await selectedTitle())?.startsWith(`${paneA} —`), `${key} leaves the pane`);
-    await page.waitForTimeout(NO_SEND_WAIT_MS);
+    await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: the shortcut may reach no pane
     assert.deepEqual(inputs.slice(beforeSwitch), [], `${key} must not reach a pane`);
     await page.locator(`.pane-select[title^="${paneA} —"]`).click();
     await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
@@ -717,7 +717,7 @@ try {
   await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
   await composer.fill("draft");
   await page.keyboard.press("ControlOrMeta+Shift+ArrowDown");
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: the shortcut may not switch pane while a draft is typed
   assert.ok((await selectedTitle())?.startsWith(`${paneA} —`), "a draft keeps Mod+Shift+arrows for selecting text");
   await composer.fill("");
   console.log("PASS pane shortcut from the empty message box; a draft keeps text selection");
@@ -934,11 +934,11 @@ try {
   assert.equal(await page.locator(".composer-action").count(), 1, "one primary action");
   const actionsBeforeTextClick = pendingActions.length;
   await pendingRows.locator(".pending-message-bubble").first().click();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: clicking pending text may trigger no action
   assert.equal(pendingActions.length, actionsBeforeTextClick, "pending message text is selectable, not a send action");
   assert.equal(pendingBytes(), "");
   await reportPending("blocked"); await page.locator('.composer-status[data-status="blocked"]').waitFor();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: blocked status may not advance pending input
   assert.equal(pendingBytes(), "", "blocked status never advances pending input");
   assert.equal(await pendingRows.count(), 3);
   await reportPending("working"); await page.locator('.composer-status[data-status="working"]').waitFor();
@@ -950,7 +950,7 @@ try {
   // a draft puts Send where Stop was: Escape in the box is still Stop, once a completion is put away, and keeps the draft
   await composer.fill("/he");
   await composer.press("Escape");
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: the first Escape may send nothing
   assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r`, "the first Escape on a command being completed only puts the completion away");
   await composer.fill("a draft while the agent works");
   assert.equal(await page.getByRole("button", { name: "Stop agent", exact: true }).count(), 0);
@@ -986,7 +986,7 @@ try {
   assert.equal(await page.locator('.pending-message[data-state="uncertain"]').count(), 2, "reload removes connection proof");
   assert.equal(await page.locator(".pending-message-send").count(), 0, "unknown delivery cannot be resent");
   await reportPending("idle"); await page.locator('.composer-status:not([data-status="working"])').waitFor();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: readiness may not replay saved pending input
   assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`, "reload and readiness never replay saved pending input");
   for (let left = 2; left > 0; left--) { await page.getByRole("button", { name: "Discard saved copy", exact: true }).first().click(); await until(async () => await pendingRows.count() === left - 1, "discard saved copy"); }
   console.log("PASS Send queues server-owned input, explicit Send now delivers once, and reload/readiness never replay uncertain copies");
@@ -1158,7 +1158,7 @@ try {
   await composer.fill("한글 조합");
   const imeInputs = inputs.length;
   await composer.dispatchEvent("keydown", IME_ENTER);
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: an IME Enter may send nothing
   assert.equal(inputs.length, imeInputs);
   assert.equal(await composer.inputValue(), "한글 조합");
   await composer.fill("");
@@ -1681,7 +1681,7 @@ try {
   const sent = moves.length;
   await childHeader.locator(".workspace-select").focus();
   await page.keyboard.press("Alt+ArrowDown");
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(400); // fixed wait: no worktree move may be sent
   assert.equal(moves.length, sent, "a lone worktree has nowhere to move");
   await page.unroute("**/api/workspace/move");
   writeFileSync(join(worktree.path, "unsaved.txt"), "dirty\n");
@@ -1958,7 +1958,7 @@ try {
   await until(async () => (await third.getAttribute("aria-selected")) === "true", "the third tab is open");
   // a held Delete is one press: its repeats close nothing
   await third.dispatchEvent("keydown", { key: "Delete", repeat: true, bubbles: true });
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(300); // fixed wait: a repeated Delete may close no tab
   assert.equal((await tabsInHerdr()).join(), "first,build,third");
   await third.click({ button: "right" });
   await page.getByRole("menu", { name: "third", exact: true }).getByRole("menuitem", { name: "Close tab", exact: true }).click();
@@ -2022,7 +2022,7 @@ try {
   await startupPrompt.waitFor({ state: "hidden" });
   await paintStartupMenu();
   await startupPrompt.getByRole("button", { name: "1. Yes, continue", exact: true }).waitFor();
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(500); // fixed wait: no Confirm may appear on the startup menu
   assert.equal(await startupPrompt.locator(".prompt-card-confirm").count(), 0);
   await startupPrompt.getByRole("button", { name: "1. Yes, continue", exact: true }).click();
   await startupPrompt.waitFor({ state: "hidden" });
@@ -2238,10 +2238,10 @@ try {
   await mobilePage.locator(`.pane-select[title^="${paneA} —"]`).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).waitFor();
   await mobilePage.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  await mobilePage.waitForTimeout(NO_SEND_WAIT_MS);
+  await mobilePage.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: a picked pane may not take the keyboard
   assert.equal(await typing(mobilePage), false, "a pane picked on a phone does not take the keyboard");
   await mobilePage.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
-  await mobilePage.waitForTimeout(NO_SEND_WAIT_MS);
+  await mobilePage.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: switching the lens may not take the keyboard
   assert.equal(await typing(mobilePage), false, "nor does switching its lens");
   await mobilePage.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).tap();
@@ -2328,13 +2328,13 @@ try {
   await line.fill("echo 한글");
   const imeSent = touchSent.length;
   await line.dispatchEvent("keydown", IME_ENTER);
-  await touchPage.waitForTimeout(NO_SEND_WAIT_MS);
+  await touchPage.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: an IME Enter may send nothing
   assert.equal(touchSent.length, imeSent);
   assert.equal(await line.inputValue(), "echo 한글");
   await line.dispatchEvent("compositionstart", { data: "" });
   const beforeComposeSend = touchSent.length;
   await touchPage.getByRole("button", { name: "Send to the terminal", exact: true }).click();
-  await touchPage.waitForTimeout(NO_SEND_WAIT_MS);
+  await touchPage.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: the Send button may send nothing mid-composition
   assert.equal(touchSent.length, beforeComposeSend, "button cannot submit an unfinished composition");
   await line.dispatchEvent("compositionend", { data: "한글" });
   await line.fill("");

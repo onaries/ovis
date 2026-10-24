@@ -23,8 +23,9 @@
  *
  * A few herdr-backed runs at a time on this PC (CHECK_MAX_RUNS, see maxRuns): contract and browser
  * tests are bound by timing, so too many side by side fail each other. Each run holds a slot, a
- * loopback port it listens on (CHECK_LOCK_PORT, default 41737, and the ports after it), so a run
- * that died holds nothing.
+ * loopback port it listens on (CHECK_LOCK_PORT, default 41737, and the ports after it: the slots,
+ * the admission port, the queue's ticket desk and its ticket ports, MAX_RUNS_LIMIT + 2 + QUEUE_TICKETS
+ * in all), so a run that died holds nothing.
  * A run that finds every slot taken names the holders and exits, and so does a second run in the
  * same checkout, which would share its dist/ and generated types.
  *
@@ -118,8 +119,11 @@ const ACTIONLINT = { version: "1.7.12", sha256: "8aca8db96f1b94770f1b0d72b6dddcb
 /** A unix socket's path holds about 104 bytes on macOS and 108 on Linux. */
 export const SOCKET_PATH_MAX = 100;
 
-/** What a shell inside a herdr pane carries of that herdr: nothing in a run may reach it by these. */
-const LIVE_HERDR = ["HERDR_SOCKET", "HERDR_SOCKET_PATH", "HERDR_ENV", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID"];
+/**
+ * What a shell inside a herdr pane carries of that herdr, and what names the user's own herdr
+ * config: nothing in a run may reach either by these.
+ */
+const LIVE_HERDR = ["HERDR_SOCKET", "HERDR_SOCKET_PATH", "HERDR_ENV", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "HERDR_CONFIG_PATH"];
 
 export interface Isolation {
   env: Record<string, string>;
@@ -157,7 +161,8 @@ export function isolate(base: Record<string, string | undefined>, kept: string |
     throw new Error(`${socket} is too long for a unix socket (${socket.length} > ${SOCKET_PATH_MAX}); set CHECK_DIR to a shorter path`);
   }
   const env: Record<string, string> = {};
-  // not what names the herdr this was started from (a pane of the user's): its socket, its pane
+  // not what names the herdr this was started from (a pane of the user's): its socket, its pane,
+  // and the user's own herdr config
   for (const [name, value] of Object.entries(base)) if (value !== undefined && !LIVE_HERDR.includes(name)) env[name] = value;
   Object.assign(env, {
     ...testShellEnv(dir),
@@ -248,8 +253,14 @@ export function lockPort(env: Record<string, string | undefined>): number {
 }
 /** The most slots CHECK_MAX_RUNS may ask for; every run looks at all of them for its own checkout. */
 export const MAX_RUNS_LIMIT = 8;
-/** The highest lock base: acquire() listens on the slots and on the admission port above them, up to base + MAX_RUNS_LIMIT. */
-export const MAX_LOCK_PORT = 65535 - MAX_RUNS_LIMIT;
+/** How many runs can hold a place in the queue for a slot at once (ticket ports above the admission port). */
+export const QUEUE_TICKETS = 24;
+/**
+ * The highest lock base: acquire() listens on the slots and on the admission port above them, up to
+ * base + MAX_RUNS_LIMIT, then the ticket desk and a waiting run on a ticket port above that, up to
+ * 1 + QUEUE_TICKETS more.
+ */
+export const MAX_LOCK_PORT = 65535 - MAX_RUNS_LIMIT - 1 - QUEUE_TICKETS;
 
 /**
  * How many herdr-backed runs may share this PC: CHECK_MAX_RUNS (1 to 8), else one per eight cores,
@@ -263,6 +274,26 @@ export function maxRuns(env: Record<string, string | undefined>, cores = availab
   const count = /^\d+$/.test(asked) ? Number(asked) : Number.NaN;
   if (!(count >= 1 && count <= MAX_RUNS_LIMIT)) throw new Error(`CHECK_MAX_RUNS must be a whole number from 1 to ${MAX_RUNS_LIMIT}, not "${asked}"`);
   return count;
+}
+
+/**
+ * What a CI host says it can take, each over the workflow's own value: a self-hosted runner's launcher
+ * puts these in its containers' environment (scripts/self-hosted-runner/run.sh --env-file), which the
+ * workflow's expressions cannot read. Every runner of a host shares its slots, so the host, not a job,
+ * knows how many fit. Unset or empty leaves the workflow's value; the named variable's own check
+ * still applies.
+ */
+export const HOST_LIMITS = {
+  CHECK_HOST_MAX_RUNS: "CHECK_MAX_RUNS",
+  CHECK_HOST_TEST_SHARDS: "HERDR_TEST_SHARDS",
+  CHECK_HOST_BROWSER_WORKERS: "BROWSER_WORKERS",
+  CHECK_HOST_UNIT_WORKERS: "UNIT_TEST_WORKERS",
+} as const;
+export function applyHostLimits(env: Record<string, string | undefined>): void {
+  for (const [host, name] of Object.entries(HOST_LIMITS)) {
+    const value = env[host];
+    if (value) env[name] = value;
+  }
 }
 
 /**
@@ -344,8 +375,142 @@ export function lock(port = DEFAULT_LOCK_PORT, pid = process.pid, checkout?: str
   });
 }
 
-export type SlotHolder = Holder & { port: number };
+/** A slot's holder, or a run waiting ahead in the queue (`queuedAt`, ms since 1970: when it first found the PC busy). */
+export type SlotHolder = Holder & { port: number; queuedAt?: number };
 type MarkerOwner = { pid: number; checkout: string };
+
+/** A waiting run's place in the queue: when it first found the PC busy, and the ticket port it holds. */
+export type Ticket = { at: number; port: number };
+
+/** The port a run holds while it takes a place, just above the admission port: one run at a time. */
+export function ticketDesk(base: number, slots: number, scan: number): number {
+  return base + Math.max(slots, scan) + 1;
+}
+
+/** The ticket ports, above the ticket desk: the same for every run of a base whatever its slot count. */
+export function ticketPorts(base: number, slots: number, scan: number): number[] {
+  const first = ticketDesk(base, slots, scan) + 1;
+  return Array.from({ length: QUEUE_TICKETS }, (_, index) => first + index);
+}
+
+/** How long one ticket lookup may take in all: a run holding the admission port asks every ticket port. */
+const TICKET_LOOKUP_MS = 1_500;
+/** How long a run waits for the ticket desk: a run there holds it for one ticket lookup and a bind. */
+export const DESK_WAIT_MS = 2 * TICKET_LOOKUP_MS;
+
+/**
+ * Who waits on a ticket port: null when nothing listens there, or when what listens is no ticket. A
+ * ticket answers with one short message and closes; a listener that says anything else is dropped at
+ * once, and none is waited on past TICKET_LOOKUP_MS, however it keeps talking.
+ */
+function askTicket(port: number): Promise<(SlotHolder & { queuedAt: number }) | null> {
+  return new Promise((resolve) => {
+    let said = "";
+    const client = connect(port, "127.0.0.1");
+    const deadline = setTimeout(() => client.destroy(), TICKET_LOOKUP_MS);
+    client.on("data", (chunk) => {
+      said += chunk.toString();
+      if (!"ticket\n".startsWith(said.slice(0, 7)) || said.length > 4_096) client.destroy();
+    });
+    client.on("error", () => undefined);
+    client.on("close", () => {
+      clearTimeout(deadline);
+      const match = /^ticket\n(\d+)\n(\d+)\n([^]+)$/.exec(said);
+      resolve(match ? { port, queuedAt: Number(match[1]), heldBy: Number(match[2]), checkout: match[3]! } : null);
+    });
+  });
+}
+
+/**
+ * Takes a place in the queue: the first free ticket port, listened on for as long as the run waits,
+ * so a run that dies leaves no place behind. Null when every ticket port is taken, or when the ticket
+ * desk stayed taken for `deskWaitMs`; the run then waits without one, behind every run that holds one,
+ * and tries again on its next round.
+ */
+export async function takeTicket(
+  { base, slots, scan = MAX_RUNS_LIMIT, at, pid = process.pid, checkout, deskWaitMs = DESK_WAIT_MS }: { base: number; slots: number; scan?: number; at: number; pid?: number; checkout: string; deskWaitMs?: number },
+): Promise<{ ticket: Ticket; release: () => void } | null> {
+  // One run at a time looks at the places taken and takes its own: two that looked at once could
+  // each miss the other, and the later one rank ahead on a clock stepped back between them.
+  // Bound directly: whoever holds it is never asked who it is, so nothing on that port can keep
+  // this run talking.
+  const bindDesk = (): Promise<{ release: () => void } | null> => new Promise((resolve, reject) => {
+    const server = createServer((socket) => { socket.destroy(); });
+    server.once("error", (error: NodeJS.ErrnoException) => { if (error.code === "EADDRINUSE") resolve(null); else reject(error); });
+    server.listen(ticketDesk(base, slots, scan), "127.0.0.1", () => { server.unref(); resolve({ release: () => { server.close(); } }); });
+  });
+  // A run at the desk holds it for one look at the tickets: wait for it, not for a whole round, in
+  // which a run that came later could take its place first and so rank ahead of this one. Runs that
+  // reach a free desk within one retry of each other (10 ms) may still swap places: their order is
+  // that of the desk, not of when they first found the PC busy.
+  // on the monotonic clock: a wall clock stepped back would stretch the wait by the step
+  const deadline = performance.now() + deskWaitMs;
+  let desk = await bindDesk();
+  while (desk === null && performance.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    desk = await bindDesk();
+  }
+  if (desk === null) return null;
+  try {
+    // after every place already taken, whatever the clock says: a clock stepped back must not put a
+    // run that came later ahead of one that waits
+    const waiting = await Promise.all(ticketPorts(base, slots, scan).map(askTicket));
+    for (const run of waiting) if (run !== null && run.queuedAt >= at) at = run.queuedAt + 1;
+    for (const port of ticketPorts(base, slots, scan)) {
+      const taken = await new Promise<{ release: () => void } | null>((resolve, reject) => {
+        const answer = `ticket\n${at}\n${pid}\n${checkout}`;
+        const server = createServer((socket) => { socket.on("error", () => undefined); socket.end(answer); });
+        server.once("error", (error: NodeJS.ErrnoException) => { if (error.code === "EADDRINUSE") resolve(null); else reject(error); });
+        server.listen(port, "127.0.0.1", () => { server.unref(); resolve({ release: () => { server.close(); } }); });
+      });
+      if (taken) return { ticket: { at, port }, release: taken.release };
+    }
+    return null;
+  } finally {
+    desk.release();
+  }
+}
+
+/** Whether queue place `a` comes before `b`: the earlier first refusal, then the lower ticket port. */
+const ahead = (a: Ticket, b: Ticket): boolean => a.at < b.at || (a.at === b.at && a.port < b.port);
+
+/** The runs waiting ahead of `ticket` (every waiting run, for a run without one), oldest first. */
+async function queuedAhead(base: number, slots: number, scan: number, ticket: Ticket | undefined): Promise<SlotHolder[]> {
+  const mine = ticket ?? { at: Number.POSITIVE_INFINITY, port: Number.POSITIVE_INFINITY };
+  const waiting = await Promise.all(ticketPorts(base, slots, scan).filter((port) => port !== ticket?.port).map(askTicket));
+  return waiting
+    .filter((run): run is SlotHolder & { queuedAt: number } => run !== null && ahead({ at: run.queuedAt, port: run.port }, mine))
+    .sort((a, b) => a.queuedAt - b.queuedAt || a.port - b.port);
+}
+
+/** Whether a pid names a live process. Any error but ESRCH (a pid this run may not signal) is thrown. */
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    return false;
+  }
+}
+
+/**
+ * Where a claim's marker is. A report is written by renaming over its name (check-report.ts), which
+ * replaces a symlink there whatever it points to: its lock is the name in its real directory, never
+ * the target. Null when the claim's directory does not exist yet (nothing can hold it).
+ */
+function claimTarget(path: string, report: boolean): { canonical: string; marker: string } | null {
+  const absolute = resolve(path);
+  if (!existsSync(dirname(absolute))) return null;
+  const isDir = !report && existsSync(absolute) && statSync(absolute).isDirectory();
+  const canonical = isDir ? realpathSync(absolute) : join(realpathSync(dirname(absolute)), basename(absolute));
+  return { canonical, marker: isDir ? join(canonical, ".check-lock") : `${canonical}.check-lock` };
+}
+
+/** The live run a marker names, without claiming it; null when it is gone, half written or dead. */
+function liveMarkerOwner(marker: string): MarkerOwner | null {
+  let owner: MarkerOwner;
+  try { owner = JSON.parse(readFileSync(marker, "utf8")) as MarkerOwner; } catch { return null; }
+  return owner !== null && typeof owner === "object" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && pidAlive(owner.pid) ? owner : null;
+}
 
 /**
  * Claims `marker` for this run, or names the live run that holds it. A marker a dead run left, or one
@@ -419,9 +584,27 @@ function claimMarker(marker: string, pid: number, checkout: string, alive: (pid:
  * runs on other CHECK_LOCK_PORT bases do not share it. A busy admission port refuses rather than waits.
  */
 export async function acquire(
-  { slots, checkout, base = DEFAULT_LOCK_PORT, pid = process.pid, scan = MAX_RUNS_LIMIT, resources = [], reports = [], checkoutLock }: { slots: number; checkout: string; base?: number; pid?: number; scan?: number; resources?: readonly string[]; reports?: readonly string[]; checkoutLock?: string },
+  { slots, checkout, base = DEFAULT_LOCK_PORT, pid = process.pid, scan = MAX_RUNS_LIMIT, resources = [], reports = [], checkoutLock, ticket, retry = false }: { slots: number; checkout: string; base?: number; pid?: number; scan?: number; resources?: readonly string[]; reports?: readonly string[]; checkoutLock?: string; ticket?: Ticket; retry?: boolean },
 ): Promise<{ release: () => void; port: number | null } | { refused: "busy" | "same-checkout" | "resource"; holders: SlotHolder[]; resource?: string }> {
   const admissionPort = base + Math.max(slots, scan);
+  const claims = [...resources.map((path) => ({ path, report: false, checkout: false })), ...reports.map((path) => ({ path, report: true, checkout: false }))];
+  if (slots > 0 && checkoutLock) claims.push({ path: checkoutLock, report: true, checkout: true });
+  // A waiting run (`retry`, with a ticket or without one when every ticket was held) with an older
+  // run ahead of it does not take the admission port at all: holding it only to find the queue would
+  // keep the head of the queue out of it, round after round. Its checkout and resources come first
+  // all the same, read without claiming them: a second run in its checkout, or a held resource, is
+  // told so at once, not after a turn in the queue. A run's first try claims them below.
+  if (slots > 0 && (retry || ticket !== undefined)) {
+    for (const { path, report, checkout: checkoutClaim } of claims) {
+      const target = claimTarget(path, report);
+      const owner = target && liveMarkerOwner(target.marker);
+      if (!target || !owner) continue;
+      if (checkoutClaim) return { refused: "same-checkout", holders: [{ port: admissionPort, heldBy: owner.pid, checkout: owner.checkout }] };
+      return { refused: "resource", resource: target.canonical, holders: [{ port: admissionPort, heldBy: owner.pid, checkout: owner.checkout }] };
+    }
+    const queued = await queuedAhead(base, slots, scan, ticket);
+    if (queued.length > 0) return { refused: "busy", holders: queued };
+  }
   const admission = await lock(admissionPort, pid, checkout);
   if (!("release" in admission)) return { refused: "busy", holders: [{ ...admission, port: admissionPort }] };
   let taken: { release: () => void; port: number } | null = null;
@@ -432,29 +615,26 @@ export async function acquire(
     for (const marker of markers.splice(0)) rmSync(marker);
   };
   try {
-    // A report is written by renaming over its name (check-report.ts), which replaces a symlink
-    // there whatever it points to: its lock is the name in its real directory, never the target.
-    const claims = [...resources.map((path) => ({ path, report: false, checkout: false })), ...reports.map((path) => ({ path, report: true, checkout: false }))];
-    if (slots > 0 && checkoutLock) claims.push({ path: checkoutLock, report: true, checkout: true });
     for (const { path, report, checkout: checkoutClaim } of claims) {
-      const absolute = resolve(path);
-      mkdirSync(dirname(absolute), { recursive: true, mode: 0o700 });
-      const isDir = !report && existsSync(absolute) && statSync(absolute).isDirectory();
-      const canonical = isDir ? realpathSync(absolute) : join(realpathSync(dirname(absolute)), basename(absolute));
-      const marker = isDir ? join(canonical, ".check-lock") : `${canonical}.check-lock`;
+      mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
+      const { canonical, marker } = claimTarget(path, report)!;
       if (markers.includes(marker)) continue;
-      const owner = claimMarker(marker, pid, checkout, (ownerPid) => {
-        try { process.kill(ownerPid, 0); return true; }
-        catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-          return false;
-        }
-      });
+      const owner = claimMarker(marker, pid, checkout, pidAlive);
       if (owner) {
         if (checkoutClaim) return { refused: "same-checkout", holders: [{ port: admissionPort, heldBy: owner.pid, checkout: owner.checkout }] };
         return { refused: "resource", resource: canonical, holders: [{ port: admissionPort, heldBy: owner.pid, checkout: owner.checkout }] };
       }
       markers.push(marker);
+    }
+    // First come, first served: a run waiting longer than this one gets the next free slot. A run
+    // with no ticket comes after every run that holds one, so a newer run cannot take the slot a
+    // waiting one is about to. Asked again under the admission port, like the slots below: a run
+    // may have started waiting since the look above. Runs asking for different slot counts (only
+    // while hosts change their CHECK_HOST_MAX_RUNS) still queue in one line: a head that does not
+    // fit yet holds back a later run that would.
+    if (slots > 0) {
+      const queued = await queuedAhead(base, slots, scan, ticket);
+      if (queued.length > 0) return { refused: "busy", holders: queued };
     }
     for (let index = 0; index < slots; index++) {
       const port = base + index;
@@ -486,33 +666,50 @@ export async function acquire(
 /**
  * acquire, asked again every `pollMs` while the only refusal is a busy PC, until `waitMs` has
  * passed. `onWait` hears the first busy refusal, so a waiting run says once whom it waits for.
+ * From that refusal on the run holds a ticket (takeTicket), its place in the queue: runs that
+ * arrive later wait behind it, so a long wait cannot be lost round after round to newer runs. The
+ * ticket goes when the run is admitted, refused for good or out of time. `now` and `sleep` are the
+ * clock and the wait between rounds, for tests to drive.
  */
 export async function acquireWaiting(
   options: Parameters<typeof acquire>[0],
-  { waitMs, pollMs = 2_000, onWait }: { waitMs: number; pollMs?: number; onWait?: (holders: SlotHolder[]) => void },
+  // fixed wait: the pause between rounds of a wait bounded by waitMs; other runs hold the slots, so there is no event to wait on
+  { waitMs, pollMs = 2_000, onWait, now = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }: {
+    waitMs: number; pollMs?: number; onWait?: (holders: SlotHolder[]) => void; now?: () => number; sleep?: (ms: number) => Promise<unknown>;
+  },
 ): ReturnType<typeof acquire> {
-  const deadline = Date.now() + waitMs;
+  const deadline = now() + waitMs;
   let held = await acquire(options);
-  let told = false;
-  while ("refused" in held && held.refused === "busy" && Date.now() < deadline) {
-    if (!told) { onWait?.(held.holders); told = true; }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(0, deadline - Date.now()))));
-    held = await acquire(options);
+  let queued: { ticket: Ticket; release: () => void } | null = null;
+  let queuedAt: number | null = null;
+  try {
+    while ("refused" in held && held.refused === "busy" && now() < deadline) {
+      if (queuedAt === null) { queuedAt = now(); onWait?.(held.holders); }
+      // a place taken late (every ticket was held) ranks after every run already waiting
+      // the desk is waited for within what is left of this run's own wait, never past it
+      queued ??= await takeTicket({ base: options.base ?? DEFAULT_LOCK_PORT, slots: options.slots, ...(options.scan === undefined ? {} : { scan: options.scan }), at: queuedAt, ...(options.pid === undefined ? {} : { pid: options.pid }), checkout: options.checkout, deskWaitMs: Math.min(DESK_WAIT_MS, Math.max(0, deadline - now())) });
+      if (now() >= deadline) break;
+      await sleep(Math.min(pollMs, Math.max(0, deadline - now())));
+      held = await acquire(queued ? { ...options, retry: true, ticket: queued.ticket } : { ...options, retry: true });
+    }
+    return held;
+  } finally {
+    queued?.release();
   }
-  return held;
 }
 
 /** One line per holder for a refusal. */
 export function describeHolders(holders: readonly SlotHolder[]): string {
   return holders.map((holder) => Number.isNaN(holder.heldBy)
     ? `port ${holder.port}: something that is no check run`
-    : `port ${holder.port}: pid ${holder.heldBy}${holder.checkout ? ` in ${holder.checkout}` : ""}`).join("; ");
+    : `port ${holder.port}: pid ${holder.heldBy}${holder.checkout ? ` in ${holder.checkout}` : ""}${holder.queuedAt === undefined ? "" : `, waiting since ${new Date(holder.queuedAt).toISOString()}`}`).join("; ");
 }
 
 export async function main(groupSeams: GroupSeams & {
   probeSession?: (socket: string) => Promise<void>;
   scheduleDrainTimeout?: (expire: () => void, ms: number) => () => void;
 } = {}): Promise<void> {
+  applyHostLimits(process.env);
   let todo: ReturnType<typeof plan>;
   const args = process.argv.slice(2);
   try { todo = plan(args); } catch (error) { console.error((error as Error).message); process.exit(2); }
@@ -567,7 +764,8 @@ export async function main(groupSeams: GroupSeams & {
         waitMs: wait * 1000,
         onWait: (holders) => {
           waited = true;
-          console.error(`check: the ${slots}-run limit is reached (${describeHolders(holders)}); waiting up to ${wait}s for a slot`);
+          const queued = holders.some((holder) => holder.queuedAt !== undefined);
+          console.error(`check: ${queued ? `runs that came first are waiting for a slot (${describeHolders(holders)}); waiting in line` : `the ${slots}-run limit is reached (${describeHolders(holders)}); waiting`} up to ${wait}s for a slot`);
         },
       });
       if (waited && !("refused" in held)) console.error(`check: took a slot after ${Math.round((Date.now() - waitStarted) / 1000)}s`);
@@ -576,7 +774,11 @@ export async function main(groupSeams: GroupSeams & {
           ? `another herdr-backed \`bun run check\` is running in this checkout, and the two would share dist/ and the generated types (${describeHolders(held.holders)}); wait for it to end or use another worktree`
           : held.refused === "resource"
             ? `check resource ${held.resource} is already held (${describeHolders(held.holders)}); use a different CHECK_DIR / CHECK_REPORT or wait for the holder`
-            : `herdr-backed check admission is busy or the ${slots}-run limit is reached (${describeHolders(held.holders)}); wait for one to end, or set CHECK_MAX_RUNS (1 to ${MAX_RUNS_LIMIT})`;
+            : held.holders.some((holder) => holder.queuedAt !== undefined)
+              ? wait > 0
+                ? `runs that came first were still waiting for a slot after ${wait}s (${describeHolders(held.holders)}); try again later, or wait longer with CHECK_WAIT_SECONDS`
+                : `runs that came first are waiting for a slot (${describeHolders(held.holders)}); wait your turn with CHECK_WAIT_SECONDS`
+              : `herdr-backed check admission is busy or the ${slots}-run limit is reached (${describeHolders(held.holders)}); wait for one to end, or set CHECK_MAX_RUNS (1 to ${MAX_RUNS_LIMIT})`;
         console.error(`check: ${message}`);
         process.exit(1);
       }

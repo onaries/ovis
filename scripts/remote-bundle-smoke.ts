@@ -27,6 +27,12 @@ let child: ReturnType<typeof Bun.spawn> | undefined;
 try {
   const archive = resolve(`remote-bundles/herdr-web-ui-${process.platform}-${process.arch}.tgz`);
   assert.equal(Bun.spawnSync(["tar", "xzf", archive, "-C", bundle]).exitCode, 0);
+  // a bundle built with the Rust PTY host carries one that runs on this PC (scripts/pty-sidecar.ts)
+  if (!windows && process.env["HERDR_BUNDLE_PTY_SIDECAR"]) {
+    const host = Bun.spawnSync([join(bundle, "bin/ovis-pty-sidecar")], { stdin: "ignore", stderr: "pipe" });
+    assert.equal(host.exitCode, 2, "the bundle's Rust PTY host runs and prints its usage");
+    assert.match(host.stderr.toString(), /^pty-sidecar: usage:/);
+  }
   child = Bun.spawn([bun, join(bundle, "server/remote-entry.ts")], { env, stdout: "inherit", stderr: "inherit" });
   const { createHash } = await import("node:crypto");
   const socket = join(xdg, "herdr/sessions/smoke/herdr.sock");

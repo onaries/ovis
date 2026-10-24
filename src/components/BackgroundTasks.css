@@ -1,14 +1,17 @@
 /* The toggle sits beside the add button in the input card's last row; the list opens above the
-   card, as the slash menu does, so it never covers what is being typed. */
+   card, as the slash menu does, so it never covers what is being typed. The chip can shrink, and
+   only the step inside it does (below): the buttons beside it never give way to it */
 .bg-tasks {
   display: inline-flex;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .bg-tasks-toggle {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
+  min-width: 0;
   min-height: var(--chip-h);
   padding: 0 var(--space-2);
   background: var(--status-working-tint);
@@ -34,8 +37,32 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* the step in progress, after the figures, in the agent's own words (#1040): one line, cut with
+   an ellipsis past the room the chip gives it, whole in the button's name and title. A one-line
+   clamp over text that may break anywhere, not nowrap with an ellipsis: its narrowest size is one
+   glyph, so on a card narrower than the row's controls the step gives its room back before the
+   add button, the figures or the round button do (nowrap would hold the whole step and push the
+   round button out of the card). The model beside the chip steps out as it does for the chip's
+   other words (Composer.css) */
+.bg-tasks-current {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  min-width: 0;
+  max-width: 16em;
+  overflow: hidden;
+  text-align: start;
+  word-break: break-all;
+}
+
+.bg-tasks-current::before {
+  content: "\00b7";
+  margin-right: var(--space-1);
+}
+
 /* a plan and running tasks share the chip: a hairline between them, the tasks as icon and number */
 .bg-tasks-sep {
+  flex: none;
   align-self: stretch;
   width: var(--hairline);
   margin: var(--space-1) var(--space-1);
@@ -64,6 +91,11 @@
 
 .composer-surface[data-compact] .bg-tasks-count {
   display: inline;
+}
+
+/* the step takes the word Plan's place there, and less room: a phone's row keeps the model's name beside it */
+.composer-surface[data-compact] .bg-tasks-current {
+  max-width: 8em;
 }
 
 /* without its words the chip would be a 28px target, an icon alone while nothing runs */

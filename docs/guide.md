@@ -53,7 +53,7 @@ curl -fsSL https://ovis.sh/install.sh | sh
 
 It does, in order, only what is not done yet:
 
-- **What it runs on.** [herdr](https://github.com/herdrdev/herdr) 0.9.0+, [Bun](https://bun.sh) 1.4+ and Node 18+ (Node runs the terminal sidecar). A missing one is installed for your user only, without sudo: herdr and Bun by their own installers, into `~/.local/bin` and `~/.bun`, and Node 22 from nodejs.org, checked against its published SHA-256, into `~/.local/share/ovis/node`. Nothing is compiled.
+- **What it runs on.** [herdr](https://github.com/herdrdev/herdr) 0.9.0+, [Bun](https://bun.sh) 1.4+. A missing one is installed for your user only, without sudo, by its own installer, into `~/.local/bin` and `~/.bun`. Node is not needed: on Linux and macOS, terminals run on the Rust PTY host each release ships (`bin/ovis-pty-sidecar`), checked against the release's SHA-256 and once more when the server starts. A Node 18+ already on the PC is only its fallback, and the installer adds Node 22 from nodejs.org (checked against its published SHA-256, into `~/.local/share/ovis/node`) only when the host cannot be installed and there is no Node. Nothing is compiled.
 - **The app**, as a herdr plugin at the latest release (set `OVIS_REF` to install another branch or tag): herdr builds it and starts it along with itself, on `127.0.0.1:7317`, following the socket of the current herdr session. When herdr is already running, the app starts now.
 - **The phone address.** When Tailscale runs on this PC, it serves the app to your tailnet (`tailscale serve`, see [On your phone](#on-your-phone)), tells you the command that undoes it, and prints the address as a QR code. Without Tailscale, it says what to set up.
 
@@ -88,7 +88,7 @@ bun install
 bun run start
 ```
 
-You need herdr 0.9.0+, Bun 1.4+ and Node 18+, and herdr must be installed and running first: start it with `herdr`. `start` builds the client and runs the server under the update supervisor. It talks to `~/.config/herdr/herdr.sock` unless `HERDR_SOCKET` says otherwise. If herdr isn't running there, the app still opens, but its header shows **Status unknown** after the first failed health check and **herdr unavailable** after the second, and the page says it cannot reach herdr at that socket.
+You need herdr 0.9.0+ and Bun 1.4+, and for attached terminals either the Rust PTY host (`cargo build --release --manifest-path crates/pty-sidecar/Cargo.toml`, or `bun scripts/pty-sidecar.ts install` on a release tag) or Node 18+; with neither, panes are mirrored. herdr must be installed and running first: start it with `herdr`. `start` builds the client and runs the server under the update supervisor. It talks to `~/.config/herdr/herdr.sock` unless `HERDR_SOCKET` says otherwise. If herdr isn't running there, the app still opens, but its header shows **Status unknown** after the first failed health check and **herdr unavailable** after the second, and the page says it cannot reach herdr at that socket.
 
 </details>
 
@@ -156,16 +156,17 @@ Every agent herdr runs shows up with its live status, terminal and alerts. The c
 | --- | --- | --- |
 | **Claude Code** | Native transcript, resolved through herdr | ✓ approvals, questions, plan and menu picks, and the `/model` list (picked for the session) |
 | **Codex** | Native rollout, with tool results and commentary/final phases | ✓ approvals and questions, including queued ones, and the `/model` lists (picked for the session) |
-| **omp** | Native session file | ✓ approvals, questions, and the model picker of `/model` and `/switch` (picked for the session: the chat sends `/model` as `/switch`, since omp's own `/model` opens its role hub) |
+| **omp** | Native session file, in the store the pane's omp process writes to: `~/.omp/agent`, a profile's, or where its `--session-dir`, or the `PI_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_DIR`, `PI_CONFIG_DIR` or XDG data and state directories it was started with, put it (absolute paths only, not values from omp's `.env` files; on Windows only `~/.omp` and its profiles) | ✓ approvals, questions, and the model picker of `/model` and `/switch` (picked for the session: the chat sends `/model` as `/switch`, since omp's own `/model` opens its role hub) |
 | **omo** | Native session file, found through the pane's process tree | ✓ the `/model` list (picked for the session); other menus — use Terminal |
 | **gjc** | Native session file reported by the web UI's GJC extension, verified against the pane's process | — use Terminal |
 | **pi** | Native session file, resolved through herdr; after `/tree`, the branch in play | ✓ its dialogs: a question, a confirmation, an answer typed in |
 | **Command Code** (`cmd`) | Native session file under `~/.commandcode/projects/`, resolved through herdr; after `/tree`, the branch in play | ✓ its permission prompts: Yes / Yes, don't ask again / No |
 | **OpenCode** | Native session in OpenCode 2's own database, resolved through herdr: `~/.local/share/opencode/opencode.db` (`%USERPROFILE%\.local\share\opencode\opencode.db` on Windows), or where the server's `XDG_DATA_HOME` or `OPENCODE_DB` puts it | ✓ its questions on OpenCode 2.0 or later, answered through its background service (`~/.local/state/opencode/service.json`, or under the server's `XDG_STATE_HOME`) one question at a time, with Back to change an earlier one; other prompts, and OpenCode 1 — use Terminal |
 | **Devin CLI** | Native SQLite session, showing the active branch when herdr or the live process explicitly identifies the session; otherwise terminal text | — use Terminal |
-| **Grok** | Linux native update log. Any Grok executable named `grok` or `grok-…` that holds the `events.jsonl` for the session Herdr reported in exactly one directory, with a newer write time than every other held session. Older open files do not hide it; ambiguous IDs, tied times, and an unreported `/resume` use Terminal until Herdr names the confirmed session. macOS and Windows use Terminal. See [Grok setup and limits](grok-chat.md). | — use Terminal |
+| **Grok** | Linux native update log. Any Grok executable named `grok` or `grok-…` that holds the `events.jsonl` for the session Herdr reported in exactly one directory, with a newer write time than every other held session. Older open files do not hide it; ambiguous IDs, tied times, and a held file that may be a renamed events file use Terminal. After a `/resume` Herdr does not hear about, Chat can keep showing the previous conversation until the resumed session writes; it then uses Terminal until Herdr names that session. macOS and Windows use Terminal. See [Grok setup and limits](grok-chat.md). | — use Terminal |
 | **Hermes** | Native SQLite session store | — use Terminal |
 | **Antigravity (agy)** | **Experimental; macOS untested.** Native ledger, selected by the running process’s held conversation lock. Linux native-tested; Windows uses terminal text. See [Agy behavior and limits](agy-chat.md). | — use Terminal |
+| **Letta Code** | The terminal's text. Choose **Letta Code** in **New workspace**, **New tab with agent…** or **New worktree** where `letta` is installed, or run `letta` in a herdr pane's **Terminal**. | — use Terminal |
 | **Anything else** | The terminal's text | — use Terminal |
 
 GJC chat and GJC done alerts use a native extension rather than SDK session queries. From
@@ -665,7 +666,7 @@ flowchart LR
 A React client talks to a Bun HTTP/WebSocket server.
 
 - **Status:** the server reads workspaces and agent status from herdr's Unix socket.
-- **Terminal:** it streams the real `herdr terminal attach` output through a Node PTY sidecar. Browsers watching one pane share one attach, with a bounded replay and backpressure ([terminal flow control](terminal-flow-control.md)).
+- **Terminal:** it streams the real `herdr terminal attach` output through a PTY host: the Rust one (`crates/pty-sidecar`) on Linux and macOS, or the Node sidecar where that cannot run (`OVIS_PTY_SIDECAR=node` asks for it). Browsers watching one pane share one attach, with a bounded replay and backpressure ([terminal flow control](terminal-flow-control.md)).
 - **Chat:** it reads the agents' own session files, and sending types into the same live pane.
 
 herdr owns the processes and the scrollback.

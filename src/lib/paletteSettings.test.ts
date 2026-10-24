@@ -1,12 +1,64 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 
 import { translate } from "./i18n.ts";
-import { actionAliases, rankByTitle, requestedSettingsPage, requestSettingsPage, settingsPageEntries } from "./paletteSettings.ts";
-import type { Translate } from "./i18n.ts";
+import { actionAliases, rankByTitle, requestedSettingsPage, requestSettingsPage, settingsPageEntries, type SettingsPageEntry, type SettingsPageId } from "./paletteSettings.ts";
+import type { Language, Translate } from "./i18n.ts";
 
 const identity = (key: string): string => key;
-/** The Settings pages as the palette searches them, in the language `t` speaks. */
-const pagesIn = (t: Translate) => settingsPageEntries(t).map((entry) => ({ item: entry.id, title: entry.label, aliases: entry.aliases }));
+/** The Settings pages and groups as the palette searches them, in the language `t` speaks: a group as `page#section`. */
+const pagesIn = (t: Translate) => settingsPageEntries(t).map((entry) => ({ item: entry.section === undefined ? entry.id : `${entry.id}#${entry.section}`, title: entry.label, aliases: entry.aliases }));
+const languageT = (language: Language): Translate => (key, vars) => translate(language, key, vars);
+
+/** What a user types for a setting, by language, and the page (and group, or `-`) its first result opens. */
+const MATRIX: readonly (readonly [Language, string, SettingsPageId, string])[] = [
+  ["en", "theme", "appearance", "-"],
+  ["en", "palette", "appearance", "-"],
+  ["en", "interface font size", "appearance", "typography"],
+  ["en", "chat font size", "chat", "-"],
+  ["en", "chat width", "chat", "-"],
+  ["en", "Enter sends", "chat", "composer"],
+  ["en", "quick replies", "chat", "quick-replies"],
+  ["en", "terminal font", "terminal", "-"],
+  ["en", "notifications", "alerts", "-"],
+  ["en", "shortcuts", "shortcuts", "-"],
+  ["en", "phone", "devices", "-"],
+  ["en", "OpenAI API key", "voice", "openai-key"],
+  ["en", "Return inserts a new line", "chat", "composer"],
+  ["en", "Send queued messages automatically", "chat", "composer"],
+  ["en", "New tab button", "chat", "composer"],
+  ["en", "Suggestion chip", "chat", "composer"],
+  ["en", "Show above the message box", "chat", "quick-replies"],
+  ["ko", "인터페이스 글자 크기", "appearance", "typography"],
+  ["ko", "채팅 글자 크기", "chat", "-"],
+  ["ko", "Enter로 보내기", "chat", "composer"],
+  ["ko", "빠른 답장", "chat", "quick-replies"],
+  ["ko", "터미널 글자 크기", "terminal", "-"],
+  ["ko", "OpenAI API 키", "voice", "openai-key"],
+  ["ko", "단축키", "shortcuts", "-"],
+  ["ko", "알림", "alerts", "-"],
+  ["ko", "대기 메시지 자동 전송", "chat", "composer"],
+  ["ko", "입력창 위에 표시", "chat", "quick-replies"],
+  ["ja", "インターフェースの文字サイズ", "appearance", "typography"],
+  ["ja", "チャットのフォントサイズ", "chat", "-"],
+  ["ja", "Enter で送信", "chat", "composer"],
+  ["ja", "クイック返信", "chat", "quick-replies"],
+  ["ja", "ターミナルのフォントサイズ", "terminal", "-"],
+  ["ja", "OpenAI API キー", "voice", "openai-key"],
+  ["ja", "ショートカット", "shortcuts", "-"],
+  ["ja", "通知", "alerts", "-"],
+  ["ja", "送信待ちメッセージを自動で送信", "chat", "composer"],
+  ["ja", "入力欄の上に表示", "chat", "quick-replies"],
+  ["zh", "界面字号", "appearance", "typography"],
+  ["zh", "聊天字号", "chat", "-"],
+  ["zh", "按 Enter 发送", "chat", "composer"],
+  ["zh", "快捷回复", "chat", "quick-replies"],
+  ["zh", "终端字号", "terminal", "-"],
+  ["zh", "OpenAI API 密钥", "voice", "openai-key"],
+  ["zh", "快捷键", "shortcuts", "-"],
+  ["zh", "提醒", "alerts", "-"],
+  ["zh", "自动发送排队消息", "chat", "composer"],
+  ["zh", "显示在输入框上方", "chat", "quick-replies"],
+];
 
 describe("rankByTitle", () => {
   const rows = [
@@ -40,7 +92,29 @@ describe("settings entries", () => {
     const pages = pagesIn(identity);
     expect(rankByTitle("theme", pages)).toEqual(["appearance"]);
     expect(rankByTitle("palette", pages)).toEqual(["appearance"]);
-    expect(rankByTitle("font", pages)).toEqual(["chat", "terminal"]);
+    // the Typography group holds the interface font size, after the pages within its rank
+    expect(rankByTitle("font", pages)).toEqual(["chat", "terminal", "appearance#typography"]);
+  });
+
+  it("finds the fixed settings matrix in every supported language", () => {
+    const misses = MATRIX.flatMap(([language, query, page, section]) => {
+      const first = rankByTitle(query, settingsPageEntries(languageT(language)).map((entry) => ({ item: entry, title: entry.label, aliases: entry.aliases })))[0] as SettingsPageEntry | undefined;
+      const actual = { page: first?.id ?? null, section: first?.section ?? null };
+      const expected = { page, section: section === "-" ? actual.section : section };
+      return actual.page === expected.page && actual.section === expected.section ? [] : [{ language, query, expected, actual }];
+    });
+    expect(MATRIX.length).toBe(47);
+    expect(misses).toEqual([]);
+  });
+
+  it("ranks titles before section aliases", () => {
+    const pages = pagesIn(identity);
+    // a group's heading holds the word: it leads the page that has it only as an alias
+    expect(rankByTitle("composer", pages)).toEqual(["chat#composer", "chat"]);
+    // a group found only by its setting's label comes after the page whose title holds the word
+    expect(rankByTitle("interface", pages)).toEqual(["appearance#typography"]);
+    expect(rankByTitle("chat", pages)[0]).toBe("chat");
+    expect(rankByTitle("enter", pages)).toEqual(["chat", "chat#composer"]);
   });
 
   it("finds Appearance by the literal word palette in every language, and by the language's own word", () => {
@@ -60,9 +134,19 @@ describe("settings entries", () => {
 describe("requested page", () => {
   beforeEach(() => requestSettingsPage(null));
   it("is held until cleared", () => {
-    requestSettingsPage("terminal");
-    expect(requestedSettingsPage()).toBe("terminal");
+    requestSettingsPage({ page: "terminal" });
+    expect(requestedSettingsPage()).toEqual({ page: "terminal" });
     requestSettingsPage(null);
     expect(requestedSettingsPage()).toBeNull();
+  });
+
+  it("clears a section request before an unrelated open", () => {
+    requestSettingsPage({ page: "chat", section: "quick-replies" });
+    expect(requestedSettingsPage()).toEqual({ page: "chat", section: "quick-replies" });
+    // the palette's own opening clears what it asked before, so Settings opened another way finds nothing
+    requestSettingsPage(null);
+    expect(requestedSettingsPage()).toBeNull();
+    requestSettingsPage({ page: "voice" });
+    expect(requestedSettingsPage()?.section).toBeUndefined();
   });
 });

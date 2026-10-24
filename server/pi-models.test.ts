@@ -186,6 +186,20 @@ describe("the context window a pi model runs in", () => {
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
+  it.skipIf(process.platform === "win32")("refuses a pipe swapped in after the stat, without waiting on it", async () => {
+    // the stat above turns a pipe away before the read: the read behind it is handed one here, as
+    // a pipe renamed over the file between the two would be
+    const dir = catalogsDir("swapped", {});
+    const pipe = join(dir, "models.json");
+    expect(Bun.spawnSync(["mkfifo", pipe]).exitCode).toBe(0);
+    // in a process of its own: a read that blocked on the writerless pipe would hold this one too
+    const child = Bun.spawn([process.execPath, "-e", `import { readRegularText } from ${JSON.stringify(join(import.meta.dir, "pi-models.ts"))}; console.log(JSON.stringify(readRegularText(${JSON.stringify(pipe)})));`], { stdout: "pipe", stderr: "inherit", timeout: 10_000 });
+    await child.exited;
+    expect(child.signalCode).toBeNull();
+    expect(child.exitCode).toBe(0);
+    expect((await new Response(child.stdout).text()).trim()).toBe("null");
+  }, 20_000);
+
   it("ignores a catalog file that is not shaped like one", () => {
     const dir = catalogsDir("misshapen", {
       "commandcode-models.json": [{ id: "cc-model", contextWindow: 200000 }],

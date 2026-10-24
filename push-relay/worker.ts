@@ -378,14 +378,24 @@ async function fcmAccessToken(env: Env, nowSeconds: number, send: Send): Promise
   return accessToken;
 }
 
-/** the FcmError code of an FCM v1 error answer, or "" */
-async function fcmErrorCode(response: Response): Promise<string> {
+/**
+ * Whether an FCM v1 error answer says the token will never take a message again: an FcmError of
+ * FCM_GONE, or INVALID_ARGUMENT about the token itself, as APNs' BadDeviceToken. FCM names a field
+ * it refuses in a google.rpc.BadRequest detail, and an invalid token comes with none (or with
+ * message.token); INVALID_ARGUMENT naming any other field is the relay's message at fault, and the
+ * token stays.
+ */
+async function fcmTokenGone(response: Response): Promise<boolean> {
   try {
-    const body = (await response.json()) as { error?: { details?: { "@type"?: unknown; errorCode?: unknown }[] } } | null;
-    const detail = body?.error?.details?.find((item) => item["@type"] === "type.googleapis.com/google.firebase.fcm.v1.FcmError");
-    return typeof detail?.errorCode === "string" ? detail.errorCode : "";
+    const body = (await response.json()) as { error?: { details?: { "@type"?: unknown; errorCode?: unknown; fieldViolations?: { field?: unknown }[] }[] } } | null;
+    const details = body?.error?.details ?? [];
+    const code = details.find((item) => item["@type"] === "type.googleapis.com/google.firebase.fcm.v1.FcmError")?.errorCode;
+    if (typeof code === "string" && FCM_GONE.has(code)) return true;
+    if (code !== "INVALID_ARGUMENT") return false;
+    return details.filter((item) => item["@type"] === "type.googleapis.com/google.rpc.BadRequest")
+      .flatMap((item) => item.fieldViolations ?? []).every((violation) => violation.field === "message.token");
   } catch {
-    return "";
+    return false;
   }
 }
 
@@ -418,8 +428,9 @@ async function sendFcm(env: Env, token: string, ciphertext: string, delivery: { 
     return status(502);
   }
   if (fcm.ok) return status(201, { ttl: String(delivery.ttl) });
-  if (FCM_GONE.has(await fcmErrorCode(fcm))) {
-    // the token is gone for every PC: all its endpoints go, and their next push is a 404
+  if (await fcmTokenGone(fcm)) {
+    // the token is gone for every PC: all its FCM endpoints go, and their next push is a 404. Only
+    // FCM's: the same string registered as an APNs token is not what FCM refused.
     await env.DB.prepare("DELETE FROM endpoints WHERE token = ? AND service = 'fcm'").bind(token).run();
     return status(410);
   }

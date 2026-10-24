@@ -2,6 +2,12 @@
 
 Ovis includes material from the projects below, under their own licenses.
 
+## QR Code generator
+
+`app/windows/src/QrCode.cs` ports the byte-mode encoder from
+[Project Nayuki's QR Code generator](https://github.com/nayuki/QR-Code-generator),
+under MIT, Copyright (c) Project Nayuki. The MIT license text below applies.
+
 ## Agent of Empires request correlation
 
 `server/request-log.ts` adapts the request-completion boundary and client correlation-ID

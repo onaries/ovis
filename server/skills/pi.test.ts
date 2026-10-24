@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneCommands } from "../commands.ts";
 import { source } from "./pi.ts";
+import type { SlashCommand } from "../../shared/protocol.ts";
+import { typedTerminalCommand } from "../../src/lib/compose.ts";
 
 const roots: string[] = [];
 const previousHome = process.env.HOME;
@@ -82,7 +84,7 @@ describe("pi's builtins", () => {
     expect(source.forms?.["tree"]).toEqual([{ match: "bare", interaction: "terminal" }]);
     expect(source.forms?.["model"]).toEqual([
       { match: "bare", interaction: "dialog", dialog: "pi-model" },
-      { match: { sub: "*" }, interaction: "none" },
+      { match: "other", interaction: "none" },
     ]);
     expect(source.forms?.["thinking"]).toEqual(source.forms?.["model"]);
   });
@@ -99,8 +101,8 @@ describe("pi's builtins", () => {
     for (const name of ["share", "bug", "copy", "name"]) {
       expect(source.forms?.[name]?.[0]).toEqual({ match: "bare", interaction: "terminal" });
     }
-    expect(source.forms?.["bug"]?.[1]).toEqual({ match: { sub: "*" }, interaction: "terminal" });
-    expect(source.forms?.["name"]?.[1]).toEqual({ match: { sub: "*" }, interaction: "none" });
+    expect(source.forms?.["bug"]?.[1]).toEqual({ match: "other", interaction: "terminal" });
+    expect(source.forms?.["name"]?.[1]).toEqual({ match: "other", interaction: "none" });
   });
 
   it("keeps reload and quit terminal because neither leaves bridge-readable result evidence", () => {
@@ -118,10 +120,10 @@ describe("pi's builtins", () => {
       .map(([name, forms]) => [name, (forms ?? []).filter((form) => form.interaction === "none")] as const)
       .filter(([, forms]) => forms.length > 0));
     expect(noneForms).toEqual({
-      model: [{ match: { sub: "*" }, interaction: "none" }],
-      thinking: [{ match: { sub: "*" }, interaction: "none" }],
+      model: [{ match: "other", interaction: "none" }],
+      thinking: [{ match: "other", interaction: "none" }],
       compact: [{ match: "bare", interaction: "none" }],
-      name: [{ match: { sub: "*" }, interaction: "none" }],
+      name: [{ match: "other", interaction: "none" }],
     });
   });
 
@@ -240,5 +242,19 @@ describe("pi skill identity", () => {
     const rows = paneCommands("pi", null, home).filter(({ name }) => name === "skill:entry");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: realpathSync(join(agentDir, "skills", "entry", "SKILL.md")) });
+  });
+});
+
+describe("pi's forms as the chat reads them", () => {
+  it("tells pi's bare commands from the ones given an argument", () => {
+    const home = mkdtempSync(join(tmpdir(), "pi-forms-"));
+    let rows: SlashCommand[];
+    try { rows = JSON.parse(JSON.stringify(paneCommands("pi", null, home))) as SlashCommand[]; }
+    finally { rmSync(home, { recursive: true, force: true }); }
+    // bare /name shows the name in the terminal; with an argument it only sets it, like /model <id>
+    expect(typedTerminalCommand(rows, "/name")?.name).toBe("name");
+    expect(typedTerminalCommand(rows, "/name Release 1")).toBeNull();
+    expect(typedTerminalCommand(rows, "/model anthropic/fictional-model")).toBeNull();
+    expect(typedTerminalCommand(rows, "/export out.html")?.name).toBe("export");
   });
 });

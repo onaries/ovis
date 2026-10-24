@@ -21,7 +21,12 @@
  *   exit:   mirrors the child's exit code
  */
 
-import * as pty from "@lydell/node-pty";
+// node-pty must never load inside Bun (AGENTS.md): a `node` that is Bun stops here, before the import
+if (process.versions.bun) {
+  process.stderr.write("pty-host: this is Bun, not Node; node-pty must not load here\n");
+  process.exit(70);
+}
+const pty = await import("@lydell/node-pty");
 
 const [colsRaw, rowsRaw, command, ...args] = process.argv.slice(2);
 if (!command) {

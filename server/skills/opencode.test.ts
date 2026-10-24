@@ -219,7 +219,7 @@ describe("OpenCode v1 catalog", () => {
       expect(source.forms?.[name]).toEqual([{ match: "bare", interaction: "terminal" }]);
     }
     for (const name of ["undo", "redo"]) expect(source.forms?.[name]).toEqual([{ match: "bare", interaction: "none" }]);
-    expect(source.pin).toBe("1.19.3");
+    expect(source.pin).toEqual(["1.19.3", "2.0.32"]);
   });
 
   it("lists every former exclusion with visibility terminal and rows from a scan unverified", () => {
@@ -236,6 +236,15 @@ describe("OpenCode v1 catalog", () => {
 
 describe("OpenCode v2 catalog", () => {
   const V2 = "2.0.32";
+  it("verifies the builtins both TUIs share on a v2 pane as on a v1 one", () => {
+    const { home } = fixture();
+    const verified = (version: string) => paneCommands("opencode", null, home, {}, version).find((row) => row.name === "models")?.provenance?.verified;
+    expect(verified(V2)).toBeTrue();
+    expect(verified("1.19.9")).toBeTrue();
+    expect(verified("2.1.0")).toBeFalse();
+    expect(verified("1.20.0")).toBeFalse();
+  });
+
   it("gives skills the @ trigger and the id the path derives", () => {
     const r = fixture();
     put(join(r.config, "skills", "git-release", "SKILL.md"), "---\nname: Git Release\ndescription: Release\n---\nBody");

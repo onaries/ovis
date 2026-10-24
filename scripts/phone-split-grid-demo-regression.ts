@@ -115,13 +115,13 @@ try {
       await page.evaluate(() => { (window as unknown as Recorded).sent = []; });
       await page.setViewportSize({ width: 700, height: 390 });
       await page.waitForFunction((id) => (window as unknown as Recorded).sent.some((frame) => frame.pane_id === id && frame.type === "resize"), sibling, { timeout: 10_000 });
-      await page.waitForTimeout(1_000);
+      await page.waitForTimeout(1_000); // fixed wait: no resize frame may be sent for the hidden pane
       assert.deepEqual(await frames(page, shell), [], "the hidden pane sends no resize");
 
       // turned back (a short screen draws no strip for a lone tab), the tab's menu leads to the shell
       await page.setViewportSize({ width: 390, height: 844 });
       await page.waitForFunction((id) => (window as unknown as Recorded).sent.filter((frame) => frame.pane_id === id && frame.type === "resize").at(-1)?.cols! < 60, sibling, { timeout: 10_000 });
-      await page.waitForTimeout(1_000);
+      await page.waitForTimeout(1_000); // fixed wait: no resize frame may be sent for the still hidden pane
       assert.deepEqual(await frames(page, shell), [], "the hidden pane still sends no resize");
 
       const phoneGrid = (await lastOf(page, sibling, "resize"))!;
@@ -142,7 +142,7 @@ try {
       await page.waitForFunction((id) => (window as unknown as Recorded).sent.some((frame) => frame.pane_id === id && frame.type === "resize"), shell, { timeout: 10_000 });
       const taken = (await lastOf(page, shell, "resize"))!;
       assert.deepEqual([taken.cols, taken.rows], [phoneGrid.cols, phoneGrid.rows], "the pane shown again takes the pty at the phone's size");
-      await page.waitForTimeout(1_000);
+      await page.waitForTimeout(1_000); // fixed wait: the pane now behind may not send a resize
       assert.equal(await lastOf(page, sibling, "resize"), undefined, "the pane gone behind it sends no resize");
 
       // the roles swapped: a reconnect now keeps the size of the other pane's pty
@@ -157,7 +157,7 @@ try {
         await page.waitForTimeout(500);
         await sent(page);
       });
-      await page.waitForTimeout(1_000);
+      await page.waitForTimeout(1_000); // fixed wait: a pinch ended behind a sibling may not send a resize
       assert.deepEqual((await frames(page, shell)).filter((frame) => frame.type === "resize"), [], "a pinch ended behind a sibling sizes no pty");
       again = await reconnect(page, [shell, sibling]);
       assert.equal(again.find((frame) => frame.pane_id === shell && frame.type === "attach")?.keep_size, true, "and leaves the hidden pane keeping the pty's size");

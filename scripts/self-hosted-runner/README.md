@@ -13,6 +13,7 @@ An ephemeral Docker GitHub Actions runner for this repository's Linux CI/CD jobs
 scripts/self-hosted-runner/run.sh                         # 1 slot, repo from the current checkout
 scripts/self-hosted-runner/run.sh --count 3
 scripts/self-hosted-runner/run.sh --repo OWNER/NAME --labels self-hosted-ovis --build
+scripts/self-hosted-runner/run.sh --count 8 --reserved 2  # slots 1-2 take only main's pushes
 scripts/self-hosted-runner/run.sh --once                  # one container per slot, then exit
 ```
 
@@ -69,11 +70,80 @@ gh variable set CI_SELF_HOSTED_LABELS --body '["self-hosted","self-hosted-ovis"]
 gh variable delete CI_SELF_HOSTED_LABELS   # back to the default
 ```
 
+Pushes to main can have runners of their own, so a merge's CI never queues behind pull request runs.
+`run.sh --reserved N` registers the first N of its `--count` slots with `--reserved-labels` (default
+`self-hosted-ovis-main`) instead of `--labels`, and the repository variable
+`CI_MAIN_SELF_HOSTED_LABELS`, when set, routes a push to main over `CI_SELF_HOSTED_LABELS`:
+
+```sh
+gh variable set CI_MAIN_SELF_HOSTED_LABELS --body '["self-hosted","self-hosted-ovis-main"]'   # main on the reserved slots
+gh variable set CI_MAIN_SELF_HOSTED_LABELS --body '"ubuntu-24.04"'   # main alone GitHub-hosted
+gh variable delete CI_MAIN_SELF_HOSTED_LABELS   # main back on the pull requests' runners
+```
+
+Only a push to main asks for `self-hosted-ovis-main` (or a manual run whose `self_hosted_labels` names
+it). Pull requests ask for `self-hosted-ovis`, which the reserved slots lack, so they never take one:
+keep such a label in any `CI_SELF_HOSTED_LABELS` you set, since `["self-hosted"]` alone would let them.
+A job waits for a runner that has every label it asks for, and only the P620 runs reserved slots (the
+maintainer PC's unit below has none): while the variable names the reserved labels and none of those
+runners is online, main's Linux jobs wait, so delete the variable when the P620 goes offline.
+`CI_SELF_HOSTED_LABELS='"ubuntu-24.04"'` still keeps main's jobs GitHub-hosted too. The reserved slots stay in the launcher's network
+namespace: they take runners away from pull requests, not load, and main's herdr-backed jobs still
+share `check.ts`'s slots (`CHECK_HOST_MAX_RUNS`) with theirs, so they can wait there for one.
+
 On the maintainer PC the launcher runs as the systemd user unit `ovis-ci-runner.service`
 (`run.sh --repo devswha/ovis --count 4 --labels self-hosted-ovis` from a copy of this directory in
 `~/.local/share/ovis-ci-runner`): four slots let one CI run's four Linux jobs start together, and
 `check.ts`'s shared slots still cap its herdr-backed lanes at three. Copy the directory again and
 restart the unit after changing these files.
+
+## Per-host limits
+
+`ci.yml` sets the self-hosted values for a 32-core PC, and a workflow cannot read its runner's
+environment to choose others. A host that can take more says so in an env file (`NAME=value` per
+line) that `run.sh --env-file FILE` hands to every runner container; `scripts/check.ts` lets these
+replace the workflow's values for the run, and a host without the file keeps `ci.yml`'s:
+
+| Host variable | Replaces | Used by |
+| --- | --- | --- |
+| `CHECK_HOST_MAX_RUNS` | `CHECK_MAX_RUNS` (1 to 8) | herdr-backed lanes of every runner of the host |
+| `CHECK_HOST_TEST_SHARDS` | `HERDR_TEST_SHARDS` | Integration tests |
+| `CHECK_HOST_BROWSER_WORKERS` | `BROWSER_WORKERS` | both browser jobs (capped at their script count) |
+| `CHECK_HOST_UNIT_WORKERS` | `UNIT_TEST_WORKERS` | Fast checks |
+
+Every runner of a host must read the same file, since they share the slots. Keep it outside this
+directory (`~/.config/ovis-ci-runner/host.env`), so copying the directory again leaves it alone.
+The launcher refuses any line but a comment, a blank or `CHECK_HOST_<name>=<number>`: a bare `NAME`
+line would make Docker copy that variable from the launcher's own environment (`GH_TOKEN`, say)
+into every job. Write the number unquoted. Keep
+`CHECK_HOST_TEST_SHARDS` at 9 or less: check.ts sizes the herdr socket paths for nine shards.
+
+The ThinkStation P620 (64 cores / 128 threads, 30 GiB) ran `--count 12 --env-file
+%h/.config/ovis-ci-runner/host.env` with:
+
+```sh
+CHECK_HOST_MAX_RUNS=5
+CHECK_HOST_TEST_SHARDS=6
+CHECK_HOST_BROWSER_WORKERS=8
+CHECK_HOST_UNIT_WORKERS=8
+```
+
+After two hardware resets under that load (a data fabric sync flood), it runs `--count 8 --reserved 2`
+(six runners for pull requests, two for main's pushes) with `CHECK_HOST_MAX_RUNS=3`,
+`CHECK_HOST_TEST_SHARDS=4`, `CHECK_HOST_BROWSER_WORKERS=5` and `CHECK_HOST_UNIT_WORKERS=5` until its
+memory is checked.
+
+Memory, not CPU, bounds it. Measured there with three runners and `ci.yml`'s values, the CPU stayed
+over 90% idle while Browser regression (other scripts) held 2-4 GiB with one script's spike to
+9.3 GiB, Browser regression (ui-regression) 2.6-4.5 GiB and Integration tests 1.6-2.7 GiB; the
+host peaked at 14.6 of 30 GiB; Fast checks peaked at 0.6 GiB. Those jobs (all but Fast checks)
+run at most `CHECK_HOST_MAX_RUNS` at once, however many runners wait for a slot, so the other
+runners hold only Fast checks and the setup steps before a slot. More browser workers raise that
+spike: with ten, Browser regression (other scripts) reached 14 GiB for about 20 s (its 90th
+percentile stayed near 5.4 GiB) while the host peaked at 20.4 GiB, so the P620 ran eight. With
+four slot jobs and twelve runners busy, the host stayed under 17.2 GiB; a fifth slot job at about
+4 GiB puts it near 21 GiB, about 9 GiB below the total, which holds one browser spike at eight
+workers (about 5-7 GiB above that job's usual 2-4 GiB) but not two at once.
 
 A manual run can override the variable with the `self_hosted_labels` workflow_dispatch input. Fork PRs always use `ubuntu-24.04`; Windows/macOS jobs, `remote-bundles.yml` and `windows-install.yml` stay GitHub-hosted.
 

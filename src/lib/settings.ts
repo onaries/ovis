@@ -603,6 +603,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [systemDark, setSystemDark] = useState(() => resolveTheme("system") === "dark");
 
   useEffect(() => {
+    const onStorage = (event: StorageEvent): void => {
+      if (event.storageArea !== window.localStorage || (event.key !== SETTINGS_STORAGE_KEY && event.key !== null)) return;
+      const { shortcutOverrides } = loadSettings();
+      setSettings((current) => ({ ...current, shortcutOverrides }));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  useEffect(() => {
     const query = window.matchMedia?.(DARK_QUERY);
     if (!query) return;
     const onChange = (event: MediaQueryListEvent): void => setSystemDark(event.matches);

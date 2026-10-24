@@ -1038,7 +1038,7 @@ export function Composer({
   useLayoutEffect(fitStatus, [fitStatus, agent, metadata?.model, metadata?.reasoning_effort,
     metadata?.context?.window, contextShown && !mobile && metadata?.context ? contextLeftPercent(metadata.context) : null,
     contextShown, mobile, usageCaption, usage?.problem, hintText, dictation.shown, backgroundTasks,
-    plan?.done, plan?.total, statusCompact, compactNow !== undefined, facesLoaded, t]);
+    plan?.done, plan?.total, plan?.current, statusCompact, compactNow !== undefined, facesLoaded, t]);
   const menuId = `composer-menu-${paneId}`;
   // the suggestions' own close, for a pointer or a phone, which has no Escape: it does what Escape does, and the
   // text and the focus stay in the box (a press never takes the focus; a key on it hands it back)

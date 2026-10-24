@@ -210,7 +210,7 @@ try {
         await boxValue(page, "/compact");
         await page.locator('input[type="file"]').setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") });
         await page.waitForFunction(() => (window as unknown as { imageUploads: number }).imageUploads === 1, undefined, { timeout: 10_000 });
-        await page.waitForTimeout(300);
+        await page.waitForTimeout(300); // fixed wait: the upload may not replace the restored /compact command
         assert.equal(await composer.inputValue(), "/compact", "the path waits on the restored command");
         await feed(page, null, null);
         await boxValue(page, "@/tmp/notes.txt ");

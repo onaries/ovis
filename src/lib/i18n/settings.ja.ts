@@ -166,7 +166,7 @@ export const SETTINGS_JA: Record<string, string> = {
   "Use alongside herdr's own window": "ターミナルの herdr と併用",
   "Turn this on if this PC also shows herdr in a terminal window. A second after you switch to another window, this tab only watches the pane, so herdr's window keeps the pane at its own size instead of this window's. Click the tab to type again. While it watches, the pane is drawn at herdr's size and may not fill this window.": "この PC のターミナルウィンドウでも herdr を使うならオンにします。別のウィンドウに切り替えて 1 秒たつと、このタブはペインを表示するだけになり、herdr のウィンドウはペインをこのウィンドウではなく自分のサイズのまま保ちます。入力するにはタブをクリックしてください。表示中のペインは herdr のサイズで描かれるため、このウィンドウを埋めないことがあります。",
   "Follow herdr's focus": "herdr のフォーカスに追従",
-  "When herdr moves to another pane, by a click in its window, a herdr command or a script, this device opens that pane too. Only on the PC open here, and only on this device.": "herdr が別のペインに移ると（herdr のウィンドウでのクリック、herdr コマンド、スクリプト）、このデバイスもそのペインを開きます。ここで開いている PC だけで、このデバイスだけに適用されます。",
+  "When herdr moves to another pane, by a click in its window, a herdr command or a script, this device opens that pane too. Only on the PC open here, and only on this device. A PC on Ovis older than 0.4.13 does not report herdr's focus: update it first.": "herdr が別のペインに移ると（herdr のウィンドウでのクリック、herdr コマンド、スクリプト）、このデバイスもそのペインを開きます。ここで開いている PC だけで、このデバイスだけに適用されます。Ovis 0.4.13 より古い PC は herdr のフォーカスを知らせないため、先に更新してください。",
   "Without a key the browser recognizes the speech: Chrome and Edge send the audio to Google or Microsoft. Nothing is recorded until you press the mic.": "キーがない場合はブラウザが音声を認識します。Chrome と Edge は音声を Google または Microsoft に送信します。マイクを押すまで録音されません。",
   "Drops fillers and fixes spacing; code and paths stay as spoken": "言いよどみを除き、スペースを整えます。コードとパスはそのまま残します",
   "In chat": "チャット",

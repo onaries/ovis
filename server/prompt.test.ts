@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InteractivePrompt } from "../shared/protocol.ts";
 
-import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, modelListWaits, openOmoAsks, paneIsCompacting, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, openOmoAsks, paneIsCompacting, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { registry } from "./dialogs/registry.ts";
 
 const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
 // Real omo-ai 5.1.30 pane.read captures at 120 and 45 columns, with the recorded open calls.
@@ -3068,6 +3069,37 @@ describe("pi's dialogs", () => {
     expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
   });
 
+  // senpi asks a confirm as a select titled `${title}\n${message}`, so a timeout ticks at the end of the message
+  test("keeps a timed confirm's card through its countdown, which ticks after its message", () => {
+    const confirm = (seconds: number, message = "All messages will be lost.") => piScreen(` Clear session?\n ${message} (${seconds}s)\n\n → Yes\n   No\n ↑↓ navigate  enter select  esc/ctrl+c cancel`);
+    const prompt = parseInteractivePrompt("pi", confirm(9))!;
+    expect(prompt.kind).toBe("approval");
+    expect(prompt.question).toBe("All messages will be lost. (9s)");
+    // a Yes tapped after a tick answers the same card
+    expect(parseInteractivePrompt("pi", confirm(8))!.id).toBe(prompt.id);
+    expect(parseInteractivePrompt("pi", confirm(9, "Only this tab is cleared."))!.id).not.toBe(prompt.id);
+    // a narrow pane can wrap `(10s)` onto a line of its own where `(9s)` still fits
+    const wrappedCount = piScreen(" Clear session?\n All messages will be lost.\n (10s)\n\n \u2192 Yes\n   No\n \u2191\u2193 navigate  enter select  esc/ctrl+c cancel");
+    expect(parseInteractivePrompt("pi", wrappedCount)!.id).toBe(prompt.id);
+  });
+
+  // senpi's text input counts down in its title
+  test("keeps a timed input's card through its countdown, which ticks after its title", () => {
+    const input = (seconds: number, title = "Branch name?") => piScreen(` ${title} (${seconds}s)\n\n>\n enter submit  esc/ctrl+c cancel`);
+    const prompt = parseInteractivePrompt("pi", input(9))!;
+    expect(prompt.custom_option_index).toBe(0);
+    expect(prompt.question).toBe("Branch name? (9s)");
+    expect(parseInteractivePrompt("pi", input(8))!.id).toBe(prompt.id);
+    expect(parseInteractivePrompt("pi", input(9, "Tag name?"))!.id).not.toBe(prompt.id);
+    // as senpi wraps a title at 46 columns: the count alone on the last line, as the count is
+    const narrow = (seconds: number, grace = 30) => piScreen(` Restart with a grace period of (${grace}s)\n before deploying? (${seconds}s)\n\n>\n enter submit  esc/ctrl+c cancel`);
+    const alone = (seconds: number) => piScreen(` What should the new release branch be named?\n (${seconds}s)\n\n>\n enter submit  esc/ctrl+c cancel`);
+    expect(parseInteractivePrompt("pi", alone(8))!.id).toBe(parseInteractivePrompt("pi", alone(9))!.id);
+    expect(parseInteractivePrompt("pi", narrow(8))!.id).toBe(parseInteractivePrompt("pi", narrow(9))!.id);
+    // a count on an earlier line is the question's own words
+    expect(parseInteractivePrompt("pi", narrow(9, 60))!.id).not.toBe(parseInteractivePrompt("pi", narrow(9))!.id);
+  });
+
   test("lets the chat type an answer to a dialog that wants text", () => {
     const prompt = parseInteractivePrompt("pi", piScreen(" Branch name?\n\n>\n enter submit  escape/ctrl+c cancel"))!;
     expect(prompt.question).toBe("Branch name?");
@@ -3477,16 +3509,16 @@ ${"─".repeat(120)}
     // the list's text left above later output takes no key any more
     expect(parseInteractivePrompt("claude", `${claudeModelList(1)}Some later output\nand more\n`)).toBeNull();
     // nor does it hold the screen for a message that waits to be typed, while an open list does, wrapped or not
-    expect(modelListWaits("claude", `${claudeModelList(1)}Some later output\nand more\n`)).toBe(false);
-    expect(modelListWaits("claude", claudeModelList(1))).toBe(true);
+    expect(registry.waits("claude", `${claudeModelList(1)}Some later output\nand more\n`)).toBe(false);
+    expect(registry.waits("claude", claudeModelList(1))).toBe(true);
     const wrapped = claudeModelList(1).replace(CLAUDE_MODEL_HINT, "  Enter to set as\n  default · s to use\n  this session\n  only · Esc to\n  cancel");
-    expect(modelListWaits("claude", wrapped)).toBe(true);
+    expect(registry.waits("claude", wrapped)).toBe(true);
     // Claude's own footer under the open list, the session's rule and its task list, is no later output: also under a wrapped hint
-    expect(modelListWaits("claude", `${claudeModelList(1)}──────────── Session name ─\n`)).toBe(true);
-    expect(modelListWaits("claude", `${wrapped}──────────── Session name ─\n`)).toBe(true);
-    expect(modelListWaits("claude", `${wrapped}──────────── Session name ─\n  3 tasks (0 done, 1 in progress, 2 open)\n  ◼ 구현\n    Running tests…\n  ◻ 검증\n  ◻ 정리\n`)).toBe(true);
+    expect(registry.waits("claude", `${claudeModelList(1)}──────────── Session name ─\n`)).toBe(true);
+    expect(registry.waits("claude", `${wrapped}──────────── Session name ─\n`)).toBe(true);
+    expect(registry.waits("claude", `${wrapped}──────────── Session name ─\n  3 tasks (0 done, 1 in progress, 2 open)\n  ◼ 구현\n    Running tests…\n  ◻ 검증\n  ◻ 정리\n`)).toBe(true);
     // the same footer under an answered list's hint and what came after it holds nothing
-    expect(modelListWaits("claude", `${wrapped}⏺ Kept the model.\n──────────── Session name ─\n`)).toBe(false);
+    expect(registry.waits("claude", `${wrapped}⏺ Kept the model.\n──────────── Session name ─\n`)).toBe(false);
     // a list that takes Enter alone would save the pick as the default: not this card's to press
     expect(parseInteractivePrompt("claude", claudeModelList(1, 0, 10, "  Enter to set as default · Esc to cancel"))).toBeNull();
     expect(parseInteractivePrompt("claude", claudeModelList(1, 0, 10, "  Enter to confirm · Esc to cancel"))).toBeNull();
@@ -3655,15 +3687,15 @@ ${rule}
     expect(parseInteractivePrompt("claude", CLAUDE_EFFORT_SET)).toBeNull();
     // the slider's text left above later output takes no key any more, and holds no message back
     expect(parseInteractivePrompt("claude", `${claudeEffort(2)}Some later output\nand more\n`)).toBeNull();
-    expect(modelListWaits("claude", `${claudeEffort(2)}Some later output\nand more\n`)).toBe(false);
-    expect(modelListWaits("claude", claudeEffort(2))).toBe(true);
-    expect(modelListWaits("claude", CLAUDE_EFFORT_SET)).toBe(false);
+    expect(registry.waits("claude", `${claudeEffort(2)}Some later output\nand more\n`)).toBe(false);
+    expect(registry.waits("claude", claudeEffort(2))).toBe(true);
+    expect(registry.waits("claude", CLAUDE_EFFORT_SET)).toBe(false);
     // a slider that takes Enter alone would save the level as the default: not this card's to press
     expect(parseInteractivePrompt("claude", claudeEffort(2, "  ←/→ to adjust · Enter to confirm · Esc to cancel"))).toBeNull();
     // level names a narrow pane wrapped: no card, and the slider still holds the screen
     const wrapped = claudeEffort(2).replace("low     medium     high     xhigh      max      Tab to toggle", "low     medium     high\n  xhigh      max");
     expect(parseInteractivePrompt("claude", wrapped)).toBeNull();
-    expect(modelListWaits("claude", wrapped)).toBe(true);
+    expect(registry.waits("claude", wrapped)).toBe(true);
     // ▲ between two levels stands over neither
     const between = claudeEffort(2).replace(`${"─".repeat(20)}▲${"─".repeat(21)}`, `${"─".repeat(15)}▲${"─".repeat(26)}`);
     expect(between).not.toBe(claudeEffort(2));
@@ -5228,13 +5260,13 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     for (const screen of unread) {
       expect(parseInteractivePrompt("claude", screen)).toBeNull();
       expect(parseFallbackPrompt("claude", screen).options.map((option) => option.label)).toContain("Enter");
-      expect(modelListWaits("claude", screen)).toBe(true);
+      expect(registry.waits("claude", screen)).toBe(true);
       await withPane("claude", "blocked", screen, async () => {
         expect(await card()).toBeNull();
       });
     }
     // the same hint above later output belongs to an answered slider
-    expect(modelListWaits("claude", `${unread[1]}Some later output\n`)).toBe(false);
+    expect(registry.waits("claude", `${unread[1]}Some later output\n`)).toBe(false);
   });
 
   test("a screen read that comes back after the wait authorises no key", async () => {
@@ -5897,23 +5929,23 @@ describe("Claude Code's model list under a hint wrapped anywhere", () => {
 
   test("holds the screen and reads the list with the hint split inside a word", () => {
     const split = list("  Enter to set as default · s to use this ses\n  sion only · Esc to cancel");
-    expect(modelListWaits("claude", split)).toBe(true);
-    expect(modelListWaits("claude", `${split}──────────── Session name ─\n`)).toBe(true);
+    expect(registry.waits("claude", split)).toBe(true);
+    expect(registry.waits("claude", `${split}──────────── Session name ─\n`)).toBe(true);
     expect(parseInteractivePrompt("claude", split)?.options.map((option) => option.label)).toEqual(CLAUDE_MODELS.slice(0, 10).map(([name]) => name));
     // the same list's text above later output still holds nothing
-    expect(modelListWaits("claude", `${split}Some later output\nand more\n`)).toBe(false);
+    expect(registry.waits("claude", `${split}Some later output\nand more\n`)).toBe(false);
   });
 
   test("holds the screen and reads the list with the hint over seven lines", () => {
     const tall = list("  Enter to\n  set as\n  default ·\n  s to use\n  this\n  session\n  only · Esc to cancel");
-    expect(modelListWaits("claude", tall)).toBe(true);
+    expect(registry.waits("claude", tall)).toBe(true);
     expect(parseInteractivePrompt("claude", tall)?.options).toHaveLength(10);
   });
 
   test("does not take the hint quoted in Claude's output for an open list", () => {
     const quoted = `${CLAUDE_MODEL_CLOSED}⏺ Example: Enter to set as default · s to use this session only · Esc to\n  cancel\n──────────── Summary ─\n`;
-    expect(modelListWaits("claude", quoted)).toBe(false);
-    expect(modelListWaits("claude", `⏺ Enter to set as default · s to use this session only · Esc to cancel\n`)).toBe(false);
+    expect(registry.waits("claude", quoted)).toBe(false);
+    expect(registry.waits("claude", `⏺ Enter to set as default · s to use this session only · Esc to cancel\n`)).toBe(false);
   });
 });
 

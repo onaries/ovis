@@ -16,7 +16,7 @@ describe("GET /api/agents", () => {
   // the shell-started agents this server finds: gjc here, omo not
   const located: string[] = [];
   const shellAgents = { executable: async (kind: string) => { located.push(kind); return kind === "gjc" ? "/opt/gjc/bin/gjc" : null; }, stop: async () => undefined } as unknown as ShellAgentLocator;
-  const manifests = spyOn(herdr, "agentManifests").mockImplementation(async () => ({ manifests: [{ agent: "codex" }, { agent: "pi" }, { agent: "someagent" }, { agent: "cmd" }, { agent: "copilot" }] }) as unknown as Awaited<ReturnType<typeof herdr.agentManifests>>);
+  const manifests = spyOn(herdr, "agentManifests").mockImplementation(async () => ({ manifests: [{ agent: "codex" }, { agent: "pi" }, { agent: "someagent" }, { agent: "cmd" }, { agent: "copilot" }, { agent: "letta" }] }) as unknown as Awaited<ReturnType<typeof herdr.agentManifests>>);
   const url = (path: string) => `http://127.0.0.1:${server.port}${path}`;
 
   beforeAll(() => {
@@ -50,6 +50,7 @@ describe("GET /api/agents", () => {
         { kind: "cmd", label: "Command Code", installed: false },
         { kind: "gjc", label: "Gajae Code", installed: true },
         { kind: "copilot", label: "GitHub Copilot", installed: false },
+        { kind: "letta", label: "Letta Code", installed: false },
         { kind: "omp", label: "Oh My Pi", installed: false },
         { kind: "pi", label: "pi", installed: false },
         { kind: "someagent", label: "someagent", installed: false },

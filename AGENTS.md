@@ -11,7 +11,8 @@ sleeps, wording, icons) are enforced by the `conventions.test.ts` files, whose f
 to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](src/AGENTS.md).
 
 ## Bridge traps
-- Never load node-pty inside Bun: it panics the runtime. PTY work goes through the Node sidecar.
+- Never load node-pty inside Bun: it panics the runtime. PTY work goes through the Rust PTY host
+  (`crates/pty-sidecar`), or the Node sidecar as its fallback, never in-process.
 - Never pass `--takeover` to `herdr terminal attach` on the server's own initiative; it cuts off
   whoever holds the pane. Only a user's explicit take-over request may.
 - One herdr RPC connection per call: herdr closes the socket after each answer. Only
@@ -20,7 +21,7 @@ to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](sr
 - `pane.process_info` takes `pane_id`, not `target` (with `target` herdr answers for the focused
   pane).
 - Keep xterm `scrollback: 0` and never rebuild an attached terminal from `pane.read`: the attach
-  stream is the truth. Only a mirrored pane (Windows, or no Node for the sidecar) is drawn from
+  stream is the truth. Only a mirrored pane (Windows, or no PTY host: neither the Rust host nor Node) is drawn from
   `pane.read`, so never assume a pty exists.
 - Nothing the user typed is sent automatically after a disconnect: it waits in a draft until the
   user sends or discards it.
