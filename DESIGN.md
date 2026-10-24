@@ -1,5 +1,11 @@
 # Ovis Design System
 
+## Codex capacity and code-mode command feedback
+
+Chat follows the Codex TUI's placement of a model-capacity refusal before the next input, using the existing inline failure row and Open Terminal action. Only the native error immediately above the live bottom composer is recognized; a later prompt or activity clears it. Nothing selects a model, retries a request or types into the terminal. Runtime errors are scoped to the PC and pane, independently of conversation-file updates.
+
+Code-mode exec rows use the existing Ran/command layout. Literal nested shell commands are summarized without evaluating JavaScript; dynamic expressions remain in the expanded source. Patch file summaries retain precedence.
+
 Extracted from the shipped client (`src/styles.css`, `src/components/*`), not invented. The machine
 copy of every token is the `:root` block in `src/styles.css`; every table below mirrors it value for
 value. When a component needs a value that is not here, add it to both first.

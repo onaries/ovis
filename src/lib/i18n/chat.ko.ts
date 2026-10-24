@@ -7,6 +7,7 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const CHAT_KO: Record<string, string> = {
+  "Selected model is at capacity. Please try a different model.": "선택한 모델의 처리 용량이 가득 찼습니다. 터미널에서 다른 모델로 변경한 뒤 다시 시도하세요.",
   "Compacting conversation…": "대화 압축 중…",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 채팅을 사용할 수 없습니다. 터미널을 열어 작업 상태와 도구 호출을 확인하세요.",
   "Chat read timed out.": "대화 읽기 시간이 초과되었습니다.",

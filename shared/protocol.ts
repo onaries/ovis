@@ -576,6 +576,8 @@ export interface PanePromptResponse {
   outcomes?: CommandOutcome[];
   /** the live agent screen is compacting its context */
   compacting?: boolean;
+  /** A live Codex failure that its native transcript does not record. */
+  runtime_error?: "model_capacity";
 }
 
 /**

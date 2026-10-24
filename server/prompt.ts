@@ -15,7 +15,7 @@ import { registry } from "./dialogs/registry.ts";
 import { ANSI_RE, type AnswerStep, KEY, type OmoAsk, type ParsedPrompt, finishPrompt, keySteps, navigationKeys, parsedByPublicPrompt, publicPrompt } from "./dialogs/shared.ts";
 import { executeInteractionPlan } from "./dialogs/interaction-plan.ts";
 import { liveScreen, parsePrompt, promptTailIsActive } from "./dialogs/live.ts";
-import { CODEX_WORKING_RE, codexFooterLine, codexModelListWaits } from "./dialogs/codex.ts";
+import { CODEX_WORKING_RE, codexFooterLine, codexModelListWaits, codexRuntimeError } from "./dialogs/codex.ts";
 import { sameText } from "./dialogs/omo.ts";
 import { CLAUDE_EFFORT_GUARD_RE, INVISIBLE_CHAR_RE, claudeModelListWaits } from "./dialogs/claude.ts";
 import { parsePiDialog } from "./dialogs/pi.ts";
@@ -609,7 +609,7 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   // Codex's collapsed question queue reads blocked while its main prompt takes a message; a
   // model list of Claude Code's or Codex's that no reader could read is left to the terminal
   // (claudeModelListWaits, codexModelListWaits)
-  if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexModelListWaits(screen))) || claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE)) {
+  if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexModelListWaits(screen) || codexRuntimeError(screen) !== null)) || claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE)) {
     fallbackLogged.delete(paneId);
     return { agent, status, prompt: asked(paneId, null, turns), pane, panes, screen };
   }
@@ -951,11 +951,13 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           .then((read) => read.text, () => null)
         : null;
       const outcomes = await commandOutcomes(paneId, read.pane, read.prompt, read.screen, readSendId, options.codexHome);
+      const runtimeError = agent === "codex" && screen ? codexRuntimeError(screen) : null;
       return jsonResponse({
         prompt,
         suggestion: box === null ? null : parseClaudeSuggestion(box),
         restored: box === null ? null : await restoredOnLiveScreen(paneId, box).catch(() => null),
         ...(screen && paneIsCompacting(screen) ? { compacting: true } : {}),
+        ...(runtimeError !== null ? { runtime_error: runtimeError } : {}),
         ...(outcomes.length ? { outcomes: watching ? outcomes.map(({ preview: _preview, result_text: _resultText, ...outcome }) => outcome) : outcomes } : {}),
       } satisfies PanePromptResponse);
     }

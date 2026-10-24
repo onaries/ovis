@@ -17,6 +17,17 @@ export const CODEX_QUEUE_HEADER_RE = /^(?:•\s*)?Queued follow-up inputs$/;
 /** Codex appends background-terminal counts to its working row, clipped in narrow panes. */
 export const CODEX_WORKING_RE = /^[•◦].*\((?:\d+[hms]\s*)+•\s*esc to interrupt\)(?:$|\s*·\s*\d+ background\b)/;
 
+/** Only the native error immediately before the bottom composer, never older output or prose. */
+export function codexRuntimeError(screen: string): "model_capacity" | null {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const composer = findLastIndex(lines, (line) => line.startsWith("›"));
+  if (composer < 0 || !lines.slice(composer + 1).some(codexFooterLine)) return null;
+  const error = findLastIndex(lines.slice(0, composer), (line) => line.startsWith("■"));
+  if (error < 0) return null;
+  return lines.slice(error, composer).join(" ") === "■ Selected model is at capacity. Please try a different model."
+    ? "model_capacity" : null;
+}
+
 /** The warning on the right can clip the shortcuts hint on the left without an ellipsis. */
 export function codexFooterLine(line: string): boolean {
   if (/^(?:\S+\s+(?:default|minimal|none|low|medium|high|xhigh|max|ultra)\s*·|\d+% context left\b|⚠\s*\d+\s*warnings?\b|(?:←[^·]*·\s*)?\?\s*for shortcuts\b)/i.test(line)) return true;

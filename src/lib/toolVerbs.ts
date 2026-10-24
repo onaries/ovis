@@ -1,4 +1,5 @@
 import { patchFiles, patchText } from "../../shared/patch.ts";
+import { execSummary } from "../../shared/execSummary.ts";
 
 export type ToolVerbKind = "read" | "edit" | "write" | "run";
 
@@ -54,6 +55,7 @@ export function toolVerbKind(name: string, input = ""): ToolVerbKind | null {
 function isObjectOf(kind: ToolVerbKind, input: string, object: string): boolean {
   const patch = patchText(input);
   if (patch !== null && patchFiles(patch).join(", ").slice(0, SUMMARY_LENGTH) === object) return true;
+  if (kind === "run" && execSummary(input) === object) return true;
   let args: unknown;
   try { args = JSON.parse(input); } catch { return false; }
   if (typeof args !== "object" || args === null) return false;

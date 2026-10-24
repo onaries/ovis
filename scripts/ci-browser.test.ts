@@ -75,7 +75,8 @@ describe("browser lane", () => {
   it("summarizes every script and exits zero on success without enabling local evidence", async () => {
     const { text, code, evidence } = await lane();
     expect(code).toBe(0);
-    expect(rows(text)).toHaveLength(85);
+    expect(rows(text)).toHaveLength(86);
+    expect(rows(text).map((row) => row.script)).toContain("scripts/codex-status-browser-regression.ts");
     expect(rows(text).map((row) => row.script)).toContain("scripts/phone-glass-header-demo-regression.ts");
     expect(rows(text).map((row) => row.script)).toContain("scripts/replay-clipboard-demo-regression.ts");
     expect(rows(text).map((row) => row.script)).toContain("scripts/theme-first-paint-demo-regression.ts");

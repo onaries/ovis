@@ -981,10 +981,12 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   const [screenRead, setScreenRead] = useState(false);
   // Native Grok/Agy events can arrive while Herdr still reports ready/done. This is display
   // feedback only: sending, queuing and stopping retain the server's input authority.
-  const activity = state.activity ?? (agentStatus === "working" ? "working" : "idle");
+  const [capacityErrorOwner, setCapacityErrorOwner] = useState<string | null>(null);
+  const modelCapacity = agent === "codex" && capacityErrorOwner === paneStorageId(machineId, paneId);
+  const activity = modelCapacity ? "idle" : state.activity ?? (agentStatus === "working" ? "working" : "idle");
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const smoothFollow = followGlides({ working: activity !== "idle" && agentStatus !== "blocked", reducedMotion });
-  const workStatus = state.activity !== undefined && agentStatus !== "blocked" ? activity === "idle" ? "idle" : "working" : agentStatus;
+  const workStatus = modelCapacity ? "blocked" : state.activity !== undefined && agentStatus !== "blocked" ? activity === "idle" ? "idle" : "working" : agentStatus;
   const [error, setError] = useState<UserFailure | null>(null);
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
   /** reads failed in a row: a slow PC is waited for this many times before the chat alarms */
@@ -1375,7 +1377,7 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   const [promptStale, setPromptStale] = useState(false);
   const pollPrompt = connected && !ended && agent !== null;
   useEffect(() => {
-    if (!pollPrompt) { setPrompt(null); setPromptStale(false); setCompacting(false); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
+    if (!pollPrompt) { setPrompt(null); setPromptStale(false); setCompacting(false); setCapacityErrorOwner(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
     if (!visible) return;
     let cancelled = false;
     let timer = 0;
@@ -1391,6 +1393,7 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
           setPromptStale(false);
           setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
           setCompacting(next.compacting);
+          setCapacityErrorOwner(next.runtimeError === "model_capacity" ? paneStorageId(machineId, paneId) : null);
           // unchanged outcomes keep their objects: the turns carrying them are not re-rendered
           setOutcomes((current) => JSON.stringify(current) === JSON.stringify(next.outcomes) ? current : next.outcomes);
           onOutcomesRef.current?.(paneId, next.outcomes.map((outcome) => outcome.id));
@@ -1789,7 +1792,7 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
     const { turn } = row;
     const live = isLiveWorkTurn(turn, row.index === shownTurns.length - 1, workStatus, finishedBeforeSend);
     return <RenderBoundary resetKey={turnRevision(turn, true)} fallback={() => <p className="chat-inline-state chat-inline-error" data-pane-content-error>{t("This message can't be shown here. The terminal has it.")}</p>}>
-      <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} skills={skillMatcher} userSkills={skillMatcher} outcome={row.outcome} outcomeActions={outcomeActions}
+      <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, workStatus)} showThinking={settings.showThinking} skills={skillMatcher} userSkills={skillMatcher} outcome={row.outcome} outcomeActions={outcomeActions}
         onRewindInTerminal={turn.role === "user" ? rewindInTerminal : null} />
     </RenderBoundary>;
   }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agentStatus, settings.showThinking, skillMatcher, outcomeActions, rewindInTerminal]);
@@ -1827,6 +1830,10 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
   const footer = <>
       {!ended && !connected && <p className="chat-inline-state" role="status">{t("Reconnecting…")}</p>}
+      {modelCapacity && connected && !ended && <div className="chat-inline-error chat-failure" role="alert">
+        <span className="chat-failure-line">{t("Selected model is at capacity. Please try a different model.")}</span>
+        {onOpenTerminal && <button type="button" className="btn chat-failure-retry" onClick={() => onOpenTerminal("")}>{t("Open Terminal")}</button>}
+      </div>}
       {compacting && connected && !ended && <p className="chat-inline-state" role="status">{t("Compacting conversation…")}</p>}
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
       {error !== null && !waiting && (errorStatus === 401
@@ -1846,7 +1853,7 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
           ? <p className="chat-activity chat-activity-line" role="status"><CircleDot aria-hidden="true" />{activity === "thinking" ? t("Thinking…") : t("Working…")}</p>
           // before the turn has a row at all, where its work block will be drawn
           : <PendingWorkHead className="chat-activity" title={activity === "thinking" ? t("Thinking…") : t("Working…")} />)}
-      {loaded && empty && error === null && prompt === null && activity === "idle" && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
+      {loaded && empty && error === null && prompt === null && activity === "idle" && !modelCapacity && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
       {ended && <p className="chat-endcap">{t("terminal ended")}</p>}
   </>;
   const jump = newMessages ? <button type="button" className="btn chat-new-messages chat-virtual-jump" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>

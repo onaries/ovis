@@ -7,6 +7,7 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const CHAT_ZH: Record<string, string> = {
+  "Selected model is at capacity. Please try a different model.": "所选模型的处理容量已满。请在终端中切换其他模型后重试。",
   "Compacting conversation…": "正在压缩对话…",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 聊天暂不可用。请打开终端查看运行状态和工具调用。",
   "Chat read timed out.": "读取对话超时。",
