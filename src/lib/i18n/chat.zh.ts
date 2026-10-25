@@ -8,6 +8,19 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const CHAT_ZH: Record<string, string> = {
+  "Subagent": "子代理",
+  "Reported status: {status}": "报告的状态: {status}",
+  "Spawn agent": "请求创建代理",
+  "Wait for agent": "等待代理响应",
+  "Send to agent": "发送给代理",
+  "Close agent": "请求关闭代理",
+  "Resume agent": "请求恢复代理",
+  "Interrupt agent": "请求中断代理",
+  "Follow up with agent": "向代理追加任务",
+  "Original tool input": "原始工具输入",
+  "interrupted": "已中断",
+  "closed": "已关闭",
+  "not found": "未找到",
   "Selected model is at capacity. Please try a different model.": "所选模型的处理容量已满。请在终端中切换其他模型后重试。",
   "Compacting conversation…": "正在压缩对话…",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 聊天暂不可用。请打开终端查看运行状态和工具调用。",

@@ -371,6 +371,16 @@ export interface SkillActivity {
   path?: string;
 }
 
+export interface CodexSubagentCall {
+  readonly operation: "spawn" | "wait" | "send" | "close" | "resume" | "interrupt" | "followup";
+  readonly title: string;
+  readonly prompt: string;
+  readonly agent_type: string | null;
+  readonly agent_id: string | null;
+  readonly nickname: string | null;
+  readonly status: "pending_init" | "running" | "completed" | "errored" | "interrupted" | "shutdown" | "not_found" | null;
+}
+
 export type ConversationPart =
   | { kind: "text"; text: string; phase?: "commentary" | "final_answer" }
   /** the agent's reasoning block; the client folds it and shows it only on request */
@@ -382,6 +392,7 @@ export type ConversationPart =
     /** Hermes could not load a tool-call list whose arguments exceeded its page limit. */
     arguments_omitted?: true;
     skill?: SkillActivity;
+    codex_subagents?: CodexSubagentCall[];
     /** set when `output` was cut: the call's id, for GET /api/pane/conversation/tool-output, and the whole output's length */
     output_ref?: string; output_size?: number;
     /** images the call returned (pi reads a picture into the result); same fetch as a user image */
@@ -403,7 +414,7 @@ export type ConversationPart =
   /** a message the agent's runtime put in the user's seat (gjc's background-job result): it starts a turn, nobody typed it.
    * `source`: the runtime's name for it (pi's customType, e.g. "async-result", "irc:incoming", "omo-model-profile:unavailable") */
   | { kind: "notice"; text: string; source?: string }
-  /** OmO's background tasks that ended, as OmO reported them back to the agent, or a Claude Code subagent that ended (its task notification): it starts a turn, nobody typed it */
+  /** OmO's background tasks or a Claude Code/Codex subagent that ended (its native notification): it starts a turn, nobody typed it */
   | { kind: "task_result"; tasks: OmoTaskResult[] };
 
 /** One OmO background task that ended (the `senpi-task.completion` OmO wakes its agent with). */

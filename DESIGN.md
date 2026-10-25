@@ -15,6 +15,14 @@ Non-shell code-mode rows follow the same Codex tool-name convention: their neste
 stand alone, in source order without duplicates, instead of the outer exec id or a shell
 verb. Only static calls are named; dynamic paths and arguments stay in the expanded source.
 
+Codex subagent calls follow Ovis's existing OmO assignment and result cards, as requested,
+rather than adding a separate agent workspace. A call shows the assigned task, reported name,
+role and identity; expanding retains the prompt and original tool input. Wait results label
+only explicitly reported states. Native completion and failure notifications become result
+cards under their originating conversation, with unknown token counts and durations omitted.
+Tool-call completion alone is not presented as the child's completion. No child transcript
+is opened and no additional polling endpoint is introduced.
+
 Extracted from the shipped client (`src/styles.css`, `src/components/*`), not invented. The machine
 copy of every token is the `:root` block in `src/styles.css`; every table below mirrors it value for
 value. When a component needs a value that is not here, add it to both first.

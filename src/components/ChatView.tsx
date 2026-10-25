@@ -92,7 +92,7 @@ const ImageViewerContext = createContext<(images: GalleryImage[], index: number)
 /** The pane's folder a tool card's file labels read from (toolPathRoot), or null: labels as written. */
 const ToolPathRootContext = createContext<string | null>(null);
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
-import type { AgentStatus, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, SlashCommand } from "../../shared/protocol.ts";
+import type { AgentStatus, CodexSubagentCall, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, SlashCommand } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
 import { useT } from "../lib/i18n.ts";
@@ -352,10 +352,36 @@ function PatchView({ patch }: { patch: string }) {
   </div>)}</div>;
 }
 
+function subagentAction(operation: CodexSubagentCall["operation"], t: ReturnType<typeof useT>): string {
+  return {
+    spawn: t("Spawn agent"), wait: t("Wait for agent"), send: t("Send to agent"), close: t("Close agent"),
+    resume: t("Resume agent"), interrupt: t("Interrupt agent"), followup: t("Follow up with agent"),
+  }[operation];
+}
+
+function SubagentInput({ calls, input }: { calls: CodexSubagentCall[]; input: string }) {
+  const t = useT();
+  const states: Record<NonNullable<CodexSubagentCall["status"]>, string> = {
+    pending_init: t("pending"), running: t("running"), completed: t("done"), errored: t("failed"),
+    interrupted: t("interrupted"), shutdown: t("closed"), not_found: t("not found"),
+  };
+  return <>
+    <ol className="chat-task-calls">{calls.map((call, index) => <li key={index} className="chat-task-call">
+      <p className="chat-task-call-head"><span className="chat-task-call-title">{call.title || call.nickname || subagentAction(call.operation, t)}</span>
+        <span className="chat-task-call-agent">{[subagentAction(call.operation, t), call.nickname, call.agent_type, call.status === null ? null : t("Reported status: {status}", { status: states[call.status] })].filter(Boolean).join(" · ")}</span>
+      </p>
+      {call.agent_id !== null && <p className="chat-tool-io-meta">{call.agent_id}</p>}
+      {call.prompt.length > 0 && <pre className="chat-tool-io chat-task-call-prompt">{call.prompt}</pre>}
+    </li>)}</ol>
+    <details className="chat-teammate-raw"><summary>{t("Original tool input")}</summary><pre>{input}</pre></details>
+  </>;
+}
+
 function ToolInputView({ part }: { part: ToolPartType }) {
   const open = useContext(OpenFileContext);
   const t = useT();
   if (part.arguments_omitted) return <pre className="chat-tool-io">{t("Arguments omitted (too large)")}</pre>;
+  if (part.codex_subagents && part.codex_subagents.length > 0) return <SubagentInput calls={part.codex_subagents} input={part.input} />;
   // a todo call shows the list as it stood after it, when the agent answered with it
   const after = isTodoTool(part.name) ? parseTodoAnswer(part.output) : null;
   if (after !== null && after.length > 0) return <TodoList items={after} />;
@@ -479,9 +505,13 @@ function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: Tool
   const [chosen, setOpen] = useChatRowToggle(stateKey, false);
   const open = chosen === true;
   const whole = useWholeOutput(part.output_ref);
-  const summary = part.arguments_omitted ? t("Arguments omitted (too large)") : todoCallSummary(part) ?? part.summary;
+  const hasSubagents = !part.arguments_omitted && (part.codex_subagents?.length ?? 0) > 0;
+  const summary = part.arguments_omitted ? t("Arguments omitted (too large)") : hasSubagents
+    ? `${t("Subagent")} · ${part.codex_subagents?.map((call) => call.title || call.nickname || subagentAction(call.operation, t)).join(" · ").slice(0, 120)}`
+    : todoCallSummary(part) ?? part.summary;
   // reads the call's input: once per call, not on every poll of the transcript
-  const { verb, narration } = useMemo(() => workRowLabel({ name: part.name, input: part.input }, summary), [part.name, part.input, summary]);
+  const { verb, narration: described } = useMemo(() => workRowLabel({ name: part.name, input: part.input }, summary), [part.name, part.input, summary]);
+  const narration = described || hasSubagents;
   // the list is the answer of a todo call: its raw text would say it twice
   const output = isTodoTool(part.name) && parseTodoAnswer(part.output) !== null ? "" : whole.text ?? part.output;
   // an attempt inside a todo run says how it went, in the transcript's words; a failure already says "failed"

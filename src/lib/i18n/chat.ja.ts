@@ -8,6 +8,19 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const CHAT_JA: Record<string, string> = {
+  "Subagent": "サブエージェント",
+  "Reported status: {status}": "報告された状態: {status}",
+  "Spawn agent": "エージェントの作成を要求",
+  "Wait for agent": "エージェントの応答待ち",
+  "Send to agent": "エージェントへ送信",
+  "Close agent": "エージェントの終了を要求",
+  "Resume agent": "エージェントの再開を要求",
+  "Interrupt agent": "エージェントの中断を要求",
+  "Follow up with agent": "エージェントへ追加作業",
+  "Original tool input": "元のツール入力",
+  "interrupted": "中断",
+  "closed": "終了",
+  "not found": "見つかりません",
   "Selected model is at capacity. Please try a different model.": "選択したモデルの処理容量がいっぱいです。ターミナルで別のモデルに切り替えてから再試行してください。",
   "Compacting conversation…": "会話を圧縮中…",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravityのチャットを利用できません。ターミナルを開いて動作状況とツール呼び出しを確認してください。",

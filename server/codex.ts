@@ -8,6 +8,7 @@ import nodePath, { isAbsolute, join, type PlatformPath } from "node:path";
 import type { ConversationPart, ConversationTurn, HerdrPane } from "../shared/protocol.ts";
 import { patchFiles, patchText } from "../shared/patch.ts";
 import { execSummary, execToolSummary } from "../shared/execSummary.ts";
+import { codexSubagentCalls, codexSubagentNotification } from "./codex-subagents.ts";
 import { processStartedAt, processStartLowerBound } from "./process-start.ts";
 import { codexImageParts } from "./codex-images.ts";
 import { codexReadCall, codexReadSkills, selectedSkill } from "./skill-activity.ts";
@@ -25,7 +26,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function contextOnly(text: string): boolean {
   const value = text.trim();
   return (/^# AGENTS\.md instructions(?: for [^\r\n]+)?\r?\n\s*<INSTRUCTIONS>[\s\S]*<\/INSTRUCTIONS>(?:\s*<environment_context>[\s\S]*<\/environment_context>)?$/.test(value))
-    || /^<(environment_context|permissions instructions|turn_aborted|subagent_notification)>[\s\S]*<\/\1>$/.test(value);
+    || /^<(environment_context|permissions instructions|turn_aborted)>[\s\S]*<\/\1>$/.test(value);
 }
 
 /**
@@ -192,7 +193,8 @@ export function codexCallFailed(output: string): boolean {
 interface CodexParseState {
   turns: ConversationTurn[];
   tools: Map<string, Extract<ConversationPart, { kind: "tool" }>>;
-  messages: { role: string; text: string; source: string; ts: string; paired: boolean; part: Extract<ConversationPart, { kind: "text" }>; turn: ConversationTurn }[];
+  messages: { role: string; text: string; source: string; ts: string; paired: boolean; part: ConversationPart; turn: ConversationTurn }[];
+  agentCells?: Map<string, Extract<ConversationPart, { kind: "tool" }>>;
   startedAt?: string;
   skillEvents?: Set<string>;
   activeTurnId?: string;
@@ -211,6 +213,8 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
     return turn;
   };
   const message = (role: "user" | "assistant", text: string, source: string, ts: string, phase?: "commentary" | "final_answer", images: ConversationPart[] = []): void => {
+    const notification = role === "user" && text.trim().startsWith("<subagent_notification>")
+      ? codexSubagentNotification(text, turns.slice(-100).flatMap((turn) => turn.parts.flatMap((part) => part.kind === "tool" ? part.codex_subagents ?? [] : [])).slice(-256)) : null;
     const body = role === "user" ? questionReply(text) ?? text
       : withoutMemoryCitations(text);
     if (!body.trim() && images.length === 0) return;
@@ -218,14 +222,14 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
       && other.source !== source && (other.ts === ts || Math.abs(Date.parse(other.ts) - Date.parse(ts)) <= 1000));
     if (duplicate) {
       duplicate.paired = true;
-      if (phase) duplicate.part.phase = phase;
+      if (phase && duplicate.part.kind === "text") duplicate.part.phase = phase;
       // Prefer the event's local paths over a response's inline copies of the same images.
       if (images.length > 0 && (source === "event" || !duplicate.turn.parts.some((part) => part.kind === "image"))) {
         duplicate.turn.parts = [...images, ...duplicate.turn.parts.filter((part) => part.kind !== "image")];
       }
       return;
     }
-    const part: Extract<ConversationPart, { kind: "text" }> = { kind: "text", text: body, ...(phase ? { phase } : {}) };
+    const part: ConversationPart = notification ?? { kind: "text", text: body, ...(phase ? { phase } : {}) };
     const turn = role === "user" ? { role, ts: ts || null, parts: [...images, ...(body.trim() ? [part] : [])] } : assistant(ts);
     if (role === "user") turns.push(turn);
     else turn.parts.push(part);
@@ -313,6 +317,10 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
           kind: "tool", name, summary: (string(summary) || name).slice(0, 120),
           input: Object.keys(args).length ? JSON.stringify(args, null, 2) : string(raw), output: "",
         };
+        const agents = codexSubagentCalls(name, part.input);
+        if (agents.length > 0) part.codex_subagents = agents;
+        const origin = name === "wait" ? state.agentCells?.get(`cell:${string(args.cell_id)}`) : undefined;
+        if (origin && typeof payload.call_id === "string") state.agentCells?.set(`call:${payload.call_id}`, origin);
         const skill = codexReadCall(name, args);
         if (skill) part.skill = skill;
         // the native id, and pending until an output record answers it
@@ -320,9 +328,28 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         assistant(ts).parts.push(part);
         if (typeof payload.call_id === "string") tools.set(payload.call_id, part);
       } else if (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") {
-        const tool = tools.get(string(payload.call_id));
+        const callId = string(payload.call_id);
+        const continuation = state.agentCells?.get(`call:${callId}`);
+        const tool = tools.get(callId) ?? continuation;
         if (!tool) continue;
         const output = contentText(payload.output);
+        const origin = continuation ?? tool;
+        const agents = codexSubagentCalls(origin.name, origin.input, output || payload.output);
+        if (agents.length > 0) origin.codex_subagents = agents.map((agent, index) => {
+          const prior = origin.codex_subagents?.[index];
+          if (!prior || prior.operation !== agent.operation || (agent.agent_id !== null && agent.agent_id !== prior.agent_id)) return agent;
+          return { ...agent, agent_id: agent.agent_id ?? prior.agent_id, nickname: agent.nickname ?? prior.nickname, status: agent.status ?? prior.status };
+        });
+        const cell = /^Script running with cell ID ([^\s]+)/m.exec(output)?.[1];
+        if (cell && origin.codex_subagents) {
+          const cells = state.agentCells ??= new Map();
+          cells.set(`cell:${cell}`, origin);
+          cells.set(`call:${callId}`, origin);
+          while (cells.size > 256) { const first = cells.keys().next().value; if (first === undefined) break; cells.delete(first); }
+        } else if (state.agentCells) {
+          state.agentCells.delete(`call:${callId}`);
+          for (const [key, owner] of state.agentCells) if (owner === origin && key.startsWith("cell:")) state.agentCells.delete(key);
+        }
         trimOutput(tool, output, string(payload.call_id));
         if (codexCallFailed(output)) tool.error = true;
         if (tool.skill) tool.skill.status = tool.error ? "failed" : "loaded";
@@ -1020,6 +1047,7 @@ function codexExchanges(text: string): CodexExchange[] {
     if (user !== null) exchanges.push({ user, assistant: assistant.join("\n") });
   };
   for (const turn of turns) {
+    if (turn.role === "user" && turn.parts.every((part) => part.kind === "task_result" || part.kind === "notice")) continue;
     const prose = turn.parts.flatMap((part) => part.kind === "text" ? [part.text] : []).join("\n");
     if (turn.role === "user") {
       finish();

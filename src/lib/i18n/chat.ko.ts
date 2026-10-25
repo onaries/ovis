@@ -8,6 +8,19 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const CHAT_KO: Record<string, string> = {
+  "Subagent": "서브에이전트",
+  "Reported status: {status}": "보고된 상태: {status}",
+  "Spawn agent": "에이전트 생성 요청",
+  "Wait for agent": "에이전트 응답 대기",
+  "Send to agent": "에이전트에 전달",
+  "Close agent": "에이전트 종료 요청",
+  "Resume agent": "에이전트 재개 요청",
+  "Interrupt agent": "에이전트 중단 요청",
+  "Follow up with agent": "에이전트에 후속 작업",
+  "Original tool input": "원본 도구 입력",
+  "interrupted": "중단됨",
+  "closed": "종료됨",
+  "not found": "찾을 수 없음",
   "Selected model is at capacity. Please try a different model.": "선택한 모델의 처리 용량이 가득 찼습니다. 터미널에서 다른 모델로 변경한 뒤 다시 시도하세요.",
   "Compacting conversation…": "대화 압축 중…",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 채팅을 사용할 수 없습니다. 터미널을 열어 작업 상태와 도구 호출을 확인하세요.",
