@@ -12,6 +12,10 @@
  *   so a restart does not forget it: a browser can keep handing over a subscription its push
  *   service retired, and registering it again would only fail the next push, so it is refused as
  *   `subscription_gone` and the device subscribes anew (#1038).
+ * - push-keys.json (PUSH_EXTRA_KEYS): key pairs other than vapid.json's, each with the endpoints
+ *   made for it. Only state-merge.ts writes it, for subscriptions taken over from the other state
+ *   dir of an install that had two: each is signed with the key it was made for until its device
+ *   subscribes again with this server's key (src/lib/push.ts does when it next opens).
  *
  * Requests are built by web-push's generateRequestDetails (RFC 8291 aes128gcm + RFC
  * 8292 VAPID) and sent with fetch; its sendNotification path goes through node:https
@@ -65,6 +69,10 @@ const DEFAULT_SUBJECT = "https://github.com/devswha/ovis";
 const RETIRED_LIMIT = 1000;
 /** How long a retired endpoint is remembered: a browser that kept it this long has long since moved on. */
 const RETIRED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** The key pairs, besides vapid.json's, that subscriptions taken over from another state dir were made for. */
+export const PUSH_EXTRA_KEYS = "push-keys.json";
+
+type VapidKeys = { publicKey: string; privateKey: string };
 
 /** How long an alert waits for the pane to change first, and the turn a finish is worth telling. */
 export interface AlertTiming {
@@ -221,6 +229,28 @@ export function createPushService(options: PushServiceOptions): PushService {
   /** sha256 of each endpoint a push service retired -> when, oldest first; loaded on first need */
   let retiredEndpoints: Map<string, number> | null = null;
   const endpointHash = (endpoint: string): string => createHash("sha256").update(endpoint).digest("base64url");
+  /** endpoint -> the key pair it was made for, when that is not vapid.json's; loaded on first need */
+  let extraKeys: Map<string, VapidKeys> | null = null;
+
+  /** The key pair `endpoint` was made for: one of push-keys.json's, else this server's own. */
+  function keysFor(endpoint: string): VapidKeys {
+    if (extraKeys === null) {
+      extraKeys = new Map();
+      const path = join(options.stateDir, PUSH_EXTRA_KEYS);
+      try {
+        const stored = readJson(path) as { keys?: unknown } | undefined;
+        for (const entry of Array.isArray(stored?.keys) ? stored.keys as unknown[] : []) {
+          const { publicKey, privateKey, endpoints } = (entry ?? {}) as { publicKey?: unknown; privateKey?: unknown; endpoints?: unknown };
+          if (typeof publicKey !== "string" || typeof privateKey !== "string" || !Array.isArray(endpoints)) continue;
+          for (const at of endpoints) if (typeof at === "string") extraKeys.set(at, { publicKey, privateKey });
+        }
+      } catch (error) {
+        // those subscriptions are then signed with vapid.json's key, which their push service refuses
+        console.error(`Cannot read ${path} (${(error as NodeJS.ErrnoException).code ?? "not JSON"}); subscriptions taken over from another state dir get no alerts until their devices subscribe again`);
+      }
+    }
+    return extraKeys.get(endpoint) ?? keys();
+  }
 
   /** Created on first need: a server nobody subscribes to never writes a key. */
   function keys(): { publicKey: string; privateKey: string } {
@@ -288,7 +318,7 @@ export function createPushService(options: PushServiceOptions): PushService {
 
   async function deliver(subscription: PushSubscriptionRecord, message: PushPayload, urgency: "normal" | "high"): Promise<PushDelivery> {
     if (options.canDeliver && !options.canDeliver(subscription.device_id)) return { ok: false, status: null, gone: false };
-    const { publicKey, privateKey } = keys();
+    const { publicKey, privateKey } = keysFor(subscription.endpoint);
     const details = webpush.generateRequestDetails(subscription, JSON.stringify(message), {
       vapidDetails: { subject, publicKey, privateKey },
       TTL: PUSH_TTL_SECONDS,

@@ -1,7 +1,9 @@
 import { expect, it, spyOn } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEVICE_COOKIE } from "./auth.ts";
 import { DeviceStore } from "./devices.ts";
 import { privateStateFs } from "./private-state.ts";
 import { MachineRelay } from "./machine-relay.ts";
@@ -39,6 +41,71 @@ async function until(check: () => boolean): Promise<void> {
     await Bun.sleep(20);
   }
 }
+
+it("keeps the gate closed, and a device paired in the install's other state dir signed in, on a fresh state dir", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-device-access-"));
+  // an update from a fresh 0.4.14 install starts on the old dir, while the phone was paired in the new one
+  const [active, sibling] = [join(root, "herdr-web-ui"), join(root, "ovis")];
+  for (const dir of [active, sibling]) mkdirSync(dir);
+  const token = "7".repeat(64);
+  const created = "2026-10-25T05:20:00.000Z";
+  writeFileSync(join(sibling, "devices.json"), JSON.stringify({ gate_closed_at: created, devices: [{ id: "0123456789abcdef", label: "Phone", role: "drive", token_hash: createHash("sha256").update(token).digest("hex"), created_at: created, last_seen_at: null }] }));
+  writeFileSync(join(sibling, "preferences.json"), JSON.stringify({ revision: 1, settings: { language: "en", sidebarRows: "two" } }));
+  const server = createServer({ port: 0, stateDir: active, siblingStateDir: sibling, tailscaleOwner: null });
+  const base = `http://127.0.0.1:${server.port}`;
+  // a request through a proxy on this PC stands for one from another device
+  const remote = { "x-forwarded-for": "100.64.0.9" };
+  try {
+    expect((await fetch(`${base}/api/preferences`, { headers: remote })).status).toBe(401);
+    const anonymous = await (await fetch(`${base}/api/health`, { headers: remote })).json() as { auth: unknown };
+    expect(anonymous.auth).toMatchObject({ required: true, authenticated: false });
+    const cookie = `${DEVICE_COOKIE}=${token}`;
+    const paired = await (await fetch(`${base}/api/health`, { headers: { ...remote, cookie } })).json() as { auth: unknown };
+    expect(paired.auth).toMatchObject({ authenticated: true, via: "device" });
+    const preferences = await fetch(`${base}/api/preferences`, { headers: { ...remote, cookie } });
+    expect(await preferences.json()).toMatchObject({ settings: { language: "en", sidebarRows: "two" } });
+  } finally {
+    server.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("serves the state dir it merged into, even when the merge gave the old dir files of its own", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-device-access-"));
+  // the old name holds only the bridge registry; the phone is paired in the new dir
+  const [legacy, next] = [join(root, "herdr-web-ui"), join(root, "ovis")];
+  mkdirSync(join(legacy, "bridges"), { recursive: true });
+  writeFileSync(join(legacy, "bridges", "local.json"), "{}");
+  mkdirSync(next);
+  const token = "8".repeat(64);
+  const created = "2026-10-25T05:20:00.000Z";
+  writeFileSync(join(next, "devices.json"), JSON.stringify({ gate_closed_at: created, devices: [{ id: "0123456789abcdef", label: "Phone", role: "drive", token_hash: createHash("sha256").update(token).digest("hex"), created_at: created, last_seen_at: null }] }));
+  const env = { XDG_CONFIG_HOME: process.env["XDG_CONFIG_HOME"], OVIS_STATE_DIR: process.env["OVIS_STATE_DIR"] };
+  process.env["XDG_CONFIG_HOME"] = root;
+  delete process.env["OVIS_STATE_DIR"];
+  // the copy of the registry for the old dir fails; its merge record does not, and gives it files of its own
+  const rename = privateStateFs.renameSync;
+  const failing = spyOn(privateStateFs, "renameSync").mockImplementation((from, to) => {
+    if (to === join(legacy, "devices.json")) throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    rename(from, to);
+  });
+  let server: ReturnType<typeof createServer> | undefined;
+  try {
+    server = createServer({ port: 0, siblingStateDir: legacy, tailscaleOwner: null, machines: false });
+    const base = `http://127.0.0.1:${server.port}`;
+    const remote = { "x-forwarded-for": "100.64.0.9" };
+    expect((await fetch(`${base}/api/preferences`, { headers: remote })).status).toBe(401);
+    expect((await fetch(`${base}/api/preferences`, { headers: { ...remote, cookie: `${DEVICE_COOKIE}=${token}` } })).status).toBe(200);
+  } finally {
+    failing.mockRestore();
+    server?.stop();
+    for (const [name, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 it("revocation closes an active device's terminal and roster stream without disconnecting another device", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-device-access-"));

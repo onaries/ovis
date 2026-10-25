@@ -9,7 +9,9 @@ It is plain HTML with no build, so edit the files and the next deploy serves the
   Simplified Chinese, Japanese and Korean come from the `#i18n-data` JSON in the same file, keyed
   by the English HTML of each text block, and the visitor picks one in the header (`?lang=zh`,
   `ja` or `ko` opens it directly; the choice is kept in `localStorage`). `/ko/` redirects to
-  `/?lang=ko`. Change English text and its entry together, or the block stays English.
+  `/?lang=ko`. Change English text and its entry together, or the block stays English. Its links
+  to `/beta/` (and `/beta/#…`) are pointed at `/zh/beta/`, `/ja/beta/` or `/ko/beta/` in the
+  other languages, and those to `/privacy/` and `/support/` at `/ko/…` in Korean.
 - It has a day and a night look (`data-theme` on `<html>`, the visitor's choice or the system
   setting); every screenshot has a `-light` and a `-dark` file, swapped by `data-light` /
   `data-dark`, and the mascot and logo have `-night` versions.
@@ -66,6 +68,9 @@ preview address. Cloudflare serves `404.html` for a missing page and `/privacy` 
   its link is set in `BETA_LINKS` there: the TestFlight public link, and the Google Group whose
   members may join the Google Play closed test. Its Windows tile downloads `Ovis.exe`, like the
   Windows download button in `assets/platform.js`, with the install command as a second way.
+  The sections carry `id="iphone"` and `id="android"`: the home page's App Store and Google Play
+  icons, and its download button on a phone (`assets/platform.js`), link to `/beta/#iphone` and
+  `/beta/#android`.
 - The support page names app labels (**Scan QR code**, **Forget**, **Change PC**) and Ovis server
   settings (**Settings → Phone & devices**, **Settings → About**); keep them matching the app.
 - The screenshots in `assets/demo/` come from the demo build (`bun scripts/demo-build.ts <dir>`),

@@ -30,6 +30,28 @@ export interface PrivateStateWrite {
 }
 
 export function writePrivateState(path: string, value: unknown, platform: NodeJS.Platform = process.platform): PrivateStateWrite {
+  const temporary = preparePrivateState(path, value, platform);
+  try { privateStateFs.renameSync(temporary, path); }
+  catch (error) {
+    // Cleanup failures must not mask the write failure the caller has to see.
+    try { privateStateFs.unlinkSync(temporary); } catch { /* reported through `error` */ }
+    throw error;
+  }
+  return syncDirectory(dirname(path), platform);
+}
+
+/**
+ * The two halves of writePrivateState, for a caller that must know afterwards whether the new
+ * document reached `path` (state-merge.ts): the prepared file is renamed into place by
+ * publishPrivateState, so while it still exists, `path` has not got it. A failed publish leaves it.
+ */
+export function publishPrivateState(temporary: string, path: string, platform: NodeJS.Platform = process.platform): PrivateStateWrite {
+  privateStateFs.renameSync(temporary, path);
+  return syncDirectory(dirname(path), platform);
+}
+
+/** The new bytes of `path`, flushed, in a private temporary file beside it; returns that file. */
+export function preparePrivateState(path: string, value: unknown, platform: NodeJS.Platform = process.platform): string {
   const fs = privateStateFs;
   const directory = dirname(path);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -52,13 +74,18 @@ export function writePrivateState(path: string, value: unknown, platform: NodeJS
     const closing = fd;
     fd = null; // a failed close must not be retried: the descriptor is released either way
     fs.closeSync(closing);
-    fs.renameSync(temporary, path);
   } catch (error) {
     // Cleanup failures must not mask the write failure the caller has to see.
     if (fd !== null) try { fs.closeSync(fd); } catch { /* reported through `error` */ }
     try { fs.unlinkSync(temporary); } catch { /* reported through `error` */ }
     throw error;
   }
+  return temporary;
+}
+
+/** Records the rename in `directory` (best effort, see the top of this file). */
+function syncDirectory(directory: string, platform: NodeJS.Platform): PrivateStateWrite {
+  const fs = privateStateFs;
   if (platform === "win32") return { directorySynced: false };
   let directoryFd: number | null = null;
   try {

@@ -23,7 +23,7 @@ const LAST_SEEN_WRITE_MS = 60_000;
 const UNCONFIRMED_FIRST_PAIR_LIMIT = 8;
 const LABEL_MAX = 48;
 
-interface StoredDevice {
+export interface StoredDevice {
   id: string;
   label: string;
   role: DeviceRole;
@@ -65,6 +65,29 @@ export function isDeviceRole(value: unknown): value is DeviceRole {
   return value === "drive" || value === "watch";
 }
 
+/**
+ * A devices.json as it is on disk: absent, a valid registry, or one that cannot be read or is not valid.
+ * `placeholder`: written only to close the gate where there was no registry (state-merge.ts); it says
+ * nothing about which devices were revoked. The store's next save drops the mark.
+ */
+export type DeviceRegistry = { kind: "missing" } | { kind: "ok"; gateClosedAt: string | null; devices: StoredDevice[]; placeholder: boolean } | { kind: "bad" };
+
+export function readDeviceRegistry(path: string): DeviceRegistry {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? { kind: "missing" } : { kind: "bad" };
+  }
+  if (!isJsonObject(parsed) || !Array.isArray(parsed.devices)
+    || !(parsed.gate_closed_at === null || typeof parsed.gate_closed_at === "string")
+    || !parsed.devices.every((d) => isJsonObject(d) && typeof d.id === "string"
+      && typeof d.token_hash === "string" && isDeviceRole(d.role)
+      && typeof d.label === "string" && typeof d.created_at === "string"
+      && (d.last_seen_at === null || typeof d.last_seen_at === "string"))) return { kind: "bad" };
+  return { kind: "ok", gateClosedAt: parsed.gate_closed_at, devices: parsed.devices as StoredDevice[], placeholder: parsed.placeholder === true && parsed.devices.length === 0 };
+}
+
 export class DeviceStore {
   private devices: StoredDevice[] = [];
   /** when the first device was paired: from then on, only this PC, the owner's login, a device or the token get in */
@@ -76,25 +99,25 @@ export class DeviceStore {
   private readonly revocations = new Map<string, Set<() => void>>();
   readonly error: string | null = null;
 
-  constructor(stateDir: string) {
+  /**
+   * `blocked`: why the registry may lack devices that must stay paired (state-merge.ts could not
+   * take over the other state dir's): the store then stays gated and changes nothing, as for a
+   * damaged registry, while the devices it holds still get in.
+   */
+  constructor(stateDir: string, blocked: string | null = null) {
     this.path = join(stateDir, "devices.json");
-    try {
-      const parsed: unknown = JSON.parse(readFileSync(this.path, "utf8"));
-      if (!isJsonObject(parsed) || !Array.isArray(parsed.devices)
-        || !(parsed.gate_closed_at === null || typeof parsed.gate_closed_at === "string")
-        || !parsed.devices.every((d) => isJsonObject(d) && typeof d.id === "string"
-          && typeof d.token_hash === "string" && isDeviceRole(d.role)
-          && typeof d.label === "string" && typeof d.created_at === "string"
-          && (d.last_seen_at === null || typeof d.last_seen_at === "string"))) {
-        throw new Error("invalid device registry");
-      }
-      this.gateClosedAt = parsed.gate_closed_at;
-      this.devices = parsed.devices as StoredDevice[];
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    const read = readDeviceRegistry(this.path);
+    if (read.kind === "ok") {
+      this.gateClosedAt = read.gateClosedAt;
+      this.devices = read.devices;
+    } else if (read.kind === "bad") {
       // A damaged registry is not a first installation. Keep it intact for recovery and
       // let the existing local/token/Tailscale routes provide access to the owner.
       this.error = `Cannot read ${this.path}. Restore a valid devices.json or fix its permissions, then restart the server. External access without a token or trusted Tailscale login remains blocked.`;
+      console.error(this.error);
+    }
+    if (blocked !== null && this.error === null) {
+      this.error = blocked;
       console.error(this.error);
     }
   }

@@ -7,6 +7,28 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-10-25
+
+### Changed
+- On ovis.sh, the App Store and Google Play icons, and the download button on an iPhone or Android
+  phone, open the iPhone or Android part of the Beta page in the visitor's language instead of
+  saying "coming soon". The home page says under its download buttons that the phone apps are in
+  beta, its FAQ says both are in open beta, and every page's top navigation links to the Beta page.
+  ([#1929](https://github.com/devswha/ovis/pull/1929))
+
+### Fixed
+- An install made fresh with 0.4.14 or 0.4.15 no longer opens its sign-in gate after an update or a
+  restart. Such an install moved to the state folder from before the rename, which held none of its
+  paired devices, so any device, and anyone who could reach the address, got in without pairing;
+  its shared settings were reset too. Ovis now uses the right folder, and takes the paired devices,
+  shared settings and alert subscriptions of the other folder over into it, so devices paired before
+  or after the update keep working and a revoked device stays revoked. A device list that cannot be
+  read keeps the gate closed.
+  ([#1931](https://github.com/devswha/ovis/pull/1931))
+- An in-app update from such an install now stays on the new version after it restarts, instead of
+  going back to the old one and offering the same update again.
+  ([#1931](https://github.com/devswha/ovis/pull/1931))
+
 ## [0.4.15] - 2026-10-25
 
 ### Added
@@ -5822,7 +5844,8 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/devswha/ovis/compare/v0.4.15...HEAD
+[Unreleased]: https://github.com/devswha/ovis/compare/v0.4.16...HEAD
+[0.4.16]: https://github.com/devswha/ovis/compare/v0.4.15...v0.4.16
 [0.4.15]: https://github.com/devswha/ovis/compare/v0.4.14...v0.4.15
 [0.4.14]: https://github.com/devswha/ovis/compare/v0.4.13...v0.4.14
 [0.4.13]: https://github.com/devswha/herdr-web-ui/compare/v0.4.12...v0.4.13

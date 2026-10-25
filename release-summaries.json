@@ -1,4 +1,30 @@
 {
+  "0.4.16": {
+    "en": {
+      "fixed": [
+        "A new 0.4.14 or 0.4.15 install keeps its sign-in gate and paired devices after an update.",
+        "An in-app update from such an install stays on the new version after it restarts."
+      ]
+    },
+    "ko": {
+      "fixed": [
+        "0.4.14나 0.4.15로 새로 설치한 PC가 업데이트 후에도 로그인 보호와 연결된 기기를 유지합니다.",
+        "이런 설치에서 앱 안 업데이트가 재시작 후에도 새 버전에 머뭅니다."
+      ]
+    },
+    "ja": {
+      "fixed": [
+        "0.4.14 か 0.4.15 で新しく入れた PC が、更新後もサインインの保護と接続済みの端末を保ちます。",
+        "そうした環境でのアプリ内更新が、再起動後も新しいバージョンのままになります。"
+      ]
+    },
+    "zh": {
+      "fixed": [
+        "用 0.4.14 或 0.4.15 全新安装的电脑，更新后仍保留登录保护和已配对的设备。",
+        "这类安装的应用内更新，重启后会停留在新版本上。"
+      ]
+    }
+  },
   "0.4.15": {
     "en": {
       "new": [

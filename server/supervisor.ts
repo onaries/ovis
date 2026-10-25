@@ -77,8 +77,9 @@ export async function runSupervisor(root = resolve(import.meta.dir, "..")) {
   // a launcher from before the rename finds its releases only under the old state dir: the move
   // waits for a launcher of this version
   const legacyStateDir = legacyLauncherStateDir(process.env);
-  if (legacyStateDir === null) moveLegacyStateDir();
-  const appStateDir = resolve(legacyStateDir ?? defaultStateDir());
+  const supervisor = { root, port, directory: resolve(import.meta.dir, "..") };
+  if (legacyStateDir === null) moveLegacyStateDir(process.env, supervisor);
+  const appStateDir = resolve(legacyStateDir ?? defaultStateDir(process.env, supervisor));
   const socketPath = resolve(herdrSocketPath());
   const stateDir = updateStateDir(root, port, appStateDir);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
