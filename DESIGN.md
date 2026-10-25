@@ -11,6 +11,10 @@ Chat follows the Codex TUI's placement of a model-capacity refusal before the ne
 
 Code-mode exec rows use the existing Ran/command layout. Literal nested shell commands are summarized without evaluating JavaScript; dynamic expressions remain in the expanded source. Patch file summaries retain precedence.
 
+Non-shell code-mode rows follow the same Codex tool-name convention: their nested tool ids
+stand alone, in source order without duplicates, instead of the outer exec id or a shell
+verb. Only static calls are named; dynamic paths and arguments stay in the expanded source.
+
 Extracted from the shipped client (`src/styles.css`, `src/components/*`), not invented. The machine
 copy of every token is the `:root` block in `src/styles.css`; every table below mirrors it value for
 value. When a component needs a value that is not here, add it to both first.

@@ -1,5 +1,5 @@
 import { patchFiles, patchText } from "../../shared/patch.ts";
-import { execSummary } from "../../shared/execSummary.ts";
+import { execSummary, execToolSummary } from "../../shared/execSummary.ts";
 
 export type ToolVerbKind = "read" | "edit" | "write" | "run";
 
@@ -75,6 +75,7 @@ const NARRATION_KEYS = ["summary", "description", "intent"] as const;
  */
 export function isToolNarration(part: { name: string; input: string }, summary: string): boolean {
   if (summary.trim().length === 0 || summary === part.name) return false;
+  if (part.name === "exec" && execToolSummary(part.input) === summary) return true;
   let args: unknown;
   try { args = JSON.parse(part.input); } catch { return false; }
   if (typeof args !== "object" || args === null) return false;

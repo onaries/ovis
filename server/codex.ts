@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import nodePath, { isAbsolute, join, type PlatformPath } from "node:path";
 import type { ConversationPart, ConversationTurn, HerdrPane } from "../shared/protocol.ts";
 import { patchFiles, patchText } from "../shared/patch.ts";
-import { execSummary } from "../shared/execSummary.ts";
+import { execSummary, execToolSummary } from "../shared/execSummary.ts";
 import { processStartedAt, processStartLowerBound } from "./process-start.ts";
 import { codexImageParts } from "./codex-images.ts";
 import { codexReadCall, codexReadSkills, selectedSkill } from "./skill-activity.ts";
@@ -308,7 +308,7 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
           : /^request_user_input/.test(name) && questionTitles(args).length > 0
           ? questionTitles(args).join(" · ")
           : [args.cmd, args.command, args.file_path, args.path, args.pattern, args.description, args.url].find((v) => typeof v === "string")
-            ?? (name === "exec" && typeof raw === "string" ? execSummary(raw) : null);
+            ?? (name === "exec" && typeof raw === "string" ? execSummary(raw) ?? execToolSummary(raw) : null);
         const part: Extract<ConversationPart, { kind: "tool" }> = {
           kind: "tool", name, summary: (string(summary) || name).slice(0, 120),
           input: Object.keys(args).length ? JSON.stringify(args, null, 2) : string(raw), output: "",

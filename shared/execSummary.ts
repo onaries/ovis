@@ -21,3 +21,13 @@ export function execSummary(input: string): string | null {
   }
   return commands.length ? commands.join(" · ").slice(0, 120) : null;
 }
+
+export function execToolCalls(input: string): { name: string; argumentsAt: number }[] {
+  const calls = new RegExp(`${LITERAL}|/\\*[\\s\\S]*?\\*/|//[^\\n]*|/(?:\\\\.|[^/\\\\\\n])+/[dgimsuvy]*(?=\\s*(?:[;,.()\\]}]|$))|(?<![\\w$.])tools\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\(`, "g");
+  return [...input.matchAll(calls)].flatMap((match) => match[1] === undefined ? [] : [{ name: match[1], argumentsAt: match.index + match[0].length }]);
+}
+
+export function execToolSummary(input: string): string | null {
+  const names = new Set(execToolCalls(input).map((call) => call.name).filter((name) => name !== "exec_command" && name !== "apply_patch"));
+  return names.size > 0 ? [...names].join(" · ").slice(0, 120) : null;
+}

@@ -1,8 +1,25 @@
 import { expect, it } from "bun:test";
 import { parseCodexTranscript } from "./codex.ts";
 import { toolVerb } from "../src/lib/toolVerbs.ts";
+import { workRowLabel } from "../src/lib/workRowLabel.ts";
 
 const parse = (input: string) => parseCodexTranscript(JSON.stringify({ type: "response_item", payload: { type: "custom_tool_call", call_id: "one", name: "exec", input } }))[0]?.parts[0];
+it("shows nested image and terminal calls instead of an exec-only heading", () => {
+  const input = 'for (const name of ["phone.png", "desktop.png"]) { const r = await tools.view_image({path:"/repo/evidence/" + name}); image(r.image_url); } text(await tools.write_stdin({session_id:51623,chars:""}));';
+  const part = parse(input);
+  expect(part).toMatchObject({ name: "exec", summary: "view_image · write_stdin", input, call_id: "one" });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(toolVerb(part, part.summary)).toBeNull();
+  expect(workRowLabel(part, part.summary)).toEqual({ narration: true, verb: null });
+  expect(parse('await tools.view_image({path: file}); await tools.view_image({path: other});')).toMatchObject({ summary: "view_image" });
+  expect(parse('await tools.write_stdin({session_id: id,chars:"continue"});')).toMatchObject({ summary: "write_stdin" });
+  expect(parse('await tools.web__run({search_query: queries});')).toMatchObject({ summary: "web__run" });
+});
+it("does not name nested tools mentioned only as data or a property", () => {
+  for (const input of ['// tools.view_image({path:"fake"})', '/* tools.write_stdin({}) */', 'const example = "tools.view_image({})";', 'const example = `tools.view_image({})`;', 'const pattern = /tools.view_image({})/g;', 'other.tools.view_image({});', 'tools.view_image;', 'tools[name]({});']) {
+    expect(parse(input)).toMatchObject({ summary: "exec" });
+  }
+});
 it("names code-mode shell commands rather than only exec, including parallel calls", () => {
   const input = 'await Promise.all([tools.exec_command({cmd:"git status --short",workdir:"/repo"}), tools.exec_command({"workdir":"/repo","cmd":"bun test"})]);';
   const part = parse(input);
@@ -22,4 +39,5 @@ it("decodes literal commands without executing the script and preserves patch su
   }
   const patch = "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch";
   expect(parse(`await tools.apply_patch(${JSON.stringify(patch)}); await tools.exec_command({cmd:"bun test"});`)).toMatchObject({ summary: "src/a.ts" });
+  expect(parse('await tools.exec_command({cmd:"bun test"}); await tools.view_image({path:file});')).toMatchObject({ summary: "bun test" });
 });
