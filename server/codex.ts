@@ -315,6 +315,8 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         };
         const skill = codexReadCall(name, args);
         if (skill) part.skill = skill;
+        // the native id, and pending until an output record answers it
+        if (typeof payload.call_id === "string" && payload.call_id.length > 0) { part.call_id = payload.call_id; part.state = "pending"; }
         assistant(ts).parts.push(part);
         if (typeof payload.call_id === "string") tools.set(payload.call_id, part);
       } else if (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") {
@@ -324,6 +326,8 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         trimOutput(tool, output, string(payload.call_id));
         if (codexCallFailed(output)) tool.error = true;
         if (tool.skill) tool.skill.status = tool.error ? "failed" : "loaded";
+        // done, outcome unknown: Codex records no failure flag, and the output text is no verdict
+        delete tool.state;
         tools.delete(string(payload.call_id));
         const turn = turns.at(-1);
         if (turn?.role === "assistant" && ts) turn.end_ts = ts;

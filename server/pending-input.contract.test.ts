@@ -29,10 +29,14 @@ const holding = async (rpc: "text" | "keys"): Promise<void> => {
   if (hold?.rpc !== rpc) return;
   connectHold = null; hold.reached(); await hold.release;
 };
+/** Each text, key (a draft clear's among them) and agent.prompt write the bridge asks herdr for, as `<kind> <pane>`. */
+const herdrWrites: string[] = [];
+const agentPrompt = herdrClient.agentPrompt;
 mock.module("./herdr/client.ts", () => ({
   ...herdrClient,
-  paneSendText: async (...args: Parameters<typeof sendText>) => { if (args[1].startsWith("\u001b[200~")) await holding("text"); return sendText(...args); },
-  paneSendKeys: async (...args: Parameters<typeof sendKeys>) => { await holding("keys"); return sendKeys(...args); },
+  agentPrompt: async (...args: Parameters<typeof agentPrompt>) => { herdrWrites.push(`prompt ${args[0]}`); return agentPrompt(...args); },
+  paneSendText: async (...args: Parameters<typeof sendText>) => { herdrWrites.push(`text ${args[0]}`); if (args[1].startsWith("\u001b[200~")) await holding("text"); return sendText(...args); },
+  paneSendKeys: async (...args: Parameters<typeof sendKeys>) => { herdrWrites.push(`keys ${args[0]}`); await holding("keys"); return sendKeys(...args); },
 }));
 // The create routes' launch, for the first-message cases: nothing is started (an agent kind may be a
 // real program on this PC); the case starts its recorder in the pane itself, after the route answered,
@@ -790,6 +794,76 @@ describe("connection-owned pending input", () => {
     expect(await f.socket.result(2)).toMatchObject({ ok: false, code: "invalid_submit_text" });
     expect(f.bytes()).toBe(""); expect(f.socket.seen.some((frame) => frame.type === "pending-messages")).toBe(false);
   }, 30_000);
+
+  for (const mirror of [false, true]) it(`rejects malformed immediate framing on shell and mirror paths (${mirror ? "mirror" : "attached shell"})`, async () => {
+    const f = await setup(mirror ? "framing-mirror" : "framing-shell", "plain", "$ ", mirror ? { terminalAttach: false } : {});
+    const writes = () => herdrWrites.filter((write) => write.endsWith(` ${f.pane}`)).length;
+    const sentinel = "touch /tmp/herdr-web-ui-framing-sentinel";
+    const forged = [
+      // its own terminator, then a CR that would run the line after it
+      { text: `ok\u001b[201~\r${sentinel}`, payload: `${paste("ok")}\r${sentinel}\u001b[201~` },
+      { text: "ok", payload: `${paste("ok")}\r${sentinel}` },
+      // a payload its text does not name, and markers twice over
+      { text: "ls", payload: sentinel },
+      { text: "ls", payload: paste(paste("ls")) },
+      { text: "ls", payload: `\u001b[201~ls\u001b[200~` },
+      // a hidden trailing CR: an Enter of its own besides the bridge's
+      { text: "ls", payload: "ls\r" },
+    ];
+    let id = 100;
+    const refused = async (frame: Record<string, unknown>, code = "invalid_submit_text", socket = f.socket) => {
+      socket.send({ type: "submit", id: ++id, pane_id: f.pane, ...frame });
+      expect(await socket.result(id), JSON.stringify(frame).slice(0, 120)).toMatchObject({ ok: false, code });
+    };
+    for (const typed of [false, true]) for (const frame of forged) await refused({ ...frame, ...(typed ? { typed: true } : {}) });
+    // a forged send over a named draft clears nothing; one under a held-copy id reserves nothing
+    await refused({ text: "ls", payload: "ls\r", clear_draft: "old draft" });
+    await refused({ text: "ls", payload: "ls\r", resend_id: "forged-copy" });
+    // over either cap, by one character
+    await refused({ text: "x".repeat(20_001), payload: "x".repeat(20_001) });
+    await refused({ text: "x".repeat(32_769), payload: "x".repeat(32_769), typed: true });
+    // an observing connection is refused for its role, forged or not
+    const watcher = await f.another();
+    watcher.send({ type: "role", mode: "observe" }); await watcher.wait((frame) => frame.type === "role-ack" && frame.mode === "observe");
+    await refused({ text: "ls", payload: "ls" }, "read_only", watcher);
+    await refused(forged[0]!, "read_only", watcher);
+    expect(writes(), "no text, key or draft-clear write").toBe(0);
+    expect(f.bytes()).toBe("");
+
+    // ordinary keys still go as typed
+    f.socket.send({ type: "input", pane_id: f.pane, text: "\u001b[A" }); await f.waitBytes("\u001b[A");
+    f.socket.send({ type: "input", pane_id: f.pane, text: "\u001b" }); await f.waitBytes("\u001b[A\u001b");
+    // and the caps take what they allow: chat 20000, the input line 20001 and 32768
+    let expected = "\u001b[A\u001b";
+    for (const [length, typed] of [[20_000, false], [20_001, true], [32_768, true]] as const) {
+      const text = "x".repeat(length);
+      f.socket.send({ type: "submit", id: ++id, pane_id: f.pane, text, payload: text, ...(typed ? { typed: true } : {}) });
+      expect(await f.socket.result(id)).toMatchObject({ ok: true });
+      expected += `${text}\r`; await f.waitBytes(expected);
+    }
+    // a canonical multiline paste goes as one paste and one Enter
+    f.socket.send({ type: "submit", id: ++id, pane_id: f.pane, text: "첫 줄\tone\nsecond ✓", payload: paste("첫 줄\tone\rsecond ✓"), typed: true });
+    expect(await f.socket.result(id)).toMatchObject({ ok: true });
+    expected += `${paste("첫 줄\tone\rsecond ✓")}\r`; await f.waitBytes(expected);
+
+    // a sender that leaves while its submits wait behind earlier input: the forged one types nothing, the one
+    // the bridge had already taken goes once, and nothing is typed again when another connection comes
+    const keeper = await f.another();
+    const hold = holdConnect("keys");
+    keeper.send({ type: "submit", id: 1, pane_id: f.pane, text: "barrier", payload: "barrier", typed: true });
+    await hold.reached;
+    f.socket.send({ type: "submit", id: ++id, pane_id: f.pane, ...forged[0]!, typed: true });
+    f.socket.send({ type: "submit", id: ++id, pane_id: f.pane, text: "taken once", payload: "taken once", typed: true });
+    await f.socket.disconnect();
+    hold.release();
+    expect(await keeper.result(1)).toMatchObject({ ok: true });
+    const later = await f.another();
+    later.send({ type: "submit", id: 2, pane_id: f.pane, text: "after reconnect", payload: "after reconnect", typed: true });
+    expect(await later.result(2)).toMatchObject({ ok: true });
+    expected += "barrier\rtaken once\rafter reconnect\r"; await f.waitBytes(expected);
+    expect(f.bytes()).toBe(expected);
+    expect(f.bytes()).not.toContain(sentinel);
+  }, 60_000);
 
   for (const stop of [false, true]) it(`checks a new blocked state after the ${stop ? "composer's Stop" : "typed ESC"}'s settling gap, before pasting`, async () => {
     const f = await setup(stop ? "stop-gap-intent" : "stop-gap"); const message = await f.queue(1, "must not paste");

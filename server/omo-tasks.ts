@@ -57,6 +57,8 @@ function task(record: Row): OmoTask | null {
     turns: count(stats?.["turns"]),
     tool_calls: count(stats?.["tool_calls"]),
     tokens: count(stats?.["total_tokens"]),
+    // the record's prompt and answer stay on the server: nothing of a running task is opened
+    detail_kind: null,
   };
 }
 

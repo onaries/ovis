@@ -124,8 +124,9 @@ export type { Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupR
  *         Update POSTs require X-Herdr-Update: 1, same-origin browser requests,
  *         and the usual token gate. Managed starts only; status is polled during restart.
  *  POST   /api/connection-diagnostics    -> 204; ClientConnectionTrace, metadata only, same-origin
- *         and authenticated (watch devices included). 400 invalid_trace, 413 trace_too_large,
- *         429 trace_rate_limited. At most 16 events and 8192 bytes; never input or credentials.
+ *         and authenticated (watch devices included). 400 invalid_trace, 408 trace_timeout (the
+ *         body took over 10 s to arrive), 413 trace_too_large, 429 trace_rate_limited. At most 16
+ *         events and 8192 bytes; never input or credentials.
  *  GET    /api/telemetry                 -> TelemetryStatus (shared/telemetry.ts), no-store
  *  POST   /api/telemetry                 -> TelemetryStatus; TelemetryChange (shared/telemetry.ts):
  *         { enabled?, notice_seen?: true, notice_version?, settings? }. A notice acknowledgement
@@ -248,16 +249,28 @@ export type { Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupR
  *         (what changed in the git repository the pane's folder, or `directory`, is inside: read
  *         only, on the PC that owns the pane. `directory` is absolute, `~/…`, or relative to the
  *         pane's folder; one of pane_id and directory is required. scope: workspace (the default:
- *         working tree against the index, plus untracked files), staged (index against HEAD) or
- *         commit (`base` against `head`, HEAD when absent; each one commit). The list is capped
- *         (`limits`), and `truncated` says when it was. 400 invalid_scope / invalid_revision /
- *         invalid_cwd / missing_directory, 404 revision_not_found, 409 not_a_repository,
- *         503 git_unavailable, 504 git_timeout; 403 read_only for a watching device, as a file read)
- *  GET    /api/workspace/diff/file?pane_id=&directory=&scope=&base=&head=&path=&old_path=
+ *         working tree against the index, plus untracked files), staged (index against HEAD),
+ *         commit (`base` against `head`, HEAD when absent; each one commit) or branch (the working
+ *         tree, untracked files included, against the merge base of `base` and HEAD: what this
+ *         branch changed, never what `base` went on to change; `base` is required, `head` is not
+ *         taken). The list is capped (`limits`), and `truncated` says when it was. 400
+ *         invalid_scope / invalid_revision / invalid_cwd / missing_directory, 404
+ *         revision_not_found, 409 not_a_repository / unborn_head (branch: no commit to compare
+ *         from) / no_common_ancestor (branch: `base` and HEAD share no history; nothing is
+ *         compared in its place), 503 git_unavailable, 504 git_timeout; 403 read_only for a
+ *         watching device, as a file read)
+ *  GET    /api/workspace/diff/file?pane_id=&directory=&scope=&base=&head=&comparison=&path=&old_path=
  *         -> RepoDiffFilePatch (one file of that comparison as a standard `diff --git` unified
  *         patch; `path` and, for a rename, `old_path` are the list's own, relative to the
  *         repository root. The patch is whole or null: `unavailable` says why it is null, and no
- *         cut hunk is ever sent. 400 invalid_path, 404 not_found when nothing changed there)
+ *         cut hunk is ever sent. 400 invalid_path, 404 not_found when nothing changed there. In
+ *         the branch scope `comparison` carries the list's RepoBranchComparison as JSON instead of
+ *         `base`: the patch is read from its pinned merge base, so a base branch that moved on
+ *         changes nothing, and 409 comparison_changed says the repository or HEAD is no longer
+ *         the one listed (refresh the list); 400 invalid_comparison for one of another shape)
+ *  GET    /api/workspace/diff/refs?pane_id=&directory= -> RepoDiffRefs (the local and remote
+ *         branches of that repository, as full refnames with their commits, for choosing a base:
+ *         at most `limits.max_refs`, sorted, a remote's symbolic HEAD left out; nothing is fetched)
  *  GET    /api/pane/prompt?pane_id=     -> PanePromptResponse
  *         (the agent's TUI question/approval menu currently on screen, parsed from the visible pane
  *         text; with no menu, the next prompt Claude Code suggests, grey in its empty input box, and
@@ -373,6 +386,15 @@ export type ConversationPart =
     output_ref?: string; output_size?: number;
     /** images the call returned (pi reads a picture into the result); same fetch as a user image */
     images?: { media_type: string; ref: string }[];
+    /** the agent's own id for the call (Claude `tool_use.id`, Codex `call_id`); absent from other agents and older servers */
+    call_id?: string;
+    /**
+     * What the transcript itself records of the call's outcome, never guessed from its output text.
+     * Claude: `pending` until its tool_result, then `ok`, or `error` when the result is flagged so.
+     * Codex: `pending` until its output record, then absent (it records no failure flag: done, outcome
+     * unknown). Absent for other agents and older servers.
+     */
+    state?: "pending" | "ok" | "error";
   }
   /** A native Claude/Codex user image, addressed by an opaque ref and fetched on demand: GET /api/pane/conversation/image?pane_id=…&ref=… */
   | { kind: "image"; media_type: string; ref: string }
@@ -415,7 +437,7 @@ export interface ConversationMetadata {
   context?: { used: number; window: number | null };
 }
 
-export type { OmoTask, OmoRunNode, OmoRun, OmoActivity } from "./tasks.ts";
+export type { OmoTask, OmoRunNode, OmoRun, OmoActivity, PaneBackgroundAgentDetail } from "./tasks.ts";
 
 export type { PlanStep, PanePlan } from "./plans.ts";
 
@@ -471,7 +493,7 @@ export type { DirectoryListing, CreateDirectoryRequest, DirectoryCreated } from 
 
 export type { FileKind, FileInfo, ProjectFavicon } from "./files.ts";
 
-export type { RepoDiffRepositories, RepoDiffScope, RepoDiffStatus, RepoDiffRepository, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch } from "./repo-diff.ts";
+export type { RepoDiffRepositories, RepoDiffScope, RepoBranchComparison, RepoDiffRefs, RepoDiffStatus, RepoDiffRepository, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch } from "./repo-diff.ts";
 
 export type { AgentKind } from "./agents.ts";
 
@@ -665,9 +687,10 @@ export interface PromptAnswer {
  *    | keys {pane_id, keys} | resize {pane_id, cols, rows} | release-size {pane_id} | role {mode}
  *    | pty-ack {pane_id, stream_id, offset} | secret {id, pane_id, prompt, secret}
  *    | watch {pane_id, cols, rows} | unwatch {pane_id} | conversation-watch {pane_id, enabled}
+ *    | insert {id, pane_id, text}
  *  Server -> client frames: snapshot | pty-data | pty-exit | pane-geometry | role-ack
  *    | pane-status | pane-exited | session-changed | conversation-changed | secret-result
- *    | watch-data | watch-end | error
+ *    | insert-result | watch-data | watch-end | error
  *
  *  attach {flow_control:"ack"} opts into per-subscription output credit.
  *  pty-data.flow carries a stream_id and cumulative UTF-8 payload offset;
@@ -722,6 +745,11 @@ export type ClientMessage =
    * the message as written (agent.prompt pastes it itself), `payload` the same shaped for the
    * pane's bracketed-paste mode, typed when no agent is in front. `typed`: the terminal's own
    * input line, which types `payload` like the keyboard would even into an agent's open menu.
+   * An immediate submit (no `delivery`, or `immediate`) is canonical or refused with invalid_submit_text before
+   * anything is typed or a draft cleared: `text` holds no terminal control character but tab and newline (so no
+   * paste marker), at most 20000 characters (32768 with `typed`) once trailing newlines are dropped and CRLF or a
+   * lone CR read as LF, and `payload` is that text with each LF a CR, bare or inside exactly one ESC[200~ ESC[201~
+   * pair. A queued or held message types `text` only, and `payload` is not read.
    * `delivery:queue` requires "pending-input" and a live interact attachment: while the agent
    * works the bridge keeps the message until its next turn, or the owner explicitly steers it.
    * `delivery:hold` (feature "pending-hold") is the same, except the message is kept as held, also
@@ -752,6 +780,17 @@ export type ClientMessage =
    * paste + Ctrl+Q (OmO) or Tab (working Codex, "codex-agent-queue"). Success removes it as sent without opening a turn gate; a failure keeps it
    * held, or uncertain if input may have reached the terminal. The receipt proves key delivery. */
   | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard" | "agent-queue"; resend_generation?: number }
+  /** the terminal's input line typed into the pane without Enter (feature "terminal-insert"), answered
+   * with an insert-result of the same id once herdr has the bytes. `text` is one line of the draft,
+   * as written: a line break is refused (`unsafe_multiline`), since nothing reports whether the pane's
+   * program takes several lines as one bracketed paste (herdr's attach always opens with its own
+   * ESC[?2004h) and a shell would run each, and an escape (a paste marker included) is refused with
+   * every control byte. The bridge never adds a terminator, a key, a focus, a resize or a take-over
+   * for it. Requires a live interact attachment
+   * the sender is in, and refuses observe, a held or unready pane and a password prompt on screen.
+   * At most 32,768 UTF-16 code units and 128 KiB of UTF-8 (shared/terminal-insert.ts). Never queued
+   * or replayed: a connection that drops settles it as not confirmed, and the draft stays. */
+  | { type: "insert"; id: number; pane_id: string; text: string }
   /** Masked input: revalidate the visible prompt, type literal bytes + Enter immediately.
    * Never queued, retried, sent through agent.prompt, or echoed in a result. */
   | { type: "secret"; id: number; pane_id: string; prompt: string; secret: string }
@@ -808,7 +847,7 @@ export interface ClientConnectionTrace {
 }
 
 /** What a server supports beyond the base protocol, listed in its first snapshot; older bridges list nothing. */
-export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "agent-queue" | "pending-agent-queue" | "codex-agent-queue" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping";
+export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "agent-queue" | "pending-agent-queue" | "codex-agent-queue" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping" | "terminal-insert";
 
 export type ServerMessage =
   /** `connection`: this socket's id on the PC, for a create request's `first_message_connection`; older bridges send none */
@@ -840,6 +879,10 @@ export type ServerMessage =
    * deadline then expired before the message was sent; never a nothing-typed receipt. */
   | { type: "submit-result"; id: number; pane_id: string; ok: boolean; pending?: PendingMessage; code?: string; message?: string; draft?: string; box?: string }
   | { type: "pending-result"; id: number; pane_id: string; pending_id: string; ok: boolean; code?: string; message?: string }
+  /** ok once herdr accepted the inserted bytes (`pane.send_text` answered), never that the program
+   * took or ran them; a refusal names why and nothing was typed, except `insert_failed`, whose bytes
+   * may or may not have arrived. Older bridges never send it. */
+  | { type: "insert-result"; id: number; pane_id: string; ok: boolean; code?: string; message?: string }
   /** Owner-only receipt and state; only an explicit removed outcome permits deleting a retained client message. */
   | { type: "pending-messages"; pane_id: string; messages: PendingMessage[]; removed?: Array<{ id: string; outcome: "sent" | "discarded" }> }
   | { type: "secret-result"; id: number; pane_id: string; ok: boolean; code?: string }

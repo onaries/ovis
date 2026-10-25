@@ -81,4 +81,11 @@ export const MACHINES_KO: Record<string, string> = {
   "Settings (⌘⇧,)": "설정 (⌘⇧,)",
   "The computer this app runs on": "이 앱이 실행되는 컴퓨터",
   "Host": "호스트",
+  "Filter workspaces and agents": "워크스페이스와 에이전트 필터",
+  "Filter": "필터",
+  "Workspaces and agents": "워크스페이스와 에이전트",
+  "Clear filter": "필터 지우기",
+  "No workspaces or agents match": "일치하는 워크스페이스나 에이전트가 없습니다",
+  "No workspaces or agents match on the PCs that answered": "응답한 PC에는 일치하는 워크스페이스나 에이전트가 없습니다",
+  "Try other words, or clear the filter.": "다른 단어로 찾거나 필터를 지우세요.",
 };

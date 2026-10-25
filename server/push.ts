@@ -29,6 +29,11 @@
  * connected page that is visible and has focus, which says so over its WebSocket): the
  * person is at a screen that already shows the change (#751). It is asked when an alert
  * would go out, so a window brought forward while the alert waits still holds it back.
+ *
+ * A pane on the shared mute list (`muted`, shared/preferences.ts `muted_panes`) gets no alert
+ * on any device: none is scheduled for it, one already waiting is called off when the list
+ * changes (`mutesChanged`), and the list is asked again right before a waiting one goes out.
+ * Its status is tracked all the same, so an unmute tells only what changes after it.
  */
 
 import { createHash } from "node:crypto";
@@ -108,6 +113,8 @@ export interface PushService {
   /** Schedules the alert this change is worth, and calls off the one it overtakes. */
   onStatus(paneId: string, status: AgentStatus, machineId?: string): Promise<void>;
   onEnded(paneId: string, machineId?: string): Promise<void>;
+  /** The shared mute list changed: an alert waiting for a pane now muted is called off. */
+  mutesChanged(): void;
   /** Resolves once every alert scheduled so far went out or was called off (tests wait). */
   settled(): Promise<void>;
 }
@@ -122,6 +129,8 @@ export interface PushServiceOptions {
   canDeliver?: (deviceId: string | null | undefined) => boolean;
   /** whether a window of the app is in use right now: then no alert goes to any device (the test push still does) */
   inUse?: () => boolean;
+  /** whether the pane's alerts are off for everyone (shared/notify-policy.ts paneAlertsMuted on the shared preferences) */
+  muted?: (machineId: string, paneId: string) => boolean;
   /** accept plain-http loopback endpoints: only for the tests' fake push service (push.fake.ts) */
   loopbackHttp?: boolean;
 }
@@ -183,6 +192,17 @@ export function statusMessage(paneId: string, title: string, status: AgentStatus
 
 export function endedMessage(paneId: string, title: string): PushPayload {
   return { pane_id: paneId, title, body: ENDED_NOTIFICATION_BODY, tag: paneNotificationTag(paneId) };
+}
+
+/** An alert scheduled for a pane, from its scheduling until it went out or was called off. */
+interface Scheduled {
+  key: string;
+  machineId: string;
+  paneId: string;
+  /** a mute called it off: set for good, so an unmute while its title is looked up sends nothing */
+  silenced: boolean;
+  /** stops the timers that have not fired yet */
+  cancel: () => void;
 }
 
 export function createPushService(options: PushServiceOptions): PushService {
@@ -340,15 +360,22 @@ export function createPushService(options: PushServiceOptions): PushService {
   const now = options.now ?? Date.now;
   /** when each pane's current turn began: from `working`/`blocked` entered, until idle or done */
   const turnStart = new Map<string, number>();
-  /** the alert each pane is waiting to send, called off by the pane's next change */
-  const waiting = new Map<string, () => void>();
+  /** the alert each pane is waiting to send, called off by the pane's next change (or its mute) */
+  const waiting = new Map<string, Scheduled>();
+  /**
+   * every alert from its scheduling until it went out or was called off, with the pane it is for:
+   * a mute calls one off even while its title is looked up, and an unmute after that brings it back nowhere
+   */
+  const unsent = new Set<Scheduled>();
   /** every alert not yet sent or called off, for `settled()` */
   const inFlight = new Set<Promise<void>>();
 
   function callOff(key: string): void {
-    waiting.get(key)?.();
+    waiting.get(key)?.cancel();
     waiting.delete(key);
   }
+
+  const muted = (machineId: string, paneId: string): boolean => options.muted?.(machineId, paneId) === true;
 
   /** How long a device waits before this alert reaches it, or null: it does not want it. */
   function delayFor(prefs: AlertPrefs, status: AgentStatus, worked: number | null): number | null {
@@ -360,9 +387,10 @@ export function createPushService(options: PushServiceOptions): PushService {
   }
 
   /** One timer per delay, each for the devices that wait that long; all called off together. */
-  function schedule(key: string, groups: Map<number, PushSubscriptionRecord[]>, send: (to: PushSubscriptionRecord[]) => Promise<void>): void {
+  function schedule(key: string, machineId: string, paneId: string, groups: Map<number, PushSubscriptionRecord[]>, send: (to: PushSubscriptionRecord[], silenced: () => boolean) => Promise<void>): void {
     const cancels: Array<() => void> = [];
     let remaining = groups.size;
+    let open = groups.size;
     for (const [delay, to] of groups) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       let fired = false;
@@ -370,8 +398,8 @@ export function createPushService(options: PushServiceOptions): PushService {
         timer = setTimeout(() => {
           fired = true;
           remaining -= 1;
-          if (remaining === 0 && waiting.get(key) === cancelAll) waiting.delete(key);
-          send(to).catch((error: unknown) => {
+          if (remaining === 0 && waiting.get(key) === entry) waiting.delete(key);
+          send(to, () => entry.silenced).catch((error: unknown) => {
             console.error(`web push failed: ${error instanceof Error ? error.message : String(error)}`);
           }).finally(resolve);
         }, delay);
@@ -379,10 +407,15 @@ export function createPushService(options: PushServiceOptions): PushService {
         cancels.push(() => { if (fired) return; clearTimeout(timer); resolve(); });
       });
       inFlight.add(done);
-      void done.finally(() => inFlight.delete(done));
+      void done.finally(() => {
+        inFlight.delete(done);
+        open -= 1;
+        if (open === 0) unsent.delete(entry);
+      });
     }
-    const cancelAll = (): void => { for (const cancel of cancels) cancel(); };
-    waiting.set(key, cancelAll);
+    const entry: Scheduled = { key, machineId, paneId, silenced: false, cancel: () => { for (const cancel of cancels) cancel(); } };
+    waiting.set(key, entry);
+    unsent.add(entry);
   }
 
   return {
@@ -471,17 +504,19 @@ export function createPushService(options: PushServiceOptions): PushService {
         turnStart.delete(key);
       }
       if (!shouldNotifyStatus(previous, status)) return;
+      // muted for everyone: tracked above, told to nobody
+      if (muted(machineId, paneId)) return;
       const groups = new Map<number, PushSubscriptionRecord[]>();
       for (const subscription of store().values()) {
         const delay = delayFor(subscription.alerts ?? DEFAULT_ALERTS, status, worked);
         if (delay !== null) groups.set(delay, [...(groups.get(delay) ?? []), subscription]);
       }
       if (groups.size === 0) return;
-      schedule(key, groups, async (to) => {
-        if (options.inUse?.()) return;
+      schedule(key, machineId, paneId, groups, async (to, silenced) => {
+        if (options.inUse?.() || muted(machineId, paneId)) return;
         const title = machineId === "local" ? await titleOf(paneId) : titles.get(key) ?? paneId;
-        // the title can wait for herdr: a window that came into use meanwhile still holds the alert
-        if (options.inUse?.()) return;
+        // the title can wait for herdr: a window that came into use, or a mute made (even one undone since), meanwhile still holds the alert
+        if (options.inUse?.() || silenced() || muted(machineId, paneId)) return;
         // a device that dropped out meanwhile is not written to
         const live = to.flatMap((subscription) => {
           const current = store().get(subscription.endpoint);
@@ -495,11 +530,24 @@ export function createPushService(options: PushServiceOptions): PushService {
       const key = paneStorageId(machineId, paneId);
       callOff(key);
       turnStart.delete(key);
+      if (muted(machineId, paneId)) return;
       // an ended terminal is a finish of its own: a device that wants none hears none
       const to = [...store().values()].filter((subscription) => (subscription.alerts ?? DEFAULT_ALERTS).done !== "off");
       if (to.length === 0 || options.inUse?.()) return;
       // the pane may already be gone from herdr: the seeded title is what is left
       await broadcast({ ...endedMessage(paneId, titles.get(key) ?? paneId), ...where(key, machineId), tag: paneNotificationTag(paneId, machineId) }, "normal", to);
+    },
+
+    mutesChanged() {
+      // an unmute resurrects nothing: what was called off while muted stays called off, including
+      // an alert whose timer has fired and whose title is still being looked up
+      for (const entry of [...unsent]) {
+        if (!muted(entry.machineId, entry.paneId)) continue;
+        entry.silenced = true;
+        entry.cancel();
+        unsent.delete(entry);
+        if (waiting.get(entry.key) === entry) waiting.delete(entry.key);
+      }
     },
 
     async settled() {

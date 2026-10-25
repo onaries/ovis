@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, Download, Monitor, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
 import type { Machine, MachineState, MachineUpdate } from "../../shared/machines.ts";
 import { MachineContext } from "../lib/machineContext.tsx";
@@ -10,6 +10,8 @@ import { useInstallPrompt } from "../lib/install.ts";
 import { Sidebar } from "./Sidebar.tsx";
 import { AgentSidebar } from "./AgentSidebar.tsx";
 import { SidebarActivityProvider, type SidebarActivity } from "../lib/sidebarActivity.tsx";
+import { filterSuggestions, machineFilter, sidebarFilter, type SidebarBranchLabels } from "../lib/sidebarFilter.ts";
+import { SidebarFilterProvider, useSidebarFilter } from "../lib/sidebarFilterContext.ts";
 import { UsageMeters } from "./UsageMeters.tsx";
 import "./Machines.css";
 import { useT } from "../lib/i18n.ts";
@@ -26,22 +28,62 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
 };
 
 /** `activity`: App's live counters per PC and finishes looked at here; both sidebar lists draw from it */
-interface Props { machines: Machine[]; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void }
+interface Props { machines: Machine[]; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; /** a phone's drawer is out: closing it clears the filter */ drawerOpen?: boolean; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
   const { canInstall, installed, install, help } = useInstallPrompt();
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
   const activity = props.activity;
+  // the filter's query lives here and nowhere else: not in storage, not in the address, not past this
+  // mount (lib/sidebarFilter.ts). The branch each roster row says comes up from the rosters, which read it.
+  const [query, setQuery] = useState("");
+  const filterId = useId();
+  const suggestionsId = useId();
+  const filterInput = useRef<HTMLInputElement>(null);
+  const [branchLabels, setBranchLabels] = useState<SidebarBranchLabels>(() => new Map());
+  const reportBranches = useCallback((machineId: string, branches: ReadonlyMap<string, string>) => setBranchLabels((current) => {
+    const before = current.get(machineId);
+    if (before !== undefined && before.size === branches.size && [...branches].every(([id, branch]) => before.get(id) === branch)) return current;
+    if (before === undefined && branches.size === 0) return current;
+    const next = new Map(current);
+    if (branches.size === 0) next.delete(machineId); else next.set(machineId, branches);
+    return next;
+  }), []);
+  const filter = useMemo(() => sidebarFilter(query, props.machines, { machineId: props.selectedMachineId, paneId: props.selectedPaneId }, t, branchLabels), [query, props.machines, props.selectedMachineId, props.selectedPaneId, t, branchLabels]);
+  const filterView = useMemo(() => ({ filter, reportBranches }), [filter, reportBranches]);
+  // the field offers the labels the rows show, as the browser's own suggestions: nothing typed is kept
+  const suggestions = useMemo(() => filterSuggestions(props.machines, branchLabels), [props.machines, branchLabels]);
+  const clearFilter = () => { setQuery(""); filterInput.current?.focus(); };
+  // Escape in the field clears it; an empty field's Escape is left to the page (a phone's drawer closes on it)
+  const onFilterKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Escape" || query === "" || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setQuery("");
+  };
+  const drawerOpen = props.drawerOpen === true;
+  useEffect(() => { if (!drawerOpen) setQuery(""); }, [drawerOpen]);
   // the roster's wait is a live region that is in the list from its first render, clipped while empty (never
   // display: none), and its words land a frame after it (lib/useAnnouncedText.ts)
   const loadingWords = useAnnouncedText(props.machines.length === 0 ? t("Loading PCs…") : null);
-  // no top bar: a workspace starts from its PC's header, and Add PC lives in Settings → Remote PCs
-  return <SidebarActivityProvider value={activity}><div className="sidebar-shell">
+  // a PC whose roster has not come was not searched: the line says the answer is only of the PCs that answered
+  const unanswered = props.machines.some((machine) => machine.snapshot === null);
+  const noMatchWords = useAnnouncedText(filter.active && filter.matches === 0 && props.machines.length > 0 ? `${t(unanswered ? "No workspaces or agents match on the PCs that answered" : "No workspaces or agents match")}\n${t("Try other words, or clear the filter.")}` : null);
+  // no top bar: a workspace starts from its PC's header, and Add PC lives in Settings → Remote PCs. The
+  // filter above the lists is a row of the same grid, one field and its clear, never taller than a row.
+  return <SidebarActivityProvider value={activity}><SidebarFilterProvider value={filterView}><div className="sidebar-shell">
+    <div className="sidebar-filter" role="search" aria-label={t("Filter workspaces and agents")}>
+      <label className="sidebar-filter-label" htmlFor={filterId}>{t("Filter")}</label>
+      <input ref={filterInput} id={filterId} className="input sidebar-filter-input" type="search" value={query} aria-label={t("Filter workspaces and agents")} placeholder={t("Workspaces and agents")} list={suggestionsId} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="search" onChange={(event) => setQuery(event.target.value)} onKeyDown={onFilterKeyDown} />
+      <datalist id={suggestionsId}>{suggestions.map((label) => <option key={label} value={label} />)}</datalist>
+      {query !== "" && <button type="button" className="sidebar-filter-clear" aria-label={t("Clear filter")} title={t("Clear filter")} onClick={clearFilter}><X aria-hidden="true" /></button>}
+    </div>
     <div className="machine-list" aria-label={t("PCs and workspaces")}>
+      <p className={noMatchWords === null ? "visually-hidden" : "tree-state sidebar-filter-empty"} role="status">{noMatchWords}</p>
       {props.machines.map((machine) => <MachineGroup key={machine.id} {...props} machine={machine} />)}
       <p className={loadingWords === null ? "visually-hidden" : "tree-state"} role="status">{loadingWords}</p>
     </div>
-    <AgentSidebar machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} stateWord={(machine) => t(STATE_WORD[machine.state])} onSelect={props.onSelect} />
+    <AgentSidebar machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} stateWord={(machine) => t(STATE_WORD[machine.state])} watching={props.watching} onSelect={props.onSelect} />
     <footer className="sidebar-footer">
       {/* browsers without an install prompt (iOS, plain HTTP) get the steps instead */}
       {!installed && <button className="btn btn-ghost sidebar-footer-action" aria-expanded={canInstall ? undefined : installHelpOpen} onClick={() => { if (canInstall) void install(); else setInstallHelpOpen(!installHelpOpen); }}><Download aria-hidden="true" />{t("Install app")}</button>}
@@ -51,7 +93,7 @@ export function MachineSidebar(props: Props) {
         <UsageMeters />
       </div>
     </footer>
-  </div></SidebarActivityProvider>;
+  </div></SidebarFilterProvider></SidebarActivityProvider>;
 }
 
 function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
@@ -91,12 +133,27 @@ function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
     finally { inFlight.current = false; setBusy(null); }
   };
   const actions: AppActions = { ...props.actions, selectPane: (id) => props.onSelect(machine.id, id), openNewSession: () => props.onNew(machine.id) };
+  // the filter (lib/sidebarFilter.ts): a PC with nothing kept is hidden, its roster still mounted so the
+  // branches it reads stay findable; a folded PC with a match or the selection in it is shown open, its saved
+  // fold untouched; a PC kept for the selection alone is drawn as context
+  const { filter } = useSidebarFilter();
+  const filtered = machineFilter(filter, machine.id);
+  // while a filter is on, the caret folds and opens the PC for the filter's time only: the saved fold is
+  // written by an unfiltered list alone, and comes back as it was when the query is cleared
+  const [filterFold, setFilterFold] = useState<boolean | null>(null);
+  useEffect(() => { if (!filter.active) setFilterFold(null); }, [filter.active]);
+  const hidden = filtered !== null && !filtered.shown;
+  const matched = filtered !== null && (filtered.matched || filtered.matchedWorkspaces.size > 0 || filtered.matchedPanes.size > 0);
+  const kept = filtered !== null && (matched || filtered.workspaces.size > 0 || filtered.panes.size > 0);
+  const folded = filtered === null ? collapsed : filterFold ?? (collapsed && !kept);
+  const context = filtered !== null && !matched;
   const toggle = () => {
+    if (filtered !== null) { setFilterFold(!folded); return; }
     setCollapsed(!collapsed);
     try { localStorage.setItem(`ovis:pc-collapsed:${machine.id}`, collapsed ? "0" : "1"); } catch {}
   };
   // the PC's name is the head of its workspaces, and the caret beside its + the one fold over them
-  return <section className={`machine-group${props.selectedMachineId === machine.id ? " is-current" : ""}${online ? "" : " is-offline"}`} aria-label={t("PC {name}", { name: machine.name })}>
+  return <section className={`machine-group${props.selectedMachineId === machine.id ? " is-current" : ""}${online ? "" : " is-offline"}${context ? " is-filter-context" : ""}`} hidden={hidden} aria-label={t("PC {name}", { name: machine.name })}>
     <header className="machine-header">
       <div className="machine-title">
         <span className="sidebar-mark" aria-hidden="true"><Monitor /></span>
@@ -107,7 +164,7 @@ function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
       </div>
       {machine.kind === "ssh" && <button className="sidebar-row-action machine-manage" aria-label={t("Manage {name}", { name: machine.name })} title={t("Manage PC")} aria-expanded={editing} onClick={() => { setEditing(!editing); setConfirmDelete(false); }}><SlidersHorizontal aria-hidden="true" /></button>}
       {/* the fold over this PC's workspaces sits beside the + */}
-      <button className="sidebar-row-action machine-toggle" aria-expanded={!collapsed} aria-label={collapsed ? t("Expand {name}", { name: machine.name }) : t("Collapse {name}", { name: machine.name })} title={collapsed ? t("Expand {name}", { name: machine.name }) : t("Collapse {name}", { name: machine.name })} onClick={toggle}>{collapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}</button>
+      <button className="sidebar-row-action machine-toggle" aria-expanded={!folded} aria-label={folded ? t("Expand {name}", { name: machine.name }) : t("Collapse {name}", { name: machine.name })} title={folded ? t("Expand {name}", { name: machine.name }) : t("Collapse {name}", { name: machine.name })} onClick={toggle}>{folded ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}</button>
       <button className="sidebar-row-action machine-new" disabled={!online} aria-label={t("New workspace on {name}", { name: machine.name })} title={t("New workspace")} onClick={() => props.onNew(machine.id)}><Plus aria-hidden="true" /></button>
     </header>
     {/* connected is the norm and says nothing new; every other state is spelled out */}
@@ -129,7 +186,8 @@ function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
       {confirmDelete && <p className="field-hint">{t("Removes this registration. Remote sessions keep running.")}</p>}
     </div>}
     {error && <p className="machine-error" role="alert">{error}</p>}
-    {!collapsed && <div className={online ? "" : "machine-offline"} inert={!online}>
+    {/* under a filter a folded PC's roster is mounted, hidden, so the branches it reads can be found */}
+    {(!folded || filtered !== null) && <div className={online ? "" : "machine-offline"} inert={!online} hidden={folded}>
       {!online && !machine.snapshot ? <p className="tree-state machine-empty" role="status">{t("No saved sessions")}</p> : <MachineContext.Provider value={machine.id}><Sidebar snapshot={machine.snapshot} online={online} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} watching={props.watching} /></MachineContext.Provider>}
     </div>}
   </section>;

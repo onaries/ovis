@@ -27,13 +27,14 @@ for size in 16 32 128 256 512; do
   sips -z $((size * 2)) $((size * 2)) Resources/AppIcon-1024.png --out "build/AppIcon.iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns build/AppIcon.iconset -o "$app/Contents/Resources/AppIcon.icns"
+cp -R Resources/ko.lproj "$app/Contents/Resources/"
 
 keychain=${OVIS_KEYCHAIN:+--keychain "$OVIS_KEYCHAIN"}
 if [ -n "${OVIS_SIGN_IDENTITY:-}" ]; then
   # shellcheck disable=SC2086 # $keychain is two words or none
-  codesign --force --options runtime --timestamp $keychain --sign "$OVIS_SIGN_IDENTITY" "$app"
+  codesign --force --options runtime --timestamp --entitlements Ovis.entitlements $keychain --sign "$OVIS_SIGN_IDENTITY" "$app"
 else
-  codesign --force --sign - "$app"
+  codesign --force --entitlements Ovis.entitlements --sign - "$app"
 fi
 codesign --verify --strict "$app"
 

@@ -1,16 +1,18 @@
 import { describe, expect, it } from "bun:test";
 
-import type { RepoDiffFilePatch } from "../../shared/protocol.ts";
+import type { RepoBranchComparison, RepoDiffFilePatch } from "../../shared/protocol.ts";
 import { ApiError } from "./api.ts";
-import { comparisonWord, diffColorable, diffErrorMessage, diffStyleFor, diffTargetFromState, diffTargetState, repositoryFilePath, shortHash, statusWord, unavailableMessage, type RepoDiffTarget } from "./repoDiff.ts";
+import { comparisonChangedWord, comparisonWord, diffColorable, diffErrorMessage, diffStyleFor, diffTargetFromState, diffTargetState, nothingChangedWord, refName, repositoryFilePath, sameComparison, shortHash, statusWord, unavailableMessage, type RepoDiffTarget } from "./repoDiff.ts";
 import { VIRTUAL_HIGHLIGHT_LINES } from "./sourcePreview.ts";
 
 const t = (key: string, vars?: Record<string, string | number>): string =>
   vars === undefined ? key : key.replace(/\{(\w+)\}/g, (match, name: string) => (name in vars ? String(vars[name]) : match));
 
+const identity: RepoBranchComparison = { repository_root: "/home/dev/repo", head_oid: "a".repeat(40), base_oid: "b".repeat(40), merge_base_oid: "c".repeat(40) };
+
 const answer = (unavailable: RepoDiffFilePatch["unavailable"]): RepoDiffFilePatch => ({
   repository: { root: "/home/dev/repo", branch: "main", head: "a".repeat(40), detached: false, unborn: false },
-  scope: "workspace", base: null, head: null,
+  scope: "workspace", base: null, head: null, comparison: null,
   file: { path: "src/a.ts", old_path: null, status: "modified", additions: null, deletions: null, binary: unavailable === "binary" },
   patch: null, unavailable, truncated: unavailable === "too_large",
   limits: { max_patch_bytes: 1024 * 1024, context_lines: 3 },
@@ -20,10 +22,24 @@ describe("repository diff words", () => {
   it("names every status and comparison", () => {
     expect(statusWord(t, "renamed")).toBe("Renamed");
     expect(statusWord(t, "unmerged")).toBe("Conflict");
-    expect(comparisonWord(t, { scope: "workspace", base: null, head: null })).toBe("Working tree");
-    expect(comparisonWord(t, { scope: "staged", base: null, head: null })).toBe("Staged");
-    expect(comparisonWord(t, { scope: "commit", base: "0123456789abcdef0123456789abcdef01234567", head: "HEAD" })).toBe("0123456..HEAD");
+    expect(comparisonWord(t, { scope: "workspace", base: null, head: null, comparison: null })).toBe("Working tree");
+    expect(comparisonWord(t, { scope: "staged", base: null, head: null, comparison: null })).toBe("Staged");
+    expect(comparisonWord(t, { scope: "commit", base: "0123456789abcdef0123456789abcdef01234567", head: "HEAD", comparison: null })).toBe("0123456..HEAD");
+    expect(comparisonWord(t, { scope: "branch", base: "origin/main", head: null, comparison: identity })).toBe("Since origin/main");
+    expect(nothingChangedWord(t, "branch")).toBe("Nothing changed since the base");
     expect(shortHash("v1.0")).toBe("v1.0");
+  });
+
+  it("names a ref as a reader does, and tells one branch identity from another", () => {
+    expect(refName("refs/heads/main")).toBe("main");
+    expect(refName("refs/remotes/origin/feat/x")).toBe("origin/feat/x");
+    expect(refName("refs/tags/v1")).toBe("refs/tags/v1");
+    expect(refName("HEAD~2")).toBe("HEAD~2");
+    expect(sameComparison(null, null)).toBe(true);
+    expect(sameComparison(identity, null)).toBe(false);
+    expect(sameComparison(identity, { ...identity })).toBe(true);
+    expect(sameComparison(identity, { ...identity, merge_base_oid: "d".repeat(40) })).toBe(false);
+    expect(sameComparison(identity, { ...identity, repository_root: "/elsewhere" })).toBe(false);
   });
 
   it("says why a patch is missing, with the cap in bytes", () => {
@@ -40,6 +56,13 @@ describe("repository diff words", () => {
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 403, "watch only", "read_only"))).toBe("This device can only watch.");
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 504, "deadline", "git_timeout"))).toBe("git took too long to answer.");
     expect(diffErrorMessage(t, new Error("socket closed"))).toBe("Changes could not be loaded.");
+    // the branch scope's own refusals, each told apart, and an older bridge that knows no such scope
+    expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 409, "no commit yet", "unborn_head"))).toBe("The repository has no commits yet, so there is no branch to compare.");
+    expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 409, "unrelated", "no_common_ancestor"))).toBe("That base shares no history with HEAD.");
+    expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/file", 409, "moved", "comparison_changed"))).toBe(comparisonChangedWord(t));
+    expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/file", 400, "shape", "invalid_comparison"))).toBe("This comparison is not one the list answered; refresh the list.");
+    expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 400, "scope must be workspace, staged or commit", "invalid_scope"))).toBe("This PC's bridge cannot compare branches yet.");
+    expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/refs", 404, "Not found", "not_found"))).toBe("This PC's bridge cannot show changes yet.");
   });
 });
 
@@ -65,7 +88,7 @@ describe("repository diff layout", () => {
 });
 
 describe("repository diff history entry", () => {
-  const target: RepoDiffTarget = { machineId: "local", paneId: "p1", directory: null, scope: "commit", base: "a".repeat(40), head: "b".repeat(40), path: "src/a.ts", oldPath: "src/old.ts" };
+  const target: RepoDiffTarget = { machineId: "local", paneId: "p1", directory: null, scope: "commit", base: "a".repeat(40), head: "b".repeat(40), comparison: null, path: "src/a.ts", oldPath: "src/old.ts" };
 
   it("keeps the entry's other data and reads its own back", () => {
     const state = diffTargetState({ "ovis:file-preview": { path: "x" } }, target);
@@ -79,6 +102,17 @@ describe("repository diff history entry", () => {
     expect(diffTargetFromState({ "ovis:repo-diff": { machineId: "local", path: "a", scope: "branches" } })).toBeNull();
     expect(diffTargetFromState({ "ovis:repo-diff": { ...target, paneId: 7 } })).toBeNull();
     expect(diffTargetFromState({ "ovis:repo-diff": { ...target, path: undefined } })).toBeNull();
+  });
+
+  it("keeps a branch comparison's identity whole, and takes none of another shape", () => {
+    const branch: RepoDiffTarget = { ...target, scope: "branch", base: "origin/main", head: null, comparison: identity };
+    expect(diffTargetFromState(diffTargetState(null, branch))).toEqual(branch);
+    // an entry from before the branch scope carries no identity: read as none
+    const { comparison: _comparison, ...older } = target;
+    expect(diffTargetFromState({ "ovis:repo-diff": older })).toEqual(target);
+    expect(diffTargetFromState({ "ovis:repo-diff": { ...branch, comparison: "pinned" } })).toBeNull();
+    expect(diffTargetFromState({ "ovis:repo-diff": { ...branch, comparison: { ...identity, merge_base_oid: 7 } } })).toBeNull();
+    expect(diffTargetFromState({ "ovis:repo-diff": { ...branch, comparison: { head_oid: identity.head_oid } } })).toBeNull();
   });
 
   it("releases only the diff when another viewer takes its entry", () => {

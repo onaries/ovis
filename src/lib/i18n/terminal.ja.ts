@@ -114,4 +114,6 @@ export const TERMINAL_JA: Record<string, string> = {
   "Quote in message": "メッセージに引用",
   "Added to the message draft": "メッセージの下書きに追加しました",
   "Too long for the message draft": "メッセージの下書きには長すぎます",
+  "Tap Input line to paste.": "貼り付けるには入力欄キーをタップしてください。",
+  "Paste into the input line": "入力行に貼り付け",
 };

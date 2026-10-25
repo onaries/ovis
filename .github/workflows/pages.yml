@@ -34,9 +34,10 @@ jobs:
     outputs:
       sha: ${{ steps.source.outputs.sha }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
       - uses: ./.github/actions/setup-ci
       # the demo is a Vite build of the client
       - run: bun install --frozen-lockfile
@@ -44,7 +45,7 @@ jobs:
       - id: source
         name: Record built SHA
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site
   deploy:
@@ -91,7 +92,7 @@ jobs:
             exit 1
           fi
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
       - name: Summarize deployment
         if: success()
         env:

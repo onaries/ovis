@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, splitTurn, visibleWorkParts, workFailed, workStartsOpen, workSummary } from "./workBlocks.ts";
+import { formatWorkDuration, splitTurn, todoGroups, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -161,5 +161,109 @@ describe("visibleWorkParts", () => {
     expect(visibleWorkParts([skill, thinking("hm")], false)).toEqual([]);
     expect(visibleWorkParts([skill, thinking("hm")], true)).toEqual([thinking("hm")]);
     expect(visibleWorkParts([tool("read")], false)).toEqual([tool("read")]);
+  });
+});
+
+describe("todoGroups", () => {
+  type State = ToolPart["state"];
+  // a Claude TodoWrite: its list is its input; the native id and state as the server sends them
+  const write = (id: string | undefined, state: State, todos: unknown = [{ content: "Read", status: "completed" }, { content: "Fix", status: "in_progress" }], output = ""): ToolPart =>
+    ({ kind: "tool", name: "TodoWrite", summary: "TodoWrite", input: typeof todos === "string" ? todos : JSON.stringify({ todos }), output,
+      ...(id === undefined ? {} : { call_id: id }), ...(state === undefined ? {} : { state }), ...(state === "error" ? { error: true } : {}) });
+  const plan = (id: string | undefined, state: State, steps: string[]): ToolPart =>
+    ({ kind: "tool", name: "update_plan", summary: "update_plan", input: JSON.stringify({ plan: steps.map((step) => ({ step, status: "completed" })) }), output: "Plan updated",
+      ...(id === undefined ? {} : { call_id: id }), ...(state === undefined ? {} : { state }) });
+  const only = (parts: ConversationPart[], row = "row") => {
+    const groups = [...todoGroups(parts, row).values()];
+    expect(groups).toHaveLength(1);
+    return groups[0]!;
+  };
+
+  it("folds only contiguous todo snapshots; one item stays a normal row", () => {
+    const a = write("a", "ok"), b = write("b", "ok"), c = write("c", "ok"), d = write("d", "ok");
+    const groups = todoGroups([a, b, tool("Bash"), c, text("next"), d], "row");
+    expect([...groups.keys()]).toEqual([a]);
+    expect(groups.get(a)!.attempts.map((attempt) => attempt.part)).toEqual([a, b]);
+    expect(todoGroups([write("solo", "ok")], "row").size).toBe(0);
+  });
+
+  it("ends a run at narration and at hidden thinking or skill parts", () => {
+    const skill: ConversationPart = { kind: "skill", skill: { name: "x", evidence: "invocation", status: "loaded" } };
+    for (const between of [text("Now the second half."), thinking("private"), skill]) {
+      expect(todoGroups([write("a", "ok"), between, write("b", "ok")], "row").size).toBe(0);
+    }
+  });
+
+  it("keeps the first call's identity through append and replacement", () => {
+    const first = only([write("a", "pending"), write("b", "pending")]).id;
+    // the next poll: a new object for every part, results recorded, a third call appended
+    expect(only([write("a", "ok"), write("b", "error"), write("c", "pending")]).id).toBe(first);
+    expect(only([write("a", "ok"), write("b", "ok")]).id).toBe(first);
+    // the same call id in another turn's row is another run
+    expect(only([write("a", "ok"), write("b", "ok")], "other row").id).not.toBe(first);
+  });
+
+  it("names a run without ids by its turn row and its first part's original index", () => {
+    const parts = [text("intro"), write(undefined, undefined), write(undefined, undefined)];
+    const id = only(parts).id;
+    expect(id).toBe(JSON.stringify(["row", "#1"]));
+    expect(only([text("intro"), write(undefined, undefined), write(undefined, undefined), write(undefined, undefined)]).id).toBe(id);
+  });
+
+  it("takes the latest ok list, counting a later pending and failed call apart", () => {
+    const ok = write("a", "ok", [{ content: "Read", status: "completed" }]);
+    const group = only([ok, write("b", "pending"), write("c", "error")]);
+    expect(group.current?.part).toBe(ok);
+    expect(group.current?.state).toBe("ok");
+    expect(group.current?.items).toEqual([{ label: "Read", phase: null, status: "completed" }]);
+    expect([group.pending, group.failed]).toEqual([1, 1]);
+    expect(group.attempts.map((attempt) => attempt.state)).toEqual(["ok", "pending", "error"]);
+  });
+
+  it("says the latest ok list cannot be read instead of using an earlier one", () => {
+    const group = only([write("a", "ok"), write("b", "ok", "{not json")]);
+    expect(group.current?.part.call_id).toBe("b");
+    expect(group.current?.items).toBeNull();
+  });
+
+  it("shows a completed Codex snapshot with omitted state without a success claim, even after an older ok", () => {
+    const codex = plan("call_2", undefined, ["Ship"]);
+    const group = only([write("toolu_1", "ok"), codex]);
+    expect(group.current?.part).toBe(codex);
+    expect(group.current?.state).toBe("unknown");
+    expect(group.current?.items).toEqual([{ label: "Ship", phase: null, status: "completed" }]);
+  });
+
+  it("uses the latest snapshot of an all-undefined run without a success claim", () => {
+    const group = only([write(undefined, undefined, [{ content: "Old", status: "pending" }]), write(undefined, undefined, [{ content: "New", status: "pending" }])]);
+    expect(group.current?.state).toBe("unknown");
+    expect(group.current?.items?.map((item) => item.label)).toEqual(["New"]);
+    expect(group.attempts.some((attempt) => attempt.state === "ok")).toBe(false);
+  });
+
+  it("never takes a failed call without a recorded state for the list", () => {
+    const earlier = write(undefined, undefined, [{ content: "Kept", status: "pending" }]);
+    const group = only([earlier, { ...write(undefined, undefined, "{not json"), error: true }]);
+    expect(group.current?.part).toBe(earlier);
+    expect(group.failed).toBe(1);
+  });
+
+  it("invents no list from pending and failed calls alone", () => {
+    const group = only([write("a", "pending"), write("b", "error")]);
+    expect(group.current).toBeNull();
+    expect([group.pending, group.failed]).toEqual([1, 1]);
+  });
+
+  it("infers no outcome from empty or nonempty output", () => {
+    for (const output of ["", "Error: the update failed", "Todos have been modified successfully"]) {
+      const group = only([write("a", "pending", undefined, output), write(undefined, undefined, undefined, output)]);
+      expect(group.attempts.map((attempt) => attempt.state)).toEqual(["pending", "unknown"]);
+      expect(group.failed).toBe(0);
+    }
+  });
+
+  it("keeps repeated identical calls as distinct attempts", () => {
+    const group = only([write("a", "ok"), write("b", "ok")]);
+    expect(group.attempts.map((attempt) => attempt.part.call_id)).toEqual(["a", "b"]);
   });
 });

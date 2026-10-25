@@ -1,14 +1,18 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { ClientConnectionTrace } from "../../shared/protocol.ts";
 import { ConnectionTrace, resumeConnectionTraces } from "./connectionTrace.ts";
 
 const context = () => ({ connection: 1, socket_state: 1, visibility: "visible" as const, online: true });
 // A macrotask turn: every promise continuation of the report has run, whatever its depth.
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+// Every trace a test opens is closed after it, so resumeConnectionTraces() in a later test reaches only its own.
+const opened: ConnectionTrace[] = [];
+const open = (...args: ConstructorParameters<typeof ConnectionTrace>) => { const trace = new ConnectionTrace(...args); opened.push(trace); return trace; };
+afterEach(() => { for (const trace of opened.splice(0)) trace.close(); });
 function fixture(status = 204) {
   let now = 1000;
   const sent: ClientConnectionTrace[] = [];
-  const trace = new ConnectionTrace("wss://private-host/ws?machine_id=private-id&token=private-credential", context, async (batch) => { sent.push(batch); return status; }, () => now);
+  const trace = open("wss://private-host/ws?machine_id=private-id&token=private-credential", context, async (batch) => { sent.push(batch); return status; }, () => now);
   return { trace, sent, advance: (ms: number) => { now += ms; } };
 }
 
@@ -64,7 +68,7 @@ describe("client connection breadcrumbs", () => {
   it("retains an incident recorded while an earlier report is in flight", async () => {
     let finish!: (status: number) => void; let now = 0;
     const sent: ClientConnectionTrace[] = [];
-    const trace = new ConnectionTrace("ws://fixture/ws", context, (batch) => { sent.push(batch); return new Promise((resolve) => { finish = resolve; }); }, () => now);
+    const trace = open("ws://fixture/ws", context, (batch) => { sent.push(batch); return new Promise((resolve) => { finish = resolve; }); }, () => now);
     trace.record("probe_retry", {}, true);
     trace.record("probe_drop", {}, true);
     finish(204); await settle(); now += 10_000;
@@ -76,7 +80,7 @@ describe("client connection breadcrumbs", () => {
 
   it("defers a failed HTTP report until a later connection event, with no new timer", async () => {
     let now = 0, calls = 0;
-    const trace = new ConnectionTrace("ws://fixture/ws", context, async () => { calls++; throw new Error("network unavailable"); }, () => now);
+    const trace = open("ws://fixture/ws", context, async () => { calls++; throw new Error("network unavailable"); }, () => now);
     trace.record("pagehide", {}, true); await settle();
     trace.record("pageshow"); expect(calls).toBe(1);
     now += 10_000; trace.record("open"); expect(calls).toBe(2);
@@ -125,7 +129,7 @@ describe("client connection breadcrumbs", () => {
   it("ignores a 401 that answers a report sent before signing in again", async () => {
     let finish!: (status: number) => void; let now = 0;
     const sent: ClientConnectionTrace[] = [];
-    const trace = new ConnectionTrace("ws://fixture/ws", context, (batch) => { sent.push(batch); return new Promise((resolve) => { finish = resolve; }); }, () => now);
+    const trace = open("ws://fixture/ws", context, (batch) => { sent.push(batch); return new Promise((resolve) => { finish = resolve; }); }, () => now);
     trace.record("close", {}, true);
     resumeConnectionTraces();
     finish(401); await settle();
@@ -136,7 +140,7 @@ describe("client connection breadcrumbs", () => {
   });
 
   it("does not throw into the socket when a reporter fails synchronously", () => {
-    const trace = new ConnectionTrace("ws://fixture/ws", context, () => { throw new Error("reporter failed"); });
+    const trace = open("ws://fixture/ws", context, () => { throw new Error("reporter failed"); });
     expect(() => trace.record("close", {}, true)).not.toThrow();
   });
 
@@ -148,7 +152,7 @@ describe("client connection breadcrumbs", () => {
       const random = spyOn(crypto, "getRandomValues").mockImplementation(() => { throw new Error("crypto unavailable"); });
       try {
         let calls = 0;
-        const trace = new ConnectionTrace("ws://fixture/ws", context, async () => { calls++; return 204; });
+        const trace = open("ws://fixture/ws", context, async () => { calls++; return 204; });
         expect(() => trace.record("close", {}, true)).not.toThrow();
         expect(calls).toBe(0);
       } finally { random.mockRestore(); }
@@ -162,7 +166,7 @@ describe("client connection breadcrumbs", () => {
     globals.window = { fetch: async (url: string, init: RequestInit) => { requests.push({ url, init }); return { status: 204 }; } };
     globals.document = { createElement() {} };
     try {
-      const trace = new ConnectionTrace("wss://private-host/ws?token=private-credential", context);
+      const trace = open("wss://private-host/ws?token=private-credential", context);
       trace.record("pagehide", {}, true); await settle();
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({ url: "/api/connection-diagnostics", init: { method: "POST", credentials: "same-origin", mode: "same-origin", redirect: "error", keepalive: true } });

@@ -186,6 +186,26 @@ it("the demo refuses draft clearing, drains accepted pending IDs once, and never
       "a successful receipt must not bypass clear_draft validation");
     assert.equal(combined(549, false).ok, true);
     assert.equal((await json("/api/pane/conversation?pane_id=" + claude)).turns.filter((turn: any) => turn.parts.some((part: any) => part.text === "combined demo copy")).length, 1);
+    // regression: as at the bridge, framing is checked before a held-copy receipt is replayed or reserved
+    const framed = (id: number, payload: string, resendId: string) => {
+      combinationPeer.socket.send(JSON.stringify({ type: "submit", id, pane_id: claude, text: "hello framing", payload, resend_id: resendId }));
+      return combinationPeer.frames.findLast((frame) => frame.type === "submit-result" && frame.id === id);
+    };
+    const framedTurns = async () => (await json("/api/pane/conversation?pane_id=" + claude)).turns.filter((turn: any) => turn.parts.some((part: any) => part.text === "hello framing")).length;
+    assert.equal(framed(551, "hello framing\r", "framing-repair").code, "invalid_submit_text");
+    assert.equal(await framedTurns(), 0);
+    assert.equal(framed(552, "hello framing", "framing-repair").ok, true, "a framing refusal must not reserve the resend id");
+    assert.equal(framed(553, "hello framing", "framing-accepted").ok, true);
+    assert.equal(framed(554, "hello framing\r", "framing-accepted").code, "invalid_submit_text", "a cached receipt must not bypass framing validation");
+    assert.equal(await framedTurns(), 2);
+    // regression: a resend is the same message when its normalized text matches, as at the bridge
+    const equivalent = (id: number, text: string) => {
+      combinationPeer.socket.send(JSON.stringify({ type: "submit", id, pane_id: claude, text, payload: "hello\rworld", resend_id: "canonical-id" }));
+      return combinationPeer.frames.findLast((frame) => frame.type === "submit-result" && frame.id === id);
+    };
+    assert.equal(equivalent(555, "hello\r\nworld\n").ok, true);
+    assert.equal(equivalent(556, "hello\nworld").ok, true, "a canonically equal resend must replay its receipt");
+    assert.equal((await json("/api/pane/conversation?pane_id=" + claude)).turns.filter((turn: any) => turn.parts.some((part: any) => part.text === "hello\nworld")).length, 1);
   } finally {
     for (const socket of opened) socket.close();
     for (const [key, descriptor] of saved) {

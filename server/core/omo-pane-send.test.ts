@@ -158,12 +158,13 @@ it("pastes a multiline message into an unlabelled omo pane as one bracketed past
   panes["w:p3"] = { process: [{ pid: 2147483646, argv: ["/bin/bash"], cwd: root }, { ...OMO_AI_SCRIPT, cwd: root }] };
   const sent = async (paneId: string) => {
     calls.length = 0;
-    await submitter()(paneId, "a\nb", "a\nb", Date.now());
+    // the payload a composer shapes for a pane whose paste mode its browser never learned: bare lines joined by CR
+    await submitter()(paneId, "a\nb", "a\rb", Date.now());
     return calls.find((call) => call.method === "pane.send_text")?.params.text;
   };
-  expect(await sent("w:p1")).toBe("\u001b[200~a\nb\u001b[201~");
-  expect(await sent("w:p2")).toBe("a\nb");
-  expect(await sent("w:p3"), "a script from an omo-ai checkout gets no omo paste markers").toBe("a\nb");
+  expect(await sent("w:p1")).toBe("\u001b[200~a\rb\u001b[201~");
+  expect(await sent("w:p2")).toBe("a\rb");
+  expect(await sent("w:p3"), "a script from an omo-ai checkout gets no omo paste markers").toBe("a\rb");
 });
 
 it("sends nothing when the device loses its access while the pane's processes are looked up", async () => {

@@ -336,6 +336,8 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
         pending.delete(result.tool_use_id);
         trimOutput(tool, claudeResultText(result.content), result.tool_use_id);
         if (result.is_error === true) tool.error = true;
+        // the result's flag, and only it, says how the call went: an empty result is still a success
+        if (tool.call_id !== undefined) tool.state = result.is_error === true ? "error" : "ok";
         if (tool.skill) tool.skill.status = result.is_error === true ? "failed" : "loaded";
       }
       // an image pasted into the prompt: named here, fetched only when shown
@@ -378,8 +380,11 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
           };
           const skill = invokedSkill(b.name, input);
           if (skill) { part.skill = skill; part.summary = skill.name; }
+          const id = (block as { id?: unknown }).id;
+          // the native id, and pending until a tool_result answers it
+          if (typeof id === "string" && id.length > 0) { part.call_id = id; part.state = "pending"; }
           turn.parts.push(part);
-          pending.set(String((block as { id?: unknown }).id ?? ""), part);
+          pending.set(String(id ?? ""), part);
         }
         // unsupported transcript blocks are intentionally ignored
       }

@@ -114,4 +114,6 @@ export const TERMINAL_KO: Record<string, string> = {
   "Quote in message": "메시지에 인용",
   "Added to the message draft": "메시지 초안에 추가했습니다",
   "Too long for the message draft": "메시지 초안에 넣기에는 너무 깁니다",
+  "Tap Input line to paste.": "붙여넣으려면\u00a0입력창\u00a0키를\u00a0누르세요.",
+  "Paste into the input line": "입력창에 붙여넣기",
 };

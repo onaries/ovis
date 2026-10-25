@@ -33,7 +33,7 @@ test("a session's tasks: running oldest first, then ended newest first, with wha
   const tasks = omoTasks(cwd, SESSION, alive, NOW);
   expect(tasks.map((task) => [task.title, task.status])).toEqual([["first", "running"], ["second", "running"], ["newer cancelled", "cancelled"], ["older done", "completed"]]);
   expect(tasks[0]).toMatchObject({ category: "explore", model: "anthropic/x", ended_at: null });
-  expect(tasks[3]).toEqual({ id: "st_0", title: "older done", category: "quick", model: "Claude Haiku 4.5", status: "completed", started_at: ago(50), ended_at: ago(40), turns: 3, tool_calls: 9, tokens: 1200 });
+  expect(tasks[3]).toEqual({ id: "st_0", title: "older done", category: "quick", model: "Claude Haiku 4.5", status: "completed", started_at: ago(50), ended_at: ago(40), turns: 3, tool_calls: 9, tokens: 1200, detail_kind: null });
   expect(JSON.stringify(tasks)).not.toContain("SECRET");
 });
 

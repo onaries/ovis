@@ -1,0 +1,192 @@
+/* The detail of one running background task: a dialog (a sheet on a phone) over the task list,
+   drawn as the task's row is in the list and in the chat's ended-task card: the status glyph, the
+   title over its dim meta line, then the agent's own words. The body alone scrolls, within .modal's
+   cap, so a long transcript never grows the sheet past the screen. The sheet is as tall as that cap
+   from the start: loading, a note and the transcript fill the same frame, so the title and the
+   buttons never move as a read lands.
+   Type is at the reading floors of a sheet that is read at length (DESIGN.md): on a desktop no text
+   under --fs-md, on a phone the agent's words at --fs-xl and the rest at --fs-chat or more. */
+.bg-agent-detail {
+  width: min(100%, 640px);
+  height: min(100%, 720px);
+}
+
+@media (max-width: 640px) {
+  .bg-agent-detail {
+    height: 92%;
+  }
+}
+
+.bg-agent-detail:focus {
+  outline: none;
+}
+
+.bg-agent-detail-header {
+  align-items: flex-start;
+}
+
+.bg-agent-detail-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 3px;
+  color: var(--status-working);
+}
+
+.bg-agent-detail-heading {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.bg-agent-detail-title {
+  font-size: var(--fs-lg);
+  overflow-wrap: anywhere;
+}
+
+.bg-agent-detail-meta {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+
+/* the title and the agent line are labels worth copying: a phone's sheet header is its swipe grip
+   and selects nothing (styles.css), but these two words do, with a long press */
+@media (pointer: coarse) {
+  .bg-agent-detail-heading {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+}
+
+/* a phone's header controls keep the touch target the header gives them */
+@media (pointer: coarse) {
+  .bg-agent-detail-header .icon-button {
+    width: var(--touch-target);
+    height: var(--touch-target);
+    margin: calc((var(--control-h) - var(--touch-target)) / 2) 0;
+  }
+}
+
+/* the body is the one scroll region: a tab stop of its own, so the keyboard reaches a long
+   transcript, with its ring drawn inside the edge .modal clips at */
+.bg-agent-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.bg-agent-detail-body:focus-visible {
+  outline-offset: calc(-1 * var(--ring-offset));
+}
+
+/* a note on the read: what was not read, what could not be, and why there is nothing; then what to do
+   about it, each sentence on a line of its own so that no clause is split from its ending */
+.bg-agent-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+
+/* a failure reads as a sentence, never as an empty transcript: the words carry it, and the blocked tint says it first */
+.bg-agent-note.is-failure {
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline) solid var(--status-blocked);
+  border-radius: var(--radius-md);
+  background: var(--danger-tint);
+  color: var(--danger-text);
+}
+
+.bg-agent-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.bg-agent-heading {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* the agent's words as it wrote them, at the chat's reading size (they are read at length, as the
+   chat's prose is): its own line breaks kept, a long unbroken run wrapped anywhere, in a reading
+   measure of its own however wide the dialog */
+.bg-agent-text {
+  max-width: 52ch;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-chat);
+  line-height: var(--lh-base);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bg-agent-events {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* a tool call: its name as a chip, its arguments in mono after it, wrapping as one line of text */
+.bg-agent-event.is-tool {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.bg-agent-tool-name {
+  flex: none;
+  padding: 0 var(--space-2);
+  min-height: var(--chip-h);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  line-height: var(--chip-h);
+}
+
+.bg-agent-tool-args {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  line-height: var(--lh-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* a phone's reading floors: the agent's words at --fs-xl, every other line at --fs-chat or more */
+@media (max-width: 640px) {
+  .bg-agent-detail-title,
+  .bg-agent-text {
+    font-size: var(--fs-xl);
+  }
+
+  .bg-agent-detail-meta,
+  .bg-agent-heading,
+  .bg-agent-note,
+  .bg-agent-tool-name,
+  .bg-agent-tool-args {
+    font-size: var(--fs-chat);
+  }
+}

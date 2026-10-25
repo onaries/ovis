@@ -8,6 +8,7 @@ import { PreferenceStore } from "../../server/preferences.ts";
 import { type PreferencesChange, type SharedPreferences } from "../../shared/preferences.ts";
 import { DEFAULT_SETTINGS, SettingsProvider, sanitizeSettings, useSettings, type Settings } from "./settings.ts";
 import { setSidebarPins } from "./sidebarPins.ts";
+import { currentPaneMutes, setPaneMutes } from "./paneMutes.ts";
 import { usePreferencesSync } from "./preferencesSync.ts";
 import type { UserError } from "./userError.ts";
 
@@ -39,7 +40,10 @@ describe("preferences sync real send path", () => {
   /** every PUT body in the order it was sent, refused or not */
   let bodies: PreferencesChange[];
   let answerListeners: Set<() => void>;
-  const dropNewKeys = (doc: SharedPreferences): SharedPreferences => ({
+  /** the bodies the PUTs carried, in order */
+  let sent: PreferencesChange[];
+  /** an older server: no theme sides, and no mute list in what it keeps or answers */
+  const dropNewKeys = ({ muted_panes: _muted, ...doc }: SharedPreferences): SharedPreferences => ({
     ...doc, settings: Object.fromEntries(Object.entries(doc.settings).filter(([key]) => key !== "darkTheme" && key !== "lightTheme")),
   });
   interface Client {
@@ -93,7 +97,10 @@ describe("preferences sync real send path", () => {
     refusing = null;
     refusals = 0;
     bodies = [];
+    sent = [];
     answerListeners = new Set();
+    // the mute list is page state (lib/paneMutes.ts): each test opens as a page that has heard none
+    setPaneMutes(null);
     store.subscribe((doc) => {
       revisions.push(doc.revision);
       for (const client of clients) client.receive(oldServer ? dropNewKeys(doc) : doc);
@@ -109,8 +116,10 @@ describe("preferences sync real send path", () => {
         return answer ?? refusing!();
       }
       const body: PreferencesChange = JSON.parse(String(init.body));
+      sent.push(body);
       const settings = oldServer ? dropNewKeys({ revision: 0, settings: body.settings }).settings : body.settings;
-      const saved = store.set({ ...body, settings });
+      const { muted_panes: _dropped, ...older } = body;
+      const saved = store.set(oldServer ? { ...older, settings } : { ...body, settings });
       const answer = oldServer ? dropNewKeys(saved) : saved;
       if (releaseAnswer) await releaseAnswer();
       answers++;
@@ -184,7 +193,7 @@ describe("preferences sync real send path", () => {
     store.set({ settings: { palette: "catppuccin" } });
     store.set({ settings: { theme } });
     store = new PreferenceStore(dir);
-    expect(store.get()).toEqual({ revision: 2, settings: { palette: "catppuccin", theme } });
+    expect(store.get()).toEqual({ revision: 2, settings: { palette: "catppuccin", theme }, muted_panes: [] });
     revisions.length = 0;
     store.subscribe((doc) => {
       revisions.push(doc.revision);
@@ -308,6 +317,80 @@ describe("preferences sync real send path", () => {
     expect(store.get().settings.darkTheme).toBe("tokyo-night");
     await windows(3);
     expect(revisions).toEqual([1]);
+  });
+
+  it("older server without muted_panes stays unsupported", async () => {
+    oldServer = true;
+    const client = await open();
+    await windows(3);
+    // no list in the document: none here, and none made up for the server
+    expect(currentPaneMutes()).toBeNull();
+    expect(answers).toBe(0);
+    // a change of something else goes out without a list
+    await act(async () => { client.update({ showThinking: true }); });
+    await send();
+    // (the pins ride along with the first change, as they always have)
+    expect(sent).toEqual([{ settings: { showThinking: true }, pins: [] }]);
+    expect(currentPaneMutes()).toBeNull();
+    // the server is upgraded: its next document carries the list, and the page offers mutes from then on
+    oldServer = false;
+    await act(async () => { store.set({ settings: { theme: "light" } }); });
+    await windows(3);
+    expect(currentPaneMutes()).toEqual([]);
+    expect(answers).toBe(1);
+    expect(revisions).toEqual([1, 2]);
+  });
+
+  it("a server that stops keeping muted_panes leaves no mute in force", async () => {
+    store.set({ settings: {}, muted_panes: ["w1:p1"] });
+    const client = await open();
+    await windows(3);
+    expect(currentPaneMutes()).toEqual(["w1:p1"]);
+    // the server is replaced by one that keeps no list (a downgrade): its next, newer document has none
+    oldServer = true;
+    await act(async () => { store.set({ settings: { theme: "light" } }); });
+    await windows(3);
+    expect(revisions).toEqual([1, 2]);
+    // the mutes stand down: no row offers a mute, and no channel holds an alert back for one
+    expect(currentPaneMutes()).toBeNull();
+    expect(answers).toBe(0);
+    // a later change of something else carries no made-up list
+    await act(async () => { client.update({ showThinking: true }); });
+    await send();
+    // (the pins ride along with the first change, as they always have)
+    expect(sent).toEqual([{ settings: { showThinking: true }, pins: [] }]);
+    expect(currentPaneMutes()).toBeNull();
+  });
+
+  it("mute survives restart and another browser", async () => {
+    const a = await open();
+    await windows();
+    // the fresh store's empty list arrived with the GET: the first mute is a change of it
+    expect(currentPaneMutes()).toEqual([]);
+    await act(async () => { setPaneMutes(["w1:p1"]); });
+    await send();
+    expect(answers).toBe(1);
+    expect(sent).toEqual([{ settings: {}, pins: [], muted_panes: ["w1:p1"] }]);
+    expect(store.get().muted_panes).toEqual(["w1:p1"]);
+    expect(a.saveError).toBeNull();
+    await windows(3);
+    expect(revisions).toEqual([1]);
+    // the server restarts, and a browser that has heard nothing opens: it takes the list, and sends nothing
+    store = new PreferenceStore(dir);
+    expect(store.get().muted_panes).toEqual(["w1:p1"]);
+    store.subscribe((doc) => { revisions.push(doc.revision); for (const client of clients) client.receive(doc); });
+    setPaneMutes(null);
+    await open();
+    await windows(3);
+    expect(currentPaneMutes()).toEqual(["w1:p1"]);
+    expect(answers).toBe(1);
+    expect(revisions).toEqual([1]);
+    // an unmute there reaches the store, and every page hears the document
+    await act(async () => { setPaneMutes([]); });
+    await send();
+    expect(sent.at(-1)).toEqual({ settings: {}, muted_panes: [] });
+    expect(store.get().muted_panes).toEqual([]);
+    expect(currentPaneMutes()).toEqual([]);
   });
 
   it.each([

@@ -37,4 +37,19 @@ describe("typing into a mirrored pane", () => {
     const pasted = "\x1b[200~line one\rline two\x1b[201~";
     expect(await mirrorInput(pasted, agent)).toBe(pasted);
   });
+
+  test("a composer's canonical submit keeps its one pair, and its bare lines get exactly one for an agent", async () => {
+    const wrapped = "\x1b[200~첫 줄\tcolumn\rsecond ✓\x1b[201~";
+    expect(await mirrorInput(wrapped, agent)).toBe(wrapped);
+    expect(await mirrorInput(wrapped, noAgent)).toBe(wrapped);
+    expect(await mirrorInput("첫 줄\tcolumn\rsecond ✓", agent)).toBe(wrapped);
+    expect(await mirrorInput("첫 줄\tcolumn\rsecond ✓", noAgent)).toBe("첫 줄\tcolumn\rsecond ✓");
+  });
+
+  test("raw terminal input is not validated here: a marker inside it goes as typed, as before", async () => {
+    // only a submit is checked (core/composer.ts submitFraming); keyboard input keeps its bytes
+    const raw = "line one\x1b[201~\rline two";
+    expect(await mirrorInput(raw, agent)).toBe(raw);
+    expect(await mirrorInput("\x1b[201~", agent)).toBe("\x1b[201~");
+  });
 });

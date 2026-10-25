@@ -28,7 +28,7 @@ export function TurnChangedFiles({ paneId, parts }: { paneId: string; parts: rea
     if (context === null) return;
     setOpening(path);
     setError(null);
-    const query = { paneId, directory: context.cwd, scope: "workspace", base: null, head: null } as const;
+    const query = { paneId, directory: context.cwd, scope: "workspace", base: null, head: null, comparison: null } as const;
     try {
       let list = await fetchRepoDiffFiles(query);
       let relative = repositoryTurnPath({ path, cwd: context.cwd, root: list.repository.root });

@@ -782,7 +782,7 @@ describe("WebSocket submit", () => {
     const socket = await Socket.connect();
     try {
       const from = chunks(agent).length;
-      socket.send({ type: "submit", id: 2, pane_id: agent.pane, text: "line one\nline two", payload: "unused" });
+      socket.send({ type: "submit", id: 2, pane_id: agent.pane, text: "line one\nline two", payload: paste("line one\rline two") });
       expect(await socket.result(2)).toMatchObject({ ok: true });
       const read = await received(agent, from, 1);
       const enter = read.findIndex((chunk) => chunk.data.includes("\r"));
@@ -1520,7 +1520,7 @@ describe("WebSocket submit", () => {
     const read = spyOn(herdr, "paneRead").mockImplementation((options, socketPath) => originalRead(options, socketPath));
     const prompt = spyOn(herdr, "agentPrompt").mockResolvedValue(undefined);
     try {
-      socket.send({ type: "submit", id: 30, pane_id: codex.pane, text: "follow up", payload: "unused" });
+      socket.send({ type: "submit", id: 30, pane_id: codex.pane, text: "follow up", payload: paste("follow up") });
       expect(await socket.result(30)).toMatchObject({ ok: true, pane_id: codex.pane });
       expect(prompt).toHaveBeenCalledWith(codex.pane, "follow up", undefined, expect.any(Function));
       expect(read).not.toHaveBeenCalled();
@@ -1535,7 +1535,7 @@ describe("WebSocket submit", () => {
     const socket = await Socket.connect();
     try {
       const from = chunks(agent).length;
-      socket.send({ type: "submit", id: 20, pane_id: agent.pane, text: "what is in @/tmp/shot.png", payload: "unused" });
+      socket.send({ type: "submit", id: 20, pane_id: agent.pane, text: "what is in @/tmp/shot.png", payload: paste("what is in @/tmp/shot.png") });
       expect(await socket.result(20)).toMatchObject({ ok: true });
       const read = await received(agent, from, 1);
       const enter = read.findIndex((chunk) => chunk.data.includes("\r"));

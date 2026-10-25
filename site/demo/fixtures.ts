@@ -103,6 +103,8 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
     turns: [
       { role: "user" as const, ts: t(1), parts: [{ kind: "text" as const, text: "Rate-limit the export button so a double click can't start two exports, then push the branch." }] },
       { role: "assistant" as const, ts: t(1, 4), end_ts: t(3, 20), parts: [
+        tool("update_plan", "update_plan", { plan: [{ step: "Find where the export starts", status: "in_progress" }, { step: "Guard the button while an export runs", status: "pending" }, { step: "Push the branch", status: "pending" }] }, "Plan updated"),
+        tool("update_plan", "update_plan", { plan: [{ step: "Find where the export starts", status: "completed" }, { step: "Guard the button while an export runs", status: "in_progress" }, { step: "Push the branch", status: "pending" }] }, "Plan updated"),
         tool("exec", "rg -n \"startExport\" src", { cmd: "rg -n \"startExport\" src" }, "src/pages/Reports.tsx:88:  onClick={() => startExport(filters)}"),
         tool("apply_patch", "src/pages/Reports.tsx", "*** Begin Patch\n*** Update File: src/pages/Reports.tsx\n@@\n-  onClick={() => startExport(filters)}\n+  disabled={exporting}\n+  onClick={() => { if (!exporting) startExport(filters); }}\n*** End Patch", "Success. Updated the following files:\nM src/pages/Reports.tsx"),
         tool("exec", "pnpm test --filter reports", { cmd: "pnpm test --filter reports" }, "✓ 9 tests passed"),
@@ -115,6 +117,8 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
     turns: [
       { role: "user" as const, ts: t(7), parts: [{ kind: "text" as const, text: "`retries a timed-out upload` fails about one run in ten. Find out why and fix it." }] },
       { role: "assistant" as const, ts: t(7, 4), end_ts: t(9, 30), parts: [
+        tool("TodoWrite", "TodoWrite", { todos: [{ content: "Reproduce the failure", status: "in_progress", activeForm: "Reproducing the failure" }, { content: "Find what the timing depends on", status: "pending", activeForm: "Finding what the timing depends on" }, { content: "Fix the test and rerun it 50 times", status: "pending", activeForm: "Fixing the test" }] }, "Todos have been modified successfully."),
+        tool("TodoWrite", "TodoWrite", { todos: [{ content: "Reproduce the failure", status: "completed", activeForm: "Reproducing the failure" }, { content: "Find what the timing depends on", status: "in_progress", activeForm: "Finding what the timing depends on" }, { content: "Fix the test and rerun it 50 times", status: "pending", activeForm: "Fixing the test" }] }, "Todos have been modified successfully."),
         tool("Read", "src/lib/retry.test.ts", { file_path: "src/lib/retry.test.ts" }, "test(\"retries a timed-out upload\", async () => { … })"),
         tool("Bash", "bun test retry --rerun-each 50", { command: "bun test retry --rerun-each 50" }, " 46 pass\n 4 fail\nexpected 3 attempts, received 2"),
         tool("Edit", "src/lib/retry.test.ts", { file_path: "src/lib/retry.test.ts" }, "Updated src/lib/retry.test.ts"),
@@ -128,6 +132,8 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
     turns: [
       { role: "user" as const, ts: t(3), parts: [{ kind: "text" as const, text: "Plan a `cli-tools.toml` so the flags people repeat can live in a file." }] },
       { role: "assistant" as const, ts: t(3, 4), end_ts: t(5, 10), parts: [
+        tool("todo", "todo", { op: "init", list: [{ phase: "Plan", items: ["Read the flags people repeat", "Pick where the file is read from", "Write the plan"] }] }, "Overall: 0/3 done, 3 open.\n  Plan:\n    - [ ] Read the flags people repeat (in progress)\n    - [ ] Pick where the file is read from\n    - [ ] Write the plan"),
+        tool("todo", "todo", { op: "done", task: "Read the flags people repeat" }, "Overall: 1/3 done, 2 open.\n  Plan:\n    - [X] Read the flags people repeat\n    - [ ] Pick where the file is read from (in progress)\n    - [ ] Write the plan"),
         tool("bash", "rg -n \"option\\(\" src/cli.ts", { command: "rg -n \"option\\(\" src/cli.ts" }, "src/cli.ts:12:  .option(\"--retries <n>\")\nsrc/cli.ts:13:  .option(\"--registry <url>\")\nsrc/cli.ts:14:  .option(\"--dry-run\")"),
         { kind: "text" as const, text: "Three steps:\n\n1. Read `cli-tools.toml` from the project root, then `~/.config/cli-tools.toml`.\n2. A flag on the command line wins over the file, the file over the defaults.\n3. `cli-tools config` prints the merged values and where each one came from.\n\n`--retries` and `--registry` move over as they are; `--dry-run` stays a flag only." },
       ] },
@@ -167,6 +173,21 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
     ],
   },
 };
+
+/**
+ * Claude Code and Codex record each call's own id (shared/protocol.ts `call_id`); every call in
+ * these chats was answered. Claude's unflagged tool_result makes it `ok`; Codex records no outcome,
+ * so its answered calls carry no state. Other agents' chats carry neither.
+ */
+for (const [key, agent] of [["api", "claude"], ["flaky", "claude"], ["web", "codex"]] as const) {
+  let n = 0;
+  for (const turn of CHATS[key]!.turns) for (const part of turn.parts) {
+    if (part.kind !== "tool") continue;
+    n += 1;
+    part.call_id = agent === "claude" ? `toolu_demo_${key}_${n}` : `call_demo_${key}_${n}`;
+    if (agent === "claude") part.state = "ok";
+  }
+}
 
 export const PROMPT: InteractivePrompt = {
   id: "demo-approval",

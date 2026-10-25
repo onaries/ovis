@@ -48,6 +48,72 @@
   font-family: var(--font-mono);
 }
 
+/* the Branch scope: one base field, its picker, and Compare on the field's row, ending with it */
+.repo-changes-base-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.repo-changes-base-form .field {
+  margin-bottom: 0;
+}
+
+/* the base field with its picker's toggle at its end, as a select's chevron sits */
+.repo-changes-base {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.repo-changes-base-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: calc(var(--control-h) + var(--space-1));
+}
+
+.repo-changes-base-toggle {
+  position: absolute;
+  right: 0;
+  color: var(--text-dim);
+}
+
+/* the toggle is a glyph inside the field: the field's border shows the focus, the glyph's color the open list
+   (a box of its own would stand out past the field on a phone, where the target is taller than the field) */
+.repo-changes-base-toggle:active,
+.repo-changes-base-toggle[aria-expanded="true"] {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+}
+
+/* the branches, a list in the form's flow under the field and Compare (as wide as both): it pushes what
+   follows down instead of floating over it, so it never covers Compare, the scopes or the header at any width */
+.repo-changes-refs {
+  grid-column: 1 / -1;
+  max-height: 20rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-shadow: none;
+}
+
+/* a branch is read and picked here, so its name, hash and the list's notes are body size, not captions
+   (a phone's are larger still, in the coarse-pointer block below) */
+.repo-changes-ref .menu-item-main {
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+}
+
+.repo-changes-ref .menu-item-hint {
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+}
+
+/* what the list says instead of, or after, its rows: on its way, none, none matching, cut short, refused */
+.repo-changes-refs-note {
+  padding: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+
 .repo-changes-repo {
   margin: 0;
   display: flex;
@@ -83,6 +149,24 @@
   direction: rtl;
   text-align: left;
   text-overflow: ellipsis;
+}
+
+/* a branch comparison's identity, under the repository line (after it, so its wrapping wins by order):
+   the merge base its files are read from, in the dim register of the root beside the branch */
+.repo-changes-identity {
+  white-space: normal;
+}
+
+.repo-changes-identity .repo-changes-branch {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: flex-start;
+  color: var(--text-dim);
+}
+
+.repo-changes-identity svg {
+  flex: none;
+  margin-top: 0.15em;
 }
 
 /* the files under their folders (lib/changeTree.ts): a row moves one indent in per level (`--depth`),
@@ -285,7 +369,8 @@
 @media (pointer: coarse) {
   .repo-change,
   .repo-change-folder,
-  .repo-change-skeleton {
+  .repo-change-skeleton,
+  .repo-changes-ref {
     min-height: var(--touch-target);
   }
 
@@ -293,11 +378,54 @@
     width: var(--touch-target);
     height: var(--touch-target);
   }
+
+  /* the field is as tall as Compare beside it, a whole touch target, and the toggle as wide */
+  .repo-changes-base-input {
+    height: var(--touch-target);
+    padding-right: calc(var(--touch-target) + var(--space-1));
+  }
+
+  .repo-changes-base-toggle {
+    width: var(--touch-target);
+  }
+
+  /* on a phone a branch's name reads at body size, its hash and the list's notes one step under */
+  .repo-changes-ref .menu-item-main {
+    font-size: var(--fs-xl);
+  }
+
+  .repo-changes-ref .menu-item-hint,
+  .repo-changes-refs-note {
+    font-size: var(--fs-lg);
+  }
 }
 
-/* on a phone the three commit fields stack */
+/* on a phone the four scopes take the bar's whole width, sharing it, and the tools the row under them:
+   side by side they would run past the card (four labels and two 44px targets in 348px) */
 @media (max-width: 480px) {
+  .repo-changes-bar {
+    flex-wrap: wrap;
+  }
+
+  .repo-changes-scopes {
+    flex: 1 1 100%;
+  }
+
+  .repo-changes-scopes > button {
+    flex: 1 1 auto;
+    padding: 0 var(--space-2);
+  }
+
+  .repo-changes-tools {
+    margin-left: auto;
+  }
+
+  /* the three commit fields stack; the base field keeps Compare beside it, with the open list under both */
   .repo-changes-commits {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .repo-changes-base-form {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }

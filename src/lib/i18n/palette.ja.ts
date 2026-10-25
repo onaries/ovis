@@ -14,7 +14,6 @@ export const PALETTE_JA: Record<string, string> = {
   "All": "すべて",
   "Recent": "最近",
   "Workspace": "ワークスペース",
-  "Selected": "選択中",
   "Unknown workspace": "不明なワークスペース",
   "Actions": "操作",
   "Plugin actions": "プラグインの操作",

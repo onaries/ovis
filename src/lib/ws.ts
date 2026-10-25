@@ -114,6 +114,10 @@ export class HerdrSocket {
   private snapshotKnown = false;
   private readonly outputSeen = new Set<string>();
   private readonly inputReady = new Set<string>();
+  /** each pane's changes of input on this connection (readiness given, lost or given again, attach, detach); see inputLease */
+  private readonly leaseChanges = new Map<string, number>();
+  /** role changes on this connection, asked for or forced by the server */
+  private roleChanges = 0;
   private readonly attached = new Map<string, AttachState>();
   /** panes this tab views read-only while out of use (feature "watch"), at the grid it asked for; replayed after each snapshot */
   private readonly watched = new Map<string, { cols: number; rows: number }>();
@@ -221,7 +225,7 @@ export class HerdrSocket {
   /** submits waiting for their submit-result, by id */
   private readonly submits = new Map<number, (result: SubmitResult) => void>();
   /** Receipts match the operation and captured target on this connection, never an ID alone. */
-  private readonly requests = new Map<number, { type: "submit" | "pending-action" | "secret"; paneId: string; queued?: boolean; pendingId?: string }>();
+  private readonly requests = new Map<number, { type: "submit" | "pending-action" | "secret" | "insert"; paneId: string; queued?: boolean; pendingId?: string }>();
 
   private readonly trace: ConnectionTrace;
   private connectionEpoch = 0;
@@ -238,6 +242,19 @@ export class HerdrSocket {
 
   get connected(): boolean {
     return this.socket?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * What a wait on the pane's input saw: this connection, its role and the pane's readiness, each
+   * counted at every change. Something that waited (a clipboard read) compares it before it writes:
+   * a readiness or a role that went and came back meanwhile, or a reconnect, is another lease.
+   */
+  inputLease(paneId: string): string {
+    return `${this.connectionEpoch}:${this.roleChanges}:${this.leaseChanges.get(paneId) ?? 0}`;
+  }
+
+  private changeLease(paneId: string): void {
+    this.leaseChanges.set(paneId, (this.leaseChanges.get(paneId) ?? 0) + 1);
   }
 
   get state(): ConnectionState {
@@ -343,7 +360,9 @@ export class HerdrSocket {
       }
       // The server can force this connection to observe. Apply its authority before
       // waking pending submits or notifying UI handlers about the acknowledged role.
-      if (message.type === "role-ack") this.mode = message.mode;
+      if (message.type === "role-ack") { this.mode = message.mode; this.roleChanges += 1; }
+      const readyPane = "pane_id" in message && typeof message.pane_id === "string" ? message.pane_id : null;
+      const wasReady = readyPane !== null && this.inputReady.has(readyPane);
       // a server without the read-only view (an older bridge after a reconnect) ends this tab's watches
       let unwatched: string[] = [];
       if (message.type === "snapshot") {
@@ -377,6 +396,8 @@ export class HerdrSocket {
         if (this.attached.has(message.pane_id)) this.inputReady.add(message.pane_id);
       }
       if ((message.type === "input-ready" && message.ready === false) || message.type === "pty-exit" || (message.type === "error" && message.pane_id && ["attach_held", "input_not_ready"].includes(message.code))) this.inputReady.delete(message.pane_id!);
+      // every readiness the bridge states is a lease of its own, a ready after a ready included
+      if (readyPane !== null && (message.type === "input-ready" || wasReady !== this.inputReady.has(readyPane))) this.changeLease(readyPane);
       if (message.type === "submit-result" && this.matchesRequest(message.id, "submit", message.pane_id)) {
         this.resolveRequest(message.id, message.ok ? { ok: true, ...(message.pending ? { pending: message.pending } : {}) }
           : { ok: false, code: message.code ?? "submit_failed", message: message.message ?? "the pane did not take the message", ...(message.draft ? { draft: message.draft } : {}),
@@ -396,6 +417,9 @@ export class HerdrSocket {
       }
       if (message.type === "secret-result" && this.matchesRequest(message.id, "secret", message.pane_id)) {
         this.resolveRequest(message.id, message.ok ? { ok: true } : { ok: false, code: message.code ?? "secret_failed", message: "Secret was not sent. Check the prompt and enter it again." });
+      }
+      if (message.type === "insert-result" && this.matchesRequest(message.id, "insert", message.pane_id)) {
+        this.resolveRequest(message.id, message.ok ? { ok: true } : { ok: false, code: message.code ?? "insert_failed", message: message.message ?? "the pane did not take the text" });
       }
       // A terminal/parser failure is not malformed JSON and must not disappear.
       this.emit(message);
@@ -681,6 +705,7 @@ export class HerdrSocket {
   attach(paneId: string, cols: number, rows: number, keepSize = false): void {
     this.outputSeen.delete(paneId);
     this.inputReady.delete(paneId);
+    this.changeLease(paneId);
     this.attached.set(paneId, { cols, rows, keepSize, releaseSizeOwed: !keepSize });
     this.send({ type: "attach", pane_id: paneId, cols, rows, flow_control: "ack", ...(keepSize ? { keep_size: true } : {}) });
     if (this.conversationWanted.has(paneId) && this.features.has("conversation-watch")) {
@@ -727,6 +752,7 @@ export class HerdrSocket {
   detach(paneId: string): void {
     this.outputSeen.delete(paneId);
     this.inputReady.delete(paneId);
+    this.changeLease(paneId);
     this.attached.delete(paneId);
     this.send({ type: "detach", pane_id: paneId });
   }
@@ -811,6 +837,7 @@ export class HerdrSocket {
   /** Sets the connection's role. Not queued: the role replays before the attaches on reconnect. */
   setMode(mode: ClientRole): void {
     this.mode = mode;
+    this.roleChanges += 1;
     if (this.connected) this.rawSend({ type: "role", mode });
   }
 
@@ -898,10 +925,41 @@ export class HerdrSocket {
     })();
   }
 
+  /** Whether this connection's bridge types the terminal's input line without Enter (feature "terminal-insert"). */
+  canInsert(): boolean {
+    return this.connected && this.mode === "interact" && this.features.has("terminal-insert");
+  }
+
+  /**
+   * Types the terminal's input line into the pane without Enter, straight to the socket, and
+   * settles once the bridge says herdr has the bytes (insert-result): never on the frame leaving.
+   * `text` is one line of the draft, as written (shared/terminal-insert.ts). A bridge without
+   * "terminal-insert" gets nothing at all: no input or submit stands in for it. null when offline
+   * or observing; a connection that drops settles it as not confirmed, and nothing is tried again.
+   */
+  insert(paneId: string, text: string): Promise<SubmitResult> | null {
+    const socket = this.socket;
+    if (!this.connected || socket === null || this.mode === "observe") return null;
+    // the pane's input as it was when the user tapped Insert: a detach and reattach (or a role change and
+    // back) during the waits below would carry this draft into an attachment it was not meant for
+    const lease = this.inputLease(paneId);
+    return (async (): Promise<SubmitResult> => {
+      await Promise.race([this.snapshotSeen, new Promise((resolve) => window.setTimeout(resolve, SNAPSHOT_WAIT_MS))]);
+      if (!(await this.probeSettled(socket))) return NOT_TRANSMITTED;
+      if (this.mode === "observe") return { ok: false, code: "read_only", message: "Observe connections cannot type into the pane." };
+      if (this.inputLease(paneId) !== lease) return { ok: false, code: "input_not_ready", message: "Terminal input changed before the text left. Nothing was sent." };
+      // the wait ended before the snapshot said what this bridge takes: "Update this PC" would be wrong advice
+      if (!this.snapshotKnown) return CAPABILITIES_UNKNOWN;
+      if (!this.features.has("terminal-insert")) return { ok: false, code: "unsupported", message: "Update this PC to insert text without Enter. Nothing was sent." };
+      if (!this.inputReady.has(paneId)) return { ok: false, code: "input_not_ready", message: "Terminal input is not ready. Nothing was sent." };
+      return this.submitRequest({ type: "insert", id: this.nextSubmit++, pane_id: paneId, text });
+    })();
+  }
+
   /** Only an acknowledgement callback is retained, never a frame to resend. */
-  private submitRequest(message: Extract<ClientMessage, { type: "submit" | "pending-action" }>): Promise<SubmitResult> {
+  private submitRequest(message: Extract<ClientMessage, { type: "submit" | "pending-action" | "insert" }>): Promise<SubmitResult> {
     const id = message.id;
-    this.requests.set(id, { type: message.type, paneId: message.pane_id, ...(message.type === "submit" ? { queued: message.delivery === "queue" || message.delivery === "hold" } : { pendingId: message.pending_id }) });
+    this.requests.set(id, { type: message.type, paneId: message.pane_id, ...(message.type === "submit" ? { queued: message.delivery === "queue" || message.delivery === "hold" } : message.type === "pending-action" ? { pendingId: message.pending_id } : {}) });
     const result = new Promise<SubmitResult>((resolve) => {
       this.submits.set(id, resolve);
       window.setTimeout(() => {
@@ -948,7 +1006,7 @@ export class HerdrSocket {
     })();
   }
 
-  private matchesRequest(id: number, type: "submit" | "pending-action" | "secret", paneId: string, pendingId?: string): boolean {
+  private matchesRequest(id: number, type: "submit" | "pending-action" | "secret" | "insert", paneId: string, pendingId?: string): boolean {
     const request = this.requests.get(id);
     return request?.type === type && request.paneId === paneId && (type !== "pending-action" || request.pendingId === pendingId);
   }

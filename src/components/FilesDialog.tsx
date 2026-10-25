@@ -70,7 +70,7 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
           {/* the dialog stays open across a pane switch (Next pane): the browser starts over on the new
               pane's folder, as Changes reads the new pane, instead of listing the pane it was opened on */}
           <div hidden={tab !== "browse"}><DirectoryBrowser key={paneId} start={start} onOpenFile={onOpenFile} onFolder={(path) => { folder.current = { pane: paneId, path }; }} /></div>
-          {changesVisited && <div hidden={tab !== "changes"}><RepoChanges key={paneId} paneId={paneId} directory={start} onOpenDiff={onOpenDiff} /></div>}
+          {changesVisited && <div hidden={tab !== "changes"}><RepoChanges paneId={paneId} directory={start} onOpenDiff={onOpenDiff} /></div>}
         </div>
       </section>
     </div>

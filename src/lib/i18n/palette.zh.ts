@@ -14,7 +14,6 @@ export const PALETTE_ZH: Record<string, string> = {
   "All": "全部",
   "Recent": "最近",
   "Workspace": "工作区",
-  "Selected": "已选择",
   "Unknown workspace": "未知工作区",
   "Actions": "操作",
   "Plugin actions": "插件操作",

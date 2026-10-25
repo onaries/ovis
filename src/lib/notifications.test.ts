@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { AgentStatus } from "../../shared/protocol.ts";
-import { alertStatus, alertsAllow, shouldNotifyStatus, showPaneEndedNotification, showPaneStatusNotification } from "./notifications.ts";
+import { paneStorageId } from "../../shared/machines.ts";
+import { alertStatus, alertsAllow, paneAlertsMuted, shouldNotifyStatus, showPaneEndedNotification, showPaneStatusNotification } from "./notifications.ts";
 
 describe("alertStatus", () => {
   it("takes a pane at rest that waits on its turn's background work for working, and leaves the rest as they are", () => {
@@ -48,6 +49,24 @@ describe("alertsAllow", () => {
     expect(alertsAllow({ input: false, done: "long" }, "done")).toBe(true);
     expect(alertsAllow({ input: true, done: "off" }, "done")).toBe(false);
     expect(alertsAllow({ input: true, done: "always" }, "working")).toBe(false);
+  });
+});
+
+describe("paneAlertsMuted", () => {
+  it("all four paths suppress only the keyed pane", () => {
+    // one predicate for the in-app alert, the chime, the tab notification (App.tsx) and web push (server/push.ts):
+    // the shared list keys a pane with its PC, so the same pane id on another PC is not muted with it
+    const muted = [paneStorageId("local", "w1:p1"), paneStorageId("pc-2", "w1:p2")];
+    expect(paneAlertsMuted(muted, "local", "w1:p1")).toBe(true);
+    expect(paneAlertsMuted(muted, "pc-2", "w1:p1")).toBe(false);
+    expect(paneAlertsMuted(muted, "local", "w1:p2")).toBe(false);
+    expect(paneAlertsMuted(muted, "pc-2", "w1:p2")).toBe(true);
+    // a bare remote pane id never matches its key
+    expect(muted).not.toContain("w1:p2");
+    // no list (an older server, or none heard yet) mutes nothing
+    expect(paneAlertsMuted(null, "local", "w1:p1")).toBe(false);
+    expect(paneAlertsMuted(undefined, "local", "w1:p1")).toBe(false);
+    expect(paneAlertsMuted([], "local", "w1:p1")).toBe(false);
   });
 });
 

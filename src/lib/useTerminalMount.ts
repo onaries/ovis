@@ -26,6 +26,7 @@ import { keepDeleteRepeatText, keyboardNeedsText, restoreDeleteRepeatCaret } fro
 import { pinchFontSize } from "./pinchFontSize.ts";
 import { narrowPaneFontSize } from "./narrowPaneFont.ts";
 import { finalStep, HERDR_MOUSE_SCROLL_LINES, wheelSteps } from "./wheelSteps.ts";
+import { createTouchWheelPacer } from "./touchWheelPacer.ts";
 import { attachTerminalWheel, canPanTerminalGrid } from "./terminalWheel.ts";
 import { visibleTerminalInputBounds } from "./terminalViewport.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
@@ -46,12 +47,15 @@ export interface TerminalMountDeps {
   cachedRef: RefObject<boolean>;
   cachedReleaseRef: RefObject<boolean>;
   cancelLeaveRef: RefObject<() => void>;
+  cancelTouchRef: RefObject<() => void>;
   chatMountedRef: RefObject<boolean>;
   chatOutputRef: RefObject<(() => void) | null>;
   chatViewRef: RefObject<boolean>;
   clearModifiers: () => void;
   clipboardTimerRef: RefObject<number | null>;
   coarseRef: RefObject<boolean>;
+  /** sends a pending Safari syllable or dictation phrase as an IME commit, ahead of a chord */
+  commitPendingText: () => void;
   composingRef: RefObject<boolean>;
   compositionCommitPendingRef: RefObject<boolean>;
   deferAttachRef: RefObject<(pane: string) => boolean>;
@@ -148,12 +152,14 @@ export interface TerminalMountDeps {
 }
 
 export function useTerminalMount(deps: TerminalMountDeps): void {
-  const { activeRef, barKeyRef, baseFontRef, cachedRef, cachedReleaseRef, cancelLeaveRef, chatMountedRef, chatOutputRef, chatViewRef, clearModifiers, clipboardTimerRef, coarseRef, composingRef, compositionCommitPendingRef, deferAttachRef, draftHeldForRef, draftPaneRef, endedRef, findOpenRef, fitRef, fittedRef, fixedGridRef, followCursorRef, followRef, frameGateRef, heldRef, hostRef, hyperlinksRef, keyboardHoldsRef, leaveRef, lineScroll, machineId, machineSessions, mirroredRef, modifiersRef, modifyOtherKeysRef, narrowFontRef, noteClipboard, observeRef, onChatSuggestion, onInputRowFrameRef, onRoleAckRef, onServerMessageRef, openFileRef, openWebRef, osc52AllowedRef, outputTargetRef, palette, paneRef, pendingEpochRef, pendingScopeRef, pendingSubmissionsRef, pinchBadgeRef, pinchStatusRef, presentationRef, presentedRef, reassertIfStaleRef, reattachRef, redrawGreeting, releaseAwayRef, releaseRef, releasedRef, retireOutputRef, secretRef, sessionRef, setChatInvalidation, setChatRefresh, setChatSent, setComposing, setConnected, setConnectedBefore, setConversationPushes, setDraft, setEnded, setHeld, setInputError, setInputReady, setObserving, setOutputError, setOutputReady, setParsedTarget, setReleased, setSecret, setSelectionQuote, setTerminal, setUnsupported, setWatching, sharedGridRef, shortcutSettings, shownRef, sizesPty, socketRef, stackRef, stalledRef, stopKeyRef, submitRetention, t, tRef, termRef, terminalFontSize, theme, updateSettings, uploadFileRef, watchingRef, wheelStateRef } = deps;
+  const { activeRef, barKeyRef, baseFontRef, cachedRef, cachedReleaseRef, cancelLeaveRef, cancelTouchRef, chatMountedRef, chatOutputRef, chatViewRef, clearModifiers, clipboardTimerRef, coarseRef, commitPendingText, composingRef, compositionCommitPendingRef, deferAttachRef, draftHeldForRef, draftPaneRef, endedRef, findOpenRef, fitRef, fittedRef, fixedGridRef, followCursorRef, followRef, frameGateRef, heldRef, hostRef, hyperlinksRef, keyboardHoldsRef, leaveRef, lineScroll, machineId, machineSessions, mirroredRef, modifiersRef, modifyOtherKeysRef, narrowFontRef, noteClipboard, observeRef, onChatSuggestion, onInputRowFrameRef, onRoleAckRef, onServerMessageRef, openFileRef, openWebRef, osc52AllowedRef, outputTargetRef, palette, paneRef, pendingEpochRef, pendingScopeRef, pendingSubmissionsRef, pinchBadgeRef, pinchStatusRef, presentationRef, presentedRef, reassertIfStaleRef, reattachRef, redrawGreeting, releaseAwayRef, releaseRef, releasedRef, retireOutputRef, secretRef, sessionRef, setChatInvalidation, setChatRefresh, setChatSent, setComposing, setConnected, setConnectedBefore, setConversationPushes, setDraft, setEnded, setHeld, setInputError, setInputReady, setObserving, setOutputError, setOutputReady, setParsedTarget, setReleased, setSecret, setSelectionQuote, setTerminal, setUnsupported, setWatching, sharedGridRef, shortcutSettings, shownRef, sizesPty, socketRef, stackRef, stalledRef, stopKeyRef, submitRetention, t, tRef, termRef, terminalFontSize, theme, updateSettings, uploadFileRef, watchingRef, wheelStateRef } = deps;
 
     // Where this terminal is: its pane, and whether it is active, presented, shown and not the chat view.
     // Counted on every commit that changes it: an explicit copy still waiting for herdr's text is
     // cancelled when the user leaves, even to come back (the copy made on release still finishes).
     const viewRef = useRef({ key: "", changes: 0 });
+    /** set while text composed before input was ready is committed: it goes to the draft, not the pane */
+    const holdPendingTextRef = useRef(false);
     useLayoutEffect(() => {
       const key = JSON.stringify([paneRef.current, activeRef.current, presentedRef.current, shownRef.current, chatViewRef.current]);
       if (key === viewRef.current.key) return;
@@ -312,7 +318,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           const chord = terminalChord(physicalKey(event.key, event.code), combined);
           const navigation = navigationSequence(event.key, combined);
           if (navigation !== null) {
-            if (event.type === "keydown") { event.preventDefault(); term.input(navigation); }
+            if (event.type === "keydown") { event.preventDefault(); commitPendingText(); term.input(navigation); }
             return false;
           }
           // A real clipboard shortcut still belongs to the browser. Soft Ctrl+V
@@ -323,6 +329,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           if (chord !== null && !clipboard) {
             if (event.type === "keydown") {
               event.preventDefault();
+              commitPendingText();
               typedChord = chord;
               // Go through the same readiness/role/secret checks as other input.
               term.input(event.key);
@@ -875,6 +882,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       // a socket this page was connected to before this mount (a switch back to the PC): a wait is a reconnect
       setConnectedBefore(connectedSockets.has(socket));
       let outputGeneration = 0;
+      /** set while a touch swipe's wheel report goes through xterm, so its own report is not taken for typing */
+      let touchWheelDispatching = false;
       // Bumped by readiness receipts: revokes only the proof that queued output is current, never
       // the parse itself (a masked prompt must still keep typing out of every draft).
       let outputLifetime = 0;
@@ -882,6 +891,30 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       let deferredAttach = false;
       // set by a disconnect: the first frame after the reconnect tries a preference that could not be read again
       let rereadHerdrUi = false;
+      // Text composed while the pane could not take input (a dictated phrase still in the editor)
+      // was typed offline: when input returns before its commit key, it goes to the draft and
+      // waits for Send or Discard like the rest, never to the pane by the next key.
+      let inputWasReady = false;
+      const noteInputReady = () => {
+        const pane = paneRef.current;
+        if (!pane) return;
+        const ready = socket.canInput(pane);
+        if (ready && !inputWasReady) {
+          holdPendingTextRef.current = true;
+          try { commitPendingText(); } finally { holdPendingTextRef.current = false; }
+        }
+        inputWasReady = ready;
+        setInputReady(ready);
+      };
+      // A refusal shorter than the readiness poll (a liveness probe whose pong comes back within
+      // it) still counts: text entering the editor while input is refused marks the refusal, so
+      // the frame that ends it (the pong) commits that text to the draft, not the next key to the pane.
+      const noteRefusedText = () => {
+        const pane = paneRef.current;
+        if (pane && !socket.canInput(pane)) inputWasReady = false;
+      };
+      const editor = term.textarea;
+      editor?.addEventListener("input", noteRefusedText, true);
       const off = session.on((message, sent) => {
         onServerMessageRef.current?.(message);
         if (rereadHerdrUi) {
@@ -915,7 +948,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           && chatMountedRef.current && document.visibilityState !== "hidden") {
           setChatInvalidation((current) => current + 1);
         }
-        if (paneRef.current) setInputReady(socket.canInput(paneRef.current));
+        noteInputReady();
         if (message.type === "input-ready" || message.type === "output-recovering") {
           // output-recovering: this client joined after the stream ended, so the replay is the screen from before
           if (message.type === "output-recovering" || message.ready === false) {
@@ -1000,7 +1033,11 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           // the server is the authority on the role; only after this ack may an
           // interact client reclaim the shared grid it stopped owning (a tab out of use
           // reclaims it when the user comes back: the refit below)
+          cancelTouchRef.current();
           const nowObserving = message.mode === "observe";
+          // text still pending in the editor was composed without the role: it is committed while
+          // observing still refuses it, so the next accepted key cannot carry it into the pane
+          if (observeRef.current && !nowObserving) commitPendingText();
           observeRef.current = nowObserving;
           // no fit runs while observing: a font shrunk for this client's own grid would stay
           if (nowObserving) term.options.fontSize = baseFontRef.current;
@@ -1098,6 +1135,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         setConversationPushes(socket.conversationPushes());
       });
       const offDisconnect = session.onDisconnect(() => {
+        // a swipe begun before the drop never goes on after the reconnect
+        cancelTouchRef.current();
         rereadHerdrUi = true;
         clearModifiers();
         pendingScopeRef.current = session.scope;
@@ -1106,6 +1145,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         outputRecovering = false;
         retireOutputRef.current();
         setOutputReady(false);
+        inputWasReady = false;
         setInputReady(false);
         setConnected(false);
         setConversationPushes(false);
@@ -1121,7 +1161,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       const poll = window.setInterval(() => {
         setConnected(socket.connected);
         setConversationPushes(socket.conversationPushes());
-        if (paneRef.current) setInputReady(socket.canInput(paneRef.current));
+        noteInputReady();
       }, 1000);
 
       // onKey runs after xterm drains a pending IME commit, immediately before the
@@ -1156,6 +1196,12 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       let pasting = false;
       const onPaste = () => { pasting = true; queueMicrotask(() => { pasting = false; }); };
       host.addEventListener("paste", onPaste, true);
+      // a key, text or a paste typed on the terminal ends the swipe before it (xterm's own replies to
+      // the program, a focus report or a query's answer, are no one typing and leave it be)
+      const onTyped = (): void => cancelTouchRef.current();
+      host.addEventListener("keydown", onTyped, true);
+      host.addEventListener("input", onTyped, true);
+      host.addEventListener("paste", onTyped, true);
       // File paths and dropped text use xterm's programmatic paste without a DOM paste event.
       const pasteText = (text: string): void => {
         const previous = pasting;
@@ -1175,6 +1221,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       };
       host.addEventListener("keydown", onCommandArrow);
       const onData = term.onData((data) => {
+        // a key from the key bar or the Stop, or a dropped file's paths, ends the swipe before it
+        if (!touchWheelDispatching && (barKeyRef.current !== null || stopKeyRef.current || pasting)) cancelTouchRef.current();
         // the split half following the other half's grid of the same tab draws it only: the active
         // half's terminal answers the program's queries (a second answer would reach it as typing),
         // and a press or key here makes this half the active one before anything is typed
@@ -1249,7 +1297,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           }
           return;
         }
-        if (socket.sendInput(current, input, stopKey && input === "\u001b")) return;
+        if (!holdPendingTextRef.current && socket.sendInput(current, input, stopKey && input === "\u001b")) return;
         if (secret) {
           const t = tRef.current;
           setInputError(t("Not sent: the terminal is not ready, and a password is never held for later."));
@@ -1376,6 +1424,13 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       /** finger travel of this gesture not yet sent as a wheel report */
       let touchPixels = 0;
       let tracking = false;
+      // a fast swipe's reports go out a few per frame, never all in one (lib/touchWheelPacer.ts)
+      const touchPacer = createTouchWheelPacer();
+      cancelTouchRef.current = () => {
+        touchPacer.cancel();
+        touchPixels = 0;
+        tracking = false;
+      };
       let pinch: { first: number; second: number; startSize: number; startDistance: number; size: number } | null = null;
       // from a second finger until every finger lifts: the stroke is a pinch, never a scroll
       let pinchStroke = false;
@@ -1428,6 +1483,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       };
       const onTouchStart = (event: TouchEvent): void => {
         if (chatViewRef.current) return;
+        // a new touch ends the swipe before it, a second finger's pinch too: what it had left is not sent
+        touchPacer.cancel();
         if (event.touches.length === 1 && pinchStroke) {
           finishPinch(false);
           pinchStroke = false;
@@ -1465,6 +1522,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       };
       const onTouchMove = (event: TouchEvent): void => {
         if (!pinchStroke && event.touches.length > 1) {
+          touchPacer.cancel();
           tracking = false;
           pinchStroke = true;
         }
@@ -1521,12 +1579,28 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           return;
         }
         const target = term.element ?? host;
-        for (let sent = 0; sent < Math.abs(steps); sent += 1) {
-          target.dispatchEvent(new WheelEvent("wheel", {
-            bubbles: true, cancelable: true, deltaY: Math.sign(steps), deltaMode: WheelEvent.DOM_DELTA_LINE,
-            clientX: touchX, clientY: touchY,
-          }));
-        }
+        // each report belongs to this pane, this attach and this role: one that is not current when
+        // its frame comes drops the rest of the swipe instead of sending it
+        const pane = paneRef.current;
+        const generation = outputGeneration;
+        const clientX = touchX;
+        const clientY = touchY;
+        touchPacer.push(steps, {
+          allowed: () => !disposed && pane !== null && paneRef.current === pane && generation === outputGeneration
+            && !observeRef.current && !heldRef.current && !releasedRef.current && !adopted() && socket.canInput(pane),
+          emit: (sign) => {
+            touchWheelDispatching = true;
+            try {
+              target.dispatchEvent(new WheelEvent("wheel", {
+                bubbles: true, cancelable: true, deltaY: sign, deltaMode: WheelEvent.DOM_DELTA_LINE, clientX, clientY,
+              }));
+            } finally {
+              touchWheelDispatching = false;
+            }
+          },
+        });
+        // travel beyond the queue's limit is dropped: counted here, never hidden
+        if (touchPacer.dropped > 0) host.dataset.touchWheelDropped = String(touchPacer.dropped);
       };
       const onTouchEnd = (event: TouchEvent): void => {
         // a lifted one-finger drag sends what is left once it reaches half a step: a flick shorter
@@ -1544,6 +1618,12 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       // Safari zooms inside an overflow region (xterm's viewport) despite touch-action: none
       const onGesture = (event: Event): void => { if (!chatViewRef.current) event.preventDefault(); };
       host.addEventListener("touchstart", onTouchStart, { capture: true, passive: false });
+      // a finger landing anywhere else on the page (a second one beside the swipe too) never reaches
+      // the host's listener: it ends the swipe all the same
+      const onPageTouchStart = (event: TouchEvent): void => {
+        if (event.touches.length > 1 || !(event.target instanceof Node && host.contains(event.target))) cancelTouchRef.current();
+      };
+      document.addEventListener("touchstart", onPageTouchStart, { capture: true, passive: true });
       host.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
       host.addEventListener("touchend", onTouchEnd, { capture: true, passive: false });
       host.addEventListener("touchcancel", onTouchEnd, { capture: true, passive: false });
@@ -1799,9 +1879,12 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         observer.disconnect();
         if (resizeTimer !== null) window.clearTimeout(resizeTimer);
         host.removeEventListener("touchstart", onTouchStart, { capture: true });
+        document.removeEventListener("touchstart", onPageTouchStart, { capture: true });
         host.removeEventListener("touchmove", onTouchMove, { capture: true });
         host.removeEventListener("touchend", onTouchEnd, { capture: true });
         host.removeEventListener("touchcancel", onTouchEnd, { capture: true });
+        touchPacer.dispose();
+        cancelTouchRef.current = () => undefined;
         host.removeEventListener("gesturestart", onGesture);
         host.removeEventListener("gesturechange", onGesture);
         finishPinch(false);
@@ -1842,10 +1925,14 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         host.removeEventListener("keydown", onCommandArrow);
         onData.dispose();
         host.removeEventListener("paste", onPaste, true);
+        host.removeEventListener("keydown", onTyped, true);
+        host.removeEventListener("input", onTyped, true);
+        host.removeEventListener("paste", onTyped, true);
         host.removeEventListener("paste", onFilePaste, { capture: true });
         host.removeEventListener("dragover", onDragOver);
         host.removeEventListener("drop", onDrop);
         offDisconnect();
+        editor?.removeEventListener("input", noteRefusedText, true);
         // frames still waiting are a retired terminal's: nothing writes or acknowledges them
         outputFrames.length = 0;
         parsingReplay = false;

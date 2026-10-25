@@ -1,11 +1,47 @@
 # Ovis for Mac
 
-The one-click setup for a Mac, downloaded from https://ovis.sh as `Ovis.dmg`. The phone apps
-need the Ovis server running on the computer; this app sets that up without a terminal and shows the
-QR code the phone app scans.
+Ovis on a Mac, downloaded from https://ovis.sh as `Ovis.dmg`. Once the Ovis server runs, the app
+opens Ovis in its own window, as a native app. Until then, or when the server stops, the window shows
+the one-click setup instead: it installs the server without a terminal and shows the QR code the
+phone app scans.
 
 It is a small SwiftUI app with no code of its own for installing: everything goes through what a
 terminal user runs, so the two never drift apart.
+
+## The Ovis window
+
+The window is a WKWebView on the server's own address (`http://127.0.0.1:<port>`, from
+`scripts/plugin.ts status`). The server lets a loopback request in without pairing, and the page's
+cookies and drafts stay in the app's own WebKit store, apart from any browser's.
+
+- **Ovis → Phone Setup…** opens the setup and the phone's QR code in a window of their own. After
+  an Install from the app it opens by itself. **File → Open in Browser** opens the page as it is in
+  the default browser, and **View → Reload** (Cmd+R) loads it again. No menu item takes a Cmd+Shift
+  letter: those are the page's own shortcuts.
+- The server's own pages stay in the app: a link that opens a new tab of it (a file) opens another
+  Ovis window. A link to any other address goes to the default browser, and a file dropped where the
+  page takes none is not opened in its place.
+- Ovis's own downloads go to Downloads; a download from a site in a web panel opens in the default
+  browser, which asks as it does for any site. A file field opens the file panel. The microphone
+  (dictation) is the app's: macOS asks once, with the text in `Info.plist`, and a signed build
+  carries the hardened runtime's `com.apple.security.device.audio-input` entitlement
+  (`Ovis.entitlements`).
+- The app checks the server every 3 seconds (`/api/health?scope=bridge`, which leaves herdr alone,
+  and only Ovis's own answer counts, never through a redirect). A running page reconnects by itself when the server is back
+  within about 15 seconds, keeping what was open in it, and says itself when the server it meets was
+  updated; a page that did not load, or whose code never started, loads again once the server
+  answers. When the server is still gone after about 15 seconds, the window shows the setup's Start
+  (the page and what was open in it go), and it goes back to Ovis by itself once the server runs
+  again, however it was started.
+- Another app's link (a site in a web panel can make one) asks before it opens that app, as Safari
+  does, and only the Ovis page itself opens app windows.
+- The user agent ends like Safari's, then `OvisMac/<version>`: the terminal's Korean input
+  (xterm.js's Hangul handling in `patches/`) goes by "Safari", and the page treats the app as
+  installed (`src/lib/nativeApp.ts`).
+- A WKWebView has no web notifications or Web Push: the page's alerts setting reports them as
+  unsupported here. macOS notifications from the app itself are a later step.
+
+## Setup
 
 | Button | What runs |
 | --- | --- |

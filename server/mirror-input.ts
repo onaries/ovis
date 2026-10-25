@@ -25,7 +25,8 @@ const PASTE_END = "\x1b[201~";
 export async function mirrorInput(text: string, paneAgent: () => Promise<string | null>): Promise<string> {
   // typing is one key per frame: only a paste has a line break with more text after it
   if (!/[\r\n][^\r\n]/.test(text)) return text;
-  // a terminal that knew the mode has wrapped it already
+  // a terminal that knew the mode has wrapped it already. This only spares a second pair; it checks nothing: a
+  // composer submit reaches here after submitFraming (core/composer.ts) allowed it one outer pair at most
   if (text.includes(PASTE_START) || text.includes(PASTE_END)) return text;
   let agent: string | null;
   try {

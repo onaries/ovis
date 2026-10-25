@@ -140,7 +140,7 @@ describe("Pages deployment gate", () => {
     expect(deploy).toContain("set -euo pipefail");
     expect(deploy).toContain('gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq \'.sha\'');
     expect(deploy).toContain('if [[ "$latest_sha" != "$EXPECTED_SHA" ]]');
-    expect(deploy.indexOf("Verify deployment SHA is current")).toBeLessThan(deploy.indexOf("actions/deploy-pages@v5"));
+    expect(deploy.indexOf("Verify deployment SHA is current")).toBeLessThan(deploy.indexOf("actions/deploy-pages@"));
   });
 
   it("summarizes the validated, built, and deployed source SHAs", () => {

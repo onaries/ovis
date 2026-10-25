@@ -1,6 +1,6 @@
 import type { ConversationPart, ConversationTurn } from "../../shared/protocol.ts";
 import { turnSkills } from "./skillActivity.ts";
-import { isTodoTool } from "./todos.ts";
+import { isTodoTool, todoSnapshot, type TodoItem } from "./todos.ts";
 import { t } from "./i18n.ts";
 
 export type ToolPart = Extract<ConversationPart, { kind: "tool" }>;
@@ -115,6 +115,77 @@ export function formatWorkDuration(startTs: string | null, endTs: string | null)
 export function isLiveWorkTurn(turn: ConversationTurn, last: boolean, status?: string, sentOver?: ConversationTurn | null): boolean {
   if (turn === sentOver) return false;
   return last && turn.role === "assistant" && (status === "working" || status === "blocked");
+}
+
+/**
+ * One todo call in a run of them. `state` is the transcript's own word for it (shared/protocol.ts):
+ * `unknown` when it records none (Codex after its output, other agents, older servers). Nothing
+ * here reads the output text or its emptiness for an outcome.
+ */
+export interface TodoAttempt {
+  part: ToolPart;
+  state: "ok" | "pending" | "error" | "unknown";
+  /** the list this call left, null when it cannot be read */
+  items: TodoItem[] | null;
+}
+
+/**
+ * Todo calls the agent made one after another, with nothing between them, drawn as one row: the
+ * plan's progress without a line per snapshot. Every attempt stays inside it, in order.
+ */
+export interface TodoGroup {
+  /** stable while calls are appended and the page is polled again: the first call's own id, in its turn's row */
+  id: string;
+  attempts: TodoAttempt[];
+  /**
+   * The list the row stands for: the latest call that completed (`ok`, or done with no recorded
+   * outcome). Null when none did. Its items are null when that list cannot be read; an earlier list
+   * never stands in for it.
+   */
+  current: TodoAttempt | null;
+  /** calls that have not answered, and calls that failed (by the transcript's flag) */
+  pending: number;
+  failed: number;
+}
+
+function attemptOf(part: ToolPart): TodoAttempt {
+  return { part, state: part.state ?? "unknown", items: todoSnapshot(part) };
+}
+
+/**
+ * The runs of two or more todo calls in a turn, by their first call. It walks the turn's own parts,
+ * before hidden thinking, skills or the answer are taken out: any other part, narration included,
+ * ends a run, so nothing the agent did between two updates is folded away. `rowKey` is the turn's
+ * row in the timeline; with the first call's original index it names a run whose calls carry no id.
+ */
+export function todoGroups(parts: readonly ConversationPart[], rowKey: string): Map<ToolPart, TodoGroup> {
+  const groups = new Map<ToolPart, TodoGroup>();
+  let run: { start: number; parts: ToolPart[] } | null = null;
+  const close = () => {
+    if (run !== null && run.parts.length > 1) {
+      const first = run.parts[0]!;
+      const attempts = run.parts.map(attemptOf);
+      let current: TodoAttempt | null = null;
+      // a call flagged failed never stands for the list, whatever state it carries
+      for (const attempt of attempts) if ((attempt.state === "ok" || attempt.state === "unknown") && attempt.part.error !== true) current = attempt;
+      groups.set(first, {
+        id: JSON.stringify([rowKey, first.call_id ?? `#${run.start}`]),
+        attempts,
+        current,
+        pending: attempts.filter((attempt) => attempt.state === "pending").length,
+        failed: attempts.filter((attempt) => attempt.state === "error" || attempt.part.error === true).length,
+      });
+    }
+    run = null;
+  };
+  parts.forEach((part, index) => {
+    if (part.kind === "tool" && !part.skill && isTodoTool(part.name)) {
+      if (run === null) run = { start: index, parts: [] };
+      run.parts.push(part);
+    } else close();
+  });
+  close();
+  return groups;
 }
 
 /** The rows a work block draws: skills are chips beside the prompt, thinking only when shown. */

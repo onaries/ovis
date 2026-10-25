@@ -114,4 +114,6 @@ export const TERMINAL_ZH: Record<string, string> = {
   "Quote in message": "引用到消息",
   "Added to the message draft": "已添加到消息草稿",
   "Too long for the message draft": "内容过长，无法加入消息草稿",
+  "Tap Input line to paste.": "要粘贴，请先点按输入框键。",
+  "Paste into the input line": "粘贴到输入行",
 };

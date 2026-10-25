@@ -24,11 +24,14 @@ import { handleMachineRequest } from "./machine-api.ts";
 import type { MachineManager } from "./machines.ts";
 import { TailnetIdentitySource } from "./tailscale.ts";
 import { forgetTranscriptState } from "./conversation.ts";
-import type { RepoDiffFileList, RepoDiffFilePatch, SessionHistoryResponse, SessionResumeResponse } from "../shared/protocol.ts";
+import type { RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, SessionHistoryResponse, SessionResumeResponse } from "../shared/protocol.ts";
 import { claudeProjectDir } from "./claude-store.ts";
 import { testShellEnv } from "../scripts/test-shell.ts";
 import { PendingInputError, PendingInputs } from "./pending-input.ts";
 import { loginPathProbe, ShellAgentLocator, type LoginPathProbe } from "./shell-agent.ts";
+import { DeviceStore } from "./devices.ts";
+import type { MachineEvent } from "../shared/machines.ts";
+import { MAX_MUTED_PANES, type SharedPreferences } from "../shared/preferences.ts";
 
 /**
  * Contract test for Ovis's HTTP + WS surface.
@@ -287,6 +290,113 @@ describe("Devin conversation API", () => {
       rmSync(state, { recursive: true, force: true });
     }
   });
+});
+
+describe("native tool call id and state on GET /api/pane/conversation", () => {
+  it.skipIf(process.platform !== "linux")("carries Claude's id and recorded outcome, Codex's id and pending only, and neither for another agent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-call-state-contract-"));
+    const cwd = realpathSync(root);
+    const originalHome = process.env["HOME"];
+    const claudeId = "6f1c2a9e-0b7d-4c3e-8a51-2d9f0e7b4c11";
+    const claudeFile = join(cwd, ".claude", "projects", claudeProjectDir(cwd), `${claudeId}.jsonl`);
+    const codexHome = join(cwd, "codex");
+    const codexFile = join(codexHome, "sessions", "2026", "10", "21", "rollout-2026-10-21T09-00-00-00000000-0000-4000-8000-000000000014.jsonl");
+    const ompFile = join(cwd, ".omp", "agent", "sessions", "-call-state", "2026-10-21T00-00-00-000Z_omp-call-state.jsonl");
+    for (const file of [claudeFile, codexFile, ompFile]) mkdirSync(join(file, ".."), { recursive: true });
+    const line = (record: unknown) => `${JSON.stringify(record)}\n`;
+    const todos = { todos: [{ content: "Read", status: "completed", activeForm: "Reading" }] };
+    const claudeUse = (id: string) => line({ type: "assistant", timestamp: "2026-10-21T09:00:01.000Z", message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id, name: "TodoWrite", input: todos }] } });
+    const claudeResult = (id: string, content: string, isError?: boolean) => line({ type: "user", timestamp: "2026-10-21T09:00:02.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, ...(isError === undefined ? {} : { is_error: isError }) }] } });
+    writeFileSync(claudeFile, line({ type: "user", timestamp: "2026-10-21T09:00:00.000Z", message: { role: "user", content: "plan it" } }) + claudeUse("toolu_ok") + claudeUse("toolu_err") + claudeUse("toolu_wait"));
+    const codexCall = (id: string, kind: "function_call" | "custom_tool_call") => line({ type: "response_item", timestamp: "2026-10-21T09:00:01.000Z", payload: kind === "function_call"
+      ? { type: kind, call_id: id, name: "update_plan", arguments: JSON.stringify({ plan: [{ step: "Read", status: "completed" }] }) }
+      : { type: kind, call_id: id, name: "apply_patch", input: "*** Begin Patch\n*** End Patch" } });
+    const codexOutput = (id: string, kind: "function_call_output" | "custom_tool_call_output", output: string) => line({ type: "response_item", timestamp: "2026-10-21T09:00:02.000Z", payload: { type: kind, call_id: id, output } });
+    writeFileSync(codexFile, line({ type: "session_meta", payload: { id: "00000000-0000-4000-8000-000000000014", timestamp: "2026-10-21T09:00:00.000Z", cwd, source: "cli" } })
+      + line({ type: "event_msg", timestamp: "2026-10-21T09:00:00.000Z", payload: { type: "user_message", message: "plan it" } })
+      + codexCall("call_fn", "function_call") + codexCall("call_custom", "custom_tool_call") + codexCall("call_fail_text", "function_call"));
+    writeFileSync(ompFile, [
+      { type: "session", version: 3, id: "omp-call-state", cwd },
+      { type: "message", id: "u1", parentId: null, timestamp: "2026-10-21T09:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "plan it" }] } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: "2026-10-21T09:00:01.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "omp_call_1", name: "todo", arguments: { op: "init", list: [{ phase: "Plan", items: ["Read"] }] } }] } },
+      { type: "message", id: "r1", parentId: "a1", timestamp: "2026-10-21T09:00:02.000Z", message: { role: "toolResult", toolCallId: "omp_call_1", toolName: "todo", isError: false, content: [{ type: "text", text: "Overall: 0/1 done.\n  Plan:\n    - [ ] Read" }] } },
+    ].map(line).join(""));
+    const workspaces: string[] = [];
+    let app: ReturnType<typeof createServer> | undefined;
+    let seq = Date.now() * 1000;
+    const agentPane = async (agent: string, session: Record<string, string>): Promise<string> => {
+      const created = await workspaceCreate({ cwd, label: `herdr-web-ui-test-call-state-${agent}` });
+      workspaces.push(created.workspace.workspace_id);
+      const paneId = created.root_pane.pane_id;
+      await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent, state: "idle" });
+      await herdrRpc("pane.report_agent_session", { pane_id: paneId, source: `herdr:${agent}`, agent, seq: ++seq, ...session });
+      return paneId;
+    };
+    try {
+      process.env["HOME"] = cwd;
+      forgetTranscriptState();
+      const claude = await agentPane("claude", { agent_session_id: claudeId });
+      // Codex is found by the rollout its process holds open: a native stand-in that only sleeps
+      const codexExe = join(cwd, "bin", "codex");
+      mkdirSync(join(cwd, "bin"));
+      copyFileSync("/bin/sleep", codexExe); chmodSync(codexExe, 0o755);
+      const codexCreated = await workspaceCreate({ cwd, label: "herdr-web-ui-test-call-state-codex" });
+      workspaces.push(codexCreated.workspace.workspace_id);
+      const codex = codexCreated.root_pane.pane_id;
+      await herdrRpc("pane.send_text", { pane_id: codex, text: `${codexExe} 600 3<${codexFile}\n` });
+      for (const deadline = Date.now() + 10_000;;) {
+        if ((await sessionSnapshot()).panes.find((pane) => pane.pane_id === codex)?.agent === "codex") break;
+        if (Date.now() > deadline) throw new Error("fixture Codex process did not start");
+        await Bun.sleep(50);
+      }
+      // omp's session report is taken for a pane herdr sees running omp: the same kind of stand-in
+      const ompExe = join(cwd, "bin", "omp");
+      copyFileSync("/bin/sleep", ompExe); chmodSync(ompExe, 0o755);
+      const ompCreated = await workspaceCreate({ cwd, label: "herdr-web-ui-test-call-state-omp" });
+      workspaces.push(ompCreated.workspace.workspace_id);
+      const omp = ompCreated.root_pane.pane_id;
+      // omp keeps its sessions under its own home, which the bridge reads from the process (#1898)
+      await herdrRpc("pane.send_text", { pane_id: omp, text: `HOME='${cwd}' exec '${ompExe}' 600\n` });
+      for (const deadline = Date.now() + 10_000;;) {
+        if ((await sessionSnapshot()).panes.find((pane) => pane.pane_id === omp)?.agent === "omp") break;
+        if (Date.now() > deadline) throw new Error("fixture omp process did not start");
+        await Bun.sleep(50);
+      }
+      await herdrRpc("pane.report_agent", { pane_id: omp, source: "herdr:omp", agent: "omp", state: "idle", seq: ++seq });
+      await herdrRpc("pane.report_agent_session", { pane_id: omp, source: "herdr:omp", agent: "omp", seq: ++seq, agent_session_path: ompFile, session_start_source: "startup" });
+      app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(cwd, "state"), codexHome });
+      const tools = async (paneId: string, source: string) => {
+        const response = await fetch(`http://127.0.0.1:${app!.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
+        expect(response.status).toBe(200);
+        const body = await response.json() as { source: string; turns: { parts: Record<string, unknown>[] }[] };
+        expect(body.source).toBe(source);
+        return body.turns.flatMap((turn) => turn.parts).filter((part) => part["kind"] === "tool");
+      };
+      const idState = (parts: Record<string, unknown>[]) => parts.map((part) => [part["call_id"], "state" in part ? part["state"] : "omitted"]);
+
+      // before any result: every native call is pending under its own id
+      expect(idState(await tools(claude, "claude-transcript"))).toEqual([["toolu_ok", "pending"], ["toolu_err", "pending"], ["toolu_wait", "pending"]]);
+      expect(idState(await tools(codex, "codex-transcript"))).toEqual([["call_fn", "pending"], ["call_custom", "pending"], ["call_fail_text", "pending"]]);
+
+      // results appended: Claude's flag decides (an empty result is ok); the next poll replaces the page
+      appendFileSync(claudeFile, claudeResult("toolu_ok", "") + claudeResult("toolu_err", "<tool_use_error>InputValidationError</tool_use_error>", true));
+      expect(idState(await tools(claude, "claude-transcript"))).toEqual([["toolu_ok", "ok"], ["toolu_err", "error"], ["toolu_wait", "pending"]]);
+      // Codex records no outcome: either output record ends pending, empty or failure-looking alike
+      appendFileSync(codexFile, codexOutput("call_fn", "function_call_output", "") + codexOutput("call_custom", "custom_tool_call_output", "applied")
+        + codexOutput("call_fail_text", "function_call_output", "Error: plan update failed\nProcess exited with code 1"));
+      expect(idState(await tools(codex, "codex-transcript"))).toEqual([["call_fn", "omitted"], ["call_custom", "omitted"], ["call_fail_text", "omitted"]]);
+
+      // another agent's parser fabricates neither, though its transcript has ids of its own
+      const ompTools = await tools(omp, "omp-transcript");
+      expect(ompTools).toHaveLength(1);
+      expect(["call_id" in ompTools[0]!, "state" in ompTools[0]!]).toEqual([false, false]);
+    } finally {
+      app?.stop();
+      for (const id of workspaces) await workspaceClose(id);
+      if (originalHome === undefined) delete process.env["HOME"]; else process.env["HOME"] = originalHome;
+      forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
 
 describe("usage API", () => {
@@ -4210,6 +4320,59 @@ describe("repository diff of a pane's folder", () => {
     const posted = await fetch(`${base()}/api/workspace/diff/files?${pane}`, { method: "POST", headers: { "x-herdr-machine": "1" } });
     expect(posted.status).toBe(400);
     expect(((await posted.json()) as ApiError).error.code).toBe("method_not_allowed");
+
+    // the branch against a base: the refs for the picker, the list from the merge base, each patch from the list's identity
+    git("add", ".");
+    git("commit", "-q", "-m", "on main");
+    git("checkout", "-q", "-b", "feature");
+    writeFileSync(join(root, "b.txt"), "branch\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "branch work");
+    git("update-ref", "refs/remotes/origin/main", "main");
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    writeFileSync(join(root, "untracked.txt"), "new\n");
+    const mainOid = Bun.spawnSync(["git", "-C", root, "rev-parse", "main"], { stdout: "pipe" }).stdout.toString().trim();
+    const headOid = Bun.spawnSync(["git", "-C", root, "rev-parse", "HEAD"], { stdout: "pipe" }).stdout.toString().trim();
+    for (const prefix of ["", "machines/local/"]) {
+      const refs = await fetch(`${base()}/api/${prefix}workspace/diff/refs?${pane}`);
+      expect([prefix, refs.status]).toEqual([prefix, 200]);
+      const listed = (await refs.json()) as RepoDiffRefs;
+      expect(listed.refs).toEqual([{ name: "refs/heads/feature", oid: headOid }, { name: "refs/heads/main", oid: mainOid }, { name: "refs/remotes/origin/main", oid: mainOid }]);
+      expect(listed).toMatchObject({ truncated: false, limits: { max_refs: 200 } });
+      const branch = await fetch(`${base()}/api/${prefix}workspace/diff/files?${pane}&scope=branch&base=refs%2Fremotes%2Forigin%2Fmain`);
+      expect([prefix, branch.status]).toEqual([prefix, 200]);
+      const compared = (await branch.json()) as RepoDiffFileList;
+      expect(compared).toMatchObject({ scope: "branch", base: mainOid, head: headOid, comparison: { repository_root: root, head_oid: headOid, base_oid: mainOid, merge_base_oid: mainOid } });
+      expect(compared.files.map((file) => [file.path, file.status])).toEqual([["b.txt", "added"], ["untracked.txt", "untracked"]]);
+      const comparison = encodeURIComponent(JSON.stringify(compared.comparison));
+      const patch = await fetch(`${base()}/api/${prefix}workspace/diff/file?${pane}&scope=branch&path=untracked.txt&comparison=${comparison}`);
+      expect([prefix, patch.status]).toEqual([prefix, 200]);
+      const read = (await patch.json()) as RepoDiffFilePatch;
+      expect(read).toMatchObject({ scope: "branch", comparison: compared.comparison, file: { path: "untracked.txt", status: "untracked", binary: false }, unavailable: null });
+      expect(read.patch).toStartWith("diff --git a/untracked.txt b/untracked.txt\n");
+      // a malformed identity, one of another HEAD, and a patch asked by the base's name instead of the identity
+      for (const [search, status, code] of [
+        [`scope=branch&path=b.txt&comparison=${encodeURIComponent("{\"head_oid\":1}")}`, 400, "invalid_comparison"],
+        // a full git id is 40 or 64 hex digits: 41 is a malformed shape, not a moved HEAD or a missing commit
+        ...(["head_oid", "base_oid", "merge_base_oid"] as const).map((key) => [`scope=branch&path=b.txt&comparison=${encodeURIComponent(JSON.stringify({ ...compared.comparison, [key]: "a".repeat(41) }))}`, 400, "invalid_comparison"] as const),
+        [`scope=branch&path=b.txt&comparison=${encodeURIComponent(JSON.stringify({ ...compared.comparison, head_oid: "0".repeat(40) }))}`, 409, "comparison_changed"],
+        ["scope=branch&path=b.txt&base=main", 400, "invalid_comparison"],
+      ] as const) {
+        const refused = await fetch(`${base()}/api/${prefix}workspace/diff/file?${pane}&${search}`);
+        expect([prefix, search, refused.status]).toEqual([prefix, search, status]);
+        expect(((await refused.json()) as ApiError).error.code).toBe(code);
+      }
+      // a base that names no commit, and one that shares no history
+      const unknown = await fetch(`${base()}/api/${prefix}workspace/diff/files?${pane}&scope=branch&base=no-such-branch`);
+      expect(unknown.status).toBe(404);
+      expect(((await unknown.json()) as ApiError).error.code).toBe("revision_not_found");
+    }
+    // another site's page reads none of it
+    for (const route of ["refs", "files?scope=branch&base=main"]) {
+      const crossSite = await fetch(`${base()}/api/workspace/diff/${route.includes("?") ? route.replace("?", `?${pane}&`) : `${route}?${pane}`}`, { headers: { "sec-fetch-site": "cross-site" } });
+      expect([route, crossSite.status]).toEqual([route, 403]);
+      expect(((await crossSite.json()) as ApiError).error.code).toBe("cross_site");
+    }
   });
 });
 
@@ -4716,4 +4879,144 @@ setInterval(() => {}, 1 << 30);
       rmSync(bridgeState, { recursive: true, force: true });
     }
   }, 60_000);
+});
+
+// The shared preferences (shared/preferences.ts) over HTTP and the event stream: the muted panes
+// are always in the document, the first mute is a change of the empty list, a watching device
+// reads and cannot write, and two tabs' changes land as two revisions with both kept.
+describe("shared preferences API", () => {
+  const guard = { "x-herdr-machine": "1", "content-type": "application/json" };
+  /** the event stream as a page reads it: each `preferences` document, and a bounded wait for the next one that matches */
+  async function openEvents(base: string, headers: Record<string, string>, abort: AbortController) {
+    const response = await fetch(`${base}/api/machines/events`, { headers, signal: abort.signal });
+    expect(response.status).toBe(200);
+    const documents: SharedPreferences[] = [];
+    const listeners = new Set<() => void>();
+    void (async () => {
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        buffer += decoder.decode(value, { stream: true });
+        for (let end = buffer.indexOf("\n\n"); end >= 0; end = buffer.indexOf("\n\n")) {
+          const frame = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          if (!frame.startsWith("data: ")) continue;
+          const event = JSON.parse(frame.slice(6)) as MachineEvent;
+          if (event.type === "preferences") { documents.push(event.preferences); for (const listener of [...listeners]) listener(); }
+        }
+      }
+    })().catch(() => undefined);
+    const next = (what: string, found: (document: SharedPreferences) => boolean): Promise<SharedPreferences> => new Promise((resolve, reject) => {
+      const check = () => { const hit = documents.find(found); if (hit) { listeners.delete(check); clearTimeout(timer); resolve(hit); } };
+      const timer = setTimeout(() => { listeners.delete(check); reject(new Error(`timed out waiting for ${what}`)); }, 10_000);
+      listeners.add(check);
+      check();
+    });
+    return { documents, next };
+  }
+
+  it("advertises the mute list from the first document on, saves the first mute, and refuses what is not a list", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-test-preferences-"));
+    const server = createServer({ port: 0, stateDir: root, token: "test-preferences", tailscaleOwner: null });
+    const base = `http://127.0.0.1:${server.port}`;
+    const headers = { ...guard, authorization: "Bearer test-preferences" };
+    const put = (body: unknown, extra: Record<string, string> = {}) => fetch(`${base}/api/preferences`, { method: "PUT", headers: { ...headers, ...extra }, body: typeof body === "string" ? body : JSON.stringify(body) });
+    const abort = new AbortController();
+    try {
+      // a fresh store: the empty list is in the GET and in the stream's opening document
+      expect(await (await fetch(`${base}/api/preferences`, { headers })).json()).toEqual({ revision: 0, settings: {}, muted_panes: [] });
+      const events = await openEvents(base, headers, abort);
+      expect(await events.next("the opening document", (document) => document.revision === 0)).toEqual({ revision: 0, settings: {}, muted_panes: [] });
+      // the first mute: saved, answered whole, and told to every stream
+      const first = await put({ settings: {}, muted_panes: ["w1:p1"] });
+      expect(first.status).toBe(200);
+      expect(await first.json()).toEqual({ revision: 1, settings: {}, muted_panes: ["w1:p1"] });
+      expect(await events.next("the first mute", (document) => document.revision === 1)).toEqual({ revision: 1, settings: {}, muted_panes: ["w1:p1"] });
+      // malformed and oversized lists: refused unread into the document, which keeps its revision
+      for (const muted of ["w1:p1", [1], [""], [null], ["x".repeat(301)], Array.from({ length: MAX_MUTED_PANES + 1 }, (_, i) => `w1:p${i}`)]) {
+        const refused = await put({ settings: {}, muted_panes: muted });
+        expect([JSON.stringify(muted).slice(0, 24), refused.status, ((await refused.json()) as ApiError).error.code]).toEqual([JSON.stringify(muted).slice(0, 24), 400, "invalid_body"]);
+      }
+      const huge = await put({ settings: {}, muted_panes: Array.from({ length: 300 }, (_, i) => `${"k".repeat(290)}${i}`) });
+      expect([huge.status, ((await huge.json()) as ApiError).error.code]).toEqual([413, "too_large"]);
+      expect(await (await fetch(`${base}/api/preferences`, { headers })).json()).toEqual({ revision: 1, settings: {}, muted_panes: ["w1:p1"] });
+      // a change that names no list leaves it; an empty list clears it
+      expect(await (await put({ settings: { theme: "light" } })).json()).toEqual({ revision: 2, settings: { theme: "light" }, muted_panes: ["w1:p1"] });
+      expect(await (await put({ settings: {}, muted_panes: [] })).json()).toEqual({ revision: 3, settings: { theme: "light" }, muted_panes: [] });
+      await events.next("the cleared list", (document) => document.revision === 3);
+      expect(events.documents.map((document) => document.revision)).toEqual([0, 1, 2, 3]);
+    } finally {
+      abort.abort();
+      server.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a document from before the list as none muted, without a write, and takes the first mute of it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-test-preferences-"));
+    const stored = { revision: 4, settings: { theme: "dark" }, pins: ["local:w1:p1"] };
+    writeFileSync(join(root, "preferences.json"), JSON.stringify(stored));
+    const server = createServer({ port: 0, stateDir: root, token: "test-preferences", tailscaleOwner: null });
+    const base = `http://127.0.0.1:${server.port}`;
+    const headers = { ...guard, authorization: "Bearer test-preferences" };
+    const abort = new AbortController();
+    try {
+      expect(await (await fetch(`${base}/api/preferences`, { headers })).json()).toEqual({ ...stored, muted_panes: [] });
+      expect(JSON.parse(readFileSync(join(root, "preferences.json"), "utf8"))).toEqual(stored);
+      const events = await openEvents(base, headers, abort);
+      expect(await events.next("the opening document", (document) => document.revision === 4)).toEqual({ ...stored, muted_panes: [] });
+      const first = await fetch(`${base}/api/preferences`, { method: "PUT", headers, body: JSON.stringify({ settings: {}, muted_panes: ["w1:p1"] }) });
+      expect(await first.json()).toEqual({ revision: 5, settings: { theme: "dark" }, pins: ["local:w1:p1"], muted_panes: ["w1:p1"] });
+      // the list has a document of its own, which an older release's whole rewrite of preferences.json cannot erase
+      expect(JSON.parse(readFileSync(join(root, "preferences.json"), "utf8"))).toEqual({ revision: 5, settings: { theme: "dark" }, pins: ["local:w1:p1"] });
+      expect(JSON.parse(readFileSync(join(root, "muted-panes.json"), "utf8"))).toEqual({ muted_panes: ["w1:p1"] });
+    } finally {
+      abort.abort();
+      server.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps both of two tabs' changes as two revisions, and lets a watching device read but not write", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-test-preferences-"));
+    const devices = new DeviceStore(root);
+    const watch = devices.pair(devices.startPairing().code, "Watch", "watch")!;
+    devices.match(watch.token);
+    const server = createServer({ port: 0, stateDir: root, token: "test-preferences", tailscaleOwner: null });
+    const base = `http://127.0.0.1:${server.port}`;
+    const driving = { ...guard, authorization: "Bearer test-preferences" };
+    const watching = { ...guard, cookie: `ovis_device=${watch.token}` };
+    const abort = new AbortController();
+    try {
+      const events = await openEvents(base, watching, abort);
+      await events.next("the opening document", (document) => document.revision === 0);
+      // tab A mutes while tab B picks a theme: each change lands on the document as it is then, and neither is lost
+      const [a, b] = await Promise.all([
+        fetch(`${base}/api/preferences`, { method: "PUT", headers: driving, body: JSON.stringify({ settings: {}, muted_panes: ["w1:p1"] }) }),
+        fetch(`${base}/api/preferences`, { method: "PUT", headers: driving, body: JSON.stringify({ settings: { theme: "light" } }) }),
+      ]);
+      expect([a.status, b.status]).toEqual([200, 200]);
+      const revisions = [((await a.json()) as SharedPreferences).revision, ((await b.json()) as SharedPreferences).revision].sort();
+      expect(revisions).toEqual([1, 2]);
+      const merged = await events.next("both changes", (document) => document.revision === 2);
+      expect(merged).toEqual({ revision: 2, settings: { theme: "light" }, muted_panes: ["w1:p1"] });
+      // tab B then clears the list tab A set: the last write wins, as for every field
+      const cleared = await fetch(`${base}/api/preferences`, { method: "PUT", headers: driving, body: JSON.stringify({ settings: {}, muted_panes: [] }) });
+      expect(await cleared.json()).toEqual({ revision: 3, settings: { theme: "light" }, muted_panes: [] });
+      // the watching device heard every document, and cannot write one: the revision stays
+      await events.next("the cleared list", (document) => document.revision === 3);
+      expect(events.documents.map((document) => document.revision)).toEqual([0, 1, 2, 3]);
+      expect(await (await fetch(`${base}/api/preferences`, { headers: watching })).json()).toEqual({ revision: 3, settings: { theme: "light" }, muted_panes: [] });
+      const refused = await fetch(`${base}/api/preferences`, { method: "PUT", headers: watching, body: JSON.stringify({ settings: {}, muted_panes: ["w1:p1"] }) });
+      expect([refused.status, ((await refused.json()) as ApiError).error.code]).toEqual([403, "read_only"]);
+      expect(await (await fetch(`${base}/api/preferences`, { headers: driving })).json()).toMatchObject({ revision: 3, muted_panes: [] });
+    } finally {
+      abort.abort();
+      server.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

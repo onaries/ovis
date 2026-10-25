@@ -81,4 +81,11 @@ export const MACHINES_JA: Record<string, string> = {
   "Settings (⌘⇧,)": "設定 (⌘⇧,)",
   "The computer this app runs on": "このアプリが動作しているコンピューター",
   "Host": "ホスト",
+  "Filter workspaces and agents": "ワークスペースとエージェントを絞り込む",
+  "Filter": "絞り込み",
+  "Workspaces and agents": "ワークスペースとエージェント",
+  "Clear filter": "絞り込みを消去",
+  "No workspaces or agents match": "一致するワークスペースやエージェントはありません",
+  "No workspaces or agents match on the PCs that answered": "応答した PC には一致するワークスペースやエージェントはありません",
+  "Try other words, or clear the filter.": "別の言葉で探すか、絞り込みを消去してください。",
 };

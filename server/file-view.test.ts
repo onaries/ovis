@@ -1,15 +1,53 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { appendFileSync, chmodSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 import * as fileView from "./file-view.ts";
-import { crossSiteFileRead, fileInfo, fileResponse, forgetPageMedia, locateFile, locateFileInFolder, PAGE_MEDIA_LIFETIME_MS, PAGE_MEDIA_PER_RENDER, pageMediaResponse, pageMediaSource, resolveFilePath } from "./file-view.ts";
+import { crossSiteFileRead, fileInfo, fileResponse, forgetPageMedia, locateFile, locateFileInFolder, PAGE_MEDIA_LIFETIME_MS, PAGE_MEDIA_PER_RENDER, pageFileHooks, pageMediaResponse, pageMediaSource, resolveFilePath } from "./file-view.ts";
 import { clearFileCache, filesNamed } from "./files.ts";
+
+/** Every descriptor a page's file was read through: open now, and any closed twice. */
+const live = new Set<number>();
+const closedTwice: number[] = [];
+/** Resolves when `fd` is next closed. */
+let closeWaiters: { fd: number; done: () => void }[] = [];
+const closing = (fd: number): Promise<void> => new Promise((done) => {
+  if (!live.has(fd)) done();
+  else closeWaiters.push({ fd, done });
+});
+const trackDescriptors = () => {
+  for (const key of Object.keys(pageFileHooks)) delete pageFileHooks[key as keyof typeof pageFileHooks];
+  pageFileHooks.opened = (fd) => { live.add(fd); };
+  pageFileHooks.closed = (fd) => {
+    if (!live.delete(fd)) closedTwice.push(fd);
+    const ready = closeWaiters.filter((waiter) => waiter.fd === fd);
+    closeWaiters = closeWaiters.filter((waiter) => waiter.fd !== fd);
+    for (const waiter of ready) waiter.done();
+  };
+};
+const descriptorsClosed = () => {
+  expect([...live]).toEqual([]);
+  expect(closedTwice).toEqual([]);
+  live.clear();
+  closedTwice.length = 0;
+  closeWaiters = [];
+  for (const key of Object.keys(pageFileHooks)) delete pageFileHooks[key as keyof typeof pageFileHooks];
+};
+/** Whether an address plays, its body let go of. */
+const plays = async (token: string, client: string | null, now?: number): Promise<boolean> => {
+  const response = pageMediaResponse(token, client, null, now);
+  await response?.body?.cancel();
+  return response !== null;
+};
 
 describe("file view", () => {
   const roots: string[] = [];
-  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+  beforeEach(trackDescriptors);
+  afterEach(() => {
+    descriptorsClosed();
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
   const temp = () => { const root = mkdtempSync(join(tmpdir(), "herdr-file-view-")); roots.push(root); return root; };
 
   it("resolves absolute, ~ and pane-relative paths", () => {
@@ -182,7 +220,7 @@ describe("file view", () => {
     expect(pageMediaResponse("A".repeat(32), "10.0.0.2")).toBeNull();
     // the address serves the file its render checked, not what later took its place
     const swapped = address("source")!;
-    expect(pageMediaResponse(swapped, "10.0.0.2")).not.toBeNull();
+    expect(await plays(swapped, "10.0.0.2")).toBe(true);
     rmSync(join(site, "clips"), { recursive: true });
     mkdirSync(join(root, "elsewhere"));
     sized(join(root, "elsewhere", "take.webm"), big);
@@ -214,7 +252,7 @@ describe("file view", () => {
     writeFileSync(join(root, "page.html"), `<video src="clip.mp4"></video>`);
     const html = await fileResponse(fileInfo(join(root, "page.html"))!, false, true, { source: "http://127.0.0.1:1/api/fs/page-media/", client: null, device: null }).text();
     const token = /page-media\/([A-Za-z0-9_-]{32})/.exec(html)![1]!;
-    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => pageMediaResponse(token, null) ?? new Response(null, { status: 404 }) });
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) => pageMediaResponse(token, null, request) ?? new Response(null, { status: 404 }) });
     try {
       const response = await fetch(`http://127.0.0.1:${server.port}/`, { headers: { range: "bytes=100-109" } });
       expect(response.status).toBe(206);
@@ -241,8 +279,8 @@ describe("file view", () => {
     const rendered = Date.now();
     const [token] = tokensOf(await fileResponse(fileInfo(streamedPage(root))!, false, true, owner("10.0.0.2")).text());
     // playing it does not stretch its life: each play near the end still ends at the same moment
-    for (const at of [1, PAGE_MEDIA_LIFETIME_MS / 2, PAGE_MEDIA_LIFETIME_MS - 60_000]) expect(pageMediaResponse(token!, "10.0.0.2", rendered + at)).not.toBeNull();
-    expect(pageMediaResponse(token!, "10.0.0.2", rendered + PAGE_MEDIA_LIFETIME_MS + 60_000)).toBeNull();
+    for (const at of [1, PAGE_MEDIA_LIFETIME_MS / 2, PAGE_MEDIA_LIFETIME_MS - 60_000]) expect(await plays(token!, "10.0.0.2", rendered + at)).toBe(true);
+    expect(pageMediaResponse(token!, "10.0.0.2", null, rendered + PAGE_MEDIA_LIFETIME_MS + 60_000)).toBeNull();
     // and once lapsed it is gone for good
     expect(pageMediaResponse(token!, "10.0.0.2")).toBeNull();
   });
@@ -254,7 +292,7 @@ describe("file view", () => {
     expect(pageMediaResponse(token!, "203.0.113.9")).toBeNull();
     expect(pageMediaResponse(token!, "203.0.113.9 via 127.0.0.1")).toBeNull();
     expect(pageMediaResponse(token!, null)).toBeNull();
-    expect(pageMediaResponse(token!, "10.0.0.2")).not.toBeNull();
+    expect(await plays(token!, "10.0.0.2")).toBe(true);
   });
 
   it("drops a device's page media when it is revoked, and a client's when it signs out", async () => {
@@ -265,10 +303,10 @@ describe("file view", () => {
     const [shared] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.4")).text());
     forgetPageMedia({ device: "phone" });
     expect(pageMediaResponse(phone!, "10.0.0.2")).toBeNull();
-    expect(pageMediaResponse(laptop!, "10.0.0.3")).not.toBeNull();
+    expect(await plays(laptop!, "10.0.0.3")).toBe(true);
     forgetPageMedia({ client: "10.0.0.4" });
     expect(pageMediaResponse(shared!, "10.0.0.4")).toBeNull();
-    expect(pageMediaResponse(laptop!, "10.0.0.3")).not.toBeNull();
+    expect(await plays(laptop!, "10.0.0.3")).toBe(true);
   });
 
   it("refuses a page's media once the file is written over in place", async () => {
@@ -287,7 +325,7 @@ describe("file view", () => {
     expect(pageMediaResponse(grown!, "10.0.0.2")).toBeNull();
     // rewritten at the same size: only its modification time tells
     const [rewritten] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.2")).text());
-    expect(pageMediaResponse(rewritten!, "10.0.0.2")).not.toBeNull();
+    expect(await plays(rewritten!, "10.0.0.2")).toBe(true);
     utimesSync(clip, second + 5, second + 5);
     expect(pageMediaResponse(rewritten!, "10.0.0.2")).toBeNull();
     expect(pageMediaResponse(touched!, "10.0.0.2")).toBeNull();
@@ -337,6 +375,658 @@ describe("file view", () => {
     expect(ask({ "sec-fetch-site": "none", "sec-fetch-mode": "navigate" })).toBe(false);
     // a browser that sends no Fetch Metadata is let through as before
     expect(ask({})).toBe(false);
+  });
+});
+
+describe("page files read through the descriptor that was validated", () => {
+  const roots: string[] = [];
+  beforeEach(trackDescriptors);
+  afterEach(() => {
+    descriptorsClosed();
+    delete process.env["OVIS_MEDIA_ROOTS"];
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+  const linux = process.platform === "linux";
+  const windows = process.platform === "win32";
+  const BIG = 9 * 1024 * 1024;
+  const source = "http://127.0.0.1:1/api/fs/page-media/";
+  const owner = (device: string | null = null) => ({ source, client: null, device });
+  const tokensOf = (html: string): string[] => [...html.matchAll(/page-media\/([A-Za-z0-9_-]{32})/g)].map((match) => match[1]!);
+  const render = async (page: string, media: ReturnType<typeof owner> | null = owner()) => (await fileResponse(fileInfo(page)!, false, true, media).text());
+  const png = (text: string) => Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from(text)]);
+  /** a file of `bytes` whose first bytes say which it is */
+  const marked = (path: string, mark: string, bytes = BIG) => { writeFileSync(path, mark); truncateSync(path, bytes); };
+  /**
+   * A page folder whose `sub` folder holds the page's picture and video, and an `outside` folder
+   * holding files of the same names: owned, mode 0755 from the page's folder down.
+   */
+  const layout = () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-page-fd-")));
+    roots.push(root);
+    const site = join(root, "site");
+    const sub = join(site, "sub");
+    const outside = join(root, "outside");
+    mkdirSync(sub, { recursive: true });
+    mkdirSync(outside);
+    for (const folder of [site, sub, outside]) chmodSync(folder, 0o755);
+    writeFileSync(join(sub, "f.png"), png("INSIDE"));
+    writeFileSync(join(outside, "f.png"), png("OUTSIDE-SECRET"));
+    marked(join(sub, "clip.mp4"), "INSIDE");
+    marked(join(outside, "clip.mp4"), "OUTSIDE-SECRET");
+    writeFileSync(join(site, "page.html"), `<img id="pic" src="sub/f.png"><video id="clip" src="sub/clip.mp4"></video>`);
+    return { root, site, sub, outside, page: join(site, "page.html") };
+  };
+  /** what a page drew: its picture put into it, and the addresses its video was given */
+  const drawn = (html: string) => ({ picture: html.includes(`id="pic" src="data:image/png;base64,`), tokens: tokensOf(html), outsideBytes: html.includes(png("OUTSIDE-SECRET").toString("base64")) });
+
+  /**
+   * B1's schedule, at the hooks of each authorization: the path resolves to `sub/<file>`; `sub`
+   * becomes a link outside before the open (so the descriptor is outside); `sub` is put back before
+   * the second resolution (which reads in the page's folder); and after it, before its identity
+   * check, `sub` is a link outside again (so the path's device and inode agree with the
+   * descriptor's). Every pathname sample agrees; only the opened file is outside. `sub` is put back
+   * whenever a descriptor closes, so each authorization meets the same schedule.
+   */
+  const threeSwap = (sub: string, outside: string) => {
+    const parked = `${sub}.real`;
+    const toOutside = () => { if (!lstatSync(sub).isSymbolicLink()) { renameSync(sub, parked); symlinkSync(outside, sub); } };
+    const toInside = () => { if (lstatSync(sub).isSymbolicLink()) { unlinkSync(sub); renameSync(parked, sub); } };
+    const seen = { schedules: 0, samplesAgreed: 0, authorized: 0 };
+    let fd = -1;
+    const opened = pageFileHooks.opened!;
+    const closed = pageFileHooks.closed!;
+    pageFileHooks.opened = (next) => { opened(next); fd = next; };
+    pageFileHooks.closed = (gone) => { closed(gone); toInside(); };
+    pageFileHooks.afterResolve = toOutside;
+    pageFileHooks.afterOpen = toInside;
+    pageFileHooks.beforeIdentity = (file) => {
+      toOutside();
+      seen.schedules += 1;
+      // the second resolution was in the page's folder, and the path now names the descriptor's file
+      const descriptor = fstatSync(fd);
+      const named = statSync(file);
+      if (file.startsWith(sub + "/") && named.ino === descriptor.ino && named.dev === descriptor.dev) seen.samplesAgreed += 1;
+    };
+    pageFileHooks.afterAuthorize = () => { seen.authorized += 1; };
+    return seen;
+  };
+
+  it.skipIf(!linux)("rejects three-swap outside embed using Linux descriptor path", async () => {
+    const { sub, outside, page } = layout();
+    const seen = threeSwap(sub, outside);
+    const html = await render(page, null);
+    expect(seen.schedules).toBeGreaterThan(0);
+    expect(seen.samplesAgreed).toBe(seen.schedules);
+    expect(seen.authorized).toBe(0);
+    expect(drawn(html)).toEqual({ picture: false, tokens: [], outsideBytes: false });
+    expect(html).toContain(`<img id="pic" src="sub/f.png">`);
+  });
+
+  it.skipIf(!linux)("does not mint a grant under three-swap path replacement", async () => {
+    const { sub, outside, page } = layout();
+    const seen = threeSwap(sub, outside);
+    const html = await render(page);
+    expect(seen.samplesAgreed).toBe(seen.schedules);
+    expect(seen.schedules).toBe(3);
+    expect(seen.authorized).toBe(0);
+    expect(drawn(html)).toEqual({ picture: false, tokens: [], outsideBytes: false });
+    expect(html).toContain(`<video id="clip" src="sub/clip.mp4">`);
+  });
+
+  it.skipIf(!linux)("rejects three-swap media reopen", async () => {
+    const { sub, outside, page } = layout();
+    const [token] = drawn(await render(page)).tokens;
+    expect(token).toBeDefined();
+    const seen = threeSwap(sub, outside);
+    expect(pageMediaResponse(token!, null)).toBeNull();
+    expect(seen.schedules).toBe(1);
+    expect(seen.samplesAgreed).toBe(1);
+    expect(seen.authorized).toBe(0);
+    // with the swaps over, the same address plays the file its render authorized
+    for (const key of ["afterResolve", "afterOpen", "beforeIdentity", "afterAuthorize"] as const) delete pageFileHooks[key];
+    const served = pageMediaResponse(token!, null, new Request("http://x/", { headers: { range: "bytes=0-5" } }))!;
+    expect(Buffer.from(await served.arrayBuffer()).toString()).toBe("INSIDE");
+  });
+
+  it("reports the Windows single-user residual under three-swap", async () => {
+    // documented, not defended: without a descriptor's own path, a writer of the folders on the way can race the path checks
+    if (windows) return;
+    const { sub, outside, page } = layout();
+    pageFileHooks.platform = "win32";
+    const seen = threeSwap(sub, outside);
+    const html = await render(page, null);
+    expect(seen.samplesAgreed).toBe(seen.schedules);
+    expect(seen.authorized).toBe(seen.schedules);
+    expect(drawn(html).outsideBytes).toBe(true);
+  });
+
+  it("fails closed on unreadable or deleted descriptor path", async () => {
+    const { page } = layout();
+    pageFileHooks.platform = "linux";
+    // the page is looked at first and gets its own path; each of its files' looks fails
+    let looks = 0;
+    let asked: string[] = [];
+    pageFileHooks.readlink = (path) => {
+      looks += 1;
+      if (looks === 1) return page;
+      asked.push(path);
+      throw Object.assign(new Error("no procfs"), { code: "ENOENT" });
+    };
+    let html = await render(page);
+    expect(html).toContain(`<img id="pic" src="sub/f.png">`);
+    expect(drawn(html)).toEqual({ picture: false, tokens: [], outsideBytes: false });
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every((path) => /^\/proc\/self\/fd\/\d+$/.test(path))).toBe(true);
+    asked = [];
+    // the descriptor's file deleted since: its kernel path ends in " (deleted)", in the page's folder or not
+    let deletedPath = "";
+    let authorized = 0;
+    pageFileHooks.afterAuthorize = () => { authorized += 1; };
+    pageFileHooks.beforeIdentity = (file) => { deletedPath = `${file} (deleted)`; };
+    looks = 0;
+    pageFileHooks.readlink = (path) => {
+      looks += 1;
+      if (looks === 1) return page;
+      asked.push(path);
+      return deletedPath;
+    };
+    html = await render(page);
+    expect(html).toContain(`<img id="pic" src="sub/f.png">`);
+    expect(drawn(html)).toEqual({ picture: false, tokens: [], outsideBytes: false });
+    expect(asked.length).toBeGreaterThan(0);
+    expect(authorized).toBe(0);
+    // and the same file, read through a real descriptor path, draws
+    delete pageFileHooks.readlink;
+    delete pageFileHooks.beforeIdentity;
+    delete pageFileHooks.afterAuthorize;
+    if (linux) expect(drawn(await render(page)).picture).toBe(true);
+  });
+
+  it.skipIf(windows)("rejects macOS group-writable chain directory", async () => {
+    const { site, sub, outside, page } = layout();
+    pageFileHooks.platform = "darwin";
+    // owned, 0755 from the page's folder down: drawn and played
+    expect(drawn(await render(page)).picture).toBe(true);
+    for (const mode of [0o775, 0o757, 0o777]) {
+      chmodSync(sub, mode);
+      expect(drawn(await render(page))).toEqual({ picture: false, tokens: [], outsideBytes: false });
+      chmodSync(sub, 0o755);
+      chmodSync(site, mode);
+      expect(drawn(await render(page))).toEqual({ picture: false, tokens: [], outsideBytes: false });
+      chmodSync(site, 0o755);
+    }
+    // B1's schedule with a group-writable folder on the way: refused, never authorized
+    chmodSync(sub, 0o775);
+    const seen = threeSwap(sub, outside);
+    expect(drawn(await render(page))).toEqual({ picture: false, tokens: [], outsideBytes: false });
+    expect(seen.authorized).toBe(0);
+  });
+
+  it.skipIf(windows)("rejects macOS nonowner directory", async () => {
+    const { site, sub, page } = layout();
+    pageFileHooks.platform = "darwin";
+    chmodSync(site, 0o700);
+    chmodSync(sub, 0o700);
+    expect(drawn(await render(page)).picture).toBe(true);
+    expect(drawn(await render(page)).tokens).toHaveLength(1);
+    const uid = process.getuid!();
+    pageFileHooks.uid = () => uid + 1;
+    expect(drawn(await render(page))).toEqual({ picture: false, tokens: [], outsideBytes: false });
+    // no user to compare with is no proof either
+    pageFileHooks.uid = () => undefined;
+    expect(drawn(await render(page))).toEqual({ picture: false, tokens: [], outsideBytes: false });
+  });
+
+  it.skipIf(windows)("follows symlinks into permitted folders under the macOS folder rule", async () => {
+    const { root, site, page } = layout();
+    pageFileHooks.platform = "darwin";
+    const share = join(root, "share");
+    mkdirSync(share);
+    chmodSync(share, 0o755);
+    marked(join(share, "take.mp4"), "SHARED");
+    symlinkSync(join(site, "sub"), join(site, "alias"));
+    symlinkSync(join(share, "take.mp4"), join(site, "take.mp4"));
+    writeFileSync(page, `<img id="pic" src="alias/f.png"><video id="clip" src="take.mp4"></video>`);
+    // a link to its own folder draws; one to a folder the operator did not name plays nothing
+    expect(drawn(await render(page))).toEqual({ picture: true, tokens: [], outsideBytes: false });
+    process.env["OVIS_MEDIA_ROOTS"] = share;
+    const [token] = drawn(await render(page)).tokens;
+    expect(token).toBeDefined();
+    const served = pageMediaResponse(token!, null, new Request("http://x/", { headers: { range: "bytes=0-5" } }))!;
+    expect(Buffer.from(await served.arrayBuffer()).toString()).toBe("SHARED");
+    // the share's own folder made writable to others since: no longer played
+    chmodSync(share, 0o775);
+    expect(pageMediaResponse(token!, null)).toBeNull();
+  });
+
+  it("retains Windows post-open identity rejection", async () => {
+    const { sub, page } = layout();
+    pageFileHooks.platform = "win32";
+    expect(drawn(await render(page)).picture).toBe(true);
+    // the file replaced between its open and the second look at its path
+    pageFileHooks.afterOpen = (file) => {
+      if (!file.endsWith("f.png")) return;
+      renameSync(file, join(sub, "old.png"));
+      writeFileSync(file, png("REPLACED"));
+    };
+    expect(drawn(await render(page)).picture).toBe(false);
+  });
+
+  it("answers 404 for a page gone or written over since it was found", async () => {
+    const { page } = layout();
+    const found = fileInfo(page)!;
+    rmSync(page);
+    const gone = fileResponse(found, false, true);
+    expect(gone.status).toBe(404);
+    expect(await gone.json()).toEqual({ error: { code: "not_found", message: "no readable file at that path" } });
+  });
+
+  it("refuses a descriptor whose inode is 0", async () => {
+    const { page } = layout();
+    pageFileHooks.fstat = (fd) => {
+      const stat = fstatSync(fd, { bigint: true });
+      return new Proxy(stat, { get: (target, key) => key === "ino" ? 0n : typeof Reflect.get(target, key) === "function" ? Reflect.get(target, key).bind(target) : Reflect.get(target, key) });
+    };
+    expect(drawn(await render(page))).toEqual({ picture: false, tokens: [], outsideBytes: false });
+  });
+
+  it("refuses a failing fstat or stat", async () => {
+    const { page } = layout();
+    // the page's own read is the first look by descriptor; each of its files' looks fails
+    let looks = 0;
+    pageFileHooks.fstat = (fd) => {
+      looks += 1;
+      if (looks === 1) return fstatSync(fd, { bigint: true });
+      throw Object.assign(new Error("EIO"), { code: "EIO" });
+    };
+    let html = await render(page);
+    expect(looks).toBeGreaterThan(1);
+    expect(html).toContain(`<img id="pic" src="sub/f.png">`);
+    expect(drawn(html)).toEqual({ picture: false, tokens: [], outsideBytes: false });
+    delete pageFileHooks.fstat;
+    // gone between the second resolution and its stat
+    pageFileHooks.beforeIdentity = (file) => rmSync(file);
+    html = await render(page);
+    expect(html).toContain(`<img id="pic" src="sub/f.png">`);
+    expect(drawn(html)).toEqual({ picture: false, tokens: [], outsideBytes: false });
+  });
+
+  it.skipIf(windows)("sends an empty file whole, whatever range is asked", async () => {
+    const { root, site, page } = layout();
+    // an empty recording is put into no page: one from a share plays from an address
+    const share = join(root, "share");
+    mkdirSync(share);
+    chmodSync(share, 0o755);
+    writeFileSync(join(share, "take.mp4"), "");
+    symlinkSync(join(share, "take.mp4"), join(site, "take.mp4"));
+    writeFileSync(page, `<video id="clip" src="take.mp4"></video>`);
+    process.env["OVIS_MEDIA_ROOTS"] = share;
+    const [token] = drawn(await render(page)).tokens;
+    expect(token).toBeDefined();
+    for (const range of ["bytes=-1", "bytes=0-"]) {
+      const response = pageMediaResponse(token!, null, new Request("http://x/", { headers: { range } }))!;
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-length")).toBe("0");
+      expect((await response.arrayBuffer()).byteLength).toBe(0);
+    }
+  });
+
+  it.skipIf(windows)("refuses a leaf swapped for a link before the open, or after it", async () => {
+    const { sub, outside, page } = layout();
+    // before the open: O_NOFOLLOW will not open the link
+    pageFileHooks.afterResolve = (file) => { rmSync(file); symlinkSync(join(outside, "f.png"), file); };
+    expect(drawn(await render(page, null)).picture).toBe(false);
+    rmSync(join(sub, "f.png"));
+    writeFileSync(join(sub, "f.png"), png("INSIDE"));
+    // after the open, before its metadata is looked at again: the second resolution leads outside
+    delete pageFileHooks.afterResolve;
+    pageFileHooks.afterOpen = (file) => { if (lstatSync(file).isFile()) { rmSync(file); symlinkSync(join(outside, "f.png"), file); } };
+    const html = await render(page, null);
+    expect(drawn(html)).toEqual({ picture: false, tokens: [], outsideBytes: false });
+  });
+
+  it.skipIf(windows)("refuses a FIFO put in place of the file", async () => {
+    const { page } = layout();
+    pageFileHooks.afterResolve = (file) => {
+      if (!file.endsWith("f.png")) return;
+      rmSync(file);
+      expect(Bun.spawnSync(["mkfifo", file]).exitCode).toBe(0);
+    };
+    // opened without waiting for a writer, and refused as no file
+    expect(drawn(await render(page, null)).picture).toBe(false);
+  });
+
+  // Windows refuses to rename a folder while a file in it is open, so the swap cannot be staged there
+  it.skipIf(windows)("keeps the page's folder as it was before the page was opened", async () => {
+    const { root, site, page } = layout();
+    // a folder elsewhere laid out as the page names its files
+    const hidden = join(root, ".private");
+    mkdirSync(join(hidden, "sub"), { recursive: true });
+    writeFileSync(join(hidden, "sub", "f.png"), png("OUTSIDE-SECRET"));
+    marked(join(hidden, "sub", "clip.mp4"), "OUTSIDE-SECRET");
+    // the page's own folder swapped for a link to it while the page is read (its first look by descriptor)
+    let swapped = false;
+    pageFileHooks.fstat = (fd) => {
+      if (!swapped) {
+        swapped = true;
+        renameSync(site, join(root, "parked"));
+        symlinkSync(hidden, site);
+      }
+      return fstatSync(fd, { bigint: true });
+    };
+    const html = await render(page);
+    expect(swapped).toBe(true);
+    expect(drawn(html)).toEqual({ picture: false, tokens: [], outsideBytes: false });
+  });
+
+  it.skipIf(windows)("refuses a page whose folder becomes a link to another folder once it is resolved", async () => {
+    // this platform's own proof, and the samples the others take
+    for (const platform of [undefined, "darwin"] as const) {
+      const { root, site, outside, page } = layout();
+      writeFileSync(join(outside, "page.html"), "<p>OUTSIDE-PAGE-SECRET</p>");
+      const found = fileInfo(page)!;
+      if (platform) pageFileHooks.platform = platform;
+      // swapped between the folder's one lookup and the page's open, and left so
+      pageFileHooks.pageFolder = () => {
+        renameSync(site, join(root, "parked"));
+        symlinkSync(outside, site);
+      };
+      const response = fileResponse(found, false, true, owner());
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain("OUTSIDE-PAGE-SECRET");
+      delete pageFileHooks.platform;
+      delete pageFileHooks.pageFolder;
+    }
+  });
+
+  it.skipIf(windows)("draws a page that is itself a link, taking its files from the folder it leads to", async () => {
+    const { root, site } = layout();
+    mkdirSync(join(root, "pages", "sub"), { recursive: true });
+    writeFileSync(join(root, "pages", "real.html"), `<img id="pic" src="sub/f.png">`);
+    writeFileSync(join(root, "pages", "sub", "f.png"), png("BESIDE-THE-TARGET"));
+    const linked = join(site, "linked.html");
+    symlinkSync(join(root, "pages", "real.html"), linked);
+    const response = fileResponse(fileInfo(linked)!, false, true, null);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain(`src="data:image/png;base64,${png("BESIDE-THE-TARGET").toString("base64")}"`);
+  });
+
+  it.skipIf(windows)("refuses a page opened through a folder that was a link only while it was opened", async () => {
+    // this platform's own proof, and the samples the others take
+    for (const platform of [undefined, "darwin"] as const) {
+      const { root, site, outside, page } = layout();
+      writeFileSync(join(outside, "page.html"), "<p>OUTSIDE-PAGE-SECRET</p>");
+      const found = fileInfo(page)!;
+      if (platform) pageFileHooks.platform = platform;
+      // a link after the path's lookup, so the open goes through it, and the folder put back before any later look
+      const parked = join(root, "parked");
+      pageFileHooks.pageFolder = () => {
+        renameSync(site, parked);
+        symlinkSync(outside, site);
+      };
+      pageFileHooks.pageOpened = () => {
+        unlinkSync(site);
+        renameSync(parked, site);
+      };
+      const response = fileResponse(found, false, true, owner());
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain("OUTSIDE-PAGE-SECRET");
+      delete pageFileHooks.platform;
+      delete pageFileHooks.pageFolder;
+      delete pageFileHooks.pageOpened;
+    }
+  });
+
+  it.skipIf(windows)("refuses a page whose folder was a link only while its path was looked up", async () => {
+    const { root, site, page } = layout();
+    const hidden = join(root, ".private");
+    mkdirSync(join(hidden, "sub"), { recursive: true });
+    writeFileSync(join(hidden, "sub", "f.png"), png("OUTSIDE-SECRET"));
+    marked(join(hidden, "sub", "clip.mp4"), "OUTSIDE-SECRET");
+    // a page of the same name there: what the path meant when it was looked up
+    writeFileSync(join(hidden, "page.html"), "<p>another page</p>");
+    const found = fileInfo(page)!;
+    // the page's folder is a link to that folder while it is resolved, and the page's own again once it is opened
+    const parked = join(root, "parked");
+    renameSync(site, parked);
+    symlinkSync(hidden, site);
+    let resolvedTo = "";
+    pageFileHooks.pageFolder = (folder) => {
+      resolvedTo = folder;
+      unlinkSync(site);
+      renameSync(parked, site);
+    };
+    const response = fileResponse(found, false, true, owner());
+    expect(resolvedTo).toBe(hidden);
+    // neither that folder's page nor its files, nor the asked page drawn with them
+    expect(response.status).toBe(404);
+    const text = await response.text();
+    expect(text).not.toContain("another page");
+    expect(text).not.toContain(`id="clip"`);
+    expect(drawn(text)).toEqual({ picture: false, tokens: [], outsideBytes: false });
+  });
+
+  // Windows refuses to rename a folder while a file in it is open, so the swap cannot be staged there
+  it.skipIf(windows)("reads a page's file and plays its video from the authorized descriptor after its path is swapped", async () => {
+    const { root, sub, outside, page } = layout();
+    // embedded: the path swapped between authorization and the read
+    let swapped = false;
+    pageFileHooks.afterAuthorize = (requested) => {
+      if (swapped || !requested.endsWith("f.png")) return;
+      swapped = true;
+      renameSync(sub, join(root, "parked"));
+      symlinkSync(outside, sub);
+    };
+    const html = await render(page, null);
+    expect(swapped).toBe(true);
+    expect(html).toContain(`id="pic" src="data:image/png;base64,${png("INSIDE").toString("base64")}"`);
+    expect(drawn(html).outsideBytes).toBe(false);
+    delete pageFileHooks.afterAuthorize;
+    unlinkSync(sub);
+    renameSync(join(root, "parked"), sub);
+    // played: authorized, then the path swapped before the body is read
+    const [token] = drawn(await render(page)).tokens;
+    const response = pageMediaResponse(token!, null)!;
+    renameSync(sub, join(root, "parked"));
+    symlinkSync(outside, sub);
+    const body = Buffer.from(await response.arrayBuffer());
+    expect(body.length).toBe(BIG);
+    expect(body.subarray(0, 6).toString()).toBe("INSIDE");
+    // a new request compares with what was minted, and refuses what took its place
+    expect(pageMediaResponse(token!, null)).toBeNull();
+  });
+
+  it("refuses a file written over after its authorization, before minting an address or answering HEAD", async () => {
+    const { sub, page } = layout();
+    const clip = join(sub, "clip.mp4");
+    let changes = 0;
+    const change = (requested: string) => { if (requested === clip) { changes += 1; appendFileSync(clip, "more"); } };
+    pageFileHooks.afterAuthorize = change;
+    expect(drawn(await render(page)).tokens).toEqual([]);
+    expect(changes).toBeGreaterThan(0);
+    const minted = changes;
+    delete pageFileHooks.afterAuthorize;
+    const [token] = drawn(await render(page)).tokens;
+    expect(token).toBeDefined();
+    pageFileHooks.afterAuthorize = change;
+    expect(pageMediaResponse(token!, null, new Request("http://x/", { method: "HEAD" }))).toBeNull();
+    expect(changes).toBe(minted + 1);
+    expect(live.size).toBe(0);
+  });
+
+  it("ends a stream once its file is written over in place", async () => {
+    const { sub, page } = layout();
+    const clip = join(sub, "clip.mp4");
+    for (const change of [() => appendFileSync(clip, "more"), () => { const second = Math.floor(Date.now() / 1000) + 30; utimesSync(clip, second, second); }]) {
+      const [token] = drawn(await render(page)).tokens;
+      const response = pageMediaResponse(token!, null)!;
+      const reader = response.body!.getReader();
+      expect((await reader.read()).value!.byteLength).toBeGreaterThan(0);
+      change();
+      await expect(reader.read()).rejects.toThrow("the file changed while it was read");
+      await reader.closed.catch(() => {});
+    }
+  });
+
+  it("ends a stream whose read fails, and closes its descriptor once", async () => {
+    const { page } = layout();
+    const [token] = drawn(await render(page)).tokens;
+    let reads = 0;
+    pageFileHooks.read = async () => { reads += 1; throw Object.assign(new Error("EIO"), { code: "EIO" }); };
+    const response = pageMediaResponse(token!, null)!;
+    await expect(response.body!.getReader().read()).rejects.toThrow("EIO");
+    expect(live.size).toBe(0);
+    expect(reads).toBe(1);
+  });
+
+  describe("over HTTP", () => {
+    /** With `cancelled`, the body passes through a stream that calls it once the server has cancelled the page's body. */
+    const serve = async (cancelled?: () => void) => {
+      const { sub, page } = layout();
+      const bytes = Buffer.alloc(BIG);
+      for (let index = 0; index < BIG; index += 1) bytes[index] = index % 251;
+      writeFileSync(join(sub, "clip.mp4"), bytes);
+      const [token] = drawn(await render(page, owner("phone"))).tokens;
+      const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) => {
+        const response = pageMediaResponse(token!, null, request);
+        if (response === null) return new Response(null, { status: 404 });
+        if (cancelled === undefined || response.body === null) return response;
+        const inner = response.body.getReader();
+        return new Response(new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            const next = await inner.read();
+            if (next.done) controller.close();
+            else controller.enqueue(next.value);
+          },
+          async cancel(reason) {
+            const done = inner.cancel(reason);
+            cancelled();
+            await done;
+          },
+        }, { highWaterMark: 0 }), { status: response.status, headers: response.headers });
+      } });
+      const opened: number[] = [];
+      const track = pageFileHooks.opened!;
+      pageFileHooks.opened = (fd) => { track(fd); opened.push(fd); };
+      return { bytes, token: token!, opened, url: `http://127.0.0.1:${server.port}/`, stop: () => server.stop(true) };
+    };
+
+    it("answers 200, HEAD and closed, open and suffix ranges with exact bytes", async () => {
+      const { bytes, opened, url, stop } = await serve();
+      try {
+        const full = await fetch(url);
+        expect(full.status).toBe(200);
+        // Bun sends a body of more than one chunk as chunked, whatever length it was given; HEAD and a one-chunk range keep it
+        expect(full.headers.get("accept-ranges")).toBe("bytes");
+        expect(full.headers.get("content-type")).toBe("video/mp4");
+        expect(full.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+        expect(Buffer.from(await full.arrayBuffer()).equals(bytes)).toBe(true);
+        await closing(opened.at(-1)!);
+        const head = await fetch(url, { method: "HEAD" });
+        expect(head.status).toBe(200);
+        expect(head.headers.get("content-length")).toBe(String(BIG));
+        expect((await head.arrayBuffer()).byteLength).toBe(0);
+        expect(live.size).toBe(0);
+        for (const [range, start, end] of [["bytes=100-109", 100, 109], ["bytes=9437000-", 9437000, BIG - 1], ["bytes=-10", BIG - 10, BIG - 1], ["bytes=0-99999999", 0, BIG - 1], ["bytes=-99999999", 0, BIG - 1], [`bytes=0-${"9".repeat(30)}`, 0, BIG - 1], [`bytes=-${"9".repeat(30)}`, 0, BIG - 1], ["BYTES=0-9", 0, 9], ["bytes=262140-262150", 262140, 262150]] as const) {
+          const part = await fetch(url, { headers: { range } });
+          expect(part.status).toBe(206);
+          expect(part.headers.get("content-range")).toBe(`bytes ${start}-${end}/${BIG}`);
+          if (end - start < 256 * 1024) expect(part.headers.get("content-length")).toBe(String(end - start + 1));
+          expect(Buffer.from(await part.arrayBuffer()).equals(bytes.subarray(start, end + 1))).toBe(true);
+          await closing(opened.at(-1)!);
+        }
+        // a range is defined for GET alone: HEAD describes the whole file
+        const headRange = await fetch(url, { method: "HEAD", headers: { range: "bytes=0-9" } });
+        expect(headRange.status).toBe(200);
+        expect(headRange.headers.get("content-length")).toBe(String(BIG));
+        expect(headRange.headers.get("content-range")).toBeNull();
+        expect(live.size).toBe(0);
+      } finally { stop(); }
+    });
+
+    it("answers 416 to a range that starts past the end, and closes at once", async () => {
+      const { opened, url, stop } = await serve();
+      try {
+        for (const range of [`bytes=${BIG}-`, "bytes=-0", `bytes=${"9".repeat(30)}-`]) {
+          const refused = await fetch(url, { headers: { range } });
+          expect(refused.status).toBe(416);
+          expect(refused.headers.get("content-range")).toBe(`bytes */${BIG}`);
+          expect((await refused.arrayBuffer()).byteLength).toBe(0);
+          expect(live.size).toBe(0);
+        }
+        expect(opened).toHaveLength(3);
+      } finally { stop(); }
+    });
+
+    it("sends the whole file for a Range it does not serve, or one with an If-Range it cannot match", async () => {
+      const { bytes, opened, url, stop } = await serve();
+      try {
+        const asked: Record<string, string>[] = [{ range: "items=0-1" }, { range: "bytes=0-1,4-5" }, { range: "bytes=5-1" }, { range: "bytes=x-1" }, { range: "bytes=-" }, { range: "bytes=0-9", "if-range": '"an-old-tag"' }];
+        for (const headers of asked) {
+          const whole = await fetch(url, { headers });
+          expect(whole.status).toBe(200);
+          expect(whole.headers.get("content-range")).toBeNull();
+          expect(Buffer.from(await whole.arrayBuffer()).equals(bytes)).toBe(true);
+          await closing(opened.at(-1)!);
+        }
+        expect(live.size).toBe(0);
+      } finally { stop(); }
+    });
+
+    it("closes once when the client goes away during a read, after that read returns", async () => {
+      let cancelled!: () => void;
+      const gone = new Promise<void>((done) => { cancelled = done; });
+      const { opened, url, stop } = await serve(() => cancelled());
+      // every read past the first waits until it is let go, so the client leaves while one is under way
+      let entered!: () => void;
+      const reading = new Promise<void>((done) => { entered = done; });
+      let release!: () => void;
+      const gate = new Promise<void>((done) => { release = done; });
+      let reads = 0;
+      pageFileHooks.read = async (fd, buffer, position) => {
+        reads += 1;
+        if (reads > 1) {
+          entered();
+          await gate;
+        }
+        return readSync(fd, buffer, 0, buffer.length, position);
+      };
+      try {
+        const controller = new AbortController();
+        const response = await fetch(url, { signal: controller.signal });
+        const reader = response.body!.getReader();
+        expect((await reader.read()).done).toBe(false);
+        await reading;
+        const fd = opened.at(-1)!;
+        controller.abort();
+        await gone;
+        // cancelled with a read under way: its descriptor stays open until that read returns
+        expect(live.has(fd)).toBe(true);
+        expect(fstatSync(fd).isFile()).toBe(true);
+        const closed = closing(fd);
+        release();
+        await closed;
+        expect(live.size).toBe(0);
+        expect(closedTwice).toEqual([]);
+      } finally {
+        release();
+        stop();
+      }
+    });
+
+    it("plays nothing, and opens nothing, once its device is revoked", async () => {
+      const { opened, url, stop } = await serve();
+      try {
+        const before = await fetch(url, { headers: { range: "bytes=0-0" } });
+        expect(before.status).toBe(206);
+        await before.arrayBuffer();
+        await closing(opened.at(-1)!);
+        const count = opened.length;
+        forgetPageMedia({ device: "phone" });
+        expect((await fetch(url)).status).toBe(404);
+        expect(opened).toHaveLength(count);
+      } finally { stop(); }
+    });
   });
 });
 

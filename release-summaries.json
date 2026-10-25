@@ -1,4 +1,98 @@
 {
+  "0.4.15": {
+    "en": {
+      "new": [
+        "Ovis for Mac opens Ovis in its own window, no browser needed; phone setup is in a menu.",
+        "Files → Changes now compares a branch against a base you pick, untracked files included.",
+        "Mute alerts for a single agent from its row in the Agents list, on every browser at once.",
+        "A filter field above the sidebar narrows the PC, workspace and agent rows as you type.",
+        "On a phone, the terminal's key bar gets a Paste key that fills the input line.",
+        "ovis.sh has a Beta page that walks testers into the iPhone TestFlight or the Android test."
+      ],
+      "improved": [
+        "A chat tool card names files from the pane's folder, the way the file browser does.",
+        "Todo updates an agent makes one after another fold into one row in the chat's work block.",
+        "The chat claims a plan update succeeded only when the agent's transcript records it."
+      ],
+      "fixed": [
+        "Pasted and attached files no longer show up in your project's Git status.",
+        "Sending from Chat while you read older turns takes you back to the end for the reply.",
+        "Dictation into the terminal in Safari types the corrected phrase once, not every draft.",
+        "The Android app's message box and key bar no longer sit under the navigation buttons.",
+        "An app updated from 0.4.13 or older now gets the Rust PTY host its terminals need.",
+        "Chat's command menu comes back on its own after the pane's command list failed to load."
+      ]
+    },
+    "ko": {
+      "new": [
+        "Mac용 Ovis가 브라우저 없이 자체 앱 창으로 열리고, 휴대폰 설정은 메뉴로 옮겼습니다.",
+        "Files → Changes에서 원하는 기준과 브랜치를 비교하며, 추적되지 않은 파일도 함께 봅니다.",
+        "에이전트 목록의 행 메뉴에서 그 에이전트의 알림만 모든 브라우저에서 끌 수 있습니다.",
+        "사이드바 위 필터 칸에 입력하면 PC와 워크스페이스, 에이전트 행이 그에 맞게 좁혀집니다.",
+        "휴대폰 터미널 키 바에 붙여넣기 키가 생겨 클립보드 내용을 입력 줄에 넣어 줍니다.",
+        "ovis.sh에 베타 페이지가 생겨 iPhone TestFlight나 Android 비공개 테스트 참여를 안내합니다."
+      ],
+      "improved": [
+        "채팅의 도구 카드가 파일 브라우저처럼 패널 폴더를 기준으로 파일 이름을 적습니다.",
+        "에이전트가 잇따라 보낸 할 일 업데이트가 채팅 작업 블록에서 한 줄로 묶입니다.",
+        "채팅은 기록에 남은 경우에만 계획 업데이트가 성공했다고 알립니다."
+      ],
+      "fixed": [
+        "붙여넣거나 첨부한 파일이 더는 프로젝트의 Git 상태에 나타나지 않습니다.",
+        "이전 대화를 보던 중 채팅에서 보내면 맨 끝으로 돌아가 답을 따라갑니다.",
+        "Safari 터미널 받아쓰기가 초안을 늘어놓지 않고 교정된 문장을 한 번만 입력합니다.",
+        "Android 앱의 메시지 상자와 키 바가 더는 내비게이션 버튼 아래에 깔리지 않습니다.",
+        "0.4.13 이하에서 업데이트한 앱도 터미널에 필요한 Rust PTY 호스트를 받습니다.",
+        "패널의 명령 목록을 불러오지 못해도 채팅의 명령 메뉴가 저절로 다시 나옵니다."
+      ]
+    },
+    "ja": {
+      "new": [
+        "Mac 版 Ovis がブラウザなしで専用のアプリウィンドウで開き、スマホ設定はメニューに移りました。",
+        "Files → Changes で選んだベースとブランチを比較でき、未追跡のファイルも含まれます。",
+        "エージェント一覧の行メニューから、そのエージェントの通知だけを全ブラウザでミュートできます。",
+        "サイドバー上部のフィルタ欄に入力すると、PC・ワークスペース・エージェントの行が絞り込まれます。",
+        "スマホのターミナルのキーバーに貼り付けキーが加わり、入力行にクリップボードを入れられます。",
+        "ovis.sh にベータページができ、iPhone の TestFlight や Android の限定テストへの参加を案内します。"
+      ],
+      "improved": [
+        "チャットのツールカードが、ファイルブラウザと同じくペインのフォルダを基準に表示します。",
+        "エージェントが続けて出した Todo の更新が、チャットの作業ブロックで 1 行にまとまります。",
+        "チャットは記録に残っているときだけ、プランの更新が成功したと伝えます。"
+      ],
+      "fixed": [
+        "貼り付けたファイルや添付したファイルが、プロジェクトの Git の状態に出なくなりました。",
+        "過去のやり取りを見ている間にチャットから送ると、末尾に戻って返信を追いかけます。",
+        "Safari のターミナルでの音声入力が、下書きを並べず修正後の文を一度だけ入力します。",
+        "Android アプリのメッセージ欄とキーバーが、ナビゲーションボタンの下に隠れなくなりました。",
+        "0.4.13 以前から更新したアプリにも、ターミナルに必要な Rust PTY ホストが届きます。",
+        "ペインのコマンド一覧の読み込みに失敗しても、チャットのコマンドメニューが自動で戻ります。"
+      ]
+    },
+    "zh": {
+      "new": [
+        "Mac 版 Ovis 无需浏览器，直接在自己的应用窗口中打开，手机设置移到了菜单里。",
+        "Files → Changes 现在可以把分支与你选定的基准比较，并包含未跟踪的文件。",
+        "可在代理列表的行菜单中单独静音某个代理的提醒，所有浏览器一起生效。",
+        "侧栏上方新增筛选框，输入后电脑、工作区和代理的行会随之缩小范围。",
+        "在手机上，终端按键栏新增粘贴键，可把剪贴板内容放进输入行。",
+        "ovis.sh 新增 Beta 页面，指引测试者加入 iPhone TestFlight 或 Android 封闭测试。"
+      ],
+      "improved": [
+        "聊天的工具卡片像文件浏览器一样，以窗格所在文件夹为基准写出文件名。",
+        "代理接连发出的待办更新，会在聊天的工作块中合并成一行。",
+        "只有记录中确实留下结果时，聊天才会说计划更新成功。"
+      ],
+      "fixed": [
+        "粘贴和附加的文件不再出现在项目的 Git 状态中。",
+        "在翻看早前对话时从聊天发送消息，会回到末尾并跟随回复。",
+        "在 Safari 的终端里听写，只输入修正后的句子，而不是每一版草稿。",
+        "Android 应用的消息框和按键栏不再压在导航按钮下方。",
+        "从 0.4.13 或更早版本更新的应用，也会获得终端所需的 Rust PTY 主机。",
+        "即使窗格的命令列表加载失败，聊天的命令菜单也会自动恢复。"
+      ]
+    }
+  },
   "0.4.14": {
     "en": {
       "new": [

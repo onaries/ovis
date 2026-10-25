@@ -43,3 +43,11 @@ test("the boundary tries again in the render where its key changes, and not whil
   expect(RenderBoundary.getDerivedStateFromProps(props("a"), { failed: true, key: "a" })).toBeNull();
   expect(RenderBoundary.getDerivedStateFromProps(props("b"), { failed: true, key: "a" })).toEqual({ failed: false, key: "b" });
 });
+
+test("a call's recorded state changes the revision; its id stays the same", () => {
+  const call = (state?: "pending" | "ok" | "error"): ConversationTurn => ({ role: "assistant", ts: "2026-10-02T00:00:00Z", parts: [
+    { kind: "tool", name: "TodoWrite", summary: "TodoWrite", input: "{}", output: "", call_id: "toolu_1", ...(state ? { state } : {}) },
+  ] });
+  const revisions = [call("pending"), call("ok"), call("error"), call()].map((value) => turnRevision(value, true));
+  expect(new Set(revisions).size).toBe(4);
+});

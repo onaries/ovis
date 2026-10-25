@@ -116,6 +116,15 @@ function fuzzyScore(query: string, candidate: string): number | null {
   return 500 - first * 2 - (previous - first) - runs * 12;
 }
 
+/**
+ * Whether `candidate` is a match for `query` by the palette's own matcher: the membership alone,
+ * never its rank, for a list that keeps its own order (the sidebar's filter, lib/sidebarFilter.ts).
+ * A blank query matches everything, as it ranks everything.
+ */
+export function matchesQuery(query: string, candidate: string): boolean {
+  return fuzzyScore(query, candidate) !== null;
+}
+
 function searchableText(pane: HerdrPane, workspaceLabel: string, tabNames: readonly string[], branch: string): string[] {
   return [
     pane.label ?? "",

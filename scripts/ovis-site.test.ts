@@ -1,6 +1,7 @@
 import { describe, it } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { BETA_LINKS } from "../ovis-site/assets/beta.js";
 import { fail, files, read, repo } from "./source-scan.ts";
 
 // ovis.sh (ovis-site/) is plain HTML with no build, so what a build would keep in step is written
@@ -103,6 +104,34 @@ describe("ovis.sh pages", () => {
       return problems;
     });
     fail(offenders, "Search results cut a title after about 60 characters and a description after about 160: shorten them, and copy the same text into og:title / twitter:title and og:description / twitter:description.");
+  });
+});
+
+describe("ovis.sh beta page", () => {
+  const BETA_PAGES = ["ovis-site/beta/index.html", "ovis-site/zh/beta/index.html", "ovis-site/ja/beta/index.html", "ovis-site/ko/beta/index.html"];
+  /** The kind of address each phone test link is, so a link pasted into the wrong slot fails here. */
+  const SHAPES: Record<string, RegExp> = {
+    testflight: /^https:\/\/testflight\.apple\.com\/join\/[A-Za-z0-9]+$/,
+    play: /^https:\/\/groups\.google\.com\/g\/[\w.-]+$/,
+  };
+  const links = BETA_LINKS as Record<string, string>;
+
+  it("sets each phone test link to its kind of address, or leaves it empty", () => {
+    fail(Object.entries(links).filter(([key, link]) => !SHAPES[key] || (link && !SHAPES[key].test(link))).map(([key, link]) => `${key}: ${JSON.stringify(link)}`),
+      "Set each link in BETA_LINKS (ovis-site/assets/beta.js) to the address its comment names, or to \"\" to keep its section hidden; a new key needs its shape in SHAPES in scripts/ovis-site.test.ts:");
+  });
+
+  it("ships each phone section hidden, with its link and its note, for beta.js to show", () => {
+    const offenders = BETA_PAGES.flatMap((file) => {
+      const page = html(file);
+      if (!page.includes("<script src=\"/assets/beta.js\"></script>")) return [`${file}: does not load /assets/beta.js`];
+      return Object.keys(links).flatMap((key) => [
+        !page.includes(`<section data-beta="${key}" hidden>`) && `${file}: no <section data-beta="${key}" hidden>`,
+        !page.includes(`<a data-beta-link="${key}">`) && `${file}: no <a data-beta-link="${key}">`,
+        !page.includes(`data-beta-pending="${key}"`) && `${file}: no data-beta-pending="${key}" note`,
+      ].filter((problem): problem is string => !!problem));
+    });
+    fail(offenders, "Each beta page loads /assets/beta.js and, for every key of BETA_LINKS, ships <section data-beta=\"<key>\" hidden> holding an <a data-beta-link=\"<key>\"> with no href, plus a data-beta-pending=\"<key>\" note; beta.js shows the section and hides the note once the link is set:");
   });
 });
 

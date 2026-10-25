@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import type { HerdrPane } from "../shared/protocol.ts";
 import { BackgroundWait, WAIT_LIMIT_MS } from "./background-wait.ts";
-import { ClaudeSubagentStatus, claudeSubagentState, claudeSubagents, forgetSubagents, lineNotifications, readLines, remember, subagentDetails, taskNotification, within } from "./claude-subagents.ts";
+import { ClaudeSubagentStatus, DETAIL_LIMITS, backgroundAgentDetail, backgroundCommand, claudeSubagentState, detailIo, claudeSubagents, forgetSubagents, lineNotifications, readLines, remember, subagentDetails, taskNotification, validDetailId, within } from "./claude-subagents.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -37,8 +37,8 @@ function session() {
     },
     work(id: string, minute: number, output: number, tools = 1) {
       const file = join(dir, `agent-${id}.jsonl`);
-      appendFileSync(file, json({ isSidechain: true, agentId: id, type: "user", timestamp: at(minute), message: { role: "user", content: "x" } }));
-      appendFileSync(file, json({ isSidechain: true, agentId: id, type: "assistant", timestamp: at(minute), message: { id: `m${minute}`, model: "claude-opus-5", usage: { input_tokens: 2, cache_read_input_tokens: 100, cache_creation_input_tokens: 5, output_tokens: output }, content: Array.from({ length: tools }, () => ({ type: "tool_use", id: "t", name: "Read", input: {} })) } }));
+      appendFileSync(file, json({ isSidechain: true, sessionId: "11111111-1111-4111-8111-111111111111", agentId: id, type: "user", timestamp: at(minute), message: { role: "user", content: "x" } }));
+      appendFileSync(file, json({ isSidechain: true, sessionId: "11111111-1111-4111-8111-111111111111", agentId: id, type: "assistant", timestamp: at(minute), message: { id: `m${minute}`, model: "claude-opus-5", usage: { input_tokens: 2, cache_read_input_tokens: 100, cache_creation_input_tokens: 5, output_tokens: output }, content: Array.from({ length: tools }, () => ({ type: "tool_use", id: "t", name: "Read", input: {} })) } }));
     },
     /** a Bash call sent to the background, by the session or (`file`) by a subagent */
     bash(taskId: string, minute: number, options: { description?: string; command?: string; file?: string } = {}) {
@@ -73,6 +73,7 @@ describe("claudeSubagents", () => {
       started_at: at(1), ended_at: null, turns: 2, tool_calls: 2,
       // the last request held 2 + 100 + 5 + 30 tokens: not the sum of both requests
       tokens: 137,
+      detail_kind: "claude-subagent",
     }]);
   });
 
@@ -212,6 +213,351 @@ describe("subagentDetails", () => {
     s.agent("a1", { description: "Review the parser", type: "reviewer", steps: [[1, 10], [2, 30]] });
     s.agent("a2");
     expect([...subagentDetails(s.path, ["a1", "gone"])]).toEqual([["a1", { title: "Review the parser", agent: "reviewer" }]]);
+  });
+});
+
+describe("backgroundAgentDetail", () => {
+  const SESSION = "11111111-1111-4111-8111-111111111111";
+  /** one assistant entry: its blocks, under a message id of its own */
+  /** a record of the agent a1's own file, as Claude Code writes it: the sidechain of its session and agent */
+  const own = (entry: object, id = "a1") => json({ isSidechain: true, sessionId: SESSION, agentId: id, ...entry });
+  const assistant = (minute: number, content: unknown[], extra: object = {}) => own({ type: "assistant", timestamp: at(minute), message: { id: `m${minute}`, model: "claude-opus-5", content, stop_reason: "tool_use" }, ...extra });
+  const detailOf = (path: string, id: string) => {
+    const read = backgroundAgentDetail(path, id);
+    if (!("detail" in read)) throw new Error(`refused: ${read.refusal}`);
+    return read.detail;
+  };
+
+  /** the detail, with every byte the transcript's own descriptor gave the read: the bytes in all, and the spans read, in order */
+  const reading = (path: string) => {
+    const opened = new Map<number, string>();
+    const spans: Array<[number, number]> = [];
+    const { openSync, readSync } = detailIo;
+    detailIo.openSync = ((name: string, flags: number) => { const fd = openSync(name, flags); opened.set(fd, name); return fd; }) as typeof openSync;
+    detailIo.readSync = ((fd: number, buffer: Buffer, offset: number, length: number, position: number) => {
+      const n = readSync(fd, buffer, offset, length, position);
+      if (opened.get(fd)?.endsWith(".jsonl")) spans.push([position, position + n]);
+      return n;
+    }) as typeof readSync;
+    let detail: ReturnType<typeof detailOf>;
+    try { detail = detailOf(path, "a1"); } finally { Object.assign(detailIo, { openSync, readSync }); }
+    spans.sort((a, b) => a[0] - b[0]);
+    const size = statSync(join(path, "..", SESSION, "subagents", "agent-a1.jsonl")).size;
+    return { detail, spans, size, total: spans.reduce((sum, [from, to]) => sum + to - from, 0) };
+  };
+  /** `head` and then records of about 4 KiB, the last one padded so that the file is `bytes` long */
+  const filled = (head: string, bytes: number): string => {
+    let out = head;
+    for (let index = 1; Buffer.byteLength(out, "utf8") < bytes; index++) {
+      const bare = Buffer.byteLength(assistant(index, [{ type: "text", text: `e${index}` }], { pad: "" }), "utf8");
+      const room = bytes - Buffer.byteLength(out, "utf8") - bare;
+      if (room < 0) throw new Error("no room for a whole record");
+      out += assistant(index, [{ type: "text", text: `e${index}` }], { pad: "p".repeat(room <= 8000 ? room : 4000) });
+    }
+    return out;
+  };
+
+  it("reads bounded running agent content", () => {
+    const s = session();
+    const file = s.agent("a1", { description: "Review the parser", type: "reviewer", steps: [] });
+    writeFileSync(file, [
+      own({ type: "user", timestamp: at(1), message: { role: "user", content: "Review src/parser.ts for off-by-one errors" } }),
+      assistant(2, [{ type: "thinking", thinking: "private", signature: "x" }, { type: "text", text: "Reading the parser first." }, { type: "tool_use", id: "t1", name: "Read", input: { file_path: "src/parser.ts" } }]),
+      own({ type: "user", timestamp: at(2), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "export function parse() {}" }] } }),
+      own({ type: "user", timestamp: at(3), message: { role: "user", content: "Also check the lexer" } }),
+      assistant(3, [{ type: "text", text: "The lexer is fine." }, { type: "tool_use", id: "t2", name: "Grep", input: {} }]),
+    ].join(""));
+    expect(detailOf(s.path, "a1")).toEqual({
+      agent_id: "a1", session_id: SESSION, title: "Review the parser", agent: "reviewer",
+      prompt: "Review src/parser.ts for off-by-one errors",
+      // the thinking, the tool's answer and the later instruction are not the agent's own activity
+      events: [
+        { kind: "text", text: "Reading the parser first.", at: at(2) },
+        { kind: "tool", text: 'Read {"file_path":"src/parser.ts"}', at: at(2) },
+        { kind: "text", text: "The lexer is fine.", at: at(3) },
+        { kind: "tool", text: "Grep {}", at: at(3) },
+      ],
+      truncated: false, incomplete: false, limits: DETAIL_LIMITS,
+    });
+    // the list says which rows can be opened: a subagent, not a command
+    s.bash("b1", 4, { description: "Run the suite" });
+    expect(claudeSubagents(s.path, true, NOW).map((task) => [task.id, task.detail_kind])).toEqual([["a1", "claude-subagent"], ["b1", null]]);
+    // a file not written yet says so with nothing in it, not with an activity it does not know
+    s.agent("a2", { steps: [] });
+    expect(detailOf(s.path, "a2")).toMatchObject({ prompt: null, events: [], truncated: false, incomplete: false });
+  });
+
+  it("partial and oversized records report incomplete", () => {
+    const s = session();
+    const file = s.agent("a1", { steps: [] });
+    writeFileSync(file, [
+      own({ type: "user", timestamp: at(1), message: { role: "user", content: "go" } }),
+      assistant(2, [{ type: "text", text: "first" }]),
+      // a complete record over its size, a line that is no record, and a trailing record still being written
+      assistant(3, [{ type: "text", text: "x".repeat(70_000) }]),
+      "not a record\n",
+      assistant(4, [{ type: "text", text: "second" }]),
+      assistant(5, [{ type: "text", text: "torn" }]).slice(0, -20),
+    ].join(""));
+    expect(detailOf(s.path, "a1")).toMatchObject({ prompt: "go", events: [{ kind: "text", text: "first" }, { kind: "text", text: "second" }], truncated: false, incomplete: true });
+    // a meta file being written, or over its size, is no agent yet
+    writeFileSync(join(s.path, "..", SESSION, "subagents", "agent-a1.meta.json"), "{ torn");
+    expect(backgroundAgentDetail(s.path, "a1")).toEqual({ refusal: "not_found" });
+    writeFileSync(join(s.path, "..", SESSION, "subagents", "agent-a1.meta.json"), JSON.stringify({ agentType: "reviewer", description: "x".repeat(70_000) }));
+    expect(backgroundAgentDetail(s.path, "a1")).toEqual({ refusal: "not_found" });
+  });
+
+  it("head and tail budgets never overlap or exceed limits", () => {
+    const s = session();
+    const file = s.agent("a1", { steps: [] });
+    const prompt = own({ type: "user", timestamp: at(0), message: { role: "user", content: "the dispatch" } });
+    // records of 4 KiB that each carry one short event: the windows cut the file, not the text budget
+    const record = (index: number) => assistant(index, [{ type: "text", text: `e${index}` }], { pad: "p".repeat(4000) });
+    const indexOf = (event: { text: string }) => Number(event.text.slice(1));
+    writeFileSync(file, prompt + Array.from({ length: 100 }, (_, index) => record(index + 1)).join(""));
+    const large = detailOf(s.path, "a1");
+    expect(large.prompt).toBe("the dispatch");
+    expect(large.truncated).toBe(true);
+    const indexes = large.events.map(indexOf);
+    // the start of the file and its end, each window's records in order, once each, and a gap between that neither read
+    expect(new Set(indexes).size).toBe(indexes.length);
+    expect(indexes).toEqual([...indexes].sort((a, b) => a - b));
+    const gap = indexes.findIndex((index, position) => position > 0 && index !== indexes[position - 1]! + 1);
+    expect(gap).toBeGreaterThan(0);
+    expect(indexes[0]).toBe(1);
+    expect(indexes.at(-1)).toBe(100);
+    expect(indexes.slice(0, gap)).toEqual(Array.from({ length: gap }, (_, index) => index + 1));
+    const head = indexes.slice(0, gap).length * 4096;
+    const tail = (100 - indexes[gap]! + 1) * 4096;
+    expect(head).toBeLessThanOrEqual(64 * 1024);
+    expect(tail).toBeLessThanOrEqual(DETAIL_LIMITS.max_read_bytes - 64 * 1024);
+    // the reads themselves: what the transcript's descriptor gave, at most the budget, no byte twice, the head and the end
+    const over = reading(s.path);
+    expect(over.size).toBeGreaterThan(DETAIL_LIMITS.max_read_bytes);
+    expect(over.total).toBe(DETAIL_LIMITS.max_read_bytes);
+    expect(over.spans[0]![0]).toBe(0);
+    expect(over.spans.at(-1)![1]).toBe(over.size);
+    for (let index = 1; index < over.spans.length; index++) expect(over.spans[index]![0]).toBeGreaterThanOrEqual(over.spans[index - 1]![1]);
+    // at the budget the file is read whole; a byte over it, the two windows, and still not a byte more than the budget
+    writeFileSync(file, filled(prompt, DETAIL_LIMITS.max_read_bytes));
+    const atBudget = reading(s.path);
+    expect([atBudget.size, atBudget.total, atBudget.detail.truncated]).toEqual([DETAIL_LIMITS.max_read_bytes, DETAIL_LIMITS.max_read_bytes, false]);
+    writeFileSync(file, filled(prompt, DETAIL_LIMITS.max_read_bytes + 1));
+    const byteOver = reading(s.path);
+    expect([byteOver.size, byteOver.total, byteOver.detail.truncated]).toEqual([DETAIL_LIMITS.max_read_bytes + 1, DETAIL_LIMITS.max_read_bytes, true]);
+    expect(byteOver.detail.prompt).toBe("the dispatch");
+    // a file that fits the read budget is read whole
+    writeFileSync(file, prompt + Array.from({ length: 40 }, (_, index) => record(index + 1)).join(""));
+    const whole = detailOf(s.path, "a1");
+    expect(whole.events.map(indexOf)).toEqual(Array.from({ length: 40 }, (_, index) => index + 1));
+    expect(whole).toMatchObject({ truncated: false, incomplete: false });
+    // more events than the cap: the newest are kept, and said to be a part
+    writeFileSync(file, prompt + Array.from({ length: 200 }, (_, index) => assistant(index + 1, [{ type: "text", text: `e${index + 1}` }])).join(""));
+    const capped = detailOf(s.path, "a1");
+    expect(capped.events).toHaveLength(DETAIL_LIMITS.max_events);
+    expect(capped.events.map(indexOf)).toEqual(Array.from({ length: DETAIL_LIMITS.max_events }, (_, index) => 200 - DETAIL_LIMITS.max_events + index + 1));
+    expect(capped.truncated).toBe(true);
+    // more text than the budget: the newest events that fit, whole, and the prompt before them
+    writeFileSync(file, prompt + Array.from({ length: 10 }, (_, index) => assistant(index + 1, [{ type: "text", text: `${index + 1}:${"t".repeat(20 * 1024)}` }])).join(""));
+    const budgeted = detailOf(s.path, "a1");
+    const bytes = budgeted.events.reduce((sum, event) => sum + Buffer.byteLength(event.text, "utf8"), Buffer.byteLength(budgeted.prompt ?? "", "utf8"));
+    expect(bytes).toBeLessThanOrEqual(DETAIL_LIMITS.max_output_bytes);
+    expect(budgeted.events.map((event) => event.text.split(":")[0])).toEqual(["5", "6", "7", "8", "9", "10"]);
+    expect(budgeted.events.every((event) => event.text.endsWith("t".repeat(20 * 1024)))).toBe(true);
+    expect(budgeted).toMatchObject({ prompt: "the dispatch", truncated: true, incomplete: false });
+  });
+
+  it("rejects traversal and symlink escapes", () => {
+    const s = session();
+    s.agent("a1", { description: "inside" });
+    for (const id of ["", "..", "x/../../../secret", "a/b", "/etc/passwd", "a b", "a\0b", "x".repeat(129)]) {
+      expect([id.slice(0, 20), validDetailId(id)]).toEqual([id.slice(0, 20), false]);
+      expect(backgroundAgentDetail(s.path, id)).toEqual({ refusal: "unavailable" });
+    }
+    expect(validDetailId("x".repeat(128))).toBe(true);
+    const dir = join(s.path, "..", SESSION, "subagents");
+    const outside = mkdtempSync(join(tmpdir(), "herdr-subagents-outside-"));
+    roots.push(outside);
+    writeFileSync(join(outside, "agent-l1.meta.json"), JSON.stringify({ agentType: "x", description: "outside" }));
+    writeFileSync(join(outside, "agent-l1.jsonl"), json({ type: "user", message: { content: "secret" } }));
+    // an agent whose files are links, to anywhere, is none of this session's
+    symlinkSync(join(outside, "agent-l1.meta.json"), join(dir, "agent-l1.meta.json"));
+    symlinkSync(join(outside, "agent-l1.jsonl"), join(dir, "agent-l1.jsonl"));
+    expect(backgroundAgentDetail(s.path, "l1")).toEqual({ refusal: "not_found" });
+    symlinkSync(join(dir, "agent-a1.meta.json"), join(dir, "agent-l2.meta.json"));
+    symlinkSync(join(dir, "agent-a1.jsonl"), join(dir, "agent-l2.jsonl"));
+    expect(backgroundAgentDetail(s.path, "l2")).toEqual({ refusal: "not_found" });
+    expect(backgroundAgentDetail(s.path, "gone")).toEqual({ refusal: "not_found" });
+    // a transcript that is there but cannot be opened is a store not readable now, never an agent gone (root opens anything)
+    if (process.getuid?.() !== 0) {
+      chmodSync(join(dir, "agent-a1.jsonl"), 0o000);
+      try { expect(backgroundAgentDetail(s.path, "a1")).toEqual({ refusal: "unavailable" }); } finally { chmodSync(join(dir, "agent-a1.jsonl"), 0o644); }
+    }
+    // another session's valid id is not this session's
+    const other = session();
+    other.agent("b1", { description: "theirs" });
+    expect(backgroundAgentDetail(s.path, "b1")).toEqual({ refusal: "not_found" });
+    expect(detailOf(other.path, "b1").title).toBe("theirs");
+    // a subagents folder that is a link leads out of the store: nothing of it is read, not even the file it points at
+    const linkedSession = join(s.path, "..", "22222222-2222-4222-8222-222222222222");
+    const linkedParent = `${linkedSession}.jsonl`;
+    writeFileSync(linkedParent, json({ type: "user", message: { content: "go" } }));
+    mkdirSync(linkedSession);
+    symlinkSync(join(other.path, "..", SESSION, "subagents"), join(linkedSession, "subagents"));
+    expect(backgroundAgentDetail(linkedParent, "b1")).toEqual({ refusal: "unavailable" });
+    // a parent transcript that is a link is not read through
+    const linkedTranscript = join(s.path, "..", "33333333-3333-4333-8333-333333333333.jsonl");
+    symlinkSync(s.path, linkedTranscript);
+    expect(backgroundAgentDetail(linkedTranscript, "a1")).toEqual({ refusal: "unavailable" });
+    // a session with no subagents folder has no agent to read
+    expect(backgroundAgentDetail(join(s.path, "..", "none.jsonl"), "a1")).toEqual({ refusal: "unavailable" });
+    writeFileSync(join(s.path, "..", "none.jsonl"), "");
+    expect(backgroundAgentDetail(join(s.path, "..", "none.jsonl"), "a1")).toEqual({ refusal: "not_found" });
+  });
+
+  it("an unreadable dispatch is no prompt, and no later instruction is taken for it", () => {
+    const s = session();
+    const file = s.agent("a1", { steps: [] });
+    const later = own({ type: "user", timestamp: at(3), message: { role: "user", content: "a later instruction" } });
+    for (const first of [own({ type: "user", timestamp: at(1), message: { role: "user", content: "x".repeat(70_000) } }), "{ torn dispatch\n", "[1]\n"]) {
+      writeFileSync(file, first + assistant(2, [{ type: "text", text: "working" }]) + later);
+      expect([first.slice(0, 16), detailOf(s.path, "a1")]).toMatchObject([first.slice(0, 16), { prompt: null, events: [{ kind: "text", text: "working" }], incomplete: true }]);
+    }
+    // a meta entry before the dispatch is none, and leaves it to come
+    writeFileSync(file, own({ type: "user", isMeta: true, timestamp: at(0), message: { role: "user", content: "caveat" } }) + own({ type: "user", timestamp: at(1), message: { role: "user", content: "the dispatch" } }) + later);
+    expect(detailOf(s.path, "a1")).toMatchObject({ prompt: "the dispatch", incomplete: false });
+    // a head window that holds no whole record has no prompt either; the tail's instruction is not it
+    writeFileSync(file, own({ type: "user", timestamp: at(1), message: { role: "user", content: "y".repeat(300_000) } }) + later);
+    expect(detailOf(s.path, "a1")).toMatchObject({ prompt: null, events: [], incomplete: true, truncated: true });
+  });
+
+  it("answers only a file that is this session's agent's own", () => {
+    const s = session();
+    const file = s.agent("a1", { steps: [] });
+    const dispatch = { type: "user", timestamp: at(1), message: { role: "user", content: "secret dispatch" } };
+    const cases: Array<[string, string]> = [
+      ["another session", json({ isSidechain: true, sessionId: "22222222-2222-4222-8222-222222222222", agentId: "a1", ...dispatch })],
+      ["another agent", json({ isSidechain: true, sessionId: SESSION, agentId: "b9", ...dispatch })],
+      ["the main thread", json({ isSidechain: false, sessionId: SESSION, agentId: "a1", ...dispatch })],
+      ["no identity", json(dispatch)],
+      // one foreign record among the agent's own taints the whole file
+      ["a foreign record after its own", own(dispatch) + json({ isSidechain: true, sessionId: SESSION, agentId: "b9", type: "attachment", timestamp: at(3) })],
+    ];
+    for (const [label, records] of cases) {
+      writeFileSync(file, records + assistant(2, [{ type: "text", text: "secret prose" }]));
+      expect([label, backgroundAgentDetail(s.path, "a1")]).toEqual([label, { refusal: "not_found" }]);
+    }
+    writeFileSync(file, own(dispatch));
+    expect(detailOf(s.path, "a1").prompt).toBe("secret dispatch");
+    // a meta file that names no agent type is no subagent's
+    writeFileSync(join(s.path, "..", SESSION, "subagents", "agent-a1.meta.json"), JSON.stringify({ description: "no type", toolUseId: "toolu_a1" }));
+    expect(backgroundAgentDetail(s.path, "a1")).toEqual({ refusal: "not_found" });
+    // a background command the session started is a command, whatever files bear its id
+    s.bash("b1", 4, { description: "Run the suite" });
+    s.agent("b1", { steps: [] });
+    expect([backgroundCommand(s.path, "b1"), backgroundCommand(s.path, "a1")]).toEqual([true, false]);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a folder swapped for a link between the look and the open", () => {
+    const s = session();
+    const project = join(s.path, "..");
+    const sessionDir = join(project, SESSION);
+    const subagents = join(sessionDir, "subagents");
+    const file = s.agent("a1", { description: "inside", steps: [] });
+    writeFileSync(file, own({ type: "user", timestamp: at(1), message: { role: "user", content: "inside dispatch" } }));
+    // elsewhere, a session folder of the same names whose records claim this session and agent
+    const outside = mkdtempSync(join(tmpdir(), "herdr-subagents-swap-"));
+    roots.push(outside);
+    const outsideSession = join(outside, SESSION);
+    mkdirSync(join(outsideSession, "subagents"), { recursive: true });
+    writeFileSync(join(outsideSession, "subagents", "agent-a1.meta.json"), JSON.stringify({ agentType: "x", description: "outside title" }));
+    writeFileSync(join(outsideSession, "subagents", "agent-a1.jsonl"), own({ type: "user", timestamp: at(1), message: { role: "user", content: "outside secret" } }));
+    const restore = (): void => {
+      for (const folder of [subagents, sessionDir]) {
+        try { if (lstatSync(folder).isSymbolicLink()) { rmSync(folder); renameSync(`${folder}.moved`, folder); } } catch { /* not swapped */ }
+      }
+    };
+    const swap = (folder: string, target: string) => (): void => { renameSync(folder, `${folder}.moved`); symlinkSync(target, folder); };
+    const swaps: Array<[string, (path: string, index: number) => boolean, () => void]> = [
+      ["the subagents folder, before the first open", (_path, index) => index === 0, swap(subagents, join(outsideSession, "subagents"))],
+      ["the session folder, before the first open", (_path, index) => index === 0, swap(sessionDir, outsideSession)],
+      ["the subagents folder, before the transcript's open", (path) => path.endsWith("agent-a1.jsonl"), swap(subagents, join(outsideSession, "subagents"))],
+      ["the session folder, before the transcript's open", (path) => path.endsWith("agent-a1.jsonl"), swap(sessionDir, outsideSession)],
+    ];
+    expect(detailOf(s.path, "a1").prompt).toBe("inside dispatch");
+    const { openSync } = detailIo;
+    for (const [label, when, act] of swaps) {
+      let opens = 0;
+      let swapped = false;
+      detailIo.openSync = ((path: string, flags: number) => {
+        if (!swapped && when(path, opens++)) { swapped = true; act(); }
+        return openSync(path, flags);
+      }) as typeof openSync;
+      let read: ReturnType<typeof backgroundAgentDetail>;
+      try { read = backgroundAgentDetail(s.path, "a1"); } finally { detailIo.openSync = openSync; restore(); }
+      expect([label, swapped, "refusal" in read]).toEqual([label, true, true]);
+      expect(JSON.stringify(read)).not.toContain("outside");
+    }
+    expect(detailOf(s.path, "a1").prompt).toBe("inside dispatch");
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a file moved or replaced while it is read, and a read that fails, as unavailable", () => {
+    const s = session();
+    const subagents = join(s.path, "..", SESSION, "subagents");
+    const file = s.agent("a1", { description: "inside", steps: [] });
+    const meta = join(subagents, "agent-a1.meta.json");
+    writeFileSync(file, own({ type: "user", timestamp: at(1), message: { role: "user", content: "inside dispatch" } }));
+    const outside = mkdtempSync(join(tmpdir(), "herdr-subagents-moved-"));
+    roots.push(outside);
+    const { openSync, readSync } = detailIo;
+    /** the detail, with `act` run once at the first read of the file whose name ends in `name` */
+    const during = (name: string, act: () => void) => {
+      const opened = new Map<number, string>();
+      let acted: boolean = false;
+      detailIo.openSync = ((path: string, flags: number) => { const fd = openSync(path, flags); opened.set(fd, path); return fd; }) as typeof openSync;
+      detailIo.readSync = ((fd: number, buffer: Buffer, offset: number, length: number, position: number) => {
+        if (!acted && opened.get(fd)?.endsWith(name)) { acted = true; act(); }
+        return readSync(fd, buffer, offset, length, position);
+      }) as typeof readSync;
+      try { const read = backgroundAgentDetail(s.path, "a1"); return [acted, read]; } finally { Object.assign(detailIo, { openSync, readSync }); }
+    };
+    const replaced = (path: string, words: string) => (): void => { renameSync(path, join(outside, `${basename(path)}.${words}`)); writeFileSync(path, own({ type: "user", timestamp: at(1), message: { role: "user", content: words } })); };
+    const restore = (path: string, words: string): void => { renameSync(join(outside, `${basename(path)}.${words}`), path); };
+    // the transcript moved out of the session while it is read, and another file put at its path
+    expect(during("agent-a1.jsonl", replaced(file, "moved"))).toEqual([true, { refusal: "unavailable" }]);
+    restore(file, "moved");
+    // the meta file likewise
+    expect(during("agent-a1.meta.json", () => { renameSync(meta, join(outside, "agent-a1.meta.json.moved")); writeFileSync(meta, JSON.stringify({ agentType: "x" })); })).toEqual([true, { refusal: "unavailable" }]);
+    restore(meta, "moved");
+    // a read the disk fails is a store not readable now, never an agent gone
+    expect(during("agent-a1.meta.json", () => { throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }); })).toEqual([true, { refusal: "unavailable" }]);
+    expect(during("agent-a1.jsonl", () => { throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }); })).toEqual([true, { refusal: "unavailable" }]);
+    // a session folder that cannot be looked into, nor its subagents folder opened (root looks into anything)
+    if (process.getuid?.() !== 0) {
+      for (const folder of [join(subagents, ".."), subagents]) {
+        chmodSync(folder, 0o000);
+        try { expect(backgroundAgentDetail(s.path, "a1")).toEqual({ refusal: "unavailable" }); } finally { chmodSync(folder, 0o755); }
+      }
+    }
+    // a file linked in that claims this session and agent is still no file of this agent's
+    const claimed = join(outside, "claimed.jsonl");
+    writeFileSync(claimed, own({ type: "user", timestamp: at(1), message: { role: "user", content: "linked secret" } }));
+    renameSync(file, `${file}.real`);
+    symlinkSync(claimed, file);
+    try { expect(backgroundAgentDetail(s.path, "a1")).toEqual({ refusal: "not_found" }); } finally { rmSync(file); renameSync(`${file}.real`, file); }
+    expect(detailOf(s.path, "a1").prompt).toBe("inside dispatch");
+  });
+
+  it("metadata-only details stay unchanged", () => {
+    const s = session();
+    s.agent("a1", { description: "Review the parser", type: "reviewer", steps: [[1, 10], [2, 30]] });
+    const before = [...subagentDetails(s.path, ["a1"])];
+    expect(before).toEqual([["a1", { title: "Review the parser", agent: "reviewer" }]]);
+    const detail = detailOf(s.path, "a1");
+    expect(detail.events.length).toBeGreaterThan(0);
+    // the chat's card and the list keep what they had: no prompt, no event, no argument
+    expect([...subagentDetails(s.path, ["a1"])]).toEqual(before);
+    expect(Object.keys(claudeSubagents(s.path, true, NOW)[0]!).sort()).toEqual(["category", "detail_kind", "ended_at", "id", "model", "started_at", "status", "title", "tokens", "tool_calls", "turns"]);
   });
 });
 
@@ -1068,8 +1414,8 @@ describe("claudeSubagents, background commands", () => {
     s.bash("b1", 2, { description: "Run the full suite", command: "bun run test" });
     s.bash("b2", 3, { command: "sleep 30" });
     expect(claudeSubagents(s.path, true, NOW)).toEqual([
-      { id: "b1", title: "Run the full suite", category: "shell", model: null, status: "running", started_at: at(2), ended_at: null, turns: null, tool_calls: null, tokens: null },
-      { id: "b2", title: "sleep 30", category: "shell", model: null, status: "running", started_at: at(3), ended_at: null, turns: null, tool_calls: null, tokens: null },
+      { id: "b1", title: "Run the full suite", category: "shell", model: null, status: "running", started_at: at(2), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: null },
+      { id: "b2", title: "sleep 30", category: "shell", model: null, status: "running", started_at: at(3), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: null },
     ]);
   });
 

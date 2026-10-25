@@ -3,9 +3,11 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AlertPrefs } from "../shared/notify-policy.ts";
+import { paneAlertsMuted, type AlertPrefs } from "../shared/notify-policy.ts";
+import { paneStorageId } from "../shared/machines.ts";
 import type { AgentStatus, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker } from "./completion.ts";
+import { handlePreferencesRequest, PreferenceStore } from "./preferences.ts";
 import { createPushService, handlePushRequest, parseSubscription, type PushService } from "./push.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
 import { privateStateFs } from "./private-state.ts";
@@ -708,5 +710,130 @@ describe("push resync after lost status events", () => {
     await push.onStatus("w1:p2", "working");
     await push.onStatus("w1:p2", "done");
     expect(fake.received.length).toBe(sent + 2);
+  });
+});
+
+describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
+  /** the persisted list as the server composition hands it over: read each time, as the store's document is */
+  function mutable(timing = { short: 0, long: 0, longTurn: 0 }) {
+    const list: string[] = [];
+    const push = createPushService({ loopbackHttp: true, stateDir, timing, muted: (machineId, paneId) => paneAlertsMuted(list, machineId, paneId) });
+    push.subscribe(fake.subscription, { input: true, done: "always" });
+    return { push, list };
+  }
+
+  it("mute cancels delayed push", async () => {
+    const { push, list } = mutable({ short: 10_000, long: 10_000, longTurn: 0 });
+    push.seed([pane("w1:p1", "working", "claude")]);
+    await push.onStatus("w1:p1", "blocked");
+    // the list changed while the alert waited: the server composition tells push, and the alert is called off
+    list.push(paneStorageId("local", "w1:p1"));
+    push.mutesChanged();
+    await push.settled();
+    expect(fake.received).toHaveLength(0);
+    // an unmute resurrects nothing: the question is still unanswered, and still untold
+    list.length = 0;
+    push.mutesChanged();
+    await push.settled();
+    expect(fake.received).toHaveLength(0);
+    // only a transition after the unmute is told
+    const prompt = createPushService({ loopbackHttp: true, stateDir, timing: { short: 0, long: 0, longTurn: 0 }, muted: (machineId, paneId) => paneAlertsMuted(list, machineId, paneId) });
+    prompt.seed([pane("w1:p1", "blocked", "claude")]);
+    await prompt.onStatus("w1:p1", "working");
+    await prompt.onStatus("w1:p1", "blocked");
+    await prompt.settled();
+    expect(fake.received.map((r) => r.payload.body)).toEqual(["waiting for your input"]);
+  });
+
+  it("a persisted mute and unmute while the title is looked up sends nothing", async () => {
+    // wired as the server composition wires it (server/core/status.ts): the store's list, and its changes told to push
+    const store = new PreferenceStore(stateDir);
+    let release!: () => void;
+    let asked!: () => void;
+    const titleAsked = new Promise<void>((resolve) => { asked = resolve; });
+    const push = createPushService({
+      loopbackHttp: true, stateDir, timing: { short: 0, long: 0, longTurn: 0 },
+      muted: (machineId, paneId) => paneAlertsMuted(store.get().muted_panes, machineId, paneId),
+      lookupTitle: () => { asked(); return new Promise((resolve) => { release = () => resolve("claude"); }); },
+    });
+    const stop = store.subscribe(() => push.mutesChanged());
+    const put = (keys: string[]) => handlePreferencesRequest(new Request("http://test/api/preferences", { method: "PUT", body: JSON.stringify({ settings: {}, muted_panes: keys }) }), store);
+    try {
+      push.subscribe(fake.subscription, { input: true, done: "always" });
+      push.seed([pane("w1:p1", "working", "claude")]);
+      await push.onStatus("w1:p1", "done");
+      // its timer fired: the finish waits for its title, past every check made before the lookup
+      await titleAsked;
+      expect((await put([paneStorageId("local", "w1:p1")])).status).toBe(200);
+      expect((await put([])).status).toBe(200);
+      expect(store.get().revision).toBe(2);
+      release();
+      await push.settled();
+      // the mute called it off for good: the unmute after it resurrects nothing
+      expect(fake.received).toHaveLength(0);
+    } finally {
+      stop();
+      release?.();
+    }
+  });
+
+  it("holds back the phone app's native push as the browser's", async () => {
+    // the app subscribes through its OvisPush plugin and posts the relay endpoint it got (push-relay
+    // POST /v1/push/<id>) to the same route, so it is one more subscription on the same list
+    const { push, list } = mutable();
+    const app = { ...fake.subscription, endpoint: fake.subscription.endpoint.replace(/\/push\/[^/]+$/, `/v1/push/${crypto.randomUUID()}`) };
+    push.subscribe(app, { input: true, done: "always" });
+    list.push(paneStorageId("local", "w1:p1"));
+    push.seed([pane("w1:p1", "working", "mine"), pane("w1:p2", "working", "other")]);
+    await push.onStatus("w1:p1", "blocked");
+    await push.onEnded("w1:p1");
+    await push.settled();
+    expect(fake.received).toHaveLength(0);
+    // the pane next to it still reaches the browser and the app
+    await push.onStatus("w1:p2", "blocked");
+    await push.settled();
+    expect(fake.received.map((r) => r.payload.title)).toEqual(["other", "other"]);
+  });
+
+  it("asks the list again right before a waiting alert goes out", async () => {
+    const { push, list } = mutable({ short: 20, long: 20, longTurn: 0 });
+    push.seed([pane("w1:p1", "working", "claude")]);
+    await push.onStatus("w1:p1", "blocked");
+    // the list changed while the alert waited, and nobody told push: the alert still reads it before it goes out
+    list.push(paneStorageId("local", "w1:p1"));
+    await push.settled();
+    expect(fake.received).toHaveLength(0);
+  });
+
+  it("all four paths suppress only the keyed pane", async () => {
+    const { push, list } = mutable();
+    list.push(paneStorageId("local", "w1:p1"));
+    push.seed([pane("w1:p1", "working", "mine"), pane("w1:p2", "working", "other")]);
+    push.seed([pane("w1:p1", "working", "theirs")], "pc-2", "Laptop");
+    // the muted pane: its status is tracked (an unmute tells only what changes after it), its alerts are not told
+    await push.onStatus("w1:p1", "blocked");
+    await push.onStatus("w1:p1", "done");
+    await push.onEnded("w1:p1");
+    await push.settled();
+    expect(fake.received).toHaveLength(0);
+    // the same pane id on another PC, and another pane here, are told as before
+    await push.onStatus("w1:p1", "blocked", "pc-2");
+    await push.settled();
+    await push.onStatus("w1:p2", "blocked");
+    await push.settled();
+    await push.onEnded("w1:p1", "pc-2");
+    await push.settled();
+    expect(fake.received.map((r) => [r.payload.title, r.payload.body])).toEqual([
+      ["Laptop · theirs", "waiting for your input"], ["other", "waiting for your input"], ["Laptop · theirs", "terminal ended"],
+    ]);
+    // tracked while muted (it was last seen done): unmuted, done -> done is no change, and the next change is told
+    list.length = 0;
+    await push.onStatus("w1:p1", "done");
+    await push.settled();
+    expect(fake.received).toHaveLength(3);
+    await push.onStatus("w1:p1", "working");
+    await push.onStatus("w1:p1", "blocked");
+    await push.settled();
+    expect(fake.received.at(-1)?.payload.title).toBe("mine");
   });
 });

@@ -1,6 +1,6 @@
-import { closeSync, lstatSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
-import { join } from "node:path";
-import type { HerdrPane, OmoTask } from "../shared/protocol.ts";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync } from "node:fs";
+import { basename, dirname, join, sep } from "node:path";
+import type { HerdrPane, OmoTask, PaneBackgroundAgentDetail } from "../shared/protocol.ts";
 
 /**
  * The subagents one Claude Code session started (the `Agent` tool), for the status line's list,
@@ -574,6 +574,337 @@ export function subagentDetails(parentPath: string, ids: Iterable<string>): Map<
   return found;
 }
 
+/**
+ * GET /api/pane/background-agent: what one subagent's own transcript holds, for a reader who opens
+ * it while it runs (shared/protocol.ts PaneBackgroundAgentDetail). A read of its own, apart from
+ * the scanner above: the scanner keeps counts and status for every agent of every Claude pane and
+ * carries no prompt or tool argument; this reads one agent's two files once, on request, and
+ * keeps nothing. Bounded: the meta file at MAX_META_BYTES, the transcript at
+ * DETAIL_LIMITS.max_read_bytes in all, in two reads that never overlap (its first
+ * DETAIL_HEAD_BYTES, where the dispatch prompt is, and its last DETAIL_TAIL_BYTES, the recent
+ * activity, the byte before which says whether the window starts a record), a record at
+ * DETAIL_RECORD_BYTES, the answer at DETAIL_LIMITS.max_events events and max_output_bytes of text.
+ * A record a window cuts, one over its size and a line that is no record are skipped and said
+ * (`incomplete`), never guessed at: a dispatch that cannot be read is no prompt, and a later
+ * instruction is not taken for it. What the windows left out, the events dropped for the cap and
+ * the text left out for its budget are said (`truncated`). Only the prompt the agent was
+ * dispatched with, its prose and its tool calls (name and arguments) are read: no tool result,
+ * no thinking, no image, nothing from a screen.
+ *
+ * The files are `<store>/<session>/subagents/agent-<id>.meta.json` and `agent-<id>.jsonl`, the
+ * store being the real folder of the session's own transcript. The id is a plain word of at most
+ * DETAIL_ID_LENGTH, so it names nothing outside that folder. Each folder on the way is a folder
+ * and no link, looked at before the files are opened and again after they are read, and must be
+ * the same folder both times. Where the kernel names an open descriptor's file (Linux's
+ * /proc/self/fd), the subagents folder is opened itself and the files are opened inside that open
+ * folder, and each descriptor's own path must be the one expected: a folder on the way swapped for
+ * a link, or moved away, between the look and the read, is refused, whatever was opened. Elsewhere
+ * the looks before and after stand for it. A file is opened only as a plain file that is no link,
+ * and the descriptor read is checked to be the file that was looked at.
+ *
+ * A file there is the agent's only when it says so: its meta file names an agent type, and every
+ * record of its transcript is a sidechain's of this session and of this agent (Claude Code writes
+ * `isSidechain`, `sessionId` and `agentId` on each). A file that says otherwise is no agent of the
+ * session's; nothing of it is answered.
+ */
+export const DETAIL_LIMITS: PaneBackgroundAgentDetail["limits"] = Object.freeze({ max_read_bytes: 256 * 1024, max_output_bytes: 128 * 1024, max_events: 128 });
+const DETAIL_HEAD_BYTES = 64 * 1024;
+const DETAIL_TAIL_BYTES = DETAIL_LIMITS.max_read_bytes - DETAIL_HEAD_BYTES;
+const DETAIL_RECORD_BYTES = 64 * 1024;
+const DETAIL_ID_LENGTH = 128;
+/** where the kernel names each open descriptor's file; absent off Linux */
+const FD_DIR = "/proc/self/fd";
+const fdPaths = ((): boolean => { try { return process.platform === "linux" && lstatSync(FD_DIR).isDirectory(); } catch { return false; } })();
+
+/** The calls the detail read makes to the file system: a test counts its bytes, or changes the store between a look and an open. */
+export const detailIo = { openSync, readSync };
+
+/** Why the detail was not read: no such agent in the session, or a store that cannot be read as it should be. */
+export type DetailRefusal = "not_found" | "unavailable";
+
+/** Whether `id` can name a subagent's files: the scanner's word, and no longer than DETAIL_ID_LENGTH. */
+export const validDetailId = (id: string): boolean => id.length > 0 && id.length <= DETAIL_ID_LENGTH && AGENT_ID.test(id);
+
+type DetailEvent = PaneBackgroundAgentDetail["events"][number];
+
+/**
+ * A file's identity as the swap checks compare it, read as BigInt: an NTFS file ID can pass Number.MAX_SAFE_INTEGER, and
+ * as a plain number two files made close together in one folder could read as the same file.
+ */
+const identity = (stat: { dev: bigint; ino: bigint }): string => `${stat.dev}:${stat.ino}`;
+
+/** A folder's identity: a folder that is no link, or null (a link, a file, nothing). */
+function folderId(path: string): string | null {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    return stat.isDirectory() && !stat.isSymbolicLink() ? identity(stat) : null;
+  } catch { return null; }
+}
+
+/** Whether an error says only that nothing is there (a missing entry, or a missing folder on its way), not that it cannot be read. */
+const absent = (error: unknown): boolean => {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+};
+
+/** What is at `path`, not followed: a plain folder or file with its identity, nothing, something else, or an error that is no answer. */
+function look(path: string): { kind: "folder" | "file"; id: string; size: number } | "missing" | "other" | "error" {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    if (stat.isSymbolicLink()) return "other";
+    if (stat.isDirectory()) return { kind: "folder", id: identity(stat), size: Number(stat.size) };
+    return stat.isFile() ? { kind: "file", id: identity(stat), size: Number(stat.size) } : "other";
+  } catch (error) { return absent(error) ? "missing" : "error"; }
+}
+
+/** The path the kernel has for an open descriptor, or null where it has none. */
+function fdPath(fd: number): string | null {
+  try { return readlinkSync(`${FD_DIR}/${fd}`); } catch { return null; }
+}
+
+/** The subagents folder of a session, as looked at: each folder on the way and its identity; open where descriptors name their files. */
+interface Folder { path: string; fd: number | null; chain: Array<{ path: string; id: string }> }
+
+function openFolder(store: string, sessionId: string): Folder | DetailRefusal {
+  const path = join(store, sessionId, "subagents");
+  const chain: Folder["chain"] = [];
+  for (const step of [store, join(store, sessionId), path]) {
+    const seen = look(step);
+    // a folder that is not there has no agent; one that is a link or no folder leads out of the store, and one that
+    // cannot be looked at (no permission, an I/O error) is a store not readable now, never an agent gone
+    if (seen === "missing") return "not_found";
+    if (typeof seen === "string" || seen.kind !== "folder") return "unavailable";
+    chain.push({ path: step, id: seen.id });
+  }
+  if (!fdPaths) return { path, fd: null, chain };
+  let fd: number;
+  try { fd = detailIo.openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); } catch { return "unavailable"; }
+  try {
+    const opened = fstatSync(fd, { bigint: true });
+    if (opened.isDirectory() && identity(opened) === chain.at(-1)!.id && fdPath(fd) === path) return { path, fd, chain };
+  } catch { /* refused below */ }
+  closeSync(fd);
+  return "unavailable";
+}
+
+/** Whether the folder is still the one looked at: every folder on the way the same, and the open one where it was. */
+function intact(folder: Folder): boolean {
+  return folder.chain.every((step) => folderId(step.path) === step.id) && (folder.fd === null || fdPath(folder.fd) === folder.path);
+}
+
+/**
+ * `name` in `folder`, opened as the plain file it was looked at as: no link, not replaced since the look, at most `max` bytes.
+ * `not_found` when there is no such plain file; `unavailable` when one is there but cannot be opened as looked at (no
+ * permission, or replaced meanwhile), so a read that fails is never taken for an agent gone from the session.
+ */
+function openIn(folder: Folder, name: string, max = Infinity): Opened | DetailRefusal {
+  const path = join(folder.path, name);
+  // inside the open folder itself where the kernel allows: a folder put in its place leads nowhere else
+  const where = folder.fd === null ? path : `${FD_DIR}/${folder.fd}/${name}`;
+  const looked = look(where);
+  if (looked === "missing") return "not_found";
+  // a link, no plain file, or one over its size is none of this agent's; one that cannot be looked at is a store not readable now
+  if (looked === "error") return "unavailable";
+  if (looked === "other" || looked.kind !== "file" || looked.size > max) return "not_found";
+  let fd: number;
+  // O_NOFOLLOW: a link put in the file's place after the look is refused by the open itself where the platform has it
+  try { fd = detailIo.openSync(where, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)); } catch { return "unavailable"; }
+  try {
+    const opened = fstatSync(fd, { bigint: true });
+    const size = Number(opened.size);
+    if (opened.isFile() && identity(opened) === looked.id && size <= max && (folder.fd === null || fdPath(fd) === path)) return { fd, size, id: looked.id, path, where };
+  } catch { /* refused below */ }
+  closeSync(fd);
+  return "unavailable";
+}
+
+/** A file `openIn` opened: its descriptor, its size and identity then, and where it was. */
+interface Opened { fd: number; size: number; id: string; path: string; where: string }
+
+/**
+ * Whether an opened file is still the one looked at, where it was looked at, after its read: the same identity at its
+ * path, and its descriptor still there (where the kernel names a descriptor's file). A file moved out of the session
+ * or its path replaced while it was read may have been read as another file.
+ */
+function stillThere(file: Opened): boolean {
+  const seen = look(file.where);
+  if (typeof seen === "string" || seen.kind !== "file" || seen.id !== file.id) return false;
+  try { if (identity(fstatSync(file.fd, { bigint: true })) !== file.id) return false; } catch { return false; }
+  return !fdPaths || fdPath(file.fd) === file.path;
+}
+
+function readAt(fd: number, from: number, length: number): Buffer {
+  const buffer = Buffer.alloc(length);
+  let got = 0;
+  while (got < length) {
+    const n = detailIo.readSync(fd, buffer, got, length - got, from + got);
+    if (n === 0) break;
+    got += n;
+  }
+  return buffer.subarray(0, got);
+}
+
+/** The text the person's side of an entry carries: a string, or its text blocks; null for a tool's answer. */
+function userText(entry: Row): string | null {
+  const content = row(entry["message"])?.["content"];
+  if (typeof content === "string") return content.trim().length > 0 ? content : null;
+  if (!Array.isArray(content) || content.some((block) => row(block)?.["type"] === "tool_result")) return null;
+  const parts = content.flatMap((block) => { const part = row(block); return part?.["type"] === "text" && typeof part["text"] === "string" ? [part["text"]] : []; });
+  const joined = parts.join("\n");
+  return joined.trim().length > 0 ? joined : null;
+}
+
+/** `text` cut to at most `max` UTF-8 bytes, a character cut in two left out with its remains. */
+function cut(text: string, max: number): string {
+  return Buffer.from(text, "utf8").subarray(0, max).toString("utf8").replace(/\uFFFD+$/, "");
+}
+
+/**
+ * One agent's transcript records, read from `fd` as the windows above: what they say, and what
+ * could not be read of them. `foreign`: a record says it is another session's or another agent's,
+ * or no sidechain's; then the file is not this agent's, and nothing of it may be answered.
+ */
+function readDetailRecords(fd: number, size: number, sessionId: string, agentId: string): { prompt: string | null; events: DetailEvent[]; truncated: boolean; incomplete: boolean; foreign: boolean } {
+  // the whole file when it fits the budget; else its head and its tail, the tail's look-behind byte inside the budget
+  const gap = size > DETAIL_LIMITS.max_read_bytes;
+  let incomplete = false;
+  let foreign = false;
+  let prompt: string | null = null;
+  /** the dispatch is the file's first record that is an instruction: until it is read, or a record before it could not be, it may still be */
+  let dispatchOpen = true;
+  const events: DetailEvent[] = [];
+  const skipped = (promptable: boolean): void => {
+    incomplete = true;
+    // a record that could not be read may have been the dispatch: a later instruction is not taken for it
+    if (promptable) dispatchOpen = false;
+  };
+  /** `promptable`: the window holds the file's start, where the dispatch is; a later instruction in the tail is not it */
+  const take = (chunk: Buffer, from: number, to: number, promptable: boolean): void => {
+    for (const line of chunk.subarray(from, to).toString("utf8").split("\n")) {
+      if (line.length === 0) continue;
+      if (Buffer.byteLength(line, "utf8") > DETAIL_RECORD_BYTES) { skipped(promptable); continue; }
+      let entry: Row | null;
+      try { entry = row(JSON.parse(line)); } catch { skipped(promptable); continue; }
+      if (entry === null) { skipped(promptable); continue; }
+      const content = entry["type"] === "user" || entry["type"] === "assistant";
+      // Claude Code marks every record of a subagent's file as the sidechain of its session and agent
+      const declared = entry["isSidechain"] === false || ("sessionId" in entry && entry["sessionId"] !== sessionId) || ("agentId" in entry && entry["agentId"] !== agentId);
+      if (declared || (content && (entry["isSidechain"] !== true || entry["sessionId"] !== sessionId || entry["agentId"] !== agentId))) { foreign = true; return; }
+      const at = iso(stamp(entry["timestamp"]));
+      if (entry["type"] === "user") {
+        // the first instruction is the dispatch; a later one, and every tool's answer, is not the agent's own activity
+        if (promptable && dispatchOpen && entry["isMeta"] !== true && entry["isCompactSummary"] !== true) { prompt = userText(entry); dispatchOpen = false; }
+        continue;
+      }
+      if (entry["type"] !== "assistant") continue;
+      const blocks = row(entry["message"])?.["content"];
+      for (const value of Array.isArray(blocks) ? blocks : []) {
+        const block = row(value);
+        if (block === null) continue;
+        if (block["type"] === "text" && typeof block["text"] === "string" && block["text"].trim().length > 0) events.push({ kind: "text", text: block["text"], at });
+        else if (block["type"] === "tool_use" && typeof block["name"] === "string" && block["name"].length > 0) {
+          const input = block["input"];
+          events.push({ kind: "tool", text: `${block["name"].trim()} ${input === undefined ? "{}" : JSON.stringify(input)}`, at });
+        }
+      }
+    }
+  };
+  /** the complete lines of a window: from `start` to its last newline; what follows is cut by the window, or still being written */
+  const complete = (chunk: Buffer, start: number, promptable: boolean): void => {
+    const end = chunk.lastIndexOf(0x0a) + 1;
+    if (end > start && !foreign) take(chunk, start, end, promptable);
+    if (end < chunk.length) skipped(promptable);
+  };
+  if (!gap) complete(readAt(fd, 0, size), 0, true);
+  else {
+    complete(readAt(fd, 0, DETAIL_HEAD_BYTES), 0, true);
+    // the tail window and the byte before it, which says whether the window starts a record: DETAIL_TAIL_BYTES in all, after the head's
+    const from = size - DETAIL_TAIL_BYTES;
+    const tail = readAt(fd, from, DETAIL_TAIL_BYTES);
+    let start = 1;
+    if (tail[0] !== 0x0a) {
+      const newline = tail.indexOf(0x0a);
+      incomplete = true;
+      start = newline === -1 ? tail.length : newline + 1;
+    }
+    if (!foreign) complete(tail, start, false);
+  }
+  return { prompt, events, truncated: gap, incomplete, foreign };
+}
+
+/**
+ * The detail of the subagent `agentId` of the session whose transcript is `parentPath`, without
+ * `server_time`; or why it was not read. `validDetailId` holds for `agentId` (the route checks it).
+ */
+export function backgroundAgentDetail(parentPath: string, agentId: string): { detail: Omit<PaneBackgroundAgentDetail, "server_time"> } | { refusal: DetailRefusal } {
+  if (!validDetailId(agentId) || plain(parentPath) === null) return { refusal: "unavailable" };
+  const sessionId = basename(parentPath, ".jsonl");
+  let store: string;
+  try { store = realpathSync(dirname(parentPath)); } catch { return { refusal: "unavailable" }; }
+  const folder = openFolder(store, sessionId);
+  if (typeof folder === "string") return { refusal: folder };
+  try {
+    const meta = openIn(folder, `agent-${agentId}.meta.json`, MAX_META_BYTES);
+    if (typeof meta === "string") return { refusal: meta };
+    // a read that fails, or a file moved or replaced while it was read, is a store not readable now; a meta file
+    // being written says nothing of the agent yet, and one that names no agent type is no subagent's
+    let bytes: Buffer;
+    try { bytes = readAt(meta.fd, 0, meta.size); if (!stillThere(meta)) return { refusal: "unavailable" }; } catch { return { refusal: "unavailable" }; } finally { closeSync(meta.fd); }
+    let record: Row | null;
+    try { record = row(JSON.parse(bytes.toString("utf8"))); } catch { record = null; }
+    if (record === null || text(record["agentType"]) === null) return { refusal: "not_found" };
+    const file = openIn(folder, `agent-${agentId}.jsonl`);
+    if (typeof file === "string") return { refusal: file };
+    let read: ReturnType<typeof readDetailRecords>;
+    try {
+      read = readDetailRecords(file.fd, file.size, sessionId, agentId);
+      if (!stillThere(file)) return { refusal: "unavailable" };
+    } catch { return { refusal: "unavailable" }; } finally { closeSync(file.fd); }
+    // a folder on the way replaced while it was read: what was read may be another folder's
+    if (!intact(folder)) return { refusal: "unavailable" };
+    if (read.foreign) return { refusal: "not_found" };
+    let { prompt, events, truncated } = read;
+    if (events.length > DETAIL_LIMITS.max_events) { events = events.slice(-DETAIL_LIMITS.max_events); truncated = true; }
+    // the text budget: the prompt first, then the events newest first; an event that does not fit goes with every older one
+    let left = DETAIL_LIMITS.max_output_bytes;
+    if (prompt !== null && Buffer.byteLength(prompt, "utf8") > left) { prompt = cut(prompt, left); truncated = true; }
+    if (prompt !== null) left -= Buffer.byteLength(prompt, "utf8");
+    let first = events.length;
+    while (first > 0) {
+      const bytes = Buffer.byteLength(events[first - 1]!.text, "utf8");
+      if (bytes > left) break;
+      left -= bytes;
+      first -= 1;
+    }
+    if (first > 0) { events = events.slice(first); truncated = true; }
+    return {
+      detail: {
+        agent_id: agentId,
+        session_id: sessionId,
+        title: text(record["description"]) ?? text(record["name"]),
+        agent: text(record["agentType"]),
+        prompt,
+        events,
+        truncated,
+        incomplete: read.incomplete,
+        limits: DETAIL_LIMITS,
+      },
+    };
+  } finally { if (folder.fd !== null) closeSync(folder.fd); }
+}
+
+/**
+ * Whether the session's transcripts started `id` as a background command (a `Bash` call's
+ * `backgroundTaskId`): the parent's, and those of its agents the scanner has read. A command has
+ * no transcript of its own, whatever files bear its id.
+ */
+export function backgroundCommand(parentPath: string, id: string): boolean {
+  if (scanParent(parentPath)?.commands.launches.has(id)) return true;
+  const dir = `${subagentsDir(parentPath)}${sep}`;
+  for (const [path, work] of works) if (path.startsWith(dir) && work.commands.launches.has(id)) return true;
+  return false;
+}
+
 const time = (value: string | null): number => value === null ? 0 : Date.parse(value) || 0;
 
 /**
@@ -666,6 +997,8 @@ export function claudeSubagentState(parentPath: string, live: boolean, now = Dat
       turns: counted ? work.turns : null,
       tool_calls: counted ? work.toolCalls : null,
       tokens: counted ? work.tokens : null,
+      // its own transcript can be opened (backgroundAgentDetail); a command's output is a screen's, which is never read
+      detail_kind: "claude-subagent",
     };
     keep(task, Math.max(tail.dispatchAt ?? 0, work.dispatchAt ?? 0, firstAt ?? 0));
   }
@@ -679,7 +1012,7 @@ export function claudeSubagentState(parentPath: string, live: boolean, now = Dat
       // a command an agent left running stops with the agent
       const end = ends.get(id) ?? (halt !== undefined && launch.at <= halt ? { at: halt, status: "cancelled" as const } : undefined);
       const lost = !live || (since !== null && launch.at < since - START_SLACK_MS);
-      keep({ id, title: launch.title, category: "shell", model: null, status: end?.status ?? (lost ? "lost" : "running"), started_at: iso(launch.at), ended_at: iso(end?.at ?? null), turns: null, tool_calls: null, tokens: null });
+      keep({ id, title: launch.title, category: "shell", model: null, status: end?.status ?? (lost ? "lost" : "running"), started_at: iso(launch.at), ended_at: iso(end?.at ?? null), turns: null, tool_calls: null, tokens: null, detail_kind: null });
     }
   }
   remember(previous, parentPath, all, 256);

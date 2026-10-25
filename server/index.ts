@@ -28,8 +28,10 @@ import { ShellAgentLocator } from "./shell-agent.ts";
 import { handleAgentsRequest } from "./agents-routes.ts";
 import { forgetPageMedia } from "./file-view.ts";
 import { handleFileRequest } from "./file-routes.ts";
+import { BACKGROUND_AGENT_PATH, handleBackgroundAgentRequest, type BackgroundAgentDeps } from "./background-agent.ts";
 import {
   herdrSocketPath,
+  paneGet,
   ping,
 } from "./herdr/client.ts";
 import { type AlertTiming, defaultStateDir, handlePushRequest } from "./push.ts";
@@ -177,6 +179,8 @@ export function createServer(
     attachHoldMs?: number;
     /** whether herdr can `terminal attach`; unset, its ping says, and this runtime's PTY sidecar has to be runnable. Tests give a Windows herdr's answer, at once or as late as a ping's. */
     terminalAttach?: boolean | (() => Promise<boolean>);
+    /** GET /api/pane/background-agent's read (server/background-agent.ts); a test holds it to change the pane's session while it is out */
+    backgroundAgentRead?: BackgroundAgentDeps["read"];
     /** whether this runtime can run the PTY sidecar; unset, server/pty/sidecar.ts says. Tests give a runtime without Node or node-pty, while herdr keeps its own answer, or a probe to run in place of that one. */
     sidecar?: boolean | (() => boolean);
     /** where omo and gjc are found for the offer and the start (server/shell-agent.ts); unset, this server's PATH alone. The real entrypoints (this file's and remote-entry.ts) add their user's login shell; tests pass a fixture one. */
@@ -223,7 +227,7 @@ export function createServer(
   const openCodeState = new OpenCodePromptState();
   const draftTimer = setInterval(() => openCodeState.prune(), 60_000);
   draftTimer.unref();
-  const core = createCore({ options: { ...options, openCodeState, orderSequence }, devices, usage, usageLogin, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS });
+  const core = createCore({ options: { ...options, openCodeState, orderSequence }, devices, preferences, usage, usageLogin, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS });
   const { sidecar, serialize, push, logPushError, omo, claudeAgents, plans, clientSnapshot, machines, broadcastAll, collector, queueFirstMessage } = core;
   // started after createCore's Node probe (server/pty/sidecar.ts), which can hold the thread up to 3 s: that wait
   // would count against the read's own 2.5 s limit, and a read cut short leaves the owner unknown for 5 minutes
@@ -515,6 +519,12 @@ export function createServer(
 
       const tasksResponse = await handleTasksRequest(request, url, pathname, { omo, claudeAgents });
       if (tasksResponse) return tasksResponse;
+
+      // a GET a watching device may make on purpose: a subagent's prose and tool-call arguments (which can carry file
+      // contents) are what the live conversation already shows it of the agents of this pane
+      if (pathname === BACKGROUND_AGENT_PATH) {
+        return handleBackgroundAgentRequest(request, url, { paneGet, omoPane: (paneId) => omo.sessionOf(paneId) !== null, claudeAgents, read: options.backgroundAgentRead });
+      }
 
       const planResponse = await handlePlanRequest(request, url, pathname, { omo, claudeAgents, plans });
       if (planResponse) return planResponse;

@@ -21,11 +21,13 @@ export function useSidebarLayout({ initialLink }: SidebarLayoutParams) {
   // on a phone the drawer follows a swipe in from the left edge, and a swipe back (lib/edgeSwipe.ts)
   useEffect(() => watchDrawerSwipe(() => drawerOpenRef.current, setDrawerOpen), []);
   // Escape puts the open drawer away and goes no further: in the capture phase, so a terminal that kept the
-  // focus never receives it. A dialog or an IME composition on top keeps its own Escape
+  // focus never receives it. A dialog, an IME composition or a search field with words in it (the sidebar's
+  // filter clears them first) on top keeps its own Escape
   useEffect(() => {
     const onEscape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || !drawerOpenRef.current || event.isComposing || event.keyCode === 229) return;
       if (document.querySelector('[role="dialog"]')) return;
+      if (event.target instanceof HTMLInputElement && event.target.type === "search" && event.target.value !== "") return;
       event.preventDefault();
       event.stopPropagation();
       setDrawerOpen(false);

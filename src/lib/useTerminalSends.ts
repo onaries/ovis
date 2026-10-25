@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, type Dispatch, type RefObject, type Set
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
 import type { MachineSession } from "./machineSession.ts";
 import { EMPTY_DRAFT } from "./draft.ts";
-import { composerMessage, composerPayload, submitNote, submitNotTyped } from "./compose.ts";
+import { composerMessage, composerPayload, insertNote, submitNote, submitNotTyped } from "./compose.ts";
 import { afterSend, afterSettled, greetingMemory, rememberGreeting } from "./greeting.ts";
 import { hasModifiers, terminalChord, type StickyModifiers } from "./keys.ts";
 import type { InputRowState } from "./inputRow.ts";
@@ -17,6 +17,7 @@ export interface TerminalSendsDeps {
   activeRef: RefObject<boolean>;
   agent: string | null;
   chatView: boolean;
+  cancelTouchRef: RefObject<() => void>;
   coarse: boolean;
   composingRef: RefObject<boolean>;
   directTyping: boolean;
@@ -54,13 +55,14 @@ export interface TerminalSendsDeps {
 }
 
 export function useTerminalSends(deps: TerminalSendsDeps) {
-  const { activeRef, agent, chatView, coarse, composingRef, directTyping, draft, draftHeldForRef, heldRef, hostRef, inputLine, inputRowNow, knownOutcomes, lineComposingRef, machineId, modifiersRef, onChatSuggestion, paneId, paneRef, pendingEpochRef, pendingSubmissionsRef, reassertIfStaleRef, redrawGreeting, releaseRef, secretRef, sessionRef, setChatRefresh, setChatSent, setDraft, showSentCommand, socketRef, stillOpenNote, stillOpenRef, submitRetention, tRef, termRef, updateSettings } = deps;
+  const { activeRef, agent, cancelTouchRef, chatView, coarse, composingRef, directTyping, draft, draftHeldForRef, heldRef, hostRef, inputLine, inputRowNow, knownOutcomes, lineComposingRef, machineId, modifiersRef, onChatSuggestion, paneId, paneRef, pendingEpochRef, pendingSubmissionsRef, reassertIfStaleRef, redrawGreeting, releaseRef, secretRef, sessionRef, setChatRefresh, setChatSent, setDraft, showSentCommand, socketRef, stillOpenNote, stillOpenRef, submitRetention, tRef, termRef, updateSettings } = deps;
   const sendDraft = useCallback(() => {
     const socket = socketRef.current;
     const pane = paneRef.current;
     if (!socket || !pane || draft.text.length === 0 || !socket.connected || secretRef.current !== null || heldRef.current) return;
     // a frame the socket refuses (input not ready yet) keeps the draft, on screen and on disk, for
     // another try or Discard; it is never queued
+    cancelTouchRef.current();
     if (socket.sendInput(pane, draft.text)) setDraft(EMPTY_DRAFT);
   }, [draft]);
 
@@ -151,12 +153,33 @@ export function useTerminalSends(deps: TerminalSendsDeps) {
     const message = composerMessage(text);
     const payload = message.includes("\n") ? composerPayload(text, term.modes.bracketedPasteMode) : message;
     reassertIfStaleRef.current();
+    cancelTouchRef.current();
     const sent = socket.submit(pane, message, payload, true);
     if (sent === null) return false;
     const releaseSubmit = submitRetention?.retain(pane);
     term.scrollToBottom();
     return sent.then((result) => (result.ok ? true : submitNote(result.code, result.message))).finally(() => {
       releaseSubmit?.();
+      if (paneRef.current === pane && socketRef.current === socket) releaseRef.current();
+    });
+  }, [submitRetention]);
+
+  // the input line's Insert: one line typed like the keyboard would, with no Enter after it, and
+  // answered once herdr has it (HerdrSocket.insert). Nothing but the insert frame goes: unlike Send,
+  // it takes no grid back from another device (no resize), and moves no focus
+  const insertTerminalText = useCallback((text: string): false | Promise<true | string> => {
+    const term = termRef.current;
+    const socket = socketRef.current;
+    const pane = paneRef.current;
+    if (!term || !socket || pane === null || secretRef.current !== null) return false;
+    // its text would land beside the held draft: Send or Discard that first
+    if (draftHeldForRef.current === pane) return Promise.resolve(insertNote("held_input", ""));
+    const sent = socket.insert(pane, text);
+    if (sent === null) return false;
+    const releaseInsert = submitRetention?.retain(pane);
+    term.scrollToBottom();
+    return sent.then((result) => (result.ok ? true : insertNote(result.code, result.message))).finally(() => {
+      releaseInsert?.();
       if (paneRef.current === pane && socketRef.current === socket) releaseRef.current();
     });
   }, [submitRetention]);
@@ -171,6 +194,7 @@ export function useTerminalSends(deps: TerminalSendsDeps) {
     // Enter beside a held draft would run the pty's line without the held start
     if (draftHeldForRef.current === pane) return tRef.current("Not sent: send or discard the held input first.");
     reassertIfStaleRef.current();
+    cancelTouchRef.current();
     const sent = hasModifiers(modifiersRef.current)
       ? socket.sendKeys(pane, [terminalChord("Enter", modifiersRef.current)!]) : socket.sendInput(pane, "\r");
     termRef.current?.scrollToBottom();
@@ -200,5 +224,5 @@ export function useTerminalSends(deps: TerminalSendsDeps) {
     }
   }, [inputLine, coarse, chatView, directTyping, paneId]);
 
-  return { sendDraft, discardDraft, submitComposerMessage, sendComposerText, sendTerminalLine, reassertGrid, pressEnter, toggleDirect };
+  return { sendDraft, discardDraft, submitComposerMessage, sendComposerText, sendTerminalLine, insertTerminalText, reassertGrid, pressEnter, toggleDirect };
 }

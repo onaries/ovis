@@ -5,7 +5,7 @@
  * launcher starts the new release's supervisor. `root` is always the source checkout.
  */
 import "./adopt-legacy-env.ts";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_PORT } from "../shared/protocol.ts";
 import { readUpdateIpcRequest } from "../shared/update.ts";
@@ -13,7 +13,60 @@ import { defaultStateDir, HANDOVER_EXIT, moveLegacyStateDir, updateStateDir } fr
 import { herdrSocketPath } from "./herdr/client.ts";
 import { legacyLauncherStateDir, withLegacyNames } from "./legacy-env.ts";
 import { acquireOwnerDirectory } from "./owner-guard.ts";
-import { Updater, type Release } from "./updater.ts";
+import { runCommand, Updater, type Release } from "./updater.ts";
+
+/** After a try at the Rust PTY host, the next supervisor start waits this long before another (as the unshallow fetch does, #1252). */
+const RUST_HOST_RETRY_MS = 6 * 60 * 60_000;
+/**
+ * How long a stopping supervisor waits for its Rust PTY host try to end: the try's 2 s SIGTERM grace,
+ * then 5 s after its group's SIGKILL. A descendant that left the group, or one the kernel cannot kill
+ * yet (D state), may keep the try's pipes open for good; the supervisor still exits, or the plugin
+ * could never start it again.
+ */
+const RUST_HOST_STOP_MS = 7_000;
+
+/**
+ * A release installed by an updater from before the Rust PTY host (0.4.13's) came without it, so its
+ * terminals run on the Node sidecar, or are mirrored where the PC has no Node. It is fetched here, in
+ * the background, as this updater fetches it for each release it installs: a bridge on the Node
+ * sidecar takes it at its next attach, and one with no PTY host at its next start.
+ *
+ * Each try is marked in bin/ before it starts, and the next one waits RUST_HOST_RETRY_MS from it: a PC
+ * that cannot get the host (offline, a release without one, a check that keeps failing) does not
+ * download again at every restart, and a supervisor that starts while an earlier try still runs
+ * leaves `bin/` to that one. `signal` ends the try when this supervisor stops; the promise, which never
+ * rejects, settles once the try's whole process group is gone (killed outright past the grace), so a
+ * stopping supervisor can wait for it before it lets go.
+ */
+function installMissingRustHost(directory: string, signal: AbortSignal): Promise<void> | null {
+  const bin = join(directory, "bin");
+  if (process.platform === "win32" || !existsSync(join(directory, "scripts", "pty-sidecar.ts"))
+    || existsSync(join(bin, "ovis-pty-sidecar.json"))) return null;
+  const attempt = join(bin, "ovis-pty-sidecar.attempt");
+  try {
+    if (Date.now() - statSync(attempt).mtimeMs < RUST_HOST_RETRY_MS) return null;
+  } catch { /* never tried */ }
+  try {
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(attempt, `${new Date().toISOString()}\n`);
+  } catch (error) {
+    console.error("Rust PTY host install not tried: its attempt could not be marked", error);
+    return null;
+  }
+  return runCommand(directory, [process.execPath, "scripts/pty-sidecar.ts", "install"], signal, 120_000).then(
+    (output) => console.log(output),
+    (error: unknown) => console.error("Rust PTY host install failed; terminals use the Node PTY sidecar", error),
+  );
+}
+
+/** Resolves once `try_` ends, or after RUST_HOST_STOP_MS with a warning that something of it may live on. */
+async function boundedStop(try_: Promise<void>, directory: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"late">((resolve) => { timer = setTimeout(() => resolve("late"), RUST_HOST_STOP_MS); });
+  const outcome = await Promise.race([try_.then(() => "ended" as const), late]);
+  clearTimeout(timer);
+  if (outcome === "late") console.warn(`Rust PTY host install in ${directory} did not end ${RUST_HOST_STOP_MS / 1000} s after it was stopped; exiting anyway. A process of it may still run.`);
+}
 
 export async function runSupervisor(root = resolve(import.meta.dir, "..")) {
   root = resolve(root);
@@ -122,10 +175,15 @@ export async function runSupervisor(root = resolve(import.meta.dir, "..")) {
       } finally { switching = false; }
     },
   });
+  // a Rust PTY host install runs in a process group of its own: it stops with this supervisor
+  const rustHostInstall = new AbortController();
+  let rustHostTry: { directory: string; done: Promise<void> } | null = null;
   async function shutdown(code: number) {
     if (stopping) return;
-    stopping = true; updater.stop();
-    await stopChild();
+    stopping = true; updater.stop(); rustHostInstall.abort();
+    // the try's group is gone before this supervisor lets go: one that ignores SIGTERM is killed
+    // past the grace, which an exit now would have dropped with it. The wait is bounded all the same.
+    await Promise.all([stopChild(), rustHostTry && boundedStop(rustHostTry.done, rustHostTry.directory)]);
     lock.release();
     process.exit(code);
   }
@@ -144,6 +202,12 @@ export async function runSupervisor(root = resolve(import.meta.dir, "..")) {
     switching = false;
     started.resolve();
     updater.start();
+    // a stop that came during the start already waited for no try: none starts after it
+    if (active && active.directory !== root && !stopping) {
+      // the try keeps its own release: a handover replaces `active` before this supervisor stops
+      const done = installMissingRustHost(active.directory, rustHostInstall.signal);
+      if (done !== null) rustHostTry = { directory: active.directory, done };
+    }
     process.send?.({ type: "supervisor-ready" });
     console.log(`Managed updates: ${updater.status.auto_update ? "automatic install" : "automatic checks, install from Settings"}`);
   } catch (error) {

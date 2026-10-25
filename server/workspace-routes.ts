@@ -71,7 +71,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     return listing === null ? badRequest("invalid_cwd", "path must be a directory this user can read") : jsonResponse(listing);
   }
 
-  if (pathname === "/api/workspace/diff/files" || pathname === "/api/workspace/diff/file" || pathname === "/api/workspace/diff/repositories") {
+  if (pathname === "/api/workspace/diff/files" || pathname === "/api/workspace/diff/file" || pathname === "/api/workspace/diff/repositories" || pathname === "/api/workspace/diff/refs") {
     setRequestRoute(pathname);
     if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
     // file contents, like /api/fs/file: this app reads them, another site's page does not
@@ -93,7 +93,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
       cwd = expandedDirectory(relative ? resolve(base!, directory) : directory) ?? undefined;
     }
     if (cwd === undefined) return badRequest("invalid_cwd", "directory must be a directory this user can read");
-    return repoDiffResponse(pathname.endsWith("/repositories") ? "repositories" : pathname.endsWith("/files") ? "files" : "file", cwd, url.searchParams);
+    return repoDiffResponse(pathname.endsWith("/repositories") ? "repositories" : pathname.endsWith("/files") ? "files" : pathname.endsWith("/refs") ? "refs" : "file", cwd, url.searchParams);
   }
 
   // A tab is made the way a workspace is: herdr opens it with a shell in its root pane, and

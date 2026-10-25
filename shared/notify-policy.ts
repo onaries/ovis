@@ -1,4 +1,5 @@
 import type { AgentStatus, PaneInfo } from "./herdr-api.generated.ts";
+import { paneStorageId } from "./machines.ts";
 
 /**
  * When a pane is worth interrupting the user for, and what the interruption says.
@@ -70,4 +71,14 @@ export function alertsAllow(prefs: AlertPrefs, status: AgentStatus): boolean {
   if (status === "blocked") return prefs.input;
   if (status === "done") return prefs.done !== "off";
   return false;
+}
+
+/**
+ * Whether the pane's alerts are off for everyone (the shared `muted_panes`, shared/preferences.ts):
+ * then no channel (push, in-app, chime, tab notification) says anything about it, in any browser,
+ * while its status is still tracked. The list keys a pane with its PC (`paneStorageId`), so a
+ * pane id reused on another PC never inherits the mute. No list (an older server) mutes nothing.
+ */
+export function paneAlertsMuted(mutedPanes: readonly string[] | null | undefined, machineId: string, paneId: string): boolean {
+  return mutedPanes != null && mutedPanes.includes(paneStorageId(machineId, paneId));
 }

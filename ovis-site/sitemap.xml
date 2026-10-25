@@ -21,4 +21,32 @@
 <xhtml:link rel="alternate" hreflang="ko" href="https://ovis.sh/ko/support/"/>
 <xhtml:link rel="alternate" hreflang="x-default" href="https://ovis.sh/support/"/>
 </url>
+<url><loc>https://ovis.sh/beta/</loc>
+<xhtml:link rel="alternate" hreflang="en" href="https://ovis.sh/beta/"/>
+<xhtml:link rel="alternate" hreflang="zh-CN" href="https://ovis.sh/zh/beta/"/>
+<xhtml:link rel="alternate" hreflang="ja" href="https://ovis.sh/ja/beta/"/>
+<xhtml:link rel="alternate" hreflang="ko" href="https://ovis.sh/ko/beta/"/>
+<xhtml:link rel="alternate" hreflang="x-default" href="https://ovis.sh/beta/"/>
+</url>
+<url><loc>https://ovis.sh/zh/beta/</loc>
+<xhtml:link rel="alternate" hreflang="en" href="https://ovis.sh/beta/"/>
+<xhtml:link rel="alternate" hreflang="zh-CN" href="https://ovis.sh/zh/beta/"/>
+<xhtml:link rel="alternate" hreflang="ja" href="https://ovis.sh/ja/beta/"/>
+<xhtml:link rel="alternate" hreflang="ko" href="https://ovis.sh/ko/beta/"/>
+<xhtml:link rel="alternate" hreflang="x-default" href="https://ovis.sh/beta/"/>
+</url>
+<url><loc>https://ovis.sh/ja/beta/</loc>
+<xhtml:link rel="alternate" hreflang="en" href="https://ovis.sh/beta/"/>
+<xhtml:link rel="alternate" hreflang="zh-CN" href="https://ovis.sh/zh/beta/"/>
+<xhtml:link rel="alternate" hreflang="ja" href="https://ovis.sh/ja/beta/"/>
+<xhtml:link rel="alternate" hreflang="ko" href="https://ovis.sh/ko/beta/"/>
+<xhtml:link rel="alternate" hreflang="x-default" href="https://ovis.sh/beta/"/>
+</url>
+<url><loc>https://ovis.sh/ko/beta/</loc>
+<xhtml:link rel="alternate" hreflang="en" href="https://ovis.sh/beta/"/>
+<xhtml:link rel="alternate" hreflang="zh-CN" href="https://ovis.sh/zh/beta/"/>
+<xhtml:link rel="alternate" hreflang="ja" href="https://ovis.sh/ja/beta/"/>
+<xhtml:link rel="alternate" hreflang="ko" href="https://ovis.sh/ko/beta/"/>
+<xhtml:link rel="alternate" hreflang="x-default" href="https://ovis.sh/beta/"/>
+</url>
 </urlset>

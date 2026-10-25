@@ -4,7 +4,7 @@
  */
 import { join } from "node:path";
 import type { AgentStatus, HerdrPane, PlanSummary, ServerMessage, SessionSnapshot } from "../../shared/protocol.ts";
-import { alertStatus, paneTitle } from "../../shared/notify-policy.ts";
+import { alertStatus, paneAlertsMuted, paneTitle } from "../../shared/notify-policy.ts";
 import { BackgroundWait } from "../background-wait.ts";
 import { ClaudeSubagentStatus } from "../claude-subagents.ts";
 import { codexOpenRollout, paneCodexHome } from "../codex.ts";
@@ -24,6 +24,7 @@ import { omoPanes } from "../omo.ts";
 import { OMO_ALIASES, OmoStatus } from "../omo-status.ts";
 import type { OrderSequence } from "../order-sequence.ts";
 import type { PendingInputs } from "../pending-input.ts";
+import type { PreferenceStore } from "../preferences.ts";
 import { promptWaitEnded, type OpenCodePromptState } from "../prompt.ts";
 import { type AlertTiming, createPushService, defaultStateDir } from "../push.ts";
 import { SessionPlans } from "../session-plan.ts";
@@ -35,7 +36,7 @@ import { type Client, send } from "./connections.ts";
 /** a focus or reconnect re-reads the panes for the daily active message at most this often */
 const VISIT_READ_MS = 10 * 60_000;
 
-export function createStatusHub<Owner, Lease>({ options, devices, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin }: {
+export function createStatusHub<Owner, Lease>({ options, devices, preferences, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin }: {
   options: {
     stateDir?: string;
     codexHome?: string;
@@ -51,6 +52,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, clients, prese
     orderSequence?: OrderSequence;
   };
   devices: DeviceStore;
+  /** the preferences every browser shares (server/preferences.ts): web push reads the muted panes from it */
+  preferences: PreferenceStore;
   clients: Set<Client>;
   present: Set<Client>;
   /** the pending messages' status and lifetime calls, whoever owns them (a connection, or the bridge for a first message) */
@@ -67,10 +70,14 @@ export function createStatusHub<Owner, Lease>({ options, devices, clients, prese
     loopbackHttp: options.pushLoopbackHttp === true,
     canDeliver: (id) => id === null || (id === undefined ? !devices.gated : devices.has(id)),
     inUse: () => present.size > 0,
+    // the persisted list, read as each alert is scheduled and again as it goes out
+    muted: (machineId, paneId) => paneAlertsMuted(preferences.get().muted_panes, machineId, paneId),
     lookupTitle: async (paneId) => {
       return paneTitle(await paneGet(paneId));
     },
   });
+  // a mute made while an alert waits calls it off, so an unmute cannot resurrect an old finish
+  const stopMutes = preferences.subscribe(() => push.mutesChanged());
 
   /** `done` for agents herdr loses track of (server/completion.ts), kept across restarts */
   const completions = new CompletionTracker(join(options.stateDir ?? defaultStateDir(), "completions.json"));
@@ -359,7 +366,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, clients, prese
 
   // a verified OpenCode pane is tracked like a usage-login pane: closing it reaches onPaneEnded above
   const untrackOpenCode = trackVerifiedOpenCodePanes((paneId) => collector.trackPane(paneId));
-  const tracked = { ...collector, stop() { untrackOpenCode(); collector.stop(); } };
+  const tracked = { ...collector, stop() { untrackOpenCode(); stopMutes(); collector.stop(); } };
 
   return { push, omo, gjc, claudeAgents, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector: tracked, waitTimer };
 }

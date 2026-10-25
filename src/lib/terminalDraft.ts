@@ -10,6 +10,9 @@ export function setTerminalDraftSending(owner: string, value: boolean): void {
   notify();
 }
 const memory = new Map<string, string>();
+/** how many times each owner's draft was written: a paste that waited on the clipboard compares it (TerminalInput.tsx) */
+const versions = new Map<string, number>();
+export function terminalDraftVersion(owner: string): number { return versions.get(owner) ?? 0; }
 const PREFIX = "ovis:terminal-line:";
 export const TERMINAL_LINE_LIMIT = 32_768;
 export function readTerminalDraft(owner: string): string {
@@ -21,6 +24,7 @@ export function writeTerminalDraft(owner: string, text: string): void {
   const sent = pending.get(owner);
   if (sent && !value.startsWith(sent.written)) sent.canClear = false;
   memory.set(owner, value);
+  versions.set(owner, terminalDraftVersion(owner) + 1);
   try {
     if (value) localStorage.setItem(PREFIX + owner, value);
     else localStorage.removeItem(PREFIX + owner);

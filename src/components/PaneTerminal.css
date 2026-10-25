@@ -256,67 +256,8 @@
   outline-offset: var(--ring-offset);
 }
 
-/* the chat reply's quote action: a row of the composer's over the card (PaneTerminal.tsx), on the
-   card's column, so it stands in the stack's flow and never over the transcript's words. Its label
-   is read text, not a note: the body sizes, and a target a pointer and a finger can take */
-.composer-quote-row {
-  display: flex;
-  justify-content: flex-end;
-  width: min(100%, var(--chat-w));
-  margin: 0 auto var(--space-2);
-}
-
-.chat-quote {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--control-h);
-  padding: var(--space-2) var(--space-3);
-  border: var(--hairline) solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--fs-md);
-  line-height: var(--lh-tight);
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    border-color var(--dur-fast) var(--ease-out),
-    background-color var(--dur-fast) var(--ease-out);
-}
-
-.chat-quote svg {
-  width: var(--icon-size);
-  height: var(--icon-size);
-  flex: none;
-}
-
-.chat-quote:hover {
-  border-color: var(--accent);
-}
-
-.chat-quote:focus-visible {
-  outline: var(--ring);
-  outline-offset: var(--ring-offset);
-}
-
-/* pressed reads as the hover fill, whole: the touch dim (styles.css) would read as disabled */
-.chat-quote:active {
-  opacity: 1;
-  background: var(--bg-hover);
-}
-
-@media (pointer: coarse) {
-  .chat-quote {
-    min-height: var(--touch-target);
-    font-size: var(--fs-chat);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .terminal-quote,
-  .chat-quote {
+  .terminal-quote {
     transition: none;
   }
 }

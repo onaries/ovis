@@ -106,6 +106,24 @@
   height: var(--icon-size);
 }
 
+/* Paste reads the clipboard: a stray tap on a neighbour is not one, so it keeps 8px clear of them */
+.key[data-key="paste"] {
+  margin-inline: var(--space-1);
+}
+
+/* what Paste needs, said in the bar's own row beside the Input line key it names (KeyBar.tsx),
+   in place of the other keys for a moment: never painted over the terminal's output. Two lines
+   fit the key's height; the row does not scroll while it shows */
+.key-bar-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-chat);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+
 /* hover only where a pointer can hover: a tapped key must not stay lit */
 @media (hover: hover) {
   .key:hover {

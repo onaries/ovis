@@ -70,7 +70,10 @@ import { useConnectionChip, useServerMessageHandler } from "./lib/useConnectionC
 import { selectionStill } from "./lib/selectionMark.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
 import { useSidebarLayout } from "./lib/useSidebarLayout.ts";
-import { alertsBell, useAlertPrefs, useAlertRefs, useAlertSignals, useNotificationState, useNotificationSwitch } from "./lib/useAlerts.ts";
+import { useAlertPrefs, useAlertRefs } from "./lib/useAlerts.ts";
+import { useAlertSignals } from "./lib/useAlertSignals.ts";
+import { useNotificationState, useNotificationSwitch } from "./lib/useNotifications.ts";
+import { alertsBell } from "./lib/alertsBell.ts";
 import { Droplet } from "./components/Droplet.tsx";
 import { paneDragData, PANE_DRAG_TYPE, slotSide, type SplitSlot } from "./lib/split.ts";
 import { useLayoutNotice, useLayoutRefused } from "./lib/useLayoutNotice.ts";
@@ -648,7 +651,7 @@ export function App() {
           {/* a sidebar that cannot be drawn leaves the panes working */}
           <RenderBoundary resetKey={null} fallback={(retry) => <RegionCrash message={t("The sidebar can't be shown.")} retry={retry} />}>
             <CrashProbe region="sidebar" />
-            <ReorderContext.Provider value={reorderCoordinator}><MachineSidebar machines={machines} watching={auth?.role === "watch"} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} activity={activity} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} /></ReorderContext.Provider>
+            <ReorderContext.Provider value={reorderCoordinator}><MachineSidebar machines={machines} watching={auth?.role === "watch"} drawerOpen={drawerOpen} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} activity={activity} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} /></ReorderContext.Provider>
           </RenderBoundary>
           <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
         </aside>

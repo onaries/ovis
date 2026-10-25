@@ -21,15 +21,44 @@ export const MAX_COMPOSER_CHARS = 20_000;
 const PASTE_START = "\u001b[200~";
 const PASTE_END = "\u001b[201~";
 
-/** A composer message as written: trailing newlines are the composer's, not the text's; CRLF reads as one newline. */
+/**
+ * A composer message as written: trailing newlines are the composer's, not the text's; CRLF reads as one newline.
+ * A whole paste marker pasted into it is dropped (until none is left, so dropping one cannot form another): it would
+ * end the paste the message goes in early. Any other escape byte stays, and the bridge refuses the message for it.
+ * One pass: each marker goes the moment its last byte arrives, so one that dropping another forms goes too.
+ */
 export function composerMessage(text: string): string {
-  return text.replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n");
+  const kept: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    kept.push(text[i]!);
+    const from = kept.length - PASTE_START.length;
+    if (from >= 0 && kept[from] === "\u001b" && (kept.slice(from).join("") === PASTE_START || kept.slice(from).join("") === PASTE_END)) kept.length = from;
+  }
+  return kept.join("").replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n");
 }
 
 /** The text a composer message types, without its submit (HerdrSocket.submit adds the Enter). */
 export function composerPayload(text: string, bracketedPaste: boolean): string {
   const body = composerMessage(text).replace(/\n/g, "\r");
   return bracketedPaste ? PASTE_START + body + PASTE_END : body;
+}
+
+/** Why an Insert did not go (SubmitResult's code): the draft stays in the line and says this. */
+export function insertNote(code: string, message: string): string {
+  if (code === "unsupported") return t("Update this PC to insert without Enter. Nothing was sent.");
+  if (code === "read_only") return t("Not inserted: this view only watches the pane.");
+  if (code === "unsafe_multiline") return t("Insert takes one line. Send several lines, or insert them one at a time.");
+  if (code === "insert_too_long") return t("Not inserted: the text is too long for the terminal.");
+  if (code === "secret_prompt") return t("Not inserted: the terminal is asking for a password. Nothing was typed.");
+  if (code === "held_input") return t("Not sent: send or discard the held input first.");
+  if (code === "not_transmitted") return t("Not inserted: the connection dropped before the text left. Try again.");
+  if (code === "insert_timeout") return t("Not inserted: it waited too long behind earlier input, and nothing was typed. Try again.");
+  if (code === "capabilities_unknown") return t("Not inserted: this PC has not said yet what it supports. Insert it again.");
+  // a control character (an escape copied with coloured output) or half a character: the same text is refused every time
+  if (code === "invalid_insert_text") return t("Not inserted: the line holds a control character. Remove it, then insert again.");
+  if (["input_not_ready", "not_attached", "attach_held", "pane_read_failed"].includes(code)) return t("Not inserted: the terminal is not ready. Nothing was typed.");
+  if (code === "disconnected" || code === "timeout" || code === "insert_failed") return t("Not confirmed: the terminal did not confirm the text. Check it before inserting again.");
+  return t("Not inserted: {message}", { message });
 }
 
 /** Why a composer message did not go (SubmitResult's code): the composer keeps the text and says this. */

@@ -228,11 +228,6 @@
   color: var(--text);
 }
 
-/* the answer's parts, marked for a selection to be quoted from; they stay items of the turn's column */
-.chat-reply {
-  display: contents;
-}
-
 .chat-agent-meta {
   gap: var(--space-2);
 }
@@ -1301,6 +1296,56 @@
   color: var(--status-blocked);
   font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
+}
+
+/* how one todo update went, in words: outlined, so it never reads by colour alone */
+.work-row-state {
+  flex: none;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 var(--hairline) var(--border);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+
+.work-row-head .work-row-failed {
+  font-family: var(--font-ui);
+  white-space: nowrap;
+}
+
+/* a run of todo updates reads as words, in the interface face of the verb before it, not as a command */
+.work-todo-group > .work-row-head .work-row-summary {
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+}
+
+/* a run of todo updates, opened: the list it stands for, then every update in order */
+.work-todo-caption {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.work-todo-detail .todo-list {
+  padding: 0;
+}
+
+.work-todo-attempts {
+  display: flex;
+  flex-direction: column;
+}
+
+.work-todo-attempts h4 {
+  margin: 0 0 var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
 }
 
 /* a file a tool call names opens in the viewer: a link in look, a button underneath */

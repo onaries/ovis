@@ -166,6 +166,29 @@ export const pendingText = (text: string): string => {
   return normalized;
 };
 
+/** The composer's message cap (src/lib/compose.ts MAX_COMPOSER_CHARS) and the terminal input line's (src/lib/terminalDraft.ts TERMINAL_LINE_LIMIT). */
+const MAX_CHAT_SUBMIT_CHARS = 20_000;
+const MAX_TYPED_SUBMIT_CHARS = 32_768;
+
+/**
+ * An immediate submit as the composer shapes it (src/lib/compose.ts composerMessage and composerPayload), or
+ * invalid_submit_text before anything is typed or cleared. `text` is the message as written: trailing newlines
+ * dropped, CRLF and a lone CR read as LF, and no terminal control character but tab and newline, so it holds no
+ * paste marker. `payload` must be that text with each LF a CR, bare or inside exactly one bracketed-paste pair:
+ * a payload that ends its own paste early, or carries bytes its text does not, would run what follows as
+ * commands. `typed`: the terminal's input line, whose cap is the longer one.
+ */
+export function submitFraming(text: string, payload: string, typed: boolean): { text: string; payload: string } {
+  const message = text.replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n");
+  const limit = typed ? MAX_TYPED_SUBMIT_CHARS : MAX_CHAT_SUBMIT_CHARS;
+  const body = message.replace(/\n/g, "\r");
+  if (message.length > limit || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(message)
+    || (payload !== body && payload !== `\u001b[200~${body}\u001b[201~`)) {
+    throw new HerdrError("invalid_submit_text", `A message must be at most ${limit} characters, without terminal control characters or paste markers, and sent as the composer shapes it; nothing was typed`);
+  }
+  return { text: message, payload };
+}
+
 export const pendingFault = (error: unknown) => ({
   code: error instanceof HerdrError || error instanceof PendingInputError ? error.code : "submit_failed",
   message: error instanceof Error ? error.message : String(error),
@@ -277,6 +300,8 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
    */
   async function submitText(paneId: string, text: string, payload: string, arrivedAt: number, fromTerminal = false, authorize: () => void = () => {},
     clearDraft?: string, confirmation?: { draft: string | null; identity: PendingIdentity; box?: string | null }, sendAnyway = false): Promise<void> {
+    // before anything reads the pane, types or clears: closeMention and mirrorInput trust this framing
+    ({ text, payload } = submitFraming(text, payload, fromTerminal));
     let clearedDraft = false;
     let sentText = text;
     let command: ReturnType<typeof prepareCommandSend>;

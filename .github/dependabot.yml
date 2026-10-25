@@ -1,11 +1,22 @@
 # GitHub Actions only. Bun, Node and herdr are pinned by hand in the workflows (herdr by
 # checksum), and package bumps go through `bun install --frozen-lockfile` in a normal PR.
+# Actions are pinned to commit SHAs with a version comment, which Dependabot updates together.
+# "/" covers .github/workflows only, so the setup-ci composite action is listed as well.
+#
+# A new action release waits seven days before the monthly version-update PR takes it (GitHub
+# waits three by default). `cooldown` delays version updates only: Dependabot security updates
+# do not wait. A tag later moved to other code is covered by the SHA pins, not by the wait.
+# For an urgent fix, read the upstream advisory and fix, pin the patched action to its full
+# commit SHA in a normal PR that names the advisory and where the commit comes from, and let it
+# pass the usual review and checks; the wait does not apply to that PR.
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    directories: ["/", "/.github/actions/setup-ci"]
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]

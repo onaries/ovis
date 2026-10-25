@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Locator, type Page } from "playwright-core";
 import { createServer } from "../server/index.ts";
+import { forgetPageMedia, PAGE_MEDIA_LIFETIME_MS, pageFileHooks, pageMediaResponse } from "../server/file-view.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { openSettingsPage } from "./settings-page.ts";
 
@@ -52,7 +53,7 @@ writeFileSync(transcript, [
   { type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "shoot", arguments: JSON.stringify({ cmd: "python3 shoot.py --out shots/report.html" }) } },
   { type: "response_item", payload: { type: "function_call_output", call_id: "shoot", output: `${join(root, "shots", "t00000.png")} (1600, 1000) -> (1255, 960)\nsaved shots/report.html\ndisplay image 1: [image/png]` } },
   { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Shots:\n\n\`\`\`\n${join(root, "shots", "t00000.png")} (1600, 1000) -> (1255, 960)\n\`\`\`` }] } },
-  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Kinds: [extensionless](./README), [unknown text](./notes.custom), [dotted folder](./folder.txt)." }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Kinds: [extensionless](./README), [unknown text](./notes.custom), [dotted folder](./folder.txt), [page media](./media/page-media.html)." }] } },
 ].map((row) => JSON.stringify(row)).join("\n"));
 const db = new Database(join(codexHome, "state_5.sqlite"));
 db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, first_user_message TEXT)");
@@ -67,6 +68,26 @@ writeFileSync(join(root, "README"), "Extensionless text\n");
 writeFileSync(join(root, "notes.custom"), "Unknown extension text\n");
 mkdirSync(join(root, "folder.txt"));
 writeFileSync(join(root, "folder.txt", "inside.txt"), "Chosen inside the popup\n");
+// a rendered page whose recording is too large to put into it (EMBED_FILE_BYTES in server/file-view.ts),
+// so it plays from the address its render gives out: 1 150 s of silence as 8 kHz 8-bit mono WAV, 9.2 MB
+mkdirSync(join(root, "media"));
+const takeRate = 8_000;
+const take = Buffer.alloc(44 + takeRate * 1_150, 0x80);
+take.write("RIFF", 0);
+take.writeUInt32LE(take.length - 8, 4);
+take.write("WAVEfmt ", 8);
+take.writeUInt32LE(16, 16);
+// PCM, one channel, one byte a sample
+take.writeUInt16LE(1, 20);
+take.writeUInt16LE(1, 22);
+take.writeUInt32LE(takeRate, 24);
+take.writeUInt32LE(takeRate, 28);
+take.writeUInt16LE(1, 32);
+take.writeUInt16LE(8, 34);
+take.write("data", 36);
+take.writeUInt32LE(take.length - 44, 40);
+writeFileSync(join(root, "media", "take.wav"), take);
+writeFileSync(join(root, "media", "page-media.html"), `<!doctype html><meta charset="utf-8"><title>Page media</title><audio id="take" src="take.wav" preload="metadata" muted controls></audio>`);
 const targetSource = Array.from({ length: 80 }, (_, index) => `export const line${index + 1} = ${index + 1};`).join("\n") + "\n\n";
 writeFileSync(join(root, "target.ts"), targetSource);
 // in a subfolder, so a link is resolved from the file's folder (../notes.txt), not the pane's
@@ -1467,6 +1488,95 @@ try {
   assert.equal(await refused.locator(".file-viewer-text").count(), 0);
   console.log("PASS A file whose body is refused shows an error, not the error's JSON");
   assert.deepEqual(errors, []);
+
+  // a rendered page's recording too large to put into it plays and seeks from the address its render
+  // gave out, read from the descriptor that render checked; a lapsed or revoked address plays no more,
+  // and closing the viewer lets go of every descriptor, each once (server/file-view.ts)
+  const live = new Set<number>();
+  let closedTwice = 0;
+  let allClosed: (() => void) | null = null;
+  pageFileHooks.opened = (fd) => { live.add(fd); };
+  pageFileHooks.closed = (fd) => {
+    if (!live.delete(fd)) closedTwice += 1;
+    if (live.size === 0) allClosed?.();
+  };
+  try {
+    await refused.getByRole("button", { name: "Close file", exact: true }).click();
+    await refused.waitFor({ state: "hidden" });
+    const mediaLink = page.getByRole("button", { name: "page media", exact: true });
+    const mediaPage = page.getByRole("dialog", { name: "page-media.html", exact: true });
+    const recording = mediaPage.frameLocator(".file-viewer-page").locator("#take");
+    /** "loaded" once the recording's metadata came, "error" when its address was refused; with `query`, asked again by a new URL first, so no cache answers for the server */
+    const loads = (query: string | null = null) => recording.evaluate((element: HTMLAudioElement, query) => new Promise<string>((done) => {
+      if (query === null && element.readyState >= 1) return done("loaded");
+      if (query === null && element.error !== null) return done("error");
+      const settle = (outcome: string) => () => {
+        element.removeEventListener("loadedmetadata", loaded);
+        element.removeEventListener("error", failed);
+        done(outcome);
+      };
+      const loaded = settle("loaded");
+      const failed = settle("error");
+      element.addEventListener("loadedmetadata", loaded);
+      element.addEventListener("error", failed);
+      if (query !== null) {
+        const address = new URL(element.src);
+        address.search = `?${query}`;
+        element.src = address.href;
+      }
+    }), query);
+    const openPage = async () => {
+      await mediaLink.tap();
+      const address = await recording.getAttribute("src") ?? "";
+      assert.match(address, new RegExp(`^${origin}/api/fs/page-media/[A-Za-z0-9_-]{32}$`), "the recording plays from its address");
+      assert.equal(await loads(), "loaded");
+      return address;
+    };
+    const closePage = async () => {
+      await mediaPage.getByRole("button", { name: "Close file", exact: true }).click();
+      await mediaPage.waitFor({ state: "hidden" });
+    };
+    const first = await openPage();
+    const played = await recording.evaluate((element: HTMLAudioElement) => new Promise<number>((done, fail) => {
+      const start = element.currentTime;
+      const moved = () => {
+        if (element.currentTime <= start) return;
+        element.removeEventListener("timeupdate", moved);
+        element.pause();
+        done(element.currentTime - start);
+      };
+      element.addEventListener("timeupdate", moved);
+      element.play().catch(fail);
+    }));
+    assert.ok(played > 0, "the recording plays");
+    const seeked = await recording.evaluate((element: HTMLAudioElement) => new Promise<number>((done, fail) => {
+      element.addEventListener("seeked", () => done(element.currentTime), { once: true });
+      element.addEventListener("error", () => fail(new Error(`media error ${element.error?.code}`)), { once: true });
+      element.currentTime = 900;
+    }));
+    assert.equal(Math.round(seeked), 900, "the recording seeks");
+    assert.equal(await loads("again"), "loaded", "its address answers again");
+    // lapsed: past its lifetime the address is dropped, and the page's next ask is refused
+    assert.equal(pageMediaResponse(first.slice(first.lastIndexOf("/") + 1), null, null, Date.now() + PAGE_MEDIA_LIFETIME_MS + 1), null);
+    assert.equal(await loads("lapsed"), "error", "a lapsed address is refused");
+    await closePage();
+    // revoked: a new render gives a new address, which plays until its client signs out
+    const second = await openPage();
+    assert.notEqual(second, first, "a new render gives a new address");
+    forgetPageMedia({ client: "127.0.0.1" });
+    assert.equal(await loads("revoked"), "error", "a revoked address is refused");
+    await closePage();
+    if (live.size > 0) await new Promise<void>((done, fail) => {
+      allClosed = done;
+      AbortSignal.timeout(15_000).addEventListener("abort", () => fail(new Error(`${live.size} page media descriptors still open after the viewer closed`)));
+    });
+    assert.equal(closedTwice, 0, "no page media descriptor closed twice");
+    assert.deepEqual(errors, []);
+    console.log("PASS A rendered page's recording plays and seeks from its checked descriptor, a lapsed or revoked address is refused, and every descriptor closes once");
+  } finally {
+    delete pageFileHooks.opened;
+    delete pageFileHooks.closed;
+  }
 } finally {
   await browser?.close();
   server?.stop();

@@ -12,6 +12,8 @@ export interface TypedKeysDeps {
   agentStatus: AgentStatus | undefined;
   barKeyRef: RefObject<{ key: string; chord: string | null } | null>;
   coarseRef: RefObject<boolean>;
+  /** sends a pending Safari syllable or dictation phrase as an IME commit, ahead of the key */
+  commitPendingText: () => void;
   compositionCommitPendingRef: RefObject<boolean>;
   composingRef: RefObject<boolean>;
   inputLineRef: RefObject<boolean>;
@@ -27,7 +29,7 @@ export interface TypedKeysDeps {
 }
 
 export function useTypedKeys(deps: TypedKeysDeps) {
-  const { agent, agentStatus, barKeyRef, coarseRef, compositionCommitPendingRef, composingRef, inputLineRef, modifiersRef, paneId, reassertIfStaleRef, setInputError, setModifiers, socketRef, stopKeyRef, tRef, termRef } = deps;
+  const { agent, agentStatus, barKeyRef, coarseRef, commitPendingText, compositionCommitPendingRef, composingRef, inputLineRef, modifiersRef, paneId, reassertIfStaleRef, setInputError, setModifiers, socketRef, stopKeyRef, tRef, termRef } = deps;
   // key-bar taps go through xterm so the onData -> socket path above is reused
   const pressKey = useCallback((item: KeyBarKeyItem) => {
     const term = termRef.current;
@@ -42,6 +44,7 @@ export function useTypedKeys(deps: TypedKeysDeps) {
       ?? keyBarInputSequence(item.key, term.modes.applicationCursorKeysMode);
     if (input === null) return;
     reassertIfStaleRef.current();
+    commitPendingText();
     barKeyRef.current = { key: item.key, chord };
     try { term.input(input); } finally { barKeyRef.current = null; }
     // with the input line, the keyboard belongs to it: a key tap must not move it to the grid. On a
@@ -49,7 +52,7 @@ export function useTypedKeys(deps: TypedKeysDeps) {
     // keyboard, and a key pressed with the keyboard put away (after dictating, say) must leave it
     // away. Only the keyboard key, or a tap on the line or the grid, brings it up.
     if (!inputLineRef.current && !coarseRef.current) term.focus();
-  }, []);
+  }, [commitPendingText]);
 
   const toggleModifier = useCallback((modifier: keyof StickyModifiers) => {
     if (composingRef.current) return;

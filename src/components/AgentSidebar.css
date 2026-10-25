@@ -230,6 +230,26 @@
   align-items: center;
 }
 
+/* alerts off for everyone (the row menu's Mute alerts): a crossed bell beside the state, drawn as
+   the background and plan counts are, so the state is told by the glyph and its words, not a colour */
+.agent-muted {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  /* kept off the row's focus ring when it is the last thing in the row */
+  margin-inline: var(--space-2) var(--space-1);
+  color: var(--text-dim);
+}
+
+.agent-muted svg {
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
+/* a PC that is away fades its whole row to half (.agent-item.is-offline): the bell is drawn in the
+   strong text colour there, so at half it still stands at least 3:1 on the sidebar in both themes */
+.agent-item.is-offline .agent-muted { color: var(--text); }
+
 .agent-row > .agent-row-state {
   position: absolute;
   inset-block: 0;

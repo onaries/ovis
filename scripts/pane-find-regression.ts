@@ -150,7 +150,8 @@ export async function checkPaneFind(browser: Browser, origin: string): Promise<v
     await page.getByRole("button", { name: "Previous match", exact: true }).focus();
     await page.keyboard.press("Escape");
     await closedGeometry;
-    assert.equal(await page.getByRole("search").count(), 0);
+    // the find bar is gone; the sidebar's label filter is a search landmark of its own and stays
+    assert.equal(await page.getByRole("search", { name: "Find in terminal", exact: true }).count(), 0);
     assert.deepEqual(inputFrames, [], "find keys and query must never be sent to the terminal");
 
     // Delay, then forward a real upload. Its old drop intent may paste the path, but its

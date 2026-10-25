@@ -76,6 +76,27 @@ describe("operator-local client diagnostic endpoint", () => {
     expect((await log.handle(request({ ...body(), target: "x" }), "after")).status).toBe(400);
   });
 
+  it("ends a body that keeps trickling in once the deadline for the whole body passes", async () => {
+    let now = 1000;
+    const log = new ClientConnectionLog(() => {}, () => now);
+    const space = new TextEncoder().encode(" ");
+    // each chunk arrives 4 s after the last: no gap is long, but the body never ends on its own
+    const trickle = new ReadableStream<Uint8Array>({ pull(controller) { now += 4_000; controller.enqueue(space); } });
+    const response = await log.handle(new Request("http://fixture/api/connection-diagnostics", { method: "POST", headers: { "content-type": "application/json" }, body: trickle }), "slow");
+    expect(response.status).toBe(408);
+    expect(now).toBeLessThan(1000 + 30_000);
+  });
+
+  it("gives every read slot back when the bodies holding them stop arriving", async () => {
+    const log = new ClientConnectionLog(() => {}, () => 1000, 1);
+    const stalled = Array.from({ length: 16 }, (_, i) => log.handle(new Request("http://fixture/api/connection-diagnostics", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode("{")); } }),
+    }), `stalled-${i}`));
+    expect((await Promise.all(stalled)).map((response) => response.status)).toEqual(Array(16).fill(408));
+    expect((await log.handle(request(body()), "after")).status).toBe(204);
+  });
+
   it("returns method/JSON refusals and never fails a client because the log writer threw", async () => {
     const log = new ClientConnectionLog(() => { throw new Error("write failed"); });
     expect((await log.handle(new Request("http://fixture/api/connection-diagnostics"), "one")).status).toBe(405);

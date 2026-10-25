@@ -1,5 +1,5 @@
 diff --git a/src/browser/Terminal.ts b/src/browser/Terminal.ts
-index 0e945aa..1e101cd 100644
+index 0e945aa..b3001c1 100644
 --- a/src/browser/Terminal.ts
 +++ b/src/browser/Terminal.ts
 @@ -120,6 +120,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
@@ -66,10 +66,15 @@ index 0e945aa..1e101cd 100644
      }));
      this.register(this.onResize(() => this._renderService!.handleResize(this.cols, this.rows)));
      this.register(this.onBlur(() => this._renderService!.handleBlur()));
-@@ -887,7 +898,19 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -887,7 +898,24 @@ export class Terminal extends CoreTerminal implements ITerminal {
      }
    }
  
++  /** Send the Safari preedit (a pending syllable or dictation phrase) now, as the next key would. */
++  public finishComposition(): void {
++    this._compositionHelper?.finishReplacement();
++  }
++
 +  public setTextAreaViewportBounds(bounds: { left: number; top: number; right: number; bottom: number } | undefined): void {
 +    this._textAreaViewportBounds = bounds;
 +    this._compositionHelper?.setInputViewport(bounds);
@@ -86,7 +91,7 @@ index 0e945aa..1e101cd 100644
      paste(data, this.textarea!, this.coreService, this.optionsService);
    }
  
-@@ -1006,9 +1029,16 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -1006,9 +1034,16 @@ export class Terminal extends CoreTerminal implements ITerminal {
        return false;
      }
  
@@ -103,7 +108,7 @@ index 0e945aa..1e101cd 100644
      if (!shouldIgnoreComposition && !this._compositionHelper!.keydown(event)) {
        if (this.options.scrollOnUserInput && this.buffer.ybase !== this.buffer.ydisp) {
          this.scrollToBottom();
-@@ -1063,7 +1093,13 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -1063,7 +1098,13 @@ export class Terminal extends CoreTerminal implements ITerminal {
      // If ctrl+c or enter is being sent, clear out the textarea. This is done so that screen readers
      // will announce deleted characters. This will not work 100% of the time but it should cover
      // most scenarios.
@@ -118,7 +123,7 @@ index 0e945aa..1e101cd 100644
        this.textarea!.value = '';
      }
  
-@@ -1170,10 +1206,11 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -1170,10 +1211,11 @@ export class Terminal extends CoreTerminal implements ITerminal {
     * @param ev The input event to be handled.
     */
    protected _inputEvent(ev: InputEvent): boolean {
@@ -131,7 +136,7 @@ index 0e945aa..1e101cd 100644
        if (this._keyPressHandled) {
          return false;
        }
-@@ -1251,6 +1288,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -1251,6 +1293,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
     * using DECSTR (soft reset, CSI ! p) or RIS instead (hard reset, ESC c).
     */
    public reset(): void {
@@ -159,7 +164,7 @@ index 9ebc55d..208ea82 100644
    compositionstart(): void;
    compositionupdate(ev: CompositionEvent): void;
 diff --git a/src/browser/input/CompositionHelper.ts b/src/browser/input/CompositionHelper.ts
-index 7542969..feb7264 100644
+index 7542969..260decc 100644
 --- a/src/browser/input/CompositionHelper.ts
 +++ b/src/browser/input/CompositionHelper.ts
 @@ -6,6 +6,11 @@
@@ -174,7 +179,7 @@ index 7542969..feb7264 100644
  
  interface IPosition {
    start: number;
-@@ -30,11 +35,17 @@ export class CompositionHelper {
+@@ -30,11 +35,19 @@ export class CompositionHelper {
     */
    private _compositionPosition: IPosition;
  
@@ -193,11 +198,13 @@ index 7542969..feb7264 100644
 +  private _editAwaitingKey = false;
 +  /** Text whose insertion ended a replacement after its keydown was held back (keydown 229). */
 +  private _commitInsert: string | undefined;
++  /** The preedit is dictation's hypothesis, replaced in place with no key of its own. */
++  private _dictation = false;
 +  private _inputViewportBounds: { left: number; top: number; right: number; bottom: number } | undefined;
  
    /**
     * Data already sent due to keydown event.
-@@ -50,17 +61,147 @@ export class CompositionHelper {
+@@ -50,17 +63,158 @@ export class CompositionHelper {
      @IRenderService private readonly _renderService: IRenderService
    ) {
      this._isComposing = false;
@@ -210,6 +217,7 @@ index 7542969..feb7264 100644
 +  public reset(): void {
 +    this._generation++;
 +    this._replacementComposition = false;
++    this._dictation = false;
 +    this._editAwaitingKey = false;
 +    this._commitInsert = undefined;
 +    this._pendingSends.length = 0;
@@ -273,13 +281,21 @@ index 7542969..feb7264 100644
 +    const commitInsert = this._replacementComposition && keyDownSeen && ev.inputType === 'insertText' ? ev.data ?? undefined : undefined;
 +    this.finishReplacement();
 +    this._commitInsert = commitInsert;
-+    // Only a Hangul preedit starts this path. Paste, emoji, dictation blocks and browsers
++    // Only a Hangul preedit or a dictation hypothesis starts this path. Paste, emoji and browsers
 +    // emitting real composition events retain their existing input handling. iPadOS puts two
 +    // syllables back at once when a final consonant moves on (\ub9dd + \u314f: \ub9c8\uc544).
-+    if (ev.inputType === 'insertText' && ev.data && HANGUL_TEXT.test(ev.data)) {
++    // Dictation replaces its hypothesis in place (thi, this, this is): sending each one put
++    // every provisional word in the pane, so the corrected text is sent once, at the commit.
++    // A replacement of text before the caret (already sent) keeps its existing handling, and a
++    // terminal that takes no input (view only) holds no phrase to send once input returns.
++    const dictation = ev.inputType === 'insertReplacementText' && !!ev.data
++      && this._textarea.selectionStart === this._textarea.value.length
++      && !this._optionsService.rawOptions.disableStdin;
++    if ((ev.inputType === 'insertText' && ev.data && HANGUL_TEXT.test(ev.data)) || dictation) {
 +      this._commitInsert = undefined;
 +      this.compositionstart();
 +      this._replacementComposition = true;
++      this._dictation = dictation;
 +    }
 +  }
 +
@@ -316,11 +332,13 @@ index 7542969..feb7264 100644
 +    this._compositionView.textContent = this._textarea.value.substring(start, this._compositionPosition.end);
 +    // An unchanged replacement is the input method committing the preedit, not an applied key:
 +    // Safari 27 then passes Backspace on (keyCode 8) to delete the last jamo, which must happen.
-+    if (!keyDownSeen && this._compositionView.textContent !== before) this._editAwaitingKey = true;
++    // Dictation has no key of its own to wait for: a Backspace after it is the user's.
++    if (!keyDownSeen && !this._dictation && this._compositionView.textContent !== before) this._editAwaitingKey = true;
 +    this.updateCompositionElements();
 +    if (this._compositionPosition.end === start) {
 +      // Backspace removed the entire preedit. Nothing has reached the PTY to delete.
 +      this._replacementComposition = false;
++      this._dictation = false;
 +      this._isComposing = false;
 +      this._compositionView.classList.remove('active');
 +    }
@@ -347,7 +365,7 @@ index 7542969..feb7264 100644
      this._compositionView.textContent = '';
      this._dataAlreadySent = '';
      this._compositionView.classList.add('active');
-@@ -71,9 +212,12 @@ export class CompositionHelper {
+@@ -71,9 +225,12 @@ export class CompositionHelper {
     * @param ev The event.
     */
    public compositionupdate(ev: Pick<CompositionEvent, 'data'>): void {
@@ -360,7 +378,7 @@ index 7542969..feb7264 100644
        this._compositionPosition.end = this._textarea.value.length;
      }, 0);
    }
-@@ -83,6 +227,7 @@ export class CompositionHelper {
+@@ -83,6 +240,7 @@ export class CompositionHelper {
     * the handler.
     */
    public compositionend(): void {
@@ -368,7 +386,7 @@ index 7542969..feb7264 100644
      this._finalizeComposition(true);
    }
  
-@@ -92,7 +237,24 @@ export class CompositionHelper {
+@@ -92,7 +250,24 @@ export class CompositionHelper {
     * @returns Whether the Terminal should continue processing the keydown event.
     */
    public keydown(ev: KeyboardEvent): boolean {
@@ -394,11 +412,12 @@ index 7542969..feb7264 100644
        if (ev.keyCode === 229) {
          // Continue composing if the keyCode is the "composition character"
          return false;
-@@ -125,56 +287,45 @@ export class CompositionHelper {
+@@ -125,56 +300,46 @@ export class CompositionHelper {
     *   the command is executed.
     */
    private _finalizeComposition(waitForPropagation: boolean): void {
 +    this._replacementComposition = false;
++    this._dictation = false;
      this._compositionView.classList.remove('active');
      this._isComposing = false;
  
@@ -478,7 +497,7 @@ index 7542969..feb7264 100644
    /**
     * Apply any changes made to the textarea after the current event chain is allowed to complete.
     * This should be called when not currently composing but a keydown event with the "composition
-@@ -183,7 +334,9 @@ export class CompositionHelper {
+@@ -183,7 +348,9 @@ export class CompositionHelper {
     */
    private _handleAnyTextareaChanges(): void {
      const oldValue = this._textarea.value;
@@ -488,7 +507,7 @@ index 7542969..feb7264 100644
        // Ignore if a composition has started since the timeout
        if (!this._isComposing) {
          const newValue = this._textarea.value;
-@@ -216,25 +369,38 @@ export class CompositionHelper {
+@@ -216,25 +383,38 @@ export class CompositionHelper {
      }
  
      if (this._bufferService.buffer.isCursorInViewport) {
@@ -549,10 +568,13 @@ index a634922..a39fc99 100644
  
  /**
   * The set of options that only have an effect when set in the Terminal constructor.
-@@ -138,6 +138,13 @@ export class Terminal extends Disposable implements ITerminalApi {
+@@ -138,6 +138,16 @@ export class Terminal extends Disposable implements ITerminalApi {
    public focus(): void {
      this._core.focus();
    }
++  public finishComposition(): void {
++    this._core.finishComposition();
++  }
 +  public setTextAreaViewportBounds(bounds: { left: number; top: number; right: number; bottom: number } | undefined): void {
 +    this._core.setTextAreaViewportBounds(bounds);
 +  }
@@ -678,7 +700,7 @@ diff --git a/typings/xterm.d.ts b/typings/xterm.d.ts
 index 3300828..9f57b18 100644
 --- a/typings/xterm.d.ts
 +++ b/typings/xterm.d.ts
-@@ -1905,4 +1905,27 @@ declare module '@xterm/xterm' {
+@@ -1905,4 +1905,29 @@ declare module '@xterm/xterm' {
       */
      readonly wraparoundMode: boolean;
    }
@@ -704,5 +726,7 @@ index 3300828..9f57b18 100644
 +    setTextAreaViewportBounds(bounds: ITextAreaViewportBounds | undefined): void;
 +    /** The parser's OSC string state, read between writes (in a write callback). */
 +    oscStringState(): IOscStringState;
++    /** Sends a pending Safari replacement preedit (Hangul syllable, dictation phrase) now. */
++    finishComposition(): void;
 +  }
  }

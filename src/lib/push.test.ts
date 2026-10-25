@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { createElement } from "react";
+import { createElement, useLayoutEffect } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import { DEFAULT_ALERTS } from "../../shared/notify-policy.ts";
 import { ensurePushSubscription, pushSupported, removePushSubscription, testDevicePush } from "./push.ts";
 import { ApiError } from "./api.ts";
 import { notificationState, refreshNotificationState, requestNotificationPermission } from "./notifications.ts";
-import { useNotificationSwitch } from "./useAlerts.ts";
+import { useNotificationSwitch } from "./useNotifications.ts";
 
 /**
  * The device-side subscription flow against a stand-in browser whose PushManager, like
@@ -437,6 +437,54 @@ describe("in the phone app", () => {
       for (const [name, descriptor] of restore) {
         if (descriptor) Object.defineProperty(globalThis, name, descriptor);
         else delete (globalThis as Record<string, unknown>)[name];
+      }
+    }
+  });
+
+  it("preserves push when visibility changes during the alerts reenable commit", async () => {
+    // Given: an off device whose removal could not reach the PC.
+    const endpoint = await ensurePushSubscription();
+    const pc = pcRefusesRemoval();
+    await expect(removePushSubscription()).rejects.toBeInstanceOf(ApiError);
+    const view = Object.assign(new EventTarget(), { visibilityState: "visible" });
+    const restore = ["document", "IS_REACT_ACT_ENVIRONMENT"].map((name) =>
+      [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+    Object.defineProperty(globalThis, "document", { configurable: true, value: view });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    const registeredAgain = deferred();
+    function Page({ alertsOn }: { readonly alertsOn: boolean }) {
+      useNotificationSwitch({ updateSettings: () => {}, locked: false, notifications: "granted",
+        setNotifications: () => {}, alerts: DEFAULT_ALERTS, alertsRef: { current: DEFAULT_ALERTS },
+        alertsOn, setPushOn: () => {} });
+      useLayoutEffect(() => {
+        if (alertsOn) view.dispatchEvent(new Event("visibilitychange"));
+      }, [alertsOn]);
+      return null;
+    }
+    let page: ReactTestRenderer | null = null;
+    try {
+      const refusedAtLoad = pc.nextRefusal();
+      await act(async () => { page = create(createElement(Page, { alertsOn: false })); });
+      await refusedAtLoad;
+      pc.answer();
+      const server = globalThis.fetch;
+      globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+        const response = await server(...args);
+        if (args[0] === "/api/push/subscribe" && args[1]?.method === "POST") registeredAgain.resolve();
+        return response;
+      }, { preconnect: server.preconnect });
+      sent = [];
+      // When: visibility changes after reenable renders but before the old effect cleans up.
+      await act(async () => { page?.update(createElement(Page, { alertsOn: true })); });
+      await registeredAgain.promise;
+      // Then: re-registration reuses the endpoint without removing it first.
+      expect(sent.filter(({ method }) => method === "DELETE")).toEqual([]);
+      expect(app.saved).toBe(endpoint);
+    } finally {
+      await act(async () => { page?.unmount(); });
+      for (const [name, descriptor] of restore) {
+        if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+        else Reflect.deleteProperty(globalThis, name);
       }
     }
   });

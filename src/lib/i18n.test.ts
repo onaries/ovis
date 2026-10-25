@@ -107,7 +107,7 @@ describe.each(Object.entries(DICTIONARIES))("%s dictionary", (_name, dictionary)
     // names and key caps read the same in every language; Chinese UIs leave "Shell" and "Agent" in English;
     // theme brand names stay as their projects write them (the color words Amber and Charcoal are translated)
     const themeNames = ["Codex", "Catppuccin", "Catppuccin Latte", "Tokyo Night", "Tokyo Night Day", "Gruvbox", "Gruvbox Light", "One Dark", "One Light", "Solarized", "Solarized Light", "Kanagawa", "Kanagawa Lotus", "Rosé Pine", "Rosé Pine Dawn", "Dracula", "Nord", "Vesper"];
-    const sameOnPurpose = new Set(["PC {name}", "Control C", "Control D", "Control Z", "Shift Tab", "Shell", "Agent", ...themeNames]);
+    const sameOnPurpose = new Set(["PC {name}", "Control C", "Control D", "Control Z", "Shift Tab", "Enter", "Shell", "Agent", ...themeNames]);
     const same = Object.entries(dictionary).filter(([en, text]) => en === text && /[a-z]{3}/i.test(en) && !sameOnPurpose.has(en));
     expect(same.map(([en]) => en)).toEqual([]);
   });
@@ -118,7 +118,7 @@ const PART_FILES: Record<string, string[]> = {
   settings: ["components/SettingsDialog.tsx", "components/KeyBarSettings.tsx", "lib/paletteSettings.ts", "components/TelemetryControls.tsx", "components/SettingsControls.tsx"],
   terminal: ["components/PaneTerminal.tsx", "lib/useTerminalMount.ts", "lib/useComposerSends.ts", "lib/usePeekReturn.ts", "lib/useTypedKeys.ts", "components/PaneCanvas.tsx", "components/KeyBar.tsx", "components/FindBar.tsx", "components/TerminalViewportTools.tsx", "components/SplitDropPreview.tsx", "components/TabStrip.tsx", "lib/terminalLabel.ts", "lib/tabName.ts"],
   composer: ["components/Composer.tsx", "components/ComposerNotices.tsx", "components/VoiceInput.tsx", "components/SecretInput.tsx", "components/TerminalInput.tsx", "components/PendingMessages.tsx", "lib/compose.ts", "components/PromptCard.tsx", "lib/promptAnswer.ts"],
-  chat: ["components/ChatView.tsx", "components/Markdown.tsx", "components/MermaidLightbox.tsx", "components/ChatMinimap.tsx", "components/ImageLightbox.tsx", "components/BackgroundTasks.tsx", "lib/workBlocks.ts", "lib/toolVerbs.ts", "lib/outcomeChip.ts", "lib/chatTimestamp.ts", "lib/chatReadDeadline.ts"],
+  chat: ["components/ChatView.tsx", "components/Markdown.tsx", "components/MermaidLightbox.tsx", "components/ChatMinimap.tsx", "components/ImageLightbox.tsx", "components/BackgroundTasks.tsx", "components/BackgroundAgentDetail.tsx", "lib/workBlocks.ts", "lib/toolVerbs.ts", "lib/outcomeChip.ts", "lib/chatTimestamp.ts", "lib/chatReadDeadline.ts"],
   sidebar: ["components/Sidebar.tsx", "components/AgentSidebar.tsx", "components/SidebarResizer.tsx"],
   machines: ["components/MachineSidebar.tsx", "components/MachineDialog.tsx", "lib/bridgeProgress.ts"],
   workspace: ["components/NewSessionDialog.tsx", "components/WorktreeDialog.tsx", "components/DirectoryBrowser.tsx", "components/RecentFolderChips.tsx", "components/SessionHistory.tsx", "lib/sessionHistory.ts"],

@@ -14,7 +14,6 @@ export const PALETTE_KO: Record<string, string> = {
   "All": "전체",
   "Recent": "최근",
   "Workspace": "워크스페이스",
-  "Selected": "선택됨",
   "Unknown workspace": "알 수 없는 워크스페이스",
   "Actions": "동작",
   "Plugin actions": "플러그인 동작",

@@ -34,23 +34,51 @@ final class PushStore {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    /** The keys, made on first use. */
+    /** Receiving a notification never creates or replaces keys. */
+    static synchronized PushKeys read(Context context) throws GeneralSecurityException {
+        PushKeys keys = read(prefs(context));
+        if (keys == null) throw new GeneralSecurityException("push keys are missing");
+        return keys;
+    }
+
+    /** The keys as stored, or null when there are none; never creates or replaces them. */
+    static synchronized PushKeys stored(Context context) throws GeneralSecurityException {
+        return read(prefs(context));
+    }
+
+    static PushKeys read(SharedPreferences prefs) throws GeneralSecurityException {
+        try {
+            return PushKeys.decode(prefs.getString("private", null), prefs.getString("public", null),
+                prefs.getString("auth", null));
+        } catch (ClassCastException damaged) {
+            throw new PushKeys.Damaged();
+        }
+    }
+
+    /** Only app subscription setup repairs a damaged store. Endpoints stay for key replacement. */
     static synchronized PushKeys keys(Context context) throws GeneralSecurityException {
-        SharedPreferences prefs = prefs(context);
-        String scalar = prefs.getString("private", null);
-        String point = prefs.getString("public", null);
-        String auth = prefs.getString("auth", null);
-        if (scalar != null && point != null && auth != null) {
-            Base64.Decoder decoder = Base64.getDecoder();
-            return new PushKeys(decoder.decode(scalar), decoder.decode(point), decoder.decode(auth));
+        return getOrCreate(prefs(context));
+    }
+
+    static synchronized PushKeys getOrCreate(SharedPreferences prefs) throws GeneralSecurityException {
+        try {
+            PushKeys keys = read(prefs);
+            if (keys != null) return keys;
+        } catch (PushKeys.Damaged damaged) {
+            // Replace all three fields together; each PC receives them on its next app load.
         }
         PushKeys keys = PushKeys.generate();
         Base64.Encoder encoder = Base64.getEncoder();
-        prefs.edit()
+        boolean saved = prefs.edit()
             .putString("private", encoder.encodeToString(keys.privateScalar))
             .putString("public", encoder.encodeToString(keys.publicPoint))
             .putString("auth", encoder.encodeToString(keys.auth))
             .commit();
+        if (!saved) {
+            // commit() has already updated memory even when the disk write fails.
+            prefs.edit().remove("private").remove("public").remove("auth").apply();
+            throw new GeneralSecurityException("could not save push keys");
+        }
         return keys;
     }
 

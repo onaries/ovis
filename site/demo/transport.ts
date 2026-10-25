@@ -14,12 +14,14 @@
  * a chat gets a demo answer.
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
-import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
-import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
+import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PaneBackgroundAgentDetail, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
+import type { RepoBranchComparison, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
+import { normalizeThemeChange, sharedPreferencesBody, type SharedPreferences } from "../../shared/preferences.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { firstMessageFault } from "../../shared/launch-rules.ts";
+import { insertTextProblem } from "../../shared/terminal-insert.ts";
 import { neighborPane } from "../../src/lib/layoutMap.ts";
 import { closeLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "../../src/lib/layoutTree.ts";
 import { rollupStatus } from "../../src/lib/status.ts";
@@ -237,6 +239,35 @@ function layOutRoster(): void {
 layOutRoster();
 for (const pane of snapshot().panes) if (keyOfPane.get(pane.pane_id) === "api") Object.assign(pane, { plan: { done: 1, total: planSteps.length, current: "Adding the replay metric" } });
 
+/**
+ * The flaky-retry pane's background work (GET /api/pane/omo-tasks): a Claude subagent still
+ * reviewing, a background command, and a subagent that ended. The subagent's own transcript
+ * (GET /api/pane/background-agent) grows by one fictional record each time it is read, so Refresh
+ * has something new to show; the command has no transcript to open, as on a real PC.
+ */
+const minutesAgo = (minutes: number, seconds = 0): string => new Date(Date.now() - minutes * 60_000 - seconds * 1000).toISOString();
+const BACKGROUND_TASKS: OmoTask[] = [
+  { id: "demo-review", title: "Review the retry test for timing assumptions", category: "reviewer", model: "claude-opus-5-5", status: "running", started_at: minutesAgo(4), ended_at: null, turns: 3, tool_calls: 4, tokens: 48_120, detail_kind: "claude-subagent" },
+  { id: "demo-flaky-run", title: "Run the retry test twenty times", category: "shell", model: null, status: "running", started_at: minutesAgo(1, 30), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: null },
+  { id: "demo-lexer", title: "Check the lexer for the same race", category: "explorer", model: "claude-opus-5-5", status: "completed", started_at: minutesAgo(25), ended_at: minutesAgo(20), turns: 2, tool_calls: 3, tokens: 21_400, detail_kind: "claude-subagent" },
+];
+for (const pane of snapshot().panes) if (keyOfPane.get(pane.pane_id) === "flaky") Object.assign(pane, { background_tasks: 2 });
+const BACKGROUND_PROMPT = "Review test/retry.test.ts for assumptions about timing: the test fails one run in ten on CI. Report what races, and propose the smallest change that makes it deterministic.";
+const BACKGROUND_EVENTS: PaneBackgroundAgentDetail["events"] = [
+  { kind: "text", text: "Reading the test and the retry helper it exercises first.", at: minutesAgo(3, 55) },
+  { kind: "tool", text: 'Read {"file_path":"test/retry.test.ts"}', at: minutesAgo(3, 54) },
+  { kind: "tool", text: 'Read {"file_path":"src/retry.ts"}', at: minutesAgo(3, 51) },
+  { kind: "text", text: "The test waits 50 ms for the second attempt, but the backoff is 40 ms plus jitter of up to 20 ms: one run in ten the retry lands after the assertion.\n\nChecking whether the jitter can be injected.", at: minutesAgo(3, 30) },
+  { kind: "tool", text: 'Grep {"pattern":"jitter","path":"src","output_mode":"content"}', at: minutesAgo(3, 29) },
+];
+const BACKGROUND_MORE: PaneBackgroundAgentDetail["events"] = [
+  { kind: "text", text: "The jitter comes from Math.random inside backoff(): injecting a clock and a random source makes the test deterministic without touching the retry policy.", at: minutesAgo(3, 10) },
+  { kind: "tool", text: 'Edit {"file_path":"src/retry.ts","old_string":"const jitter = Math.random() * 20;","new_string":"const jitter = random() * 20;"}', at: minutesAgo(3, 5) },
+  { kind: "tool", text: 'Bash {"command":"bun test test/retry.test.ts","description":"Run the retry test once"}', at: minutesAgo(2, 50) },
+  { kind: "text", text: "Passing with the injected source. Running it twenty times in the background to be sure.", at: minutesAgo(2, 40) },
+];
+let backgroundReads = 0;
+
 // The last workspace can be closed in a demo, so creation keeps templates independent of it.
 const newPaneTemplate = structuredClone(snapshot().panes[0]!);
 const newTabTemplate = structuredClone(snapshot().tabs[0]!);
@@ -303,6 +334,22 @@ function relabelAutoTabs(workspaceId: string): void {
 function emitSse(event: MachineEvent): void {
   const message = new MessageEvent("message", { data: JSON.stringify(event) });
   for (const listener of sseListeners) listener(message);
+}
+
+// The settings, pins and muted panes every browser of a server shares (shared/preferences.ts),
+// kept the way server/preferences.ts keeps them: one document, a change laid over it, told on the
+// event stream. The demo is one page, so the document is this page's and a reload starts it over,
+// as the rest of the demo's state does; it is here so an agent's Mute alerts works as on a server.
+let preferences: SharedPreferences = { revision: 0, settings: {}, muted_panes: [] };
+
+function changePreferences(raw: unknown): Response {
+  const change = sharedPreferencesBody(raw);
+  if (change === null) return error("invalid_body", "Send { settings: object, pins?: string[], muted_panes?: string[] }", 400);
+  const { settings } = normalizeThemeChange(preferences.settings, change);
+  const pins = change.pins ?? preferences.pins;
+  preferences = { revision: preferences.revision + 1, settings: { ...preferences.settings, ...settings }, ...(pins === undefined ? {} : { pins }), muted_panes: change.muted_panes ?? preferences.muted_panes ?? [] };
+  emitSse({ type: "preferences", preferences });
+  return json(preferences, 200, { "cache-control": "no-store" });
 }
 
 function paneOf(paneId: string): Pane | undefined {
@@ -804,7 +851,8 @@ function answerPrompt(paneId: string, optionIndex: number | undefined): void {
       role: "assistant", ts: now(), end_ts: now(),
       parts: declined
         ? [{ kind: "text", phase: "final_answer", text: "Understood, I won't push. The changes stay on `feat/export-guard` locally; tell me what to do differently." }]
-        : [{ kind: "tool", name: "exec", summary: "git push origin feat/export-guard", input: JSON.stringify({ cmd: "git push origin feat/export-guard" }, null, 2), output: "To github.com:acme/checkout-api.git\n * [new branch]      feat/export-guard -> feat/export-guard" },
+        // Codex: its own call id, and no state once its output is recorded (it records no outcome)
+        : [{ kind: "tool", name: "exec", summary: "git push origin feat/export-guard", input: JSON.stringify({ cmd: "git push origin feat/export-guard" }, null, 2), output: "To github.com:acme/checkout-api.git\n * [new branch]      feat/export-guard -> feat/export-guard", call_id: "call_demo_web_push" },
           { kind: "text", phase: "final_answer", text: "Pushed `feat/export-guard`. The export button is guarded and the branch is ready for a pull request." }],
     });
     if (chat) conversationChanged(paneId);
@@ -894,6 +942,45 @@ const DEMO_DIFF: { file: RepoDiffFile; patch: string | null }[] = [
   ].join("\n") },
 ];
 
+/**
+ * The demo repository's HEAD, and the branches a base picker is offered (GET /api/workspace/diff/refs):
+ * only the bases its branch comparison below answers, so no offered branch is refused on Compare.
+ */
+const DEMO_HEAD = "4f2a9c1d7e3b5a8c6d0e1f2a3b4c5d6e7f8a9b0c";
+const DEMO_MAIN = "7a3e5c19b2d84f06a1c3e5b7d9f1a3c5e7b9d1f3";
+const DEMO_REFS: RepoDiffRefs["refs"] = [
+  { name: "refs/heads/main", oid: DEMO_MAIN },
+  { name: "refs/remotes/origin/main", oid: DEMO_MAIN },
+];
+
+/**
+ * What the demo's branch changed against `main` or `origin/main` (both at the same commit): the
+ * uncommitted work above, plus the branch's own committed file. Any other base is one the demo
+ * repository does not know. The merge base is pinned in the comparison the list answers with, as
+ * the server pins it.
+ */
+const DEMO_BRANCH_COMPARISON: RepoBranchComparison = { repository_root: "", head_oid: DEMO_HEAD, base_oid: DEMO_MAIN, merge_base_oid: "e5b7d9f1a3c5e7b9d1f37a3e5c19b2d84f06a1c3" };
+const DEMO_BRANCH_FILE: RepoDiffFile = { path: "src/routes/payments.ts", old_path: null, status: "modified", additions: 3, deletions: 1, binary: false };
+const DEMO_BRANCH_DIFF: { file: RepoDiffFile; patch: string | null }[] = [
+  ...DEMO_DIFF,
+  { file: DEMO_BRANCH_FILE, patch: [
+    "diff --git a/src/routes/payments.ts b/src/routes/payments.ts",
+    "index 1a2b3c4..5d6e7f8 100644",
+    "--- a/src/routes/payments.ts",
+    "+++ b/src/routes/payments.ts",
+    "@@ -12,5 +12,7 @@ export async function createPayment(request: PaymentRequest): Promise<Payment> {",
+    "   const key = request.headers.get(\"idempotency-key\");",
+    "-  return charge(request.body);",
+    "+  if (key === null) return charge(request.body);",
+    "+  const earlier = await lookup(key);",
+    "+  return earlier ?? remember(key, await charge(request.body));",
+    " }",
+    " ",
+    " export async function refund(id: string): Promise<void> {",
+    "",
+  ].join("\n") },
+].sort((left, right) => (left.file.path < right.file.path ? -1 : 1));
+
 /** Settings → Subscription usage on the demo: plans as the workstation's CLIs might report them, resets counted from now. */
 function usageReport(): UsageReport {
   const now = Date.now();
@@ -982,6 +1069,14 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/connection-diagnostics") return new Response(null, { status: 204 });
   // the demo is one browser: a finish read here is kept in its own storage, with no other browser to tell
   if (path === "/api/seen") return method === "POST" ? new Response(null, { status: 204 }) : json({ finishes: [] }, 200, { "cache-control": "no-store" });
+  if (path === "/api/preferences") {
+    if (method === "GET") return json(preferences, 200, { "cache-control": "no-store" });
+    if (method !== "PUT") return error("method_not_allowed", "Use GET or PUT /api/preferences", 405);
+    let raw: unknown;
+    try { raw = init?.body ? JSON.parse(String(init.body)) : input instanceof Request ? await input.clone().json() : undefined; }
+    catch { return error("invalid_json", "The body is not JSON", 400); }
+    return changePreferences(raw);
+  }
   if (path === "/api/telemetry") return json({ error: { code: "not_found", message: "This server sends no telemetry" } }, 404, { "cache-control": "no-store" });
   if (path === "/api/herdr/update") return json({ supported: false, phase: "idle", server_version: null, binary_version: null, stale: false, output: null, finished_at: null }, 200, { "cache-control": "no-store" });
   if (path === "/api/portal") return json(demoPortal(), 200, { "cache-control": "no-store" });
@@ -1191,7 +1286,26 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     if (request.jump !== false && result.match) redrawHistory(target);
     return json(result);
   }
-  if (path === "/api/pane/omo-tasks") return json({ tasks: [], runs: [] });
+  if (path === "/api/pane/omo-tasks") return json({ tasks: keyOfPane.get(paneId) === "flaky" ? BACKGROUND_TASKS : [], runs: [], server_time: new Date().toISOString() } satisfies OmoActivity);
+  if (path === "/api/pane/background-agent") {
+    if (method !== "GET") return error("method_not_allowed", "use GET", 400);
+    if (!paneId) return error("missing_pane_id", "pane_id query parameter is required", 400);
+    const agentId = query.get("agent_id") ?? "";
+    if (agentId === "") return error("missing_agent_id", "agent_id query parameter is required", 400);
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(agentId)) return error("invalid_agent_id", "agent_id must be a word of letters, digits, - and _, at most 128 characters", 400);
+    if (!paneOf(paneId)) return error("pane_not_found", "pane not found", 404);
+    if (agentOf(paneId) !== "claude") return error("background_detail_unsupported", "details can be read for a Claude Code subagent only", 501);
+    const task = keyOfPane.get(paneId) === "flaky" ? BACKGROUND_TASKS.find((candidate) => candidate.id === agentId) : undefined;
+    if (task === undefined) return error("background_agent_not_found", "no such subagent in the pane's session", 404);
+    if (task.detail_kind === null) return error("background_detail_unsupported", "a background command's output is not read", 501);
+    // the agent writes on between reads: each read finds one more record, up to what it has
+    backgroundReads += 1;
+    const events = [...BACKGROUND_EVENTS, ...BACKGROUND_MORE.slice(0, Math.min(backgroundReads - 1, BACKGROUND_MORE.length))];
+    return json({
+      agent_id: task.id, session_id: "demo-session-flaky", title: task.title, agent: task.category, prompt: BACKGROUND_PROMPT, events,
+      truncated: false, incomplete: false, limits: { max_read_bytes: 256 * 1024, max_output_bytes: 128 * 1024, max_events: 128 }, server_time: new Date().toISOString(),
+    } satisfies PaneBackgroundAgentDetail);
+  }
   if (path === "/api/pane/files") {
     const q = (query.get("q") ?? "").toLowerCase();
     return json({ files: DEMO_FILES.filter((file) => file.toLowerCase().includes(q)).slice(0, Number(query.get("limit") ?? 20)) });
@@ -1554,19 +1668,39 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/workspace/diff/repositories") {
     return json({ roots: [query.get("directory") || snapshot().panes.find((pane) => pane.pane_id === paneId)?.cwd || "/home/demo/checkout-api"], truncated: false });
   }
-  if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file") {
-    const scope = query.get("scope") || "workspace";
-    if (scope !== "workspace" && scope !== "staged" && scope !== "commit") return error("invalid_scope", "scope must be workspace, staged or commit", 400);
-    // the demo keeps no history to name commits in
-    if (scope === "commit") return error("revision_not_found", "the demo repository has no commits to compare", 404);
+  if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file" || path === "/api/workspace/diff/refs") {
     const root = snapshot().panes.find((pane) => pane.pane_id === paneId)?.cwd ?? query.get("directory") ?? "/home/demo/checkout-api";
     // a worktree's checkout is on its own branch, as the sidebar and the footer say
     const branch = [...repositories.values()].flatMap((repo) => repo.checkouts).find((checkout) => checkout.path === root)?.branch ?? "main";
-    const repository: RepoDiffRepository = { root, branch, head: "4f2a9c1d7e3b5a8c6d0e1f2a3b4c5d6e7f8a9b0c", detached: false, unborn: false };
-    // everything in the demo is unstaged work
-    const changed = scope === "workspace" ? DEMO_DIFF : [];
+    const repository: RepoDiffRepository = { root, branch, head: DEMO_HEAD, detached: false, unborn: false };
+    if (path === "/api/workspace/diff/refs") return json({ repository, refs: DEMO_REFS, truncated: false, limits: { max_refs: 200, max_list_bytes: DEMO_DIFF_LIMITS.max_list_bytes } } satisfies RepoDiffRefs);
+    const scope = query.get("scope") || "workspace";
+    if (scope !== "workspace" && scope !== "staged" && scope !== "commit" && scope !== "branch") return error("invalid_scope", "scope must be workspace, staged, commit or branch", 400);
+    // the demo keeps no history to name commits in
+    if (scope === "commit") return error("revision_not_found", "the demo repository has no commits to compare", 404);
+    let comparison: RepoBranchComparison | null = null;
+    if (scope === "branch") {
+      const pinned = query.get("comparison");
+      if (pinned !== null) {
+        // a patch read carries the list's identity back: the demo's one branch comparison, or nothing
+        let parsed: unknown;
+        try { parsed = JSON.parse(pinned); } catch { return error("invalid_comparison", "comparison must be the identity a branch list answered with", 400); }
+        const identity = parsed as Partial<RepoBranchComparison> | null;
+        if (identity === null || typeof identity !== "object" || identity.head_oid !== DEMO_HEAD || identity.base_oid !== DEMO_MAIN || identity.merge_base_oid !== DEMO_BRANCH_COMPARISON.merge_base_oid) return error("comparison_changed", "the repository or its HEAD is no longer the one this comparison was made on; refresh the list", 409);
+        if (identity.repository_root !== root) return error("comparison_changed", "the repository or its HEAD is no longer the one this comparison was made on; refresh the list", 409);
+      } else {
+        const base = query.get("base") ?? "";
+        if (path === "/api/workspace/diff/file") return error("invalid_comparison", "a branch patch needs the comparison its list answered with", 400);
+        if (base === "") return error("invalid_revision", "scope=branch needs a base branch or commit", 400);
+        if (!/^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]{0,199}$/.test(base) || base.includes("..")) return error("invalid_revision", "base must name one commit", 400);
+        if (!["main", "origin/main", "refs/heads/main", "refs/remotes/origin/main", DEMO_MAIN].includes(base)) return error("revision_not_found", "base names no commit in this repository", 404);
+      }
+      comparison = { ...DEMO_BRANCH_COMPARISON, repository_root: root };
+    }
+    // everything in the demo is unstaged work; the branch adds its one committed file
+    const changed = scope === "workspace" ? DEMO_DIFF : scope === "branch" ? DEMO_BRANCH_DIFF : [];
     const compared: RepoDiffScope = scope;
-    const shared = { repository, scope: compared, base: null, head: null };
+    const shared = { repository, scope: compared, base: comparison?.base_oid ?? null, head: comparison?.head_oid ?? null, comparison };
     if (path === "/api/workspace/diff/files") {
       return json({ ...shared, files: changed.map((entry) => entry.file), total: changed.length, truncated: false, limits: { max_files: DEMO_DIFF_LIMITS.max_files, max_list_bytes: DEMO_DIFF_LIMITS.max_list_bytes } } satisfies RepoDiffFileList);
     }
@@ -1601,7 +1735,12 @@ class DemoEventSource extends EventTarget {
     super();
     this.url = url;
     sseListeners.add(this.listener);
-    setTimeout(() => { this.onopen?.(new Event("open")); this.listener(new MessageEvent("message", { data: JSON.stringify({ type: "machines", machines: readRoster() } satisfies MachineEvent) })); }, 30);
+    setTimeout(() => {
+      this.onopen?.(new Event("open"));
+      this.listener(new MessageEvent("message", { data: JSON.stringify({ type: "machines", machines: readRoster() } satisfies MachineEvent) }));
+      // as the server's stream: it opens with the shared document, so a page that reconnects holds the latest
+      this.listener(new MessageEvent("message", { data: JSON.stringify({ type: "preferences", preferences } satisfies MachineEvent) }));
+    }, 30);
   }
   close(): void { this.readyState = 2; sseListeners.delete(this.listener); }
 }
@@ -1697,7 +1836,7 @@ class DemoSocket extends EventTarget {
       const open = new Event("open");
       this.onopen?.(open);
       this.dispatchEvent(open);
-      this.push({ type: "snapshot", snapshot: readSnapshot(local)!, features: ["submit", "pending-input", "pending-hold", "agent-queue", "pending-agent-queue", "secret-input", "input-ready", "conversation-watch", "ping"], connection: this.connection });
+      this.push({ type: "snapshot", snapshot: readSnapshot(local)!, features: ["submit", "pending-input", "pending-hold", "agent-queue", "pending-agent-queue", "secret-input", "input-ready", "conversation-watch", "ping", "terminal-insert"], connection: this.connection });
     }, 20);
     this.timers.add(opening);
   }
@@ -1828,6 +1967,24 @@ class DemoSocket extends EventTarget {
       case "secret":
         if (message.id !== undefined && message.pane_id) this.push({ type: "secret-result", id: message.id, pane_id: message.pane_id, ok: false, code: "prompt_changed" });
         break;
+      // the input line typed without Enter: the pretend shell takes it at its prompt and runs nothing
+      // until an Enter is typed; refused as the server refuses, and answered only once it holds the text
+      case "insert": {
+        if (!Number.isSafeInteger(message.id) || typeof message.pane_id !== "string" || !message.pane_id) {
+          this.push({ type: "error", code: "invalid_insert", message: "id must be an integer and pane_id a string" });
+          break;
+        }
+        const answer = (ok: boolean, code?: string, text?: string) => this.push({ type: "insert-result", id: message.id!, pane_id: message.pane_id!, ok, ...(code ? { code, message: text } : {}) });
+        const problem = insertTextProblem(message.text);
+        if (problem) { answer(false, problem.code, problem.message); break; }
+        if (this.mode === "observe") { answer(false, "read_only", "this connection is in observe mode"); break; }
+        if (!this.attached.has(message.pane_id)) { answer(false, "not_attached", "This connection has no terminal attached for the pane; nothing was typed"); break; }
+        const target = paneOf(message.pane_id);
+        if (!target || target.agent || chats.has(message.pane_id)) { answer(false, "input_not_ready", "The demo agent's terminal takes no inserted text; nothing was typed"); break; }
+        this.typed(message.pane_id, message.text!);
+        answer(true);
+        break;
+      }
       case "submit":
         if (!Number.isSafeInteger(message.id) || !message.pane_id || typeof message.text !== "string" || typeof message.payload !== "string") {
           this.push({ type: "error", code: "invalid_submit", message: "id, pane_id, text and payload are required." });
@@ -1841,14 +1998,21 @@ class DemoSocket extends EventTarget {
           const queued = message.delivery === "queue" || message.delivery === "hold";
           const native = message.delivery === "agent-queue";
           for (const [key, receipt] of heldCopyResends) if (Date.now() - receipt.at >= 60_000) heldCopyResends.delete(key);
+          const text = message.text.replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n");
+          // an immediate submit's framing, as the bridge checks it (server/core/composer.ts submitFraming):
+          // before a held-copy receipt is replayed or reserved, so a refusal never claims its resend id
+          const body = text.replace(/\n/g, "\r");
+          const framingLimit = message.typed === true ? 32_768 : 20_000;
+          const badFraming = !queued && !native && (text.length > framingLimit || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(text)
+            || (message.payload !== body && message.payload !== `\u001b[200~${body}\u001b[201~`));
           const resendKey = message.resend_id === undefined ? null : JSON.stringify([message.pane_id, message.resend_id, message.resend_generation ?? 0]);
-          const previous = resendKey === null ? undefined : heldCopyResends.get(resendKey);
+          const previous = resendKey === null || badFraming ? undefined : heldCopyResends.get(resendKey);
           if (previous && this.mode !== "observe" && message.clear_draft === undefined) {
-            this.push(previous.text === message.text ? { ...previous.reply, id: message.id }
+            // the bridge keys a resend on its normalized text, so a CRLF copy of the same message replays
+            this.push(previous.text === text ? { ...previous.reply, id: message.id }
               : { type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code: "invalid_submit_id", message: "This resend id already belongs to another message." });
             break;
           }
-          const text = queued ? message.text.replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n") : message.text;
           let code: string | null = null;
           if ((message.delivery !== undefined && message.delivery !== "immediate" && !queued && !native) || ((queued || native) && message.typed !== undefined && message.typed !== false)) code = "invalid_delivery";
           else if (message.clear_draft !== undefined && (typeof message.clear_draft !== "string" || !message.clear_draft
@@ -1862,11 +2026,14 @@ class DemoSocket extends EventTarget {
           else if (message.resend_generation !== undefined && (typeof message.resend_generation !== "number" || !Number.isSafeInteger(message.resend_generation) || message.resend_generation < 0 || message.resend_id === undefined)) code = "invalid_delivery";
           else if (resendKey !== null && heldCopyResends.size >= 256) code = "pending_limit";
           else if ((queued || native) && (text.trim().length === 0 || text.length > 20_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(text))) code = "invalid_submit_text";
+          else if (badFraming) code = "invalid_submit_text";
           else if (native && (paneOf(message.pane_id)?.agent ?? paneOf(message.pane_id)?.agent_session?.agent) !== "omo") code = "agent_queue_unsupported";
           else if (queued || native) code = this.pendingTargetError(message.pane_id);
           if (code) {
-            const reply: Extract<ServerMessage, { type: "submit-result" }> = { type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code, message: "The demo agent cannot take this submission." };
-            if (resendKey !== null && this.mode !== "observe" && code !== "pending_limit" && !previous) heldCopyResends.set(resendKey, { text: message.text, reply, at: Date.now() });
+            const framingRefused = badFraming && code === "invalid_submit_text";
+            const reply: Extract<ServerMessage, { type: "submit-result" }> = { type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code,
+              message: framingRefused ? `A message must be at most ${framingLimit} characters, without terminal control characters or paste markers, and sent as the composer shapes it; nothing was typed` : "The demo agent cannot take this submission." };
+            if (resendKey !== null && this.mode !== "observe" && code !== "pending_limit" && !framingRefused && !previous) heldCopyResends.set(resendKey, { text, reply, at: Date.now() });
             this.completeRequest(reply);
             break;
           }
@@ -1880,7 +2047,7 @@ class DemoSocket extends EventTarget {
           } else {
             submitToChat(message.pane_id, text);
             const reply: Extract<ServerMessage, { type: "submit-result" }> = { type: "submit-result", id: message.id, pane_id: message.pane_id, ok: true };
-            if (resendKey !== null) heldCopyResends.set(resendKey, { text: message.text, reply, at: Date.now() });
+            if (resendKey !== null) heldCopyResends.set(resendKey, { text, reply, at: Date.now() });
             this.completeRequest(reply);
           }
         }
@@ -2199,7 +2366,8 @@ setTimeout(() => {
   const turn = chat?.turns.filter((turn) => turn.role === "assistant" && !turn.end_ts).at(-1);
   if (!chat || !turn || turn.role !== "assistant") return;
   turn.parts.push(
-    { kind: "tool", name: "Bash", summary: "bun test metrics", input: JSON.stringify({ command: "bun test metrics" }, null, 2), output: " 6 pass\n 0 fail\nRan 6 tests across 1 file. [201ms]" },
+    // Claude: its own call id, and `ok` from the unflagged tool_result that answered it
+    { kind: "tool", name: "Bash", summary: "bun test metrics", input: JSON.stringify({ command: "bun test metrics" }, null, 2), output: " 6 pass\n 0 fail\nRan 6 tests across 1 file. [201ms]", call_id: "toolu_demo_api_metrics_test", state: "ok" },
     { kind: "text", phase: "final_answer", text: "Added `payments_idempotent_replays_total`, incremented where a stored response is replayed, and exposed with the other counters on `/metrics`. 6 tests pass." },
   );
   turn.end_ts = now();

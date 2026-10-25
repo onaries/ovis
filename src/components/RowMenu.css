@@ -50,6 +50,26 @@
   color: currentColor;
 }
 
+/* a shared switch a watching device sees but cannot flip (an agent's Mute alerts): its words and
+   mark in the dim text colour, not faded, so they keep AA contrast in both themes; its state still
+   drawn, and a press or a hover changes nothing */
+.row-menu .menu-item.is-disabled,
+.row-sheet-item.is-disabled,
+.row-menu .menu-item.is-disabled svg,
+.row-sheet-item.is-disabled svg {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+@media (hover: hover) {
+  .row-menu .menu-item.is-disabled:hover {
+    background: transparent;
+    color: var(--text-dim);
+  }
+}
+
+.row-sheet-item.is-disabled:active { background: transparent; }
+
 /* a picker's item that is what is open now: named in the strong colour, with its mark unfaded */
 .row-menu .menu-item[aria-current="true"],
 .row-sheet-item[aria-current="true"] {

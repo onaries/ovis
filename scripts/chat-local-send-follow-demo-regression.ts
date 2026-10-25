@@ -183,7 +183,7 @@ try {
         const message = JSON.parse(event.data);
         if (message.type === "submit-result" && message.id === 9001) { other.close(); resolve(); }
       });
-      other.addEventListener("open", () => other.send(JSON.stringify({ type: "submit", id: 9001, pane_id: target, text, payload: text + "\\r" })));
+      other.addEventListener("open", () => other.send(JSON.stringify({ type: "submit", id: 9001, pane_id: target, text, payload: text })));
     });
     window.fetch = (input, init) => {
       const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
@@ -292,6 +292,50 @@ try {
           record("navigation before receipt cancels follow", { chosen: chosen.anchor, after: after.anchor, gap: after.gap });
         } finally { await releaseAll(); }
         await idle(page);
+
+        // 2b. a scrollbar thumb held past the input window, then dragged up before the receipt, cancels follow:
+        // a small drag (inside the layout allowance) and a large one (past it), with the drag's scroll
+        // delivered before the thumb is let go and after it
+        for (const [distance, scrollFirst] of [[30, true], [30, false], [200, true], [200, false]] as const) {
+          const label = `held thumb dragged ${distance}px, scroll ${scrollFirst ? "before" : "after"} release, cancels follow`;
+          try {
+            step = label;
+            // back at the end and following before the send, as the previous step left the reader away
+            await page.locator(".chat-new-messages").click();
+            await latestShows(page, REPLY);
+            await settled(page);
+            await lab(page, (l) => { l.holdReceipts = true; l.holdReads = true; });
+            await send(`Local follow: thumb ${distance} ${scrollFirst ? "scrolled" : "released"} first`);
+            await until(page, "lab.held.length === 1");
+            await page.locator(".chat-view").evaluate(async (node, [by, scrolledFirst]) => {
+              if (!(node instanceof HTMLElement)) throw new Error("Missing chat scroller");
+              node.dispatchEvent(new Event("scroll"));
+              // a press on the scrollbar: the scroller itself, right of its content box
+              const bar = node.getBoundingClientRect();
+              const pressed = { clientX: bar.left + node.clientWidth, clientY: bar.bottom - 20 };
+              node.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, buttons: 1, ...pressed }));
+              const letGo = () => node.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: pressed.clientX, clientY: pressed.clientY - by }));
+              // the thumb rests past the 500 ms input window before it is dragged: no pointermove comes
+              const now = performance.now.bind(performance);
+              Object.defineProperty(performance, "now", { configurable: true, value: () => now() + 600 });
+              node.scrollTop -= by;
+              if (scrolledFirst) { node.dispatchEvent(new Event("scroll")); letGo(); } else { letGo(); node.dispatchEvent(new Event("scroll")); }
+              Reflect.deleteProperty(performance, "now");
+              await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            }, [distance, scrollFirst] as const);
+            await frames(page);
+            const chosen = await geometry(page);
+            assert.ok(chosen.gap > 1, `${label}: the drag left the end (gap ${chosen.gap})`);
+            await lab(page, (l) => { l.holdReceipts = false; return l.releaseReceipts(); });
+            await lab(page, (l) => l.releaseReads());
+            await committed(page, chosen.scrollHeight);
+            await frames(page);
+            const after = await geometry(page);
+            assert.ok(after.gap >= chosen.gap - 2, `${label}: the receipt does not take the reader back to the end (gap ${chosen.gap} -> ${after.gap})`);
+            record(label, { chosen: chosen.gap, after: after.gap });
+          } finally { await releaseAll(); }
+          await idle(page);
+        }
 
         // 3. navigation before transcript publication cancels follow
         try {

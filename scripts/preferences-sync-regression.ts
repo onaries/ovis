@@ -166,7 +166,8 @@ try {
     console.log("QA empty server clients opened");
     await windows([a, b]);
     assert.deepEqual([...a.puts, ...b.puts], []);
-    assert.deepEqual(await held(), { revision: 0, settings: {} });
+    // a server that keeps the mute list always says it, empty while nothing is muted
+    assert.deepEqual(await held(), { revision: 0, settings: {}, muted_panes: [] });
 
     await a.page.goto(`${origin}/?settings=appearance`);
     const bLight = settingsHold(b.page, { theme: "light" });

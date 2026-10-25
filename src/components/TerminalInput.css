@@ -6,12 +6,11 @@
 .terminal-input-slot {
   position: relative;
   flex-shrink: 0;
-  /* .terminal-input at one row: its top border, its padding above and below, then the taller of
-     the send button and a one-row .terminal-input-text (same font size, line height, padding and
-     border). The same height as before the padding was split: the grid, and so the pty, keep their
-     size */
-  height: calc(var(--hairline) + 2 * var(--space-1) + max(var(--touch-target),
-    max(16px, var(--fs-md)) * var(--lh-base) + 2 * var(--space-2) + 2 * var(--hairline)));
+  /* .terminal-input at one row: its top border, its padding above and below, the field's label and
+     the gap under it, then the taller of the round targets and a one-row .terminal-input-text (same
+     font size, line height, padding and border); the actions' words sit beside the label */
+  height: calc(var(--hairline) + 2 * var(--space-1) + var(--fs-chat) * var(--lh-tight) + var(--space-2)
+    + max(var(--touch-target), max(var(--fs-input), var(--fs-xl)) * var(--lh-base) + 2 * var(--space-2) + 2 * var(--hairline)));
 }
 
 /* the masked input stands in on a pane that types straight into the grid: no row is kept */
@@ -26,9 +25,11 @@
 }
 
 /* the terminal's input line on touch screens (TerminalInput.tsx): one row that grows to four,
-   with a send button that reads Enter while the line is empty. It hangs from the slot's bottom
-   edge, so it grows upward; the dictation pill floats above it. It reaches the grid's top at
-   most (--terminal-input-room, measured by PaneTerminal.tsx): past that the text scrolls */
+   under its visible label, with an insert button (the text to the prompt, no Enter) and a send
+   button that reads Enter while the line is empty, each named in words above its round target.
+   It hangs from the slot's bottom edge, so it grows upward; the dictation pill floats above it.
+   It reaches the grid's top at most (--terminal-input-room, measured by PaneTerminal.tsx): past
+   that the text scrolls */
 .terminal-input {
   position: absolute;
   right: 0;
@@ -37,7 +38,7 @@
   z-index: var(--z-banner); /* over xterm's layers, like the banners */
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   max-height: var(--terminal-input-room);
   gap: var(--space-2);
   align-items: end;
@@ -52,6 +53,20 @@
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
+/* the field's name, above it on the left; the actions' words stand level with it on the right */
+.terminal-input-label {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: end;
+  color: var(--text-dim);
+  font-size: var(--fs-chat);
+  line-height: var(--lh-tight);
+}
+
+.terminal-input-mic {
+  grid-row: 2;
+}
+
 /* the same round target as the send button beside it */
 .terminal-input-mic .voice-mic {
   width: var(--touch-target);
@@ -64,6 +79,8 @@
 }
 
 .terminal-input-text {
+  grid-column: 1;
+  grid-row: 2;
   min-height: var(--touch-target);
   max-height: 100%; /* of its row, which the line's cap above shortens */
   padding: var(--space-2) var(--space-3);
@@ -72,7 +89,8 @@
   background: var(--bg-elevated);
   color: var(--text);
   font: inherit;
-  font-size: max(16px, var(--fs-md)); /* below 16px iOS zooms the page on focus */
+  /* body text a phone reads at arm's length; never below 16px, where iOS zooms the page on focus */
+  font-size: max(var(--fs-input), var(--fs-xl));
   line-height: var(--lh-base);
   resize: none;
 }
@@ -82,25 +100,92 @@
   border-color: var(--accent);
 }
 
-.terminal-input-send {
+/* the two actions, the last grid column from the label's row down: Insert first, Send last at
+   the edge, as the composer's. Each is its words over its round target, one button */
+.terminal-input-actions {
+  display: inline-flex;
+  grid-column: -2;
+  grid-row: 1 / span 2;
+  align-self: end;
+  gap: var(--space-2);
+}
+
+.terminal-input-action {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  /* the label's own gap to the field: the words stand level with the label */
+  gap: var(--space-2);
+  min-width: var(--touch-target);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.terminal-input-caption {
+  font-size: var(--fs-chat);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+}
+
+.terminal-input-face {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: var(--touch-target);
   height: var(--touch-target);
-  border: 0;
+  border: var(--hairline) solid transparent;
   border-radius: var(--radius-pill);
-  background: var(--accent);
-  color: var(--bg);
-  cursor: pointer;
 }
 
-.terminal-input-send:disabled {
-  opacity: 0.5;
+.terminal-input-send .terminal-input-face {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+/* Insert is the quieter of the two: an outline on the elevated surface, so Send alone is the
+   filled one. The outline is the dim text colour, which holds 3:1 against the panel in every
+   theme (the hairline border colour does not); the pressed state is the key bar's */
+.terminal-input-insert .terminal-input-face {
+  border-color: var(--text-dim);
+  background: var(--bg-elevated);
+  color: var(--text);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .terminal-input-insert:hover:not(:disabled) .terminal-input-face {
+    background: var(--bg-hover);
+  }
+}
+
+.terminal-input-insert:active:not(:disabled) .terminal-input-face {
+  border-color: var(--accent);
+  color: var(--text-strong);
+}
+
+/* off (an empty line, a send on its way, offline): the face turns to a dashed outline and the words
+   and glyph to the dim text colour, a shape and a colour that both still read at 3:1 or more,
+   rather than a fade */
+.terminal-input-action:disabled {
+  color: var(--text-dim);
   cursor: default;
 }
 
-.terminal-input-send svg {
+.terminal-input-action:disabled .terminal-input-face {
+  border-style: dashed;
+  border-color: var(--text-dim);
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.terminal-input-face svg {
   width: var(--icon-size);
   height: var(--icon-size);
 }
@@ -109,5 +194,11 @@
   grid-column: 1 / -1;
   margin: 0;
   color: var(--danger-text);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-chat);
+  line-height: var(--lh-tight);
+}
+
+/* a paste still reading the clipboard: said, not warned */
+.terminal-input-note.is-pending {
+  color: var(--text-dim);
 }

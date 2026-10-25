@@ -35,6 +35,8 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
       localStorage.setItem(`ovis:view:${pane}`, "terminal");
     }, { pane, platform });
     const sent: Array<{ pane_id: string; text: string }> = [];
+    // key frames (a key-bar chord), with how many input frames came before each
+    const keyed: Array<{ pane_id: string; keys: string[]; after: number }> = [];
     const signals = new EventEmitter();
     const signal = (name: string) => once(signals, name, { signal: AbortSignal.timeout(10_000) });
     // output for the page as if the pane wrote it: input here never reaches the pane to echo
@@ -50,6 +52,7 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
       socket.onMessage((raw) => {
         const frame = JSON.parse(String(raw));
         if (frame.type === "input") { sent.push(frame); signals.emit(`input:${frame.text}`); }
+        else if (frame.type === "keys") { keyed.push({ pane_id: frame.pane_id, keys: frame.keys, after: sent.length }); signals.emit("keys"); }
         else server.send(raw);
       });
     });
@@ -61,7 +64,48 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
       await input.focus();
       assert.equal(await input.inputValue(), " ", "touch devices keep the Backspace repeat space");
       sent.length = 0;
+      keyed.length = 0;
     };
+    // the pane and the exact bytes a named assertion saw, JSON-escaped
+    const report = (label: string, owner = pane) => console.log(`  ok ${platform}: ${label}: pane ${owner} bytes ${JSON.stringify(sent.map((frame) => frame.text).join(""))}${keyed.length ? ` keys ${JSON.stringify(keyed)}` : ""}`);
+    // iOS dictation replaces its hypothesis in place: insertReplacementText over the previous one,
+    // no key and no composition events.
+    const dictate = (hypotheses: string[]) => input.evaluate(async (element, hypotheses) => {
+      const box = element as HTMLTextAreaElement;
+      const from = box.value.length;
+      for (const data of hypotheses) {
+        box.setSelectionRange(from, box.value.length);
+        box.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, inputType: "insertReplacementText", data, isComposing: false }));
+        box.setRangeText(data, from, box.value.length, "end");
+        box.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertReplacementText", data, isComposing: false }));
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+      return box.value.slice(from);
+    }, hypotheses);
+    // SwiftKey (#3746 in Agent of Empires): letters as plain edits, then a composition that wraps the
+    // word before the caret again and commits it, or a longer one.
+    const typeText = (text: string) => input.evaluate(async (element, text) => {
+      const box = element as HTMLTextAreaElement;
+      for (const data of text) {
+        box.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, inputType: "insertText", data, isComposing: false }));
+        box.setRangeText(data, box.value.length, box.value.length, "end");
+        box.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data, isComposing: false }));
+      }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }, text);
+    const composeWord = (data: string) => input.evaluate(async (element, data) => {
+      const box = element as HTMLTextAreaElement;
+      const from = box.value.length - (/\S*$/.exec(box.value)?.[0].length ?? 0);
+      box.setSelectionRange(from, box.value.length);
+      box.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+      box.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, inputType: "insertCompositionText", data, isComposing: true }));
+      box.setRangeText(data, from, box.value.length, "end");
+      box.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data }));
+      box.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertCompositionText", data, isComposing: true }));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      box.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data }));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }, data);
     // One key of the recorded order: keydown (jamo, real keyCode), keypress, then the editor's
     // edits. A cancelled keydown means a browser makes no edit, which is the failure this guards.
     const KEYCODES: Record<string, number> = { "ㅎ": 71, "ㅏ": 75, "ㄴ": 83, "ㄱ": 82, "ㅡ": 77, "ㄹ": 70, "ㅇ": 68, "ㅁ": 65 };
@@ -96,7 +140,7 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
     const check = async (expected: string, label: string) => {
       const received = signal("input:\x07");
       await input.press("Control+g");
-      await received;
+      await received.catch((error) => { throw new Error(`no sentinel for "${label}" (platform ${platform}): input ${JSON.stringify(sent)} keys ${JSON.stringify(keyed)}`, { cause: error }); });
       assert.equal(sent.map((frame) => frame.text).join(""), expected + "\x07", `${label} (platform ${platform})`);
       assert(sent.every((frame) => frame.pane_id === pane), "input stays with its pane");
     };
@@ -213,6 +257,61 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
         await page.setViewportSize({ width: 1100, height: 700 });
       }
 
+      // Dictation: the hypotheses stay in the field, and the corrected phrase is sent once.
+      const hypotheses = ["thi", "this", "this is", "this is a test", "This is a test."];
+      await reset();
+      assert.equal(await dictate(hypotheses), "This is a test.", "the field ends on the corrected phrase");
+      await check("This is a test.", "dictation replacement commits one corrected phrase");
+      report("dictation replacement commits one corrected phrase");
+
+      for (const [label, run, expected] of [
+        ["test, test again, space", async () => { await typeText("test"); await composeWord("test"); await typeText(" "); }, "test "],
+        ["tes extended to test", async () => { await typeText("tes"); await composeWord("test"); }, "test"],
+        ["tes, test twice, space", async () => { await typeText("tes"); await composeWord("test"); await composeWord("test"); await typeText(" "); }, "test "],
+      ] as const) {
+        await reset(); await run();
+        await check(expected, `SwiftKey repeats a word without duplication: ${label}`);
+        report(`SwiftKey repeats a word without duplication: ${label}`);
+      }
+
+      // The key bar's Ctrl stays held until tapped again, and turns a typed letter or a key-bar key
+      // into a chord. A syllable still being typed is text: it goes first, never as the chord, and the
+      // next syllable starts clean (no c, no DEL).
+      const ctrl = page.locator('.key-bar .key[data-key="Control"]');
+      await reset(); await fresh("ㅎ"); await replace("ㅏ", "하");
+      await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.key-bar .key[data-key="Control"]')?.disabled === false);
+      await ctrl.evaluate((node: HTMLElement) => node.click());
+      let chord = signal("keys");
+      await input.press("c");
+      await chord.catch((error) => { throw new Error(`no key frame for the held Ctrl and c (platform ${platform}): input ${JSON.stringify(sent)}`, { cause: error }); });
+      await ctrl.evaluate((node: HTMLElement) => node.click());
+      await fresh("ㄱ"); await replace("ㅡ", "그");
+      await ctrl.evaluate((node: HTMLElement) => node.click());
+      chord = signal("keys");
+      await page.locator('.key-bar .key[data-key="Escape"]').evaluate((node: HTMLElement) => node.click());
+      await chord.catch((error) => { throw new Error(`no key frame for the held Ctrl and the key bar's Esc (platform ${platform}): input ${JSON.stringify(sent)}`, { cause: error }); });
+      await ctrl.evaluate((node: HTMLElement) => node.click());
+      await fresh("ㅎ");
+      await check("하그ㅎ", "refused context cannot seed the next accepted rewrite: a held Ctrl chord");
+      assert.deepEqual(keyed, [{ pane_id: pane, keys: ["ctrl+c"], after: 1 }, { pane_id: pane, keys: ["ctrl+esc"], after: 2 }],
+        `each chord follows its syllable, as one key frame: ${JSON.stringify(keyed)}`);
+      report("refused context cannot seed the next accepted rewrite: held Ctrl chord");
+
+      // A pane switch during a pending dictation phrase: neither pane receives it.
+      await reset(); await dictate(hypotheses.slice(0, 3));
+      const away = signal("ready");
+      await page.locator(`.pane-select[title^="${otherPane} —"]`).first().evaluate((node: HTMLElement) => node.click());
+      await page.waitForFunction((pane) => JSON.parse(localStorage.getItem("ovis:selection") ?? "null")?.pane_id === pane, otherPane);
+      await away;
+      const ended = signal("input:\x07");
+      await input.focus();
+      await input.press("x");
+      await input.press("Control+g");
+      await ended;
+      assert.equal(sent.map((frame) => frame.text).join(""), "x\x07", "refused context cannot seed the next accepted rewrite: a pane switch mid-dictation");
+      assert(sent.every((frame) => frame.pane_id === otherPane), `input goes to the pane switched to: ${JSON.stringify(sent)}`);
+      report("refused context cannot seed the next accepted rewrite: pane switched mid-dictation", otherPane);
+
       await reset(); await fresh("ㅎ"); await replace("ㅏ", "하");
       const switched = signal("ready");
       await page.locator(`.pane-select[title^="${otherPane} —"]`).first().evaluate((node: HTMLElement) => node.click());
@@ -230,7 +329,7 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
     }
   }
   } finally { await context.close(); await iphone.close(); }
-  console.log("PASS iPad hardware-keyboard and iPhone keyboard replay: jamo keys composed in the editor, pending syllable at its row's size, commit keys, two-syllable replacement, blur and pane reset");
+  console.log("PASS iPad hardware-keyboard and iPhone keyboard replay: jamo keys composed in the editor, pending syllable at its row's size, commit keys, two-syllable replacement, blur, pane reset, dictation, SwiftKey and refused contexts");
 }
 
 if (import.meta.main) {

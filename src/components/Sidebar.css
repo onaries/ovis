@@ -76,6 +76,129 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   color: var(--text);
 }
 
+/* The filter over both lists (MachineSidebar.tsx): its word, then one field the height of a row, in the rows'
+   gutter, and its clear inside the field's trailing cell. It never grows: a long query scrolls inside the field. */
+.sidebar-filter {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--side-gutter) 0;
+}
+
+/* the field's label stays in view whatever is typed: the section head's words (Agents) */
+.sidebar-filter-label {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--fs-input);
+  line-height: var(--lh-tight);
+}
+
+/* the size of the field's own text beside it, as .input steps down on a wide screen */
+@media (min-width: 641px) {
+  .sidebar-filter-label { font-size: var(--fs-md); }
+}
+
+.sidebar-filter-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--side-row);
+  padding-right: var(--side-row);
+  text-overflow: ellipsis;
+}
+
+/* the clear is the field's own, drawn once below; the browser's cancel glyph would make two */
+.sidebar-filter-input::-webkit-search-cancel-button,
+.sidebar-filter-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+
+.sidebar-filter-clear {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--side-gutter);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--side-row);
+  height: var(--side-row);
+  padding: 0;
+  background: transparent;
+  border: var(--hairline) solid transparent;
+  border-radius: var(--radius-md);
+  background-clip: padding-box;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.sidebar-filter-clear svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+/* a pointer's hover and press, as the app's icon buttons draw them (styles.css .icon-button) */
+@media (hover: hover) {
+  .sidebar-filter-clear:hover { background: var(--bg-hover); color: var(--text); }
+}
+
+.sidebar-filter-clear:active {
+  background: var(--bg-elevated);
+  border-color: var(--accent);
+  color: var(--text-strong);
+}
+
+.sidebar-filter-clear:focus-visible {
+  outline: var(--ring);
+  outline-offset: calc(var(--ring-offset) * -1);
+}
+
+/* a row the filter keeps for the selection, or as the head of a match, not as a match: its words dim,
+   and the selected one says why it is there (.sidebar-filter-note), so colour never carries it alone. An
+   offline PC's rows are already faded (Machines.css .machine-offline): they are not dimmed twice */
+.machine-group:not(.is-offline) .is-filter-context > .workspace-header .workspace-name,
+.machine-group:not(.is-offline) .is-filter-context > .workspace-header .workspace-place,
+.machine-group:not(.is-offline) .is-filter-context > .workspace-header .worktree-workspace-label,
+.machine-group:not(.is-offline) .is-filter-context > .workspace-header .sidebar-mark,
+.machine-group:not(.is-offline) .is-filter-context > .workspace-header .sidebar-mark .agent-mark,
+.agent-item.is-filter-context:not(.is-offline) .agent-title,
+.agent-item.is-filter-context:not(.is-offline) .agent-context,
+.agent-item.is-filter-context:not(.is-offline) .sidebar-mark,
+.agent-item.is-filter-context:not(.is-offline) .sidebar-mark .agent-mark,
+.machine-group.is-filter-context > .machine-header .machine-name {
+  color: var(--text-dim);
+}
+
+/* beside the note a one-line row's secondary words would be cut to an ellipsis: they step aside for it */
+.workspace-group.is-filter-context.is-selected > .workspace-header .worktree-workspace-label,
+.agents-sidebar.is-one-line .agent-item.is-filter-context.is-selected .agent-context {
+  display: none;
+}
+
+/* the no-match line: what happened, then what to do, each sentence on its own line */
+.sidebar-filter-empty {
+  white-space: pre-line;
+}
+
+.sidebar-filter-note {
+  flex: none;
+  padding: 0 var(--space-1);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  line-height: calc(var(--fs-md) + var(--space-1));
+  white-space: nowrap;
+}
+
+/* in an agent row it opens the row's trailing badges, apart from the title as they are */
+.agent-row-status > .sidebar-filter-note {
+  margin-left: var(--space-2);
+}
+
 /* also the connecting shell's one line, which sits outside the grid */
 .tree-state {
   margin: 0;

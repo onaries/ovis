@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,43 @@ const action = Bun.YAML.parse(readFileSync(join(root, ".github/actions/setup-ci/
   inputs: Record<string, { default: string }>;
   runs: { steps: Array<{ name?: string; uses?: string; if?: string; with?: Record<string, string>; env?: Record<string, string> }> };
 };
+
+type Step = { name?: string; uses?: string; run?: string; with?: Record<string, unknown> };
+type Workflow = { jobs?: Record<string, { uses?: string; steps?: Step[] }>; runs?: { steps: Step[] } };
+
+const FULL_SHA = /^[0-9a-f]{40}$/;
+const actionName = (uses: string) => uses.slice(0, uses.lastIndexOf("@"));
+const actionFiles = [
+  ...readdirSync(join(root, ".github/workflows")).filter((name) => name.endsWith(".yml")).map((name) => `.github/workflows/${name}`),
+  ".github/actions/setup-ci/action.yml",
+];
+
+/** What is wrong with the action references of one workflow or composite action, step by step. */
+function auditActions(file: string, text: string) {
+  const doc = Bun.YAML.parse(text) as Workflow;
+  const problems: string[] = [];
+  const steps: Array<[string, Step]> = [];
+  for (const [id, job] of Object.entries(doc.jobs ?? {})) {
+    if (job.uses && !job.uses.startsWith("./")) problems.push(`${file} jobs.${id}: reusable workflow ${job.uses} is not local`);
+    (job.steps ?? []).forEach((step, index) => steps.push([`jobs.${id}.steps[${index}]`, step]));
+  }
+  (doc.runs?.steps ?? []).forEach((step, index) => steps.push([`runs.steps[${index}]`, step]));
+  for (const [where, step] of steps) {
+    if (!step.uses || step.uses.startsWith("./")) continue;
+    const at = `${file} ${where}${step.name ? ` (${step.name})` : ""}`;
+    if (!FULL_SHA.test(step.uses.slice(step.uses.lastIndexOf("@") + 1))) problems.push(`${at}: ${step.uses} is not pinned to a full commit SHA`);
+    if (actionName(step.uses) === "actions/checkout" && step.with?.["persist-credentials"] !== false) {
+      problems.push(`${at}: checkout persists its Git credential`);
+    }
+  }
+  // YAML parsing drops comments: the version Dependabot and readers go by is only in the text
+  for (const [index, line] of text.split("\n").entries()) {
+    const [, uses, comment] = line.match(/^\s*(?:- )?uses:\s*([^\s#]+)\s*(#.*)?$/) ?? [];
+    if (!uses || uses.startsWith("./") || !FULL_SHA.test(uses.slice(uses.lastIndexOf("@") + 1))) continue;
+    if (!/^# v\d+\.\d+\.\d+$/.test(comment?.trim() ?? "")) problems.push(`${file}:${index + 1}: ${uses} has no "# vX.Y.Z" version comment`);
+  }
+  return problems;
+}
 
 function prepared(overrides: Record<string, string> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ci-preinstalled-"));
@@ -87,7 +124,7 @@ describe("CI cache contract", () => {
     expect(action.inputs.cache!.default).toBe("save");
     expect(save.if).toContain("inputs.cache != 'restore'");
     expect(restore.if).toContain("inputs.cache == 'restore'");
-    expect(restore.uses).toBe("actions/cache/restore@v4");
+    expect(actionName(restore.uses!)).toBe("actions/cache/restore");
     expect(restore.with).toEqual(save.with);
     const canary = Bun.YAML.parse(readFileSync(join(root, ".github/workflows/omp-question-compat.yml"), "utf8")) as {
       jobs: Record<string, { steps: Array<{ uses?: string; with?: Record<string, string> }> }>;
@@ -110,8 +147,8 @@ describe("CI cache contract", () => {
     for (const name of ["Cache Bun dependencies", "Restore Bun dependencies (read-only)"]) {
       expect(action.runs.steps.find((step) => step.name === name)!.if).toStartWith("runner.environment != 'self-hosted' && ");
     }
-    for (const uses of ["oven-sh/setup-bun@v2", "actions/setup-node@v7"]) {
-      expect(action.runs.steps.find((step) => step.uses === uses)!.if).toContain("runner.environment != 'self-hosted'");
+    for (const name of ["oven-sh/setup-bun", "actions/setup-node"]) {
+      expect(action.runs.steps.find((step) => step.uses && actionName(step.uses) === name)!.if).toContain("runner.environment != 'self-hosted'");
     }
     expect(action.runs.steps.find((step) => step.name === "Install checksum-pinned herdr 0.9.3")!.if)
       .toContain("runner.environment != 'self-hosted'");
@@ -144,5 +181,54 @@ describe("CI cache contract", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("action pins and checkout credentials", () => {
+  it("pins every external action to a full commit SHA and keeps local actions and workflows relative", () => {
+    const names = new Set<string>();
+    for (const file of actionFiles) {
+      const text = readFileSync(join(root, file), "utf8");
+      expect(auditActions(file, text)).toEqual([]);
+      for (const [, uses] of text.matchAll(/uses:\s*([^\s#]+)/g)) if (!uses!.startsWith("./")) names.add(actionName(uses!));
+    }
+    expect([...names].sort()).toEqual([
+      "actions/cache", "actions/cache/restore", "actions/checkout", "actions/deploy-pages", "actions/download-artifact",
+      "actions/setup-node", "actions/upload-artifact", "actions/upload-pages-artifact", "oven-sh/setup-bun",
+    ]);
+    const dependabot = Bun.YAML.parse(readFileSync(join(root, ".github/dependabot.yml"), "utf8")) as {
+      updates: Array<{ "package-ecosystem": string; directories: string[] }>;
+    };
+    const actions = dependabot.updates.find((update) => update["package-ecosystem"] === "github-actions")!;
+    expect(actions.directories).toEqual(["/", "/.github/actions/setup-ci"]);
+  });
+
+  it("names the step of a floating action, a missing version comment and a persisted checkout credential", () => {
+    const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+    const fixture = `jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Cache
+        uses: actions/cache@v4
+      - uses: actions/checkout@${sha} # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/cache/restore@${sha}
+      - uses: ./.github/actions/setup-ci
+  call:
+    uses: someone/repo/.github/workflows/ci.yml@main
+`;
+    expect(auditActions("fixture.yml", fixture)).toEqual([
+      "fixture.yml jobs.call: reusable workflow someone/repo/.github/workflows/ci.yml@main is not local",
+      "fixture.yml jobs.build.steps[0]: actions/checkout@v7 is not pinned to a full commit SHA",
+      "fixture.yml jobs.build.steps[0]: checkout persists its Git credential",
+      "fixture.yml jobs.build.steps[1] (Set up Bun): oven-sh/setup-bun@v2 is not pinned to a full commit SHA",
+      "fixture.yml jobs.build.steps[2] (Cache): actions/cache@v4 is not pinned to a full commit SHA",
+      "fixture.yml jobs.build.steps[3]: checkout persists its Git credential",
+      `fixture.yml:12: actions/cache/restore@${sha} has no "# vX.Y.Z" version comment`,
+    ]);
   });
 });

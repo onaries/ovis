@@ -20,17 +20,33 @@ export interface SharedPreferences {
   settings: Partial<Record<SharedSettingKey, unknown>>;
   /** sidebar pin keys (`machine:pane` for an agent, `machine:workspace:id` for a workspace), in their order; absent until a browser first shares its pins */
   pins?: string[];
+  /**
+   * the panes whose alerts are off on every channel (push, in-app, chime, tab notification) in
+   * every browser, keyed as the alerts are: `paneStorageId(machineId, paneId)` (shared/machines.ts).
+   * A server that keeps the list always sends it, empty when nothing is muted; a document without
+   * it comes from an older server, and a browser then offers no mute.
+   */
+  muted_panes?: string[];
 }
 
 export const MAX_PINS = 500;
 const MAX_PIN_LENGTH = 300;
+export const MAX_MUTED_PANES = 500;
+const MAX_MUTED_PANE_LENGTH = 300;
 /** a shared value is a few words or a short list; a change and the whole document it makes stay small */
 export const MAX_PREFERENCES_BYTES = 64 * 1024;
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** What a browser sends: the settings it changed, and the pins when they changed */
-export interface PreferencesChange { settings: SharedPreferences["settings"]; pins?: string[] }
+/** What a browser sends: the settings it changed, and the pins and the muted panes when they changed (absent: unchanged; an empty list: none left) */
+export interface PreferencesChange { settings: SharedPreferences["settings"]; pins?: string[]; muted_panes?: string[] }
+
+/** A list of keys as a body or a stored file may carry it: at most `limit` nonempty strings of at most `length` characters; null when it is anything else. */
+function keyList(value: unknown, limit: number, length: number): string[] | null | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > limit || !value.every((key) => typeof key === "string" && key.length > 0 && key.length <= length)) return null;
+  return [...new Set(value as string[])];
+}
 
 /** System's legacy single palette is the dark side, independent of this browser's OS. */
 export function mirrorPalette<T>(theme: unknown, darkTheme: T, lightTheme: T): T {
@@ -62,11 +78,12 @@ export function normalizeThemeChange(stored: SharedPreferences["settings"], chan
 
 /** The settings and pins of a body or a stored file, cut to the shared names and the limits; null when the shape is wrong. */
 export function sharedPreferencesBody(raw: unknown): PreferencesChange | null {
-  if (!isObject(raw) || !isObject(raw["settings"]) || (raw["pins"] !== undefined && !Array.isArray(raw["pins"]))) return null;
-  const pins = raw["pins"] as unknown[] | undefined;
-  if (pins !== undefined && (pins.length > MAX_PINS || !pins.every((pin) => typeof pin === "string" && pin.length > 0 && pin.length <= MAX_PIN_LENGTH))) return null;
+  if (!isObject(raw) || !isObject(raw["settings"])) return null;
+  const pins = keyList(raw["pins"], MAX_PINS, MAX_PIN_LENGTH);
+  const muted = keyList(raw["muted_panes"], MAX_MUTED_PANES, MAX_MUTED_PANE_LENGTH);
+  if (pins === null || muted === null) return null;
   const given = raw["settings"];
   const settings: SharedPreferences["settings"] = {};
   for (const key of SHARED_SETTING_KEYS) if (key in given) settings[key] = given[key];
-  return pins === undefined ? { settings } : { settings, pins: [...new Set(pins as string[])] };
+  return { settings, ...(pins === undefined ? {} : { pins }), ...(muted === undefined ? {} : { muted_panes: muted }) };
 }

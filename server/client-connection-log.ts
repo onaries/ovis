@@ -5,6 +5,8 @@ const KINDS: readonly ClientConnectionEventKind[] = ["connect", "open", "connect
 const MAX_BYTES = 8192;
 // Report bodies read at once, server-wide: 16 x 8 KiB at most, whatever peer keys callers rotate.
 const MAX_READING = 16;
+// A body still arriving after this long gives up its read slot, however steadily it trickles in.
+const READ_DEADLINE_MS = 10_000;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
 
@@ -43,7 +45,7 @@ export class ClientConnectionLog {
   private peers = new Map<string, { at: number; count: number }>();
   private global = { at: 0, count: 0 };
   private reading = 0;
-  constructor(private write: (line: string) => void = (line) => console.warn(line), private now: () => number = Date.now) {}
+  constructor(private write: (line: string) => void = (line) => console.warn(line), private now: () => number = Date.now, private readDeadlineMs = READ_DEADLINE_MS) {}
 
   async handle(request: Request, peer: string): Promise<Response> {
     if (request.method !== "POST") return jsonResponse({ error: { code: "method_not_allowed", message: "use POST" } }, 405, { allow: "POST" });
@@ -72,16 +74,25 @@ export class ClientConnectionLog {
     if (!request.body) return badRequest("invalid_trace", "Connection diagnostics are required");
     const reader = request.body.getReader();
     const chunks: Uint8Array[] = []; let size = 0;
+    // One deadline for the whole body, not per chunk: the timer covers a body that stops arriving,
+    // the clock check after each chunk a body that keeps arriving slowly.
+    const deadline = this.now() + this.readDeadlineMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<"expired">((resolve) => { timer = setTimeout(() => resolve("expired"), this.readDeadlineMs); });
+    const timedOut = () => { void reader.cancel().catch(() => {}); return jsonResponse({ error: { code: "trace_timeout", message: "Connection diagnostics took too long to arrive" } }, 408); };
     try {
       for (;;) {
-        const { value, done } = await reader.read();
+        const next = await Promise.race([reader.read(), expired]);
+        if (next === "expired") return timedOut();
+        const { value, done } = next;
         if (done) break;
         size += value.byteLength;
         if (size > MAX_BYTES) { void reader.cancel().catch(() => {}); return tooLarge(); }
         chunks.push(value);
+        if (this.now() >= deadline) return timedOut();
       }
     } catch { return badRequest("invalid_trace", "Connection diagnostics could not be read"); }
-    finally { reader.releaseLock(); }
+    finally { clearTimeout(timer); reader.releaseLock(); }
     const bytes = new Uint8Array(size); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     let trace: ClientConnectionTrace | null;

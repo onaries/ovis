@@ -81,4 +81,11 @@ export const MACHINES_ZH: Record<string, string> = {
   "Settings (⌘⇧,)": "设置 (⌘⇧,)",
   "The computer this app runs on": "运行此应用的计算机",
   "Host": "主机",
+  "Filter workspaces and agents": "筛选工作区和代理",
+  "Filter": "筛选",
+  "Workspaces and agents": "工作区和代理",
+  "Clear filter": "清除筛选",
+  "No workspaces or agents match": "没有匹配的工作区或代理",
+  "No workspaces or agents match on the PCs that answered": "已响应的 PC 上没有匹配的工作区或代理",
+  "Try other words, or clear the filter.": "换个词试试，或清除筛选。",
 };

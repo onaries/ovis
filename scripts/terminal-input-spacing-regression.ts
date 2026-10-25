@@ -74,7 +74,9 @@ export async function checkTerminalInputSpacing(browser: Browser, origin: string
             return { top: own.top, bottom: own.bottom, tapTop, tapBottom, inView, landsAbove: inView && lands(tapTop + 0.5), landsBelow: inView && lands(tapBottom - 0.5) };
           });
           return {
-            line: { top: line.top + 1, bottom: line.bottom }, text: box(".terminal-input-text"), send: box(".terminal-input-send"),
+            // the field stands under its label (TerminalInput.css): the two are measured as one, as the send
+            // button is with the word above its round face
+            line: { top: line.top + 1, bottom: line.bottom }, text: { top: box(".terminal-input-label").top, bottom: box(".terminal-input-text").bottom }, send: box(".terminal-input-send"),
             bar: { top: bar.top, bottom: bar.bottom - barPadding }, keys, target, barPadding, screenBottom: window.visualViewport!.height,
           };
         });

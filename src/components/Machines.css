@@ -35,7 +35,8 @@
   --machine-indent: calc(var(--side-gutter) + var(--side-box));
 }
 
-.machine-group + .machine-group { margin-top: var(--space-4); }
+/* a PC the sidebar's filter hides stays in the list, hidden: the gap is between the groups that show */
+.machine-group:not([hidden]) ~ .machine-group { margin-top: var(--space-4); }
 
 .machine-header {
   display: flex;

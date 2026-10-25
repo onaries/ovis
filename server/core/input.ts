@@ -11,10 +11,13 @@ import type { ClientMessage } from "../../shared/protocol.ts";
 import { isMouseReport, typingGuards } from "../input-guard.ts";
 import { HerdrError, paneRead, paneSendKeys, paneSendText } from "../herdr/client.ts";
 import { secretPrompt, validSecret } from "../../shared/secret-prompt.ts";
+import { insertTextProblem } from "../../shared/terminal-insert.ts";
 import { mirrorInput } from "../mirror-input.ts";
 
 /** Keys that may wait to join one `pane.send_keys` while herdr answers the one before (a held arrow repeats ~30/s). */
 const MAX_WAITING_KEYS = 256;
+/** An insert that waited this long behind earlier input is refused rather than typed late (as SUBMIT_DEADLINE_MS for a message). */
+const INSERT_DEADLINE_MS = 45_000;
 
 type Frame<T extends ClientMessage["type"]> = Extract<ClientMessage, { type: T }>;
 
@@ -312,6 +315,75 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
         // Never forward an exception that might include submitted bytes.
         result(false, "secret_failed");
       } finally { message.secret = ""; }
+      return;
+    },
+    /**
+     * The terminal's input line typed without Enter: herdr's `pane.send_text`, awaited, so the
+     * answer says herdr has the bytes (never that the program ran them). It takes the pane's turn
+     * like queued typing, behind a message in flight and the last pty keystroke, and the sender's
+     * attach, session, claim and role are checked again at every step after an await, and once more
+     * by herdr's own guard right before the write. No Enter, key, terminator, focus or take-over
+     * follows it, and nothing of it outlives the connection or is tried again.
+     */
+    async insert(client: Client, message: Frame<"insert">): Promise<void> {
+      const result = (ok: boolean, code?: string, text?: string) => {
+        if (clients.has(client)) send(client, { type: "insert-result", id: message.id, pane_id: message.pane_id, ok, ...(code ? { code, message: text } : {}) });
+      };
+      if (!Number.isSafeInteger(message.id) || typeof message.pane_id !== "string" || !message.pane_id) {
+        send(client, { type: "error", code: "invalid_insert", message: "id must be an integer and pane_id a string" });
+        return;
+      }
+      const problem = insertTextProblem(message.text);
+      if (problem) { result(false, problem.code, problem.message); return; }
+      if (connectionOf(client).mode === "observe") { result(false, "read_only", "this connection is in observe mode"); return; }
+      const sighting = sight(client, message.pane_id);
+      const seen = sighting.facts();
+      if (!seen.member) { result(false, "not_attached", "This connection has no terminal attached for the pane; nothing was typed"); return; }
+      if (seen.held) { result(false, "attach_held", ATTACH_HELD_MESSAGE); return; }
+      if (!seen.ready) { result(false, "input_not_ready", "Terminal input is not ready. Nothing was sent."); return; }
+      const roles = connectionOf(client).roles;
+      const arrivedAt = Date.now();
+      // the same attach, session and claim, still this bridge's, ready and not held: what the pty's queued typing checks
+      const standing = (): string | null => {
+        if (!clients.has(client) || connectionOf(client).closing || connectionOf(client).roles !== roles || connectionOf(client).mode === "observe") return "read_only";
+        const facts = sighting.facts();
+        if (!facts.member || !facts.sameAttachment || !facts.sameClaim) return "not_attached";
+        if (facts.held) return "attach_held";
+        if (!facts.ready || !facts.samePty) return "input_not_ready";
+        if (Date.now() - arrivedAt > INSERT_DEADLINE_MS) return "insert_timeout";
+        return null;
+      };
+      const refuse = (code: string): void => result(false, code, code === "insert_timeout" ? "The text waited too long behind earlier input; nothing was typed"
+        : code === "attach_held" ? ATTACH_HELD_MESSAGE : code === "read_only" ? "This connection may no longer type into the pane; nothing was typed"
+        : "The pane's terminal changed before the text was typed; nothing was typed");
+      await serialize(message.pane_id, async () => {
+        try {
+          // behind typing still in the sidecar, as a key or a message waits for it
+          if (!seen.mirror) await settleAfterTyping(message.pane_id);
+          let lost = standing();
+          if (lost) { refuse(lost); return; }
+          // the live screen, not a scrolled-up one: a password prompt takes no pasted text
+          const screen = await paneRead({ paneId: message.pane_id, source: "detection", format: "text" }).catch(() => null);
+          if (screen === null) { result(false, "pane_read_failed", "The pane's screen could not be read; nothing was typed"); return; }
+          lost = standing();
+          if (lost) { refuse(lost); return; }
+          if (secretPrompt(screen.text, sighting.facts().cols) !== null) { result(false, "secret_prompt", "The terminal is asking for a password; nothing was typed"); return; }
+          authorizeSocket(client);
+          const allowed = () => mayType(client) && standing() === null && typingGuards.queuedTyping(sighting.facts());
+          try {
+            // one line, no line break and no escape (insertTextProblem): typed as it came, on an attach or a mirror
+            await paneSendText(message.pane_id, message.text, undefined, allowed);
+          } catch (error) {
+            if (error instanceof HerdrError && error.code === "cancelled") { refuse(standing() ?? "not_attached"); return; }
+            throw error;
+          }
+          poke(message.pane_id);
+          result(true);
+        } catch {
+          // herdr answered with an error or not at all: the bytes may or may not have arrived
+          result(false, "insert_failed", "The terminal did not confirm the text. Check it before inserting again.");
+        }
+      });
       return;
     },
   };

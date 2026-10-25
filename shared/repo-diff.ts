@@ -1,5 +1,9 @@
-/** Which two states of a repository are compared. */
-export type RepoDiffScope = "workspace" | "staged" | "commit";
+/**
+ * Which two states of a repository are compared: the working tree against the index, the index
+ * against HEAD, two commits, or (`branch`) the working tree against the merge base of a chosen
+ * base and HEAD.
+ */
+export type RepoDiffScope = "workspace" | "staged" | "commit" | "branch";
 
 export interface RepoDiffRepositories {
   roots: string[];
@@ -7,7 +11,30 @@ export interface RepoDiffRepositories {
   truncated: boolean;
 }
 
-/** How one file changed. `untracked` exists only in the `workspace` scope. */
+/**
+ * The identity of a `branch` comparison, pinned when the list answered: the repository, HEAD,
+ * the chosen base as the commit it named then, and their merge base, which the patches are read
+ * from. Carried back whole on each patch read; the server recomputes the merge base from the
+ * immutable ids and refuses (409 comparison_changed) once the repository or HEAD is another.
+ */
+export interface RepoBranchComparison {
+  repository_root: string;
+  head_oid: string;
+  base_oid: string;
+  merge_base_oid: string;
+}
+
+/** GET /api/workspace/diff/refs */
+export interface RepoDiffRefs {
+  repository: RepoDiffRepository;
+  /** full refnames (`refs/heads/main`, `refs/remotes/origin/main`) with their commits, sorted by name */
+  refs: { name: string; oid: string }[];
+  /** `refs` is not the whole list: a base not in it can still be typed */
+  truncated: boolean;
+  limits: { max_refs: number; max_list_bytes: number };
+}
+
+/** How one file changed. `untracked` exists only in the `workspace` and `branch` scopes. */
 export type RepoDiffStatus = "added" | "deleted" | "modified" | "renamed" | "copied" | "type_changed" | "unmerged" | "untracked";
 
 /** The repository a comparison was read from, on the PC that owns it. */
@@ -40,9 +67,14 @@ export interface RepoDiffFile {
 export interface RepoDiffFileList {
   repository: RepoDiffRepository;
   scope: RepoDiffScope;
-  /** the commits compared, as full hashes, in the `commit` scope; null in the others */
+  /**
+   * the commits compared, as full hashes, in the `commit` scope; in the `branch` scope the chosen
+   * base and HEAD (the merge base they were compared from is in `comparison`); null in the others
+   */
   base: string | null;
   head: string | null;
+  /** the `branch` scope's pinned identity, to carry into each patch read; null in the others */
+  comparison: RepoBranchComparison | null;
   /** sorted by path, at most `limits.max_files` */
   files: RepoDiffFile[];
   /** how many files changed in all; null when git printed more than `limits.max_list_bytes` */
@@ -61,6 +93,8 @@ export interface RepoDiffFilePatch {
   scope: RepoDiffScope;
   base: string | null;
   head: string | null;
+  /** the `branch` scope's identity this patch was read from, as the list gave it; null in the others */
+  comparison: RepoBranchComparison | null;
   file: RepoDiffFile;
   patch: string | null;
   /**

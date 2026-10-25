@@ -269,6 +269,7 @@ const BASE: Record<string, string> = {
   // t3code ports (a)
   // t3code ports (d)
   "Change PC": "切换电脑",
+  "Selected": "已选择",
 };
 
 /** The parts ZH is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */

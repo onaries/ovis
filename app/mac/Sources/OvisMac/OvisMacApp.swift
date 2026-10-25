@@ -8,13 +8,88 @@ struct OvisMacApp: App {
     @StateObject private var model = Model()
 
     var body: some Scene {
-        Window("Ovis", id: "main") {
+        // not "main", the setup window's id before: macOS keeps a window's frame by its id, and that one is 520 wide
+        Window("Ovis", id: "ovis") {
+            MainView()
+                .environmentObject(model)
+        }
+        .defaultSize(width: 1200, height: 800)
+        .windowResizability(.contentMinSize)
+        .commands { OvisCommands(model: model) }
+
+        Window(L("Phone Setup", "휴대폰 연결"), id: "setup") {
             ContentView()
                 .environmentObject(model)
                 .frame(width: 520)
-                .task { await model.refresh() }
+                .task { if !model.busy { await model.refresh() } }
         }
         .windowResizability(.contentSize)
+    }
+}
+
+/// Ovis itself once its server runs; until then, or when it stops, the setup that gets it running.
+struct MainView: View {
+    @EnvironmentObject private var model: Model
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Group {
+            if let origin = model.webOrigin {
+                WebPage(origin: origin, model: model).id(origin)
+            } else if model.phase == .checking {
+                ProgressView(L("Checking this Mac…", "이 Mac을 확인하는 중…"))
+            } else {
+                ScrollView { ContentView().frame(width: 520).padding(.vertical, 24) }
+            }
+        }
+        .frame(minWidth: 520, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
+        .task {
+            await model.refresh()
+            await model.monitor()
+        }
+        .onChange(of: model.phoneSetupRequested) { requested in
+            guard requested else { return }
+            model.phoneSetupRequested = false
+            openWindow(id: "setup")
+        }
+    }
+}
+
+struct OvisCommands: Commands {
+    let model: Model
+
+    var body: some Commands {
+        CommandGroup(after: .appInfo) { PhoneSetupItem() }
+        CommandGroup(replacing: .newItem) { OpenInBrowserItem(model: model) }
+        CommandGroup(before: .toolbar) { ReloadItem(model: model) }
+    }
+}
+
+/// No Cmd+Shift letter here or below: the page's own shortcuts are Cmd+Shift ones (src/lib/shortcuts.ts).
+private struct PhoneSetupItem: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button(L("Phone Setup…", "휴대폰 연결…")) { openWindow(id: "setup") }
+    }
+}
+
+private struct OpenInBrowserItem: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        Button(L("Open in Browser", "브라우저에서 열기")) { model.openInBrowser() }
+            .disabled(model.webOrigin == nil)
+    }
+}
+
+private struct ReloadItem: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        Button(L("Reload", "새로고침")) { model.reload() }
+            .keyboardShortcut("r")
+            .disabled(model.webOrigin == nil)
     }
 }
 
@@ -120,9 +195,6 @@ struct ContentView: View {
             }
             if status?.running == true { phone(status) }
             HStack {
-                if let origin = status?.origin, status?.running == true {
-                    Button(L("Open in browser", "브라우저에서 열기")) { model.open(origin) }.buttonStyle(.borderedProminent)
-                }
                 Button(status?.running == true ? L("Restart", "다시 시작") : L("Start", "시작")) { Task { await model.restart() } }
                 Spacer()
                 Button(L("Remove…", "제거…")) { confirmRemove = true }

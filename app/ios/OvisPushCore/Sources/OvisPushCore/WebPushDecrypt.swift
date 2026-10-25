@@ -11,6 +11,7 @@ public enum WebPushDecrypt {
             throw Failure.invalidRecord
         }
         let recordSize = bytes[16..<20].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+        guard recordSize >= 18 else { throw Failure.invalidRecord }
         guard UInt64(bytes.count - 86) <= recordSize else { throw Failure.invalidRecord }
         let sender = Data(bytes[21..<86])
         let publicKey = try P256.KeyAgreement.PublicKey(x963Representation: sender)

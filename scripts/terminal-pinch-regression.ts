@@ -109,6 +109,18 @@ export async function checkTerminalPinch(browser: Browser, origin: string, paneI
         await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: cx, y: cy - distance / 2 + distance * step / moves, id: 1 }] });
       }
       await release();
+      // an attached swipe's reports go out a few per animation frame (lib/touchWheelPacer.ts), and the
+      // pacer sends in every frame while any wait: a frame that sends none means the swipe has drained
+      await page.evaluate(() => new Promise<void>((resolve) => {
+        const sent = () => (window as Window & { wheels_: number }).wheels_;
+        let last = sent();
+        const check = (): void => {
+          const now = sent();
+          if (now === last) resolve();
+          else { last = now; requestAnimationFrame(check); }
+        };
+        requestAnimationFrame(check);
+      }));
       const after = await probe();
       assert(after.wheelModes.slice(before.wheelModes.length).every((mode) => mode === 1),
         `a ${moves}-move swipe sends line-mode wheels only`);

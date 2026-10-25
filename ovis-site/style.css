@@ -88,6 +88,43 @@ details p { color: var(--muted); margin: 10px 0 0; }
 .doc ul { padding-left: 1.2em; }
 .doc .box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 22px; }
 
+/* The beta page: few words, one big button per platform. */
+.beta { padding-block: 48px 96px; text-align: center; }
+.beta h1 { font-size: clamp(36px, 6vw, 56px); line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 14px; }
+.beta .lead { font-size: clamp(18px, 2.4vw, 21px); color: var(--muted); margin: 0 auto; max-width: 30em; }
+.beta h2 { display: flex; flex-direction: column; align-items: center; gap: 12px; font-size: clamp(22px, 3vw, 28px); line-height: 1.3; letter-spacing: -0.01em; margin: 80px 0 24px; }
+.beta h2 .num { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--pink); color: #1f2740; font-size: 17px; }
+.beta .note { color: var(--muted); margin: 24px auto 0; max-width: 34em; }
+/* short centred lines break evenly, so no line ends on one word or one Chinese character */
+.beta :is(.lead, .note, h2, small) { text-wrap: balance; }
+/* Japanese breaks between phrases where the browser can; Chinese, like Korean, at spaces and punctuation */
+.beta:lang(ja) { word-break: auto-phrase; }
+.beta:lang(zh) { word-break: keep-all; overflow-wrap: anywhere; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.tiles > * { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 0; padding: 28px 22px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.tiles > [hidden] { display: none; }
+.tiles svg { width: 36px; height: 36px; }
+.tiles strong { font-size: 19px; }
+.tiles small { color: var(--muted); font-size: 14px; }
+.tiles small strong { font-size: inherit; }
+.tiles code { display: block; width: 100%; padding: 10px 12px; font-size: 12.5px; overflow-wrap: break-word; }
+.tiles ol { margin: 0; padding-left: 1.4em; text-align: left; }
+.tiles .alt { display: flex; flex-direction: column; gap: 8px; width: 100%; margin: 4px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.tiles .cmd { display: block; width: 100%; padding: 8px 12px; border: 0; border-radius: 6px; background: var(--code); color: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; overflow-wrap: break-word; cursor: copy; }
+.tiles .cmd:hover { background: var(--line); }
+.cta { width: 100%; margin: 0; }
+/* the phone tiles line their buttons up at the bottom; the computer tiles keep theirs under the name */
+.tiles > section .cta { margin-top: auto; }
+.cta a, .cta button { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 50px; padding: 12px 20px; border: 0; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 17px; font-weight: 600; text-decoration: none; cursor: pointer; }
+.cta a:hover, .cta button:hover { opacity: 0.88; }
+.lang-pick { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.lang-pick:hover { border-color: var(--muted); }
+.lang-pick:focus-within { outline: 2px solid var(--muted); outline-offset: 2px; }
+.lang-pick svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
+.lang-pick select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit; font: inherit; font-size: 14px; font-weight: 600; padding: 0 2px; cursor: pointer; outline: none; }
+.lang-pick select option { color: #1f2740; background: #fff; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
 footer { border-top: 1px solid var(--line); padding: 28px 0 40px; color: var(--muted); font-size: 14px; }
 footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; }
 footer .wrap span { margin-right: auto; }
@@ -106,4 +143,9 @@ footer a:hover { color: var(--ink); }
   .top .brand img { height: 32px; }
   .top nav { gap: 12px; font-size: 14px; }
   .store { min-width: 0; flex: 1; }
+  .beta { padding-block: 32px 72px; }
+  .beta h2 { margin-top: 56px; }
+  .tiles > * { gap: 10px; padding: 22px 18px 20px; }
+  .lang-pick { gap: 0; padding: 0 10px; }
+  .lang-pick svg { display: none; }
 }

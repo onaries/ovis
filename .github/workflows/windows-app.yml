@@ -68,7 +68,7 @@ jobs:
     outputs:
       skip: ${{ steps.source.outputs.skip }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -110,7 +110,7 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File app/windows/build.ps1 -Version $version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Move-Item app/windows/build-source.txt app/windows/build/build-source.txt
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.source.outputs.skip != 'true'
         with:
           name: ovis-windows
@@ -128,11 +128,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: ovis-windows
           path: build

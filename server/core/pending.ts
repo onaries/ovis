@@ -17,7 +17,7 @@
  * pane after, so another session or process of the same kind gets none.
  * First messages live in memory: a restart of the bridge loses those not sent yet.
  */
-import { closeMention, type createSubmitText, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, pendingFault, pendingIdentity, pendingText } from "./composer.ts";
+import { closeMention, type createSubmitText, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, pendingFault, pendingIdentity, pendingText, submitFraming } from "./composer.ts";
 import { type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE } from "./terminal-process.ts";
 import type { AttachmentView, TerminalSighting } from "./terminals.ts";
@@ -625,6 +625,12 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         result(false, "attach_held", ATTACH_HELD_MESSAGE);
         return;
       }
+      // an immediate submit's framing, checked before a resend id is reserved or anything is typed or cleared
+      let framed = { text: message.text, payload: message.payload };
+      if (!waits && !native) {
+        try { framed = submitFraming(message.text, message.payload, message.typed === true); }
+        catch (error) { const fault = pendingFault(error); result(false, fault.code, fault.message); return; }
+      }
       const arrivedAt = Date.now();
       try {
         if (waits || native) {
@@ -670,13 +676,13 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         const dispatch = () => {
           // held while this waited its turn (the attach was refused after the check above)
           if (attachments.get(message.pane_id)?.held) throw new HerdrError("attach_held", ATTACH_HELD_MESSAGE);
-          return submitText(message.pane_id, message.text, message.payload, arrivedAt, message.typed === true, () => authorizeSocket(client), message.clear_draft,
+          return submitText(message.pane_id, framed.text, framed.payload, arrivedAt, message.typed === true, () => authorizeSocket(client), message.clear_draft,
             draftConfirmations.get(client)?.get(message.pane_id), message.send_anyway === true);
         };
         if (message.resend_id !== undefined) {
           authorizeSocket(client);
           const answer = await serialize(message.pane_id, () => pending.resend(message.pane_id, message.resend_id!,
-            new Bun.CryptoHasher("sha256").update(message.text).digest("hex"), async () => {
+            new Bun.CryptoHasher("sha256").update(framed.text).digest("hex"), async () => {
               try { await dispatch(); return { ok: true }; }
               catch (error) { return { ok: false, ...pendingFault(error) }; }
             }, message.resend_generation));

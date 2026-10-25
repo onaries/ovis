@@ -16,6 +16,12 @@
 /install https://github.com/devswha/ovis/blob/main/README.md#install 302
 /changelog https://github.com/devswha/ovis/blob/main/CHANGELOG.md 302
 /faq /#faq 302
+# The beta page has Japanese and Chinese pages of its own. Cloudflare follows a rule even where a
+# file matches, so these serve them before the /ja/* and /zh/* rules below send the address home.
+/ja/beta/ /ja/beta/ 200
+/ja/beta /ja/beta/ 301
+/zh/beta/ /zh/beta/ 200
+/zh/beta /zh/beta/ 301
 # The home page reads in Japanese and Chinese through ?lang=, like /ko/.
 /ja /?lang=ja 302
 /ja/* /?lang=ja 302

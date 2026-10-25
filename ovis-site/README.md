@@ -1,7 +1,8 @@
 # ovis.sh
 
 The website of Ovis, the phone, desktop and browser client for herdr: the home page, the privacy
-policy (`/privacy/`) and the support page (`/support/`) the App Store and Google Play ask for.
+policy (`/privacy/`) and the support page (`/support/`) the App Store and Google Play ask for, and
+the beta page (`/beta/`) that walks testers through joining the phone app tests.
 It is plain HTML with no build, so edit the files and the next deploy serves them.
 
 - The home page (`index.html`) carries its own styles and scripts. It is English as written;
@@ -12,8 +13,10 @@ It is plain HTML with no build, so edit the files and the next deploy serves the
 - It has a day and a night look (`data-theme` on `<html>`, the visitor's choice or the system
   setting); every screenshot has a `-light` and a `-dark` file, swapped by `data-light` /
   `data-dark`, and the mascot and logo have `-night` versions.
-- The privacy, support and 404 pages use `style.css`, in English at the root and Korean under
-  `/ko/`.
+- The privacy, support, beta and 404 pages use `style.css`, in English at the root and Korean under
+  `/ko/`. The beta page also has Simplified Chinese (`/zh/beta/`) and Japanese (`/ja/beta/`), with
+  a language picker like the home page's; `_redirects` serves those two before its `/zh/*` and
+  `/ja/*` rules, since Cloudflare follows a rule even where a file matches.
 
 ## Deploy
 
@@ -59,6 +62,10 @@ preview address. Cloudflare serves `404.html` for a missing page and `/privacy` 
   cookie), that the camera only reads the pairing QR code, and what the Ovis server's anonymous usage
   counts hold (docs/guide.md, "Anonymous usage counts"). Change it, and its date, in both
   languages when any of those changes, before the release that changes them.
+- The beta page ships its iPhone and Android sections hidden; `assets/beta.js` shows each one once
+  its link is set in `BETA_LINKS` there: the TestFlight public link, and the Google Group whose
+  members may join the Google Play closed test. Its Windows tile downloads `Ovis.exe`, like the
+  Windows download button in `assets/platform.js`, with the install command as a second way.
 - The support page names app labels (**Scan QR code**, **Forget**, **Change PC**) and Ovis server
   settings (**Settings → Phone & devices**, **Settings → About**); keep them matching the app.
 - The screenshots in `assets/demo/` come from the demo build (`bun scripts/demo-build.ts <dir>`),

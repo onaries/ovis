@@ -11,6 +11,7 @@
  */
 import type { DeviceStore } from "../devices.ts";
 import { ping } from "../herdr/client.ts";
+import type { PreferenceStore } from "../preferences.ts";
 import { attachableIdentity, sidecarAvailable } from "../pty/sidecar.ts";
 import type { UsageLoginService } from "../usage-login.ts";
 import type { UsageService } from "../usage.ts";
@@ -34,9 +35,11 @@ type CoreOptions = Parameters<typeof createTerminalRegistry>[0]["options"] & Par
     attachHoldMs?: number;
   };
 
-export function createCore({ options, devices, usage, usageLogin, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS }: {
+export function createCore({ options, devices, preferences, usage, usageLogin, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS }: {
   options: CoreOptions;
   devices: DeviceStore;
+  /** the shared preferences (server/preferences.ts): the status hub's web push reads the muted panes from it */
+  preferences: PreferenceStore;
   usage: UsageService;
   usageLogin: UsageLoginService;
   TYPED_SETTLE_MS: number;
@@ -73,7 +76,7 @@ export function createCore({ options, devices, usage, usageLogin, TYPED_SETTLE_M
   const { pending, holdPending, holdPendingPane, drainPending, pendingFrames, queueFirstMessage, attached, closeConnection } = createPendingDelivery({ options, clients, attachments, sight, serialize, lastTyped, submitText, authorizeSocket: (client) => authorizeSocket(client), clientSnapshot: () => clientSnapshot(), omo: { sessionOf: (paneId) => omo.sessionOf(paneId) }, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, TYPED_SETTLE_MS });
 
   const { mayType, authorizeSocket, admit, setRole, watchPane, unwatchPane, killWatches, end } = createConnections({ clients, present, pending: { close: closeConnection }, devices, detachClaimed, dropClaims });
-  const { push, omo, gjc, claudeAgents, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector, waitTimer } = createStatusHub({ options, devices, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin });
+  const { push, omo, gjc, claudeAgents, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector, waitTimer } = createStatusHub({ options, devices, preferences, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin });
   const websocket = createSocket({
     clients, present, stopped: () => stopped, admit, setRole, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, countVisit, drainOutput,
     // each frame type by name, with the handler of the module that owns it: anything else on a frame object never
@@ -89,6 +92,7 @@ export function createCore({ options, devices, usage, usageLogin, TYPED_SETTLE_M
       input: inputFrames.input,
       keys: inputFrames.keys,
       secret: inputFrames.secret,
+      insert: inputFrames.insert,
       submit: pendingFrames.submit,
       "pending-action": pendingFrames["pending-action"],
     },

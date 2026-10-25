@@ -41,19 +41,19 @@ runs:
         NEED_NODE: ${{ inputs.node }}
         NEED_HERDR: ${{ inputs.herdr }}
       run: bash scripts/ci-preinstalled-tools.sh
-    - uses: oven-sh/setup-bun@v2
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       if: runner.environment != 'self-hosted'
       with:
         bun-version: ${{ inputs.bun-version }}
     - if: inputs.node == 'true' && runner.environment != 'self-hosted'
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: '22'
     - name: Cache Bun dependencies
       # On the measured self-hosted connection this archive costs 37–43s to restore,
       # versus 7–20s for a fresh install. Do not pay for restore/save on disposable runners.
       if: runner.environment != 'self-hosted' && inputs.cache != 'restore'
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: .ci-cache/bun
         key: bun-workspace-v2-${{ runner.environment }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.bun-version }}-${{ hashFiles('bun.lock') }}
@@ -61,7 +61,7 @@ runs:
           bun-workspace-v2-${{ runner.environment }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.bun-version }}-
     - name: Restore Bun dependencies (read-only)
       if: runner.environment != 'self-hosted' && inputs.cache == 'restore'
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: .ci-cache/bun
         key: bun-workspace-v2-${{ runner.environment }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.bun-version }}-${{ hashFiles('bun.lock') }}

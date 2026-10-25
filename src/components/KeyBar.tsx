@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, type MouseEvent, type PointerEvent, type ReactNode } from "react";
-import { Keyboard } from "lucide-react";
+import { ClipboardPaste, Keyboard } from "lucide-react";
 
 import "./KeyBar.css";
 
@@ -24,6 +24,14 @@ export interface KeyBarProps {
   onToggleDirect?: () => void;
   /** greys out only the direct-typing toggle (an input-line composition is in progress) */
   directDisabled?: boolean;
+  /** on a touch screen: pastes the clipboard into the terminal's input line (never into the grid), from this tap */
+  onPaste?: () => void;
+  /** greys out only Paste (a paste of the line's still waits on the clipboard) */
+  pasteDisabled?: boolean;
+  /** a word about Paste, said in the bar's own row beside the mode toggle and Paste, in place of
+   * the other keys until it is dismissed (a tap on it); never painted over the terminal */
+  note?: string | null;
+  onNoteDismiss?: () => void;
 }
 
 /**
@@ -187,7 +195,7 @@ export const KEY_SPOKEN_NAMES: ReadonlyArray<{ key: string; label: string }> = [
  * for touch, a hardware keyboard already has all of them. Hence role="group", not
  * toolbar: a toolbar promises arrow-key navigation between items, which these skip.
  */
-export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping, onToggleDirect, directDisabled, disabled, holdScope }: KeyBarProps) {
+export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping, onToggleDirect, directDisabled, onPaste, pasteDisabled, note, onNoteDismiss, disabled, holdScope }: KeyBarProps) {
   const t = useT();
   // only a bar that reaches the bottom of the screen keeps clear of the home indicator: a pane
   // stacked over another one has the other pane under its bar, not the indicator
@@ -210,6 +218,7 @@ export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping
   // the edge with keys out of view fades (KeyBar.css reads the attributes): measured before the
   // first paint, then on scroll and whenever the bar or a key changes size, at most once a frame
   const hasDirectToggle = onToggleDirect !== undefined;
+  const hasPaste = onPaste !== undefined;
   useLayoutEffect(() => {
     const bar = barRef.current;
     if (!bar) return;
@@ -233,7 +242,7 @@ export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping
       bar.removeEventListener("scroll", schedule);
       observer.disconnect();
     };
-  }, [items, hasDirectToggle]);
+  }, [items, hasDirectToggle, hasPaste, note]);
   /** The key's name as it is said: its spoken name where its cap is notation, else its cap. */
   const spokenKey = (item: KeyBarKeyItem): string => {
     const spoken = ARROWS.find((candidate) => candidate.key === item.key)?.label ?? KEY_SPOKEN_NAMES.find((candidate) => candidate.key === item.key)?.label;
@@ -247,7 +256,13 @@ export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping
           <Keyboard aria-hidden="true" />
         </Key>
       )}
-      {items.map((item) => {
+      {/* beside the mode toggle it belongs with: a tap, never a hold (a repeat would read the clipboard again) */}
+      {onPaste && (
+        <Key disabled={disabled || pasteDisabled} dataKey="paste" label={t("Paste into the input line")} onPress={onPaste}>
+          <ClipboardPaste aria-hidden="true" />
+        </Key>
+      )}
+      {note ? <p className="key-bar-note" role="status" onClick={onNoteDismiss}>{note}</p> : items.map((item) => {
         if (item.type === "modifier") {
           const cap = { ctrl: "Ctrl", alt: "Alt", shift: "Shift" }[item.modifier];
           const dataKey = { ctrl: "Control", alt: "Alt", shift: "Shift" }[item.modifier];

@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { parsePatchFiles } from "@pierre/diffs";
 
-import type { ApiError, RepoDiffFileList, RepoDiffFilePatch } from "../shared/protocol.ts";
+import type { ApiError, RepoBranchComparison, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs } from "../shared/protocol.ts";
 import { DeviceStore } from "./devices.ts";
 import { createServer } from "./index.ts";
-import { REPO_DIFF_CONTEXT_LINES, REPO_DIFF_MAX_FILES, REPO_DIFF_MAX_LIST_BYTES, REPO_DIFF_MAX_PATCH_BYTES, repoDiffFile, repoDiffFiles } from "./repo-diff.ts";
+import { REPO_DIFF_CONTEXT_LINES, REPO_DIFF_MAX_FILES, REPO_DIFF_MAX_LIST_BYTES, REPO_DIFF_MAX_PATCH_BYTES, REPO_DIFF_MAX_REFS, repoDiffFile, repoDiffFiles, repoDiffRefs } from "./repo-diff.ts";
 
 /**
  * Real git repositories in a temp folder: the routes are only as right as what git prints, so a
@@ -24,6 +24,12 @@ function git(cwd: string, ...args: string[]): string {
   const result = Bun.spawnSync(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
   return result.stdout.toString();
+}
+
+/** `git update-ref --stdin`: many refs made or dropped in one process. */
+function updateRefs(cwd: string, commands: string[]): void {
+  const result = Bun.spawnSync(["git", "-C", cwd, "update-ref", "--stdin"], { stdin: Buffer.from(`${commands.join("\n")}\n`), stdout: "pipe", stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error(`git update-ref --stdin failed: ${result.stderr.toString()}`);
 }
 
 function repository(name: string): string {
@@ -219,6 +225,294 @@ describe("comparing two commits", () => {
   });
 });
 
+describe("a branch against a base", () => {
+  let root: string;
+  let fork: string;
+  let baseTip: string;
+  let head: string;
+  const branchQuery = (values: Record<string, string> = {}) => query({ scope: "branch", base: "main", ...values });
+  const pinned = (list: RepoDiffFileList, values: Record<string, string> = {}) => query({ scope: "branch", comparison: JSON.stringify(list.comparison), ...values });
+  beforeAll(() => {
+    root = repository("branch");
+    writeFileSync(join(root, "shared.txt"), lines(6));
+    writeFileSync(join(root, "base-only.txt"), "base\n");
+    writeFileSync(join(root, "moved-from.txt"), lines(12));
+    writeFileSync(join(root, "gone.txt"), "going\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "fork point");
+    fork = git(root, "rev-parse", "HEAD").trim();
+    git(root, "checkout", "-q", "-b", "feature");
+    writeFileSync(join(root, "feature.txt"), "committed on the branch\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "branch work");
+    // the base goes on without the branch: what it changed is no part of the branch's review
+    git(root, "checkout", "-q", "main");
+    writeFileSync(join(root, "base-only.txt"), "base moved on\n");
+    writeFileSync(join(root, "shared.txt"), lines(6).replace("line 1\n", "base edit\n"));
+    git(root, "commit", "-q", "-a", "-m", "base moves on");
+    baseTip = git(root, "rev-parse", "HEAD").trim();
+    git(root, "checkout", "-q", "feature");
+    head = git(root, "rev-parse", "HEAD").trim();
+    // staged: a rename with an edit; unstaged: an edit and a deletion; and an untracked file
+    git(root, "mv", "moved-from.txt", "moved-to.txt");
+    writeFileSync(join(root, "moved-to.txt"), lines(12).replace("line 3\n", "line three\n"));
+    git(root, "add", "moved-to.txt");
+    writeFileSync(join(root, "shared.txt"), lines(6).replace("line 6\n", "branch edit\n"));
+    rmSync(join(root, "gone.txt"));
+    writeFileSync(join(root, "untracked.txt"), "never added\n");
+    writeFileSync(join(root, "untracked.bin"), new Uint8Array([0, 1, 2, 0]));
+  });
+
+  it("branch compares merge base including untracked", async () => {
+    const list = await repoDiffFiles(root, branchQuery());
+    expect(list.repository).toEqual({ root, branch: "feature", head, detached: false, unborn: false });
+    expect(list).toMatchObject({ scope: "branch", base: baseTip, head, total: 6, truncated: false });
+    expect(list.comparison).toEqual({ repository_root: root, head_oid: head, base_oid: baseTip, merge_base_oid: fork });
+    // the branch's commit, its staged and unstaged work and its untracked files; the base's own edits to shared.txt and base-only.txt are not here
+    expect(list.files).toEqual([
+      { path: "feature.txt", old_path: null, status: "added", additions: 1, deletions: 0, binary: false },
+      { path: "gone.txt", old_path: null, status: "deleted", additions: 0, deletions: 1, binary: false },
+      { path: "moved-to.txt", old_path: "moved-from.txt", status: "renamed", additions: 1, deletions: 1, binary: false },
+      { path: "shared.txt", old_path: null, status: "modified", additions: 1, deletions: 1, binary: false },
+      { path: "untracked.bin", old_path: null, status: "untracked", additions: null, deletions: null, binary: null },
+      { path: "untracked.txt", old_path: null, status: "untracked", additions: null, deletions: null, binary: null },
+    ]);
+    // the same answer for the base named as a full refname, a remote-style name is not needed, and as its hash
+    for (const base of ["refs/heads/main", baseTip]) expect((await repoDiffFiles(root, branchQuery({ base }))).comparison).toEqual(list.comparison);
+
+    const shared = await repoDiffFile(root, pinned(list, { path: "shared.txt" }));
+    expect(shared).toMatchObject({ scope: "branch", base: baseTip, head, comparison: list.comparison, unavailable: null });
+    // the branch's edit of line 6 is the hunk; the base's edit of line 1 is on neither side
+    expect(parsed(shared.patch).map((file) => [file.name, file.deletionLines.includes("line 6\n"), file.additionLines.includes("branch edit\n"), file.deletionLines.includes("base edit\n"), file.additionLines.includes("base edit\n")])).toEqual([["shared.txt", true, true, false, false]]);
+    const added = await repoDiffFile(root, pinned(list, { path: "feature.txt" }));
+    expect(parsed(added.patch).map((file) => [file.name, file.type])).toEqual([["feature.txt", "new"]]);
+    const renamed = await repoDiffFile(root, pinned(list, { path: "moved-to.txt", old_path: "moved-from.txt" }));
+    expect(parsed(renamed.patch).map((file) => [file.name, file.prevName, file.type])).toEqual([["moved-to.txt", "moved-from.txt", "rename-changed"]]);
+    const untracked = await repoDiffFile(root, pinned(list, { path: "untracked.txt" }));
+    expect(untracked.file).toMatchObject({ status: "untracked", binary: false });
+    expect(parsed(untracked.patch).map((file) => [file.name, file.type, file.additionLines])).toEqual([["untracked.txt", "new", ["never added\n"]]]);
+    expect(await repoDiffFile(root, pinned(list, { path: "untracked.bin" }))).toMatchObject({ patch: null, unavailable: "binary", file: { binary: true } });
+    expect(await repoDiffFile(root, pinned(list, { path: "untracked.txt" }), { maxPatchBytes: 16 })).toMatchObject({ patch: null, unavailable: "too_large", truncated: true });
+    await expect(repoDiffFile(root, pinned(list, { path: "base-only.txt" }))).rejects.toMatchObject({ code: "not_found", status: 404 });
+  });
+
+  it("detached HEAD is valid", async () => {
+    git(root, "checkout", "-q", "--detach");
+    try {
+      const list = await repoDiffFiles(root, branchQuery());
+      expect(list.repository).toMatchObject({ branch: null, head, detached: true, unborn: false });
+      expect(list.comparison).toEqual({ repository_root: root, head_oid: head, base_oid: baseTip, merge_base_oid: fork });
+      expect(list.files.map((file) => file.path)).toEqual(["feature.txt", "gone.txt", "moved-to.txt", "shared.txt", "untracked.bin", "untracked.txt"]);
+      expect(parsed((await repoDiffFile(root, pinned(list, { path: "feature.txt" }))).patch).map((file) => file.name)).toEqual(["feature.txt"]);
+    } finally {
+      git(root, "checkout", "-q", "feature");
+    }
+  });
+
+  it("unborn and unrelated histories fail", async () => {
+    const unborn = repository("branch-unborn");
+    await expect(repoDiffFiles(unborn, branchQuery())).rejects.toMatchObject({ code: "unborn_head", status: 409 });
+    // a malformed base is refused as such, before the repository's state is looked at
+    await expect(repoDiffFiles(unborn, branchQuery({ base: "-p" }))).rejects.toMatchObject({ code: "invalid_revision", status: 400 });
+
+    const orphan = repository("branch-orphan");
+    writeFileSync(join(orphan, "a.txt"), "one\n");
+    git(orphan, "add", ".");
+    git(orphan, "commit", "-q", "-m", "main");
+    git(orphan, "checkout", "-q", "--orphan", "island");
+    writeFileSync(join(orphan, "b.txt"), "two\n");
+    git(orphan, "add", ".");
+    git(orphan, "commit", "-q", "-m", "island");
+    writeFileSync(join(orphan, "c.txt"), "not listed in the base's place\n");
+    const log = git(orphan, "log", "--all", "--oneline");
+    await expect(repoDiffFiles(orphan, branchQuery())).rejects.toMatchObject({ code: "no_common_ancestor", status: 409 });
+    // no fallback to the base's tip, and nothing written: the history and the working tree are as they were
+    expect(git(orphan, "log", "--all", "--oneline")).toBe(log);
+    expect(git(orphan, "status", "--porcelain")).toBe("?? c.txt\n");
+
+    const marker = join(scratch, "branch-option-ran");
+    for (const base of [`--output=${marker}`, "-p", "main..feature", "HEAD:a.txt", "$(touch x)", "main; ls", "", "x".repeat(201)]) {
+      await expect(repoDiffFiles(root, branchQuery({ base }))).rejects.toMatchObject({ code: "invalid_revision", status: 400 });
+    }
+    expect(existsSync(marker)).toBeFalse();
+    await expect(repoDiffFiles(root, query({ scope: "branch" }))).rejects.toMatchObject({ code: "invalid_revision", status: 400 });
+    await expect(repoDiffFiles(root, branchQuery({ base: "no-such-branch" }))).rejects.toMatchObject({ code: "revision_not_found", status: 404 });
+    await expect(repoDiffFiles(root, branchQuery({ base: "refs/heads/no-such-branch" }))).rejects.toMatchObject({ code: "revision_not_found", status: 404 });
+    // head names the other side of a commit comparison only: a branch is always the working tree
+    await expect(repoDiffFiles(root, branchQuery({ head: "HEAD" }))).rejects.toMatchObject({ code: "invalid_revision", status: 400 });
+  });
+
+  it("base moves retain pinned comparison", async () => {
+    const list = await repoDiffFiles(root, branchQuery());
+    // the base goes on again between the list and the patch (a commit made without touching the checkout)
+    const movedTip = git(root, "commit-tree", git(root, "rev-parse", `${baseTip}^{tree}`).trim(), "-p", baseTip, "-m", "base moves again").trim();
+    git(root, "update-ref", "refs/heads/main", movedTip);
+    try {
+      expect(movedTip).not.toBe(baseTip);
+      const answer = await repoDiffFile(root, pinned(list, { path: "shared.txt" }));
+      expect(answer.comparison).toEqual(list.comparison);
+      expect(answer).toMatchObject({ base: baseTip, head });
+      expect(parsed(answer.patch).map((file) => [file.deletionLines.includes("line 6\n"), file.additionLines.includes("branch edit\n"), file.deletionLines.includes("base edit\n")])).toEqual([[true, true, false]]);
+      // a fresh list resolves the base again: the identity moves with it, the merge base stays the fork point
+      const fresh = await repoDiffFiles(root, branchQuery());
+      expect(fresh.comparison).toEqual({ repository_root: root, head_oid: head, base_oid: movedTip, merge_base_oid: fork });
+    } finally {
+      git(root, "update-ref", "refs/heads/main", baseTip);
+    }
+  });
+
+  it("HEAD or repository move requires refresh", async () => {
+    const list = await repoDiffFiles(root, branchQuery());
+    const identity = list.comparison!;
+    // HEAD moved on: the branch committed again (the index and working tree stay as they are)
+    const moved = git(root, "commit-tree", git(root, "rev-parse", `${head}^{tree}`).trim(), "-p", head, "-m", "more branch work").trim();
+    git(root, "update-ref", "refs/heads/feature", moved);
+    try {
+      expect(moved).not.toBe(head);
+      await expect(repoDiffFile(root, pinned(list, { path: "shared.txt" }))).rejects.toMatchObject({ code: "comparison_changed", status: 409 });
+      // a fresh list is the way back, and it pins the new HEAD
+      expect((await repoDiffFiles(root, branchQuery())).comparison).toEqual({ ...identity, head_oid: moved });
+    } finally {
+      git(root, "update-ref", "refs/heads/feature", head);
+    }
+    // another repository: the identity names a root this one is not
+    const other = repository("branch-other");
+    writeFileSync(join(other, "shared.txt"), "elsewhere\n");
+    git(other, "add", ".");
+    git(other, "commit", "-q", "-m", "other");
+    await expect(repoDiffFile(other, pinned(list, { path: "shared.txt" }))).rejects.toMatchObject({ code: "comparison_changed", status: 409 });
+    // the shape is checked first, and a merge base the ids do not make is no identity of this repository's
+    const malformed: unknown[] = ["{", "[]", "null", JSON.stringify({ ...identity, extra: 1 }), JSON.stringify({ ...identity, merge_base_oid: "HEAD" }), JSON.stringify({ ...identity, repository_root: "" }), JSON.stringify({ head_oid: identity.head_oid }), "x".repeat(9_000)];
+    // a full git id is 40 (SHA-1) or 64 (SHA-256) hex digits, nothing between or around
+    for (const key of ["head_oid", "base_oid", "merge_base_oid"] as const) {
+      for (const length of [39, 41, 63, 65]) malformed.push(JSON.stringify({ ...identity, [key]: "a".repeat(length) }));
+    }
+    for (const comparison of malformed) {
+      await expect(repoDiffFile(root, query({ scope: "branch", comparison: comparison as string, path: "shared.txt" }))).rejects.toMatchObject({ code: "invalid_comparison", status: 400 });
+    }
+    await expect(repoDiffFile(root, query({ scope: "branch", comparison: JSON.stringify({ ...identity, merge_base_oid: baseTip }), path: "shared.txt" }))).rejects.toMatchObject({ code: "invalid_comparison", status: 400 });
+    await expect(repoDiffFile(root, query({ scope: "branch", comparison: JSON.stringify({ ...identity, base_oid: "f".repeat(40) }), path: "shared.txt" }))).rejects.toMatchObject({ code: "revision_not_found", status: 404 });
+    // a patch read goes by the identity alone, and a list by the base's name alone
+    await expect(repoDiffFile(root, branchQuery({ path: "shared.txt" }))).rejects.toMatchObject({ code: "invalid_comparison", status: 400 });
+    await expect(repoDiffFiles(root, pinned(list))).rejects.toMatchObject({ code: "invalid_comparison", status: 400 });
+    await expect(repoDiffFiles(root, query({ scope: "workspace", comparison: JSON.stringify(identity) }))).rejects.toMatchObject({ code: "invalid_comparison", status: 400 });
+  });
+
+  it("refs are bounded and remote symbolic HEAD is omitted", async () => {
+    const refs = await repoDiffRefs(root);
+    expect(refs.repository.root).toBe(root);
+    expect(refs).toMatchObject({ truncated: false, limits: { max_refs: REPO_DIFF_MAX_REFS, max_list_bytes: REPO_DIFF_MAX_LIST_BYTES } });
+    expect(refs.refs).toEqual([{ name: "refs/heads/feature", oid: head }, { name: "refs/heads/main", oid: baseTip }]);
+
+    // a remote's branches are listed; its symbolic HEAD is not a branch; tags are not offered
+    git(root, "update-ref", "refs/remotes/origin/main", baseTip);
+    git(root, "update-ref", "refs/remotes/origin/feature", head);
+    git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    git(root, "tag", "v1", fork);
+    expect((await repoDiffRefs(root)).refs).toEqual([
+      { name: "refs/heads/feature", oid: head }, { name: "refs/heads/main", oid: baseTip },
+      { name: "refs/remotes/origin/feature", oid: head }, { name: "refs/remotes/origin/main", oid: baseTip },
+    ]);
+    // a base picked from the list is named in full, so it is that branch and never a tag of the same name (which git reads first)
+    git(root, "tag", "main", fork);
+    expect((await repoDiffFiles(root, branchQuery({ base: "refs/heads/main" }))).comparison?.base_oid).toBe(baseTip);
+    expect((await repoDiffFiles(root, branchQuery({ base: "main" }))).comparison?.base_oid).toBe(fork);
+    git(root, "tag", "-d", "main");
+
+    // past the cap the list is cut, in name order, and says so; a branch not offered still names a base
+    const many = Array.from({ length: 210 }, (_, index) => `refs/heads/many/${String(index).padStart(3, "0")}`);
+    updateRefs(root, many.map((name) => `create ${name} ${fork}`));
+    const crowded = await repoDiffRefs(root);
+    expect(crowded.refs.length).toBe(REPO_DIFF_MAX_REFS);
+    expect(crowded.truncated).toBe(true);
+    expect(crowded.refs[0]).toEqual({ name: "refs/heads/feature", oid: head });
+    expect(crowded.refs.every((ref) => /^refs\/(?:heads|remotes)\//.test(ref.name) && /^[0-9a-f]{40}$/.test(ref.oid))).toBe(true);
+    expect((await repoDiffFiles(root, branchQuery({ base: "refs/heads/many/209" }))).comparison?.base_oid).toBe(fork);
+    const few = await repoDiffRefs(root, { maxRefs: 3 });
+    expect(few.refs.map((ref) => ref.name)).toEqual(["refs/heads/feature", "refs/heads/main", "refs/heads/many/000"]);
+    expect(few).toMatchObject({ truncated: true, limits: { max_refs: 3 } });
+    const cut = await repoDiffRefs(root, { maxListBytes: 256 });
+    expect(cut.truncated).toBe(true);
+    expect(cut.refs.length).toBeGreaterThan(0);
+    expect(cut.refs.every((ref) => /^[0-9a-f]{40}$/.test(ref.oid))).toBe(true);
+    updateRefs(root, many.map((name) => `delete ${name}`));
+  });
+
+  it("compares every branch the refs list offers, by its full name, and still refuses expressions in that shape", async () => {
+    // valid refnames a short expression does not allow: a plus sign, Hangul, and a long name
+    const offered = ["refs/heads/topic+base", "refs/heads/topic/한글", `refs/heads/topic/${"x".repeat(192)}`, "refs/remotes/origin/release+1"];
+    updateRefs(root, offered.map((name) => `create ${name} ${fork}`));
+    try {
+      const listed = (await repoDiffRefs(root)).refs.map((ref) => ref.name);
+      for (const name of offered) {
+        expect(listed).toContain(name);
+        const list = await repoDiffFiles(root, branchQuery({ base: name }));
+        expect(list.comparison).toEqual({ repository_root: root, head_oid: head, base_oid: fork, merge_base_oid: fork });
+        expect(parsed((await repoDiffFile(root, pinned(list, { path: "feature.txt" }))).patch).map((file) => file.name)).toEqual(["feature.txt"]);
+      }
+      expect(offered[2]!.length).toBe(209);
+      // a full name with letters a short expression refuses is a name and nothing more: no range, reflog,
+      // peel, path, space or option rides on it, and none past the cap
+      const marker = join(scratch, "refname-option-ran");
+      for (const base of ["refs/heads/topic+base..main", "refs/heads/topic+base@{1}", "refs/heads/topic+base^{tree}", "refs/heads/topic+base~1", "refs/heads/topic+base:feature.txt", "refs/heads/topic+base ", `refs/heads/topic+base --output=${marker}`, "refs/heads/topic+base.lock", "refs/heads/topic+base/", `refs/heads/topic+${"x".repeat(1_100)}`, "refs/tags/v1+x", "refs/heads/topic+base\0"]) {
+        await expect(repoDiffFiles(root, branchQuery({ base }))).rejects.toMatchObject({ code: "invalid_revision", status: 400 });
+      }
+      // a valid name that starts like an option is still only a refname, and here names nothing
+      await expect(repoDiffFiles(root, branchQuery({ base: "refs/heads/-p" }))).rejects.toMatchObject({ code: "revision_not_found", status: 404 });
+      expect(existsSync(marker)).toBeFalse();
+    } finally {
+      updateRefs(root, offered.map((name) => `delete ${name}`));
+    }
+  });
+
+  it("refuses a patch when a checkout lands while it is read, never answering it under the old identity", async () => {
+    const racy = repository("branch-race");
+    writeFileSync(join(racy, "a.txt"), "base\n");
+    git(racy, "add", ".");
+    git(racy, "commit", "-q", "-m", "base");
+    git(racy, "checkout", "-q", "-b", "other");
+    writeFileSync(join(racy, "a.txt"), "other-branch-content\n");
+    git(racy, "commit", "-q", "-a", "-m", "other");
+    git(racy, "checkout", "-q", "-b", "feature", "main");
+    writeFileSync(join(racy, "a.txt"), "feature-content\n");
+    git(racy, "commit", "-q", "-a", "-m", "feature");
+    const list = await repoDiffFiles(racy, query({ scope: "branch", base: "main" }));
+    // the stand-in checks out `target` once, right before the git call whose arguments match `when`:
+    // another branch before the patch (other content), the base before the patch (nothing changed
+    // there any more) and the base before the patch's own listing (the file is no longer listed)
+    const cases = [["patch", "*\" diff \"*-U3*", "other"], ["emptied patch", "*\" diff \"*-U3*", "main"], ["emptied listing", "*--name-status*", "main"]] as const;
+    for (const [label, when, target] of cases) {
+      const marker = join(scratch, `race-${target}-${label.length}`);
+      const racer = join(scratch, `racing-git-${label.length}`);
+      writeFileSync(racer, `#!/bin/sh\ncase "$*" in ${when}) [ -f '${marker}' ] || { touch '${marker}'; git -C '${racy}' checkout -q ${target}; } ;; esac\nexec git "$@"\n`);
+      chmodSync(racer, 0o755);
+      try {
+        await expect(repoDiffFile(racy, pinned(list, { path: "a.txt" }), { git: racer })).rejects.toMatchObject({ code: "comparison_changed", status: 409 });
+        expect(existsSync(marker)).toBeTrue();
+        expect(git(racy, "rev-parse", "HEAD").trim()).not.toBe(list.comparison!.head_oid);
+      } finally {
+        git(racy, "checkout", "-q", "feature");
+      }
+    }
+  });
+
+  it("never fetches, checks out or writes while comparing a branch", async () => {
+    const log = join(scratch, "git-calls.log");
+    const logging = join(scratch, "logging-git");
+    writeFileSync(logging, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec git "$@"\n`);
+    chmodSync(logging, 0o755);
+    rmSync(log, { force: true });
+    const list = await repoDiffFiles(root, branchQuery(), { git: logging });
+    await repoDiffFile(root, pinned(list, { path: "shared.txt" }), { git: logging });
+    await repoDiffRefs(root, { git: logging });
+    const calls = readFileSync(log, "utf8").trim().split("\n");
+    expect(calls.length).toBeGreaterThan(5);
+    const commands = calls.map((call) => /-C \S+ (\S+)/.exec(call)?.[1] ?? call);
+    expect(new Set(commands)).toEqual(new Set(["rev-parse", "symbolic-ref", "merge-base", "diff", "ls-files", "for-each-ref"]));
+    expect(git(root, "status", "--porcelain")).toBe(" D gone.txt\nR  moved-from.txt -> moved-to.txt\n M shared.txt\n?? untracked.bin\n?? untracked.txt\n");
+  });
+});
+
 describe("repositories in an unusual state", () => {
   it("reads a repository with no commit yet: nothing, then untracked, then staged", async () => {
     const root = repository("unborn");
@@ -232,6 +526,7 @@ describe("repositories in an unusual state", () => {
     const staged = await repoDiffFile(root, query({ scope: "staged", path: "first.txt" }));
     expect(parsed(staged.patch).map((file) => [file.name, file.type])).toEqual([["first.txt", "new"]]);
     await expect(repoDiffFiles(root, query({ scope: "commit", base: "HEAD" }))).rejects.toMatchObject({ code: "revision_not_found", status: 404 });
+    expect(await repoDiffRefs(root)).toMatchObject({ refs: [], truncated: false });
   });
 
   it("reads a detached HEAD and a clean tree", async () => {
@@ -436,6 +731,36 @@ describe("GET /api/workspace/diff/*", () => {
     expect(parsed(answer.patch).map((file) => [file.name, file.type])).toEqual([["a.txt", "change"]]);
   });
 
+  it("lists the branches and compares the branch against one, the patch by the list's identity", async () => {
+    const list = await (await files(directory())).json() as RepoDiffFileList;
+    const listed = await fetch(`${base}/api/workspace/diff/refs?${directory()}`, { headers: owner });
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get("cache-control")).toBe("private, no-store");
+    const refs = await listed.json() as RepoDiffRefs;
+    expect(refs.refs).toEqual([{ name: "refs/heads/main", oid: list.repository.head! }]);
+    const branch = await files(`${directory()}&scope=branch&base=refs%2Fheads%2Fmain`);
+    expect(branch.status).toBe(200);
+    const compared = await branch.json() as RepoDiffFileList;
+    const identity: RepoBranchComparison = { repository_root: root, head_oid: list.repository.head!, base_oid: list.repository.head!, merge_base_oid: list.repository.head! };
+    expect(compared).toMatchObject({ scope: "branch", comparison: identity });
+    expect(compared.files.map((file) => file.path)).toEqual(["a.txt"]);
+    const patch = await fetch(`${base}/api/workspace/diff/file?${directory()}&scope=branch&path=a.txt&comparison=${encodeURIComponent(JSON.stringify(identity))}`, { headers: owner });
+    expect(patch.status).toBe(200);
+    expect(((await patch.json()) as RepoDiffFilePatch).comparison).toEqual(identity);
+    for (const [search, status, code] of [
+      [`${directory()}&scope=branch`, 400, "invalid_revision"],
+      [`${directory()}&scope=branch&base=nope`, 404, "revision_not_found"],
+      [`${directory()}&scope=branch&base=main&comparison=%7B%7D`, 400, "invalid_comparison"],
+    ] as const) {
+      const response = await files(search);
+      expect([search, response.status]).toEqual([search, status]);
+      expect(((await response.json()) as ApiError).error.code).toBe(code);
+    }
+    const stale = await fetch(`${base}/api/workspace/diff/file?${directory()}&scope=branch&path=a.txt&comparison=${encodeURIComponent(JSON.stringify({ ...identity, head_oid: "0".repeat(40) }))}`, { headers: owner });
+    expect(stale.status).toBe(409);
+    expect(((await stale.json()) as ApiError).error.code).toBe("comparison_changed");
+  });
+
   it("refuses bad input in the error envelope", async () => {
     const cases: [string, number, string][] = [
       ["", 400, "missing_directory"],
@@ -468,8 +793,11 @@ describe("GET /api/workspace/diff/*", () => {
     const crossSite = await files(directory(), { ...owner, "sec-fetch-site": "cross-site" });
     expect(crossSite.status).toBe(403);
     expect((await crossSite.json() as ApiError).error.code).toBe("cross_site");
+    const crossSiteRefs = await fetch(`${base}/api/workspace/diff/refs?${directory()}`, { headers: { ...owner, "sec-fetch-site": "cross-site" } });
+    expect(crossSiteRefs.status).toBe(403);
+    expect((await crossSiteRefs.json() as ApiError).error.code).toBe("cross_site");
     expect((await fetch(`${base}/api/session`, { headers: { cookie: watchCookie } })).status).not.toBe(401);
-    for (const path of ["workspace/diff/files", "workspace/diff/file", "machines/pc1/workspace/diff/files", "machines/pc1/workspace/diff/file", "machines/local/workspace/diff/file"]) {
+    for (const path of ["workspace/diff/files", "workspace/diff/file", "workspace/diff/refs", "machines/pc1/workspace/diff/files", "machines/pc1/workspace/diff/file", "machines/pc1/workspace/diff/refs", "machines/local/workspace/diff/file"]) {
       const response = await fetch(`${base}/api/${path}?${directory()}&path=a.txt`, { headers: { cookie: watchCookie } });
       expect([path, response.status]).toEqual([path, 403]);
       expect((await response.json() as ApiError).error.code).toBe("read_only");

@@ -116,6 +116,33 @@ describe("related app refresh", () => {
   }
 });
 
+describe("Ovis for Mac", () => {
+  // app/mac/Sources/OvisMac/WebPage.swift: WebPageController.userAgentSuffix
+  const MAC_APP = `${IPAD} OvisMac/1.0.0`;
+
+  it("counts its window as the app installed, and Safari on the same Mac as a tab", async () => {
+    const originals = Object.getOwnPropertyDescriptors(globalThis);
+    const page = Object.assign(new EventTarget(), { matchMedia: () => Object.assign(new EventTarget(), { matches: false }) });
+    try {
+      for (const [userAgent, installed] of [[MAC_APP, "true"], [IPAD, "false"]] as const) {
+        Object.defineProperties(globalThis, {
+          window: { configurable: true, value: page },
+          navigator: { configurable: true, value: { userAgent, maxTouchPoints: 0 } },
+        });
+        const { useInstallPrompt } = await import(`./install.ts?mac=${installed}`);
+        const State = () => String(useInstallPrompt().installed);
+        expect(renderToStaticMarkup(createElement(State))).toBe(installed);
+      }
+    } finally {
+      for (const key of ["window", "navigator"]) {
+        const original = originals[key];
+        if (original) Object.defineProperty(globalThis, key, original);
+        else Reflect.deleteProperty(globalThis, key);
+      }
+    }
+  });
+});
+
 describe("installHelp", () => {
   it("points iPhones and iPads (which report a Mac) at Add to Home Screen", () => {
     expect(installHelp({ userAgent: IPHONE, secure: false, maxTouchPoints: 5 })).toContain("Add to Home Screen");

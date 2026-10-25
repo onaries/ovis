@@ -7,6 +7,157 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.15] - 2026-10-25
+
+### Added
+- Files → Changes compares a branch against a base of your choosing: a **Branch** scope with a
+  base picker that lists the repository's local and remote branches (or takes a typed branch or
+  commit), and reads what the branch changed since its merge base with that base, untracked files
+  included, so what the base went on to change stays out. Each file's patch is read from the
+  comparison the list answered with: a base that moves on changes nothing until Refresh, and a
+  moved HEAD asks for one. A base that names no commit, a repository with no commit yet and a base
+  sharing no history with HEAD are each refused by name, with nothing compared in their place.
+  ([#1857](https://github.com/devswha/ovis/pull/1857))
+- Mute alerts for one agent from its row's menu in the Agents list (the ⋯, a right-click or the
+  context-menu key): the pane then raises no push (a browser's or the phone app's), in-app alert,
+  chime or tab notification on any device or browser of the server, while its status is still drawn. The choice is shared with the
+  other browsers like the pins, keyed by the PC and pane, and Unmute alerts tells only what
+  changes after it. A watching device sees the state and cannot change it.
+  ([#1848](https://github.com/devswha/ovis/pull/1848))
+- A running Claude Code subagent in the background-task list opens a read-only sheet with the
+  prompt it was given, what it has written and the tools it called so far, read from its own
+  transcript on request and bounded; Refresh reads it again. A background command, another
+  agent's task and a PC with an older bridge say so instead.
+  ([#1842](https://github.com/devswha/ovis/pull/1842))
+- A filter field above the sidebar's lists narrows the PC, workspace and agent rows to the ones whose
+  labels match what is typed (the command palette's fuzzy matcher), in their usual order with their
+  pins and folds; the selected pane's row and the rows over it stay, marked **Selected**. The query
+  is never saved: it is empty again after a clear, Escape, closing the phone's drawer or a reload.
+  ([#1851](https://github.com/devswha/ovis/pull/1851))
+- ovis.sh has a Beta page (https://ovis.sh/beta/, in English, Simplified Chinese, Japanese and
+  Korean) with two short steps for a tester: install Ovis on the computer, then join the iPhone
+  TestFlight beta or the Android Google Play closed test. Every page's footer links to it.
+  ([#1910](https://github.com/devswha/ovis/pull/1910))
+- On a phone, the terminal's key bar has a Paste key: it reads the clipboard from that tap alone
+  and puts the text into the input line at the caret, never into the grid, and drops a read that
+  answers after the line, its caret or a composition changed, or the pane, the mode or the
+  connection did. Beside Send, the input line has Insert: it types one line into the terminal
+  without Enter, so a path or a flag can be put at the prompt and edited there. The line clears
+  only once the PC confirms the terminal has the text; a refusal, a dropped connection or an
+  older PC keeps it with a note, and nothing is sent again on its own. Several lines are not
+  inserted: the line says to send them or insert them one at a time.
+  ([#1853](https://github.com/devswha/ovis/pull/1853))
+
+### Changed
+- A chat tool card names its files from the pane's folder, as the file browser does: in a pane on
+  `/work/app`, `/work/app/src/a.ts` reads `app/src/a.ts`. Its tooltip, the file it opens and a
+  copied label keep the whole path, and a file outside the folder still reads as written.
+  ([#1837](https://github.com/devswha/ovis/pull/1837))
+- Todo updates an agent makes one after another fold into one row in the chat's work block: the
+  current list with its progress, how many updates are still pending or failed, and every update
+  in order when opened. Narration or any other step between updates keeps them apart.
+  ([#1846](https://github.com/devswha/ovis/pull/1846))
+- The chat says a plan update succeeded only when the transcript records it: Claude Code's
+  results do; Codex and other agents record no outcome, so their latest list carries
+  "outcome not recorded" instead of a success claim.
+  ([#1846](https://github.com/devswha/ovis/pull/1846))
+- Ovis for Mac opens Ovis in its own window, like a native app, as soon as the server runs: no
+  more QR code and "Open in browser" first. The setup and the phone's QR code move to Ovis → Phone
+  Setup…, and show first only while Ovis is not installed or not running. File → Open in Browser
+  stays, links to other sites open in the default browser, and the window comes back to Ovis by
+  itself once the server runs again.
+  ([#1920](https://github.com/devswha/ovis/pull/1920))
+- On a Windows PC, the download button on ovis.sh now downloads `Ovis.exe` instead of copying the
+  PowerShell install command.
+  ([#1924](https://github.com/devswha/ovis/pull/1924))
+
+### Fixed
+- Turning alerts back on no longer lets a pending visibility retry remove this device's push
+  subscription.
+  ([#1871](https://github.com/devswha/ovis/pull/1871))
+- In the Android app with 3-button navigation, the message box and the terminal's key bar no
+  longer sit under the navigation buttons at the bottom of the screen (with a floating keyboard,
+  on Android System WebView 144 and later).
+  ([#1914](https://github.com/devswha/ovis/pull/1914))
+- A message sent from Chat while you were reading older turns now takes the chat back to its end
+  once the PC accepts it, and the reply is followed there. Scrolling, paging or jumping before the
+  message shows keeps the place you chose, and a message that was refused, queued or sent from
+  another browser never moves the chat.
+  ([#1831](https://github.com/devswha/ovis/pull/1831))
+- Chat stops following new output when the reader drags the scrollbar up a little after holding
+  it still, instead of only when the drag starts within half a second of the press.
+  ([#1902](https://github.com/devswha/ovis/pull/1902))
+- A pane running `claude attach` with options before `attach`, the start of the job's id or part
+  of its name also shows the background job's conversation, found the way Claude finds the job. A
+  job that cannot be told for certain keeps the terminal.
+  ([#1897](https://github.com/devswha/ovis/pull/1897))
+- Chat's command menu, and the terminal handoff of a command that needs the terminal, come back on
+  their own after the pane's command list failed to load (a dropped connection, a restarting
+  bridge), instead of staying empty until the pane is opened again.
+  ([#1893](https://github.com/devswha/ovis/pull/1893))
+- pi: `/name Release 1`, `/model <id>` and pi's other commands given an argument are no longer taken
+  for terminal screens.
+  ([#1893](https://github.com/devswha/ovis/pull/1893))
+- An omo pane is typed into as omo even when an omo-looking helper process is listed before the omo
+  that holds the session.
+  ([#1893](https://github.com/devswha/ovis/pull/1893))
+- OpenCode v2: the builtins both TUIs share are shown as verified on a v2 pane, as on v1.
+  ([#1893](https://github.com/devswha/ovis/pull/1893))
+- Claude Code: a bundled skill run by its slash command (`/code-review`, `/simplify`...), or a skill
+  of your own named like one, shows as skill activity.
+  ([#1893](https://github.com/devswha/ovis/pull/1893))
+- A connection diagnostics report whose body takes more than 10 seconds to arrive is cut off, so a
+  device sending one slowly can no longer hold every report slot and get other reports refused.
+  ([#1883](https://github.com/devswha/ovis/pull/1883))
+- Pasted and attached files no longer show up in the project's Git status: the default
+  `.ovis` folder now ignores itself, and its files still open by the path the prompt
+  names. An ignore file already in that folder, or an `OVIS_PASTE_DIR` folder, is left as is.
+  ([#1830](https://github.com/devswha/ovis/pull/1830))
+- A rendered HTML page, its own pictures, scripts and stylesheets, and the videos it plays from the
+  server, are read from the file that was checked, so a folder swapped on the way afterwards can
+  no longer put another file in their place. An HTML file that is a symlink takes its pictures,
+  scripts and stylesheets from the folder of the file it leads to.
+  ([#1892](https://github.com/devswha/ovis/pull/1892))
+- With Settings → Terminal → Follow herdr's focus on, a split this device opens itself (Split pane
+  right and open it) keeps the keyboard in the new pane and adds a Back entry, even when herdr's
+  focus moving there reaches this device before the split's answer. The setting's description now
+  says that a PC on Ovis older than 0.4.13 does not report herdr's focus.
+  ([#1887](https://github.com/devswha/ovis/pull/1887))
+- A message sent from the chat or the terminal's input line can no longer end its own bracketed paste
+  early: a paste marker pasted into it is dropped, and the bridge refuses a message whose text and
+  typed bytes disagree or that holds terminal control characters, before anything is typed or a
+  terminal draft is cleared. The draft stays with the reason.
+  ([#1840](https://github.com/devswha/ovis/pull/1840))
+- The phone app can recover damaged notification keys without reinstalling. Open each PC in the
+  app to refresh its push subscription; until then, its alerts may show only the fallback text.
+  ([#1880](https://github.com/devswha/ovis/pull/1880))
+- On Linux, a pi pane started with its own `PI_CODING_AGENT_DIR` draws its context ring against
+  the windows in that directory's model catalogs, not the ones in the server's. A pane whose
+  profile cannot be told (its environment cannot be read, and its session store is shared rather
+  than the one inside the server's own agent directory) draws no ring instead of the server's.
+  ([#1899](https://github.com/devswha/ovis/pull/1899))
+- A release installed in the app from 0.4.13 or older now gets its Rust PTY host too: the updater
+  of those versions builds a release without fetching it, so its terminals ran on Node, or were
+  mirrored on a PC without Node. The new release's supervisor fetches the host in the background
+  and checks it as an update does, and the next terminal runs on it.
+  ([#1913](https://github.com/devswha/ovis/pull/1913))
+- Dictation into the terminal in Safari (Mac, iPad and iPhone) types the corrected phrase once,
+  instead of losing it or typing every draft of it before the final one. A phrase dictated while
+  the pane is view-only is not typed later, and one dictated while the pane is not ready waits in
+  the held input until you send or discard it.
+  ([#1850](https://github.com/devswha/ovis/pull/1850))
+- With the key bar's Ctrl held, a Korean syllable still being typed in Safari is typed before the
+  chord or key-bar key, instead of being turned into the chord and lost.
+  ([#1850](https://github.com/devswha/ovis/pull/1850))
+- A touch swipe on a terminal no longer sends a leftover scroll step after a key, a disconnect, a
+  pane switch, the observe role or a released attach: each of them ends the swipe. A fast swipe's
+  scroll steps are spread over the next few frames, at most six per frame, instead of all at once,
+  and every step still arrives.
+  ([#1852](https://github.com/devswha/ovis/pull/1852))
+- A release's Ovis for Windows attach no longer fails: its swap marker is no longer an empty file, which
+  GitHub refuses to upload.
+  ([#1912](https://github.com/devswha/ovis/pull/1912))
+
 ## [0.4.14] - 2026-10-25
 
 ### Added
@@ -5671,7 +5822,8 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/devswha/ovis/compare/v0.4.14...HEAD
+[Unreleased]: https://github.com/devswha/ovis/compare/v0.4.15...HEAD
+[0.4.15]: https://github.com/devswha/ovis/compare/v0.4.14...v0.4.15
 [0.4.14]: https://github.com/devswha/ovis/compare/v0.4.13...v0.4.14
 [0.4.13]: https://github.com/devswha/herdr-web-ui/compare/v0.4.12...v0.4.13
 [0.4.12]: https://github.com/devswha/herdr-web-ui/compare/v0.4.11...v0.4.12

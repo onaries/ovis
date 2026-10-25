@@ -27,6 +27,7 @@ final class WebPushDecrypt {
         byte[] salt = new byte[16];
         header.get(salt);
         long recordSize = header.getInt() & 0xffffffffL;
+        if (recordSize < 18) throw new GeneralSecurityException("record size must be at least 18");
         if ((header.get() & 0xff) != 65) throw new GeneralSecurityException("the key id is not a P-256 key");
         byte[] senderKey = new byte[65];
         header.get(senderKey);

@@ -13,6 +13,12 @@ export interface OmoTask {
   turns: number | null;
   tool_calls: number | null;
   tokens: number | null;
+  /**
+   * What GET /api/pane/background-agent can show of it while it runs: `claude-subagent` for a
+   * Claude Code subagent (its own transcript), null for a source it reads nothing of (OmO's tasks,
+   * a Claude background command). Absent from a bridge from before the route.
+   */
+  detail_kind?: "claude-subagent" | null;
 }
 
 /** One step of an OmO workflow (a DAG node); `error` is why a failed one failed. */
@@ -39,5 +45,29 @@ export interface OmoActivity {
   tasks: OmoTask[];
   runs: OmoRun[];
   /** the PC's clock, which the times are on */
+  server_time: string;
+}
+
+/**
+ * GET /api/pane/background-agent?pane_id=&agent_id=: what a running Claude Code subagent's own
+ * transcript holds now, read-only and bounded (server/claude-subagents.ts backgroundAgentDetail):
+ * the prompt it was dispatched with, then its prose and the tools it called, as text. The read
+ * covers the start of its file (the prompt) and its end (recent activity): `truncated` when the
+ * file, the events or the text went past the `limits`, `incomplete` when a record inside what was
+ * read could not be used (torn, over its size, or not a record). `session_id` names the Claude
+ * session it belongs to: an opaque identity, never a path.
+ */
+export interface PaneBackgroundAgentDetail {
+  agent_id: string;
+  session_id: string;
+  title: string | null;
+  agent: string | null;
+  prompt: string | null;
+  /** oldest first; a `tool` event's text is the tool's name, a space, and its arguments as JSON */
+  events: Array<{ kind: "text" | "tool"; text: string; at: string | null }>;
+  truncated: boolean;
+  incomplete: boolean;
+  limits: { max_read_bytes: number; max_output_bytes: number; max_events: number };
+  /** the PC's clock, which `at` is on */
   server_time: string;
 }

@@ -1,5 +1,5 @@
 import type { ConversationPart } from "../../shared/protocol.ts";
-import type { TodoItem, TodoStatus } from "../../shared/todos.ts";
+import { parseTodoAnswer, type TodoItem, type TodoStatus } from "../../shared/todos.ts";
 export { parseTodoAnswer, type TodoItem, type TodoStatus } from "../../shared/todos.ts";
 
 /**
@@ -51,6 +51,32 @@ function phases(list: unknown): TodoItem[] {
     const items = Array.isArray(phase["items"]) ? phase["items"] : [];
     return items.flatMap((item) => text(item) === null ? [] : [{ label: text(item)!, phase: name, status: "pending" as TodoStatus }]);
   });
+}
+
+/**
+ * The whole list one todo call leaves, or null when it cannot be read. A whole-list tool's list is
+ * its input (`todos` / `plan`); an operations tool's is only its answer: an `init` input is one
+ * operation, not the list as it stands, so it is never read as one.
+ */
+export function todoSnapshot(part: Tool): TodoItem[] | null {
+  const kind = toolKind(part.name);
+  if (kind === null) return null;
+  if (kind === "ops") return parseTodoAnswer(part.output);
+  if (part.arguments_omitted) return null;
+  let input: unknown;
+  try { input = JSON.parse(part.input); } catch { return null; }
+  const list = record(input)[kind === "whole" ? "todos" : "plan"];
+  if (!Array.isArray(list)) return null;
+  const items: TodoItem[] = [];
+  for (const entry of list) {
+    const fields = record(entry);
+    const label = text(fields[kind === "whole" ? "content" : "step"]);
+    // one entry without words makes the list unreadable, not shorter
+    if (label === null) return null;
+    const status = fields["status"];
+    items.push({ label, phase: null, status: status === "completed" ? "completed" : status === "in_progress" ? "in_progress" : "pending" });
+  }
+  return items;
 }
 
 /** One line for a todo call in the work block, instead of its raw input. */

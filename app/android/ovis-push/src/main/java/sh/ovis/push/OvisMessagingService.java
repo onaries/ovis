@@ -37,7 +37,7 @@ public class OvisMessagingService extends FirebaseMessagingService {
         String sealed = message.getData().get("ovis");
         if (sealed != null) {
             try {
-                byte[] plain = WebPushDecrypt.decrypt(Base64.getDecoder().decode(sealed), PushStore.keys(this));
+                byte[] plain = WebPushDecrypt.decrypt(Base64.getDecoder().decode(sealed), PushStore.read(this));
                 JSONObject payload = new JSONObject(new String(plain, StandardCharsets.UTF_8));
                 title = payload.optString("title", "").isEmpty() ? title : payload.getString("title");
                 body = payload.optString("body", "");

@@ -118,12 +118,21 @@ public class OvisPushPlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandlerPro
 
     @objc func getSubscription(_ call: CAPPluginCall) {
         do {
-            guard let origin = PCStore.current, let saved = savedEndpoint(origin),
-                  let keys = try keyStore().read() else {
+            guard let origin = PCStore.current, let saved = savedEndpoint(origin) else {
+                call.resolve(["subscription": NSNull()])
+                return
+            }
+            if call.getBool("endpointOnly") == true {
+                call.resolve(["subscription": ["endpoint": saved.endpoint]])
+                return
+            }
+            guard let keys = try keyStore().read() else {
                 call.resolve(["subscription": NSNull()])
                 return
             }
             call.resolve(["subscription": subscription(saved.endpoint, keys)])
+        } catch PushKeyStore.Failure.damaged {
+            call.resolve(["subscription": NSNull()])
         } catch { call.reject("The push keys could not be read", "failed") }
     }
 

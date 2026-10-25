@@ -15,7 +15,7 @@ import { callNative, hasNativePlugin, PUSH_PLUGIN } from "./nativeApp.ts";
  * The transition policy is shared with the server (shared/notify-policy.ts).
  */
 
-export { alertStatus, alertsAllow, shouldNotifyStatus } from "../../shared/notify-policy.ts";
+export { alertStatus, alertsAllow, paneAlertsMuted, shouldNotifyStatus } from "../../shared/notify-policy.ts";
 
 export type NotificationState = "unsupported" | "default" | "granted" | "denied";
 

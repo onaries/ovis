@@ -207,6 +207,58 @@
   padding: var(--space-1) var(--space-2);
 }
 
+/* a running task is a disclosure: the whole row is the button that opens its detail
+   (BackgroundAgentDetail), with the caret of the ended fold at its end; the row's padding is the
+   button's, so the hit area and the hover tint are the row */
+.bg-task.is-openable {
+  padding: 0;
+}
+
+.bg-task-open {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-h);
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .bg-task-open:hover {
+    background: var(--bg-hover);
+  }
+}
+
+.bg-task-open[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
+/* a finger's row: the target's height, the text still at the row's top */
+@media (pointer: coarse) {
+  .bg-task-open {
+    min-height: var(--touch-target);
+  }
+}
+
+.bg-task-open .bg-task-main {
+  flex: 1 1 auto;
+}
+
+.bg-task-caret {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  align-self: center;
+  color: var(--text-dim);
+}
+
 .bg-task-icon {
   width: 14px;
   height: 14px;

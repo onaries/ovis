@@ -16,7 +16,7 @@ import type { SelectionMark } from "./selectionMark.ts";
 import type { SplitState } from "./split.ts";
 import { deviceInUse, followsHerdrFocus, movingHerdrFocusOn } from "./followFocus.ts";
 import type { usePreferencesSync } from "./preferencesSync.ts";
-import type { useAlertSignals } from "./useAlerts.ts";
+import type { useAlertSignals } from "./useAlertSignals.ts";
 
 const POLL_MS = 5000;
 

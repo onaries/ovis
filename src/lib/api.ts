@@ -23,6 +23,7 @@ import type {
   MoveTabRequest,
   TabMoved,
   OmoActivity,
+  PaneBackgroundAgentDetail,
   OpenWorktreeRequest,
   PairedDevice,
   PairingCode,
@@ -32,9 +33,11 @@ import type {
   PanePromptResponse,
   PaneReadResult,
   PaneResized,
+  RepoBranchComparison,
   RepoDiffFileList,
   RepoDiffRepositories,
   RepoDiffFilePatch,
+  RepoDiffRefs,
   RepoDiffScope,
   PaneSplit,
   PaneSwapped,
@@ -661,33 +664,44 @@ export function fileUrl(path: string, paneId: string | null, machineId = "local"
 
 /**
  * Which repository and which two of its states: the pane's folder (or `directory`, read when the
- * pane is gone), and the working tree against the index, the index against HEAD, or two commits.
+ * pane is gone), and the working tree against the index, the index against HEAD, two commits, or
+ * the working tree against the merge base of a chosen base and HEAD.
  */
 export interface RepoDiffQuery {
   paneId: string | null;
   directory: string | null;
   scope: RepoDiffScope;
-  /** `commit` only: the list's hashes, so a file is read from the same comparison */
+  /** `commit`: the list's hashes, so a file is read from the same comparison; `branch`: the base to list from */
   base: string | null;
   head: string | null;
+  /** `branch` only: the identity the list answered with, which a patch is read from instead of the base's name */
+  comparison: RepoBranchComparison | null;
 }
 
 function repoDiffQuery(query: RepoDiffQuery): URLSearchParams {
+  const pinned = query.scope === "branch" && query.comparison !== null;
   return new URLSearchParams({
     ...(query.paneId ? { pane_id: query.paneId } : {}),
     ...(query.directory ? { directory: query.directory } : {}),
     scope: query.scope,
-    ...(query.scope === "commit" && query.base ? { base: query.base } : {}),
+    ...((query.scope === "commit" || query.scope === "branch") && !pinned && query.base ? { base: query.base } : {}),
     ...(query.scope === "commit" && query.head ? { head: query.head } : {}),
+    ...(pinned ? { comparison: JSON.stringify(query.comparison) } : {}),
   });
 }
 
 /** GET /api/workspace/diff/repositories: bounded repository discovery on the owning PC. */
 export async function fetchRepoDiffRepositories(query: Pick<RepoDiffQuery, "paneId" | "directory">, children: boolean, depth: number, machineId = "local"): Promise<RepoDiffRepositories> {
-  const params = repoDiffQuery({ ...query, scope: "workspace", base: null, head: null });
+  const params = repoDiffQuery({ ...query, scope: "workspace", base: null, head: null, comparison: null });
   params.set("children", children ? "1" : "0");
   params.set("depth", String(depth));
   return getJson<RepoDiffRepositories>(machinePath(machineId, `workspace/diff/repositories?${params.toString()}`));
+}
+
+/** GET /api/workspace/diff/refs: the repository's branches, for choosing a base; nothing is fetched. */
+export async function fetchRepoDiffRefs(query: Pick<RepoDiffQuery, "paneId" | "directory">, machineId = "local"): Promise<RepoDiffRefs> {
+  const params = new URLSearchParams({ ...(query.paneId ? { pane_id: query.paneId } : {}), ...(query.directory ? { directory: query.directory } : {}) });
+  return getJson<RepoDiffRefs>(machinePath(machineId, `workspace/diff/refs?${params.toString()}`));
 }
 
 /** GET /api/workspace/diff/files: the files a comparison changed, with their status and counts. */
@@ -826,6 +840,17 @@ export async function fetchPaneOmoActivity(paneId: string, machineId = "local"):
   const activity = await getJson<Partial<OmoActivity>>(machinePath(machineId, `pane/omo-tasks?pane_id=${encodeURIComponent(paneId)}`));
   // a bridge from before workflows answers tasks only
   return { tasks: activity.tasks ?? [], runs: activity.runs ?? [], serverTime: activity.server_time ?? null };
+}
+
+/**
+ * GET /api/pane/background-agent: what a running Claude Code subagent's own transcript holds now,
+ * read-only and bounded (its dispatch prompt, its prose and the tools it called), for the
+ * background-task list's detail sheet. The PC resolves the session and the files: the caller
+ * names a pane and the agent id the list gave it, nothing else.
+ */
+export async function fetchPaneBackgroundAgent(paneId: string, agentId: string, machineId = "local"): Promise<PaneBackgroundAgentDetail> {
+  const query = new URLSearchParams({ pane_id: paneId, agent_id: agentId });
+  return await getJson<PaneBackgroundAgentDetail>(machinePath(machineId, `pane/background-agent?${query.toString()}`));
 }
 
 /** GET /api/pane/plan: the plan the pane's Claude Code or Codex session keeps, and that PC's clock. */
