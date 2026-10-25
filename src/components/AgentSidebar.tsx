@@ -133,10 +133,12 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   const describe = ({ machine, entry }: AgentRow) => {
     const { pane, workspace, tab, agent, agentLabel } = entry;
     const online = machine.state === "connected";
-    const title = pane.label?.trim() || agent?.title?.trim() || pane.title?.trim() || displayPaneTitle(pane);
+    const liveTitle = (pane.terminal_title_stripped ?? pane.terminal_title)?.trim();
+    const title = pane.label?.trim() || (liveTitle ? displayPaneTitle(pane) : agent?.title?.trim() || pane.title?.trim() || displayPaneTitle(pane));
     const name = agent?.name?.trim() || null;
     // the name has its own place on the line: the label beside it says the kind instead
-    const kindLabel = name !== null && agentLabel === name ? entry.canonicalAgent ?? agent?.title?.trim() ?? null : agentLabel;
+    const kindLabel = (name !== null && agentLabel === name) || (liveTitle && agentLabel === agent?.title?.trim())
+      ? entry.canonicalAgent ?? agent?.title?.trim() ?? null : agentLabel;
     const tabs = machine.snapshot?.tabs.filter((candidate) => candidate.workspace_id === workspace.workspace_id) ?? [];
     const mark = paneMark(entry);
     const markAgent = mark && hasAgentMark(mark) ? mark : null;
@@ -147,16 +149,16 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const markKind = kind && kind !== title.trim() && !contextParts.includes(kind) ? kind : null;
     // a PC that is away says nothing of its agents now, its plugins' words included
     const tokens = online ? paneTokenValues(rowTokens, entry.canonicalAgent, pane.tokens ?? agent?.tokens) : [];
-    return { online, title, name, mark, context, markKind, tokens };
+    return { online, title, name, mark, context, markKind, kind, tokens };
   };
 
   const agentItem = (row: AgentRow) => {
     const { machine, entry } = row;
-    const { pane, agent } = entry;
+    const { pane } = entry;
     const selected = machine.id === selectedMachineId && pane.pane_id === selectedPaneId;
-    const { online, title, name, mark, context, markKind, tokens } = describe(row);
+    const { online, title, name, mark, context, markKind, kind, tokens } = describe(row);
     // the row cuts a long value: the tooltip, and a phone's menu sheet, say each in full
-    const tooltip = [...new Set([pane.pane_id, title, context, ...tokens, markKind, name, agent?.display_agent, pane.cwd, online ? null : stateWord(machine)].filter(Boolean))].join("\n");
+    const tooltip = [...new Set([pane.pane_id, title, context, ...tokens, markKind, name, kind, pane.cwd, online ? null : stateWord(machine)].filter(Boolean))].join("\n");
     const pinKey = sidebarPinKey(machine.id, pane.pane_id);
     const menuOpen = menu?.key === pinKey;
     // one menu for the ⋯ and a right-click, which opens it at the pointer and leaves the focus where it was

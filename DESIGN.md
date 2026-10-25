@@ -1,5 +1,10 @@
 # Ovis Design System
 
+Agent rows use the existing workspace/header title policy: a user label first, then the live
+terminal title, with roster titles retained when no live title exists. This follows the Codex
+TUI's current thread name; no additional naming surface is drawn. A roster title echoed as the
+agent's display label is not repeated as a kind, while distinct plugin information stays.
+
 ## Codex capacity and code-mode command feedback
 
 Chat follows the Codex TUI's placement of a model-capacity refusal before the next input, using the existing inline failure row and Open Terminal action. Only the native error immediately above the live bottom composer is recognized; a later prompt or activity clears it. Nothing selects a model, retries a request or types into the terminal. Runtime errors are scoped to the PC and pane, independently of conversation-file updates.

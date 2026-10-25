@@ -16,6 +16,7 @@ declare global {
       finish(paneId: string, status: AgentStatus, seq: number): Promise<void>;
       zoom(paneId: string, focusedId: string): Promise<void>;
       split(paneId: string, focusedId: string): Promise<void>;
+      title(paneId: string, live: string, roster: string, label?: string): Promise<void>;
       block(paneId: string, kind: "loading" | "failed" | "held" | "unattached" | "files"): void;
       unblock(): void;
       blockedReads: number;
@@ -37,7 +38,7 @@ declare global {
 function installSidebarFixture(): void {
   const key = "sidebar-regression:roster";
   const stored = sessionStorage.getItem(key);
-  const state: { finishes: Record<string, { status: AgentStatus; seq: number }>; zoom: { paneId: string; focusedId: string; split?: boolean } | null; blocked?: { paneId: string; kind: string }; padded?: Record<string, number> } =
+  const state: { finishes: Record<string, { status: AgentStatus; seq: number }>; zoom: { paneId: string; focusedId: string; split?: boolean } | null; blocked?: { paneId: string; kind: string }; padded?: Record<string, number>; titles?: Record<string, { live: string; roster: string; label?: string }> } =
     stored ? JSON.parse(stored) : { finishes: {}, zoom: null };
   const sources = new Set<EventSource>();
   const sockets = new Set<WebSocket>();
@@ -50,10 +51,19 @@ function installSidebarFixture(): void {
       if (!snapshot) continue;
       snapshot.finish_epoch = `sidebar-fixture:${machine.id}:1`;
       for (const pane of snapshot.panes) {
+        const title = state.titles?.[pane.pane_id];
+        if (title) {
+          pane.terminal_title_stripped = `${title.live} | web-dashboard`;
+          pane.title = title.roster;
+          if (title.label !== undefined) pane.label = title.label;
+          else delete pane.label;
+        }
         const finish = state.finishes[pane.pane_id];
         if (finish) { pane.agent_status = finish.status; pane.finish_id = finish.seq; }
       }
       for (const agent of snapshot.agents) {
+        const title = state.titles?.[agent.pane_id];
+        if (title) { agent.title = title.roster; agent.display_agent = title.roster; }
         const finish = state.finishes[agent.pane_id];
         if (finish) { agent.agent_status = finish.status; agent.state_change_seq = finish.seq; }
       }
@@ -206,6 +216,14 @@ function installSidebarFixture(): void {
     async finish(paneId, status, seq) { state.finishes[paneId] = { status, seq }; await publish(); },
     async zoom(paneId, focusedId) { state.zoom = { paneId, focusedId }; await publish(); },
     async split(paneId, focusedId) { state.zoom = { paneId, focusedId, split: true }; await publish(); },
+    async title(paneId, live, roster, label) {
+      state.titles = { ...state.titles, [paneId]: { live, roster, ...(label !== undefined ? { label } : {}) } };
+      await publish();
+      const body: { machines: Machine[] } = await (await fetch("/api/machines")).json();
+      const snapshot = body.machines.find((machine) => machine.id === "local")?.snapshot;
+      if (!snapshot) throw new Error("Missing demo snapshot");
+      window.sidebarFixture.frame({ type: "snapshot", snapshot });
+    },
     pad(paneId, turns) { state.padded = { ...state.padded, [paneId]: turns }; sessionStorage.setItem(key, JSON.stringify(state)); },
     frame(message) {
       for (const socket of sockets) if (socket.readyState === 1) socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
@@ -294,6 +312,37 @@ try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
       const finishCase = process.env["SIDEBAR_FINISH_CASE"];
+      if (!finishCase || finishCase === "live-title") {
+        for (const mobile of [false, true]) for (const theme of ["light", "dark"]) {
+          await withPage(browser, { theme, sidebarRows: "two", language: mobile ? "ko" : "en" }, async (page) => {
+            if (mobile) {
+              await page.locator('button[aria-controls="workspace-drawer"]').tap();
+              await page.locator(".agents-sidebar .agent-section-toggle").tap();
+            }
+            const live = mobile ? "현재 대화 검토 이어가기" : "Continue current review";
+            const renamed = mobile ? "다음 작업 상태 확인" : "Check the next task";
+            const row = page.locator(`.agent-item[data-pin-key="local:${panes.web}"]`);
+            const workspace = page.locator(`.workspace-select[data-pane="${panes.web}"] .workspace-name`);
+            for (const title of [live, renamed]) {
+              await page.evaluate(({ id, title }) => window.sidebarFixture.title(id, title, "Old roster task"), { id: panes.web, title });
+              await page.waitForFunction(({ id, title }) =>
+                document.querySelector(`.agent-item[data-pin-key="local:${id}"] .agent-title`)?.textContent === title
+                  && document.querySelector(`.workspace-select[data-pane="${id}"] .workspace-name`)?.textContent === title,
+              { id: panes.web, title });
+              assert.equal(await workspace.textContent(), await row.locator(".agent-title").textContent());
+              assert.ok(!(await row.innerText()).includes("Old roster task"), "the stale roster title is not repeated as a kind");
+              assert.ok(!(await row.locator(".agent-select").getAttribute("title"))?.includes("Old roster task"), "tooltip follows the same live title");
+            }
+            await row.scrollIntoViewIfNeeded();
+            const evidence = process.env["UI_EVIDENCE_DIR"];
+            if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, `agent-live-title-${mobile ? 390 : 1280}-${theme}.png`) }); }
+            await page.evaluate((id) => window.sidebarFixture.title(id, "New live title", "Old roster task", "Pinned review"), panes.web);
+            await page.waitForFunction((id) => document.querySelector(`.agent-item[data-pin-key="local:${id}"] .agent-title`)?.textContent === "Pinned review", panes.web);
+            assert.equal(await workspace.textContent(), "Pinned review", "a user label still names the workspace and agent alike");
+          }, mobile);
+          console.log(`PASS ${mobile ? 390 : 1280}px ${theme}: live title changes agree across workspace/agent rows, including tooltip and user labels`);
+        }
+      }
       if (!finishCase || finishCase === "previous-answer") {
         for (const source of ["claude-transcript", "codex-transcript", "pi-transcript", "omp-transcript", "omo-transcript", "gjc-transcript", "opencode-transcript", "grok-transcript", "devin-transcript", "hermes-transcript", "agy-transcript"] as const) {
           await withPage(browser, {}, async (page) => {

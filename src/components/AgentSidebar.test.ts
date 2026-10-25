@@ -95,4 +95,27 @@ describe("AgentSidebar plugin tokens", () => {
     // the mark already draws Claude: the line does not say it again
     expect(lines[1]).toBe("checkout-api");
   });
+
+  test("a live Codex title replaces a stale roster title while user labels and absent-title fallbacks remain", () => {
+    const host = machine([
+      pane("w1:p1", { agent: "codex", title: "Old task", terminal_title_stripped: "Continue review | api" }),
+      pane("w1:p2", { agent: "codex", label: "My review", terminal_title_stripped: "Continue review | api" }),
+      pane("w1:p3", { agent: "codex" }),
+    ]);
+    if (!host.snapshot) throw new Error("Missing test snapshot");
+    host.snapshot.agents = host.snapshot.agents.map((entry) => ({ ...entry, title: "Old task", display_agent: "Old task" }));
+    const html = render([host]);
+    expect(texts(html, "agent-title")).toEqual(["Continue review", "My review", "Old task"]);
+    expect(texts(html, "agent-context")[0]).toBe("checkout-api");
+    expect(tooltips(html)[0]).not.toContain("Old task");
+  });
+
+  test("a live title keeps a plugin's distinct display line", () => {
+    const host = machine([pane("w1:p1", { agent: "codex", terminal_title_stripped: "Continue review | api" })]);
+    if (!host.snapshot) throw new Error("Missing test snapshot");
+    host.snapshot.agents = host.snapshot.agents.map((entry) => ({ ...entry, title: "Old task", display_agent: "needs a login · 8m ago" }));
+    const html = render([host]);
+    expect(texts(html, "agent-title")).toEqual(["Continue review"]);
+    expect(texts(html, "agent-context")[0]).toBe("needs a login · 8m ago · checkout-api");
+  });
 });
