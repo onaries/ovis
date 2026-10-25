@@ -12,7 +12,7 @@ import type { ServerMessage } from "../shared/protocol.ts";
 
 const agent = process.argv[2] === "codex" ? "codex" : "omo";
 const queueKey = agent === "codex" ? "\t" : "\u0011";
-const screen = agent === "codex" ? "• Working (2s • esc to interrupt) · 1 background termin…\n› \x1b[2mAsk Codex to do anything\x1b[0m\n  GPT-6.1-Sol high · /tmp/work\n  ← for agents · ? for shor  ⚠ 3 warnings · f2 to view\n" : "Message OmO\n";
+const screen = agent === "codex" ? "• Working (2s • esc to interrupt) · 1 background termin…\n› \x1b[2mAsk Codex to do anything\x1b[0m\n  GPT-6.1-Sol high fast · /tmp/work\n  ← for agents · ? for shor  ⚠ 3 warnings · f2 to view\n" : "Message OmO\n";
 const root = mkdtempSync(join(tmpdir(), `herdr-${agent}-queue-`));
 const evidence = process.env.UI_EVIDENCE_DIR || join(root, "evidence");
 mkdirSync(evidence, { recursive: true });

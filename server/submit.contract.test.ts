@@ -244,11 +244,12 @@ describe("WebSocket submit", () => {
     }
   });
 
-  for (const extended of [false, true]) it(`Codex native queue delivers paste then Tab once (${extended ? "CSI-u" : "legacy"})`, async () => {
+  for (const extended of [false, true]) it(`Codex native queue delivers paste then Tab once with a fast-tier footer (${extended ? "CSI-u" : "legacy"})`, async () => {
     const socket = await Socket.connect();
     const target = extended ? codexExtended : codexWorking;
     const { read, scroll } = mockClaudeInput(target.pane, codexWorkingScreen
       .replace("esc to interrupt)", "esc to interrupt) · 1 background termin…")
+      .replace(" high ·", " high fast ·")
       + "  ← for agents · ? for shor  ⚠ 3 warnings · f2 to view\n");
     const key = extended ? "\u001b[9u" : "\t";
     const prompt = spyOn(herdr, "agentPrompt");

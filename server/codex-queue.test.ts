@@ -32,3 +32,16 @@ it("recognizes a clipped shortcuts footer and background-terminal status without
     expect(codexQueueInputEmpty(live.replace("? for shor", "? for sharing"), colors)).toBe(false);
   }
 });
+
+it("recognizes a fast-tier model footer without treating typed placeholder words as empty", () => {
+  for (const footer of ["GPT-6.1-Sol high fast · Context 59% left · 1M in · 12K out…", "GPT-6.1-Sol high fast · main · Context 41% left · 1M i…"]) {
+    const live = screen("› Ask Codex to do anything").replace("GPT-6.1-Sol high · /workspace", footer);
+    const colors = live.replace("Ask Codex to do anything", "\x1b[2mAsk Codex to do anything\x1b[0m");
+    expect(codexQueueInputEmpty(live, colors)).toBe(true);
+    expect(codexQueueInputEmpty(live.replace("› Ask Codex to do anything", "›"))).toBe(true);
+    expect(codexQueueInputEmpty(live, live)).toBe(false);
+    expect(codexQueueInputEmpty(live.replace("Ask Codex to do anything", "unsent draft"), colors)).toBe(false);
+    expect(codexQueueInputEmpty(live.replace("high fast", "high faster"), colors.replace("high fast", "high faster"))).toBe(false);
+    expect(codexQueueInputEmpty(live + "Select model\n", colors)).toBe(false);
+  }
+});
