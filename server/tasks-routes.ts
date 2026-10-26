@@ -14,7 +14,7 @@ import type { OmoTask } from "../shared/protocol.ts";
 
 /** The core's own trackers: the route reads them and never makes its own. */
 export type TaskTrackers = { omo: Pick<OmoStatus, "sessionOf">; claudeAgents: Pick<ClaudeSubagentStatus, "sessionOf" | "ensure">;
-  codexTasks?: Pick<CodexBackgroundTasks, "poll" | "tasksOf">; plans?: Pick<SessionPlans, "ensure" | "codexPathOf"> };
+  codexTasks?: Pick<CodexBackgroundTasks, "poll" | "tasksWithUsage">; plans?: Pick<SessionPlans, "ensure" | "codexPathOf"> };
 
 /** The answer for the background tasks route, or null when the path is not it. */
 export async function handleTasksRequest(request: Request, url: URL, pathname: string, { omo, claudeAgents, codexTasks, plans }: TaskTrackers): Promise<Response | null> {
@@ -37,8 +37,9 @@ export async function handleTasksRequest(request: Request, url: URL, pathname: s
             await plans.ensure(pane, true);
             const path = plans.codexPathOf(pane);
             codexTasks.poll(paneId, path);
+            const tasks = path === null ? [] : await codexTasks.tasksWithUsage(paneId);
             const after = await paneGet(paneId);
-            found = plans.codexPathOf(after) === path && path !== null ? codexTasks.tasksOf(paneId) : [];
+            found = plans.codexPathOf(after) === path && path !== null ? tasks : [];
           } else if (claudeAgents.sessionOf(paneId) === null) await claudeAgents.ensure(pane);
         } else if (claudeAgents.sessionOf(paneId) === null) await claudeAgents.ensure(await paneGet(paneId));
       })());

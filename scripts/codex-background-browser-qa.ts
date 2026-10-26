@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Database } from "bun:sqlite";
 import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,12 +16,16 @@ let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 const agentId = "11111111-1111-4111-8111-111111111111";
 const record = (payload: unknown, type = "response_item") => JSON.stringify({ type, timestamp: new Date().toISOString(), payload }) + "\n";
-const parent = join(root, "parent.jsonl");
+mkdirSync(join(root, "sessions"));
+const parent = join(root, "sessions", "parent.jsonl");
+const db = new Database(join(root, "state_5.sqlite"), { create: true });
+db.run("CREATE TABLE threads (id TEXT PRIMARY KEY, tokens_used INTEGER, source TEXT)");
+db.query("INSERT INTO threads VALUES (?, ?, ?)").run(agentId, 29_014, JSON.stringify({ subagent: { thread_spawn: { parent_thread_id: "parent-session" } } }));
 const started = record({ id: "parent-session" }, "session_meta")
   + record({ type: "function_call", name: "multi_agent_v1__spawn_agent", arguments: JSON.stringify({ agent_type: "explorer", message: "Inspect Codex lifecycle without changing files" }), call_id: "spawn" })
   + record({ type: "function_call_output", call_id: "spawn", output: JSON.stringify({ agent_id: agentId, nickname: "Explorer QA" }) });
 const completed = record({ type: "user_message", message: `<subagent_notification>${JSON.stringify({ agent_path: agentId, status: { completed: "Lifecycle check completed" } })}</subagent_notification>` }, "event_msg");
-const tracker = new CodexBackgroundTasks(() => {});
+const tracker = new CodexBackgroundTasks(() => {}, Date.now, root);
 let activityReads = 0;
 try {
   if (evidence) mkdirSync(evidence, { recursive: true });
@@ -29,13 +34,13 @@ try {
   symlinkSync(join(repo, "scripts/codex-background-fixture.tsx"), join(root, "fixture.tsx"));
   writeFileSync(join(root, "index.html"), '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="/fixture.tsx"></script></body></html>');
   await viteBuild({ configFile: join(repo, "vite.config.ts"), root, publicDir: false, logLevel: "warn", build: { outDir: output, emptyOutDir: true } });
-  server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+  server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url), pane = url.searchParams.get("pane_id");
     assert.equal(request.method, "GET", "the UI must remain read-only");
     if (url.pathname === "/api/pane/omo-tasks") {
       activityReads += 1;
       tracker.poll("parent", parent);
-      return Response.json({ tasks: pane === "parent" ? tracker.tasksOf("parent") : [], runs: [], server_time: new Date().toISOString() });
+      return Response.json({ tasks: pane === "parent" ? await tracker.tasksWithUsage("parent") : [], runs: [], server_time: new Date().toISOString() });
     }
     if (url.pathname === "/api/pane/background-agent") {
       tracker.poll("parent", parent);
@@ -52,6 +57,7 @@ try {
   browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
   let missing = 0;
   for (const width of [390, 1440]) for (const theme of ["light", "dark"]) {
+    db.run("UPDATE threads SET tokens_used = 29014");
     writeFileSync(parent, started + completed); tracker.poll("parent", null); activityReads = 0;
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     const errors: string[] = [];
@@ -79,6 +85,9 @@ try {
     await chip.click();
     const row = page.locator(".bg-task-open");
     await row.waitFor();
+    await row.getByText(/29k tokens/).waitFor();
+    db.run("UPDATE threads SET tokens_used = 42500");
+    await row.getByText(/43k tokens/).waitFor();
     await settled();
     if (evidence) await page.screenshot({ path: join(evidence, `codex-${width}-${theme}-running.png`) });
     await row.click();
@@ -93,6 +102,7 @@ try {
     await page.evaluate(() => window.codexBackgroundQA.count(0));
     await page.locator(".bg-task.is-running").waitFor({ state: "detached" });
     await page.locator(".bg-ended-toggle").click();
+    await page.locator(".bg-task.is-completed").getByText(/43k tokens/).waitFor();
     await page.locator(".bg-task.is-completed .bg-task-open").click();
     await detail.getByText("Lifecycle check completed", { exact: true }).waitFor();
     await page.keyboard.press("Escape");
@@ -101,10 +111,10 @@ try {
     assert.equal(await page.locator(".bg-agent-detail").count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.deepEqual(errors, []);
-    console.log(`PASS Codex task discovery, running/detail/completion and pane isolation ${width}px ${theme}`);
+    console.log(`PASS Codex task discovery, live cumulative tokens, running/detail/completion and pane isolation ${width}px ${theme}`);
     await page.close();
   }
   assert.equal(missing, 0, "Codex's composer must discover its parent-reported tasks");
 } finally {
-  await browser?.close(); server?.stop(true); rmSync(root, { recursive: true, force: true });
+  await browser?.close(); server?.stop(true); db.close(); rmSync(root, { recursive: true, force: true });
 }

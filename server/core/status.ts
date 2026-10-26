@@ -119,7 +119,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   const codexTasks = new CodexBackgroundTasks((paneId, count) => {
     const status = completions.current(paneId);
     if (status !== undefined) broadcastAll(paneStatus(paneId, status, { background_tasks: count }));
-  });
+  }, Date.now, options.codexHome);
   const plans = new SessionPlans({
     claudePath: (paneId) => claudeAgents.sessionOf(paneId)?.path ?? null,
     omoPath: (paneId) => omo.pathOf(paneId),

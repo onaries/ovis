@@ -1,7 +1,9 @@
 import type { CodexSubagentCall, OmoTask, PaneBackgroundAgentDetail } from "../shared/protocol.ts";
+import { Database } from "bun:sqlite";
+import { join } from "node:path";
 import { plain, readLines } from "./claude-subagents.ts";
 import { codexSubagentCalls, codexSubagentNotification, codexSubagentReplies } from "./codex-subagents.ts";
-import { codexOutputText } from "./codex.ts";
+import { codexOutputText, codexRolloutPath, paneCodexHome } from "./codex.ts";
 
 const READ_BYTES = 8 * 1024 * 1024;
 const LIMIT = 200;
@@ -16,12 +18,12 @@ type Read = {
   session: string | null; tasks: Map<string, Task>; calls: Map<string, Call>; cells: Map<string, Call>;
 };
 
-/** Parent-reported assignments and lifecycle only: no child store, process or model is queried. */
+/** Parent-reported lifecycle, with cumulative child usage from Codex's read-only thread store. */
 export class CodexBackgroundTasks {
   private readonly panes = new Map<string, Read>();
   private readonly counts = new Map<string, number>();
 
-  constructor(private readonly changed: (paneId: string, count: number) => void, private readonly now = Date.now) {}
+  constructor(private readonly changed: (paneId: string, count: number) => void, private readonly now = Date.now, private readonly codexHome?: string) {}
 
   poll(paneId: string, path: string | null): void {
     const stat = path === null ? null : plain(path);
@@ -56,6 +58,34 @@ export class CodexBackgroundTasks {
     const ended = recent.filter((task) => task.status !== "running")
       .sort((left, right) => Date.parse(right.ended_at ?? "") - Date.parse(left.ended_at ?? "")).slice(0, 10);
     return [...running, ...ended].map((task) => ({ ...task }));
+  }
+
+  async tasksWithUsage(paneId: string): Promise<OmoTask[]> {
+    const read = this.panes.get(paneId);
+    if (!read || read.behind || read.session === null || this.tasksOf(paneId).length === 0) return [];
+    const session = read.session;
+    const home = await paneCodexHome(paneId, this.codexHome);
+    if (this.panes.get(paneId) !== read || read.session !== session || read.behind) return [];
+    const tasks = this.tasksOf(paneId);
+    if (tasks.length === 0 || codexRolloutPath(read.path, home) !== read.path) return tasks;
+    let db: Database | undefined;
+    try {
+      db = new Database(join(home, "state_5.sqlite"), { readonly: true, create: false });
+      const rows = db.query<{ id: string; tokens_used: number; source: string }, string[]>(
+        `SELECT id, tokens_used, source FROM threads WHERE id IN (${tasks.map(() => "?").join(", ")})`,
+      ).all(...tasks.map((task) => task.id));
+      const usage = new Map<string, number>();
+      for (const child of rows) {
+        let source: Row;
+        try { source = row(JSON.parse(child.source)); } catch (error) { if (error instanceof SyntaxError) continue; throw error; }
+        const parent = row(row(source["subagent"])["thread_spawn"])["parent_thread_id"];
+        if (parent === session && Number.isSafeInteger(child.tokens_used) && child.tokens_used >= 0) usage.set(child.id, child.tokens_used);
+      }
+      return tasks.map((task) => ({ ...task, tokens: usage.get(task.id) ?? null }));
+    } catch {
+      // Older or unavailable stores leave usage unknown, without hiding the parent's task list.
+      return tasks;
+    } finally { db?.close(); }
   }
 
   detail(paneId: string, agentId: string): { detail: Omit<PaneBackgroundAgentDetail, "server_time"> } | { refusal: "missing" | "unavailable" } {

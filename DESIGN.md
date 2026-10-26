@@ -29,7 +29,10 @@ The existing plan poll also reads bounded increments of the verified parent roll
 spawn receipts, wait results, completion notices, close and resume reports drive the running
 count. A tool finishing is not a child finishing. The list retains the newest ten endings in
 the last day. Details show the assigned prompt and parent-reported result, explicitly labelled;
-child transcripts, token counts and live child output are not inferred. Session replacement
+child transcripts and live child output are not inferred. Each child's cumulative input and
+output tokens (including cached input) come from Codex's read-only thread store, only when its
+native source names this parent. Resuming a child keeps its session-wide total; absent or
+unreadable usage stays hidden. The existing task metadata row renders it. Session replacement
 clears the old list, and task changes do not complete, interrupt or submit the parent's turn.
 
 Agy's terminal fallback follows Copilot's recovery cadence: while native history is

@@ -12,6 +12,7 @@ export interface OmoTask {
   ended_at: string | null;
   turns: number | null;
   tool_calls: number | null;
+  /** Codex: this child's cumulative input + output usage, including cached input, from its native store. */
   tokens: number | null;
   /**
    * What GET /api/pane/background-agent can show of it while it runs: `claude-subagent` for a

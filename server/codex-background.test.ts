@@ -1,5 +1,6 @@
 import { afterEach, expect, it, spyOn } from "bun:test";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CodexBackgroundTasks } from "./codex-background.ts";
@@ -18,14 +19,87 @@ const call = (name: string, args: unknown, call_id = "call") => entry({ type: "f
 const output = (value: unknown, call_id = "call") => entry({ type: "function_call_output", output: JSON.stringify(value), call_id });
 const spawn = () => call("multi_agent_v1__spawn_agent", { agent_type: "explorer", message: "Inspect task lifecycle" }) + output({ agent_id: id, nickname: "Explorer" });
 function fixture(body = spawn()) {
-  const root = mkdtempSync(join(tmpdir(), "ovis-codex-tasks-")); roots.push(root);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-codex-tasks-"))); roots.push(root);
   const path = join(root, "rollout.jsonl");
   writeFileSync(path, entry({ id: "parent" }, "session_meta") + body);
   const counts: number[] = [];
-  const tracker = new CodexBackgroundTasks((_pane, count) => counts.push(count), () => Date.parse(at));
+  const tracker = new CodexBackgroundTasks((_pane, count) => counts.push(count), () => Date.parse(at), root);
   tracker.poll("pane", path);
-  return { path, tracker, counts };
+  return { root, path, tracker, counts };
 }
+
+function usageFixture() {
+  const setup = fixture();
+  mkdirSync(join(setup.root, "sessions"));
+  const path = join(setup.root, "sessions", "parent.jsonl");
+  writeFileSync(path, entry({ id: "parent", source: "cli" }, "session_meta") + spawn());
+  setup.tracker.poll("pane", path);
+  const usage = (tokens: number | null, parent = "parent", child = id, source?: string) => {
+    const db = new Database(join(setup.root, "state_5.sqlite"), { create: true });
+    try {
+      db.run("CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, tokens_used INTEGER, source TEXT)");
+      db.query("INSERT OR REPLACE INTO threads VALUES (?, ?, ?)").run(child, tokens,
+        source ?? JSON.stringify({ subagent: { thread_spawn: { parent_thread_id: parent } } }));
+    } finally { db.close(); }
+  };
+  usage(29_014);
+  return { ...setup, path, usage };
+}
+
+it("reads a child's native cumulative usage and refreshes it without summing snapshots", async () => {
+  const { path, tracker, usage } = usageFixture();
+  expect((await tracker.tasksWithUsage("pane"))[0]?.tokens).toBe(29_014);
+  usage(42_500);
+  expect((await tracker.tasksWithUsage("pane"))[0]?.tokens).toBe(42_500);
+  appendFileSync(path, call("wait_agent", { targets: [id] }) + output({ status: { [id]: { completed: "Done" } } }));
+  tracker.poll("pane", path);
+  expect(await tracker.tasksWithUsage("pane")).toMatchObject([{ status: "completed", tokens: 42_500 }]);
+  appendFileSync(path, call("followup_task", { agent_id: id, message: "Follow up" }) + output({}));
+  tracker.poll("pane", path); usage(60_000);
+  expect(await tracker.tasksWithUsage("pane")).toMatchObject([{ status: "running", tokens: 60_000 }]);
+  expect(tracker.tasksOf("pane")[0]?.tokens).toBeNull();
+});
+
+it("never attributes another parent's usage or unspawned children to this task", async () => {
+  const { tracker, usage } = usageFixture();
+  usage(900_000, "foreign");
+  usage(1_000_000, "parent", "unspawned");
+  expect(await tracker.tasksWithUsage("pane")).toMatchObject([{ id, tokens: null }]);
+  expect(await tracker.tasksWithUsage("pane")).toHaveLength(1);
+});
+
+it("keeps malformed, missing and invalid usage unknown, and accepts a real zero", async () => {
+  const { root, tracker, usage } = usageFixture();
+  for (const value of [null, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    usage(value);
+    expect((await tracker.tasksWithUsage("pane"))[0]?.tokens).toBeNull();
+  }
+  for (const source of ["{", "null", JSON.stringify({ subagent: "other" })]) {
+    usage(20, "parent", id, source);
+    expect((await tracker.tasksWithUsage("pane"))[0]?.tokens).toBeNull();
+  }
+  usage(0);
+  expect((await tracker.tasksWithUsage("pane"))[0]?.tokens).toBe(0);
+  rmSync(join(root, "state_5.sqlite"));
+  expect(await tracker.tasksWithUsage("pane")).toMatchObject([{ id, tokens: null }]);
+  writeFileSync(join(root, "state_5.sqlite"), "unreadable database");
+  expect(await tracker.tasksWithUsage("pane")).toMatchObject([{ id, tokens: null }]);
+});
+
+it("does not read usage for a parent outside the resolved store", async () => {
+  const { root, tracker, usage } = usageFixture();
+  usage(900);
+  const path = join(root, "outside.jsonl");
+  writeFileSync(path, entry({ id: "parent" }, "session_meta") + spawn()); tracker.poll("pane", path);
+  expect(await tracker.tasksWithUsage("pane")).toMatchObject([{ id, tokens: null }]);
+});
+
+it("drops an in-flight usage read when the pane changes session", async () => {
+  const { tracker } = usageFixture();
+  const pending = tracker.tasksWithUsage("pane");
+  tracker.poll("pane", null);
+  expect(await pending).toEqual([]);
+});
 
 it("counts only acknowledged spawns and exposes their assigned task", () => {
   const { path, tracker } = fixture(call("multi_agent_v1__spawn_agent", { message: "Inspect task lifecycle" }));
@@ -210,7 +284,7 @@ it("rejects a Codex detail when the pane changes session during the read", async
 });
 
 it("lists Codex tasks through the existing route, not through the Claude tracker", async () => {
-  const { path, tracker } = fixture();
+  const { path, tracker } = usageFixture();
   const plans = new SessionPlans({ claudePath: () => null, codexPath: async () => path, onChange: () => {} });
   const get = spyOn(herdr, "paneGet").mockImplementation(async () => pane());
   const url = new URL("http://localhost/api/pane/omo-tasks?pane_id=pane");
@@ -220,7 +294,7 @@ it("lists Codex tasks through the existing route, not through the Claude tracker
       plans, codexTasks: tracker,
     });
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toMatchObject({ tasks: [{ id, title: "Explorer", status: "running" }], runs: [] });
+    expect(await response?.json()).toMatchObject({ tasks: [{ id, title: "Explorer", status: "running", tokens: 29_014 }], runs: [] });
   } finally { get.mockRestore(); }
 });
 
