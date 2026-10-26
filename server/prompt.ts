@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { HerdrPane, InteractivePrompt, InteractivePromptOption, PanePromptResponse, PromptAnswer, SessionSnapshot, SlashCommand } from "../shared/protocol.ts";
+import type { HerdrPane, InteractivePrompt, PanePromptResponse, PromptAnswer, SessionSnapshot, SlashCommand } from "../shared/protocol.ts";
 import { builtinCommands, cachedPaneCommands } from "./commands.ts";
 import { agentProcesses, readCommandTranscript } from "./conversation.ts";
+import { agentProcessInFront } from "./agent-process.ts";
 import { resolveAgent } from "./pane-context.ts";
 import { processAlive, processStartedAt, processStartUpperBoundAsync } from "./process-start.ts";
 import { commandInvocations, commandOutcome, CommandReservations, dialogSettlingScreen, ownsCommandDialog, WINDOW_MS as COMMAND_WINDOW_MS, type CommandSend } from "./outcome.ts";
@@ -14,7 +15,7 @@ import { claudePlanFile } from "./claude-plan.ts";
 import { listPendingQuestionForms, openCodeService, replyOpenCodeForm } from "./opencode-service.ts";
 import { opencodeSessionId } from "./opencode.ts";
 import { registry } from "./dialogs/registry.ts";
-import { ANSI_RE, type AnswerStep, KEY, type OmoAsk, type ParsedPrompt, finishPrompt, keySteps, navigationKeys, parsedByPublicPrompt, publicPrompt } from "./dialogs/shared.ts";
+import { ANSI_RE, type AnswerStep, KEY, type OmoAsk, type ParsedPrompt, type PromptDraft, finishPrompt, keySteps, navigationKeys, own, parsedByPublicPrompt, publicPrompt } from "./dialogs/shared.ts";
 import { executeInteractionPlan } from "./dialogs/interaction-plan.ts";
 import { liveScreen, parsePrompt, promptTailIsActive } from "./dialogs/live.ts";
 import { CODEX_WORKING_RE, codexFooterLine, codexRuntimeError } from "./dialogs/codex.ts";
@@ -115,11 +116,15 @@ const chatSent = new Map<string, { text: string; commands: PaneCommandSend[]; re
 
 const outcomeIdentity = (pane: HerdrPane): string => JSON.stringify([pane.terminal_id, pane.agent_session]);
 
-/** The agent's own process (agentProcesses), keyed by its pid and, on Linux, its start time; never the process-group id. */
+/**
+ * The agent process in front (agentProcessInFront, as a pending send is bound), keyed by its pid and, on Linux, its
+ * start time; never the process-group id. With `bound`, that process only, while herdr still lists it as one of the
+ * agent's: Windows hands a finished agent's pid to the next process at once, and that one is no agent.
+ */
 function outcomeProcess(info: ProcessInfo | undefined, agent: string, bound?: number): { pid: number; started: number | null } | null {
-  const candidates = agentProcesses(info?.foreground_processes ?? [], agent);
-  const running = bound === undefined ? candidates[0] : candidates.find((entry) => entry.pid === bound);
-  return running ? { pid: running.pid, started: process.platform === "linux" ? processStartedAt(running.pid) : null } : null;
+  const running = agentProcessInFront(info, agent, bound);
+  return running && (bound === undefined || running.pid === bound && agentProcesses([running], agent).length > 0)
+    ? { pid: running.pid, started: process.platform === "linux" ? processStartedAt(running.pid) : null } : null;
 }
 
 /** How long a poll waits for a send's process binding before it judges that send without one, this time. */
@@ -708,11 +713,11 @@ async function readKnownPrompt(
     const rawOptions = field.options ?? [];
     const customAllowed = field.custom === true || rawOptions.length === 0;
 
-    let options: InteractivePromptOption[];
+    let options: PromptDraft["options"];
     let customOptionIndex: number | null = null;
 
     if (rawOptions.length === 0) {
-      options = [{ label: "Type your answer", description: null }];
+      options = [{ label: own("Type your answer"), description: null }];
       customOptionIndex = 0;
     } else {
       options = rawOptions.map((opt) => ({
@@ -720,16 +725,16 @@ async function readKnownPrompt(
         description: opt.description ?? null,
       }));
       if (customAllowed) {
-        options.push({ label: "Type your own answer", description: null });
+        options.push({ label: own("Type your own answer"), description: null });
         customOptionIndex = options.length - 1;
       }
     }
 
-    const title = field.title && field.title !== field.description ? field.title : (form.title || "Question");
+    const title = field.title && field.title !== field.description ? field.title : (form.title || own("Question"));
     const question = field.description || field.title || form.title || "";
     const steps = form.fields.length > 1
       ? form.fields.map((f, i) => ({
-          label: f.title || `Question ${i + 1}`,
+          label: f.title || own("Question {n}", { n: i + 1 }),
           answered: i < stepIndex,
           current: i === stepIndex,
         }))

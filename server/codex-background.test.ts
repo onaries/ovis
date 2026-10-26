@@ -324,6 +324,7 @@ it("lists Codex tasks through the existing route, not through the Claude tracker
   try {
     const response = await handleTasksRequest(new Request(url), url, url.pathname, {
       omo: { sessionOf: () => null }, claudeAgents: { sessionOf: () => null, ensure: async () => { throw new Error("Wrong agent tracker"); } },
+      opencodeAgents: { sessionOf: () => null, ensure: () => { throw new Error("Wrong agent tracker"); }, tasksOf: async () => { throw new Error("Wrong agent tracker"); }, beginRead: () => 0 },
       plans, codexTasks: tracker,
     });
     expect(response?.status).toBe(200);
@@ -339,7 +340,8 @@ it("returns no Codex list from a pane that moved sessions during its lookup", as
   const url = new URL("http://localhost/api/pane/omo-tasks?pane_id=pane");
   try {
     const response = await handleTasksRequest(new Request(url), url, url.pathname, {
-      omo: { sessionOf: () => null }, claudeAgents: { sessionOf: () => null, ensure: async () => {} }, plans, codexTasks: tracker,
+      omo: { sessionOf: () => null }, claudeAgents: { sessionOf: () => null, ensure: async () => {} },
+      opencodeAgents: { sessionOf: () => null, ensure: () => { throw new Error("Wrong agent tracker"); }, tasksOf: async () => { throw new Error("Wrong agent tracker"); }, beginRead: () => 0 }, plans, codexTasks: tracker,
     });
     expect(await response?.json()).toMatchObject({ tasks: [], runs: [] });
   } finally { get.mockRestore(); }

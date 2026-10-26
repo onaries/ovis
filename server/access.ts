@@ -27,7 +27,7 @@
  * nothing) cannot be told from a local client: only a token closes that setup.
  */
 import { BlockList, isIP } from "node:net";
-import type { AccessRefusal, AccessVia, DeviceRole } from "../shared/protocol.ts";
+import type { AccessRefusal, AccessVia, BindScope, DeviceRole, ObservedIngress } from "../shared/protocol.ts";
 import type { DeviceMatch } from "./devices.ts";
 
 export interface AccessInput {
@@ -95,10 +95,58 @@ export function isLoopbackBind(hostname: string): boolean {
  * loopback bind is local, and a Tailscale-only bind is reachable only within the tailnet.
  */
 export function lanExposed(input: { hostname: string; tokenConfigured: boolean; gated: boolean }): boolean {
-  const address = input.hostname.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  return bindScope(input.hostname) === "other" && !input.tokenConfigured && !input.gated;
+}
+
+/**
+ * Where the configured bind address answers, read from the address literal alone: any spelling of
+ * loopback (`isLoopbackBind`), a Tailscale address, or anything else (a LAN address, a wildcard, a
+ * DNS name). A name is never resolved, and nothing here says what a proxy in front forwards.
+ */
+export function bindScope(hostname: string): BindScope {
+  if (isLoopbackBind(hostname)) return "loopback";
+  const address = hostname.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
   const family = isIP(address);
-  const tailnet = family === 4 ? tailnetIpv4.check(address, "ipv4") : family === 6 && tailnetIpv6.check(address, "ipv6");
-  return !isLoopbackBind(input.hostname) && !tailnet && !input.tokenConfigured && !input.gated;
+  return (family === 4 ? tailnetIpv4.check(address, "ipv4") : family === 6 && tailnetIpv6.check(address, "ipv6")) ? "tailnet" : "other";
+}
+
+const inTailnet = (address: string | null | undefined): boolean => {
+  const family = isIP(address ?? "");
+  return family === 4 ? tailnetIpv4.check(address!, "ipv4") : family === 6 && tailnetIpv6.check(address!, "ipv6");
+};
+
+/**
+ * How this one request reached the server, as far as the request proves it; never how every
+ * device reaches it. Tailscale's headers are only evidence where the operator declared serve the
+ * only ingress (OVIS_TAILSCALE_SERVE_ONLY): elsewhere any client on this PC, or another proxy
+ * passing a visitor's copy on, can send the same shape. So Tailscale and Funnel are labelled only
+ * on that declared install, from loopback, while Tailscale runs here, and (Tailscale) with the
+ * tailnet source address it writes. A Tailscale header that fails those checks is `unknown`,
+ * other forwarding is `proxy`, and an unforwarded request is `direct` (a proxy that adds nothing,
+ * nginx's bare `proxy_pass`, looks the same: see `cameThroughProxy`).
+ */
+export function observedIngress(input: Pick<AccessInput, "loopback" | "forwarded" | "funnel" | "tailscaleLogin" | "forwardedFor" | "owner" | "tagged" | "serveOnly"> & {
+  /** the connection's source address is known at all */
+  peerKnown: boolean;
+  /** a forwarding header (`forwardingHeaders`) came with the request */
+  forwardingHeaders: boolean;
+}): ObservedIngress {
+  if (!input.peerKnown) return "unknown";
+  const tailscaleHere = input.owner !== null || input.tagged;
+  const throughServe = input.serveOnly && input.loopback && tailscaleHere;
+  const fromTailscale = throughServe && inTailnet(input.forwardedFor ?? null);
+  if (input.funnel) return throughServe ? "funnel" : "unknown";
+  if (input.tailscaleLogin !== null) return fromTailscale ? "tailscale" : "unknown";
+  // a request with no login: a tagged node, or the owner's own grant
+  if (fromTailscale && input.forwarded) return "tailscale";
+  if (input.forwardingHeaders) return "proxy";
+  // from this PC, a Host that does not name it is a proxy rewriting nothing but the address
+  return input.loopback && input.forwarded ? "proxy" : "direct";
+}
+
+/** Is there a forwarding header on the request, whoever sent it? Unlike `cameThroughProxy`, a Host header alone does not count. */
+export function forwardingHeaders(headers: Headers): boolean {
+  return PROXY_HEADERS.some((name) => headers.has(name)) || headers.has("tailscale-funnel-request");
 }
 
 /** Headers a proxy adds and a browser or CLI on this PC has no reason to send; a Tailscale login is stated by a proxy too. */

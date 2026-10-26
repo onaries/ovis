@@ -1,14 +1,17 @@
 import { expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
-import type { DeviceStore } from "../devices.ts";
+import { DeviceStore } from "../devices.ts";
 import type { MachineRelay } from "../machine-relay.ts";
 import type { PendingInputs } from "../pending-input.ts";
 import { type Client, connectionData, connectionOf, createConnections, send } from "./connections.ts";
 
-function harness({ deviceId, readOnly = false, relay, revokedAlready = false }: { deviceId?: string; readOnly?: boolean; relay?: MachineRelay; revokedAlready?: boolean } = {}) {
+function harness({ deviceId, readOnly = false, relay, revokedAlready = false, store }: { deviceId?: string; readOnly?: boolean; relay?: MachineRelay; revokedAlready?: boolean; store?: DeviceStore } = {}) {
   const log: string[] = [];
   const revocations: (() => void)[] = [];
-  const devices = {
+  const devices = store ?? {
     onRevoke: (_id: string, close: () => void) => {
       if (revokedAlready) close(); else revocations.push(close);
       return () => log.push("unwatch device");
@@ -60,6 +63,36 @@ it("does not admit a device that was revoked before its socket opened", () => {
   const { client, log, admit } = harness({ deviceId: "phone", revokedAlready: true });
   expect(admit(client)).toBe(false);
   expect(log.at(-1)).toBe("closed 1008 Device access revoked");
+});
+
+it("revoking every device ends local and relayed device connections alike, and admits none after", () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-connections-revoke-all-"));
+  try {
+    const store = new DeviceStore(root);
+    const phone = store.pair(store.startPairing().code, "Phone", "drive")!;
+    store.match(phone.token);
+    const tablet = store.pair(store.startPairing().code, "Tablet", "drive")!;
+    store.match(tablet.token);
+    const relayed: string[] = [];
+    const relay = { close: () => relayed.push("relay closed") } as unknown as MachineRelay;
+    const local = harness({ deviceId: phone.device.id, store });
+    const remote = harness({ deviceId: tablet.device.id, relay, store });
+    expect(local.admit(local.client)).toBe(true);
+    expect(remote.admit(remote.client)).toBe(true);
+    expect(store.revokeAll().sort()).toEqual([phone.device.id, tablet.device.id].sort());
+    expect(local.log).toEqual(["detach claimed", "drop claims", "closed 1008 Device access revoked"]);
+    expect(remote.log).toEqual(["detach claimed", "drop claims", "closed 1008 Device access revoked"]);
+    // the relayed connection's relay is closed with the revocation itself, before its socket's own close
+    expect(relayed).toEqual(["relay closed"]);
+    expect(local.mayType(local.client)).toBe(false);
+    expect(() => remote.authorizeSocket(remote.client)).toThrow("this device's access was revoked");
+    remote.end(remote.client, "closed");
+    expect(relayed).toEqual(["relay closed", "relay closed"]);
+    // a socket that opens with a revoked device's cookie after the fact is closed at once
+    const late = harness({ deviceId: phone.device.id, store });
+    expect(late.admit(late.client)).toBe(false);
+    expect(late.log.at(-1)).toBe("closed 1008 Device access revoked");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 it("closes only the relay of a relayed connection", () => {

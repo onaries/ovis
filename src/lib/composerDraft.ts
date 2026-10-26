@@ -1,3 +1,5 @@
+import { paneLifetimes, paneStateKey, type PaneLifetimes } from "./paneLifetime.ts";
+
 /** Drafts and in-flight sends belong to their pane, even while its composer is unmounted. */
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 interface Draft { text: string; sending: boolean }
@@ -20,9 +22,17 @@ export class ComposerDraftStore {
   private own = new Set<string>();
   /** one wake-up per draft at the end of another tab's lease: an abandoned lease ends silently */
   private expiries = new Map<string, unknown>();
+  /** this tab's send on each draft, and the herdr its pane was drawn under when it began */
+  private sends = new Map<string, { id: number; lifetime: string | null | undefined }>();
+  private sendCount = 0;
   constructor(
-    private storage: () => DraftStorage = () => window.localStorage,
+    // the pane's herdr's storage, or this page's memory (lib/paneLifetime.ts)
+    private storage: () => DraftStorage = () => paneLifetimes.paneStorage,
     private schedule: (run: () => void, ms: number) => unknown = (run, ms) => setTimeout(run, ms),
+    private lifetimeOf: (key: string) => string | null | undefined = (key) => {
+      const pane = paneStateKey(key);
+      return pane ? paneLifetimes.generation(pane.machineId) : undefined;
+    },
   ) {}
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private notify(): void { for (const listener of this.listeners) listener(); }
@@ -95,6 +105,7 @@ export class ComposerDraftStore {
     // lease runs out (a tab that closed mid-send never ends it)
     if (this.own.has(key) || this.inFlight(key) !== null) return false;
     this.own.add(key);
+    this.sends.set(key, { id: ++this.sendCount, lifetime: this.lifetimeOf(key) });
     if (sent !== undefined) this.pending.set(key, { sent, edited: false });
     this.drafts.set(key, { ...draft, sending: true });
     // the lease, so a second tab on this pane sees the send instead of the text it carries
@@ -103,7 +114,12 @@ export class ComposerDraftStore {
     this.notify();
     return true;
   }
-  end(key: string): void {
+  /** The send this tab began on the draft: its settle and end name it (lib/paneLifetime.ts, #1608). */
+  sendOf(key: string): number | undefined { return this.sends.get(key)?.id; }
+  /** `send`: the one sendOf named; a send another herdr's pane outlived ends nothing here */
+  end(key: string, send?: number): void {
+    if (send !== undefined && this.sends.get(key)?.id !== send) return;
+    this.sends.delete(key);
     this.pending.delete(key);
     this.own.delete(key);
     try { this.storage().removeItem(SENDING_PREFIX + key); } catch { /* private mode */ }
@@ -121,8 +137,38 @@ export class ComposerDraftStore {
     this.set(to, text);
     this.set(from, "");
   }
-  /** Remove only the acknowledged prefix; edits within the sent text stay unsent. */
-  settle(key: string, sent: string): { text: string; edited: boolean } {
+  /** Another herdr took the PC's pane IDs: its drafts are read again from where they now are. */
+  forget(machineId: string, lifetimes: Pick<PaneLifetimes, "keep"> = paneLifetimes): void {
+    // a send begun for the earlier herdr's pane settles nothing in the draft that pane ID holds now,
+    // and does not hold the new pane's box as sending
+    for (const [key, send] of [...this.sends]) {
+      if (paneStateKey(key)?.machineId !== machineId || send.lifetime === this.lifetimeOf(key)) continue;
+      this.sends.delete(key);
+      this.own.delete(key);
+      this.pending.delete(key);
+    }
+    for (const [key, draft] of [...this.drafts]) {
+      const pane = paneStateKey(key);
+      if (pane?.machineId !== machineId) continue;
+      // an edit storage refused lives only here: it goes to recovery, not away
+      if (this.unsaved.has(key)) lifetimes.keep(machineId, pane.paneId, "message", draft.text);
+      this.drafts.delete(key);
+      this.saved.delete(key);
+      this.unsaved.delete(key);
+    }
+    this.notify();
+  }
+  /** The draft's latest text could not be saved: it is in this page only. */
+  isUnsaved(key: string): boolean { return this.unsaved.has(key); }
+  /**
+   * Remove only the acknowledged prefix; edits within the sent text stay unsent. `send`: the one
+   * sendOf named; null when that send was for a pane another herdr's has replaced, whose draft it
+   * leaves alone.
+   */
+  settle(key: string, sent: string): { text: string; edited: boolean };
+  settle(key: string, sent: string, send: number | undefined): { text: string; edited: boolean } | null;
+  settle(key: string, sent: string, send?: number): { text: string; edited: boolean } | null {
+    if (send !== undefined && this.sends.get(key)?.id !== send) return null;
     this.refresh(key);
     const current = this.read(key).text;
     const editedMeanwhile = this.pending.get(key)?.edited === true;
@@ -134,6 +180,7 @@ export class ComposerDraftStore {
   }
 }
 export const composerDrafts = new ComposerDraftStore();
+paneLifetimes.onRetire((machineId) => composerDrafts.forget(machineId));
 /**
  * The draft a `storage` event from another tab concerns, or null. A send is begun and ended as
  * well as edited, so both keys reconcile the one draft: a sending key names it after its prefix,

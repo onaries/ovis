@@ -929,6 +929,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       noteSubmitted(paneId, current.text, current);
       const shown = await served(paneId);
       expect(shown.prompt).toMatchObject({ agent: "claude", title: "Goal active", options: [{ label: "Close" }] });
+      // the route hands over which words are the bridge's own, as keys the client translates (#1482)
+      expect(shown.prompt?.own_text).toEqual({ title: { key: "Goal active" }, labels: { 0: { key: "Close" } } });
       expect(shown.outcomes?.at(-1)).toMatchObject({ id: "goal-send", state: "interaction-required" });
       expect(current.dialogId).toBe(shown.prompt!.id);
       // a form naming another reader's dialog is not waiting on this card

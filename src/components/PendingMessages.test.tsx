@@ -22,6 +22,22 @@ const render = (code: string, message: string, languages: string[], serverOwned 
 };
 
 describe("a pending row's refusal note", () => {
+  it.each(["en", "ko", "ja", "zh"] as const)("shows a confirmed agent change on an uncertain message in %s", (language) => {
+    const fields = { from: "Build", to: "Plan" };
+    const message = `Tab switched OpenCode's agent from ${JSON.stringify(fields.from)} to ${JSON.stringify(fields.to)}. Nothing more was typed.`;
+    const note = translate(language, "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.", fields);
+    const expected = renderToStaticMarkup(createElement("span", null, note)).slice("<span>".length, -"</span>".length);
+    expect(render("submit_changed", message, [language], true, "uncertain")).toContain(expected);
+  });
+
+  it.each(["en", "ko", "ja", "zh"] as const)("shows that Tab attached another skill on an uncertain message in %s", (language) => {
+    const message = "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.";
+    const expected = renderToStaticMarkup(createElement("span", null, translate(language, message))).slice("<span>".length, -"</span>".length);
+    const html = render("submit_changed", message, [language], true, "uncertain");
+    expect(html).toContain(expected);
+    expect(html).not.toContain(translate(language, "Not confirmed. Check the terminal before sending again."));
+  });
+
   it("says a held-input refusal in the reader's language, not the raw English reason", () => {
     const held = translate("ko", "Not sent: send or discard the held input first.");
     expect(held).not.toBe("Not sent: send or discard the held input first.");
@@ -47,6 +63,19 @@ describe("a pending row's refusal note", () => {
       expect(html).toContain(note);
       expect(html).toContain("pending-message-send");
       expect(html).not.toContain("this PC has not said yet what it supports; nothing was sent");
+    }
+  });
+
+  it("tells a first message whose launched agent ended apart from a changed terminal or session, in the reader's language (#1547)", () => {
+    for (const language of ["ko", "ja", "zh"] as const) {
+      const ended = translate(language, "Not sent: the agent started for this message has ended. Review the message before sending it.");
+      const changed = translate(language, "Not sent: the pane's terminal or agent session changed. Review the message before sending it again.");
+      const endedHtml = render("first_message_launch_ended", "The agent started for this message has ended; review the message before sending it", [language]);
+      expect(endedHtml).toContain(ended);
+      expect(endedHtml).not.toContain("has ended; review the message");
+      const changedHtml = render("pending_target_changed", "The pane's terminal or agent session changed; review the message before sending it again", [language]);
+      expect(changedHtml).toContain(changed);
+      expect(changedHtml).not.toContain("agent session changed; review the message");
     }
   });
 

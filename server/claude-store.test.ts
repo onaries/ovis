@@ -3,7 +3,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, sy
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
-import { AmbiguousClaudeStore, claudeAttachArgs, claudeAttachedJob, claudeAttachSession, claudeForegroundSession, claudeJobSession, claudeProcessSession, claudeSessionTempDir, claudeStoreKey, claudeStoreOf, claudeProjectDir, claudeTranscriptFile, claudeRecordOnlyIn, configDirInPsLine, darwinProcess, forgetClaudeSessions, herdrLaunchSource, isClaudeProcess, paneClaudeSource, processClaudeConfigDir, processClaudeSource, procArgsEnvironment, procStartTime } from "./claude-store.ts";
+import { AmbiguousClaudeStore, claudeAttachArgs, claudeAttachedJob, claudeAttachSession, claudeForegroundSession, claudeJobSession, claudeProcessSession, claudeSessionTempDir, claudeStoreKey, claudeStoreOf, claudeProjectDir, claudeTranscriptFile, claudeRecordOnlyIn, configDirInPsLine, darwinProcess, forgetClaudeSessions, herdrLaunchSource, isClaudeProcess, paneClaudeSource, processClaudeConfigDir, processClaudeSource, procArgsEnvironment } from "./claude-store.ts";
+import { procStartTime } from "./darwin-process.ts";
 import type { ProcessRow } from "./windows-processes.ts";
 
 const NATIVE = process.platform === "linux" || process.platform === "darwin";

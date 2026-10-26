@@ -13,13 +13,13 @@
  * id is a UUID herdr reports, so at most one file answers to it.
  */
 
-import { dlopen, FFIType, ptr } from "bun:ffi";
 import { createHash } from "node:crypto";
 import { constants, type Dirent } from "node:fs";
 import { open, readFile, readdir, readlink, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import nodePath, { basename, dirname, isAbsolute, join, type PlatformPath } from "node:path";
 import { directoryKey, withoutVerbatimPrefix } from "./codex.ts";
+import { darwinStartTime, sysctlCall } from "./darwin-process.ts";
 import { recentProcessTable } from "./gjc-runtime.ts";
 import { processAlive, processStartUpperBoundAsync } from "./process-start.ts";
 import type { ProcessRow } from "./windows-processes.ts";
@@ -194,20 +194,6 @@ export async function claudeRecordOnlyIn(
   return holders.length === 1 && holders[0] === wanted;
 }
 
-/** sysctl(3) from libSystem, opened once, on macOS only. */
-let darwinSysctl: ((name: Int32Array, out: Uint8Array) => number | null) | undefined;
-
-function sysctlCall(): (name: Int32Array, out: Uint8Array) => number | null {
-  if (darwinSysctl) return darwinSysctl;
-  // a system library's C function: nothing native of node's is loaded into Bun
-  const lib = dlopen("/usr/lib/libSystem.B.dylib", { sysctl: { args: [FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.i32 } });
-  darwinSysctl = (name, out) => {
-    const size = new BigUint64Array([BigInt(out.byteLength)]);
-    return lib.symbols.sysctl(ptr(name), name.length, ptr(out), ptr(size), null, 0) === 0 ? Number(size[0]) : null;
-  };
-  return darwinSysctl;
-}
-
 /**
  * The environment in a `KERN_PROCARGS2` answer, one entry each: an int argc, the executable's path,
  * its NUL padding, argc arguments, then the environment, each NUL-terminated, up to an empty one or
@@ -247,23 +233,6 @@ function darwinEnvironment(pid: number): string | null {
   const length = call(new Int32Array([1, 49, pid]), answer); // CTL_KERN, KERN_PROCARGS2
   const entries = length === null ? null : procArgsEnvironment(answer.subarray(0, length));
   return entries === null ? null : entries.join("\0");
-}
-
-/** kern.proc.pid begins with extern_proc.p_starttime, a 64-bit Darwin timeval. */
-export function procStartTime(answer: Uint8Array): bigint | null {
-  if (answer.byteLength < 16) return null;
-  const view = new DataView(answer.buffer, answer.byteOffset, answer.byteLength);
-  const seconds = view.getBigInt64(0, true);
-  const micros = view.getInt32(8, true);
-  return seconds > 0n && micros >= 0 && micros < 1_000_000 ? seconds * 1_000_000n + BigInt(micros) : null;
-}
-
-/** The kernel's process birth time, including microseconds that `ps -o lstart` drops. */
-function darwinStartTime(pid: number): bigint | null {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
-  const answer = new Uint8Array(4096);
-  const length = sysctlCall()(new Int32Array([1, 14, 1, pid]), answer); // CTL_KERN, KERN_PROC, KERN_PROC_PID
-  return length === null ? null : procStartTime(answer.subarray(0, length));
 }
 
 export const darwinProcess = { environment: darwinEnvironment, startTime: darwinStartTime };
@@ -921,7 +890,7 @@ async function findAttachedJob(configDir: string, { ref, byName }: ClaudeAttach,
  */
 const attachedJobs = new Map<string, { pid: number; started: number; job: string | null; at: number }>();
 const MAX_ATTACHED_JOBS = 256;
-/** Two reads of one process's start differ by up to a second: macOS's ps counts whole seconds. */
+/** Two reads of one process's start: Linux's differ by a tick or two; macOS's are the kernel's own, kept to the margin they had when `ps` counted whole seconds. */
 const SAME_START_MS = 2000;
 const ATTACH_MISS_MS = 10_000;
 

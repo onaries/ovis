@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as darwinProcess from "./darwin-process.ts";
 import { Database } from "bun:sqlite";
 import { appendFileSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +19,8 @@ import * as herdr from "./herdr/client.ts";
 import { forgetHistoryChains } from "./codex.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import * as omo from "./omo.ts";
-import { ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
+import { claudeProjectDir } from "./claude-store.ts";
+import { claudePaneSession, ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
 
 it("labels only Claude's explicit end_turn text as final-answer evidence", () => {
   const entry = (stop_reason: string | null) => JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason, content: [{ type: "text", text: "Answer" }] } });
@@ -2752,4 +2754,37 @@ describe("a Codex pane that reported no session yet", () => {
       snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+// any client snapshot starts the Claude subagent refresh that reads this, also the one a pending message is checked against (#1545)
+it("reads a Claude pane's process start from the kernel on macOS, with no ps for it", async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const home = mkdtempSync(join(tmpdir(), "claude-darwin-start-"));
+  const previousHome = process.env["HOME"];
+  const session = "0b9d6a52-7a5e-4f8e-9a51-2f3c4d5e6f70";
+  const cwd = join(home, "project");
+  mkdirSync(join(home, ".claude", "projects", claudeProjectDir(cwd)), { recursive: true });
+  writeFileSync(join(home, ".claude", "projects", claudeProjectDir(cwd), `${session}.jsonl`), "");
+  const rpc = spyOn(herdr, "herdrRpc").mockImplementation((async (method: string) => method === "agent.get"
+    ? { agent: { agent_session: { value: session } } }
+    : { process_info: { foreground_processes: [{ pid: 4242, name: "claude", argv: ["claude"] }] } }) as unknown as typeof herdr.herdrRpc);
+  const blocking = spyOn(Bun, "spawnSync");
+  // the kernel's process record answers the start; no ps asks it, awaited or not (#1404). Claude's own
+  // store may still ask an awaited ps for the process's environment on a real Mac.
+  const kernel = spyOn(darwinProcess, "darwinStartTime").mockReturnValue(1_000_000n);
+  const awaited = spyOn(Bun, "spawn");
+  process.env["HOME"] = home;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  try {
+    const found = await claudePaneSession({ pane_id: "claude-darwin", cwd } as HerdrPane);
+    expect(found?.pid).toBe(4242);
+    expect(found?.startedAt).toBe(1_000);
+    expect((awaited.mock.calls as unknown as [string[]][]).filter(([argv]) => argv.includes("etime="))).toEqual([]);
+    expect(blocking).not.toHaveBeenCalled();
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    if (previousHome === undefined) delete process.env["HOME"]; else process.env["HOME"] = previousHome;
+    awaited.mockRestore(); blocking.mockRestore(); kernel.mockRestore(); rpc.mockRestore();
+    rmSync(home, { recursive: true, force: true });
+  }
 });

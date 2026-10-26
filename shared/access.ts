@@ -30,6 +30,29 @@ export interface LanExposure {
   readonly host: string;
 }
 
+/** The configured bind address, read from its literal (`bindScope` in server/access.ts): never a DNS lookup or the request's Host. */
+export type BindScope = "loopback" | "tailnet" | "other";
+/** How this one request arrived, as far as it proves (`observedIngress` in server/access.ts); not how every device reaches the server. `direct`: no proxy said it forwarded the request, which a proxy that adds nothing (an SSH tunnel, nginx's bare `proxy_pass`) also looks like. */
+export type ObservedIngress = "direct" | "proxy" | "tailscale" | "funnel" | "unknown";
+
+/**
+ * GET /api/health (both scopes), authenticated requests only, a watching device's included:
+ * what protects this server, each fact on its own and none of them a verdict. It carries no
+ * token, hash, header, login or address, and is sent `no-store`. Anonymous answers omit it, and
+ * an older server sends none: the client then says the facts are unavailable rather than
+ * reading them from `auth` or from the absence of `lan_exposure`.
+ */
+export interface SecuritySummary {
+  /** an access token is configured on the server, whether or not this request used it */
+  readonly token_configured: boolean;
+  /** the durable pairing gate (`DeviceStore.gated`); `unavailable` when devices.json cannot be read, which keeps it closed */
+  readonly pairing_gate: "open" | "closed" | "unavailable";
+  readonly bind_scope: BindScope;
+  readonly observed_ingress: ObservedIngress;
+  /** `observed` only with trusted public-ingress evidence on this request (Funnel); otherwise unknown, never "none" */
+  readonly public_exposure: "observed" | "unknown";
+}
+
 export interface PairedDevice {
   readonly id: string;
   readonly label: string;

@@ -10,6 +10,7 @@ import { ConversationUnavailable, forgetTranscriptState, HistoryChanged, paneCon
 import { parseConversationMetadata } from "./conversation-metadata.ts";
 import * as herdr from "./herdr/client.ts";
 import * as omo from "./omo.ts";
+import * as processStart from "./process-start.ts";
 import type { SessionSnapshot } from "../shared/protocol.ts";
 
 const session = "12aa83d8-48bc-41f2-a498-7055c5c44a01";
@@ -66,6 +67,22 @@ async function logFixture(held: readonly string[]) {
     },
   };
 }
+
+it.skipIf(process.platform !== "linux")("never reuses cached handoff unregister evidence when the process identity lookup fails", async () => {
+  const fixture = await logFixture([session]);
+  const { environment, log, pid } = fixture;
+  const read = () => copilotProcessSession(environment, ["copilot"], pid, "unregistered");
+  const realStarted = processStart.processStartedAt;
+  try {
+    appendFileSync(log, register(session) + register(session, "Unregistering"));
+    expect(read()?.sessionId).toBe(session);
+    writeFileSync(log, register(other));
+    const missing = spyOn(processStart, "processStartedAt").mockImplementation((current) => current === pid ? null : realStarted(current));
+    try { expect(read()).toBeNull(); } finally { missing.mockRestore(); }
+    expect(read()).toBeNull();
+    expect(copilotProcessSession(environment, ["copilot"], pid)?.sessionId).toBe(other);
+  } finally { await fixture.close(); }
+});
 
 it("parses persisted Copilot messages and tool rounds once, with failures and recorded metadata", () => {
   const text = start + prompt("Visible prompt")

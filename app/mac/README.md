@@ -33,6 +33,13 @@ cookies and drafts stay in the app's own WebKit store, apart from any browser's.
   answers. When the server is still gone after about 15 seconds, the window shows the setup's Start
   (the page and what was open in it go), and it goes back to Ovis by itself once the server runs
   again, however it was started.
+- When the server comes back on another port (7317 was taken), the window follows it. The page's
+  storage belongs to its port, so the app reads the unsent drafts (the chat's draft, the terminal's
+  held input, held messages) from the page it leaves and writes them into the new one before its
+  code starts, over the older copies an earlier visit left there (unless a window the page opened is
+  still open on that port: then they only fill gaps). Nothing is sent; the old port keeps its copy.
+  Drafts move only between this Mac's own loopback addresses (`Resources/carry-drafts.js`); one that
+  does not fit in the new page's storage stays in the app and is written on the next try.
 - Another app's link (a site in a web panel can make one) asks before it opens that app, as Safari
   does, and only the Ovis page itself opens app windows.
 - The user agent ends like Safari's, then `OvisMac/<version>`: the terminal's Korean input

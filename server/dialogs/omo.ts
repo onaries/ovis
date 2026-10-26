@@ -1,7 +1,7 @@
 import type { DialogReader, ReaderContext } from "./registry.ts";
 import { pickerPlan } from "./interaction-plan.ts";
 import { type InteractivePrompt } from "../../shared/protocol.ts";
-import { ANSI_RE, onePerPass, type AnswerStep, KEY, type OmoAsk, PI_MODEL_TAIL_RE, type ParsedPrompt, SOLID_RULE_RE, cleanLine, findLastIndex, finishPrompt, isDivider, joinWrapped, keySteps, navigationKeys, normalizeText, piModelRows, screenWidth, wrapped } from "./shared.ts";
+import { ANSI_RE, onePerPass, type AnswerStep, type CardWords, KEY, type OmoAsk, PI_MODEL_TAIL_RE, type ParsedPrompt, SOLID_RULE_RE, cleanLine, englishOf, findLastIndex, finishPrompt, isDivider, own, joinWrapped, keySteps, navigationKeys, normalizeText, piModelRows, screenWidth, wrapped } from "./shared.ts";
 
 // OmO's ask_user_question form (omo 5.1): `Ask user · 30m`, a tab per question then Submit, and
 // under them the active question or, on the Submit tab, the review of the answers
@@ -83,8 +83,8 @@ function omoSteps(tabs: OmoForm["tabs"], ask: OmoAsk | null): InteractivePrompt[
 }
 
 /** The card's title: where the question stands among several, else its header. */
-function omoTitle(tabs: OmoForm["tabs"], index: number, ask: OmoAsk | null): string {
-  return tabs.length > 1 ? `Question ${index + 1} of ${tabs.length}` : ask?.questions[index]?.header ?? tabs[index]!.label;
+function omoTitle(tabs: OmoForm["tabs"], index: number, ask: OmoAsk | null): CardWords {
+  return tabs.length > 1 ? own("Question {n} of {total}", { n: index + 1, total: tabs.length }) : ask?.questions[index]?.header ?? tabs[index]!.label;
 }
 
 /**
@@ -295,9 +295,9 @@ function parseOmoTyping(screen: string, ask: OmoAsk | null, trusted: boolean): P
     tabs = form.tabs;
     question = joinWrapped(view.question, screenWidth(lines));
   }
-  const choices: { label: string; description: string | null; steps: AnswerStep[] }[] = [
-    { label: "Save the typed answer", description: typed || null, steps: [{ text: "\n" }] },
-    { label: "Discard it", description: null, steps: keySteps([KEY.escape]) },
+  const choices: { label: CardWords; description: string | null; steps: AnswerStep[] }[] = [
+    { label: own("Save the typed answer"), description: typed || null, steps: [{ text: "\n" }] },
+    { label: own("Discard it"), description: null, steps: keySteps([KEY.escape]) },
   ];
   return finishPrompt("omo", {
     // a menu: a number typed in the chat acts on the terminal's input, so it waits for Confirm
@@ -305,7 +305,7 @@ function parseOmoTyping(screen: string, ask: OmoAsk | null, trusted: boolean): P
     options: choices.map((choice) => ({ label: choice.label, description: choice.description })),
     multi_select: false, custom_option_index: null, steps: omoSteps(tabs, known),
   }, {
-    responder: "omo-typing", menuLabels: choices.map((choice) => choice.label), selectedIndex: -1,
+    responder: "omo-typing", menuLabels: choices.map((choice) => englishOf(choice.label)), selectedIndex: -1,
     checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
     optionSteps: choices.map((choice) => choice.steps),
   }, { call: known?.id });
@@ -365,7 +365,7 @@ function parseOmoReview(screen: string, ask: OmoAsk | null, trusted: boolean): P
   // a notice (`! …`) and the Submit line, both wrapped as well
   const field = rest.findIndex((line) => cleanLine(line).startsWith(">"));
   if (field < 0) return null;
-  const commentLabel = joinWrapped(rest.slice(0, field), width) || "Comment";
+  const commentLabel = joinWrapped(rest.slice(0, field), width) || own("Comment");
   const comment = cleanLine(rest[field]!).replace(/^>\s?/, "").trim();
   const after = joinWrapped(rest.slice(field + 1), width);
   const submitAt = after.search(/Submit \(\d+\/\d+ answered\)/);
@@ -380,18 +380,19 @@ function parseOmoReview(screen: string, ask: OmoAsk | null, trusted: boolean): P
     answered: rowOf[at] ? !/:\s*unanswered$/.test(rowOf[at]!.label) : answeredCount === count,
     current: false,
   }));
-  const choices: { label: string; steps: AnswerStep[] }[] = [
-    { label: "Submit", steps: [OMO_SUBMIT] },
+  const choices: { label: CardWords; steps: AnswerStep[] }[] = [
+    { label: own("Submit"), steps: [OMO_SUBMIT] },
     ...labels.map((label, row) => ({ label, steps: keySteps([...omoWalk(row, selectedIndex, count + 1), KEY.enter]) })),
   ];
   return finishPrompt("omo", {
     // a menu: a number typed in the chat submits the whole form, so it waits for Confirm
-    kind: "menu", title: "Review your answers", question: submitAt < 0 ? "Submit your answers?" : after.slice(submitAt),
-    body: [notice, comment ? `Comment: ${comment}` : ""].filter(Boolean).join("\n") || null,
+    kind: "menu", title: own("Review your answers"), question: submitAt < 0 ? own("Submit your answers?") : after.slice(submitAt),
+    // the notice and the comment are omo's and the user's own words, the label before the comment the bridge's
+    body: comment ? (notice ? own("{notice}\nComment: {comment}", { notice, comment }) : own("Comment: {comment}", { comment })) : notice || null,
     options: [...choices.map(({ label }) => ({ label, description: null })), { label: commentLabel, description: null }],
     multi_select: false, custom_option_index: choices.length, steps: omoSteps(tabs, known),
   }, {
-    responder: "omo-review", menuLabels: [...labels, commentLabel], selectedIndex,
+    responder: "omo-review", menuLabels: [...labels, englishOf(commentLabel)], selectedIndex,
     checkedOptionIndices: [], customMenuIndex: count, rejectWithEscapeIndex: null,
     optionSteps: [...choices.map(({ steps }) => steps), []],
     customSteps: (text) => [...keySteps(omoWalk(count, selectedIndex, count + 1)), { text }, OMO_SUBMIT],
@@ -501,7 +502,7 @@ function parseOmoModel(screen: string): ParsedPrompt | null {
   return finishPrompt("omo", {
     kind: "question",
     title: "",
-    question: current ? `Select model (currently ${current.label})` : "Select model",
+    question: current ? own("Select model (currently {model})", { model: current.label }) : own("Select model"),
     body: null,
     options: labels.map((label) => ({ label, description: null })),
     multi_select: false,

@@ -1854,6 +1854,15 @@ ${rows}
     expect(answerKeys(onRow!, { option_index: 0 })).toEqual([{ text: "\u001b[13;5u" }]);
     expect(answerKeys(onRow!, { option_index: 1 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);
     expect(answerKeys(onRow!, { custom_text: "급해요" })).toEqual([{ keys: ["down"] }, { text: "급해요" }, { text: "\u001b[13;5u" }]);
+
+    // the label before a typed comment is the bridge's, as a key (#1482); the comment and omo's notice are not
+    const typed = (field: string) => parseInteractivePrompt("pi", review("   표시 위치: 설정 > 음성 입력 (추천)\n   월 한도: 월 $5 한도", "enter submit  ↑ review answers  shift+tab back  tab next question  esc back").replace(">\n Submit", field));
+    const commented = typed("> 급해요\n Submit");
+    expect(commented?.body).toBe("Comment: 급해요");
+    expect(commented?.own_text?.body).toEqual({ key: "Comment: {comment}", vars: { comment: "급해요" } });
+    const noticed = typed("> 급해요\n ! 1 answer was changed\n Submit");
+    expect(noticed?.body).toBe("1 answer was changed\nComment: 급해요");
+    expect(noticed?.own_text?.body).toEqual({ key: "{notice}\nComment: {comment}", vars: { notice: "1 answer was changed", comment: "급해요" } });
   });
 
   test("joins what a narrow pane wraps, the tab bar, the hint and words cut at the edge", () => {
@@ -2733,6 +2742,8 @@ Which approach?
     const prompt = parseFallbackPrompt("gjc", " config.json already exists.\n Overwrite it? (y/n)\n Press Enter to keep it, or Esc to abort\n");
     expect(prompt.question).toBe("Overwrite it? (y/n)");
     expect(labels(prompt)).toEqual(["Yes (y)", "No (n)", "Enter", "Esc"]);
+    // the card's title, Yes and No are the bridge's own words, as keys (#1482); the question is the screen's, and key names stay
+    expect(prompt.own_text).toEqual({ title: { key: "Waiting for input" }, labels: { 0: { key: "Yes (y)" }, 1: { key: "No (n)" } } });
     expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ text: "y" }]);
     expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ text: "n" }]);
     expect(labels(parseFallbackPrompt("gjc", "Delete the branch? [Y/n] "))).toEqual(["Yes (y)", "No (n)", "Enter", "Esc"]);
@@ -3194,6 +3205,8 @@ describe("pi's thinking selector", () => {
     const wide = parseInteractivePrompt("pi", piThinking(2))!;
     const narrow = parseInteractivePrompt("pi", piThinking(2, true))!;
     expect(wide.question).toBe("Select thinking level (currently medium)");
+    expect(wide.own_text).toEqual({ question: { key: "Select thinking level (currently {level})", vars: { level: "medium" } } });
+    expect(wide.id).toBe("cb779b7d598a"); // the id main's bridge gave this card before its question went as a key
     expect(wide.options[2]).toEqual({ label: "max", description: "Maximum reasoning · default" });
     expect(narrow.options).toEqual(["off", "medium", "max"].map((label) => ({ label, description: null })));
     expect(narrow.question).toBe(wide.question);

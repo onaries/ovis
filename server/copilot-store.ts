@@ -1,4 +1,4 @@
-import { constants, closeSync, fstatSync, lstatSync, openSync, opendirSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
+import { constants, closeSync, fstatSync, lstatSync, openSync, opendirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import { processAlive, processStartedAt } from "./process-start.ts";
@@ -13,10 +13,11 @@ const LOG_TIMESTAMP_MARGIN_NS = 3_000_000_000n;
 const LOG_NAME = /^process-\d+-(\d+)\.log$/;
 const FOREGROUND_PREFIXES = ["Registering foreground session: ", "Unregistering foreground session: "] as const;
 const FOREGROUND_EVENT = new RegExp(String.raw`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z \[INFO\] (${FOREGROUND_PREFIXES.join("|")})([\da-f-]{36})$`);
+const VERIFIED_UNREGISTER = Symbol("verified unregister");
 interface ForegroundBinding { sessionId: string; generation: string }
 interface ForegroundCheckpoint {
   dev: bigint; ino: bigint; path: string; size: number; observedSize: number; mtimeNs: bigint; ctimeNs: bigint; checkedAtNs: bigint; pendingSwitch: boolean;
-  hash: Hash; epoch: string; binding: ForegroundBinding | null | undefined;
+  hash: Hash; epoch: string; binding: ForegroundBinding | null | undefined; unregistered: ForegroundBinding | null;
 }
 const foregroundCheckpoints = new Map<number, ForegroundCheckpoint>();
 const foregroundLogProcesses = new Map<number, { started: number; observed: boolean }>();
@@ -34,7 +35,7 @@ function logPrefix(fd: number, size: number): Hash | null {
 }
 
 /** The latest complete lifecycle event in the CLI's own open log, never the newest transcript. */
-function loggedForeground(pid: number, logDirectories: readonly string[]): ForegroundBinding | null | undefined {
+function loggedForeground(pid: number, logDirectories: readonly string[]): ForegroundBinding | null | undefined | typeof VERIFIED_UNREGISTER {
   const started = processStartedAt(pid);
   if (started === null) return undefined;
   let owner = foregroundLogProcesses.get(pid);
@@ -64,11 +65,11 @@ function loggedForeground(pid: number, logDirectories: readonly string[]): Foreg
   };
   const unavailable = (): undefined => {
     const checkpoint = foregroundCheckpoints.get(pid);
-    if (checkpoint) checkpoint.binding = undefined;
+    if (checkpoint) { checkpoint.binding = undefined; checkpoint.unregistered = null; }
     return undefined;
   };
   const directory = opendirSync(`/proc/${pid}/fd`);
-  let found: ForegroundBinding | null | undefined = null;
+  let found: ForegroundBinding | null | undefined | typeof VERIFIED_UNREGISTER = null;
   let logFound = false;
   let count = 0;
   try {
@@ -106,7 +107,8 @@ function loggedForeground(pid: number, logDirectories: readonly string[]): Foreg
             && checkedAtNs >= cached.checkedAtNs
             && cached.checkedAtNs - stat.mtimeNs >= LOG_TIMESTAMP_MARGIN_NS
             && cached.checkedAtNs - stat.ctimeNs >= LOG_TIMESTAMP_MARGIN_NS) {
-            found = cached.pendingSwitch ? undefined : cached.binding;
+            found = cached.pendingSwitch ? undefined
+              : cached.binding === undefined && cached.unregistered ? VERIFIED_UNREGISTER : cached.binding;
             continue;
           }
           const prefix = cached && size >= cached.size ? logPrefix(fd, cached.size) : null;
@@ -128,13 +130,19 @@ function loggedForeground(pid: number, logDirectories: readonly string[]): Foreg
           if (start > 0 && !complete && !same) return unavailable();
           // Only a complete initial log without lifecycle evidence permits marker/report fallback.
           let selected = same ? cached.binding : start === 0 && !observedBefore ? null : undefined;
+          let unregistered = same ? cached.unregistered : null;
           let position = start + Buffer.byteLength(text.slice(0, skip));
           for (const line of complete.split("\n")) {
             const match = FOREGROUND_EVENT.exec(line);
             if (match) {
               if (!SESSION_ID.test(match[2]!)) return unavailable();
-              if (match[1] === FOREGROUND_PREFIXES[0]) selected = { sessionId: match[2]!, generation: `${pid}:${stat.dev}:${stat.ino}:${epoch}:${position}` };
-              else selected = undefined;
+              if (match[1] === FOREGROUND_PREFIXES[0]) {
+                selected = { sessionId: match[2]!, generation: `${pid}:${stat.dev}:${stat.ino}:${epoch}:${position}` };
+                unregistered = null;
+              } else {
+                unregistered = selected && selected.sessionId === match[2] ? selected : null;
+                selected = undefined;
+              }
             }
             position += Buffer.byteLength(line) + 1;
           }
@@ -148,9 +156,9 @@ function loggedForeground(pid: number, logDirectories: readonly string[]): Foreg
             || FOREGROUND_PREFIXES.some((event) => event.startsWith(message) || message.startsWith(event)))));
           foregroundCheckpoints.set(pid, {
             dev: stat.dev, ino: stat.ino, path: target, size: start + completeBytes,
-            observedSize: size, mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs, checkedAtNs, pendingSwitch, hash, epoch, binding: selected,
+            observedSize: size, mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs, checkedAtNs, pendingSwitch, hash, epoch, binding: selected, unregistered,
           });
-          found = pendingSwitch ? undefined : selected;
+          found = pendingSwitch ? undefined : selected === undefined && unregistered ? VERIFIED_UNREGISTER : selected;
         } finally { closeSync(fd); }
       } catch { return unavailable(); }
     }
@@ -231,7 +239,7 @@ type ProcessSession = { sessionId: string; path: string } & (
 );
 
 /** Resolve once per validation pass; never reuse this evidence across a transcript read. */
-export function copilotProcessSession(environment: readonly string[] | null, argv: readonly string[], pid: number): ProcessSession | null {
+export function copilotProcessSession(environment: readonly string[] | null, argv: readonly string[], pid: number, mode: "current" | "unregistered" = "current"): ProcessSession | null {
   if (environment === null || !Number.isSafeInteger(pid) || pid < 1) return null;
   const values = (key: string) => environment.filter((item) => item.startsWith(`${key}=`)).map((item) => item.slice(key.length + 1));
   const home = values("HOME");
@@ -261,7 +269,15 @@ export function copilotProcessSession(environment: readonly string[] | null, arg
     if (logOptions.length > 1 || (logOptions.length && !isAbsolute(logOptions[0]!))) return null;
     const logs = logOptions.length ? logOptions : [join(canonicalHome, "logs"), ...(home[0] ? [join(home[0], ".copilot", "logs")] : [])];
     const foreground = loggedForeground(pid, logs);
-    if (foreground === undefined) return null;
+    if (mode === "unregistered") {
+      const checkpoint = foregroundCheckpoints.get(pid);
+      const ended = foreground === VERIFIED_UNREGISTER && checkpoint ? checkpoint.unregistered : null;
+      if (!ended) return null;
+      const directory = join(store, ended.sessionId);
+      if (realpathSync(directory) !== directory) return null;
+      return { ...ended, path: join(directory, "events.jsonl"), logged: true };
+    }
+    if (foreground === undefined || foreground === VERIFIED_UNREGISTER) return null;
     if (foreground !== null) {
       const directory = join(store, foreground.sessionId);
       if (realpathSync(directory) !== directory) return null;
@@ -274,6 +290,65 @@ export function copilotProcessSession(environment: readonly string[] | null, arg
     if (realpathSync(directory) !== directory) return null;
     return { sessionId: session, path: join(directory, "events.jsonl"), logged: false };
   } catch { return null; }
+}
+
+interface HandoffProcess { pid: number; argv: readonly string[] }
+interface LinuxGroup { parent: number; group: number; session: number; terminal: number; foreground: number; birth: number }
+
+function linuxGroup(pid: number): LinuxGroup | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(") ") + 2).split(" ");
+    const [parent, group, session, terminal, foreground, birth] = [1, 2, 3, 4, 5, 19].map((index) => Number(fields[index]));
+    if (![parent, group, session, terminal, foreground, birth].every(Number.isSafeInteger)) return null;
+    return { parent: parent!, group: group!, session: session!, terminal: terminal!, foreground: foreground!, birth: birth! };
+  } catch { return null; }
+}
+
+function onlyOption(argv: readonly string[], name: string, expected: string): boolean {
+  const values: string[] = [];
+  for (let i = 1; i < argv.length; i++) {
+    if (argv[i] === "--") break;
+    if (argv[i] === name) values.push(argv[++i] ?? "");
+    else if (argv[i]?.startsWith(`${name}=`)) values.push(argv[i]!.slice(name.length + 1));
+  }
+  return values.length === 1 && values[0] === expected;
+}
+
+/** An unregistered parent may hand its reported session to its direct, foreground child. */
+export function copilotHandoffSession(
+  parent: HandoffProcess, child: HandoffProcess, report: string, groupId: number | null | undefined, tty: string | null | undefined,
+  environment: (pid: number) => readonly string[] | null,
+): ProcessSession | null {
+  if (process.platform !== "linux" || !SESSION_ID.test(report) || !Number.isSafeInteger(parent.pid)
+    || !Number.isSafeInteger(child.pid) || !groupId || parent.pid === child.pid
+    || !onlyOption(parent.argv, "--resume", report) || !onlyOption(child.argv, "--session-id", report)) return null;
+  const beforeParent = linuxGroup(parent.pid);
+  const beforeChild = linuxGroup(child.pid);
+  if (!beforeParent || !beforeChild || beforeChild.parent !== parent.pid
+    || beforeParent.birth > beforeChild.birth || beforeParent.terminal <= 0
+    || beforeParent.terminal !== beforeChild.terminal || beforeParent.session !== beforeChild.session
+    || beforeParent.group !== beforeChild.group || beforeParent.group !== groupId
+    || beforeParent.foreground !== groupId || beforeChild.foreground !== groupId) return null;
+  if (tty) {
+    try {
+      const terminal = realpathSync(tty);
+      if (realpathSync(`/proc/${parent.pid}/fd/0`) !== terminal || realpathSync(`/proc/${child.pid}/fd/0`) !== terminal) return null;
+    } catch { return null; }
+  }
+  const ended = copilotProcessSession(environment(parent.pid), parent.argv, parent.pid, "unregistered");
+  const held = copilotProcessSession(environment(child.pid), child.argv, child.pid);
+  const childLog = foregroundCheckpoints.get(child.pid);
+  if (!ended?.logged || !held || held.logged || !foregroundLogProcesses.get(child.pid)?.observed
+    || !childLog || childLog.binding !== null || childLog.pendingSwitch
+    || ended.sessionId !== report || held.sessionId !== report || ended.path !== held.path) return null;
+  const afterParent = linuxGroup(parent.pid);
+  const afterChild = linuxGroup(child.pid);
+  if (!afterParent || !afterChild || afterParent.birth !== beforeParent.birth || afterChild.birth !== beforeChild.birth
+    || afterChild.parent !== parent.pid || afterParent.group !== groupId || afterChild.group !== groupId
+    || afterParent.terminal !== beforeParent.terminal || afterChild.terminal !== beforeChild.terminal
+    || afterParent.foreground !== groupId || afterChild.foreground !== groupId) return null;
+  return { ...held, logged: true, generation: `handoff:${parent.pid}:${ended.generation}:${child.pid}:${afterChild.birth}` };
 }
 
 /** Only the reported session, or the process-owned lifecycle selection. */

@@ -13,7 +13,7 @@
  * own close, does not close it. Any other sheet still up under a new one closes with it, as before.
  */
 import { useEffect, useRef } from "react";
-import { SHEET_HISTORY_KEY, SHEET_UNDER_KEY } from "./historyKeys.ts";
+import { SHEET_HISTORY_KEY, SHEET_UNDER_KEY, sheetStep } from "./historyKeys.ts";
 import { SHEET_QUERY } from "./sheets.ts";
 import { useMediaQuery } from "./useMediaQuery.ts";
 
@@ -153,7 +153,11 @@ if (typeof window !== "undefined") {
     // an entry pushed over a sheet's copies its state (the file viewer's does): only the sheet's own carries its mark
     return push(without(state), ...rest);
   }) as History["pushState"];
+  /** the popstate this module last handled: one asked about before it is handled is answered by the step on its way */
+  let heard: Event | null = null;
+  sheetStep.lands = (event) => event === heard ? steppedOff : stepping !== null;
   window.addEventListener("popstate", (event) => {
+    heard = event;
     const landed = sheetOf(event.state);
     // the step off a closed sheet's entry: not a Back for the sheets that opened while it was on its way
     const step = stepping;

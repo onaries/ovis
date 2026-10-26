@@ -14,8 +14,8 @@
  * a chat gets a demo answer.
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
-import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PaneBackgroundAgentDetail, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, TabMovedToWorkspace, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
-import type { RepoBranchComparison, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
+import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, DevicePairedEvent, DevicesRevokedAll, HealthAuth, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PairedDevice, PairingCode, PaneBackgroundAgentDetail, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, SecuritySummary, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, TabMovedToWorkspace, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
+import type { PushSubscriptionStatus, RepoBranchComparison, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
 import { normalizeThemeChange, sharedPreferencesBody, type SharedPreferences } from "../../shared/preferences.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
@@ -26,7 +26,7 @@ import { neighborPane } from "../../src/lib/layoutMap.ts";
 import { closeLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "../../src/lib/layoutTree.ts";
 import { rollupStatus } from "../../src/lib/status.ts";
 import { movedTabOrder } from "../../src/lib/tabOrder.ts";
-import { agentSkillRows, CHATS, PROMPT, SESSION_HISTORY_AGENTS, sessionHistoryRows, SPECS, type DemoSpec } from "./fixtures.ts";
+import { agentSkillRows, CHATS, DEMO_PUSH, PROMPT, SESSION_HISTORY_AGENTS, sessionHistoryRows, SPECS, type DemoSpec } from "./fixtures.ts";
 import { DemoHistory } from "./history.ts";
 import { screenAgent, screenCommand, screenFrame } from "./agentScreens.ts";
 import machinesFixture from "./fixtures/machines.json";
@@ -35,6 +35,27 @@ import commandsFixture from "./fixtures/commands.json";
 import panesFixture from "./fixtures/panes.json";
 import terminalFixture from "./fixtures/terminal.json";
 
+/**
+ * The fictional access facts the Phone & devices page shows, picked by `?demo_security=` when the
+ * demo loads, or by `ovis:demo-security` in this tab's sessionStorage, which a check changes to see
+ * the next answer replace the last (scripts/security-summary-demo-regression.ts); none of them is
+ * any real server's. `older` answers without facts, `error` fails the bridge health and `loading`
+ * never answers it.
+ */
+const DEMO_SECURITY_AT_LOAD = new URLSearchParams(location.search).get("demo_security") ?? "known";
+const demoSecurity = (): string => {
+  try { return sessionStorage.getItem("ovis:demo-security") ?? DEMO_SECURITY_AT_LOAD; } catch { return DEMO_SECURITY_AT_LOAD; }
+};
+const DEMO_SECURITY_FACTS: Record<string, SecuritySummary> = {
+  known: { token_configured: true, pairing_gate: "closed", bind_scope: "loopback", observed_ingress: "tailscale", public_exposure: "unknown" },
+  watch: { token_configured: true, pairing_gate: "closed", bind_scope: "loopback", observed_ingress: "tailscale", public_exposure: "unknown" },
+  unknown: { token_configured: false, pairing_gate: "open", bind_scope: "other", observed_ingress: "unknown", public_exposure: "unknown" },
+  proxy: { token_configured: false, pairing_gate: "open", bind_scope: "loopback", observed_ingress: "proxy", public_exposure: "unknown" },
+  gated: { token_configured: false, pairing_gate: "closed", bind_scope: "other", observed_ingress: "direct", public_exposure: "unknown" },
+  funnel: { token_configured: true, pairing_gate: "closed", bind_scope: "loopback", observed_ingress: "funnel", public_exposure: "observed" },
+  tailnet: { token_configured: true, pairing_gate: "closed", bind_scope: "tailnet", observed_ingress: "direct", public_exposure: "unknown" },
+  unavailable: { token_configured: false, pairing_gate: "unavailable", bind_scope: "other", observed_ingress: "direct", public_exposure: "unknown" },
+};
 /** Only an explicit `demo logs` command starts this fictional retained history. */
 const histories = new Map<string, DemoHistory>();
 const terminalGrids = new Map<string, { cols: number; rows: number }>();
@@ -67,6 +88,8 @@ const snapshot = (): SessionSnapshot => local.snapshot!;
 // Reloading the demo starts its in-memory server over, so IDs from the previous page cannot match.
 for (const machine of machines) if (machine.snapshot) {
   machine.snapshot.finish_epoch = crypto.randomUUID();
+  // each PC's one fictional herdr, the same on every load: what the demo stores stays its panes'
+  machine.snapshot.herdr_lifetime = `demo-${machine.id}`;
   for (const pane of machine.snapshot.panes) pane.finish_id = pane.agent_status === "done" ? 1 : 0;
 }
 /** pane id -> fixture key ("api", "web", …) */
@@ -1016,6 +1039,59 @@ function usageReport(): UsageReport {
   ] };
 }
 
+// ---- paired devices (Settings → Phone & devices) ----------------------------------------------
+
+/**
+ * Fictional paired devices, and what that page does with them: rename, revoke one, revoke all,
+ * and start a pairing that a fictional phone completes a moment later, which is what sends the
+ * `device-paired` event every open window shows as a line (src/components/DevicePairedNotice.tsx).
+ * All of it answers only with `?demo_devices=`: without it the demo has no device list (its
+ * /api/devices is a 404, which scripts/security-summary-demo-regression.ts relies on). `list` is the
+ * fictional devices below; another value picks a state for the browser lane's captures: `empty` (nothing paired),
+ * `watch` (this browser is a device that only watches), `slow` (the list is held until the page calls
+ * `herdrDemoReleaseDevices()`, so a capture of the loading state never races the answer) or `error`
+ * (the registry cannot be written, so revoking fails). No real credential is involved anywhere.
+ * `?demo_connection=drops` loses the bridge connection right after the first pairing is heard, and
+ * never gets it back: the line stays while the header says it is reconnecting. `?demo_pairing=held`
+ * keeps the fictional phone from entering the code until the page calls `herdrDemoReleasePairing()`
+ * (once per pairing started), so the lane sees the code before the enrollment takes it away; without
+ * it, the phone enters the code a moment later, as a visitor to the demo expects.
+ */
+const DEVICE_STATE = new URLSearchParams(location.search).get("demo_devices");
+const CONNECTION_DROPS = new URLSearchParams(location.search).get("demo_connection") === "drops";
+let connectionLost = false;
+const DEVICE_PAIRS_AFTER_MS = 1800;
+/** `held`: each pairing started waits here until the page releases it; no timer decides it */
+const PAIRING_HELD = new URLSearchParams(location.search).get("demo_pairing") === "held";
+const heldPairings: (() => void)[] = [];
+if (PAIRING_HELD) (globalThis as { herdrDemoReleasePairing?: () => boolean }).herdrDemoReleasePairing = () => {
+  const release = heldPairings.shift();
+  release?.();
+  return release !== undefined;
+};
+/** `slow`: the device list waits on this until `herdrDemoReleaseDevices()` is called; no timer decides it */
+const deviceListHeld = DEVICE_STATE === "slow" ? new Promise<void>((resolve) => { (globalThis as { herdrDemoReleaseDevices?: () => void }).herdrDemoReleaseDevices = resolve; }) : null;
+const demoDevices: PairedDevice[] = DEVICE_STATE === "empty" ? [] : [
+  { id: "6f1c2a9d4b7e8503", label: "Pixel 9", role: "drive", created_at: ago(41 * 24 * 60), last_seen_at: ago(3), current: DEVICE_STATE === "watch" },
+  { id: "0b8e7d6c5a493f21", label: "iPad", role: "drive", created_at: ago(12 * 24 * 60), last_seen_at: ago(26 * 60), current: false },
+  { id: "c3d9e1f24a5b6078", label: "Kitchen laptop, the old one with the broken hinge", role: "drive", created_at: ago(3 * 24 * 60), last_seen_at: null, current: false },
+];
+const demoAuth: HealthAuth = DEVICE_STATE === "watch" ? { required: false, authenticated: true, via: "device", role: "watch" } : { required: false, authenticated: true };
+let demoPairings = 0;
+// what a server answers when the registry write fails (server/http.ts): a log reference, nothing more
+const registryUnwritable = () => error("internal_error", "internal error (d3m0f41l0001)", 500);
+/** The fictional phone that enters the code: a device more, and the event every window hears. */
+function demoDevicePairs(): void {
+  demoPairings += 1;
+  const device: PairedDevice = { id: `${demoPairings.toString(16).padStart(4, "0")}9e2d1c0b7a6f`, label: demoPairings === 1 ? "Living-room iPad" : `Phone ${demoPairings}`, role: "drive", created_at: new Date().toISOString(), last_seen_at: new Date().toISOString(), current: false };
+  demoDevices.push(device);
+  emitSse({ type: "device-paired", event_id: `d${demoPairings.toString(16).padStart(15, "0")}`, device_id: device.id, label: device.label, enrolled_at: device.created_at } satisfies DevicePairedEvent);
+  if (CONNECTION_DROPS) {
+    connectionLost = true;
+    for (const socket of [...sockets]) socket.close(1006, "demo: the connection was lost");
+  }
+}
+
 /** One fictional plugin, so the palette's Plugin actions group and Settings have something to show. */
 const PLUGINS: PluginActions[] = [
   { plugin_id: "example.layout", name: "Layout", version: "0.1.0", description: "Apply project layouts", enabled: true, actions: [
@@ -1044,9 +1120,52 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   const paneId = query.get("pane_id") ?? "";
 
   if (path === "/api/health") {
-    const auth = { required: false, authenticated: true };
-    if (query.get("scope") === "bridge") return json({ ok: true, auth, bridge_protocol: 1 });
-    return json({ ok: true, herdr: { version: "0.9.0", protocol: 22, terminal_attach: true }, auth, web_ui: { boot_id: orderOf(local.id).epoch, revision: null } });
+    const variant = demoSecurity();
+    // a device that only watches, from either demo switch: the security facts' own, or the device states' (`?demo_devices=watch`)
+    const auth: HealthAuth = variant === "watch" ? { required: false, authenticated: true, via: "device", role: "watch" } : demoAuth;
+    const security = DEMO_SECURITY_FACTS[variant];
+    const facts = security ? { security } : {};
+    // only the herdr-free bridge scope fails or waits: the rest of the demo keeps answering
+    if (query.get("scope") === "bridge") {
+      if (variant === "loading") return await new Promise<Response>(() => undefined);
+      if (variant === "error") return error("server_unavailable", "The demo server is not answering.", 503);
+      return json({ ok: true, auth, bridge_protocol: 1, ...facts }, 200, { "cache-control": "no-store" });
+    }
+    // the LAN warning is drawn only where a real server would send it: an other-address bind, no token, nothing paired
+    const lan = variant === "unknown" ? { lan_exposure: { host: "0.0.0.0" } } : {};
+    return json({ ok: true, herdr: { version: "0.9.0", protocol: 22, terminal_attach: true }, auth, ...lan, ...facts, web_ui: { boot_id: orderOf(local.id).epoch, revision: null } }, 200, { "cache-control": "no-store" });
+  }
+  // without `?demo_devices=` the demo answers no device route: its /api/devices stays a 404, as before
+  if (DEVICE_STATE !== null) {
+    if (path === "/api/devices") {
+      // the `slow` state: held until released, so the lane captures the page while its list loads
+      if (deviceListHeld) await deviceListHeld;
+      return json({ devices: demoDevices }, 200, { "cache-control": "no-store" });
+    }
+    if (path === "/api/devices/pair/start") {
+      if (demoAuth.role === "watch") return error("read_only", "this device can only watch", 403);
+      if (PAIRING_HELD) heldPairings.push(demoDevicePairs);
+      else setTimeout(demoDevicePairs, DEVICE_PAIRS_AFTER_MS);
+      return json({ code: "482913", expires_at: new Date(Date.now() + 10 * 60_000).toISOString() } satisfies PairingCode, 200, { "cache-control": "no-store" });
+    }
+    if (path === "/api/devices/revoke-all") {
+      if (demoAuth.role === "watch") return error("read_only", "this device can only watch", 403);
+      if (DEVICE_STATE === "error") return registryUnwritable();
+      const revoked = demoDevices.length;
+      demoDevices.length = 0;
+      return json({ revoked } satisfies DevicesRevokedAll, 200, { "cache-control": "no-store" });
+    }
+    const deviceId = /^\/api\/devices\/([0-9a-f]{16})$/.exec(path)?.[1];
+    if (deviceId !== undefined) {
+      if (demoAuth.role === "watch") return error("read_only", "this device can only watch", 403);
+      const index = demoDevices.findIndex((device) => device.id === deviceId);
+      if (index === -1) return error("not_found", "no such device", 404);
+      if (DEVICE_STATE === "error") return registryUnwritable();
+      if (method === "DELETE") { demoDevices.splice(index, 1); return new Response(null, { status: 204 }); }
+      const label = String((await bodyOf(init, input))["label"] ?? "").replace(/\s+/g, " ").trim().slice(0, 48) || "Device";
+      demoDevices[index] = { ...demoDevices[index]!, label };
+      return json(demoDevices[index]);
+    }
   }
   if (path === "/api/machines") {
     const asked = query.getAll("verify_source_boot");
@@ -1105,7 +1224,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     return error("demo", "Connect CLIProxyAPI from an installed server, not the public demo.", 409);
   }
   if (path === "/api/cliproxy/login" || path === "/api/cliproxy/callback") return error("demo", "Sign in from an installed server, not the public demo.", 409);
-  if (path === "/api/push" || path.startsWith("/api/push/")) return error("push_unavailable", "the demo sends no alerts", 404);
+  if (path === "/api/push" || path.startsWith("/api/push/")) return pushRoute(path, method, init);
   if (path === "/api/machines/settings") return json({ auto_update_bridges: true });
   if (path.startsWith("/api/machines/")) return error("demo", "remote PCs need a real machine", 404);
 
@@ -1762,6 +1881,67 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   return error("demo", `${method} ${path} is not part of the demo`, 404);
 }
 
+// ---- web push -----------------------------------------------------------------------------------
+
+/**
+ * The workstation's push state, as a server keeps it (server/push.ts): the subscriptions this
+ * browser registered and how the last push to each went. The public demo has no PushManager, so
+ * the app never asks; a browser script that lends one (scripts/push-health-demo-regression.ts)
+ * hands over the fixtures of site/demo/fixtures.ts and sees the notice and its repair. No push
+ * ever goes out: a test push is answered as delivered and recorded as the last success.
+ */
+interface DemoSubscription { endpoint: string; keys: { p256dh: string; auth: string } }
+const pushRegistry = new Map<string, { keys: DemoSubscription["keys"]; status: PushSubscriptionStatus }>();
+const FIXTURE_STATUS = new Map([DEMO_PUSH.retired, DEMO_PUSH.refused].map((fixture) => [fixture.subscription.endpoint, fixture]));
+const sameKeys = (a: DemoSubscription["keys"], b: DemoSubscription["keys"]): boolean => a.p256dh === b.p256dh && a.auth === b.auth;
+
+function parseDemoSubscription(value: unknown): DemoSubscription | null {
+  const { endpoint, keys } = (value ?? {}) as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
+  if (typeof endpoint !== "string" || !endpoint.startsWith("https://") || typeof keys?.p256dh !== "string" || typeof keys.auth !== "string") return null;
+  return { endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } };
+}
+
+async function pushRoute(path: string, method: string, init: RequestInit | undefined): Promise<Response> {
+  if (path === "/api/push") return method === "GET" ? json({ public_key: DEMO_PUSH.publicKey }) : error("method_not_allowed", `${method} is not supported on ${path}`, 400);
+  if (path !== "/api/push/subscribe" && path !== "/api/push/test" && path !== "/api/push/status") return error("demo", `${method} ${path} is not part of the demo`, 404);
+  const body = (typeof init?.body === "string" ? JSON.parse(init.body) : {}) as { subscription?: unknown; endpoint?: unknown };
+  const gone = () => error("subscription_gone", "the push service retired this subscription; subscribe again", 410);
+  const notFound = () => error("subscription_not_found", "this device is not subscribed", 404);
+  if (path === "/api/push/subscribe" && method === "POST") {
+    const subscription = parseDemoSubscription(body.subscription);
+    if (!subscription) return error("invalid_subscription", "subscription needs an https endpoint and p256dh/auth keys", 400);
+    if (subscription.endpoint === DEMO_PUSH.retired.subscription.endpoint) return gone();
+    const fixture = FIXTURE_STATUS.get(subscription.endpoint);
+    const known = pushRegistry.get(subscription.endpoint);
+    pushRegistry.set(subscription.endpoint, { keys: subscription.keys, status: known && sameKeys(known.keys, subscription.keys) ? known.status
+      : fixture && sameKeys(fixture.subscription.keys, subscription.keys) ? fixture.status : { registered: true, last_success_at: null, last_failure_at: null, last_failure: null } });
+    return new Response(null, { status: 204 });
+  }
+  if (path === "/api/push/subscribe" && method === "DELETE") {
+    if (typeof body.endpoint === "string") pushRegistry.delete(body.endpoint);
+    return new Response(null, { status: 204 });
+  }
+  if (path === "/api/push/test" && method === "POST") {
+    if (typeof body.endpoint !== "string") return error("missing_endpoint", "endpoint is required", 400);
+    if (body.endpoint === DEMO_PUSH.retired.subscription.endpoint) return gone();
+    const known = pushRegistry.get(body.endpoint);
+    if (!known) return notFound();
+    known.status = { ...known.status, registered: true, last_success_at: new Date().toISOString() };
+    return new Response(null, { status: 204 });
+  }
+  if (path === "/api/push/status" && method === "POST") {
+    const subscription = parseDemoSubscription(body.subscription);
+    if (!subscription) return error("invalid_subscription", "subscription needs an https endpoint and p256dh/auth keys", 400);
+    const known = pushRegistry.get(subscription.endpoint);
+    if (known) return sameKeys(known.keys, subscription.keys) ? json(known.status, 200, { "cache-control": "no-store" }) : notFound();
+    // the retired fixture answers like a server's tombstone: its owner, holding its keys, and nobody else
+    const fixture = FIXTURE_STATUS.get(subscription.endpoint);
+    if (fixture && !fixture.status.registered && sameKeys(fixture.subscription.keys, subscription.keys)) return json(fixture.status, 200, { "cache-control": "no-store" });
+    return notFound();
+  }
+  return error("method_not_allowed", `${method} is not supported on ${path}`, 400);
+}
+
 const realFetch = window.fetch.bind(window);
 window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
@@ -1881,7 +2061,8 @@ class DemoSocket extends EventTarget {
     // opens on its own tick, like a real socket; `later` guards on OPEN, so not through it
     const opening = setTimeout(() => {
       this.timers.delete(opening);
-      if (this.readyState !== 0) return;
+      // a lost connection stays lost: every new socket keeps trying and never opens
+      if (this.readyState !== 0 || connectionLost) return;
       this.readyState = 1;
       const open = new Event("open");
       this.onopen?.(open);

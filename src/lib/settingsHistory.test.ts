@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it } from "bun:test";
+import { sheetStep } from "./historyKeys.ts";
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -514,6 +515,51 @@ describe("history traversal races", () => {
     browser.advance(1001);
     browser.recordSettings(browser.settingsLevels(false, "appearance", false));
     expect(browser.requests).toHaveLength(1);
+  });
+
+  it("keeps its step back through the address written as Settings closes, and opens again once it lands (#2000)", async () => {
+    const browser = await delayedHistory();
+    browser.recordSettings(browser.settingsLevels(false, "appearance", false));
+    const moves: boolean[] = [];
+    browser.onSettingsHistory((_entry, own) => moves.push(own));
+    browser.recordSettings([]);
+    // the app's address bar drops Settings from the address on the entry the step leaves
+    browser.history.replaceState({ ...browser.history.state as object });
+    // Settings opened again before the step lands
+    browser.recordSettings(browser.settingsLevels(false, "appearance", false));
+    await browser.land();
+    expect(moves).toEqual([true]);
+    expect(browser.settingsEntry(browser.history.state)).toEqual({ page: "appearance", keyBar: false, depth: 1 });
+  });
+
+  it("stays open when a closed sheet's step off the entry it opened over lands under it (#2000)", async () => {
+    for (const step of [true, false]) {
+      // the palette's sheet, closed: its step back off its entry is on its way
+      const browser = await delayedHistory([{ "ovis:sheet-under": "palette" }, { "ovis:sheet-under": "palette", "ovis:sheet": "palette" }]);
+      const moves: boolean[] = [];
+      browser.onSettingsHistory((_entry, own) => moves.push(own));
+      browser.recordSettings(browser.settingsLevels(true, null, false));
+      const answer = sheetStep.lands;
+      sheetStep.lands = () => step;
+      try { await browser.move(-2); }
+      finally { sheetStep.lands = answer; }
+      // the sheet's step: Settings stays, on an entry made again; a Back of the user's: it closes
+      expect(moves).toEqual(step ? [] : [false]);
+      expect(browser.settingsEntry(browser.history.state)).toEqual(step ? { page: null, keyBar: false, depth: 1 } : null);
+      expect(browser.index).toBe(step ? 1 : 0);
+    }
+  });
+
+  it("lets go of its step back when a write on the same entry changes the Settings it holds", async () => {
+    const browser = await delayedHistory();
+    browser.recordSettings(browser.settingsLevels(false, "appearance", false));
+    const moves: boolean[] = [];
+    browser.onSettingsHistory((_entry, own) => moves.push(own));
+    browser.recordSettings([]);
+    const state = browser.history.state as Record<string, unknown>;
+    browser.history.replaceState({ ...state, "ovis:settings": { page: "terminal", keyBar: false, depth: 1 } });
+    await browser.land();
+    expect(moves).toEqual([false]);
   });
 
   it("does not consume Back after a timed-out close and reopening", async () => {

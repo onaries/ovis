@@ -418,8 +418,8 @@ describe("the pictures sent to pi reach the chat", () => {
     const bytes = Buffer.from(rows.join("\n"));
     const second = rows[0]!.length + rows[1]!.length + 2;
     expect(turnStarts(bytes, "pi-transcript")).toEqual([0, second]);
-    // omp draws no prompt picture yet, so it opens nothing there
-    expect(turnStarts(bytes, "omp-transcript")).toEqual([0]);
+    // omp draws its prompt pictures as pi does, so it opens a turn there too
+    expect(turnStarts(bytes, "omp-transcript")).toEqual([0, second]);
   });
 
   it("keeps a picture a /tree or a clear left behind out of the chat and out of reach", () => {

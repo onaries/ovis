@@ -1,6 +1,6 @@
 import type { DialogReader } from "./registry.ts";
 import { pickerPlan } from "./interaction-plan.ts";
-import { ANSI_RE, onePerPass, KEY, PI_MODEL_HINT_RE, PI_ROW_RE, type ParsedPrompt, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, piModelRows, wrapped } from "./shared.ts";
+import { ANSI_RE, onePerPass, KEY, PI_MODEL_HINT_RE, PI_ROW_RE, type ParsedPrompt, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, own, piModelRows, wrapped } from "./shared.ts";
 
 /**
  * pi draws one menu widget for its dialogs — an extension's `ctx.ui.select`, `confirm` and
@@ -107,8 +107,8 @@ function parsePiModel(screen: string): ParsedPrompt | null {
   // should know what they are switching from; pi's tick is the only mark that says so
   const current = rows.find((row) => row.current);
   const question = current
-    ? `Select model (currently ${current.label.replace(PI_MODEL_DEFAULT_RE, "")})`
-    : "Select model";
+    ? own("Select model (currently {model})", { model: current.label.replace(PI_MODEL_DEFAULT_RE, "") })
+    : own("Select model");
   return finishPrompt("pi", {
     kind: "question",
     title: "",
@@ -145,7 +145,7 @@ function parsePiThinking(screen: string): ParsedPrompt | null {
   if (rows.length === 0 || rows.filter((row) => row.cursor).length !== 1 || rows.filter((row) => row.current).length > 1) return null;
   const current = rows.find((row) => row.current);
   return finishPrompt("pi", {
-    kind: "question", title: "", question: current ? `Select thinking level (currently ${current.label})` : "Select thinking level",
+    kind: "question", title: "", question: current ? own("Select thinking level (currently {level})", { level: current.label }) : own("Select thinking level"),
     body: null, options: rows.map(({ label, description }) => ({ label, description })),
     multi_select: false, custom_option_index: null,
   }, {
@@ -167,7 +167,7 @@ export function parsePiDialog(screen: string, moved = false): ParsedPrompt | nul
     const text = (words: string[]) => ({ title: restOf(words) ?? "", question: ownLine(words) });
     return finishPrompt("pi", {
       kind: "question", ...text(block.title), body: null,
-      options: [{ label: "Type your answer", description: null }], multi_select: false, custom_option_index: 0,
+      options: [{ label: own("Type your answer"), description: null }], multi_select: false, custom_option_index: 0,
     }, { responder: "pi-input", menuLabels: [], selectedIndex: 0, checkedOptionIndices: [], customMenuIndex: 0, rejectWithEscapeIndex: null },
     text(uncounted(block.title)));
   }

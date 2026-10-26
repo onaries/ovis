@@ -13,7 +13,7 @@ import { chromePath } from "./chrome-path.ts";
 /** how long a resize that should not happen gets to show up */
 const NO_RESIZE_WAIT_MS = 400;
 
-type Frame = { dir: "in" | "out"; type: string; keep_size?: boolean; pane_id?: string; cols?: number; rows?: number };
+type Frame = { dir: "in" | "out"; type: string; keep_size?: boolean; pane_id?: string; cols?: number; rows?: number; text?: string };
 const framesOf = (page: Page) => page.evaluate(() => (window as unknown as { frames_: Frame[] }).frames_);
 
 /**
@@ -80,7 +80,7 @@ async function openRecording(browser: Browser, contexts: BrowserContext[], origi
   await context.addInitScript((stored) => {
     localStorage.setItem("ovis:settings", JSON.stringify(stored));
     // every frame this page's socket sends and receives, to wait on the server's answers
-    const frames: { dir: "in" | "out"; type: string; keep_size?: boolean; pane_id?: string; cols?: number; rows?: number }[] = [];
+    const frames: { dir: "in" | "out"; type: string; keep_size?: boolean; pane_id?: string; cols?: number; rows?: number; text?: string }[] = [];
     (window as unknown as { frames_: typeof frames }).frames_ = frames;
     const Native = window.WebSocket;
     class Recording extends Native {
@@ -93,7 +93,7 @@ async function openRecording(browser: Browser, contexts: BrowserContext[], origi
         // Physical closes remain separate evidence for the explicit reconnect scenarios.
         this.addEventListener("close", () => frames.push({ dir: "in", type: "socket-closed" }));
       }
-      override send(data: string): void { try { const frame = JSON.parse(data); frames.push({ dir: "out", type: frame.type, keep_size: frame.keep_size, ...(frame.type === "detach" ? { pane_id: frame.pane_id } : {}), ...(frame.type === "resize" ? { cols: frame.cols, rows: frame.rows } : {}) }); } catch {} super.send(data); }
+      override send(data: string): void { try { const frame = JSON.parse(data); frames.push({ dir: "out", type: frame.type, keep_size: frame.keep_size, ...(frame.type === "detach" ? { pane_id: frame.pane_id } : {}), ...(frame.type === "resize" ? { cols: frame.cols, rows: frame.rows } : {}), ...(frame.type === "input" ? { text: frame.text } : {}) }); } catch {} super.send(data); }
     }
     Object.assign(window, { WebSocket: Recording });
   }, settings);
@@ -523,7 +523,7 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
     };
     const sent = async (page: Page, start = 0) => (await framesOf(page)).slice(start)
       .filter((f) => f.dir === "out" && (f.type === "attach" || f.type === "resize"));
-    const scenarios = ["mount", "mount-optin", "hidden-mount", "legacy-mount", "mirrored-mount", "reconnect", "hidden-reconnect", "legacy-reconnect", "key-resume", "switch", "background-cache", "mirrored-cache", "resume", "pageshow", "pageshow-touch", "toggles", "held", "queue-switch", "queue-inflight", "writes", "embedded"] as const;
+    const scenarios = ["mount", "mount-optin", "hidden-mount", "legacy-mount", "mirrored-mount", "reconnect", "hidden-reconnect", "legacy-reconnect", "key-resume", "switch", "background-cache", "mirrored-cache", "resume", "pageshow", "pageshow-touch", "toggles", "held", "queue-switch", "queue-inflight", "writes", "idle", "idle-off", "idle-held", "idle-offline", "idle-expired", "idle-secret", "embedded"] as const;
     assert.ok(!process.env.CHAT_SIZE_CASE || scenarios.some((scenario) => scenario === process.env.CHAT_SIZE_CASE), "unknown CHAT_SIZE_CASE");
     for (const scenario of scenarios) {
       if (process.env.CHAT_SIZE_CASE && process.env.CHAT_SIZE_CASE !== scenario) continue;
@@ -551,6 +551,10 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
         let releaseSubmit: (() => void) | undefined;
         let acceptedQueue = false;
         let holdOutput = false;
+        // idle-held / idle-offline: the input-ready of the attach that takes an idle pane back waits here
+        let holdReady = false;
+        const heldReady: Array<() => void> = [];
+        let injectFrame: ((frame: object) => void) | undefined;
         let injectOutput: (() => void) | undefined;
         const heldOutput: Array<() => void> = [];
         const wire: Frame[] = [];
@@ -568,7 +572,8 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
           };
           listeners.add(check); check();
         });
-        const routed = queueScenario || scenario === "writes" || scenario === "background-cache" || scenario === "mirrored-cache" || legacy;
+        const routed = queueScenario || scenario === "writes" || scenario === "background-cache" || scenario === "mirrored-cache" || legacy
+          || (scenario.startsWith("idle") && scenario !== "idle-off");
         const recorded = async (): Promise<Frame[]> => {
           if (routed) return [...wire];
           assert.ok(page);
@@ -610,9 +615,14 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
                 socket.send(JSON.stringify({ type: "pty-data", pane_id: first, data }));
               }
             };
+            injectFrame = (frame) => socket.send(JSON.stringify(frame));
             const upstream = socket.connectToServer();
             upstream.onMessage((raw) => {
               const frame = JSON.parse(String(raw));
+              if (holdReady && frame.type === "input-ready" && frame.pane_id === first) {
+                heldReady.push(() => { record(raw, "in"); socket.send(raw); });
+                return;
+              }
               if (legacy && frame.type === "snapshot") {
                 frame.features = frame.features.filter((feature: string) => feature !== "watch");
                 raw = JSON.stringify(frame);
@@ -654,8 +664,15 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
         }
         page = await openRecording(browser, contexts, origin, scenario === "held" ? heldPane : first,
           scenario === "pageshow-touch" ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } : { viewport: { width: 1000, height: 700 } }, { language: "en", defaultView: queueScenario ? "chat" : "terminal",
-            releasePaneAway: scenario === "mount-optin" || (!fresh && !reconnect && scenario !== "switch") },
-          fresh, setup);
+            releasePaneAway: scenario === "mount-optin" || (!fresh && !reconnect && scenario !== "switch" && scenario !== "idle-off") },
+          fresh, async (recording) => {
+            // a tab in use from its first attach, on the page clock from the start: its quiet spell is counted there
+            if (scenario.startsWith("idle")) {
+              await recording.addInitScript(() => Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true }));
+              await recording.clock.install();
+            }
+            await setup(recording);
+          });
         if (scenario === "held") {
           await page.getByText("Another app has this pane open.", { exact: false }).waitFor();
           await pauseClock(page);
@@ -683,6 +700,128 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
           await page.waitForFunction(() => (window as unknown as { frames_: Frame[] }).frames_
             .some((f) => f.dir === "out" && f.type === "input"), undefined, { timeout: 10_000 });
           console.log("PASS inactive attach lifecycle: held");
+          continue;
+        }
+        if (scenario.startsWith("idle")) {
+          // #712: a tab in use holds herdr's attach, and herdr keeps the pane at the tab's size, so its own TUI
+          // draws the pane cut off and takes clicks in the wrong place. With Settings → Use alongside herdr's own
+          // window on, the tab lets go of the pane after 10 s without typing or a click in it, and the key that
+          // takes it back reaches the pane, once, through the new attach. Off, nothing changes.
+          await attached(page);
+          await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1_000);
+          await page.clock.runFor(6_000);
+          const idlePage = page;
+          const detaches = async () => (await framesOf(idlePage)).filter((f) => f.dir === "out" && f.type === "detach").length;
+          assert.equal(await detaches(), 0, "reading the output for a few seconds keeps the pane");
+          if (scenario === "idle-off") {
+            await page.clock.runFor(12_000);
+            assert.equal(await detaches(), 0, "with the setting off a tab in use keeps its pane");
+            assert.equal((await framesOf(page)).filter((f) => f.dir === "out" && f.type === "watch").length, 0);
+            assert.ok(attachRunning(firstTerminal), "with the setting off the tab still holds its attach");
+            console.log("PASS inactive attach lifecycle: idle-off");
+            continue;
+          }
+          await page.clock.runFor(4_000);
+          await waitDetach(page);
+          await page.locator(".terminal-banner", { hasText: "View only while you are not typing here" }).waitFor();
+          await page.waitForFunction(() => (window as unknown as { frames_: Frame[] }).frames_.some((frame) => frame.type === "watch-data"));
+          // the bridge's attach ends with the tab's: herdr gives the pane back to its own window
+          const gone = Date.now() + 10_000;
+          while (attachRunning(firstTerminal) && Date.now() < gone) await Bun.sleep(100);
+          assert.ok(!attachRunning(firstTerminal), "an idle tab holds no attach on the pane");
+          // From here the page clock stays paused: the keys' wait (RESUME_INPUT_WAIT_MS, 5 s) runs out only where a case
+          // advances it, and the attach that takes the pane back answers input-ready only when the case lets it.
+          const start = (await framesOf(page)).length;
+          const typedOut = async () => (await framesOf(idlePage)).slice(start).filter((f) => f.dir === "out" && f.type === "input").map((f) => f.text);
+          const readyComes = async (): Promise<void> => {
+            const readyDeadline = Date.now() + 10_000;
+            while (heldReady.length === 0 && Date.now() < readyDeadline) await Bun.sleep(50);
+            assert.ok(heldReady.length > 0, "the server answered the attach with input-ready");
+            const readies = wire.filter((f) => f.dir === "in" && f.type === "input-ready").length;
+            holdReady = false;
+            for (const deliver of heldReady.splice(0)) deliver();
+            await waitWire("in", "input-ready", readies + 1);
+          };
+          if (scenario === "idle-secret") {
+            // a masked prompt comes up while the tab only watches the pane
+            // the command line does not spell the prompt: only the prompt itself puts "Password:" on screen
+            await paneSendText(first, "read -s -p \"$(printf 'Pass%s: ' word)\" x");
+            await paneSendKeys(first, ["Enter"]);
+            const drawn = (): Promise<boolean> => idlePage.evaluate(() => document.querySelector(".xterm-rows")?.textContent?.includes("Password:") ?? false);
+            const promptDeadline = Date.now() + 10_000;
+            // the paused clock lets the watched view parse and draw only as it is advanced (no resume has started yet)
+            while (!(await drawn()) && Date.now() < promptDeadline) await page.clock.runFor(100);
+            assert.ok(await drawn(), "the masked prompt is on the watched screen");
+          }
+          holdReady = true;
+          const proof = join(root, `idle-${Date.now()}.txt`);
+          const line = scenario === "idle" ? `echo typed-once > ${proof}` : scenario === "idle-secret" ? "hunter2" : "echo held-once";
+          // typed from the view-only screen: its first key takes the pane back
+          await page.locator(".xterm-helper-textarea").focus();
+          await page.keyboard.type(line);
+          if (scenario === "idle") await page.keyboard.press("Enter");
+          await page.waitForFunction((from) => (window as unknown as { frames_: Frame[] }).frames_.slice(from)
+            .some((f) => f.dir === "out" && f.type === "attach"), start, { timeout: 10_000 });
+          if (scenario === "idle") {
+            // every key typed before the attach took input waited for it, and went to the pane once, in order
+            assert.deepEqual(await typedOut(), [], "nothing is typed before the attach takes input");
+            await readyComes();
+            const ran = Date.now() + 10_000;
+            while (!existsSync(proof) && Date.now() < ran) await Bun.sleep(100);
+            assert.equal(existsSync(proof) ? readFileSync(proof, "utf8") : "(no file)", "typed-once\n", "the line typed into the idle tab ran, its first key included");
+            assert.equal((await typedOut()).join(""), `${line}\r`, "every key went to the pane once, in order");
+            assert.deepEqual((await framesOf(page)).slice(start).filter((f) => f.dir === "out" && f.type === "attach").map((f) => f.keep_size ?? false), [false],
+              "the key takes the pane back with one attach, at this window's size");
+            await page.clock.resume();
+            await page.locator(".terminal-banner", { hasText: "View only" }).waitFor({ state: "hidden" });
+            console.log("PASS inactive attach lifecycle: idle");
+            continue;
+          }
+          // The attach does not take the keys: another app holds the pane, the connection drops, or it takes longer than
+          // the keys may wait. They are held for review (before the wait could run out, but for idle-expired), and the
+          // attach that takes input later sends none of them.
+          if (scenario === "idle-held" || scenario === "idle-secret") {
+            assert.ok(injectFrame);
+            injectFrame({ type: "error", code: "attach_held", pane_id: first, message: "Another app has this pane open." });
+            await page.getByText("Another app has this pane open.", { exact: false }).first().waitFor();
+          } else if (scenario === "idle-offline") {
+            await page.evaluate(() => (window as unknown as { socket_: WebSocket }).socket_.close());
+            // the ready held for the dropped connection never reaches the page; the reconnect's is held next
+            heldReady.length = 0;
+            // the reconnect's backoff, advanced in steps and never as far as the keys' wait (5 s)
+            const reopened = async (): Promise<boolean> => (await framesOf(idlePage)).filter((f) => f.type === "socket-opened").length >= 2;
+            for (let advanced = 0; advanced < 4_000 && !(await reopened()); advanced += 250) await page.clock.runFor(250);
+            await page.waitForFunction(() => (window as unknown as { frames_: Frame[] }).frames_
+              .filter((f) => f.type === "socket-opened").length >= 2, undefined, { timeout: 15_000 });
+          } else {
+            await page.clock.runFor(5_100);
+          }
+          if (scenario === "idle-secret") await page.getByText("a password is never held for later", { exact: false }).first().waitFor();
+          else await page.locator(".draft-text", { hasText: "echo held-once" }).waitFor();
+          await readyComes();
+          if (scenario === "idle-held" || scenario === "idle-secret") {
+            assert.ok(injectFrame);
+            injectFrame({ type: "attach-resumed", pane_id: first });
+          }
+          await Bun.sleep(NO_RESIZE_WAIT_MS);
+          assert.deepEqual(await typedOut(), [], "keys held for review are never sent by an attach that takes input later");
+          if (scenario === "idle-secret") {
+            // what was typed at the masked prompt is in no draft, on screen or on disk
+            assert.equal(await page.locator(".draft-text").count(), 0, "a password is never held in a draft");
+            assert.equal(await page.evaluate(() => Object.keys(localStorage).some((key) => (localStorage.getItem(key) ?? "").includes("hunter2"))), false,
+              "a password is never kept on disk");
+            await paneSendKeys(first, ["Enter"]);
+            console.log("PASS inactive attach lifecycle: idle-secret");
+            continue;
+          }
+          // the connection takes input: the held keys go when the user sends them, and only then
+          await page.getByRole("button", { name: "Send held input" }).first().click();
+          await page.waitForFunction((from) => (window as unknown as { frames_: Frame[] }).frames_.slice(from)
+            .some((f) => f.dir === "out" && f.type === "input"), start, { timeout: 10_000 });
+          assert.deepEqual(await typedOut(), ["echo held-once"], "the held keys go once, when the user sends them");
+          // the held text was typed without Enter: run it, so the next case starts at an empty prompt
+          await paneSendKeys(first, ["Enter"]);
+          console.log(`PASS inactive attach lifecycle: ${scenario}`);
           continue;
         }
         if (watchFirst) {

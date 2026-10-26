@@ -87,7 +87,6 @@ export const FILES_KO: Record<string, string> = {
   "git is not installed on that PC.": "그 PC에는 git이 설치되어 있지 않습니다.",
   "git took too long to answer.": "git의 응답이 너무 오래 걸렸습니다.",
   "git could not compare these.": "git이 비교하지 못했습니다.",
-  "This device can only watch.": "이 기기는 보기만 할 수 있습니다.",
   "The pane's folder could not be read.": "창의 폴더를 읽지 못했습니다.",
   "That PC is not reachable right now.": "지금은 그 PC에 연결할 수 없습니다.",
   "Changes to {name}": "{name} 변경 사항",

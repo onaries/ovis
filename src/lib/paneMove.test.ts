@@ -1,5 +1,7 @@
 import { expect, it } from "bun:test";
+import { paneStorageId, type Machine } from "../../shared/machines.ts";
 import { ComposerDraftStore } from "./composerDraft.ts";
+import { paneLifetimes } from "./paneLifetime.ts";
 import { carryPaneState } from "./paneMove.ts";
 import { readTerminalDraft, setTerminalDraftSending, writeTerminalDraft } from "./terminalDraft.ts";
 function fixture() {
@@ -48,4 +50,25 @@ it("carries a touch screen's unsent terminal line to the new ID, and leaves one 
   setTerminalDraftSending("w7:p3", false);
   expect(readTerminalDraft("w7:p3")).toBe("make");
   expect(readTerminalDraft("w8:p4")).toBe("");
+});
+it("carries what this page alone keeps for a PC that names no herdr, and writes none of it to storage", () => {
+  const { data, storage } = fixture();
+  const window = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage() } });
+  try {
+    // an older bridge names no herdr: its panes' state lives in the page (lib/paneLifetime.ts)
+    paneLifetimes.observe([{ id: "older", snapshot: { panes: [] } } as unknown as Machine], (item) => item.pane_id);
+    const before = paneStorageId("older", "w1:p1");
+    const after = paneStorageId("older", "w2:p4");
+    paneLifetimes.paneStorage.setItem(`ovis:terminal-draft:${before}`, JSON.stringify({ text: "echo held", at: 1 }));
+    paneLifetimes.paneStorage.setItem(`ovis:view:${before}`, "terminal");
+    carryPaneState("older", "w1:p1", "w2:p4", new ComposerDraftStore(() => paneLifetimes.paneStorage));
+    expect(paneLifetimes.paneStorage.getItem(`ovis:terminal-draft:${after}`)).toBe(JSON.stringify({ text: "echo held", at: 1 }));
+    expect(paneLifetimes.paneStorage.getItem(`ovis:view:${after}`)).toBe("terminal");
+    expect(paneLifetimes.paneStorage.getItem(`ovis:view:${before}`)).toBeNull();
+    expect([...data.keys()]).toEqual([]);
+  } finally {
+    if (window) Object.defineProperty(globalThis, "window", window);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
 });

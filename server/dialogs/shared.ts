@@ -1,4 +1,5 @@
-import { type InteractivePrompt } from "../../shared/protocol.ts";
+import { type CardText, type InteractivePrompt, type InteractivePromptOption, type InteractivePromptStep } from "../../shared/protocol.ts";
+import { type CardTextKey } from "../../shared/card-text.ts";
 import { type OpenCodeFormFieldOption, type OpenCodeFormInfo } from "../opencode-service.ts";
 import { createHash } from "node:crypto";
 import type { ReaderContext } from "./registry.ts";
@@ -247,20 +248,73 @@ export function sequentialRows(rows: NumberedRow[]): boolean {
   return rows.length > 0 && rows.every((row, index) => row.number === index + 1);
 }
 
+/** What a card shows: the agent's own text as read, or the bridge's own words (`own`), which the client shows in the user's language. */
+export type CardWords = string | CardText;
+
+/** The bridge's own words on a card (shared/card-text.ts), with the values of their placeholders: given where a card takes the agent's text. */
+export function own(key: CardTextKey, vars?: CardText["vars"]): CardText {
+  return vars === undefined ? { key } : { key, vars };
+}
+
+/** A card's words in English, the bridge's own with their values filled in: as an older client shows them, and as the card's id reads them. */
+export function englishOf(words: CardWords): string {
+  if (typeof words === "string") return words;
+  return words.key.replace(/\{(\w+)\}/g, (match, name: string) => {
+    const value = words.vars?.[name];
+    return value === undefined ? match : typeof value === "object" ? englishOf(value) : String(value);
+  });
+}
+
+/** A card as a reader writes it: its title, question, body, options and steps may be the bridge's own words. */
+export type PromptDraft = Omit<InteractivePrompt, "id" | "agent" | "title" | "question" | "body" | "options" | "steps" | "own_text"> & {
+  title: CardWords;
+  question: CardWords;
+  body: CardWords | null;
+  options: (Omit<InteractivePromptOption, "label" | "description"> & { label: CardWords; description: CardWords | null })[];
+  steps?: (Omit<InteractivePromptStep, "label"> & { label: CardWords })[];
+};
+
+/** The entries of `words` that are the bridge's own, by index; none when there are none. */
+function ownByIndex(words: readonly (CardWords | null)[]): Record<number, CardText> | undefined {
+  const found = words.flatMap((entry, index) => entry !== null && typeof entry === "object" ? [[index, entry] as const] : []);
+  return found.length > 0 ? Object.fromEntries(found) : undefined;
+}
+
 export function finishPrompt(
   agent: string,
-  input: Omit<InteractivePrompt, "id" | "agent">,
+  draft: PromptDraft,
   internal: Omit<ParsedPrompt, keyof InteractivePrompt>,
   /** fields as the id reads them, where that is not as the card shows them (a fallback card's ticking working line) */
   hashed: Partial<Pick<InteractivePrompt, "title" | "question" | "body" | "steps" | "can_step_back" | "default_custom_text">> & { call?: string } = {},
 ): ParsedPrompt {
+  // the card in English, field for field where the draft had them: the id reads the same words as ever
+  const input: Omit<InteractivePrompt, "id" | "agent"> = {
+    ...draft,
+    title: englishOf(draft.title),
+    question: englishOf(draft.question),
+    body: draft.body === null ? null : englishOf(draft.body),
+    options: draft.options.map((option) => ({ ...option, label: englishOf(option.label), description: option.description === null ? null : englishOf(option.description) })),
+    // a draft without steps gets none: undefined, which neither the id nor the card reads
+    steps: draft.steps?.map((step) => ({ ...step, label: englishOf(step.label) })),
+  };
+  // and which of its words are the bridge's own, for the client to show in the user's language
+  const owned: NonNullable<InteractivePrompt["own_text"]> = {};
+  if (typeof draft.title === "object") owned.title = draft.title;
+  if (typeof draft.question === "object") owned.question = draft.question;
+  if (draft.body !== null && typeof draft.body === "object") owned.body = draft.body;
+  const labels = ownByIndex(draft.options.map((option) => option.label));
+  if (labels) owned.labels = labels;
+  const descriptions = ownByIndex(draft.options.map((option) => option.description));
+  if (descriptions) owned.descriptions = descriptions;
+  const steps = ownByIndex(draft.steps?.map((step) => step.label) ?? []);
+  if (steps) owned.steps = steps;
   const id = createHash("sha256")
     .update(JSON.stringify({ agent, ...input, ...hashed }))
     .digest("hex")
     .slice(0, 12);
   // Hash all approval details before applying the display cap. Cursor movement
   // is excluded, but a different command, plan or option description is stale.
-  return { id, agent, ...input, body: input.body?.slice(0, 12_000) ?? null, ...internal };
+  return { id, agent, ...input, body: input.body?.slice(0, 12_000) ?? null, ...(Object.keys(owned).length > 0 ? { own_text: owned } : {}), ...internal };
 }
 
 export function publicPrompt(parsed: ParsedPrompt): InteractivePrompt {
@@ -283,6 +337,7 @@ export function publicPrompt(parsed: ParsedPrompt): InteractivePrompt {
     ...(parsed.default_option_indices ? { default_option_indices: parsed.default_option_indices } : {}),
     ...(parsed.default_custom_text ? { default_custom_text: parsed.default_custom_text } : {}),
     ...(parsed.fallback ? { fallback: true as const } : {}),
+    ...(parsed.own_text ? { own_text: parsed.own_text } : {}),
   };
   parsedByPublicPrompt.set(prompt, parsed);
   return prompt;

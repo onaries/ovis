@@ -5,6 +5,13 @@ import { userErrorMessage } from "./userError.ts";
 export const RESIZE_SETTLE_MS = 120;
 /** How long a tab is out of use before it lets go of its pane: a glance at another window keeps it. */
 export const RELEASE_AFTER_MS = 1000;
+/**
+ * How long a tab in use goes without typing, clicking or pasting in its terminal before it lets go of its pane too,
+ * with Settings → Use alongside herdr's own window on (#712): a few seconds of reading the output keep it.
+ */
+export const IDLE_RELEASE_MS = 10_000;
+/** How long keys typed to take an idle pane back wait for its attach before they are held for review instead. */
+export const RESUME_INPUT_WAIT_MS = 5_000;
 
 // Only a tab the user is in drives the shared grid. A window left open behind another app
 // still turns visible when the screen wakes, and reconnects, reloads or moves on to the next pane

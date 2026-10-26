@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { descriptorLive, registerBridge, type BridgeDescriptor } from "./bridge.ts";
+import type { Socket } from "bun";
+import { descriptorLive, loopbackRelay, registerBridge, RELAY_CLIENT_AHEAD_BYTES, relayTarget, type BridgeDescriptor } from "./bridge.ts";
 import { guardLibrary, guardPath, OwnerGuardReleaseFailed } from "./owner-guard.ts";
 import { readProcessBirth } from "./process-owner.ts";
 
@@ -188,5 +189,150 @@ describe("bridge registration", () => {
     expect(message).toStartWith(`This bridge was not registered (descriptor ${path}): the file lock could not be loaded`);
     expect(message).not.toContain("old-bridge-secret");
     expect(message).not.toContain("new-token");
+  });
+});
+
+// #1960: an Ovis with HOST set to another address registers this relay, since the app's tunnel reaches only the PC's loopback
+describe("loopback relay", () => {
+  const stops: (() => void)[] = [];
+  afterEach(() => { for (const stop of stops.splice(0)) stop(); });
+  function relayTo(port: number): number {
+    const relay = loopbackRelay("127.0.0.1", port);
+    stops.push(() => relay.stop());
+    return relay.port;
+  }
+
+  it("passes requests, a large answer and a WebSocket through to the server", async () => {
+    const big = "x".repeat(8 * 1024 * 1024);
+    const server = Bun.serve({
+      port: 0, hostname: "127.0.0.1",
+      fetch(request, srv) {
+        if (new URL(request.url).pathname === "/ws") return srv.upgrade(request) ? undefined : new Response("no", { status: 400 });
+        return new Response(new URL(request.url).pathname === "/big" ? big : `${request.method} ${request.headers.get("authorization")}`);
+      },
+      websocket: { message(ws, message) { ws.send(`echo ${message}`); } },
+    });
+    stops.push(() => server.stop(true));
+    const port = relayTo(server.port!);
+    expect(port).not.toBe(server.port);
+    expect(await (await fetch(`http://127.0.0.1:${port}/api/bridge`, { headers: { authorization: "Bearer t" } })).text()).toBe("GET Bearer t");
+    expect((await (await fetch(`http://127.0.0.1:${port}/big`)).text()).length).toBe(big.length);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const echoed = new Promise<string>((resolve, reject) => { ws.onmessage = (event) => resolve(String(event.data)); ws.onerror = () => reject(new Error("WebSocket failed")); });
+    ws.onopen = () => ws.send("hi");
+    expect(await echoed).toBe("echo hi");
+    ws.close();
+  });
+
+  it("makes the server wait for a client that stops reading, then delivers every byte", async () => {
+    const size = 64 * 1024 * 1024;
+    const piece = 16 * 1024;
+    const blocked = Promise.withResolvers<"blocked">();
+    const sent = Promise.withResolvers<"sent">();
+    // one piece per event-loop turn, so the relay gets to read between them; a write that takes
+    // less than a piece is the server feeling the client's backpressure, and its drain goes on
+    // every byte says where it belongs, so a lost, repeated or reordered piece shows
+    const payload = new Uint8Array(size);
+    for (let i = 0; i < size; i++) payload[i] = (i ^ (i >>> 13)) & 0xff;
+    type Writer = { data: { at: number }; write(chunk: Uint8Array): number; end(): void };
+    const pump = (socket: Writer): void => {
+      if (socket.data.at === size) { sent.resolve("sent"); socket.end(); return; }
+      const want = Math.min(piece, size - socket.data.at);
+      const written = Math.max(socket.write(payload.subarray(socket.data.at, socket.data.at + want)), 0);
+      socket.data.at += written;
+      if (written < want) { blocked.resolve("blocked"); return; }
+      setImmediate(() => pump(socket));
+    };
+    const server = Bun.listen<{ at: number }>({ hostname: "127.0.0.1", port: 0, socket: {
+      open(socket) { socket.data = { at: 0 }; pump(socket); },
+      drain: pump,
+      data() {},
+    } });
+    stops.push(() => server.stop(true));
+    const received = new Uint8Array(size);
+    let filled = 0;
+    const done = Promise.withResolvers<void>();
+    const client = await Bun.connect({ hostname: "127.0.0.1", port: relayTo(server.port), socket: {
+      open(socket) { socket.pause(); },
+      data(_socket, data) { received.set(data.subarray(0, size - filled), filled); filled += data.byteLength; },
+      close() { done.resolve(); },
+    } });
+    // a relay that buffered everything would let the server finish while nothing is read
+    expect(await Promise.race([blocked.promise, sent.promise])).toBe("blocked");
+    client.resume();
+    await done.promise;
+    expect(filled).toBe(size);
+    expect(Buffer.compare(received, payload)).toBe(0);
+  });
+
+  /** a client sending `total` bytes through the relay to a server that reads nothing */
+  async function stuckUpstream(total: number): Promise<{ client: Socket; relay: { stop(): void }; written: Promise<void>; clientClosed: Promise<void>; upstreamClosed: Promise<void> }> {
+    const upstreamClosed = Promise.withResolvers<void>();
+    const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: {
+      open(socket) { socket.pause(); },
+      data() {},
+      close() { upstreamClosed.resolve(); },
+    } });
+    stops.push(() => server.stop(true));
+    const relay = loopbackRelay("127.0.0.1", server.port);
+    stops.push(() => relay.stop());
+    const written = Promise.withResolvers<void>();
+    const clientClosed = Promise.withResolvers<void>();
+    const chunk = new Uint8Array(1024 * 1024).fill(3);
+    let sent = 0;
+    const push = (socket: Socket) => {
+      while (sent < total) {
+        const want = Math.min(chunk.byteLength, total - sent);
+        const accepted = socket.write(chunk.subarray(0, want));
+        if (accepted <= 0) return;
+        sent += accepted;
+        if (accepted < want) return;
+      }
+      written.resolve();
+    };
+    const client = await Bun.connect({ hostname: "127.0.0.1", port: relay.port, socket: { open: push, drain: push, data() {}, close() { clientClosed.resolve(); } } });
+    return { client, relay, written: written.promise, clientClosed: clientClosed.promise, upstreamClosed: upstreamClosed.promise };
+  }
+
+  it("lets go of a server that reads nothing once its client leaves", async () => {
+    const { client, written, upstreamClosed } = await stuckUpstream(16 * 1024 * 1024);
+    await written;
+    client.terminate();
+    await upstreamClosed;
+  });
+
+  it("lets go of a server that reads nothing when it stops", async () => {
+    const { relay, written, upstreamClosed } = await stuckUpstream(16 * 1024 * 1024);
+    await written;
+    relay.stop();
+    await upstreamClosed;
+  });
+
+  it("cuts off a client that gets too far ahead of a server that reads nothing", async () => {
+    const { clientClosed, upstreamClosed } = await stuckUpstream(RELAY_CLIENT_AHEAD_BYTES + 16 * 1024 * 1024);
+    await Promise.all([clientClosed, upstreamClosed]);
+  });
+
+  // macOS gives its loopback interface 127.0.0.1 alone
+  it.skipIf(process.platform === "darwin")("reaches a server on another loopback address", async () => {
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.2", fetch: () => new Response("two") });
+    stops.push(() => server.stop(true));
+    expect(relayTarget("127.0.0.2")).toBe("127.0.0.2");
+    const relay = loopbackRelay("127.0.0.2", server.port!);
+    stops.push(() => relay.stop());
+    expect(await (await fetch(`http://127.0.0.1:${relay.port}/`)).text()).toBe("two");
+  });
+
+  it("closes a connection when nothing listens behind it", async () => {
+    const gone = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+    const closed = gone.port;
+    gone.stop(true);
+    await expect(fetch(`http://127.0.0.1:${relayTo(closed)}/`, { signal: AbortSignal.timeout(5000) })).rejects.toThrow();
+  });
+
+  it("relays an IP address that does not answer on 127.0.0.1, and never a host name", () => {
+    expect(["127.0.0.2", "100.64.0.7", "::1", "[FD7A:115C:A1E0::7]"].map(relayTarget)).toEqual(["127.0.0.2", "100.64.0.7", "::1", "fd7a:115c:a1e0::7"]);
+    // 127.0.0.1 and a wildcard need none; a host name may resolve elsewhere by the next connection
+    expect(["127.0.0.1", "0.0.0.0", "::", "[::]", "localhost", "pc.example", "pc.tail1234.ts.net"].map(relayTarget)).toEqual([null, null, null, null, null, null, null]);
   });
 });

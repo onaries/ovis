@@ -53,7 +53,8 @@ function listedNames(output: Uint8Array): string[] | null {
   return Buffer.from(output.buffer, output.byteOffset, output.byteLength).toString("utf8").split("\0").filter(Boolean);
 }
 
-async function gitFiles(cwd: string): Promise<string[] | null> {
+/** The listing, at most `limit` names of it; null when git failed, overran its cap or its deadline. */
+async function gitFiles(cwd: string, limit = MAX_GIT_ENTRIES): Promise<string[] | null> {
   const { deadlineMs, maxBytes } = gitList;
   let proc: Bun.Subprocess<"ignore", "pipe", "ignore">;
   try {
@@ -86,7 +87,7 @@ async function gitFiles(cwd: string): Promise<string[] | null> {
     const exitCode = await proc.exited;
     if (stopped || exitCode !== 0) return null;
     const names = listedNames(Buffer.concat(chunks));
-    return names && [...new Set(names)].slice(0, MAX_GIT_ENTRIES);
+    return names && [...new Set(names)].slice(0, limit);
   } finally {
     clearTimeout(timer);
   }
@@ -172,44 +173,41 @@ export async function paneFiles(cwd: string, query = "", limit = 20): Promise<st
 }
 
 const walked = new Map<string, { expires: number; files: string[] }>();
-
-/** `gitFiles` for a lookup that answers at once, not cut to MAX_GIT_ENTRIES: a name is matched against every path. */
-function gitFilesNow(cwd: string): string[] | null {
-  const { deadlineMs, maxBytes } = gitList;
-  let proc;
-  try {
-    proc = Bun.spawnSync(gitListArgv(cwd), {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "ignore",
-      env: gitEnvironment(),
-      timeout: deadlineMs,
-      maxBuffer: maxBytes,
-      killSignal: "SIGKILL",
-    });
-  } catch {
-    return null;
-  }
-  // a listing past its cap or deadline may end in half a name, even when git exited 0
-  if (proc.exitCode !== 0 || proc.exitedDueToTimeout || proc.exitedDueToMaxBuffer || proc.stdout.byteLength > maxBytes) return null;
-  return listedNames(proc.stdout);
-}
+/** One listing per folder at a time: lookups that arrive while it runs share it rather than start their own git. */
+const listing = new Map<string, Promise<string[]>>();
+/** Raised by clearFileCache: a listing begun before it neither fills the cache nor removes a later listing. */
+let generation = 0;
 
 /**
  * The files under `cwd` whose path ends in `name` (a bare `demo.mp4`, or `screenshots/demo.mp4`),
  * for a path an agent wrote without its folders. The git inventory comes first, whole, so a
  * folder of thousands of files cannot hide the one named; the bounded walk follows, since that
- * inventory leaves out ignored files (build output, recordings).
+ * inventory leaves out ignored files (build output, recordings). The listing is awaited, not
+ * waited for: a slow git in a large repository must not hold every other request (#1404).
  */
-export function filesNamed(cwd: string, name: string, limit = 10, anyForm = false): string[] {
+export async function filesNamed(cwd: string, name: string, limit = 10, anyForm = false): Promise<string[]> {
   const suffix = anyForm ? name.replace(/^\.\//, "").normalize("NFC") : name.replace(/^\.\//, "");
-  let hit = walked.get(cwd);
-  if (!hit || hit.expires <= Date.now()) {
-    hit = { expires: Date.now() + CACHE_MS, files: [...new Set([...gitFilesNow(cwd) ?? [], ...walkFiles(cwd)])] };
-    walked.set(cwd, hit);
-    if (walked.size > 16) walked.delete(walked.keys().next().value!);
+  const hit = walked.get(cwd);
+  let files = hit && hit.expires > Date.now() ? hit.files : undefined;
+  if (files === undefined) {
+    let shared = listing.get(cwd);
+    if (shared === undefined) {
+      const begun = generation;
+      // not cut to MAX_GIT_ENTRIES: a name is matched against every path
+      const pending: Promise<string[]> = gitFiles(cwd, Infinity).then((listed) => {
+        const found = [...new Set([...listed ?? [], ...walkFiles(cwd)])];
+        if (begun === generation) {
+          walked.set(cwd, { expires: Date.now() + CACHE_MS, files: found });
+          if (walked.size > 16) walked.delete(walked.keys().next().value!);
+        }
+        return found;
+      }).finally(() => { if (listing.get(cwd) === pending) listing.delete(cwd); });
+      shared = pending;
+      listing.set(cwd, pending);
+    }
+    files = await shared;
   }
-  return hit.files.filter((path) => {
+  return files.filter((path) => {
     const compared = anyForm ? path.normalize("NFC") : path;
     return compared === suffix || compared.endsWith(`/${suffix}`);
   }).sort().slice(0, limit);
@@ -218,4 +216,6 @@ export function filesNamed(cwd: string, name: string, limit = 10, anyForm = fals
 export function clearFileCache(): void {
   cache.clear();
   walked.clear();
+  listing.clear();
+  generation += 1;
 }

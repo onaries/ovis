@@ -57,6 +57,13 @@ export type SessionSnapshot = Omit<HerdrSnapshot, "panes"> & {
   /** Random per bridge start and observed herdr socket/marker replacement, independently per PC. */
   finish_epoch?: string;
   /**
+   * An opaque digest of the herdr this snapshot was read from (server/finishes.ts): the same across
+   * server restarts, new once herdr itself is replaced and gives its pane IDs out again. Absent when
+   * the read could not prove one herdr, and from older servers. A browser keeps each pane's drafts
+   * and lens for the lifetime they were made in (src/lib/paneLifetime.ts).
+   */
+  herdr_lifetime?: string;
+  /**
    * Workspace-order evidence of the server that read this snapshot (server/order-sequence.ts):
    * `order_epoch` is that server's `web_ui.boot_id`, and `read_seq` the number of workspace moves
    * it had confirmed when this read started. Both or neither; a snapshot without them comes from an
@@ -67,7 +74,7 @@ export type SessionSnapshot = Omit<HerdrSnapshot, "panes"> & {
 };
 export type { WorkspaceMoved } from "./workspace-lifecycle.ts";
 
-export type { Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupRequest, SetupAction, BridgeIdentity, BridgeHealth } from "./machines.ts";
+export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupRequest, SetupAction, BridgeIdentity, BridgeHealth } from "./machines.ts";
 
 /** Machine API (same token gate; mutations require X-Herdr-Machine: 1 + same origin)
  * GET /api/health?scope=bridge -> BridgeHealth, never waits for herdr
@@ -97,7 +104,8 @@ export type { Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupR
  *  GET    /api/health                    -> { ok: true, herdr: HerdrIdentity (shared/machines.ts; terminal_attach false on a
  *                                          Windows herdr and on a bridge that cannot run the PTY sidecar; terminal_mirror: its
  *                                          terminal lens is the pane's screen, repainted; /api/bridge tells the same herdr), auth: HealthAuth,
- *                                          web_ui: { boot_id: string, revision: string | null } } (boot_id: this server
+ *                                          web_ui: { boot_id: string, revision: string | null },
+ *                                          security?: SecuritySummary (authenticated only, no-store) } (boot_id: this server
  *                                          lifetime's id, the supervisor's when managed; older servers sent null unmanaged)
  *  GET    /api/session                   -> { snapshot: SessionSnapshot }
  *  GET    /api/herdr-ui                  -> HerdrUiConfig (this server PC's herdr [ui] copy_on_select,
@@ -322,12 +330,20 @@ export type { Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupR
  *  POST   /api/devices/pair { code, label? } -> 204 + Set-Cookie ovis_device (public, like /api/auth;
  *         401 invalid_code when the code is wrong, spent after five tries, or expired)
  *  PATCH  /api/devices/:id  { label }    -> PairedDevice;  DELETE /api/devices/:id -> 204 (revoked at its next request)
+ *  POST   /api/devices/revoke-all        -> DevicesRevokedAll + Set-Cookie clearing ovis_device and its old name
+ *         (X-Herdr-Machine: 1 + same origin, a client that can drive: 403 invalid_origin / read_only;
+ *         500 internal_error when the write fails, and then nothing was revoked)
  *  GET    /api/push                      -> PushKey (the VAPID application server key)
- *  POST   /api/push/subscribe { subscription }  -> 204 (a browser PushSubscription JSON; upsert by endpoint)
+ *  POST   /api/push/subscribe { subscription }  -> 204 (a browser PushSubscription JSON; upsert by endpoint;
+ *         a browser without a stream key is issued one: "Browser stream keys" below)
  *         | 410 subscription_gone (its push service answered 404/410 for that endpoint since the server
  *         started: the browser must unsubscribe and subscribe anew; an older server never says it)
  *  DELETE /api/push/subscribe { endpoint }      -> 204
  *  POST   /api/push/test      { endpoint }      -> 204 | 404 subscription_not_found | 410 subscription_gone | 502 push_failed
+ *  POST   /api/push/status    { subscription }  -> PushSubscriptionStatus: this browser's own subscription (its JSON, never an
+ *         endpoint in a URL or a list); 404 subscription_not_found alike for an unknown one, another owner's
+ *         and one whose keys do not match, so nothing is enumerated; 403 status_unavailable to the open LAN, which
+ *         signs in as no device and so owns no record (asked before any subscription is looked at)
  *  GET    /api/usage[?refresh=1]         -> UsageReport (plan limits of the AI subscriptions signed in on this PC)
  *  Errors: non-2xx with { error: { code, message } }
  *
@@ -352,11 +368,48 @@ export type { UsageProviderId, UsageWindow, UsageProblem, ProviderUsage, UsageRe
 
 export type { CLIProxyStatus, CLIProxyProvider, CLIProxyLogin, CLIProxyLoginStatus } from "./cliproxy.ts";
 
-export type { AccessVia, AccessRefusal, DeviceRole, HealthAuth, LanExposure, PairedDevice, PairingCode, RemoteAccess, TailscaleAccess } from "./access.ts";
+export type { AccessVia, AccessRefusal, DeviceRole, HealthAuth, LanExposure, BindScope, ObservedIngress, SecuritySummary, PairedDevice, PairingCode, RemoteAccess, TailscaleAccess } from "./access.ts";
+
+/**
+ * Browser stream keys: how the server tells one browser from another without a credential, so a
+ * device a browser pairs itself is not announced back to it (`DevicePairedEvent`, and the push
+ * "New device paired" notice).
+ *
+ * - Issuance: an answer to GET /api/machines/events or POST /api/push/subscribe that is served
+ *   (2xx) to a request carrying no valid key adds one: `Set-Cookie: ovis_stream_<key>=1;
+ *   Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000` (plus `Secure` over https), `<key>` 32
+ *   lowercase hex characters from 16 random bytes. A request that carries one is issued nothing.
+ * - Format: the key is in the cookie's NAME and the value is always `1`. Tabs that open at once,
+ *   before the browser held a key, each get one; since the names differ the browser keeps them
+ *   all, and every later request carries every key. At most eight are read from one request. A
+ *   cookie with the prefix whose key is not 32 lowercase hex, or whose value is not `1`, is not a
+ *   key and is ignored (never refused); a request with none is treated as a browser without one.
+ * - Lifetime: one year, like the device cookie, so a push subscription and the browser that made
+ *   it keep matching. Nothing revokes a key: it names a browser and grants nothing.
+ * - No authority: a key never lets a request in, never selects an owner or a role, and is not read
+ *   by the gate. Losing one only means that browser may hear of its own next pairing.
+ * - Role in POST /api/devices/pair: the keys the pairing request carries are the enrollment's
+ *   origin (kept with a first-pair credential until its first return). The `device-paired` event
+ *   then skips every machines event stream opened with one of those keys, and the push notice
+ *   skips every subscription registered with one, whatever access it came through (token, this
+ *   PC, Tailscale or a paired device).
+ */
+export const STREAM_COOKIE_PREFIX = "ovis_stream_";
 
 export type { PortalStatus } from "./portal.ts";
 
-export type { PushKey, PushPayload } from "./push.ts";
+/**
+ * POST /api/devices/revoke-all: every paired device lost its pairing access in one durable write,
+ * the caller's own included (its device cookie is cleared by the answer). Only pairing ends: the
+ * access token, this PC itself and the PC's Tailscale login get in as before, and the gate stays
+ * closed to strangers.
+ */
+export interface DevicesRevokedAll {
+  /** how many devices were paired before */
+  readonly revoked: number;
+}
+
+export type { PushDeliveryFailure, PushKey, PushPayload, PushSubscriptionStatus } from "./push.ts";
 
 /** One turn of a structured agent conversation (the chat lens source). */
 export interface ConversationTurn {
@@ -570,7 +623,7 @@ export interface CommandForm {
 
 /** What the bridge knows about a command a user sent: accepted is never the same as done. */
 export interface CommandOutcome {
-  /** the outcome's own id, referenced by PendingMessage.outcome_id */
+  /** the outcome's own id */
   id: string;
   /** the pane the command was sent to */
   pane_id: string;
@@ -663,6 +716,29 @@ export interface InteractivePrompt {
   fallback?: true;
   /** Claude's plan file behind a plan card, whose whole text is then the body: opened in the file viewer */
   plan_file?: string;
+  /**
+   * The card's own words, which the bridge wrote rather than read off the agent's screen (an Esc
+   * offered as Close, a fallback card's title): for each such field above, its English as a key with
+   * its values (shared/card-text.ts), so the client shows it in the user's language. A field not
+   * named here is the agent's own text, shown as it is; an older bridge names none.
+   */
+  own_text?: {
+    title?: CardText;
+    question?: CardText;
+    body?: CardText;
+    /** by index into `options` */
+    labels?: Record<number, CardText>;
+    /** by index into `options` */
+    descriptions?: Record<number, CardText>;
+    /** by index into `steps` */
+    steps?: Record<number, CardText>;
+  };
+}
+
+/** Card text the bridge wrote itself: an English key of the client's dictionaries, and the values of its `{placeholders}`, which may be card text too. */
+export interface CardText {
+  key: string;
+  vars?: Record<string, string | number | CardText>;
 }
 
 export interface InteractivePromptStep {
@@ -740,8 +816,6 @@ export interface PendingMessage {
   state: "queued" | "sending" | "held" | "uncertain";
   created_at: string;
   error?: { code: string; message: string };
-  /** the CommandOutcome this message's command is tracked by */
-  outcome_id?: string;
 }
 
 export type ClientMessage =
@@ -796,7 +870,7 @@ export type ClientMessage =
   /** `agent-queue` requires "pending-agent-queue": transfers this same bridge ID with
    * paste + Ctrl+Q (OmO) or Tab (working Codex, "codex-agent-queue"). Success removes it as sent without opening a turn gate; a failure keeps it
    * held, or uncertain if input may have reached the terminal. The receipt proves key delivery. */
-  | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard" | "agent-queue"; resend_generation?: number }
+  | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard" | "agent-queue"; resend_generation?: number; launch_ended?: true }
   /** the terminal's input line typed into the pane without Enter (feature "terminal-insert"), answered
    * with an insert-result of the same id once herdr has the bytes. `text` is one line of the draft,
    * as written: a line break is refused (`unsafe_multiline`), since nothing reports whether the pane's

@@ -152,7 +152,10 @@ describe("testDevicePush", () => {
       calls.push([url, init]);
       return new Response(null, { status: 204 });
     }) as typeof fetch;
-    expect(await testDevicePush()).toBe("sent");
+    const tested: string[] = [];
+    expect(await testDevicePush((endpoint) => { tested.push(endpoint); })).toBe("sent");
+    // the endpoint the test went to is named, for the line it leaves in Settings (lib/pushHealth.ts)
+    expect(tested).toEqual(["https://push.example/existing"]);
     expect(calls.length).toBe(1);
     expect(calls[0]![0]).toBe("/api/push/test");
     expect(calls[0]![1]?.method).toBe("POST");

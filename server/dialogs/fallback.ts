@@ -1,7 +1,7 @@
 import type { DialogReader } from "./registry.ts";
 import { type InteractivePrompt } from "../../shared/protocol.ts";
 import { createHash } from "node:crypto";
-import { ANSI_RE, type AnswerStep, KEY, type MenuRow, NUMBERED_OPTION_RE, type NumberedRow, type ParsedPrompt, SELECTED_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parseNumberedRows, parsedByPublicPrompt, publicPrompt, sequentialRows } from "./shared.ts";
+import { ANSI_RE, type AnswerStep, type CardWords, KEY, type MenuRow, NUMBERED_OPTION_RE, type NumberedRow, type ParsedPrompt, SELECTED_RE, cleanLine, englishOf, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, own, parseNumberedRows, publicPrompt, sequentialRows, parsedByPublicPrompt } from "./shared.ts";
 
 /**
  * The last resort, for a pane herdr reports blocked that none of the readers above know (a
@@ -101,7 +101,7 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
     return screenCard(lines, shown, steady, finishPrompt(agent, {
       // the body is every other line above the rows, so a changed command above a same-looking
       // menu is another card; the display cap applies after the hash
-      kind: "menu", fallback: true, title: "Waiting for your answer", question: question ?? "The agent is waiting for your answer.",
+      kind: "menu", fallback: true, title: own("Waiting for your answer"), question: question ?? own("The agent is waiting for your answer."),
       body,
       options: choices.map(({ label }) => ({ label, description: null })),
       multi_select: false, custom_option_index: null,
@@ -141,7 +141,7 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
     ];
     const body = withoutLine(above, question);
     return screenCard(lines, dialogShown, steady, finishPrompt(agent, {
-      kind: "menu", fallback: true, title: "Waiting for your answer", question: question ?? "The agent is waiting for your answer.",
+      kind: "menu", fallback: true, title: own("Waiting for your answer"), question: question ?? own("The agent is waiting for your answer."),
       body,
       options: choices.map(({ label }) => ({ label, description: null })),
       multi_select: false, custom_option_index: customIndex,
@@ -159,20 +159,20 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
   // a (y/n) letter is offered only for the prompt at the screen's end, never for a mention
   // above it; it is typed without an Enter: a program reading a whole line still waits for
   // one, and the card that follows offers it
-  const choices: { label: string; steps: AnswerStep[] }[] = [
-    ...(hints.some((line) => YES_NO_RE.test(line)) ? [{ label: "Yes (y)", steps: [{ text: "y" }] }, { label: "No (n)", steps: [{ text: "n" }] }] : []),
+  const choices: { label: CardWords; steps: AnswerStep[] }[] = [
+    ...(hints.some((line) => YES_NO_RE.test(line)) ? [{ label: own("Yes (y)"), steps: [{ text: "y" }] }, { label: own("No (n)"), steps: [{ text: "n" }] }] : []),
     ...(hints.some((line) => ARROWS_RE.test(line)) ? [{ label: "↑", steps: keySteps([KEY.up]) }, { label: "↓", steps: keySteps([KEY.down]) }] : []),
     { label: "Enter", steps: keySteps([KEY.enter]) },
     { label: "Esc", steps: keySteps([KEY.escape]) },
   ];
   const body = withoutLine(last, question);
   return screenCard(lines, shown, steady, finishPrompt(agent, {
-    kind: "menu", fallback: true, title: "Waiting for input", question: question ?? "The agent is waiting for input.",
+    kind: "menu", fallback: true, title: own("Waiting for input"), question: question ?? own("The agent is waiting for input."),
     body,
     options: choices.map(({ label }) => ({ label, description: null })),
     multi_select: false, custom_option_index: null,
   }, {
-    responder: "fallback-keys", menuLabels: choices.map(({ label }) => label), selectedIndex: 0,
+    responder: "fallback-keys", menuLabels: choices.map(({ label }) => englishOf(label)), selectedIndex: 0,
     checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
     optionSteps: choices.map(({ steps }) => steps),
   }, steadyFields(question, body, steady.read)));

@@ -5,7 +5,7 @@
  */
 import { existsSync, realpathSync } from "node:fs";
 import { userInfo } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import { darwinProcess } from "./claude-store.ts";
 import { paneProcessInfo } from "./herdr/client.ts";
@@ -339,6 +339,26 @@ export function ompRouteOwns({ layout }: OmpRoute, file: string, cwd: string): b
   if (parts === null || parts.length !== layout.depth && parts.length !== layout.depth + 1) return false;
   const header = transcriptHeader(file);
   return header !== null && ompSessionVersion(header.version) && (layout.depth === 2 || sameDirectory(header.cwd, cwd));
+}
+
+/**
+ * The blob store holding the pictures of an omp transcript, or null. omp 18.8.7 keeps its sessions in
+ * `<data>/sessions` and their pictures in `<data>/blobs` (`<data>` is the agent directory, or omp's
+ * XDG data directory), so a session of a managed store, `<data>/sessions/<cwd>/<id>.jsonl` or a
+ * subagent's file a level below it, has its blobs beside the store. A session directory of its own
+ * (`--session-dir`) names no data directory, and its pictures stay unnamed. The store is found from
+ * the transcript's real path, by layout alone, whether it exists yet or not: the parser, a page read
+ * live and the image endpoint all ask of the store when they read a blob, and a store that is missing,
+ * or a link (to another omp's store, or anywhere), answers nothing then (ompBlobPicture). A blob is
+ * served only when its bytes hash to the name the transcript gave them, so a wrong guess finds nothing.
+ */
+export function ompBlobStore(transcript: string): string | null {
+  let real: string;
+  try { real = realpathSync(transcript); } catch { return null; }
+  for (let dir = dirname(dirname(real)), depth = 0; depth < 2; depth += 1, dir = dirname(dir)) {
+    if (basename(dir) === "sessions") return join(dirname(dir), "blobs");
+  }
+  return null;
 }
 
 /** The transcript the pane's omp process holds open or last pointed its terminal breadcrumb at, or null (ompRouteTranscript). */

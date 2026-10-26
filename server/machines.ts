@@ -18,7 +18,7 @@ import { sameSshSession, type HerdrMachineProfile } from "./herdr-profiles.ts";
 import { validateTarget } from "./machine-security.ts";
 import { detectHost, HERDR_INSTALL_CMD, installLockOwner } from "./remote-host.ts";
 import { discard, readCappedJson, REMOTE_LIMITS } from "./remote-json.ts";
-import { SshConnection } from "./ssh.ts";
+import { SshConnection, sshClient } from "./ssh.ts";
 
 interface StoredMachine { id: string; name: string; target: SshTarget; enabled: boolean; snapshot?: SessionSnapshot | null }
 interface Runtime {
@@ -95,6 +95,20 @@ function verificationFailure(status: number, body: unknown): string {
   if (error?.code === "socket_missing" || error?.code === "internal_error" && typeof error.message === "string" && error.message.startsWith("ENOENT")) return "herdr is not running for this session on the PC (its socket is missing). Start herdr there, then reconnect.";
   if (error?.code === "connect_failed") return "herdr is not answering on the PC (its socket is there, but nothing listens). Restart herdr there, then reconnect.";
   return `Bridge verification failed (${status}). Reconnect after checking the remote bridge.`;
+}
+
+/** how long verifying a bridge waits for its answer through the tunnel */
+const BRIDGE_ANSWER_MS = 15_000;
+/**
+ * What the person adding the PC is told when the request through the standing tunnel to its bridge
+ * fails (#1960): ssh resets the connection when nothing listens on the PC's 127.0.0.1 at that port,
+ * as with an Ovis older than this fix that runs with HOST set to another address.
+ */
+function bridgeUnreachable(descriptor: BridgeDescriptor, error: unknown): string {
+  const at = `127.0.0.1:${descriptor.port}`;
+  if (descriptor.managed_remote) return `The bridge on this PC does not answer at ${at} through SSH. Reconnect after checking the remote bridge.`;
+  if ((error as Error | null)?.name === "TimeoutError") return `This PC's Ovis did not answer at ${at} through SSH within ${BRIDGE_ANSWER_MS / 1000} seconds. Reconnect after checking that it runs.`;
+  return `This PC's Ovis does not answer at ${at} through SSH. If it runs with HOST set to another address, update it or set HOST=127.0.0.1 there, restart it, then add the PC again.`;
 }
 
 async function freePort(): Promise<number> {
@@ -679,7 +693,7 @@ export class MachineManager {
           const directory = mkdtempSync(join(this.sshDir, "keygen-"));
           const temporary = join(directory, "key");
           try {
-            const keygen = Bun.spawn(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", `ovis:${runtime.machine.id}`, "-f", temporary], { stdout: "ignore", stderr: "pipe" });
+            const keygen = Bun.spawn([sshClient().keygen, "-q", "-t", "ed25519", "-N", "", "-C", `ovis:${runtime.machine.id}`, "-f", temporary], { stdout: "ignore", stderr: "pipe" });
             if (await keygen.exited !== 0) throw new Error("Could not generate the dedicated SSH key");
             if (job.abort.signal.aborted || runtime.generation !== generation || this.stopped) throw new Error("Setup cancelled");
             renameSync(temporary + ".pub", path + ".pub");
@@ -737,9 +751,18 @@ export class MachineManager {
     const port = await freePort();
     await ssh.forward(port, descriptor.port);
     const endpoint = { url: `http://127.0.0.1:${port}`, token: descriptor.token };
-    const response = await fetch(`${endpoint.url}/api/bridge`, { headers: { authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.timeout(15_000) });
+    let response: Response;
+    // one deadline for the answer, its body included: a bridge that stops halfway timed out too
+    const deadline = AbortSignal.timeout(BRIDGE_ANSWER_MS);
+    try { response = await fetch(`${endpoint.url}/api/bridge`, { headers: { authorization: `Bearer ${endpoint.token}` }, signal: deadline }); }
+    catch (error) { throw new Error(bridgeUnreachable(descriptor, error), { cause: error }); }
     if (!response.ok) throw new Error(verificationFailure(response.status, await readCappedJson(response, REMOTE_LIMITS.bridgeError).catch(() => null)));
-    const identity = await readCappedJson<BridgeIdentity>(response, REMOTE_LIMITS.bridgeIdentity);
+    let identity: BridgeIdentity;
+    try { identity = await readCappedJson<BridgeIdentity>(response, REMOTE_LIMITS.bridgeIdentity); }
+    catch (error) {
+      if (deadline.aborted) throw new Error(bridgeUnreachable(descriptor, deadline.reason), { cause: error });
+      throw error;
+    }
     // An approved replacement only reads this stable identity endpoint. It never uses the
     // old bridge's pane protocol; the new bridge must pass the strict version check below.
     if (!forReplacement && (identity.bridge_protocol !== BRIDGE_PROTOCOL || identity.bundle_version !== REMOTE_BUNDLE_VERSION)) {

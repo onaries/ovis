@@ -221,6 +221,72 @@ it("keeps the terminal for a session the store does not hold", async () => {
   expect((await read()).source).toBe("opencode-transcript");
 });
 
+it("counts an OpenCode pane's running subagent, holds the turn that ends meanwhile as BG, and leaves its card when it ends", async () => {
+  const PARENT = "ses_contractSubagents";
+  const CHILD = "ses_contractChild01";
+  // the columns child sessions came with (2.0.26 on): this store began as a 2.0.24 one
+  for (const column of ["parent_id text", "agent text", "model text"]) db.exec(`ALTER TABLE session_v2 ADD COLUMN ${column}`);
+  db.query("INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, 'global', 'contract', ?, 'Contract', '2.0.32', 0, 0)").run(PARENT, root);
+  add("user", { time: { created: Date.now() }, text: "scan it in the background", files: [], agents: [] }, PARENT);
+  db.query("INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, agent, time_created, time_updated) VALUES (?, 'global', ?, 'child', ?, 'Scan the repo', '2.0.32', 'explore', ?, ?)").run(CHILD, PARENT, root, Date.now(), Date.now());
+  add("user", { time: { created: Date.now() }, text: "You are a subagent spawned by another session.\nscan" }, CHILD);
+  const target = await startOpencode(PARENT);
+  // a server of its own, whose OpenCode state holds no service: never the machine's own service.json
+  const own = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state-subagents"), opencodeDb: database, openCodeStateDir: join(root, "no-service") });
+  // its status subscription is up before the turn is reported, or the turn's events go by unseen
+  await own.statusReady;
+  const base = `http://127.0.0.1:${own.port}`;
+  const ws = new WebSocket(`ws://127.0.0.1:${own.port}/ws`);
+  const frames: Record<string, unknown>[] = [];
+  const waiters = new Set<() => void>();
+  ws.addEventListener("message", (event) => { frames.push(JSON.parse(String(event.data)) as Record<string, unknown>); for (const wake of waiters) wake(); });
+  await new Promise((resolve) => ws.addEventListener("open", resolve, { once: true }));
+  // only a frame received after `from` (the frame count before the step it should follow) answers
+  const frame = (match: (frame: Record<string, unknown>) => boolean, what: string, from = 0) => new Promise<Record<string, unknown>>((resolve, reject) => {
+    const timeout = setTimeout(() => { waiters.delete(check); reject(new Error(`no frame: ${what}`)); }, 15_000);
+    const check = () => { const found = frames.slice(from).find((seen) => seen.type === "pane-status" && seen.pane_id === target && match(seen)); if (found) { clearTimeout(timeout); waiters.delete(check); resolve(found); } };
+    waiters.add(check);
+    check();
+  });
+  const reportState = (state: string) => herdrRpc("pane.report_agent", { pane_id: target, source: "herdr:opencode", agent: "opencode", agent_session_id: PARENT, state });
+  try {
+    const started = frames.length;
+    await reportState("working");
+    await frame((seen) => seen.agent_status === "working", "the turn at work", started);
+    // a snapshot names the pane and its session to the tracker, which counts the child from the store:
+    // this one, or one the server took on its own since the turn started, which said it first
+    await fetch(`${base}/api/session`);
+    await frame((seen) => seen.background_tasks === 1, "the running subagent counted", started);
+    let from = frames.length;
+    await reportState("idle");
+    // the turn ended while its subagent runs: BG, not DONE
+    expect(await frame((seen) => seen.background_wait === true, "the turn held on its subagent", from)).toMatchObject({ background_tasks: 1 });
+    const { snapshot } = await (await fetch(`${base}/api/session`)).json() as { snapshot: { panes: { pane_id: string; background_tasks?: number; background_wait?: true }[] } };
+    expect(snapshot.panes.find((pane) => pane.pane_id === target)).toMatchObject({ background_tasks: 1, background_wait: true });
+    const listed = await (await fetch(`${base}/api/pane/omo-tasks?pane_id=${encodeURIComponent(target)}`)).json() as { tasks: { id: string; title: string; category: string | null; status: string }[] };
+    expect(listed.tasks.map((task) => [task.id, task.title, task.category, task.status])).toEqual([[CHILD, "Scan the repo", "explore", "running"]]);
+
+    // it ends, and OpenCode wakes the parent with its answer
+    from = frames.length;
+    add("assistant", { time: { created: Date.now(), completed: Date.now() }, finish: "stop", content: [{ type: "text", text: "Three TODOs." }] }, CHILD);
+    add("idle", { time: { created: Date.now() }, outcome: "succeeded" }, CHILD);
+    add("synthetic", {
+      time: { created: Date.now() }, description: "Scan the repo", metadata: { source: "subagent", childID: CHILD, agent: "explore", state: "completed" },
+      text: `<subagent sessionID="${CHILD}" state="completed" description="Scan the repo">\nThree TODOs.\n</subagent>`,
+    }, PARENT);
+    await frame((seen) => seen.background_tasks === 0, "the ended subagent no longer counted", from);
+    const ended = await (await fetch(`${base}/api/pane/omo-tasks?pane_id=${encodeURIComponent(target)}`)).json() as { tasks: { id: string; status: string }[] };
+    expect(ended.tasks.map((task) => [task.id, task.status])).toEqual([[CHILD, "completed"]]);
+    const response = await fetch(`${base}/api/pane/conversation?${new URLSearchParams({ pane_id: target })}`);
+    expect(response.status).toBe(200);
+    const conversation = await response.json() as ConversationResponse;
+    expect(conversation.turns.at(-1)?.parts).toEqual([{ kind: "task_result", tasks: [expect.objectContaining({ id: CHILD, title: "Scan the repo", agent: "explore", status: "completed", result: "Three TODOs." })] }]);
+  } finally {
+    ws.close();
+    own.stop();
+  }
+}, 60_000);
+
 
 /**
  * OpenCode v2's own service, faked in the pinned OpenAPI shapes (843a6c51): /api/info, a session,
@@ -609,6 +675,94 @@ process.stdin.on("data", (chunk) => {
     check();
   });
 
+  it("delivers a queued message completely when Tab leaves the skill unconfirmed", async () => {
+    const acceptedPath = join(nativeRoot, "accepted.txt");
+    const accepted = readFileSync(acceptedPath, "utf8");
+    const unconfirmed = readFileSync(join(nativeRoot, "screen.txt"), "utf8");
+    const { ws, frame } = await socket();
+    const before = typed().length;
+    try {
+      writeFileSync(acceptedPath, unconfirmed);
+      const ready = frame((message) => message.type === "input-ready" && message.pane_id === nativePane);
+      ws.send(JSON.stringify({ type: "attach", pane_id: nativePane, cols: 80, rows: 24 }));
+      await ready;
+      await reportState("working");
+      await browserCatalog();
+      const queued = frame((message) => message.type === "submit-result" && message.id === 1494);
+      ws.send(JSON.stringify({ type: "submit", id: 1494, pane_id: nativePane, text: "@effect fallback", payload: "@effect fallback", delivery: "queue" }));
+      expect(await queued).toMatchObject({ ok: true, pending: { state: "queued" } });
+      const settled = frame((message) => message.type === "pending-messages" && (
+        Array.isArray(message.removed) && message.removed.length > 0
+        || Array.isArray(message.messages) && message.messages.some((entry) => entry.state === "uncertain" || entry.state === "held")));
+      await reportState("idle");
+      const receipt = await settled;
+      expect(receipt).toMatchObject({ removed: [{ outcome: "sent" }] });
+      expect(await typedSince(before)).toBe("@effect\t\u001b[200~ fallback\u001b[201~\r");
+      const outcome = (await outcomesAt(server.port, nativePane)).find((entry) => entry.text === "@effect fallback");
+      expect(outcome).toMatchObject({ state: "terminal-required", unattached_skills: ["effect"] });
+    } finally {
+      writeFileSync(acceptedPath, accepted);
+      ws.close();
+      await reportState("idle");
+    }
+  });
+
+  it.each(["immediate", "queue"] as const)("refuses a confirmed Tab agent switch during %s delivery without Enter", async (delivery) => {
+    const selectedPath = join(nativeRoot, "screen.txt");
+    const acceptedPath = join(nativeRoot, "accepted.txt");
+    const selected = readFileSync(selectedPath, "utf8");
+    const accepted = readFileSync(acceptedPath, "utf8");
+    const { ws, frame } = await socket();
+    const before = typed().length;
+    let uncertainId: string | undefined;
+    try {
+      await browserCatalog();
+      writeFileSync(selectedPath, selected.replace("MiniMax", "Build · MiniMax"));
+      writeFileSync(acceptedPath, accepted.replace("MiniMax", "Plan · MiniMax"));
+      if (delivery === "queue") {
+        const ready = frame((message) => message.type === "input-ready" && message.pane_id === nativePane);
+        ws.send(JSON.stringify({ type: "attach", pane_id: nativePane, cols: 80, rows: 24 }));
+        await ready;
+        const working = frame((message) => message.type === "pane-status" && message.pane_id === nativePane && message.agent_status === "working");
+        await reportState("working");
+        await working;
+      }
+      const submitted = frame((message) => message.type === "submit-result" && message.id === 1493);
+      ws.send(JSON.stringify({ type: "submit", id: 1493, pane_id: nativePane, text: "@effect switched agent", payload: "@effect switched agent", ...(delivery === "queue" ? { delivery } : {}) }));
+      if (delivery === "queue") {
+        expect(await submitted).toMatchObject({ ok: true, pending: { state: "queued" } });
+        const refused = frame((message) => message.type === "pending-messages" && Array.isArray(message.messages)
+          && message.messages.some((entry) => entry.state === "uncertain" && entry.error?.code === "submit_changed"));
+        await reportState("idle");
+        const result = await refused;
+        const item = (result.messages as Array<{ id: string; state: string; error?: { code: string; message: string } }>).find((entry) => entry.state === "uncertain");
+        uncertainId = item?.id;
+        expect(item?.error).toMatchObject({ code: "submit_changed" });
+        expect(item?.error?.message).toContain(JSON.stringify("Build"));
+        expect(item?.error?.message).toContain(JSON.stringify("Plan"));
+      } else {
+        const result = await submitted;
+        expect(result).toMatchObject({ ok: false, code: "submit_changed" });
+        expect(result.message).toEqual(expect.stringContaining(JSON.stringify("Build")));
+        expect(result.message).toEqual(expect.stringContaining(JSON.stringify("Plan")));
+      }
+      expect(typed().slice(before)).toBe("@effect\t");
+      const outcome = (await outcomesAt(server.port, nativePane)).find((entry) => entry.text === "@effect switched agent");
+      expect(outcome).toBeUndefined();
+    } finally {
+      writeFileSync(selectedPath, selected);
+      writeFileSync(acceptedPath, accepted);
+      // an uncertain message holds every later queued send to this shared pane until it is discarded
+      if (uncertainId) {
+        const discarded = frame((message) => message.type === "pending-result" && message.id === 1495);
+        ws.send(JSON.stringify({ type: "pending-action", id: 1495, pane_id: nativePane, pending_id: uncertainId, action: "discard" }));
+        expect(await discarded).toMatchObject({ ok: true });
+      }
+      ws.close();
+      await reportState("idle");
+    }
+  });
+
   it("attaches @effect and records the send after the pane's OpenCode session changed, with no catalog request since", async () => {
     const { ws, frame } = await socket();
     const before = typed().length;
@@ -662,7 +816,7 @@ process.stdin.on("data", (chunk) => {
     }
   });
 
-  it("types within the attach budget and records terminal-required with the note when the service hangs", async () => {
+  it("types within the attach budget without inventing a skill record when a cold service hangs", async () => {
     const { ws, frame } = await socket();
     const before = typed().length;
     const first = Promise.withResolvers<boolean>();
@@ -708,8 +862,7 @@ process.stdin.on("data", (chunk) => {
       expect(sent.startsWith("@effect\t")).toBe(false);
       expect(sent).toContain("@effect while hung");
       const outcome = (await outcomesAt(server.port, nativePane)).find((entry) => entry.text === "@effect while hung");
-      expect(outcome?.state).toBe("terminal-required");
-      expect(outcome?.note).toContain("@effect");
+      expect(outcome).toBeUndefined();
     } finally {
       clearTimeout(deadlineTimer);
       timers.mockRestore();
@@ -809,7 +962,7 @@ process.stdin.on("data", (chunk) => {
       const response = await fetch(`http://127.0.0.1:${server.port}/api/pane/commands?pane_id=${encodeURIComponent(nativePane)}`);
       expect(response.status).toBe(200);
       const routeMs = performance.now() - started;
-      // a cold send to a hung service falls back to the scan, which reads opencode.json
+      // a cold send to a hung service must not scan opencode.json or invent a skill record
       closeOpenCodeNative();
       forgetOpenCodeService();
       extraSessions.add("ses_contractFifo01");
@@ -826,7 +979,7 @@ process.stdin.on("data", (chunk) => {
       expect(gap).toBeLessThan(2_000);
       expect(await typedSince(before)).toContain("@effect past the fifo");
       const outcome = (await outcomesAt(server.port, nativePane)).find((entry) => entry.text === "@effect past the fifo");
-      expect(outcome?.state).toBe("terminal-required");
+      expect(outcome).toBeUndefined();
     } finally {
       writer.kill();
       rmSync(fifo, { force: true });

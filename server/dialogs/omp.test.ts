@@ -78,6 +78,8 @@ describe("omp /handoff", () => {
           agent: "omp", kind: "menu", question: "Generating handoff…", options: [{ label: "Cancel", description: null }],
           multi_select: false, custom_option_index: null,
         });
+        // its title and Cancel are the bridge's, as keys the client translates (#1482); the status line is omp's
+        expect(prompt!.own_text).toEqual({ title: { key: "Handoff" }, labels: { 0: { key: "Cancel" } } });
         expect(answerKeys(prompt!, { option_index: 0 })).toEqual([{ keys: [KEY.escape] }]);
       }
     }

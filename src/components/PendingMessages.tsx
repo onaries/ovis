@@ -2,8 +2,8 @@ import { useRef, useState } from "react";
 import { ArrowUp, Copy, ListEnd, X } from "lucide-react";
 import type { PendingMessageView } from "../lib/pendingMessages.ts";
 import { copyText } from "../lib/clipboard.ts";
-import { submitNote } from "../lib/compose.ts";
-import { useT } from "../lib/i18n.ts";
+import { openCodeRefusalNote, submitNote } from "../lib/compose.ts";
+import { useT, type Vars } from "../lib/i18n.ts";
 import "./PendingMessages.css";
 
 interface Props {
@@ -27,13 +27,16 @@ interface Props {
  * holds it on the bridge: a copy restored from storage (another tab's live hold, or one from before
  * a reload) is reviewed first, since the tab that held it may still send it.
  */
-export function pendingStatus(message: Pick<PendingMessageView, "state" | "error" | "serverOwned">, busy: boolean, t: (text: string) => string): string {
+export function pendingStatus(message: Pick<PendingMessageView, "state" | "error" | "serverOwned">, busy: boolean, t: (text: string, vars?: Vars) => string): string {
   if (busy) return t("Sending…");
   if (message.state === "queued") return t("Next turn");
   if (message.error?.code === "pi_transcript_pending") return t("Sent to Pi · waiting for transcript");
   if (message.error?.code === "transcript_unconfirmed" || message.error?.code === "pi_transcript_target_changed") return t("Sent to Pi · transcript confirmation unavailable");
   if (message.state === "held" && !message.error && message.serverOwned) return t("Waits for Send now");
-  if (message.state === "uncertain") return t("Not confirmed. Check the terminal before sending again.");
+  if (message.state === "uncertain") {
+    return (message.error ? openCodeRefusalNote(message.error.code, message.error.message, t) : null)
+      ?? t("Not confirmed. Check the terminal before sending again.");
+  }
   return t("Held message — review and send");
 }
 
@@ -87,7 +90,7 @@ export function PendingMessages({ messages, active = true, connected, agent, blo
             }}><X aria-hidden="true" /></button>}
         </div>
         {message.error && !uncertain && !sent && <p className="pending-message-note" role="status">{message.error.code === "still_open" ? message.error.message
-          : (message.error.code === "input_draft" || message.error.code === "held_input" || message.error.code === "not_transmitted" || message.error.code === "capabilities_unknown" || message.error.code === "rewind_dialog_open" || message.error.code === "first_message_unattended") ? submitNote(message.error.code, message.error.message, agent) : t("Not sent: {message}", { message: message.error.message })}</p>}
+          : (message.error.code === "input_draft" || message.error.code === "held_input" || message.error.code === "not_transmitted" || message.error.code === "capabilities_unknown" || message.error.code === "rewind_dialog_open" || message.error.code === "first_message_unattended" || message.error.code === "first_message_launch_ended" || message.error.code === "pending_target_changed") ? submitNote(message.error.code, message.error.message, agent) : t("Not sent: {message}", { message: message.error.message })}</p>}
       </li>;
     })}
   </ol>;

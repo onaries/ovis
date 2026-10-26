@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect as tcpConnect, createServer, type Socket } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import type { FileSink, Subprocess } from "bun";
 import type { SshTarget } from "../shared/machines.ts";
 import { shellQuote } from "./machine-security.ts";
@@ -18,6 +18,77 @@ const WINDOWS = process.platform === "win32";
  * reads `\` as an escape, so a Windows path goes with forward slashes (which Windows accepts).
  */
 function sshPath(path: string): string { return WINDOWS ? path.replaceAll("\\", "/") : path; }
+
+/** The OpenSSH programs a connection runs, all from one install. */
+export interface SshClient {
+  ssh: string; sftp: string; keygen: string;
+  /** Git for Windows' build, found where its installer put it, which does not read Windows' ssh-agent service */
+  git?: true;
+}
+
+/**
+ * Which OpenSSH runs. `OVIS_SSH` names an ssh, with the sftp and ssh-keygen beside it. Windows
+ * otherwise takes Git for Windows' build (installing Ovis there requires Git): the OpenSSH that
+ * ships with Windows, started by a server that has no console, never exits once a remote command
+ * wrote anything, so every connection hung until its timeout (Win32-OpenSSH#1427, #1470).
+ * Git is looked for only where its installer puts it, never through PATH: the ssh runs with the
+ * account's keys, and a folder on PATH may be one anybody can write to.
+ */
+export function sshClient({ env = process.env, platform = process.platform, exists = existsSync, which = (command: string) => Bun.which(command), registry = gitInstallPath }: {
+  env?: Record<string, string | undefined>; platform?: NodeJS.Platform; exists?: (path: string) => boolean; which?: (command: string) => string | null; registry?: () => string | null;
+} = {}): SshClient {
+  const path = platform === "win32" ? win32 : posix;
+  const plain: SshClient = { ssh: "ssh", sftp: "sftp", keygen: "ssh-keygen" };
+  const beside = (ssh: string): SshClient => {
+    const extension = path.extname(ssh) || (platform === "win32" ? ".exe" : "");
+    const sibling = (name: string, fallback: string) => {
+      const file = path.join(path.dirname(ssh), name + extension);
+      return path.dirname(ssh) !== "." && exists(file) ? file : fallback;
+    };
+    return { ssh, sftp: sibling("sftp", plain.sftp), keygen: sibling("ssh-keygen", plain.keygen) };
+  };
+  // a value pasted with its quotes; it is a path, never evaluated by a shell
+  const override = env["OVIS_SSH"]?.trim().replace(/^"(.*)"$/, "$1");
+  // a bare name is looked up on PATH, so its sftp and ssh-keygen come from the same folder
+  if (override) return beside(override.includes("/") || override.includes("\\") ? override : which(override) ?? override);
+  if (platform !== "win32") return plain;
+  // a machine-wide install (the registry and Program Files take an administrator to change),
+  // then one inside this account's own profile, which only the account itself can write
+  const roots: string[] = [];
+  const installed = registry();
+  if (installed) roots.push(installed);
+  for (const base of [env["ProgramFiles"], env["ProgramFiles(x86)"], env["LOCALAPPDATA"] && win32.join(env["LOCALAPPDATA"], "Programs")]) if (base) roots.push(win32.join(base, "Git"));
+  if (env["USERPROFILE"]) roots.push(win32.join(env["USERPROFILE"], "scoop", "apps", "git", "current"));
+  for (const root of roots) {
+    const ssh = win32.join(root, "usr", "bin", "ssh.exe");
+    if (exists(ssh)) return { ...beside(ssh), git: true };
+  }
+  return plain;
+}
+
+/**
+ * What a refused connection adds to ssh's own words. Git for Windows' ssh does not read Windows'
+ * ssh-agent service, so a key only that service holds is the likely thing missing. Any other
+ * ssh, Windows' own included (which reads that service), gets nothing added.
+ */
+export function refusalHint(client: SshClient, stderr: string): string {
+  return client.git && /Permission denied/.test(stderr)
+    ? "\nGit for Windows' ssh, which this server runs on Windows, does not read Windows' ssh-agent service. Use a key file (~/.ssh/id_ed25519, or IdentityFile in ~/.ssh/config) or a password."
+    : "";
+}
+
+let gitInstall: string | null | undefined;
+/** Git for Windows' machine-wide install folder, as its installer recorded it, read once. */
+function gitInstallPath(): string | null {
+  if (gitInstall !== undefined) return gitInstall;
+  gitInstall = null;
+  if (!WINDOWS) return gitInstall;
+  // reg.exe by its full path: a reg.exe earlier on PATH must not answer
+  const reg = join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "reg.exe");
+  const result = Bun.spawnSync([reg, "query", "HKLM\\SOFTWARE\\GitForWindows", "/v", "InstallPath"], { windowsHide: true, stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 3000 });
+  gitInstall = /InstallPath\s+REG_SZ\s+(.+)/.exec(result.stdout?.toString() ?? "")?.[1]?.trim() || null;
+  return gitInstall;
+}
 
 /**
  * Strict checking refused a host it has no key for. A changed key says something else
@@ -70,9 +141,11 @@ export function decodeClixml(stderr: string): string {
  * Multiplexed (Linux, macOS): one OpenSSH master; every command, upload and forward goes over
  * its control socket, so a password typed once serves them all.
  *
- * Direct (Windows, whose OpenSSH has no connection sharing: `getsockname failed: Not a socket`):
+ * Direct (Windows, whichever ssh runs; Windows' own OpenSSH has no connection sharing:
+ * `getsockname failed: Not a socket`):
  * every command is its own ssh process, a long-lived `ssh -N` stands in for the master, and each
- * forward is its own `ssh -N -L`. ssh-agent signs for all of them; a password or passphrase the
+ * forward is its own `ssh -N -L`. An ssh-agent signs for all of them (Git for Windows' ssh reads
+ * `SSH_AUTH_SOCK`, not Windows' agent service); a password or passphrase the
  * user typed while connecting is kept in memory for this connection only and answered to the
  * same prompt again, never stored. A host key is learned without authenticating and confirmed
  * in the dialog before any connection that authenticates, because a `.cmd` askpass helper only
@@ -82,6 +155,7 @@ export class SshConnection {
   // Unix sockets (including OpenSSH's temporary control path) must fit even with a long TMPDIR.
   private dir = mkdtempSync(join(WINDOWS ? tmpdir() : "/tmp", "herdr-ssh-"));
   private control = join(this.dir, "control");
+  private client = sshClient();
   private master: Subprocess | null = null;
   private children = new Set<Subprocess>();
   /** direct mode's forwards; one ending is the connection ending */
@@ -116,7 +190,7 @@ export class SshConnection {
     const args = ["-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "PermitLocalCommand=no", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
     if (clearForwardings) args.unshift("-o", "ClearAllForwardings=yes");
     if (this.keyOnly) args.push("-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none");
-    // the account's own `ControlMaster auto` would make Windows' ssh fail every connection
+    // the account's own `ControlMaster auto` would make every connection fail on Windows
     if (!this.multiplexed) args.push("-o", "ControlMaster=no", "-o", "ControlPath=none");
     if (this.target.port) args.push("-o", `Port=${this.target.port}`);
     if (this.target.identity_file) args.push("-i", this.target.identity_file.replace(/^~[\\/]/, homedir() + "/"));
@@ -124,7 +198,7 @@ export class SshConnection {
     return args;
   }
   private base(): string[] {
-    return ["ssh", "-S", this.control, ...this.options()];
+    return [this.client.ssh, "-S", this.control, ...this.options()];
   }
   private knownHosts(): string { return join(this.stateDir, "known_hosts"); }
   private knownHostsOption(): string {
@@ -133,13 +207,13 @@ export class SshConnection {
   /**
    * A direct-mode ssh. It always checks the host strictly; it may answer a prompt only when
    * start() kept an answer for it, and the helper then refuses any prompt it has none for.
-   * Keyboard-interactive is off: its prompt is the server's own text, and Windows' ssh hands a
+   * Keyboard-interactive is off: its prompt is the server's own text, and ssh on Windows hands a
    * prompt to the `.cmd` helper on a command line that cmd parses, quoting `"` only as `\"`, so
    * a `"` and `&` in it would run a command here before the helper sees it. Password and
    * passphrase prompts are built by ssh itself from this PC's config.
    */
   private direct(batch: "yes" | "no" = this.answers.size ? "no" : "yes", clearForwardings = true): string[] {
-    return ["ssh", ...this.options(clearForwardings), "-o", `BatchMode=${batch}`, "-o", "KbdInteractiveAuthentication=no", "-o", "StrictHostKeyChecking=yes", "-o", this.knownHostsOption()];
+    return [this.client.ssh, ...this.options(clearForwardings), "-o", `BatchMode=${batch}`, "-o", "KbdInteractiveAuthentication=no", "-o", "StrictHostKeyChecking=yes", "-o", this.knownHostsOption()];
   }
   private askEnv(): Record<string, string | undefined> {
     return this.askHelper ? { ...process.env, SSH_ASKPASS: this.askHelper, SSH_ASKPASS_REQUIRE: "force", DISPLAY: "herdr:0", HERDR_ASKPASS_SOCKET: this.askPath, HERDR_ASKPASS_TOKEN: this.askToken } : { ...process.env };
@@ -224,7 +298,9 @@ export class SshConnection {
       await this.learnHostKey(challenge);
       probe = await this.attempt([...this.direct("no"), "-T", this.target.destination, "exit"], until);
     }
-    if (probe.code !== 0) throw new Error(probe.stderr.trim() || "SSH connection failed");
+    if (probe.code !== 0) {
+      throw new Error((probe.stderr.trim() || "SSH connection failed") + refusalHint(this.client, probe.stderr));
+    }
     for (const [prompt, answer] of this.typed) this.answers.set(prompt, answer);
     this.typed.clear();
     const keepalive = this.master = Bun.spawn([...this.direct(), "-N", "-T", this.target.destination], { stdin: "ignore", stdout: "ignore", stderr: "ignore", env: this.askEnv() });
@@ -261,10 +337,10 @@ export class SshConnection {
   private async learnHostKey(challenge: (prompt: string, hostKey: boolean) => Promise<string>): Promise<void> {
     const file = join(this.dir, "learned_hosts");
     rmSync(file, { force: true });
-    const seen = await this.attempt(["ssh", ...this.options(), "-o", "BatchMode=yes", "-o", "PreferredAuthentications=none", "-o", "IdentityAgent=none", "-o", "StrictHostKeyChecking=accept-new", "-o", `UserKnownHostsFile=${shellQuote(sshPath(file))}`, "-o", `GlobalKnownHostsFile=${WINDOWS ? "NUL" : "/dev/null"}`, "-T", this.target.destination, "exit"], Date.now() + 25_000, false);
+    const seen = await this.attempt([this.client.ssh, ...this.options(), "-o", "BatchMode=yes", "-o", "PreferredAuthentications=none", "-o", "IdentityAgent=none", "-o", "StrictHostKeyChecking=accept-new", "-o", `UserKnownHostsFile=${shellQuote(sshPath(file))}`, "-o", `GlobalKnownHostsFile=${WINDOWS ? "NUL" : "/dev/null"}`, "-T", this.target.destination, "exit"], Date.now() + 25_000, false);
     const learned = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
     if (!learned) throw new Error(seen.stderr.trim() || "Could not read the server's host key");
-    const fingerprints = (await this.exec(["ssh-keygen", "-l", "-f", file])).split(/\r?\n/).flatMap((line) => {
+    const fingerprints = (await this.exec([this.client.keygen, "-l", "-f", file])).split(/\r?\n/).flatMap((line) => {
       const match = /^\d+ (\S+) .*\((\S+)\)$/.exec(line.trim());
       return match ? [`${match[2]} key fingerprint is ${match[1]}.`] : [];
     });
@@ -314,7 +390,8 @@ export class SshConnection {
     const options = this.multiplexed
       ? [...this.options(), "-o", `ControlPath=${this.control}`, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
       : this.direct().slice(1);
-    await this.exec(["sftp", ...options, "-b", "-", this.target.destination], put, timeout);
+    // sftp starts its own build's ssh unless told which
+    await this.exec([this.client.sftp, ...(this.client.ssh === "ssh" ? [] : ["-S", this.client.ssh]), ...options, "-b", "-", this.target.destination], put, timeout);
   }
   async forward(port: number, remotePort: number): Promise<void> {
     if (this.closed) throw new Error("SSH connection closed");
@@ -322,12 +399,12 @@ export class SshConnection {
       // Mux commands read SSH config too: even a master with ClearAllForwardings
       // would accept those extra tunnels here. -O uses only our existing control
       // socket, so no host config is needed; ClearAllForwardings would erase our -L.
-      await this.exec(["ssh", "-F", "none", "-S", this.control, "-O", "forward", "-L", `127.0.0.1:${port}:127.0.0.1:${remotePort}`, this.target.destination]);
+      await this.exec([this.client.ssh, "-F", "none", "-S", this.control, "-O", "forward", "-L", `127.0.0.1:${port}:127.0.0.1:${remotePort}`, this.target.destination]);
       return;
     }
     // Our -L needs ClearAllForwardings off, which would also open the forwards the account's
     // SSH config names for this host. Those are refused rather than opened on the user's behalf.
-    if (CONFIG_FORWARD.test(await this.exec(["ssh", "-G", ...this.options(false), this.target.destination]))) {
+    if (CONFIG_FORWARD.test(await this.exec([this.client.ssh, "-G", ...this.options(false), this.target.destination]))) {
       throw new Error(`The SSH config for ${this.target.destination} sets LocalForward, RemoteForward or DynamicForward, which the web UI on Windows cannot switch off. Use a host alias without them.`);
     }
     const proc = Bun.spawn([...this.direct(undefined, false), "-N", "-T", "-o", "ExitOnForwardFailure=yes", "-L", `127.0.0.1:${port}:127.0.0.1:${remotePort}`, this.target.destination], { stdin: "ignore", stdout: "ignore", stderr: "pipe", env: this.askEnv() });

@@ -87,7 +87,6 @@ export const FILES_ZH: Record<string, string> = {
   "git is not installed on that PC.": "那台电脑未安装 git。",
   "git took too long to answer.": "git 响应超时。",
   "git could not compare these.": "git 无法比较这些内容。",
-  "This device can only watch.": "此设备只能查看。",
   "The pane's folder could not be read.": "无法读取窗格的文件夹。",
   "That PC is not reachable right now.": "目前无法连接那台电脑。",
   "Changes to {name}": "{name} 的更改",

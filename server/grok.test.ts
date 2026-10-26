@@ -290,9 +290,12 @@ describe("exact store lookup", () => {
         held.push(nested);
       }
       const fds = held.map((file) => openSync(file, "r"));
-      const child = spawn(executable, ["-e", "process.stdin.resume()"], {
-        stdio: ["pipe", "ignore", "ignore", ...fds], env: { ...process.env, HOME: "/bridge-home", GROK_HOME: home },
+      // The child says so once its own script runs: Bun's "spawn" event can come before the exec,
+      // while /proc still shows this runtime's executable, environment and descriptors.
+      const child = spawn(executable, ["-e", "process.stdout.write('running\\n'); process.stdin.resume()"], {
+        stdio: ["pipe", "pipe", "ignore", ...fds], env: { ...process.env, HOME: "/bridge-home", GROK_HOME: home },
       });
+      const running = once(child.stdout!, "data", { signal: AbortSignal.timeout(10_000) });
       const pane: HerdrPane = {
         pane_id: "grok-fixture", agent: "grok", agent_status: "ready", focused: false,
         revision: 0, tab_id: "tab-fixture", terminal_id: "terminal-fixture", workspace_id: "workspace-fixture",
@@ -318,7 +321,7 @@ describe("exact store lookup", () => {
         },
       }));
       try {
-        await once(child, "spawn", { signal: AbortSignal.timeout(2000) });
+        await running;
         if (scenario.change === "unlink") unlinkSync(other);
         else if (scenario.change === "rename") renameSync(other, `${other}.old`);
         else if (scenario.change === "rename-away") renameSync(other, join(dirname(other), "old-events.jsonl"));

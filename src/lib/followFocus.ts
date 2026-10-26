@@ -1,6 +1,7 @@
 import { paneStorageId } from "../../shared/machines.ts";
 import { composerDrafts } from "./composerDraft.ts";
 import { restoreDraft } from "./draft.ts";
+import { paneLifetimes } from "./paneLifetime.ts";
 import { readTerminalDraft } from "./terminalDraft.ts";
 import { sameTarget, type SplitTarget } from "./split.ts";
 
@@ -93,7 +94,7 @@ const draftsHere: PaneDrafts = {
   line: (owner) => readTerminalDraft(owner),
   held: (owner) => {
     let raw: string | null = null;
-    try { raw = localStorage.getItem(`ovis:terminal-draft:${owner}`); } catch { /* private mode */ }
+    try { raw = paneLifetimes.paneStorage.getItem(`ovis:terminal-draft:${owner}`); } catch { /* private mode */ }
     return restoreDraft(raw, Date.now()).text;
   },
 };

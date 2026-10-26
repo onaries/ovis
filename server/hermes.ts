@@ -1,5 +1,4 @@
 import { Database } from "bun:sqlite";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -10,6 +9,7 @@ import { herdrRpc } from "./herdr/client.ts";
 import { answerVersion, ConversationNotStarted, ConversationUnavailable, type ConversationPage, HistoryChanged, type RecognizedConversation, TRANSCRIPT_WINDOW_BYTES } from "./conversation-shared.ts";
 import { toolSummary } from "./transcript-records.ts";
 import { TOOL_OUTPUT_CHARS, trimOutput } from "./tool-output.ts";
+import { darwinTerminal } from "./darwin-process.ts";
 import { processStartedAt } from "./process-start.ts";
 import { hermesSkillPrompt } from "./skill-activity.ts";
 
@@ -135,20 +135,24 @@ export function isHermesProcess(entry: { name?: string; argv0?: string; argv?: r
 
 /** Resolves process terminal identity to Hermes breadcrumb filename convention. */
 export function hermesTerminalId(pid: number): string | null {
+  return hermesTerminal(pid)?.id ?? null;
+}
+
+/** hermesTerminalId with the start of the process it names; on macOS both come from one kernel record. */
+function hermesTerminal(pid: number): { id: string; startedAt: number | null } | null {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
     if (process.platform === "linux") {
       const tty = readlinkSync(`/proc/${pid}/fd/0`);
       if (!/^\/dev\/(?:pts\/\d+|tty[\w-]+)$/.test(tty)) return null;
-      return `tty-${tty.slice(1).replaceAll("/", "-")}`;
+      return { id: `tty-${tty.slice(1).replaceAll("/", "-")}`, startedAt: processStartedAt(pid) };
     }
     if (process.platform === "darwin") {
-      const output = execFileSync("ps", ["-p", String(pid), "-o", "tty="], {
-        encoding: "utf8", timeout: 1500, maxBuffer: 4096, stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-      if (!output || output === "??") return null;
-      const device = output.startsWith("/dev/") ? output.slice(5) : output.startsWith("ttys") ? `dev-${output}` : output;
-      return `tty-${device.replaceAll("/", "-")}`;
+      // the kernel's record, as `ps -o tty=` read it, without a child process that holds the event loop
+      const record = darwinTerminal(pid);
+      if (!record) return null;
+      const device = record.tty.startsWith("ttys") ? `dev-${record.tty}` : record.tty;
+      return { id: `tty-${device.replaceAll("/", "-")}`, startedAt: record.startedAt };
     }
   } catch { /* process exited or terminal unavailable */ }
   return null;
@@ -209,10 +213,9 @@ export async function hermesTranscriptForPane(
   const hermesHome = configuredHome ?? processHome ?? defaultHermesHome();
 
   if (sessionId === null && hermesProcess !== undefined) {
-    const termId = hermesTerminalId(hermesProcess.pid);
-    const startedAt = processStartedAt(hermesProcess.pid);
-    if (termId !== null && startedAt !== null) {
-      sessionId = hermesBreadcrumbSession(hermesHome, termId, cwd, startedAt);
+    const terminal = hermesTerminal(hermesProcess.pid);
+    if (terminal !== null && terminal.startedAt !== null) {
+      sessionId = hermesBreadcrumbSession(hermesHome, terminal.id, cwd, terminal.startedAt);
     }
   }
 

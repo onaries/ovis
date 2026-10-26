@@ -45,6 +45,8 @@ describe("Claude Code's bare /goal", () => {
       expect(prompt?.body).toMatch(/^running \d+s · 0 tokens$/);
       expect(prompt?.options.map((option) => option.label)).toEqual(["Close"]);
       expect(answerKeys(prompt!, { option_index: 0 })).toEqual([{ keys: ["esc"] }]);
+      // the bridge's own words go as keys the client translates (#1482); the goal and its status are Claude's
+      expect(prompt?.own_text).toEqual({ title: { key: "Goal active" }, labels: { 0: { key: "Close" } } });
     });
 
     test(`reads the goal dialog without a goal at ${width} columns`, () => {
@@ -54,6 +56,7 @@ describe("Claude Code's bare /goal", () => {
       expect(prompt?.body).toBeNull();
       expect(prompt?.options.map((option) => option.label)).toEqual(["Close"]);
       expect(answerKeys(prompt!, { option_index: 0 })).toEqual([{ keys: ["esc"] }]);
+      expect(prompt?.own_text).toEqual({ title: { key: "Goal" }, question: { key: "No goal set" }, labels: { 0: { key: "Close" } } });
     });
   }
 
@@ -62,6 +65,11 @@ describe("Claude Code's bare /goal", () => {
     const later = shown.replace(/running \d+s/, "running 4m 12s");
     expect(later).not.toBe(shown);
     expect(parseInteractivePrompt("claude", later)?.id).toBe(parseInteractivePrompt("claude", shown)?.id);
+  });
+
+  test("keeps the id an earlier bridge gave the card, so an answer to a card read before an update still lands (#1482)", () => {
+    // the id main's bridge gave this card before its words went as keys (own_text is not part of it)
+    expect(parseInteractivePrompt("claude", fixture("none", 120))?.id).toBe("d4c74b031221");
   });
 
   test("a different goal is a different card", () => {

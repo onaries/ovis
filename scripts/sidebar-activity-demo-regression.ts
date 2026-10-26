@@ -29,6 +29,14 @@ declare global {
       replay(paneId: string, ready: boolean, data: string, readyAfter?: boolean): void;
       /** the next attach of a pane joins an attachment that lost its stream: as the server sends it, no readiness, the screen from before */
       recoveringReplay(paneId: string, data: string): void;
+      /** the pane's next attaches go unanswered, as an attach that has not taken yet */
+      hold(paneId: string): void;
+      /** attaches sent, per pane */
+      attaches: Record<string, number>;
+      /** the roster gives the pane a new terminal, as herdr replacing it under the same pane */
+      replaceTerminal(paneId: string): Promise<void>;
+      /** the roster says herdr could not restore the pane; null: it is restored */
+      unrestored(paneId: string | null): Promise<void>;
     };
   }
 }
@@ -38,13 +46,13 @@ declare global {
 function installSidebarFixture(): void {
   const key = "sidebar-regression:roster";
   const stored = sessionStorage.getItem(key);
-  const state: { finishes: Record<string, { status: AgentStatus; seq: number }>; zoom: { paneId: string; focusedId: string; split?: boolean } | null; blocked?: { paneId: string; kind: string }; padded?: Record<string, number>; titles?: Record<string, { live: string; roster: string; label?: string }> } =
+  const state: { finishes: Record<string, { status: AgentStatus; seq: number }>; zoom: { paneId: string; focusedId: string; split?: boolean } | null; blocked?: { paneId: string; kind: string }; padded?: Record<string, number>; terminals?: Record<string, string>; unrestored?: string | null; titles?: Record<string, { live: string; roster: string; label?: string }> } =
     stored ? JSON.parse(stored) : { finishes: {}, zoom: null };
   const sources = new Set<EventSource>();
   const sockets = new Set<WebSocket>();
   const conversations = new Map<string, { response: ConversationResponse; etag: string }>();
   let conversationRevision = 0;
-  const replays = new Map<string, { ready: boolean; data: string; readyAfter: boolean; recovering?: boolean }>();
+  const replays = new Map<string, { ready: boolean; data: string; readyAfter: boolean; recovering?: boolean; held?: boolean }>();
   const patch = (machines: Machine[]): Machine[] => {
     for (const machine of machines) {
       const snapshot = machine.snapshot;
@@ -60,12 +68,17 @@ function installSidebarFixture(): void {
         }
         const finish = state.finishes[pane.pane_id];
         if (finish) { pane.agent_status = finish.status; pane.finish_id = finish.seq; }
+        const terminal = state.terminals?.[pane.pane_id];
+        if (terminal) pane.terminal_id = terminal;
+        if (pane.pane_id === state.unrestored) pane.restore_error = "held by the fixture";
       }
       for (const agent of snapshot.agents) {
         const title = state.titles?.[agent.pane_id];
         if (title) { agent.title = title.roster; agent.display_agent = title.roster; }
         const finish = state.finishes[agent.pane_id];
         if (finish) { agent.agent_status = finish.status; agent.state_change_seq = finish.seq; }
+        const terminal = state.terminals?.[agent.pane_id];
+        if (terminal) agent.terminal_id = terminal;
       }
       if (state.zoom) {
         const target = snapshot.panes.find((pane) => pane.pane_id === state.zoom?.paneId);
@@ -149,8 +162,10 @@ function installSidebarFixture(): void {
       this.send = (raw) => {
         const message = JSON.parse(String(raw));
         const replay = replays.get(message.pane_id);
+        if (message.type === "attach") window.sidebarFixture.attaches[message.pane_id] = (window.sidebarFixture.attaches[message.pane_id] ?? 0) + 1;
+        if (message.type === "attach" && replay?.held) return;
         if (message.type === "attach" && replay?.recovering) {
-          for (const frame of [{ type: "output-recovering", pane_id: message.pane_id }, { type: "pty-data", pane_id: message.pane_id, data: replay.data }]) {
+          for (const frame of [{ type: "output-recovering", pane_id: message.pane_id }, { type: "pty-data", pane_id: message.pane_id, data: replay.data, replay: true }]) {
             this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
           }
           return;
@@ -231,6 +246,10 @@ function installSidebarFixture(): void {
     conversation(paneId, response) { conversations.set(paneId, { response, etag: `"fixture-${++conversationRevision}"` }); },
     replay(paneId, ready, data, readyAfter = false) { replays.set(paneId, { ready, data, readyAfter }); },
     recoveringReplay(paneId, data) { replays.set(paneId, { ready: false, data, readyAfter: false, recovering: true }); },
+    hold(paneId) { replays.set(paneId, { ready: false, data: "", readyAfter: false, held: true }); },
+    attaches: {},
+    async replaceTerminal(paneId) { state.terminals = { ...state.terminals, [paneId]: `${paneId}:replaced` }; await publish(); },
+    async unrestored(paneId) { state.unrestored = paneId; await publish(); },
   };
 }
 
@@ -249,6 +268,13 @@ const AGENTS_HERDR_ORDER = [API, WEB, "Fix the flaky retry test", INFRA, "Ship t
 const agents = (page: Page) => page.locator(".agents-sidebar .agent-item");
 const agentTitles = (page: Page) => agents(page).locator(".agent-title").allTextContents();
 const agent = (page: Page, title: string) => agents(page).filter({ has: page.locator(".agent-title", { hasText: title }) });
+/** waits until xterm has parsed the text and nothing is queued or in flight, so a later check cannot pass by timing */
+const outputParsed = (page: Page, text: string) => page.waitForFunction((expected) => {
+  const host = document.querySelector(".pane-frame.is-current .pane-terminal");
+  if (!host || !("outputProbe" in host) || typeof host.outputProbe !== "function") return false;
+  const probe = host.outputProbe();
+  return probe.written.includes(expected) && probe.inFlight === 0 && probe.queued === 0;
+}, text);
 const waitStatus = (page: Page, title: string, status: string) => agent(page, title).locator(`.sidebar-status[data-status="${status}"]`).waitFor({ timeout: 10_000 });
 const waitAgentAt = (page: Page, index: number, title: string) => page.waitForFunction(([at, name]) =>
   [...document.querySelectorAll(".agents-sidebar .agent-item .agent-title")][at as number]?.textContent === name, [index, title] as const, { timeout: 5_000 });
@@ -411,7 +437,7 @@ try {
           await waitStatus(page, INFRA, "done");
           assert.equal(await content.count(), 0, "attachment loss revokes the old screen's presentation");
           await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "old attachment tail\r\n" }), panes.omp);
-          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          await outputParsed(page, "old attachment tail\r\n");
           assert.equal(await content.count(), 0, "output before recovery cannot re-arm presentation");
           await page.evaluate((id) => window.sidebarFixture.frame({ type: "input-ready", pane_id: id }), panes.omp);
           assert.equal(await content.count(), 0, "recovery alone must wait for new output");
@@ -424,7 +450,7 @@ try {
             window.sidebarFixture.frame({ type: "input-ready", pane_id: id });
             await window.sidebarFixture.finish(id, "done", 102);
           }, panes.omp);
-          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          await outputParsed(page, "queued before loss\r\n");
           await waitStatus(page, INFRA, "done");
           assert.equal(await content.count(), 0, "a pre-loss parse callback cannot re-arm a recovered attachment");
           await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "fresh after queued parse\r\n" }), panes.omp);
@@ -445,12 +471,7 @@ try {
           await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
           const content = page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]");
           await page.locator(".pane-frame.is-current .terminal-stack:not(.is-chat)").waitFor();
-          await page.waitForFunction(() => {
-            const host = document.querySelector(".pane-frame.is-current .pane-terminal");
-            if (!host || !("outputProbe" in host) || typeof host.outputProbe !== "function") return false;
-            const probe = host.outputProbe();
-            return probe.written.includes("previous answer\r\n") && probe.inFlight === 0 && probe.queued === 0;
-          });
+          await outputParsed(page, "previous answer\r\n");
           assert.equal(await content.count(), 0, "a recovering joiner's replay is not the current screen");
           await waitStatus(page, INFRA, "done");
           await page.evaluate((id) => window.sidebarFixture.frame({ type: "input-ready", pane_id: id }), panes.omp);
@@ -460,6 +481,60 @@ try {
           await content.waitFor();
         });
         console.log("PASS a page joining a recovering attachment acknowledges only output after recovery");
+      }
+      if (!finishCase || finishCase === "recovering-restored") {
+        await withPage(browser, {}, async (page) => {
+          // the recovery wait is the pane's: a terminal that left its pane and attaches it afresh is told again
+          await page.evaluate((id) => {
+            window.sidebarFixture.recoveringReplay(id, "previous answer\r\n");
+            window.sidebarFixture.block(id, "loading");
+          }, panes.omp);
+          await agent(page, INFRA).locator(".agent-select").click();
+          await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+          const content = page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]");
+          await page.locator(".pane-frame.is-current .terminal-stack:not(.is-chat)").waitFor();
+          await outputParsed(page, "previous answer\r\n");
+          assert.equal(await content.count(), 0, "the recovering pane's replay is not its current screen");
+          // herdr could not restore the pane: its terminal shows no pane
+          await page.evaluate((id) => window.sidebarFixture.unrestored(id), panes.omp);
+          await page.locator(".pane-frame.is-current").getByText("held by the fixture").waitFor();
+          // restored, its attachment recovered meanwhile: the replay comes before readiness and nothing after it
+          await page.evaluate(async (id) => {
+            window.sidebarFixture.replay(id, true, "restored screen\r\n", true);
+            await window.sidebarFixture.unrestored(null);
+          }, panes.omp);
+          await content.waitFor({ timeout: 10_000 });
+        });
+        console.log("PASS a pane restored after its attachment recovered shows its screen as current");
+      }
+      if (!finishCase || finishCase === "recovering-replaced") {
+        await withPage(browser, {}, async (page) => {
+          // the pane's attach has not been answered yet
+          await page.evaluate((id) => {
+            window.sidebarFixture.hold(id);
+            window.sidebarFixture.block(id, "loading");
+          }, panes.omp);
+          await agent(page, INFRA).locator(".agent-select").click();
+          await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+          const content = page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]");
+          await page.locator(".pane-frame.is-current .terminal-stack:not(.is-chat)").waitFor();
+          await page.waitForFunction((id) => (window.sidebarFixture.attaches[id] ?? 0) > 0, panes.omp);
+          // the attach joins a recovering attachment, and herdr replaces the pane's terminal before that join's replay comes
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "output-recovering", pane_id: id }), panes.omp);
+          const attaches = await page.evaluate((id) => window.sidebarFixture.attaches[id] ?? 0, panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.replaceTerminal(id), panes.omp);
+          await page.waitForFunction(([id, before]) => (window.sidebarFixture.attaches[id as string] ?? 0) > (before as number), [panes.omp, attaches] as const);
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "previous answer\r\n", replay: true }), panes.omp);
+          await outputParsed(page, "previous answer\r\n");
+          assert.equal(await content.count(), 0, "the recovering join's late replay is still the screen from before");
+          // the new attach joins the attachment, which recovered meanwhile: its replay is the current screen
+          await page.evaluate((id) => {
+            window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "current screen\r\n", replay: true });
+            window.sidebarFixture.frame({ type: "input-ready", pane_id: id });
+          }, panes.omp);
+          await content.waitFor({ timeout: 10_000 });
+        });
+        console.log("PASS a replaced terminal of a recovering pane shows the replay of an attachment that recovered");
       }
       if (!finishCase || finishCase === "transcript-finish") {
         for (const source of ["claude-transcript", "codex-transcript"] as const) await withPage(browser, {}, async (page) => {

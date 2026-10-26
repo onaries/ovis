@@ -116,7 +116,8 @@ The sidebar's label filter (`src/lib/sidebarFilter.ts`) adapts the idea of
 `web/src/components/sidebar/filterGroups.ts` at revision
 `b3141c8a310338dedf87ebbd13a0d67ecd69030d`, that a sidebar row survives a typed filter when it, a
 header over it or a row under it matches; its substring matcher, facets and sunk/trash semantics are
-not taken over. Under the MIT License printed above, with this copyright notice:
+not taken over. `src/lib/pushHealth.ts` adapts its push health classifier (`web/src/lib/pushHealth.ts`)
+at the same revision. Under the MIT License printed above, with this copyright notice:
 
 ```
 Copyright (c) 2026 Nathan Brake

@@ -1,4 +1,5 @@
 import type { PendingMessage } from "../../shared/protocol.ts";
+import { paneLifetimes, paneStateKey } from "./paneLifetime.ts";
 
 export interface PendingMessageView extends PendingMessage { serverOwned: boolean; resendInFlight?: true; resendGeneration?: number }
 type StoragePort = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -17,7 +18,8 @@ export class PendingMessageStore {
   /** rows saved as not confirmed while they are shown as they were (unconfirm) */
   private unconfirmed = new Set<string>();
   private listeners = new Set<() => void>();
-  constructor(private storage: () => StoragePort = () => window.localStorage) {}
+  // the pane's herdr's storage, or this page's memory (lib/paneLifetime.ts)
+  constructor(private storage: () => StoragePort = () => paneLifetimes.paneStorage) {}
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
@@ -158,6 +160,22 @@ export class PendingMessageStore {
     if (proofs?.size === 0) this.scopes.delete(owner);
     if (changed) this.write(owner, next);
   }
+  /**
+   * Another herdr took the PC's pane IDs: the copies kept here go (their saved text went to
+   * recovery), and only rows a live connection proves stay until the bridge settles them.
+   */
+  forget(machineId: string): void {
+    for (const [owner, rows] of [...this.rows]) {
+      const pane = paneStateKey(PREFIX + owner);
+      if (pane?.machineId !== machineId) continue;
+      const kept = rows.filter((message) => message.serverOwned);
+      if (this.unsaved.has(owner)) for (const message of rows) if (!message.serverOwned) paneLifetimes.keep(machineId, pane.paneId, "pending", message.text);
+      if (kept.length > 0) this.rows.set(owner, kept); else this.rows.delete(owner);
+      this.saved.delete(owner);
+      this.unsaved.delete(owner);
+    }
+    this.notify();
+  }
   suspendScope(scope: string): void { for (const owner of this.rows.keys()) this.suspend(owner, scope); }
   begin(owner: string, id: string): boolean {
     if (this.isBusy(owner, id) || !this.read(owner).some((message) => message.id === id)) return false;
@@ -215,6 +233,7 @@ export class PendingMessageStore {
 }
 
 export const pendingMessages = new PendingMessageStore();
+paneLifetimes.onRetire((machineId) => pendingMessages.forget(machineId));
 if (typeof window !== "undefined") window.addEventListener("storage", (event) => {
   if (event.key?.startsWith(PREFIX)) pendingMessages.refresh(event.key.slice(PREFIX.length));
 });

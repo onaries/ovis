@@ -167,6 +167,8 @@ bun scripts/key-bar-hold-repeat-regression.ts # phone touch key-bar taps, holds 
 bun scripts/settings-pages-demo-regression.ts # every Settings page on a 390px and a 320px phone, and Back stepping out of the dialog
 bun scripts/interface-font-demo-regression.ts # Interface font at 390 and 1440: System and a typed list lead --font-ui, a reload keeps it, Default restores it; the message box takes the Chat font
 bun scripts/theme-first-paint-demo-regression.ts # the saved theme in every painted frame before and after the app starts, root and demo builds under the app's CSP
+bun scripts/push-health-demo-regression.ts # the alerts health notice with a stand-in PushManager: a retired subscription told once over the pane and in Settings, repaired once; a refusal, a key mismatch, denied, unsupported, offline, loading and a watching device's refused test, at 390 and 1440, light and dark, Korean at 390
+bun scripts/device-security-demo-regression.ts # Phone & devices on demo fixtures: revoking every device (the caller's warning, the confirmation, a refused write, a watching device) and the line every window gets when a device pairs
 bun scripts/chat-browser-qa.ts  # chat lens end to end
 bun scripts/omo-plan-browser-regression.ts # OmO todo progress and plan panel on isolated native fixtures
 bun scripts/pane-input-focus-demo-regression.ts # the input focus shortcut against fictional panes
@@ -324,8 +326,9 @@ older bridges receive no unknown control frame, and their visible Chat reads eve
 The client retains current interest through reconnect, replaying it after attachment and
 capability discovery. Hiding the page, leaving Chat or unmounting disables interest. The bridge
 drops interest with the attachment, and the client asks again with the pane's next attach: a
-tab that let go of its pane while out of use (Settings → Use alongside herdr's own window) has
-no pushes while it only watches, so it reads every 2 s, and gets pushes back when it attaches.
+tab that let go of its pane while out of use or idle (Settings → Use alongside herdr's own
+window) has no pushes while it only watches, so it reads every 2 s, and gets pushes back when it
+attaches.
 Observers may subscribe without gaining input or resize authority.
 
 The bridge shares one native-file monitor per interested attached pane and one 250 ms stat

@@ -3,15 +3,15 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEVICE_COOKIE } from "./auth.ts";
+import { CLEAR_LEGACY_DEVICE_COOKIE, DEVICE_COOKIE, DEVICE_COOKIE_CLEARED } from "./auth.ts";
 import { DeviceStore } from "./devices.ts";
 import { privateStateFs } from "./private-state.ts";
 import { MachineRelay } from "./machine-relay.ts";
-import type { MachineManager } from "./machines.ts";
+import { MachineManager } from "./machines.ts";
 import { startFakePushService } from "./push.fake.ts";
 import { createServer } from "./index.ts";
 import { workspaceCreate, workspaceClose } from "./herdr/client.ts";
-import type { ServerMessage } from "../shared/protocol.ts";
+import type { DevicePairedEvent, DevicesRevokedAll, MachineEvent, ServerMessage } from "../shared/protocol.ts";
 
 const guard = { "x-herdr-machine": "1", "content-type": "application/json" };
 
@@ -106,6 +106,86 @@ it("serves the state dir it merged into, even when the merge gave the old dir fi
     rmSync(root, { recursive: true, force: true });
   }
 });
+/** The next frame that satisfies `predicate`: subscribed before the frame is provoked, with a deadline instead of a poll. */
+function nextMessage(socket: WebSocket, predicate: (message: ServerMessage) => boolean, label: string, ms = 5000): Promise<ServerMessage> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { socket.removeEventListener("message", onMessage); reject(new Error(`${label}: no such frame within ${ms} ms`)); }, ms);
+    const onMessage = (event: MessageEvent) => {
+      const message = JSON.parse(String(event.data)) as ServerMessage;
+      if (!predicate(message)) return;
+      clearTimeout(timer);
+      socket.removeEventListener("message", onMessage);
+      resolve(message);
+    };
+    socket.addEventListener("message", onMessage);
+  });
+}
+
+/**
+ * An open machines event stream: its `events` are the JSON data lines as they arrive, `next`
+ * resolves with the first event satisfying `predicate` (subscribed before it is provoked), and
+ * `ended` resolves when the server closes the stream, or when the test aborts it.
+ */
+async function openEvents(base: string, headers: Record<string, string>, signal: AbortSignal) {
+  const response = await fetch(`${base}/api/machines/events`, { headers, signal });
+  expect(response.status).toBe(200);
+  const reader = response.body!.getReader();
+  const events: MachineEvent[] = [];
+  const listeners = new Set<(event: MachineEvent) => void>();
+  let buffered = "";
+  const ended = (async () => {
+    const decoder = new TextDecoder();
+    for (;;) {
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
+      try { chunk = await reader.read(); }
+      catch (error) { if (signal.aborted) return; throw error; }
+      const { done, value } = chunk;
+      if (done) return;
+      buffered += decoder.decode(value, { stream: true });
+      for (;;) {
+        const end = buffered.indexOf("\n\n");
+        if (end === -1) break;
+        const block = buffered.slice(0, end);
+        buffered = buffered.slice(end + 2);
+        const data = block.split("\n").filter((line) => line.startsWith("data: ")).map((line) => line.slice("data: ".length)).join("\n");
+        if (!data) continue;
+        const event = JSON.parse(data) as MachineEvent;
+        events.push(event);
+        for (const listener of listeners) listener(event);
+      }
+    }
+  })();
+  const next = (predicate: (event: MachineEvent) => boolean, label: string, ms = 5000): Promise<MachineEvent> => {
+    const already = events.find(predicate);
+    if (already) return Promise.resolve(already);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { listeners.delete(listener); reject(new Error(`${label}: no such event within ${ms} ms`)); }, ms);
+      const listener = (event: MachineEvent) => { if (!predicate(event)) return; clearTimeout(timer); listeners.delete(listener); resolve(event); };
+      listeners.add(listener);
+    });
+  };
+  // the browser's stream key, when the server gave it one with this stream (shared/protocol.ts, "Browser stream keys")
+  const setCookies = response.headers.getSetCookie();
+  return { events, next, ended, setCookies, cookie: setCookies[0]?.split(";")[0] ?? null };
+}
+
+/** A browser's cookie jar: what each answer set, by cookie name, and the Cookie header its next request sends. */
+function cookieJar() {
+  const cookies = new Map<string, string>();
+  return {
+    take(setCookies: readonly string[]) {
+      for (const line of setCookies) {
+        const [pair] = line.split(";");
+        const separator = pair!.indexOf("=");
+        const name = pair!.slice(0, separator);
+        if (/;\s*Max-Age=0\b/i.test(line)) cookies.delete(name);
+        else cookies.set(name, pair!.slice(separator + 1));
+      }
+    },
+    header: () => [...cookies].map(([name, value]) => `${name}=${value}`).join("; "),
+    names: () => [...cookies.keys()],
+  };
+}
 
 it("revocation closes an active device's terminal and roster stream without disconnecting another device", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-device-access-"));
@@ -156,6 +236,288 @@ it("revocation closes an active device's terminal and roster stream without disc
     rmSync(root, { recursive: true, force: true });
   }
 }, 10_000);
+
+it("revoking every device closes each paired client's streams at once, voids every credential, and leaves the token, this PC and the Tailscale login in, also after a restart", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-device-revoke-all-"));
+  const OWNER = "owner@example.com";
+  // a device that only watches: issued through the store itself, since the pairing route pairs drivers only
+  const seed = new DeviceStore(root);
+  const watch = seed.pair(seed.startPairing().code, "Watch", "watch")!;
+  seed.match(watch.token);
+  const options = { port: 0, stateDir: root, token: "test-revoke-all", tailscaleOwner: OWNER } as const;
+  let server = createServer(options);
+  let base = `http://127.0.0.1:${server.port}`;
+  const admin = { ...guard, authorization: "Bearer test-revoke-all" };
+  const stranger = { "x-forwarded-for": "100.64.0.9" };
+  const tailscale = { ...stranger, "tailscale-user-login": OWNER };
+  const sockets: WebSocket[] = [];
+  const abort = new AbortController();
+  let workspaceId: string | undefined;
+  try {
+    const pair = async (label: string) => {
+      const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: admin })).json() as { code: string };
+      const response = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, ...stranger }, body: JSON.stringify({ code, label }) });
+      expect(response.status).toBe(204);
+      const cookie = response.headers.get("set-cookie")!.split(";")[0]!;
+      expect((await fetch(`${base}/api/session`, { headers: { ...stranger, cookie } })).status).toBe(200);
+      return cookie;
+    };
+    const cookieA = await pair("A");
+    const cookieB = await pair("B");
+    const watchCookie = `${DEVICE_COOKIE}=${watch.token}`;
+    // A's and the owner's streams are open before C is enrolled: both hear of it, once, as one event
+    const streamA = await openEvents(base, { ...stranger, cookie: cookieA }, abort.signal);
+    const owner = await openEvents(base, { authorization: "Bearer test-revoke-all" }, abort.signal);
+    const isPairing = (label: string) => (event: MachineEvent): event is DevicePairedEvent => event.type === "device-paired" && event.label === label;
+    const heardByA = streamA.next(isPairing("C"), "A hears of C");
+    const heardByOwner = owner.next(isPairing("C"), "the owner hears of C");
+    const cookieC = await pair("C");
+    const [toldA, toldOwner] = await Promise.all([heardByA, heardByOwner]) as [DevicePairedEvent, DevicePairedEvent];
+    expect(toldA).toEqual({ type: "device-paired", event_id: expect.stringMatching(/^[0-9a-f]{16}$/), device_id: expect.stringMatching(/^[0-9a-f]{16}$/), label: "C", enrolled_at: expect.any(String) });
+    expect(toldOwner).toEqual(toldA);
+    // C's own stream, opened after its enrollment, hears nothing of itself; a later enrollment (D) reaches A, the owner and C
+    const streamC = await openEvents(base, { ...stranger, cookie: cookieC }, abort.signal);
+    const heardD = [streamA, owner, streamC].map((stream) => stream.next(isPairing("D"), "hears of D"));
+    const cookieD = await pair("D");
+    const toldD = await Promise.all(heardD);
+    expect(toldD.every((event) => event.type === "device-paired" && event.event_id === (toldD[0] as DevicePairedEvent).event_id)).toBe(true);
+    expect(streamC.events.filter((event) => event.type === "device-paired").map((event) => (event as DevicePairedEvent).label)).toEqual(["D"]);
+    expect(streamA.events.filter((event) => event.type === "device-paired").map((event) => (event as DevicePairedEvent).label)).toEqual(["C", "D"]);
+    const { devices } = await (await fetch(`${base}/api/devices`, { headers: admin })).json() as { devices: { id: string; label: string }[] };
+    expect(devices.map((device) => device.label).sort()).toEqual(["A", "B", "C", "D", "Watch"]);
+
+    // live terminals for A (local) and B, and page media A's render was given
+    const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-device-revoke-all" });
+    workspaceId = created.workspace.workspace_id;
+    const paneId = created.root_pane.pane_id;
+    const a = await connect(`${base.replace("http:", "ws:")}/ws`, cookieA); sockets.push(a.socket);
+    const b = await connect(`${base.replace("http:", "ws:")}/ws`, cookieB); sockets.push(b.socket);
+    for (const client of [a, b]) {
+      const output = nextMessage(client.socket, (message) => message.type === "pty-data", "terminal output");
+      client.socket.send(JSON.stringify({ type: "attach", pane_id: paneId, cols: 80, rows: 24 }));
+      await output;
+    }
+
+    // the refusals: no mutation guard, another origin, a watching device, a misspelled route
+    const revokeAll = (headers: Record<string, string>, method = "POST") => fetch(`${base}/api/devices/revoke-all`, { method, headers });
+    expect((await revokeAll({ authorization: "Bearer test-revoke-all" })).status).toBe(403);
+    expect((await revokeAll({ ...admin, origin: "https://elsewhere.example" })).status).toBe(403);
+    const watched = await revokeAll({ ...guard, ...stranger, cookie: watchCookie });
+    expect([watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([403, "read_only"]);
+    expect((await fetch(`${base}/api/devices/revoke-all/`, { method: "POST", headers: admin })).status).toBe(404);
+    expect((await fetch(`${base}/api/devices//revoke-all`, { method: "POST", headers: admin })).status).toBe(404);
+    expect((await revokeAll(admin, "GET")).status).toBe(400);
+    // nothing above changed anything: every stream is still open and every credential still works
+    expect(a.socket.readyState).toBe(WebSocket.OPEN);
+    for (const cookie of [cookieA, cookieB, cookieC, cookieD, watchCookie]) expect((await fetch(`${base}/api/session`, { headers: { ...stranger, cookie } })).status).toBe(200);
+
+    // the revocation, from a paired device that can drive: everything paired goes, its own pairing included
+    const closures = Promise.all([a.closed, b.closed, streamA.ended, streamC.ended]);
+    const revoked = await revokeAll({ ...guard, ...stranger, cookie: cookieD });
+    expect(revoked.status).toBe(200);
+    expect((await revoked.json()) as DevicesRevokedAll).toEqual({ revoked: 5 });
+    expect(revoked.headers.getSetCookie()).toEqual([DEVICE_COOKIE_CLEARED, CLEAR_LEGACY_DEVICE_COOKIE]);
+    const [closedA, closedB] = await closures;
+    expect([closedA.code, closedB.code]).toEqual([1008, 1008]);
+    for (const cookie of [cookieA, cookieB, cookieC, cookieD, watchCookie]) expect((await fetch(`${base}/api/session`, { headers: { ...stranger, cookie } })).status).toBe(401);
+    expect((await (await fetch(`${base}/api/devices`, { headers: admin })).json() as { devices: unknown[] }).devices).toEqual([]);
+    const registry = JSON.parse(readFileSync(join(root, "devices.json"), "utf8")) as { gate_closed_at: string | null; devices: unknown[] };
+    expect(registry).toEqual({ gate_closed_at: expect.any(String), devices: [] });
+    // the owner's stream and the token are untouched, and the policy for the rest is what it was: with a token
+    // configured, this PC itself and the PC's Tailscale login are asked for it (token_required), a stranger too
+    expect(owner.events.length).toBeGreaterThan(0);
+    expect((await fetch(`${base}/api/session`, { headers: { authorization: "Bearer test-revoke-all" } })).status).toBe(200);
+    const authOf = async (headers: Record<string, string>) => ((await (await fetch(`${base}/api/health?scope=bridge`, { headers })).json()) as { auth: { authenticated: boolean; reason?: string } }).auth;
+    expect(await authOf({})).toMatchObject({ authenticated: false, reason: "token_required" });
+    expect(await authOf(tailscale)).toMatchObject({ authenticated: false, reason: "token_required" });
+    expect(await authOf(stranger)).toMatchObject({ authenticated: false, reason: "token_required" });
+    expect(await authOf({ ...stranger, cookie: cookieA })).toMatchObject({ authenticated: false });
+    // a late socket with a revoked cookie is refused at the upgrade, as the gate is closed to it
+    expect((await fetch(`${base}/ws`, { headers: { ...stranger, cookie: cookieA } })).status).toBe(401);
+
+    // after a restart the gate is still closed and every old credential still void; pairing anew works
+    abort.abort();
+    await owner.ended;
+    server.stop();
+    server = createServer(options);
+    base = `http://127.0.0.1:${server.port}`;
+    expect((await fetch(`${base}/api/session`, { headers: stranger })).status).toBe(401);
+    for (const cookie of [cookieA, cookieD, watchCookie]) expect((await fetch(`${base}/api/session`, { headers: { ...stranger, cookie } })).status).toBe(401);
+    expect((await fetch(`${base}/api/session`, { headers: { authorization: "Bearer test-revoke-all" } })).status).toBe(200);
+    expect((await fetch(`${base}/api/session`, { headers: { ...tailscale, authorization: "Bearer test-revoke-all" } })).status).toBe(200);
+    const cookieE = await pair("E");
+    expect((await fetch(`${base}/api/session`, { headers: { ...stranger, cookie: cookieE } })).status).toBe(200);
+  } finally {
+    abort.abort();
+    for (const socket of sockets) socket.close();
+    server.stop();
+    if (workspaceId) await workspaceClose(workspaceId);
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);
+
+it("revoking every device closes relayed remote terminals through /ws?machine_id=, and one whose upgrade is still pending is never left open", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-device-revoke-all-relay-"));
+  // the other PC: a fictional bridge that accepts the relay's bearer token, and can hold one upgrade until let go
+  const opened: unknown[] = [];
+  const upgrades: Request[] = [];
+  const watchers = new Set<() => void>();
+  let closedUpstreams = 0;
+  let hold: { reached: () => void; released: Promise<void> } | null = null;
+  const changed = () => { for (const watcher of watchers) watcher(); };
+  const within = (check: () => boolean, label: string, ms = 5000): Promise<void> => check() ? Promise.resolve() : new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { watchers.delete(watcher); reject(new Error(`${label}: not within ${ms} ms`)); }, ms);
+    const watcher = () => { if (!check()) return; clearTimeout(timer); watchers.delete(watcher); resolve(); };
+    watchers.add(watcher);
+  });
+  const upstream = Bun.serve({
+    port: 0, hostname: "127.0.0.1",
+    async fetch(request, instance) {
+      if (request.headers.get("authorization") !== "Bearer fictional-remote") return new Response(null, { status: 401 });
+      upgrades.push(request);
+      const held = hold;
+      if (held) { held.reached(); await held.released; }
+      if (instance.upgrade(request)) return;
+      return new Response(null, { status: 426 });
+    },
+    websocket: { open(ws) { opened.push(ws); changed(); }, message() {}, close() { closedUpstreams += 1; changed(); } },
+  });
+  const endpoint = spyOn(MachineManager.prototype, "endpoint").mockImplementation((id) =>
+    id === "fictional-remote" ? { url: `http://127.0.0.1:${upstream.port}`, token: "fictional-remote" } : undefined);
+  const server = createServer({ port: 0, hostname: "127.0.0.1", stateDir: root, token: "test-revoke-all-relay", tailscaleOwner: null, sidecar: false });
+  const base = `http://127.0.0.1:${server.port}`;
+  const admin = { ...guard, authorization: "Bearer test-revoke-all-relay" };
+  const stranger = { "x-forwarded-for": "100.64.0.9" };
+  const relayed = `${base.replace("http:", "ws:")}/ws?machine_id=fictional-remote`;
+  const sockets: WebSocket[] = [];
+  try {
+    const pair = async (label: string) => {
+      const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: admin })).json() as { code: string };
+      const response = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, ...stranger }, body: JSON.stringify({ code, label }) });
+      expect(response.status).toBe(204);
+      const cookie = response.headers.get("set-cookie")!.split(";")[0]!;
+      expect((await fetch(`${base}/api/session`, { headers: { ...stranger, cookie } })).status).toBe(200);
+      return cookie;
+    };
+    const cookieA = await pair("A");
+    const cookieB = await pair("B");
+    // A's terminal on the other PC, relayed and open
+    const a = await connect(relayed, cookieA); sockets.push(a.socket);
+    await within(() => opened.length === 1, "A's relay reached the other PC");
+
+    // B's upgrade is authenticated, and waits while the relay dials the other PC
+    let reached!: () => void;
+    let release!: () => void;
+    const reachedRemote = new Promise<void>((resolve) => { reached = resolve; });
+    hold = { reached, released: new Promise<void>((resolve) => { release = resolve; }) };
+    const RuntimeSocket = WebSocket as unknown as new (url: string, options: { headers: { cookie: string } }) => WebSocket;
+    const b = new RuntimeSocket(relayed, { headers: { cookie: cookieB } }); sockets.push(b);
+    const bMessages: string[] = [];
+    b.addEventListener("message", (event) => bMessages.push(String(event.data)));
+    const bClosed = new Promise<CloseEvent>((resolve) => b.addEventListener("close", resolve, { once: true }));
+    await reachedRemote;
+    hold = null;
+
+    // every device goes while B's upgrade is still pending
+    const revoked = await fetch(`${base}/api/devices/revoke-all`, { method: "POST", headers: admin });
+    expect(revoked.status).toBe(200);
+    expect((await revoked.json()) as DevicesRevokedAll).toEqual({ revoked: 2 });
+    // the open relayed terminal ends at once, its connection to the other PC with it
+    expect((await a.closed).code).toBe(1008);
+    await within(() => closedUpstreams >= 1, "A's connection to the other PC closed");
+
+    // the pending upgrade completes only now; its device is gone, so it is ended at admission, with its relay
+    release();
+    const closedB = await Promise.race([bClosed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("B's late relayed socket was left open")), 5000))]);
+    expect(closedB.code).toBe(1008);
+    await within(() => opened.length === 2 && closedUpstreams === 2, "B's connection to the other PC closed");
+    expect(bMessages.filter((raw) => (JSON.parse(raw) as { type?: string }).type !== "error")).toEqual([]);
+
+    // a later relayed upgrade with a revoked cookie is refused before the other PC is dialled
+    const dialled = upgrades.length;
+    for (const cookie of [cookieA, cookieB]) {
+      expect((await fetch(`${base}/ws?machine_id=fictional-remote`, { headers: { ...stranger, cookie } })).status).toBe(401);
+    }
+    expect(upgrades.length).toBe(dialled);
+  } finally {
+    for (const socket of sockets) socket.close();
+    server.stop();
+    upstream.stop(true);
+    endpoint.mockRestore();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("a revocation of every device that cannot be persisted changes nothing, and once it can, every credential issued before is void", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-device-revoke-all-write-"));
+  const options = { port: 0, stateDir: root, token: "", tailscaleOwner: null } as const;
+  let server = createServer(options);
+  let base = `http://127.0.0.1:${server.port}`;
+  const forwarded = { "x-forwarded-for": "198.51.100.24" };
+  const abort = new AbortController();
+  const start = async () => (await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: guard })).json() as { code: string }).code;
+  const issue = async (code: string) => {
+    const response = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, ...forwarded }, body: JSON.stringify({ code }) });
+    expect(response.status).toBe(204);
+    return response.headers.get("set-cookie")!.split(";")[0]!;
+  };
+  const session = (headers: Record<string, string>) => fetch(`${base}/api/session`, { headers });
+  const revokeAll = () => fetch(`${base}/api/devices/revoke-all`, { method: "POST", headers: guard });
+  let failing: ReturnType<typeof failFileSync> | undefined;
+  try {
+    const owner = await openEvents(base, {}, abort.signal);
+    const pairings = () => owner.events.filter((event) => event.type === "device-paired") as DevicePairedEvent[];
+    // nothing paired yet: a credential issued now is unconfirmed, a code is pending, and the gate is open
+    const candidate = await issue(await start());
+    const pendingCode = await start();
+    expect((await session(forwarded)).status).toBe(200);
+    failing = failFileSync();
+    const failed = await revokeAll();
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toMatchObject({ error: { code: "internal_error" } });
+    // nothing changed: the gate is still open, no registry was written, and a confirmation that cannot be written is refused too
+    expect((await session(forwarded)).status).toBe(200);
+    expect(() => readFileSync(join(root, "devices.json"), "utf8")).toThrow();
+    expect((await session({ ...forwarded, cookie: candidate })).status).toBe(500);
+    failing.mockRestore();
+    // once writes work: the pending code still pairs, the candidate still confirms, and that confirmation is the one enrollment heard
+    const told = owner.next((event) => event.type === "device-paired", "the owner hears of the confirmed device");
+    const sibling = await issue(pendingCode);
+    expect((await session({ ...forwarded, cookie: candidate })).status).toBe(200);
+    expect(((await told) as DevicePairedEvent).device_id).toMatch(/^[0-9a-f]{16}$/);
+    expect(pairings()).toHaveLength(1);
+    // a sibling candidate is stale once a first cookie closed the gate (the rule from before this route)
+    expect((await session({ ...forwarded, cookie: sibling })).status).toBe(401);
+    // gated now, with one device and a fresh pending code: the write succeeds, and everything issued before it is void
+    const staleCode = await start();
+    const revoked = await revokeAll();
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toEqual({ revoked: 1 });
+    expect((await session({ ...forwarded, cookie: candidate })).status).toBe(401);
+    const stale = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, ...forwarded }, body: JSON.stringify({ code: staleCode }) });
+    expect(stale.status).toBe(401);
+    expect(await stale.json()).toMatchObject({ error: { code: "invalid_code" } });
+    expect((await session(forwarded)).status).toBe(401);
+    // revoking announces nothing, and the owner's stream is still the owner's
+    expect(pairings()).toHaveLength(1);
+    expect((await session({})).status).toBe(200);
+    // the registry on disk says gated with nothing in it, and a restart agrees
+    abort.abort();
+    await owner.ended;
+    server.stop();
+    server = createServer(options);
+    base = `http://127.0.0.1:${server.port}`;
+    expect(JSON.parse(readFileSync(join(root, "devices.json"), "utf8"))).toEqual({ gate_closed_at: expect.any(String), devices: [] });
+    expect((await session(forwarded)).status).toBe(401);
+    expect((await session({ ...forwarded, cookie: candidate })).status).toBe(401);
+    expect((await session({})).status).toBe(200);
+  } finally {
+    abort.abort();
+    failing?.mockRestore();
+    server.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 it("a corrupt device registry refuses strangers while keeping local recovery and the original file", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-device-recovery-"));
@@ -224,6 +586,112 @@ it("keeps a forwarded first-pair gate open until a returned cookie is durably co
     expect(registry.gate_closed_at).not.toBeNull();
     expect(registry.devices).toHaveLength(1);
   } finally {
+    server.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("never tells a browser of the device it paired itself, on any stream or push subscription it had before, even from tabs that opened at once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-self-pair-"));
+  const server = createServer({ port: 0, stateDir: root, token: "test-self-pair", tailscaleOwner: null, pushLoopbackHttp: true });
+  const base = `http://127.0.0.1:${server.port}`;
+  const bearer = { authorization: "Bearer test-self-pair" };
+  const abort = new AbortController();
+  const selfPush = await startFakePushService();
+  const otherPush = await startFakePushService();
+  const isPairing = (label: string) => (event: MachineEvent): event is DevicePairedEvent => event.type === "device-paired" && event.label === label;
+  const pairedLabels = (stream: { events: MachineEvent[] }) => stream.events.filter((event) => event.type === "device-paired").map((event) => (event as DevicePairedEvent).label);
+  const pushed = (label: string) => (push: { payload: { body: string } }) => push.payload.body === `New device paired: ${label}`;
+  const issued = /^ovis_stream_([0-9a-f]{32})=1; Path=\/; HttpOnly; SameSite=Strict; Max-Age=31536000$/;
+  // "Pair this device" from a signed-in browser: a code, then the pairing from that same browser
+  const selfPair = async (jar: ReturnType<typeof cookieJar>, label: string) => {
+    const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: { ...guard, ...bearer, cookie: jar.header() } })).json() as { code: string };
+    const response = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, ...bearer, cookie: jar.header() }, body: JSON.stringify({ code, label }) });
+    expect(response.status).toBe(204);
+    jar.take(response.headers.getSetCookie());
+  };
+  // a device paired by someone else, from a browser of its own that holds no key
+  const otherPair = async (label: string) => {
+    const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: { ...guard, ...bearer } })).json() as { code: string };
+    expect((await fetch(`${base}/api/devices/pair`, { method: "POST", headers: guard, body: JSON.stringify({ code, label }) })).status).toBe(204);
+  };
+  const subscribe = (subscription: unknown, cookie: string) => fetch(`${base}/api/push/subscribe`, { method: "POST", headers: { ...guard, ...bearer, cookie }, body: JSON.stringify({ subscription }) });
+  try {
+    // two tabs of one browser open at once, before it holds any key: each answer issues a key in a cookie of its own name
+    const browser = cookieJar();
+    const [tab, otherTab] = await Promise.all([openEvents(base, bearer, abort.signal), openEvents(base, bearer, abort.signal)]);
+    for (const stream of [tab, otherTab]) {
+      expect(stream.setCookies).toHaveLength(1);
+      expect(stream.setCookies[0]).toMatch(issued);
+    }
+    expect(tab.setCookies[0]!.match(issued)![1]).not.toBe(otherTab.setCookies[0]!.match(issued)![1]);
+    // the browser keeps both, since neither overwrites the other, and sends both from now on
+    browser.take([...tab.setCookies, ...otherTab.setCookies]);
+    expect(browser.names()).toHaveLength(2);
+    // a third tab carries the keys: nothing new is issued, and it is the same browser
+    const thirdTab = await openEvents(base, { ...bearer, cookie: browser.header() }, abort.signal);
+    expect(thirdTab.setCookies).toEqual([]);
+    // this browser's alerts were on before it paired anything (a token sign-in: no owner); the answer issues nothing new
+    const ownSubscription = await subscribe(selfPush.subscription, browser.header());
+    expect(ownSubscription.status).toBe(204);
+    expect(ownSubscription.headers.getSetCookie()).toEqual([]);
+    expect(JSON.parse(readFileSync(join(root, "push-subscriptions.json"), "utf8"))[0]).toMatchObject({ device_id: null, browser_keys: expect.arrayContaining(browser.names().map((name) => name.slice("ovis_stream_".length))) });
+
+    // another browser signed in with the same token: its push subscription comes first, and that answer gives it its key
+    const other = cookieJar();
+    const otherSubscription = await subscribe(otherPush.subscription, "");
+    expect(otherSubscription.status).toBe(204);
+    expect(otherSubscription.headers.getSetCookie()[0]).toMatch(issued);
+    other.take(otherSubscription.headers.getSetCookie());
+    const owner = await openEvents(base, { ...bearer, cookie: other.header() }, abort.signal);
+    expect(owner.setCookies).toEqual([]);
+    // a key cookie that is malformed is no key: the stream is served, not refused, and given a real one (a browser of its own)
+    const malformed = await openEvents(base, { ...bearer, cookie: `ovis_stream_${"A".repeat(32)}=1; ovis_stream_${"a".repeat(32)}=0; ovis_stream=${"a".repeat(32)}` }, abort.signal);
+    expect(malformed.setCookies).toHaveLength(1);
+    expect(malformed.setCookies[0]).toMatch(issued);
+
+    // the store is not gated yet: the pairing issues a first-pair cookie, and its first return enrolls it
+    const heardSelf = [owner, malformed].map((stream) => stream.next(isPairing("Self"), "another browser hears of Self"));
+    const pushedSelf = otherPush.waitFor(pushed("Self"), "the other browser is pushed Self", 5000);
+    await selfPair(browser, "Self");
+    expect((await fetch(`${base}/api/devices`, { headers: { cookie: browser.header() } })).status).toBe(200);
+    const self = (await Promise.all(heardSelf))[0] as DevicePairedEvent;
+    await pushedSelf;
+    // a key grants nothing: from another address, the browser's keys alone are refused like no cookie at all
+    const keysOnly = browser.header().split("; ").filter((pair) => pair.startsWith("ovis_stream_")).join("; ");
+    expect(keysOnly.split("; ")).toHaveLength(2);
+    expect((await fetch(`${base}/api/machines/events`, { headers: { cookie: keysOnly, "x-forwarded-for": "192.0.2.1" } })).status).toBe(401);
+    // a later enrollment by someone else reaches every tab and both subscriptions; a stream is ordered,
+    // so had Self reached a tab it came first, and Self's push went out before this one was asked for
+    const tabs = [tab, otherTab, thirdTab];
+    const heardBarrier = [...tabs, owner, malformed].map((stream) => stream.next(isPairing("Barrier"), "hears of Barrier"));
+    const pushedBarrier = [selfPush, otherPush].map((fake) => fake.waitFor(pushed("Barrier"), "pushed Barrier", 5000));
+    await otherPair("Barrier");
+    await Promise.all([...heardBarrier, ...pushedBarrier]);
+    for (const stream of tabs) expect(pairedLabels(stream)).toEqual(["Barrier"]);
+    expect(pairedLabels(owner)).toEqual(["Self", "Barrier"]);
+    expect(pairedLabels(malformed)).toEqual(["Self", "Barrier"]);
+    expect(selfPush.received.map((push) => push.payload.body)).toEqual(["New device paired: Barrier"]);
+    // the event the other browser heard was this browser's own enrollment
+    const { devices } = await (await fetch(`${base}/api/devices`, { headers: bearer })).json() as { devices: { id: string; label: string }[] };
+    expect(devices.find((entry) => entry.label === "Self")?.id).toBe(self.device_id);
+
+    // the gate is closed now: the same browser, holding its device cookie, pairs again and is enrolled at once;
+    // none of its tabs or its subscription hears of it, the other browser does
+    const heardAgain = owner.next(isPairing("Again"), "the other browser hears of Again");
+    const pushedAgain = otherPush.waitFor(pushed("Again"), "the other browser is pushed Again", 5000);
+    await selfPair(browser, "Again");
+    await Promise.all([heardAgain, pushedAgain]);
+    const heardLast = [...tabs, owner].map((stream) => stream.next(isPairing("Last"), "hears of Last"));
+    const pushedLast = selfPush.waitFor(pushed("Last"), "pushed Last", 5000);
+    await otherPair("Last");
+    await Promise.all([...heardLast, pushedLast]);
+    for (const stream of tabs) expect(pairedLabels(stream)).toEqual(["Barrier", "Last"]);
+    expect(selfPush.received.map((push) => push.payload.body)).toEqual(["New device paired: Barrier", "New device paired: Last"]);
+  } finally {
+    abort.abort();
+    selfPush.stop();
+    otherPush.stop();
     server.stop();
     rmSync(root, { recursive: true, force: true });
   }
@@ -384,4 +852,47 @@ it("returns an error when revocation cannot be persisted, then allows a successf
     expect((await revoke()).status).toBe(204);
     expect(new DeviceStore(root).match(paired.token)).toBeNull();
   } finally { server.stop(); rmSync(root, { recursive: true, force: true }); }
+});
+
+it("never announces a pairing to a stream that came in through the open LAN, before or after every device is revoked", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-open-stream-"));
+  const server = createServer({ port: 0, stateDir: root, token: "", tailscaleOwner: null });
+  const base = `http://127.0.0.1:${server.port}`;
+  const abort = new AbortController();
+  // a request through a proxy on this PC stands for one from another device; with nothing paired it gets in through the open LAN
+  const lan = { "x-forwarded-for": "100.64.0.9" };
+  const isPairing = (label: string) => (event: MachineEvent): event is DevicePairedEvent => event.type === "device-paired" && event.label === label;
+  const pairedLabels = (stream: { events: MachineEvent[] }) => stream.events.filter((event) => event.type === "device-paired").map((event) => (event as DevicePairedEvent).label);
+  const pair = async (label: string) => {
+    const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: guard })).json() as { code: string };
+    const response = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, ...lan }, body: JSON.stringify({ code, label }) });
+    expect(response.status).toBe(204);
+    const cookie = response.headers.getSetCookie().find((line) => line.startsWith(`${DEVICE_COOKIE}=`))!.split(";")[0]!;
+    // its first return confirms a first-pair credential (and closes the gate); a gated pairing is in already
+    expect((await fetch(`${base}/api/session`, { headers: { ...lan, cookie } })).status).toBe(200);
+  };
+  try {
+    const open = await openEvents(base, lan, abort.signal);
+    const local = await openEvents(base, {}, abort.signal);
+    const heardFirst = local.next(isPairing("First"), "this PC hears of First");
+    await pair("First");
+    await heardFirst;
+    // the gate is closed: the LAN client is refused on any new request, while the stream it opened before is still open
+    expect((await fetch(`${base}/api/session`, { headers: lan })).status).toBe(401);
+    const revoked = await fetch(`${base}/api/devices/revoke-all`, { method: "POST", headers: guard });
+    expect(await revoked.json()).toEqual({ revoked: 1 } satisfies DevicesRevokedAll);
+    const heardSecond = local.next(isPairing("Second"), "this PC hears of Second");
+    await pair("Second");
+    await heardSecond;
+    // a stream is ordered: a change made after both pairings reaches the open stream, so had either pairing reached it, it came first
+    const barrier = open.next((event) => event.type === "preferences" && event.preferences.settings["theme"] === "light", "the open stream hears the barrier");
+    expect((await fetch(`${base}/api/preferences`, { method: "PUT", headers: guard, body: JSON.stringify({ settings: { theme: "light" } }) })).status).toBe(200);
+    await barrier;
+    expect(pairedLabels(open)).toEqual([]);
+    expect(pairedLabels(local)).toEqual(["First", "Second"]);
+  } finally {
+    abort.abort();
+    server.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
 });

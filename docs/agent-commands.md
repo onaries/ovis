@@ -269,9 +269,11 @@ request (`first_message_connection`) types it on its own, while it has the pane 
 disconnects or leaves the pane first, the message is held until someone sends it now or discards it,
 and the pane's other messages go at their turn. A pane holds one first message, bound to the agent
 the launch brought up: its process (the one a shell-started agent's launch saw come up) and session,
-as known when the message is queued and as learned at each event of the pane after. A `/resume`,
-another process of the same kind, or that agent ending before the message went holds it with
-`pending_target_changed`, at the pane's next event. First messages live in the
+as known when the message is queued and as learned at each event of the pane after. A `/resume` or
+another process of the same kind holds it with `pending_target_changed`, and that agent ending
+before the message went holds it with `first_message_launch_ended`, at the pane's next event; Send
+now then answers the same code to a client whose `pending-action` frame says `launch_ended`, and
+`pending_target_changed` to an older one. First messages live in the
 bridge's memory, so a restart drops the ones not sent yet. The bridge checks launch arguments by the
 dialog's rules in `shared/launch-rules.ts`.
 
@@ -288,7 +290,10 @@ To add a reader:
    `wide` (`omp-handoff-18.8.7-done-narrow.txt`). A set of result screens may get its own folder
    (`server/fixtures/hermes-results/help-120.txt`).
 2. Add the reader to `server/dialogs/<agent>.ts`, with an interaction plan if it moves a cursor,
-   or `kind: "result"` if it recognizes a finished result.
+   or `kind: "result"` if it recognizes a finished result. Words the card gets from the bridge
+   rather than from the screen (a title, the Close an Esc is offered as) go in as `own("…")`, with
+   their English key added to `shared/card-text.ts` and translated in `src/lib/i18n/composer.*.ts`:
+   the client shows them in the user's language (`own_text`), and the agent's own text as drawn.
 3. Switch the form to `dialog` with that reader's id.
 4. Test the reader against its fixtures in the agent's test file.
 

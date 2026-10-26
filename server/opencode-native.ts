@@ -8,7 +8,7 @@ import type { HerdrPane, SlashCommand } from "../shared/protocol.ts";
 import { resolveAgent, typingRoots } from "./pane-context.ts";
 import { paneProcessRoots } from "./conversation.ts";
 import { CATALOG_SOURCE_BUDGET_MS, registerCatalogSource } from "./catalog-sources.ts";
-import { builtinCommands, cachedPaneCommands, paneCommands } from "./commands.ts";
+import { builtinCommands, cachedPaneCommands } from "./commands.ts";
 import { opencodeSessionId } from "./opencode.ts";
 import { listOpenCodeCatalog, openCodeHasSession, openCodeService, subscribeOpenCodeEvents, type OpenCodeEvent, type OpenCodeService } from "./opencode-service.ts";
 import { skillTokens, type PromptPiece } from "./opencode-skill-attach.ts";
@@ -286,27 +286,22 @@ registerCatalogSource({
 type Sent = (CommandSend & { store: string | null }) | undefined;
 const UNKNOWN_FORMS = [{ match: "bare", interaction: "unknown" }] as const;
 
-/**
- * The pane's verified service and (for `cwd`) its lists, under one budget for all of it. `version` is
- * the verified service's, known even when its session lookup or lists then fail or run out.
- */
-async function boundCatalog(pane: HerdrPane, cwd: string | null, budgetMs: number, stateDir?: string): Promise<{ bound: boolean; rows: SlashCommand[] | null; version: string | null }> {
+/** The pane's verified service and (for `cwd`) its lists, under one budget for all of it. */
+async function boundCatalog(pane: HerdrPane, cwd: string | null, budgetMs: number, stateDir?: string): Promise<{ bound: boolean; rows: SlashCommand[] | null }> {
+  const deadline = Date.now() + budgetMs;
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let version: string | null = null;
   const expired = new Promise<null>((resolve) => { timer = setTimeout(() => { controller.abort(); resolve(null); }, budgetMs); });
   const asked = (async () => {
-    version = (await openCodeService(stateDir, controller.signal))?.version ?? null;
+    const version = (await openCodeService(stateDir, controller.signal))?.version ?? null;
+    if (Date.now() >= deadline) { controller.abort(); return null; }
     const bound = version ? await openCodePaneService(pane, controller.signal, stateDir) : null;
-    // an answer in time that the pane's session is not this service's: its version says nothing about the pane
-    // (an OpenCode 1.x TUI, whose '@' names a file); only a lookup that ran out keeps it (a hung service)
-    if (!bound && !controller.signal.aborted) version = null;
     if (!bound) return null;
     return { bound: true, rows: cwd ? await openCodeCatalogRows(bound.service, cwd, controller.signal) : null };
   })().catch(() => null);
   try {
     const answer = await Promise.race([asked, expired]);
-    return { bound: answer?.bound ?? false, rows: answer?.rows ?? null, version };
+    return { bound: answer?.bound ?? false, rows: answer?.rows ?? null };
   } finally { clearTimeout(timer); }
 }
 
@@ -315,7 +310,7 @@ async function boundCatalog(pane: HerdrPane, cwd: string | null, budgetMs: numbe
  * OpenCode pane's text with an `@` token waits here (delivery has to, to attach a skill), and only up to
  * the catalog budget. With no catalog remembered for the pane's current identity (a bridge restarted
  * under an open tab, a new OpenCode session), the record is made from the verified service's own lists,
- * or from the scanned ones when the service does not answer. A skill that cannot be attached goes as
+ * never from a synchronous filesystem scan on the delivery path. A skill that cannot be attached goes as
  * plain text and its record is terminal-required with the note why.
  */
 export async function openCodeSkillsToType(pane: HerdrPane, sent: Sent, text: string, screen = "", stateDir?: string): Promise<{ sent: Sent; skills: string[] }> {
@@ -324,16 +319,18 @@ export async function openCodeSkillsToType(pane: HerdrPane, sent: Sent, text: st
   const roots = typingRoots(await paneProcessRoots(pane.pane_id, label));
   if (resolveAgent(pane, roots).agent !== "opencode") return { sent, skills: [] };
   const tokensOf = (record: Sent): string[] => record?.agent === "opencode" ? skillTokens(text, record.invocations.map((invocation) => invocation.name)) : [];
-  const cold = cachedPaneCommands(pane) === undefined;
-  if (!cold && tokensOf(sent).length === 0) return { sent, skills: [] };
+  const cached = cachedPaneCommands(pane);
+  const cold = cached === undefined;
+  let record = sent ?? (cached?.agent === "opencode" ? commandSendFrom(pane, "opencode", cached.commands, text, screen) : undefined);
+  if (!cold && tokensOf(record).length === 0) return { sent: record, skills: [] };
   const cwd = pane.foreground_cwd ?? pane.cwd ?? null;
-  const { bound, rows, version } = await boundCatalog(pane, cold ? cwd : null, CATALOG_SOURCE_BUDGET_MS, stateDir);
-  let record = sent;
+  const { bound, rows } = await boundCatalog(pane, cold ? cwd : null, CATALOG_SOURCE_BUDGET_MS, stateDir);
   if (cold) {
     const native = rows?.filter((row) => row.source !== "builtin").map((row): SlashCommand => ({ ...row, forms: row.forms ?? [...UNKNOWN_FORMS], visibility: row.visibility ?? "offered", provenance: { transport: "native", verified: true } }));
-    // the scanned lists are read only when the service gave none, after the wait delivery already had; without the
-    // service's version nothing says the pane is v2, whose `@` names a skill (v1's names a file)
-    record = commandSendFrom(pane, "opencode", native ? [...builtinCommands("opencode"), ...native] : paneCommands("opencode", cwd, undefined, {}, version), text, screen);
+    // A synchronous scan cannot be interrupted by the lookup timer. Without a native catalog,
+    // no mention is known to be a skill; files and other @words remain ordinary plain text.
+    record = commandSendFrom(pane, "opencode", [...builtinCommands("opencode"), ...(native ?? [])], text, screen);
+    if (!native) return { sent: record, skills: [] };
   }
   const tokens = tokensOf(record);
   if (tokens.length === 0) return { sent: record, skills: [] };

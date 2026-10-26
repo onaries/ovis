@@ -2,7 +2,8 @@ import { afterAll, describe, expect, it, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DeviceStore, normalizeLabel } from "./devices.ts";
+import type { DevicePairedEvent } from "../shared/protocol.ts";
+import { DeviceStore, newStreamKey, normalizeLabel, sameBrowser, streamCookie, streamKeys } from "./devices.ts";
 import { privateStateFs } from "./private-state.ts";
 import { isTaggedNode, parseTailscaleOwner } from "./tailscale.ts";
 
@@ -159,6 +160,153 @@ describe("DeviceStore", () => {
     expect(store.revoke(b.device.id)).toBe(true);
     expect(store.gated).toBe(true);
     expect(new DeviceStore(root).gated).toBe(true);
+  });
+});
+
+describe("revoke all", () => {
+  it("revoke all is atomic and stays gated after restart", () => {
+    const root = mkdtempSync(join(dir, "revoke-all-"));
+    const store = new DeviceStore(root);
+    const a = store.pair(store.startPairing().code, "A", "drive")!;
+    store.match(a.token);
+    const b = store.pair(store.startPairing().code, "B", "watch")!;
+    store.match(b.token);
+    const closed: string[] = [];
+    store.onRevoke(a.device.id, () => closed.push("a"));
+    store.onRevoke(a.device.id, () => closed.push("a2"));
+    store.onRevoke(b.device.id, () => closed.push("b"));
+    expect(store.revokeAll().sort()).toEqual([a.device.id, b.device.id].sort());
+    expect(closed.sort()).toEqual(["a", "a2", "b"]);
+    expect(store.list(null)).toEqual([]);
+    expect(store.has(a.device.id)).toBe(false);
+    expect(store.match(a.token)).toBeNull();
+    expect(store.match(b.token)).toBeNull();
+    expect(store.gated).toBe(true);
+    const registry = JSON.parse(readFileSync(join(root, "devices.json"), "utf8")) as { gate_closed_at: string | null; devices: unknown[] };
+    expect(registry).toEqual({ gate_closed_at: expect.any(String), devices: [] });
+    const reloaded = new DeviceStore(root);
+    expect(reloaded.gated).toBe(true);
+    expect(reloaded.match(a.token)).toBeNull();
+    // a listener registered after the fact is closed at once, as after a single revocation
+    store.onRevoke(a.device.id, () => closed.push("late"));
+    expect(closed).toContain("late");
+    // nothing more to revoke: still one durable write of an empty, gated registry
+    expect(store.revokeAll()).toEqual([]);
+    expect(new DeviceStore(root).gated).toBe(true);
+  });
+
+  it("save failure preserves pending and live devices", () => {
+    const root = mkdtempSync(join(dir, "revoke-all-failure-"));
+    const store = new DeviceStore(root);
+    const live = store.pair(store.startPairing().code, "Live", "drive")!;
+    store.match(live.token);
+    const pendingCode = store.startPairing().code;
+    let closed = false;
+    store.onRevoke(live.device.id, () => { closed = true; });
+    const fsync = spyOn(privateStateFs, "fsyncSync").mockImplementation(() => { throw Object.assign(new Error("EIO: i/o error, fsync"), { code: "EIO" }); });
+    try {
+      expect(() => store.revokeAll()).toThrow("EIO");
+      expect(closed).toBe(false);
+      expect(store.list(null).map((d) => d.label)).toEqual(["Live"]);
+      expect(store.match(live.token)?.label).toBe("Live");
+    } finally { fsync.mockRestore(); }
+    expect(new DeviceStore(root).match(live.token)?.label).toBe("Live");
+    // the pending code is still good after the failed attempt: nothing was voided
+    expect(store.pair(pendingCode, "Second", "drive")).not.toBeNull();
+    expect(store.revokeAll()).toHaveLength(2);
+    expect(closed).toBe(true);
+  });
+
+  it("unconfirmed credentials and pending codes are void", () => {
+    const root = mkdtempSync(join(dir, "revoke-all-void-"));
+    const store = new DeviceStore(root);
+    // only a first-pair candidate exists: the gate is still open and no registry is on disk
+    const candidate = store.pair(store.startPairing().code, "Candidate", "drive")!;
+    const code = store.startPairing().code;
+    expect(store.gated).toBe(false);
+    expect(store.revokeAll()).toEqual([]);
+    // revoking closes the gate durably even though no device was ever confirmed
+    expect(store.gated).toBe(true);
+    expect(new DeviceStore(root).gated).toBe(true);
+    expect(store.match(candidate.token)).toBeNull();
+    expect(store.pair(code, "Stale code", "drive")).toBeNull();
+    expect(store.list(null)).toEqual([]);
+    // a code issued after the revocation pairs through the gated flow and is announced
+    const notices: string[] = [];
+    store.onPaired((event) => notices.push(event.label));
+    const fresh = store.pair(store.startPairing().code, "Fresh", "drive")!;
+    expect(store.match(fresh.token)?.label).toBe("Fresh");
+    expect(notices).toEqual(["Fresh"]);
+  });
+
+  it("notice occurs once after durable enrollment", () => {
+    const root = mkdtempSync(join(dir, "paired-notice-"));
+    const store = new DeviceStore(root);
+    const events: DevicePairedEvent[] = [];
+    const stop = store.onPaired((event) => events.push(event));
+    // issuing an unconfirmed first-pair credential announces nothing
+    const first = store.pair(store.startPairing().code, "  First   phone ", "drive")!;
+    expect(events).toEqual([]);
+    // its confirmation (the first cookie that returns) is the durable enrollment: once
+    expect(store.match(first.token)).not.toBeNull();
+    expect(store.match(first.token)).not.toBeNull();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "device-paired", event_id: expect.stringMatching(/^[0-9a-f]{16}$/), device_id: first.device.id, label: "  First   phone ", enrolled_at: expect.any(String) });
+    expect(Date.parse(events[0]!.enrolled_at)).not.toBeNaN();
+    // a gated pairing is durable at once: one notice, and none for its later requests
+    const second = store.pair(store.startPairing().code, "Second", "drive")!;
+    expect(events).toHaveLength(2);
+    expect(events[1]!.device_id).toBe(second.device.id);
+    expect(events[1]!.event_id).not.toBe(events[0]!.event_id);
+    store.match(second.token, Date.now() + 120_000); // a last-seen write
+    store.update(second.device.id, { label: "Renamed" });
+    expect(events).toHaveLength(2);
+    // a pairing whose write fails announces nothing
+    const code = store.startPairing().code;
+    const fsync = spyOn(privateStateFs, "fsyncSync").mockImplementation(() => { throw Object.assign(new Error("EIO: i/o error, fsync"), { code: "EIO" }); });
+    try { expect(() => store.pair(code, "Failed", "drive")).toThrow("EIO"); } finally { fsync.mockRestore(); }
+    expect(events).toHaveLength(2);
+    stop();
+    expect(store.pair(code, "Unheard", "drive")).not.toBeNull();
+    expect(events).toHaveLength(2);
+  });
+
+  it("tells the moment of enrollment, not of issue, and the browser that asked for it", () => {
+    const store = new DeviceStore(mkdtempSync(join(dir, "enrolled-at-")));
+    const heard: { event: DevicePairedEvent; origin: readonly string[] }[] = [];
+    store.onPaired((event, origin) => heard.push({ event, origin }));
+    // a first-pair credential issued at 12:00 and returned at 12:05 was enrolled at 12:05
+    const issuedAt = Date.parse("2026-10-21T12:00:00.000Z");
+    const confirmedAt = Date.parse("2026-10-21T12:05:00.000Z");
+    const self = ["a".repeat(32), "b".repeat(32)];
+    const first = store.pair(store.startPairing(issuedAt).code, "Phone", "drive", issuedAt, self)!;
+    expect(heard).toEqual([]);
+    expect(store.match(first.token, confirmedAt)).not.toBeNull();
+    expect(heard).toEqual([{ event: expect.objectContaining({ device_id: first.device.id, enrolled_at: "2026-10-21T12:05:00.000Z" }), origin: self }]);
+    // a gated pairing is enrolled when its write succeeds; one that names no browser is told with none
+    const gatedAt = Date.parse("2026-10-21T12:07:30.000Z");
+    const second = store.pair(store.startPairing(gatedAt).code, "Tablet", "drive", gatedAt)!;
+    expect(heard[1]).toEqual({ event: expect.objectContaining({ device_id: second.device.id, enrolled_at: "2026-10-21T12:07:30.000Z" }), origin: [] });
+  });
+
+  it("reads every stream key a browser holds and ignores malformed ones", () => {
+    const a = "a".repeat(32);
+    const b = "b".repeat(32);
+    const keys = (cookie: string) => streamKeys(new Request("http://host/", { headers: { cookie } }));
+    expect(keys(`ovis_stream_${a}=1; other=x; ovis_stream_${b}=1`)).toEqual([a, b]);
+    // a wrong value, a short or upper-case key, the bare name, a junk pair: none is a key, and none refuses the rest
+    expect(keys(`ovis_stream_${a}=0; ovis_stream_${"A".repeat(32)}=1; ovis_stream_abc=1; ovis_stream=${a}; =1; %zz; ovis_stream_${b}=1`)).toEqual([b]);
+    expect(keys("")).toEqual([]);
+    // at most eight are read from one request
+    const many = Array.from({ length: 12 }, (_, index) => index.toString(16).repeat(32));
+    expect(keys(many.map((key) => `ovis_stream_${key}=1`).join("; "))).toEqual(many.slice(0, 8));
+    expect(sameBrowser([a, b], [b])).toBe(true);
+    expect(sameBrowser([a], [b])).toBe(false);
+    expect(sameBrowser([], [a])).toBe(false);
+    // the cookie that issues one: its own name, no authority, a year like the device cookie
+    expect(streamCookie(a, true)).toBe(`ovis_stream_${a}=1; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000; Secure`);
+    expect(streamCookie(a, false)).not.toContain("Secure");
+    expect(newStreamKey()).toMatch(/^[0-9a-f]{32}$/);
   });
 });
 

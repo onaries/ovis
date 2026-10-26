@@ -1,3 +1,5 @@
+import { paneLifetimes, paneStateKey } from "./paneLifetime.ts";
+
 /** Held messages are explicitly sent, never dispatched by reconnects or status changes. */
 export interface HeldMessage { id: string; text: string }
 type QueueStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -28,7 +30,21 @@ export class MessageQueueStore {
     this.queues.set(owner, [...this.read(owner)]);
     for (const listener of this.listeners) listener();
   }
-  constructor(private storage: () => QueueStorage = () => window.localStorage) {}
+  // the pane's herdr's storage, or this page's memory (lib/paneLifetime.ts)
+  constructor(private storage: () => QueueStorage = () => paneLifetimes.paneStorage) {}
+
+  /** Another herdr took the PC's pane IDs: its queues are read again from where they now are. */
+  forget(machineId: string): void {
+    for (const [owner, messages] of [...this.queues]) {
+      const pane = paneStateKey(`ovis:queue:${owner}`);
+      if (pane?.machineId !== machineId) continue;
+      if (this.unsaved.has(owner)) for (const message of messages) paneLifetimes.keep(machineId, pane.paneId, "pending", message.text);
+      this.queues.delete(owner);
+      this.saved.delete(owner);
+      this.unsaved.delete(owner);
+    }
+    for (const listener of this.listeners) listener();
+  }
 
   /** Reconcile storage before mutation; another tab may have written since our last render. */
   refresh(owner: string): void {
@@ -94,6 +110,7 @@ export class MessageQueueStore {
 
 // Machine switches remount the terminal; outstanding sends must share the same owner cache.
 export const messageQueues = new MessageQueueStore();
+paneLifetimes.onRetire((machineId) => messageQueues.forget(machineId));
 
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {

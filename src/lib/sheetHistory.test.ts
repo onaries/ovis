@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, jest } from "bun:test";
+import { sheetStep } from "./historyKeys.ts";
 
 let originalWindow: PropertyDescriptor | undefined;
 
@@ -13,11 +14,13 @@ function fakeWindow() {
   const traverse = (by: number): void => {
     const next = Math.max(0, Math.min(entries.length - 1, index + by));
     if (next === index) return;
+    // one event for every listener, as a browser dispatches it
+    const dispatch = (): void => { const event = { state: entries[index]!.state }; for (const listener of listeners) listener(event); };
     const land = (): void => {
       index = Math.min(next, entries.length - 1);
-      for (const listener of listeners) listener({ state: entries[index]!.state });
+      dispatch();
     };
-    if (!deferred) { index = next; queueMicrotask(() => { for (const listener of listeners) listener({ state: entries[index]!.state }); }); return; }
+    if (!deferred) { index = next; queueMicrotask(dispatch); return; }
     pending = true;
     setTimeout(() => { pending = false; land(); }, 1);
   };
@@ -245,5 +248,61 @@ describe("a phone's sheet in the history", () => {
     hooks.enter(() => {});
     h.back(); await settled();
     expect(seen).toEqual([true, false]);
+  });
+
+  it("answers whether a popstate is that step, before it handles the event and after (#2000)", async () => {
+    const answers: boolean[] = [];
+    fake.window.addEventListener("popstate", (event) => { answers.push(sheetStep.lands(event as unknown as Event)); });
+    const leave = hooks.enter(() => {});
+    fake.defer(true);
+    leave();
+    // the step back is asked for; until it lands, a popstate not yet handled here is that step
+    jest.advanceTimersByTime(0);
+    expect(fake.pending()).toBe(true);
+    expect(sheetStep.lands({} as Event)).toBe(true);
+    await settled();
+    fake.defer(false);
+    hooks.enter(() => {});
+    h.back(); await settled();
+    expect(answers).toEqual([true, false]);
+  });
+
+  // last: Settings' module stays on this browser from here, after this module, as in the app
+  it("keeps Settings opened before a closed palette's step lands, over a peek that stays up too (#2000)", async () => {
+    const settingsPath = "./settingsHistory.ts?with-sheets";
+    const settings: typeof import("./settingsHistory.ts") = await import(settingsPath);
+    const moves: Array<boolean> = [];
+    settings.onSettingsHistory((_entry, own) => moves.push(own));
+    let peekClosed = 0;
+    const leavePeek = hooks.enter(() => { peekClosed += 1; }, true);
+    const leavePalette = hooks.enter(() => {});
+    fake.defer(true);
+    leavePalette();
+    jest.advanceTimersByTime(0);
+    expect(fake.pending()).toBe(true);
+    // Settings opens before the palette's step back lands
+    settings.recordSettings(settings.settingsLevels(true, null, false));
+    await settled();
+    fake.defer(false);
+    expect(moves).toEqual([]);
+    expect(settings.settingsEntry(h.state)).toEqual({ page: null, keyBar: false, depth: 1 });
+    expect(peekClosed).toBe(0);
+    // and Settings closed by its X leaves the peek up, on its entry
+    settings.recordSettings([]);
+    await settled();
+    expect(settings.settingsEntry(h.state)).toBeNull();
+    expect(peekClosed).toBe(0);
+    leavePeek(); await settled();
+
+    // a sheet closed above Settings (a lightbox in a preview opened over it) steps onto the preview's
+    // entry: not the entry the palette opened over, so Settings is not made again there
+    const leaveRoute = hooks.enter(() => {});
+    settings.recordSettings(settings.settingsLevels(true, null, false));
+    leaveRoute(); await settled();
+    h.pushState({ ...settings.outsideSettings(h.state), "ovis:file-preview": { path: "README.md" } }, "");
+    const leaveLightbox = hooks.enter(() => {});
+    leaveLightbox(); await settled();
+    expect((h.state as Record<string, unknown>)["ovis:file-preview"]).toBeDefined();
+    expect(settings.settingsEntry(h.state)).toBeNull();
   });
 });

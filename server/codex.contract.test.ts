@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "./index.ts";
@@ -103,6 +104,23 @@ it("serves a native image-only Codex turn through the pane-scoped image API", as
   expect(response.headers.get("content-type")).toBe("image/png");
   expect(response.headers.get("cache-control")).toContain("no-store");
   expect(Buffer.from(await response.arrayBuffer())).toEqual(png);
+  writeFileSync(rollout, transcript(`${answerPrefix}Answer one`));
+  expect((await fetch(url)).status).toBe(404);
+});
+
+// codex-cli 0.163.0's view_image as recorded (server/fixtures/codex-pictures-0.163.0-rollout.jsonl)
+it("serves a picture a Codex tool returned, named by its call, through the pane-scoped image API", async () => {
+  const recorded = readFileSync(new URL("./fixtures/codex-pictures-0.163.0-rollout.jsonl", import.meta.url), "utf8").split("\n").filter(Boolean).slice(1);
+  writeFileSync(rollout, [transcript(`${answerPrefix}Answer one`), ...recorded].join("\n") + "\n");
+  const tool = (await read()).turns.flatMap((turn) => turn.parts).find((part) => part.kind === "tool" && part.images !== undefined);
+  if (tool?.kind !== "tool") throw new Error("missing tool picture");
+  expect(tool.images).toEqual([{ media_type: "image/png", ref: "codex-tool:call_c14dcc9fd54946c7bc093bac1ec706fd:0" }]);
+  const url = `http://127.0.0.1:${server.port}/api/pane/conversation/image?${new URLSearchParams({ pane_id: paneId, ref: tool.images![0]!.ref })}`;
+  const response = await fetch(url);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("image/png");
+  expect(response.headers.get("cache-control")).toContain("no-store");
+  expect(createHash("sha256").update(Buffer.from(await response.arrayBuffer())).digest("hex")).toBe("216412999d849811ca002949953aa22a041cebcf0b31e7c812ee86328338b893");
   writeFileSync(rollout, transcript(`${answerPrefix}Answer one`));
   expect((await fetch(url)).status).toBe(404);
 });

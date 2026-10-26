@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type DragEvent, type MouseEvent, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
-import { Columns2, Ellipsis, Eraser, Maximize2, MoveHorizontal, Pencil, Rows2, ArrowLeftRight, TextWrap, X } from "lucide-react";
+import { ArchiveRestore, Columns2, Ellipsis, Eraser, Maximize2, MoveHorizontal, Pencil, Rows2, ArrowLeftRight, TextWrap, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { HerdrPane, PaneLayoutSnapshot, SessionSnapshot } from "../../shared/protocol.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
@@ -17,6 +17,7 @@ import { userErrorMessage, type UserError } from "../lib/userError.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
+import { paneLifetimes } from "../lib/paneLifetime.ts";
 import { displayPaneTitle } from "./Sidebar.tsx";
 import { RowMenu, type RowMenuItem } from "./RowMenu.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
@@ -37,6 +38,8 @@ interface Props {
   onOpenInHalf?: (paneId: string, side: SplitSide) => void;
   /** the PC's panes are mirrored (no terminal attach there): their grid can be wider than this screen */
   mirrored?: boolean;
+  /** opens Recover unsent text for the pane, offered while earlier herdrs' panes left some (UnsentText) */
+  onRecoverUnsent?: (target: HerdrPane) => void;
 }
 type Menu = { paneId: string; anchor: HTMLElement; point?: { x: number; y: number }; previousFocus: HTMLElement | null };
 interface Drag {
@@ -59,7 +62,7 @@ interface Drag {
 }
 
 /** The active tab, drawn from herdr's rectangles. No browser-owned layout or PTY state. */
-export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged, renderPane, actionsRef, onOpenInHalf, mirrored = false }: Props) {
+export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged, renderPane, actionsRef, onOpenInHalf, mirrored = false, onRecoverUnsent }: Props) {
   const t = useT();
   const { settings, update: updateSettings } = useSettings();
   const narrowScreen = useMediaQuery(MIRROR_WRAP_QUERY);
@@ -182,6 +185,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     ...(mirrored || wideGrid.has(wideGridKey(machineId, target.pane_id)) ? [{ id: "mirror-width", label: t(mirrorWraps ? "Original width" : "Wrap to screen"),
       icon: mirrorWraps ? MoveHorizontal : TextWrap,
       run: () => updateSettings({ terminalMirrorWrap: !mirrorWraps }) }] : []),
+    ...(onRecoverUnsent && paneLifetimes.unsent().length > 0 ? [{ id: "recover-unsent", label: t("Recover unsent text"), icon: ArchiveRestore, run: () => onRecoverUnsent(target) }] : []),
     { id: "close", label: t("Close pane"), icon: X, danger: true, run: () => requestClose(target) },
   ];
   const items = target ? itemsFor(target) : [];

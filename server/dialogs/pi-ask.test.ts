@@ -129,6 +129,9 @@ describe("Pi rpiv ask questionnaires", () => {
     expect(review.body).toBeNull();
     expect(review.answers?.[0]?.answer).toBe("允许结构化单元格");
     expect(review.options.map(option => option.label)).toEqual(["Submit answers", "Cancel"]);
+    // the bridge's title and question go as keys; pi's own rows stay as drawn, and the id is main's
+    expect(review.own_text).toEqual({ title: { key: "Review your answers" }, question: { key: "Submit these answers?" } });
+    expect(review.id).toBe("ba1bee6d9951");
     expect(answerKeys(review, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
     expect(answerKeys(review, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
     expect(answerKeys(read("review-cancel")!, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);

@@ -7,6 +7,7 @@ import { ApiError } from "../lib/api.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import type { InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import { blocksStepNavigation, focusFollowsAnswer, pressOrigin, type TypedAnswer } from "../lib/promptAnswer.ts";
+import { promptWords } from "../lib/promptText.ts";
 import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useT } from "../lib/i18n.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
@@ -141,6 +142,8 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
     return { text, recommended: text !== label };
   };
   const hasChoices = prompt.options.some((_, index) => index !== prompt.custom_option_index);
+  // the bridge's own words in the user's language, the agent's as written
+  const words = promptWords(prompt, t);
   const openFile = useContext(OpenFileContext);
   const planFile = prompt.plan_file;
   const navigationBlocked = blocksStepNavigation(prompt, selected, custom);
@@ -169,7 +172,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         )}
         {/* read, not drawn: the title is the card's one red */}
         <span className="visually-hidden">{t("input needed")}</span>
-        <h2>{prompt.title}</h2>
+        <h2>{words.title}</h2>
         {/* the card shows a plan in its short box; the file viewer draws the whole of it as Markdown */}
         {planFile && openFile && (
           <button type="button" className="btn btn-ghost prompt-card-plan-file" onClick={() => openFile(planFile)}>
@@ -197,18 +200,18 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
                     type="button"
                     className="prompt-card-step-button"
                     disabled={pending || navigationBlocked}
-                    aria-label={step.label}
-                    title={step.can_navigate ? step.label : t("Back")}
+                    aria-label={words.step(index)}
+                    title={step.can_navigate ? words.step(index) : t("Back")}
                     onClick={(event) => void answer({ step_index: index, draft: { option_indices: [...selected], custom_text: custom } }, event)}
                   >
                     <span className="prompt-card-step-mark" aria-hidden="true">{step.answered ? <Check /> : index + 1}</span>
-                    <span className="prompt-card-step-label">{step.label}</span>
+                    <span className="prompt-card-step-label">{words.step(index)}</span>
                     {step.answered && <span className="visually-hidden">{t("(answered)")}</span>}
                   </button>
                 ) : (
                   <>
                     <span className="prompt-card-step-mark" aria-hidden="true">{step.answered ? <Check /> : index + 1}</span>
-                    <span className="prompt-card-step-label">{step.label}</span>
+                    <span className="prompt-card-step-label">{words.step(index)}</span>
                     {step.answered && <span className="visually-hidden">{t("(answered)")}</span>}
                   </>
                 )}
@@ -219,7 +222,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
       )}
       {navigationBlocked && <p className="prompt-card-hint">{t("Submit or clear edits before switching questions.")}</p>}
       {/* a Claude approval's heading is its question too: said once */}
-      {prompt.question !== prompt.title && <p className="prompt-card-question">{prompt.question}</p>}
+      {prompt.question !== prompt.title && <p className="prompt-card-question">{words.question}</p>}
       {prompt.queued && (
         <p className="prompt-card-hint">
           {prompt.queued === "open"
@@ -245,18 +248,19 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
           })}
         </dl>
       )}
-      {prompt.body !== null && prompt.body.length > 0 && <pre className={`prompt-card-body${prompt.body.includes("\n") ? "" : " is-line"}`}>{prompt.body}</pre>}
+      {words.body !== null && words.body.length > 0 && <pre className={`prompt-card-body${words.body.includes("\n") ? "" : " is-line"}`}>{words.body}</pre>}
       {hasChoices && (
         /* busy on the options alone, never on the card: a live region inside an aria-busy subtree is not
            read (Chromium), and the status line below has to be */
-        <div className="prompt-card-options" role={prompt.multi_select ? "group" : undefined} aria-label={prompt.multi_select ? prompt.question : undefined} aria-busy={pending}>
+        <div className="prompt-card-options" role={prompt.multi_select ? "group" : undefined} aria-label={prompt.multi_select ? words.question : undefined} aria-busy={pending}>
           {prompt.options.map((option, index) => {
             if (index === prompt.custom_option_index) return null;
-            const { text, recommended } = labelOf(option.label);
+            const { text, recommended } = labelOf(words.label(index));
+            const description = words.description(index);
             const content = (
               <span className="prompt-card-option-text">
                 <span className="prompt-card-option-label">{text}{recommended && <> <span className="prompt-card-tag">{t("Recommended")}</span></>}</span>
-                {option.description !== null && <span className="prompt-card-option-description">{option.description}</span>}
+                {description !== null && <span className="prompt-card-option-description">{description}</span>}
               </span>
             );
             // the key the user can type, drawn as a keycap; the option's name keeps the menu's "1."
@@ -289,7 +293,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         <div className="prompt-card-custom">
           {hasChoices && <span className="prompt-card-custom-label" id={customLabelId}>{prompt.agent === "opencode" && prompt.multi_select ? t("Custom answer") : t("Or type your own answer")}</span>}
           <div className="prompt-card-custom-row">
-            <input className="input" value={custom} disabled={pending} placeholder={prompt.options[prompt.custom_option_index]?.label ?? t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => setCustom(event.currentTarget.value)} onKeyDown={(event) => {
+            <input className="input" value={custom} disabled={pending} placeholder={prompt.options[prompt.custom_option_index] !== undefined ? words.label(prompt.custom_option_index) : t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => setCustom(event.currentTarget.value)} onKeyDown={(event) => {
               // an IME's Enter commits the candidate; WebKit can send it after compositionend, as key code 229
               if (event.key === "Enter" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && custom.trim().length > 0) void answer({ custom_text: custom.trim() });
             }} />
@@ -308,7 +312,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         <div className="prompt-card-confirm" role="alert" ref={confirmRef}>
           {/* an option's label can run to pages (a review to approve): the question shows two lines
               of it and scrolls in itself, and the two buttons stay whole, on one line */}
-          <span className="prompt-card-confirm-text">{t("Send {answer}?", { answer: `${typedAnswer.option_index + 1}. ${prompt.options[typedAnswer.option_index]?.label ?? ""}` })}</span>
+          <span className="prompt-card-confirm-text">{t("Send {answer}?", { answer: `${typedAnswer.option_index + 1}. ${words.label(typedAnswer.option_index)}` })}</span>
           <span className="prompt-card-confirm-actions">
             <button type="button" className="btn btn-primary" disabled={pending} onClick={(event) => void answer(typedAnswer, event).then((current) => { if (current) onTypedAnswerDone?.(); })}>{t("Confirm")}</button>
             <button type="button" className="btn" disabled={pending} onClick={() => onTypedAnswerDone?.()}>{t("Cancel")}</button>

@@ -1044,8 +1044,8 @@ describe("locateFile", () => {
     writeFileSync(path, "# nfd");
     const distinguishes = !existsSync(join(root, "문서.md"));
     for (const found of [
-      locateFile(join(root, "문서.md".normalize("NFC")), null, true),
-      locateFile("문서.md", root, true),
+      await locateFile(join(root, "문서.md".normalize("NFC")), null, true),
+      await locateFile("문서.md", root, true),
       await fileView.findFile("문서.md", root, async () => null),
     ]) {
       expect(found).not.toBeNull();
@@ -1054,7 +1054,7 @@ describe("locateFile", () => {
       expect(readFileSync(found.info.path, "utf8")).toBe("# nfd");
       if (distinguishes) expect(found.info.path).toBe(path);
     }
-    if (distinguishes) expect(locateFile("문서.md", root)).toBeNull();
+    if (distinguishes) expect(await locateFile("문서.md", root)).toBeNull();
   });
 
   it("(b) opens a path whose folder and filename use different forms", async () => {
@@ -1065,7 +1065,7 @@ describe("locateFile", () => {
     writeFileSync(path, "mixed");
     const requested = join(root, "회의자료", "메모.md");
     for (const found of [
-      locateFile(requested, null, true),
+      await locateFile(requested, null, true),
       await fileView.findFile(requested, null, async () => null),
     ]) {
       expect(found).not.toBeNull();
@@ -1114,32 +1114,32 @@ describe("locateFile", () => {
     rmSync(path);
     mkdirSync(path);
     expect(await fileView.findFile(path, null, async () => null)).toBeNull();
-    expect(locateFile(path, null, true)).toBeNull();
+    expect(await locateFile(path, null, true)).toBeNull();
   });
 
-  it("(f) resolves scratch names across forms without allowing symlink escapes", () => {
+  it("(f) resolves scratch names across forms without allowing symlink escapes", async () => {
     const root = temp();
     const folder = join(root, "scratch");
     mkdirSync(folder);
     const outside = join(root, "outside.txt");
     writeFileSync(outside, "outside");
     symlinkSync(outside, join(folder, "링크.txt".normalize("NFD")));
-    expect(locateFileInFolder("링크.txt", folder, true)).toBeNull();
+    expect(await locateFileInFolder("링크.txt", folder, true)).toBeNull();
     const path = join(folder, "문서.md".normalize("NFD"));
     writeFileSync(path, "inside");
-    const found = locateFileInFolder("문서.md", folder, true);
+    const found = await locateFileInFolder("문서.md", folder, true);
     expect(found).not.toBeNull();
     if (found === null || !("info" in found)) throw new Error("expected one file");
     expect(found.info.name.normalize("NFC")).toBe("문서.md");
     expect(readFileSync(found.info.path, "utf8")).toBe("inside");
-    if (!existsSync(join(folder, "문서.md"))) expect(locateFileInFolder("문서.md", folder)).toBeNull();
+    if (!existsSync(join(folder, "문서.md"))) expect(await locateFileInFolder("문서.md", folder)).toBeNull();
   });
 
   it("(g) returns null for missing ASCII names even beneath a non-ASCII folder", async () => {
     const root = temp();
     mkdirSync(join(root, "자료".normalize("NFD")));
     for (const path of [join(root, "missing.txt"), join(root, "자료", "missing.txt")]) {
-      expect(locateFile(path, null, true)).toBeNull();
+      expect(await locateFile(path, null, true)).toBeNull();
       expect(await fileView.findFile(path, null, async () => null)).toBeNull();
     }
   });
@@ -1167,11 +1167,11 @@ describe("locateFile", () => {
     const found = await fileView.findFile("메모.md", root, async () => null);
     if (distinguishes) {
       expect(found).toMatchObject({ info: { path: exact } });
-      expect(filesNamed(root, "메모.md")).toEqual(["a/메모.md"]);
+      expect(await filesNamed(root, "메모.md")).toEqual(["a/메모.md"]);
     } else {
       expect(found).not.toBeNull();
     }
-    const matches = filesNamed(root, "메모.md", 10, true).sort();
+    const matches = (await filesNamed(root, "메모.md", 10, true)).sort();
     if (distinguishes) expect(matches).toEqual(["a/메모.md", `b/${variant}`].sort());
     else expect(matches.map((path) => path.normalize("NFC"))).toEqual(["a/메모.md", "b/메모.md"]);
   });
@@ -1202,31 +1202,31 @@ describe("locateFile", () => {
     expect(await fileView.findFile("메모.md", cwd, async () => null)).toEqual(found);
   });
 
-  it("refuses parent traversal outside the Claude scratch fallback folder", () => {
+  it("refuses parent traversal outside the Claude scratch fallback folder", async () => {
     const root = mkdtempSync(join(tmpdir(), "herdr-locate-")); roots.push(root);
     const folder = join(root, "session");
     mkdirSync(folder);
     writeFileSync(join(root, "outside.txt"), "outside");
-    expect(locateFileInFolder("../outside.txt", folder)).toBeNull();
+    expect(await locateFileInFolder("../outside.txt", folder)).toBeNull();
   });
 
-  it("resolves an in-folder Claude scratch fallback link", () => {
+  it("resolves an in-folder Claude scratch fallback link", async () => {
     const folder = mkdtempSync(join(tmpdir(), "herdr-locate-")); roots.push(folder);
     mkdirSync(join(folder, "scratchpad"));
     const path = join(folder, "scratchpad", "notes.txt");
     writeFileSync(path, "notes");
-    expect(locateFileInFolder("scratchpad/notes.txt", folder)).toMatchObject({ info: { path } });
+    expect(await locateFileInFolder("scratchpad/notes.txt", folder)).toMatchObject({ info: { path } });
   });
 
-  it("refuses absolute paths and symlink escapes from the scratch fallback", () => {
+  it("refuses absolute paths and symlink escapes from the scratch fallback", async () => {
     const root = mkdtempSync(join(tmpdir(), "herdr-locate-")); roots.push(root);
     const folder = join(root, "session");
     mkdirSync(folder);
     const outside = join(root, "outside.txt");
     writeFileSync(outside, "outside");
     symlinkSync(outside, join(folder, "linked.txt"));
-    expect(locateFileInFolder(outside, folder)).toBeNull();
-    expect(locateFileInFolder("linked.txt", folder)).toBeNull();
+    expect(await locateFileInFolder(outside, folder)).toBeNull();
+    expect(await locateFileInFolder("linked.txt", folder)).toBeNull();
   });
 
   it("finds a bare name deeper in the pane's folder, and lists several of that name", async () => {
@@ -1241,12 +1241,12 @@ describe("locateFile", () => {
     writeFileSync(join(root, "a/notes.md"), "a");
     writeFileSync(join(root, "b/notes.md"), "b");
     clearFileCache();
-    expect(locateFile("demo.mp4", root)).toMatchObject({ info: { path: join(root, "docs/screenshots/demo.mp4") } });
-    expect(locateFile("screenshots/demo.mp4", root)).toMatchObject({ info: { name: "demo.mp4" } });
-    expect(locateFile("notes.md", root)).toEqual({ candidates: [join(root, "a/notes.md"), join(root, "b/notes.md")] });
-    expect(locateFile("missing.txt", root)).toBeNull();
+    expect(await locateFile("demo.mp4", root)).toMatchObject({ info: { path: join(root, "docs/screenshots/demo.mp4") } });
+    expect(await locateFile("screenshots/demo.mp4", root)).toMatchObject({ info: { name: "demo.mp4" } });
+    expect(await locateFile("notes.md", root)).toEqual({ candidates: [join(root, "a/notes.md"), join(root, "b/notes.md")] });
+    expect(await locateFile("missing.txt", root)).toBeNull();
     // an absolute or ~ path is taken as written, never searched for
-    expect(locateFile("/nowhere/demo.mp4", root)).toBeNull();
+    expect(await locateFile("/nowhere/demo.mp4", root)).toBeNull();
   });
 
   // the walk goes files first, then folders in name order, and stops at 5,000 entries
@@ -1255,7 +1255,7 @@ describe("locateFile", () => {
     for (let index = 0; index < 5_100; index += 1) writeFileSync(join(root, "a-data", `page-${index}.txt`), "");
   };
 
-  it("finds a tracked file past an ignored folder too large to walk", () => {
+  it("finds a tracked file past an ignored folder too large to walk", async () => {
     const root = temp();
     bigFolder(root);
     mkdirSync(join(root, "docs/design"), { recursive: true });
@@ -1263,10 +1263,10 @@ describe("locateFile", () => {
     writeFileSync(join(root, ".gitignore"), "a-data/\n");
     expect(Bun.spawnSync(["git", "init", "-q", root]).exitCode).toBe(0);
     clearFileCache();
-    expect(locateFile("11_two-version-design.md", root)).toMatchObject({ info: { path: join(root, "docs/design/11_two-version-design.md") } });
+    expect(await locateFile("11_two-version-design.md", root)).toMatchObject({ info: { path: join(root, "docs/design/11_two-version-design.md") } });
   });
 
-  it("finds an ignored file past an ignored folder too large to walk", () => {
+  it("finds an ignored file past an ignored folder too large to walk", async () => {
     const root = temp();
     bigFolder(root);
     mkdirSync(join(root, "recordings"));
@@ -1274,10 +1274,10 @@ describe("locateFile", () => {
     writeFileSync(join(root, ".gitignore"), "a-data/\nrecordings/\n");
     expect(Bun.spawnSync(["git", "init", "-q", root]).exitCode).toBe(0);
     clearFileCache();
-    expect(locateFile("demo.mp4", root)).toMatchObject({ info: { path: join(root, "recordings/demo.mp4") } });
+    expect(await locateFile("demo.mp4", root)).toMatchObject({ info: { path: join(root, "recordings/demo.mp4") } });
   });
 
-  it("opens an explicitly named ignored paste", () => {
+  it("opens an explicitly named ignored paste", async () => {
     const root = temp();
     expect(Bun.spawnSync(["git", "init", "-q", root]).exitCode).toBe(0);
     mkdirSync(join(root, ".ovis"));
@@ -1288,25 +1288,25 @@ describe("locateFile", () => {
     // ignored keeps it out of Git status, not out of reach: the absolute path the upload answered
     // and the project-relative one both open it
     expect(Bun.spawnSync(["git", "-C", root, "check-ignore", "-q", path]).exitCode).toBe(0);
-    expect(locateFile(path, root)).toMatchObject({ info: { path } });
-    expect(locateFile(".ovis/notes-20261021-120000-0123abcd.json", root)).toMatchObject({ info: { path } });
+    expect(await locateFile(path, root)).toMatchObject({ info: { path } });
+    expect(await locateFile(".ovis/notes-20261021-120000-0123abcd.json", root)).toMatchObject({ info: { path } });
   });
 
-  it("walks the subfolders of a folder holding thousands of files outside a repository", () => {
+  it("walks the subfolders of a folder holding thousands of files outside a repository", async () => {
     const root = temp();
     for (let index = 0; index < 1_500; index += 1) writeFileSync(join(root, `page-${index}.txt`), "");
     mkdirSync(join(root, "docs"));
     writeFileSync(join(root, "docs/notes.md"), "notes");
     clearFileCache();
-    expect(locateFile("notes.md", root)).toMatchObject({ info: { path: join(root, "docs/notes.md") } });
+    expect(await locateFile("notes.md", root)).toMatchObject({ info: { path: join(root, "docs/notes.md") } });
   });
 
-  it("finds a file past a folder too large to walk outside a repository", () => {
+  it("finds a file past a folder too large to walk outside a repository", async () => {
     const root = temp();
     bigFolder(root);
     mkdirSync(join(root, "docs"));
     writeFileSync(join(root, "docs/notes.md"), "notes");
     clearFileCache();
-    expect(locateFile("notes.md", root)).toMatchObject({ info: { path: join(root, "docs/notes.md") } });
+    expect(await locateFile("notes.md", root)).toMatchObject({ info: { path: join(root, "docs/notes.md") } });
   });
 });

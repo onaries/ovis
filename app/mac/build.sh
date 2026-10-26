@@ -28,6 +28,7 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns build/AppIcon.iconset -o "$app/Contents/Resources/AppIcon.icns"
 cp -R Resources/ko.lproj "$app/Contents/Resources/"
+cp Resources/carry-drafts.js "$app/Contents/Resources/"
 
 keychain=${OVIS_KEYCHAIN:+--keychain "$OVIS_KEYCHAIN"}
 if [ -n "${OVIS_SIGN_IDENTITY:-}" ]; then

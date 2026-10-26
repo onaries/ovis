@@ -36,8 +36,8 @@ pane, so a session Muse opens after a failed scan can take that long to show. On
 4096 entries, is not read, and Chat uses Terminal.
 
 The data directory comes from the server's `XDG_DATA_HOME`; a Muse started with another one
-uses Terminal. A process's start time comes from `ps` on macOS (whole seconds, so a three-second
-margin) and `/proc` on Linux (to 10 ms, so a 20 ms margin). Windows uses Terminal.
+uses Terminal. A process's start time comes from the kernel's process record on macOS (with a
+three-second margin) and `/proc` on Linux (to 10 ms, so a 20 ms margin). Windows uses Terminal.
 
 ## What is read
 

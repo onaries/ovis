@@ -1,14 +1,20 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { BRIDGE_PROTOCOL, REMOTE_BUNDLE_VERSION, type BridgeIdentity } from "../shared/machines.ts";
 import { HerdrError, herdrSocketPath, ping } from "./herdr/client.ts";
 import { OwnerGuardUnavailable, withOwnerGuard } from "./owner-guard.ts";
 import { newOwnerRecord, ownerGone, probeProcess, type ProcessBirth } from "./process-owner.ts";
+import type { Socket } from "bun";
+import { MAX_IMAGE_BODY_BYTES } from "./paste.ts";
 import { attachableIdentity, sidecarAvailable } from "./pty/sidecar.ts";
 
-/** `generation` and `birth` identify the registering process beyond its PID; older bridges wrote neither. */
+/**
+ * `generation` and `birth` identify the registering process beyond its PID; older bridges wrote neither.
+ * `port` is on 127.0.0.1, the only address the app's SSH tunnel goes to (`loopbackRelay`).
+ */
 export interface BridgeDescriptor { managed_remote?: boolean; port: number; token: string; pid: number; generation?: string; birth?: ProcessBirth; socket_path: string; bridge_protocol: number; bundle_version: string }
 export function bridgeRegistry(): string { return join(homedir(), ".config/herdr-web-ui/bridges"); }
 export function socketPath(): string {
@@ -106,4 +112,96 @@ export function registerBridge(port: number, token = randomBytes(32).toString("h
       }
     },
   };
+}
+
+/**
+ * The address a loopback relay passes connections to for a server bound to `hostname`, or null when
+ * it needs none (127.0.0.1 or a wildcard already answers on 127.0.0.1; 127.0.0.2 does not) or gets
+ * none: a host name is not relayed, since by the next connection it may resolve to another machine
+ * and take the bridge token there. Such a server gets the app's message to set HOST=127.0.0.1.
+ */
+export function relayTarget(hostname: string): string | null {
+  const name = hostname.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (name === "127.0.0.1" || name === "0.0.0.0" || name === "::" || isIP(name) === 0) return null;
+  return name;
+}
+
+/**
+ * How far a client may get ahead of a server that is not reading before the relay cuts both off: the
+ * largest request body the server reads (a picture at the attachment limit), twice over.
+ */
+export const RELAY_CLIENT_AHEAD_BYTES = 2 * MAX_IMAGE_BODY_BYTES;
+/** `queue`: what this socket has not taken yet, `queued` bytes; `ending`: the other side closed, so this one ends once its queue is sent */
+interface Relayed { peer?: Socket<Relayed>; queue: Uint8Array[]; queued: number; closed?: boolean; ending?: boolean }
+/** writes `chunk` after what the socket has not taken yet (`drain` sends the rest); the bytes it holds now */
+function send(socket: Socket<Relayed>, chunk: Uint8Array): number {
+  if (!socket.data.queue.length) {
+    const written = Math.max(socket.write(chunk), 0);
+    if (written === chunk.byteLength) return 0;
+    chunk = chunk.subarray(written);
+  }
+  socket.data.queue.push(chunk);
+  socket.data.queued += chunk.byteLength;
+  return socket.data.queued;
+}
+function drain(socket: Socket<Relayed>): void {
+  while (socket.data.queue.length) {
+    const chunk = socket.data.queue[0]!;
+    const written = Math.max(socket.write(chunk), 0);
+    socket.data.queued -= written;
+    if (written < chunk.byteLength) { socket.data.queue[0] = chunk.subarray(written); return; }
+    socket.data.queue.shift();
+  }
+  if (socket.data.ending) socket.end();
+  else socket.data.peer?.resume();
+}
+/** ends `socket` after what it still has to send */
+function endAfterQueue(socket: Socket<Relayed> | undefined): void {
+  if (!socket) return;
+  socket.data.ending = true;
+  if (!socket.data.queue.length) socket.end();
+}
+
+/**
+ * A port on 127.0.0.1 that passes each connection on to `target:port` (#1960), `target` an IP address (`relayTarget`). An Ovis whose HOST
+ * is another address does not answer on the PC's loopback, where the app's SSH tunnel always goes:
+ * it registers this port as its bridge instead. The tunnel then never reaches past the PC's loopback,
+ * whatever a descriptor says, and a request through it still arrives from that address, not loopback.
+ *
+ * A client slow to read pauses the server's side, so the server feels it as its own backpressure (its
+ * output-stall checks read it) instead of the relay holding it all. The client's side is never paused:
+ * a paused socket would not see its client leave. A client more than RELAY_CLIENT_AHEAD_BYTES ahead of
+ * a server that is not reading is cut off instead.
+ */
+export function loopbackRelay(target: string, port: number): { port: number; stop(): void } {
+  const listener = Bun.listen<Relayed>({ hostname: "127.0.0.1", port: 0, socket: {
+    open(client) {
+      client.data = { queue: [], queued: 0 };
+      // read nothing from the client until the server's side is there to take it
+      client.pause();
+      void Bun.connect<Relayed>({ hostname: target, port, data: { queue: [], queued: 0 }, socket: {
+        open(peer) {
+          if (client.data.closed) { peer.end(); return; }
+          peer.data.peer = client;
+          client.data.peer = peer;
+          client.resume();
+        },
+        data(peer, chunk) { if (send(client, chunk)) peer.pause(); },
+        drain,
+        close() { endAfterQueue(client); },
+        error() { endAfterQueue(client); },
+      } }).catch(() => client.end());
+    },
+    data(client, chunk) {
+      const peer = client.data.peer;
+      if (peer && send(peer, chunk) > RELAY_CLIENT_AHEAD_BYTES) { client.terminate(); peer.terminate(); }
+    },
+    drain,
+    // nothing a departed client sent still matters, and a server that reads nothing would hold the
+    // queue forever: its side goes at once (a server's own close still lets the client read the rest)
+    close(client) { client.data.closed = true; client.data.peer?.terminate(); },
+    error(client) { client.data.closed = true; client.data.peer?.terminate(); },
+  } });
+  // stopping closes every client, and each client's close takes its server's side with it
+  return { port: listener.port, stop: () => listener.stop(true) };
 }

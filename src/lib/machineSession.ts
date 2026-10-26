@@ -1,6 +1,7 @@
 import type { PendingMessage, ServerMessage } from "../../shared/protocol.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { afterSend, afterSettled, greetingMemory, rememberGreeting } from "./greeting.ts";
+import { paneLifetimes } from "./paneLifetime.ts";
 import { pendingMessages, type PendingMessageStore } from "./pendingMessages.ts";
 import { watchPageInUse } from "./presence.ts";
 import { HerdrSocket } from "./ws.ts";
@@ -35,6 +36,10 @@ export class MachineSession {
     // Installed before view subscribers, and kept even while this PC has no mounted pane.
     this.offMessage = this.socket.on((message) => {
       if (this.closed) return;
+      // a connection that came back to a replaced herdr, or to one it cannot prove, can say so before
+      // the roster does: the earlier herdr's drafts and lenses leave the reused pane IDs before any
+      // pane hears of it
+      if (message.type === "snapshot") paneLifetimes.observe([{ id: this.machineId, snapshot: message.snapshot }]);
       if (message.type === "snapshot" && this.currentScope === null) this.currentScope = `${this.identity}:${this.currentEpoch}`;
       if (message.type === "snapshot" && message.connection !== undefined) this.currentConnection = message.connection;
       if (message.type === "role-ack") this.role = message;

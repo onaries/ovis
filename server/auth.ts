@@ -43,7 +43,7 @@ function clearCookie(name: string): string {
 /** Set with a fresh credential, so the browser stops sending the old name beside the new one. */
 export const CLEAR_LEGACY_TOKEN_COOKIE = clearCookie(LEGACY_TOKEN_COOKIE);
 export const CLEAR_LEGACY_DEVICE_COOKIE = clearCookie(LEGACY_DEVICE_COOKIE);
-const COOKIE_MAX_AGE_SECONDS = 31536000;
+export const COOKIE_MAX_AGE_SECONDS = 31536000;
 
 /**
  * Guessing budgets, per client address. A token is meant to be a long random string, but an
@@ -134,6 +134,9 @@ function sessionCookie(token: string, secure: boolean): string {
 export function deviceCookie(token: string, secure: boolean): string {
   return `${DEVICE_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE_SECONDS}${secure ? "; Secure" : ""}`;
 }
+
+/** The Set-Cookie that drops a browser's device cookie: signing out, or revoking every device (its own included). */
+export const DEVICE_COOKIE_CLEARED = clearCookie(DEVICE_COOKIE);
 
 export function noContent(...setCookies: string[]): Response {
   const headers = new Headers();

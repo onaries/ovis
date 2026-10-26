@@ -7,6 +7,7 @@
  */
 import { paneStorageId } from "../../shared/machines.ts";
 import { composerDrafts, type ComposerDraftStore } from "./composerDraft.ts";
+import { paneLifetimes } from "./paneLifetime.ts";
 import { PANE_VIEW_KEY_PREFIX } from "./settings.ts";
 import { readTerminalDraft, terminalDraftSending, writeTerminalDraft } from "./terminalDraft.ts";
 
@@ -14,7 +15,7 @@ type KeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 const CARRIED = ["ovis:terminal-draft:", PANE_VIEW_KEY_PREFIX];
 
-export function carryPaneState(machineId: string, from: string, to: string, drafts: ComposerDraftStore = composerDrafts, storage: () => KeyStorage = () => window.localStorage): void {
+export function carryPaneState(machineId: string, from: string, to: string, drafts: ComposerDraftStore = composerDrafts, storage: () => KeyStorage = () => paneLifetimes.paneStorage): void {
   const before = paneStorageId(machineId, from);
   const after = paneStorageId(machineId, to);
   drafts.move(`ovis:composer-draft:${before}`, `ovis:composer-draft:${after}`);
@@ -25,6 +26,7 @@ export function carryPaneState(machineId: string, from: string, to: string, draf
     writeTerminalDraft(after, line);
     writeTerminalDraft(before, "");
   }
+  // through the herdr fence (lib/paneLifetime.ts): a PC whose herdr is not proven keeps them in this page
   for (const prefix of CARRIED) {
     try {
       const value = storage().getItem(prefix + before);

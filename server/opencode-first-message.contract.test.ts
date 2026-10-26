@@ -146,6 +146,39 @@ it("attaches the skill through OpenCode's autocomplete when its service is verif
   expect(sent.outcomes[0]!.state).not.toBe("terminal-required");
 }, 60_000);
 
+it("retains a first queued message when Tab switches its OpenCode agent, without Enter", async () => {
+  const label = "agent-change";
+  const selectedPath = join(root, "screen.txt");
+  const acceptedPath = join(root, "accepted.txt");
+  const selected = readFileSync(selectedPath, "utf8");
+  const accepted = readFileSync(acceptedPath, "utf8");
+  const pane = await openCodePane(label, SESSION, root, "working");
+  const { socket, frame } = connect(label);
+  try {
+    writeFileSync(selectedPath, selected.replace("MiniMax", "Build · MiniMax"));
+    writeFileSync(acceptedPath, accepted.replace("MiniMax", "Plan · MiniMax"));
+    const { connection } = await frame((item) => item.type === "snapshot", "no snapshot");
+    const message = await server.queueFirstMessage(pane, "@effect apply it", "opencode", connection);
+    socket.send(JSON.stringify({ type: "attach", pane_id: pane, cols: 80, rows: 24 }));
+    await frame((item) => item.type === "input-ready" && item.pane_id === pane, "the pane's input never became ready", 10_000);
+    const refused = frame((item) => item.type === "pending-messages" && item.messages?.some((entry: { id: string; state: string; error?: { code: string } }) =>
+      entry.id === message.id && entry.state === "uncertain" && entry.error?.code === "submit_changed"), "the first message did not retain its refusal");
+    await herdrRpc("pane.report_agent", { pane_id: pane, source: "herdr:opencode", agent: "opencode", agent_session_id: SESSION, state: "idle" });
+    const receipt = await refused;
+    const item = receipt.messages.find((entry: { id: string }) => entry.id === message.id);
+    expect(item).toMatchObject({ state: "uncertain", text: "@effect apply it", error: { code: "submit_changed" } });
+    expect(item.error.message).toContain(JSON.stringify("Build"));
+    expect(item.error.message).toContain(JSON.stringify("Plan"));
+    expect(typed(label)).toBe("@effect\t");
+    const shown = await (await fetch(`http://127.0.0.1:${server.port}/api/pane/prompt?pane_id=${encodeURIComponent(pane)}`)).json() as PanePromptResponse;
+    expect(shown.outcomes ?? []).toHaveLength(0);
+  } finally {
+    writeFileSync(selectedPath, selected);
+    writeFileSync(acceptedPath, accepted);
+    socket.close();
+  }
+}, 60_000);
+
 it("answers a sender that switched to observe while its @skill was on its way with its own refusal, typing nothing", async () => {
   const label = "observe";
   const pane = await openCodePane(label, SESSION, root, "idle");

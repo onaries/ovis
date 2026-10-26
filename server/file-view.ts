@@ -90,7 +90,7 @@ function pathsByName(path: string): string[] {
  * file under the pane's folder whose path ends in it (agents often name `demo.mp4` without
  * `docs/screenshots/`). Several such files come back as candidates to choose from.
  */
-export function locateFile(input: string, cwd: string | null, anyForm = false): { info: FileInfo } | { candidates: string[] } | null {
+export async function locateFile(input: string, cwd: string | null, anyForm = false): Promise<{ info: FileInfo } | { candidates: string[] } | null> {
   const path = resolveFilePath(input, cwd);
   const info = anyForm || path === null ? null : fileInfo(path);
   if (info !== null) return { info };
@@ -102,7 +102,7 @@ export function locateFile(input: string, cwd: string | null, anyForm = false): 
   const relative = input.trim();
   if (cwd === null || relative === "" || isAbsolute(relative) || relative.startsWith("~") || relative.startsWith("../")) return null;
   if (anyForm && !/[^\x00-\x7f]/.test(relative)) return null;
-  const found = filesNamed(cwd, relative, 10, anyForm).map((match) => resolve(cwd, match));
+  const found = (await filesNamed(cwd, relative, 10, anyForm)).map((match) => resolve(cwd, match));
   if (found.length === 1) {
     const only = fileInfo(found[0]!);
     return only === null ? null : { info: only };
@@ -111,10 +111,10 @@ export function locateFile(input: string, cwd: string | null, anyForm = false): 
 }
 
 /** A relative fallback stays in its own folder, including after following symlinks. */
-export function locateFileInFolder(input: string, folder: string, anyForm = false): ReturnType<typeof locateFile> {
+export async function locateFileInFolder(input: string, folder: string, anyForm = false): ReturnType<typeof locateFile> {
   const relative = input.trim();
   if (isAbsolute(relative) || relative.startsWith("~") || !resolve(folder, relative).startsWith(resolve(folder) + sep)) return null;
-  const found = locateFile(relative, folder, anyForm);
+  const found = await locateFile(relative, folder, anyForm);
   if (found === null) return null;
   try {
     const root = realpathSync(folder) + sep;
@@ -124,18 +124,18 @@ export function locateFileInFolder(input: string, folder: string, anyForm = fals
 }
 
 /** Try every exact place before opening a name stored in another form. */
-export async function findFile(input: string, cwd: string | null, scratchFolder: () => Promise<string | null>): Promise<ReturnType<typeof locateFile>> {
-  const exact = locateFile(input, cwd);
+export async function findFile(input: string, cwd: string | null, scratchFolder: () => Promise<string | null>): ReturnType<typeof locateFile> {
+  const exact = await locateFile(input, cwd);
   if (exact !== null) return exact;
   let folder: string | null = null;
   if (cwd !== null && !isAbsolute(input.trim()) && !input.trim().startsWith("~")) {
     folder = await scratchFolder();
     if (folder !== null) {
-      const scratch = locateFileInFolder(input, folder);
+      const scratch = await locateFileInFolder(input, folder);
       if (scratch !== null) return scratch;
     }
   }
-  const found = locateFile(input, cwd, true);
+  const found = await locateFile(input, cwd, true);
   if (found !== null) return found;
   return folder === null ? null : locateFileInFolder(input, folder, true);
 }

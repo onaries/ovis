@@ -13,8 +13,9 @@ import { processStartUpperBoundAsync } from "./process-start.ts";
 
 const SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
- * A process's start is an upper bound: up to two seconds late on macOS (whole seconds of `ps`
- * elapsed time, plus one), and up to two 10 ms ticks late on Linux.
+ * A process's start is an upper bound: up to a second late on macOS (the kernel's start, plus one),
+ * and up to two 10 ms ticks late on Linux. macOS keeps the three seconds it had when `ps` told the
+ * start in whole seconds.
  */
 const START_SLACK_MS = process.platform === "darwin" ? 3000 : 20;
 const TAIL_BYTES = 64 * 1024;

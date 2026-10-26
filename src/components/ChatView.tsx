@@ -1637,8 +1637,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           setPromptStale(false);
           setPrompt((current) => {
             if (current === null || next.prompt === null || current.id !== next.prompt.id) return next.prompt;
-            if (JSON.stringify([current.steps, current.can_step_back]) === JSON.stringify([next.prompt.steps, next.prompt.can_step_back])) return current;
-            return { ...current, steps: next.prompt.steps, can_step_back: next.prompt.can_step_back };
+            if (JSON.stringify([current.steps, current.can_step_back, current.own_text]) === JSON.stringify([next.prompt.steps, next.prompt.can_step_back, next.prompt.own_text])) return current;
+            // own_text names steps by index: it goes with the steps it was read with
+            return { ...current, steps: next.prompt.steps, can_step_back: next.prompt.can_step_back, own_text: next.prompt.own_text };
           });
           setCompacting(next.compacting);
           setCapacityErrorOwner(next.runtimeError === "model_capacity" ? paneStorageId(machineId, paneId) : null);

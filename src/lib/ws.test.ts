@@ -422,7 +422,8 @@ it("steers or discards an opaque pending ID once and waits for its action acknow
     const result = client.pendingAction("w1:p1", "pending-1", action as "steer" | "discard");
     for (let turn = 0; turn < 10 && socket.sent.filter((frame) => frame.type === "pending-action").length <= index; turn++) await Promise.resolve();
     const frame = socket.sent.filter((frame) => frame.type === "pending-action")[index]!;
-    expect(frame).toEqual({ type: "pending-action", id: index + 1, pane_id: "w1:p1", pending_id: "pending-1", action });
+    // launch_ended: this client tells a launch that ended apart, so the bridge answers it with that code (#1547)
+    expect(frame).toEqual({ type: "pending-action", id: index + 1, pane_id: "w1:p1", pending_id: "pending-1", action, launch_ended: true });
     socket.receive({ type: "pending-result", id: index + 1, pane_id: "w1:p1", pending_id: "pending-1", ok: index === 0, ...(index === 1 ? { code: "pending_not_found", message: "already sent" } : {}) });
     expect(await result).toEqual(index === 0 ? { ok: true } : { ok: false, code: "pending_not_found", message: "already sent" });
   }

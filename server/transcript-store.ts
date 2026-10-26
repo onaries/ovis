@@ -3,6 +3,14 @@ import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 /** A canonical regular JSONL file inside the canonical session store, never a link out or FIFO. */
 export function transcriptInStore(path: string, sessionDir: string): string | null {
+  return authorizedTranscript(path, sessionDir)?.path ?? null;
+}
+
+/**
+ * transcriptInStore, with what it authorized: the store's real path (`root`) and the identity of the
+ * very file it opened there (`identity`, dev:ino), so a caller can hold later reads to that file.
+ */
+export function authorizedTranscript(path: string, sessionDir: string): { path: string; root: string; identity: string } | null {
   let canonical: string;
   let root: string;
   try {
@@ -15,7 +23,8 @@ export function transcriptInStore(path: string, sessionDir: string): string | nu
   let fd: number | undefined;
   try {
     fd = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK);
-    return fstatSync(fd).isFile() ? canonical : null;
+    const stat = fstatSync(fd);
+    return stat.isFile() ? { path: canonical, root, identity: `${stat.dev}:${stat.ino}` } : null;
   } catch { return null; }
   finally { if (fd !== undefined) closeSync(fd); }
 }

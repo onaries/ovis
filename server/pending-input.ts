@@ -18,7 +18,7 @@ export function samePendingIdentity(before: PendingIdentity, after: PendingIdent
     && !changed(before.session, after.session) && !changed(before.omoSession, after.omoSession)
     && !changed(before.claudeSession, after.claudeSession)
     && !changed(before.processPid, after.processPid)
-    // macOS derives birth from whole elapsed seconds; reads of one PID drift by up to a second.
+    // macOS allows a second: its birth was once read from `ps`'s whole elapsed seconds, now from the kernel exactly.
     && (before.processBirth == null || after.processBirth == null
       || (platform === "darwin" ? Math.abs(before.processBirth - after.processBirth) <= 1000 : before.processBirth === after.processBirth));
 }

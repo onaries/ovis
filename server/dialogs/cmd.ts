@@ -1,5 +1,5 @@
 import type { DialogReader } from "./registry.ts";
-import { ANSI_RE, type ParsedPrompt, cleanLine, findLastIndex, finishPrompt, isDivider } from "./shared.ts";
+import { ANSI_RE, type CardWords, type ParsedPrompt, cleanLine, findLastIndex, finishPrompt, isDivider, own } from "./shared.ts";
 
 /**
  * Command Code's permission prompt, as its TUI draws it (ACP `session/request_permission`):
@@ -70,7 +70,7 @@ function parseCmdQuestion(screen: string): ParsedPrompt | null {
   const selectedIndex = rows.findIndex((row) => row.selected);
   const firstRowIndex = lines.findIndex((line, index) => index >= blockStart && /^\s*[❯›>]?\s*1\.\s+/.test(line));
   // the heading: the first line of the dialog above the question (e.g. "Create File")
-  let title = "Permission request";
+  let title: CardWords = own("Permission request");
   // where the dialog's text starts: just below the title, else below whatever ended the search
   let titleIndex = -1;
   if (firstRowIndex >= 0) {

@@ -1,5 +1,5 @@
 import type { DialogReader } from "./registry.ts";
-import { ANSI_RE, type AnswerStep, KEY, finishPrompt, keySteps, type ParsedPrompt } from "./shared.ts";
+import { ANSI_RE, type AnswerStep, KEY, finishPrompt, keySteps, own, type ParsedPrompt } from "./shared.ts";
 
 /**
  * OpenCode v2's questions are forms its service holds (GET /api/session/{id}/form), read for the
@@ -75,7 +75,7 @@ export function parseOpenCodeV1Question(screen: string): ParsedPrompt | null {
   const custom = options.at(-1)!.label === CUSTOM_LABEL ? options.length - 1 : null;
   const digit = (index: number): AnswerStep => ({ text: String(index + 1) });
   return finishPrompt("opencode", {
-    kind: "question", title: "Question", question, body: null, options, multi_select: false, custom_option_index: custom,
+    kind: "question", title: own("Question"), question, body: null, options, multi_select: false, custom_option_index: custom,
   }, {
     responder: "opencode-v1-question",
     menuLabels: options.map((option) => option.label),

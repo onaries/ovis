@@ -921,7 +921,7 @@ export class HerdrSocket {
       if (action === "agent-queue" && !this.canQueuePendingMessages()) return { ok: false, code: "agent_queue_unsupported", message: "Update this PC to transfer pending messages to the agent's native queue. Nothing was sent." };
       if (!this.canQueueMessages()) return { ok: false, code: "pending_input_unsupported", message: "Update this PC to manage pending messages." };
       return this.submitRequest({ type: "pending-action", id: this.nextSubmit++, pane_id: paneId, pending_id: pendingId, action,
-        ...(generation !== undefined ? { resend_generation: generation } : {}) });
+        ...(generation !== undefined ? { resend_generation: generation } : {}), launch_ended: true });
     })();
   }
 

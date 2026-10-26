@@ -11,9 +11,13 @@ import { CodexBackgroundTasks } from "../codex-background.ts";
 import { codexOpenRollout, codexTranscriptPath, paneCodexHome } from "../codex.ts";
 import { startStatusCollector } from "../collector.ts";
 import { CompletionTracker, type OmoRest } from "../completion.ts";
-import { Finishes } from "../finishes.ts";
+import { Finishes, herdrLifetime } from "../finishes.ts";
 import { claudePanePid, claudePaneSession, forgetPaneTranscriptState } from "../conversation.ts";
 import { releaseOpenCodePane, trackVerifiedOpenCodePanes } from "../opencode-native.ts";
+import { opencodeDatabasePath } from "../opencode.ts";
+import { OpencodeSubagentStatus } from "../opencode-subagents.ts";
+import { openCodeServiceOptions, readOpenCodeService } from "../opencode-service.ts";
+import { processStartUpperBoundAsync } from "../process-start.ts";
 import type { DeviceStore } from "../devices.ts";
 import { createGjcStatus, gjcPanes, readOmoSnapshot, reconcileProviderStatus } from "../gjc-status.ts";
 import type { HerdrMachineProfile } from "../herdr-profiles.ts";
@@ -49,6 +53,12 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     backgroundWait?: { grace: number; limit: number };
     statusNow?: () => number;
     openCodeState?: OpenCodePromptState;
+    /** herdr's identity behind finish epochs and `herdr_lifetime` (server/finishes.ts); tests give their own */
+    herdrIdentity?: () => string | null;
+    /** OpenCode's store, when the server is told where it is (createServer's `opencodeDb`) */
+    opencodeDb?: string;
+    /** OpenCode's state dir, where its service.json is (createServer's `openCodeStateDir`) */
+    openCodeStateDir?: string;
     /** this server's workspace-order counter (server/order-sequence.ts); createServer makes the one there is */
     orderSequence?: OrderSequence;
   };
@@ -82,7 +92,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
 
   /** `done` for agents herdr loses track of (server/completion.ts), kept across restarts */
   const completions = new CompletionTracker(join(options.stateDir ?? defaultStateDir(), "completions.json"));
-  const finishes = new Finishes();
+  const finishes = new Finishes(options.herdrIdentity);
   /** OmO panes get their status from OmO's session files: herdr reports none for them (server/omo-status.ts) */
   const omo = new OmoStatus({
     discover: (panes) => omoPanes(panes),
@@ -104,17 +114,73 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   const waits = new BackgroundWait(options.statusNow ?? Date.now, options.backgroundWait);
   /** the pane whose status event is reading its background work now: that event sends the one frame and alert of it */
   let settling: string | null = null;
+  /** each pane's agent as the newest snapshot or status event has it, a snapshot's set before either subagent tracker reads it (owns) */
+  const agentNow = new Map<string, string | null>();
+  /** the read (opencodeAgents.beginRead) each pane's agentNow came from: a snapshot read before a newer word never undoes it */
+  const agentRead = new Map<string, number>();
+  /** each pane's agent as its status events have it, and since when: the rests from then on are that agent's (newLifetime) */
+  const eventAgent = new Map<string, { agent: string | null; since: number }>();
+  const statusNow = options.statusNow ?? Date.now;
+  /**
+   * A new lifetime in the pane: what came before is not its own. `keep`: the agent whose rests from its first status
+   * event on stay, as it was seen rest before its tracker knew its session; null keeps none.
+   */
+  function newLifetime(paneId: string, keep: string | null): void {
+    const held = waits.waiting(paneId);
+    const seen = eventAgent.get(paneId);
+    if (keep !== null && seen?.agent === keep) waits.resetBefore(paneId, seen.since); else waits.reset(paneId);
+    claudeAgentsChanged(paneId, 0, 0, null, held);
+  }
+  /** OpenCode's service and when it started, looked up once per service process, off the event loop */
+  let service: { pid: number; started: number | null } | null = null;
   /** Claude panes count the subagents and commands they run as background tasks, read from the session's own files (server/claude-subagents.ts) */
   const claudeAgents = new ClaudeSubagentStatus({
     resolve: claudePaneSession,
     pid: claudePanePid,
+    // a pane that left Claude Code for another agent keeps what that agent was seen do there since
     onReset: (paneId) => {
-      const held = waits.waiting(paneId);
-      waits.reset(paneId);
-      claudeAgentsChanged(paneId, 0, 0, null, held);
+      const agent = agentNow.get(paneId) ?? null;
+      if (owns(paneId, "claude")) newLifetime(paneId, agent === "claude" ? null : agent);
     },
-    onChange: (paneId, running, turnRunning, promptAt) => claudeAgentsChanged(paneId, running, turnRunning, promptAt),
+    onChange: (paneId, running, turnRunning, promptAt) => { if (owns(paneId, "claude")) claudeAgentsChanged(paneId, running, turnRunning, promptAt); },
   });
+  /** OpenCode panes count their subagents too: child sessions in OpenCode's store (server/opencode-subagents.ts) */
+  const opencodeAgents = new OpencodeSubagentStatus({
+    store: () => options.opencodeDb ?? opencodeDatabasePath(),
+    // the runs are its service's: one that started since took what ran before it
+    serviceStart: () => {
+      const found = readOpenCodeService(options.openCodeStateDir ?? openCodeServiceOptions.stateDir);
+      if (found === null) return null;
+      if (service?.pid !== found.pid) {
+        // until the lookup answers no run is taken for one the service before took along; then the store is read again
+        // at once. A lookup with no answer is asked again
+        const looked: { pid: number; started: number | null } = service = { pid: found.pid, started: null };
+        void processStartUpperBoundAsync(found.pid).then((at) => {
+          if (service !== looked) return;
+          if (at === null) { service = null; return; }
+          looked.started = at;
+          void opencodeAgents.poll();
+        }, () => { if (service === looked) service = null; });
+      }
+      return service.started;
+    },
+    onReset: (paneId, first) => { if (owns(paneId, "opencode")) newLifetime(paneId, first ? "opencode" : null); },
+    onChange: (paneId, running, turnRunning, promptAt) => { if (owns(paneId, "opencode")) claudeAgentsChanged(paneId, running, turnRunning, promptAt); },
+  });
+  /**
+   * Whether a subagent tracker's word on a pane's count and wait stands: not once OmO runs there, nor
+   * the other tracker's agent on a session that tracker holds, whose count and wait the pane's are now
+   * (a tracker left behind says 0 as it lets go, and that must not end the new agent's wait). Which
+   * agent runs there is the newest snapshot's word, not the other tracker's: that one may not have
+   * read the snapshot yet, and would keep the wait of the agent it ran for from being dropped.
+   */
+  function owns(paneId: string, tracker: "claude" | "opencode"): boolean {
+    if (omo.runs(paneId)) return false;
+    const agent = agentNow.get(paneId);
+    const other = tracker === "claude" ? "opencode" : "claude";
+    if (agent !== undefined && agent !== other) return true;
+    return (tracker === "claude" ? opencodeAgents : claudeAgents).sessionOf(paneId)?.live !== true;
+  }
   /** the plan each Claude Code, Codex and OmO pane keeps, for the sidebar's progress (server/session-plan.ts) */
   const codexTasks = new CodexBackgroundTasks((paneId, count) => {
     const status = completions.current(paneId);
@@ -133,29 +199,48 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   /** herdr's snapshot with OmO's and GJC's own status in it: what the completion tracker and web push are given */
   const rawSnapshot = async (): Promise<SessionSnapshot> => {
     const promptCheckpoint = options.openCodeState?.checkpoint();
+    const read = opencodeAgents.beginRead();
     const snapshot = await omoSnapshot();
     await gjc.refresh(snapshot.panes);
     const named = gjc.apply(omo.apply(snapshot));
+    const ids = new Set(named.panes.map((pane) => pane.pane_id));
+    for (const paneId of [...agentNow.keys()]) {
+      if (ids.has(paneId) || (agentRead.get(paneId) ?? 0) > read) continue;
+      agentNow.delete(paneId);
+      agentRead.delete(paneId);
+      eventAgent.delete(paneId);
+    }
+    for (const pane of named.panes) {
+      if ((agentRead.get(pane.pane_id) ?? 0) > read) continue;
+      agentNow.set(pane.pane_id, pane.agent ?? null);
+      agentRead.set(pane.pane_id, read);
+    }
     // not waited for: finding a transcript costs process calls, and a snapshot must not wait on them.
     // The plans come after: a Claude pane's transcript is the one the subagent tracker found
     void claudeAgents.refresh(named.panes).catch(() => undefined).then(() => plans.refresh(named.panes)).catch(() => undefined);
+    void opencodeAgents.refresh(named.panes, read);
     // an agent this server started has had no turn yet: its start screen is no work (launched-agents.ts)
     for (const pane of named.panes) pane.agent_status = launchedAgents.settle(pane.pane_id, pane.agent_status);
     options.openCodeState?.reconcile(named.panes, promptCheckpoint);
     return named;
   };
-  const backgroundOf = (paneId: string): number => omo.backgroundOf(paneId) || claudeAgents.countOf(paneId) || codexTasks.countOf(paneId);
+  const backgroundOf = (paneId: string): number => omo.backgroundOf(paneId) || claudeAgents.countOf(paneId) || opencodeAgents.countOf(paneId) || codexTasks.countOf(paneId);
   /** the snapshot clients get: finishes settled, OmO panes named, background tasks, waits and plan progress */
   const clientSnapshot = async (): Promise<SessionSnapshot> => {
     // the order this read can show is the one of the moves confirmed before it starts: taken before any wait,
     // and again by a read started afresh below
     const order = options.orderSequence?.read();
     const epoch = finishes.epoch;
+    const identity = finishes.herdrIdentity();
     const snapshot = await completions.readSnapshot(rawSnapshot);
     // A read spanning a proven daemon replacement belongs to neither generation. Read afresh.
     if (epoch !== finishes.epoch) return clientSnapshot();
+    // the same herdr before and after the read: its panes are that herdr's. Without that proof the
+    // snapshot names none, rather than give one herdr's pane IDs to another's drafts
+    const lifetime = identity !== null && identity === finishes.herdrIdentity() ? herdrLifetime(identity) : undefined;
     const settled = finishes.snapshot({
       ...snapshot,
+      ...(lifetime === undefined ? {} : { herdr_lifetime: lifetime }),
       panes: snapshot.panes.map((pane) => {
         const background = backgroundOf(pane.pane_id);
         const waiting = waits.waiting(pane.pane_id);
@@ -197,6 +282,10 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   const logPushError = (error: unknown): void => {
     console.error(`web push: ${error instanceof Error ? error.message : String(error)}`);
   };
+  // a device durably enrolled: every other device with alerts on hears of it at once (server/devices.ts announces
+  // only after the registry write succeeded, so nothing is told of a pairing that did not happen)
+  // nor is the browser that paired, by its stream keys, whatever access its subscriptions came through
+  devices.onPaired((event, origin) => { push.devicePaired(event, origin).catch(logPushError); });
 
   /** Status of EVERY pane, attached or not: one collector feeds all connected clients and web push. */
   function omoChanged(paneId: string, derived: AgentStatus, background: number, turn: boolean, rest: OmoRest | undefined): void {
@@ -231,8 +320,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   }
 
   /**
-   * A Claude pane's subagents or background commands started or ended: no turn, so the status
-   * stands. Nothing is alerted unless the pane began or stopped waiting on its turn's work at rest:
+   * A Claude pane's subagents or background commands, or an OpenCode pane's subagents, started or
+   * ended: no turn, so the status stands. Nothing is alerted unless the pane began or stopped waiting on its turn's work at rest:
    * the alerts took it for working meanwhile, so a wait that ends with no turn after it is that
    * turn's finish, told then.
    */
@@ -284,6 +373,10 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       // pane is `omo` in every snapshot, whatever herdr calls it in an event
       const named = [{ pane_id: paneId, agent: omo.runs(paneId) ? "omo" : gjc.runs(paneId) ? "gjc" : agent }];
       if (machines) machines.localAgents(named); else bridgeAgents!.status(named);
+      // newer than the last snapshot: a route that looks the pane's session up before the next one reads it so
+      agentNow.set(paneId, named[0]!.agent ?? null);
+      agentRead.set(paneId, opencodeAgents.beginRead());
+      if (eventAgent.get(paneId)?.agent !== (named[0]!.agent ?? null)) eventAgent.set(paneId, { agent: named[0]!.agent ?? null, since: statusNow() });
       // herdr says `claude/idle` for an OmO pane whatever it does, and a provider child's work for
       // a GJC one while its transcript is tracked: their own status stands, and no Claude turn waits there
       // (an OmO pane's wait on its background tasks is omoChanged's)
@@ -304,14 +397,21 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       // a Claude turn that ended holds on its background work: what it started is read now, while
       // the pane is still taken for the status before (work that ended before the turn did holds
       // nothing), and this frame says all of it, so none says the pane finished first
-      const claude = agent === "claude" && !omo.runs(paneId);
-      if (claude) {
+      // so does an OpenCode turn on the subagents it started
+      const tracker = omo.runs(paneId) ? null : agent === "claude" ? claudeAgents : agent === "opencode" ? opencodeAgents : null;
+      if (tracker !== null) {
         settling = paneId;
-        try { claudeAgents.poll(paneId); } finally { settling = null; }
+        try { void tracker.poll(paneId); } finally { settling = null; }
         waits.status(paneId, status);
       } else waits.forget(paneId);
-      broadcastAll(paneStatus(paneId, status, claude ? { background_tasks: claudeAgents.countOf(paneId) } : {}));
+      broadcastAll(paneStatus(paneId, status, tracker !== null ? { background_tasks: tracker.countOf(paneId) } : {}));
       push.onStatus(paneId, alertStatus(status, waits.waiting(paneId))).catch(logPushError);
+      // an OpenCode turn whose session is not known yet: its pane is looked up now, not at the next snapshot, so a
+      // turn that ended on its subagents is held while the finish alert still waits (and is called off)
+      if (tracker === opencodeAgents && opencodeAgents.sessionOf(paneId)?.live !== true) {
+        const begun = opencodeAgents.beginRead();
+        void paneGet(paneId).then((pane) => { if (opencodeAgents.ensure(pane, begun)) void opencodeAgents.poll(paneId); }).catch(() => undefined);
+      }
     },
     // a finish reported as done, now in front at herdr's terminal: seen, idle again
     onFocus: (paneId) => {
@@ -326,7 +426,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     },
     onBaseline: (panes) => {
       // A resting baseline never reholds old work after a bridge restart.
-      for (const pane of panes) if (pane.agent === "claude") waits.seed(pane.pane_id, pane.agent_status);
+      for (const pane of panes) if (pane.agent === "claude" || pane.agent === "opencode") waits.seed(pane.pane_id, pane.agent_status);
       push.seed(panes.map((pane) => ({ ...pane, agent_status: alertStatus(pane.agent_status, waits.waiting(pane.pane_id)) })));
       for (const pane of panes) {
         // A fast mirrored client may queue before the collector's first baseline. A
@@ -345,7 +445,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       finishes.resync(completions, panes, newer);
       const settled = (pane: HerdrPane): AgentStatus => completions.current(pane.pane_id) ?? pane.agent_status;
       for (const pane of panes) { pending.status(pane.pane_id, settled(pane)); drainPending(pane.pane_id); }
-      for (const pane of panes) if (!newer.has(pane.pane_id) && pane.agent === "claude") waits.status(pane.pane_id, settled(pane));
+      for (const pane of panes) if (!newer.has(pane.pane_id) && (pane.agent === "claude" || pane.agent === "opencode")) waits.status(pane.pane_id, settled(pane));
       push.resync(panes.map((pane) => ({ ...pane, agent_status: alertStatus(settled(pane), waits.waiting(pane.pane_id)) })), newer);
     },
     onPaneEnded: (paneId) => {
@@ -368,6 +468,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   omo.start();
   gjc.start();
   claudeAgents.start();
+  opencodeAgents.start();
   const waitTimer = setInterval(waitsRanOut, 1000);
   waitTimer.unref?.();
   plans.start();
@@ -376,5 +477,5 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   const untrackOpenCode = trackVerifiedOpenCodePanes((paneId) => collector.trackPane(paneId));
   const tracked = { ...collector, stop() { untrackOpenCode(); stopMutes(); collector.stop(); } };
 
-  return { push, omo, gjc, claudeAgents, codexTasks, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector: tracked, waitTimer };
+  return { push, omo, gjc, claudeAgents, opencodeAgents, codexTasks, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector: tracked, waitTimer };
 }

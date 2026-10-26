@@ -29,6 +29,7 @@ import { canHideMachine, isMachineShown, setHiddenMachines, useHiddenMachines, w
 import { fetchRemoteAccess, fetchVoiceStatus, machineRequest, saveVoiceConfig } from "../lib/api.ts";
 import { isLoopbackHost, phonePlan } from "../lib/phone.ts";
 import type { AgentIntegration, HealthAuth, PluginActions, RemoteAccess } from "../../shared/protocol.ts";
+import type { SecurityFacts } from "../lib/useAccess.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { loadIntegrations, outcomeFor, type IntegrationsResult } from "../lib/integrations.ts";
 import type { VoiceStatus } from "../../shared/voice.ts";
@@ -68,6 +69,8 @@ export interface SettingsDialogProps {
   auth: HealthAuth | null;
   /** the herdr this app's server talks to, from the last health check */
   herdrVersion: string | null;
+  /** what protects this server, from the last bridge health check: never an earlier answer once one fails */
+  security: SecurityFacts;
   onEnableNotifications: () => Promise<boolean>;
   /** the last change the server refused to save (lib/preferencesSync.ts); null once a save lands */
   saveError: UserError | null;
@@ -81,6 +84,12 @@ export interface SettingsDialogProps {
   /** every PC of the roster, the hidden ones too: Remote PCs lists them with their Show in sidebar switch */
   machines?: readonly Machine[];
 }
+
+/**
+ * The access facts as the app last heard them: `absent` is a server that answered without them
+ * (an older one), `error` one that did not answer. Neither is ever filled in from `auth` or from
+ * the missing LAN warning.
+ */
 
 function compactKeys(keys: readonly string[]): string {
   return formatKeys(keys).map((key) => ({ Shift: "⇧", ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→" }[key] ?? (key.length === 1 ? key.toUpperCase() : key))).join("+");
@@ -518,7 +527,7 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
       <SettingsRow label={t("Clipboard from a pane")} description={t("A program in a pane that copies (vim, tmux, Claude Code) puts its text on this device's clipboard, as a copy you made yourself would. Turn it off if a pane runs output you do not trust: it could replace what you paste next.")}>
         <Toggle label={t("Clipboard from a pane")} checked={settings.paneClipboard} onChange={(paneClipboard) => update({ paneClipboard })} />
       </SettingsRow>
-      <SettingsRow label={t("Use alongside herdr's own window")} description={t("Turn this on if this PC also shows herdr in a terminal window. A second after you switch to another window, this tab only watches the pane, so herdr's window keeps the pane at its own size instead of this window's. Click the tab to type again. While it watches, the pane is drawn at herdr's size and may not fill this window.")}>
+      <SettingsRow label={t("Use alongside herdr's own window")} description={t("Turn this on if herdr is also open in a terminal window, on this PC or another. A second after you switch to another window, or after 10 seconds without typing or clicking in a terminal you type straight into, this tab only watches the pane, so herdr's window keeps the pane at its own size instead of this window's. Type or click in the terminal to type again: what you type goes in once it is back. While it watches, the pane is drawn at herdr's size and may not fill this window.")}>
         <Toggle label={t("Use alongside herdr's own window")} checked={settings.releasePaneAway} onChange={(releasePaneAway) => update({ releasePaneAway })} />
       </SettingsRow>
       <SettingsRow label={t("Follow herdr's focus")} description={t("When herdr moves to another pane, by a click in its window, a herdr command or a script, this device opens that pane too. Only on the PC open here, and only on this device. A PC on Ovis older than 0.4.13 does not report herdr's focus: update it first.")}>
@@ -895,7 +904,50 @@ function ShortcutsPage() {
   );
 }
 
-function DevicesPage({ auth, onSignOut }: { auth: HealthAuth | null; onSignOut: (() => Promise<void>) | null }) {
+/**
+ * Read-only: each fact on its own line and none of them a verdict. Public reachability stays
+ * unknown unless this request proved it, since a proxy or router in front can expose any bind.
+ */
+function AccessFacts({ facts }: { facts: SecurityFacts }) {
+  const t = useT();
+  const fact = (label: string, value: string, description: string) => (
+    <SettingsRow key={label} label={label} description={description}><span className="settings-fact">{value}</span></SettingsRow>
+  );
+  if (facts.state !== "known") {
+    const text = facts.state === "loading" ? t("Loading…")
+      : facts.state === "error" ? t("The server did not answer, so these facts are unavailable. Nothing from an earlier check is shown. This page asks again by itself; if this message stays, check that the server is running and that this device can reach it.")
+      : t("This server does not report these facts. Updating it adds them.");
+    return (
+      <SettingsGroup title={t("Access")} section="access">
+        <p className="settings-item settings-description" role="status">{text}</p>
+      </SettingsGroup>
+    );
+  }
+  const { summary } = facts;
+  const gate = summary.pairing_gate;
+  const bind = summary.bind_scope;
+  const ingress = summary.observed_ingress;
+  return (
+    <SettingsGroup title={t("Access")} section="access" note={t("What this server reports about how it is reached. Each line is one fact, not a safety rating.")}>
+      {fact(t("Access token"), summary.token_configured ? t("Set") : t("Not set"), t("Whether the server has a token configured. Its value is never shown."))}
+      {fact(t("Pairing gate"), gate === "open" ? t("Not yet closed") : gate === "closed" ? t("Closed") : t("Unavailable"),
+        gate === "open" ? t("No device has been paired yet, so no pairing code is asked for.")
+          : gate === "closed" ? t("A new browser needs a pairing code or the token.")
+          : t("The device list cannot be read, so no new device can pair. This PC, the token and Tailscale sign-in still work."))}
+      {fact(t("Listens on"), bind === "loopback" ? t("Loopback") : bind === "tailnet" ? t("Tailscale address") : t("Other address"),
+        bind === "other" ? t("A network address, every interface or a host name: other devices on that network may reach it.")
+          : t("The address the server listens on. A proxy on this PC can still forward other traffic to it."))}
+      {fact(t("This connection"), ingress === "direct" ? t("No proxy seen") : ingress === "proxy" ? t("Through a proxy") : ingress === "tailscale" ? t("Through Tailscale") : ingress === "funnel" ? t("Through Tailscale Funnel") : t("Unknown"),
+        ingress === "direct" ? t("No proxy said it forwarded this browser's request. One that adds nothing, such as an SSH tunnel, looks the same.")
+          : t("How this browser's request arrived, not how every device reaches the server."))}
+      {fact(t("Public internet"), summary.public_exposure === "observed" ? t("Reachable") : t("Unknown"),
+        summary.public_exposure === "observed" ? t("This request came through Tailscale Funnel, which is open to the public internet.")
+          : t("The server cannot see whether a proxy, tunnel or router makes it reachable from the internet."))}
+    </SettingsGroup>
+  );
+}
+
+function DevicesPage({ auth, security, onSignOut, onRevokedAll }: { auth: HealthAuth | null; security: SecurityFacts; onSignOut: (() => Promise<void>) | null; onRevokedAll: () => void }) {
   const { settings, update } = useSettings();
   const t = useT();
   const installPrompt = useInstallPrompt();
@@ -934,7 +986,7 @@ function DevicesPage({ auth, onSignOut }: { auth: HealthAuth | null; onSignOut: 
       <PortalPanel readOnly={auth?.role === "watch"} />
 
       <SettingsGroup title={t("Devices")} section="devices">
-        <div className="settings-item"><DevicesPanel pairUrl={pairUrl} auth={auth} /></div>
+        <div className="settings-item"><DevicesPanel pairUrl={pairUrl} auth={auth} onRevokedAll={onRevokedAll} /></div>
         {onSignOut && (
           <SettingsRow label={t("Sign out")} description={t("Forget this browser's sign-in. Getting back in takes the access token or a pairing code.")}>
             <button type="button" className="btn" onClick={() => setConfirmSignOut(true)}>{t("Sign out")}</button>
@@ -946,6 +998,8 @@ function DevicesPage({ auth, onSignOut }: { auth: HealthAuth | null; onSignOut: 
             confirmLabel={t("Sign out")} onClose={() => setConfirmSignOut(false)} onConfirm={onSignOut} />
         )}
       </SettingsGroup>
+
+      <AccessFacts facts={security} />
     </>
   );
 }
@@ -1100,7 +1154,7 @@ function SaveFailure({ error, paused, retrying, onRetry }: { error: UserError; p
   </div>;
 }
 
-function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [] }: SettingsDialogProps) {
+function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [] }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
   // opened by Forward, the dialog shows what that entry of the history showed
@@ -1235,7 +1289,8 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       case "voice": return <VoicePage />;
       case "usage": return <UsageSettings onLocalLogin={onUsageLogin} />;
       case "shortcuts": return <ShortcutsPage />;
-      case "devices": return <DevicesPage auth={auth} onSignOut={actions.lock} />;
+      // after every device went, its own pairing included, a browser asks the server where it stands: the roster answers, or the gate does
+      case "devices": return <DevicesPage auth={auth} security={security} onSignOut={actions.lock} onRevokedAll={actions.refresh} />;
       case "remote": return <RemotePcsPage actions={actions} machines={machines} pcSettings={pcSettings} pcSettingsError={pcSettingsError} onPcSettings={(patch) => void updatePcSettings(patch)} />;
       case "integrations": return <IntegrationsPage />;
       case "about": return <AboutPage updates={updates} herdrVersion={herdrVersion} bridgesFollow={pcSettings?.auto_update_bridges === true} />;

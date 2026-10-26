@@ -26,7 +26,7 @@ import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc } from "./herdr/client.ts";
 import { gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, type GjcProcess } from "./gjc-runtime.ts";
 import type { OmoAsks } from "./omo-ask.ts";
-import { processStartedAt } from "./process-start.ts";
+import { processStartedAtAsync } from "./process-start.ts";
 import { OmoStatus, type OmoLine, type OmoPane, type OmoStatusDeps, type OmoTurn } from "./omo-status.ts";
 
 /** the custom messages gjc wakes the parent turn with, displayed or not */
@@ -100,7 +100,7 @@ type ProcessInfo = { process_info?: { shell_pid?: unknown; foreground_processes?
 export interface GjcDiscovery {
   processInfo?: (paneId: string) => Promise<ProcessInfo>;
   transcript?: (paneId: string, cwd: string) => Promise<string | null>;
-  startedAt?: (pid: number) => number | null;
+  startedAt?: (pid: number) => number | null | Promise<number | null>;
   underShell?: (shellPid: unknown) => Promise<GjcProcess | null | undefined>;
   platform?: string;
 }
@@ -117,14 +117,15 @@ export interface GjcDiscovery {
 export async function gjcPanes(panes: HerdrPane[], deps: GjcDiscovery = {}): Promise<Map<string, OmoPane>> {
   const processInfo = deps.processInfo ?? ((paneId: string) => herdrRpc<NonNullable<ProcessInfo>>("pane.process_info", { pane_id: paneId }).catch(() => null));
   const transcript = deps.transcript ?? ((paneId: string, cwd: string) => gjcTranscriptForPane(paneId, cwd).catch(() => null));
-  const startedAt = deps.startedAt ?? processStartedAt;
+  // awaited: every snapshot a pending message is checked against runs this, and macOS reads a start with `ps` (#1545)
+  const startedAt = deps.startedAt ?? processStartedAtAsync;
   const underShell = deps.underShell ?? ((shellPid: unknown) => gjcPidUnderShell(shellPid, deps.platform));
   const found = new Map<string, OmoPane>();
   await Promise.all(panes.filter((pane) => pane.agent === "gjc").map(async (pane) => {
     const info = await processInfo(pane.pane_id);
-    const starts = (info?.process_info?.foreground_processes ?? [])
+    const starts = (await Promise.all((info?.process_info?.foreground_processes ?? [])
       .filter((process) => typeof process.pid === "number" && Array.isArray(process.argv) && isGjcProcess(process.argv.map(String)))
-      .map((process) => startedAt(process.pid as number))
+      .map((process) => startedAt(process.pid as number))))
       .filter((start): start is number => start !== null);
     let started = starts.length > 0 ? Math.min(...starts) : null;
     if (started === null) {

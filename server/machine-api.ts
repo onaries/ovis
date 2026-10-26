@@ -1,4 +1,4 @@
-import type { MachineEvent, MachineRoster, SetupAction, SetupRequest } from "../shared/machines.ts";
+import type { DevicePairedEvent, MachineEvent, MachineRoster, SetupAction, SetupRequest } from "../shared/machines.ts";
 import type { AgentRowTokens } from "../shared/pane-tokens.ts";
 import type { SharedPreferences } from "../shared/preferences.ts";
 import type { PanePromptResponse } from "../shared/protocol.ts";
@@ -53,7 +53,9 @@ function unusableAnswer(id: string, path: string, error: RemoteResponseTooLarge 
 export async function handleMachineRequest(request: Request, manager: MachineManager, onRevoke?: (close: () => void) => () => void,
   preferences?: { get(): SharedPreferences; subscribe(listener: (preferences: SharedPreferences) => void): () => void }, readOnly = false,
   herdrSidebar?: { get(): AgentRowTokens | null; subscribe(listener: (agents: AgentRowTokens | null) => void): () => void },
-  seen?: { list(): SeenFinish[]; subscribe(listener: (finish: SeenFinish) => void): () => void }): Promise<Response> {
+  seen?: { list(): SeenFinish[]; subscribe(listener: (finish: SeenFinish) => void): () => void },
+  /** durable device enrollments (server/devices.ts), already without the ones this stream's own device made */
+  pairings?: { subscribe(listener: (event: DevicePairedEvent) => void): () => void }): Promise<Response> {
   const url = new URL(request.url);
   // A PC's file opens as this PC's /api/fs/file does, from any navigation: reading it changes
   // nothing, and Chrome on Android shows a PDF in the viewer's frame as an "Open" button whose
@@ -89,11 +91,12 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       let stopPreferences: (() => void) | undefined;
       let stopSidebar: (() => void) | undefined;
       let stopSeen: (() => void) | undefined;
+      let stopPairings: (() => void) | undefined;
       let unwatchDevice: (() => void) | undefined;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let close = () => {};
       const cleanup = () => {
-        stop?.(); stopPreferences?.(); stopSidebar?.(); stopSeen?.(); unwatchDevice?.(); clearInterval(heartbeat);
+        stop?.(); stopPreferences?.(); stopSidebar?.(); stopSeen?.(); stopPairings?.(); unwatchDevice?.(); clearInterval(heartbeat);
         request.signal.removeEventListener("abort", close);
       };
       const encoder = new TextEncoder();
@@ -118,6 +121,8 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
           const sendSeen = (finishes: SeenFinish[]) => send(`data: ${JSON.stringify({ type: "seen", finishes } satisfies MachineEvent)}\n\n`);
           if (seen) sendSeen(seen.list());
           stopSeen = seen?.subscribe((finish) => sendSeen([finish]));
+          // a device paired after this stream opened: the one event, as it happens (nothing is replayed on reconnect)
+          stopPairings = pairings?.subscribe((event) => send(`data: ${JSON.stringify(event satisfies MachineEvent)}\n\n`));
           if (closed) { cleanup(); return; }
           heartbeat = setInterval(() => send(": heartbeat\n\n"), 15_000);
           request.signal.addEventListener("abort", close, { once: true });

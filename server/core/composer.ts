@@ -528,6 +528,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           } catch (error) {
             watch?.cancel();
             if (!typed) throw refused ?? error;
+            if (error instanceof HerdrError && error.code === "submit_changed") throw error;
             throw new HerdrError("submit_partial", "Part of the message was typed into OpenCode's input, but sending was not confirmed. Your chat text stayed here. Check the terminal before sending again.");
           }
         }

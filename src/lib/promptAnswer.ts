@@ -6,6 +6,7 @@
  */
 import type { InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import { t } from "./i18n.ts";
+import { promptWords } from "./promptText.ts";
 
 export type TypedAnswer = Pick<PromptAnswer, "option_index" | "option_indices" | "custom_text">;
 
@@ -41,10 +42,11 @@ export function answerFromText(prompt: InteractivePrompt, text: string): TypedAn
   const numbered = byNumber(value);
   if (numbered !== null) return { option_index: numbered };
   const lower = value.toLowerCase();
-  const named = valid.find((index) => {
-    const label = prompt.options[index]!.label;
-    return label.toLowerCase() === lower || bareLabel(label) === lower || boundLetter(label) === lower;
-  });
+  // a label the bridge wrote is named as the card shows it, in the user's language, or in English
+  const words = promptWords(prompt);
+  const names = (label: string): boolean => label.toLowerCase() === lower || bareLabel(label) === lower || boundLetter(label) === lower;
+  // an option's own words first: a translated label never takes the words another option shows
+  const named = valid.find((index) => names(prompt.options[index]!.label)) ?? valid.find((index) => names(words.label(index)));
   if (named !== undefined) return { option_index: named };
   return prompt.custom_option_index !== null ? { custom_text: value } : null;
 }

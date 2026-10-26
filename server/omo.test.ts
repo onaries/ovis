@@ -1,9 +1,12 @@
 import { expect, it, spyOn } from "bun:test";
+import * as darwinProcess from "./darwin-process.ts";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrPane } from "../shared/protocol.ts";
-import { heldRuntime, heldSessionIds, isOmoProcess, omoAgentDir, omoProcessIdentity, omoSessionFolder, omoCandidates, omoTranscriptsOfCwd, selectOmoTranscript, withOmoDescendants, type OmoRuntime, type ProcessInfo } from "./omo.ts";
+import { heldOmoProcess, heldRuntime, heldSessionIds, isOmoProcess, omoAgentDir, omoPanes, omoProcessIdentity, omoSessionFolder, omoCandidates, omoTranscriptsOfCwd, selectOmoTranscript, withOmoDescendants, type OmoRuntime, type ProcessInfo } from "./omo.ts";
+import * as client from "./herdr/client.ts";
+import * as omoModule from "./omo.ts";
 import * as processStart from "./process-start.ts";
 import { processStartedAt } from "./process-start.ts";
 import { parseOmpTranscript } from "./transcript-records.ts";
@@ -478,4 +481,54 @@ it("fails closed on distinct holder claims while duplicates of one claim still b
   expect(pending.ids).toEqual([]);
   expect(pending.claims).toEqual([{ id: "one", store: "/b/sessions" }]);
   expect(selectOmoTranscript("a", [fileA], [pending], 20_000)).toBeNull();
+});
+
+it("names the OmO process holding a session, not the bundled SDK child beside it (#1545)", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-omo-held-pid-")));
+  const cwd = join(root, "project");
+  const agentDir = join(root, "agent");
+  const pid = 41001;
+  const start = spyOn(processStart, "processStartedAtAsync").mockResolvedValue(1_792_000_000_000);
+  const environ = spyOn(omoModule, "processEnviron").mockReturnValue([`OMO_CODING_AGENT_DIR=${agentDir}`]);
+  try {
+    holdRecord(join(agentDir, "sessions", omoSessionFolder(cwd)), "sess-1", pid, { pid, processStartedAtMs: 1_792_000_000_000, cwd });
+    // an argv-silent custom OmO, known by its holder alone, and the SDK child it runs a turn in; herdr gives no
+    // per-process cwd (macOS), so the pane's own directory places them
+    const pane = { pane_id: "p", cwd } as HerdrPane;
+    const parent = { pid, argv: ["/opt/team-ai/bin/run"] };
+    const sdk = { pid: pid + 1, argv: [`${OMO_AI}/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`] };
+    expect(await heldOmoProcess(pane, [parent, sdk], root)).toBe(pid);
+    expect(await heldOmoProcess(pane, [sdk, parent], root)).toBe(pid);
+    expect(await heldOmoProcess(pane, [sdk], root)).toBeNull();
+    expect(await heldOmoProcess({ ...pane, cwd: join(root, "elsewhere") }, [parent, sdk], root)).toBeNull();
+  } finally { start.mockRestore(); environ.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// every OmO status refresh reads these, so every snapshot a pending message is checked against does (#1545)
+it("reads OmO panes' process starts from the kernel on macOS, with no ps child", async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  const home = mkdtempSync(join(tmpdir(), "omo-darwin-starts-"));
+  const pane = { pane_id: "omo-darwin", workspace_id: "w", tab_id: "t", terminal_id: "term", focused: false, revision: 0,
+    agent: "pi", agent_status: "idle", cwd: home } as HerdrPane;
+  spyOn(client, "herdrRpc").mockImplementation((async () => ({ process_info: { pane_id: pane.pane_id,
+    foreground_processes: [{ pid: 4242, name: "node", argv: ["node", `${OMO_AI}/bin/omo`], cwd: home }] } })) as unknown as typeof client.herdrRpc);
+  const blocking = spyOn(Bun, "spawnSync");
+  // the kernel's process record answers; no ps runs, awaited or not (#1404)
+  const kernel = spyOn(darwinProcess, "darwinStartTime").mockReturnValue(1_000_000n);
+  const awaited = spyOn(Bun, "spawn");
+  try {
+    // the kernel's start reaches the pane's OmO result: a read that skipped the kernel would leave it unknown
+    expect((await omoPanes([pane], home)).get(pane.pane_id)?.startedAt).toBe(1_000);
+    expect(kernel).toHaveBeenCalledWith(4242);
+    expect(awaited).not.toHaveBeenCalled();
+    expect(blocking).not.toHaveBeenCalled();
+  } finally {
+    awaited.mockRestore();
+    blocking.mockRestore();
+    kernel.mockRestore();
+    (client.herdrRpc as unknown as { mockRestore(): void }).mockRestore();
+    Object.defineProperty(process, "platform", platform);
+    rmSync(home, { recursive: true, force: true });
+  }
 });

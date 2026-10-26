@@ -15,12 +15,13 @@ export const OPENCODE_SKILL_ROW_WAIT_MS = 2_000;
 export const OPENCODE_SKILL_ACCEPT_WAIT_MS = 1_000;
 const ROW_POLL_MS = 50;
 
-type Cell = { ch: string; bg: string; bold: boolean };
+type Cell = { ch: string; bg: string; fg: string; bold: boolean };
 
 /** One screen line as cells with the background and weight SGR gave them; other escapes are dropped. */
 function cells(line: string): Cell[] {
   const out: Cell[] = [];
   let bg = "default";
+  let fg = "default";
   let bold = false;
   for (let at = 0; at < line.length;) {
     if (line[at] === "\u001b") {
@@ -29,13 +30,15 @@ function cells(line: string): Cell[] {
         const codes = sgr[1] === "" ? [0] : sgr[1]!.split(/[;:]/u).map(Number);
         for (let i = 0; i < codes.length; i++) {
           const code = codes[i]!;
-          if (code === 0) { bg = "default"; bold = false; }
+          if (code === 0) { bg = "default"; fg = "default"; bold = false; }
           else if (code === 1) bold = true;
           else if (code === 22) bold = false;
           else if (code === 49) bg = "default";
+          else if (code === 39) fg = "default";
+          else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) fg = String(code);
           else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) bg = String(code);
-          else if ((code === 38 || code === 48) && codes[i + 1] === 2) { if (code === 48) bg = codes.slice(i + 2, i + 5).join(","); i += 4; }
-          else if ((code === 38 || code === 48) && codes[i + 1] === 5) { if (code === 48) bg = `5:${codes[i + 2]}`; i += 2; }
+          else if ((code === 38 || code === 48) && codes[i + 1] === 2) { const color = codes.slice(i + 2, i + 5).join(","); if (code === 48) bg = color; else fg = color; i += 4; }
+          else if ((code === 38 || code === 48) && codes[i + 1] === 5) { const color = `5:${codes[i + 2]}`; if (code === 48) bg = color; else fg = color; i += 2; }
         }
         at += sgr[0].length;
         continue;
@@ -45,7 +48,7 @@ function cells(line: string): Cell[] {
       continue;
     }
     const ch = String.fromCodePoint(line.codePointAt(at)!);
-    out.push({ ch, bg, bold });
+    out.push({ ch, bg, fg, bold });
     at += ch.length;
   }
   return out;
@@ -62,7 +65,7 @@ const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, "\
  *   a bare `┃`, the agent/model row, and the prompt's bottom edge `╹▀…` as wide as the box.
  * Returns its rows (as cells) and its agent row, or null for any other layout.
  */
-function autocomplete(screen: string, id: string): { rows: Cell[][]; panel: string; agent: string } | null {
+function autocomplete(screen: string, id: string): { rows: Cell[][]; panel: string; agent: string; inputFg: string; inputPrefix: string; inputTokens: string[] } | null {
   const all = screen.split(/\r?\n/u).map(cells);
   const lines = all.map(textOf);
   const boxRow = /^( *)┃ (.*) ┃$/u;
@@ -82,11 +85,15 @@ function autocomplete(screen: string, id: string): { rows: Cell[][]; panel: stri
   if (at >= lines.length || !new RegExp(`^${indent}┃ +(?:.* )?@${escape(id)}$`, "u").test(lines[at]!) || at - input > 8) return null;
   // the input row's own background, right after its border: the colour of a row nobody selected
   const panel = all[at]![indent.length + 1]?.bg ?? "default";
+  const inputFg = all[at]!.filter((cell) => cell.ch.trim() !== "").at(-1)!.fg;
+  const inputText = lines.slice(input, at + 1).map((line) => line.replace(/^ *┃ */u, "")).join(" ");
+  const inputPrefix = inputText.slice(0, inputText.lastIndexOf(`@${id}`)).replace(/\s/gu, "");
+  const inputTokens = [...inputText.matchAll(/(?:^|\s)@(\S+)/gu)].map((match) => match[1]!);
   at++;
   // the prompt's bottom edge spans the box's own width, as in the recordings (39, 74 and 98 columns)
   const bottom = lines[at + 2] ?? "";
   if (lines[at] !== bare || !filled.test(lines[at + 1] ?? "") || !new RegExp(`^${indent}╹▀+$`, "u").test(bottom) || Bun.stringWidth(bottom) !== width) return null;
-  return { rows, panel, agent: lines[at + 1]! };
+  return { rows, panel, agent: lines[at + 1]!, inputFg, inputPrefix, inputTokens };
 }
 
 /**
@@ -110,27 +117,55 @@ export function skillRowSelected(screen: string, id: string): boolean {
   return selected.length === 1 && selected[0] === target;
 }
 
-/**
- * Whether the screen after the key shows `@id` attached: the box gone, the agent row as before (the key
- * did not switch Build/Plan), and the token drawn bold in the input, as 2.0.32 draws an attached skill
- * and never a plain typed `@id` (fixtures opencode-autocomplete-2.0.32-ansi-{accepted,closed}).
- */
-export function skillAccepted(screen: string, id: string, agent: string): boolean {
+/** Only the explicit agent label before the model separator is an identity; narrow model-only rows aren't. */
+const agentName = (line: string): string | null => /^ *┃ +(.+?)\s+·(?:\s|$)/u.exec(line)?.[1]?.trim().replace(/\s+/gu, " ") ?? null;
+
+/** The current prompt, anchored at its bottom edge, not an earlier bordered content block. */
+function promptState(screen: string, id: string, inputFg?: string): { agent: string | null; attached: boolean; space: boolean; token: string | null; prefix: string | null } | null {
   const all = screen.split(/\r?\n/u).map(cells);
   const lines = all.map(textOf);
-  if (lines.some((line) => /^ *┃ .* ┃$/u.test(line))) return false;
-  if (!lines.includes(agent)) return false;
-  const token = `@${id}`;
-  for (let index = lines.length - 1; index >= 0; index--) {
+  let bottom = lines.length - 1;
+  while (bottom >= 0 && !/^ *╹▀+$/u.test(lines[bottom]!)) bottom--;
+  if (bottom < 3 || !/^ *┃ +\S/u.test(lines[bottom - 1]!)) return null;
+  const agent = agentName(lines[bottom - 1]!);
+  const indent = lines[bottom]!.indexOf("╹");
+  const bare = `${" ".repeat(indent)}┃`;
+  if (lines[bottom - 2] !== bare) return null;
+  const top = lines.lastIndexOf(bare, bottom - 3);
+  if (top < 0) return null;
+  for (let index = bottom - 3; index > top; index--) {
     // the last such token on the row: an earlier one can be a skill attached before it
-    const match = [...lines[index]!.matchAll(new RegExp(`(?:^|\\s)(${escape(token)})(?=\\s|$)`, "gu"))].at(-1);
+    const match = [...lines[index]!.matchAll(/(?:^|\s)(@\S+)(?=\s|$)/gu)].at(-1);
     if (!match || !/^ *┃ /u.test(lines[index]!)) continue;
+    const token = match[1]!;
     // the match counts UTF-16 units, the cells one code point each: an emoji before the token is two units
-    const start = Array.from(lines[index]!.slice(0, match.index + match[0].length - token.length)).length;
+    const prefix = lines[index]!.slice(0, match.index + match[0].length - token.length);
+    const start = Array.from(prefix).length;
     const width = Array.from(token).length;
-    return all[index]!.slice(start, start + width).every((cell) => cell.bold);
+    const tokenCells = all[index]!.slice(start, start + width);
+    const next = all[index]![start + width];
+    const paddingFg = all[index]![indent + 1]?.fg;
+    // Tab inserts a space drawn as input text, not panel padding. Without a pre-Tab colour,
+    // only that text-coloured separator can establish the normal input foreground.
+    const normalFg = inputFg ?? (next?.ch === " " && next.fg !== paddingFg ? next.fg : undefined);
+    // Nothing after the token is typed yet, so a word starting the next input row is the token's own
+    // wrapped tail (`@effect` + `-two`): the token is the two joined, never the first piece alone.
+    const rowEnds = next === undefined || next.ch === " " && next.fg === paddingFg;
+    const tail = rowEnds && index + 1 < bottom - 2 ? /^ *┃ +(\S+)/u.exec(lines[index + 1]!)?.[1] : undefined;
+    const attached = tail === undefined && token === `@${id}` && tokenCells.length === width && (tokenCells.every((cell) => cell.bold)
+      || normalFg !== undefined && tokenCells.every((cell) => cell.fg !== "default" && cell.fg === tokenCells[0]!.fg && cell.fg !== normalFg));
+    const space = next?.ch === " " && normalFg !== undefined && next.fg === normalFg && next.fg !== paddingFg;
+    const joinedPrefix = [...lines.slice(top + 1, index), prefix].map((line) => line.replace(/^ *┃ */u, "")).join(" ").replace(/\s/gu, "");
+    return { agent, attached, space, token: `${token}${tail ?? ""}`.slice(1), prefix: joinedPrefix };
   }
-  return false;
+  return { agent, attached: false, space: false, token: null, prefix: null };
+}
+
+/** A closed autocomplete, a styled token in the prompt, and the same agent (not necessarily model). */
+export function skillAccepted(screen: string, id: string, agent: string, inputFg?: string): boolean {
+  if (autocomplete(screen, id)) return false;
+  const state = promptState(screen, id, inputFg);
+  return state?.attached === true && state.agent === agentName(agent);
 }
 
 /** The `@id` tokens of `text` that name one of `skills`, in order, each once. */
@@ -197,29 +232,46 @@ export async function typeWithSkills(text: string, skills: readonly string[], al
     let seen = false;
     for (const deadline = io.now() + OPENCODE_SKILL_ROW_WAIT_MS; !(seen = skillRowSelected(await io.screen(), id)) && io.now() < deadline;) await io.wait(ROW_POLL_MS);
     let accepted = false;
+    let insertedSpace = false;
     if (seen) {
       // the checks awaited herdr: the box is read again right before the key, which goes only to that selected row
       await revalidate();
       if (!allowed()) throw new HerdrError("cancelled", "The message's sender may no longer type into this pane");
       const before = await io.screen();
-      const agent = skillRowSelected(before, id) ? autocomplete(before, id)!.agent : null;
-      if (agent !== null) {
+      const box = autocomplete(before, id);
+      // A read cannot guard the subsequent write atomically: that needs conditional herdr send-keys.
+      if (box && skillRowSelected(before, id)) {
         await io.sendKeys([OPENCODE_SKILL_ACCEPT_KEY], allowed);
         // attached only as the screen after the key shows it
-        for (const deadline = io.now() + OPENCODE_SKILL_ACCEPT_WAIT_MS; !(accepted = skillAccepted(await io.screen(), id, agent)) && io.now() < deadline;) await io.wait(ROW_POLL_MS);
+        const deadline = io.now() + OPENCODE_SKILL_ACCEPT_WAIT_MS;
+        const from = agentName(box.agent);
+        let lastAgent: string | null = null;
+        do {
+          const screen = await io.screen();
+          const late = io.now() >= deadline;
+          const state = promptState(screen, id, box.inputFg);
+          if (state?.token != null && state.token !== id && (state.prefix === box.inputPrefix || !box.inputTokens.includes(state.token))) {
+            throw new HerdrError("submit_changed", "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.");
+          }
+          if (state?.token === id && !autocomplete(screen, id)) insertedSpace ||= state.space;
+          // Two consistent reads confirm a switch. A switch still showing on the last read has had no second
+          // read, but it is not resolved either, and the rest and Enter would go to that other agent.
+          if (from !== null && state?.agent != null && state.agent !== from && (state.agent === lastAgent || late)) {
+            throw new HerdrError("submit_changed", `Tab switched OpenCode's agent from ${JSON.stringify(from)} to ${JSON.stringify(state.agent)}. Nothing more was typed.`);
+          }
+          accepted = skillAccepted(screen, id, box.agent, box.inputFg);
+          insertedSpace ||= accepted;
+          if (accepted || late) break;
+          lastAgent = state?.agent ?? null;
+          await io.wait(ROW_POLL_MS);
+        } while (true);
       }
     }
-    if (accepted) {
-      // the accepted row puts the id and one space in the prompt (recorded)
-      prompt.push({ typed: `@${id} ` });
-      attached.push(id);
-      afterAccept = true;
-    } else {
-      missed.push(id);
-      afterAccept = false;
-      prompt.push({ typed: `@${id}` });
-      if (!/^\s/u.test(rest)) { await write(() => io.sendText(" ", allowed)); prompt.push({ typed: " " }); }
-    }
+    if (accepted) attached.push(id);
+    else missed.push(id);
+    afterAccept = insertedSpace;
+    prompt.push({ typed: `@${id}${insertedSpace ? " " : ""}` });
+    if (!insertedSpace && !/^\s/u.test(rest)) { await write(() => io.sendText(" ", allowed)); prompt.push({ typed: " " }); }
   }
   if (afterAccept) rest = rest.replace(/^ /u, "");
   // a trailing @mention would leave OpenCode's file box open for the Enter: closed with a space, as closeMention does for a paste

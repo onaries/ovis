@@ -239,7 +239,8 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     try {
       const image = await conversationImage(paneId, ref, options.codexHome, options.opencodeDb);
       if (image === null) return jsonResponse({ error: { code: "image_not_found", message: "no such image in this pane's conversation" } }, 404);
-      // Claude embeds immutable bytes; Codex files and OpenCode tool-image ordinals can change.
+      // Claude and pi embed immutable bytes and omp names a blob by its digest; Codex files and
+      // OpenCode tool-image ordinals can change, and a Codex tool's picture (`codex-tool:`) loads with its row.
       const cacheControl = ref.startsWith("codex-") || ref.startsWith("opencode:") ? "private, no-store" : "private, max-age=86400, immutable";
       return new Response(image.bytes, { headers: { "content-type": image.mediaType, "cache-control": cacheControl, "x-content-type-options": "nosniff" } });
     } catch (error) {

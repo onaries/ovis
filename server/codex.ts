@@ -10,7 +10,7 @@ import { patchFiles, patchText } from "../shared/patch.ts";
 import { execSummary, execToolSummary } from "../shared/execSummary.ts";
 import { codexSubagentCalls, codexSubagentNotification } from "./codex-subagents.ts";
 import { processStartedAt, processStartLowerBound } from "./process-start.ts";
-import { codexImageParts } from "./codex-images.ts";
+import { CODEX_TOOL_IMAGE_REF, codexImageParts, codexOutputPictures } from "./codex-images.ts";
 import { codexReadCall, codexReadSkills, selectedSkill } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
 import type { TranscriptParser } from "./transcript-records.ts";
@@ -353,6 +353,11 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         }
         trimOutput(tool, output, string(payload.call_id));
         if (codexCallFailed(output)) tool.error = true;
+        // the pictures it returned (view_image, an image generation, a screenshot a command read), named by
+        // the call this output answers and fetched only when shown; the generation event's copy is not read
+        const pictures = codexOutputPictures(payload.output).map(({ mediaType }, index) => ({ media_type: mediaType, ref: `codex-tool:${string(payload.call_id)}:${index}` }))
+          .filter(({ ref }) => CODEX_TOOL_IMAGE_REF.test(ref));
+        if (pictures.length > 0) tool.images = pictures;
         if (tool.skill) tool.skill.status = tool.error ? "failed" : "loaded";
         // done, outcome unknown: Codex records no failure flag, and the output text is no verdict
         delete tool.state;

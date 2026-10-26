@@ -536,6 +536,33 @@
   list-style: none;
 }
 
+/* a read-only fact beside its label (Phone & devices, Access): text, never a control */
+.settings-fact {
+  flex: 0 1 auto;
+  max-width: 45%;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+
+/* Access is read, not operated: its text takes reading sizes (14 px on a desktop; 18 and 15 on a
+   phone), scoped to this group so the other settings keep their scale */
+[data-section="access"] :is(.settings-label, .settings-description) {
+  font-size: var(--fs-md);
+}
+
+@media (max-width: 640px) {
+  [data-section="access"] :is(.settings-label, .settings-fact) {
+    font-size: var(--fs-xl);
+  }
+
+  [data-section="access"] .settings-description {
+    font-size: var(--fs-chat);
+  }
+}
+
 @media (max-width: 640px) {
   .settings-row.is-wide > .settings-font-field {
     flex: 0 0 auto;

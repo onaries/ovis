@@ -854,7 +854,9 @@ async function readKeychainInLoginSession(service: string, account?: string): Pr
   const plist = join(dir, "job.plist");
   let pipe: FileHandle | undefined;
   try {
-    if (Bun.spawnSync(["mkfifo", "-m", "600", fifo]).exitCode !== 0) return null;
+    // awaited, not waited for: a stalled mkfifo must not hold every other request (#1404)
+    const mkfifo = Bun.spawn(["mkfifo", "-m", "600", fifo], { stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: COMMAND_TIMEOUT_MS, killSignal: "SIGKILL" });
+    if (await mkfifo.exited !== 0) return null;
     writeFileSync(plist, `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>Label</key><string>${xml(label)}</string><key>ProgramArguments</key><array>${args.map((a) => `<string>${xml(a)}</string>`).join("")}</array><key>StandardOutPath</key><string>${xml(fifo)}</string><key>StandardErrorPath</key><string>/dev/null</string><key>RunAtLoad</key><true/></dict></plist>

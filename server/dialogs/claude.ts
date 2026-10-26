@@ -1,7 +1,7 @@
 import type { DialogReader } from "./registry.ts";
 import { pickerPlan } from "./interaction-plan.ts";
 import { type InteractivePromptAnswer } from "../../shared/protocol.ts";
-import { ANSI_RE, onePerPass, KEY, NUMBERED_OPTION_RE, type ParsedPrompt, SELECTED_RE, SOLID_RULE_RE, cleanLine, findLastIndex, finishPrompt, isDivider, joinWrapped, keySteps, listNames, listRows, menuRows, navigationKeys, nearestQuestion, normalizeText, parseNumberedRows, screenWidth, sequentialRows, sliderKeys, wrapped } from "./shared.ts";
+import { ANSI_RE, onePerPass, type CardWords, KEY, NUMBERED_OPTION_RE, type ParsedPrompt, SELECTED_RE, SOLID_RULE_RE, cleanLine, englishOf, findLastIndex, finishPrompt, own, isDivider, joinWrapped, keySteps, listNames, listRows, menuRows, navigationKeys, nearestQuestion, normalizeText, parseNumberedRows, screenWidth, sequentialRows, sliderKeys, wrapped } from "./shared.ts";
 
 // several questions navigate between tabs: "Tab/Arrow keys to navigate"
 export const CLAUDE_ASK_HINT_RE = /enter to select.*(?:↑\/↓|tab\/arrow keys) to navigate.*esc to cancel/i;
@@ -128,8 +128,9 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
   const selectedIndex = onSubmit ? rows.length - 1 : submit && rowAt === rows.length - 1 ? rowAt + 1 : rowAt;
   const current = tabs?.tabs.findIndex((tab) => !tab.answered) ?? -1;
   // a bar cut off by a narrow pane does not show how many questions there are
-  const title = tabs && current >= 0 ? `${tabs.tabs[current]!.label}${tabs.whole && tabs.tabs.length > 1 ? ` · ${current + 1} of ${tabs.tabs.length}` : ""}`
-    : chip ?? (multiSelect ? "Multiple choice" : "Question");
+  const title = tabs && current >= 0
+    ? tabs.whole && tabs.tabs.length > 1 ? own("{label} · {n} of {total}", { label: tabs.tabs[current]!.label, n: current + 1, total: tabs.tabs.length }) : tabs.tabs[current]!.label
+    : chip ?? own(multiSelect ? "Multiple choice" : "Question");
   return finishPrompt("claude", {
     kind: "question", title, question, body: null,
     options: optionRows.map((row) => ({ label: row.label, description: row.description ?? null })),
@@ -256,7 +257,7 @@ function parseClaudeSubmit(screen: string): ParsedPrompt | null {
     .filter((line) => line && !isDivider(line) && !/^Review your answers$/i.test(line)).join("\n");
   return finishPrompt("claude", {
     // a menu, not a question: a typed pick submits every answer at once, so it waits for Confirm
-    kind: "menu", title: "Review your answers", question: cleanLine(lines[questionIndex]!), body: body || null,
+    kind: "menu", title: own("Review your answers"), question: cleanLine(lines[questionIndex]!), body: body || null,
     ...(answers ? { answers } : {}),
     options: rows.map((row) => ({ label: row.label, description: null })), multi_select: false, custom_option_index: null,
   }, {
@@ -274,7 +275,7 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
     const customIndex = rows.findIndex((row) => /^Tell Claude what to change$/i.test(row.label));
     const bodyStart = Math.max(0, findLastIndex(lines.slice(0, planIndex), (line) => /Ready to code\?/i.test(cleanLine(line))));
     return finishPrompt("claude", {
-      kind: "plan", title: "Ready to code?", question: cleanLine(lines[planIndex]!),
+      kind: "plan", title: own("Ready to code?"), question: cleanLine(lines[planIndex]!),
       body: lines.slice(bodyStart, planIndex).map(cleanLine).filter((line) => !isDivider(line)).join("\n") || null,
       options: rows.map((row) => ({ label: row.label, description: null })), multi_select: false,
       custom_option_index: customIndex >= 0 ? customIndex : null,
@@ -298,10 +299,10 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
   // pane: the panel was answered, and what ends the screen now is another prompt ("Password:"
   // over a bare "Esc to cancel"); an option's own words may name the keys
   if (/esc to\s+cancel/i.test(lines.slice(rows.at(-1)!.lineIndex + 1, hintIndex).map(cleanLine).join(" "))) return null;
-  let title: string;
+  let title: CardWords;
   let body: string;
   if (approvalIndex >= 0 && approvalIndex < questionIndex) {
-    title = nearestQuestion(lines, approvalIndex) ?? "Command approval";
+    title = nearestQuestion(lines, approvalIndex) ?? own("Command approval");
     const bodyEnd = dangerousRmIndex > requiredIndex ? questionIndex : approvalIndex;
     body = lines.slice(Math.max(0, approvalIndex - 8), bodyEnd).map(cleanLine).filter((line) => line && !isDivider(line)).join("\n");
   } else {
@@ -331,7 +332,7 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
       .filter((line) => !/^Tip:/i.test(line.replace(ANSI_RE, "").trim())).map(cleanLine)
       .filter((line) => line && !isDivider(line));
     if (panel.length === 0) return null;
-    title = scrolled ? "Command approval" : panel[0]!;
+    title = scrolled ? own("Command approval") : panel[0]!;
     body = (scrolled ? panel : panel.slice(1)).join("\n");
   }
   return finishPrompt("claude", {
@@ -385,16 +386,16 @@ function parseClaudeHeld(screen: string, sent: string | null, working: boolean):
   const hint = above >= 0 ? CLAUDE_HELD_HINT_RE.exec(cleanLine(lines[above]!)) : null;
   const removed = hint ? Number(hint[1]) : sent !== null ? removedInvisible(sent, message) : 0;
   if (removed <= 0) return null;
-  const title = removed === 1 ? "Claude Code removed 1 invisible character" : `Claude Code removed ${removed} invisible characters`;
+  const title = removed === 1 ? own("Claude Code removed 1 invisible character") : own("Claude Code removed {count} invisible characters", { count: removed });
   // the choices are part of the card's id: a Discard tapped on a card read before the turn began is refused
-  const choices = [{ label: "Send", steps: keySteps([KEY.enter]) }, ...(working ? [] : [{ label: "Discard", steps: keySteps(["ctrl+c"]) }])];
+  const choices = [{ label: own("Send"), steps: keySteps([KEY.enter]) }, ...(working ? [] : [{ label: own("Discard"), steps: keySteps(["ctrl+c"]) }])];
   return finishPrompt("claude", {
-    kind: "approval", title, question: "The message waits in its input. Send it as it is now?",
+    kind: "approval", title, question: own("The message waits in its input. Send it as it is now?"),
     body: message,
     options: choices.map(({ label }) => ({ label, description: null })),
     multi_select: false, custom_option_index: null,
   }, {
-    responder: "claude-held", menuLabels: choices.map(({ label }) => label), selectedIndex: -1,
+    responder: "claude-held", menuLabels: choices.map(({ label }) => englishOf(label)), selectedIndex: -1,
     checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
     optionSteps: choices.map(({ steps }) => steps),
   });
@@ -434,20 +435,20 @@ function parseClaudeGoal(screen: string): ParsedPrompt | null {
   const hinted = normalizeText(hint.join(" "));
   if (head.length === 1 && head[0] === "Goal") {
     if (normalizeText(middle.join(" ")) !== "No goal set /goal <condition> to set one" || hinted !== "Esc to dismiss") return null;
-    return goalCard("Goal", "No goal set", null);
+    return goalCard(own("Goal"), own("No goal set"), null);
   }
   if (head.length === 2 && head[0] === "◎ Goal active" && CLAUDE_GOAL_STATUS_RE.test(head[1]!) && /^Goal:\s*\S/.test(middle[0]!)
     && hinted === "/goal clear to stop early · Esc to dismiss") {
-    return goalCard("Goal active", joinWrapped(middle, screenWidth(lines), /^Goal:\s*/), head[1]!);
+    return goalCard(own("Goal active"), joinWrapped(middle, screenWidth(lines), /^Goal:\s*/), head[1]!);
   }
   return null;
 }
 
 /** The card for the goal dialog: its one key is Esc, shown as Close; the elapsed time ticks, so it stays out of the card's id. */
-function goalCard(title: string, question: string, status: string | null): ParsedPrompt {
+function goalCard(title: CardWords, question: CardWords, status: string | null): ParsedPrompt {
   return finishPrompt("claude", {
     kind: "menu", title, question, body: status,
-    options: [{ label: "Close", description: null }], multi_select: false, custom_option_index: null,
+    options: [{ label: own("Close"), description: null }], multi_select: false, custom_option_index: null,
   }, {
     responder: "claude-goal", menuLabels: ["Close"], selectedIndex: -1,
     checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
@@ -553,7 +554,7 @@ function parseClaudeConfirm(screen: string): ParsedPrompt | null {
   let top = start - 1;
   while (top >= 0 && !isDivider(lines[top]!) && start - top <= 30) top -= 1;
   const panel = lines.slice(top + 1, start).map(cleanLine).filter(Boolean);
-  const title = (panel[0] ?? "Choose an option").replace(/:$/, "");
+  const title = panel[0]?.replace(/:$/, "") ?? own("Choose an option");
   const prose = normalizeText(panel.slice(1).join(" "));
   const asked = /(?:^|[.:!]\s+)([^.:!?]*\?)/.exec(prose)?.[1]?.trim();
   return finishPrompt("claude", {
@@ -647,11 +648,14 @@ function parseClaudeModel(screen: string): ParsedPrompt | null {
   const hidden = rows[0]!.number - 1 + below;
   const current = names.findIndex(({ name }) => /\s[✔✓]$/.test(name));
   // "Default (recommended)" in use reads as Default: the tag is the list's advice, not the model's name
-  const asked = `Select model for this session${current >= 0 ? ` (currently ${options[current]!.label.replace(/\s*\(recommended\)$/i, "")})` : ""}`;
+  const asked = current >= 0
+    ? own("Select model for this session (currently {model})", { model: options[current]!.label.replace(/\s*\(recommended\)$/i, "") })
+    : own("Select model for this session");
   return finishPrompt("claude", {
     kind: "question",
     title: "",
-    question: hidden > 0 ? `${asked}. ${hidden} more ${hidden === 1 ? "model is" : "models are"} listed in the terminal.` : asked,
+    question: hidden <= 0 ? asked : hidden === 1 ? own("{question}. 1 more model is listed in the terminal.", { question: asked })
+      : own("{question}. {count} more models are listed in the terminal.", { question: asked, count: hidden }),
     body: null,
     options,
     multi_select: false,
@@ -723,7 +727,7 @@ function parseClaudeEffort(screen: string): ParsedPrompt | null {
     // where the slider stands is no part of what the card asks: one card wherever ▲ is
     kind: "question",
     title: "",
-    question: "Set effort for this session",
+    question: own("Set effort for this session"),
     body: null,
     options: names.map((label) => ({ label, description: null })),
     multi_select: false,

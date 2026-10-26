@@ -76,6 +76,29 @@ it("revoking a paired device ends the page media its renders were given", async 
   } finally { close(); }
 });
 
+it("revoking every device ends the page media each device's renders were given, and not the token's", async () => {
+  const { base, render, close } = fixture();
+  const admin = { authorization: "Bearer test-page-media", "x-herdr-machine": "1", "content-type": "application/json" };
+  try {
+    const pair = async (label: string) => {
+      const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: admin })).json() as { code: string };
+      const paired = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { "x-herdr-machine": "1", "content-type": "application/json" }, body: JSON.stringify({ code, label }) });
+      expect(paired.status).toBe(204);
+      return paired.headers.get("set-cookie")!.split(";")[0]!;
+    };
+    const phone = await render({ cookie: await pair("phone") });
+    const tablet = await render({ cookie: await pair("tablet") });
+    const owner = await render();
+    for (const { address } of [phone, tablet, owner]) expect((await fetch(`${base}${address}`, { headers: fromPage })).status).toBe(200);
+    const revoked = await fetch(`${base}/api/devices/revoke-all`, { method: "POST", headers: admin });
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toEqual({ revoked: 2 });
+    expect((await fetch(`${base}${phone.address}`, { headers: fromPage })).status).toBe(404);
+    expect((await fetch(`${base}${tablet.address}`, { headers: fromPage })).status).toBe(404);
+    expect((await fetch(`${base}${owner.address}`, { headers: fromPage })).status).toBe(200);
+  } finally { close(); }
+});
+
 it("signing out ends page media rendered by a browser holding both the token and a device cookie", async () => {
   const { base, render, close } = fixture();
   const admin = { authorization: "Bearer test-page-media", "x-herdr-machine": "1", "content-type": "application/json" };

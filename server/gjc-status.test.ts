@@ -1,4 +1,5 @@
-import { afterAll, describe, expect, it } from "bun:test";
+import { afterAll, describe, expect, it, spyOn } from "bun:test";
+import * as darwinProcess from "./darwin-process.ts";
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -729,4 +730,39 @@ describe("the gjc process a pane's transcript and start are read from", () => {
     });
     expect(panes.get("p")).toEqual({ path: "/t/p.jsonl", startedAt: null });
   });
+});
+
+/** macOS, where a start is read with `ps`: answered by an awaited child, and any synchronous spawn recorded */
+async function onDarwinKernel<T>(startedMs: number, run: (spawned: { mock: { calls: unknown[] } }, blocking: { mock: { calls: unknown[] } }) => Promise<T>): Promise<T> {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  // the kernel's process record answers; no ps runs, awaited or not (#1404)
+  const kernel = spyOn(darwinProcess, "darwinStartTime").mockReturnValue(BigInt(startedMs) * 1000n);
+  const blocking = spyOn(Bun, "spawnSync");
+  const spawned = spyOn(Bun, "spawn");
+  try { return await run(spawned, blocking); } finally {
+    spawned.mockRestore();
+    blocking.mockRestore();
+    kernel.mockRestore();
+    Object.defineProperty(process, "platform", platform);
+  }
+}
+
+// every snapshot a pending message is checked against runs GJC discovery (#1545)
+it("reads a GJC pane's process start from the kernel on macOS, with no ps child", async () => {
+  const clock = spyOn(Date, "now").mockReturnValue(61_000);
+  const pane = { pane_id: "gjc-darwin", workspace_id: "w", tab_id: "t", terminal_id: "term", focused: false, revision: 0,
+    agent: "gjc", agent_status: "idle", cwd: root } as HerdrPane;
+  try {
+    await onDarwinKernel(1_000, async (spawned, blocking) => {
+      const found = await gjcPanes([pane], {
+        platform: "darwin",
+        processInfo: async () => ({ process_info: { pane_id: pane.pane_id, foreground_processes: [{ pid: 300, name: "gjc", argv: ["/usr/bin/gjc"] }] } }),
+        transcript: async () => null,
+      });
+      expect(found.get(pane.pane_id)).toEqual({ path: null, startedAt: 1_000 });
+      expect(spawned.mock.calls).toHaveLength(0);
+      expect(blocking.mock.calls).toHaveLength(0);
+    });
+  } finally { clock.mockRestore(); }
 });

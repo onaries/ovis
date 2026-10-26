@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SshConnection } from "./ssh.ts";
+import { refusalHint, SshConnection, sshClient } from "./ssh.ts";
 
 // The direct mode Windows uses (its OpenSSH has no connection sharing), run here against a
 // stand-in ssh. Windows itself runs it against real hosts; this sh stand-in needs a POSIX shell.
@@ -74,7 +74,7 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
   const cleanups: (() => void)[] = [];
   afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
 
-  function fixture(env: Record<string, string> = {}) {
+  function fixture(env: Record<string, string> = {}, { onPath = true } = {}) {
     const root = mkdtempSync(join(tmpdir(), "herdr-ssh-direct-"));
     const bin = join(root, "bin");
     mkdirSync(bin);
@@ -82,8 +82,11 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
     chmodSync(join(bin, "ssh"), 0o755);
     writeFileSync(join(bin, "ssh-keygen"), FAKE_SSH_KEYGEN);
     chmodSync(join(bin, "ssh-keygen"), 0o755);
-    const saved = Object.fromEntries(["PATH", ...FAKE_KEYS].map((key) => [key, process.env[key]]));
-    process.env["PATH"] = `${bin}:${saved["PATH"]}`;
+    writeFileSync(join(bin, "sftp"), `#!/bin/sh\nprintf 'sftp %s\\n' "$*" >> "$FAKE_DIR/calls"\ncat > /dev/null\n`);
+    chmodSync(join(bin, "sftp"), 0o755);
+    const saved = Object.fromEntries(["PATH", "OVIS_SSH", ...FAKE_KEYS].map((key) => [key, process.env[key]]));
+    if (onPath) process.env["PATH"] = `${bin}:${saved["PATH"]}`;
+    else process.env["OVIS_SSH"] = join(bin, "ssh");
     Object.assign(process.env, { FAKE_DIR: root, FAKE_BUN: process.execPath }, env);
     const state = join(root, "state");
     const ssh = new SshConnection({ destination: "pc" }, state, undefined, false, false);
@@ -108,6 +111,34 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
     expect(run).toContain("BatchMode=yes");
     expect(run).toContain("StrictHostKeyChecking=yes");
     expect(ssh.connected()).toBe(true);
+  });
+
+  it("runs the ssh OVIS_SSH names instead of the one on PATH", async () => {
+    const { root, ssh, calls, ask } = fixture({}, { onPath: false });
+    await ssh.start(ask("unused"));
+    expect(await ssh.run("true")).toBe("ran\n");
+    expect(calls().some((line) => line.endsWith("sh -c 'true'"))).toBe(true);
+    // the sftp beside it, told to start that ssh rather than its own build's
+    await ssh.upload(join(root, "calls"), String.raw`C:\Users\pc\bundle`);
+    expect(calls().some((line) => line.startsWith(`sftp -S ${join(root, "bin", "ssh")} `))).toBe(true);
+  });
+
+  it("adds nothing to a refusal when OVIS_SSH names the ssh, which may be Windows' own", async () => {
+    const { ssh } = fixture({ FAKE_PASSPHRASE: "secret" }, { onPath: false });
+    await expect(ssh.start()).rejects.toThrow(/^pc@pc\.example: Permission denied \(publickey\)\.$/);
+  });
+
+  it("tells a refused connection through Git's ssh that Windows' agent service is not read", async () => {
+    const { ssh } = fixture({ FAKE_PASSPHRASE: "secret" }, { onPath: false });
+    // what discovery marks on Windows, which this POSIX stand-in cannot reach
+    const own = ssh as unknown as { client: { git?: true } };
+    own.client = { ...own.client, git: true };
+    await expect(ssh.start()).rejects.toThrow("does not read Windows' ssh-agent service");
+  });
+
+  it("adds nothing to a refusal when the plain ssh on PATH runs", async () => {
+    const { ssh } = fixture({ FAKE_PASSPHRASE: "secret" });
+    await expect(ssh.start()).rejects.toThrow(/^pc@pc\.example: Permission denied \(publickey\)\.$/);
   });
 
   it("asks for a passphrase once and answers it to the commands after connecting", async () => {
@@ -202,5 +233,67 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
       await ssh.start(ask("unused"));
       await expect(ssh.forward(40_000, 7317)).rejects.toThrow("LocalForward, RemoteForward or DynamicForward");
     });
+  });
+});
+
+describe("which OpenSSH runs", () => {
+  const git = String.raw`C:\Program Files\Git\usr\bin`;
+  const gitClient = { ssh: String.raw`${git}\ssh.exe`, sftp: String.raw`${git}\sftp.exe`, keygen: String.raw`${git}\ssh-keygen.exe` };
+  const only = (...paths: string[]) => (path: string) => paths.includes(path);
+  const plain = { ssh: "ssh", sftp: "sftp", keygen: "ssh-keygen" };
+  const programFiles = { ProgramFiles: String.raw`C:\Program Files` };
+  const noRegistry = () => null;
+  const found = { ...gitClient, git: true as const };
+
+  it("is Git for Windows' on Windows, whose ssh exits after a command that printed something", () => {
+    expect(sshClient({ platform: "win32", env: programFiles, which: () => null, registry: noRegistry, exists: only(...Object.values(gitClient)) })).toEqual(found);
+  });
+
+  it("finds Git where its installer recorded it", () => {
+    const dir = String.raw`D:\Tools\Git\usr\bin`;
+    const client = { ssh: String.raw`${dir}\ssh.exe`, sftp: String.raw`${dir}\sftp.exe`, keygen: String.raw`${dir}\ssh-keygen.exe` };
+    expect(sshClient({ platform: "win32", env: programFiles, which: () => null, registry: () => String.raw`D:\Tools\Git`, exists: only(...Object.values(client), ...Object.values(gitClient)) })).toEqual({ ...client, git: true as const });
+  });
+
+  it("never takes an ssh from a Git-shaped folder on PATH, which anybody may be able to write", () => {
+    const planted = String.raw`C:\Users\Public\planted`;
+    const which = () => String.raw`${planted}\cmd\git.exe`;
+    const plantedSsh = String.raw`${planted}\usr\bin\ssh.exe`;
+    expect(sshClient({ platform: "win32", env: programFiles, which, registry: noRegistry, exists: only(plantedSsh, ...Object.values(gitClient)) })).toEqual(found);
+    expect(sshClient({ platform: "win32", env: programFiles, which, registry: noRegistry, exists: only(plantedSsh) })).toEqual(plain);
+  });
+
+  it("is the one OVIS_SSH names, with the sftp and ssh-keygen beside it where they exist", () => {
+    const env = { ...programFiles, OVIS_SSH: String.raw`D:\OpenSSH\ssh.exe` };
+    const exists = only(...Object.values(gitClient), String.raw`D:\OpenSSH\sftp.exe`);
+    expect(sshClient({ platform: "win32", env, which: () => null, registry: noRegistry, exists }))
+      .toEqual({ ssh: String.raw`D:\OpenSSH\ssh.exe`, sftp: String.raw`D:\OpenSSH\sftp.exe`, keygen: "ssh-keygen" });
+  });
+
+  it("takes OVIS_SSH in quotes, or as a name on PATH, with that folder's sftp and ssh-keygen", () => {
+    const dir = String.raw`D:\OpenSSH`;
+    const client = { ssh: String.raw`${dir}\ssh.exe`, sftp: String.raw`${dir}\sftp.exe`, keygen: String.raw`${dir}\ssh-keygen.exe` };
+    const exists = only(...Object.values(client));
+    expect(sshClient({ platform: "win32", env: { OVIS_SSH: `"${client.ssh}"` }, which: () => null, registry: noRegistry, exists })).toEqual(client);
+    expect(sshClient({ platform: "win32", env: { OVIS_SSH: "ssh.exe" }, which: (name) => name === "ssh.exe" ? client.ssh : null, registry: noRegistry, exists })).toEqual(client);
+  });
+
+  it("finds a Scoop Git in the account's own profile", () => {
+    const env = { USERPROFILE: String.raw`C:\Users\pc` };
+    const scoop = String.raw`C:\Users\pc\scoop\apps\git\current\usr\bin`;
+    const client = { ssh: String.raw`${scoop}\ssh.exe`, sftp: String.raw`${scoop}\sftp.exe`, keygen: String.raw`${scoop}\ssh-keygen.exe` };
+    expect(sshClient({ platform: "win32", env, which: () => null, registry: noRegistry, exists: only(...Object.values(client)) })).toEqual({ ...client, git: true as const });
+  });
+
+  it("tells a refused connection that Git's ssh does not read Windows' agent service, and only Git's", () => {
+    const refused = "pc@pc.example: Permission denied (publickey).";
+    expect(refusalHint(found, refused)).toContain("does not read Windows' ssh-agent service");
+    expect(refusalHint(found, "ssh: connect to host pc.example port 22: Connection timed out")).toBe("");
+    expect(refusalHint({ ssh: String.raw`C:\Windows\System32\OpenSSH\ssh.exe`, sftp: "sftp", keygen: "ssh-keygen" }, refused)).toBe("");
+  });
+
+  it("stays the one on PATH without Git, and on other systems", () => {
+    expect(sshClient({ platform: "win32", env: programFiles, which: () => null, registry: noRegistry, exists: () => false })).toEqual(plain);
+    expect(sshClient({ platform: "linux", env: {}, which: () => "/usr/bin/git", registry: () => "/opt/git", exists: () => true })).toEqual(plain);
   });
 });

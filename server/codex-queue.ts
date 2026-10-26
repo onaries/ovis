@@ -1,6 +1,6 @@
 import type { QueuedQuestion } from "./codex.ts";
 import type { InteractivePrompt } from "../shared/protocol.ts";
-import { ANSI_RE, cleanLine, findLastIndex, finishPrompt, normalizeText, publicPrompt, type ParsedPrompt } from "./dialogs/shared.ts";
+import { ANSI_RE, cleanLine, findLastIndex, finishPrompt, normalizeText, own, publicPrompt, type ParsedPrompt } from "./dialogs/shared.ts";
 import { CODEX_ASYNC_ASK_HINT_RE, CODEX_QUEUE_HEADER_RE } from "./dialogs/codex.ts";
 import { sameText } from "./dialogs/omo.ts";
 
@@ -44,7 +44,7 @@ function queuedPrompt(count: number, unanswered: QueuedQuestion[], front: QueueF
     ?? waiting[0];
   if (!first || waiting.length !== count || !first.title.trim()) return null;
   return finishPrompt("codex", {
-    kind: "question", title: count > 1 ? `Question 1 of ${count}` : "Question", question: normalizeText(first.title), body: null,
+    kind: "question", title: count > 1 ? own("Question {n} of {total}", { n: 1, total: count }) : own("Question"), question: normalizeText(first.title), body: null,
     options: first.options.map((label) => ({ label, description: null })),
     multi_select: false, custom_option_index: first.options.length, queued: "collapsed",
   }, {

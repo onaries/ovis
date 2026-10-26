@@ -13,6 +13,8 @@ import { paneProcessRoots } from "./conversation.ts";
 import { closeOpenCodeNative, openCodeNativeState, openCodePaneService, openCodeSkillsToType, releaseOpenCodePane, skillsNotAttached, startOpenCodeWatch, trackVerifiedOpenCodePanes } from "./opencode-native.ts";
 import { commandOutcome } from "./outcome.ts";
 import * as service from "./opencode-service.ts";
+import * as commands from "./commands.ts";
+import { CATALOG_SOURCE_BUDGET_MS } from "./catalog-sources.ts";
 import { forgetOpenCodeService, openCodeServiceOptions } from "./opencode-service.ts";
 
 const root = mkdtempSync(join(tmpdir(), "opencode-native-test-"));
@@ -39,6 +41,54 @@ describe("a skill OpenCode did not attach", () => {
     expect(result).toMatchObject({ state: "terminal-required", unattached_skills: ["effect"] });
     expect(result.note).toContain("@effect");
     expect(commandOutcome("p_native", sent, { now: sent.at + 100 }).unattached_skills).toBeUndefined();
+  });
+});
+
+describe("cold skill lookup budget", () => {
+  it.each(["absent", "present"])("records only known skills when the service times out and a remembered catalog is %s", async (availability) => {
+    const remembered = availability === "present";
+    const target = { ...pane, pane_id: `p_review_catalog_${remembered}`, cwd: root } as HerdrPane;
+    const text = "@effect @a.ts @alice,";
+    if (remembered) commands.rememberPaneCommands(target, "opencode", [{ name: "effect", description: "", source: "skill", trigger: "@" }]);
+    let clock = 1_000;
+    const now = spyOn(Date, "now").mockImplementation(() => clock);
+    const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({ process_info: { foreground_processes: [] } } as never);
+    const lookup = spyOn(service, "openCodeService").mockImplementation(async () => {
+      clock += CATALOG_SOURCE_BUDGET_MS;
+      return { version: "2.0.32", config: { baseUrl: failing.url.origin, port: failing.port!, pid: process.pid, password: "fixture" } };
+    });
+    const scan = spyOn(commands, "paneCommands");
+    try {
+      const result = await openCodeSkillsToType(target, undefined, text);
+      expect(result.skills).toEqual([]);
+      if (remembered) expect(result.sent?.unattached).toEqual(["effect"]);
+      else expect(result.sent).toBeUndefined();
+      expect(scan).not.toHaveBeenCalled();
+    } finally { now.mockRestore(); rpc.mockRestore(); lookup.mockRestore(); scan.mockRestore(); }
+  });
+
+  it.each([0, CATALOG_SOURCE_BUDGET_MS])("never starts a synchronous scan after a service lookup taking %d ms", async (elapsed) => {
+    let clock = 1_000;
+    const now = spyOn(Date, "now").mockImplementation(() => clock);
+    const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({ process_info: { foreground_processes: [] } } as never);
+    const lookup = spyOn(service, "openCodeService").mockImplementation(async () => {
+      clock += elapsed;
+      return { version: "2.0.32", config: { baseUrl: failing.url.origin, port: failing.port!, pid: process.pid, password: "fixture" } };
+    });
+    const session = spyOn(service, "openCodeHasSession").mockResolvedValue(false);
+    const scan = spyOn(commands, "paneCommands");
+    try {
+      const result = await openCodeSkillsToType({ ...pane, pane_id: `p_cold_${elapsed}`, cwd: root } as HerdrPane, undefined, "@effect");
+      expect(scan).not.toHaveBeenCalled();
+      expect(result.skills).toEqual([]);
+      if (elapsed === CATALOG_SOURCE_BUDGET_MS) {
+        expect(result.sent).toBeUndefined();
+        expect(clock).toBe(1_000 + CATALOG_SOURCE_BUDGET_MS);
+        expect(session).not.toHaveBeenCalled();
+      }
+    } finally {
+      now.mockRestore(); rpc.mockRestore(); lookup.mockRestore(); session.mockRestore(); scan.mockRestore();
+    }
   });
 });
 

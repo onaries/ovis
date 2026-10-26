@@ -32,7 +32,7 @@ import { join, resolve } from "node:path";
 import type { ConversationMetadata, ConversationPart, ConversationTurn, HerdrPane, SkillActivity } from "../shared/protocol.ts";
 import { opencodeSkillInvocation } from "./skill-invocations/opencode.ts";
 import { trimOutput } from "./tool-output.ts";
-import { MAX_TURNS, toolSummary } from "./transcript-records.ts";
+import { MAX_TURNS, OMO_TASK_RESULT_MAX, toolSummary } from "./transcript-records.ts";
 
 /** A page never holds more prompts than this (each opens a user + assistant pair). */
 const MAX_PAGE_PROMPTS = MAX_TURNS / 2;
@@ -102,12 +102,13 @@ function rowImages(type: string, data: Row): { media_type: string; data: string 
   return images;
 }
 
-/** A tool's own output: its error, else the text it returned. */
-function toolText(state: Row): string {
+/** A tool's own output: its error, else the text it returned (a subagent's answer without the tag around it). */
+function toolText(state: Row, name: string): string {
   if (state.status === "error") return text(record(state.error).message) ?? "";
-  return (Array.isArray(state.content) ? state.content : []).map(record)
+  const output = (Array.isArray(state.content) ? state.content : []).map(record)
     .filter((item) => item.type === "text" && typeof item.text === "string")
     .map((item) => item.text as string).join("\n");
+  return name === "subagent" ? unwrap(output) : output;
 }
 
 /** OpenCode's `skill` tool names the skill it loads by `id` (1.x: `name`). */
@@ -161,7 +162,7 @@ export function opencodeRecord(id: string, type: string, data: Row): OpencodeRec
           output: "",
         };
         if (skill !== null) part.skill = skill;
-        trimOutput(part, toolText(state), `${id}:${index}`);
+        trimOutput(part, toolText(state, block.name), `${id}:${index}`);
         const exit = record(state.metadata).exit;
         if (state.status === "error" || (typeof exit === "number" && exit !== 0)) part.error = true;
         const files = (Array.isArray(state.content) ? state.content : []).map(record).filter((item) => item.type === "file");
@@ -190,6 +191,16 @@ export function opencodeRecord(id: string, type: string, data: Row): OpencodeRec
     if (metadata.source === "shell" && metadata.jobID === undefined) return null;
     const body = typeof data.text === "string" ? unwrap(data.text) : "";
     const label = text(data.description)?.trim() ?? null;
+    // a background subagent that ended (SubagentCompletion.deliver in 2.0.32): its card, with its answer
+    if (metadata.source === "subagent") {
+      const agent = text(metadata.agent)?.trim() ?? null;
+      const status = metadata.state === "error" ? "failed" as const : metadata.state === "cancelled" ? "cancelled" as const : "completed" as const;
+      return { role: "user", ts: iso(time.created), parts: [{ kind: "task_result", tasks: [{
+        id: text(metadata.childID) ?? id, title: label ?? agent ?? "subagent", agent, model: null, status,
+        duration_ms: null, turns: null, tool_calls: null, tokens: null,
+        result: body.slice(0, OMO_TASK_RESULT_MAX), ...(body.length > OMO_TASK_RESULT_MAX ? { result_cut: true } : {}),
+      }] }] };
+    }
     const shown = label !== null && body.length > 0 && body !== label ? `${label}\n${body}` : label ?? body;
     if (shown.length === 0) return null;
     const source = text(metadata.source) ?? text(metadata.notice) ?? "synthetic";
@@ -294,16 +305,17 @@ export function forgetOpencodeRead(key: string): void {
 }
 
 /** The store, read-only; null when it cannot be opened (no file, not SQLite, not readable). */
-function openStore(path: string): Database | null {
+function openStore(path: string, busyMs: number): Database | null {
   try {
     const db = new Database(path, { readonly: true, create: false });
-    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    db.exec(`PRAGMA busy_timeout = ${busyMs}`);
     return db;
   } catch { return null; }
 }
 
-function withStore<T>(path: string, read: (db: Database) => T): T | null {
-  const db = openStore(path);
+/** `busyMs`: how long a read waits on a store held by its writer; a poll that runs on the event loop waits not at all. */
+export function withStore<T>(path: string, read: (db: Database) => T, busyMs = BUSY_TIMEOUT_MS): T | null {
+  const db = openStore(path, busyMs);
   if (db === null) return null;
   try { return read(db); }
   finally { db.close(); }
@@ -580,7 +592,7 @@ export function opencodeToolOutput(path: string, sessionId: string, ref: string)
   return readRow(path, sessionId, match[1]!, (row) => {
     if (row.type !== "assistant" || !Array.isArray(row.data.content)) return null;
     const block = record(row.data.content[Number(match[2])]);
-    return block.type === "tool" ? toolText(record(block.state)) : null;
+    return block.type === "tool" && typeof block.name === "string" ? toolText(record(block.state), block.name) : null;
   });
 }
 

@@ -1,5 +1,5 @@
 import type { DialogReader } from "./registry.ts";
-import { ANSI_RE, onePerPass, type AnswerStep, KEY, type ParsedPrompt, findLastIndex, finishPrompt, keySteps, navigationKeys } from "./shared.ts";
+import { ANSI_RE, onePerPass, type AnswerStep, KEY, type ParsedPrompt, findLastIndex, finishPrompt, keySteps, navigationKeys, own } from "./shared.ts";
 
 /**
  * Hermes's clarify question, as its Ink TUI draws it (ui-tui/src/components/prompts.tsx):
@@ -41,15 +41,15 @@ function parseHermesClarify(screen: string): ParsedPrompt | null {
   const member: string[] = [];
   for (let i = end; i < block.length && indent(block[i]!) > base; i += 1) member.push(block[i]!.trim());
   const [answered, total] = lines[hintIndex]!.trim().match(HERMES_HINT_RE)!.slice(1).map(Number);
-  const body = total! > 1 ? `${answered}/${total} answered` : null;
+  const body = total! > 1 ? own("{answered}/{total} answered", { answered: answered!, total: total! }) : null;
   // text already on the `>` line (typed in the terminal, or a typed answer Tab brought back)
   // would join the answer: the line is emptied first, after the cursor and before it (its
   // TextInput's ctrl+k and ctrl+u, on every platform)
   const typed = (text: string): AnswerStep[] => [...keySteps(["ctrl+k", "ctrl+u"]), { text }, ...keySteps([KEY.enter])];
   if (member[0]?.startsWith(">")) {
     return finishPrompt("hermes", {
-      kind: "question", title: "Question", question, body,
-      options: [{ label: "Type your answer", description: null }], multi_select: false, custom_option_index: 0,
+      kind: "question", title: own("Question"), question, body,
+      options: [{ label: own("Type your answer"), description: null }], multi_select: false, custom_option_index: 0,
     }, {
       responder: "hermes-input", menuLabels: [], selectedIndex: 0, checkedOptionIndices: [], customMenuIndex: 0,
       rejectWithEscapeIndex: null, customSteps: typed,
@@ -71,7 +71,7 @@ function parseHermesClarify(screen: string): ParsedPrompt | null {
   if (!multi && choices.some((row) => row.box)) return null;
   const checked = choices.flatMap((row, index) => row.checked ? [index] : []);
   return finishPrompt("hermes", {
-    kind: "question", title: "Question", question, body,
+    kind: "question", title: own("Question"), question, body,
     options: choices.map((row) => ({ label: row.label.replace(/ \(Recommended\)$/i, ""), description: null })),
     // typed text on a multi-select question joins the ticks, which the card has no way to say
     multi_select: multi, custom_option_index: multi ? null : choices.length,
@@ -248,7 +248,7 @@ function parseHermesResult(below: string, sent: string | null, reader: HermesRes
   return {
     ...finishPrompt("hermes", {
       kind: "menu", title: command, question: command, body: text,
-      options: [{ label: "Dismiss", description: null }], multi_select: false, custom_option_index: null,
+      options: [{ label: own("Dismiss"), description: null }], multi_select: false, custom_option_index: null,
     }, {
       responder: reader, menuLabels: ["Dismiss"], selectedIndex: 0, checkedOptionIndices: [], customMenuIndex: null,
       rejectWithEscapeIndex: null, optionSteps: [[]],

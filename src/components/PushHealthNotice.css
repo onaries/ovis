@@ -1,0 +1,14 @@
+/* the alerts line shares .update-notice's layout with the update, telemetry, machine-action and
+   exposure notices (src/components/UpdateControls.css); the needs-attention tint and the glyph
+   that says so without the colour are its own */
+.update-notice.is-alerts {
+  background: var(--status-blocked-tint);
+  color: var(--text-strong);
+}
+
+.update-notice.is-alerts > svg {
+  flex: 0 0 auto;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--status-blocked);
+}

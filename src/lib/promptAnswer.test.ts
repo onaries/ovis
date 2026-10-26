@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import type { InteractivePrompt } from "../../shared/protocol.ts";
+import { setCurrentLanguage, translate } from "./i18n.ts";
 import { answerFromText, answerHint, answerRefusal, focusFollowsAnswer, needsConfirmation, pressOrigin, type PressOrigin } from "./promptAnswer.ts";
 
 const prompt = (options: string[], custom: number | null, multi = false): InteractivePrompt => ({
@@ -26,6 +27,23 @@ describe("answering a prompt from the chat", () => {
     expect(answerFromText(question, "3")).toEqual({ custom_text: "3" });
     expect(answerFromText(question, "use T-LESS instead")).toEqual({ custom_text: "use T-LESS instead" });
     expect(answerHint(question)).toBe("Type 1–2 or your own reply…");
+  });
+
+  it("takes a label the bridge wrote as the card shows it, in the reader's language or in English (#1482)", () => {
+    const keys: InteractivePrompt = { ...prompt(["Yes (y)", "No (n)", "Enter", "Esc"], null), kind: "menu", own_text: { labels: { 0: { key: "Yes (y)" }, 1: { key: "No (n)" } } } };
+    setCurrentLanguage("ko");
+    try {
+      expect(translate("ko", "No (n)")).not.toBe("No (n)");
+      expect(answerFromText(keys, translate("ko", "No (n)"))).toEqual({ option_index: 1 });
+      expect(answerFromText(keys, "No (n)")).toEqual({ option_index: 1 });
+      expect(answerFromText(keys, "y")).toEqual({ option_index: 0 });
+      // an option the agent drew in those words is named by them before a translated label is
+      const drawn: InteractivePrompt = { ...prompt(["Cancel", translate("ko", "Cancel")], null), kind: "menu", own_text: { labels: { 0: { key: "Cancel" } } } };
+      expect(answerFromText(drawn, translate("ko", "Cancel"))).toEqual({ option_index: 1 });
+      expect(answerFromText(drawn, "Cancel")).toEqual({ option_index: 0 });
+    } finally {
+      setCurrentLanguage("en");
+    }
   });
 
   it("answers a free-form question (Codex's queue) with the text itself, numbers included", () => {

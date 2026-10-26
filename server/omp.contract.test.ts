@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -147,4 +148,28 @@ it("cancels omp's /handoff from its card, and keeps the same conversation when a
   const after = await read(handoffPaneId);
   expect(after.history_id).toBe(before.history_id);
   expect(after.turns.slice(0, before.turns.length)).toEqual(before.turns);
+});
+
+// omp 18.8.7's pictures as recorded (server/fixtures/omp-pictures-18.8.7-*): the bytes sit in the blob
+// store beside the session store, the transcript holds `blob:sha256:<digest>`
+it("serves an omp session's prompt and tool pictures, named by ref, from omp's blob store", async () => {
+  const blob = readFileSync(new URL("./fixtures/omp-pictures-18.8.7-blob.webp", import.meta.url));
+  const blobs = join(root, ".omp", "agent", "blobs");
+  mkdirSync(blobs, { recursive: true });
+  writeFileSync(join(blobs, createHash("sha256").update(blob).digest("hex")), blob);
+  writeFileSync(fresh, readFileSync(new URL("./fixtures/omp-pictures-18.8.7-session.jsonl", import.meta.url), "utf8").split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line).type === "session" ? JSON.stringify({ ...JSON.parse(line), cwd: root }) : line).join("\n") + "\n");
+  const refs = (await read()).turns.flatMap((turn) => turn.parts.flatMap((part) => part.kind === "image" ? [part.ref] : part.kind === "tool" ? (part.images ?? []).map((image) => image.ref) : []));
+  expect(refs).toEqual(["pi-prompt:d4a9dbba:0", expect.stringMatching(/^pi:call_[0-9a-f]+\|fc_[0-9a-f]+:0$/), "pi-prompt:faaa5772:0"]);
+  const image = (ref: string) => fetch(`http://127.0.0.1:${server.port}/api/pane/conversation/image?${new URLSearchParams({ pane_id: paneId, ref })}`);
+  for (const ref of refs) {
+    const response = await image(ref);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/webp");
+    expect(response.headers.get("cache-control")).toBe("private, max-age=86400, immutable");
+    expect(Buffer.from(await response.arrayBuffer()).equals(blob)).toBe(true);
+  }
+  // a ref the conversation does not name, and one past the shape the endpoint takes
+  expect((await image("pi-prompt:d4a9dbba:1")).status).toBe(404);
+  expect((await image("pi:../blobs:0")).status).toBe(404);
 });

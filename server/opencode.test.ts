@@ -272,9 +272,36 @@ describe("OpenCode's rows as a conversation", () => {
       ["assistant", [{ kind: "text", text: "Started.", phase: "final_answer" }]],
       ["user", [{ kind: "notice", text: "sleep 30 && echo ok\nok", source: "shell" }]],
       ["assistant", [{ kind: "text", text: "It printed ok.", phase: "final_answer" }]],
-      ["user", [{ kind: "notice", text: "Find sources\nThree sources.", source: "subagent" }]],
+      // a background subagent that ended leaves its card, with its answer
+      ["user", [{ kind: "task_result", tasks: [{
+        id: "ses_child", title: "Find sources", agent: "web-search", model: null, status: "completed",
+        duration_ms: null, turns: null, tool_calls: null, tokens: null, result: "Three sources.",
+      }] }]],
       ["assistant", [{ kind: "text", text: "The subagent found three.", phase: "final_answer" }]],
     ]);
+  });
+
+  it("draws a subagent that failed or was cancelled as such, and a foreground one's answer without OpenCode's tag", () => {
+    const wake = (state: string, body: string) => opencodeRecord("msg_wake", "synthetic", {
+      metadata: { source: "subagent", childID: "ses_child", agent: "explore", state }, time: { created: T0 },
+      text: `<subagent sessionID="ses_child" state="${state}" description="Scan">\n${body}\n</subagent>`, description: "Scan",
+    });
+    const card = (state: string, body: string) => {
+      const found = wake(state, body);
+      const part = found?.role === "user" ? found.parts[0] : undefined;
+      return part?.kind === "task_result" ? part.tasks[0] : undefined;
+    };
+    expect([card("error", "provider failed")?.status, card("error", "provider failed")?.result]).toEqual(["failed", "provider failed"]);
+    expect(card("cancelled", "Subagent cancelled")?.status).toBe("cancelled");
+    const long = card("completed", "x".repeat(20_000));
+    expect([long?.result.length, long?.result_cut]).toEqual([16_000, true]);
+    const step = opencodeRecord("msg_call", "assistant", {
+      time: { created: T0, completed: T0 + 1 }, finish: "tool-calls",
+      content: [{ type: "tool", name: "subagent", state: { status: "completed", input: { agent: "explore", description: "Scan", prompt: "scan it" },
+        content: [{ type: "text", text: "<subagent sessionID=\"ses_child\" state=\"completed\">\nAll clear.\n</subagent>" }], metadata: { sessionID: "ses_child", status: "completed" } } }],
+    });
+    const tool = step?.role === "assistant" ? step.parts[0] : undefined;
+    expect(tool?.kind === "tool" ? [tool.summary, tool.output] : null).toEqual(["Scan", "All clear."]);
   });
 
   it("shows a command the user ran once, with its output, and leaves instructions and switches out", () => {

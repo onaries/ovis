@@ -1,6 +1,6 @@
 import type { AgentRowTokens } from "./pane-tokens.ts";
 import type { SharedPreferences } from "./preferences.ts";
-import type { HealthAuth, ServerMessage, SessionSnapshot } from "./protocol.ts";
+import type { HealthAuth, SecuritySummary, ServerMessage, SessionSnapshot } from "./protocol.ts";
 import type { SeenFinish } from "./seen.ts";
 
 export const LOCAL_MACHINE = "local";
@@ -91,14 +91,30 @@ export interface SetupJob {
   progress?: SetupProgress | null;
 }
 export type SetupAction = { action: "answer"; challenge_id: string; answer: string } | { action: "approve" } | { action: "cancel" };
+/**
+ * A device was durably enrolled (server/devices.ts): its registry write succeeded, whether at a
+ * gated pairing or when a first-pair cookie came back. Never for an unconfirmed credential, a
+ * last-seen write or a failed write. Sent to every stream of this server but the new device's
+ * own; `event_id` is what a browser deduplicates by. Carries nothing a credential could be
+ * made from: the label is the normalized one (at most 48 characters), the id the public one.
+ */
+export interface DevicePairedEvent {
+  type: "device-paired";
+  event_id: string;
+  device_id: string;
+  label: string;
+  enrolled_at: string;
+}
 /** `preferences`: what every browser of this server shares changed (shared/preferences.ts) */
 export type MachineEvent = { type: "machines"; machines: Machine[] } | { type: "machine-message"; machine_id: string; message: ServerMessage }
   | { type: "preferences"; preferences: SharedPreferences }
   /** the `$name` tokens herdr's `[ui.sidebar.agents]` rows draw on this server's PC, for every PC's agent rows (server/herdr-sidebar.ts) */
   | { type: "herdr-sidebar"; agents: AgentRowTokens | null }
   /** finishes a browser of this server presented (shared/seen.ts): every record when the stream opens, then each change */
-  | { type: "seen"; finishes: SeenFinish[] };
-export interface BridgeHealth { ok: true; auth: HealthAuth; bridge_protocol: number }
+  | { type: "seen"; finishes: SeenFinish[] }
+  | DevicePairedEvent;
+/** `security`: authenticated requests only, absent from an older server (shared/protocol.ts SecuritySummary) */
+export interface BridgeHealth { ok: true; auth: HealthAuth; bridge_protocol: number; security?: SecuritySummary }
 export interface BridgeIdentity {
   pid: number;
   managed_remote: boolean;

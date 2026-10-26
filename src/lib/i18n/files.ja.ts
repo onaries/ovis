@@ -87,7 +87,6 @@ export const FILES_JA: Record<string, string> = {
   "git is not installed on that PC.": "そのPCには git がインストールされていません。",
   "git took too long to answer.": "git の応答に時間がかかりすぎました。",
   "git could not compare these.": "git が比較できませんでした。",
-  "This device can only watch.": "この端末は閲覧のみできます。",
   "The pane's folder could not be read.": "ペインのフォルダを読み取れませんでした。",
   "That PC is not reachable right now.": "そのPCには今接続できません。",
   "Changes to {name}": "{name} の変更",

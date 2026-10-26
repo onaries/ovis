@@ -1,0 +1,17 @@
+/* the pairing line shares .update-notice's layout with the update, telemetry and exposure notices
+   (src/components/UpdateControls.css): the glyph is its cue, the words its warning, no colour of its own */
+.update-notice.is-paired > svg {
+  flex: 0 0 auto;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--accent);
+}
+
+/* its two controls stay together: at the end of the line, or as one row under the words on a phone */
+.device-paired-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}

@@ -1,7 +1,7 @@
 import type { DialogReader } from "./registry.ts";
 import { pickerPlan } from "./interaction-plan.ts";
 import { type InteractivePromptAnswer } from "../../shared/protocol.ts";
-import { ANSI_RE, KEY, type MenuRow, type ParsedPrompt, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, nearestQuestion, normalizeText, wrapped } from "./shared.ts";
+import { ANSI_RE, KEY, type MenuRow, type ParsedPrompt, cleanLine, findLastIndex, finishPrompt, isDivider, own, keySteps, navigationKeys, nearestQuestion, normalizeText, wrapped } from "./shared.ts";
 
 const OMP_OPTION_MARKER_RE = /^([ \t]*)(?:[❯›>]\s*)?([○●◉◯☐☑☒✓])/;
 
@@ -143,9 +143,9 @@ function parseOmpSubmit(screen: string): ParsedPrompt | null {
   // unanswered-questions warning)
   const body = (answers ? panel.filter((line) => !OMP_REVIEW_ROW_RE.test(line) && !OMP_REVIEW_NOTE_RE.test(line)) : panel).join("\n");
   return finishPrompt("omp", {
-    kind: "menu", title: "Review answers", question: "Submit these answers?", body: body || null,
+    kind: "menu", title: own("Review answers"), question: own("Submit these answers?"), body: body || null,
     ...(answers ? { answers } : {}),
-    options: [{ label: "Submit", description: null }, { label: "Cancel", description: null }],
+    options: [{ label: own("Submit"), description: null }, { label: own("Cancel"), description: null }],
     multi_select: false, custom_option_index: null,
   }, {
     responder: "omp-submit", menuLabels: ["Submit", "Cancel"], selectedIndex: 0,
@@ -201,7 +201,7 @@ function parseOmpQuestion(screen: string): ParsedPrompt | null {
   if (!question || selectedIndex < 0 || optionRows.length === 0 || customIndex !== rows.length - 1
     || (hintIndex === clippedHintIndex && !ompRowsHaveAlignedMarkers(lines, rows))) return null;
   return finishPrompt("omp", {
-    kind: "question", title: multiSelect ? "Multiple choice" : "Question", question, body: null,
+    kind: "question", title: own(multiSelect ? "Multiple choice" : "Question"), question, body: null,
     options: optionRows.map((row) => ({ label: row.label.replace(/ \(Recommended\)$/i, ""), description: row.description ?? null })),
     multi_select: multiSelect, custom_option_index: multiSelect ? null : optionRows.length,
   }, {
@@ -331,15 +331,15 @@ function parseOmpModel(screen: string): ParsedPrompt | null {
   if (list === null) return null;
   const labels = list.rows.map((row) => row.label);
   const current = list.rows.find((row) => row.current);
-  const asked = `Select model for this session${current ? ` (currently ${current.label})` : ""}`;
+  const asked = current ? own("Select model for this session (currently {model})", { model: current.label }) : own("Select model for this session");
   return finishPrompt("omp", {
     kind: "question",
     title: "",
-    question: list.more ? `${asked}. More models are listed in the terminal.` : asked,
+    question: list.more ? own("{question}. More models are listed in the terminal.", { question: asked }) : asked,
     body: null,
     options: list.rows.map((row) => ({
       label: row.label,
-      description: row.overContext === null ? null : `The conversation is over its ${row.overContext} context: omp compacts it first`,
+      description: row.overContext === null ? null : own("The conversation is over its {context} context: omp compacts it first", { context: row.overContext }),
     })),
     multi_select: false,
     custom_option_index: null,
@@ -363,8 +363,8 @@ function parseOmpHandoff(screen: string): ParsedPrompt | null {
   const below = lines.slice(index + 1).filter(Boolean);
   if (below.length < 2 || !below[0]!.startsWith("π >") || !below.slice(1).every((line) => line.startsWith("╰─"))) return null;
   return finishPrompt("omp", {
-    kind: "menu", title: "Handoff", question: OMP_HANDOFF_RE.exec(lines[index]!)![1]!, body: null,
-    options: [{ label: "Cancel", description: null }], multi_select: false, custom_option_index: null,
+    kind: "menu", title: own("Handoff"), question: OMP_HANDOFF_RE.exec(lines[index]!)![1]!, body: null,
+    options: [{ label: own("Cancel"), description: null }], multi_select: false, custom_option_index: null,
   }, {
     responder: "omp-handoff", menuLabels: ["Cancel"], selectedIndex: 0,
     checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: 0,

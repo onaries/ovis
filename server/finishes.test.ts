@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { AgentStatus, SessionSnapshot } from "../shared/protocol.ts";
 import machines from "../site/demo/fixtures/machines.json";
 import { CompletionTracker } from "./completion.ts";
-import { Finishes, finishHerdrIdentity } from "./finishes.ts";
+import { Finishes, finishHerdrIdentity, herdrLifetime } from "./finishes.ts";
 import { LaunchedAgents } from "./launched-agents.ts";
 import { shownStatus } from "../src/lib/sidebarOrder.ts";
 
@@ -116,6 +116,14 @@ it("starts with a random epoch per server and rotates on proven herdr identity c
   expect(restarted.finish_epoch).not.toBe(first.finish_epoch);
   expect(restarted.finish_id).toBe(1);
   expect(finishes.snapshot(snapshot("done"), new CompletionTracker()).finish_epoch).toBe(restarted.finish_epoch);
+});
+
+it("names one herdr by the same opaque lifetime from every server, and another herdr by another", () => {
+  const identity = "66306:1234567:1790829888292852700";
+  expect(herdrLifetime(identity)).toBe(herdrLifetime(identity));
+  expect(herdrLifetime(identity)).toMatch(/^[0-9a-f]{32}$/);
+  expect(herdrLifetime(identity)).not.toContain("1234567");
+  expect(herdrLifetime("66306:1234568:1790829888292852700")).not.toBe(herdrLifetime(identity));
 });
 
 it("recognizes a replaced socket file and Windows marker incarnation, never just a reused PID", () => {

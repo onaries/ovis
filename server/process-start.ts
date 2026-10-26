@@ -1,49 +1,26 @@
 import { readFileSync } from "node:fs";
+import { darwinStartTime } from "./darwin-process.ts";
 
-/** `ps -o etime=`: `[[dd-]hh:]mm:ss` since the process started. */
-export function parseElapsed(text: string): number | null {
-  const match = /^\s*(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)\s*$/.exec(text);
-  if (!match) return null;
-  const [, days = "0", hours = "0", minutes, seconds] = match;
-  return ((Number(days) * 24 + Number(hours)) * 60 + Number(minutes!)) * 60 + Number(seconds!);
+/**
+ * The kernel's own start on macOS, to the millisecond, read fresh on every call (a live PID may belong
+ * to a replacement process) and without a child process: a `ps` here held the event loop (#1404).
+ */
+function darwinStart(pid: number): number | null {
+  try {
+    const micros = darwinStartTime(pid);
+    return micros === null ? null : Number(micros / 1000n);
+  } catch {
+    return null;
+  }
 }
-
-type StartReading = { readonly started: number; readonly lower: number };
-type StartSpawn = (argv: string[], options: {
-  readonly stdout: "pipe"; readonly stderr: "ignore"; readonly timeout: number; readonly killSignal: "SIGKILL";
-}) => { readonly exitCode: number; readonly stdout: { toString(): string }; readonly exitedDueToTimeout?: boolean };
-
-/** Read a fresh macOS start on every call: a live PID may belong to a replacement process. */
-export function createDarwinStartReader(
-  spawn: StartSpawn = (argv, options) => Bun.spawnSync(argv, options),
-  now: () => number = Date.now,
-): (pid: number) => StartReading | null {
-  return (pid) => {
-    const before = now();
-    try {
-      const ps = spawn(["/bin/ps", "-o", "etime=", "-p", String(pid)], {
-        stdout: "pipe", stderr: "ignore", timeout: 1000, killSignal: "SIGKILL",
-      });
-      const elapsed = ps.exitCode === 0 && !ps.exitedDueToTimeout ? parseElapsed(ps.stdout.toString()) : null;
-      if (elapsed === null) return null;
-      return { started: now() - elapsed * 1000, lower: before - (elapsed + 1) * 1000 };
-    } catch {
-      return null;
-    }
-  };
-}
-
-const darwinStart = createDarwinStartReader();
 
 /**
  * When a process started, in ms since the epoch: Linux counts it in /proc (USER_HZ
- * ticks after boot); macOS has no /proc, so there `ps` tells how long it has run (to the
- * second, which is all the callers compare). null where neither answers.
+ * ticks after boot); macOS has no /proc, so there the kernel's process record tells it
+ * (sysctl). null where neither answers.
  */
 export function processStartedAt(pid: number): number | null {
-  if (process.platform === "darwin") {
-    return darwinStart(pid)?.started ?? null;
-  }
+  if (process.platform === "darwin") return darwinStart(pid);
   return linuxBirth(pid);
 }
 
@@ -73,20 +50,20 @@ export function processAlive(pid: number): boolean {
 }
 
 /**
- * processStartUpperBound without holding the event loop: on macOS `ps` runs as a child that is awaited.
+ * processStartedAt for a caller that awaits it: the same reading (Linux's /proc birth; macOS's kernel record),
+ * which no platform needs a child process for any more (#1404). null where neither answers.
+ */
+export async function processStartedAtAsync(pid: number): Promise<number | null> {
+  return processStartedAt(pid);
+}
+
+/**
+ * processStartUpperBound for a caller that awaits it; every platform's read is synchronous now.
  * Where no start time is known (Windows), null.
  */
 export async function processStartUpperBoundAsync(pid: number): Promise<number | null> {
-  if (process.platform === "linux") return processStartUpperBound(pid);
-  if (process.platform !== "darwin") return null;
-  try {
-    const ps = Bun.spawn(["/bin/ps", "-o", "etime=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore" });
-    const [text, code] = await Promise.all([new Response(ps.stdout).text(), ps.exited]);
-    const elapsed = code === 0 ? parseElapsed(text) : null;
-    return elapsed === null ? null : Date.now() - elapsed * 1000 + 1000;
-  } catch {
-    return null;
-  }
+  if (process.platform !== "linux" && process.platform !== "darwin") return null;
+  return processStartUpperBound(pid);
 }
 
 /** An upper bound for comparing a new thread's timestamp, without btime's whole-second loss. */
@@ -123,15 +100,13 @@ function linuxReadStart(pid: number): number | null {
 /**
  * A time no later than the process started, in ms since the epoch: what a thread begun since
  * must be no older than. Codex 0.163 creates its thread as its process starts, often in the same
- * millisecond tick on Linux and always in the same second as macOS's `ps` reports; the bound from
+ * millisecond tick on Linux and always in the same second on macOS; the bound from
  * above (processStartUpperBound, still what a send's process check compares) left such a thread
  * out, and two Codex panes of one directory with short answers both said they could not tell. An older thread let in with it makes two begun
  * since, and two tell nothing.
  */
 export function processStartLowerBound(pid: number): number | null {
-  if (process.platform === "darwin") {
-    return darwinStart(pid)?.lower ?? null;
-  }
+  if (process.platform === "darwin") return darwinStart(pid);
   if (process.platform !== "linux") return null;
   // the earlier of both readings, less one tick: no later than the real start (the uptime's), nor
   // than the start processStartedAt tells (btime's), so a thread made as the process starts is in

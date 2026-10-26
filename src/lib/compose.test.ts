@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneCommands } from "../../server/commands.ts";
+import { setCurrentLanguage, translate } from "./i18n.ts";
 
 describe("menu rows", () => {
   it("keeps a description's first sentence, without its full stop", () => {
@@ -168,6 +169,13 @@ describe("composerMessage and submitNote", () => {
     expect(pendingActionUncertain("disconnected", "held")).toBe(true);
     expect(submitNote("held_input", "x")).toBe("Not sent: send or discard the held input first.");
     expect(submitNote("pending_input_unsupported", "x")).toBe("Update this PC to send messages in the next turn. Your draft stayed here.");
+    // a first message held because its launched agent ended typed nothing, and says so apart from a changed terminal or session, in the client's words (#1547)
+    expect(submitNotTyped("first_message_launch_ended")).toBe(true);
+    const ended = "The agent started for this message has ended; review the message before sending it";
+    const changed = "The pane's terminal or agent session changed; review the message before sending it again";
+    expect(submitNote("first_message_launch_ended", ended)).not.toContain(ended);
+    expect(submitNote("pending_target_changed", changed)).not.toContain(changed);
+    expect(submitNote("first_message_launch_ended", "x")).not.toBe(submitNote("pending_target_changed", "x"));
     expect(submitNotTyped("submit_changed")).toBe(false);
     expect(submitNotTyped("pending_uncertain")).toBe(false);
     expect(submitNotTyped("submit_partial")).toBe(false);
@@ -199,6 +207,30 @@ describe("sameMessage", () => {
     expect(sameMessage("fix the login bug\nthen run tests", "fix the login\u00a0bug\n  then run tests")).toBe(true);
     expect(sameMessage("fix the login bug", "fix the logout bug")).toBe(false);
     expect(sameMessage("  ", "")).toBe(false);
+  });
+});
+
+describe("OpenCode agent-change refusal", () => {
+  it.each(["en", "ko", "ja", "zh"] as const)("localizes the refusal fields in %s", (language) => {
+    const fields = { from: 'Build "custom"', to: "Plan \\ next" };
+    const message = `Tab switched OpenCode's agent from ${JSON.stringify(fields.from)} to ${JSON.stringify(fields.to)}. Nothing more was typed.`;
+    setCurrentLanguage(language);
+    try {
+      expect(submitNote("submit_changed", message)).toBe(translate(language, "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.", fields));
+    } finally {
+      setCurrentLanguage("en");
+    }
+  });
+
+  it.each(["en", "ko", "ja", "zh"] as const)("localizes the another-skill refusal in %s", (language) => {
+    const message = "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.";
+    setCurrentLanguage(language);
+    try {
+      expect(submitNote("submit_changed", message)).toBe(translate(language, message));
+      expect(submitNote("submit_changed", message)).not.toContain("Not sent");
+    } finally {
+      setCurrentLanguage("en");
+    }
   });
 });
 

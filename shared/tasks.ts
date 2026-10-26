@@ -48,6 +48,8 @@ export interface OmoActivity {
   runs: OmoRun[];
   /** the PC's clock, which the times are on */
   server_time: string;
+  /** running tasks that count but are not listed: an OpenCode pane lists the newest thousand that run */
+  more_running?: number;
 }
 
 /**

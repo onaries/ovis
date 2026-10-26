@@ -849,6 +849,63 @@ function opencodeSessions(cwds: readonly string[], storeDir: string, path: strin
   }) ?? [];
 }
 
+/**
+ * The children Hermes lists as conversations of their own, each opened by `hermes --resume <its id>`:
+ * a /branch and a gateway reset (hermes-agent 354724fb, hermes_state_common.py _LISTABLE_CHILD_SQL;
+ * scripts/hermes-history-schema-probe.ts recorded it in server/fixtures/hermes-history/evidence.json).
+ * A marker counts only when it names the row's own parent: a compression continuation inherits its
+ * parent's model_config, markers included (as Hermes's own _non_continuation_child_sql reads them).
+ * An older row with no marker key is a branch when its parent ended "branched" before it started, or
+ * a reset when its parent ended at a reset and both carry the same routing key. Delegated runs, tool
+ * sessions, continuations and any child whose model_config is no JSON or holds another marker value
+ * stay hidden. Hermes's own list is looser (it shows a continuation that inherited a branch marker).
+ * A child is listed only when `hermes --resume` opens it as itself. resolve_resume_session_id first
+ * follows the compression chain (get_compression_tip: an unmarked, non-reset child of a row that
+ * ended "compression"), then walks the newest unmarked child at each step, through rows with no
+ * messages, to the deepest one with messages. So an older branch branched again, or a legacy branch
+ * Hermes compressed later, is left out: it resumes as another row. A /branch or a reset compressed
+ * later stays listed and opens there, before the compression: its continuation inherits the marker,
+ * which the chain step skips.
+ * Children are listed only from a store whose schema_version the probe proved, or an older one; a
+ * newer store lists its roots until the probe is run against that release.
+ */
+const HERMES_PROVEN_SCHEMA = 31;
+/**
+ * How many of the folder's newest roots and admitted children the resume walk examines: the walk runs
+ * on these alone, never on every row of the store. When more of them than MAX_ROWS resume as another
+ * row, the list is shorter than MAX_ROWS.
+ */
+export const HERMES_CANDIDATES = MAX_ROWS * 4;
+const HERMES_CHILD_COLUMNS = ["parent_session_id", "model_config", "source", "session_key", "started_at", "ended_at", "end_reason"];
+const HERMES_RESET_END_REASONS = ["session_reset", "session_switch", "idle", "daily", "suspended", "resume_pending_expired"];
+const hermesConfig = "(CASE WHEN json_valid(s.model_config) THEN s.model_config ELSE NULL END)";
+const hermesMarker = (name: string) => `json_type(${hermesConfig}, '$.${name}')`;
+/** a root, or a child Hermes lists as a branch or a reset of its parent */
+const HERMES_ADMITTED = `(s.parent_session_id IS NULL OR (coalesce(s.source, '') != 'tool' AND EXISTS (
+  SELECT 1 FROM sessions p WHERE p.id = s.parent_session_id AND (
+    (${hermesMarker("_delegate_from")} IS NULL AND (
+      (${hermesMarker("_branched_from")} = 'text' AND json_extract(${hermesConfig}, '$._branched_from') = p.id)
+      OR (${hermesMarker("_reset_from")} = 'text' AND json_extract(${hermesConfig}, '$._reset_from') = p.id)))
+    OR ((s.model_config IS NULL OR (json_type(${hermesConfig}) = 'object'
+        AND ${hermesMarker("_branched_from")} IS NULL AND ${hermesMarker("_reset_from")} IS NULL AND ${hermesMarker("_delegate_from")} IS NULL))
+      AND ((p.end_reason = 'branched' AND s.started_at >= p.ended_at)
+        OR (p.end_reason IN (${HERMES_RESET_END_REASONS.map((reason) => `'${reason}'`).join(", ")})
+          AND coalesce(s.session_key, '') != '' AND s.session_key = p.session_key))))
+)))`;
+/** a root, or a child `hermes --resume` opens as itself: no compression continuation to follow, and nothing past it in the walk has messages */
+const HERMES_RESUMES_ITSELF = `(s.parent_session_id IS NULL OR NOT EXISTS (
+  WITH RECURSIVE walk(id, depth) AS (
+    SELECT s.id, 0
+    UNION ALL
+    SELECT (SELECT c.id FROM sessions c WHERE c.parent_session_id = walk.id AND coalesce(c.source, '') != 'tool'
+        AND ${["_branched_from", "_delegate_from", "_reset_from"].map((name) => `json_extract(CASE WHEN json_valid(c.model_config) THEN c.model_config ELSE '{}' END, '$.${name}') IS NULL`).join(" AND ")}
+        AND NOT EXISTS (SELECT 1 FROM sessions r WHERE r.id = c.parent_session_id AND r.end_reason IN (${HERMES_RESET_END_REASONS.map((reason) => `'${reason}'`).join(", ")})
+          AND coalesce(c.session_key, '') != '' AND c.session_key = r.session_key)
+        ORDER BY c.started_at DESC, c.id DESC LIMIT 1), depth + 1
+    FROM walk WHERE walk.id IS NOT NULL AND depth < 31)
+  SELECT 1 FROM walk w WHERE w.depth > 0 AND w.id IS NOT NULL
+    AND ((w.depth = 1 AND s.end_reason = 'compression') OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = w.id))))`;
+
 function hermesSessions(cwds: readonly string[], hermesHome: string, budget: Budget): Row[] {
   return withDatabase(budget, hermesHome, join(hermesHome, "state.db"), (db) => {
     if (!tableExists(db, "sessions")) return [];
@@ -856,11 +913,21 @@ function hermesSessions(cwds: readonly string[], hermesHome: string, budget: Bud
     if (!columns.has("cwd")) return [];
     const spellings = spellingsOf(cwds);
     const updated = ["last_activity_at", "ended_at"].filter((name) => columns.has(name));
-    const updatedAt = `coalesce(${[...updated, "started_at"].join(", ")})`;
-    const sessions = db.query<{ id: string; title: string | null; started: number; updated: number }, string[]>(
-      `SELECT id, ${columns.has("title") ? `substr(title, 1, ${TITLE_CHARS * 4})` : "NULL"} AS title, started_at AS started, ${updatedAt} AS updated
-       FROM sessions WHERE cwd IN (${placeholders(spellings)})${columns.has("parent_session_id") ? " AND parent_session_id IS NULL" : ""}
-       ORDER BY updated DESC LIMIT ${MAX_ROWS}`,
+    const updatedAt = `coalesce(${[...updated, "started_at"].map((name) => `s.${name}`).join(", ")})`;
+    // a store of an unproven schema, or without every column the children are told apart by, lists its roots alone
+    const schema = tableExists(db, "schema_version") ? db.query<{ version: number | null }, []>("SELECT max(version) AS version FROM schema_version").get()?.version ?? null : null;
+    const proven = typeof schema === "number" && schema <= HERMES_PROVEN_SCHEMA && HERMES_CHILD_COLUMNS.every((name) => columns.has(name)) && tableExists(db, "messages");
+    const title = columns.has("title") ? `substr(s.title, 1, ${TITLE_CHARS * 4})` : "NULL";
+    const folder = `FROM sessions s WHERE s.cwd IN (${placeholders(spellings)})`;
+    // the resume walk runs on the newest HERMES_CANDIDATES admitted rows of the folder, after its cheap rules
+    const sessions = db.query<{ id: string; title: string | null; started: number; updated: number }, string[]>(proven
+      ? `SELECT s.id AS id, s.title AS title, s.started AS started, s.updated AS updated FROM (
+           SELECT s.id AS id, s.parent_session_id AS parent_session_id, s.end_reason AS end_reason, ${title} AS title, s.started_at AS started, ${updatedAt} AS updated
+           ${folder} AND ${HERMES_ADMITTED} ORDER BY updated DESC LIMIT ${HERMES_CANDIDATES}) s
+         WHERE ${HERMES_RESUMES_ITSELF} ORDER BY s.updated DESC LIMIT ${MAX_ROWS}`
+      : `SELECT s.id AS id, ${title} AS title, s.started_at AS started, ${updatedAt} AS updated
+         ${folder}${columns.has("parent_session_id") ? " AND s.parent_session_id IS NULL" : ""}
+         ORDER BY updated DESC LIMIT ${MAX_ROWS}`,
     ).all(...spellings);
     const first = tableExists(db, "messages")
       ? db.query<{ content: string | null }, [string]>(`SELECT substr(content, 1, ${HEAD_BYTES}) AS content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id LIMIT 1`)

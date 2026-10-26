@@ -4,6 +4,7 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { HerdrSocket } from "./ws.ts";
 import { EMPTY_DRAFT, restoreDraft, type InputDraft } from "./draft.ts";
 import { paneStorageId } from "../../shared/machines.ts";
+import { paneLifetimes } from "./paneLifetime.ts";
 import { inUse } from "./paneTerminalShared.ts";
 import { modalOpen } from "./focus.ts";
 import type { PendingMessageView } from "./pendingMessages.ts";
@@ -92,7 +93,7 @@ export function usePaneAttach(deps: PaneAttachDeps): void {
     // a record past its TTL, an undated one, and a hand-edited one all restore as nothing held
     let saved = EMPTY_DRAFT;
     try {
-      saved = paneId ? restoreDraft(localStorage.getItem(`ovis:terminal-draft:${paneStorageId(machineId, paneId)}`), Date.now()) : EMPTY_DRAFT;
+      saved = paneId ? restoreDraft(paneLifetimes.paneStorage.getItem(`ovis:terminal-draft:${paneStorageId(machineId, paneId)}`), Date.now()) : EMPTY_DRAFT;
     } catch {}
     setDraft(saved);
     draftPaneRef.current = paneId;

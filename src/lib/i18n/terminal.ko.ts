@@ -12,6 +12,7 @@ export const TERMINAL_KO: Record<string, string> = {
   "Waiting for terminal input…": "터미널 입력 준비 중…",
   "Paused while you use another window": "다른 창을 쓰는 동안 일시 정지됨",
   "View only while you use another window · click to type": "다른 창을 쓰는 동안 보기 전용 · 클릭하면 입력",
+  "View only while you are not typing here · type or click to type": "입력하지 않는 동안 보기 전용 · 입력하거나 클릭하면 입력",
   "Drop on the left": "왼쪽에 놓기",
   "Drop on the right": "오른쪽에 놓기",
   "Live terminal is coming to Windows PCs: herdr cannot attach a terminal there yet. The chat lens works now.": "Windows PC의 실시간 터미널은 준비 중입니다. herdr가 아직 Windows에서 터미널 attach를 지원하지 않습니다. 채팅은 지금 바로 쓸 수 있습니다.",
@@ -120,4 +121,5 @@ export const TERMINAL_KO: Record<string, string> = {
   "Paste into the input line": "입력창에 붙여넣기",
   "Show keyboard": "키보드 보이기",
   "Hide keyboard": "키보드 숨기기",
+  "Recover unsent text": "보내지 않은 글 복구",
 };

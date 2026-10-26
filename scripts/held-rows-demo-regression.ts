@@ -106,6 +106,9 @@ try {
         const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-US", hasTouch: touch });
         await context.addInitScript((queues) => {
           localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+          // the rows were kept under the demo's herdr (site/demo/transport.ts): with no record they would
+          // be an earlier release's, whose herdr nothing proves, and go to Recover unsent text
+          localStorage.setItem("ovis:pane-lifetime:local", "demo-local");
           for (const [owner, value] of Object.entries(queues)) localStorage.setItem(`ovis:queue:${owner}`, value);
         }, seed);
         const page = await context.newPage();

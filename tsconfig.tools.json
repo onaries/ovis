@@ -34,6 +34,7 @@
     "scripts/chat-gjc-streaming-browser-qa.ts",
     "scripts/grok-chat-browser-qa.ts",
     "scripts/claude-image-browser-qa.ts",
+    "scripts/omp-codex-image-browser-qa.ts",
     "scripts/gjc-status-browser-regression.ts",
     "scripts/sidebar-activity-demo-regression.ts",
     "scripts/pane-mute-demo-regression.ts",

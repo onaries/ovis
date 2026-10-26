@@ -258,6 +258,8 @@ try {
         });
         await context.addInitScript(([owner, messages, settings]) => {
           localStorage.setItem("ovis:settings", settings!);
+          // held under the demo's herdr (site/demo/transport.ts), not an earlier release's (lib/paneLifetime.ts)
+          localStorage.setItem("ovis:pane-lifetime:local", "demo-local");
           if (messages !== "") localStorage.setItem(`ovis:queue:${owner}`, messages!);
         }, [panes.web, held.length === 0 ? "" : JSON.stringify({ version: 1, messages: held.map((text, at) => ({ id: `m${at}`, text })) }), JSON.stringify({ language, theme, ...settings })] as const);
         // a soft keyboard the script can raise: lib/viewport.ts reads navigator.virtualKeyboard

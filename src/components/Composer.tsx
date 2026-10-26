@@ -811,8 +811,10 @@ export function Composer({
     if (terminalTyped?.name === "resume" && onOpenHistory) { setMenuDismissed(true); onOpenHistory(); return true; }
     const sent = text;
     const sentAttachments = attachments;
+    let sendId: number | undefined;
     const settle = (result: boolean | string | DraftRefusal): void => {
-      const acknowledged = result === true ? composerDrafts.settle(draftKey, sent) : null;
+      // a send for a pane another herdr has replaced since leaves the new pane's box alone (#1608)
+      const acknowledged = result === true ? composerDrafts.settle(draftKey, sent, sendId) : null;
       if (!mounted.current) return;
       if (typeof result !== "boolean") setNote(result);
       if (acknowledged === null) return;
@@ -827,14 +829,15 @@ export function Composer({
       setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
     };
     if (!composerDrafts.begin(draftKey, sent)) return false;
+    sendId = composerDrafts.sendOf(draftKey);
     // a polish landing before the acknowledgement would count as an edit and keep the sent message here
     dictation.forget();
     try {
       const result = onSend(text, clearDraft, sendAnyway);
-      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return true; }
-      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
+      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey, sendId); return true; }
+      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey, sendId));
     } catch {
-      composerDrafts.end(draftKey);
+      composerDrafts.end(draftKey, sendId);
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
     return true;
@@ -915,12 +918,13 @@ export function Composer({
       }
     };
     if (!composerDrafts.begin(draftKey)) return;
+    const sendId = composerDrafts.sendOf(draftKey);
     try {
       const result = deliver();
-      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return; }
-      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
+      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey, sendId); return; }
+      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey, sendId));
     } catch {
-      composerDrafts.end(draftKey);
+      composerDrafts.end(draftKey, sendId);
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
   }, [connected, draftKey, sending]);
@@ -1374,7 +1378,7 @@ export function Composer({
               <MessageSquarePlus aria-hidden="true" />
             </button>
           )}
-          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} claude={agent === "claude"} codex={agent === "codex"} plan={plan} />
+          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} subagents={agent === "claude" || agent === "opencode" || agent === "codex"} plan={plan} />
         </div>
         {/* between the two control groups of the card's last row. The agent's name, its separator and the
             state word are read, not drawn: the mark and the header name the agent, and Stop, the live row and

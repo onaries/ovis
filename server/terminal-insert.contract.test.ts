@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { createServer } from "./index.ts";
 import { herdrRpc } from "./herdr/client.ts";
 import * as herdr from "./herdr/client.ts";
@@ -41,35 +41,31 @@ const chunks = (recorder: Recorder): Chunk[] => readFileSync(recorder.log, "utf8
 });
 const typed = (recorder: Recorder, from: number) => chunks(recorder).slice(from).map((chunk) => chunk.data).join("");
 
-/** Settles once `file` exists: its directory is watched before the first look, so a file already there counts. */
-function appears(file: string, ms = 15_000): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const watcher = watch(dirname(file), check);
-    const timer = setTimeout(() => { watcher.close(); reject(new Error(`${file} did not appear within ${ms}ms`)); }, ms);
-    function check(): void {
-      if (!existsSync(file)) return;
-      clearTimeout(timer);
-      watcher.close();
-      resolve();
-    }
-    check();
-  });
+/*
+ * The recorder's files are looked at again until a deadline, not on fs.watch events: Bun can set a
+ * directory watch up after watch() returns, so the write a wait was for could land unseen, and the
+ * wait ran out with the text already in the log (#1948).
+ */
+
+/** Settles once `file` exists. */
+async function appears(file: string, ms = 15_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (existsSync(file)) return;
+    if (Date.now() > deadline) throw new Error(`${file} did not appear within ${ms}ms`);
+    await Bun.sleep(25);
+  }
 }
 
-/** The bytes the recorder read since `from`, once `wanted` holds of them; the log is watched before the first look. */
-function recorded(recorder: Recorder, from: number, wanted: (text: string) => boolean, ms = 10_000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const watcher = watch(dirname(recorder.log), check);
-    const timer = setTimeout(() => { watcher.close(); reject(new Error(`the recorder did not read the text within ${ms}ms: ${JSON.stringify(typed(recorder, from))}`)); }, ms);
-    function check(): void {
-      const text = typed(recorder, from);
-      if (!wanted(text)) return;
-      clearTimeout(timer);
-      watcher.close();
-      resolve(text);
-    }
-    check();
-  });
+/** The bytes the recorder read since `from`, once `wanted` holds of them. */
+async function recorded(recorder: Recorder, from: number, wanted: (text: string) => boolean, ms = 10_000): Promise<string> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const text = typed(recorder, from);
+    if (wanted(text)) return text;
+    if (Date.now() > deadline) throw new Error(`the recorder did not read text that ${wanted} holds of within ${ms}ms (${text.length} characters read): ${JSON.stringify(text)}`);
+    await Bun.sleep(25);
+  }
 }
 
 async function recorder(label: string, paste: "on" | "off" = "on"): Promise<Recorder> {

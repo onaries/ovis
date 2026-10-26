@@ -41,6 +41,26 @@ const RESUME_FLAGS: Record<SessionHistoryAgent, string[]> = {
 };
 export const SESSION_HISTORY_AGENTS = Object.keys(RESUME_FLAGS) as SessionHistoryAgent[];
 
+/**
+ * Web push on the demo: the fictional workstation's key, and two subscriptions its push service has
+ * already answered for, so the alerts notice has something to show. The public demo has no
+ * PushManager, so only a browser script that lends it one (scripts/push-health-demo-regression.ts)
+ * ever hands these over; nothing here reaches a real push service.
+ */
+export const DEMO_PUSH = {
+  publicKey: "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+  /** retired by its push service after one alert got through: the tombstone that says why alerts stopped */
+  retired: {
+    subscription: { endpoint: "https://push.example.test/demo/retired", keys: { p256dh: "CzBVep_E6Q4zWH2ix-wRNluApcrvFDleg6jN8hc8YYar0PUaP2SJrtP4HUJnjLHW-yBFao-02f4jSG2St9wBJks", auth: "BzxxptsQRXqv5BlOg7jtIg" } },
+    status: { registered: false, last_success_at: t(2), last_failure_at: t(41), last_failure: "gone" as const },
+  },
+  /** refused by its push service, and still registered: told, and not mended by subscribing again */
+  refused: {
+    subscription: { endpoint: "https://push.example.test/demo/refused", keys: { p256dh: "AyA9WneUsc7rCCVCX3yZttPwDSpHZIGeu9j1Ei9MaYajwN36FzRRbouoxeL_HDlWc5CtyucEIT5beJWyz-wJJkM", auth: "BUJ_vPk2c7DtKmek4R5bmA" } },
+    status: { registered: true, last_success_at: t(2), last_failure_at: t(44), last_failure: "rejected" as const },
+  },
+};
+
 /** Two earlier, fictional sessions of an agent in a demo folder, newest first. */
 export function sessionHistoryRows(agent: SessionHistoryAgent): SessionHistoryRow[] {
   const row = (id: string, title: string, firstMessage: string, started: number, updated: number): SessionHistoryRow =>

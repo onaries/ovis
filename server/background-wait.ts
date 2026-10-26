@@ -101,6 +101,18 @@ export class BackgroundWait {
     pane.waiting = false;
   }
 
+  /**
+   * reset, keeping the rests observed from `since` on: another agent's lifetime ended there, and the one that
+   * followed was seen rest before its tracker knew its session. Its counts come afresh from that tracker.
+   */
+  resetBefore(paneId: string, since: number): void {
+    const pane = this.panes.get(paneId);
+    if (!pane) return;
+    const rests = pane.rests.filter((at) => at >= since);
+    this.reset(paneId);
+    pane.rests = rests;
+  }
+
   forget(paneId: string): void {
     this.panes.delete(paneId);
   }

@@ -14,6 +14,8 @@ export async function checkPushSettings(browser: Browser, origin: string): Promi
   let hold: Promise<void> | undefined;
   const tests: string[] = [];
   let registrations = 0;
+  // what the server knows of this device's subscription (POST /api/push/status): clean until a push is retired
+  let health = { registered: true, last_success_at: null as string | null, last_failure_at: null as string | null, last_failure: null as string | null };
   try {
     await context.addInitScript((endpoint) => {
       localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
@@ -43,6 +45,7 @@ export async function checkPushSettings(browser: Browser, origin: string): Promi
       await hold;
       await route.fulfill(status === 204 ? { status } : { status, json: { error: { code: status === 404 ? "subscription_not_found" : "push_failed", message: "Test failure" } } });
     });
+    await context.route("**/api/push/status", (route) => route.fulfill({ json: health }));
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -87,12 +90,34 @@ export async function checkPushSettings(browser: Browser, origin: string): Promi
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "push-test-mobile.png") });
     assert.equal(await page.locator(".settings-dialog").evaluate((el) => el.scrollWidth <= el.clientWidth), true);
 
+    // the push service retired the subscription since: the notice over the pane and Settings say so once, and
+    // Settings' repair clears both on the push it proves (the shared state of lib/pushHealth.ts)
+    health = { registered: false, last_success_at: "2026-10-20T08:12:00.000Z", last_failure_at: "2026-10-21T07:41:00.000Z", last_failure: "gone" };
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    const notice = page.locator('[data-testid="push-health-notice"]');
+    await notice.waitFor();
+    assert.equal(await notice.getAttribute("data-problem"), "gone");
+    assert.equal(await page.locator(".update-notice.is-alerts").count(), 1, "one notice, over the pane");
+    await page.locator('[data-testid="push-health-hint"]').filter({ hasText: "The push service retired this device's subscription. Turn alerts on again to make a new one." }).waitFor();
+    health = { registered: true, last_success_at: null, last_failure_at: null, last_failure: null };
+    // the repair's confirmation push goes through (the failure above left the stand-in answering 502)
+    status = 204;
+    const beforeRepair = registrations;
+    await page.locator(".settings-dialog").getByRole("button", { name: "Turn alerts on again", exact: true }).click();
+    await page.getByText("Test notification sent. Check this device for the alert.", { exact: true }).waitFor();
+    await notice.waitFor({ state: "detached" });
+    assert.equal(registrations, beforeRepair + 1, "the repair registers this device once");
+    assert.equal(await page.locator(".update-notice.is-alerts").count(), 0);
+
     // A browser can lose its local subscription while the server still has the endpoint.
     await page.evaluate(async () => (await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription())?.unsubscribe());
     const beforeMissing = tests.length;
     await send.click();
-    await page.getByText("This device's push subscription is missing. Turn alerts on again.", { exact: true }).waitFor();
+    await page.locator('[data-testid="push-health-hint"]').getByText("This device's push subscription is missing. Turn alerts on again.", { exact: true }).waitFor();
     assert.equal(tests.length, beforeMissing);
+    // the look after the test finds the browser holding none: the notice over the pane says so too, once
+    await page.locator('[data-testid="push-health-notice"][data-problem="missing"]').waitFor();
+    assert.equal(await page.locator(".update-notice.is-alerts").count(), 1);
 
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
     await runMoreItem(page, "Alerts");
@@ -101,7 +126,7 @@ export async function checkPushSettings(browser: Browser, origin: string): Promi
     assert.equal(await send.isDisabled(), true, "testing must not turn alerts on implicitly");
     await page.getByRole("button", { name: "Turn alerts on again", exact: true }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("PASS Settings push test: sent, stale/local missing subscription, recovery, failure, off, mobile layout");
+    console.log("PASS Settings push test: sent, stale/local missing subscription, recovery, failure, retired notice shared with Settings and cleared by its repair, off, mobile layout");
   } finally {
     release?.();
     await context.close();

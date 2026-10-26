@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
-import type { Machine, MachineEvent } from "../../shared/machines.ts";
+import type { DevicePairedEvent, Machine, MachineEvent } from "../../shared/machines.ts";
 import { ApiError, authenticate, fetchMachines, verifySourceBoot } from "./api.ts";
 import { passingFolder, recentDirectories } from "./recent-directories.ts";
 import { keepEventStream } from "./eventStream.ts";
 import { receiveSeen } from "./seenFinishes.ts";
+import { withPairedNotice } from "./pairedNotices.ts";
 import { takeAuthTokenFromUrl } from "./authLink.ts";
 import { applyPaneStatus } from "./snapshot.ts";
 import { setAgentRowTokens } from "./agentRowTokens.ts";
@@ -15,6 +16,8 @@ import type { NotificationTarget } from "./notificationTarget.ts";
 import type { SelectionMark } from "./selectionMark.ts";
 import type { SplitState } from "./split.ts";
 import { deviceInUse, followsHerdrFocus, movingHerdrFocusOn } from "./followFocus.ts";
+import { paneLifetimes } from "./paneLifetime.ts";
+import { displayPaneTitle } from "../components/Sidebar.tsx";
 import type { usePreferencesSync } from "./preferencesSync.ts";
 import type { useAlertSignals } from "./useAlertSignals.ts";
 
@@ -87,6 +90,8 @@ export function useRosterLoader({ rosterIn, setMachines, setMachineRosterLoaded,
     const started = reorderCoordinator.loadStarted();
     try {
       await snapshotRequests.current.read(fetchMachines, (next) => {
+        // a PC whose herdr was replaced leaves its panes' drafts and lenses before they are drawn
+        paneLifetimes.observe(next, displayPaneTitle);
         reorderCoordinator.roster(next, { kind: "load", started });
         setMachines((previous) => sameData(previous, next) ? previous : next);
         rosterIn();
@@ -147,7 +152,7 @@ export function useRosterLoader({ rosterIn, setMachines, setMachineRosterLoaded,
   return { snapshotRequests, reorderCoordinator, load, scheduleRefetch };
 }
 
-export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequests, onRoster, reorderCoordinator, setMachines, rosterIn, setMachineRosterLoaded, machinesRef, onPaneStatus, onPaneExited, followFocusRef, selectionRef, splitShownRef, splitRef, pendingLink, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, scheduleRefetch, preferencesResubscribedRef, preferencesDisconnectedRef, preferencesClosedRef, dropIn, chime, getTakeNotificationTargetRef }: {
+export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequests, onRoster, reorderCoordinator, setMachines, rosterIn, setMachineRosterLoaded, machinesRef, onPaneStatus, onPaneExited, followFocusRef, selectionRef, splitShownRef, splitRef, pendingLink, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, scheduleRefetch, preferencesResubscribedRef, preferencesDisconnectedRef, preferencesClosedRef, dropIn, chime, setPairedNotices, getTakeNotificationTargetRef }: {
   locked: boolean | null;
   receivePreferencesRef: RefObject<ReturnType<typeof usePreferencesSync>["receive"]>;
   snapshotRequests: RefObject<SnapshotRequests>;
@@ -175,6 +180,7 @@ export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequest
   preferencesClosedRef: RefObject<ReturnType<typeof usePreferencesSync>["closed"]>;
   dropIn: ReturnType<typeof useAlertSignals>["dropIn"];
   chime: ReturnType<typeof useAlertSignals>["chime"];
+  setPairedNotices: Dispatch<SetStateAction<readonly DevicePairedEvent[]>>;
   getTakeNotificationTargetRef: () => RefObject<(target: NotificationTarget) => void>;
 }) {
   // One SSE subscription watches every PC, even when no terminal is selected.
@@ -187,9 +193,12 @@ export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequest
       if (payload.type === "preferences") { receivePreferencesRef.current(payload.preferences); return; }
       if (payload.type === "herdr-sidebar") { setAgentRowTokens(payload.agents); return; }
       if (payload.type === "seen") { receiveSeen(payload.finishes); return; }
+      // a device paired with this server: told once per enrollment, kept until read, the oldest giving way
+      if (payload.type === "device-paired") { setPairedNotices((list) => withPairedNotice(list, payload)); return; }
       // A poll started before this event can carry an older roster or pane status.
       snapshotRequests.current.invalidate();
       if (payload.type === "machines") {
+        paneLifetimes.observe(payload.machines, displayPaneTitle);
         onRoster(payload.machines);
         reorderCoordinator.roster(payload.machines, { kind: "event" });
         setMachines((previous) => sameData(previous, payload.machines) ? previous : payload.machines);

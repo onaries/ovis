@@ -91,6 +91,12 @@
   }
 }
 
+/* the one action that ends every pairing at once: parted from the pairing controls above it by a hairline */
+.devices-revoke-all {
+  padding-top: var(--space-3);
+  border-top: var(--hairline) solid var(--border);
+}
+
 .devices-open {
   padding: var(--space-2) var(--space-3);
   border: var(--hairline) solid var(--status-blocked);

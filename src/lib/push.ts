@@ -36,11 +36,13 @@ export function pushSupported(): boolean {
 }
 
 /** Test the existing subscription without repairing it first, so stale registrations stay visible. */
-export async function testDevicePush(): Promise<"sent" | "unsupported" | "permission" | "missing"> {
+export async function testDevicePush(tested?: (endpoint: string) => void): Promise<"sent" | "unsupported" | "permission" | "missing"> {
   if (!pushSupported()) return "unsupported";
   if (notificationState() !== "granted") return "permission";
   const subscription = appPush() ? await appSubscription() : await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription();
   if (!subscription) return "missing";
+  // the subscription the test is about, whatever replaces it while the push is out (lib/pushHealth.ts)
+  tested?.(subscription.endpoint);
   await sendTestPush(subscription.endpoint);
   return "sent";
 }
@@ -57,6 +59,28 @@ function sameKey(current: ArrayBuffer | null, expected: Uint8Array): boolean {
   if (!current || current.byteLength !== expected.length) return false;
   const bytes = new Uint8Array(current);
   return bytes.every((byte, index) => byte === expected[index]);
+}
+
+/** Whether a subscription made for `key` was made for the server's; null where that is not known. */
+export function sameServerKey(key: ArrayBuffer | null, serverKey: string): boolean | null {
+  return key ? sameKey(key, keyBytes(serverKey)) : null;
+}
+
+/**
+ * This device's subscription as it stands, read without changing it (lib/pushHealth.ts), with the
+ * key it was made for: null when it holds none, undefined while there is nothing to ask (no
+ * service worker registered yet). The app makes its subscription for the key it is handed each
+ * time and says no key back, so its key is null.
+ */
+export async function heldPushSubscription(): Promise<{ json: PushSubscriptionJSON; key: ArrayBuffer | null } | null | undefined> {
+  if (appPush()) {
+    const subscription = await appSubscription();
+    return subscription && { json: subscription, key: null };
+  }
+  const registration = await navigator.serviceWorker.getRegistration();
+  if (!registration) return undefined;
+  const subscription = await registration.pushManager.getSubscription();
+  return subscription && { json: subscription.toJSON(), key: subscription.options.applicationServerKey };
 }
 
 /** navigator.serviceWorker.ready never settles when registration failed; bound it. */
@@ -77,6 +101,25 @@ let pending: Promise<string | null> | null = null;
 // Preserve click order across registration/removal, even when a prior operation fails.
 let operations: Promise<unknown> = Promise.resolve();
 
+/** Moves on with every registration or removal begun: a look at the subscription started before one reads a subscription it may replace (lib/pushHealth.ts). */
+let epoch = 0;
+
+export function pushSubscriptionEpoch(): number {
+  return epoch;
+}
+
+/** The endpoint this page's latest registration ended with, null after a failed one or a removal: what a repair proved (lib/pushHealth.ts). */
+let registered: string | null = null;
+
+export function registeredPushEndpoint(): string | null {
+  return registered;
+}
+
+/** Settles with the registration or removal under way, if any: a look at the subscription waits for it (lib/pushHealth.ts). */
+export function currentPushOperation(): Promise<void> {
+  return operations.then(() => undefined, () => undefined);
+}
+
 /**
  * Subscribes this device (reusing a live subscription) and registers it with the server.
  * Idempotent, so it also runs on every load: a server that lost its state gets the device
@@ -89,7 +132,14 @@ let operations: Promise<unknown> = Promise.resolve();
  */
 export function ensurePushSubscription(alerts?: AlertPrefs): Promise<string | null> {
   if (pending) return pending;
-  const request = operations.catch(() => undefined).then(() => subscribeDevice(alerts)).finally(() => {
+  epoch += 1;
+  const request = operations.catch(() => undefined).then(() => subscribeDevice(alerts)).then((endpoint) => {
+    registered = endpoint;
+    return endpoint;
+  }, (error: unknown) => {
+    registered = null;
+    throw error;
+  }).finally(() => {
     if (pending === request) pending = null;
   });
   pending = request;
@@ -150,6 +200,8 @@ async function subscribeApp(alerts?: AlertPrefs): Promise<string> {
 export function removePushSubscription(): Promise<void> {
   // A later enable must enqueue a new registration after this removal, not join the old one.
   pending = null;
+  epoch += 1;
+  registered = null;
   const request = operations.catch(() => undefined).then(unsubscribeDevice);
   operations = request;
   return request;

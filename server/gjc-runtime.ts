@@ -1,12 +1,12 @@
 /** GJC transcript identity is published by its lifecycle extension; shared terminal/store helpers are also used by omp. */
 
-import { execFileSync } from "node:child_process";
 import { closeSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import nodePath, { join, type PlatformPath } from "node:path";
 
 import { readGjcNativeBinding, validateGjcNativeTranscript } from "./gjc-native.ts";
+import { darwinTerminal } from "./darwin-process.ts";
 import { herdrRpc } from "./herdr/client.ts";
-import { processStartedAt } from "./process-start.ts";
+import { processStartedAt, processStartedAtAsync } from "./process-start.ts";
 import { descendantArgv, windowsProcessTable, type ProcessRow } from "./windows-processes.ts";
 
 export interface GjcTerminal { id: string; startedAt: number }
@@ -143,23 +143,13 @@ export function gjcTerminal(pid: number, environ?: readonly string[] | null): Gj
       return { id: tty.slice(5).replaceAll("/", "-"), startedAt };
     }
     if (process.platform === "darwin") {
-      // lstart is local time without a zone: print it in the zone Date.parse reads it in,
-      // which is not always $TZ (bun test runs in UTC without setting it)
-      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const output = execFileSync("ps", ["-p", String(pid), "-o", "tty=", "-o", "lstart="], {
-        encoding: "utf8", timeout: 1500, maxBuffer: 4096, env: { ...process.env, LC_ALL: "C", TZ: zone }, stdio: ["ignore", "pipe", "ignore"],
-      });
-      return parseGjcPs(output);
+      // the terminal and the start from one kernel record, as `ps -o tty= -o lstart=` read them, without a
+      // child process that holds the event loop
+      const record = darwinTerminal(pid);
+      return record !== null && /^ttys\d+$/.test(record.tty) ? { id: record.tty, startedAt: record.startedAt } : null;
     }
   } catch { /* process exited or its terminal metadata is unavailable */ }
   return null;
-}
-
-export function parseGjcPs(output: string): GjcTerminal | null {
-  const match = output.trim().match(/^(?:\/dev\/)?(ttys\d+)\s+(.+)$/);
-  if (!match) return null;
-  const startedAt = Date.parse(match[2]!);
-  return Number.isFinite(startedAt) ? { id: match[1]!, startedAt } : null;
 }
 
 /**
@@ -286,7 +276,7 @@ type GjcProcessIdentity = { pid: number; birth: number };
 export type GjcTranscriptOptions = {
   platform?: string;
   processInfo?: (paneId: string) => Promise<GjcPaneProcessInfo | null>;
-  processBirth?: (pid: number) => number | null;
+  processBirth?: (pid: number) => number | null | Promise<number | null>;
   readProcessTable?: () => Promise<ProcessRow[]>;
   now?: () => number;
 };
@@ -319,12 +309,13 @@ async function foregroundProcesses(
   const foreground = processInfo.foreground_processes;
   if (!Array.isArray(foreground)) return null;
   const identities = new Map<number, number>();
-  const birthOf = options.processBirth ?? processStartedAt;
+  // awaited: GJC discovery runs this for every snapshot, and macOS reads a start with `ps` (#1545)
+  const birthOf = options.processBirth ?? processStartedAtAsync;
   for (const process of foreground) {
     const argv = Array.isArray(process.argv) ? process.argv.filter((arg): arg is string => typeof arg === "string") : [];
     if (!isGjcProcess(argv)) continue;
     if (typeof process.pid !== "number" || !Number.isSafeInteger(process.pid) || process.pid <= 0) return null;
-    const birth = birthOf(process.pid);
+    const birth = await birthOf(process.pid);
     if (birth === null || !Number.isSafeInteger(birth) || birth <= 0) return null;
     const previous = identities.get(process.pid);
     if (previous !== undefined && !sameBirth(previous, birth, platform)) return null;

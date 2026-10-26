@@ -885,6 +885,17 @@ describe("bridge verification failures", () => {
     const verify = (manager as unknown as { verify(ssh: SshConnection, descriptor: BridgeDescriptor, socket: string): Promise<unknown> }).verify.bind(manager);
     return verify(ssh, descriptor, socket).then(() => "verified", (error: Error) => error.message);
   }
+  /** what verifying `fields` says when nothing answers at the end of the tunnel, and the arguments forward() got */
+  async function unanswered(fields: Record<string, unknown>): Promise<{ told: string; forwards: unknown[][] }> {
+    const manager = new MachineManager(temp(), {} as PushService, {} as CompletionTracker);
+    stops.push(() => manager.stop());
+    const forwards: unknown[][] = [];
+    const ssh = { forward: async (...args: unknown[]) => { forwards.push(args.slice(1)); } } as unknown as SshConnection;
+    const descriptor = { port: 18472, token: TOKEN, pid: process.pid, socket_path: "/s", bridge_protocol: 0, bundle_version: "", ...fields } as BridgeDescriptor;
+    const verify = (manager as unknown as { verify(ssh: SshConnection, descriptor: BridgeDescriptor, socket: string): Promise<unknown> }).verify.bind(manager);
+    const told = await verify(ssh, descriptor, "/s").then(() => "verified", (error: Error) => error.message);
+    return { told, forwards };
+  }
 
   // Evaluate the entrypoint's actual socket setup without starting its daemon.
   const entryLines = readFileSync(new URL("./remote-entry.ts", import.meta.url), "utf8").split("\n");
@@ -1001,5 +1012,40 @@ describe("bridge verification failures", () => {
     expect(await told(answering(500, JSON.stringify({ error: { code: "internal_error", message: "EACCES: permission denied, stat '/home/u/x'" } })))).toBe(GENERIC(500));
     expect(await told(answering(503, "<html>proxy</html>"))).toBe(GENERIC(503));
     expect(await told(answering(500, "null"))).toBe(GENERIC(500));
+  });
+
+  // #1960: an Ovis older than its loopback relay, with HOST set to another address, answers nothing on the PC's 127.0.0.1
+  it("says what to change when nothing answers on the PC's loopback, not the connection's raw error", async () => {
+    expect((await unanswered({})).told).toBe("This PC's Ovis does not answer at 127.0.0.1:18472 through SSH. If it runs with HOST set to another address, update it or set HOST=127.0.0.1 there, restart it, then add the PC again.");
+    expect((await unanswered({ managed_remote: true })).told).toBe("The bridge on this PC does not answer at 127.0.0.1:18472 through SSH. Reconnect after checking the remote bridge.");
+  });
+
+  it("says a bridge that did not answer in time timed out, without HOST advice", async () => {
+    const timedOut = spyOn(globalThis, "fetch").mockRejectedValue(new DOMException("The operation timed out.", "TimeoutError"));
+    try {
+      expect((await unanswered({})).told).toBe("This PC's Ovis did not answer at 127.0.0.1:18472 through SSH within 15 seconds. Reconnect after checking that it runs.");
+    } finally { timedOut.mockRestore(); }
+  });
+
+  it("says a bridge that stops halfway through its answer timed out", async () => {
+    // the deadline is what is tested: 200 ms here, not 15 s
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const short = spyOn(AbortSignal, "timeout").mockImplementation(() => realTimeout(200));
+    const manager = new MachineManager(temp(), {} as PushService, {} as CompletionTracker);
+    stops.push(() => manager.stop());
+    // its headers and the start of a body, then nothing
+    const ssh = { forward: async (local: number) => {
+      const stalled = Bun.listen({ hostname: "127.0.0.1", port: local, socket: { data(socket) { socket.write("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 1000\r\n\r\n{\"pid\""); } } });
+      stops.push(() => stalled.stop(true));
+    } } as unknown as SshConnection;
+    const descriptor = { port: 18472, token: TOKEN, pid: process.pid, socket_path: "/s", bridge_protocol: 0, bundle_version: "" } as BridgeDescriptor;
+    const verify = (manager as unknown as { verify(ssh: SshConnection, descriptor: BridgeDescriptor, socket: string): Promise<unknown> }).verify.bind(manager);
+    try {
+      expect(await verify(ssh, descriptor, "/s").then(() => "verified", (error: Error) => error.message)).toBe("This PC's Ovis did not answer at 127.0.0.1:18472 through SSH within 15 seconds. Reconnect after checking that it runs.");
+    } finally { short.mockRestore(); }
+  });
+
+  it("tunnels only to the PC's loopback, whatever address a descriptor names", async () => {
+    expect((await unanswered({ host: "203.0.113.99" })).forwards).toEqual([[18472]]);
   });
 });
