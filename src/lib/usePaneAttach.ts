@@ -57,12 +57,14 @@ export interface PaneAttachDeps {
   watchingRef: RefObject<boolean>;
   keyboardHoldsRef: RefObject<(force: boolean) => boolean>;
   followRef: RefObject<boolean>;
+  /** decides the fold again and keeps the cursor in view (useTerminalMount) */
+  followCursorRef: RefObject<() => void>;
   leaveRef: RefObject<() => void>;
   shownRef: RefObject<boolean>;
 }
 
 export function usePaneAttach(deps: PaneAttachDeps): void {
-  const { activeRef, autoSelected, cached, coarseRef, deferAttachRef, draftPaneRef, findOpenRef, fitRef, fittedRef, fixedGridRef, frameGateRef, hyperlinksRef, hostRef, machineId, mirrored, modifyOtherKeysRef, observeRef, paneId, pending, presented, presentationRef, releaseRef, releasedRef, retireOutputRef, secretRef, setDraft, setComposing, setEnded, setHeld, setInputError, setInputReady, setOutputError, setOutputReady, setReleased, setSecret, setUnsupported, setWatching, sharedGridRef, socketRef, stalledRef, terminalId, termRef, chatViewRef, cancelLeaveRef, cachedRef, watchingRef, keyboardHoldsRef, followRef, leaveRef, shownRef } = deps;
+  const { activeRef, autoSelected, cached, coarseRef, deferAttachRef, draftPaneRef, findOpenRef, fitRef, fittedRef, fixedGridRef, frameGateRef, hyperlinksRef, hostRef, machineId, mirrored, modifyOtherKeysRef, observeRef, paneId, pending, presented, presentationRef, releaseRef, releasedRef, retireOutputRef, secretRef, setDraft, setComposing, setEnded, setHeld, setInputError, setInputReady, setOutputError, setOutputReady, setReleased, setSecret, setUnsupported, setWatching, sharedGridRef, socketRef, stalledRef, terminalId, termRef, chatViewRef, cancelLeaveRef, cachedRef, watchingRef, keyboardHoldsRef, followRef, followCursorRef, leaveRef, shownRef } = deps;
 
   // Reset on a pane or terminal replacement: a herdr restart can keep the pane ID.
   // Old composition timers must never see the new terminal.
@@ -99,6 +101,8 @@ export function usePaneAttach(deps: PaneAttachDeps): void {
     frameGateRef.current.reset();
     hyperlinksRef.current.reset();
     modifyOtherKeysRef.current = 0;
+    // the fold is decided again for this pane (lib/terminalFold.ts), and the pane menu forgets the last one's width
+    followCursorRef.current();
     if (!paneId) return;
     const leavePane = (): void => {
       cancelLeaveRef.current();

@@ -171,7 +171,11 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       // (index.ts `mutating`): it writes nothing on another PC
       if (readOnly && !["GET", "HEAD", "OPTIONS"].includes(request.method)) return fail("read_only", "this device can only watch", 403);
       const endpoint = manager.endpoint(id);
-      if (!endpoint) return fail("machine_offline", "This PC is disconnected", 503);
+      if (!endpoint) {
+        // a chat opened while the PC waits to reconnect asks it to try now, not after its delay
+        manager.retryNow(id);
+        return fail("machine_offline", "This PC is disconnected", 503);
+      }
       // Explicit header allowlist: cookies, browser Authorization, forwarded headers
       // and remote Set-Cookie never cross this boundary. No arbitrary target URLs.
       const headers = new Headers({ authorization: `Bearer ${endpoint.token}` });

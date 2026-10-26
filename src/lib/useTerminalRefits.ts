@@ -156,7 +156,11 @@ export function useTerminalRefits(deps: TerminalRefitsDeps): void {
     wasFollowing.current = follow;
     const pane = paneRef.current;
     const term = termRef.current;
-    if (!pane || !term || observeRef.current || fixedGridRef.current) return;
+    if (!pane || !term || observeRef.current || fixedGridRef.current) {
+      // a mirror's grid stays herdr's, a watched one the pty's: the half made active, or following, only folds it again or not
+      if (fixedGridRef.current || observeRef.current) followCursorRef.current();
+      return;
+    }
     if (follow) {
       socketRef.current?.keepSize(pane);
       const shared = sharedGridRef.current;

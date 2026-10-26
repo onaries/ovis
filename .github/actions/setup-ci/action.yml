@@ -53,7 +53,7 @@ runs:
       # On the measured self-hosted connection this archive costs 37–43s to restore,
       # versus 7–20s for a fresh install. Do not pay for restore/save on disposable runners.
       if: runner.environment != 'self-hosted' && inputs.cache != 'restore'
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .ci-cache/bun
         key: bun-workspace-v2-${{ runner.environment }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.bun-version }}-${{ hashFiles('bun.lock') }}
@@ -61,7 +61,7 @@ runs:
           bun-workspace-v2-${{ runner.environment }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.bun-version }}-
     - name: Restore Bun dependencies (read-only)
       if: runner.environment != 'self-hosted' && inputs.cache == 'restore'
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .ci-cache/bun
         key: bun-workspace-v2-${{ runner.environment }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.bun-version }}-${{ hashFiles('bun.lock') }}

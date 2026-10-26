@@ -38,6 +38,7 @@ export class ConversationMonitor {
     private readonly opencodeDb?: string,
     private readonly hermesHome?: string,
     private readonly grokHome?: string,
+    private readonly museData?: string,
   ) {}
 
   get size(): number { return this.panes.size; }
@@ -108,7 +109,7 @@ export class ConversationMonitor {
       this.snapshot ??= sessionSnapshot().finally(() => { this.snapshot = null; });
       const snapshot = await this.snapshot;
       if (this.panes.get(paneId) !== state) return;
-      const transcript = await paneTranscript(paneId, this.codexHome, snapshot, this.devinDbPath, this.opencodeDb, this.hermesHome, this.grokHome);
+      const transcript = await paneTranscript(paneId, this.codexHome, snapshot, this.devinDbPath, this.opencodeDb, this.hermesHome, this.grokHome, this.museData);
       if (this.panes.get(paneId) !== state) return;
       state.transcript = transcript;
       present = this.read(paneId, state);

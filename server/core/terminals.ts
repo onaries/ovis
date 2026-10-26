@@ -55,7 +55,7 @@ export function validGeometry(cols: unknown, rows: unknown): { cols: number; row
  * is called through one, as the connections are built after the terminals.
  */
 export function createTerminalRegistry({ options, clients, stopped, terminalAttach, holdFor, heldRetry, retryFor, relookupFor, holdPending, holdPendingPane, attached, transcriptChanged, inputReady, end }: {
-  options: { codexHome?: string; devinDbPath?: string; opencodeDb?: string; hermesHome?: string; grokHome?: string };
+  options: { codexHome?: string; devinDbPath?: string; opencodeDb?: string; hermesHome?: string; grokHome?: string; museData?: string };
   clients: Set<Client>;
   stopped: () => boolean;
   terminalAttach: () => Promise<boolean>;
@@ -87,7 +87,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
         send(client, { type: "conversation-changed", pane_id: paneId, signature });
       }
     }
-  }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+  }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);
 
   function releaseConversation(paneId: string): void {
     for (const client of clients) {

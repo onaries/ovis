@@ -104,6 +104,8 @@ export const TERMINAL_JA: Record<string, string> = {
   "Close pane {name}?": "ペイン{name}を閉じますか？",
   "The pane's running processes will stop. Closing its last pane also closes the workspace.": "ペインで実行中のプロセスが停止します。最後のペインを閉じるとワークスペースも閉じます。",
   "Close pane": "ペインを閉じる",
+  "Wrap to screen": "画面の幅で折り返す",
+  "Original width": "元の幅で表示",
   "Save": "保存",
   "Move tab left": "タブを左に移動",
   "Move tab right": "タブを右に移動",

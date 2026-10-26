@@ -1,9 +1,10 @@
 import { expect, it, spyOn } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseCopilotTranscript } from "./copilot.ts";
+import * as copilotStore from "./copilot-store.ts";
 import { copilotProcessSession, copilotTranscriptFile as selectedTranscriptFile, copilotUnwrittenSession as selectedUnwrittenSession, heldSessions } from "./copilot-store.ts";
 import { ConversationUnavailable, forgetTranscriptState, HistoryChanged, paneConversation, toolOutput, transcriptPage, transcriptToolOutput } from "./conversation.ts";
 import { parseConversationMetadata } from "./conversation-metadata.ts";
@@ -247,7 +248,10 @@ it("fetches only a bounded complete output for the selected native call ID", () 
       + line("assistant.message", { content: "", toolRequests: [{ toolCallId: "call-1", name: "shell", arguments: {} }] })
       + line("tool.execution_complete", { toolCallId: "call-1", success: true, result: { content: "x".repeat(5000) } })
       + line("tool.execution_complete", { toolCallId: "unrelated", success: true, result: { content: "hidden" } }));
-    expect(transcriptPage("copilot-transcript", path).turns.at(-1)?.parts[0]).toMatchObject({ kind: "tool", output_ref: "call-1" });
+    const part = transcriptPage("copilot-transcript", path).turns.at(-1)?.parts[0];
+    const ref = part?.kind === "tool" ? part.output_ref : undefined;
+    expect(ref).toMatch(/^call-1@[0-9a-z]+@[0-9a-z]+@[0-9a-f]{32}$/);
+    expect(transcriptToolOutput("copilot-transcript", path, ref!)).toBe("x".repeat(5000));
     expect(transcriptToolOutput("copilot-transcript", path, "call-1")).toBe("x".repeat(5000));
     expect(transcriptToolOutput("copilot-transcript", path, "../secret")).toBeNull();
     expect(transcriptToolOutput("copilot-transcript", path, "unrelated")).toBeNull();
@@ -265,7 +269,10 @@ it("reads a complete Copilot tool result at EOF across read chunks, but refuses 
     const request = start + line("assistant.message", { toolRequests: [{ toolCallId: "eof-call", name: "shell" }] });
     const complete = line("tool.execution_complete", { toolCallId: "eof-call", success: true, result: { content: "z".repeat(70_000) } }).trimEnd();
     writeFileSync(path, request + complete);
-    expect(transcriptPage("copilot-transcript", path).turns.at(-1)?.parts[0]).toMatchObject({ kind: "tool", output_ref: "eof-call" });
+    const part = transcriptPage("copilot-transcript", path).turns.at(-1)?.parts[0];
+    const ref = part?.kind === "tool" ? part.output_ref : undefined;
+    expect(ref).toMatch(/^eof-call@[0-9a-z]+@[0-9a-z]+@[0-9a-f]{32}$/);
+    expect(transcriptToolOutput("copilot-transcript", path, ref!)).toBe("z".repeat(70_000));
     expect(transcriptToolOutput("copilot-transcript", path, "eof-call")).toBe("z".repeat(70_000));
     writeFileSync(path, request + complete.slice(0, -1));
     expect(transcriptToolOutput("copilot-transcript", path, "eof-call")).toBeNull();
@@ -330,6 +337,52 @@ it("bounds total tool-output scans even when a reference is missing or beyond th
   } finally { forgetTranscriptState(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+it("reads old paginated and recent Copilot outputs across a large append without scanning the gap", () => {
+  const dir = mkdtempSync(join(tmpdir(), "copilot-offsets-"));
+  const path = join(dir, "events.jsonl");
+  const request = (id: string) => line("assistant.message", { toolRequests: [{ toolCallId: id, name: "shell" }] });
+  const result = (id: string, content: string) => line("tool.execution_complete", { toolCallId: id, result: { content } });
+  try {
+    writeFileSync(path, start + prompt("old") + request("old-call") + result("old-call", "old ".repeat(1300))
+      + Array.from({ length: 55 }, (_, i) => prompt(`later ${i}`) + answer(`reply ${i}`)).join(""));
+    const latest = transcriptPage("copilot-transcript", path);
+    const older = transcriptPage("copilot-transcript", path, { before: latest.cursor! });
+    const oldRef = older.turns.flatMap((turn) => turn.parts).find((part) => part.kind === "tool")?.output_ref;
+    expect(oldRef).toMatch(/^old-call@[0-9a-z]+@[0-9a-z]+@[0-9a-f]{32}$/);
+    appendFileSync(path, (line("system.message", { content: "f".repeat(32_000) })).repeat(1100)
+      + prompt("recent") + request("recent-call") + result("recent-call", "recent ".repeat(900)));
+    expect(statSync(path).size).toBeGreaterThan(32 * 1024 * 1024);
+    const recent = transcriptPage("copilot-transcript", path);
+    const recentRef = recent.turns.flatMap((turn) => turn.parts).find((part) => part.kind === "tool")?.output_ref;
+    expect(recentRef).toMatch(/^recent-call@[0-9a-z]+@[0-9a-z]+@[0-9a-f]{32}$/);
+    expect(transcriptToolOutput("copilot-transcript", path, oldRef!)).toBe("old ".repeat(1300));
+    expect(transcriptToolOutput("copilot-transcript", path, recentRef!)).toBe("recent ".repeat(900));
+    expect(transcriptToolOutput("copilot-transcript", path, "recent-call")).toBeNull();
+    expect(transcriptPage("copilot-transcript", path, { before: latest.cursor! }).turns).toEqual(older.turns);
+  } finally { forgetTranscriptState(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+it("rejects offset refs after rewrite-and-growth, malformed records, and forged or orphan results", () => {
+  const dir = mkdtempSync(join(tmpdir(), "copilot-offset-integrity-"));
+  const path = join(dir, "events.jsonl");
+  const request = line("tool.execution_start", { toolCallId: "picked", toolName: "shell" });
+  const result = (content: string) => line("tool.execution_complete", { toolCallId: "picked", result: { content } });
+  try {
+    writeFileSync(path, start + prompt("request") + request + result("first ".repeat(900)));
+    const part = transcriptPage("copilot-transcript", path).turns.at(-1)?.parts[0];
+    if (part?.kind !== "tool" || !part.output_ref) throw new Error("missing tool ref");
+    const oldRef = part.output_ref;
+    expect(transcriptToolOutput("copilot-transcript", path, oldRef)).toBe("first ".repeat(900));
+    expect(transcriptToolOutput("copilot-transcript", path, oldRef.replace(/.$/, (last) => last === "0" ? "1" : "0"))).toBeNull();
+    writeFileSync(path, start + prompt("request") + request + result("other ".repeat(900)) + prompt("more"));
+    expect(transcriptToolOutput("copilot-transcript", path, oldRef)).toBeNull();
+    writeFileSync(path, start + prompt("request") + request + result("first ".repeat(900)).slice(0, -5) + "\n");
+    expect(transcriptToolOutput("copilot-transcript", path, oldRef)).toBeNull();
+    writeFileSync(path, start + prompt("request") + line("tool.execution_complete", { toolCallId: "picked", result: { content: "hidden".repeat(900) } }));
+    expect(transcriptPage("copilot-transcript", path).turns.some((turn) => turn.parts.some((item) => item.kind === "tool"))).toBe(false);
+  } finally { forgetTranscriptState(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 it.skipIf(process.platform !== "linux")("reuses peer claims across conversation and tool reads while rechecking the pane process", async () => {
   const own = await logFixture([]);
   const peer = await logFixture([]);
@@ -350,9 +403,11 @@ it.skipIf(process.platform !== "linux")("reuses peer claims across conversation 
   try {
     appendFileSync(own.log, register(session));
     appendFileSync(peer.log, register(other));
-    writeFileSync(join(own.root, "session-state", session, "events.jsonl"), start + prompt("own history")
+    const transcript = join(own.root, "session-state", session, "events.jsonl");
+    const contents = start + prompt("own history")
       + line("tool.execution_start", { toolCallId: "chosen", toolName: "shell" })
-      + line("tool.execution_complete", { toolCallId: "chosen", result: { content: "output ".repeat(1000) } }));
+      + line("tool.execution_complete", { toolCallId: "chosen", result: { content: "output ".repeat(1000) } });
+    writeFileSync(transcript, contents);
     const conversation = await paneConversation(ownPane);
     expect(conversation.source).toBe("copilot-transcript");
     expect(calls.filter((pane) => pane === peerPane)).toHaveLength(1);
@@ -363,6 +418,22 @@ it.skipIf(process.platform !== "linux")("reuses peer claims across conversation 
     expect(await toolOutput(ownPane, part.output_ref)).toBe("output ".repeat(1000));
     expect(calls.filter((pane) => pane === peerPane)).toHaveLength(1);
     expect(calls.filter((pane) => pane === ownPane)).toHaveLength(2);
+    const selectFile = copilotStore.copilotTranscriptFile;
+    for (const eraseAfter of [1, 2]) {
+      let selections = 0;
+      const disappearing = spyOn(copilotStore, "copilotTranscriptFile").mockImplementation((...args) => {
+        const selected = selectFile(...args);
+        if (selected === transcript && ++selections === eraseAfter) rmSync(transcript);
+        return selected;
+      });
+      try {
+        await expect(paneConversation(ownPane)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "transcript_missing" });
+        expect(selections).toBe(eraseAfter);
+      } finally {
+        disappearing.mockRestore();
+        writeFileSync(transcript, contents);
+      }
+    }
     calls.length = 0;
     info.mockImplementation(async (paneId) => {
       calls.push(paneId);

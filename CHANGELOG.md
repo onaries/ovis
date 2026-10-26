@@ -7,6 +7,39 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.18] - 2026-10-26
+
+### Added
+- Chat reads Muse Code sessions: prompts, answers, reasoning and tool activity, each pane bound to
+  its own session by the lock Muse writes for its process.
+  ([#1706](https://github.com/devswha/ovis/pull/1706) by @jpcarranza94)
+
+### Changed
+- Pictures a tool returned in Claude Code or pi (a Read of a screenshot, a browser screenshot) show
+  as small thumbnails at the end of their work line in Chat, folded or open, without opening the
+  row: hovering one shows it larger, a click opens the viewer on all of them. A block with many
+  keeps the latest four and counts the rest. Codex and OpenCode pictures still load only when
+  their row is opened.
+  ([#1952](https://github.com/devswha/ovis/pull/1952) by @mattmarcin)
+
+### Fixed
+- Copilot chat can open older and recent tool results even after a transcript grows beyond 32 MiB.
+  ([#1956](https://github.com/devswha/ovis/pull/1956) by @YuuuXie)
+- On a phone, a Windows PC's terminal is no longer cut off on the right: a pane wider than the
+  screen is drawn folded to its width, colours and links kept. The pane menu's Original width draws
+  it as on the PC again, and Wrap to screen folds it on a desktop too; the choice is kept on that
+  device.
+  ([#1961](https://github.com/devswha/ovis/pull/1961))
+- A chat opened on another PC while it waits to reconnect (a laptop that just woke, its network
+  back late) asks that PC to connect now, instead of waiting out a retry delay of up to a minute.
+  ([#1959](https://github.com/devswha/ovis/pull/1959))
+- On a phone that only watches a pane, a pane another device sized wider than the screen is no
+  longer cut off on the right: it is drawn folded to the screen's width, as a Windows PC's pane is,
+  and so is a pane drawn at another device's size while the phone's keyboard is up. The pane menu's
+  Original width draws it at that device's width again, panned sideways. A phone that types into
+  the pane still gets the program redrawn at its own width.
+  ([#1963](https://github.com/devswha/ovis/pull/1963))
+
 ## [0.4.17] - 2026-10-26
 
 ### Added
@@ -6024,7 +6057,8 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/devswha/ovis/compare/v0.4.17...HEAD
+[Unreleased]: https://github.com/devswha/ovis/compare/v0.4.18...HEAD
+[0.4.18]: https://github.com/devswha/ovis/compare/v0.4.17...v0.4.18
 [0.4.17]: https://github.com/devswha/ovis/compare/v0.4.16...v0.4.17
 [0.4.16]: https://github.com/devswha/ovis/compare/v0.4.15...v0.4.16
 [0.4.15]: https://github.com/devswha/ovis/compare/v0.4.14...v0.4.15

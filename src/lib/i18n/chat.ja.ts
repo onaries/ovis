@@ -103,6 +103,8 @@ export const CHAT_JA: Record<string, string> = {
   "Couldn't load the terminal output": "ターミナル出力を読み込めませんでした",
   "Jump to latest": "最新に移動",
   "Open image": "画像を開く",
+  "Pictures from this work": "この作業で得た画像",
+  "All {count} pictures": "{count} 枚の画像をすべて表示",
   "Attached image": "添付画像",
   "Conversation compacted": "会話を圧縮しました",
   "{n} earlier turn on a branch you navigated away from": "移動で離れたブランチの以前の話 {n}件",

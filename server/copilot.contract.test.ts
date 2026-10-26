@@ -131,8 +131,9 @@ it.skipIf(process.platform !== "linux")("binds only the reported UUID to the for
   if (completed?.kind !== "tool" || !completed.output_ref) throw new Error("fixture tool output ref missing");
   const completedRef = completed.output_ref;
   expect(completed).toMatchObject({ kind: "tool", error: true });
-  expect(completedRef).toMatch(/^cp[0-9a-f]{16}\.call-1$/);
+  expect(completedRef).toMatch(/^cp[0-9a-f]{16}\.call-1@[0-9a-z]+@[0-9a-z]+@[0-9a-f]{32}$/);
   expect((await fetch(toolUrl("call-1"))).status).toBe(404);
+  expect((await fetch(toolUrl(completedRef.slice(0, completedRef.indexOf("@"))))).status).toBe(404);
   expect(await (await fetch(toolUrl(completedRef))).text()).toBe("error ".repeat(900));
   appendFileSync(file(id), event("session.resume", { selectedModel: "fixture-model" }) + event("user.message", { content: "appended" }));
   expect((await read()).history_id).toBe(first.history_id);

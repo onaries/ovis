@@ -104,6 +104,8 @@ export const TERMINAL_ZH: Record<string, string> = {
   "Close pane {name}?": "关闭面板 {name}？",
   "The pane's running processes will stop. Closing its last pane also closes the workspace.": "面板中运行的进程将停止。关闭最后一个面板也会关闭工作区。",
   "Close pane": "关闭面板",
+  "Wrap to screen": "按屏幕宽度换行",
+  "Original width": "按原始宽度显示",
   "Save": "保存",
   "Move tab left": "向左移动标签页",
   "Move tab right": "向右移动标签页",

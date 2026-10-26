@@ -801,6 +801,108 @@
   white-space: nowrap;
 }
 
+/* a work line and the pictures its tools returned at its end (lib/workImages.ts): the words keep the
+   line's hover plate and are cut first, the thumbnails never wrap */
+.work-block-line,
+.work-row-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.work-block-line > .work-block-head,
+.work-row-line > .work-row-head {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.work-images {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* small enough to sit in the line's height: what the agent saw, at a glance */
+.work-image {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 2.5rem;
+  height: 1.5rem;
+  padding: 0;
+  overflow: hidden;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  cursor: zoom-in;
+}
+
+.work-image:hover,
+.work-image:focus-visible {
+  border-color: var(--border-strong);
+}
+
+.work-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* a finger's floor: the line is --touch-target tall there, and each thumbnail takes all of it as a
+   square, so a tap that misses one never folds the block (fewer of them fit: LINE_IMAGES_SHOWN_TOUCH) */
+@media (pointer: coarse) {
+  .work-image {
+    width: var(--touch-target);
+    height: var(--touch-target);
+  }
+}
+
+/* the hover look: over the page, a fixed box so it is placed once, before the picture decodes */
+.work-image-preview {
+  position: fixed;
+  z-index: var(--z-popover);
+  width: min(20rem, calc(100vw - 2 * var(--space-2)));
+  overflow: hidden;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-pop);
+  pointer-events: none;
+}
+
+.work-image-preview img,
+.work-image-preview .image-slot.is-loading,
+.work-image-preview .image-slot.is-failed {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--bg);
+}
+
+.work-image-preview img { object-fit: contain; }
+
+.work-image-preview-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.work-image-preview-tool {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* rows hang under the header on its own left edge. The space under the header is the rows' own
    (not the block's gap): it opens and folds with them, and a folded block holds none of it */
 .work-block-rows {
@@ -916,8 +1018,8 @@
 /* blocks stacked in a call's detail; a file link inside an output's text is not one */
 .chat-tool-io > :not(:first-child):not(.markdown-file) { margin-top: var(--space-2); }
 
-/* a tool's own pictures (pi reads a file into the result): left-aligned, unlike a user's
-   attachments, and only fetched when the row is opened, so the bytes are not on the page */
+/* a tool's own pictures in its opened row (pi reads a file into the result): left-aligned, unlike
+   a user's attachments; the folded line shows them small (.work-images) */
 .chat-tool-images {
   display: flex;
   flex-wrap: wrap;

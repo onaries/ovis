@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, afterAll, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { appendFileSync, chmodSync, closeSync, constants as fsConstants, copyFileSync, mkdirSync, mkdtempSync, existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, openSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, watch, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import { createServer } from "./index.ts";
@@ -230,6 +230,82 @@ describe("Agy conversation API", () => {
       expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [] });
     } finally {
       monitor?.stop(); app?.stop(); db?.close(); await workspaceClose(created.workspace.workspace_id);
+      forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+describe("Muse conversation API", () => {
+  it.skipIf(process.platform === "win32")("binds the session whose lock names the pane's Muse process, and follows a switch to another session", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-muse-contract-"));
+    // the session Muse 1.4.13 recorded, live: without the `session.end` that its /exit wrote
+    const recorded = readFileSync(join(import.meta.dir, "fixtures", "muse", "recorded-1.4.13.jsonl"), "utf8").split("\n");
+    const end = recorded.at(-2)!;
+    const live = `${recorded.slice(0, -2).join("\n")}\n`;
+    const sessions = join(root, "data", "sessions", "2026", "10", "25");
+    // each session's folder is named after it, as Muse names it
+    const first = join(sessions, "01a17441-bc95-7e23-b488-988dceb829cd");
+    const second = join(sessions, "01a17445-0000-7000-8000-000000000002");
+    mkdirSync(first, { recursive: true }); mkdirSync(second);
+    // a link, not a copy: macOS kills a copied system binary, and argv keeps the name it was run by
+    const executable = join(root, "muse");
+    symlinkSync("/bin/sleep", executable);
+    const created = await workspaceCreate({ cwd: root, label: "ovis-test-muse-api" });
+    let app: ReturnType<typeof createServer> | undefined;
+    try {
+      const paneId = created.root_pane.pane_id;
+      await herdrRpc("pane.send_text", { pane_id: paneId, text: `${executable} 600\n` });
+      let pid: number | undefined;
+      for (const deadline = Date.now() + 10_000;;) {
+        const pane = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
+        const info = await herdrRpc<{ process_info?: { foreground_processes?: { pid: number; argv?: string[] }[] } }>("pane.process_info", { pane_id: paneId });
+        pid = info.process_info?.foreground_processes?.find((process) => process.argv?.[0] === executable)?.pid;
+        if (pane?.agent === "muse" && pid !== undefined) break;
+        if (Date.now() > deadline) throw new Error(`fixture Muse process did not start: ${pane?.agent} ${JSON.stringify(info.process_info?.foreground_processes)}`);
+        await Bun.sleep(50);
+      }
+      app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), museData: join(root, "data") });
+      const url = `http://127.0.0.1:${app.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`;
+      // a session no lock ties to this process is never shown, whatever its folder or age
+      writeFileSync(join(first, "session.jsonl"), live);
+      writeFileSync(join(first, ".session.lock"), `pid=${pid! + 1}\nhost=${hostname()}\n`);
+      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [] });
+      writeFileSync(join(first, ".session.lock"), `pid=${pid}\nhost=${hostname()}\n`);
+      // the scan that found nothing stands for 2 s, as for a fresh Muse that has written no log yet
+      let response: Response, body;
+      for (const deadline = Date.now() + 5000;;) {
+        response = await fetch(url); body = await response.json();
+        if (body.source === "muse-transcript" || Date.now() > deadline) break;
+        await Bun.sleep(100);
+      }
+      expect(body.source).toBe("muse-transcript");
+      expect(body.turns.map((turn: { role: string }) => turn.role)).toEqual(["user", "assistant", "user", "assistant", "user", "assistant"]);
+      expect(body.metadata.model).toBe("muse-spark-1.2");
+      expect((await fetch(url, { headers: { "if-none-match": response.headers.get("etag")! } })).status).toBe(304);
+      const outputUrl = `http://127.0.0.1:${app.port}/api/pane/conversation/tool-output?${new URLSearchParams({ pane_id: paneId, ref: "call_01a1744243497078923c0e3306f4900d" })}`;
+      expect(await (await fetch(outputUrl)).text()).toBe("ls: missing-folder: No such file or directory\n");
+      // the TUI switches sessions: the one left behind ends, the new one holds a lock for the same pid
+      appendFileSync(join(first, "session.jsonl"), `${end}\n`);
+      const prompt = recorded.find((line) => line.includes('"runtime.user_intent.accepted"'))!.replace("01a17441-bc95-7e23-b488-988dceb829cd", "01a17445-0000-7000-8000-000000000002");
+      writeFileSync(join(second, "session.jsonl"), `${prompt}\n`);
+      writeFileSync(join(second, ".session.lock"), `pid=${pid}\nhost=${hostname()}\n`);
+      const switched = await (await fetch(url)).json();
+      expect(switched.turns).toHaveLength(1);
+      expect(switched.history_id).not.toBe(body.history_id);
+      expect((await fetch(outputUrl)).status).toBe(404);
+      // a record in a shape the reader does not know, or a log it cannot read, shows Terminal
+      const log = join(second, "session.jsonl");
+      appendFileSync(log, `${prompt.replace('"runtime.user_intent.accepted"', '"runtime.user_intent.renamed"')}\n`);
+      expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [] });
+      writeFileSync(log, `${prompt}\n`);
+      expect((await (await fetch(url)).json()).source).toBe("muse-transcript");
+      // root reads a file whatever its mode
+      if (process.getuid?.() !== 0) {
+        chmodSync(log, 0);
+        expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [] });
+      }
+    } finally {
+      app?.stop(); await workspaceClose(created.workspace.workspace_id);
       forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
     }
   }, 20_000);
@@ -4238,7 +4314,8 @@ describe("PC management API", () => {
     let serve = () => new Response("{}");
     const peer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => serve() });
     const url = `http://127.0.0.1:${peer.port}`;
-    const manager = { endpoint: (id: string) => id === "capped-remote" ? { url, token: "contract-token" } : undefined, trackTerminal: () => () => {} } as unknown as MachineManager;
+    const retried: string[] = [];
+    const manager = { endpoint: (id: string) => id === "capped-remote" ? { url, token: "contract-token" } : undefined, trackTerminal: () => () => {}, retryNow: (id: string) => { retried.push(id); } } as unknown as MachineManager;
     const ask = (machine: string, path: string, readOnly = false) => handleMachineRequest(new Request(`http://127.0.0.1/api/machines/${machine}/${path}`), manager, undefined, undefined, readOnly);
     const logged: string[] = [];
     const error = spyOn(console, "error").mockImplementation((...args: unknown[]) => { logged.push(args.join(" ")); });
@@ -4263,6 +4340,8 @@ describe("PC management API", () => {
       const offline = await ask("missing", "session");
       expect(offline.status).toBe(503);
       expect((await offline.json() as ApiError).error.code).toBe("machine_offline");
+      // and asked to try connecting now rather than after its retry delay
+      expect(retried).toEqual(["missing"]);
     } finally { error.mockRestore(); peer.stop(true); }
   });
   it("gates PC metadata, setup and SSE behind the existing token", async () => {

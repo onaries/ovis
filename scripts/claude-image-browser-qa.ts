@@ -1,7 +1,7 @@
 /** Claude Code pictures in Chat, end to end on an owned herdr pane: a Claude stand-in bound to a
  * native transcript -> real HTTP -> React -> the image endpoint -> Chrome's decoder. A prompt that
  * is only a picture, sent after a rewind, is a turn of its own and the turns it left behind stay
- * hidden; a picture a Read returned is fetched only once its row opens. Run after bun run build.
+ * hidden; a picture a Read returned shows small on its folded work line. Run after bun run build.
  * Every byte of fixture text is synthetic. */
 import "./test-herdr.ts"; // a herdr session of its own: nothing shows in the user's
 import assert from "node:assert/strict";
@@ -128,14 +128,25 @@ try {
   assert.deepEqual(served.get(promptRef), { status: 200, type: "image/gif" });
   console.log("PASS a Claude prompt that is only a picture is its own turn, its thumbnail decoded, the rewind's turns hidden");
 
-  // a settled turn's work is folded, and a row shows its picture only once opened
-  assert.equal(served.has(toolRef), false, "a folded row fetches nothing");
+  // a settled turn's work is folded, and its line shows the picture the Read returned, small
   const work = log.locator(".work-block-head");
   assert.equal(await work.count(), 1);
   assert.equal(await work.getAttribute("aria-expanded"), "false");
+  const thumb = log.locator(".work-block-line .work-image img");
+  assert.equal(await thumb.count(), 1);
+  await thumb.scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => {
+    const img = document.querySelector<HTMLImageElement>(".work-block-line .work-image img");
+    return img !== null && img.complete && img.naturalWidth === 1;
+  });
+  assert.deepEqual(served.get(toolRef), { status: 200, type: "image/png" });
+  assert.equal(await log.locator(".work-block-line .work-image").getAttribute("aria-label"), "Image 1 from Read");
+  console.log("PASS the folded line shows the picture Claude Code's Read returned, decoded from the served bytes");
+
+  // opened, the row carries it on its own line, and larger in its detail once the row opens
   await work.click();
-  assert.equal(await log.locator(".chat-tool-images img").count(), 0, "an open block with a closed row fetches nothing");
-  assert.equal(served.has(toolRef), false);
+  assert.equal(await log.locator(".work-block-line .work-images").count(), 0);
+  assert.equal(await log.locator(".work-row-line .work-image").count(), 1);
   await log.locator(".work-row-head").first().click();
   const shot = log.locator(".chat-tool-images img");
   assert.equal(await shot.count(), 1);
@@ -144,9 +155,8 @@ try {
     const img = document.querySelector<HTMLImageElement>(".chat-tool-images img");
     return img !== null && img.complete && img.naturalWidth === 1;
   });
-  assert.deepEqual(served.get(toolRef), { status: 200, type: "image/png" });
   assert.equal(await shot.getAttribute("alt"), "Image 1 from Read");
-  console.log("PASS a picture Claude Code's Read returned shows in its row once opened, decoded from the served bytes");
+  console.log("PASS an opened row shows the Read's picture in its detail");
 
   const missing = await page.request.get(`http://127.0.0.1:${server.port}/api/pane/conversation/image?${new URLSearchParams({ pane_id: paneId, ref: `${ids.result}:0:1` })}`);
   assert.equal(missing.status(), 404);
@@ -161,6 +171,10 @@ try {
     const small = await phone.newPage();
     const smallLog = await openChat(small);
     await small.screenshot({ path: join(evidence, "claude-images-phone-prompt.png") });
+    // the folded line keeps its thumbnail on one line at a phone's width
+    const head = await smallLog.locator(".work-block-head").boundingBox();
+    const line = await smallLog.locator(".work-block-line .work-image").boundingBox();
+    assert.ok(head !== null && line !== null && Math.abs((line.y + line.height / 2) - (head.y + head.height / 2)) < 2, "the thumbnail sits on the folded line");
     await smallLog.locator(".work-block-head").click();
     await smallLog.locator(".work-row-head").first().click();
     await smallLog.locator(".chat-tool-images img").scrollIntoViewIfNeeded();

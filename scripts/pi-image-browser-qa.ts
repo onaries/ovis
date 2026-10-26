@@ -1,10 +1,10 @@
-/** pi's pictures end to end in Chrome: parsed page -> prompt or work row -> <img> bytes. A prompt
- * that is only a picture is a turn of its own; a tool result's picture loads once its row opens. */
+/** pi's pictures end to end in Chrome: parsed page -> prompt, work line or row -> <img> bytes. A
+ * prompt that is only a picture is a turn of its own; a tool result's picture shows on its work line. */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium } from "playwright-core";
+import { chromium, type Page } from "playwright-core";
 import { transcriptPage } from "../server/conversation.ts";
 import type { ConversationResponse } from "../shared/protocol.ts";
 import { chromePath } from "./chrome-path.ts";
@@ -16,6 +16,7 @@ let server: ReturnType<typeof Bun.serve> | undefined;
 // are a picture, not a broken-image placeholder
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const GIF = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+const png = { type: "image", mimeType: "image/png", data: PNG };
 // pi's own record shapes: the picture sits in the tool result, beside the text it returns
 const entries = [
   { type: "session", version: 3, id: "s", timestamp: "2026-09-30T00:00:00Z", cwd: root },
@@ -31,13 +32,34 @@ const entries = [
   { type: "message", id: "r1", parentId: "a1", timestamp: "2026-09-30T00:00:03Z", message: {
     role: "toolResult", toolCallId: "call-1", toolName: "read", content: [
       { type: "text", text: "read 2 images" },
-      { type: "image", mimeType: "image/png", data: PNG },
+      png,
       { type: "image", mimeType: "image/gif", data: GIF },
     ],
   } },
+  // a second call's four pictures: the folded line holds the latest four, the first two counted on a tile
+  { type: "message", id: "a2", parentId: "r1", timestamp: "2026-09-30T00:00:04Z", message: {
+    role: "assistant", model: "qwen-test", provider: "test", stopReason: "toolUse", usage: { input: 10, output: 4 },
+    content: [{ type: "toolCall", id: "call-2", name: "read", arguments: { path: "shots" } }],
+  } },
+  { type: "message", id: "r2", parentId: "a2", timestamp: "2026-09-30T00:00:05Z", message: {
+    role: "toolResult", toolCallId: "call-2", toolName: "read", content: [{ type: "text", text: "read 4 images" }, png, png, png, png],
+  } },
 ];
+const LATEST = ["pi:call-2:0", "pi:call-2:1", "pi:call-2:2", "pi:call-2:3"];
 let conversation: ConversationResponse;
 const bytes = new Map<string, { data: Buffer; type: string }>();
+const served: string[] = [];
+
+// loading="lazy" defers the fetch until a picture is near the viewport, and naturalWidth only
+// settles once Chrome has decoded what came back
+async function decoded(page: Page, selector: string): Promise<number[][]> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (await page.locator(selector).evaluateAll((imgs) => imgs.length > 0 && imgs.every((img) => (img as HTMLImageElement).complete && (img as HTMLImageElement).naturalWidth > 0))) break;
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  return page.locator(selector).evaluateAll((imgs) => imgs.map((img) => [(img as HTMLImageElement).naturalWidth, (img as HTMLImageElement).naturalHeight]));
+}
+
 try {
   const build = await Bun.build({ entrypoints: ["scripts/chat-history-fixture.tsx"], outdir: root, target: "browser", define: { "process.env.NODE_ENV": '"development"' } });
   assert.ok(build.success, String(build.logs));
@@ -66,12 +88,11 @@ try {
     const images = part.kind === "tool" ? part.images ?? [] : part.kind === "image" ? [part] : [];
     for (const image of images) bytes.set(image.ref, image.media_type === "image/png" ? { data: Buffer.from(PNG, "base64"), type: "image/png" } : { data: Buffer.from(GIF, "base64"), type: "image/gif" });
   }
-  assert.deepEqual([...bytes.keys()].sort(), ["pi-prompt:u0:0", "pi:call-1:0", "pi:call-1:1"], "the page should address all three pictures");
+  assert.equal(bytes.size, 7, "the page should address every picture: the prompt's and the six the tools returned");
 
   browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   const errors: string[] = [];
-  const served: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/pane/conversation?*", (route) => route.fulfill({ json: conversation }));
   await page.goto(`http://127.0.0.1:${server.port}/`);
@@ -85,41 +106,127 @@ try {
     const img = document.querySelector<HTMLImageElement>(".chat-turn-user .chat-user-images img");
     return img !== null && img.complete && img.naturalWidth === 1;
   });
-  assert.deepEqual(served, ["pi-prompt:u0:0"], "the prompt's picture loads with the prompt");
+  assert.ok(served.includes("pi-prompt:u0:0"), "the prompt's picture loads with the prompt");
   console.log("PASS a pi prompt that is only a picture is its own turn, its thumbnail decoded from the served bytes");
 
-  // the row shows a picture only once opened: a base64 blob must not arrive on every poll
-  assert.equal(await page.locator(".chat-tool-images img").count(), 0, "a closed row fetches nothing");
-  assert.deepEqual(served.filter((ref) => ref.startsWith("pi:")), [], "a closed row fetches nothing");
-  // a settled turn's work is folded: open the block, then the row
+  // a settled turn's work is folded, and its line shows what the tools returned: the latest four
+  // small, the two before them on a "+2" tile; the conversation itself carries refs only
   assert.equal(await page.locator(".work-block-head").getAttribute("aria-expanded"), "false");
+  const line = page.locator(".work-block-line .work-images");
+  assert.equal(await line.getAttribute("aria-label"), "Pictures from this work");
+  assert.equal(await line.locator(".work-image.is-more").textContent(), "+2");
+  assert.equal(await line.locator(".work-image.is-more").getAttribute("aria-label"), "All 6 pictures");
+  assert.deepEqual(await decoded(page, ".work-block-line .work-image img"), [[1, 1], [1, 1], [1, 1], [1, 1]], "Chrome decoded the line's four thumbnails");
+  assert.deepEqual([...new Set(served.filter((ref) => ref.startsWith("pi:")))].sort(), LATEST, "only the pictures the line shows are fetched");
+  assert.equal(await page.locator(".chat-tool-images").count(), 0, "no row is open");
+  console.log("PASS a folded block's line shows its latest four pictures and counts the rest, fetching only those four");
+
+  // hovering a thumbnail shows it larger, with the tool's name and its place among the block's
+  const second = line.locator(".work-image:not(.is-more)").nth(1);
+  await second.hover();
+  const preview = page.locator(".work-image-preview");
+  await preview.waitFor();
+  assert.equal(await preview.locator(".work-image-preview-bar").textContent(), "read4 of 6");
+  assert.deepEqual(await decoded(page, ".work-image-preview img"), [[1, 1]]);
+  const [thumbBox, previewBox] = [await second.boundingBox(), await preview.boundingBox()];
+  // above its thumbnail where that fits, else under it: never over it
+  assert.ok(thumbBox !== null && previewBox !== null && (previewBox.y + previewBox.height <= thumbBox.y || previewBox.y >= thumbBox.y + thumbBox.height), "the preview leaves its thumbnail in view");
+  await page.mouse.move(5, 5);
+  await preview.waitFor({ state: "detached" });
+  console.log("PASS a hover shows the picture larger, named by its tool and place, and leaving takes it away");
+
+  // a click opens the viewer on all six at that one; the tile opens it at the first
+  await second.click();
+  const viewer = page.getByRole("dialog", { name: "Image viewer" });
+  await viewer.waitFor();
+  assert.equal(await viewer.locator(".image-lightbox-count").textContent(), "4 of 6");
+  assert.equal(await preview.count(), 0, "the viewer takes the preview's place");
+  await page.keyboard.press("Escape");
+  await viewer.waitFor({ state: "detached" });
+  // by keyboard: Enter on a thumbnail opens the viewer, and the focus Escape gives back to the
+  // thumbnail is a return, not a reader reaching it, so the preview stays away
+  await page.mouse.move(5, 5);
+  await second.focus();
+  await page.keyboard.press("Enter");
+  await viewer.waitFor();
+  await page.keyboard.press("Escape");
+  await viewer.waitFor({ state: "detached" });
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("work-image") && document.activeElement.matches(":focus-visible")), true);
+  assert.equal(await preview.count(), 0, "closing the viewer with Escape does not bring the preview back");
+  await line.locator(".work-image.is-more").click();
+  await viewer.waitFor();
+  assert.equal(await viewer.locator(".image-lightbox-count").textContent(), "1 of 6");
+  await page.keyboard.press("Escape");
+  await viewer.waitFor({ state: "detached" });
+  console.log("PASS a click opens the viewer on every picture of the block, at the one clicked or at the first from the tile");
+
+  // opened, the block's line gives its pictures to its rows, each on its own line; an opened row
+  // shows them larger in its detail
   await page.locator(".work-block-head").click();
-  assert.equal(await page.locator(".chat-tool-images img").count(), 0, "an open block with a closed row fetches nothing");
+  assert.equal(await page.locator(".work-block-line .work-images").count(), 0, "an open block's line carries none");
+  assert.equal(await page.locator(".work-row-line .work-images").count(), 2);
+  assert.equal(await page.locator(".work-row-line .work-images").first().locator(".work-image").count(), 2, "the first row's two");
   await page.locator(".work-row-head").first().click();
-  assert.equal(await page.locator(".chat-tool-images img").count(), 2);
-  // loading="lazy" means the fetch is deferred until the picture is near the viewport, and
-  // naturalWidth only settles once Chrome has decoded what came back
-  await page.locator(".chat-tool-images img").first().scrollIntoViewIfNeeded();
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const loaded = await page.locator(".chat-tool-images img").evaluateAll((imgs) => imgs.every((img) => img.complete && img.naturalWidth > 0));
-    if (loaded) break;
-    await new Promise((done) => setTimeout(done, 50));
-  }
-  assert.deepEqual(served.filter((ref) => ref.startsWith("pi:")).sort(), ["pi:call-1:0", "pi:call-1:1"]);
-  // the bytes round-tripped: Chrome decoded them, so they are the file and not a broken icon
-  const sizes = await page.locator(".chat-tool-images img").evaluateAll((imgs) => imgs.map((img) => [img.naturalWidth, img.naturalHeight]));
-  assert.deepEqual(sizes, [[1, 1], [1, 1]], "Chrome decoded both pictures from the served bytes");
-  assert.equal(await page.locator(".chat-tool-output pre").textContent(), "read 2 images", "the text answer stays beside the pictures");
+  assert.equal(await page.locator(".work-row-line .work-images").count(), 1, "an open row's line gives its pictures to its detail");
+  assert.deepEqual(await decoded(page, ".chat-tool-images img"), [[1, 1], [1, 1]], "Chrome decoded both of the row's pictures from the served bytes");
+  assert.deepEqual([...new Set(served.filter((ref) => ref.startsWith("pi:")))].sort(), ["pi:call-1:0", "pi:call-1:1", ...LATEST]);
+  assert.equal(await page.locator(".chat-tool-output pre").first().textContent(), "read 2 images", "the text answer stays beside the pictures");
   assert.deepEqual(errors, []);
 
+  const evidence = process.env["UI_EVIDENCE_DIR"];
+  if (evidence) {
+    mkdirSync(evidence, { recursive: true });
+    await page.locator(".work-row-head").first().click();
+    await page.locator(".work-block-head").click();
+    await second.hover();
+    await preview.waitFor();
+    await page.screenshot({ path: join(evidence, "work-images-preview.png") });
+    await page.mouse.move(5, 5);
+    await page.locator(".work-block-head").click();
+    await page.locator(".work-row-head").first().click();
+  }
+
+  // a picture the endpoint cannot answer leaves the line and the count, and the one before it moves up
+  bytes.delete("pi:call-2:3");
+  const reloaded = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await reloaded.route("**/api/pane/conversation?*", (route) => route.fulfill({ json: conversation }));
+  await reloaded.goto(`http://127.0.0.1:${server.port}/`);
+  const reloadedLine = reloaded.locator(".work-block-line .work-images");
+  await reloadedLine.locator(".work-image.is-more").waitFor();
+  await reloaded.waitForFunction(() => document.querySelectorAll(".work-block-line .work-image:not(.is-more)").length === 4 && document.querySelector(".work-block-line .work-image.is-more")?.textContent === "+1");
+  assert.equal(await reloadedLine.locator(".work-image.is-more").getAttribute("aria-label"), "All 5 pictures");
+  assert.deepEqual(await decoded(reloaded, ".work-block-line .work-image img"), [[1, 1], [1, 1], [1, 1], [1, 1]], "no broken icon is left on the line");
+  await reloaded.close();
+  console.log("PASS a picture that fails to load leaves the line, and the line fills from the ones before it");
+
+  // beside a finger each thumbnail is a --touch-target square, three to the line
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const small = await phone.newPage();
+  await small.route("**/api/pane/conversation?*", (route) => route.fulfill({ json: conversation }));
+  await small.goto(`http://127.0.0.1:${server.port}/`);
+  const smallLine = small.locator(".work-block-line .work-images");
+  await smallLine.locator(".work-image.is-more").waitFor();
+  assert.equal(await smallLine.locator(".work-image:not(.is-more)").count(), 3);
+  const boxes = await smallLine.locator(".work-image").evaluateAll((buttons) => buttons.map((button) => [button.getBoundingClientRect().width, button.getBoundingClientRect().height]));
+  assert.deepEqual(boxes, [[44, 44], [44, 44], [44, 44], [44, 44]], "every thumbnail and the tile is a 44px square");
+  const [head, strip] = [await small.locator(".work-block-head").boundingBox(), await smallLine.boundingBox()];
+  assert.ok(head !== null && strip !== null && strip.x + strip.width <= 390 && Math.abs(strip.y - head.y) < 1, "the strip stays on the folded line, inside the screen");
+  await smallLine.locator(".work-image:not(.is-more)").first().tap();
+  await small.getByRole("dialog", { name: "Image viewer" }).waitFor();
+  assert.equal(await small.locator(".work-image-preview").count(), 0, "a tap opens the viewer, with no hover preview");
+  await phone.close();
+  console.log("PASS on a phone the line holds three 44px thumbnails and a tap opens the viewer");
+
   // a result whose pictures vanish (the branch moved, the file changed) must not strand an <img>
-  const kept = entries.filter((entry) => (entry as { id?: string }).id !== "r1");
+  const kept = entries.filter((entry) => !["r1", "a2", "r2"].includes((entry as { id?: string }).id ?? ""));
   write(kept);
   await page.evaluate(() => window.qa.refresh());
   await page.locator(".work-block-head").click(); // fold, then unfold, so the row re-renders
+  assert.equal(await page.locator(".work-images").count(), 0, "no picture, no line thumbnails");
   await page.locator(".work-block-head").click();
   assert.equal(await page.locator(".chat-tool-images").count(), 0, "no image, no container");
-  console.log("PASS pi pictures: browser OK (a prompt's picture, 2 tool pictures served, none fetched while folded, text answer intact)");
+  console.log("PASS pi pictures: browser OK (a prompt's picture, 6 tool pictures served, the folded line's four first, text answer intact)");
 } finally {
   await browser?.close();
   server?.stop();

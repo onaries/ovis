@@ -2071,6 +2071,28 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   failure count leave and end in an ellipsis. `· 1 failed` (`.work-block-failed`) is its own item
   and is never cut, because the fold hides the failed row; at the largest chat type on the
   narrowest phone the title wraps to a second line instead.
+- Pictures a tool returned (a Read of a screenshot, a browser screenshot; `tool.images`) sit at the
+  end of their line as small thumbnails (`.work-images`, `.work-image`: 2.5rem by 1.5rem, cover, a
+  hairline and `--radius-sm`), so a reader sees what the agent saw without opening anything.
+  A folded block's line carries every picture of its tools; opened, each row's line carries its
+  own, and an opened row shows them larger in its detail (`.chat-tool-images`) instead.
+  A line carries only pictures the browser keeps once fetched (Claude's and pi's, served
+  immutable), so a folded line never fetches one again; Codex's and OpenCode's are served
+  `no-store` and appear only in their opened row, as before.
+  The line keeps the latest four and puts the rest on one `+N` tile before them, so it never wraps;
+  the words are cut first.
+  On a coarse pointer each thumbnail and the tile is a `--touch-target` square, the line's own
+  height, and the line keeps the latest three.
+  Hovering a thumbnail, or reaching it with the keyboard, shows it larger over the page
+  (`.work-image-preview`: 20rem wide, 16:9, `--shadow-pop`) with the tool's id and its place
+  (`4 of 6`): above the thumbnail where that fits, else under it, else on the roomier side, always
+  inside the viewport, and it follows the thumbnail when the chat scrolls under it.
+  A touch has no hover and opens the viewer at once.
+  A click opens the image viewer on all of the line's pictures at that one, and the tile opens it at
+  the first.
+  A picture that fails to load leaves the line rather than showing a broken icon.
+  This follows the Claude app, whose folded `Read 2 files` line shows its pictures the same three
+  ways (small on the line, larger on hover, the viewer on a click); none of its code is used.
 - An OmO or omp `task` row opens to the tasks it starts (`.chat-task-calls`): each summary in
   `--text`, the agent as a hairline mono pill, the prompt in the bounded mono input box.
 - Todo updates the agent made one after another (`.work-todo-group`) are one row:
@@ -2895,6 +2917,33 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   resize it to reveal the caret. No terminal pixels or input handling code are copied from Zed.
   Local wheel panning in an oversized mirror survives subsequent output. A tap or a touch movement
   that produces no history step sends no shared scroll request.
+- A mirrored grid wider than its mount (a Windows PC's pane, whose size a phone cannot change) is
+  drawn folded (`lib/terminalFold.ts`): its rows are drawn again as SGR runs in a pre-wrap block at
+  the mount's width, over the grid, which stays at the pane's size for input, the masked prompt, the
+  input row and Find; it moves down under the folded rows until its cursor row lies on theirs, so an
+  IME preedit shows where its text will. The apps this repo compares against all size their terminal
+  to the window, which a mirror cannot; this follows Collie (AltanS/collie, `ansi-output.tsx`), which
+  draws herdr's pane read the same way and never resizes the pane. No code is copied. A full-screen
+  program's boxes fold with the text, so the pane menu offers Original width (`terminalMirrorWrap`,
+  this device's, kept in its own `ovis:mirror-wrap` key so an older tab's save of `ovis:settings` cannot
+  erase it), the grid at its size panned sideways as before, and Wrap to screen back. Until the
+  user chooses, a narrow screen (a touch screen, or 768px and under) folds and a desktop does not. A
+  watching phone folds too. An attached pane's grid folds the same way while this device does not
+  size the pty: watching it (a device paired to watch), or under a phone's soft keyboard, where the
+  grid stays at another device's size until the keyboard goes (#1045). It is drawn from the xterm
+  buffer the attach stream wrote, never from a pane read, and the pane is never resized for it; the
+  pane menu then offers the same choice, under the same setting. A cursor the grid shows (an attached
+  pane's; a mirror hides it) is drawn in the folded rows in the grid's shape and colours, and the hidden
+  grid moves down and sideways onto it, so a preedit stands on the caret even in an earlier part of a
+  long folded line. A phone that drives the pty is never
+  folded (the program redraws at its width), nor is a split's following half, and a grid its mount
+  fits is drawn as it is. Under the keyboard the folded rows pan by finger and wheel up to their
+  edges, past which a swipe scrolls the pane as before; a tap on them is no mouse click for the
+  program (herdr's attach reports the mouse for every pane, so a program that wants clicks cannot be
+  told apart): Original width keeps clicks. Folded
+  rows keep the cursor's row in view and pan only up and down; a tap on a web address, a file path or
+  an OSC 8 hyperlink's label opens it as the grid's links do, any other tap focuses the terminal, and a wheel past their edges
+  scrolls the mirror's history at the chosen speed. Find's boxes are hidden while folded.
 - In Safari, a Hangul syllable being typed and a dictation hypothesis wait in the terminal's
   editor as a preedit, and the next key, paste or blur sends the corrected text once. Dictation
   replaces its hypothesis in place (`thi`, `this`, `this is a test`), so sending each one typed

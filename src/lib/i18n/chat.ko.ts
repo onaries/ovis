@@ -103,6 +103,8 @@ export const CHAT_KO: Record<string, string> = {
   "Couldn't load the terminal output": "터미널 출력을 불러오지 못했습니다",
   "Jump to latest": "최신 메시지로 이동",
   "Open image": "이미지 열기",
+  "Pictures from this work": "이 작업에서 나온 이미지",
+  "All {count} pictures": "이미지 {count}개 모두 보기",
   "Attached image": "첨부한 이미지",
   "Conversation compacted": "대화가 압축됨",
   "{n} earlier turn on a branch you navigated away from": "이동으로 떠난 브랜치의 이전 대화 {n}개",

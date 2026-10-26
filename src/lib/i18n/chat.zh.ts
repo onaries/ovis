@@ -103,6 +103,8 @@ export const CHAT_ZH: Record<string, string> = {
   "Couldn't load the terminal output": "无法加载终端输出",
   "Jump to latest": "跳转到最新",
   "Open image": "打开图片",
+  "Pictures from this work": "此次工作得到的图片",
+  "All {count} pictures": "查看全部 {count} 张图片",
   "Attached image": "附加的图片",
   "Conversation compacted": "对话已压缩",
   "{n} earlier turn on a branch you navigated away from": "你离开的分支上有 {n} 条更早的对话",

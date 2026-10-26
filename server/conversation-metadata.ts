@@ -2,6 +2,7 @@ import { isContextClear, piMessage } from "./transcript-records.ts";
 import { piContextWindow } from "./pi-models.ts";
 import { cmdContextWindow } from "./cmd.ts";
 import { copilotRecords } from "./copilot.ts";
+import { museModel } from "./muse.ts";
 import type { ConversationMetadata, ConversationResponse } from "../shared/protocol.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -55,6 +56,8 @@ export function parseConversationMetadata(text: string, source: ConversationResp
     }
     return metadata;
   }
+  // Muse names its model, but no effort or context window; most of its lines are skipped unparsed
+  if (source === "muse-transcript") return { ...metadata, model: museModel(text, metadata.model) };
   // pi states the provider on the same records that state usage, so the window is asked for
   // from what this line says rather than remembered across sources
   let piProvider: string | null = null;

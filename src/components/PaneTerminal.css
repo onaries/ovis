@@ -46,6 +46,57 @@
   overflow: auto;
 }
 
+/* a grid wider than the screen that this browser does not size (a mirror, a watched pane, one held
+   under the keyboard at another device's size), drawn folded to its width (lib/terminalFold.ts). The
+   grid stays under the folded rows for its input and its readers, unseen and clipped to the mount, so
+   only the folded rows pan, up and down (a held grid is not adopted, so its mount scrolls from here).
+   The helper textarea is not hidden: typing still reaches xterm */
+.pane-terminal[data-folded] {
+  position: relative;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.pane-terminal[data-folded] > .xterm {
+  overflow: hidden;
+}
+
+.pane-terminal[data-folded] .xterm-rows,
+.pane-terminal[data-folded] .xterm-selection,
+.pane-terminal[data-folded] .xterm-decoration-container {
+  visibility: hidden;
+}
+
+/* the font, colours and row height are the grid's own (set by lib/terminalFold.ts); the gutter is
+   .xterm's below, so a row that fits starts where the grid drew it */
+.terminal-fold {
+  position: absolute;
+  inset: 0 0 auto;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-2) 0;
+  line-height: var(--fold-line);
+  white-space: pre-wrap;
+  /* a Korean word folds whole, at a space, as a Latin one does; a token longer than the line still
+     breaks at its edge */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  text-spacing-trim: space-all;
+  text-autospace: no-autospace;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.terminal-fold-row {
+  min-height: var(--fold-line);
+}
+
+/* Find's hits (TerminalViewportTools) are boxes over the grid's cells: over folded rows they would
+   mark other text, so they wait for the grid's own width. Find still steps through the matches */
+.pane-terminal[data-folded] ~ .terminal-viewport-tools .terminal-find-hit {
+  display: none;
+}
+
 /* Chrome's CJK typography (text-spacing-trim, text-autospace) changes how far a glyph advances
    with what stands beside it, and a cell grid needs every glyph to advance alike. xterm's
    WidthCache measures a glyph as 32 copies in one span, which Chrome trims to half width when

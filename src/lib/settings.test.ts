@@ -84,6 +84,19 @@ describe("saved theme migration", () => {
     expect(loadSettings().uiFontFamily).toBe("");
   });
 
+  it("keeps Wrap to screen / Original width in its own key, out of an old tab's whole-record save", () => {
+    saveSettings(sanitizeSettings({ terminalMirrorWrap: false }));
+    expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("terminalMirrorWrap");
+    oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
+    expect(loadSettings().terminalMirrorWrap).toBe(false);
+    expect(loadSettings().terminalFontSize).toBe(18);
+    saveSettings({ ...loadSettings(), terminalMirrorWrap: true });
+    expect(loadSettings().terminalMirrorWrap).toBe(true);
+    saveSettings({ ...loadSettings(), terminalMirrorWrap: null });
+    expect(loadSettings().terminalMirrorWrap).toBeNull();
+    expect(sanitizeSettings({ terminalMirrorWrap: "yes" }).terminalMirrorWrap).toBeNull();
+  });
+
   it("survives repeated stale saves from an already-open old tab (f1)", () => {
     putOld({ theme: "dark", palette: "charcoal" });
     const stale = readOld();
