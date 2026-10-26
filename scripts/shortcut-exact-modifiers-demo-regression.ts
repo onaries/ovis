@@ -122,6 +122,48 @@ try {
         await page.locator(".settings-dialog").waitFor();
         await page.getByRole("button", { name: "Close settings", exact: true }).click();
 
+        // Rename tab has no default key: a recorded chord opens the open tab's name field, Escape cancels, Enter renames
+        await hungarianE();
+        await openSettingsPage(page, "Shortcuts");
+        const recorded = await record(page, "Rename tab", "Meta+Shift+KeyY");
+        assert.equal((await stored(page))["rename-tab"], "y", recorded);
+        await page.getByRole("button", { name: "Close settings", exact: true }).click();
+        const tabName = page.locator(".tab-strip-item.is-active .tab-strip-rename");
+        const tabLabel = (await page.locator('.tab-strip-item.is-active [role="tab"]').textContent()) ?? "";
+        await page.keyboard.press("Meta+Shift+KeyY");
+        await tabName.waitFor();
+        assert.equal(await tabName.evaluate((input) => input === document.activeElement), true, "the name field has the focus");
+        if (screenshotDir) await page.screenshot({ path: join(screenshotDir, "rename-tab-shortcut.png") });
+        await page.keyboard.press("Escape");
+        await tabName.waitFor({ state: "detached" });
+        assert.equal(await page.locator('.tab-strip-item.is-active [role="tab"]').textContent(), tabLabel, "Escape keeps the name");
+        // the request is one-shot: leaving the pane and coming back does not open the field again
+        const openTab = () => document.querySelector<HTMLElement>('.tab-strip-item.is-active [role="tab"]')?.dataset["tabId"] ?? null;
+        const firstTab = await page.evaluate(openTab);
+        await page.keyboard.press("Meta+Shift+End");
+        await page.waitForFunction((before) => (document.querySelector<HTMLElement>('.tab-strip-item.is-active [role="tab"]')?.dataset["tabId"] ?? null) !== before, firstTab);
+        await page.keyboard.press("Meta+Shift+ArrowUp");
+        await page.waitForFunction((before) => (document.querySelector<HTMLElement>('.tab-strip-item.is-active [role="tab"]')?.dataset["tabId"] ?? null) === before, firstTab);
+        assert.equal(await page.locator(".tab-strip-rename").count(), 0, "coming back to the pane does not reopen the name field");
+        await page.keyboard.press("Meta+Shift+KeyY");
+        await tabName.waitFor();
+        await page.keyboard.type("Renamed by shortcut");
+        // a second press while the field is open keeps what was typed
+        await page.keyboard.press("Meta+Shift+KeyY");
+        await page.keyboard.press("Enter");
+        await tabName.waitFor({ state: "detached" });
+        assert.match((await page.locator('.tab-strip-item.is-active [role="tab"]').textContent()) ?? "", /Renamed by shortcut/, "Enter renames the tab");
+        // the demo's authoritative snapshot carries the name, so herdr was sent the rename
+        await page.waitForFunction(async () => (await (await fetch("/api/session")).json()).snapshot.tabs.some((tab: { label: string }) => tab.label === "Renamed by shortcut"));
+        // the palette offers the same action
+        await page.keyboard.press("Control+KeyK");
+        await palette.waitFor();
+        await page.keyboard.type("rename tab");
+        await page.getByRole("option", { name: /Rename tab/ }).first().click();
+        await tabName.waitFor();
+        assert.equal(await tabName.evaluate((input) => input === document.activeElement), true, "the palette action focuses the name field");
+        await page.keyboard.press("Escape");
+
         // a binding on End gives way to a message box that has text, as the arrows do; an empty box lets it run
         const composer = page.locator(".composer-text").first();
         await composer.fill("draft");

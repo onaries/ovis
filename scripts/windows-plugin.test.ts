@@ -7,6 +7,25 @@ import { socketAddress } from "../server/herdr/client.ts";
 import { windowsProcessTable } from "../server/windows-processes.ts";
 import { updateStateDir } from "../server/update-state.ts";
 
+/**
+ * Removes a fixture's scratch folder, again while Windows still holds something in it: a process the
+ * test started, or a scan of an executable it copied there, can keep a handle open for a moment
+ * after the process is gone (#1907). Still fails, with the last error, once 10 s have passed.
+ */
+async function removeScratch(scratch: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      rmSync(scratch, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!["EPERM", "EBUSY", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      if (Date.now() > deadline) throw error;
+    }
+    await Bun.sleep(100);
+  }
+}
+
 it.skipIf(process.platform !== "win32")("runs the Windows launcher with executable and npm shim installations in literal percent paths", async () => {
   const scratch = mkdtempSync(join(tmpdir(), "ovis bun shim "));
   const prefix = join(scratch, "npm %OS% !OS! ^x prefix");
@@ -56,7 +75,7 @@ it.skipIf(process.platform !== "win32")("runs the Windows launcher with executab
       }
     }
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    await removeScratch(scratch);
   }
 }, 70_000);
 
@@ -274,6 +293,6 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
   } finally {
     if (existsSync(join(state, "server.pid"))) await run("stop");
     await new Promise<void>(resolve => peer.close(() => resolve()));
-    rmSync(scratch, { recursive: true, force: true });
+    await removeScratch(scratch);
   }
 }, 90_000);

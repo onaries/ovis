@@ -30,6 +30,8 @@ export interface AppActions {
    * else the selected pane's. Nothing happens without a workspace to add the tab to.
    */
   openNewTab: (target?: { machineId: string; workspaceId: string }) => void;
+  /** The inline name field of the selected pane's tab, as the tab menu's Rename opens it; nothing while the tab strip is not drawn. */
+  renameTab: () => void;
   /**
    * A shell tab in the same workspace, at once and with no dialog, as herdr's own new tab: the
    * new pane opens unless another one was opened meanwhile. Rejects with herdr's refusal.

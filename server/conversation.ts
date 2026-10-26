@@ -43,7 +43,7 @@ import { dshConversation, DshHistoryChanged, dshSessionFromPids, dshToolOutput }
 import type { ConversationMetadata, ConversationTurn, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc, paneProcessInfo, paneRead, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
 import { resolveAgent } from "./pane-context.ts";
-import { codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
+import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
 import { CODEX_IMAGE_REF, codexTranscriptImage, MAX_IMAGE_BYTES } from "./codex-images.ts";
 import { AmbiguousClaudeStore, claudeAttachSession, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
 import { forgetGjcPane, forgetGjcState, gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
@@ -1310,10 +1310,10 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     const screen = await paneRead({ paneId, source: "visible", format: "text", timeoutMs: 2_000 }).then((read) => read.text, () => "");
     return startScreenMetadata(source, screen);
   };
-  const notBegun = async (source: RecognizedConversation["source"], id: string): Promise<RecognizedConversation> => {
+  const notBegun = async (source: RecognizedConversation["source"], id: string, read?: ConversationMetadata): Promise<RecognizedConversation> => {
     // what the screen states can change with the pane's output, with no file to watch: the chat re-reads on it
     const screen = readsStartScreen(source);
-    const metadata = screen ? await screenMetadata(source) : { model: null, reasoning_effort: null };
+    const metadata = read ?? (screen ? await screenMetadata(source) : { model: null, reasoning_effort: null });
     return { source, turns: [], metadata, ...(screen ? { screen: true as const } : {}), cursor: null, history_id: id, version: answerVersion(id, `${metadata.model}\0${metadata.reasoning_effort}`) };
   };
 
@@ -1346,7 +1346,15 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
       // a Codex that reported no session yet (one started in the terminal): the terminal stands in
       // for the chat, and Codex's live status line still states the model and effort it runs at
       if (pane.agent === "codex" && page.before === undefined && page.since === undefined && page.from === undefined) {
-        const screen = await screenMetadata("codex-transcript");
+        const text = await paneRead({ paneId, source: "visible", format: "text", timeoutMs: 2_000 }).then((read) => read.text, () => "");
+        const screen = startScreenMetadata("codex-transcript", text);
+        // unless it has begun no conversation at all: then it has its greeting, as one this server
+        // started does. At work or asking, its first turn may have begun.
+        if (error.message === "no_session_path" && screen.model !== null && pane.agent_status !== "working" && pane.agent_status !== "blocked") {
+          // every folder the pane names, and the screen this was decided on
+          const fresh = await codexFreshSession(paneId, [pane.cwd ?? "", pane.foreground_cwd ?? ""], codexHome, text);
+          if (fresh !== null) return await notBegun("codex-transcript", fresh, screen);
+        }
         if (screen.model !== null) throw new ConversationUnavailable(error.message, screen);
       }
       throw error;

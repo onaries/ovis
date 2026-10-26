@@ -251,6 +251,7 @@ const BASE: Record<string, string> = {
   "Try again": "重试",
   // tabs: the strip over the pane, and the New tab dialog
   "New tab": "新建标签页",
+  "Rename tab": "重命名标签页",
   "Zoom pane": "放大窗格",
   "Unzoom pane": "取消放大",
   "This PC's bridge does not offer this yet": "此电脑的桥接尚未提供此功能。",

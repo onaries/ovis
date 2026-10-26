@@ -84,7 +84,6 @@ export const TERMINAL_KO: Record<string, string> = {
   "New terminal": "새 터미널",
   "New terminal failed: {reason}": "새 터미널 열기 실패: {reason}",
   "Tab {n}": "탭 {n}",
-  "Rename tab": "탭 이름 바꾸기",
   "Close tab": "탭 닫기",
   "Tab name": "탭 이름",
   "Actions for {tab}": "{tab} 작업",
@@ -119,4 +118,6 @@ export const TERMINAL_KO: Record<string, string> = {
   "Too long for the message draft": "메시지 초안에 넣기에는 너무 깁니다",
   "Tap Input line to paste.": "붙여넣으려면\u00a0입력창\u00a0키를\u00a0누르세요.",
   "Paste into the input line": "입력창에 붙여넣기",
+  "Show keyboard": "키보드 보이기",
+  "Hide keyboard": "키보드 숨기기",
 };

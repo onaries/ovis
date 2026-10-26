@@ -201,6 +201,7 @@ For isolated phone viewer and keyboard layout regressions (no herdr session; the
 bun scripts/file-viewer-mobile-regression.ts  # 8 viewport cases × tall/wide images
 bun scripts/keyboard-viewport-regression.ts   # keyboard, rotation and measured standalone status inset
 bun scripts/keyboard-viewport-demo-regression.ts # original real-app viewport suite on disposable demo fixtures
+bun scripts/terminal-keyboard-demo-regression.ts # the key bar's Show/Hide keyboard control: current-mode focus, measured state, composition refusal, observe/held/offline/ended; `--serve-ios` only serves the build on loopback for a Simulator
 bun scripts/droplet-demo-regression.ts        # real-app alerts below the header, keyboard and landscape
 bun scripts/chat-greeting-demo-regression.ts  # an empty chat's greeting: centred on a desktop, docked on a phone
 bun scripts/composer-fit-demo-regression.ts   # one Send/Stop control, pending Send now actions, context/label fit and Chat font sizing

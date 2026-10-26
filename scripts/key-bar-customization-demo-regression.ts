@@ -14,9 +14,9 @@ const repo = join(import.meta.dir, "..");
 const app = mkdtempSync(join(tmpdir(), "herdr-key-bar-demo-"));
 const evidence = process.env.UI_EVIDENCE_DIR;
 const SETTINGS_KEY = "ovis:settings";
-// the touch key bar's fixed keys lead: the Input line toggle, then Paste into the input line
-const MIGRATED_KEYS = ["direct", "paste", "Escape", "Tab", "BackTab", "Control", "Alt", "Shift", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "ctrl-c", "ctrl-d", "ctrl-z", "pipe", "tilde", "slash"];
-const DEFAULT_KEY_BAR_KEYS = ["direct", "paste", "Escape", "Tab", "ctrl-c", "Control", "Alt", "Shift", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+// the touch key bar's fixed keys lead: the Input line toggle, Paste into the input line, then the keyboard control
+const MIGRATED_KEYS = ["direct", "paste", "keyboard", "Escape", "Tab", "BackTab", "Control", "Alt", "Shift", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "ctrl-c", "ctrl-d", "ctrl-z", "pipe", "tilde", "slash"];
+const DEFAULT_KEY_BAR_KEYS = ["direct", "paste", "keyboard", "Escape", "Tab", "ctrl-c", "Control", "Alt", "Shift", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
 
 interface InputFrame { type: "input" | "keys"; pane_id: string; text?: string; keys?: string[] }
 const framesOf = (page: Page): Promise<InputFrame[]> => page.evaluate(() => (window as unknown as { keyBarFrames: InputFrame[] }).keyBarFrames);
@@ -262,10 +262,10 @@ try {
         while (await editor.locator(".key-bar-settings-row").count()) await editor.getByRole("button", { name: /^Remove / }).first().tap();
         await editor.getByText("No keys selected.", { exact: true }).waitFor();
         await closeSettings(page, dialog);
-        assert.deepEqual(await keysOf(page), ["direct", "paste"]);
+        assert.deepEqual(await keysOf(page), ["direct", "paste", "keyboard"], "an empty list keeps the fixed controls");
         await page.reload();
         await ready(page);
-        assert.deepEqual(await keysOf(page), ["direct", "paste"], "an intentionally empty list survives reload");
+        assert.deepEqual(await keysOf(page), ["direct", "paste", "keyboard"], "an intentionally empty list survives reload");
         await bar.locator('[data-key="direct"]').tap();
         await page.getByRole("textbox", { name: "Terminal input line", exact: true }).waitFor();
         await bar.locator('[data-key="direct"]').tap();

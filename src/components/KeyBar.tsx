@@ -1,11 +1,12 @@
-import { useCallback, useLayoutEffect, useRef, type MouseEvent, type PointerEvent, type ReactNode } from "react";
-import { ClipboardPaste, Keyboard } from "lucide-react";
+import { useCallback, useLayoutEffect, useRef, useSyncExternalStore, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { ClipboardPaste, Keyboard, PanelBottomClose, PanelBottomOpen } from "lucide-react";
 
 import "./KeyBar.css";
 
 import type { KeyBarKey, StickyModifiers } from "../lib/keys.ts";
 import { keyBarItemId, keyBarItemLabel, type KeyBarItem, type KeyBarKeyItem } from "../lib/keyBar.ts";
 import { createKeyRepeat, isRepeatableKeyBarItem, type KeyRepeat } from "../lib/keyRepeat.ts";
+import { keyboardUp, subscribeKeyboardUp } from "../lib/keyboard.ts";
 import { useT } from "../lib/i18n.ts";
 
 export type { KeyBarKey };
@@ -28,10 +29,21 @@ export interface KeyBarProps {
   onPaste?: () => void;
   /** greys out only Paste (a paste of the line's still waits on the clipboard) */
   pasteDisabled?: boolean;
-  /** a word about Paste, said in the bar's own row beside the mode toggle and Paste, in place of
-   * the other keys until it is dismissed (a tap on it); never painted over the terminal */
+  /** a word about Paste, said in the bar's own row after its fixed controls (the mode toggle, Paste
+   * and the keyboard control), in place of the other keys until it is dismissed (a tap on it); never
+   * painted over the terminal */
   note?: string | null;
   onNoteDismiss?: () => void;
+  /**
+   * on a touch screen: shows or hides the soft keyboard for the current input mode, without a key,
+   * a mode change or a resize; the control's pressed state is what lib/viewport.ts measured
+   */
+  onToggleKeyboard?: () => void;
+  /** greys out only the keyboard control: no field it may focus (offline, held, ended, not ready) */
+  keyboardDisabled?: boolean;
+  /** the keyboard control refuses its tap, keeping the focus and the composition a blur would end,
+   * and while a paste reads the clipboard (the paste's own focus would bring a hidden keyboard back) */
+  keyboardRefused?: boolean;
 }
 
 /**
@@ -44,6 +56,16 @@ function keepFocus(event: PointerEvent<HTMLButtonElement> | MouseEvent<HTMLButto
 
 interface KeyProps {
   disabled?: boolean;
+  /**
+   * live, so a press still keeps the focus where it is, but doing nothing (aria-disabled): a
+   * disabled button would let the press move the focus, and end the composition it was guarding
+   */
+  refused?: boolean;
+  /**
+   * a command no hardware keyboard has (the keyboard control): a Tab stop, with its name as the
+   * tooltip, where a key is neither. A press still keeps the focus where it is (keepFocus)
+   */
+  command?: boolean;
   dataKey: string;
   label?: string;
   pressed?: boolean;
@@ -53,7 +75,7 @@ interface KeyProps {
   children: ReactNode;
 }
 
-function Key({ dataKey, label, pressed, onPress, children, disabled, repeatable, holdScope }: KeyProps) {
+function Key({ dataKey, label, pressed, onPress, children, disabled, refused, command, repeatable, holdScope }: KeyProps) {
   const onPressRef = useRef(onPress);
   onPressRef.current = onPress;
   const disabledRef = useRef(disabled);
@@ -101,7 +123,9 @@ function Key({ dataKey, label, pressed, onPress, children, disabled, repeatable,
       data-key={dataKey}
       aria-label={label}
       aria-pressed={pressed}
-      tabIndex={-1}
+      aria-disabled={refused || undefined}
+      title={command ? label : undefined}
+      tabIndex={command ? 0 : -1}
       onPointerDown={(event) => {
         keepFocus(event);
         if (!repeatable || disabled || event.button !== 0 || !event.isPrimary || pointerRef.current.id !== null) return;
@@ -128,6 +152,7 @@ function Key({ dataKey, label, pressed, onPress, children, disabled, repeatable,
       onMouseDown={keepFocus}
       onContextMenu={keepFocus}
       onClick={() => {
+        if (refused) return;
         if (!repeatable) {
           onPress();
           return;
@@ -194,9 +219,13 @@ export const KEY_SPOKEN_NAMES: ReadonlyArray<{ key: string; label: string }> = [
  * Touch key bar under the terminal. Keys are tabIndex -1 on purpose: they exist
  * for touch, a hardware keyboard already has all of them. Hence role="group", not
  * toolbar: a toolbar promises arrow-key navigation between items, which these skip.
+ * The keyboard control is no key a hardware keyboard has, so it is a Tab stop.
  */
-export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping, onToggleDirect, directDisabled, onPaste, pasteDisabled, note, onNoteDismiss, disabled, holdScope }: KeyBarProps) {
+export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping, onToggleDirect, directDisabled, onPaste, pasteDisabled, note, onNoteDismiss, onToggleKeyboard, keyboardDisabled, keyboardRefused, disabled, holdScope }: KeyBarProps) {
   const t = useT();
+  // the keyboard control says what the viewport measured (data-keyboard), never that a tap focused
+  // a field: a hardware keyboard, or an occlusion the browser cannot report, leaves it down
+  const keyboardShown = useSyncExternalStore(subscribeKeyboardUp, keyboardUp, () => false);
   // only a bar that reaches the bottom of the screen keeps clear of the home indicator: a pane
   // stacked over another one has the other pane under its bar, not the indicator
   const barRef = useRef<HTMLDivElement | null>(null);
@@ -219,6 +248,7 @@ export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping
   // first paint, then on scroll and whenever the bar or a key changes size, at most once a frame
   const hasDirectToggle = onToggleDirect !== undefined;
   const hasPaste = onPaste !== undefined;
+  const hasKeyboardToggle = onToggleKeyboard !== undefined;
   useLayoutEffect(() => {
     const bar = barRef.current;
     if (!bar) return;
@@ -242,7 +272,7 @@ export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping
       bar.removeEventListener("scroll", schedule);
       observer.disconnect();
     };
-  }, [items, hasDirectToggle, hasPaste, note]);
+  }, [items, hasDirectToggle, hasPaste, hasKeyboardToggle, note]);
   /** The key's name as it is said: its spoken name where its cap is notation, else its cap. */
   const spokenKey = (item: KeyBarKeyItem): string => {
     const spoken = ARROWS.find((candidate) => candidate.key === item.key)?.label ?? KEY_SPOKEN_NAMES.find((candidate) => candidate.key === item.key)?.label;
@@ -250,7 +280,7 @@ export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping
   };
   return (
     <div className="key-bar" ref={barRef} role="group" aria-label={t("Terminal keys")}>
-      {/* first: on a narrow cover screen the row scrolls, and the mode toggle must not be the key cut off */}
+      {/* first: on a narrow cover screen the row scrolls, and the keyboard controls must not be the keys cut off */}
       {onToggleDirect && (
         <Key disabled={disabled || directDisabled} dataKey="direct" label={t("Input line")} pressed={!directTyping} onPress={onToggleDirect}>
           <Keyboard aria-hidden="true" />
@@ -260,6 +290,14 @@ export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping
       {onPaste && (
         <Key disabled={disabled || pasteDisabled} dataKey="paste" label={t("Paste into the input line")} onPress={onPaste}>
           <ClipboardPaste aria-hidden="true" />
+        </Key>
+      )}
+      {/* after the mode switch and Paste, and unlike the switch: this one moves the keyboard, not the
+          typing. Its glyph is the panel at the screen's bottom with the way it goes next, its name says
+          the same, and its pressed state is the measured one */}
+      {onToggleKeyboard && (
+        <Key disabled={keyboardDisabled} refused={keyboardRefused} command dataKey="keyboard" label={t(keyboardShown ? "Hide keyboard" : "Show keyboard")} pressed={keyboardShown} onPress={onToggleKeyboard}>
+          {keyboardShown ? <PanelBottomClose aria-hidden="true" /> : <PanelBottomOpen aria-hidden="true" />}
         </Key>
       )}
       {note ? <p className="key-bar-note" role="status" onClick={onNoteDismiss}>{note}</p> : items.map((item) => {

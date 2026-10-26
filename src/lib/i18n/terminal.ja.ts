@@ -84,7 +84,6 @@ export const TERMINAL_JA: Record<string, string> = {
   "New terminal": "新しいターミナル",
   "New terminal failed: {reason}": "新しいターミナルを開けませんでした: {reason}",
   "Tab {n}": "タブ {n}",
-  "Rename tab": "タブの名前を変更",
   "Close tab": "タブを閉じる",
   "Tab name": "タブ名",
   "Actions for {tab}": "{tab} の操作",
@@ -119,4 +118,6 @@ export const TERMINAL_JA: Record<string, string> = {
   "Too long for the message draft": "メッセージの下書きには長すぎます",
   "Tap Input line to paste.": "貼り付けるには入力欄キーをタップしてください。",
   "Paste into the input line": "入力行に貼り付け",
+  "Show keyboard": "キーボードを表示",
+  "Hide keyboard": "キーボードを非表示",
 };

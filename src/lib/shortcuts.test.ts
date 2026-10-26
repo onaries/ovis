@@ -211,13 +211,15 @@ it("pages the selected pane with fixed Mod+Shift bindings, remapping and disabli
 
 describe("new tab and split pane", () => {
   it("have no key until one is chosen in Settings, and then work like any other binding", () => {
-    for (const id of ["new-tab", "split-right", "split-down"] as const) {
+    for (const id of ["new-tab", "rename-tab", "split-right", "split-down"] as const) {
       expect(shortcutKeys(id, {})).toEqual([]);
       expect(shortcutDisplayKeys(id, {})).toEqual([]);
     }
     expect(matchShortcut(keyEvent("t", { ctrlKey: true }), false)).toBeNull();
-    const overrides = sanitizeShortcutOverrides({ "new-tab": "y", "split-right": "l", "split-down": "h" });
-    expect(overrides).toEqual({ "new-tab": "y", "split-right": "l", "split-down": "h" });
+    const overrides = sanitizeShortcutOverrides({ "new-tab": "y", "rename-tab": "r", "split-right": "l", "split-down": "h" });
+    expect(overrides).toEqual({ "new-tab": "y", "rename-tab": "r", "split-right": "l", "split-down": "h" });
+    expect(matchShortcut(keyEvent("R", { ctrlKey: true }), false, overrides)).toBe("rename-tab");
+    expect(shortcutDisplayKeys("rename-tab", overrides)).toEqual(["Mod", "Shift", "R"]);
     expect(matchShortcut(keyEvent("Y", { ctrlKey: true }), false, overrides)).toBe("new-tab");
     expect(matchShortcut(keyEvent("l", { metaKey: true }), true, overrides)).toBe("split-right");
     expect(matchShortcut(keyEvent("h", { ctrlKey: true }), false, overrides)).toBe("split-down");

@@ -978,7 +978,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   split tab is not offered it. The view follows the pane there, in whichever half of a split shows
   it, and this browser's unsent draft for it goes along (herdr gives the pane a new ID). The
   palette has the same move as one Move tab to {workspace} row per workspace, found by a query
-  only, as Settings pages are.
+  only, as Settings pages are. Rename tab is also a palette action and a rebindable shortcut with
+  no default key, as herdr's own `rename_tab` binding: it opens the same name field on the selected
+  pane's tab, and is not offered where the strip is left out (a lone tab on a cramped screen).
   The `⋯` beside the selected tab holds the same tab actions (the strip's `+` opens a shell tab, so
   New tab with agent… stays here) and also carries the open pane's actions, less Split and Zoom where a phone shows one pane at a time.
   Touch and narrow layouts keep that `⋯` in view; a desktop with a mouse (`hover: hover`,
@@ -3030,7 +3032,35 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   leaving the pane/lens or disconnecting; each exposes `aria-pressed`.
 - That is the default row. Settings → Terminal → Key bar can add, remove and reorder every
   terminal key and register exact combinations. Removing a held modifier clears it immediately.
-  A deliberately empty row retains only the keyboard mode control on a touch screen.
+  A deliberately empty row retains only the Input line switch, Paste and the keyboard control on a
+  touch screen.
+- On a touch screen the row starts with controls that are not keys: the **Input line** switch
+  (the keyboard glyph, `aria-pressed` while the input line is on), **Paste** (below) and, after
+  them, **Show keyboard** / **Hide keyboard** (#1046), which moves the soft keyboard without changing the input mode. Its glyph
+  is the panel at the screen's bottom with the way it goes next (`PanelBottomOpen` to show,
+  `PanelBottomClose` to hide), its name says the same, and its `aria-pressed` is the state
+  `lib/viewport.ts` measured (`data-keyboard`), never the hope that a focus raised a keyboard: a
+  hardware keyboard, or an occlusion the browser cannot report, leaves it at Show. Show focuses the
+  field of the current input mode inside the tap, as Mod+Shift+E does on a desktop (the input
+  line, else xterm's own field; the bar is not shown while the masked input is); Hide blurs this pane's
+  field and nothing else. Neither sends a key, nor the focus report (DECSET 1004's ESC [ I / ESC [ O)
+  its own focus move would make, fits or resizes the pane (the grid under a keyboard stays, #1045),
+  changes the mode or acts on a sibling pane. A focus the user makes still reports, and so does a
+  sibling's field that loses the focus to Show, as it would to a tap into this pane's line. Safari's
+  Hangul or dictation preedit, which has no composition events and waits for the next key, is typed
+  by Hide's blur, as a key-bar key types it first. While a word is being composed in
+  either field, or its commit is still on its way, and while Paste still reads the clipboard (the
+  paste's own focus would bring a hidden keyboard back), the control is `aria-disabled` and refuses the
+  tap in place: a disabled button would let the tap move the focus and end the composition.
+  Unlike the keys, which a hardware keyboard already has, the control is a Tab stop (after the
+  input line and its Enter button) that Enter or Space presses, and its name is also its tooltip.
+  Without a field it may focus (view only, held, ended, offline) the bar has no control or a
+  disabled one, like its keys. The platform's own dismiss key is the model (iPadOS's keyboard key,
+  Android's ▽): it lives in the key bar with the mode switch because this app keeps its touch
+  controls in the bar and its menus, which is where it differs from AoE's floating button over
+  the terminal; only the focus-preserving tap AoE's button relies on is shared, and the key bar
+  already had it. Disabled keys (`.key:disabled`, and the refusing control) draw their glyph in
+  `--text-dim`, so a bar with nothing to send to reads as such.
 - When the row outgrows the viewport it scrolls sideways, and the edge that hides more keys fades
   out: `KeyBar` sets `data-overflow-start` / `data-overflow-end` on `.key-bar` (measured before
   first paint, on scroll and on resize, once a frame) and `KeyBar.css` masks that edge with a
@@ -3063,8 +3093,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   read from that tap alone and dropped when the line, its caret, a composition, the pane, mode,
   role, input lease or connection changed before the clipboard answered, even and back again. With
   the line put away (direct typing) it changes no mode and says "Tap Input line to paste." in the
-  bar's own row (`.key-bar-note`, in place of the other keys for a few seconds, gone on a tap),
-  beside the key it names and never over the terminal's output. No widely used coding-agent app (the
+  bar's own row (`.key-bar-note`, after the bar's fixed controls, in place of the other keys for a
+  few seconds, gone on a tap), in the row of the key it names and never over the terminal's output. No widely used coding-agent app (the
   Codex and Claude apps, Paseo, T3 Code) was found to establish a precedent for a phone terminal
   draft with a separate no-Enter insert; agent-of-empires' compose sheet has Insert beside Send but
   clears its draft on a synchronous boolean, which this design rejects: the draft is cleared on the
@@ -3192,8 +3222,9 @@ The values are the ones in `src/styles.css`.
   keys, composition, other editable controls and modal input. They do not capture terminal keys.
 - On touch screens app actions stay in buttons and menus. More → Search panes and actions opens
   the command palette, including its plugin actions, in the phone touch UI.
-  The key bar sends terminal input only; it is not an app-action toolbar. Hardware keyboards use
-  the same global bindings on phones and desktops.
+  The key bar sends terminal input only, apart from its fixed controls (the input mode switch,
+  Paste and keyboard visibility); it is not an app-action toolbar. Hardware keyboards use the same global
+  bindings on phones and desktops.
 - `document.title` is `<pane title> · Ovis` while selected, otherwise `Ovis`.
 
 ### Accepted debt

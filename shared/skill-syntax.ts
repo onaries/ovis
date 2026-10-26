@@ -21,6 +21,7 @@ export const SKILL_SYNTAX: Readonly<Record<string, SkillSyntax>> = {
   omp: { skillTriggers: ["/"], inline: ["/"], namespaced: true, chipForms: [] },
   gjc: { skillTriggers: ["/"], inline: [], namespaced: true, chipForms: [] },
   devin: { skillTriggers: ["/"], inline: [], namespaced: true, chipForms: [] },
+  cmd: { skillTriggers: ["/"], inline: [], namespaced: true, chipForms: [] },
   hermes: { skillTriggers: ["/"], inline: [], namespaced: true, chipForms: [] },
   opencode: { skillTriggers: ["/"], inline: [], namespaced: false, chipForms: [] },
   grok: { skillTriggers: ["/"], inline: [], namespaced: false, chipForms: [] },

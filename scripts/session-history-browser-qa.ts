@@ -4,8 +4,9 @@
  * clicked (the body carries the row's argv), no second Resume in the window before herdr reports the
  * resumed pane's session (App's RecentResume record), a session a pane already shows selected instead of
  * started, a row without a verified resume listed with no button, the keyboard along the rows,
- * the agent picker (each agent with its mark, no Shell, its open list taking Escape alone, disabled
- * while a resume is in flight), a PC whose bridge answers 404 for the route, whose menu has no item, and
+ * the agent picker (each agent with its mark, no Shell, its open list taking Escape alone, also with the
+ * focus off its button and when the sessions arrive while it is open, disabled while a resume is in
+ * flight), a PC whose bridge answers 404 for the route, whose menu has no item, and
  * Claude's store-bound Resume: the list asked for from a pane of the workspace, one POST sessions/resume
  * per double click (never tab/create), the same UUID reported by a pane on another store left to Resume, a
  * store that changed read again, and a bridge from before store-bound Resume (rows without a source, no
@@ -41,6 +42,8 @@ const resumeRequests = new EventEmitter();
 let holdResume = false;
 /** true: the next Claude lists wait for a release, as a list read again after a changed store does */
 let holdList = false;
+/** "held" each time a Claude list starts waiting for its release */
+const heldLists = new EventEmitter();
 /** how the bridge answers the next resumes: start it, name a pane already showing it, refuse a changed store or one a new tab would not keep, or have no route */
 let resumeAnswer: "created" | "opened" | "stale" | "unsupported" | "changed" | "missing" = "created";
 const closedSources = new Set<string>();
@@ -67,7 +70,7 @@ try {
       const workspaceId = url.searchParams.get("workspace_id")!;
       if (agent === "claude" && (workspaceId === "w3" || workspaceId === "w4")) {
         claudeLists.push(url.search);
-        if (holdList) await new Promise<void>((resolve) => releases.push(resolve));
+        if (holdList) await new Promise<void>((resolve) => { releases.push(resolve); heldLists.emit("held"); });
         const paneId = url.searchParams.get("pane_id");
         if (paneId && closedSources.has(paneId)) return refusal("stale_source", "source pane no longer exists", 409);
         // w4's bridge is from before store-bound Resume: it ignores pane_id and gives no source
@@ -254,6 +257,77 @@ try {
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "detached" });
   console.log("PASS the agent picker lists the agents with their marks, closes its list alone on Escape and takes the keys; an empty store is said in words");
+  // the sessions arrive while the agent list is open: the list keeps the focus, so its keys and Escape stay
+  // the list's, not the first Resume's and the dialog's
+  holdList = true;
+  const listHeld = once(heldLists, "held", { signal: AbortSignal.timeout(10_000) });
+  await (await openMenu("w3")).getByRole("menuitem", { name: "Earlier sessions…", exact: true }).click();
+  await dialog.waitFor();
+  await listHeld;
+  assert.equal(await dialog.locator(".session-row").count(), 0, "the sessions are still on their way");
+  await picker.click();
+  await agentList.waitFor();
+  holdList = false;
+  releases.splice(0).forEach((release) => release());
+  await dialog.locator(".session-row").first().waitFor();
+  await settled(page);
+  assert.equal(await agentList.isVisible(), true, "the open list stays open when the sessions arrive");
+  assert.equal(await picker.evaluate((node) => node === document.activeElement), true, "the open list keeps the focus when the sessions arrive");
+  await page.keyboard.press("Escape");
+  await agentList.waitFor({ state: "detached" });
+  assert.equal(await dialog.isVisible(), true, "Escape after the sessions arrived closes the list, not the dialog");
+  console.log("PASS sessions arriving while the agent list is open leave it the focus and its Escape");
+  // Safari leaves the focus off a button a click opened: the open list still takes Escape alone
+  await picker.click();
+  await agentList.waitFor();
+  await picker.evaluate((node) => (node as HTMLElement).blur());
+  assert.equal(await page.evaluate(() => document.activeElement === document.body), true, "the focus is off the picker, as Safari leaves it");
+  await page.keyboard.press("Escape");
+  await agentList.waitFor({ state: "detached" });
+  assert.equal(await dialog.isVisible(), true, "Escape with the focus off the open list closes the list, not the dialog");
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  console.log("PASS an open agent list takes Escape alone with the focus off its button; the next Escape closes the dialog");
+  // an overlay opened over the dialog keeps its own Escape while the agent list stays open under it:
+  // a native modal (Add PC from the palette), and an overlay holding the focus outside the dialog
+  await openHistory("w1");
+  await picker.click();
+  await agentList.waitFor();
+  await page.evaluate(() => {
+    const modal = document.createElement("dialog");
+    modal.id = "qa-native-modal";
+    modal.innerHTML = '<button type="button">Add PC</button>';
+    document.body.append(modal);
+    modal.showModal();
+    // the focus on body, as Safari leaves it after a click in the modal: only the modal check keeps this Escape the modal's
+    modal.querySelector("button")!.focus();
+    modal.querySelector("button")!.blur();
+  });
+  assert.equal(await page.evaluate(() => document.activeElement === document.body), true, "the focus is on body under the native modal");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !(document.getElementById("qa-native-modal") as HTMLDialogElement).open);
+  assert.equal(await agentList.isVisible(), true, "Escape in a native modal over the dialog closes that modal, not the agent list under it");
+  await page.evaluate(() => document.getElementById("qa-native-modal")!.remove());
+  const outside = await page.evaluate(() => {
+    const field = document.createElement("input");
+    field.setAttribute("aria-label", "qa overlay field");
+    // fixed, as the palette is: focusing a field below #root scrolls the page, and the list closes on that scroll
+    field.style.cssText = "position: fixed; top: 0; left: 0";
+    document.body.append(field);
+    field.focus();
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    field.dispatchEvent(escape);
+    field.remove();
+    return escape.defaultPrevented;
+  });
+  assert.equal(outside, false, "an Escape from an overlay outside the dialog is left to that overlay");
+  assert.equal(await agentList.isVisible(), true, "the agent list under that overlay stays open");
+  console.log("PASS an overlay over the dialog keeps its own Escape while the agent list stays open under it");
+  // with the overlay gone the focus is nowhere: the list takes the next Escape, the dialog the one after
+  await page.keyboard.press("Escape");
+  await agentList.waitFor({ state: "detached" });
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
   // Claude: the list is asked for from a pane of the workspace (its store's), and the same UUID reported by a
   // pane on another store is not that row's session: Resume, not Open
   await openHistory("w3");

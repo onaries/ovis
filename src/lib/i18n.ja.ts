@@ -249,6 +249,7 @@ const BASE: Record<string, string> = {
   "Try again": "再試行",
   // tabs: the strip over the pane, and the New tab dialog
   "New tab": "新しいタブ",
+  "Rename tab": "タブの名前を変更",
   "Zoom pane": "ペインをズーム",
   "Unzoom pane": "ズームを解除",
   "This PC's bridge does not offer this yet": "このPCのブリッジはまだこの機能に対応していません。",

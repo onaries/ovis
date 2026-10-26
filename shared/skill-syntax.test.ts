@@ -4,8 +4,8 @@ import { DEFAULT_SKILL_SYNTAX, SKILL_SYNTAX, skillSyntax } from "./skill-syntax.
 import { SUPPORTED_AGENT_KINDS } from "./supported-agents.ts";
 
 describe("skillSyntax", () => {
-  it("has an explicit row for every supported agent", () => {
-    expect(Object.keys(SKILL_SYNTAX).sort()).toEqual([...SUPPORTED_AGENT_KINDS].sort());
+  it("has an explicit row for every supported agent and Command Code", () => {
+    expect(Object.keys(SKILL_SYNTAX).sort()).toEqual([...SUPPORTED_AGENT_KINDS, "cmd"].sort());
     for (const agent of SUPPORTED_AGENT_KINDS) {
       expect(SKILL_SYNTAX[agent]).toBe(skillSyntax(agent));
     }

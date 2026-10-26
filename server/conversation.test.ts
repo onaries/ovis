@@ -2590,4 +2590,166 @@ describe("a Codex pane that reported no session yet", () => {
       expect((page as ConversationUnavailable).screen).toBeUndefined();
     } finally { snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
   });
+
+  // the process's start time is read from the OS: this test's own process stands in for Codex's
+  it.skipIf(process.platform === "win32")("greets a Codex started in the terminal on no conversation, and only that one", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-codex-greet-"));
+    const home = join(root, ".codex");
+    mkdirSync(home);
+    const pane = { pane_id: "codex-greet", cwd: root, foreground_cwd: root, agent: "codex", agent_status: "done" } as HerdrPane;
+    let screen = FRESH;
+    let argv = ["codex"];
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockImplementation(async () => ({ panes: [pane] }) as SessionSnapshot);
+    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method: string) => (method === "agent.get"
+      ? { agent: { agent: "codex" } } : { process_info: { foreground_processes: [{ pid: process.pid, argv }] } }) as never);
+    const read = spyOn(herdr, "paneRead").mockImplementation(async () => ({ text: screen }) as never);
+    const ask = () => paneConversation(pane.pane_id, home).catch((error: unknown) => error);
+    try {
+      // no store yet, as for a CODEX_HOME Codex has not written to
+      const greeting = await ask() as Awaited<ReturnType<typeof paneConversation>>;
+      expect(greeting).toMatchObject({ source: "codex-transcript", turns: [], cursor: null, screen: true, metadata: { model: "gpt-6.1-sol", reasoning_effort: "low" } });
+      expect(greeting.history_id).toStartWith("unwritten:codex:");
+      // a store whose threads of this folder all ended before this Codex started
+      const db = new Database(join(home, "state_5.sqlite"));
+      db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, source TEXT, created_at INTEGER, updated_at INTEGER, archived INTEGER DEFAULT 0, agent_role TEXT)");
+      db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at) VALUES ('old', '/nowhere.jsonl', ?, 'cli', 1, 2)").run(root);
+      expect(await ask()).toMatchObject({ history_id: greeting.history_id });
+      // a resume or a fork on the command line opens a conversation that exists
+      argv = ["codex", "resume"];
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      argv = ["codex", "fork", "--last"];
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      argv = ["codex"];
+      // something said on screen, or a first turn at work
+      screen = FRESH.replace("\u203a Ask Codex", "\u203a hello\n\n\u2022 Hi there\n\n\u203a Ask Codex");
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      screen = FRESH;
+      pane.agent_status = "working";
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      pane.agent_status = "done";
+      // a thread of this folder written since this Codex started: perhaps its own, unread
+      const now = Math.floor(Date.now() / 1000);
+      db.query("UPDATE threads SET updated_at = ? WHERE id = 'old'").run(now);
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      db.query("UPDATE threads SET updated_at = 2").run();
+      db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at) VALUES ('new', '/nowhere-2.jsonl', ?, 'cli', ?, ?)").run(root, now, now);
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      // one in another folder, a subagent's or a `codex exec` run's says nothing about this one
+      db.query("UPDATE threads SET cwd = '/elsewhere' WHERE id = 'new'").run();
+      db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at, agent_role) VALUES ('sub', '/sub.jsonl', ?, 'cli', ?, ?, 'worker')").run(root, now, now);
+      db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at) VALUES ('exec', '/exec.jsonl', ?, 'exec', ?, ?)").run(root, now, now);
+      expect(await ask()).toMatchObject({ history_id: greeting.history_id });
+      // a thread with no message yet holds no conversation, whoever made it; one with a message does
+      db.exec("ALTER TABLE threads ADD COLUMN first_user_message TEXT");
+      db.query("UPDATE threads SET cwd = ?, first_user_message = '' WHERE id = 'new'").run(root);
+      expect(await ask()).toMatchObject({ history_id: greeting.history_id });
+      db.query("UPDATE threads SET first_user_message = 'hi' WHERE id = 'new'").run();
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      // the pane's folder named through a link: Codex stored the folder it resolves to
+      const alias = join(tmpdir(), `herdr-codex-greet-alias-${process.pid}`);
+      symlinkSync(root, alias);
+      try {
+        pane.cwd = alias;
+        pane.foreground_cwd = alias;
+        expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      } finally { pane.cwd = root; pane.foreground_cwd = root; rmSync(alias, { force: true }); }
+      // Codex runs in another folder than the pane's shell: that folder's conversations count too
+      const elsewhere = mkdtempSync(join(tmpdir(), "herdr-codex-greet-fg-"));
+      try {
+        db.query("UPDATE threads SET cwd = ? WHERE id = 'new'").run(elsewhere);
+        expect(await ask()).toMatchObject({ history_id: greeting.history_id });
+        pane.foreground_cwd = elsewhere;
+        expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      } finally { pane.foreground_cwd = root; rmSync(elsewhere, { recursive: true, force: true }); }
+      db.close();
+      // a store that cannot be read tells nothing, nor one that cannot even be looked at
+      writeFileSync(join(home, "state_5.sqlite"), "not a database");
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      rmSync(join(home, "state_5.sqlite"));
+      symlinkSync(join(home, "state_5.sqlite"), join(home, "state_5.sqlite"));
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+    } finally { snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  // each Codex is a child started with the CODEX_HOME under test, whose environment the server reads from
+  // the OS: a Bun process, since macOS's ps shows no environment for a system binary such as sleep
+  it.skipIf(process.platform === "win32")("greets a terminal Codex only in the store its own environment places for certain", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-codex-home-"));
+    const own = join(root, "own");
+    const fallback = join(root, "fallback");
+    mkdirSync(own);
+    mkdirSync(fallback);
+    const pane = { pane_id: "codex-home", cwd: root, foreground_cwd: root, agent: "codex", agent_status: "done" } as HerdrPane;
+    const children: Bun.Subprocess[] = [];
+    let codexes: { pid: number; argv: string[] }[] = [];
+    // each one says it runs before it is asked about: until its exec, the OS shows the environment it was forked with
+    // a string is the CODEX_HOME it starts with; an object sets (or, as undefined, drops) its variables
+    const started = async (...homes: (string | Record<string, string | undefined>)[]) => {
+      codexes = await Promise.all(homes.map(async (home) => {
+        const set = typeof home === "string" ? { CODEX_HOME: home } : home;
+        const env = Object.fromEntries(Object.entries({ ...process.env, ...set }).filter((entry): entry is [string, string] => entry[1] !== undefined));
+        const child = Bun.spawn([process.execPath, "-e", "console.log('ready'); setTimeout(() => {}, 60_000)"], { cwd: root, env, stdout: "pipe" });
+        children.push(child);
+        const reader = child.stdout.getReader();
+        let said = "";
+        while (!said.includes("ready")) {
+          const { value, done } = await reader.read();
+          if (done) throw new Error("the stand-in Codex exited before it ran");
+          said += new TextDecoder().decode(value);
+        }
+        reader.releaseLock();
+        return { pid: child.pid, argv: ["codex"] };
+      }));
+    };
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockImplementation(async () => ({ panes: [pane] }) as SessionSnapshot);
+    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method: string) => (method === "agent.get"
+      ? { agent: { agent: "codex" } } : { process_info: { foreground_processes: codexes } }) as never);
+    const read = spyOn(herdr, "paneRead").mockImplementation(async () => ({ text: FRESH }) as never);
+    // the server's own default store holds nothing: a home it cannot place must not fall back to it
+    const serverHome = process.env["CODEX_HOME"];
+    process.env["CODEX_HOME"] = fallback;
+    const ask = () => paneConversation(pane.pane_id).catch((error: unknown) => error);
+    try {
+      // a home its environment names, with no store yet: the greeting
+      await started(own);
+      const greeting = await ask() as Awaited<ReturnType<typeof paneConversation>>;
+      expect(greeting).toMatchObject({ source: "codex-transcript", turns: [], cursor: null });
+      expect(greeting.history_id).toStartWith("unwritten:codex:");
+      // a relative CODEX_HOME: Codex places it under its folder, where a conversation has begun
+      const relative = join(root, "rel");
+      mkdirSync(relative);
+      const begun = (store: string) => {
+        const db = new Database(join(store, "state_5.sqlite"));
+        const now = Math.floor(Date.now() / 1000);
+        db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, source TEXT, created_at INTEGER, updated_at INTEGER, archived INTEGER DEFAULT 0, agent_role TEXT, first_user_message TEXT)");
+        db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at, first_user_message) VALUES ('begun', '/nowhere.jsonl', ?, 'cli', ?, ?, 'hi')").run(root, now, now);
+        db.close();
+      };
+      begun(relative);
+      await started("rel");
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      // a CODEX_HOME that is no directory, or a second Codex whose home cannot be placed
+      await started(join(root, "missing"));
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      await started(own, "rel");
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      // no CODEX_HOME: the store is .codex in the HOME the Codex runs with, never the server's own
+      const user = join(root, "user");
+      mkdirSync(join(user, ".codex"), { recursive: true });
+      await started({ CODEX_HOME: undefined, HOME: user });
+      expect(await ask()).toMatchObject({ history_id: expect.stringMatching(/^unwritten:codex:/) });
+      begun(join(user, ".codex"));
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      // with no HOME, or a relative one, there is no telling where it is
+      await started({ CODEX_HOME: undefined, HOME: undefined });
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      await started({ CODEX_HOME: undefined, HOME: "user" });
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+    } finally {
+      if (serverHome === undefined) delete process.env["CODEX_HOME"]; else process.env["CODEX_HOME"] = serverHome;
+      for (const child of children) child.kill();
+      await Promise.all(children.map((child) => child.exited));
+      snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -257,6 +257,7 @@ export const SETTINGS_ZH: Record<string, string> = {
   "version update release herdr": "版本 更新 发布 herdr",
   "create workspace session start": "创建 工作区 会话 开始",
   "create tab add": "创建 标签页 添加",
+  "edit tab name title": "编辑 标签页 名称 标题",
   "divide pane layout side": "拆分 窗格 布局 侧边",
   "divide pane layout below": "拆分 窗格 布局 下方",
   "maximize fullscreen full screen focus": "最大化 全屏 专注",

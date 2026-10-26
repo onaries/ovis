@@ -1,4 +1,5 @@
 import { closeSync, constants, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { parse } from "jsonc-parser";
 import { SkillIgnore } from "../skill-ignore.ts";
@@ -10,6 +11,8 @@ export interface WalkRules {
   readonly ignoreFiles: boolean;
   readonly requireDescription: boolean;
   readonly skipNames?: (name: string) => boolean;
+  /** Only when a sibling alias cannot change a skill's name or ignore rules. */
+  readonly uniqueFolders?: boolean;
   /** Work remaining, shared by every walk given the same object. */
   readonly budget?: WalkBudget;
 }
@@ -63,7 +66,7 @@ export const MAX_WALK_FOLDERS = 4096;
  */
 function openRegular(path: string): number {
   if (!statSync(path).isFile()) throw new Error(`not a regular file: ${path}`);
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOCTTY ?? 0));
   let regular = false;
   try { regular = fstatSync(fd).isFile(); } finally { if (!regular) closeSync(fd); }
   if (!regular) throw new Error(`not a regular file: ${path}`);
@@ -146,34 +149,43 @@ export function description(markdown: string): string {
 
 /** `name:` from a SKILL.md's frontmatter, else its directory's name. */
 function skillName(markdown: string, directory: string): string {
-  const frontmatter = markdown.match(/^---[ \t]*\r?\n([\s\S]*?)\n---(?:\s*\n|$)/);
+  const frontmatter = markdown.match(FRONTMATTER);
   const named = frontmatter?.[1]?.match(/^name:\s*(.+?)\s*$/m)?.[1]?.trim().replace(/^(["'])(.*)\1$/, "$2");
   return named && /^[\p{L}\p{N}_:-]+$/u.test(named) ? named : directory;
 }
 export function walkSkills(root: string, rules: WalkRules): WalkedSkill[] {
   const result: WalkedSkill[] = [];
+  for (const skill of walkSkillSteps(root, rules)) if (skill) result.push(skill);
+  return result;
+}
+
+/** Resumable work checkpoints let multiple roots share one allowance without rescanning. */
+export function* walkSkillSteps(root: string, rules: WalkRules): Generator<WalkedSkill | null> {
   const budget = rules.budget ?? createWalkBudget();
-  if (budget.folders <= 0 || budget.entries <= 0 || budget.reads <= 0) return result;
+  if (budget.folders <= 0 || budget.entries <= 0 || budget.reads <= 0) return;
   const ignore = new SkillIgnore();
   const ancestors = new Set<string>();
-  const load = (path: string): void => {
+  const visited = rules.uniqueFolders ? new Set<string>() : null;
+  const load = (path: string): WalkedSkill | null => {
     const fields = readFrontmatter(path, budget) ?? {};
-    if (rules.requireDescription && (typeof fields.description !== "string" || !fields.description.trim())) return;
+    if (rules.requireDescription && (typeof fields.description !== "string" || !fields.description.trim())) return null;
     try {
       // The original one-level loaders use their permissive name parser and short body fallback.
       const markdown = rules.requireDescription ? "" : readSkillText(path, budget);
       const name = rules.requireDescription
         ? typeof fields.name === "string" && fields.name ? fields.name : basename(dirname(path))
         : skillName(markdown, basename(dirname(path)));
-      result.push({ name, description: rules.requireDescription && typeof fields.description === "string" ? fields.description : description(markdown), path, fields, id: canonicalFile(path) });
-    } catch { return; /* unreadable skill */ }
+      return { name, description: rules.requireDescription && typeof fields.description === "string" ? fields.description : description(markdown), path, fields, id: canonicalFile(path) };
+    } catch { return null; /* unreadable skill */ }
   };
   if (rules.depth === "one") {
+    yield null;
+    if (budget.folders <= 0 || budget.entries <= 0 || budget.reads <= 0) return;
     budget.folders -= 1;
-    if (!existsSync(root)) return result;
+    if (!existsSync(root)) return;
     if (rules.ignoreFiles) {
       for (const filename of [".gitignore", ".ignore", ".fdignore"]) {
-        if (budget.reads <= 0) return result;
+        if (budget.reads <= 0) return;
         budget.reads -= 1;
         try { ignore.add(readFileSync(join(root, filename), "utf8")); }
         catch (error) {
@@ -181,26 +193,30 @@ export function walkSkills(root: string, rules: WalkRules): WalkedSkill[] {
         }
       }
     }
-    const entries = readdirSync(root, { withFileTypes: true }).slice(0, budget.entries);
-    budget.entries -= entries.length;
+    if (budget.entries <= 0 || budget.reads <= 0) return;
+    const found = readdirSync(root, { withFileTypes: true });
+    const entries = found.slice(0, budget.entries);
+    budget.entries -= found.length;
+    for (let index = 0; index < entries.length; index++) yield null;
     for (const entry of entries) {
       if (budget.reads <= 0) break;
       if (entry.name.startsWith(".") || rules.skipNames?.(entry.name)) continue;
       const directory = join(root, entry.name);
       try {
-        if (statSync(directory).isDirectory() && !ignore.ignores(entry.name + "/")) load(join(directory, "SKILL.md"));
-        else if (rules.looseMarkdown === "root" && entry.name.endsWith(".md") && statSync(directory).isFile() && !ignore.ignores(entry.name)) load(directory);
+        if (statSync(directory).isDirectory() && !ignore.ignores(entry.name + "/")) yield load(join(directory, "SKILL.md"));
+        else if (rules.looseMarkdown === "root" && entry.name.endsWith(".md") && statSync(directory).isFile() && !ignore.ignores(entry.name)) yield load(directory);
       } catch { continue; /* broken links or missing skill */ }
     }
-    return result;
+    return;
   }
-  const visit = (directory: string): void => {
+  function* visit(directory: string): Generator<WalkedSkill | null> {
     // every visit counts, a link back to an ancestor too: each one is a lookup on the server's thread
+    yield null;
     if (budget.folders <= 0 || budget.entries <= 0 || budget.reads <= 0) return;
     budget.folders -= 1;
     let canonical: string;
     try { canonical = realpathSync(directory); } catch { return; }
-    if (ancestors.has(canonical)) return;
+    if (ancestors.has(canonical) || visited?.has(canonical)) return;
     ancestors.add(canonical);
     try {
       const prefix = relative(root, directory).split(sep).join("/");
@@ -213,15 +229,25 @@ export function walkSkills(root: string, rules: WalkRules): WalkedSkill[] {
           continue;
         }
       }
-      // Reserve entries before the SKILL.md scan and recursion, so every inspected entry counts.
-      const entries = readdirSync(directory, { withFileTypes: true }).slice(0, budget.entries);
-      budget.entries -= entries.length;
+      if (budget.entries <= 0 || budget.reads <= 0) return;
+      // readdir is atomic: charge its whole array before suspending, even the unprocessed tail.
+      const found = readdirSync(directory, { withFileTypes: true });
+      const entries = found.slice(0, budget.entries);
+      budget.entries -= found.length;
+      for (let index = 0; index < entries.length; index++) yield null;
       const declared = join(directory, "SKILL.md");
       if (entries.some((entry) => entry.name === "SKILL.md") && !ignore.ignores(relative(root, declared).split(sep).join("/"))) {
         try {
-          if (statSync(declared).isFile()) { load(declared); return; }
+          if (statSync(declared).isFile()) {
+            const skill = load(declared);
+            // A missing name falls back to this alias's directory, so those rows stay distinct.
+            if (rules.requireDescription && skill && typeof skill.fields.name === "string" && skill.fields.name) visited?.add(canonical);
+            yield skill;
+            return;
+          }
         } catch { /* a broken SKILL.md link does not hide other entries */ }
       }
+      visited?.add(canonical);
       for (const entry of entries) {
         if (budget.reads <= 0) break;
         if (entry.name.startsWith(".") || entry.name === "node_modules" || rules.skipNames?.(entry.name)) continue;
@@ -230,14 +256,13 @@ export function walkSkills(root: string, rules: WalkRules): WalkedSkill[] {
           const target = statSync(path);
           const relativePath = relative(root, path).split(sep).join("/");
           if (ignore.ignores(relativePath + (target.isDirectory() ? "/" : ""))) continue;
-          if (target.isDirectory()) visit(path);
-          else if (target.isFile() && entry.name.endsWith(".md") && (rules.looseMarkdown === "root" ? directory === root : rules.looseMarkdown === "nested" && directory !== root)) load(path);
+          if (target.isDirectory()) yield* visit(path);
+          else if (target.isFile() && entry.name.endsWith(".md") && (rules.looseMarkdown === "root" ? directory === root : rules.looseMarkdown === "nested" && directory !== root)) yield load(path);
         } catch { continue; /* broken links and unreadable directories are skipped */ }
       }
     } finally { ancestors.delete(canonical); }
-  };
-  visit(root);
-  return result;
+  }
+  yield* visit(root);
 }
 
 /** Existing one-level command mapping, kept separate from each agent's root selection. */
@@ -272,12 +297,19 @@ export function parseJsonc(text: string): unknown {
 
 /** `budget`: work remaining, shared across skill and command roots in one discovery. */
 export function customCommands(root: string, source: SlashCommand["source"], budget = createWalkBudget(), include?: (fields: Readonly<Record<string, unknown>>) => boolean): SlashCommand[] {
-  if (budget.folders <= 0 || budget.entries <= 0 || budget.reads <= 0 || !existsSync(root)) return [];
   const result: SlashCommand[] = [];
+  for (const command of customCommandSteps(root, source, budget, include)) if (command) result.push(command);
+  return result;
+}
+
+/** `sortByName` matches Node's UTF-8-byte-sorted readdir, with the same depth-first traversal. */
+export function* customCommandSteps(root: string, source: SlashCommand["source"], budget = createWalkBudget(), include?: (fields: Readonly<Record<string, unknown>>) => boolean, sortByName = false): Generator<SlashCommand | null> {
+  if (budget.folders <= 0 || budget.entries <= 0 || budget.reads <= 0) return;
   // Guard only the current ancestry: sibling links can expose different command namespaces.
   const ancestors = new Set<string>();
-  const visit = (directory: string): void => {
+  function* visit(directory: string): Generator<SlashCommand | null> {
     // every visit counts, a link back to an ancestor too: each one is a lookup on the server's thread
+    yield null;
     if (budget.folders <= 0 || budget.entries <= 0 || budget.reads <= 0) return;
     budget.folders -= 1;
     let canonical: string;
@@ -285,27 +317,35 @@ export function customCommands(root: string, source: SlashCommand["source"], bud
     if (ancestors.has(canonical)) return;
     ancestors.add(canonical);
     try {
-      const entries = readdirSync(directory, { withFileTypes: true }).slice(0, budget.entries);
-      budget.entries -= entries.length;
+      let found: Dirent[];
+      try { found = readdirSync(directory, { withFileTypes: true }); }
+      catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOTDIR") return;
+        throw error;
+      }
+      if (sortByName) found = found.map((entry) => ({ entry, bytes: Buffer.from(entry.name) }))
+        .sort((left, right) => Buffer.compare(left.bytes, right.bytes)).map(({ entry }) => entry);
+      const entries = found.slice(0, budget.entries);
+      budget.entries -= found.length;
+      for (let index = 0; index < entries.length; index++) yield null;
       for (const entry of entries) {
         if (budget.reads <= 0) break;
         const path = join(directory, entry.name);
         try {
           const target = statSync(path);
-          if (target.isDirectory()) visit(path);
+          if (target.isDirectory()) yield* visit(path);
           else if (target.isFile() && entry.name.endsWith(".md")) {
             const markdown = readSkillText(path, budget);
             // Finish visibility filtering from this read before spending the next allowance.
             if (include && !include(parseFrontmatter(markdown) ?? {})) continue;
             const relativeName = relative(root, path).slice(0, -3).split(sep).join(":");
-            result.push({ name: relativeName, description: description(markdown), source, id: canonicalFile(path) });
+            yield { name: relativeName, description: description(markdown), source, id: canonicalFile(path) };
           }
         } catch { continue; }
       }
     } finally { ancestors.delete(canonical); }
-  };
-  visit(root);
-  return result;
+  }
+  yield* visit(root);
 }
 
 

@@ -130,8 +130,8 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, sourcePane
       if (event.key !== "Escape") return;
       const active = document.activeElement;
       if (active && active !== document.body && !surface.current?.contains(active)) return;
-      // the agent picker's open list takes this Escape: it closes the list, not the dialog
-      if (active?.getAttribute("aria-expanded") === "true") return;
+      // the agent picker's open list takes this Escape, wherever the focus is: it closes the list, not the dialog
+      if (picker.current?.getAttribute("aria-expanded") === "true") return;
       event.stopPropagation();
       event.preventDefault();
       if (!pending) onClose();

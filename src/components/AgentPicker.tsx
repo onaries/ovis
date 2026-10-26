@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, typ
 import { ChevronDown, Terminal } from "lucide-react";
 
 import type { AgentKind } from "../../shared/protocol.ts";
+import { nativeModalOver } from "../lib/useFocusTrap.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import "./AgentPicker.css";
 
@@ -67,10 +68,26 @@ export const AgentPicker = forwardRef<HTMLButtonElement, AgentPickerProps>(funct
       // Only an ancestor's scroll can move the anchor; text inputs scroll too.
       if (event.type === "resize" || (event.target instanceof Node && rootRef.current !== null && event.target.contains(rootRef.current))) setOpen(false);
     };
+    // The open list takes Escape wherever the focus is in its own dialog (Safari leaves it off a
+    // button a click opened): it closes the list, not the dialog, which leaves this Escape to the
+    // list. An overlay opened over the dialog (the palette, a native modal) keeps its own Escape.
+    const onEscape = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      const root = rootRef.current;
+      if (!root || nativeModalOver(root)) return;
+      const surface = root.closest<HTMLElement>("[role='dialog'], dialog") ?? root;
+      const active = document.activeElement;
+      if (active && active !== document.body && !surface.contains(active)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener("keydown", onEscape, true);
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("scroll", onMove, true);
     window.addEventListener("resize", onMove);
     return () => {
+      document.removeEventListener("keydown", onEscape, true);
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("scroll", onMove, true);
       window.removeEventListener("resize", onMove);
@@ -123,12 +140,7 @@ export const AgentPicker = forwardRef<HTMLButtonElement, AgentPickerProps>(funct
       }
       return;
     }
-    if (event.key === "Escape") {
-      // cancel: close the list only, not the dialog around it
-      event.preventDefault();
-      event.stopPropagation();
-      setOpen(false);
-    } else if (event.key === "Tab") {
+    if (event.key === "Tab") {
       // a select-only combobox takes the row it is on as focus moves on, as a native select does
       choose(active);
     } else if (event.key === "ArrowDown") {

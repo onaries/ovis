@@ -596,8 +596,8 @@ focus where it was. **Mod+Shift+E** focuses the selected pane's input in any mod
 terminal's input line and direct input; it prefers masked input while a secret prompt is open. The
 shortcut can be reassigned or disabled in Settings → Shortcuts.
 
-**New tab**, **Split pane right** and **Split pane down** have no default key: pick one in
-**Settings → Shortcuts**, and the command palette shows it beside the action.
+**New tab**, **Rename tab**, **Split pane right** and **Split pane down** have no default key:
+pick one in **Settings → Shortcuts**, and the command palette shows it beside the action.
 
 **Settings → Shortcuts** changes each app binding or turns it off: press **Record** on a row,
 then the new chord (Escape cancels). A Mod+Shift chord is always safe for the terminal. Other

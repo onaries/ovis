@@ -99,6 +99,14 @@ describe("omo command completion", () => {
     expect(applyCompletion("/skill:pd", activeTrigger("/skill:pd", 9, options("pi"))!, slashCommandReplacement(skill, "pi", slash))).toEqual({ text: "/skill:mass-ulw ", caret: 16 });
   });
 
+  it("keeps Command Code mode completion open after a colon", () => {
+    const syntax = skillSyntax("cmd");
+    const options = { skills: syntax.skillTriggers.includes("$"), namespaced: syntax.namespaced };
+    for (const text of ["/mode:", "/mode:pl"]) {
+      expect(activeTrigger(text, text.length, options)).toEqual({ kind: "slash", query: text.slice(1), start: 0, end: text.length });
+    }
+  });
+
   it("offers omp inline /skill: but not /model or dollar triggers", () => {
     const syntax = skillSyntax("omp");
     const options = { skills: syntax.skillTriggers.includes("$"), namespaced: syntax.namespaced };

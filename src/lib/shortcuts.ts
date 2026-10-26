@@ -18,6 +18,7 @@ export const SHORTCUTS = [
   { id: "new-session", label: "New workspace", keys: ["Mod", "Shift", "O"] },
   // no default key: the free Mod+Shift letters are few, so each person picks one in Settings
   { id: "new-tab", label: "New tab", keys: [] },
+  { id: "rename-tab", label: "Rename tab", keys: [] },
   { id: "split-right", label: "Split pane right", keys: [] },
   { id: "split-down", label: "Split pane down", keys: [] },
   { id: "previous-pane", label: "Previous pane", keys: ["Mod", "Shift", "ArrowUp"] },
@@ -230,7 +231,7 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
       if (keepsKeyForText(event)) return;
       event.preventDefault();
       // a held chord repeats: a tab or a split is made once per press, not once per key repeat
-      if (event.repeat && (shortcut === "new-tab" || shortcut === "split-right" || shortcut === "split-down")) return;
+      if (event.repeat && (shortcut === "new-tab" || shortcut === "rename-tab" || shortcut === "split-right" || shortcut === "split-down")) return;
       switch (shortcut) {
         case "palette":
           actions.openPalette();
@@ -258,6 +259,9 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
           break;
         case "new-tab":
           actions.openNewTab();
+          break;
+        case "rename-tab":
+          actions.renameTab();
           break;
         case "split-right":
           actions.splitPane?.("right");

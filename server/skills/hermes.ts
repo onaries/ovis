@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "n
 import { basename, dirname, join, relative, resolve } from "node:path";
 import type { CommandForm, SlashCommand } from "../../shared/protocol.ts";
 import type { AgentCommandContext, AgentCommandSource } from "./index.ts";
-import { environRecord, plainObject, readFrontmatter } from "./walk.ts";
+import { environRecord, plainObject, readFrontmatter, readSkillText } from "./walk.ts";
 
 // Hermes 0.21.5 CommandDefs at 354724fb085162678964c116ceb4c40fc57c717c; CLI aliases are included.
 // Gateway-only commands are never CLI rows. Runtime-only plugin commands are not listed.
@@ -255,7 +255,7 @@ function discover(ctx: AgentCommandContext): SlashCommand[] {
       let description = typeof skill.fields.description === "string" ? skill.fields.description.trim() : "";
       if (!description) {
         try {
-          const body = readFileSync(skill.path, "utf8").replace(/^\uFEFF?---\s*\r?\n[\s\S]*?\r?\n---(?:\s*\r?\n|$)/, "");
+          const body = readSkillText(skill.path).replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---(?:\s*\r?\n|$)/, "");
           description = body.split(/\r?\n/).find((line) => line.trim() && !line.trim().startsWith("#"))?.trim().slice(0, 80) ?? "";
         } catch { continue; /* unreadable skill */ }
       }

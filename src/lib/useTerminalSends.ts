@@ -27,6 +27,7 @@ export interface TerminalSendsDeps {
   hostRef: RefObject<HTMLDivElement | null>;
   inputLine: boolean;
   inputRowNow: () => InputRowState | null;
+  keyboardToggleFocusRef: RefObject<boolean>;
   knownOutcomes: (pane: string | null) => readonly string[] | null;
   lineComposingRef: RefObject<boolean>;
   machineId: string;
@@ -55,7 +56,7 @@ export interface TerminalSendsDeps {
 }
 
 export function useTerminalSends(deps: TerminalSendsDeps) {
-  const { activeRef, agent, cancelTouchRef, chatView, coarse, composingRef, directTyping, draft, draftHeldForRef, heldRef, hostRef, inputLine, inputRowNow, knownOutcomes, lineComposingRef, machineId, modifiersRef, onChatSuggestion, paneId, paneRef, pendingEpochRef, pendingSubmissionsRef, reassertIfStaleRef, redrawGreeting, releaseRef, secretRef, sessionRef, setChatRefresh, setChatSent, setDraft, showSentCommand, socketRef, stillOpenNote, stillOpenRef, submitRetention, tRef, termRef, updateSettings } = deps;
+  const { activeRef, agent, cancelTouchRef, chatView, coarse, composingRef, directTyping, draft, draftHeldForRef, heldRef, hostRef, inputLine, inputRowNow, keyboardToggleFocusRef, knownOutcomes, lineComposingRef, machineId, modifiersRef, onChatSuggestion, paneId, paneRef, pendingEpochRef, pendingSubmissionsRef, reassertIfStaleRef, redrawGreeting, releaseRef, secretRef, sessionRef, setChatRefresh, setChatSent, setDraft, showSentCommand, socketRef, stillOpenNote, stillOpenRef, submitRetention, tRef, termRef, updateSettings } = deps;
   const sendDraft = useCallback(() => {
     const socket = socketRef.current;
     const pane = paneRef.current;
@@ -185,7 +186,11 @@ export function useTerminalSends(deps: TerminalSendsDeps) {
   }, [submitRetention]);
 
   // a tap into the input line is the user here: the grid is theirs again before they type
-  const reassertGrid = useCallback(() => { reassertIfStaleRef.current(); }, []);
+  const reassertGrid = useCallback(() => {
+    // not the keyboard control's focus of the line: it shows the keyboard and sizes nothing
+    if (keyboardToggleFocusRef.current) return;
+    reassertIfStaleRef.current();
+  }, []);
 
   const pressEnter = useCallback((): boolean | string => {
     const socket = socketRef.current;

@@ -257,6 +257,7 @@ export const SETTINGS_JA: Record<string, string> = {
   "version update release herdr": "バージョン アップデート リリース herdr",
   "create workspace session start": "作成 ワークスペース セッション 開始",
   "create tab add": "作成 タブ 追加",
+  "edit tab name title": "編集 タブ 名前 タイトル",
   "divide pane layout side": "分割 ペイン レイアウト 横",
   "divide pane layout below": "分割 ペイン レイアウト 下",
   "maximize fullscreen full screen focus": "最大化 フルスクリーン 全画面 フォーカス",

@@ -32,6 +32,26 @@ function fixture() {
 }
 
 describe("Hermes commands", () => {
+  it("bounds fallback body reads to the first 64 KiB", () => {
+    const f = fixture();
+    const path = join(f.profile, "skills", "huge", "SKILL.md");
+    put(path, `---\nname: huge\n---\n${"\n".repeat(64 * 1024)}outside-prefix\n`);
+    const rows = f.discovered();
+    const row = rows.find(({ name }) => name === "huge");
+    expect(row).toBeDefined();
+    expect(row?.description).not.toBe("outside-prefix");
+  });
+
+  it("does not parse a vertical-whitespace delimiter as frontmatter", () => {
+    const f = fixture();
+    const body = "Body after the malformed header";
+    put(join(f.profile, "skills", "malformed", "SKILL.md"), `---\v\nname: malformed\n---\n${body}\n`);
+    const rows = f.discovered();
+    const row = rows.find(({ name }) => name === "malformed");
+    expect(row).toBeDefined();
+    expect(row?.description).not.toBe(body);
+  });
+
   it("keeps CLI CommandDefs and palette aliases, including terminal-bound screens", () => {
     const f = fixture();
     const rows = f.commands();

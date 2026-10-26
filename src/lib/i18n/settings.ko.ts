@@ -257,6 +257,7 @@ export const SETTINGS_KO: Record<string, string> = {
   "version update release herdr": "버전 업데이트 릴리스 herdr",
   "create workspace session start": "만들기 워크스페이스 세션 시작",
   "create tab add": "만들기 탭 추가",
+  "edit tab name title": "편집 탭 이름 제목",
   "divide pane layout side": "나누기 패널 레이아웃 옆",
   "divide pane layout below": "나누기 패널 레이아웃 아래",
   "maximize fullscreen full screen focus": "최대화 전체 화면 집중",

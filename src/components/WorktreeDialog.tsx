@@ -55,6 +55,7 @@ export function WorktreeDialog({ mode, workspace, onClose, onOpened }: Props) {
   const [error, setError] = useState<string | null>(null);
   const first = useRef<HTMLInputElement>(null);
   const surface = useRef<HTMLFormElement>(null);
+  const picker = useRef<HTMLButtonElement>(null);
   useSheetSwipe(surface, pending ? null : onClose);
   usePhoneSheetBack(() => { if (pending) return false; onClose(); });
   const opener = useRef<HTMLElement | null>(null);
@@ -76,8 +77,8 @@ export function WorktreeDialog({ mode, workspace, onClose, onOpened }: Props) {
       // another overlay (the palette) over this one owns the keyboard, and Escape, until it goes
       const active = document.activeElement;
       if (active && active !== document.body && !surface.current?.contains(active)) return;
-      // the agent picker's open list takes this Escape: it closes the list, not the dialog
-      if (active?.getAttribute("aria-expanded") === "true") return;
+      // the agent picker's open list takes this Escape, wherever the focus is: it closes the list, not the dialog
+      if (picker.current?.getAttribute("aria-expanded") === "true") return;
       event.stopPropagation();
       event.preventDefault();
       if (!pending) onClose();
@@ -191,7 +192,7 @@ export function WorktreeDialog({ mode, workspace, onClose, onOpened }: Props) {
               </label>
               <div className="field">
                 <span className="field-label" id={`${id}-agent`}>{t("Agent")}</span>
-                <AgentPicker agents={agents} value={agentKind} disabled={locked} labelledBy={`${id}-agent`} onChange={setAgentKind} />
+                <AgentPicker ref={picker} agents={agents} value={agentKind} disabled={locked} labelledBy={`${id}-agent`} onChange={setAgentKind} />
               </div>
             </>
           ) : others === null && !error ? (

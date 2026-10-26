@@ -247,6 +247,7 @@ const BASE: Record<string, string> = {
   "Try again": "다시 시도",
   // tabs: the strip over the pane, and the New tab dialog
   "New tab": "새 탭",
+  "Rename tab": "탭 이름 바꾸기",
   "Zoom pane": "패널 확대",
   "Unzoom pane": "패널 확대 해제",
   "This PC's bridge does not offer this yet": "이 PC의 브리지는 아직 이 기능을 제공하지 않습니다.",

@@ -111,7 +111,8 @@
   margin-inline: var(--space-1);
 }
 
-/* what Paste needs, said in the bar's own row beside the Input line key it names (KeyBar.tsx),
+/* what Paste needs, said in the bar's own row after its fixed controls, which start with the Input
+   line key it names (KeyBar.tsx),
    in place of the other keys for a moment: never painted over the terminal's output. Two lines
    fit the key's height; the row does not scroll while it shows */
 .key-bar-note {
@@ -141,6 +142,27 @@
 /* a key shows its press in its own colours, not with the dim other buttons take (styles.css) */
 .key:active {
   opacity: 1;
+}
+
+/* the bar scrolls sideways and so clips what overflows it: the ring is drawn inside the key */
+.key:focus-visible {
+  outline-offset: calc(var(--ring-offset) * -1);
+}
+
+/* a key with nothing to send to or to show the keyboard for (offline, held, ended, a composition)
+   says so by its dim glyph; the keyboard control that refuses a tap is live (aria-disabled, so the
+   press keeps the focus and the composition) and reads the same */
+.key:disabled,
+.key[aria-disabled="true"] {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+/* a refused tap is no press: the key stays at rest */
+.key[aria-disabled="true"]:active {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-dim);
 }
 
 @media (pointer: coarse), (max-width: 768px) {

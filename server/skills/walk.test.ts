@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneCommands } from "../commands.ts";
-import { ancestorsToRepoRoot, createWalkBudget, customCommands, readFrontmatter, walkSkills } from "./walk.ts";
+import { ancestorsToRepoRoot, createWalkBudget, customCommands, customCommandSteps, readFrontmatter, walkSkills, walkSkillSteps } from "./walk.ts";
 import { source as claude } from "./claude.ts";
 import { source as devin } from "./devin.ts";
 import type { WalkRules } from "./walk.ts";
@@ -40,6 +40,49 @@ function lattice(root: string): void {
 }
 
 describe("shared skill walk", () => {
+  for (const kind of ["skills", "commands", "one-level"] as const) {
+    for (const exhausted of ["folders", "entries", "reads"] as const) {
+      it(`does no resumed directory work in ${kind} after ${exhausted} is exhausted`, () => {
+        const root = temp();
+        put(join(root, "file.md"), "Body");
+        const budget = { folders: 16, entries: 16, reads: 16 };
+        const walk = kind === "commands" ? customCommandSteps(root, "skill", budget)
+          : walkSkillSteps(root, { ...recursive, depth: kind === "one-level" ? "one" : "recursive", ignoreFiles: false, budget });
+        walk.next();
+        budget[exhausted] = 0;
+        const canonical = spyOn(fs, "realpathSync");
+        const reads = spyOn(fs, "readdirSync");
+        try {
+          walk.next();
+          expect(canonical).not.toHaveBeenCalled();
+          expect(reads).not.toHaveBeenCalled();
+        } finally { walk.return(undefined); canonical.mockRestore(); reads.mockRestore(); }
+      });
+    }
+  }
+
+  it("charges a skill directory once when sibling aliases cannot change its rows", () => {
+    const root = temp();
+    const directory = join(root, "original");
+    put(join(directory, "SKILL.md"), "---\nname: declared\ndescription: Present\n---\n");
+    symlinkSync(directory, join(root, "first"), "dir");
+    symlinkSync(directory, join(root, "second"), "dir");
+    const budget = { folders: 32, entries: 32, reads: 8 };
+    const rows = walkSkills(root, { ...recursive, ignoreFiles: false, uniqueFolders: true, budget });
+    expect(rows.map(({ name }) => name)).toEqual(["declared"]);
+    expect(budget.reads).toBe(7);
+  });
+
+  it("preserves directory fallback names for nameless skill aliases", () => {
+    const root = temp();
+    const directory = join(root, "original");
+    put(join(directory, "SKILL.md"), "---\ndescription: Present\n---\n");
+    symlinkSync(directory, join(root, "first"), "dir");
+    symlinkSync(directory, join(root, "second"), "dir");
+    const rows = walkSkills(root, { ...recursive, ignoreFiles: false, uniqueFolders: true });
+    expect(rows.map(({ name }) => name).sort()).toEqual(["first", "original", "second"]);
+  });
+
   for (const kind of ["skills", "commands", "one-level"] as const) {
     it(`bounds entry work in ${kind} even when linked folders repeat`, () => {
       // Given a linked lattice and a small shared entry allowance.
@@ -152,6 +195,12 @@ describe("shared skill walk", () => {
     expect(walkSkills(root, one).map(({ name, description }) => [name, description]).sort()).toEqual([
       ["fallback", "Body fallback"], ["valid:name", "x".repeat(150)],
     ]);
+  });
+
+  it("uses the name from a BOM-prefixed one-level skill header", () => {
+    const root = temp();
+    put(join(root, "folder", "SKILL.md"), "\uFEFF---\r\nname: declared\r\ndescription: Present\r\n---\r\n");
+    expect(walkSkills(root, one).map(({ name }) => name)).toEqual(["declared"]);
   });
 
   it("distinguishes root and nested loose markdown and stops at declared skills", () => {

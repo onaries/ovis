@@ -4,6 +4,11 @@ type PaneLayoutSplit = PaneLayoutSnapshot["splits"][number];
 /** Where a split has no room: a tab's panes are shown one at a time (PaneCanvas) and picked from the tab's menu (TabStrip). */
 export const SOLO_PANE_QUERY = "(max-width: 768px)";
 
+/** A short phone screen (landscape, a small phone): a lone tab is not drawn there (TabStrip). */
+export const CRAMPED_QUERY = "(max-width: 768px) and (max-height: 600px)";
+/** Whether the tab strip is left out of a workspace's view: a lone tab on a cramped screen. */
+export const loneTabHidden = (cramped: boolean, tabCount: number): boolean => cramped && tabCount === 1;
+
 /**
  * The pane a tab shows alone, or null when every pane is drawn: herdr's zoomed pane, else on a
  * narrow screen the selected pane (herdr's focused one, then the first, while the selection is

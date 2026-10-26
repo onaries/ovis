@@ -84,7 +84,6 @@ export const TERMINAL_ZH: Record<string, string> = {
   "New terminal": "新建终端",
   "New terminal failed: {reason}": "新建终端失败：{reason}",
   "Tab {n}": "标签页 {n}",
-  "Rename tab": "重命名标签页",
   "Close tab": "关闭标签页",
   "Tab name": "标签页名称",
   "Actions for {tab}": "{tab} 的操作",
@@ -119,4 +118,6 @@ export const TERMINAL_ZH: Record<string, string> = {
   "Too long for the message draft": "内容过长，无法加入消息草稿",
   "Tap Input line to paste.": "要粘贴，请先点按输入框键。",
   "Paste into the input line": "粘贴到输入行",
+  "Show keyboard": "显示键盘",
+  "Hide keyboard": "隐藏键盘",
 };

@@ -13,6 +13,32 @@ export function keyboardUp(): boolean {
   return typeof document !== "undefined" && document.documentElement.hasAttribute("data-keyboard");
 }
 
+/**
+ * Calls `listener` whenever the measured keyboard state changes (lib/viewport.ts toggles
+ * data-keyboard on what it measured, never on a focus alone); returns the stop. With `keyboardUp`
+ * this is a store for useSyncExternalStore: the key bar's keyboard control shows the state the
+ * viewport measured, not the one a tap hoped for.
+ */
+export function subscribeKeyboardUp(listener: () => void): () => void {
+  if (typeof document === "undefined") return () => {};
+  const observer = new MutationObserver(listener);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-keyboard"] });
+  return () => observer.disconnect();
+}
+
+/**
+ * What a tap on the key bar's keyboard control does. The measured state decides, not the focus: a
+ * field focused under a hardware keyboard, or before the occlusion is measured, counts as down, so
+ * the tap only focuses it again (`show`); a keyboard measured up is put away by blurring this pane's
+ * field (`hide`). An IME composition in either field, or a commit still on its way, refuses the tap
+ * outright (`refuse`): nothing runs later, and no compositionend is forced.
+ */
+export type KeyboardToggle = "show" | "hide" | "refuse";
+export function keyboardToggleAction(up: boolean, composing: boolean): KeyboardToggle {
+  if (composing) return "refuse";
+  return up ? "hide" : "show";
+}
+
 /** Reference height for keyboard occlusion, retaining the unobstructed viewport unless the window resized. */
 export function keyboardViewportReference(
   height: number,

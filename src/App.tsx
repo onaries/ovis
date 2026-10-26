@@ -64,6 +64,7 @@ import { useMachinesRef, useRecentFolderMemory, useRefetchTimer, useRosterError,
 import { useMachineDialog } from "./lib/useMachineDialog.ts";
 import { useNewSessionMachine, useNewSessionState, useSessionHistoryList } from "./lib/useNewSessionDialog.ts";
 import { useCommandPalette } from "./lib/useCommandPalette.ts";
+import { useRenameRequest } from "./lib/useRenameRequest.ts";
 import { useFilePanels } from "./lib/useFilePanels.ts";
 import { usePaneCoverage } from "./lib/usePaneCoverage.ts";
 import { useT } from "./lib/i18n.ts";
@@ -187,6 +188,8 @@ export function App() {
   const { paletteOpen, paletteQuery, openPalette, setPaletteOpen } = useCommandPalette();
   const paneControls = useRef<PaneControls | null>(null);
   const [findRequest, setFindRequest] = useState<{ paneId: string | null; serial: number }>({ paneId: null, serial: 0 });
+  // the Rename tab shortcut and palette action: the tab strip of the selected pane opens its name field
+  const { renameRequest, requestRename, clearRenameRequest } = useRenameRequest(selectedMachineId, selectedPaneId);
   // the header's More menu: its button
   const [more, setMore] = useState<{ anchor: HTMLElement } | null>(null);
   const closeMore = useCallback(() => setMore(null), []);
@@ -289,6 +292,8 @@ export function App() {
   const { selectedPane } = useSelectedPane({ snapshot, selectedPaneId });
   useScreenWakeLock(settings.keepScreenOn && locked === false && selectedPane !== null);
   const { selectedWorkspace, presentedPaneId } = useSelectedLayout({ selectedPane, snapshot, drawerOpen, selectedMachineId, selectedPaneId, setSelectedPaneId, setAutoSelected });
+  // the selected pane has a tab strip to rename in: its pane and workspace are in the roster
+  const tabStripMounted = selectedPane !== null && selectedWorkspace !== null;
   const targetHerdr = selectedMachineId === "local" ? health?.herdr : selectedMachine?.herdr;
   // the herdr the header names as current: this PC's last answer only while it is still shown (through one
   // failed read, not once unavailable), though its capabilities stay in targetHerdr
@@ -384,6 +389,11 @@ export function App() {
         setNewSessionMachineId(machineId);
         setNewTab({ workspaceId: workspace.workspace_id, workspaceLabel: workspace.label, cwd, number: workspace.tab_count + 1 });
         setNewSessionOpen(true);
+      },
+      renameTab: () => {
+        if (selectedPaneId === null || !tabStripMounted) return;
+        setDrawerOpen(false);
+        requestRename(selectedMachineId, selectedPaneId);
       },
       openTerminalTab: async (target) => {
         const found = newTabTarget(target);
@@ -485,7 +495,7 @@ export function App() {
         void zoomPane(paneId, mode, machineId).then(() => void load()).catch((err) => layoutRefused("pane zoom failed", err));
       } : null,
     }),
-    [selectPane, selectedPaneId, selectedMachineId, setView, view, terminalPeek, endPeek, updateSettings, resolvedTheme, canSignOut, lock, bellVisible, bell.run, enableNotifications, load, layoutRefused, moveRefused, lenses],
+    [selectPane, selectedPaneId, selectedMachineId, tabStripMounted, setView, view, terminalPeek, endPeek, updateSettings, resolvedTheme, canSignOut, lock, bellVisible, bell.run, enableNotifications, load, layoutRefused, moveRefused, lenses],
   );
 
   useShortcuts(actions, locked === false);
@@ -790,6 +800,8 @@ export function App() {
                 {!(slotSnapshot && pane && workspace) && slotBar}
                 {slotSnapshot && pane && workspace && (
                   <TabStrip snapshot={slotSnapshot} workspace={workspace} selectedPane={pane} panelId={slotPanelId} splitDrag={wideScreen} onSelectPane={onSelect} end={slotEnd}
+                    renameRequest={active && renameRequest?.machineId === machineId && renameRequest.paneId === pane.pane_id ? renameRequest : null}
+                    onRenameHandled={clearRenameRequest}
                     onNewTab={() => actions.openNewTab(active ? undefined : { machineId, workspaceId: workspace.workspace_id })}
                     onNewTerminal={() => actions.openTerminalTab(active ? undefined : { machineId, workspaceId: workspace.workspace_id })}
                     onMoveToWorkspace={(tabId, workspaceId) => actions.moveTabToWorkspace({ machineId, tabId, workspaceId })}

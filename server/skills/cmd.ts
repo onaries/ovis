@@ -1,6 +1,6 @@
 import { join, resolve } from "node:path";
 import type { AgentCommandContext, AgentCommandSource } from "./index.ts";
-import { ancestorsToRepoRoot, createWalkBudget, customCommands, readSkillText, walkSkills } from "./walk.ts";
+import { ancestorsToRepoRoot, createWalkBudget, customCommandSteps, readSkillText, walkSkillSteps } from "./walk.ts";
 import type { WalkBudget } from "./walk.ts";
 import type { SlashCommand } from "../../shared/protocol.ts";
 
@@ -156,9 +156,6 @@ const bundledDescriptions: Readonly<Record<string, string>> = {
   "skill-builder": "Author a new Agent Skill for Command Code end to end — scaffold the directory, write valid SKILL.md frontmatter, structure the instructions for progressive disclosure, and verify the skill loads.",
 };
 
-const recursiveSkills = (root: string, budget?: WalkBudget): ReturnType<typeof walkSkills> =>
-  walkSkills(root, { depth: "recursive", looseMarkdown: "root", ignoreFiles: false, requireDescription: true, budget });
-
 const readSettings = (path: string): Record<string, unknown> => {
   try {
     // bounded and regular files only: a FIFO or a link to /dev/zero committed as settings must not block the server
@@ -168,42 +165,32 @@ const readSettings = (path: string): Record<string, unknown> => {
 };
 const stringArray = (value: unknown): string[] => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 
-function skillsAt(root: string, origin: NonNullable<SlashCommand["origin"]>, shadowed: ReadonlySet<string>, disabled: ReadonlySet<string>, budget?: WalkBudget): SlashCommand[] {
-  return recursiveSkills(root, budget)
-    .filter((skill) => skill.fields["user-invocable"] !== false && !disabled.has(skill.name))
-    .map((skill) => ({
-      name: shadowed.has(skill.name.toLocaleLowerCase()) ? `skill:${skill.name}` : skill.name,
-      description: skill.description,
-      source: "skill",
-      origin,
-      id: skill.id,
-    }));
+function* skillsAt(root: string, origin: NonNullable<SlashCommand["origin"]>, disabled: ReadonlySet<string>, budget: WalkBudget): Generator<SlashCommand | null> {
+  try {
+    for (const skill of walkSkillSteps(root, { depth: "recursive", looseMarkdown: "root", ignoreFiles: false, requireDescription: true, uniqueFolders: true, budget })) {
+      if (!skill) { yield null; continue; }
+      if (skill.fields["user-invocable"] === false || disabled.has(skill.name)) { yield null; continue; }
+      yield { name: skill.name, description: skill.description, source: "skill", origin, id: skill.id };
+    }
+  } catch { return; /* a configured root that is not a readable folder lists nothing */ }
 }
 
-function commandsAt(root: string, origin: SlashCommand["source"], budget: WalkBudget): SlashCommand[] {
-  return customCommands(root, origin, budget).map((command) => {
-    const folder = command.name.includes(":") ? command.name.slice(0, command.name.lastIndexOf(":")).split(":").at(-1) : "";
-    return {
-      ...command,
-      name: command.name.split(":").at(-1)!,
-      description: folder ? `${folder} · ${command.description}` : command.description,
-    };
-  });
+function* commandsAt(root: string, origin: SlashCommand["source"], budget: WalkBudget): Generator<SlashCommand | null> {
+  try {
+    for (const command of customCommandSteps(root, origin, budget, undefined, true)) {
+      if (!command) { yield null; continue; }
+      const folder = command.name.includes(":") ? command.name.slice(0, command.name.lastIndexOf(":")).split(":").at(-1) : "";
+      yield {
+        ...command,
+        name: command.name.split(":").at(-1)!,
+        description: folder ? `${folder} · ${command.description}` : command.description,
+      };
+    }
+  } catch { return; /* an unreadable command root lists nothing, as Command Code's own loader skips it */ }
 }
 
-/**
- * The skill folders a settings file names: each walked once, all of them within one shared folder
- * budget, since a repository can commit the settings and list a folder any number of times.
- */
-function extraSkills(paths: readonly string[], base: string, home: string, origin: "user" | "project", shadowed: ReadonlySet<string>, disabled: ReadonlySet<string>, budget: WalkBudget): SlashCommand[] {
-  const roots = new Set(paths.map((path) => resolve(base, path === "~" || path.startsWith("~/") ? join(home, path.slice(2)) : path)));
-  return [...roots].flatMap((root) => {
-    // a configured path that is no folder lists nothing, and hides nothing else
-    try { return skillsAt(root, origin, shadowed, disabled, budget); } catch { return []; }
-  });
-}
-
-function discoverSkills(ctx: AgentCommandContext, shadowed: ReadonlySet<string>, budget: WalkBudget): SlashCommand[] {
+function discover(ctx: AgentCommandContext): SlashCommand[] {
+  const budget = createWalkBudget();
   const { home, cwd } = ctx;
   const agentDir = join(home, ".commandcode");
   const directories = cwd ? ancestorsToRepoRoot(cwd) : [];
@@ -219,32 +206,75 @@ function discoverSkills(ctx: AgentCommandContext, shadowed: ReadonlySet<string>,
   ]);
   const projectSkillsConfig = Array.isArray(projectLocalSettings.skills) ? projectLocalSettings.skills : projectSettings.skills;
   const projectDefinesSkills = Array.isArray(projectLocalSettings.skills) || Array.isArray(projectSettings.skills);
-  const projectSkills = Array.isArray(projectSkillsConfig)
-    ? extraSkills(stringArray(projectSkillsConfig), repoRoot, home, "project", shadowed, disabled, budget)
-    : [];
-  const userSkills = !projectDefinesSkills && Array.isArray(userSettings.skills)
-    ? extraSkills(stringArray(userSettings.skills), repoRoot, home, "user", shadowed, disabled, budget)
-    : [];
-  const project = cwd ? ancestorsToRepoRoot(cwd).flatMap((directory) => [
-    ...skillsAt(join(directory, ".commandcode", "skills"), "project", shadowed, disabled, budget),
-    ...skillsAt(join(directory, ".agents", "skills"), "project", shadowed, disabled, budget),
-  ]) : [];
-  const user = [
-    ...skillsAt(join(agentDir, "skills"), "user", shadowed, disabled, budget),
-    ...skillsAt(join(home, ".agents", "skills"), "user", shadowed, disabled, budget),
-    ...userSkills,
+  const configured = stringArray(projectDefinesSkills ? projectSkillsConfig : userSettings.skills);
+  const extraRoots = new Set(configured.map((path) => resolve(repoRoot, path === "~" || path.startsWith("~/") ? join(home, path.slice(2)) : path)));
+  const personalRoots = [
+    { path: join(agentDir, "skills"), origin: "user" as const },
+    { path: join(home, ".agents", "skills"), origin: "user" as const },
   ];
-  const extraProject = projectSkills;
+  // Command Code 1.84.0 createSkillRegistry: project, user, extra, bundled; first name wins.
+  const roots = [
+    ...directories.flatMap((directory) => [
+      { path: join(directory, ".commandcode", "skills"), origin: "project" as const },
+      { path: join(directory, ".agents", "skills"), origin: "project" as const },
+    ]),
+    ...personalRoots,
+    ...[...extraRoots].map((path) => ({ path, origin: projectDefinesSkills ? "project" as const : "user" as const })),
+  ];
+  // Preserve dispatch precedence in the result, independently of when each root is walked.
+  const commandRoots = [
+    { path: join(agentDir, "commands"), origin: "user" as const },
+    ...directories.map((directory) => ({ path: join(directory, ".commandcode", "commands"), origin: "project" as const })),
+  ];
+  const candidates = [
+    ...commandRoots.map(({ path, origin }) => ({
+      walk: commandsAt(path, origin, budget), command: true, personal: false, rows: new Array<SlashCommand>(), cut: false,
+    })),
+    ...roots.map((location) => ({
+      walk: skillsAt(location.path, location.origin, disabled, budget),
+      command: false, personal: personalRoots.some((root) => root === location), rows: new Array<SlashCommand>(), cut: false,
+    })),
+  ];
+  const spent = (): boolean => budget.folders <= 0 || budget.entries <= 0 || budget.reads <= 0;
+  const advance = (walks: typeof candidates): typeof candidates => walks.filter((candidate) => {
+    const step = candidate.walk.next();
+    // A walk that ends with the bound spent may have stopped short of names it never listed.
+    if (step.done) { candidate.cut = spent(); return false; }
+    // Only a command found before the bound was spent is safe: after that the walk may have skipped a
+    // folder or entries holding a same-name command that Command Code reaches first. The bound only
+    // shrinks, so the rows kept are a prefix of the walk with nothing skipped before them.
+    if (step.value && !(candidate.command && spent())) candidate.rows.push(step.value);
+    return true;
+  });
+  // Personal roots get first use of half the work bound, even with thousands of project roots.
+  // Walkers retain their position: unfinished personal roots rejoin the others, and finished or
+  // absent roots retain no capacity. Round-robin checkpoints prevent one large root spending it all.
+  const reserved = { folders: budget.folders / 2, entries: budget.entries / 2, reads: budget.reads / 2 };
+  let personal = candidates.filter((candidate) => candidate.personal);
+  // Equality still leaves buffered entries to process; stop only when charged work crosses a half.
+  while (personal.length && budget.folders >= reserved.folders && budget.entries >= reserved.entries && budget.reads >= reserved.reads) personal = advance(personal);
+  let pending = candidates;
+  while (pending.length) pending = advance(pending);
+  // Once a command root is cut short, any name may be one of its unlisted commands, which Command Code
+  // runs first: lower-priority command roots list nothing, and skills keep only their /skill: form.
+  let unresolved = false;
+  const discovered = candidates.flatMap((candidate, index) => {
+    if (index >= commandRoots.length) return candidate.rows;
+    const rows = unresolved ? [] : candidate.rows;
+    unresolved ||= candidate.cut;
+    return rows;
+  });
+  const shadowed = new Set([...source.builtins, ...discovered.filter((row) => row.source !== "skill").map(({ name }) => name)].map((name) => name.toLocaleLowerCase()));
   const bundled = bundledSkills.filter((name) => !disabled.has(name)).map((name): SlashCommand => ({
-    name: shadowed.has(name.toLocaleLowerCase()) ? `skill:${name}` : name,
+    name,
     description: bundledDescriptions[name] ?? name,
     source: "skill",
     origin: "bundled",
     id: `command-code@1.84.0:skill:${name}`,
   }));
-  const seen = new Set<string>();
-  return [...project, ...user, ...extraProject, ...bundled].filter((row) => {
-    const key = row.name.startsWith("skill:") ? row.name.slice(6) : row.name;
+  const seen = new Set(source.builtins.map((name) => name.toLocaleLowerCase()));
+  return [...discovered, ...bundled].map((row) => row.source === "skill" && (unresolved || shadowed.has(row.name.toLocaleLowerCase())) ? { ...row, name: `skill:${row.name}` } : row).filter((row) => {
+    const key = row.name.toLocaleLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -271,24 +301,5 @@ export const source: AgentCommandSource = {
   },
   pin: "1.84.0",
   skillsOverrideBuiltins: false,
-  discover(ctx) {
-    const { home, cwd } = ctx;
-    const agentDir = join(home, ".commandcode");
-    // One walk budget for the whole discovery: a repository can commit settings, nest projects under
-    // its root and link folders, and every root it adds would otherwise bring a budget of its own.
-    const budget = createWalkBudget();
-    const commands = [
-      ...(cwd ? ancestorsToRepoRoot(cwd).flatMap((directory) => commandsAt(join(directory, ".commandcode", "commands"), "project", budget)) : []),
-      ...commandsAt(join(agentDir, "commands"), "user", budget),
-    ];
-    const shadowed = new Set([...source.builtins, ...commands.map(({ name }) => name)].map((name) => name.toLocaleLowerCase()));
-    const result = [...commands, ...discoverSkills(ctx, shadowed, budget)];
-    const seen = new Set<string>();
-    return result.filter((row) => {
-      const key = `${row.name}\0${row.id ?? ""}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  },
+  discover,
 };

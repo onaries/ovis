@@ -75,7 +75,7 @@ function Root() {
   const join = (panes: HerdrPane[]) => setSnapshot((current) => ({ ...current, panes: [...current.panes, ...panes] }));
   window.qa.rosterCatchUp = () => join(held.current.splice(0));
   const actions: AppActions = {
-    selectPane: setSelected, selectAdjacentPane: noop, setView: noop, toggleView: noop, focusInput: noop, scrollPage: noop, openNewSession: noop, openNewTab: noop,
+    selectPane: setSelected, selectAdjacentPane: noop, setView: noop, toggleView: noop, focusInput: noop, scrollPage: noop, openNewSession: noop, openNewTab: noop, renameTab: noop,
     openTerminalTab: async () => {}, openSessionHistory: (target) => {
       // as App does: prefer Claude for its store, keeping the original request for picker changes
       if (target) setHistory({ workspaceId: target.workspaceId, agent: target.agent ?? null, askingPaneId: target.paneId ?? null, paneId: sessionHistorySourcePane(sessionHistoryAgent(target.agent) ?? "codex", snapshot.panes, { workspaceId: target.workspaceId, askingPaneId: target.paneId, selectedPaneId: selected }) });

@@ -17,6 +17,7 @@ import type { TranscriptParser } from "./transcript-records.ts";
 import type { AgentInfo } from "../shared/herdr-api.generated.ts";
 import { agentGet, paneProcessInfo, paneRead, sessionSnapshot } from "./herdr/client.ts";
 import { resolveAgent } from "./pane-context.ts";
+import { codexStartScreenUnused } from "./start-screen.ts";
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -416,20 +417,56 @@ async function readProcessCodexHome(pid: number): Promise<string | null> {
     if (process.platform === "linux") {
       home = (await readFile(`/proc/${pid}/environ`, "utf8")).split("\0").find((entry) => entry.startsWith("CODEX_HOME="))?.slice(11) || null;
     } else if (process.platform === "darwin") {
-      const child = Bun.spawn(["/bin/ps", "-E", "-ww", "-p", String(pid), "-o", "command="], { stdout: "pipe", stderr: "ignore" });
-      const timer = setTimeout(() => child.kill(), 3000);
-      try {
-        // the environment follows the arguments, space-separated: the last match is the
-        // environment's, and its value runs to the next `NAME=` (a path may hold spaces).
-        // ponytail: a value holding ` NAME=` is cut there, and with none in the environment an
-        // argument spelled CODEX_HOME=/path would be taken. /proc on Linux has neither problem
-        const text = await new Response(child.stdout).text();
-        await child.exited;
-        home = codexHomeInPsLine(text);
-      } finally { clearTimeout(timer); }
+      // the environment follows the arguments, space-separated: the last match is the
+      // environment's, and its value runs to the next `NAME=` (a path may hold spaces).
+      // ponytail: a value holding ` NAME=` is cut there, and with none in the environment an
+      // argument spelled CODEX_HOME=/path would be taken. /proc on Linux has neither problem
+      home = codexHomeInPsLine((await psEnvironmentLine(pid)) ?? "");
     }
   } catch { home = null; }
   return home !== null && (await isCodexHomeDir(home)) ? home : null;
+}
+
+/** A process's `ps -E` line on macOS: its arguments, then its environment when it is this user's. Null when ps fails. */
+async function psEnvironmentLine(pid: number): Promise<string | null> {
+  const child = Bun.spawn(["/bin/ps", "-E", "-ww", "-p", String(pid), "-o", "command="], { stdout: "pipe", stderr: "ignore" });
+  const timer = setTimeout(() => child.kill(), 3000);
+  try {
+    const text = await new Response(child.stdout).text();
+    return (await child.exited) === 0 ? text : null;
+  } finally { clearTimeout(timer); }
+}
+
+/**
+ * The store a process's Codex writes to, only as far as its environment tells it for certain
+ * (#1191): the CODEX_HOME directory it names, else .codex in the HOME it names, or null. Null
+ * covers an environment that cannot be read (another user's process, a gone one, Windows), a
+ * CODEX_HOME that is relative or no directory (Codex places one itself, while paneCodexHome falls
+ * back to the default store for it), no HOME or a relative one, and on macOS a command line that
+ * spells CODEX_HOME= or HOME= itself, which `ps -E` cannot tell from the environment. Never this
+ * server's own home: the pane's Codex may run with another HOME.
+ */
+async function certainProcessCodexHome(pid: number, argv: readonly string[]): Promise<string | null> {
+  let named: string | null = null;
+  let home: string | null = null;
+  try {
+    if (process.platform === "linux") {
+      const environment = (await readFile(`/proc/${pid}/environ`, "utf8")).split("\0");
+      named = environment.find((entry) => entry.startsWith("CODEX_HOME="))?.slice(11) ?? "";
+      home = environment.find((entry) => entry.startsWith("HOME="))?.slice(5) ?? null;
+    } else if (process.platform === "darwin" && !argv.some((word) => word.includes("HOME="))) {
+      // ps draws another user's process without its environment, and then names no HOME either
+      const line = await psEnvironmentLine(pid);
+      if (line !== null) {
+        named = codexHomeInPsLine(line) ?? "";
+        home = [...line.matchAll(/(?:^|\s)HOME=(.*?)(?=\s+[A-Za-z_][A-Za-z0-9_]*=|\s*$)/g)].at(-1)?.[1] ?? null;
+      }
+    }
+  } catch { return null; }
+  if (named === null) return null;
+  // Codex reads an empty CODEX_HOME as none, and then keeps its store in the HOME it runs with
+  if (named === "") return home !== null && isAbsolute(home) ? join(home, ".codex") : null;
+  return (await isCodexHomeDir(named)) ? named : null;
 }
 
 /** An absolute path to a directory that is there: `ps` cannot tell an argument from the environment, a store can be checked. */
@@ -1359,6 +1396,66 @@ function titledCandidate(agent: Pick<AgentInfo, "terminal_title" | "terminal_tit
     "SELECT rollout_path FROM threads WHERE id >= ? AND id < ? AND archived = 0 LIMIT 2",
   ).all(id, `${id}g`);
   return rows.length === 1 ? codexRolloutPath(rows[0]!.rollout_path, home) : null;
+}
+
+/**
+ * The history id of the conversation a Codex started in a terminal has not begun, or null unless
+ * every fact says it has begun none (#1191). This server did not start it (launched-agents.ts),
+ * herdr reports no session for it, and nothing was matched to it; what tells instead:
+ *
+ * - its screen is its start screen with nothing said yet (codexStartScreenUnused);
+ * - its processes were started on no conversation: no `resume` or `fork` on their command lines,
+ *   since the picker either opens shows a conversation that exists;
+ * - its store holds no interactive thread of its folder with a first message, begun or written
+ *   since it started (no later than its start: processStartLowerBound), so no first message of
+ *   its own and no conversation it resumed and wrote to. One another pane began there since
+ *   counts too: which pane's it is cannot be told here. A thread with no message yet holds no
+ *   conversation, whoever made it. That store is an explicit one (`configured`), else the one
+ *   its own environment names for certain (certainProcessCodexHome), on every platform.
+ *
+ * A start time, a home or a store that cannot be read says nothing, and then neither does this. The id
+ * names the pane and its processes, never a time: a start read on macOS moves between reads.
+ */
+export async function codexFreshSession(paneId: string, cwds: readonly string[], configured: string | undefined, screen: string): Promise<string | null> {
+  if (!codexStartScreenUnused(screen)) return null;
+  const { list, key } = await codexProcessesOf(paneId).catch(() => ({ list: [], key: "" }));
+  if (list.length === 0 || list.some((codex) => (codex.argv ?? []).some((word) => word === "resume" || word === "fork"))) return null;
+  // an explicit store wins, as in paneCodexHome. Else every Codex's home must be placed for
+  // certain, and the first decides: one paneCodexHome cannot place (a relative CODEX_HOME) falls
+  // back to the default store, where this pane's conversation is not
+  let home = configured;
+  if (home === undefined) {
+    const homes = await Promise.all(list.map((codex) => certainProcessCodexHome(codex.pid, codex.argv ?? [])));
+    const [first] = homes;
+    if (first == null || homes.some((known) => known === null)) return null;
+    home = first;
+  }
+  const starts = list.map((codex) => processStartLowerBound(codex.pid));
+  if (starts.some((started) => started === null)) return null;
+  // whole seconds, and one more: a start read anew may land in the second before
+  const since = Math.floor(Math.min(...(starts as number[])) / 1000) - 1;
+  const store = join(home, "state_5.sqlite");
+  let db: Database | undefined;
+  try {
+    // a store Codex has not made yet holds no thread
+    if (statSync(store, { throwIfNoEntry: false }) !== undefined) {
+      db = new Database(store, { readonly: true, create: false });
+      // each folder the pane names (its shell's, its foreground process's), as given and as it
+      // resolves: Codex may have stored any of them
+      const named = cwds.filter((cwd) => cwd.length > 0);
+      if (named.length === 0) return null;
+      const folders = [...new Set(named.flatMap((cwd) => {
+        try { return [cwd, realpathSync(cwd)]; } catch { return [cwd]; }
+      }))].map((folder) => storedCwdCondition(folder));
+      const said = db.query("SELECT 1 FROM pragma_table_info('threads') WHERE name = 'first_user_message'").get() !== null ? " AND COALESCE(first_user_message, '') <> ''" : "";
+      const begun = db.query<unknown, (string | number)[]>(
+        `SELECT 1 FROM threads WHERE (${folders.map((folder) => folder.where).join(" OR ")}) AND archived = 0 AND agent_role IS NULL${interactive(db)}${said} AND max(COALESCE(created_at, 0), COALESCE(updated_at, 0)) >= ? LIMIT 1`,
+      ).get(...folders.flatMap((folder) => folder.params), since);
+      if (begun !== null) return null;
+    }
+  } catch { return null; }
+  finally { db?.close(); }
+  return `unwritten:codex:${paneId}:${key}`;
 }
 
 /** `codex resume <thread>`: the thread a TUI was started on, straight from its command line. */

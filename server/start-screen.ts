@@ -29,20 +29,51 @@ function claudeScreen(lines: string[]): Screen {
   return { model: `claude-${named[1]!.toLowerCase()}-${named[2]}${named[3] === undefined ? "" : `-${named[3]}`}`, reasoning_effort: null };
 }
 
-/** Only the live composer footer owns a Codex model. Text above it (an answer quoting the
- * /model picker, a draft) never does, and while a popup hides the footer the model is unknown. */
-function codexScreen(lines: string[]): Screen {
+const CODEX_PROMPT = /^\s*›(?:\s|$)/u;
+
+/** The lines under the last Codex session header down to its composer footer, the model and
+ * effort that footer states, or null when the screen does not show both. */
+function codexLayout(lines: string[]): { header: number; visible: string[]; end: number; model: RegExpExecArray } | null {
   let header = lines.length - 1;
-  while (header >= 0 && !lines[header]!.includes("OpenAI Codex (v")) header--;
-  if (header < 0) return NOTHING;
+  // the banner's own line, boxed or not: an answer that only mentions it is no header
+  while (header >= 0 && !/^[\s\u2502|]*>_ OpenAI Codex \(v\d[^)]*\)[\s\u2502|]*$/u.test(lines[header]!)) header--;
+  if (header < 0) return null;
   const visible = lines.slice(header + 1);
   const footer = new RegExp(`^\\s*(GPT-[\\w.-]+) (${EFFORT})(?: \\w+)? · `, "u");
   let end = visible.length - 1;
   while (end >= 0 && visible[end]!.trim() === "") end--;
-  if (end < 1 || !/^\s*[←?].*(?:for agents|shortcuts)/u.test(visible[end]!)) return NOTHING;
-  const found = footer.exec(visible[end - 1]!);
-  if (!found || !visible.slice(0, end - 1).some((line) => /^\s*›(?:\s|$)/u.test(line))) return NOTHING;
-  return { model: found[1]!.toLowerCase(), reasoning_effort: found[2]! };
+  if (end < 1 || !/^\s*[←?].*(?:for agents|shortcuts)/u.test(visible[end]!)) return null;
+  const model = footer.exec(visible[end - 1]!);
+  if (!model || !visible.slice(0, end - 1).some((line) => CODEX_PROMPT.test(line))) return null;
+  return { header, visible, end, model };
+}
+
+/** Only the live composer footer owns a Codex model. Text above it (an answer quoting the
+ * /model picker, a draft) never does, and while a popup hides the footer the model is unknown. */
+function codexScreen(lines: string[]): Screen {
+  const found = codexLayout(lines)?.model;
+  return found ? { model: found[1]!.toLowerCase(), reasoning_effort: found[2]! } : NOTHING;
+}
+
+/** A cell Codex draws for something said or done: an answer or a tool call, a warning, an error. */
+const CODEX_CELL = /^\s*[•⚠■]/u;
+
+/**
+ * Whether a Codex screen is its start screen with nothing said in it yet: under the last session
+ * header, its card and start tips, then the composer (the first prompt line, `›`) with what it
+ * holds, then the footer. A message sent or a resumed conversation puts a prompt or an answer
+ * above the composer, and a long one pushes the header off the screen; either way this says no.
+ * So does one said above the header: the header may be a card a command drew (`/status`) after
+ * a conversation, or a session started after another one in the same terminal.
+ */
+export function codexStartScreenUnused(screen: string): boolean {
+  const all = screen.split("\n");
+  const layout = codexLayout(all);
+  if (layout === null || all.slice(0, layout.header).some((line) => CODEX_PROMPT.test(line) || CODEX_CELL.test(line))) return false;
+  const lines = layout.visible.slice(0, layout.end - 1);
+  const composer = lines.findIndex((line) => CODEX_PROMPT.test(line));
+  return composer >= 0 && !lines.slice(0, composer).some((line) => CODEX_CELL.test(line))
+    && !lines.slice(composer + 1).some((line) => CODEX_PROMPT.test(line) || CODEX_CELL.test(line));
 }
 
 /** ` ⬢ opus-5.5 · ◉ xhigh · 1.5% / …`, the status line over the composer. */
