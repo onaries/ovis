@@ -1,4 +1,118 @@
 {
+  "0.4.17": {
+    "en": {
+      "new": [
+        "Copilot CLI is in the agent picker, and its conversations show in Chat on Linux.",
+        "Grok Chat works on macOS.",
+        "Hide a PC on this device in Settings → Remote PCs → Show in sidebar.",
+        "Move a tab with one pane to another workspace from its menu or the palette.",
+        "Drop a pane's title on another's in the same tab to swap the two panes.",
+        "Pictures Claude Code reads and pictures sent to pi show in Chat.",
+        "Pick the interface font again in Settings → Appearance.",
+        "In the Android app, long-press a link to copy, open or share it."
+      ],
+      "improved": [
+        "Pi question cards show their real choices in Chat.",
+        "GJC question cards take a typed answer in Other.",
+        "An option picked by typing its number can be confirmed with Enter.",
+        "Chat keeps a tool you opened in place while the agent keeps working.",
+        "Updates wait longer before giving up on slow PCs."
+      ],
+      "fixed": [
+        "Codex Chat opens a session resumed from another folder.",
+        "In Ovis for Mac, the terminal draws Korean at the right size.",
+        "A Windows PC whose bridge setup was interrupted can be set up again.",
+        "A terminal whose connection drops while its pane runs reconnects.",
+        "Messages sent to pi stay visible until pi records them.",
+        "Remote PCs on macOS connect even with a long temporary folder path.",
+        "On Linux, a Chinese candidate picked by number is typed, not the number."
+      ]
+    },
+    "ko": {
+      "new": [
+        "Copilot CLI를 에이전트 선택에서 고를 수 있고, 리눅스에서는 대화가 채팅에 보입니다.",
+        "macOS에서 Grok 채팅을 쓸 수 있습니다.",
+        "설정 → 원격 PC → 사이드바에 표시에서 이 기기에서만 PC를 숨길 수 있습니다.",
+        "패널이 하나인 탭을 메뉴나 팔레트에서 다른 워크스페이스로 옮길 수 있습니다.",
+        "같은 탭에서 패널 제목을 다른 패널 제목에 놓으면 두 패널이 자리를 바꿉니다.",
+        "Claude Code가 읽은 그림과 pi에 보낸 그림이 채팅에 보입니다.",
+        "설정 → 모양에서 인터페이스 글꼴을 다시 고를 수 있습니다.",
+        "안드로이드 앱에서 링크를 길게 누르면 복사, 열기, 공유할 수 있습니다."
+      ],
+      "improved": [
+        "Pi 질문 카드가 채팅에서 실제 선택지를 보여 줍니다.",
+        "GJC 질문 카드의 기타 칸에 답을 직접 적을 수 있습니다.",
+        "번호를 입력해 고른 선택지를 Enter로 확인할 수 있습니다.",
+        "에이전트가 일하는 동안에도 펼친 도구가 제자리에 머뭅니다.",
+        "느린 PC에서 업데이트가 더 오래 기다린 뒤에 포기합니다."
+      ],
+      "fixed": [
+        "Codex 채팅이 다른 폴더에서 이어 연 세션을 엽니다.",
+        "Ovis for Mac에서 터미널의 한글이 제 크기로 그려집니다.",
+        "브리지 설치가 중간에 끊긴 Windows PC를 다시 설정할 수 있습니다.",
+        "패널이 살아 있는데 연결이 끊긴 터미널이 다시 연결됩니다.",
+        "pi에 보낸 메시지가 pi에 기록될 때까지 보입니다.",
+        "임시 폴더 경로가 긴 macOS에서도 원격 PC에 연결됩니다.",
+        "리눅스에서 번호로 고른 중국어 후보가 숫자 대신 입력됩니다."
+      ]
+    },
+    "ja": {
+      "new": [
+        "Copilot CLI をエージェント選択で選べ、Linux では会話がチャットに表示されます。",
+        "macOS で Grok のチャットが使えます。",
+        "設定 → リモート PC → サイドバーに表示 で、この端末だけ PC を隠せます。",
+        "ペインが 1 つのタブを、メニューやパレットから別のワークスペースへ移せます。",
+        "同じタブでペインのタイトルを別のタイトルに落とすと、2 つのペインが入れ替わります。",
+        "Claude Code が読んだ画像と pi に送った画像がチャットに表示されます。",
+        "設定 → 外観 でインターフェースのフォントを再び選べます。",
+        "Android アプリでリンクを長押しすると、コピー・開く・共有ができます。"
+      ],
+      "improved": [
+        "Pi の質問カードがチャットで実際の選択肢を表示します。",
+        "GJC の質問カードで「その他」に答えを入力できます。",
+        "番号を入力して選んだ選択肢を Enter で確定できます。",
+        "エージェントが作業中でも、開いたツールがその場にとどまります。",
+        "遅い PC では、更新があきらめるまでより長く待ちます。"
+      ],
+      "fixed": [
+        "Codex のチャットが別のフォルダから再開したセッションを開きます。",
+        "Ovis for Mac で、ターミナルの韓国語が正しい大きさで描かれます。",
+        "ブリッジのインストールが中断した Windows PC を再び設定できます。",
+        "ペインが動いたまま接続が切れたターミナルが再接続します。",
+        "pi に送ったメッセージが、pi に記録されるまで表示されます。",
+        "一時フォルダのパスが長い macOS でもリモート PC に接続できます。",
+        "Linux で番号で選んだ中国語の候補が、数字ではなく入力されます。"
+      ]
+    },
+    "zh": {
+      "new": [
+        "Copilot CLI 可在代理选择中选取，在 Linux 上其对话会显示在聊天中。",
+        "macOS 上可以使用 Grok 聊天。",
+        "在 设置 → 远程 PC → 在侧边栏中显示 中，可仅在本设备上隐藏某台 PC。",
+        "只有一个窗格的标签页可通过菜单或命令面板移到另一个工作区。",
+        "在同一标签页中把窗格标题拖到另一个标题上，两个窗格会互换位置。",
+        "Claude Code 读取的图片和发给 pi 的图片会显示在聊天中。",
+        "可以在 设置 → 外观 中重新选择界面字体。",
+        "在 Android 应用中长按链接，可以复制、打开或分享。"
+      ],
+      "improved": [
+        "Pi 的提问卡片在聊天中显示真实选项。",
+        "GJC 提问卡片的“其他”可以直接输入答案。",
+        "输入编号选中的选项可以按 Enter 确认。",
+        "代理工作时，你展开的工具会留在原位。",
+        "在较慢的电脑上，更新会等待更久才放弃。"
+      ],
+      "fixed": [
+        "Codex 聊天能打开从其他文件夹恢复的会话。",
+        "在 Ovis for Mac 中，终端里的韩文按正确大小绘制。",
+        "桥接安装中途中断的 Windows 电脑可以重新设置。",
+        "窗格仍在运行但连接断开的终端会重新连接。",
+        "发给 pi 的消息在 pi 记录之前保持可见。",
+        "临时文件夹路径较长的 macOS 也能连接远程 PC。",
+        "在 Linux 上，按编号选中的中文候选词会被输入，而不是数字。"
+      ]
+    }
+  },
   "0.4.16": {
     "en": {
       "fixed": [
