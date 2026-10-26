@@ -44,6 +44,21 @@ it("records reported completion and leaves it completed when closed", () => {
   expect(tracker.detail("pane", id)).toMatchObject({ detail: { events: [{ text: "Lifecycle verified" }] } });
 });
 
+it("accepts native text-content blocks in a code-mode spawn receipt", () => {
+  const script = 'text(await tools.multi_agent_v1__spawn_agent({agent_type:"explorer",message:"Inspect task lifecycle"}));';
+  const { tracker } = fixture(entry({ type: "custom_tool_call", name: "exec", input: script, call_id: "spawn" })
+    + entry({ type: "custom_tool_call_output", call_id: "spawn", output: [{ type: "text", text: "Script completed\nOutput:" }, { type: "text", text: JSON.stringify({ agent_id: id, nickname: "Explorer" }) }] }));
+  expect(tracker.countOf("pane")).toBe(1);
+  expect(tracker.tasksOf("pane")).toMatchObject([{ id, title: "Explorer" }]);
+});
+
+it("reads completion carried only as a native user response item", () => {
+  const message = `<subagent_notification>${JSON.stringify({ agent_path: id, status: { completed: "Native completion" } })}</subagent_notification>`;
+  const { tracker } = fixture(spawn() + entry({ type: "message", role: "user", content: [{ type: "input_text", text: message }] }));
+  expect(tracker.countOf("pane")).toBe(0);
+  expect(tracker.detail("pane", id)).toMatchObject({ detail: { events: [{ text: "Native completion" }] } });
+});
+
 it("does not claim a rejected close stopped a child", () => {
   const { path, tracker } = fixture();
   appendFileSync(path, call("multi_agent_v1__close_agent", { target: id }) + output({ error: "permission denied" })); tracker.poll("pane", path);

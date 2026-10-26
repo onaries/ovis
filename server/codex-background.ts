@@ -1,6 +1,7 @@
 import type { CodexSubagentCall, OmoTask, PaneBackgroundAgentDetail } from "../shared/protocol.ts";
 import { plain, readLines } from "./claude-subagents.ts";
 import { codexSubagentCalls, codexSubagentNotification, codexSubagentReplies } from "./codex-subagents.ts";
+import { codexOutputText } from "./codex.ts";
 
 const READ_BYTES = 8 * 1024 * 1024;
 const LIMIT = 200;
@@ -93,8 +94,10 @@ export class CodexBackgroundTasks {
       read.calls.clear(); read.cells.clear();
       return;
     }
-    if (entry["type"] === "event_msg" && payload["type"] === "user_message") {
-      const notification = codexSubagentNotification(text(payload["message"]), []);
+    if ((entry["type"] === "event_msg" && payload["type"] === "user_message")
+      || (entry["type"] === "response_item" && payload["type"] === "message" && payload["role"] === "user")) {
+      const body = entry["type"] === "event_msg" ? text(payload["message"]) : codexOutputText(payload["content"]);
+      const notification = codexSubagentNotification(body, []);
       if (notification?.kind === "task_result") for (const result of notification.tasks) {
         const found = read.tasks.get(result.id);
         if (!found) continue;
@@ -124,7 +127,7 @@ export class CodexBackgroundTasks {
     const id = text(payload["call_id"]), call = read.calls.get(id);
     if (!call) return;
     read.calls.delete(id);
-    const output = text(payload["output"]);
+    const output = codexOutputText(payload["output"]);
     const answers = codexSubagentReplies(output);
     const accepted = answers.length > 0 && !answers.some((answer) => Object.hasOwn(answer, "error") || answer["isError"] === true);
     const agents = codexSubagentCalls(call.name, call.input, output);
