@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { Minus, Plus } from "lucide-react";
+import type { ComponentProps, ReactNode } from "react";
+import { ChevronDown, Minus, Plus } from "lucide-react";
 
 import "./SettingsControls.css";
 
@@ -39,6 +39,15 @@ export function Toggle({ checked, label, onChange, disabled }: { checked: boolea
     <button type="button" className="settings-toggle" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}>
       <span className="settings-toggle-thumb" />
     </button>
+  );
+}
+
+export function SettingsSelect({ className, children, ...props }: ComponentProps<"select">) {
+  return (
+    <span className={className ? `settings-select-wrap ${className}` : "settings-select-wrap"}>
+      <select {...props} className="select settings-select">{children}</select>
+      <ChevronDown aria-hidden="true" />
+    </span>
   );
 }
 

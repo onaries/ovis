@@ -23,6 +23,11 @@ cards under their originating conversation, with unknown token counts and durati
 Tool-call completion alone is not presented as the child's completion. No child transcript
 is opened and no additional polling endpoint is introduced.
 
+Agy's terminal fallback follows Copilot's recovery cadence: while native history is
+unavailable, use the normal two-second poll rather than rely on a file watcher that may
+not be bound yet. A verified native answer replaces the fallback without a reload or pane
+switch; an unknown session still displays no previous conversation.
+
 Extracted from the shipped client (`src/styles.css`, `src/components/*`), not invented. The machine
 copy of every token is the `:root` block in `src/styles.css`; every table below mirrors it value for
 value. When a component needs a value that is not here, add it to both first.
@@ -536,7 +541,7 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
 | Token | Value | Usage |
 |-------|-------|-------|
 | `--ui-scale` | `1`; Settings → Appearance → Interface font size over the density's body size, written on `<html>` | Multiplies every `--fs-*` token but `--fs-input` |
-| `--font-ui` | `"Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Malgun Gothic", sans-serif` | Chrome and chat prose |
+| `--font-ui` | `"Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Malgun Gothic", sans-serif`; Settings → Appearance → Interface font writes the token on `<html>`: a typed list in front of this stack, a preset as a whole stack (`src/lib/typography.ts` keeps this one verbatim) | Chrome and chat prose |
 | `--font-mono` | `"Symbols Nerd Font Mono", "JetBrains Mono Web", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "D2Coding", monospace` | Code, paths, keys, terminal-adjacent metadata |
 | `--lh-tight` | `1.2` | Titles |
 | `--lh-base` | `1.5` comfortable / `1.45` compact | Body copy |
@@ -568,6 +573,14 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   name `"JetBrains Mono Web"`. The name is the app's own so that the terminal never takes it:
   xterm's stack (`src/lib/fontFamily.ts`) names `"JetBrains Mono"`, sizes every cell from the
   first font that matches, and keeps meaning the copy installed on the device.
+- Except in Ovis for Mac's window: WebKit there draws a font the user installed, but its canvas,
+  which xterm and the glyph fit measure with, sees only the system's fonts. The terminal leaves
+  such a font out of its stack (`measurableFontStack`) and draws what Safari draws, Menlo and
+  Apple SD Gothic Neo, rather than a grid measured in one font and drawn in another. It follows
+  Zed and Warp, whose terminals size a cell with the font that draws it. VS Code's xterm.js
+  terminal, the nearest web one, never meets the case: in Electron the canvas and the page see
+  the same installed fonts. A WKWebView's canvas cannot, so here the font is dropped rather than
+  measured.
 - Chat reading scale: prose, the user's bubble and live narration are `--fs-chat` on
   `--lh-prose`; `strong` is `--fw-semibold` in `--text-strong`; inline code and code file chips
   are `0.87em` of their line; a code block is `--fs-sm` on `--lh-code`; headings are h1 `--fs-xl`,
@@ -618,10 +631,19 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
 - Interface font size (`uiFontSize`): the body size (`--fs-md`) in px, `11–20px`, `null` follows the
   density (`14px` comfortable, `13px` compact); it reaches CSS as `--ui-scale` (above). The chat follows
   it until it has a size of its own; the terminal keeps its own size.
+- Interface font (`uiFontFamily`, kept in its own `ovis:ui-font` key so an older tab's save of
+  `ovis:settings` cannot erase it): Default (the built-in `--font-ui`), System, Noto Sans or Custom.
+  It is written as `--font-ui` on `<html>`, so everything set in it follows, the chat's prose too
+  until the chat has a font of its own. A preset is a whole stack with no Pretendard behind it, since
+  a browser takes each character from the first family that has it and Pretendard has kana but few
+  kanji: System is `system-ui, sans-serif`, so kana and kanji come from the device's own fonts;
+  Noto Sans is followed by its CJK families, the UI language's first. A typed list goes in front of
+  the built-in stack. As Zed's `ui_font_family`, it is apart from the code and terminal fonts, which
+  keep `--font-mono` and the terminal's own stack.
 - Terminal and chat font families are comma-separated lists, default empty. They go in front of the
   built-in fonts, never in place of them: the terminal's (after the bundled Symbols Nerd Font Mono,
-  which only draws icons) and `--font-ui` in the chat's prose (as `--font-chat`). The interface keeps
-  `--font-ui` and code keeps `--font-mono`. A file
+  which only draws icons) and `--font-ui` in the chat's prose (as `--font-chat`). Code keeps
+  `--font-mono`. A file
   viewer's Markdown preview takes the chat font size and family too.
   At most 200 characters, with `;`, `{`, `}`, `<`,
   `>`, `\` and control characters stripped and names with spaces quoted.
@@ -670,7 +692,8 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   event, scoped to the active, presented pane and its PC; a modal or observe mode blocks it.
   It sends no text or keys and never takes an attach. The binding follows the existing shortcut
   customization and Mod+Shift policy.
-- All settings share one sanitized `localStorage["ovis:settings"]` record.
+- Settings share one sanitized `localStorage["ovis:settings"]` record, except the interface font,
+  which is kept in `localStorage["ovis:ui-font"]` so an older tab's whole-record save cannot erase it.
 
 ## 4. Spacing & Layout
 
@@ -934,6 +957,14 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   confirmed close, focus lands on the header's workspace-list toggle.
 - Tab and pane menus follow herdr's target scopes. A tab's menu contains New tab with agent…, Rename
   tab and Close tab, plus Move tab left/right when a neighbouring position exists and no move is pending.
+  A tab with one pane also offers Move to workspace…, when its PC has another workspace: the same
+  menu then lists those workspaces by name, at the same place, as Chrome's Move tab to another
+  window lists windows. herdr moves tabs only within a workspace, so the tab goes as its pane
+  (`pane.move` into a new tab at the end of the chosen workspace), its name and process kept; a
+  split tab is not offered it. The view follows the pane there, in whichever half of a split shows
+  it, and this browser's unsent draft for it goes along (herdr gives the pane a new ID). The
+  palette has the same move as one Move tab to {workspace} row per workspace, found by a query
+  only, as Settings pages are.
   The `⋯` beside the selected tab holds the same tab actions (the strip's `+` opens a shell tab, so
   New tab with agent… stays here) and also carries the open pane's actions, less Split and Zoom where a phone shows one pane at a time.
   Touch and narrow layouts keep that `⋯` in view; a desktop with a mouse (`hover: hover`,
@@ -1044,6 +1075,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   panes have come, an empty list says **Loading agents…**, never "No agents running".
 - A PC's header is the head of its workspaces, and the caret beside its `+` is the one fold over
   them. The roster has no label or fold of its own.
+- **Settings → Remote PCs → Show in sidebar** hides a PC on this device (`lib/hiddenMachines.ts`,
+  its own `ovis:hidden-pcs` key, like the fold): it leaves the PC groups, the Agents list and the
+  command palette, stays connected, and a link or an alert to its pane still opens that pane. The
+  list shows when there are two PCs or more, the Host first; the last PC shown cannot be hidden, and
+  hiding the PC the selection is on moves it to the Host, else the first PC shown. Under the PCs a
+  quiet `--fs-xs` `--text-dim` line says how many are hidden here and opens that group. The banner of
+  a PC that needs setup or a bridge update still shows for a hidden PC: it asks for an action. herdr's
+  TUI shows one session at a time and Orca hides other clients' workspaces; Ovis shows every PC of
+  the roster, so the choice is per PC and per device, not a sidebar switch.
 - A repository's parent row keeps `workspace.label`; its opened linked
   worktree rows show their actual checkout branches. Each row's compact status
   glyph rolls up all of the workspace's panes (blocked, then working, then waiting on background
@@ -1454,7 +1494,29 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   pane. It appears at the pointer, clamped to the window. Up/Down
   stop at the ends, hover selects, Enter acts, Escape and an outside click dismiss.
 - Split selects the new pane (`focus:true`), like the TUI. Swap exchanges the right-clicked
-  pane with the previously selected pane and retains the latter's focus. A close confirms when
+  pane with the previously selected pane and retains the browser's selection. On a desktop,
+  dragging a pane's title onto another pane's title in the same tab on the same PC exchanges
+  their positions too. The eligible title is highlighted instead of offering a split-view
+  half. Sidebar drags, drops outside an eligible title, and drops across tabs or PCs keep
+  their existing docking behavior. This follows tmux's explicit `swap-pane` operation,
+  exposed through a title drop like VS Code's editor-group drag targets rather than a new
+  layout setting. Explicit swaps leave herdr's focused pane, tab and workspace where they
+  were: the bridge serializes Ovis focus-changing calls (focus, swaps, split, zoom and close)
+  per herdr socket, reads its focused pane before
+  the native swap, and restores it only after a changed swap if focus still belongs to the
+  swapped source. A later Ovis focus choice runs after the restore and takes precedence.
+  A focus change in herdr's own TUI between the check and restore cannot be serialized by
+  Ovis; eliminating that window needs a native swap that does not move focus.
+  Restoration is best effort: its failure is logged but the committed swap still succeeds.
+  The browser keeps the request-only `movingHerdrFocus` guard used for a split: with
+  Follow herdr focus enabled, a focus event received while a swap is pending can be ignored.
+  A restore event received after its reply can still open the restored pane in the browser.
+  This is the approved fallback after six ordering failures of a client-only restore filter.
+  Native focus events carry no RPC correlation, so the bridge cannot prove which event was
+  caused by restoration. No sequence fields, pane-name tokens, or held/replayed events are
+  added. The root fix needs native `pane.swap focus:false` or correlated event identifiers.
+  A refused title swap shows a layout notice with a localized reason.
+  A close confirms when
   the pane is busy or is the last pane of the workspace. Rename is herdr's label; clearing it
   returns to its automatic title. Herdr owns every resulting layout and name.
 - Up to 768px a split has no room: the canvas shows the selected pane alone, full size and
@@ -1852,6 +1914,13 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Markdown supports headings, lists (a task item `- [x]` / `- [ ]` shows a checked or empty box in
   place of its bullet, not clickable), links, quotes, tables, inline/fenced code and code-copy
   actions.
+  A long press on a rendered link in the Android app opens the phone's sheet (RowMenu,
+  `MarkdownLinkMenu.tsx`) with **Copy link**, **Open link** (the tap's own way) and, where the
+  WebView has `navigator.share`, **Share link**; the link's words are its title, the address under
+  them. Android's WebView draws no link menu of its own, while Chrome, Safari and the iOS app's
+  WKWebView do, and keep theirs: the sheet follows Android Chrome's link menu, cut to those three.
+  Only the WebView's own long press (its `contextmenu`, not a mouse's) opens it, so a tap, a swipe
+  and a press on other words keep their meaning.
   Markdown files use the same renderer in the file viewer. **Open in a new tab** opens an
   app link to the resolved absolute file on its own PC, independent of the originating pane.
   **Open raw file** (Code glyph) opens the original bytes; Download still saves those bytes.
@@ -1904,13 +1973,21 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   scrolls the document vertically while the table alone pans horizontally. This retains the
   existing Paseo-style file surface and native scrolling instead of adding touch handlers.
   Thinking renders as a folded block only when **Show thinking** is enabled.
-- Auto-follow stops when the reader scrolls up; later output raises a **New messages** pill.
+- Auto-follow stops when the reader scrolls up, or opens a tool, a folded block or a whole output:
+  they read there, and the opened row stays put while the turn streams below it (#1388). T3 Code
+  keeps a reader at the very bottom pinned when they toggle a tool; Ovis already reads scrolling
+  up as "stop following until I come back", and opening joins that rule. Later output raises a
+  **New messages** pill. A gjc rewrite of its session file that keeps every turn shown in its place
+  (its first save, trimmed tool outputs: a new history ID whose newest page still opens with those
+  turns, each part's kind and each tool's call and input unchanged) keeps the rows, what was opened
+  and the reader's place. A compaction that drops turns, a rewind and any other new history start over.
   A message sent from this browser's message box resumes it once the bridge accepts it at once
   (a receipt with no pending item, no refusal and no uncertain answer): the view goes to the end
   and follows the turn and its reply there. Agent of Empires re-pins its view on any prompt, local,
   remote or replayed; Ovis's sends carry a receipt, so only that accepted local receipt counts. A
   refused, uncertain, queued or Send now delivery, another browser's message, a reconnect and a
-  pane opened again keep the reader's place. Scrolling or paging back, a minimap jump, a restored
+  pane opened again keep the reader's place. Scrolling or paging back, opening a tool, a folded
+  block or a whole output, a minimap jump, a restored
   place, a replaced history or leaving the pane after the message went out, before its receipt or
   before its turn shows, cancels the follow. Nothing new is drawn: the existing Jump to latest and
   New messages controls keep the Ovis/Codex chat look.
@@ -1930,6 +2007,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   that has not written its transcript yet (a new Claude Code or Codex pane before its first
   message), so those are not greeted; an omo session not yet written answers an empty
   conversation and is.
+  While terminal output stands in for an unavailable native conversation, Chat retries on the
+  existing 2 s polling cadence, not the 10 s native-push backstop. A verified native read restores
+  the ordinary cadence without a lens switch; rejected history stays hidden meanwhile. This
+  follows T3 Code's separation of [transport health and data freshness](https://github.com/pingdotgg/t3code/blob/main/docs/internals/connection-runtime.md):
+  an open socket alone does not prove the conversation is current. No code or new controls are borrowed.
 
 ### Work block (`.work-block`, `.work-row`)
 - One per assistant turn: a `▸ Worked for 7s · 1 edit · 2 commands` header (duration = next turn's
@@ -2123,6 +2205,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   answered-step chips save the current step's unsent text and checks before navigating. Returning
   restores them without submitting them to the agent. This keeps the existing T3 Code-inspired
   per-question panel; folding is not cancellation, and no native cancel action is exposed.
+- Pi's rpiv multi-question widget reuses that T3 Code-inspired panel and its step chips, not a
+  second wizard. The native current tab is verified against the live styled viewport (background
+  in colored themes; neutral versus dim/green in Pi's system theme); plain labels never authorize
+  switching. Back, question chips and the complete review
+  use native left/right only, observing each move without Enter. Saved choices and custom text
+  are restored from the pane's verified pending call. Web-only edits must be sent or cleared
+  before switching, with a hint rather than silently losing them. Review reuses the existing
+  `.prompt-card-answers` definition list and its typography, not a terminal dump. Incomplete
+  answers stay visible as Not answered with question-chip recovery, no partial-submit action.
 - OpenCode multiselect Submit, custom Send and Enter send all checked choices and custom text
   together. A transient native-service failure keeps an existing question card and its edits;
   with no native question known, permissions and legacy prompts use the generic fallback card.
@@ -2266,7 +2357,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   secondary queue control. The placeholder is `Message <agent>…`; message text
   uses `--fs-chat` scaled by `--chat-scale` on `--lh-code` with a fine pointer. Otherwise it
   uses that scaled size or `--fs-input`, whichever is larger, keeping the 16px floor that avoids
-  iOS zoom. Changing Chat font size or density resizes the box around its existing draft. The
+  iOS zoom. It is set in the Chat font (`--font-chat`, else `--font-ui`), as the transcript is.
+  Changing Chat font size, either font or density resizes the box around its existing draft. The
   box's height is automatic only: it has no resize grip.
 - A local desktop composer shows the first visible account in Settings order for its agent's
   provider as a read-only usage reference inside the model pill. Plan-wide five-hour session is
@@ -2294,10 +2386,20 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   A refusal names Codex and keeps the held message available for review.
   Sending disables that item's actions; errors stay inline. Uncertain messages offer Copy and
   Discard saved copy, with no retry action. Desktop and phones share this flow.
-- Accepted pending messages clear only the draft prefix acknowledged by the bridge. Actual
-  Enter delivery removes the pending row and refreshes the transcript. Next-turn delivery and
-  an explicit Send now action claim the same server ID; connection loss never resumes automatic input.
-  Previously held browser messages retain their explicit Send now/Discard recovery.
+- Accepted pending messages clear only the draft prefix acknowledged by the bridge. For agents
+  other than Pi, actual Enter delivery removes the pending row and refreshes the transcript. For
+  a message submitted from Ovis Chat to Pi, Enter changes it to a read-only **Sent to Pi ·
+  waiting for transcript** user bubble. Only a matching durable user record appended beyond the byte
+  boundary captured on that exact Pi session's unchanged active-branch prefix removes it. Pi may
+  stage input while status says idle/done during automatic compaction, so status and screen text are
+  not delivery evidence. The live receipt and its text belong only to the connection that sent it;
+  another attached typist neither sees nor acts on it. A lost connection or server restart keeps the
+  browser's saved, non-resendable **transcript confirmation unavailable** copy, but automatic
+  consumption cannot resume without that exact server-owned connection. A changed terminal or
+  session also makes confirmation unavailable. Ovis does not claim that Pi queued or consumed
+  the message until the transcript proves it. Next-turn delivery and an explicit Send
+  now action claim the same server ID. Connection loss never resumes automatic input. Previously
+  held browser messages retain their explicit Send now/Discard recovery.
 - Not connected, the one word `Reconnecting…` (`Connecting…` before this page's first connection to
   the PC's socket) is the placeholder while the box is empty and moves into the status content once
   there is a draft (`composerStatusHint`), on a phone too; it says no more (nothing is queued, and
@@ -2604,7 +2706,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   an edge swipe) takes one step out and never leaves the app from inside Settings; the Back
   control, the X, Escape and the scrim take the same entries off. Beside the list, turning pages
   replaces the one entry. A reload steps out of the entries it finds; Forward reopens the page.
-- Pages, in order: **Appearance** (theme, dark theme, light theme, density, language, sidebar rows), **Chat**
+- Pages, in order: **Appearance** (theme, dark theme, light theme, density, language, sidebar rows; then
+  **Typography**: interface font size and interface font), **Chat**
   (panes open in, show thinking, chat width, chat font size and family; then
   **Composer**: Enter sends, send queued messages automatically, in a mouse-driven window wider than
   640px the New tab button (off by default), and on a touch screen the suggestion chip (off by default); then
@@ -2613,7 +2716,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   herdr's focus), **Alerts**, **Voice input**, **Subscription usage**,
   **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (the phone address,
   Keep screen on, Install; then Portal, where the server offers it; then paired devices),
-  **Remote PCs**, **About** (Updates, herdr, the repository links). A button that points at
+  **Remote PCs** (Add PC, Update PC bridges automatically; then **Show in sidebar**), **About** (Updates, herdr, the repository links). A button that points at
   Updates opens the dialog on About.
 - Every page is built from the same parts (`components/SettingsControls.tsx`). A group is an
   optional caption (`--fs-sm`, `--fw-semibold`, `--text-dim`, sentence case) over one card:
@@ -2631,6 +2734,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   a `details` whose `summary` is the sentence); the conditions and exceptions open under it. On
   coarse pointers an invisible expander gives that line the touch target without changing its
   height.
+- Settings selects use `SettingsSelect` in `components/SettingsControls.tsx`: an inset Lucide
+  chevron with space reserved beside the text. This follows the padded indicator in
+  [T3 Code](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/ui/select.tsx),
+  but keeps the native select and OS picker rather than a custom popup. The decorative arrow
+  passes clicks through; forced-colors mode restores the native indicator.
 - Terminal keeps Key bar as a compact description and Edit key bar button. That button opens
   a detail screen in the same dialog with its own scroll body and a Back to settings control.
   Back or Escape returns to the Terminal page's scroll position and focuses Edit key bar;

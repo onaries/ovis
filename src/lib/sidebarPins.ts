@@ -103,10 +103,11 @@ function pinMachineId(key: string): string | null {
 }
 
 /** The agent pins whose pane is gone from a loaded PC leave; workspace pins are the workspace list's to prune. */
-export function pruneSidebarPins(keys: readonly string[], liveKeys: ReadonlySet<string>, machines: readonly { id: string; snapshot: object | null }[]): string[] {
+export function pruneSidebarPins(keys: readonly string[], liveKeys: ReadonlySet<string>, machines: readonly { id: string; snapshot: object | null }[], hiddenMachineIds: readonly string[] = []): string[] {
   if (machines.length === 0) return [...keys];
-  const loading = new Set(machines.filter((machine) => machine.snapshot === null).map((machine) => machine.id));
-  return keys.filter((key) => isWorkspacePinKey(key) || liveKeys.has(key) || (pinMachineId(key) !== null && loading.has(pinMachineId(key)!)));
+  // a PC still loading, or one this device hides (lib/hiddenMachines.ts), cannot say its panes are gone
+  const unjudged = new Set([...machines.filter((machine) => machine.snapshot === null).map((machine) => machine.id), ...hiddenMachineIds]);
+  return keys.filter((key) => isWorkspacePinKey(key) || liveKeys.has(key) || (pinMachineId(key) !== null && unjudged.has(pinMachineId(key)!)));
 }
 
 export interface WorkspaceGroup<W> { workspace: W; children: W[] }

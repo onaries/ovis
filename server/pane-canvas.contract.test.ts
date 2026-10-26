@@ -24,17 +24,19 @@ describe("pane canvas: focus, explicit swap and dragged split ratio", () => {
     return layout;
   };
   const until = async (check: (layout: PaneLayoutSnapshot) => boolean): Promise<PaneLayoutSnapshot> => {
-    const deadline = Date.now() + 5000;
-    for (;;) {
-      const layout = await current();
-      if (check(layout)) return layout;
-      if (Date.now() >= deadline) throw new Error(`layout did not settle: ${JSON.stringify(layout)}`);
-      await Bun.sleep(50);
-    }
+    const layout = await current();
+    expect(check(layout)).toBe(true);
+    return layout;
+  };
+  const within = <T>(promise: Promise<T>): Promise<T> => {
+    const deadline = Promise.withResolvers<T>();
+    const timer = setTimeout(() => deadline.reject(new Error("contract event did not arrive")), 10_000);
+    return Promise.race([promise, deadline.promise]).finally(() => clearTimeout(timer));
   };
 
   beforeAll(async () => {
     server = createServer({ port: 0, stateDir: state });
+    await within(server.focusReady);
     const created = await workspaceCreate({ cwd: state, label: "ovis-test-canvas" });
     workspaceId = created.workspace.workspace_id;
     root = created.root_pane.pane_id;
@@ -65,6 +67,7 @@ describe("pane canvas: focus, explicit swap and dragged split ratio", () => {
   });
 
   it("swaps with the named pane and leaves other panes' geometry intact", async () => {
+    await paneFocus(root);
     const before = await current();
     const rect = (layout: PaneLayoutSnapshot, id: string) => layout.panes.find((pane) => pane.pane_id === id)!.rect;
     const response = await post("pane/swap", { pane_id: root, target_pane_id: below });
@@ -77,6 +80,24 @@ describe("pane canvas: focus, explicit swap and dragged split ratio", () => {
     expect(after.focused_pane_id).toBe(root);
     for (const [target, reason] of [[root, "same_pane"], [anotherTab, "cross_tab"], ["missing-pane", "not_found"]]) {
       expect(await (await post("pane/swap", { pane_id: root, target_pane_id: target })).json()).toEqual({ ok: true, changed: false, reason, target_pane_id: target });
+    }
+  });
+
+  it("keeps herdr focused in another workspace after an explicit swap, including refusals", async () => {
+    const elsewhere = await workspaceCreate({ cwd: state, label: "ovis-test-canvas-focus" });
+    try {
+      await paneFocus(elsewhere.root_pane.pane_id);
+      const focused = await sessionSnapshot();
+      for (const target of [below, below, root, anotherTab, "missing-pane"]) {
+        const response = await post("pane/swap", { pane_id: root, target_pane_id: target });
+        expect(response.status).toBe(200);
+        const after = await sessionSnapshot();
+        expect(after.focused_pane_id).toBe(focused.focused_pane_id);
+        expect(after.focused_tab_id).toBe(focused.focused_tab_id);
+        expect(after.focused_workspace_id).toBe(focused.focused_workspace_id);
+      }
+    } finally {
+      await workspaceClose(elsewhere.workspace.workspace_id);
     }
   });
 
@@ -102,29 +123,33 @@ describe("pane canvas: focus, explicit swap and dragged split ratio", () => {
   });
 
   it("tells a browser where herdr's focus moved when herdr itself moved it", async () => {
+    // Fresh, never-focused panes cannot match queued focus events from the preceding tests.
+    const first = (await paneSplit(root, "right", false)).pane_id;
+    const second = (await paneSplit(anotherTab, "right", false)).pane_id;
     const focused: string[] = [];
     const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
+    const opened = Promise.withResolvers<void>();
+    socket.addEventListener("open", () => opened.resolve(), { once: true });
+    socket.addEventListener("error", () => opened.reject(new Error("socket failed")), { once: true });
     socket.addEventListener("message", (event) => {
       const frame = JSON.parse(String(event.data)) as ServerMessage;
       if (frame.type === "pane-focused") focused.push(frame.pane_id);
     });
     try {
-      const deadline = Date.now() + 10_000;
-      while (socket.readyState !== WebSocket.OPEN) {
-        if (Date.now() > deadline) throw new Error("socket did not open");
-        await Bun.sleep(25);
+      await within(opened.promise);
+      for (const paneId of [first, second]) {
+        const arrived = Promise.withResolvers<void>();
+        const listener = (event: MessageEvent) => {
+          const frame = JSON.parse(String(event.data)) as ServerMessage;
+          if (frame.type === "pane-focused" && frame.pane_id === paneId) arrived.resolve();
+        };
+        socket.addEventListener("message", listener);
+        try {
+          await paneFocus(paneId);
+          await within(arrived.promise);
+        } finally { socket.removeEventListener("message", listener); }
       }
-      // straight to herdr, as `herdr tab focus` or a script does: another tab's pane comes to the
-      // front. The server's focus subscription may still be opening, so the focus moves again
-      // (away and back) until a frame tells of it
-      let next = anotherTab;
-      while (!focused.includes(anotherTab)) {
-        if (Date.now() > deadline) throw new Error(`no pane-focused frame for ${anotherTab}: ${JSON.stringify(focused)}`);
-        await paneFocus(next);
-        next = next === anotherTab ? root : anotherTab;
-        await Bun.sleep(100);
-      }
-      expect(focused).toContain(anotherTab);
+      expect(focused.slice(-2)).toEqual([first, second]);
     } finally {
       socket.close();
     }

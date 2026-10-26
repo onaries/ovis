@@ -501,7 +501,9 @@
   border: 0;
   outline: 0;
   color: var(--text-strong);
-  font-family: var(--font-ui);
+  /* the chat's font, as the dock around it and the transcript have (Settings → Chat → Chat font);
+     the measure copy takes it too, so the height it measures is the text drawn */
+  font-family: var(--font-chat, var(--font-ui));
   /* never under --fs-input, the smallest size iOS does not zoom the page for; a larger
      Settings → Chat font size grows it with the transcript */
   font-size: max(var(--fs-input), calc(var(--fs-chat) * var(--chat-scale, 1)));

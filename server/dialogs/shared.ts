@@ -92,6 +92,9 @@ type Responder =
   | "pi-confirm"
   | "pi-input"
   | "pi-model"
+  | "pi-thinking"
+  | "pi-ask-question"
+  | "pi-ask-submit"
   | "omo-model"
   | "omp-model"
   | "hermes-question"
@@ -129,6 +132,10 @@ export type ParsedPrompt = InteractivePrompt & {
     revision: number;
     available: boolean;
   };
+  /** Pi's active tab, from colors verified against the live detection screen by the caller. */
+  piAskForm?: { identity: string; index: number };
+  /** Pi's custom row owns the inline editor, rather than only a selected menu row. */
+  piAskTyping?: true;
   menuLabels: string[];
   selectedIndex: number;
   checkedOptionIndices: number[];
@@ -245,7 +252,7 @@ export function finishPrompt(
   input: Omit<InteractivePrompt, "id" | "agent">,
   internal: Omit<ParsedPrompt, keyof InteractivePrompt>,
   /** fields as the id reads them, where that is not as the card shows them (a fallback card's ticking working line) */
-  hashed: Partial<Pick<InteractivePrompt, "title" | "question" | "body">> & { call?: string } = {},
+  hashed: Partial<Pick<InteractivePrompt, "title" | "question" | "body" | "steps" | "can_step_back" | "default_custom_text">> & { call?: string } = {},
 ): ParsedPrompt {
   const id = createHash("sha256")
     .update(JSON.stringify({ agent, ...input, ...hashed }))

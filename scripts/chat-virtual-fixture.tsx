@@ -35,7 +35,9 @@ function Fixture() {
     <MachineContext.Provider value={machine}>
       <Profiler id="chat" onRender={() => window.dispatchEvent(new Event("chat-qa-commit"))}>
         <OpenFileContext.Provider value={() => {}}>
-          {mounted && <ChatView key={machine} paneId="same-pane" refreshKey={refresh} connected ended={false} agent={null} agentStatus="working" pageScroll={pageScroll} />}
+          {/* the metadata of each answer the chat shows: a script can tell an applied answer from one only fetched */}
+          {mounted && <ChatView key={machine} paneId="same-pane" refreshKey={refresh} connected ended={false} agent={null} agentStatus="working" pageScroll={pageScroll}
+            onMetadata={(_pane, metadata) => window.dispatchEvent(new CustomEvent("chat-qa-answer", { detail: metadata }))} />}
         </OpenFileContext.Provider>
       </Profiler>
     </MachineContext.Provider>

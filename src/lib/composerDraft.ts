@@ -110,6 +110,17 @@ export class ComposerDraftStore {
     this.drafts.set(key, { ...this.read(key), sending: false });
     this.notify();
   }
+  /**
+   * herdr gave the draft's pane a new ID (lib/paneMove.ts): the text goes to the new key. A send of
+   * it on its way, from this tab or another, stays with the ID it went under, and a new key that
+   * holds a draft already keeps its own.
+   */
+  move(from: string, to: string): void {
+    const text = this.read(from).text;
+    if (text === "" || this.own.has(from) || this.inFlight(from) !== null || this.read(to).text !== "") return;
+    this.set(to, text);
+    this.set(from, "");
+  }
   /** Remove only the acknowledged prefix; edits within the sent text stay unsent. */
   settle(key: string, sent: string): { text: string; edited: boolean } {
     this.refresh(key);

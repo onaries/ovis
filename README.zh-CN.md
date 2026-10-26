@@ -76,7 +76,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 <p align="center"><sub>每段片段都是同时录制电脑和手机的真实操作，实时、无剪辑。点击可播放完整视频。</sub></p>
 
-- **聊天与终端，共用一个窗格** — 阅读 Claude Code、Codex、omp、omo、gjc、pi、Hermes 的原生会话记录，以及可明确识别的 OpenCode 和 Devin CLI 会话。Linux 上的 Grok 和实验性的 Antigravity（agy）也按下文所述条件提供支持，一键即可切换到同一窗格的终端。智能体工作时可将消息排队到下一轮发送，也可以用 Send now 立即发送。[支持的智能体 →](docs/guide.md#supported-agents)
+- **聊天与终端，共用一个窗格** — 阅读 Claude Code、Codex、omp、omo、gjc、pi、Hermes 的原生会话记录，以及可明确识别的 OpenCode 和 Devin CLI 会话。Linux 和 macOS 上的 Grok 和实验性的 Antigravity（agy）也按下文所述条件提供支持，一键即可切换到同一窗格的终端。智能体工作时可将消息排队到下一轮发送，也可以用 Send now 立即发送。[支持的智能体 →](docs/guide.md#supported-agents)
 - **轻点即可批准** — 支持的审批请求、问题和计划菜单会显示为卡片，发送回答前会先确认提示仍然有效。不支持卡片的请求需在终端中回答。
 - **需要你时及时提醒** — 实时显示每个窗格的状态；应用打开时提醒会从顶部滑下；智能体需要输入或完成任务时发送推送通知，即使应用已关闭也能收到。
 - **安装到手机** — PWA 在键盘上方提供按键栏（Esc、Tab、Ctrl、Alt、Shift、Enter 和方向键），可在 Settings（设置）中调整顺序或添加自定义组合键；Tailscale 地址以二维码显示。[手机设置 →](docs/guide.md#on-your-phone)
@@ -134,7 +134,7 @@ herdr plugin install devswha/ovis
 
 Claude Code、Codex、omp、omo、gjc、pi 和 Hermes 从各自的会话存储读取记录。GJC 聊天和完成提醒通过 Web UI 的原生 GJC 扩展识别当前会话，不依赖 SDK broker 或 CLI 查询。[安装该扩展](docs/guide.md#supported-agents)并重启 GJC 即可启用；无法明确识别会话时显示终端，并使用 herdr 自身的状态。OpenCode 从支持的 2.x 和 1.x SQLite 表结构中读取 herdr 报告的会话；开始界面、缺少会话 ID，以及不支持、无法读取或超出大小限制的存储则显示终端。Devin CLI 在 herdr 或运行中的进程明确指出其会话时（例如 `devin --resume <id>`）显示为聊天，直接运行 `devin` 则显示终端。
 
-Grok 聊天仅支持 Linux，并要求进程只持有一个会话，且与 herdr 报告的会话一致；macOS、Windows 或身份不明确时显示终端。Antigravity（agy）是实验性支持，通过运行中进程持有的会话锁定位记录，而非猜测会话。Linux 已通过原生环境验证，macOS 尚未验证，Windows 仅显示终端。对于不支持或无法读取的记录，也会显示终端。[支持的智能体 →](docs/guide.md#supported-agents)
+Grok 聊天支持 Linux 和 macOS，并要求进程只持有一个会话，且与 herdr 报告的会话一致；Windows 或身份不明确时显示终端。Antigravity（agy）是实验性支持，通过运行中进程持有的会话锁定位记录，而非猜测会话。Linux 已通过原生环境验证，macOS 尚未验证，Windows 仅显示终端。对于不支持或无法读取的记录，也会显示终端。[支持的智能体 →](docs/guide.md#supported-agents)
 
 **它会取代 herdr 自带的 TUI 吗？**
 

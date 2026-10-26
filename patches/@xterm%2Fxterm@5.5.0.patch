@@ -1,8 +1,17 @@
 diff --git a/src/browser/Terminal.ts b/src/browser/Terminal.ts
-index 0e945aa..b3001c1 100644
+index 0e945aa92b34cead9a28edb0e56d894f58ed9b51..43bfa621f1f1bd17ae79bd98a82e3f7f42e77fe0 100644
 --- a/src/browser/Terminal.ts
 +++ b/src/browser/Terminal.ts
-@@ -120,6 +120,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -110,6 +110,8 @@ export class Terminal extends CoreTerminal implements ITerminal {
+    * screen readers will announce it.
+    */
+   private _keyPressHandled: boolean = false;
++  /** A digit keydown was left to its keypress and input events (see _keyDown). */
++  private _digitAwaitsKeyPress: boolean = false;
+ 
+   /**
+    * Records whether there has been a keydown event for a dead key without a corresponding keydown
+@@ -120,6 +122,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
  
    public viewport: IViewport | undefined;
    private _compositionHelper: ICompositionHelper | undefined;
@@ -10,7 +19,7 @@ index 0e945aa..b3001c1 100644
    private _accessibilityManager: MutableDisposable<AccessibilityManager> = this.register(new MutableDisposable());
  
    private readonly _onCursorMove = this.register(new EventEmitter<void>());
-@@ -339,7 +340,10 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -339,7 +342,10 @@ export class Terminal extends CoreTerminal implements ITerminal {
        }
        copyHandler(event, this._selectionService!);
      }));
@@ -22,7 +31,7 @@ index 0e945aa..b3001c1 100644
      this.register(addDisposableDomListener(this.textarea!, 'paste', pasteHandlerWrapper));
      this.register(addDisposableDomListener(this.element!, 'paste', pasteHandlerWrapper));
  
-@@ -381,6 +385,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -381,6 +387,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
      this.register(addDisposableDomListener(this.textarea!, 'compositionstart', () => this._compositionHelper!.compositionstart()));
      this.register(addDisposableDomListener(this.textarea!, 'compositionupdate', (e: CompositionEvent) => this._compositionHelper!.compositionupdate(e)));
      this.register(addDisposableDomListener(this.textarea!, 'compositionend', () => this._compositionHelper!.compositionend()));
@@ -30,19 +39,20 @@ index 0e945aa..b3001c1 100644
      this.register(addDisposableDomListener(this.textarea!, 'input', (ev: InputEvent) => this._inputEvent(ev), true));
      this.register(this.onRender(() => this._compositionHelper!.updateCompositionElements()));
    }
-@@ -465,7 +470,10 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -465,7 +472,11 @@ export class Terminal extends CoreTerminal implements ITerminal {
      this._instantiationService.setService(ICoreBrowserService, this._coreBrowserService);
  
      this.register(addDisposableDomListener(this.textarea, 'focus', (ev: FocusEvent) => this._handleTextAreaFocus(ev)));
 -    this.register(addDisposableDomListener(this.textarea, 'blur', () => this._handleTextAreaBlur()));
 +    this.register(addDisposableDomListener(this.textarea, 'blur', () => {
++      this._digitAwaitsKeyPress = false;
 +      this._compositionHelper?.finishReplacement();
 +      this._handleTextAreaBlur();
 +    }));
      this._helperContainer.appendChild(this.textarea);
  
      this._charSizeService = this._instantiationService.createInstance(CharSizeService, this._document, this._helperContainer);
-@@ -485,6 +493,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -485,6 +496,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
      this._compositionView = this._document.createElement('div');
      this._compositionView.classList.add('composition-view');
      this._compositionHelper = this._instantiationService.createInstance(CompositionHelper, this.textarea, this._compositionView);
@@ -50,7 +60,7 @@ index 0e945aa..b3001c1 100644
      this._helperContainer.appendChild(this._compositionView);
  
      this._mouseService = this._instantiationService.createInstance(MouseService);
-@@ -502,6 +511,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -502,6 +514,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
      if (!this._renderService.hasRenderer()) {
        this._renderService.setRenderer(this._createRenderer());
      }
@@ -58,7 +68,7 @@ index 0e945aa..b3001c1 100644
  
      this.viewport = this._instantiationService.createInstance(Viewport, this._viewportElement, this._viewportScrollArea);
      this.viewport.onRequestScrollLines(e => this.scrollLines(e.amount, e.suppressScrollEvent, ScrollSource.VIEWPORT)),
-@@ -511,6 +521,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -511,6 +524,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
      this.register(this.onCursorMove(() => {
        this._renderService!.handleCursorMove();
        this._syncTextArea();
@@ -66,7 +76,7 @@ index 0e945aa..b3001c1 100644
      }));
      this.register(this.onResize(() => this._renderService!.handleResize(this.cols, this.rows)));
      this.register(this.onBlur(() => this._renderService!.handleBlur()));
-@@ -887,7 +898,24 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -887,7 +901,24 @@ export class Terminal extends CoreTerminal implements ITerminal {
      }
    }
  
@@ -91,7 +101,13 @@ index 0e945aa..b3001c1 100644
      paste(data, this.textarea!, this.coreService, this.optionsService);
    }
  
-@@ -1006,9 +1034,16 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -1001,14 +1032,22 @@ export class Terminal extends CoreTerminal implements ITerminal {
+   protected _keyDown(event: KeyboardEvent): boolean | undefined {
+     this._keyDownHandled = false;
+     this._keyDownSeen = true;
++    this._digitAwaitsKeyPress = false;
+ 
+     if (this._customKeyEventHandler && this._customKeyEventHandler(event) === false) {
        return false;
      }
  
@@ -108,7 +124,22 @@ index 0e945aa..b3001c1 100644
      if (!shouldIgnoreComposition && !this._compositionHelper!.keydown(event)) {
        if (this.options.scrollOnUserInput && this.buffer.ybase !== this.buffer.ydisp) {
          this.scrollToBottom();
-@@ -1063,7 +1098,13 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -1055,6 +1094,14 @@ export class Terminal extends CoreTerminal implements ITerminal {
+       }
+     }
+ 
++    // A Linux input method without in-app preedit picks a candidate with a digit key: the keydown
++    // names the digit, and the keypress and input that follow carry the candidate (xterm.js #6036).
++    // Send the digit from those events, as Space already is.
++    if (Browser.isLinux && !this.optionsService.rawOptions.screenReaderMode && event.key && !event.ctrlKey && !event.altKey && !event.metaKey && /^[0-9]$/.test(event.key)) {
++      this._digitAwaitsKeyPress = true;
++      return true;
++    }
++
+     if (this._unprocessedDeadKey) {
+       this._unprocessedDeadKey = false;
+       return true;
+@@ -1063,7 +1110,13 @@ export class Terminal extends CoreTerminal implements ITerminal {
      // If ctrl+c or enter is being sent, clear out the textarea. This is done so that screen readers
      // will announce deleted characters. This will not work 100% of the time but it should cover
      // most scenarios.
@@ -123,7 +154,15 @@ index 0e945aa..b3001c1 100644
        this.textarea!.value = '';
      }
  
-@@ -1170,10 +1211,11 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -1098,6 +1151,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
+ 
+   protected _keyUp(ev: KeyboardEvent): void {
+     this._keyDownSeen = false;
++    this._digitAwaitsKeyPress = false;
+ 
+     if (this._customKeyEventHandler && this._customKeyEventHandler(ev) === false) {
+       return;
+@@ -1170,10 +1224,11 @@ export class Terminal extends CoreTerminal implements ITerminal {
     * @param ev The input event to be handled.
     */
    protected _inputEvent(ev: InputEvent): boolean {
@@ -132,20 +171,21 @@ index 0e945aa..b3001c1 100644
      // support reading out character input which can doubling up input characters
      // Based on these event traces: https://github.com/xtermjs/xterm.js/issues/3679
 -    if (ev.data && ev.inputType === 'insertText' && (!ev.composed || !this._keyDownSeen) && !this.optionsService.rawOptions.screenReaderMode) {
-+    if (ev.data && ev.inputType === 'insertText' && (!ev.composed || !this._keyDownSeen || this._compositionHelper!.takeCommitInsert(ev)) && !this.optionsService.rawOptions.screenReaderMode) {
++    if (ev.data && ev.inputType === 'insertText' && (!ev.composed || !this._keyDownSeen || this._digitAwaitsKeyPress || this._compositionHelper!.takeCommitInsert(ev)) && !this.optionsService.rawOptions.screenReaderMode) {
        if (this._keyPressHandled) {
          return false;
        }
-@@ -1251,6 +1293,7 @@ export class Terminal extends CoreTerminal implements ITerminal {
+@@ -1251,6 +1306,8 @@ export class Terminal extends CoreTerminal implements ITerminal {
     * using DECSTR (soft reset, CSI ! p) or RIS instead (hard reset, ESC c).
     */
    public reset(): void {
++    this._digitAwaitsKeyPress = false;
 +    this._compositionHelper?.reset();
      /**
       * Since _setup handles a full terminal creation, we have to carry forward
       * a few things that should not reset.
 diff --git a/src/browser/Types.d.ts b/src/browser/Types.d.ts
-index 9ebc55d..208ea82 100644
+index 9ebc55d96f328720dcb87cc31147c6d5a76ebebe..208ea825de87d30677b559760469ba95ae9a683c 100644
 --- a/src/browser/Types.d.ts
 +++ b/src/browser/Types.d.ts
 @@ -36,6 +36,14 @@ export type CustomWheelEventHandler = (event: WheelEvent) => boolean;
@@ -164,7 +204,7 @@ index 9ebc55d..208ea82 100644
    compositionstart(): void;
    compositionupdate(ev: CompositionEvent): void;
 diff --git a/src/browser/input/CompositionHelper.ts b/src/browser/input/CompositionHelper.ts
-index 7542969..260decc 100644
+index 7542969a62fa6b5e84471a3bdecdc4bec82de542..260decc7a5e357c96bd51014661ee9e0711b3af5 100644
 --- a/src/browser/input/CompositionHelper.ts
 +++ b/src/browser/input/CompositionHelper.ts
 @@ -6,6 +6,11 @@
@@ -556,7 +596,7 @@ index 7542969..260decc 100644
        this._textarea.style.lineHeight = compositionViewBounds.height + 'px';
      }
 diff --git a/src/browser/public/Terminal.ts b/src/browser/public/Terminal.ts
-index a634922..a39fc99 100644
+index a6349225dffc1d0e7c6e145bafbc4de81476c673..0bf00c353f78b8001990b9fca1ef4f7e0ce439b3 100644
 --- a/src/browser/public/Terminal.ts
 +++ b/src/browser/public/Terminal.ts
 @@ -13,7 +13,7 @@ import { AddonManager } from 'common/public/AddonManager';
@@ -586,7 +626,7 @@ index a634922..a39fc99 100644
      this._core.input(data, wasUserInput);
    }
 diff --git a/src/browser/services/CoreBrowserService.ts b/src/browser/services/CoreBrowserService.ts
-index 575b62b..27e0b78 100644
+index 575b62b63c647356378a55919a3c9c18eb8da11e..27e0b787b0000550f9806c0ecc3a95e65ff017d4 100644
 --- a/src/browser/services/CoreBrowserService.ts
 +++ b/src/browser/services/CoreBrowserService.ts
 @@ -13,7 +13,7 @@ export class CoreBrowserService extends Disposable implements ICoreBrowserServic
@@ -599,7 +639,7 @@ index 575b62b..27e0b78 100644
    private readonly _onDprChange = this.register(new EventEmitter<number>());
    public readonly onDprChange = this._onDprChange.event;
 diff --git a/src/common/CoreTerminal.ts b/src/common/CoreTerminal.ts
-index 327b8bc..b94c90d 100644
+index 327b8bc2f7edead47e756034e0a6d0083d7eea37..b94c90da81d7ee4239ad8b60e164105c09869245 100644
 --- a/src/common/CoreTerminal.ts
 +++ b/src/common/CoreTerminal.ts
 @@ -223,6 +223,11 @@ export abstract class CoreTerminal extends Disposable implements ICoreTerminal {
@@ -615,7 +655,7 @@ index 327b8bc..b94c90d 100644
    public registerEscHandler(id: IFunctionIdentifier, callback: () => boolean | Promise<boolean>): IDisposable {
      return this._inputHandler.registerEscHandler(id, callback);
 diff --git a/src/common/InputHandler.ts b/src/common/InputHandler.ts
-index a4b8c64..6aad1ab 100644
+index a4b8c64b0225013a65bf93e9153abba417bbfa29..6aad1abd453b8a669682400e702560ea39a3045f 100644
 --- a/src/common/InputHandler.ts
 +++ b/src/common/InputHandler.ts
 @@ -683,6 +683,11 @@ export class InputHandler extends Disposable implements IInputHandler {
@@ -631,7 +671,7 @@ index a4b8c64..6aad1ab 100644
     * BEL
     * Bell (Ctrl-G).
 diff --git a/src/common/Types.d.ts b/src/common/Types.d.ts
-index 17c7231..3df9fd1 100644
+index 17c7231a22ceff260db629409a884285970a62ca..3df9fd11a910573603d8aad3455e657983aecbf2 100644
 --- a/src/common/Types.d.ts
 +++ b/src/common/Types.d.ts
 @@ -460,6 +460,7 @@ export interface IInputHandler {
@@ -643,7 +683,7 @@ index 17c7231..3df9fd1 100644
    /** C0 BEL */ bell(): boolean;
    /** C0 LF */ lineFeed(): boolean;
 diff --git a/src/common/parser/EscapeSequenceParser.ts b/src/common/parser/EscapeSequenceParser.ts
-index b3d0276..aba90ed 100644
+index b3d02768b6198435cff8a73f65d81630cfc699ea..aba90edd65831b46c2d4f80a55f7d13646c0829e 100644
 --- a/src/common/parser/EscapeSequenceParser.ts
 +++ b/src/common/parser/EscapeSequenceParser.ts
 @@ -432,6 +432,11 @@ export class EscapeSequenceParser extends Disposable implements IEscapeSequenceP
@@ -659,7 +699,7 @@ index b3d0276..aba90ed 100644
     * Reset parser to initial values.
     *
 diff --git a/src/common/parser/OscParser.ts b/src/common/parser/OscParser.ts
-index 32710ae..1415ec6 100644
+index 32710aedf70b68f74fe89bb17b6e5b62905bbe81..1415ec643bb6f3dd4fa7b0fe6199b7c0858699c4 100644
 --- a/src/common/parser/OscParser.ts
 +++ b/src/common/parser/OscParser.ts
 @@ -50,6 +50,11 @@ export class OscParser implements IOscParser {
@@ -675,7 +715,7 @@ index 32710ae..1415ec6 100644
      // force cleanup handlers if payload was already sent
      if (this._state === OscState.PAYLOAD) {
 diff --git a/src/common/parser/Types.d.ts b/src/common/parser/Types.d.ts
-index 2ed4acd..0b26def 100644
+index 2ed4acdcaf9fde4894f0615dc8ccda942a8bce97..0b26defe50bdf4597d8115eacf0b7f6077678d3c 100644
 --- a/src/common/parser/Types.d.ts
 +++ b/src/common/parser/Types.d.ts
 @@ -198,6 +198,9 @@ export interface IEscapeSequenceParser extends IDisposable {
@@ -697,7 +737,7 @@ index 2ed4acd..0b26def 100644
    end(success: boolean, promiseResult?: boolean): void | Promise<boolean>;
  }
 diff --git a/typings/xterm.d.ts b/typings/xterm.d.ts
-index 3300828..9f57b18 100644
+index 330082890b7f90ed8ac40b68ccc65d8bfc8bc76a..2421619d5ba45c75b5606c53d9f0d58540d8b44a 100644
 --- a/typings/xterm.d.ts
 +++ b/typings/xterm.d.ts
 @@ -1905,4 +1905,29 @@ declare module '@xterm/xterm' {

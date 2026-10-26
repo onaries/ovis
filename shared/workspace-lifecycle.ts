@@ -34,6 +34,14 @@ export interface TabMoved {
   tabs: HerdrTab[];
 }
 
+/** POST /api/tab/move-to-workspace: where the tab's pane is now, under its new ID. */
+export interface MoveTabToWorkspaceRequest { tab_id: string; workspace_id: string; }
+export interface TabMovedToWorkspace {
+  ok: true;
+  pane_id: string;
+  tab_id: string;
+}
+
 /** POST /api/tab/create: the workspace is required; `label` names the new tab. */
 export interface CreateTabRequest extends CreateWorkspaceRequest {
   workspace_id: string;

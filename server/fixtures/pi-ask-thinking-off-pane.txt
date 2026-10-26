@@ -1,0 +1,19 @@
+⦁ ask_user_question
+
+────────────────────────────────────────────────────────────────────────────────
+
+  Ovis复测
+
+ Ovis复测：请保持题目至少 5 秒，让后台捕获真正的问卷画面，然后选择当前显示情况？
+
+❯ 1. 看到中文选项
+     Ovis 卡片现在有这两个中文选项，并且可以点击。
+  2. 仍只有按键
+     Ovis 里仍是方向键和 Enter、Esc，或没有出现问卷卡片。
+  3. Type something.
+
+────────────────────────────────────────────────────────────────────────────────
+
+ Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel · Ctrl+] to collapse
+C:\project
+↑1k ↓200 R1M CH99.0% $0.010 (sub) 12.0%/200k (auto)    some-model • thinking off

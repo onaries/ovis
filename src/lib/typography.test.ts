@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 
-import { TERMINAL_FONT_STACK } from "./fontFamily.ts";
-import { UI_FONT_MAX, UI_FONT_MIN, fontScale, sanitizeUiFontSize } from "./typography.ts";
+import { sanitizeFontFamily, TERMINAL_FONT_STACK } from "./fontFamily.ts";
+import { UI_FONT_MAX, UI_FONT_MIN, UI_FONT_PRESETS, UI_FONT_PRESET_FAMILY, UI_FONT_STACK, fontScale, sanitizeUiFontSize, uiFontPreset, uiFontStack } from "./typography.ts";
 import { DEFAULT_SETTINGS, SETTING_SCOPE, chatFontSize, sanitizeSettings, uiFontSize } from "./settings.ts";
 
 const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
@@ -12,6 +12,48 @@ describe("the built-in stacks", () => {
   it("keep the terminal's stack apart: xterm never takes the bundled code face", () => {
     expect(TERMINAL_FONT_STACK).not.toContain("JetBrains Mono Web");
     expect(token("--font-mono")).toContain('"JetBrains Mono Web"');
+  });
+});
+
+describe("interface font", () => {
+  it("copies --font-ui verbatim, since a chosen font is written as the token itself", () => {
+    expect(UI_FONT_STACK).toBe(token("--font-ui"));
+  });
+
+  it("keeps the stylesheet's stack until a font is chosen", () => {
+    expect(uiFontStack("")).toBeNull();
+    expect(uiFontStack(" , ")).toBeNull();
+    expect(uiFontStack(";{}")).toBeNull();
+  });
+
+  it("puts a typed list in front of the built-in stack, never in place of it", () => {
+    expect(uiFontStack("Noto Sans JP, Segoe UI")).toBe(`"Noto Sans JP", "Segoe UI", ${UI_FONT_STACK}`);
+    expect(uiFontStack("x; } body { color: red")).toBe(`"x body color: red", ${UI_FONT_STACK}`);
+  });
+
+  it("draws a preset without Pretendard behind it, so kana and kanji come from one family", () => {
+    expect(uiFontStack(UI_FONT_PRESET_FAMILY.system)).toBe("system-ui, sans-serif");
+    for (const language of ["en", "ko", "ja", "zh"] as const) {
+      expect(uiFontStack(UI_FONT_PRESET_FAMILY.noto, language)).not.toContain("Pretendard");
+      expect(uiFontStack(UI_FONT_PRESET_FAMILY.noto, language)!.endsWith(", sans-serif")).toBe(true);
+    }
+  });
+
+  it("puts the UI language's Noto CJK family first", () => {
+    expect(uiFontStack(UI_FONT_PRESET_FAMILY.noto, "ja")).toBe('"Noto Sans", "Noto Sans JP", "Noto Sans CJK JP", "Noto Sans KR", "Noto Sans CJK KR", "Noto Sans SC", "Noto Sans CJK SC", "Noto Sans TC", "Noto Sans CJK TC", sans-serif');
+    // a Korean device with the CJK collection's KR but only the per-language JP still gets Korean shapes
+    expect(uiFontStack(UI_FONT_PRESET_FAMILY.noto, "ko")).toStartWith('"Noto Sans", "Noto Sans KR", "Noto Sans CJK KR", "Noto Sans JP", ');
+    expect(uiFontStack(UI_FONT_PRESET_FAMILY.noto, "zh")).toStartWith('"Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", "Noto Sans TC", ');
+  });
+
+  it("stores each preset in the form the sanitizer keeps, and reads it back as that preset", () => {
+    for (const preset of UI_FONT_PRESETS) {
+      expect(sanitizeFontFamily(UI_FONT_PRESET_FAMILY[preset])).toBe(UI_FONT_PRESET_FAMILY[preset]);
+      expect(uiFontPreset(UI_FONT_PRESET_FAMILY[preset])).toBe(preset);
+    }
+    expect(uiFontPreset("")).toBe("default");
+    expect(uiFontPreset(" system-ui ")).toBe("system");
+    expect(uiFontPreset("Hiragino Sans")).toBe("custom");
   });
 });
 
@@ -38,6 +80,14 @@ describe("in Settings", () => {
   it("stays on this device, with nothing chosen by default", () => {
     expect(DEFAULT_SETTINGS.uiFontSize).toBeNull();
     expect(SETTING_SCOPE.uiFontSize).toBe("device");
+    expect(DEFAULT_SETTINGS.uiFontFamily).toBe("");
+    expect(SETTING_SCOPE.uiFontFamily).toBe("device");
+  });
+
+  it("keeps a stored interface font sanitized, and drops one that is not text", () => {
+    expect(sanitizeSettings({ uiFontFamily: " Noto Sans JP ; , x" }).uiFontFamily).toBe('"Noto Sans JP", x');
+    expect(sanitizeSettings({ uiFontFamily: 3 }).uiFontFamily).toBe("");
+    expect(sanitizeSettings({}).uiFontFamily).toBe("");
   });
 
   it("keeps only a valid size from a stored record", () => {

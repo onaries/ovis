@@ -54,6 +54,13 @@ function range(prompt: InteractivePrompt): string {
   return numbers.length > 1 ? `${numbers[0]}–${numbers.at(-1)}` : String(numbers[0] ?? 1);
 }
 
+/** Pi switches native tabs, not web-owned drafts. Keep edits visible until sent or cleared. */
+export function blocksStepNavigation(prompt: InteractivePrompt, selected: ReadonlySet<number>, custom: string): boolean {
+  if (prompt.agent !== "pi" || !prompt.steps?.some(step => step.can_navigate)) return false;
+  return custom !== (prompt.default_custom_text ?? "") || prompt.multi_select
+    && JSON.stringify([...selected].sort((a, b) => a - b)) !== JSON.stringify(prompt.default_option_indices ?? []);
+}
+
 /** How a typed message answers this prompt: the composer's placeholder while it waits. */
 export function answerHint(prompt: InteractivePrompt): string {
   if (prompt.multi_select) return t("Type the numbers you choose, e.g. 1 3");

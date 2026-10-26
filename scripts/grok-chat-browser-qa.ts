@@ -8,7 +8,7 @@ import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 
-if (process.platform !== "linux") { console.log("SKIP Grok process binding is Linux-only"); process.exit(0); }
+if (process.platform !== "linux") { console.log("SKIP Grok browser QA stand-in uses Linux /proc"); process.exit(0); }
 const root = mkdtempSync(join(tmpdir(), "herdr-grok-browser-"));
 const session = "00000000-0000-4000-8000-000000000021";
 const dir = join(root, "sessions", "fiction", session);

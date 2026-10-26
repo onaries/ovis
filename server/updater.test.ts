@@ -200,6 +200,19 @@ const offlineUpdater = (plugin: string) => new OfflineUnshallow({ root: plugin, 
   autoUpdate: false, pluginCheckout: true, publish() {}, activate: async (_next, persist) => persist() });
 
 describe("managed source updates with real Git repositories and builds", () => {
+  it("gives each release preparation command ten minutes without slowing ordinary discovery", async () => {
+    await release("second", "v0.2.0");
+    const timers = jest.spyOn(globalThis, "setTimeout");
+    try {
+      await updater.request("install");
+      expect(updater.status.error).toBeNull();
+      expect(timers.mock.calls.filter((call) => call[1] === 10 * 60_000)).toHaveLength(7);
+      expect(timers.mock.calls.some((call) => call[1] === 30_000)).toBe(true);
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
   it("checks without installing, then builds an exact revision without changing the source", async () => {
     const original = await git(root, "rev-parse", "HEAD");
     writeFileSync(join(upstream, "CHANGELOG.md"), "# Changelog\n\n## [0.2.0] - 2026-10-07\n\n### Added\n- Second.\n");

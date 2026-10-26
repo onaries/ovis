@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { AgentInfo } from "../shared/herdr-api.generated.ts";
 import { cmdContextWindow, cmdSlug, cmdTranscriptInStore, unwrittenSession } from "./cmd.ts";
 import { transcriptPage } from "./conversation.ts";
-import { parseInteractivePrompt } from "./prompt.ts";
+import { answerKeys, parseFallbackPrompt, parseInteractivePrompt } from "./prompt.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-cmd-store-"));
 const project = join(root, "projects", cmdSlug(root));
@@ -170,6 +170,7 @@ describe("Command Code's context window comes from its catalog", () => {
 
 // The permission prompt, as Command Code's TUI draws it.
 const permission = [
+  "─".repeat(40), "",
   "Create File",
   "",
   "Do you want to create hello.txt?",
@@ -178,11 +179,139 @@ const permission = [
   "  2. Yes, allow all edits this session [shift+tab]",
   "  3. No, tell Command Code what to do differently",
   "",
-  "↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo to",
+  "↑/↓ navigate · enter select · Run cmd --yolo to",
   "bypass all permissions (Docs ↗)",
 ].join("\n");
 
 describe("Command Code's permission prompt is a card", () => {
+  // command-code@1.88.0 dist/cli.mjs: Overlay, ShellPermissionPrompt,
+  // PermissionFooter and getShellPermissionChoices. Static source, not an account session.
+  const heading = "Execute Shell Command";
+  const footer = "↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo to bypass all permissions (Docs ↗)";
+  const command = "printf first\nprintf second";
+  const shell = [
+    "─".repeat(40), "", heading,
+    `Command Code needs to execute ${command}.`, "",
+    "Press [ctrl+e] to explain this command", "",
+    "❯ 1. Yes", "  2. Yes, don't ask again for `printf` commands in this project",
+    "  3. No, tell Command Code what to do differently", "", footer,
+  ].join("\n");
+
+  it("makes the card stale when output above the permission overlay redraws", () => {
+    const before = parseInteractivePrompt("cmd", `spinner 1\n${shell}`);
+    const after = parseInteractivePrompt("cmd", `spinner 2\n${shell}`);
+    expect(before).not.toBeNull();
+    expect(after?.id).not.toBe(before?.id);
+  });
+
+  it("hashes earlier text even when another tool heading is visible", () => {
+    const card = parseInteractivePrompt("cmd", `Create File\nEarlier output\n${shell}`);
+    expect(card?.id).not.toBe(parseInteractivePrompt("cmd", shell)?.id);
+    expect(card).not.toBeNull();
+  });
+
+  it.each(["whole", "heading-only", "command-only", "command-middle"])("hashes executable text above a quoted native cmd frame (%s)", (layout) => {
+    const screen = (prefix: string) => {
+      const shown = shell
+        .replace(command, `${prefix}; cat <<'EOF'\n${"─".repeat(40)}\n\nExecute Shell Command\nCommand Code needs to execute echo quoted.\nEOF`)
+        .split("\n");
+      if (layout === "command-middle") return ["  printf a", `  ${prefix}`, "  cat <<'EOF'", ...shown.slice(4)].join("\n");
+      return layout === "command-only"
+        ? [`  ${prefix}; cat <<'EOF'`, ...shown.slice(4)].join("\n")
+        : shown.slice(layout === "heading-only" ? 2 : 0).join("\n");
+    };
+    const before = parseInteractivePrompt("cmd", screen("printf harmless"));
+    const after = parseInteractivePrompt("cmd", screen("printf secrets >/tmp/leaked"));
+    expect(before).not.toBeNull();
+    expect(after).not.toBeNull();
+    expect(after?.id).not.toBe(before?.id);
+  });
+
+  it.each([
+    { name: "native", parse: parseInteractivePrompt },
+    { name: "manual fallback", parse: parseFallbackPrompt },
+  ])("hashes significant heredoc delimiter indentation in cmd cards ($name)", ({ parse }) => {
+    const screen = (indent: string) => shell.replace(command,
+      `cat <<'EOF'\n${"─".repeat(40)}\n${indent}EOF\nprintf secrets >/tmp/leaked\n: <<'EOF'\nEOF\nprintf done`);
+    const before = parse("cmd", screen("  "));
+    const after = parse("cmd", screen(""));
+    expect(before).not.toBeNull();
+    expect(after).not.toBeNull();
+    expect(after?.id).not.toBe(before?.id);
+  });
+
+  it.each([
+    ["Create File", "create"], ["Edit File hello.txt", "edit"],
+    ["Delete File", "delete"], ["Execute File", "execute"],
+  ])("keeps main's file card body with transcript and diff above the rows (%s)", (title, verb) => {
+    const screen = [
+      "> make hello.txt", "", "● I'll update the file.", "  some earlier transcript line", "",
+      permission.replace("Create File", title).replace("Do you want to create hello.txt?",
+        `- old contents\n+ new contents\n\nDo you want to ${verb} hello.txt?`),
+    ].join("\n");
+    const card = parseInteractivePrompt("cmd", screen);
+    expect(card).not.toBeNull();
+    expect(card?.body).toBeNull();
+  });
+
+  it("gives no approval card to a menu whose rows are not Command Code's Yes/No choices", () => {
+    const menu = [
+      "Execute Shell Command", "Command Code needs to execute echo old.",
+      "─".repeat(40), "Choose action", "", "❯ 1. First action", "  2. Second action", "", footer,
+    ].join("\n");
+    expect(parseInteractivePrompt("cmd", menu)).toBeNull();
+  });
+
+  it("hashes literal explain-hint text inside a shell heredoc", () => {
+    const heredoc = "cat <<'EOF'\nDo you want to continue?\nPress [ctrl+e] to explain this command\nEOF";
+    const card = parseInteractivePrompt("cmd", shell.replace(command, heredoc));
+    const changed = parseInteractivePrompt("cmd", shell.replace(command, heredoc.replace("ctrl+e", "ctrl+y")));
+    expect(card).not.toBeNull();
+    expect(changed?.id).not.toBe(card?.id);
+  });
+
+  it("keeps the native explain hint out of a single-line shell card body", () => {
+    const card = parseInteractivePrompt("cmd", shell.replace(command, "printf first"));
+    expect(card?.title).toBe(heading);
+    expect(card?.body).toBeNull();
+  });
+
+  it.each([
+    ["↑/↓ navigate ·", "enter select · ctrl+e explain · Run cmd --yolo to bypass all permissions (Docs ↗)"],
+    ["↑/↓ navig", "ate · enter sel", "ect · ctrl+e exp", "lain · Run cmd --", "yolo to bypass all per", "missions (Docs ↗)"],
+    ["↑/↓ navigate · enter select · ctrl+y explain · Run cmd --yolo to bypass all permissions (Docs ↗)"],
+    ["↑/↓ navigate · enter select · Run cmd --yolo to bypass all permissions (Docs ↗)"],
+  ])("recognizes the complete permission footer across real wrapping and key variants: %j", (...lines) => {
+    expect(parseInteractivePrompt("cmd", shell.replace(footer, lines.join("\n")))).not.toBeNull();
+  });
+
+  it("rejects later output made only of words from the old footer whitelist", () => {
+    expect(parseInteractivePrompt("cmd", `${shell}\nrun all`)).toBeNull();
+  });
+
+  it("rejects status or input after the complete permission footer", () => {
+    expect(parseInteractivePrompt("cmd", `${shell}\nmodel · 1s`)).toBeNull();
+    expect(parseInteractivePrompt("cmd", shell.replace("(Docs ↗)", ""))).toBeNull();
+  });
+
+  it("does not label an ordinary numbered menu as approval", () => {
+    const menu = ["Theme", "", "❯ 1. Dark", "  2. Light", "", footer].join("\n");
+    expect(parseInteractivePrompt("cmd", menu)).toBeNull();
+  });
+
+  it.each([0, 1, 2])("sends navigation and Enter for answer %i from every cursor", (answer) => {
+    for (const cursor of [0, 1, 2]) {
+      const screen = permission.replace("❯ 1.", "  1.").replace(`  ${cursor + 1}.`, `❯ ${cursor + 1}.`);
+      const card = parseInteractivePrompt("cmd", screen);
+      expect(card).not.toBeNull();
+      if (!card) throw new Error("permission fixture did not parse");
+      expect(answerKeys(card, { option_index: answer })).toEqual([
+        ...Array.from({ length: Math.abs(answer - cursor) }, () => ({ keys: [answer > cursor ? "down" : "up"] })),
+        { keys: ["enter"] },
+      ]);
+    }
+  });
+
   it("reads the heading, the question and the three options", () => {
     const prompt = parseInteractivePrompt("cmd", permission);
     expect(prompt?.title).toBe("Create File");

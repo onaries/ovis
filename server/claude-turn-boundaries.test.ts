@@ -24,8 +24,11 @@ describe("Claude completed turns", () => {
         reply("Verified.", "2026-01-01T12:02:00Z"),
       ));
       expect(turns.map((turn) => turn.role)).toEqual(["user", "assistant", "assistant"]);
-      expect(turns.slice(1).map((turn) => splitTurn(turn.parts).answer.map((part) => part.text))).toEqual([["The library has three books.", "Two are available."], ["Verified."]]);
-      expect(turns.slice(1).map((turn) => splitTurn(turn.parts).work.map((part) => part.kind === "text" ? part.text : part.kind))).toEqual([["Checking the catalog.", "tool"], ["Verifying the catalog.", "tool"]]);
+      expect(turns.slice(1).map((turn) => splitTurn(turn.parts).answer.map((part) => part.text))).toEqual([
+        ["Checking the catalog.", "The library has three books.", "Two are available."],
+        ["Verifying the catalog.", "Verified."],
+      ]);
+      expect(turns.slice(1).map((turn) => splitTurn(turn.parts).work.map((part) => part.kind))).toEqual([["tool"], ["tool"]]);
       expect(turns.slice(1).flatMap((turn) => turn.parts.filter((part) => part.kind === "tool").map((part) => part.output))).toEqual(["Three books", "Three books confirmed"]);
     });
   }
@@ -41,9 +44,11 @@ describe("Claude completed turns", () => {
       reply("The background check timed out.", "2026-01-01T12:03:00Z"),
     ));
     expect(turns.map((turn) => turn.role)).toEqual(["assistant", "assistant", "assistant"]);
-    expect(turns.map((turn) => splitTurn(turn.parts).answer.map((part) => part.text))).toEqual([["The catalog has three books."], ["Two books are available."], ["The background check timed out."]]);
+    expect(turns.map((turn) => splitTurn(turn.parts).answer.map((part) => part.text))).toEqual([
+      ["The catalog has three books."], ["Checking availability.", "Two books are available."], ["The background check timed out."],
+    ]);
     expect(turns.map((turn) => turn.end_ts)).toEqual(["2026-01-01T12:00:00Z", "2026-01-01T12:02:00Z", "2026-01-01T12:03:00Z"]);
-    expect(splitTurn(turns[1]!.parts).work.map((part) => part.kind === "text" ? part.text : part.kind)).toEqual(["Checking availability.", "tool"]);
+    expect(splitTurn(turns[1]!.parts).work.map((part) => part.kind)).toEqual(["tool"]);
     expect(splitTurn(turns[1]!.parts).work.find((part) => part.kind === "tool")).toMatchObject({ output: "Two available" });
   });
 });

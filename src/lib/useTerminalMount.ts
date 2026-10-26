@@ -16,7 +16,7 @@ import { paneStorageId } from "../../shared/machines.ts";
 import { secretPrompt } from "../../shared/secret-prompt.ts";
 import type { ClientRole, ServerMessage } from "../../shared/protocol.ts";
 import { terminalTheme, type Palette, type ResolvedTheme, type Settings } from "./settings.ts";
-import { TERMINAL_FONT_STACK } from "./fontFamily.ts";
+import { measurableFontStack, TERMINAL_FONT_STACK } from "./fontFamily.ts";
 import type { Translate } from "./i18n.ts";
 import { isAppShortcut } from "./shortcuts.ts";
 import { keyboardHoldsGrid, keyboardUp } from "./keyboard.ts";
@@ -187,7 +187,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         allowProposedApi: true,
         fontSize: terminalFontSize,
         // a chosen family follows in the font effect below, once its faces have loaded
-        fontFamily: TERMINAL_FONT_STACK,
+        fontFamily: measurableFontStack(TERMINAL_FONT_STACK),
         theme: terminalTheme(theme, palette),
         // a program's own colors suit one background (Claude Code's question titles are #ffffff, near
         // 1:1 on a light palette): xterm moves a foreground under 4.5:1 toward black or white. Dim text

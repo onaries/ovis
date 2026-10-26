@@ -471,9 +471,22 @@ export async function tabMove(tabId: string, insertIndex: number, socketPath?: s
   return herdrRpc("tab.move", { tab_id: tabId, insert_index: insertIndex }, socketPath);
 }
 
+/**
+ * The pane leaves for a new tab of another workspace, its process running; herdr gives it a new
+ * ID there and closes the tab (and a workspace) it leaves empty. Focus stays where it is.
+ */
+export async function paneMoveToNewTab(paneId: string, workspaceId: string, label: string | null, socketPath?: string): Promise<{
+  pane: PaneInfo; closed_tab_id?: string | null; closed_workspace_id?: string | null;
+}> {
+  const result = await herdrRpc<{ move_result: { pane: PaneInfo; closed_tab_id?: string | null; closed_workspace_id?: string | null } }>("pane.move", {
+    pane_id: paneId, destination: { type: "new_tab", workspace_id: workspaceId, label }, focus: false,
+  }, socketPath);
+  return result.move_result;
+}
+
 /** Closes the tab and every pane in it; a workspace's last tab takes the workspace with it. */
 export async function tabClose(tabId: string, socketPath?: string): Promise<void> {
-  await herdrRpc("tab.close", { tab_id: tabId }, socketPath);
+  await queueHerdrFocus(socketPath, (socket) => herdrRpc("tab.close", { tab_id: tabId }, socket));
 }
 
 export async function agentStart(
@@ -518,7 +531,7 @@ export async function workspaceMove(workspaceId: string, insertIndex: number, so
 
 /** closeGroup takes a repository workspace's open worktree workspaces with it; herdr refuses otherwise. */
 export async function workspaceClose(workspaceId: string, socketPath?: string, closeGroup = false): Promise<void> {
-  await herdrRpc("workspace.close", { workspace_id: workspaceId, ...(closeGroup ? { close_group: true } : {}) }, socketPath);
+  await queueHerdrFocus(socketPath, (socket) => herdrRpc("workspace.close", { workspace_id: workspaceId, ...(closeGroup ? { close_group: true } : {}) }, socket));
 }
 
 /** `git worktree add` or `remove` on a large checkout can take well over the default 10 s. */
@@ -526,7 +539,7 @@ const WORKTREE_GIT_TIMEOUT_MS = 60_000;
 
 /** `git worktree remove` of the workspace's checkout; herdr closes the workspace with it and keeps the branch. */
 export async function worktreeRemove(workspaceId: string, force: boolean, socketPath?: string): Promise<{ type: "worktree_removed"; workspace_id: string; path: string; forced: boolean }> {
-  return herdrRpc("worktree.remove", { workspace_id: workspaceId, force }, socketPath, WORKTREE_GIT_TIMEOUT_MS);
+  return queueHerdrFocus(socketPath, (socket) => herdrRpc("worktree.remove", { workspace_id: workspaceId, force }, socket, WORKTREE_GIT_TIMEOUT_MS));
 }
 
 /** herdr's view of one git checkout: `worktree.list` entries, and what create/open hand back. */
@@ -737,12 +750,24 @@ export async function paneSendKeys(paneId: string, keys: string[], socketPath?: 
 }
 
 export async function paneClose(paneId: string, socketPath?: string): Promise<void> {
-  await herdrRpc("pane.close", { pane_id: paneId }, socketPath);
+  await queueHerdrFocus(socketPath, (socket) => herdrRpc("pane.close", { pane_id: paneId }, socket));
+}
+
+const focusQueues = new Map<string, Promise<void>>();
+
+/** One ordering for Ovis focus writers, including an explicit swap's snapshot and restore. */
+function queueHerdrFocus<T>(socketPath: string | undefined, action: (socket: string) => Promise<T>): Promise<T> {
+  const socket = socketAddress(socketPath ?? herdrSocketPath());
+  const pending = (focusQueues.get(socket) ?? Promise.resolve()).then(() => action(socket));
+  const settled = pending.then(() => {}, () => {});
+  focusQueues.set(socket, settled);
+  void settled.then(() => { if (focusQueues.get(socket) === settled) focusQueues.delete(socket); });
+  return pending;
 }
 
 /** Focuses this exact pane, its tab and workspace, as a click in herdr's TUI does. */
 export async function paneFocus(paneId: string, socketPath?: string): Promise<void> {
-  await herdrRpc("pane.focus", { pane_id: paneId }, socketPath);
+  await queueHerdrFocus(socketPath, (socket) => herdrRpc("pane.focus", { pane_id: paneId }, socket));
 }
 
 /**
@@ -750,7 +775,7 @@ export async function paneFocus(paneId: string, socketPath?: string): Promise<vo
  * herdr's focus stays where it is unless `focus` asks for the new pane, as its --focus does.
  */
 export async function paneSplit(paneId: string, direction: SplitPaneDirection, focus: boolean, socketPath?: string): Promise<PaneInfo> {
-  const result = await herdrRpc<{ pane: PaneInfo }>("pane.split", { target_pane_id: paneId, direction, focus }, socketPath);
+  const result = await queueHerdrFocus(socketPath, (socket) => herdrRpc<{ pane: PaneInfo }>("pane.split", { target_pane_id: paneId, direction, focus }, socket));
   return result.pane;
 }
 
@@ -764,20 +789,38 @@ export interface PaneLayoutOutcome {
 
 /** herdr's prefix+z: the tab shows the pane alone (and focuses it), or every pane again. */
 export async function paneZoom(paneId: string, mode: "toggle" | "on" | "off", socketPath?: string): Promise<PaneLayoutOutcome & { zoomed: boolean }> {
-  const result = await herdrRpc<{ zoom: PaneLayoutOutcome & { zoomed: boolean; reason?: string | null } }>("pane.zoom", { pane_id: paneId, mode }, socketPath);
+  const result = await queueHerdrFocus(socketPath, (socket) => herdrRpc<{ zoom: PaneLayoutOutcome & { zoomed: boolean; reason?: string | null } }>("pane.zoom", { pane_id: paneId, mode }, socket));
   return { ...result.zoom, reason: result.zoom.reason ?? null };
 }
 
 /** herdr's prefix+shift+hjkl: the pane and its neighbour on that side change places; no_neighbor when it has none. */
 export async function paneSwap(paneId: string, direction: PaneDirection, socketPath?: string): Promise<PaneLayoutOutcome & { target_pane_id: string | null }> {
-  const result = await herdrRpc<{ swap: PaneLayoutOutcome & { target_pane_id?: string | null; reason?: string | null } }>("pane.swap", { pane_id: paneId, direction }, socketPath);
-  return { ...result.swap, reason: result.swap.reason ?? null, target_pane_id: result.swap.target_pane_id ?? null };
+  return queueHerdrFocus(socketPath, async (socket) => {
+    const result = await herdrRpc<{ swap: PaneLayoutOutcome & { target_pane_id?: string | null; reason?: string | null } }>("pane.swap", { pane_id: paneId, direction }, socket);
+    return { ...result.swap, reason: result.swap.reason ?? null, target_pane_id: result.swap.target_pane_id ?? null };
+  });
 }
 
-/** Explicit swaps use source_pane_id, not the directional form's pane_id (herdr's PaneSwapParams). */
+/** Serialize explicit swaps per herdr so none snapshots another swap's temporary focus. */
 export async function paneSwapWith(paneId: string, targetPaneId: string, socketPath?: string): Promise<PaneLayoutOutcome & { target_pane_id: string | null }> {
-  const result = await herdrRpc<{ swap: PaneLayoutOutcome & { target_pane_id?: string | null; reason?: string | null } }>("pane.swap", { source_pane_id: paneId, target_pane_id: targetPaneId }, socketPath);
-  return { ...result.swap, reason: result.swap.reason ?? null, target_pane_id: result.swap.target_pane_id ?? null };
+  return queueHerdrFocus(socketPath, async (socket) => {
+    const focusedPaneId = (await sessionSnapshot(socket)).focused_pane_id;
+    // Explicit swaps use source_pane_id, not the directional form's pane_id (PaneSwapParams).
+    const result = await herdrRpc<{ swap: PaneLayoutOutcome & { target_pane_id?: string | null; reason?: string | null } }>("pane.swap", { source_pane_id: paneId, target_pane_id: targetPaneId }, socket);
+    if (result.swap.changed && focusedPaneId && focusedPaneId !== paneId) {
+      try {
+        // A user may have selected something else while the swap was in flight.
+        if ((await sessionSnapshot(socket)).focused_pane_id === paneId) {
+          // Already inside the focus queue: do not enqueue recursively.
+          await herdrRpc("pane.focus", { pane_id: focusedPaneId }, socket);
+        }
+      } catch (error) {
+        // The layout is already committed. A failed restore must not invite a swap-back retry.
+        console.warn("pane swap focus restore failed", error);
+      }
+    }
+    return { ...result.swap, reason: result.swap.reason ?? null, target_pane_id: result.swap.target_pane_id ?? null };
+  });
 }
 
 /** A split's absolute ratio: [] is the root, false descends first, true descends second. */

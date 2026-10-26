@@ -178,7 +178,7 @@ describe("incremental Claude transcripts", () => {
   it("preserves peer dedup, queued human prompts, image refs, pastes and thinking-display updates", () => {
     const paste = '<pasted_content id="paste-one">\nPasted text\n</pasted_content id="paste-one">';
     const turns = appendRecords([
-      { ...user([{ type: "text", text: paste }, { type: "image", source: { type: "base64", media_type: "image/png", data: "PRIVATE IMAGE" } }, { type: "image", source: { type: "base64", media_type: "application/pdf" } }]), uuid: "image-entry" },
+      { ...user([{ type: "text", text: paste }, { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgoPRIVATEIMAGE" } }, { type: "image", source: { type: "base64", media_type: "application/pdf" } }]), uuid: "11111111-2222-3333-4444-555555555555" },
       { ...assistant([{ type: "thinking", thinking: "" }, { type: "thinking", thinking: "Visible update" }]), thinkingDisplay: "updates" },
       peerAttachment,
       peerEcho,
@@ -188,14 +188,27 @@ describe("incremental Claude transcripts", () => {
       assistant([{ type: "thinking", thinking: "Private reasoning" }, { type: "text", text: "Answer" }], "end_turn"),
     ]);
     expect(turns.map((turn) => turn.parts)).toEqual([
-      [{ kind: "image", media_type: "image/png", ref: "image-entry:1" }, { kind: "text", text: "Pasted text" }],
+      [{ kind: "image", media_type: "image/png", ref: "11111111-2222-3333-4444-555555555555:1" }, { kind: "text", text: "Pasted text" }],
       [{ kind: "text", text: "Visible update", phase: "commentary" }],
       [{ kind: "notice", text: "Review ready", source: "peer:Reviewer" }],
       [{ kind: "text", text: "Pasted text" }],
       [{ kind: "thinking", text: "Private reasoning" }, { kind: "text", text: "Answer", phase: "final_answer" }],
     ]);
-    expect(JSON.stringify(turns)).not.toContain("PRIVATE IMAGE");
+    expect(JSON.stringify(turns)).not.toContain("PRIVATEIMAGE");
     expect(JSON.stringify(turns)).not.toContain("Hidden meta body");
+  });
+
+  it("names a tool's pictures and a prompt that is only a picture the same live as cold", () => {
+    const picture = { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgoAAAANSUhEUg==" } };
+    const turns = appendRecords([
+      user("Open the shot"),
+      assistant([call("read", "Read", { file_path: "shot.png" })], "tool_use"),
+      { ...user([result("read", [{ type: "text", text: "Read output" }, picture])]), uuid: "11111111-2222-3333-4444-555555555555" },
+      assistant([{ type: "text", text: "A pixel." }], "end_turn"),
+      { ...user([picture]), uuid: "22222222-2222-3333-4444-555555555555" },
+    ]);
+    expect(tools(turns).map((tool) => tool.images)).toEqual([[{ media_type: "image/png", ref: "11111111-2222-3333-4444-555555555555:0:1" }]]);
+    expect(turns.at(-1)?.parts).toEqual([{ kind: "image", media_type: "image/png", ref: "22222222-2222-3333-4444-555555555555:0" }]);
   });
 
   it("clears visible state and pending tools while keeping native notification and peer dedup semantics", () => {

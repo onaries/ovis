@@ -4,6 +4,7 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const PALETTE_KO: Record<string, string> = {
+  "Move tab to {workspace}": "탭을 {workspace}(으)로 이동",
   "Enable notifications": "알림 켜기",
   "Switch to terminal": "터미널로 전환",
   "Switch to chat": "채팅으로 전환",

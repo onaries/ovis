@@ -56,3 +56,69 @@ it("the demo relabels automatic tab names by place and leaves custom numeric nam
     }
   }
 });
+
+/** A tab moved to another workspace leaves no ID behind: its agent, the open tab it leaves and herdr's focus follow it. */
+it("the demo moves a one-pane tab to another workspace without stale tab or workspace IDs", async () => {
+  const saved = new Map(["window", "location", "PushManager"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  try {
+    const storage = new Map<string, string>();
+    (globalThis as any).location = new URL("http://demo.test/demo/app/");
+    (globalThis as any).window = {
+      fetch, WebSocket, EventSource: class {},
+      localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
+    };
+    const transport = "../site/demo/transport.ts?move-to-workspace";
+    await import(transport);
+    const demo = (globalThis as any).window;
+    const post = async (url: string, body: unknown) => (await demo.fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+    const session = async () => (await (await demo.fetch("/api/session")).json()).snapshot;
+    // every tab or workspace the snapshot names is one it holds
+    const consistent = (snap: any) => {
+      const tabs = new Set(snap.tabs.map((tab: any) => tab.tab_id));
+      const workspaces = new Set(snap.workspaces.map((workspace: any) => workspace.workspace_id));
+      for (const workspace of snap.workspaces) assert.ok(tabs.has(workspace.active_tab_id), `${workspace.workspace_id} opens a tab it has`);
+      for (const agent of snap.agents) assert.ok(tabs.has(agent.tab_id) && workspaces.has(agent.workspace_id), `${agent.pane_id}'s agent names its place`);
+      assert.ok(snap.focused_tab_id === null || tabs.has(snap.focused_tab_id));
+      assert.ok(snap.focused_workspace_id === null || workspaces.has(snap.focused_workspace_id));
+      assert.deepEqual(snap.tabs.filter((tab: any) => tab.focused).map((tab: any) => tab.tab_id), snap.focused_tab_id === null ? [] : [snap.focused_tab_id]);
+    };
+
+    const from = (await post("/api/workspace/create", { cwd: "/home/demo/move-from", label: "move-from", agent: { kind: "claude" } })).workspace_id as string;
+    const to = (await post("/api/workspace/create", { cwd: "/home/demo/move-to", label: "move-to" })).workspace_id as string;
+    await post("/api/tab/create", { workspace_id: from, label: "build" });
+    const before = await session();
+    const agentPane = before.panes.find((pane: any) => pane.tab_id === `${from}:t1`).pane_id as string;
+    await post("/api/pane/focus", { pane_id: agentPane });
+    assert.equal((await session()).workspaces.find((workspace: any) => workspace.workspace_id === from).active_tab_id, `${from}:t1`);
+
+    const moved = await post("/api/tab/move-to-workspace", { tab_id: `${from}:t1`, workspace_id: to });
+    const after = await session();
+    consistent(after);
+    assert.deepEqual(after.agents.filter((agent: any) => agent.pane_id === moved.pane_id).map((agent: any) => [agent.tab_id, agent.workspace_id]), [[moved.tab_id, to]]);
+    assert.equal(after.workspaces.find((workspace: any) => workspace.workspace_id === from).active_tab_id, `${from}:t2`, "the workspace left behind opens its other tab");
+    assert.deepEqual([after.focused_pane_id, after.focused_tab_id, after.focused_workspace_id], [moved.pane_id, moved.tab_id, to], "herdr's focus goes with the pane");
+    assert.equal(after.tabs.find((tab: any) => tab.tab_id === moved.tab_id).label, "move-from", "a named tab keeps its name");
+
+    // a name herdr gave by the tab's place stays behind: its place in the new workspace names it
+    // (the fixtures' tabs carry that name as their label, as herdr reports it)
+    await post("/api/tab/create", { workspace_id: from, label: "2" });
+    const unnamed = (await session()).tabs.filter((tab: any) => tab.workspace_id === from).at(-1).tab_id as string;
+    const placed = await post("/api/tab/move-to-workspace", { tab_id: unnamed, workspace_id: to });
+    assert.equal((await session()).tabs.find((tab: any) => tab.tab_id === placed.tab_id).label, "3");
+    // and goes on being named by its place: a tab closed before it renumbers it
+    const before3 = (await session()).tabs.filter((tab: any) => tab.workspace_id === to);
+    await post("/api/tab/close", { tab_id: before3[0].tab_id });
+    assert.equal((await session()).tabs.find((tab: any) => tab.tab_id === placed.tab_id).label, "2");
+
+    // the last tab takes its workspace with it
+    await post("/api/tab/move-to-workspace", { tab_id: `${from}:t2`, workspace_id: to });
+    const emptied = await session();
+    consistent(emptied);
+    assert.equal(emptied.workspaces.some((workspace: any) => workspace.workspace_id === from), false);
+  } finally {
+    for (const [key, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as any)[key];
+    }
+  }
+});

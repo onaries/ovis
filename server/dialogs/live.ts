@@ -6,8 +6,9 @@ import { OMO_FOOTER_LINES, OMO_HINT_LINES, OMO_NOT_FOOTER_RE, OMO_OPTIONS_HINT_R
 import { CLAUDE_ASK_HINT_RE, CLAUDE_CONFIRM_HINT_RE, CLAUDE_EFFORT_HINT_RE, claudeModelListWaits, withoutClaudeTasks } from "./claude.ts";
 import { OMP_CLIPPED_SINGLE_HINT_RE, OMP_MULTI_CLIPPED_HINT_RE, OMP_MULTI_HINT_RE, OMP_REVIEW_HINT_RE, OMP_SINGLE_CLIPPED_HINT_RE, OMP_SINGLE_HINT_RE } from "./omp.ts";
 import { HERMES_HINT_RE } from "./hermes.ts";
-import { PI_INPUT_HINT_RE, PI_MENU_HINT_RE } from "./pi.ts";
+import { PI_INPUT_HINT_RE, PI_MENU_HINT_RE, PI_THINKING_HINT_LINES } from "./pi.ts";
 import { openCodeV1QuestionActive } from "./opencode.ts";
+import { cmdFooterStart } from "./cmd.ts";
 
 /**
  * A row of OmO's omo-task widget under the input box (omo-ai plugin/extensions/omo-task.js): a live row
@@ -93,6 +94,8 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   // the last one, never for a hint that ended above later output (an answered, stale menu).
   const ends = (re: RegExp): boolean => [1, 2, 3].some((span) =>
     re.test(shown.slice(-span).join(" ")) && (span === 1 || !re.test(shown.slice(-span, -1).join(" "))));
+  // The rpiv reader validates its complete frame and Pi footer itself, including clipped hints.
+  if (prompt.responder === "pi-ask-question" || prompt.responder === "pi-ask-submit") return true;
   if (prompt.responder === "omp-question") return ends(OMP_SINGLE_HINT_RE) || ends(OMP_CLIPPED_SINGLE_HINT_RE) || ends(OMP_SINGLE_CLIPPED_HINT_RE) || ends(OMP_MULTI_HINT_RE)
     || ends(OMP_MULTI_CLIPPED_HINT_RE);
   if (prompt.responder === "omp-submit") return ends(OMP_REVIEW_HINT_RE);
@@ -147,6 +150,7 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   // hint sits near the end without being it. A dialog already answered leaves its hint far
   // above whatever came after, which is what keeps this window narrow.
   if (prompt.responder === "pi-model") return hintAtEnd(shown, PI_MODEL_HINT_AT_END_RE, PI_FOOTER_LINES);
+  if (prompt.responder === "pi-thinking") return hintAtEnd(shown, PI_MODEL_HINT_AT_END_RE, PI_FOOTER_LINES, PI_THINKING_HINT_LINES);
   if (prompt.responder === "omo-model") return omoModelListWaits(screen);
   // its reader already found the picker ending the screen, which only an open picker does
   if (prompt.responder === "omp-model") return true;
@@ -156,7 +160,7 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   }
   // Command Code's permission footer names its keys at the dialog's end and wraps on a narrow
   // pane: `↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo to bypass all …`
-  if (prompt.responder === "cmd-question") return cmdFooterEnds(shown);
+  if (prompt.responder === "cmd-question") return cmdFooterStart(shown) >= 0;
   // its footer ends the screen, wrapped or not (dialogs/opencode.ts)
   if (prompt.responder === "opencode-v1-question") return openCodeV1QuestionActive(screen);
   return ends(/ctrl\+g to edit|shift\+tab to approve with this feedback/i);
@@ -170,19 +174,6 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
  */
 const PI_MENU_HINT_AT_END_RE = new RegExp(`${PI_MENU_HINT_RE.source}$`, "i");
 const PI_INPUT_HINT_AT_END_RE = new RegExp(`${PI_INPUT_HINT_RE.source}$`, "i");
-/** Command Code's permission footer: `↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo …` */
-const CMD_HINT_RE = /↑\/↓ navigate.*enter select/i;
-const CMD_FOOTER_WORDS = new Set(["·", "ctrl+e", "explain", "run", "cmd", "--yolo", "to", "bypass", "all", "permissions", "(docs", "↗)", "↗", "(docs↗)"]);
-/**
- * The footer ends the screen: after its key hint only the footer's own words may follow, wrapped or
- * not. A line typed below a quoted or stale dialog (`❯ my next message`) means it is no live one.
- */
-function cmdFooterEnds(shown: string[]): boolean {
-  const at = findLastIndex(shown, (line) => CMD_HINT_RE.test(line));
-  if (at < 0 || shown.length - at > 3) return false;
-  const rest = [shown[at]!.replace(/^.*?enter select/i, ""), ...shown.slice(at + 1)].join(" ");
-  return rest.split(/\s+/).filter(Boolean).every((word) => CMD_FOOTER_WORDS.has(word.toLowerCase()));
-}
 /** The same hint told from the end, so lines that follow it cannot complete a match of their own. */
 const PI_MODEL_HINT_AT_END_RE = new RegExp(`${PI_MODEL_HINT_RE.source}$`, "i");
 /**

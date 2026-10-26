@@ -36,6 +36,13 @@ export interface AppActions {
    */
   openTerminalTab: (target?: { machineId: string; workspaceId: string }) => Promise<void>;
   /**
+   * A one-pane tab into a new tab at the end of another workspace on its PC, its process running.
+   * Where its pane is shown, in either half of a split, the app follows it there, and what was typed
+   * into it and not sent goes with it. Rejects with herdr's refusal; `notice` also says it over the
+   * pane, for a caller with no line of its own (the palette, which has closed).
+   */
+  moveTabToWorkspace: (target: { machineId: string; tabId: string; workspaceId: string; notice?: boolean }) => Promise<void>;
+  /**
    * The earlier sessions of a workspace's folder (components/SessionHistory.tsx): the named
    * workspace's, listed for `agent` first (a pane's, or the row's), else the selected pane's
    * workspace and agent. A `pane` request lists that agent or opens nothing (lib/sessionHistory.ts

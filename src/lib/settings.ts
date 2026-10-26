@@ -12,7 +12,7 @@ import { DEFAULT_THEME, terminalColors, themeColor as themeTableColor, type Them
 import { LANGUAGE_SETTINGS, LOCALE_TAGS, resolveLanguage, setCurrentLanguage, type Language, type LanguageSetting } from "./i18n.ts";
 import type { AlertPrefs, DoneAlerts } from "../../shared/notify-policy.ts";
 import { chatFontStack, sanitizeFontFamily } from "./fontFamily.ts";
-import { fontScale, sanitizeUiFontSize } from "./typography.ts";
+import { fontScale, sanitizeUiFontSize, uiFontStack } from "./typography.ts";
 import { sanitizeKeyBarExtras, type KeyBarExtra } from "./keys.ts";
 import { themeFor } from "./themeFor.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems, sanitizeKeyBarItems, type KeyBarItem } from "./keyBar.ts";
@@ -110,6 +110,9 @@ export interface Settings {
   /** the interface's body size in px (--fs-md; every other --fs-* scales with it as --ui-scale); null follows the density.
    *  The chat follows it until it has a size of its own; the terminal keeps terminalFontSize */
   uiFontSize: number | null;
+  /** fonts tried before the built-in interface stack (--font-ui, lib/typography.ts), as a CSS font-family list; "" keeps
+   *  the built-in one. Everything set in --font-ui follows, the chat's prose included until it has a font of its own */
+  uiFontFamily: string;
   /** how wide the chat lane may run on a large screen, keyed as data-chat-width in src/styles.css; default follows the pane
    *  (chatLaneWidth, written by lib/chatLane.ts); a narrower pane is never affected */
   chatWidth: ChatWidth;
@@ -186,10 +189,10 @@ export type DiffStyle = (typeof DIFF_STYLES)[number];
 
 /** Raw custom text, key combinations and account keys are never copied. Requiring every other
  * Settings field in the projection makes a new field require an explicit collection decision.
- * fileOpen, webLinks, the launch modes, followHerdrFocus and composerNewTabButton are not collected: the
+ * fileOpen, webLinks, the launch modes, followHerdrFocus, composerNewTabButton and the interface font are not collected: the
  * telemetry schema (shared/telemetry.ts) does not carry them. */
 type TelemetrySourceSettings = Omit<Settings,
-  "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
+  "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily" | "uiFontFamily"
   | "quickReplies" | "usageOrder" | "usageHidden" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode"
   | "followHerdrFocus" | "composerNewTabButton" | "changesChildRepos" | "changesRepoDepth">;
 
@@ -270,7 +273,7 @@ export const SETTING_SCOPE = {
   terminalWheelSpeed: "device", terminalFontFamily: "device", paneClipboard: "device", releasePaneAway: "device",
   // a desk that follows herdr's focus must not move a phone open on another pane
   followHerdrFocus: "device",
-  chatFontSize: "device", chatFontFamily: "device", uiFontSize: "device", chatWidth: "device", enterSends: "device",
+  chatFontSize: "device", chatFontFamily: "device", uiFontSize: "device", uiFontFamily: "device", chatWidth: "device", enterSends: "device",
   // a desk's composer button: a phone never shows it
   composerNewTabButton: "device",
   keepScreenOn: "device", alertsOn: "device", alertInput: "device", alertDone: "device", alertInApp: "device", alertSound: "device",
@@ -313,6 +316,7 @@ export const DEFAULT_SETTINGS: Settings = {
   chatFontSize: null,
   chatFontFamily: "",
   uiFontSize: null,
+  uiFontFamily: "",
   chatWidth: "default",
   enterSends: true,
   autoSendQueued: true,
@@ -486,6 +490,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       : DEFAULT_SETTINGS.chatFontSize,
     terminalFontFamily: sanitizeFontFamily(record["terminalFontFamily"]),
     uiFontSize: sanitizeUiFontSize(record["uiFontSize"]),
+    uiFontFamily: sanitizeFontFamily(record["uiFontFamily"]),
     paneClipboard: typeof record["paneClipboard"] === "boolean" ? record["paneClipboard"] : DEFAULT_SETTINGS.paneClipboard,
     releasePaneAway: typeof record["releasePaneAway"] === "boolean" ? record["releasePaneAway"] : DEFAULT_SETTINGS.releasePaneAway,
     followHerdrFocus: typeof record["followHerdrFocus"] === "boolean" ? record["followHerdrFocus"] : DEFAULT_SETTINGS.followHerdrFocus,
@@ -530,11 +535,28 @@ export function sanitizeSettings(raw: unknown): Settings {
   };
 }
 
+/**
+ * Settings → Appearance → Interface font is kept in a key of its own, not in ovis:settings: a tab
+ * still on an older version rewrites that record whole on its next save and would erase a field it
+ * does not know (docs/development.md, Stored-format changes).
+ */
+export const UI_FONT_STORAGE_KEY = "ovis:ui-font";
+
+function readUiFontFamily(): string {
+  try {
+    const raw = window.localStorage.getItem(UI_FONT_STORAGE_KEY);
+    return raw === null ? "" : sanitizeFontFamily(JSON.parse(raw));
+  } catch {
+    return "";
+  }
+}
+
 export function loadSettings(): Settings {
   // read as the page's boot script reads them (themeBoot.ts), so React starts on the row the first frame showed
   const stored = readStoredAppearance(() => window.localStorage);
   const settings = stored.main === null ? DEFAULT_SETTINGS : sanitizeSettings(stored.main.value);
-  return stored.themes === null ? settings : sanitizeSettings({ ...settings, ...stored.themes });
+  const merged = stored.themes === null ? settings : sanitizeSettings({ ...settings, ...stored.themes });
+  return { ...merged, uiFontFamily: readUiFontFamily() };
 }
 
 export function saveSettings(settings: Settings): void {
@@ -544,7 +566,9 @@ export function saveSettings(settings: Settings): void {
       darkTheme: mirrored.darkTheme, lightTheme: mirrored.lightTheme,
       mirror: { palette: mirrored.palette, paletteDark: mirrored.paletteDark, paletteLight: mirrored.paletteLight },
     }));
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(mirrored));
+    const { uiFontFamily, ...main } = mirrored;
+    window.localStorage.setItem(UI_FONT_STORAGE_KEY, JSON.stringify(uiFontFamily));
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(main));
   } catch {
     /* private mode: preferences last for the session */
   }
@@ -579,6 +603,10 @@ export function applyToDocument(settings: Settings, entry: ThemeEntry, language:
   // ChatView.css scales its type tokens by this (the chat's and a Markdown preview's): the chat's size over the
   // interface's, so a chosen chat size is drawn as itself whatever the interface size, and an unchosen one follows it
   root.style.setProperty("--chat-scale", String(fontScale(chatFontSize(settings), uiPx)));
+  // Settings → Appearance → Interface font, written as the token itself: the chosen list in front of the built-in stack
+  const uiFont = uiFontStack(settings.uiFontFamily, language);
+  if (uiFont === null) root.style.removeProperty("--font-ui");
+  else root.style.setProperty("--font-ui", uiFont);
   // ChatView.css sets the transcript's and a Markdown preview's prose in this, and falls back to --font-ui without it
   const chatFont = chatFontStack(settings.chatFontFamily);
   if (chatFont === null) root.style.removeProperty("--font-chat");

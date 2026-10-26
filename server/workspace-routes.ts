@@ -9,11 +9,11 @@ import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { MAX_LABEL_CHARS } from "../shared/labels.ts";
 import { firstMessageFault } from "../shared/launch-rules.ts";
-import type { DirectoryCreated, PendingMessage, ServerMessage, TabMoved, WorkspaceMoved } from "../shared/protocol.ts";
+import type { DirectoryCreated, PendingMessage, ServerMessage, TabMoved, TabMovedToWorkspace, WorkspaceMoved } from "../shared/protocol.ts";
 import type { MoveReceipt } from "./order-sequence.ts";
 import { agentFault, agentLaunch, type AgentPayload } from "./agent-launch.ts";
 import { createDirectory, listDirectories } from "./directories.ts";
-import { HerdrError, tabClose, tabCreate, tabMove, tabRename, workspaceClose, workspaceCreate, workspaceMove, workspaceRename, worktreeCreate, worktreeList, worktreeOpen, worktreeRemove } from "./herdr/client.ts";
+import { HerdrError, paneMoveToNewTab, sessionSnapshot, tabClose, tabCreate, tabMove, tabRename, workspaceClose, workspaceCreate, workspaceMove, workspaceRename, worktreeCreate, worktreeList, worktreeOpen, worktreeRemove } from "./herdr/client.ts";
 import { badRequest, conflictResponse, errorResponse, isJsonObject, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
 import { paneContext } from "./pane-context.ts";
 import { repoDiffResponse } from "./repo-diff.ts";
@@ -303,6 +303,34 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
       // the collector's structure debounce, and the closed workspace stays on screen meanwhile
       if (pathname === "/api/workspace/close") broadcastAll({ type: "session-changed" });
       return jsonResponse({ ok: true });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
+  // herdr moves tabs only within their workspace: a one-pane tab goes as its pane, into a new tab there
+  if (pathname === "/api/tab/move-to-workspace") {
+    setRequestRoute(pathname);
+    if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+    const payload = await readJsonObject<{ tab_id?: unknown; workspace_id?: unknown }>(request);
+    if (payload instanceof Response) return payload;
+    if (typeof payload.tab_id !== "string" || payload.tab_id.length === 0) return badRequest("missing_tab_id", "tab_id is required");
+    if (typeof payload.workspace_id !== "string" || payload.workspace_id.length === 0) return badRequest("missing_workspace_id", "workspace_id is required");
+    try {
+      const snapshot = await sessionSnapshot();
+      const tab = snapshot.tabs.find((candidate) => candidate.tab_id === payload.tab_id);
+      if (!tab) return jsonResponse({ error: { code: "tab_not_found", message: "no tab has that ID" } }, 404);
+      if (tab.workspace_id === payload.workspace_id) return conflictResponse("same_workspace", "the tab is already in that workspace");
+      const panes = snapshot.panes.filter((pane) => pane.tab_id === tab.tab_id);
+      if (panes.length !== 1 || !panes[0]) return conflictResponse("multi_pane_tab", "only a tab with one pane can move to another workspace");
+      // herdr names an unnamed tab by its place in the row, which it moves up when a tab before it
+      // closes while the tab keeps its number (src/lib/tabName.ts): that name is not carried over
+      const place = snapshot.tabs.filter((candidate) => candidate.workspace_id === tab.workspace_id).indexOf(tab) + 1;
+      const named = tab.label.trim();
+      const label = named === "" || named === String(place) ? null : named;
+      const moved = await paneMoveToNewTab(panes[0].pane_id, payload.workspace_id, label);
+      broadcastAll({ type: "session-changed" });
+      return jsonResponse({ ok: true, pane_id: moved.pane.pane_id, tab_id: moved.pane.tab_id } satisfies TabMovedToWorkspace);
     } catch (error) {
       return errorResponse(error);
     }

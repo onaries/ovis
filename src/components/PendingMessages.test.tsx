@@ -6,12 +6,12 @@ import { translate } from "../lib/i18n.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 import { PendingMessages } from "./PendingMessages.tsx";
 
-const render = (code: string, message: string, languages: string[], serverOwned = true): string => {
+const render = (code: string, message: string, languages: string[], serverOwned = true, state: "held" | "uncertain" = "held"): string => {
   const saved = Object.getOwnPropertyDescriptor(navigator, "languages");
   Object.defineProperty(navigator, "languages", { configurable: true, value: languages });
   try {
     return renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(PendingMessages, {
-      messages: [{ id: "p1", request_id: 1, text: "ls", state: "held", created_at: "2026-10-14T00:00:00.000Z", serverOwned, error: { code, message } }],
+      messages: [{ id: "p1", request_id: 1, text: "ls", state, created_at: "2026-10-14T00:00:00.000Z", serverOwned, error: { code, message } }],
       connected: true, blocked: false, unsaved: false, isBusy: () => false,
       onSendNow: async () => {}, onDiscard: async () => {},
     }) }));
@@ -59,5 +59,12 @@ describe("a pending row's refusal note", () => {
 
   it("keeps the server's reason for other refusals", () => {
     expect(render("agent_blocked", "the agent is busy", ["en"])).toContain("Not sent: the agent is busy");
+  });
+
+  it("encodes a live Pi receipt as the existing non-resendable uncertain state", () => {
+    const html = render("pi_transcript_pending", "waiting", ["en"], true, "uncertain");
+    expect(html).toContain("Sent to Pi · waiting for transcript");
+    expect(html).not.toContain("pending-message-send");
+    expect(html).not.toContain("Discard saved copy");
   });
 });

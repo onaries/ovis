@@ -22,8 +22,9 @@ export function queuedQuestionCount(screen: string): number {
   if (header < 0 || lines.length - header > 16) return 0;
   if (lines.slice(header).some((line) => /^↳\s/.test(line) || /Messages to be submitted/i.test(line) || CODEX_ASYNC_ASK_HINT_RE.test(line))) return 0;
   const at = lines.findIndex((line, index) => index > header && index <= header + 7 && CODEX_QUEUE_COUNT_RE.test(line));
-  // (the main prompt, not a numbered menu row the parser did not recognise)
-  if (at < 0 || !/\bto answer$/i.test(lines[at + 1] ?? "") || !/^›\s(?!\d+\.)/.test(lines[at + 2] ?? "")) return 0;
+  // (the main prompt, not a numbered menu row the parser did not recognise; Codex 0.164 draws
+  // the main prompt as » at Ultra reasoning effort, numbered menu rows keep ›)
+  if (at < 0 || !/\bto answer$/i.test(lines[at + 1] ?? "") || !/^[›»]\s(?!\d+\.)/.test(lines[at + 2] ?? "")) return 0;
   return Number(lines[at]!.match(CODEX_QUEUE_COUNT_RE)![1]);
 }
 

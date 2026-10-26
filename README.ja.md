@@ -76,7 +76,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 <p align="center"><sub>どのクリップも、パソコンとスマートフォンを同時に収録した実際の動作です。等速・カットなし。クリックすると動画全体を再生できます。</sub></p>
 
-- **チャットとターミナルを、ひとつのペインで** — Claude Code、Codex、omp、omo、gjc、pi、Hermes の会話履歴と、特定できた OpenCode、Devin CLI のセッションを表示します。Linux の Grok と実験的な Antigravity（agy）も、後述の条件で対応しています。ワンクリックで同じペインのターミナルに切り替えられます。作業中のメッセージはキューに入れて次のターンで送るか、Send now ですぐに送れます。[対応エージェント →](docs/guide.md#supported-agents)
+- **チャットとターミナルを、ひとつのペインで** — Claude Code、Codex、omp、omo、gjc、pi、Hermes の会話履歴と、特定できた OpenCode、Devin CLI のセッションを表示します。Linux と macOS の Grok と実験的な Antigravity（agy）も、後述の条件で対応しています。ワンクリックで同じペインのターミナルに切り替えられます。作業中のメッセージはキューに入れて次のターンで送るか、Send now ですぐに送れます。[対応エージェント →](docs/guide.md#supported-agents)
 - **タップで承認** — 対応する承認リクエスト、質問、計画メニューがカードになり、問いかけがまだ有効か確認してから回答を送信します。カードに対応していない要求にはターミナルで回答します。
 - **対応が必要なときに通知** — すべてのペインの状態をリアルタイムに表示し、アプリを開いているときは通知が上から降りてきます。入力が必要なときや完了したときには、アプリを閉じていてもプッシュ通知が届きます。
 - **スマートフォンにインストール** — キーボードの上にキーバー（Esc、Tab、Ctrl、Alt、Shift、Enter、矢印キー）が並ぶ PWA。キーの並べ替えや独自のキー組み合わせの追加は Settings（設定）でできます。Tailscale のアドレスは QR コードで表示されます。[スマートフォンの設定 →](docs/guide.md#on-your-phone)
@@ -134,7 +134,7 @@ herdr が起動した状態で、インストーラーが表示または開い�
 
 Claude Code、Codex、omp、omo、gjc、pi、Hermes は各自のセッションストアを読み取ります。GJC のチャットと完了通知は、Web UI のネイティブ GJC 拡張でアクティブなセッションを特定します。SDK ブローカーや CLI での照会は使いません。[拡張をインストール](docs/guide.md#supported-agents)して GJC を再起動すると有効になります。セッションを一意に特定できなければ、ターミナルと herdr 自身のステータスを使います。OpenCode は、対応する 2.x および 1.x の SQLite スキーマから herdr が報告したセッションを読み取ります。開始画面、セッション ID がない場合、未対応・読み取り不能・サイズ制限超過のストアではターミナルを表示します。Devin CLI は `devin --resume <id>` のように herdr または実行中のプロセスがセッションを明示する場合にチャットを表示し、単に `devin` で起動した場合はターミナルを表示します。
 
-Grok のチャットは Linux のみで、プロセスが保持するセッションが 1 つだけで、herdr の報告と一致する場合に対応します。macOS、Windows、セッションを一意に特定できない場合はターミナルを表示します。Antigravity（agy）は実験的な対応で、実行中のプロセスが保持する会話ロックから履歴を特定します。Linux は実機検証済み、macOS は未検証、Windows はターミナル表示です。対応していない、または読み取れる履歴がない場合もターミナルを表示します。[対応エージェント →](docs/guide.md#supported-agents)
+Grok のチャットは Linux と macOS で、プロセスが保持するセッションが 1 つだけで、herdr の報告と一致する場合に対応します。Windows、セッションを一意に特定できない場合はターミナルを表示します。Antigravity（agy）は実験的な対応で、実行中のプロセスが保持する会話ロックから履歴を特定します。Linux は実機検証済み、macOS は未検証、Windows はターミナル表示です。対応していない、または読み取れる履歴がない場合もターミナルを表示します。[対応エージェント →](docs/guide.md#supported-agents)
 
 **herdr の TUI の代わりになるものですか？**
 

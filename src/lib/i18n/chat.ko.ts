@@ -2,7 +2,7 @@
  * Korean for the keys only the chat files use:
  * components/ChatView.tsx, components/Markdown.tsx, components/MermaidLightbox.tsx,
  * components/ChatMinimap.tsx, components/ImageLightbox.tsx, components/BackgroundTasks.tsx,
- * components/BackgroundAgentDetail.tsx,
+ * components/BackgroundAgentDetail.tsx, components/MarkdownLinkMenu.tsx,
  * lib/workBlocks.ts (with CATEGORY_LABEL), lib/toolVerbs.ts (with VERB_LABEL), lib/outcomeChip.ts,
  * lib/chatTimestamp.ts, lib/chatReadDeadline.ts.
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
@@ -216,4 +216,6 @@ export const CHAT_KO: Record<string, string> = {
   "Conversation turns": "대화 턴",
   "Go to turn {n}": "{n}번째 턴으로 이동",
   "Show full message": "전체 메시지 보기",
+  "Open link": "링크 열기",
+  "Share link": "링크 공유",
 };

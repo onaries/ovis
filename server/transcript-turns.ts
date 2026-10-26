@@ -1,7 +1,8 @@
 import type { StreamSource } from "./conversation-shared.ts";
-import { claudePeerNotice, piMessage } from "./transcript-records.ts";
+import { claudePeerNotice, piMessage, piPromptImages } from "./transcript-records.ts";
 import type { TranscriptEntry } from "./claude-transcript.ts";
-import { isCommandEntry } from "./claude-transcript.ts";
+import { claudeImages, isCommandEntry, withoutPictureBytes } from "./claude-transcript.ts";
+import { copilotRootRecord } from "./copilot.ts";
 
 /**
  * A Claude session's branch, followed as the file is scanned. Claude Code links each record to the
@@ -51,19 +52,20 @@ function claudeCommandEchoRecord(entry: { type?: unknown; subtype?: unknown; isM
   return typeof text === "string" && /^\s*(?:<command-message>[^<]*<\/command-message>\s*)?<command-name>\//.test(text);
 }
 
-/** a record longer than this is not parsed for its links: it leaves the chain unknown */
+/** a record longer than this, its pictures' bytes left out, is not parsed for its links: it leaves the chain unknown */
 const CLAUDE_CHAIN_LINE_BYTES = 1024 * 1024;
 
 export function followClaudeBranch(branch: ClaudeBranch, line: Buffer, start: number, end: number, floor: number): void {
   if (!line.includes('"uuid"')) return;
-  if (line.length > CLAUDE_CHAIN_LINE_BYTES) { branch.last = null; return; }
+  const text = line.length > CLAUDE_CHAIN_LINE_BYTES ? withoutPictureBytes(line.toString("utf8")) : line.toString("utf8");
+  if (text.length > CLAUDE_CHAIN_LINE_BYTES) { branch.last = null; return; }
   let entry: TranscriptEntry & { isSidechain?: unknown; logicalParentUuid?: unknown };
-  try { entry = JSON.parse(line.toString("utf8")) as typeof entry; } catch { branch.last = null; return; }
+  try { entry = JSON.parse(text) as typeof entry; } catch { branch.last = null; return; }
   if (entry === null || typeof entry !== "object" || typeof entry.uuid !== "string" || entry.isSidechain === true) return;
   // a compaction's boundary starts a chain of its own, and names the record it continues
   const parent = entry.parentUuid === null ? typeof entry.logicalParentUuid === "string" ? entry.logicalParentUuid : null
     : typeof entry.parentUuid === "string" ? entry.parentUuid : undefined;
-  const prompt = opensTurn("claude-transcript", line.toString("utf8"));
+  const prompt = opensTurn("claude-transcript", text);
   const echo = !prompt && claudeCommandEchoRecord(entry as Parameters<typeof claudeCommandEchoRecord>[0]);
   if (branch.echo && typeof parent === "string" && branch.echo.line.has(parent)) {
     if (prompt) { branch.forks.push(branch.echo.range); branch.echo = undefined; } else branch.echo.line.add(entry.uuid);
@@ -85,6 +87,7 @@ export function followClaudeBranch(branch: ClaudeBranch, line: Buffer, start: nu
 /** the mark of another session's message in a Claude record, in either of its forms (claudePeerNotice) */
 const PEER_MARK = Buffer.from('"kind":"peer"');
 const TURN_MARK: Record<StreamSource, Buffer> = {
+  "copilot-transcript": Buffer.from('"user.message"'),
   "grok-transcript": Buffer.from('"user_message_chunk"'),
   "agy-transcript": Buffer.from('"USER_INPUT"'),
   "codex-transcript": Buffer.from('"task_started"'),
@@ -103,21 +106,29 @@ const TURN_MARK: Record<StreamSource, Buffer> = {
  * and the same for pi, whose prompts are `message` records with a user role.
  */
 function opensTurn(source: StreamSource, line: string): boolean {
-  let entry: { type?: unknown; isMeta?: unknown; isCompactSummary?: unknown; payload?: { type?: unknown }; message?: { role?: unknown; content?: unknown } };
+  let entry: { type?: unknown; uuid?: unknown; data?: { content?: unknown }; isMeta?: unknown; isCompactSummary?: unknown; payload?: { type?: unknown }; message?: { role?: unknown; content?: unknown } };
   try { entry = JSON.parse(line); } catch { return false; }
   if (entry === null || typeof entry !== "object") return false;
+  if (source === "copilot-transcript") return entry.type === "user.message" && copilotRootRecord(entry)
+    && typeof entry.data?.content === "string" && !!entry.data.content.trim();
   if (source === "codex-transcript") return entry.type === "event_msg" && entry.payload?.type === "task_started";
   if (source !== "claude-transcript") {
     const message = piMessage(entry);
-    return message?.role === "user" && (message.content as Record<string, unknown>[]).some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0);
+    if (message?.role !== "user") return false;
+    if ((message.content as Record<string, unknown>[]).some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0)) return true;
+    // a pi prompt that is only pictures is drawn as a turn of its own, so it opens one
+    return (source === "pi-transcript" || source === "cmd-transcript") && piPromptImages(entry, message).length > 0;
   }
   // another session's message opens a turn in either of its forms, the meta entry and the queued attachment
   if (claudePeerNotice(entry) !== null) return true;
   if (entry.type !== "user" || entry.isMeta || entry.isCompactSummary) return false;
   const content = entry.message?.content;
   if (typeof content === "string") return !isCommandEntry(content);
-  return Array.isArray(content) && content.some((block: { type?: unknown; text?: unknown } | null) =>
-    block?.type === "text" && typeof block.text === "string" && !isCommandEntry(block.text.trim()));
+  // a prompt that is only a picture is one too, as the parser draws it; a picture beside a tool's
+  // result opens nothing: the result must stay on the page of the call it answers
+  return Array.isArray(content) && (content.some((block: { type?: unknown; text?: unknown } | null) =>
+    block?.type === "text" && typeof block.text === "string" && !isCommandEntry(block.text.trim()))
+    || (!content.some((block: { type?: unknown } | null) => block?.type === "tool_result") && claudeImages(entry.uuid, content).length > 0));
 }
 
 /**

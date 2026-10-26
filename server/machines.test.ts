@@ -502,8 +502,9 @@ describe("a first connect that finds a bridge of another version", () => {
     } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it("sends a newer bridge of an independently managed web server to that server's own Settings", async () => {
-    const independent = { ...descriptor, bridge_protocol: BRIDGE_PROTOCOL, bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1), managed_remote: false };
+  it("tells this app to update itself when an independently managed web server is newer", async () => {
+    const newer = String(Number(REMOTE_BUNDLE_VERSION) + 1);
+    const independent = { ...descriptor, bridge_protocol: BRIDGE_PROTOCOL, bundle_version: newer, managed_remote: false };
     SshConnection.prototype.start = async () => {};
     SshConnection.prototype.run = (async (script: string) => {
       if (script.includes("uname")) return `Linux\nx86_64\n/home/u\n/home/u/.config\n\n${JSON.stringify(independent)}\n`;
@@ -518,9 +519,13 @@ describe("a first connect that finds a bridge of another version", () => {
       const started = manager.setup({ destination: "independent-pc" });
       for (let i = 0; i < 100 && !["failed", "connected"].includes(manager.job(started.id)?.phase ?? ""); i += 1) await Bun.sleep(25);
       const job = manager.job(started.id)!;
-      // this app cannot update that server, so "update this app" is not the way out here
+      // this app cannot update that server, and that server is already the newer one: this app is
+      // the side that is behind (a Mac on 0.4.13 met a PC already on 0.4.16 and was sent to the PC)
       expect(job).toMatchObject({ phase: "failed", action_required: "setup" });
       expect(job.error).toContain("independently managed");
+      expect(job.error).toContain(`(v${newer})`);
+      expect(job.error).toContain("Update this app");
+      expect(job.error).not.toContain("its own Settings");
     } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
   });
 });

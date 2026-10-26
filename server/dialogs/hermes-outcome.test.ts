@@ -225,8 +225,9 @@ describe("Hermes result outcomes", () => {
     const previous = process.env.HERDR_SOCKET;
     const paneId = `hermes-gate-${Date.now()}`;
     let screen = fixture("status-120");
-    // every transcript lookup starts with its own session.snapshot
+    // the poll's own snapshot serves the transcript lookup (#1544); only a lookup reads the pane's processes
     let snapshots = 0;
+    let processReads = 0;
     const server = createServer((socket) => {
       let input = "";
       socket.on("data", (chunk) => {
@@ -234,6 +235,7 @@ describe("Hermes result outcomes", () => {
         if (!input.includes("\n")) return;
         const request = JSON.parse(input) as { id: string; method: string };
         if (request.method === "session.snapshot") snapshots++;
+        if (request.method === "pane.process_info") processReads++;
         const result = request.method === "session.snapshot"
           ? { snapshot: { panes: [{ pane_id: paneId, agent: "hermes", agent_status: "idle" }], layouts: [] } }
           : { read: { text: screen } };
@@ -245,8 +247,9 @@ describe("Hermes result outcomes", () => {
     const url = new URL(`http://localhost/api/pane/prompt?pane_id=${paneId}`);
     const poll = async () => {
       snapshots = 0;
+      processReads = 0;
       const body = await (await handlePromptRequest(new Request(url), url))?.json() as PanePromptResponse;
-      return { snapshots, state: body.outcomes?.at(-1)?.state };
+      return { snapshots, processReads, state: body.outcomes?.at(-1)?.state };
     };
     const note = (id: string, at: number) => {
       const invocations = commandInvocations("hermes", "/version", rows);
@@ -257,16 +260,16 @@ describe("Hermes result outcomes", () => {
       note("hermes-gate-send", Date.now() - 1);
       // no result yet: the send is open, so the poll looks up the transcript
       const open = await poll();
-      expect(open.state).toBe("accepted");
+      expect(open).toEqual({ snapshots: 1, processReads: 1, state: "accepted" });
       screen = fixture("version-120");
       expect((await poll()).state).toBe("result-observed");
-      // settled: the next poll reads one snapshot fewer, the transcript's
+      // settled: the next poll looks the transcript up no more
       const settled = await poll();
-      expect(settled).toEqual({ snapshots: open.snapshots - 1, state: "result-observed" });
+      expect(settled).toEqual({ snapshots: 1, processReads: 0, state: "result-observed" });
       // a send past the ten-minute window cannot change either
       screen = fixture("status-120");
       note("hermes-gate-expired", Date.now() - 11 * 60_000);
-      expect((await poll()).snapshots).toBe(settled.snapshots);
+      expect(await poll()).toMatchObject({ snapshots: 1, processReads: 0 });
     } finally {
       if (previous === undefined) delete process.env.HERDR_SOCKET;
       else process.env.HERDR_SOCKET = previous;

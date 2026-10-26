@@ -16,6 +16,7 @@ export const SKILL_SYNTAX: Readonly<Record<string, SkillSyntax>> = {
   // `/prompts:x`, `/plugin:x` and `/skill:x` keep the menu open past their `:`
   codex: { skillTriggers: ["$"], inline: ["/", "$"], namespaced: true, chipForms: [] },
   claude: { skillTriggers: ["/"], inline: ["/"], namespaced: true, chipForms: [] },
+  copilot: DEFAULT_SKILL_SYNTAX,
   pi: { skillTriggers: ["/"], inline: [], namespaced: true, chipForms: [] },
   omp: { skillTriggers: ["/"], inline: ["/"], namespaced: true, chipForms: [] },
   gjc: { skillTriggers: ["/"], inline: [], namespaced: true, chipForms: [] },

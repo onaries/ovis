@@ -3,6 +3,7 @@ import type { ConversationPart, ConversationTurn, OmoTaskResult } from "../share
 import type { SubagentDetail, TaskNotification } from "./claude-subagents.ts";
 import { skillInvocationPrompt, skillPromptMessage } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
+import { inlineImageType } from "./codex-images.ts";
 
 type Row = Record<string, unknown>;
 export const record = (value: unknown): Row => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
@@ -86,14 +87,34 @@ export function piResults(message: Row): { id: string; text: string; error: bool
   });
 }
 
-/** The image types a chat shows; pi names the type `mimeType` where Claude names it `media_type`. */
-const PI_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+/**
+ * A picture pi holds inline, by the type its bytes announce (inlineImageType: the same check the
+ * image endpoint makes). pi names the type `mimeType` where Claude names it `media_type`.
+ */
 function piImageOf(value: unknown): { media_type: string; data: string } | null {
   const image = record(value);
   if (image.type !== "image") return null;
-  const type = typeof image.mimeType === "string" ? image.mimeType : typeof image.media_type === "string" ? image.media_type : null;
-  if (type === null || !PI_IMAGE_TYPES.has(type) || typeof image.data !== "string") return null;
-  return { media_type: type, data: image.data };
+  const type = inlineImageType(typeof image.mimeType === "string" ? image.mimeType : image.media_type, image.data);
+  return type === null ? null : { media_type: type, data: image.data as string };
+}
+
+/** A picture in a pi prompt: the entry it was sent in, and its place among that prompt's pictures. */
+export const PI_PROMPT_IMAGE_REF = /^pi-prompt:([A-Za-z0-9_.\-]{1,128}):(\d{1,3})$/;
+
+/**
+ * The pictures a pi prompt carries, each with the ref that names it. `message` must come from
+ * piMessage. The parser, the turn scanner and the image endpoint all read a prompt's pictures here,
+ * so a picture is named exactly when it can be fetched, and a prompt that is only pictures opens a
+ * turn exactly when it is drawn as one.
+ */
+export function piPromptImages(entry: unknown, message: Row): { media_type: string; ref: string; data: string }[] {
+  const id = record(entry).id;
+  if (message.role !== "user" || !Array.isArray(message.content) || typeof id !== "string") return [];
+  const shown = message.content.map(piImageOf).filter((image): image is { media_type: string; data: string } => image !== null);
+  return shown.flatMap((image, index) => {
+    const ref = `pi-prompt:${id}:${index}`;
+    return PI_PROMPT_IMAGE_REF.test(ref) ? [{ ...image, ref }] : [];
+  });
 }
 
 /**
@@ -103,9 +124,12 @@ function piImageOf(value: unknown): { media_type: string; data: string } | null 
  * the wrong block.
  */
 export function piImageBlock(message: Row, toolCallId: string, index: number): { media_type: string; data: string } | null {
-  if (piResults(message).every((result) => result.id !== toolCallId)) return null;
-  const blocks = message.role === "toolResult" ? [message] : (Array.isArray(message.content) ? message.content : []).filter((block) => record(block).type === "toolResult" && record(block).toolCallId === toolCallId);
-  const images = blocks.flatMap((value) => { const block = record(value); return (Array.isArray(block.content) ? block.content : []).map(piImageOf); }).filter((image): image is { media_type: string; data: string } => image !== null);
+  // the first result answering the call, as the parser takes it: a second one in the same entry finds
+  // its call answered already, and its pictures are never named
+  const blocks = message.role === "toolResult" ? [message] : (Array.isArray(message.content) ? message.content : []).filter((block) => record(block).type === "toolResult");
+  const block = blocks.map(record).find((value) => value.toolCallId === toolCallId);
+  if (block === undefined) return null;
+  const images = (Array.isArray(block.content) ? block.content : []).map(piImageOf).filter((image): image is { media_type: string; data: string } => image !== null);
   return index >= 0 ? images[index] ?? null : null;
 }
 
@@ -239,7 +263,9 @@ export interface TranscriptParser {
   snapshot(tail?: string): ConversationTurn[];
 }
 
-type OmpTranscriptOptions = { toolImages?: boolean; taskTitles?: Map<string, string> };
+/** `images`: pi keeps the pictures of prompts and tool results inline, so their refs are named.
+ * `callIds`: each tool part carries its call's own id (gjc, whose rewrites the chat matches by it) */
+type OmpTranscriptOptions = { images?: boolean; callIds?: boolean; taskTitles?: Map<string, string> };
 
 interface OmpParseState {
   turns: ConversationTurn[];
@@ -263,10 +289,10 @@ function ompParseState(options: OmpTranscriptOptions): OmpParseState {
  * notification. Merging across it folded the answer before it into the next turn's work block.
  */
 export function createOmpTranscriptParser(options: OmpTranscriptOptions = {}): TranscriptParser {
-  return ompTranscriptParser(ompParseState(options), options.toolImages === true);
+  return ompTranscriptParser(ompParseState(options), options.images === true, options.callIds === true);
 }
 
-function ompTranscriptParser(state: OmpParseState, toolImages: boolean): TranscriptParser {
+function ompTranscriptParser(state: OmpParseState, images: boolean, callIds: boolean): TranscriptParser {
   const { turns, pending, taskTitles } = state;
   const assistantTurn = (ts?: string): ConversationTurn => {
     const last = turns[turns.length - 1];
@@ -326,7 +352,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
           pending.delete(result.id);
           trimOutput(tool, result.text, result.id);
           if (result.error) tool.error = true;
-          if (toolImages && result.images.length > 0) {
+          if (images && result.images.length > 0) {
             // addressed by the call it answers: a nested result shares its entry with other
             // blocks, so the entry id alone could not say which one an image came from
             tool.images = result.images.map((media_type, index) => ({ media_type, ref: `pi:${result.id}:${index}` }));
@@ -344,12 +370,17 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
                 .map((part) => (part.type === "text" && typeof part.text === "string" ? part.text : ""))
                 .filter((part) => part.length > 0)
                 .join("\n");
-        if (prompt.length === 0) continue; // image-only user parts have no text to show
+        // pictures sent with the prompt, or alone: named here, fetched only when shown
+        const pictures = images ? piPromptImages(entry, message).map(({ media_type, ref }) => ({ kind: "image" as const, media_type, ref })) : [];
+        if (prompt.length === 0) {
+          if (pictures.length > 0) turns.push({ role: "user", ts: timestamp ?? null, parts: pictures });
+          continue;
+        }
         // a skill invocation reads as what the user asked, the skill as a chip on it: not as the
         // SKILL.md the runtime put before it. Kept on this record, so no page boundary can part them
         const invocation = skillInvocationPrompt(prompt);
         const asked = invocation === null ? prompt : invocation.request || invocation.skills.map((skill) => `/skill:${skill.name}`).join(" ");
-        turns.push({ role: "user", ts: timestamp ?? null, parts: [{ kind: "text", text: asked }, ...(invocation?.skills ?? []).map((skill) => ({ kind: "skill" as const, skill }))] });
+        turns.push({ role: "user", ts: timestamp ?? null, parts: [...pictures, { kind: "text", text: asked }, ...(invocation?.skills ?? []).map((skill) => ({ kind: "skill" as const, skill }))] });
         continue;
       }
 
@@ -373,6 +404,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
               summary: summary.slice(0, 120),
               input: JSON.stringify(input, null, 2),
               output: "",
+              ...(callIds && typeof b.id === "string" ? { call_id: b.id } : {}),
             };
             turn.parts.push(part);
             if (typeof b.id === "string") pending.set(b.id, part);
@@ -398,7 +430,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
         // Clone the whole graph together: pending must point at the preview's tool parts,
         // and neither speculative title updates nor settled boundaries may escape it.
         const preview = structuredClone(state);
-        ompTranscriptParser(preview, toolImages).write(tail);
+        ompTranscriptParser(preview, images, callIds).write(tail);
         return preview.turns.filter((turn) => turn.parts.length > 0);
       }
       return structuredClone(turns.filter((turn) => turn.parts.length > 0));
@@ -409,7 +441,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
 /** One-shot parsing shares the incremental record rules, including valid no-newline tails. */
 export function parseOmpTranscript(text: string, maxTurns = MAX_TURNS, options: OmpTranscriptOptions = {}): ConversationTurn[] {
   const state = ompParseState(options);
-  ompTranscriptParser(state, options.toolImages === true).write(text);
+  ompTranscriptParser(state, options.images === true, options.callIds === true).write(text);
   // No writer survives this call, so its owned turns need no detached snapshot.
   return state.turns.filter((turn) => turn.parts.length > 0).slice(-maxTurns);
 }

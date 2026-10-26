@@ -178,6 +178,9 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   // the focus where it is, and the click still comes
   const keepFocus = (event: ReactMouseEvent<HTMLButtonElement>): void => event.preventDefault();
 
+  // opened from inside a dialog (a link in a file preview): drawn over it, sheet or popover
+  const overModal = anchor.closest('[aria-modal="true"]') !== null;
+
   const run = (item: RowMenuItem): void => {
     if (item.disabled) return;
     onClose();
@@ -186,7 +189,7 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
 
   if (sheet) {
     return createPortal(
-      <div className="modal-scrim">
+      <div className={`modal-scrim${overModal ? " is-over-modal" : ""}`}>
         <div ref={surface} className="modal row-sheet" role="dialog" aria-modal="true" aria-label={title} onKeyDown={onKeyDown} onBlur={onBlur}>
           <span className="row-sheet-grip" aria-hidden="true" />
           {header ? <div className="row-sheet-head">{header}</div> : (
@@ -215,7 +218,7 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   }
 
   return createPortal(
-    <div ref={surface} className={`menu row-menu${anchor.closest('[aria-modal="true"]') ? " is-over-modal" : ""}${variant === "paths" ? " row-menu-paths" : ""}`} role="menu" aria-label={title} style={place ?? { visibility: "hidden" }} onKeyDown={onKeyDown} onBlur={onBlur}>
+    <div ref={surface} className={`menu row-menu${overModal ? " is-over-modal" : ""}${variant === "paths" ? " row-menu-paths" : ""}`} role="menu" aria-label={title} style={place ?? { visibility: "hidden" }} onKeyDown={onKeyDown} onBlur={onBlur}>
       {header && <div className="row-menu-header" role="presentation">{header}</div>}
       {items.map((item) => (
         <Fragment key={item.id}>

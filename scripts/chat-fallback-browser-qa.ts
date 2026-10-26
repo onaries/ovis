@@ -8,7 +8,10 @@ import { build as viteBuild } from "vite";
 import { CONTENT_SECURITY_POLICY } from "../server/static.ts";
 import { chromePath } from "./chrome-path.ts";
 import { parseClaudeTranscript } from "../server/conversation.ts";
-import type { ConversationTurn } from "../shared/protocol.ts";
+import type { ConversationTurn, InteractivePrompt } from "../shared/protocol.ts";
+import type {} from "./chat-fallback-fixture.tsx";
+import { parseInteractivePrompt } from "../server/prompt.ts";
+import piNavigation from "../server/fixtures/pi-ask-navigation.json";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-chat-fallback-")));
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -22,12 +25,13 @@ try {
   let structured = false, resolveAgent!: () => void, agentReadArrived!: () => void;
   let lookupTimeout = false;
   let source = "codex-transcript";
+  let prompt: InteractivePrompt | null = null;
   let turns: ConversationTurn[] = [{ role: "assistant", ts: null, parts: [{ kind: "text", text: "Structured conversation arrived" }] }];
   // resolved by the server's handler: a browser-side waitForRequest can win the race against it
   const agentRead = new Promise<void>((resolve) => { agentReadArrived = resolve; });
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     const url = new URL(request.url), pane = url.searchParams.get("pane_id");
-    if (url.pathname === "/api/pane/prompt") return Response.json({ prompt: null });
+    if (url.pathname === "/api/pane/prompt") return Response.json({ prompt, outcomes: [] });
     // the chat's skill matcher asks for the pane's commands
     if (url.pathname === "/api/pane/commands") return Response.json({ commands: [] });
     if (url.pathname === "/api/pane/conversation") {
@@ -109,7 +113,7 @@ try {
   await page.getByText("No conversation yet — say something below", { exact: true }).waitFor();
   assert.equal(await page.locator(".chat-terminal-fallback").count(), 0, "an empty structured conversation keeps its ordinary prompt");
   // Native parser output crosses HTTP into the real ChatView. Later activity must not
-  // move a final reply into the fold or duplicate it; narration and tools stay there.
+  // move a final reply into the fold or duplicate it. Only explicit commentary joins the tools there.
   const jsonl = (...records: unknown[]) => records.map((record) => JSON.stringify(record)).join("\n");
   source = "claude-transcript";
   turns = parseClaudeTranscript(jsonl(
@@ -149,7 +153,8 @@ try {
     ));
     await page.evaluate(() => { window.chatFallbackQA.agent("claude"); window.chatFallbackQA.pane("agent"); window.chatFallbackQA.refresh(); });
     await page.getByText(answer, { exact: true }).waitFor();
-    const work = page.locator(".work-block");
+    const continuation = page.locator(".chat-turn-agent").nth(1);
+    const work = continuation.locator(".work-block");
     const head = work.locator(".work-block-head");
     await head.waitFor();
     if (await head.getAttribute("aria-expanded") === "true") await head.click();
@@ -157,17 +162,114 @@ try {
     assert.equal(await work.getByText(answer, { exact: true }).count(), 0, "the reply is outside work");
     assert.equal(await page.getByText(answer, { exact: true }).count(), 1, "the reply appears once");
     assert.equal(await page.getByText(answer, { exact: true }).isVisible(), true, "folding work keeps the reply visible");
+    assert.equal(await continuation.getByText(narration, { exact: true }).isVisible(), true, "unphased narration stays visible outside folded work");
+    assert.equal(await work.getByText(narration, { exact: true }).count(), 0, "unphased narration is not part of work");
+    assert.equal(await page.getByText(narration, { exact: true }).count(), 1, "unphased narration appears once");
     assert.equal(await page.getByText("Catalog verification complete.", { exact: true }).isVisible(), true, "the hook continuation's short reply is also visible");
     assert.equal(await page.locator(".chat-turn-agent").count(), 2, "hook continuation answers have separate bubbles");
     assert.equal(await page.getByText(/Stop hook feedback:/).count(), 0, "injected hook context is not a user message");
     await head.click();
-    await work.getByText(narration, { exact: true }).waitFor();
     assert.equal(await work.locator(".work-row-head").count(), 1, "the tool stays inside work");
     await head.click();
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "claude-hook-separate-replies.png") });
-    console.log("PASS Claude hook replies stay separately visible outside folded work; narration and tool remain grouped");
+    console.log("PASS Claude hook narration and replies stay visible outside folded work; the tool remains inside");
   }
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    prompt = parseInteractivePrompt("pi", piNavigation["custom-empty"])!;
+    const originalId = prompt.id;
+    await page.evaluate(() => { window.chatFallbackQA.agent("pi"); window.chatFallbackQA.refresh(); });
+    const card = page.locator(".prompt-card");
+    await card.waitFor();
+    const back = card.getByRole("button", { name: "Back", exact: true });
+    const question = card.getByRole("button", { name: "单元格内容", exact: true });
+    assert.equal(await back.count(), 0, "native custom editor owns navigation");
+    assert.equal(await question.count(), 0);
+    const input = card.locator("input.input");
+    await input.fill("unsent browser draft");
+    const mountedCard = await card.elementHandle();
+    prompt = parseInteractivePrompt("pi", piNavigation["second-answered"])!;
+    assert.equal(prompt.id, originalId, "leaving the editor does not change question identity");
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await back.waitFor();
+    await question.waitFor();
+    assert.equal(await input.inputValue(), "unsent browser draft", "metadata refresh preserves web edits");
+    assert.equal(await mountedCard!.evaluate(node => node.isConnected), true, "the card stays mounted");
+    await input.fill("");
+    assert.equal(await back.isEnabled(), true);
+    assert.equal(await question.isEnabled(), true);
+    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `pi-navigation-${width}.png`) });
+    // Start the next width with a new occurrence so its initial navigation state is observed.
+    prompt = null;
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await card.waitFor({ state: "detached" });
+  }
+  console.log("PASS same-id Pi navigation refresh restores Back/question buttons without losing web drafts at desktop and mobile widths");
   assert.deepEqual(errors, []);
+  structured = false;
+  const polling = await browser.newPage();
+  let pollingReads = 0;
+  polling.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/pane/conversation") pollingReads += 1;
+  });
+  await polling.clock.install();
+  await polling.clock.pauseAt(new Date());
+  await polling.addInitScript(() => {
+    localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+  });
+  await polling.goto(`http://127.0.0.1:${server.port}/?pushes`);
+  await polling.locator(".chat-terminal-fallback summary").waitFor();
+  const codexReads = pollingReads;
+  await polling.clock.runFor(2000);
+  assert.equal(pollingReads, codexReads, "Codex terminal fallback keeps its 10s backstop");
+  const codexBackstop = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  await polling.clock.runFor(8000);
+  await codexBackstop;
+  assert.equal(pollingReads, codexReads + 1);
+  const changedAgent = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  await polling.evaluate(() => window.chatFallbackQA.agent("copilot"));
+  await changedAgent;
+  const copilotReads = pollingReads;
+  const copilotPoll = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  await polling.clock.runFor(2000);
+  await copilotPoll;
+  assert.equal(pollingReads, copilotReads + 1, "Copilot terminal fallback uses the 2s recovery poll");
+  await polling.close();
+  console.log("PASS fallback polling keeps 10s for Codex and 2s for Copilot under a controlled clock");
+  for (const width of [390, 1440]) for (const theme of ["light", "dark"] as const) {
+    structured = false;
+    source = "agy-transcript";
+    prompt = null;
+    turns = [{ role: "assistant", ts: null, parts: [{ kind: "text", text: "Agy conversation recovered without a reload" }] }];
+    const context = await browser.newContext({ viewport: { width, height: 900 }, isMobile: width === 390, hasTouch: width === 390, locale: "en-US", colorScheme: theme });
+    try {
+      const recovery = await context.newPage();
+      const recoveryErrors: string[] = [];
+      recovery.on("pageerror", (error) => recoveryErrors.push(error.message));
+      await recovery.clock.install();
+      await recovery.clock.pauseAt(new Date());
+      await recovery.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
+      await recovery.goto(`http://127.0.0.1:${server.port}/?pushes`);
+      const changed = recovery.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+      await recovery.evaluate(() => window.chatFallbackQA.agent("agy"));
+      await changed;
+      await recovery.getByText("Antigravity chat is unavailable. Open Terminal to see activity and tool calls.", { exact: true }).waitFor();
+      await recovery.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      const evidence = process.env.UI_EVIDENCE_DIR;
+      if (evidence) await recovery.screenshot({ path: join(evidence, `agy-unavailable-${width}-${theme}.png`) });
+      structured = true;
+      const recoveredRead = recovery.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation", { timeout: 3000 });
+      await recovery.clock.runFor(2000);
+      await recoveredRead;
+      await recovery.clock.resume();
+      await recovery.getByText("Agy conversation recovered without a reload", { exact: true }).waitFor();
+      assert.equal(await recovery.locator(".chat-terminal-fallback").count(), 0, "native history replaces fallback without a push, reload or pane switch");
+      assert.equal(await recovery.getByText("Antigravity chat is unavailable. Open Terminal to see activity and tool calls.", { exact: true }).count(), 0);
+      if (evidence) await recovery.screenshot({ path: join(evidence, `agy-recovered-${width}-${theme}.png`) });
+      assert.deepEqual(recoveryErrors, []);
+      console.log(`PASS agy fallback recovers in the normal poll at ${width}px ${theme} without a watcher push`);
+    } finally { await context.close(); }
+  }
   console.log("chat fallback: browser OK (no hidden terminal reads, opened stalled output cannot block structured refresh, late cleanup, non-agent inline output, fallback error announcement and accurate empty state)");
 
 } finally {

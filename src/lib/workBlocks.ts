@@ -8,9 +8,9 @@ export type ThinkingPart = Extract<ConversationPart, { kind: "thinking" }>;
 export type TextPart = Extract<ConversationPart, { kind: "text" }>;
 
 /**
- * A turn the way Codex shows it: everything the agent did on the way — tool calls,
- * reasoning and the narration between them — folded under one "Worked for 7s · 1 edit"
- * header, and only what it said after the last action left out in the open as the answer.
+ * A turn the way Codex shows it: tool calls, reasoning and explicit progress narration fold under
+ * one "Worked for 7s · 1 edit" header. Every other assistant response stays in the main chat,
+ * including an unphased response followed by more work or another answer.
  */
 export interface SplitTurn {
   work: ConversationPart[];
@@ -18,15 +18,10 @@ export interface SplitTurn {
 }
 
 export function splitTurn(parts: ConversationPart[]): SplitTurn {
-  let lastAction = -1;
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index];
-    if (part?.kind !== "text" || part.phase === "commentary") lastAction = index;
-  }
   const isProse = (part: ConversationPart): part is TextPart => part.kind === "text" && part.text.trim().length > 0;
   return {
-    work: parts.filter((part, index) => part.kind !== "text" || (isProse(part) && part.phase !== "final_answer" && index <= lastAction)),
-    answer: parts.filter((part, index): part is TextPart => isProse(part) && (part.phase === "final_answer" || index > lastAction)),
+    work: parts.filter((part) => part.kind !== "text" || (isProse(part) && part.phase === "commentary")),
+    answer: parts.filter((part): part is TextPart => isProse(part) && part.phase !== "commentary"),
   };
 }
 
@@ -34,10 +29,9 @@ export function splitTurn(parts: ConversationPart[]): SplitTurn {
  * A work block is open while its turn runs and folded once the turn settles: the answer stays
  * outside the fold, so a finished turn reads as its answer under one "Worked for" row.
  *
- * A settled turn keeps its block open when the work holds words the answer does not end on:
- * prose with no answer at all (an action came after the last words, or Codex commentary had no
- * final answer), or prose recorded after the last answer part. Folding would hide the newest
- * thing the agent said, or all of it. It takes the turn's parts, not the split: the order decides.
+ * A settled turn keeps its block open when explicit commentary comes after the last answer, or
+ * when commentary has no answer at all. Folding would hide the newest thing the agent said, or all
+ * of it. It takes the turn's parts, not the split: the order decides.
  */
 export function workStartsOpen(live: boolean, parts: ConversationPart[]): boolean {
   if (live) return true;

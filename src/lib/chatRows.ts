@@ -1,3 +1,5 @@
+import type { ConversationResponse } from "../../shared/protocol.ts";
+
 /**
  * One browser-local identity for one native conversation lifetime. `incarnation`
  * increments when a history without an ID is replaced in the same pane.
@@ -52,4 +54,27 @@ export function prependChatRowSlots(slots: ChatRowSlots, count: number): ChatRow
 
 export function appendChatRowSlots(slots: ChatRowSlots, count: number): ChatRowSlots {
   return insertChatRowSlots(slots, slots.rows.length, count);
+}
+
+/**
+ * Whether a gjc answer under a new history ID goes on with the turns shown. gjc writes its whole
+ * session anew and renames it over the old file (its first save, trimmed tool outputs), so the server
+ * names it as another history. When the newest page still opens with every turn shown, in the same
+ * places (its role, its start time, each part's kind, and a tool's name, call id and input; a trim
+ * may shorten what a tool answered), the rows keep their identity. Anything else starts the chat
+ * over: a page that now starts elsewhere (a compaction that dropped turns), any other agent's new
+ * ID, or a turn that changed otherwise (a new session, a cleared context, a rewind, a moved branch).
+ */
+export function continuesHistory(shown: Pick<ConversationResponse, "source" | "turns"> | null, next: Pick<ConversationResponse, "source" | "turns">): boolean {
+  if (shown === null || shown.source !== "gjc-transcript" || next.source !== shown.source) return false;
+  if (shown.turns.length === 0 || next.turns.length < shown.turns.length) return false;
+  return shown.turns.every((turn, index) => {
+    const after = next.turns[index]!;
+    return turn.ts !== null && after.role === turn.role && after.ts === turn.ts && after.parts.length >= turn.parts.length
+      && turn.parts.every((part, at) => {
+        const other = after.parts[at]!;
+        return other.kind === part.kind && (part.kind !== "tool" || (other.kind === "tool" && other.name === part.name
+          && other.call_id === part.call_id && other.input === part.input));
+      });
+  });
 }

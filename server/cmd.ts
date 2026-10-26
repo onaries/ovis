@@ -1,8 +1,10 @@
-import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { constants, closeSync, fstatSync, openSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { homedir } from "node:os";
 
 import { agentGet } from "./herdr/client.ts";
+import { transcriptInStore as cmdTranscriptInStore, unwrittenSession } from "./transcript-store.ts";
+export { transcriptInStore as cmdTranscriptInStore, unwrittenSession } from "./transcript-store.ts";
 
 /**
  * Command Code's session store. One directory per project (the cwd), under
@@ -26,56 +28,8 @@ export function cmdModelCatalogPath(): string {
   return join(homedir(), ".pi", "agent", "commandcode-models.json");
 }
 
-/**
- * The canonical file inside the store, or null. Command Code names an absolute
- * path itself, so the store is checked rather than trusted: a path elsewhere, a
- * link out of it or a non-session file is no evidence.
- */
-export function cmdTranscriptInStore(path: string, sessionDir: string): string | null {
-  let canonical: string;
-  let root: string;
-  try {
-    canonical = realpathSync(path);
-    root = realpathSync(sessionDir);
-  } catch { return null; }
-  const inside = relative(root, canonical);
-  if (!inside || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return null;
-  if (!canonical.endsWith(".jsonl")) return null;
-  let fd: number | undefined;
-  try {
-    fd = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK);
-    return fstatSync(fd).isFile() ? canonical : null;
-  } catch { return null; }
-  finally { if (fd !== undefined) closeSync(fd); }
-}
-
-const absent = (error: unknown): boolean => (error as { code?: unknown } | null)?.code === "ENOENT";
-
-export function unwrittenSession(path: string, sessionDir: string): { id: string; path: string } | null {
-  if (!isAbsolute(path) || !path.endsWith(".jsonl")) return null;
-  let root: string;
-  try { root = realpathSync(sessionDir); } catch { return null; }
-  try {
-    lstatSync(path);
-    return null;
-  } catch (error) { if (!absent(error)) return null; }
-  for (let dir = dirname(path); ; dir = dirname(dir)) {
-    try {
-      const real = realpathSync(dir);
-      if (!statSync(real).isDirectory()) return null;
-      const inside = relative(root, real);
-      if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return null;
-      return { id: basename(path, ".jsonl"), path: join(real, relative(dir, path)) };
-    } catch (error) {
-      if (!absent(error) || dirname(dir) === dir) return null;
-      try { lstatSync(dir); return null; } catch (missing) { if (!absent(missing)) return null; }
-    }
-  }
-}
-
 type CmdTranscriptOptions = {
   agent?: Awaited<ReturnType<typeof agentGet>> | null;
-  home?: string;
 };
 
 export async function cmdTranscriptPath(

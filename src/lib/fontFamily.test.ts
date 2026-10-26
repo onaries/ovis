@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 
-import { chatFontStack, loadFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "./fontFamily.ts";
+import { chatFontStack, type FontWidths, loadFontStack, measurableFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "./fontFamily.ts";
 
 describe("terminal font stack", () => {
   it("is the built-in stack when nothing is typed", () => {
@@ -31,6 +31,41 @@ describe("terminal font stack", () => {
 
   it("never lets an unsanitized list through", () => {
     expect(terminalFontStack("x; } body { color: red")).toBe(TERMINAL_FONT_STACK.replace(", ", ', "x body color: red", '));
+  });
+});
+
+describe("fonts the canvas cannot measure", () => {
+  // a page that has the fonts in `drawn` and a canvas that has those in `measured`: a list is as wide
+  // as its first font either one has, and every monospaced face is as wide as monospace
+  const page = (drawn: readonly string[], measured: readonly string[]): FontWidths => {
+    const width = (has: readonly string[]) => (family: string): number => {
+      const names = family.split(",").map((name) => name.trim().replace(/["']/g, ""));
+      const first = names.find((name) => has.includes(name) || name === "monospace" || name === "serif");
+      return first === "serif" ? 280 : first === "D2Coding" ? 270 : 300;
+    };
+    return { drawn: width(drawn), measured: width(measured) };
+  };
+  const system = ["Menlo", "Monaco"];
+  const installed = ["JetBrains Mono", "D2Coding"];
+
+  it("leaves out the installed fonts Ovis for Mac's web view draws but its canvas cannot measure", () => {
+    const widths = page([...system, ...installed], system);
+    expect(measurableFontStack(TERMINAL_FONT_STACK, widths)).toBe(TERMINAL_FONT_STACK.replace('"JetBrains Mono", ', "").replace('"D2Coding", ', ""));
+    // a font typed in Settings goes the same way
+    expect(measurableFontStack(terminalFontStack("D2Coding"), widths)).toBe(TERMINAL_FONT_STACK.replace('"JetBrains Mono", ', "").replace('"D2Coding", ', ""));
+  });
+
+  it("keeps the stack where the canvas measures what the page draws, as in Chromium and Safari", () => {
+    expect(measurableFontStack(TERMINAL_FONT_STACK, page([...system, ...installed], [...system, ...installed]))).toBe(TERMINAL_FONT_STACK);
+    expect(measurableFontStack(TERMINAL_FONT_STACK, page(system, system))).toBe(TERMINAL_FONT_STACK);
+  });
+
+  it("keeps the bundled icon font, which the canvas measures once it has loaded", () => {
+    expect(measurableFontStack(TERMINAL_FONT_STACK, page(["Symbols Nerd Font Mono", ...system], system))).toBe(TERMINAL_FONT_STACK);
+  });
+
+  it("measures nothing without a page", () => {
+    expect(measurableFontStack(TERMINAL_FONT_STACK)).toBe(TERMINAL_FONT_STACK);
   });
 });
 

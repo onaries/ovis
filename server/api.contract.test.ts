@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import { createServer } from "./index.ts";
-import type { AgentKind, AgentStatus, ApiError, HealthAuth, IntegrationsResponse, LanExposure, PortalStatus, PushKey, RemoteAccess, SessionSnapshot, TabMoved, PaneFindResponse, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
+import type { AgentKind, AgentStatus, ApiError, HealthAuth, IntegrationsResponse, LanExposure, PortalStatus, PushKey, RemoteAccess, SessionSnapshot, TabMoved, TabMovedToWorkspace, PaneFindResponse, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
 import { SUPPORTED_AGENT_KINDS } from "../shared/supported-agents.ts";
 import { HerdrUpdater } from "./herdr-update.ts";
 import { PortalService } from "./portal.ts";
@@ -17,7 +17,7 @@ import { Telemetry } from "./telemetry.ts";
 import { NOTICE_VERSION, telemetryHarnesses, type TelemetryActive, type TelemetryEvent, type TelemetryStatus } from "../shared/telemetry.ts";
 import { DEFAULT_SETTINGS, telemetrySettingsSnapshot } from "../src/lib/settings.ts";
 import { HerdrSocket } from "../src/lib/ws.ts";
-import { HerdrError, herdrRpc, paneRead, ping, sessionSnapshot, subscribeEvents, tabCreate, workspaceCreate, workspaceClose } from "./herdr/client.ts";
+import { HerdrError, herdrRpc, paneRead, paneSplit, ping, sessionSnapshot, subscribeEvents, tabCreate, workspaceCreate, workspaceClose } from "./herdr/client.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
 import { descriptorPath, type BridgeDescriptor } from "./bridge.ts";
 import { handleMachineRequest } from "./machine-api.ts";
@@ -929,7 +929,7 @@ describe("Portal API", () => {
 describe("mutation body validation", () => {
   it("rejects non-object JSON without touching herdr or losing the error envelope", async () => {
     for (const path of [
-      "/api/workspace/create", "/api/tab/create", "/api/tab/rename", "/api/tab/close", "/api/tab/move", "/api/workspace/rename", "/api/workspace/move", "/api/workspace/close",
+      "/api/workspace/create", "/api/tab/create", "/api/tab/rename", "/api/tab/close", "/api/tab/move", "/api/tab/move-to-workspace", "/api/workspace/rename", "/api/workspace/move", "/api/workspace/close",
       "/api/pane/rename", "/api/pane/input", "/api/pane/keys", "/api/pane/close", "/api/pane/image",
       "/api/pane/scroll", "/api/agent/rename",
     ]) {
@@ -1071,6 +1071,68 @@ describe("tab reorder", () => {
       expect((await post({ tab_id: firstId, insert_index: 1 })).status).toBe(200);
       expect(await nativeIds()).toEqual([firstId, second.tab.tab_id, third.tab.tab_id]);
     } finally { await workspaceClose(id); }
+  });
+});
+
+describe("tab to another workspace", () => {
+  const post = (body: unknown) => fetch(`${base()}/api/machines/local/tab/move-to-workspace`, {
+    method: "POST", headers: { "content-type": "application/json", "x-herdr-machine": "1" }, body: JSON.stringify(body),
+  });
+  it("requires a tab and a workspace", async () => {
+    for (const [body, code] of [[{ workspace_id: "w1" }, "missing_tab_id"], [{ tab_id: "w1:t1", workspace_id: "" }, "missing_workspace_id"]] as const) {
+      const result = await post(body);
+      expect(result.status).toBe(400);
+      expect(((await result.json()) as ApiError).error.code).toBe(code);
+    }
+    const missing = await post({ tab_id: "unknown:t9", workspace_id: "w1" });
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as ApiError).error.code).toBe("tab_not_found");
+  });
+  it("moves a one-pane tab with its label and process, and refuses a split tab", async () => {
+    const source = await workspaceCreate({ cwd: tmpdir(), label: "ovis-test-tab-out" });
+    const target = await workspaceCreate({ cwd: tmpdir(), label: "ovis-test-tab-in" });
+    const open = [source.workspace.workspace_id, target.workspace.workspace_id];
+    try {
+      const named = await tabCreate({ workspaceId: source.workspace.workspace_id, label: "build" });
+      await paneSplit(source.root_pane.pane_id, "right", false);
+      const split = await post({ tab_id: source.tab.tab_id, workspace_id: target.workspace.workspace_id });
+      expect(split.status).toBe(409);
+      expect(((await split.json()) as ApiError).error.code).toBe("multi_pane_tab");
+      const same = await post({ tab_id: named.tab.tab_id, workspace_id: source.workspace.workspace_id });
+      expect(((await same.json()) as ApiError).error.code).toBe("same_workspace");
+
+      const response = await post({ tab_id: named.tab.tab_id, workspace_id: target.workspace.workspace_id });
+      expect(response.status).toBe(200);
+      const moved = await response.json() as TabMovedToWorkspace;
+      const snapshot = await sessionSnapshot();
+      const pane = snapshot.panes.find((candidate) => candidate.pane_id === moved.pane_id);
+      expect(pane?.workspace_id).toBe(target.workspace.workspace_id);
+      expect(snapshot.tabs.find((tab) => tab.tab_id === moved.tab_id)?.label).toBe("build");
+      expect(snapshot.tabs.some((tab) => tab.tab_id === named.tab.tab_id)).toBe(false);
+      expect(snapshot.panes.some((candidate) => candidate.pane_id === named.root_pane.pane_id)).toBe(false);
+    } finally { for (const id of open) await workspaceClose(id).catch(() => {}); }
+  });
+  it("leaves the name herdr gave a tab by its place behind, though the tab's number differs", async () => {
+    const source = await workspaceCreate({ cwd: tmpdir(), label: "ovis-test-tab-place-out" });
+    const target = await workspaceCreate({ cwd: tmpdir(), label: "ovis-test-tab-place-in" });
+    const open = [source.workspace.workspace_id, target.workspace.workspace_id];
+    try {
+      await tabCreate({ workspaceId: source.workspace.workspace_id });
+      const third = await tabCreate({ workspaceId: source.workspace.workspace_id });
+      await tabCreate({ workspaceId: target.workspace.workspace_id });
+      // the first tab closes: the third keeps its number, and herdr names it by its new place
+      await herdrRpc("tab.close", { tab_id: source.tab.tab_id });
+      const before = (await sessionSnapshot()).tabs.find((tab) => tab.tab_id === third.tab.tab_id);
+      expect(before?.number).toBe(3);
+      expect(before?.label).toBe("2");
+      const response = await post({ tab_id: third.tab.tab_id, workspace_id: target.workspace.workspace_id });
+      expect(response.status).toBe(200);
+      const moved = await response.json() as TabMovedToWorkspace;
+      const row = (await sessionSnapshot()).tabs.filter((tab) => tab.workspace_id === target.workspace.workspace_id);
+      // third in its new row, and unnamed there: herdr names it by that place, not by the "2" it had
+      expect(row.map((tab) => tab.tab_id).indexOf(moved.tab_id)).toBe(2);
+      expect(row.find((tab) => tab.tab_id === moved.tab_id)?.label).toBe("3");
+    } finally { for (const id of open) await workspaceClose(id).catch(() => {}); }
   });
 });
 

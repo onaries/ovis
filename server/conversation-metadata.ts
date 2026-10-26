@@ -1,6 +1,7 @@
 import { isContextClear, piMessage } from "./transcript-records.ts";
 import { piContextWindow } from "./pi-models.ts";
 import { cmdContextWindow } from "./cmd.ts";
+import { copilotRecords } from "./copilot.ts";
 import type { ConversationMetadata, ConversationResponse } from "../shared/protocol.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -41,6 +42,19 @@ export function parseConversationMetadata(text: string, source: ConversationResp
   const metadata: ConversationMetadata = before ? { ...before } : { model: null, reasoning_effort: null };
   // Agy's exported rows do not attest the selected model or reasoning effort.
   if (source === "agy-transcript") return metadata;
+  if (source === "copilot-transcript") {
+    for (const { type, data } of copilotRecords(text)) {
+      const model = type === "session.start" ? label(data.selectedModel)
+        : type === "session.model_change" ? label(data.newModel)
+        : type === "session.resume" ? label(data.selectedModel)
+        : type === "assistant.message" ? label(data.model) : null;
+      if (model) metadata.model = model;
+      if (type === "session.start" || type === "session.model_change" || type === "session.resume") {
+        if ("reasoningEffort" in data) metadata.reasoning_effort = label(data.reasoningEffort);
+      }
+    }
+    return metadata;
+  }
   // pi states the provider on the same records that state usage, so the window is asked for
   // from what this line says rather than remembered across sources
   let piProvider: string | null = null;

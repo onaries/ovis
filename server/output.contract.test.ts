@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "./index.ts";
@@ -39,7 +39,7 @@ async function connect(paneId: string, ack = true, observer = false, port = serv
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   sockets.push(ws);
   const state = {
-    bytes: 0, frames: 0, ack, code: 0, exits: 0,
+    bytes: 0, frames: 0, ack, code: 0, exits: 0, ready: 0, notReady: 0,
     latest: undefined as Extract<ServerMessage, { type: "pty-data" }> | undefined,
     errors: [] as string[], tail: "",
     /** the first frame's text (a joiner's replay), and whether `find` has arrived since the attach */
@@ -53,6 +53,7 @@ async function connect(paneId: string, ack = true, observer = false, port = serv
     const frame = JSON.parse(String(event.data)) as ServerMessage;
     if (frame.type === "error") state.errors.push(frame.code);
     if (frame.type === "pty-exit" && frame.pane_id === paneId) state.exits++;
+    if (frame.type === "input-ready" && frame.pane_id === paneId) frame.ready === false ? state.notReady++ : state.ready++;
     if (frame.type !== "pty-data" || frame.pane_id !== paneId) return;
     state.bytes += Buffer.byteLength(frame.data);
     state.frames++;
@@ -214,6 +215,131 @@ for i in itertools.count(): sys.stdout.write("".join("\\033[%d;1H%s" % (r, str((
       client.send({ type: "input", pane_id: paneId, text: "\x03" });
     } finally { client.ws.close(); }
   }, 30_000);
+});
+
+type AttachStep = { kind: "eof" | "read-race" | "real"; gate?: string; exitGate?: string; text?: string };
+
+function scriptedAttachHerdr(steps: AttachStep[]): { path: string; attempts: () => number; release: (gate: string) => void; dir: string } {
+  const real = process.env["OVIS_HERDR_BIN"] || Bun.which("herdr") || "herdr";
+  const dir = mkdtempSync(join(root, "reattach-herdr-"));
+  const path = join(dir, "herdr.mjs");
+  copyFileSync(join(import.meta.dir, "../scripts/fixtures/attach-sequence.mjs"), path);
+  chmodSync(path, 0o700);
+  writeFileSync(join(dir, "plan.json"), JSON.stringify({ herdr: real, steps }));
+  return {
+    path,
+    dir,
+    attempts: () => existsSync(join(dir, "count")) ? Number(readFileSync(join(dir, "count"), "utf8").trim() || 0) : 0,
+    release: (gate) => writeFileSync(join(dir, gate), "go"),
+  };
+}
+
+async function withAttachHerdr<T>(herdr: { path: string; dir: string }, run: () => Promise<T>): Promise<T> {
+  const previous = { binary: process.env["OVIS_HERDR_BIN"], dir: process.env["HERDR_ATTACH_TEST_DIR"] };
+  process.env["OVIS_HERDR_BIN"] = herdr.path;
+  process.env["HERDR_ATTACH_TEST_DIR"] = herdr.dir;
+  try { return await run(); } finally {
+    for (const [key, value] of [["OVIS_HERDR_BIN", previous.binary], ["HERDR_ATTACH_TEST_DIR", previous.dir]]) {
+      if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
+    }
+  }
+}
+
+describe("same-terminal attach recovery", () => {
+  it("reattaches after a transient EOF, becomes ready again and accepts input without ending", async () => {
+    const paneId = await pane();
+    const herdr = scriptedAttachHerdr([
+      { kind: "eof", text: "transient attach EOF\r\n", exitGate: "exit-1" },
+      { kind: "real" },
+    ]);
+    const recovering = createServer({
+      port: 0, hostname: "127.0.0.1", token: "", stateDir: mkdtempSync(join(root, "same-terminal-ready-")),
+      attachRelookupForMs: 500,
+    });
+    try {
+      await withAttachHerdr(herdr, async () => {
+        const client = await connect(paneId, true, false, recovering.port);
+        try {
+          expect(client.state.ready).toBe(1);
+          herdr.release("exit-1");
+          await until(() => client.state.ready >= 2, "the same terminal becomes input-ready again", 5_000);
+          expect(client.state.notReady).toBe(1);
+          expect(client.state.exits).toBe(0);
+          expect(herdr.attempts()).toBe(2);
+          // Past the one recovery window, the stable replacement remains the only attach.
+          await Bun.sleep(650); // fixed wait: proves no third attach appears after the recovery settles
+          expect(herdr.attempts()).toBe(2);
+          expect(client.state.ready).toBe(2);
+          client.send({ type: "input", pane_id: paneId, text: "printf 'same_id_input_%s\\n' 42\r" });
+          await until(() => client.state.tail.includes("same_id_input_42"), "input reaches the recovered attach", 5_000);
+          expect(client.state.errors).toEqual([]);
+          expect(client.state.exits).toBe(0);
+        } finally { client.ws.close(); }
+      });
+    } finally { recovering.stop(); }
+  }, 20_000);
+
+  it("bounds repeated ready-then-EOF replacements under one recovery deadline", async () => {
+    const paneId = await pane();
+    const herdr = scriptedAttachHerdr([{ kind: "eof", text: "flapping attach\r\n", exitGate: "exit-{attempt}" }]);
+    const impatient = createServer({
+      port: 0, hostname: "127.0.0.1", token: "", stateDir: mkdtempSync(join(root, "same-terminal-flap-")),
+      attachHoldMs: 20, attachRelookupForMs: 500,
+    });
+    try {
+      await withAttachHerdr(herdr, async () => {
+        const client = await connect(paneId, true, false, impatient.port);
+        try {
+          let released = 0;
+          const ended = () => client.state.exits === 1;
+          while (!ended() && released < 20) {
+            await until(() => ended() || client.state.ready > released, "the next replacement is ready", 4_000);
+            if (ended()) break;
+            released += 1;
+            herdr.release(`exit-${released}`);
+          }
+          await until(() => client.state.exits === 1, "one bounded terminal exit", 4_000);
+          const attempts = herdr.attempts();
+          expect(attempts).toBeGreaterThan(1);
+          expect(attempts).toBeLessThan(10);
+          await Bun.sleep(700); // fixed wait: proves neither another attach nor another exit appears
+          expect(herdr.attempts()).toBe(attempts);
+          expect(client.state.exits).toBe(1);
+          expect(client.state.notReady).toBeGreaterThan(0);
+        } finally { client.ws.close(); }
+      });
+    } finally { impatient.stop(); }
+  }, 15_000);
+
+  it("bounds read-race retries by the EOF recovery deadline", async () => {
+    const paneId = await pane();
+    const herdr = scriptedAttachHerdr([
+      { kind: "eof", text: "initial attach\r\n", exitGate: "initial-eof" },
+      { kind: "read-race" },
+    ]);
+    const impatient = createServer({
+      port: 0, hostname: "127.0.0.1", token: "", stateDir: mkdtempSync(join(root, "same-terminal-read-race-")),
+      attachHoldMs: 20, attachRetryForMs: 5_000, attachRelookupForMs: 500,
+    });
+    try {
+      await withAttachHerdr(herdr, async () => {
+        const client = await connect(paneId, true, false, impatient.port);
+        try {
+          expect(client.state.ready).toBe(1);
+          herdr.release("initial-eof");
+          await until(() => client.state.exits === 1, "read-race recovery reaches its terminal exit", 4_000);
+          const attempts = herdr.attempts();
+          expect(attempts).toBeGreaterThan(1);
+          expect(attempts).toBeLessThan(10);
+          expect(client.state.ready).toBe(1);
+          expect(client.state.notReady).toBe(1);
+          await Bun.sleep(700); // fixed wait: proves no retry runs after the shared recovery deadline
+          expect(herdr.attempts()).toBe(attempts);
+          expect(client.state.exits).toBe(1);
+        } finally { client.ws.close(); }
+      });
+    } finally { impatient.stop(); }
+  }, 15_000);
 });
 
 describe("a terminal attach that cannot spawn (#154)", () => {

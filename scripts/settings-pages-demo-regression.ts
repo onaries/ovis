@@ -321,6 +321,31 @@ async function heldGroupLanding(browser: import("playwright-core").Browser, url:
   }
 }
 
+const checkSelectArrows = async (page: Page): Promise<void> => {
+  const controls = await page.locator(".settings-select").evaluateAll((nodes) => nodes.map((select) => {
+    const arrow = select.parentElement?.querySelector("svg");
+    if (!arrow) return { arrow: false };
+    const field = select.getBoundingClientRect();
+    const glyph = arrow.getBoundingClientRect();
+    const style = getComputedStyle(select);
+    return {
+      arrow: true,
+      inset: field.right - glyph.right,
+      expectedInset: parseFloat(style.paddingLeft),
+      centered: Math.abs((field.top + field.bottom) / 2 - (glyph.top + glyph.bottom) / 2) < 1,
+      textClear: parseFloat(style.paddingRight) > field.right - glyph.left,
+      nativeArrowHidden: style.appearance === "none",
+      clickThrough: getComputedStyle(arrow).pointerEvents === "none",
+      decorative: arrow.getAttribute("aria-hidden") === "true",
+    };
+  }));
+  for (const control of controls) {
+    assert.equal(control.arrow, true, "each Settings select has an inset chevron");
+    assert.ok(Math.abs(control.inset! - control.expectedInset!) < 1, "the chevron matches the text inset");
+    for (const key of ["centered", "textClear", "nativeArrowHidden", "clickThrough", "decorative"] as const) assert.equal(control[key], true, key);
+  }
+};
+
 try {
   await buildDemoApp(app);
   await buildDevelopmentDemoApp(devApp);
@@ -377,6 +402,8 @@ try {
             // what a page asks the server for (devices, the phone address, the accounts) has arrived
             await page.waitForFunction((loading) => ![...document.querySelectorAll(".settings-body [role='status']")].some((node) => loading.includes(node.textContent?.trim() ?? "")),
               [label("Loading…"), label("Asking this PC about Tailscale…")]);
+            if (name === "Appearance" && process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `select-arrows-${width}-${language}.png`), animations: "disabled" });
+            await checkSelectArrows(page);
             if (name === "Subscription usage") await page.locator(".usage-accounts-row").first().waitFor();
             if (name === "Voice input") {
               await page.locator(".voice-key").waitFor();
@@ -472,6 +499,7 @@ try {
                 await themes.getByRole("button", { name: mode === "dark" ? "Dark" : "Light", exact: true }).tap();
                 await pickers[mode].selectOption(id);
                 await drawn(mode, id);
+                await checkSelectArrows(page);
                 assert.equal((await stored()).palette, id);
                 assert.deepEqual(await drift([...Object.entries(combos[key]!.resolved), ...xtermTokens(mode, id)]), [], `${key}: the page computes the frozen colors, and --term-* as the theme xterm is given`);
                 if (key === "catppuccin/dark" && process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `catppuccin-palette-${width}.png`), fullPage: true });
@@ -717,6 +745,31 @@ try {
         await phone.close();
       }
 
+      if (process.env.UI_EVIDENCE_DIR) {
+        for (const width of [1280, 390]) {
+          const context = await browser.newContext({
+            viewport: { width, height: width === 390 ? 844 : 800 },
+            isMobile: width === 390, hasTouch: width === 390, locale: "en-US",
+          });
+          try {
+            await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify(SETTINGS));
+            const page = await context.newPage();
+            await page.goto(url);
+            await page.locator(".conn-live").waitFor({ state: "attached" });
+            await openSettings(page);
+            await openSettingsPage(page, "Appearance");
+            for (const mode of ["light", "dark"]) {
+              await page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: mode === "dark" ? "Dark" : "Light", exact: true }).click();
+              await page.waitForFunction((mode) => document.documentElement.dataset.theme === mode, mode);
+              await checkSelectArrows(page);
+              await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `select-arrows-${width}-${mode}.png`), animations: "disabled" });
+            }
+          } finally {
+            await context.close();
+          }
+        }
+      }
+
       const desktop = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
       try {
         await desktop.addInitScript((settings) => {
@@ -727,6 +780,22 @@ try {
         page.on("pageerror", (error) => errors.push(error.message));
         await page.goto(url);
         await page.locator(".conn-live").waitFor({ state: "attached" });
+        await openSettings(page);
+        await openSettingsPage(page, "Appearance");
+        await checkSelectArrows(page);
+        if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "select-arrows-desktop.png"), animations: "disabled" });
+        const themePicker = page.getByLabel("Dark theme", { exact: true });
+        await themePicker.focus();
+        await page.keyboard.press("ArrowDown");
+        assert.notEqual(await themePicker.inputValue(), "amber", "the native select keeps keyboard selection");
+        await themePicker.selectOption("amber");
+        await page.emulateMedia({ forcedColors: "active" });
+        assert.equal(await themePicker.evaluate((select) => getComputedStyle(select).appearance), "auto", "forced colors restores the native indicator");
+        assert.equal(await themePicker.locator("..").locator("svg").evaluate((arrow) => getComputedStyle(arrow).display), "none");
+        await page.emulateMedia({ forcedColors: "none" });
+        await checkSelectArrows(page);
+        await page.keyboard.press("Escape");
+        await page.locator(".settings-dialog").waitFor({ state: "detached" });
         for (const id of ["dracula", "nord", "vesper"]) {
           await openSettings(page);
           await openSettingsPage(page, "Appearance");
@@ -740,6 +809,7 @@ try {
           });
           assert.notEqual(surfaces[0], surfaces[1], `${id} border differs from elevated surface`);
           assert.notEqual(surfaces[0], surfaces[2], `${id} border differs from input surface`);
+          await checkSelectArrows(page);
           if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `${id}-appearance-1280.png`), animations: "disabled" });
           await page.keyboard.press("Escape");
           await page.locator(".settings-dialog").waitFor({ state: "detached" });

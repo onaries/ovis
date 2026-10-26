@@ -4,10 +4,12 @@ The reader shows Grok's user messages, assistant text and expandable tool rows i
 the existing Chat view. Terminal remains the place for approvals. Reading chat makes no
 model calls. Reasoning, images and child-session expansion are outside this first scope.
 
-**Supported executable:** on Linux, chat follows any Grok executable named `grok` or
-`grok-…`, including a versioned build such as `grok-1.0.52-linux-x86_64` and a binary
-replaced while it was still running. macOS and Windows show the terminal view, because the
-held-file check reads Linux `/proc`. Lifecycle checks used Grok 1.0.50 and Herdr 0.9.3.
+**Supported executable:** chat follows any Grok executable named `grok` or `grok-…`,
+including a versioned build such as `grok-1.0.52-linux-x86_64` or `grok-macos-aarch64`,
+and a binary replaced while it was still running. Linux reads the held file from `/proc`.
+macOS reads it from `lsof`, and that process's home from the kernel's copy of its
+environment. Windows shows the terminal view. Lifecycle checks used Grok 1.0.50 and Herdr
+0.9.3 on Linux; on macOS the binding is tested against real `lsof` with a stand-in process.
 No installer changes the Grok configuration.
 
 Chat shows Thinking or Working from the bound transcript's current turn even if Herdr
@@ -18,12 +20,17 @@ turn or rewind replaces it. Unavailable native history is explicitly marked in C
 
 ## Finding the active session
 
-The bridge reads the foreground Grok process's environment for `GROK_HOME`, or
-`HOME/.grok` when unset. The pane's Grok process is found in Herdr's foreground list.
-Foreground discovery and the executable check both accept `grok` or `grok-…`, with
-packaging suffixes removed; neither requires a particular build number or a numeric suffix.
-A reported ID is looked up exactly, including hashed directory names for long paths;
-directory or modification time never chooses a conversation.
+The bridge reads the one foreground Grok process's environment for `GROK_HOME`, or
+`HOME/.grok` when unset: `/proc/<pid>/environ` on Linux, `sysctl` `KERN_PROCARGS2` on
+macOS, never the bridge's own home. A relative `GROK_HOME` does not fall through to
+`HOME`. The pane's Grok process is found in Herdr's foreground list, and chat needs exactly
+one. Foreground discovery and the
+executable check both accept `grok` or `grok-…`, with packaging suffixes removed; neither
+requires a particular build number or a numeric suffix. On macOS the executable is the
+first `txt` entry from `lsof` (later `txt` lines are mapped files such as dyld). A
+reported ID is looked up exactly across session groups, including hashed directory names
+for long paths; a duplicate ID is ambiguous. Directory or modification time never chooses
+a conversation, and a symlinked session is not followed.
 
 Grok keeps `events.jsonl` open for earlier sessions as well as the one on screen, and an
 in-TUI `/resume` on Grok 1.0.50 does not fire `SessionStart`, so Herdr can keep an old ID.
@@ -53,6 +60,12 @@ another session's directory, moved up to its cwd group, or moved out of `session
 every unexpected held file as ambiguous would catch these, but which files real Grok builds
 keep open in the store needs native descriptor captures first; without them, that rule could
 send ordinary sessions to the terminal.
+
+On macOS, `lsof -nPbw -a -p <pid> -FfDin` lists the holds: only numeric
+descriptors count (`cwd`, `rtd` and `mem` do not), and the device and inode in that
+listing must match the named file. Its write time comes from the named file only after
+that identity matches. A missing device or inode is not a match. The `lsof` read has a
+three-second timeout.
 
 The newest file only confirms Herdr's ID; it never chooses another session. A missing held
 file or a newer write to another held session uses the terminal view. An in-TUI `/resume`

@@ -1,7 +1,7 @@
 import type { DialogReader } from "./registry.ts";
 import { type InteractivePrompt } from "../../shared/protocol.ts";
 import { createHash } from "node:crypto";
-import { ANSI_RE, type AnswerStep, KEY, type MenuRow, NUMBERED_OPTION_RE, type NumberedRow, type ParsedPrompt, SELECTED_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parseNumberedRows, publicPrompt, sequentialRows } from "./shared.ts";
+import { ANSI_RE, type AnswerStep, KEY, type MenuRow, NUMBERED_OPTION_RE, type NumberedRow, type ParsedPrompt, SELECTED_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parseNumberedRows, parsedByPublicPrompt, publicPrompt, sequentialRows } from "./shared.ts";
 
 /**
  * The last resort, for a pane herdr reports blocked that none of the readers above know (a
@@ -130,6 +130,8 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
     const heading = lines.slice(headStart, headEnd).map((line) => cleanLine(line));
     const question = [...heading].reverse().find((line) => ASKED_RE.test(line)) ?? heading.at(-1);
     const choiceRows = new Set(selectionMenu.rows.map((row) => row.lineIndex));
+    const customRows = selectionMenu.rows.flatMap((row, index) => /^(?:\d+\.\s*)?Other \(type your own\)$/i.test(row.label) ? [index] : []);
+    const customIndex = customRows.length === 1 ? customRows[0]! : null;
     const choices = [
       ...selectionMenu.rows.map((row, index) => ({
         label: row.label,
@@ -142,10 +144,10 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
       kind: "menu", fallback: true, title: "Waiting for your answer", question: question ?? "The agent is waiting for your answer.",
       body,
       options: choices.map(({ label }) => ({ label, description: null })),
-      multi_select: false, custom_option_index: null,
+      multi_select: false, custom_option_index: customIndex,
     }, {
       responder: "fallback-gjc-menu", menuLabels: choices.map(({ label }) => label), selectedIndex: selectionMenu.selectedIndex,
-      checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+      checkedOptionIndices: [], customMenuIndex: customIndex, rejectWithEscapeIndex: null,
       optionSteps: choices.map(({ steps }) => steps),
     }, steadyFields(question, body, steady.read)), choiceRows);
   }
@@ -181,13 +183,19 @@ function steadyFields(question: string | undefined, body: string | null, steady:
   return { ...(question === undefined ? {} : { question: steady(question) }), body: body === null ? null : body.split("\n").map(steady).join("\n") };
 }
 
+const gjcMenuIdentities = new WeakMap<ParsedPrompt, string>();
+
 /**
  * A fallback card's id covers the whole visible screen, not just the lines it shows: a changed
  * command, footer or wrapped label anywhere on it makes an answer to the old card stale. A working
  * line's spinner, time and token count are the one thing it leaves out (steadyReader).
  */
 function screenCard(lines: string[], shown: number[], steady: SteadyReader, parsed: ParsedPrompt, cursorRows?: ReadonlySet<number>): InteractivePrompt {
-  const screen = shown.map((index) => {
+  // Preserve the card hash before adding the selector footer's screen hash. The inline editor
+  // has a different footer, but must retain the full question body hashed before its display cap.
+  if (parsed.responder === "fallback-gjc-menu") gjcMenuIdentities.set(parsed, parsed.id);
+  // A cmd heredoc's indentation and separators can change which text is executable.
+  const screen = parsed.agent === "cmd" ? lines.join("\n") : shown.map((index) => {
     const line = cleanLine(lines[index]!);
     // GJC moves its cursor within the same menu; the selectedIndex is checked separately on reread.
     return steady.read(cursorRows?.has(index) ? line.replace(GJC_SELECTED_RE, "") : line);
@@ -272,6 +280,64 @@ function fallbackGjcSelectionMenu(agent: string, lines: string[], shown: number[
   const selectedIndex = rows.findIndex((row) => row.selected);
   if (rows.length < 2 || selectedIndex < 0 || rows.filter((row) => row.selected).length !== 1) return null;
   return { start, rows, selectedIndex };
+}
+
+/** The same framed question must still own the inline Other editor before any text is sent. */
+export function gjcCustomEditorMatches(screen: string, expected: ParsedPrompt, draft: string): boolean {
+  if (expected.responder !== "fallback-gjc-menu" || expected.customMenuIndex === null) return false;
+  const identity = gjcMenuIdentities.get(expected);
+  if (!identity || /[\r\n]/.test(draft)) return false;
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  const shown = lines.flatMap((line, index) => cleanLine(line) && !isDivider(line) ? [index] : []);
+  const footer = "enter submit esc back to options ctrl+g external editor PgUp/PgDn: question · Wheel: transcript";
+  let footerStart = -1;
+  let footerEnd = -1;
+  for (let count = 1; count <= Math.min(3, shown.length); count++) {
+    const tail = shown.slice(-count);
+    if (normalizeText(tail.map((index) => cleanLine(lines[index]!)).join(" ")) === footer) {
+      footerStart = tail[0]!;
+      footerEnd = tail.at(-1)!;
+      break;
+    }
+  }
+  if (footerStart < 0) return false;
+  const text = draft.normalize("NFC").replace(/\t/g, "    ");
+  const draftCharacters = text.replace(/\s/g, "").length;
+  // Normalize the rows once, not the entire suffix again for every quoted body row.
+  const editorLines = lines.slice(0, footerStart).map((line) => line.normalize("NFC").replace(/\t/g, "    ").trimEnd());
+  while (editorLines.at(-1) === "") editorLines.pop();
+  let characters = 0;
+  // A wrapped draft can itself start a row with "> ". Only the start that restores the
+  // original selector identity belongs to its editor, rather than to the draft or transcript.
+  for (let input = editorLines.length - 1; input >= 0; input--) {
+    characters += editorLines[input]!.replace(/\s/g, "").length;
+    // The editor marker adds exactly one non-whitespace character to the draft. Once the
+    // suffix has more, no earlier start can spell it; each "> " candidate adds another.
+    if (characters > draftCharacters + 1) break;
+    if (characters !== draftCharacters + 1 || !/^>(?:\s|$)/.test(cleanLine(editorLines[input]!))) continue;
+    // Like claudeRestoredDraft, walk exact row contents: a soft wrap can split a word or
+    // consume one separating space. Do not flatten internal whitespace or accept missing text.
+    let positions = new Set([0]);
+    for (let index = input; index < editorLines.length; index++) {
+      // Keep leading spaces in continuation rows: a wrap can split two adjacent spaces.
+      const row = index === input ? editorLines[index]!.replace(/^\s*> ?/, "") : editorLines[index]!;
+      const next = new Set<number>();
+      for (const from of positions) {
+        const starts = index > input && text[from] === " " ? [from, from + 1] : [from];
+        for (const start of starts) if (text.startsWith(row, start)) next.add(start + row.length);
+      }
+      positions = next;
+      if (positions.size === 0) break;
+    }
+    if (!positions.has(text.length)) continue;
+    // At most one candidate has the draft's character count. Check its spelling before
+    // rebuilding and parsing the uncapped question, so quoted bodies cost one parse, not N.
+    const restored = [...lines.slice(0, input), "↑/↓ select enter esc PgUp/PgDn/Ctrl+u/d: question · Wheel: transcript", ...lines.slice(footerEnd + 1)].join("\n");
+    const parsed = parsedByPublicPrompt.get(parseFallbackPrompt("gjc", restored));
+    return parsed?.responder === expected.responder && parsed.selectedIndex === expected.customMenuIndex
+      && gjcMenuIdentities.get(parsed) === identity;
+  }
+  return false;
 }
 
 /**

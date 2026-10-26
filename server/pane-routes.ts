@@ -333,7 +333,8 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
   }
 
   // herdr's own layout operations, as its TUI has them: prefix+v and prefix+- (split), prefix+z
-  // (zoom), prefix+shift+hjkl (swap), its resize mode, and pane clear. Each is one herdr RPC. No
+  // (zoom), prefix+shift+hjkl (swap), its resize mode, and pane clear. Explicit swaps also restore
+  // herdr's prior focus; the browser's rearrangement must not select another workspace there. No
   // answer carries the layout: a new pane reaches every client through the collector's
   // pane.created subscription and a moved border, zoom or swap through its layout.updated one,
   // both as session-changed, the same way the TUI's own changes do.

@@ -1,6 +1,6 @@
 import { MachineContext, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { Bell, Columns2, CornerLeftUp, Folder, FolderOpen, FolderSearch, History, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, PanelLeft, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, X } from "lucide-react";
+import { Bell, Columns2, CornerLeftUp, Folder, FolderInput, FolderOpen, FolderSearch, History, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, PanelLeft, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, X } from "lucide-react";
 
 import "./CommandPalette.css";
 
@@ -336,6 +336,14 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
     } satisfies PaletteAction, aliases }));
   }, [actions, t]);
   const aliasesByAction = useMemo(() => actionAliases(t), [t]);
+  // the selected one-pane tab to another workspace of its PC, one row each, found by a query only as Settings pages are
+  const selectedWorkspace = selectedPane?.workspace_id ?? null;
+  const moveActions = useMemo<PaletteAction[]>(() => selectedTab === null || tabPanes !== 1 ? [] : (snapshot?.workspaces ?? [])
+    .filter((entry) => entry.workspace_id !== selectedWorkspace)
+    .map((entry) => ({ id: `move-tab-${entry.workspace_id}`, label: t("Move tab to {workspace}", { workspace: entry.label }), icon: FolderInput,
+      // a refusal is said over the pane (App): the palette has closed by then
+      run: () => { void actions.moveTabToWorkspace({ machineId, tabId: selectedTab, workspaceId: entry.workspace_id, notice: true }).catch(() => undefined); } })),
+  [actions, machineId, selectedTab, selectedWorkspace, snapshot?.workspaces, t, tabPanes]);
 
   const allPanes = useMemo(() => machines.flatMap((machine) => machine.state === "connected" ? machine.snapshot?.panes ?? [] : []), [machines]);
   const multiMachine = machines.length > 1;
@@ -384,7 +392,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
     }
     if (actionsOnly || filter === "all") {
       // a name found only through an alias comes after the titles that hold the query
-      const visible = rankByTitle(text, paletteActions.map((action) => ({ item: action, title: action.label, aliases: aliasesByAction[action.id] })));
+      const visible = rankByTitle(text, [...paletteActions, ...(text === "" ? [] : moveActions)].map((action) => ({ item: action, title: action.label, aliases: aliasesByAction[action.id] })));
       if (visible.length > 0) list.push({ id: "actions", heading: t("Actions"), machineName: multiMachine ? selectedMachineName : undefined, branch: null, placeNamesWorkspace: false, rows: visible.map((action) => ({ kind: "action", action })) });
       const pages = text === "" ? [] : rankByTitle(text, settingsActions.map(({ action, aliases }) => ({ item: action, title: action.label, aliases })));
       if (pages.length > 0) list.push({ id: "settings-pages", heading: t("Settings"), machineName: multiMachine ? selectedMachineName : undefined, branch: null, placeNamesWorkspace: false, rows: pages.map((action) => ({ kind: "action", action })) });
@@ -392,7 +400,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
       if (offered.length > 0) list.push({ id: "plugins", heading: t("Plugin actions"), machineName: multiMachine ? selectedMachineName : undefined, branch: null, placeNamesWorkspace: false, rows: offered.map((item) => ({ kind: "plugin", offered: item })) });
     }
     return list;
-  }, [actionsOnly, text, filter, machines, multiMachine, selectedMachineName, machineId, branches, recentPaneIds, selectedPaneId, paletteActions, aliasesByAction, settingsActions, plugins, t, folder?.directory, folder?.filter, query, browse, home, pins, recentFolders, snapshot, actions]);
+  }, [actionsOnly, text, filter, machines, multiMachine, selectedMachineName, machineId, branches, recentPaneIds, selectedPaneId, paletteActions, moveActions, aliasesByAction, settingsActions, plugins, t, folder?.directory, folder?.filter, query, browse, home, pins, recentFolders, snapshot, actions]);
 
   const rows = useMemo(() => sections.flatMap((section) => section.rows), [sections]);
   const rowKeys = useMemo(() => sections.flatMap((section) => section.rows.map((row) => rowKey(section.id, row))), [sections]);

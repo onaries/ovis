@@ -24,6 +24,8 @@ it("starts Codex with a sandbox and an approval policy together", () => {
 it("leaves other agents and a plain shell alone", () => {
   const set = { claudeLaunchMode: "plan", codexLaunchMode: "fullAccess" } as const;
   expect(launchArgs("omp", set)).toBeUndefined();
+  expect(launchAgent("copilot", set, { prompt: "Fix it" })).toEqual({ kind: "copilot" });
+  expect(firstPromptDelivery("copilot", "Fix it")).toBe("pending");
   expect(launchAgent("gemini", set)).toEqual({ kind: "gemini" });
   expect(launchAgent("", set)).toBeNull();
 });

@@ -210,8 +210,8 @@ export function piBranchSegments(path: string, size: number): TranscriptSegment[
   return segments;
 }
 
-/** Read auxiliary tool/image records one at a time, never allocating a merged branch range. */
-export function* piBranchRecords(path: string, size: number): Generator<string> {
+/** Read active-branch records with their immutable append ranges, one at a time. */
+export function* piBranchRecordRanges(path: string, size: number): Generator<{ line: string; start: number; end: number }> {
   const branch = piBranchSegments(path, size), index = piEntryIndex(path);
   if (!branch || !index || (index.entries.at(-1)?.end ?? 0) > size) return;
   let fd: number;
@@ -227,10 +227,15 @@ export function* piBranchRecords(path: string, size: number): Generator<string> 
         if (length > MAX_PI_ENTRY_BYTES + 1) return;
         const bytes = Buffer.alloc(length);
         if (readSync(fd, bytes, 0, length, entry.start) !== length) return;
-        yield bytes.toString("utf8");
+        yield { line: bytes.toString("utf8"), start: entry.start, end: entry.end };
       }
     }
   } finally { closeSync(fd); }
+}
+
+/** Read auxiliary tool/image records one at a time, never allocating a merged branch range. */
+export function* piBranchRecords(path: string, size: number): Generator<string> {
+  for (const item of piBranchRecordRanges(path, size)) yield item.line;
 }
 
 /** Test/diagnostic summary: metadata estimates only; never session contents. */

@@ -9,6 +9,7 @@
  * Read only, on purpose: an OAuth token is never refreshed here. Claude, Codex, Cursor and Grok
  * rotate refresh tokens, so a refresh the CLI did not make logs the CLI out. An expired token is
  * reported as `expired` instead; the CLI refreshes its own file the next time it runs.
+ * Antigravity uses its official CLI only when HTTP omits Gemini quotas; the CLI owns its authentication.
  *
  * Nothing runs in the background: a provider is asked only when a client asks this server, at
  * most every FRESH_MS unless the client forces it, which is still limited to one ask per
@@ -45,7 +46,7 @@ export interface UsageContext {
   fetch(url: string, init: RequestInit): Promise<Response>;
   keychain(service: string, account?: string): Promise<KeychainRead>;
   /** a command's trimmed stdout, or null when it is missing, fails or hangs */
-  run(argv: string[]): Promise<string | null>;
+  run(argv: string[], timeoutMs?: number): Promise<string | null>;
   now(): number;
 }
 
@@ -627,6 +628,21 @@ const ANTIGRAVITY_BUCKETS: Record<string, { kind: UsageWindow["kind"]; scope: st
   "3p-weekly": { kind: "week", scope: "Other models" },
 };
 
+function antigravityWindows(groups: unknown): UsageWindow[] {
+  const windows: UsageWindow[] = [];
+  for (const group of Array.isArray(groups) ? groups : []) {
+    const buckets = record(group)["buckets"];
+    for (const bucket of Array.isArray(buckets) ? buckets : []) {
+      const value = record(bucket);
+      const shape = ANTIGRAVITY_BUCKETS[text(value["bucketId"] ?? value["id"]) ?? ""];
+      const remaining = number(value["remainingFraction"] ?? value["remaining_fraction"]);
+      // Missing fractions are unknown, not exhausted; bucket names do not state a start time.
+      if (shape && remaining !== null) windows.push({ ...shape, used_percent: percent((1 - remaining) * 100), resets_at: isoTime(value["resetTime"] ?? value["reset_time"]), starts_at: null });
+    }
+  }
+  return windows;
+}
+
 const antigravity: UsageProvider = {
   id: "antigravity",
   async signIns(ctx) {
@@ -650,18 +666,13 @@ const antigravity: UsageProvider = {
       if (error instanceof UsageHttpError && (error.status === 401 || error.status === 403 || error.status === 429)) throw error;
       body = await requestJson(ctx, "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", init);
     }
-    const groups = body["groups"] ?? record(body["response"])["groups"];
-    const windows: UsageWindow[] = [];
-    for (const group of Array.isArray(groups) ? groups : []) {
-      const buckets = record(group)["buckets"];
-      for (const bucket of Array.isArray(buckets) ? buckets : []) {
-        const value = record(bucket);
-        const shape = ANTIGRAVITY_BUCKETS[text(value["bucketId"]) ?? ""];
-        const remaining = number(value["remainingFraction"]);
-        // no fraction is left out, as OpenUsage does, rather than shown as 0% or 100% used
-        // no start: a bucket's name gives a length, not whether its reset ends a fixed window or refills it
-        if (shape && remaining !== null) windows.push({ ...shape, used_percent: percent((1 - remaining) * 100), resets_at: isoTime(value["resetTime"]), starts_at: null });
-      }
+    const windows = antigravityWindows(body["groups"] ?? record(body["response"])["groups"]);
+    if (windows.some((window) => window.scope === null)) return { plan: null, windows };
+    // Only pay the CLI startup cost when HTTP omits Gemini quotas for this account.
+    const cli = record(parseJson(await ctx.run(["agy", "--print", "/usage", "--output-format", "json", "--print-timeout", "30s"], 35_000).catch(() => null)));
+    if (cli["status"] === "SUCCESS") {
+      const cliWindows = antigravityWindows(record(record(cli["command"])["data"])["groups"]);
+      if (cliWindows.length > 0) return { plan: null, windows: cliWindows };
     }
     return { plan: null, windows };
   },
@@ -881,11 +892,11 @@ async function readKeychainInLoginSession(service: string, account?: string): Pr
   }
 }
 
-export async function runCommand(argv: string[]): Promise<string | null> {
+export async function runCommand(argv: string[], timeoutMs = COMMAND_TIMEOUT_MS): Promise<string | null> {
   if (!Bun.which(argv[0]!)) return null;
   try {
     const child = Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-    const timer = setTimeout(() => child.kill(), COMMAND_TIMEOUT_MS);
+    const timer = setTimeout(() => child.kill(), timeoutMs);
     try {
       const output = await readCapped(child.stdout);
       if (output === null) child.kill();

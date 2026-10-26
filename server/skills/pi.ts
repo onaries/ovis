@@ -37,7 +37,7 @@ const PI_TERMINAL_BOUND = [
 ];
 const PI_FORMS: NonNullable<AgentCommandSource["forms"]> = {
   model: [{ match: "bare", interaction: "dialog", dialog: "pi-model" }, { match: "other", interaction: "none" }],
-  thinking: [{ match: "bare", interaction: "dialog", dialog: "pi-model" }, { match: "other", interaction: "none" }],
+  thinking: [{ match: "bare", interaction: "dialog", dialog: "pi-thinking" }, { match: "other", interaction: "none" }],
   tree: [{ match: "bare", interaction: "terminal" }],
   fork: [{ match: "bare", interaction: "terminal" }],
   resume: [{ match: "bare", interaction: "terminal" }],

@@ -232,6 +232,18 @@ describe("pending message ownership", () => {
     expect(none.begin("pc:pane", "m")).toBe(true);
     expect(none.unconfirm("pc:pane", "m")).toBe(true);
   });
+  it("keeps a typed Pi receipt through reload as a dismissible, non-resendable local copy", () => {
+    const port = storage(), live = new PendingMessageStore(() => port);
+    const waiting = { ...message("pi:1", "uncertain", "same"), error: { code: "pi_transcript_pending", message: "waiting" } };
+    live.accept("pc:pane", waiting, "connection-1");
+    const restored = new PendingMessageStore(() => port);
+    expect(restored.read("pc:pane")[0]).toMatchObject({ id: "pi:1", state: "uncertain", serverOwned: false, error: { code: "transcript_unconfirmed" } });
+    // Only an explicitly owner-scoped server snapshot may restore live confirmation authority.
+    restored.publish("pc:pane", [waiting], [], "connection-2");
+    expect(restored.read("pc:pane")[0]).toMatchObject({ state: "uncertain", serverOwned: true, error: { code: "pi_transcript_pending" } });
+    restored.publish("pc:pane", [], [{ id: "pi:1", outcome: "consumed" }], "connection-2");
+    expect(restored.read("pc:pane")).toEqual([]);
+  });
   it("keeps unsaved text in memory when storage fails", () => {
     const store = new PendingMessageStore(() => ({ getItem: () => null, setItem: () => { throw new Error("full"); }, removeItem: () => { throw new Error("full"); } }));
     store.accept("p", message("a"), "scope");

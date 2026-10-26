@@ -1,6 +1,6 @@
 import { type Dispatch, type DragEvent, type RefObject, type SetStateAction, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { HerdrPane } from "../../shared/protocol.ts";
-import type { Machine } from "../../shared/machines.ts";
+import { paneStorageId, type Machine } from "../../shared/machines.ts";
 import { fetchSession, type HealthInfo } from "./api.ts";
 import { dockPane, draggedPane, dropSide, otherSlot, PANE_DRAG_TYPE, sameTarget, storedSplit, storeSplit, type SplitSide, type SplitSlot, type SplitState, type SplitTarget } from "./split.ts";
 import { paneDrag, type PaneDrag } from "./paneDrag.ts";
@@ -71,17 +71,30 @@ export function useSplitState() {
     dropAtRef.current = side;
     setDropAt(side);
   }, []);
+  // the pane being dragged, read at dragstart (a dragover cannot read the drag's data), and the
+  // title it would trade places with if dropped now. Only a drag from the pane's own title swaps:
+  // a sidebar row, a tab or a half's bar dropped on a title still opens a half
+  const draggedPaneRef = useRef<SplitTarget | null>(null);
+  const swapHeadRef = useRef<HTMLElement | null>(null);
+  const markSwap = useCallback((head: HTMLElement | null): void => {
+    if (swapHeadRef.current === head) return;
+    swapHeadRef.current?.classList.remove("is-swap-target");
+    head?.classList.add("is-swap-target");
+    swapHeadRef.current = head;
+  }, []);
   const clearDropPreview = useCallback((): void => {
     setPaneDragging(false);
     showDropTarget(null);
-  }, [showDropTarget]);
+    markSwap(null);
+    draggedPaneRef.current = null;
+  }, [showDropTarget, markSwap]);
   const paneAreaRef = useRef<HTMLDivElement>(null);
   // a tab dragged out of its strip (lib/paneDrag.ts)
   const tabDrag = useSyncExternalStore(paneDrag.subscribe, paneDrag.snapshot);
-  return { split, setSplit, soloSlot, endSplit, splitRef, splitShownRef, lastKeyAtRef, paneDragging, setPaneDragging, dropAt, dropAtRef, showDropTarget, clearDropPreview, paneAreaRef, tabDrag };
+  return { split, setSplit, soloSlot, endSplit, splitRef, splitShownRef, lastKeyAtRef, paneDragging, setPaneDragging, dropAt, dropAtRef, showDropTarget, clearDropPreview, paneAreaRef, tabDrag, draggedPaneRef, markSwap };
 }
 
-export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, selectedPane, selectedMachineId, splitShownRef, health, machineRosterLoaded, endSplit, otherRecheck, otherRosterTick, setSplit, soloSlot, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setOutputStopped, splitRef, selectPane, paneAreaRef, dropAtRef, clearDropPreview, tabDrag, showDropTarget, setPaneDragging }: {
+export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, selectedPane, selectedMachineId, splitShownRef, health, machineRosterLoaded, endSplit, otherRecheck, otherRosterTick, setSplit, soloSlot, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setOutputStopped, splitRef, selectPane, paneAreaRef, dropAtRef, clearDropPreview, tabDrag, showDropTarget, setPaneDragging, movingPanes, draggedPaneRef, markSwap, swapPanes }: {
   machines: Machine[];
   split: SplitState | null;
   wideScreen: boolean;
@@ -110,6 +123,12 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
   tabDrag: PaneDrag | null;
   showDropTarget: (side: SplitSide | null) => void;
   setPaneDragging: Dispatch<SetStateAction<boolean>>;
+  /** panes a tab move has on its way to another workspace (paneStorageId): the other half waits for the move */
+  movingPanes: RefObject<Set<string>>;
+  draggedPaneRef: RefObject<SplitTarget | null>;
+  markSwap: (head: HTMLElement | null) => void;
+  /** herdr's pane.swap of the dragged pane and another pane of its tab */
+  swapPanes: (dragged: SplitTarget, targetPaneId: string) => void;
 }) {
   // The split view (lib/split.ts): drawn only where the sidebar stands beside the pane, and only
   // while a pane is selected; a narrower window shows the active half alone and keeps the split
@@ -139,6 +158,8 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
     if (!otherMachine.snapshot || otherMachine.state !== "connected") return;
     const panes = otherMachine.snapshot.panes;
     if (panes.some((pane) => pane.pane_id === split.other.paneId)) return;
+    const moving = (): boolean => movingPanes.current.has(paneStorageId(split.other.machineId, split.other.paneId));
+    if (moving()) return;
     const tabId = otherTabRef.current?.tab ?? null;
     // a pane this page has not seen in the roster yet (a saved split, a pane made just before the page
     // loaded) may be newer than the cached roster: ask the PC before the split ends, as the selection does
@@ -146,7 +167,7 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
       let cancelled = false;
       const other = split.other;
       void fetchSession(other.machineId).then((current) => {
-        if (!cancelled && !current.panes.some((pane) => pane.pane_id === other.paneId)) endSplit(split.active);
+        if (!cancelled && !moving() && !current.panes.some((pane) => pane.pane_id === other.paneId)) endSplit(split.active);
       }).catch(() => {
         // a failed read is not evidence that the pane closed: ask again on the next roster
         if (!cancelled) otherRecheck.current = true;
@@ -223,11 +244,25 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
   // dragenter too: a drop hit-tests once more, and when the node under the pointer was replaced since
   // the last dragover (xterm redraws its rows, a transcript renders again) the new node gets a
   // dragenter instead. Chromium refuses a drop whose last drag event nobody accepted.
+  /** The title of another pane in the dragged pane's own tab, under the pointer: dropped there, the
+   *  two trade places (herdr's pane.swap) instead of opening the pane in a half. */
+  const swapHead = (target: EventTarget | null): HTMLElement | null => {
+    const dragged = draggedPaneRef.current;
+    const head = target instanceof Element ? target.closest<HTMLElement>(".pane-frame-head") : null;
+    const slot = head?.closest<HTMLElement>(".pane-slot");
+    const paneId = head?.parentElement?.getAttribute("data-layout-pane");
+    if (!dragged || !head || !slot || !paneId || paneId === dragged.paneId || slot.dataset.machine !== dragged.machineId) return null;
+    // the dragged pane drawn in the same canvas is in the same tab, the only place herdr swaps in
+    return slot.querySelector(`.pane-frame:not(.is-hidden)[data-layout-pane="${CSS.escape(dragged.paneId)}"]`) ? head : null;
+  };
   const paneDragOver = (event: DragEvent<HTMLDivElement>): void => {
     if (!splitDragOn || !event.dataTransfer.types.includes(PANE_DRAG_TYPE)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
-    setPaneDragging(true);
+    const head = swapHead(event.target);
+    markSwap(head);
+    setPaneDragging(head === null);
+    if (head) { showDropTarget(null); return; }
     const box = paneAreaRef.current?.getBoundingClientRect();
     if (box) showDropTarget(dropSide(event.clientX, box.left, box.width, dropAtRef.current));
   };
@@ -238,6 +273,7 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
     const box = event.currentTarget.getBoundingClientRect();
     if (event.relatedTarget === null && event.clientX >= box.left && event.clientX < box.right && event.clientY >= box.top && event.clientY < box.bottom) return;
     showDropTarget(null);
+    markSwap(null);
   };
   const paneDrop = (event: DragEvent<HTMLDivElement>): void => {
     if (!event.dataTransfer.types.includes(PANE_DRAG_TYPE)) return;
@@ -245,7 +281,11 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
     event.preventDefault();
     event.stopPropagation();
     const dragged = draggedPane(event.dataTransfer.getData(PANE_DRAG_TYPE));
-    if (dragged) dockAt(dragged, event.clientX, event.clientY);
+    const target = swapHead(event.target)?.parentElement?.getAttribute("data-layout-pane");
+    if (dragged && target) {
+      clearDropPreview();
+      swapPanes(dragged, target);
+    } else if (dragged) dockAt(dragged, event.clientX, event.clientY);
     else clearDropPreview();
   };
   // Bubble phase: the sidebar row has put its pane type into DataTransfer by then.
@@ -253,6 +293,8 @@ export function useSplitLayout({ machines, split, wideScreen, selectedPaneId, se
     if (!splitDragOn) { clearDropPreview(); return; }
     const start = (event: globalThis.DragEvent): void => {
       if (event.dataTransfer?.types.includes(PANE_DRAG_TYPE)) {
+        const fromTitle = event.target instanceof Element && event.target.closest(".pane-frame-head") !== null;
+        draggedPaneRef.current = fromTitle ? draggedPane(event.dataTransfer.getData(PANE_DRAG_TYPE)) : null;
         showDropTarget(null);
         setPaneDragging(true);
       }

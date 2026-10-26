@@ -15,6 +15,7 @@ import { useSettings } from "../lib/settings.ts";
 import { useSidebarActivity } from "../lib/sidebarActivity.tsx";
 import { machineFilter } from "../lib/sidebarFilter.ts";
 import { useSidebarFilter } from "../lib/sidebarFilterContext.ts";
+import { useHiddenMachines } from "../lib/hiddenMachines.ts";
 import { currentSidebarPins, pruneSidebarPins, setSidebarPins, sidebarPinKey, subscribeSidebarPins, toggleSidebarPin } from "../lib/sidebarPins.ts";
 import { PANE_DRAG_TYPE, paneDragData } from "../lib/split.ts";
 import { AgentMark, hasAgentMark } from "./AgentMark.tsx";
@@ -132,11 +133,13 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   const [filterFold, setFilterFold] = useState<boolean | null>(null);
   useEffect(() => { if (!filter.active) setFilterFold(null); }, [filter.active]);
   const folded = filter.active ? filterFold ?? (collapsed && rows.length === 0) : collapsed;
+  // the PCs this device hides are not in `machines`: their pins are kept, not taken for gone panes
+  const hidden = useHiddenMachines();
   const togglePin = (key: string): void => {
     // pins of panes gone from this server leave with a change of the user's, never by themselves: the
     // list is shared, and a pane this page has not seen yet (a PC still loading) is not gone
     const live = new Set(allRows.map(({ machine, entry }) => sidebarPinKey(machine.id, entry.pane.pane_id)));
-    setSidebarPins(toggleSidebarPin(pruneSidebarPins(pinned, live, machines), key));
+    setSidebarPins(toggleSidebarPin(pruneSidebarPins(pinned, live, machines, hidden), key));
   };
   const toggleMute = (machineId: string, paneId: string): void => {
     // as the pins: the mutes of panes a connected PC no longer has leave with this change, and no other PC's

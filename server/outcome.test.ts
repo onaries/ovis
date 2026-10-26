@@ -12,6 +12,7 @@ import * as processStart from "./process-start.ts";
 import { registry } from "./dialogs/registry.ts";
 import { source as claudeSource } from "./skills/claude.ts";
 import { source as ompSource } from "./skills/omp.ts";
+import { source as piSource } from "./skills/pi.ts";
 
 const at = Date.parse("2026-10-20T00:00:00Z");
 const row = (name: string, interaction: "none" | "dialog" | "terminal" | "unknown" = "none"): SlashCommand => ({
@@ -313,12 +314,13 @@ const resultReader: DialogReader = {
 let readerPaneSequence = 0;
 
 /** A herdr stand-in serving one pane whose screen the test sets; keys sent to it are kept. */
-async function withFakeHerdr(pane: { agent: string; status: string; screen: string; terminal_id?: string; agent_session?: HerdrPane["agent_session"]; pid?: number; argv?: string[] }, run: (paneId: string, keys: unknown[], processReads: () => number) => Promise<void>): Promise<void> {
+async function withFakeHerdr(pane: { agent: string; status: string; screen: string; terminal_id?: string; agent_session?: HerdrPane["agent_session"]; pid?: number; argv?: string[]; cwd?: string }, run: (paneId: string, keys: unknown[], processReads: () => number, calls: () => Record<string, number>) => Promise<void>): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "herdr-outcome-reader-"));
   const socketPath = join(root, "herdr.sock");
   const previous = process.env.HERDR_SOCKET;
   const paneId = `outcome-reader-${++readerPaneSequence}`;
   const keys: unknown[] = [];
+  const calls: Record<string, number> = {};
   let processReads = 0;
   const server = createServer((socket) => {
     let input = "";
@@ -329,10 +331,13 @@ async function withFakeHerdr(pane: { agent: string; status: string; screen: stri
       if (request.method === "pane.send_keys") keys.push(request.params?.keys);
       if (request.method === "pane.send_text") keys.push(request.params?.text);
       if (request.method === "pane.process_info") processReads += 1;
+      calls[request.method] = (calls[request.method] ?? 0) + 1;
       const result = request.method === "session.snapshot"
-        ? { snapshot: { panes: [{ pane_id: paneId, agent: pane.agent, agent_status: pane.status, terminal_id: pane.terminal_id, agent_session: pane.agent_session }], layouts: [] } }
+        ? { snapshot: { panes: [{ pane_id: paneId, agent: pane.agent, agent_status: pane.status, terminal_id: pane.terminal_id, agent_session: pane.agent_session, cwd: pane.cwd }], layouts: [] } }
         : request.method === "pane.process_info"
         ? { process_info: { foreground_processes: pane.pid === undefined ? [] : [{ pid: pane.pid, argv: pane.argv ?? [pane.agent] }] } }
+        : request.method === "agent.get"
+        ? { agent: { pane_id: paneId, agent: pane.agent, agent_status: pane.status, terminal_id: pane.terminal_id, agent_session: pane.agent_session } }
         : { read: { text: pane.screen } };
       socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
     });
@@ -340,7 +345,7 @@ async function withFakeHerdr(pane: { agent: string; status: string; screen: stri
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketAddress(socketPath), resolve); });
   process.env.HERDR_SOCKET = socketPath;
   try {
-    await run(paneId, keys, () => processReads);
+    await run(paneId, keys, () => processReads, () => ({ ...calls }));
   } finally {
     if (previous === undefined) delete process.env.HERDR_SOCKET;
     else process.env.HERDR_SOCKET = previous;
@@ -348,6 +353,33 @@ async function withFakeHerdr(pane: { agent: string; status: string; screen: stri
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+it("correlates Pi's thinking card and session-only commit with bare /thinking, not /model", async () => {
+  const pane = {
+    pane_id: "fixture", workspace_id: "w", tab_id: "t", terminal_id: "fixture-terminal",
+    focused: false, revision: 0, agent: "pi", agent_status: "idle", status: "idle", screen: "Ready",
+  };
+  await withFakeHerdr(pane, async (paneId, keys) => {
+    const catalog = ["thinking", "model"].map((name) => ({ ...row(name), forms: piSource.forms?.[name] }));
+    const command = commandSendFrom(pane, "pi", catalog, "/thinking")!;
+    noteSubmitted(paneId, command.text, command);
+    pane.screen = "Thinking Level\n\nShift+Tab cycles thinking levels in-session\n\n>\n\n→ ✓ medium\n    high\n\nEnter to select · Ctrl+S to set as default · Escape/Ctrl+C to cancel\n────────────────────\n/tmp/fixture\n0.0%/215k (auto)";
+    const shown = await served(paneId);
+    expect(command.dialogObserved).toBe(true);
+    expect(command.dialogId).toBe(shown.prompt?.id);
+    const url = new URL("http://localhost/api/pane/prompt/answer");
+    const response = await handlePromptRequest(new Request(url, { method: "POST", body: JSON.stringify({ pane_id: paneId, prompt_id: shown.prompt!.id, option_index: 0 }) }), url);
+    expect(response?.status).toBe(200);
+    expect(keys).toEqual([["enter"]]);
+    expect((await served(paneId)).outcomes).toMatchObject([{ id: command.id, state: "result-observed", evidence: [{ kind: "dialog" }] }]);
+    pane.screen = "Ready again";
+    const model = commandSendFrom(pane, "pi", catalog, "/model")!;
+    noteSubmitted(paneId, model.text, model);
+    pane.screen = "Thinking Level\n\n>\n\n→ ✓ medium\n\nEnter to select · Ctrl+S to set as default · Escape/Ctrl+C to cancel";
+    await served(paneId);
+    expect(model.dialogObserved).not.toBe(true);
+  });
+});
 
 const fixture = (name: string): string => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 const promptUrl = (paneId: string): URL => new URL(`http://localhost/api/pane/prompt?pane_id=${paneId}`);
@@ -470,6 +502,32 @@ describe("session-scoped command outcomes", () => {
     });
   }
 
+  it("reads the pane's processes and the session once per poll while a command's transcript is open", async () => {
+    // a Claude pane in a folder, so the poll resolves its transcript down to Claude's (empty) store
+    const store = mkdtempSync(join(tmpdir(), "outcome-claude-store-"));
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = store;
+    const pane = { ...target(), pid: 2147483645, cwd: store,
+      agent_session: session("0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9") };
+    try {
+      await withFakeHerdr(pane, async (paneId, _keys, _processReads, calls) => {
+        const command = await submit(paneId, pane, "/context");
+        await command.visibility?.binding;
+        const before = calls();
+        expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual([command.id]);
+        const after = calls();
+        const made = (method: string) => (after[method] ?? 0) - (before[method] ?? 0);
+        expect(made("agent.get")).toBe(1);
+        expect(made("pane.process_info")).toBe(1);
+        expect(made("session.snapshot")).toBe(1);
+      });
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+      rmSync(store, { recursive: true, force: true });
+    }
+  });
+
   it("omits a known session's sends once a restarted agent still reports that session id", async () => {
     // herdr keeps a restarted Claude Code's old session id until the new process's first turn
     const pane = { ...target(), pid: 2147483645 };
@@ -542,6 +600,43 @@ describe("session-scoped command outcomes", () => {
       } finally {
         clock.mockRestore();
       }
+    });
+  });
+
+  // herdr keeps a restarted agent's old session id for up to a minute (STALE_SESSION_LAG_MS): within it a session
+  // change typed in the terminal is taken for the agent's own session, past it for a later one
+  for (const [lag, kept] of [[59_000, true], [61_000, false]] as const) {
+    it(`${kept ? "keeps" : "drops"} a resumed session's send whose session changes in the terminal ${lag / 1000} s after it`, async () => {
+      const pane = { ...target(), pid: 2147483645 };
+      await withFakeHerdr(pane, async (paneId) => {
+        const fresh = await resumed(paneId, pane);
+        pane.agent_session = session("typed-in-terminal");
+        const clock = spyOn(Date, "now").mockImplementation(() => fresh.at + lag);
+        try {
+          expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual(kept ? [fresh.id] : undefined);
+        } finally {
+          clock.mockRestore();
+        }
+      });
+    });
+  }
+
+  // herdr names an OmO pane `pi` (its process cannot be told on native Windows): the session herdr reports under
+  // that label is the one the OmO send started, and a later one is not
+  it("adopts an unmatched OmO send into the session herdr reports under the pane's label at the send", async () => {
+    const pane = { ...target(), agent: "pi", agent_session: null as HerdrPane["agent_session"] };
+    await withFakeHerdr(pane, async (paneId) => {
+      const command = commandSendFrom(pane, "omo", [row("context")], "/context");
+      if (!command) throw new Error("fixture command was not recorded");
+      bindCommandProcess(paneId, command);
+      noteSubmitted(paneId, "/context", command);
+      expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual([command.id]);
+      const reported = { agent: "pi", kind: "path", source: "herdr:pi", value: "/fixture/omo-first.jsonl" };
+      pane.agent_session = reported;
+      expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual([command.id]);
+      expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual([command.id]);
+      pane.agent_session = { ...reported, value: "/fixture/omo-later.jsonl" };
+      expect((await served(paneId)).outcomes).toBeUndefined();
     });
   });
 

@@ -31,6 +31,18 @@ describe("a past question tool call", () => {
     }
   });
 
+  test("shows Copilot's recorded question and choices without offering an unverified answer path", () => {
+    expect(askedQuestions("ask_user", { question: "Proceed?", choices: ["Yes", "No"], allowFreeform: true })).toEqual([{
+      header: null, question: "Proceed?", multi: false, recommended: null, options: [
+        { label: "Yes", description: null, preview: null }, { label: "No", description: null, preview: null },
+      ],
+    }]);
+    expect(askedQuestions("ask_user", { question: "What next?" })?.[0]?.options).toEqual([]);
+    for (const bad of [{ question: "" }, { question: "Proceed?", choices: [0] }, { question: "Proceed?", choices: [""] }]) {
+      expect(askedQuestions("ask_user", bad)).toBeNull();
+    }
+  });
+
   test("ignores a recommendation that names no option", () => {
     for (const recommended of [2, -1, 0.5, "0"]) {
       expect(askedQuestions("ask", { questions: [{ question: "Q?", recommended, options: [{ label: "A" }, { label: "B" }] }] })?.[0]?.recommended).toBeNull();

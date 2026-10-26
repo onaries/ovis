@@ -408,7 +408,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen, keyboardActiv
       case "image":
         return info.size > MAX_INLINE_IMAGE_BYTES
           ? <p className="file-viewer-note">{t("This image is {size}; download it to view.", { size: formatBytes(info.size) })}</p>
-          : <img className="file-viewer-media" src={url} alt={info.name} />;
+          : <img className="file-viewer-media" src={`${url}&revision=${encodeURIComponent(`${info.modified}:${info.size}`)}`} alt={info.name} />;
       case "video":
         return <video ref={(node) => { mediaRef.current = node; }} className="file-viewer-media" src={url} controls playsInline preload="metadata" />;
       case "audio":

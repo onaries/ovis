@@ -19,11 +19,21 @@ import { ANSI_RE, type ParsedPrompt, cleanLine, findLastIndex, finishPrompt, isD
  * rows directly above the footer are the dialog's: a numbered list in the conversation above it
  * (or in the agent's own output) is not an option, and a command's own text is not one either.
  */
-const CMD_HINT_RE = /↑\/↓ navigate/i;
+/**
+ * command-code@1.88.0's PermissionFooter (dist/cli.mjs). Ink wraps its Text at word or
+ * character boundaries. Match the entire footer, not a bag of words that also accepts later output.
+ * MainView hides its normal input/status chrome while permissionPanel is present.
+ */
+export function cmdFooterStart(lines: string[]): number {
+  const at = findLastIndex(lines, (line) => /^\s*↑/.test(line));
+  if (at < 0) return -1;
+  const footer = lines.slice(at).join("").replace(/\s/g, "");
+  return /^↑\/↓navigate·enterselect(?:·ctrl\+[ey]explain)?·Runcmd--yolotobypassallpermissions\(Docs↗\)$/i.test(footer) ? at : -1;
+}
 
 function parseCmdQuestion(screen: string): ParsedPrompt | null {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
-  const hintIndex = findLastIndex(lines, (line) => CMD_HINT_RE.test(line) && /enter select/i.test(line));
+  const hintIndex = cmdFooterStart(lines);
   if (hintIndex < 0) return null;
   // the dialog block: the rows directly above the footer, and their wrapped continuation lines.
   // The blank line between the last row and the footer is skipped; anything else ends the block.
@@ -55,6 +65,8 @@ function parseCmdQuestion(screen: string): ParsedPrompt | null {
   // the cursor must be marked on exactly one row: without it the chat cannot tell which option
   // an answer would land on, and Command Code may mark the cursor by colour alone
   if (rows.filter((row) => row.selected).length !== 1) return null;
+  // The source-defined permission choices begin with Yes and end with No, not arbitrary menu labels.
+  if (rows[0]?.label !== "Yes" || !/^No(?:,|$)/.test(rows.at(-1)?.label ?? "")) return null;
   const selectedIndex = rows.findIndex((row) => row.selected);
   const firstRowIndex = lines.findIndex((line, index) => index >= blockStart && /^\s*[❯›>]?\s*1\.\s+/.test(line));
   // the heading: the first line of the dialog above the question (e.g. "Create File")

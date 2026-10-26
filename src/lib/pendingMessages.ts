@@ -2,7 +2,7 @@ import type { PendingMessage } from "../../shared/protocol.ts";
 
 export interface PendingMessageView extends PendingMessage { serverOwned: boolean; resendInFlight?: true; resendGeneration?: number }
 type StoragePort = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-type Removal = { id: string; outcome: "sent" | "discarded" };
+type Removal = { id: string; outcome: "sent" | "discarded" | "consumed" };
 const PREFIX = "ovis:pending:";
 
 /** Connection proof stays in memory. A saved copy can never resume automatic delivery. */
@@ -38,10 +38,12 @@ export class PendingMessageStore {
           || !Number.isSafeInteger(message.request_id) || !["queued", "sending", "held", "uncertain"].includes(message.state)) return [];
         ids.add(message.id);
         const error = message.error && typeof message.error.code === "string" && typeof message.error.message === "string" ? message.error : undefined;
+        const restoredError = error?.code === "pi_transcript_pending"
+          ? { code: "transcript_unconfirmed", message: "The bridge connection ended before Pi's transcript append was confirmed" } : error;
         return [{ id: message.id, request_id: message.request_id, text: message.text, created_at: message.created_at,
           state: message.state === "held" && message.resendInFlight !== true ? "held" as const : "uncertain" as const,
           ...(typeof message.resendGeneration === "number" && Number.isSafeInteger(message.resendGeneration) && message.resendGeneration >= 0 ? { resendGeneration: message.resendGeneration } : {}),
-          ...(message.resendInFlight === true ? { resendInFlight: true as const } : {}), ...(error ? { error } : {}), serverOwned: false }];
+          ...(message.resendInFlight === true ? { resendInFlight: true as const } : {}), ...(restoredError ? { error: restoredError } : {}), serverOwned: false }];
       });
     } catch { return []; }
   }
@@ -149,7 +151,9 @@ export class PendingMessageStore {
       if (proofs?.get(message.id) !== scope) return message;
       proofs.delete(message.id);
       changed = true;
-      return { ...message, serverOwned: false, state: message.state === "held" && !message.resendInFlight ? "held" as const : "uncertain" as const };
+      return message.error?.code === "pi_transcript_pending"
+        ? { ...message, serverOwned: false, state: "uncertain" as const, error: { code: "transcript_unconfirmed", message: "The connection ended before Pi's transcript append was confirmed" } }
+        : { ...message, serverOwned: false, state: message.state === "held" && !message.resendInFlight ? "held" as const : "uncertain" as const };
     });
     if (proofs?.size === 0) this.scopes.delete(owner);
     if (changed) this.write(owner, next);

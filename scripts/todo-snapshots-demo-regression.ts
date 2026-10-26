@@ -168,11 +168,11 @@ const measurements: Record<string, unknown>[] = [];
 
 /** The end of the chat, by the app's own Jump to latest: nothing floats over the last rows then. */
 async function toEnd(page: Page): Promise<void> {
-  const jump = page.locator(".chat-virtual-jump");
-  if (await jump.count() > 0) {
-    await jump.click();
-    await jump.waitFor({ state: "detached", timeout: 10_000 });
-  }
+  // A reader who opened a run reads there (#1388), so the button can be offered while the chat is
+  // already at its end and leave on its own once a layout change scrolls there: it is pressed only
+  // if it is there at that moment, and either way the end is reached with nothing over it.
+  await page.evaluate(() => document.querySelector<HTMLElement>(".chat-virtual-jump")?.click());
+  await page.locator(".chat-virtual-jump").waitFor({ state: "detached", timeout: 10_000 });
 }
 
 async function shoot(page: Page, config: Config, state: string, end = false): Promise<void> {

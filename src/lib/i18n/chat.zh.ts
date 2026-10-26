@@ -2,7 +2,7 @@
  * Simplified Chinese for the keys only the chat files use:
  * components/ChatView.tsx, components/Markdown.tsx, components/MermaidLightbox.tsx,
  * components/ChatMinimap.tsx, components/ImageLightbox.tsx, components/BackgroundTasks.tsx,
- * components/BackgroundAgentDetail.tsx,
+ * components/BackgroundAgentDetail.tsx, components/MarkdownLinkMenu.tsx,
  * lib/workBlocks.ts (with CATEGORY_LABEL), lib/toolVerbs.ts (with VERB_LABEL), lib/outcomeChip.ts,
  * lib/chatTimestamp.ts, lib/chatReadDeadline.ts.
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
@@ -216,4 +216,6 @@ export const CHAT_ZH: Record<string, string> = {
   "Conversation turns": "对话轮次",
   "Go to turn {n}": "跳到第 {n} 轮",
   "Show full message": "显示完整消息",
+  "Open link": "打开链接",
+  "Share link": "分享链接",
 };

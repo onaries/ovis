@@ -1,4 +1,5 @@
-/** A pi tool result's picture, end to end in Chrome: parsed page -> work row -> <img> bytes. */
+/** pi's pictures end to end in Chrome: parsed page -> prompt or work row -> <img> bytes. A prompt
+ * that is only a picture is a turn of its own; a tool result's picture loads once its row opens. */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +20,10 @@ const GIF = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 const entries = [
   { type: "session", version: 3, id: "s", timestamp: "2026-09-30T00:00:00Z", cwd: root },
   { type: "model_change", id: "m1", parentId: null, timestamp: "2026-09-30T00:00:00Z", provider: "test", modelId: "qwen-test" },
-  { type: "message", id: "u1", parentId: "m1", timestamp: "2026-09-30T00:00:01Z", message: { role: "user", content: "what is in this screenshot?" } },
+  // a picture sent with no words: pi keeps it in the prompt
+  { type: "message", id: "u0", parentId: "m1", timestamp: "2026-09-30T00:00:00Z", message: { role: "user", content: [{ type: "image", mimeType: "image/gif", data: GIF }] } },
+  { type: "message", id: "a0", parentId: "u0", timestamp: "2026-09-30T00:00:00Z", message: { role: "assistant", model: "qwen-test", provider: "test", stopReason: "stop", usage: { input: 4, output: 2 }, content: [{ type: "text", text: "A single pixel." }] } },
+  { type: "message", id: "u1", parentId: "a0", timestamp: "2026-09-30T00:00:01Z", message: { role: "user", content: "what is in this screenshot?" } },
   { type: "message", id: "a1", parentId: "u1", timestamp: "2026-09-30T00:00:02Z", message: {
     role: "assistant", model: "qwen-test", provider: "test", stopReason: "toolUse", usage: { input: 10, output: 4 },
     content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "shot.png" } }],
@@ -47,6 +51,8 @@ try {
       return image ? new Response(new Uint8Array(image.data), { headers: { "content-type": image.type } }) : new Response(JSON.stringify({ error: { code: "image_not_found" } }), { status: 404 });
     }
     const path = url.pathname;
+    if (path.endsWith("/pane/prompt")) return Response.json({ prompt: null, outcomes: [] });
+    if (path.endsWith("/pane/commands")) return Response.json({ commands: [] });
     return path === "/" ? new Response('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/chat-history-fixture.css"></head><body><div id="root"></div><script type="module" src="/chat-history-fixture.js"></script></body></html>', { headers: { "Content-Type": "text/html" } }) : new Response(Bun.file(join(root, path.slice(1))));
   } });
   const write = (rows: unknown[]) => {
@@ -57,10 +63,10 @@ try {
   };
   write(entries);
   for (const part of conversation.turns.flatMap((turn) => turn.parts)) {
-    if (part.kind !== "tool" || part.images === undefined) continue;
-    for (const image of part.images) bytes.set(image.ref, image.media_type === "image/png" ? { data: Buffer.from(PNG, "base64"), type: "image/png" } : { data: Buffer.from(GIF, "base64"), type: "image/gif" });
+    const images = part.kind === "tool" ? part.images ?? [] : part.kind === "image" ? [part] : [];
+    for (const image of images) bytes.set(image.ref, image.media_type === "image/png" ? { data: Buffer.from(PNG, "base64"), type: "image/png" } : { data: Buffer.from(GIF, "base64"), type: "image/gif" });
   }
-  assert.equal(bytes.size, 2, "the page should address both pictures");
+  assert.deepEqual([...bytes.keys()].sort(), ["pi-prompt:u0:0", "pi:call-1:0", "pi:call-1:1"], "the page should address all three pictures");
 
   browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
@@ -71,9 +77,20 @@ try {
   await page.goto(`http://127.0.0.1:${server.port}/`);
   await page.getByText("what is in this screenshot?").waitFor();
 
+  // the prompt that is only a picture is a turn of its own: its thumbnail, decoded, and no empty bubble
+  const sent = page.locator(".chat-turn-user").first();
+  assert.equal(await sent.locator(".chat-user-images img").count(), 1);
+  assert.equal(await sent.locator(".chat-bubble").count(), 0, "a picture alone draws no empty bubble");
+  await page.waitForFunction(() => {
+    const img = document.querySelector<HTMLImageElement>(".chat-turn-user .chat-user-images img");
+    return img !== null && img.complete && img.naturalWidth === 1;
+  });
+  assert.deepEqual(served, ["pi-prompt:u0:0"], "the prompt's picture loads with the prompt");
+  console.log("PASS a pi prompt that is only a picture is its own turn, its thumbnail decoded from the served bytes");
+
   // the row shows a picture only once opened: a base64 blob must not arrive on every poll
   assert.equal(await page.locator(".chat-tool-images img").count(), 0, "a closed row fetches nothing");
-  assert.deepEqual(served, [], "a closed row fetches nothing");
+  assert.deepEqual(served.filter((ref) => ref.startsWith("pi:")), [], "a closed row fetches nothing");
   // a settled turn's work is folded: open the block, then the row
   assert.equal(await page.locator(".work-block-head").getAttribute("aria-expanded"), "false");
   await page.locator(".work-block-head").click();
@@ -88,7 +105,7 @@ try {
     if (loaded) break;
     await new Promise((done) => setTimeout(done, 50));
   }
-  assert.deepEqual(served.sort(), ["pi:call-1:0", "pi:call-1:1"]);
+  assert.deepEqual(served.filter((ref) => ref.startsWith("pi:")).sort(), ["pi:call-1:0", "pi:call-1:1"]);
   // the bytes round-tripped: Chrome decoded them, so they are the file and not a broken icon
   const sizes = await page.locator(".chat-tool-images img").evaluateAll((imgs) => imgs.map((img) => [img.naturalWidth, img.naturalHeight]));
   assert.deepEqual(sizes, [[1, 1], [1, 1]], "Chrome decoded both pictures from the served bytes");
@@ -102,7 +119,7 @@ try {
   await page.locator(".work-block-head").click(); // fold, then unfold, so the row re-renders
   await page.locator(".work-block-head").click();
   assert.equal(await page.locator(".chat-tool-images").count(), 0, "no image, no container");
-  console.log("pi tool images: browser OK (2 pictures served, none fetched while folded, text answer intact)");
+  console.log("PASS pi pictures: browser OK (a prompt's picture, 2 tool pictures served, none fetched while folded, text answer intact)");
 } finally {
   await browser?.close();
   server?.stop();

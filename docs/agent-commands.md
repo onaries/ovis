@@ -205,6 +205,27 @@ merged into history, never starts another action, and is withheld from observe-r
 A command the agent keeps no transcript turn for, such as Claude Code's `/btw`, still shows a sent
 row.
 
+A row belongs to the agent session it was sent in (`commandOutcomes` in
+[`server/prompt.ts`](../server/prompt.ts)): once herdr reports another session, terminal or agent
+process in the pane, the row is hidden. A send made before the agent reports a session is bound to
+the agent process it went to and stays with the session that process reports first. Where no
+process could be matched (native Windows lists only the shell; an agent may run under another
+program name), it stays with the next session herdr reports in the same terminal under the same
+agent, or under the label herdr gave the pane at the send (herdr names an OmO pane `pi`). A send to
+a restarted agent while herdr still shows the session of the process before waits up to a minute
+(`STALE_SESSION_LAG_MS`) for the agent's own session. Known limits, all of which hide a row rather
+than show a wrong result, except the last:
+
+- That minute is counted when Chat next asks. A session that appeared within it while no Chat was
+  open is taken for a later one, and the row is hidden.
+- Within that minute, a session change typed in the terminal of an agent that resumed the same
+  session (`claude -c`, `codex resume`) keeps the row in the new session until the next change.
+- Outside Linux, an agent restarted under the same process number cannot be told apart from the
+  one before it.
+- The order of repeated identical sends trusts the history row numbers herdr reports
+  (`printedPastEarlier` in [`server/outcome.ts`](../server/outcome.ts)): a herdr that renumbered
+  its history between two sends could credit one with the other's result. herdr 0.9.5 does not.
+
 ## Readers
 
 A reader turns a screen into a card. Each agent's readers live in

@@ -62,6 +62,27 @@ describe.skipIf(process.platform === "win32")("Unix Bun discovery", () => {
     expect(result.out.trim()).toBe("1.4.3");
   });
 
+  it("lets the launched Bun discover Grok in ~/.local/bin with a service's bare PATH", async () => {
+    const bin = join(home, ".bun", "bin");
+    mkdirSync(bin, { recursive: true });
+    symlinkSync(process.execPath, join(bin, "bun"));
+    tool(join(home, ".local", "bin"), "grok", "fixture");
+    const result = await run(["/bin/sh", script, "-e", 'console.log(Bun.which("grok"))']);
+    expect(result.code).toBe(0);
+    expect(result.out.trim()).toBe(join(home, ".local", "bin", "grok"));
+  });
+
+  it("keeps a Grok already on PATH ahead of the user-local fallback", async () => {
+    const bin = join(home, ".bun", "bin");
+    mkdirSync(bin, { recursive: true });
+    symlinkSync(process.execPath, join(bin, "bun"));
+    tool(tools, "grok", "chosen");
+    tool(join(home, ".local", "bin"), "grok", "fallback");
+    const result = await run(["/bin/sh", script, "-e", 'console.log(Bun.which("grok"))']);
+    expect(result.code).toBe(0);
+    expect(result.out.trim()).toBe(join(tools, "grok"));
+  });
+
   it("exits 127 when Bun is missing from PATH and the configured locations", async () => {
     const result = await run(["/bin/sh", script, "x"], { WITH_BUN_EXTRA_DIRS: join(home, "missing") });
     expect(result.code).toBe(127);

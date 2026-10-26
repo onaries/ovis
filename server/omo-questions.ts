@@ -4,7 +4,7 @@ import { OmoAskReader, omoAsksAfter, type OmoAskCall, type OmoAsks } from "./omo
 import type { OmoAsk } from "./dialogs/shared.ts";
 
 /** A call's questions, or null for arguments that are not the shape omo asks with. */
-function omoAskOf(call: OmoAskCall): OmoAsk | null {
+export function omoAskOf(call: OmoAskCall): OmoAsk | null {
   const questions = (call.args as { questions?: unknown } | null | undefined)?.questions;
   if (!Array.isArray(questions) || questions.length === 0) return null;
   const ask: OmoAsk = { id: call.id, questions: [], wait: call.wait };

@@ -79,7 +79,8 @@ export function decodeClixml(stderr: string): string {
  * receives a prompt's first line, not the fingerprint below it.
  */
 export class SshConnection {
-  private dir = mkdtempSync(join(tmpdir(), "herdr-ssh-"));
+  // Unix sockets (including OpenSSH's temporary control path) must fit even with a long TMPDIR.
+  private dir = mkdtempSync(join(WINDOWS ? tmpdir() : "/tmp", "herdr-ssh-"));
   private control = join(this.dir, "control");
   private master: Subprocess | null = null;
   private children = new Set<Subprocess>();

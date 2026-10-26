@@ -11,17 +11,25 @@ const attempt = (existsSync(count) ? Number(readFileSync(count, "utf8")) : 0) + 
 writeFileSync(count, String(attempt));
 const step = plan.steps[Math.min(attempt - 1, plan.steps.length - 1)];
 log({ type: "start", attempt, pid: process.pid, host: process.ppid, args: process.argv.slice(2) });
-if (step.gate) {
+const waitForGate = async (name) => {
+  const gate = name.replace("{attempt}", String(attempt));
   const deadline = Date.now() + 15000;
-  while (!existsSync(join(dir, step.gate))) {
-    if (Date.now() >= deadline) throw new Error("attach gate timed out: " + step.gate);
+  while (!existsSync(join(dir, gate))) {
+    if (Date.now() >= deadline) throw new Error("attach gate timed out: " + gate);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-}
+};
+if (step.gate) await waitForGate(step.gate);
 if (step.kind === "real") {
   const child = spawn(plan.herdr, process.argv.slice(2), { stdio: "inherit" });
   log({ type: "child", attempt, pid: child.pid });
   child.on("exit", (code) => { log({ type: "exit", attempt }); process.exitCode = code ?? 1; });
+} else if (step.kind === "eof") {
+  await new Promise((resolve) => process.stdout.write(step.text ?? "attached and ready\r\n", resolve));
+  log({ type: "streaming", attempt });
+  if (step.exitGate) await waitForGate(step.exitGate);
+  log({ type: "exit", attempt });
+  process.exitCode = 0;
 } else {
   const message = step.kind === "held"
     ? "terminal attach failed: terminal term_test already has an attached client; retry with --takeover"

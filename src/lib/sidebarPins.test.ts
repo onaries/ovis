@@ -36,6 +36,9 @@ describe("sidebar agent pins", () => {
     expect(pruneSidebarPins(pins, new Set(), [])).toEqual(pins);
     expect(pruneSidebarPins(pins, new Set(), [{ id: "local", snapshot: null }, { id: "remote", snapshot: null }])).toEqual(pins);
     expect(pruneSidebarPins(pins, live, [{ id: "local", snapshot: {} }, { id: "remote", snapshot: null }])).toEqual(pins);
+    // a PC hidden on this device is out of the list: its pins are not taken for gone panes
+    expect(pruneSidebarPins(["pc-a:p1", "pc-b:p1"], new Set(["pc-a:p1"]), [{ id: "pc-a", snapshot: {} }], ["pc-b"])).toEqual(["pc-a:p1", "pc-b:p1"]);
+    expect(pruneSidebarPins(["pc-a:p1", "pc-b:p1"], new Set(["pc-a:p1"]), [{ id: "pc-a", snapshot: {} }])).toEqual(["pc-a:p1"]);
     expect(pruneSidebarPins(pins, live, [{ id: "local", snapshot: {} }, { id: "remote", snapshot: {} }])).toEqual(["local:p1"]);
   });
 

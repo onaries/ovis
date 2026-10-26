@@ -76,7 +76,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 <p align="center"><sub>모든 클립은 데스크톱과 폰을 동시에 녹화한 실제 동작이며, 실제 속도로 컷 없이 담았습니다. 누르면 전체 영상을 볼 수 있습니다.</sub></p>
 
-- **채팅과 터미널을 pane 하나에** — Claude Code, Codex, omp, omo, gjc, pi, Hermes의 기록과 식별된 OpenCode, Devin CLI 세션을 보여 줍니다. Linux의 Grok과 실험적인 Antigravity(agy)도 아래 지원 조건에 따라 채팅으로 보이며, 클릭 한 번이면 같은 pane의 터미널로 넘어갑니다. 에이전트가 일하는 동안 메시지를 대기열에 두어 다음 턴에 보내거나 **지금 보내기(Send now)**로 바로 보낼 수 있습니다. [지원 에이전트 →](docs/guide.md#supported-agents)
+- **채팅과 터미널을 pane 하나에** — Claude Code, Codex, omp, omo, gjc, pi, Hermes의 기록과 식별된 OpenCode, Devin CLI 세션을 보여 줍니다. Linux와 macOS의 Grok과 실험적인 Antigravity(agy)도 아래 지원 조건에 따라 채팅으로 보이며, 클릭 한 번이면 같은 pane의 터미널로 넘어갑니다. 에이전트가 일하는 동안 메시지를 대기열에 두어 다음 턴에 보내거나 **지금 보내기(Send now)**로 바로 보낼 수 있습니다. [지원 에이전트 →](docs/guide.md#supported-agents)
 - **탭 한 번으로 승인** — 지원되는 승인 요청, 질문, 계획 메뉴가 카드로 뜹니다. 답을 보내기 전에 그 질문이 아직 유효한지 확인하며, 카드로 지원하지 않는 요청에는 터미널에서 답합니다.
 - **내가 필요할 때 알림** — 모든 pane의 상태를 실시간으로 보여 주고, 앱을 보고 있을 때는 알림이 위에서 내려오며, 에이전트가 입력을 기다리거나 일을 끝내면 앱이 닫혀 있어도 푸시 알림을 보냅니다.
 - **폰에 설치해서 쓰기** — 키보드 위에 키 바(Esc, Tab, Ctrl, Alt, Shift, Enter, 방향키)가 붙은 PWA입니다. 키 순서를 바꾸거나 나만의 키 조합을 Settings(설정)에서 추가할 수 있습니다. Tailscale 주소는 QR 코드로 받아 갑니다. [폰 설정 →](docs/guide.md#on-your-phone)
@@ -134,7 +134,7 @@ herdr가 실행 중이면 설치 스크립트가 출력하거나 열어 준 주�
 
 Claude Code, Codex, omp, omo, gjc, pi, Hermes는 각자의 세션 저장소에서 읽습니다. GJC 채팅과 완료 알림은 웹 UI의 네이티브 GJC 확장으로 활성 세션을 식별하며, SDK 브로커나 CLI 조회를 쓰지 않습니다. [확장을 설치](docs/guide.md#supported-agents)하고 GJC를 다시 시작하면 켜집니다. 세션을 확실히 식별할 수 없으면 터미널과 herdr 자체 상태로 보입니다. OpenCode는 지원되는 2.x와 1.x SQLite 구조에서 herdr가 보고한 세션을 읽습니다. 시작 화면, 세션 식별자가 없는 경우, 지원하지 않거나 읽을 수 없거나 크기 제한을 넘긴 저장소에서는 터미널로 보입니다. Devin CLI는 `devin --resume <id>`처럼 herdr나 실행 중인 프로세스가 세션을 명시할 때 채팅으로 보이고, 그냥 `devin`으로 띄우면 터미널로 보입니다.
 
-Grok 채팅은 Linux에서 프로세스가 보유한 세션이 하나뿐이고 herdr가 보고한 세션과 일치할 때 지원됩니다. macOS와 Windows, 세션이 불명확한 경우에는 터미널로 보입니다. Antigravity(agy)는 실행 중인 프로세스의 대화 잠금을 따라 기록을 읽는 실험적 지원입니다. Linux에서 실제 동작을 확인했으며 macOS는 미검증, Windows는 터미널 전용입니다. 지원하지 않거나 읽을 수 있는 기록이 없는 경우에는 터미널로 보입니다. [지원 에이전트 →](docs/guide.md#supported-agents)
+Grok 채팅은 Linux와 macOS에서 프로세스가 보유한 세션이 하나뿐이고 herdr가 보고한 세션과 일치할 때 지원됩니다. Windows와 세션이 불명확한 경우에는 터미널로 보입니다. Antigravity(agy)는 실행 중인 프로세스의 대화 잠금을 따라 기록을 읽는 실험적 지원입니다. Linux에서 실제 동작을 확인했으며 macOS는 미검증, Windows는 터미널 전용입니다. 지원하지 않거나 읽을 수 있는 기록이 없는 경우에는 터미널로 보입니다. [지원 에이전트 →](docs/guide.md#supported-agents)
 
 **herdr의 TUI를 대체하나요?**
 

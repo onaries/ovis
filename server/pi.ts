@@ -1,11 +1,13 @@
-import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { agentGet, paneProcessInfo } from "./herdr/client.ts";
 import { runsAgent } from "./gjc-runtime.ts";
 import { processEnviron } from "./omo.ts";
 import { piAgentDir } from "./pi-models.ts";
+import { transcriptInStore as piTranscriptInStore, unwrittenSession } from "./transcript-store.ts";
+export { transcriptInStore as piTranscriptInStore, unwrittenSession } from "./transcript-store.ts";
 
 /**
  * pi's session store. `PI_CODING_AGENT_SESSION_DIR` moves it, exactly as CODEX_HOME
@@ -18,59 +20,14 @@ export const defaultPiSessionDir = (): string =>
   process.env["PI_CODING_AGENT_SESSION_DIR"] || join(piAgentDir(), "sessions");
 
 /**
- * The canonical file inside the store, or null. pi names an absolute path itself, so
- * the store is checked rather than trusted: a path elsewhere, a link out of it or a
- * non-session file is no evidence, and an unreadable store holds nothing readable.
- */
-export function piTranscriptInStore(path: string, sessionDir: string): string | null {
-  let canonical: string;
-  let root: string;
-  try {
-    canonical = realpathSync(path);
-    root = realpathSync(sessionDir);
-  } catch { return null; }
-  const inside = relative(root, canonical);
-  if (!inside || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return null;
-  if (!canonical.endsWith(".jsonl")) return null;
-  // A directory wearing the extension answers no transcript read later: refuse it here.
-  let fd: number | undefined;
-  try {
-    fd = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK);
-    return fstatSync(fd).isFile() ? canonical : null;
-  } catch { return null; }
-  finally { if (fd !== undefined) closeSync(fd); }
-}
-
-const absent = (error: unknown): boolean => (error as { code?: unknown } | null)?.code === "ENOENT";
-
-/**
  * The session an agent named but has not written, or null. pi and omp write their file only
  * once the first answer is in (pi's SessionManager waits for an assistant message), so until
  * then the reported path does not exist. Only an absent `.jsonl` file whose nearest existing
  * ancestor is a directory inside the store, both resolved, counts: nothing is read from it,
  * its display id and canonical prospective path keep equally named sessions distinct.
  */
-export function unwrittenSession(path: string, sessionDir: string): { id: string; path: string } | null {
-  if (!isAbsolute(path) || !path.endsWith(".jsonl")) return null;
-  let root: string;
-  try { root = realpathSync(sessionDir); } catch { return null; }
-  try {
-    lstatSync(path);
-    return null;
-  } catch (error) { if (!absent(error)) return null; }
-  for (let dir = dirname(path); ; dir = dirname(dir)) {
-    try {
-      const real = realpathSync(dir);
-      if (!statSync(real).isDirectory()) return null;
-      const inside = relative(root, real);
-      if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return null;
-      return { id: basename(path, ".jsonl"), path: join(real, relative(dir, path)) };
-    } catch (error) {
-      if (!absent(error) || dirname(dir) === dir) return null;
-      // a link to nowhere is a place the agent cannot write to, not a directory still to come
-      try { lstatSync(dir); return null; } catch (missing) { if (!absent(missing)) return null; }
-    }
-  }
+export function piUnwrittenHeaderId(path: string): string | null {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/iu.exec(basename(path))?.[1] ?? null;
 }
 
 const PI_EXECUTABLE = /(^|[\\/])pi(?:\.exe|\.[cm]?js)?$/i;

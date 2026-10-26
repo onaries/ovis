@@ -5,6 +5,8 @@
  */
 interface CapacitorBridge {
   isNativePlatform?: () => boolean;
+  /** "ios" or "android" in the app */
+  getPlatform?: () => string;
   nativePromise?: (plugin: string, method: string, options?: Record<string, unknown>) => Promise<unknown>;
   /** the app's native plugins, announced to the page before its first script runs */
   PluginHeaders?: ReadonlyArray<{ name?: unknown }>;
@@ -25,6 +27,11 @@ export function inNativeApp(): boolean {
 /** Whether this page runs in Ovis for Mac's own window (app/mac), which names itself in the user agent. */
 export function inMacApp(): boolean {
   return typeof navigator !== "undefined" && /\bOvisMac\//.test(navigator.userAgent);
+}
+
+/** Whether this page runs inside the Android app, whose WebView draws no menu of its own for a long-pressed link. */
+export function inAndroidApp(): boolean {
+  return inNativeApp() && bridge()?.getPlatform?.() === "android";
 }
 
 /**

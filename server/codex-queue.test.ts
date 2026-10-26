@@ -3,6 +3,17 @@ import { codexQueueInputEmpty } from "./prompt.ts";
 
 const screen = (input: string) => `• Working (2s • esc to interrupt)\n${input}\n  GPT-6.1-Sol high · /workspace\n  ? for shortcuts\n`;
 
+it("recognizes Ultra's main prompt while retaining placeholder and queued-question guards", () => {
+  const live = screen("» Ask Codex to do anything").replace("Sol high", "Sol ultra");
+  const colors = live.replace("Ask Codex to do anything", "\x1b[2mAsk Codex to do anything\x1b[0m");
+  expect(codexQueueInputEmpty(live, colors)).toBe(true);
+  expect(codexQueueInputEmpty(live.replace("» Ask Codex to do anything", "»"))).toBe(true);
+  expect(codexQueueInputEmpty(live, live)).toBe(false);
+  expect(codexQueueInputEmpty(live.replace("Ask Codex to do anything", "unsent draft"), colors)).toBe(false);
+  const waiting = live.replace("»", "• Queued follow-up inputs\n? 1 question · 8s\nalt+↑ to answer\n»");
+  expect(codexQueueInputEmpty(waiting, colors)).toBe(false);
+});
+
 it("requires the live bottom composer and distinguishes a placeholder from the same typed words", () => {
   expect(codexQueueInputEmpty(screen("›"))).toBe(true);
   const plain = screen("› Ask Codex to do anything");

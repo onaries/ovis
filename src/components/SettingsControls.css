@@ -172,8 +172,39 @@
   text-align: center;
 }
 
-.settings-select {
+.settings-select-wrap {
+  position: relative;
+  display: inline-flex;
   max-width: 100%;
+}
+
+.settings-select {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  padding-inline-end: calc(var(--space-3) + var(--space-4) + var(--space-2));
+}
+
+.settings-select-wrap > svg {
+  position: absolute;
+  inset-inline-end: var(--space-3);
+  top: 50%;
+  width: var(--space-4);
+  height: var(--space-4);
+  transform: translateY(-50%);
+  color: var(--text-strong);
+  pointer-events: none;
+}
+
+@media (forced-colors: active) {
+  .settings-select {
+    appearance: auto;
+    padding-inline-end: var(--space-3);
+  }
+
+  .settings-select-wrap > svg {
+    display: none;
+  }
 }
 
 /* fingers: a select is a finger-sized target, like the file viewer's controls */

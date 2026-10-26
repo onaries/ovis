@@ -393,6 +393,51 @@ try {
         console.log("PASS an empty Enter answers nothing, a typed pick waits for Confirm, a press answers and hands the focus to the message box");
       }
 
+      for (const size of [{ width: 1280, height: 800 }, { width: 390, height: 844, touch: true }]) {
+        for (const enterSends of [true, false]) {
+          // the keyboard alone: with a typed pick waiting, the empty box's Escape is the card's Cancel
+          // and its Enter the card's Confirm, so the hands never leave the keys
+          const { page, errors, shot, close } = await open({ ...size, prompt: PLAN, settings: { enterSends } });
+          try {
+            const box = page.locator(".composer-text");
+            const sendKey = enterSends ? "Enter" : "Control+Enter";
+            await box.fill("2");
+            await box.press(sendKey);
+            await page.locator(".prompt-card-confirm").waitFor();
+            await box.press("Escape");
+            await page.locator(".prompt-card-confirm").waitFor({ state: "detached" });
+            assert.equal(await page.locator(".prompt-card").count(), 1, "Escape cancels the pick, not the question");
+            // a held Enter: its first press picks, and its repeats confirm nothing
+            await box.fill("2");
+            if (!enterSends) await page.keyboard.down("Control");
+            await page.keyboard.down("Enter");
+            await page.locator(".prompt-card-confirm").waitFor();
+            await page.keyboard.down("Enter");
+            await page.keyboard.up("Enter");
+            if (!enterSends) await page.keyboard.up("Control");
+            // a box holding only a space is not empty: its Enter keeps the pick waiting
+            await box.fill(" ");
+            await box.press(sendKey);
+            // The fixture records an answer synchronously in fetch, before returning its promise.
+            // Reading it after the completed key event needs no timing window.
+            assert.deepEqual(await answersOf(page), [], "a held Enter, or an Enter over a space, does not confirm the pick");
+            assert.equal(await page.locator(".prompt-card-confirm").count(), 1);
+            // text in the box is a message being written: Escape there leaves the pick waiting
+            await box.fill("never mind");
+            await box.press("Escape");
+            assert.equal(await page.locator(".prompt-card-confirm").count(), 1, "Escape over text keeps the pick");
+            await box.fill("");
+            await shot(`typed-pick-${size.width}-${enterSends ? "enter" : "ctrl-enter"}`);
+            await box.press(sendKey);
+            await page.locator(".prompt-card").getByText(PLAN.question).waitFor({ state: "detached" });
+            assert.deepEqual(await answersOf(page), [{ pane_id: panes.web, prompt_id: "demo-plan", option_index: 1 }], "Enter in the empty box confirms the pick, once");
+            assert.equal(await page.evaluate(() => document.activeElement?.className.split(" ")[0]), "composer-text", "and the focus stays in the box");
+            assert.deepEqual(errors, []);
+          } catch (error) { await preserveFailure(page, error); } finally { await close(); }
+          console.log(`PASS a typed pick is confirmed with ${enterSends ? "Enter" : "Ctrl+Enter"}, or cancelled with Escape, at ${size.width}px`);
+        }
+      }
+
       {
         // held messages fold to their caption over the card: caption, card, input card
         const { page, errors, shot, close } = await open({ width: 1440, height: 900, held: ["Also cover a replay after the key has expired."] });

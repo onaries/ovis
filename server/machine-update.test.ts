@@ -208,6 +208,13 @@ describe("approved bridge replacement", () => {
     expect(result.error).toContain("Update this app");
     expect(operations).toEqual(["verify:4242"]);
   });
+  it("sends a newer independently managed bridge to this app's own update, not to that server", async () => {
+    const { result, operations } = await scenario({ onlyFirst: true, initialProtocol: BRIDGE_PROTOCOL, initialBundle: REMOTE_BUNDLE_VERSION, identity: { bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1), managed_remote: false } });
+    expect(result).toMatchObject({ phase: "failed", action_required: "setup" });
+    expect(result.error).toContain("Update this app");
+    expect(result.error).not.toContain("its own Settings");
+    expect(operations).toEqual(["verify:4242"]);
+  });
   it("sends an incompatible independently managed bridge to its own Settings, not to an update", async () => {
     const { result, operations } = await scenario({ onlyFirst: true, initialProtocol: BRIDGE_PROTOCOL, initialBundle: REMOTE_BUNDLE_VERSION, identity: { bundle_version: "older", managed_remote: false } });
     expect(result).toMatchObject({ phase: "failed", action_required: "setup" });

@@ -209,7 +209,7 @@ describe("a terminal another web bridge holds", () => {
 });
 
 describe("an attach classified as held", () => {
-  it("is only herdr's own refusal: an attach that ends on other output ends the terminal", async () => {
+  it("is only herdr's own refusal: other output gets bounded live-terminal recovery", async () => {
     const paneId = await pane();
     // the pane itself prints herdr's refusal (a log, say), then the attach fails for another reason
     const herdr = scriptedHerdr([`${HELD.replace("; exit 1", "")}; printf 'more pane output\\r\\n'; sleep 0.5; exit 1`]);
@@ -218,12 +218,15 @@ describe("an attach classified as held", () => {
       try {
         await client.open;
         client.send({ type: "attach", pane_id: paneId, cols: 100, rows: 30 });
-        await until(() => client.state.exits === 1, "the failed attach ends the terminal");
+        await until(() => client.state.exits === 1, "the repeatedly failed attach reaches its one recovery deadline");
         expect(client.state.exitCodes).toEqual([1]);
         expect(client.state.errors).not.toContain("attach_held");
         expect(client.state.tail).toContain("already has an attached client");
+        const attempts = herdr.attempts();
+        expect(attempts).toBeGreaterThan(1);
+        expect(attempts).toBeLessThan(16);
         await Bun.sleep(400);
-        expect(herdr.attempts()).toBe(1);
+        expect(herdr.attempts()).toBe(attempts);
       } finally { client.ws.close(); }
     });
   }, 30_000);

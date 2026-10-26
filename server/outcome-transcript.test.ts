@@ -1,11 +1,65 @@
 import { afterEach, expect, it, mock, spyOn } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as client from "./herdr/client.ts";
 import * as conversation from "./conversation.ts";
-import { handlePromptRequest, noteSubmitted } from "./prompt.ts";
+import * as claudeStore from "./claude-store.ts";
+import { bindCommandProcess, commandSendFrom, handlePromptRequest, noteSubmitted } from "./prompt.ts";
 import type { PanePromptResponse } from "../shared/protocol.ts";
 import { commandInvocations, commandTranscriptRecords, CommandReservations, type CommandSend } from "./outcome.ts";
 
 afterEach(() => mock.restore());
+
+// a `claude attach <job>` shows the job's session, not the one herdr's hook last reported: only the pane's processes
+// tell, so a poll whose own read of them failed leaves the lookup to ask herdr itself
+it("keeps a claude attach pane on its job's transcript when the poll's process read fails", async () => {
+  const at = Date.parse("2026-10-20T00:00:00Z");
+  const root = mkdtempSync(join(tmpdir(), "outcome-attach-read-"));
+  const hook = "00000000-0000-4000-8000-000000000001";
+  const job = "00000000-0000-4000-8000-000000000002";
+  const project = join(root, "projects", claudeStore.claudeProjectDir(root));
+  mkdirSync(project, { recursive: true });
+  mkdirSync(join(root, "jobs", "abcd1234"), { recursive: true });
+  writeFileSync(join(root, "jobs", "abcd1234", "state.json"), JSON.stringify({ sessionId: job }));
+  writeFileSync(join(project, `${job}.jsonl`), JSON.stringify({ type: "progress", uuid: "job-session-without-result" }) + "\n");
+  // the session herdr's hook reported earlier holds a /context result after the send
+  writeFileSync(join(project, `${hook}.jsonl`), [
+    { type: "system", subtype: "local_command", timestamp: new Date(at + 10).toISOString(), content: "<command-name>/context</command-name>\n<command-message>context</command-message>" },
+    { type: "system", subtype: "local_command", timestamp: new Date(at + 20).toISOString(), content: "<local-command-stdout>fixture-hook-session-result</local-command-stdout>" },
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  const pane = { pane_id: root, terminal_id: "term", workspace_id: "w", tab_id: "t", focused: false, revision: 0, agent: "claude",
+    agent_status: "idle", cwd: root, agent_session: { agent: "claude", kind: "id", source: "herdr:claude", value: hook } };
+  const foreground = { pane_id: root, foreground_processes: [{ pid: process.pid, name: "claude", argv: ["claude", "attach", "abcd1234"] }] };
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = root;
+  const clock = spyOn(Date, "now").mockReturnValue(at);
+  spyOn(client, "sessionSnapshot").mockResolvedValue({ panes: [pane], layouts: [], agents: [], workspaces: [], tabs: [], protocol: 22, version: "fixture" });
+  spyOn(client, "paneRead").mockResolvedValue({ ...pane, text: "", source: "detection", format: "text", truncated: false });
+  spyOn(client, "paneProcessInfo").mockRejectedValue(new Error("fixture: the poll's process read failed"));
+  spyOn(client, "herdrRpc").mockImplementation((async (method: string) => {
+    if (method === "agent.get") return { agent: pane };
+    if (method === "pane.process_info") return { process_info: foreground };
+    throw new Error(`fixture: unexpected ${method}`);
+  }) as typeof client.herdrRpc);
+  spyOn(claudeStore, "processClaudeConfigDir").mockResolvedValue(root);
+  try {
+    const sent = commandSendFrom(pane, "claude", [], "/context");
+    if (!sent) throw new Error("fixture command was not recorded");
+    bindCommandProcess(pane.pane_id, sent, foreground);
+    await sent.visibility?.binding;
+    noteSubmitted(pane.pane_id, sent.text, sent);
+    clock.mockReturnValue(at + 30);
+    const url = new URL(`http://localhost/api/pane/prompt?pane_id=${encodeURIComponent(pane.pane_id)}`);
+    const shown = await (await handlePromptRequest(new Request(url), url))?.json() as PanePromptResponse;
+    expect(shown.outcomes?.at(-1)).toMatchObject({ state: "accepted", evidence: [] });
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previous;
+    conversation.forgetTranscriptState();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 for (const delayed of [true, false]) {
   it(`assigns repeated /context records FIFO once unambiguous when the first result is ${delayed ? "after" : "before"} the second send`, async () => {
     const at = Date.parse("2026-10-20T00:00:00Z");

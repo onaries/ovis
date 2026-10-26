@@ -54,7 +54,7 @@ export function validGeometry(cols: unknown, rows: unknown): { cols: number; row
  * The server's terminals. `stopped` is read through a getter, as `stop()` sets it later, and `end`
  * is called through one, as the connections are built after the terminals.
  */
-export function createTerminalRegistry({ options, clients, stopped, terminalAttach, holdFor, heldRetry, retryFor, relookupFor, holdPending, holdPendingPane, attached, inputReady, end }: {
+export function createTerminalRegistry({ options, clients, stopped, terminalAttach, holdFor, heldRetry, retryFor, relookupFor, holdPending, holdPendingPane, attached, transcriptChanged, inputReady, end }: {
   options: { codexHome?: string; devinDbPath?: string; opencodeDb?: string; hermesHome?: string; grokHome?: string };
   clients: Set<Client>;
   stopped: () => boolean;
@@ -67,6 +67,8 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
   holdPendingPane: (paneId: string, fault: { code: string; message: string }) => void;
   /** a connection joined the pane's attachment: the pending messages queued for the pane are told to it, and may go through it */
   attached: (client: Client, paneId: string) => void;
+  /** a native transcript changed: reconcile Ovis-origin Pi receipts before notifying readers */
+  transcriptChanged?: (paneId: string) => void;
   /** the pane's terminal takes input again: a pending message waiting for a typist may go now */
   inputReady: (paneId: string) => void;
   end: (client: Client, reason: "stalled" | "revoked" | "closed") => void;
@@ -79,6 +81,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
   const retiringAttachments = new Map<string, Promise<void>>();
 
   const conversations = new ConversationMonitor((paneId, signature) => {
+    transcriptChanged?.(paneId);
     for (const client of clients) {
       if (!connectionOf(client).closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId)) {
         send(client, { type: "conversation-changed", pane_id: paneId, signature });
@@ -155,6 +158,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
     attachments.delete(paneId);
     clearTimeout(attachment.retry);
     clearTimeout(attachment.relookup);
+    clearTimeout(attachment.recovery);
     clearTimeout(attachment.repaint);
     // its members hold nothing on this pane any more (a pty that exited leaves them on
     // the "terminal ended" screen): a stale entry would read as a live claim in

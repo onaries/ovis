@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
 import { ChatRowMemoryContext, type ChatRowMemory } from "../lib/chatRowState.tsx";
@@ -17,6 +17,11 @@ export interface ChatTimelineProps<Row extends ChatTimelineRow> {
   scroller: RefObject<HTMLDivElement | null>;
   listRef: RefObject<LegendListRef | null>;
   following: RefObject<boolean>;
+  /**
+   * A click a following reader made is laid out where they are until the rows change; held by the
+   * chat, which lets it go when the reader goes back to the end (Jump to latest), whatever set it.
+   */
+  manualLayout: RefObject<boolean>;
   /** A turn works and motion is welcome: following the end glides. */
   smoothFollow: boolean;
   memories: Map<string, ChatRowMemory>;
@@ -24,18 +29,19 @@ export interface ChatTimelineProps<Row extends ChatTimelineRow> {
   footer: ReactNode;
   label: string;
   onScroll: () => void;
+  /** The reader opened something in a row (a tool, a folded block, a whole output): they read there. */
+  onOpen: () => void;
   renderRow: (row: Row, index: number) => ReactNode;
 }
 
 /** One scroll owner; selected and focused rows stay real DOM nodes outside its window. */
-export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source, scroller, listRef, following, smoothFollow, memories, header, footer, label, onScroll, renderRow }: ChatTimelineProps<Row>) {
+export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source, scroller, listRef, following, manualLayout, smoothFollow, memories, header, footer, label, onScroll, onOpen, renderRow }: ChatTimelineProps<Row>) {
   const [selectionKeys, setSelectionKeys] = useState<string[]>([]);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   useLayoutEffect(() => {
     setSelectionKeys([]);
     setFocusKey(null);
   }, [scope]);
-  const manualLayout = useRef(false);
   const rowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
   const positions = useMemo(() => new Map(rowKeys.map((key, index) => [key, index])), [rowKeys]);
   const pinned = useMemo(() => [...new Set(focusKey === null ? selectionKeys : [...selectionKeys, focusKey])], [selectionKeys, focusKey]);
@@ -49,7 +55,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
   useLayoutEffect(() => {
     manualLayout.current = false;
     for (const key of memories.keys()) if (!positions.has(key)) memories.delete(key);
-  }, [rows, memories, positions]);
+  }, [rows, memories, positions, manualLayout]);
 
   useEffect(() => {
     const node = scroller.current;
@@ -77,8 +83,19 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     const focusChanged = () => setFocusKey(rowFor(document.activeElement));
     const focusOut = () => queueMicrotask(focusChanged);
     const interaction = (event: Event) => {
+      const control = event.target instanceof Element ? event.target.closest("summary, .work-block-head, .work-row-head, .chat-tool-more") : null;
       // a pending work block's head opens nothing
-      if (event.target instanceof Element && event.target.closest("summary, .work-block-head, .work-row-head, .chat-tool-more") && !event.target.closest(".work-block.is-pending")) manualLayout.current = true;
+      if (control === null || control.closest(".work-block.is-pending")) return;
+      // captured before the row's own handler: what it shows now is what the click changes
+      const details = control.matches("summary") ? control.parentElement : null;
+      // Opening is reading there: following stops until the reader goes back to the end, so nothing
+      // is held for them once they do (Jump to latest follows what grows next), not even a hold an
+      // earlier click left. Another click a following reader makes is laid out where they are until
+      // the rows change.
+      if (control.matches(".chat-tool-more") || control.getAttribute("aria-expanded") === "false" || (details instanceof HTMLDetailsElement && !details.open)) {
+        manualLayout.current = false;
+        onOpen();
+      } else if (following.current) manualLayout.current = true;
     };
     document.addEventListener("selectionchange", selectionChanged);
     node.addEventListener("focusin", focusChanged);
@@ -101,7 +118,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
       node.removeEventListener("click", interaction, true);
       node.removeEventListener("copy", copy);
     };
-  }, [scroller, positions, rowKeys]);
+  }, [scroller, positions, rowKeys, onOpen, following, manualLayout]);
 
   // A glide aims at the end it saw; content that grew meanwhile leaves it short. Where it stops, a
   // reader still following is put at the end at once.
@@ -121,7 +138,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     const scrolled = () => { clearTimeout(quiet); quiet = setTimeout(settle, 150); };
     node.addEventListener("scroll", scrolled, { passive: true });
     return () => { clearTimeout(quiet); node.removeEventListener("scroll", scrolled); };
-  }, [scroller, listRef, following, smoothFollow]);
+  }, [scroller, listRef, following, manualLayout, smoothFollow]);
 
   useLayoutEffect(() => {
     const transcript = scroller.current?.querySelector<HTMLElement>(".chat-transcript");

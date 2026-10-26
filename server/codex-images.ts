@@ -10,7 +10,26 @@ type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" ? value as RecordValue : {};
 const TYPES: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
 const DATA_IMAGE = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]*={0,2})$/;
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+/** The largest picture the image endpoint serves, from any agent's transcript. */
+export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const RASTER_TYPES = new Set(Object.values(TYPES));
+
+/** How many bytes a base64 string decodes to, its padding left out. */
+export function base64Size(data: string): number {
+  return Math.floor(data.length * 3 / 4) - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0);
+}
+
+/**
+ * The type of a picture a transcript holds inline as base64, by its leading bytes: a raster the
+ * chat shows, declared as one, within the size the image endpoint serves. Null for anything else.
+ * The parsers and the image endpoint ask the same question, so a page never names a picture the
+ * endpoint refuses.
+ */
+export function inlineImageType(declared: unknown, data: unknown): string | null {
+  if (typeof declared !== "string" || !RASTER_TYPES.has(declared) || typeof data !== "string") return null;
+  if (base64Size(data) > MAX_IMAGE_BYTES) return null;
+  return imageType(Buffer.from(data.slice(0, 16), "base64"));
+}
 export const CODEX_IMAGE_REF = /^codex-[a-f0-9]{64}$/;
 
 /** Only native user records name attachments; tool output and remote URLs never do. */

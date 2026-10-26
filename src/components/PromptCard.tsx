@@ -6,7 +6,7 @@ import "./PromptCard.css";
 import { ApiError } from "../lib/api.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import type { InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
-import { focusFollowsAnswer, pressOrigin, type TypedAnswer } from "../lib/promptAnswer.ts";
+import { blocksStepNavigation, focusFollowsAnswer, pressOrigin, type TypedAnswer } from "../lib/promptAnswer.ts";
 import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useT } from "../lib/i18n.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
@@ -143,6 +143,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   const hasChoices = prompt.options.some((_, index) => index !== prompt.custom_option_index);
   const openFile = useContext(OpenFileContext);
   const planFile = prompt.plan_file;
+  const navigationBlocked = blocksStepNavigation(prompt, selected, custom);
 
   return (
     <section className={`prompt-card${folded ? " is-folded" : ""}`} ref={cardRef} role="region" aria-label={t("Agent is asking")}
@@ -157,7 +158,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
           <button
             type="button"
             className="btn btn-ghost prompt-card-back"
-            disabled={pending}
+            disabled={pending || navigationBlocked}
             aria-label={t("Back")}
             title={t("Back")}
             onClick={(event) => void answer({ step_back: true, draft: { option_indices: [...selected], custom_text: custom } }, event)}
@@ -184,7 +185,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
       {prompt.steps && (
         <ol className="prompt-card-steps" aria-label={t("Questions")}>
           {prompt.steps.map((step, index) => {
-            const isClickable = step.answered && !step.current && prompt.can_step_back;
+            const isClickable = !step.current && (step.can_navigate || step.answered && prompt.can_step_back);
             return (
               <li
                 key={index}
@@ -195,14 +196,14 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
                   <button
                     type="button"
                     className="prompt-card-step-button"
-                    disabled={pending}
+                    disabled={pending || navigationBlocked}
                     aria-label={step.label}
-                    title={t("Back")}
+                    title={step.can_navigate ? step.label : t("Back")}
                     onClick={(event) => void answer({ step_index: index, draft: { option_indices: [...selected], custom_text: custom } }, event)}
                   >
-                    <span className="prompt-card-step-mark" aria-hidden="true"><Check /></span>
+                    <span className="prompt-card-step-mark" aria-hidden="true">{step.answered ? <Check /> : index + 1}</span>
                     <span className="prompt-card-step-label">{step.label}</span>
-                    <span className="visually-hidden">{t("(answered)")}</span>
+                    {step.answered && <span className="visually-hidden">{t("(answered)")}</span>}
                   </button>
                 ) : (
                   <>
@@ -216,6 +217,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
           })}
         </ol>
       )}
+      {navigationBlocked && <p className="prompt-card-hint">{t("Submit or clear edits before switching questions.")}</p>}
       {/* a Claude approval's heading is its question too: said once */}
       {prompt.question !== prompt.title && <p className="prompt-card-question">{prompt.question}</p>}
       {prompt.queued && (

@@ -69,6 +69,78 @@ export function terminalFontStack(family: string): string {
   return chosen === "" ? TERMINAL_FONT_STACK : `${SYMBOLS_FONT}, ${chosen}, ${TERMINAL_TEXT_FONTS}`;
 }
 
+/** The width of PROBE_TEXT in a `font-family` list: as the page draws it, and as a canvas measures it. */
+export interface FontWidths {
+  drawn(family: string): number;
+  measured(family: string): number;
+}
+
+// narrow and wide Latin, a digit and Hangul: any text face changes the width of some of them
+const PROBE_TEXT = "mmmmmmmmmmlli1WW가나다";
+const PROBE_SIZE = "32px";
+// a monospaced face can match monospace's Latin to the pixel, never serif's as well
+const PROBE_FALLBACKS = ["monospace", "serif"] as const;
+const PROBE_TOLERANCE_PX = 0.5;
+const GENERIC_FAMILIES = new Set(["monospace", "serif", "sans-serif", "cursive", "fantasy", "system-ui", "ui-monospace", "ui-serif", "ui-sans-serif", "ui-rounded", "math", "emoji", "fangsong"]);
+
+let pageWidths: FontWidths | undefined;
+
+/** This page's measurements, each made once: null without a document to measure in. */
+function browserFontWidths(): FontWidths | null {
+  if (pageWidths) return pageWidths;
+  const context = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+  if (!context || !document.body) return null;
+  const widths = new Map<string, number>();
+  const once = (kind: string, measure: (family: string) => number) => (family: string): number => {
+    const key = `${kind} ${family}`;
+    let width = widths.get(key);
+    if (width === undefined) {
+      width = measure(family);
+      widths.set(key, width);
+    }
+    return width;
+  };
+  pageWidths = {
+    drawn: once("drawn", (family) => {
+      const span = document.createElement("span");
+      span.style.cssText = "position:absolute;visibility:hidden;white-space:pre;letter-spacing:0";
+      span.style.fontSize = PROBE_SIZE;
+      span.style.fontFamily = family;
+      span.textContent = PROBE_TEXT;
+      document.body.append(span);
+      const width = span.getBoundingClientRect().width;
+      span.remove();
+      return width;
+    }),
+    measured: once("measured", (family) => {
+      context.font = `${PROBE_SIZE} ${family}`;
+      return context.measureText(PROBE_TEXT).width;
+    }),
+  };
+  return pageWidths;
+}
+
+function finds(width: (family: string) => number, name: string): boolean {
+  return PROBE_FALLBACKS.some((fallback) => Math.abs(width(`${name}, ${fallback}`) - width(fallback)) > PROBE_TOLERANCE_PX);
+}
+
+/**
+ * The stack without the families this page draws but its canvas cannot measure. WebKit in an
+ * app's web view (Ovis for Mac's window) draws text in a font the user installed, while its
+ * canvas sees only the system's fonts; Safari hides an installed font from both, Chromium shows
+ * it to both. xterm sizes its cells from a canvas (TextMetrics), and lib/terminalGlyphs.ts fits
+ * wide glyphs from one: with JetBrains Mono and D2Coding installed, the app measured a grid in
+ * Menlo and drew it in those, rows too short for their glyphs, and Hangul it measured as Apple SD
+ * Gothic Neo was enlarged past its two cells. Left out, such a family falls back as if it were not
+ * installed, and the terminal draws what Safari draws. The icon font and generic families stay.
+ */
+export function measurableFontStack(stack: string, widths: FontWidths | null = browserFontWidths()): string {
+  if (!widths) return stack;
+  const names = stack.split(",").map((name) => name.trim());
+  const kept = names.filter((name) => name === SYMBOLS_FONT || GENERIC_FAMILIES.has(name) || !finds(widths.drawn, name) || finds(widths.measured, name));
+  return kept.length === names.length ? stack : kept.join(", ");
+}
+
 /** The chat body's `font-family`, or null to keep the UI font. */
 export function chatFontStack(family: string): string | null {
   const chosen = sanitizeFontFamily(family);

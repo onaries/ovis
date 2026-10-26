@@ -22,7 +22,7 @@ import { loadChatTimeline, loadedChatTimeline, useChatTimeline } from "./chatTim
 import { ChatMinimap } from "./ChatMinimap.tsx";
 import { minimapTurns } from "../lib/chatMinimap.ts";
 import type { LegendListRef } from "@legendapp/list/react";
-import { appendChatRowSlots, createChatRowSlots, prependChatRowSlots } from "../lib/chatRows.ts";
+import { appendChatRowSlots, continuesHistory, createChatRowSlots, prependChatRowSlots } from "../lib/chatRows.ts";
 import { ChatDetails, ChatRowMemoryContext, useChatRowToggle, type ChatRowMemory } from "../lib/chatRowState.tsx";
 import { turnRevision } from "../lib/turnRevision.ts";
 import { conversationFinishEvidence, conversationFinishPresented } from "../lib/panePresentation.ts";
@@ -542,7 +542,13 @@ function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: Tool
  */
 function TodoGroupRow({ paneId, group, stateKeyOf }: { paneId: string; group: TodoGroup; stateKeyOf: (part: ToolPartType) => string }) {
   const t = useT();
-  const [chosen, setOpen] = useChatRowToggle(`todo-group:${group.id}`, false);
+  const memory = useContext(ChatRowMemoryContext);
+  // an update the reader opened before the next one joined it opens the group: what they were
+  // reading stays open, inside it, while the turn streams on (#1388). The group keeps that as its own
+  // state, so closing the update inside later does not fold the group when the list remounts it.
+  const groupKey = `todo-group:${group.id}`;
+  const [chosen, setOpen] = useChatRowToggle(groupKey, group.attempts.some((attempt) => memory?.toggles.get(stateKeyOf(attempt.part)) === true));
+  useLayoutEffect(() => { if (chosen === true && memory !== null && !memory.toggles.has(groupKey)) memory.toggles.set(groupKey, true); }, [chosen, memory, groupKey]);
   const open = chosen === true;
   const { current } = group;
   const items = current?.items ?? null;
@@ -1111,10 +1117,11 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const [prompt, setPrompt] = useState<InteractivePrompt | null>(null);
   const [compacting, setCompacting] = useState(false);
   // Each prompt that appears is an occurrence of its own, and gets a card of its own. The prompt's
-  // id is a hash of what it says, so the same question asked twice shares it: the read below keeps
-  // one object while one prompt stays on screen, and that object is what tells them apart.
+  // id is a hash of what it says, so the same question asked twice shares it. Navigation metadata
+  // can change within an occurrence; only another id or a disappearance starts a new card.
   const promptOccurrence = useRef<{ of: InteractivePrompt | null; count: number }>({ of: null, count: 0 });
-  if (prompt !== null && promptOccurrence.current.of !== prompt) promptOccurrence.current = { of: prompt, count: promptOccurrence.current.count + 1 };
+  if (prompt === null) promptOccurrence.current.of = null;
+  else if (promptOccurrence.current.of?.id !== prompt.id) promptOccurrence.current = { of: prompt, count: promptOccurrence.current.count + 1 };
   // turns the transcript holds on a path /tree walked away from: no page can reach them, so the
   // only way to say they exist is to be told, and to say it where the reader would look for them
   const [abandoned, setAbandoned] = useState<{ count: number; branches: number; summary: string | null } | null>(null);
@@ -1147,8 +1154,12 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const timeline = useRef<LegendListRef>(null);
   const ChatTimeline = useChatTimeline();
   const stickToBottom = useRef(true);
+  // the timeline's hold on a following reader's own click layout (ChatTimeline manualLayout)
+  const manualLayout = useRef(false);
   // Explicit paging stays away even inside the ordinary near-bottom tolerance.
   const pagingAway = useRef(false);
+  // The paging away is the reader opening something (readOpened): it holds in a chat still too short to scroll.
+  const openedAway = useRef(false);
   const lastScrollTop = useRef(0);
   // When the reader last used upward scroll input.
   const scrollInputAt = useRef(-Infinity);
@@ -1164,6 +1175,8 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const olderCount = useRef(0);
   const incarnation = useRef(0);
   const slots = useRef(createChatRowSlots({ machineId, paneId, historyId: null, incarnation: 0 }, 0));
+  /** the history the row slots stand for: its own, or the one a rewrite continued (continuesHistory) */
+  const slotsHistory = useRef<string | null>(null);
   /** the page before everything shown; null at the conversation's beginning, undefined when unknown */
   const [olderCursor, setOlderCursor] = useState<string | null | undefined>(undefined);
   const [olderState, setOlderState] = useState<"idle" | "loading" | "failed">("idle");
@@ -1200,6 +1213,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     incarnation.current += 1;
     prependAnchor.current = null;
     slots.current = createChatRowSlots({ machineId, paneId, historyId: history.current ?? null, incarnation: incarnation.current }, 0);
+    slotsHistory.current = history.current ?? null;
   };
 
   /** What an answer says beside its turns: where older pages start, its metadata, abandoned turns. */
@@ -1215,8 +1229,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const showAnswer = (conversation: ConversationResponse, next: ChatState): void => {
     if (next.source === "conversation") {
       const count = olderCount.current + next.turns.length;
-      if (slots.current.scope.historyId !== (history.current ?? null) || lastAnswer.current?.source === "scrollback") {
+      if (slotsHistory.current !== (history.current ?? null) || lastAnswer.current?.source === "scrollback") {
         slots.current = createChatRowSlots({ machineId, paneId, historyId: history.current ?? null, incarnation: ++incarnation.current }, count);
+        slotsHistory.current = history.current ?? null;
       } else if (count > slots.current.rows.length) {
         slots.current = appendChatRowSlots(slots.current, count - slots.current.rows.length);
       } else if (count < slots.current.rows.length) {
@@ -1327,10 +1342,24 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           if (cancelled || generation !== olderGeneration.current) return;
         }
         if (history.current !== conversation.history_id) {
-          if (history.current !== undefined) navigated();
-          dropOlder(); generation = olderGeneration.current;
+          // the same turns under a new ID (gjc rewrote its file): the rows, what the reader opened and
+          // where they read stay, so it is no navigation. Older pages were read from the old file: with
+          // any held, it starts over, and a replaced history is navigation.
+          const continued = olderCount.current === 0 && history.current !== undefined && conversation.history_id !== undefined
+            && continuesHistory(lastAnswer.current, conversation);
+          if (continued) {
+            slotsHistory.current = conversation.history_id ?? null;
+            // an older page still being read names the old file: it is dropped, not taken for a replacement
+            olderGeneration.current += 1; loadingOlder.current = false; setOlderState("idle");
+            // the place kept for this pane is in the new history too
+            const storageId = paneStorageId(machineId, paneId);
+            const kept = readChatPosition(storageId);
+            if (kept !== undefined && kept.historyId === (history.current ?? null)) rememberChatPosition(storageId, { ...kept, historyId: conversation.history_id ?? null });
+          }
+          else { if (history.current !== undefined) navigated(); dropOlder(); }
+          generation = olderGeneration.current;
           history.current = conversation.history_id; setHistoryId(conversation.history_id);
-          pagingAway.current = false; stickToBottom.current = true; setNewMessages(false); setAway(false);
+          if (!continued) { pagingAway.current = false; stickToBottom.current = true; setNewMessages(false); setAway(false); }
         }
         // a 304 hands back the answer already shown: nothing to compare or lay out again
         if (conversation === lastAnswer.current) { setError(null); setErrorStatus(null); setFailures(0); setReadPresentation(proved ? readKey : undefined); return; }
@@ -1403,7 +1432,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     if (seen.pane === paneId && seen.key !== invalidationKey && visible) conversationRefresh.invalidate();
   }, [paneId, invalidationKey, visible, conversationRefresh]);
 
-  useEffect(() => { conversationRefresh.setPushes(conversationPushes); }, [conversationPushes, conversationRefresh]);
+  useEffect(() => {
+    conversationRefresh.setPushes(conversationPushes && ((agent !== "copilot" && agent !== "agy") || state.source !== "scrollback"));
+  }, [conversationPushes, state.source, conversationRefresh, agent]);
 
   // A scrollback stand-in has no native file for the server to watch, and neither have settings
   // read off the agent's screen (a conversation not begun). Their source is the pane's own
@@ -1495,14 +1526,18 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     let timer = 0;
     // a restart (the page shown again, a refused answer) keeps the notice and the count of failed reads: only a read that answers clears them
     const readPrompt = async (): Promise<void> => {
-      // the same prompt keeps its object: the composer and the card only change with it
+      // Keep unchanged prompts stable, but refresh navigation without replacing the card's edits.
       const sent = sentKeyRef.current;
       try {
         const next = await fetchPanePromptState(paneId);
         if (!cancelled) {
           failedPromptReads.current = 0;
           setPromptStale(false);
-          setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
+          setPrompt((current) => {
+            if (current === null || next.prompt === null || current.id !== next.prompt.id) return next.prompt;
+            if (JSON.stringify([current.steps, current.can_step_back]) === JSON.stringify([next.prompt.steps, next.prompt.can_step_back])) return current;
+            return { ...current, steps: next.prompt.steps, can_step_back: next.prompt.can_step_back };
+          });
           setCompacting(next.compacting);
           setCapacityErrorOwner(next.runtimeError === "model_capacity" ? paneStorageId(machineId, paneId) : null);
           // unchanged outcomes keep their objects: the turns carrying them are not re-rendered
@@ -1547,8 +1582,10 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const node = scroller.current;
     if (!node) return;
     // Every measurement path must respect a pending restore/minimap/page navigation.
-    // Only genuinely short content cannot be moved away from its end.
-    if (pagingAway.current && node.scrollHeight > node.clientHeight) {
+    // Only genuinely short content cannot be moved away from its end, unless the reader opened
+    // something in it: the records that make it longer must not pull that away (readOpened).
+    if (!pagingAway.current) openedAway.current = false;
+    if (pagingAway.current && (node.scrollHeight > node.clientHeight || openedAway.current)) {
       setEndPresentation(null);
       return;
     }
@@ -1562,6 +1599,8 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       ? before?.state === state && before.key === presentationKey ? before : { state, key: presentationKey }
       : null);
     if (atEnd) {
+      // back at the end, by hand as by Jump: what grows next is followed, no earlier hold kept
+      if (!stickToBottom.current) manualLayout.current = false;
       pagingAway.current = false; stickToBottom.current = true;
       scrollInputAt.current = -Infinity; pointerDragAt.current = -Infinity;
       setAway(false); setNewMessages(false);
@@ -1734,7 +1773,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     // A downward automatic scroll may arrive before the next measured layout.
     // Only upward movement can turn an existing follow intent into reading intent.
     if (!stickToBottom.current || scrollingUp || pagingAway.current) {
-      stickToBottom.current = !pagingAway.current && distanceFromBottom <= allowance;
+      const following = !pagingAway.current && distanceFromBottom <= allowance;
+      if (following && !stickToBottom.current) manualLayout.current = false;
+      stickToBottom.current = following;
     }
     setAway(!stickToBottom.current);
     measureEnd();
@@ -1765,11 +1806,25 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       atEnd: row === undefined,
     });
   };
+  // Opening a tool, a folded block or a whole output is reading there, as scrolling up is: the end
+  // moves on without the reader until they go back to it (#1388), and a local send already on its way
+  // no longer takes them to the end. A glide still under way stops where it is.
+  const readOpened = useCallback((): void => {
+    navigationRef.current += 1;
+    if (!stickToBottom.current) return;
+    pagingAway.current = true; stickToBottom.current = false; openedAway.current = true;
+    dropPendingListScroll(timeline.current);
+    const node = scroller.current;
+    if (node !== null) node.scrollTo({ top: node.scrollTop, behavior: "instant" });
+    setAway(true);
+  }, [navigationRef]);
   const scrollToBottom = (): void => {
     const node = scroller.current;
     if (node === null) return;
     // Away/new-message state clears in measureEnd once the end is really on screen (#1342).
     pagingAway.current = false; stickToBottom.current = true;
+    // back at the end, what grows next is followed: no hold an earlier click set is kept (#1388)
+    manualLayout.current = false;
     // A lens change can unmount us before the deferred list scroll emits its first event.
     rememberPlace(node);
     if (timeline.current) timeline.current.scrollToEnd({ animated: false });
@@ -2052,12 +2107,14 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       scroller={scroller}
       listRef={timeline}
       following={stickToBottom}
+      manualLayout={manualLayout}
       smoothFollow={smoothFollow}
       memories={rowMemories}
       header={header}
       footer={footer}
       label={logLabel}
       onScroll={onScroll}
+      onOpen={readOpened}
       renderRow={renderTurn}
     /> : <div className="chat-view" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={logLabel}>
       <div className="chat-transcript" data-conversation-source={state.conversationSource}>

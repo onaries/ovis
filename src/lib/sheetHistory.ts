@@ -13,10 +13,11 @@
  * own close, does not close it. Any other sheet still up under a new one closes with it, as before.
  */
 import { useEffect, useRef } from "react";
+import { SHEET_HISTORY_KEY, SHEET_UNDER_KEY } from "./historyKeys.ts";
 import { SHEET_QUERY } from "./sheets.ts";
 import { useMediaQuery } from "./useMediaQuery.ts";
 
-const KEY = "ovis:sheet";
+const KEY = SHEET_HISTORY_KEY;
 
 /** what Back does to each open sheet: false refuses it (the sheet is busy), and the sheet keeps its entry */
 const open = new Map<string, () => boolean | void>();
@@ -88,13 +89,19 @@ export function enterSheet(onBack: () => boolean | void, reuse: string | null, s
   }
   const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   const base = window.history.state;
-  const state = { ...(base !== null && typeof base === "object" ? base : {}), [KEY]: id };
+  const fields = base !== null && typeof base === "object" ? base : {};
+  const state = { ...fields, [KEY]: id };
   pushing = true;
   try {
     // a sheet opened from another sheet takes that sheet's entry: one Back closes it. A staying
     // sheet still up under it is covered, and comes back once the new sheet goes
     if (owned(base)) { cover(base); window.history.replaceState(state, ""); }
-    else window.history.pushState(state, "");
+    else {
+      // the entry the sheet opens over is marked with it, as is the sheet's own: a navigation that
+      // takes the sheet's entry over (Settings from the palette) can tell the entry it began from
+      window.history.replaceState({ ...fields, [SHEET_UNDER_KEY]: id }, "");
+      window.history.pushState({ ...state, [SHEET_UNDER_KEY]: id }, "");
+    }
   } finally { pushing = false; }
   open.set(id, onBack);
   if (stays) staying.add(id);

@@ -30,13 +30,14 @@ async function checkLayout(): Promise<void> {
     function Demo() {
       const [open, setOpen] = React.useState(true);
       return React.createElement(SettingsProvider, null, open
-        ? React.createElement(FileViewer, { path, paneId: null, onClose: () => setOpen(false) })
-        : React.createElement("p", { id: "closed" }, "Viewer closed"));
+        ? React.createElement(FileViewer, { path, paneId: query.get("kind") === "mutable" ? "fixture-pane" : null, onClose: () => setOpen(false) })
+        : React.createElement("div", null, React.createElement("p", { id: "closed" }, "Viewer closed"), React.createElement("button", { onClick: () => setOpen(true) }, "Reopen image")));
     }
     createRoot(document.getElementById("root")).render(React.createElement(Demo));
   `);
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   let server: ReturnType<typeof Bun.serve> | undefined;
+  let imageRevision = 1;
   try {
     const bundle = await Bun.build({
       entrypoints: [entry], target: "browser", define: { "process.env.NODE_ENV": JSON.stringify("development") },
@@ -64,10 +65,14 @@ async function checkLayout(): Promise<void> {
       if (url.pathname === "/api/fs/stat") {
         const path = url.searchParams.get("path")!;
         if (new URL(request.headers.get("referer")!).searchParams.get("kind") === "text") return Response.json({ path, name: path.split("/").pop(), kind: "text", mime: "text/plain", size: 650 });
-        return Response.json({ path, name: path.split("/").pop(), kind: "image", mime: "image/svg+xml", size: 2048 });
+        return Response.json({ path, name: path.split("/").pop(), kind: "image", mime: "image/svg+xml", size: 2048, modified: `2026-01-01T00:00:0${imageRevision}.000Z` });
       }
       if (url.pathname === "/api/fs/file") {
         if (new URL(request.headers.get("referer")!).searchParams.get("kind") === "text") return new Response(`const x = 1; // ${"long source line ".repeat(12)}\n`.repeat(50), { headers: { "content-type": "text/plain" } });
+        if (new URL(request.headers.get("referer")!).searchParams.get("kind") === "mutable") {
+          return new Response(`<svg xmlns="http://www.w3.org/2000/svg" width="${imageRevision * 64}" height="32"><rect width="100%" height="100%" fill="teal"/></svg>`,
+            { headers: { "content-type": "image/svg+xml", "cache-control": "private, no-store" } });
+        }
         const wide = new URL(request.headers.get("referer")!).searchParams.get("image") === "wide";
         const [width, height] = wide ? [6000, 400] : [400, 6000];
         return new Response(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="teal"/></svg>`,
@@ -169,6 +174,30 @@ async function checkLayout(): Promise<void> {
         }
       } finally { await context.close(); }
     }
+    const mutableContext = await browser.newContext({ locale: "en-US" });
+    try {
+      const page = await mutableContext.newPage();
+      await page.goto(`http://127.0.0.1:${server.port}/?kind=mutable`);
+      const image = page.locator("img.file-viewer-media");
+      await page.waitForFunction(() => document.querySelector<HTMLImageElement>("img.file-viewer-media")?.naturalWidth === 64);
+      const original = new URL(await image.getAttribute("src") ?? "", page.url());
+      imageRevision = 2;
+      // Reopening already fetches metadata; no file watcher or periodic request is needed.
+      await page.getByRole("button", { name: "Close file", exact: true }).click();
+      await page.getByRole("button", { name: "Reopen image", exact: true }).click();
+      await image.waitFor();
+      const updated = new URL(await image.getAttribute("src") ?? "", page.url());
+      assert.notEqual(updated.href, original.href, "changed metadata changes the image identity, including same-size overwrites");
+      assert.equal(updated.pathname, original.pathname, "versioning keeps the existing API route");
+      assert.equal(updated.searchParams.get("path"), original.searchParams.get("path"), "versioning preserves the file path");
+      assert.equal(updated.searchParams.get("pane_id"), "fixture-pane", "versioning preserves pane-scoped resolution");
+      await page.waitForFunction(() => document.querySelector<HTMLImageElement>("img.file-viewer-media")?.naturalWidth === 128);
+      await page.getByRole("button", { name: "Close file", exact: true }).click();
+      await page.getByRole("button", { name: "Reopen image", exact: true }).click();
+      await image.waitFor();
+      assert.equal(new URL(await image.getAttribute("src") ?? "", page.url()).href, updated.href, "unchanged metadata keeps the same image identity");
+      console.log("PASS same-path image overwrite: reopening uses the latest revision, unchanged metadata keeps its URL");
+    } finally { await mutableContext.close(); }
     // A text file adds Copy to Open in a new tab and Download: on a phone the header is one row, the
     // name, Copy and More (new tab, download) and Close in its corner, all inside the dialog.
     for (const [width, height, theme] of [[390, 844, "dark"], [390, 844, "light"], [844, 390, "dark"], [844, 390, "light"]] as const) {

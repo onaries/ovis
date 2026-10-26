@@ -29,9 +29,12 @@
   text-align: right;
 }
 
-/* opened from inside a dialog (New workspace's "+N" folders): over the dialog */
-.row-menu.is-over-modal {
-  z-index: calc(var(--z-modal) + 1);
+/* opened from inside a dialog (New workspace's "+N" folders, a link in a file preview), as a
+   popover or a phone's sheet: over every dialog layer, the file viewer's (+1) and Settings over a
+   preview (+2) included, and still under the palette */
+.row-menu.is-over-modal,
+.modal-scrim.is-over-modal {
+  z-index: calc(var(--z-modal) + 3);
 }
 
 .row-menu .menu-item:focus-visible {

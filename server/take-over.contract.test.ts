@@ -207,7 +207,7 @@ describe("explicit take-over intent", () => {
     }, "no late takeover after detach");
   }, 20_000);
 
-  it("ends a failed attempt without starting a pending click during its terminal lookup, preserving pane text", async () => {
+  it("recovers an ordinary failure without turning a click during its terminal lookup into takeover", async () => {
     const f = await fixture([{ kind: "held" }, { kind: "failed", gate: "fail" }, { kind: "real" }]);
     await until(() => f.starts().length === 2, "retry running");
     f.send({ type: "take-over", pane_id: f.paneId });
@@ -216,8 +216,12 @@ describe("explicit take-over intent", () => {
     await until(() => !alive(f.starts()[1]!.host), "failed sidecar exited");
     await f.barrier();
     f.send({ type: "take-over", pane_id: f.paneId });
-    await until(() => f.frames.some((m) => m.type === "pty-exit"), "ordinary failure ends after its terminal lookup");
-    expect(f.starts()).toHaveLength(2);
+    await until(() => f.frames.some((m) => m.type === "attach-resumed"), "ordinary recovery attaches again");
+    expect(f.starts()).toHaveLength(3);
+    expect(f.starts()[2]!.args).not.toContain("--takeover");
+    expect(f.frames.some((m) => m.type === "pty-exit")).toBe(false);
     expect(f.frames.filter((m) => m.type === "pty-data").map((m) => m.data).join("")).toContain("terminal attach taken over");
+    f.send({ type: "detach", pane_id: f.paneId });
+    await until(() => f.events().filter((e) => e.type === "child").every((e) => !alive(e.pid)), "detach releases recovered attach");
   }, 20_000);
 });

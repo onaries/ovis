@@ -249,7 +249,24 @@ function darwinEnvironment(pid: number): string | null {
   return entries === null ? null : entries.join("\0");
 }
 
-export const darwinProcess = { environment: darwinEnvironment };
+/** kern.proc.pid begins with extern_proc.p_starttime, a 64-bit Darwin timeval. */
+export function procStartTime(answer: Uint8Array): bigint | null {
+  if (answer.byteLength < 16) return null;
+  const view = new DataView(answer.buffer, answer.byteOffset, answer.byteLength);
+  const seconds = view.getBigInt64(0, true);
+  const micros = view.getInt32(8, true);
+  return seconds > 0n && micros >= 0 && micros < 1_000_000 ? seconds * 1_000_000n + BigInt(micros) : null;
+}
+
+/** The kernel's process birth time, including microseconds that `ps -o lstart` drops. */
+function darwinStartTime(pid: number): bigint | null {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  const answer = new Uint8Array(4096);
+  const length = sysctlCall()(new Int32Array([1, 14, 1, pid]), answer); // CTL_KERN, KERN_PROC, KERN_PROC_PID
+  return length === null ? null : procStartTime(answer.subarray(0, length));
+}
+
+export const darwinProcess = { environment: darwinEnvironment, startTime: darwinStartTime };
 
 /** A named store: an absolute path to a directory, else null. */
 async function namedDirectory(dir: string | null): Promise<string | null> {

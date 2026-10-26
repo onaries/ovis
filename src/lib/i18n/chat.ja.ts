@@ -2,7 +2,7 @@
  * Japanese for the keys only the chat files use:
  * components/ChatView.tsx, components/Markdown.tsx, components/MermaidLightbox.tsx,
  * components/ChatMinimap.tsx, components/ImageLightbox.tsx, components/BackgroundTasks.tsx,
- * components/BackgroundAgentDetail.tsx,
+ * components/BackgroundAgentDetail.tsx, components/MarkdownLinkMenu.tsx,
  * lib/workBlocks.ts (with CATEGORY_LABEL), lib/toolVerbs.ts (with VERB_LABEL), lib/outcomeChip.ts,
  * lib/chatTimestamp.ts, lib/chatReadDeadline.ts.
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
@@ -216,4 +216,6 @@ export const CHAT_JA: Record<string, string> = {
   "Conversation turns": "会話のターン",
   "Go to turn {n}": "ターン {n} へ移動",
   "Show full message": "メッセージ全体を表示",
+  "Open link": "リンクを開く",
+  "Share link": "リンクを共有",
 };

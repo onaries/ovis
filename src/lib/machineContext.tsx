@@ -64,6 +64,7 @@ export function useMachineApi() {
     renameTab: (tab: string, label: string) => api.renameTab(tab, label, id),
     closeTab: (tab: string) => api.closeTab(tab, id),
     moveTab: (tab: string, index: number) => api.moveTab(tab, index, id),
+    moveTabToWorkspace: (tab: string, workspace: string) => api.moveTabToWorkspace(tab, workspace, id),
     fetchPluginActions: () => api.fetchPluginActions(id),
     runPluginAction: (request: PluginActionRequest) => api.runPluginAction(request, id),
     fetchPluginActionStatus: (pluginId: string, logId: string) => api.fetchPluginActionStatus(pluginId, logId, id),

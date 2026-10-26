@@ -9,6 +9,14 @@ const prompt = (options: string[], custom: number | null, multi = false): Intera
 });
 
 describe("answering a prompt from the chat", () => {
+  it("keeps GJC's native numbers when Other precedes a numbered clarification choice", () => {
+    const question = { ...prompt(["1. Read only", "2. Other (type your own)", "3. Ask about these choices", "Esc"], 1), agent: "gjc", kind: "menu" as const };
+    const answer = answerFromText(question, "3");
+    expect(answer).toEqual({ option_index: 2 });
+    expect(needsConfirmation(question, answer!)).toBe(true);
+    expect(answerFromText(question, "2")).toEqual({ custom_text: "2" });
+    expect(answerFromText(question, "4")).toEqual({ option_index: 3 });
+  });
   it("reads the agent's option numbers, labels and bound letters, else the typed reply", () => {
     const question = prompt(["LM-O (Recommended)", "YCB-V"], 2);
     expect(answerFromText(question, "2")).toEqual({ option_index: 1 });

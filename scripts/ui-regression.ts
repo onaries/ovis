@@ -18,6 +18,7 @@ import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
 import { checkTerminalInput } from "./terminal-input-regression.ts";
 import { checkSafariIme } from "./terminal-safari-ime-regression.ts";
 import { checkIpadIme } from "./terminal-ipad-ime-regression.ts";
+import { checkLinuxIme } from "./terminal-linux-ime-regression.ts";
 import { checkHeldDraftPaneSwitch } from "./terminal-draft-regression.ts";
 import { checkCommandBackspace } from "./terminal-command-backspace-regression.ts";
 import { checkCtrlEnter } from "./terminal-ctrl-enter-regression.ts";
@@ -1908,7 +1909,7 @@ try {
   await tabMenu.waitFor();
   assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "first", "opening another tab's context menu does not select it");
   // The tab menu keeps native tab scope; pane operations belong to the pane or header.
-  assert.deepEqual(await tabMenu.getByRole("menuitem").allTextContents(), ["Move tab left", "New tab with agent…", "Rename tab", "Close tab"], "the last tab offers only a move to the left");
+  assert.deepEqual(await tabMenu.getByRole("menuitem").allTextContents(), ["Move tab left", "Move to workspace…", "New tab with agent…", "Rename tab", "Close tab"], "the last tab offers only a move to the left, and a one-pane tab a move to another workspace");
   await tabMenu.getByRole("menuitem", { name: "Rename tab", exact: true }).click();
   await tabName.fill("build");
   await page.keyboard.press("Enter");
@@ -1931,7 +1932,7 @@ try {
   const tabSheet = tabPhonePage.getByRole("dialog", { name: "build", exact: true });
   await tabSheet.waitFor();
   const touchTabItems = await tabSheet.locator(".row-sheet-item").allTextContents();
-  assert.deepEqual(touchTabItems.slice(-5), ["Move tab left", "Move tab right", "New tab with agent…", "Rename tab", "Close tab"], "a tab between siblings offers both adjacent moves on touch");
+  assert.deepEqual(touchTabItems.slice(-6), ["Move tab left", "Move tab right", "Move to workspace…", "New tab with agent…", "Rename tab", "Close tab"], "a tab between siblings offers both adjacent moves on touch");
   assert.ok(touchTabItems.includes("Rename pane") && touchTabItems.includes("Close pane"), "the touch menu carries the open pane's actions");
   await tabSheet.getByRole("button", { name: "Cancel", exact: true }).tap();
   await tabSheet.waitFor({ state: "detached" });
@@ -2287,6 +2288,7 @@ try {
   await checkTerminalInput(browser, origin, paneA, paneB);
   await checkSafariIme(browser, origin, paneA, paneB);
   await checkIpadIme(browser, origin, paneA, paneB);
+  await checkLinuxIme(browser, origin, paneA);
   await checkHeldDraftPaneSwitch(browser, origin, paneA, paneB);
 
   // the terminal lens on a touch screen starts in direct typing without raising the keyboard;

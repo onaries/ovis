@@ -16,5 +16,8 @@ describe("pending row status", () => {
     expect(pendingStatus({ state: "queued", serverOwned: true }, false)).toBe("Next turn");
     expect(pendingStatus({ state: "queued", serverOwned: true }, true)).toBe("Sending…");
     expect(pendingStatus({ state: "uncertain", serverOwned: false }, false)).toBe("Not confirmed. Check the terminal before sending again.");
+    expect(pendingStatus({ state: "uncertain", serverOwned: true, error: { code: "pi_transcript_pending", message: "waiting" } }, false)).toBe("Sent to Pi · waiting for transcript");
+    expect(pendingStatus({ state: "uncertain", serverOwned: true, error: { code: "pi_transcript_target_changed", message: "changed" } }, false)).toBe("Sent to Pi · transcript confirmation unavailable");
+    expect(pendingStatus({ state: "held", serverOwned: true, error: { code: "pending_target_changed", message: "changed" } }, false)).toBe("Held message — review and send");
   });
 });

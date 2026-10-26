@@ -416,18 +416,19 @@ export class Updater {
         attempted = revision;
         this.patch({ phase: "building", step: "download" });
         stage = mkdtempSync(join(this.options.stateDir, "release-"));
-        const run = (args: string[], timeout?: number) => runCommand(stage!, args, this.controller.signal, timeout);
+        // Network filesystems and low-memory builds can take minutes even without a network fetch.
+        const run = (args: string[], timeout = 10 * 60_000) => runCommand(stage!, args, this.controller.signal, timeout);
         await run(["git", "clone", "--quiet", "--no-checkout", "--no-hardlinks", this.options.root, "."]);
         await run(["git", "fetch", "--quiet", this.options.root, revision]);
         await run(["git", "checkout", "--quiet", "--detach", revision]);
         // The clone's origin must keep pointing at the user's chosen upstream.
         await run(["git", "remote", "set-url", "origin", await this.git("remote", "get-url", "origin")]);
         this.patch({ step: "dependencies" });
-        await run([process.execPath, "install", "--frozen-lockfile"], 180_000);
+        await run([process.execPath, "install", "--frozen-lockfile"]);
         this.patch({ step: "typecheck" });
-        await run([process.execPath, "run", "typecheck"], 120_000);
+        await run([process.execPath, "run", "typecheck"]);
         this.patch({ step: "build" });
-        await run([process.execPath, "run", "build"], 120_000);
+        await run([process.execPath, "run", "build"]);
         // the release's Rust PTY host, checked against its manifest; without it the release runs the Node sidecar
         if (existsSync(join(stage, "scripts", "pty-sidecar.ts"))) {
           try { console.log((await run([process.execPath, "scripts/pty-sidecar.ts", "install"], 120_000))); }

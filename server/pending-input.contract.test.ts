@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, mock, spyOn } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createServer } from "./index.ts";
 import * as herdrClient from "./herdr/client.ts";
 import { herdrRpc, paneRead, paneScrollInfo, sessionSnapshot } from "./herdr/client.ts";
@@ -12,6 +12,7 @@ import * as pendingInput from "./pending-input.ts";
 import { OmoStatus } from "./omo-status.ts";
 import * as claudeStore from "./claude-store.ts";
 import * as agentLaunchModule from "./agent-launch.ts";
+import * as piModule from "./pi.ts";
 
 type PendingUpdate = Extract<ServerMessage, { type: "pending-messages" }>;
 
@@ -23,6 +24,8 @@ const paste = (text: string) => `\u001b[200~${text}\u001b[201~`;
 // Without a hold they go straight to herdr; this file runs in a process of its own (ci-tests.ts).
 const sendText = herdrClient.paneSendText;
 const sendKeys = herdrClient.paneSendKeys;
+const processInfo = herdrClient.paneProcessInfo;
+const failedPiIdentityLookups = new Set<string>();
 let connectHold: { rpc: "text" | "keys"; reached: () => void; release: Promise<void> } | null = null;
 const holding = async (rpc: "text" | "keys"): Promise<void> => {
   const hold = connectHold;
@@ -37,6 +40,22 @@ mock.module("./herdr/client.ts", () => ({
   agentPrompt: async (...args: Parameters<typeof agentPrompt>) => { herdrWrites.push(`prompt ${args[0]}`); return agentPrompt(...args); },
   paneSendText: async (...args: Parameters<typeof sendText>) => { herdrWrites.push(`text ${args[0]}`); if (args[1].startsWith("\u001b[200~")) await holding("text"); return sendText(...args); },
   paneSendKeys: async (...args: Parameters<typeof sendKeys>) => { herdrWrites.push(`keys ${args[0]}`); await holding("keys"); return sendKeys(...args); },
+  paneProcessInfo: async (...args: Parameters<typeof processInfo>) => {
+    if (failedPiIdentityLookups.has(args[0])) throw new Error("transient process lookup failure");
+    return processInfo(...args);
+  },
+}));
+const fakePiTranscripts = new Map<string, string>();
+const unavailablePiTranscripts = new Set<string>();
+const realPiTranscriptPath = piModule.piTranscriptPath;
+mock.module("./pi.ts", () => ({
+  ...piModule,
+  piTranscriptPath: async (paneId: string, ...args: any[]) => {
+    if (unavailablePiTranscripts.has(paneId)) return null;
+    const path = fakePiTranscripts.get(paneId);
+    return path ? existsSync(path) ? { path } : { unwritten: { id: basename(path, ".jsonl"), path } }
+      : realPiTranscriptPath(paneId, ...args as Parameters<typeof realPiTranscriptPath> extends [string, ...infer Rest] ? Rest : never);
+  },
 }));
 // The create routes' launch, for the first-message cases: nothing is started (an agent kind may be a
 // real program on this PC); the case starts its recorder in the pane itself, after the route answered,
@@ -116,19 +135,23 @@ beforeAll(() => {
   // The recorder polls its screen file: fs.watch can drop the change that follows writeFileSync's
   // truncation, leaving the cleared screen it read in between up for good.
   writeFileSync(join(root, "record.cjs"), `const fs=require("node:fs");const out=process.argv[2];process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write("\\x1b[?2004h"+(process.argv[3]||"").replace(/\\\\x1b/g,"\\x1b"),()=>fs.writeFileSync(out,""));process.stdin.on("data",c=>fs.appendFileSync(out,JSON.stringify(c.toString("utf8"))+"\\n"));let shown="";setInterval(()=>{const next=fs.readFileSync(process.argv[4],"utf8");if(next!==shown){shown=next;process.stdout.write("\\x1b[2J\\x1b[H"+next);}},20);`);
-  for (const name of ["claude", "codex", "omp", "plain"]) { copyFileSync(process.execPath, join(root, name)); chmodSync(join(root, name), 0o755); }
+  for (const name of ["claude", "codex", "omp", "pi", "plain"]) { copyFileSync(process.execPath, join(root, name)); chmodSync(join(root, name), 0o755); }
 });
 afterEach(async () => {
   for (const item of active.splice(0)) { for (const socket of item.sockets) socket.close(); item.stop(); await herdrRpc("workspace.close", { workspace_id: item.workspace }).catch(() => undefined); }
+  fakePiTranscripts.clear();
+  unavailablePiTranscripts.clear();
+  failedPiIdentityLookups.clear();
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-async function setup(label: string, agent = "claude", screen = "› Message\n", options: Parameters<typeof createServer>[0] = {}, replaceable = false) {
+async function setup(label: string, agent = "claude", screen = "› Message\n", options: Parameters<typeof createServer>[0] = {}, replaceable = false, piTranscript?: string) {
   const id = ++next;
   const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>("workspace.create", { label: `ovis-test-pending-${label}`, cwd: root, focus: false });
   // registered before anything below can throw, so afterEach closes the workspace of a setup that failed
   const entry: (typeof active)[number] = { stop: () => {}, sockets: [], workspace: created.workspace.workspace_id }; active.push(entry);
   const pane = created.root_pane.pane_id;
+  let piSeq = 1;
   const log = join(root, `${id}.jsonl`);
   const screenFile = join(root, `${id}.screen`);
   writeFileSync(screenFile, "");
@@ -141,7 +164,13 @@ async function setup(label: string, agent = "claude", screen = "› Message\n", 
   const deadline = Date.now() + 10_000;
   while (!existsSync(log)) { if (Date.now() > deadline) throw new Error("recorder did not start"); await Bun.sleep(25); }
   // "plain" is a program herdr knows as no agent
-  if (agent !== "plain") await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent, state: "working" });
+  if (agent !== "plain") {
+    if (agent === "pi" && piTranscript) {
+      fakePiTranscripts.set(pane, piTranscript);
+      await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent, state: "working" });
+      await herdrRpc("pane.report_agent_session", { pane_id: pane, source: "herdr:pi", agent, seq: piSeq++, agent_session_path: piTranscript, session_start_source: "startup" });
+    } else await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent, state: "working" });
+  }
   const server = createServer({ ...options, port: 0, stateDir: join(root, `state-${id}`) });
   entry.stop = server.stop;
   const socket = new Socket(server.port); entry.sockets.push(socket);
@@ -153,7 +182,9 @@ async function setup(label: string, agent = "claude", screen = "› Message\n", 
   };
   const state = async (value: string, reader = socket) => {
     const from = reader.seen.length;
-    await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent, state: value });
+    await herdrRpc("pane.report_agent", agent === "pi" && piTranscript
+      ? { pane_id: pane, source: "herdr:pi", agent, state: value, seq: piSeq++, agent_session_path: piTranscript }
+      : { pane_id: pane, source: "manual", agent, state: value });
     await reader.wait((frame) => frame.type === "pane-status" && frame.pane_id === pane && (value === "idle" || value === "unknown" ? ["idle", "done"].includes(frame.agent_status) : frame.agent_status === value), from);
   };
   // `ending`: what the screen ends with once drawn, for a text taller than the pane
@@ -170,12 +201,222 @@ async function setup(label: string, agent = "claude", screen = "› Message\n", 
   };
   const queue = async (id: number, text: string): Promise<PendingMessage> => {
     socket.send({ type: "submit", id, pane_id: pane, text, payload: "unused\r", delivery: "queue" });
-    const answer = await socket.result(id); expect(answer.ok).toBe(true); expect(answer.pending?.request_id).toBe(id); return answer.pending;
+    const answer = await socket.result(id); expect(answer.ok, JSON.stringify(answer)).toBe(true); expect(answer.pending?.request_id).toBe(id); return answer.pending;
   };
   const removed = (id: string, outcome = "sent", reader = socket) => reader.wait((frame) => frame.type === "pending-messages" && frame.pane_id === pane && frame.removed?.some((entry: any) => entry.id === id && entry.outcome === outcome));
   const another = async (attach = true, chat = false) => { const reader = new Socket(server.port); entry.sockets.push(reader); if (attach) await reader.attach(pane, chat); else await reader.wait((frame) => frame.type === "snapshot"); return reader; };
   return { screenFile, pane, port: server.port, server, socket, bytes, waitBytes, state, showScreen, queue, removed, another, replacementLog };
 }
+
+describe("Ovis-origin Pi transcript receipts", () => {
+  const piLine = (id: string, parentId: string | null, role: string, text: string) => JSON.stringify({
+    type: "message", id, parentId, timestamp: new Date().toISOString(), message: { role, content: [{ type: "text", text }], timestamp: Date.now() },
+  }) + "\n";
+  const piFile = (name: string) => {
+    const path = join(root, `${name}-${crypto.randomUUID()}.jsonl`);
+    writeFileSync(path, JSON.stringify({ type: "session", version: 3, id: crypto.randomUUID(), timestamp: new Date().toISOString(), cwd: root }) + "\n"
+      + piLine("a0", null, "assistant", "working"));
+    return path;
+  };
+
+  it("binds a production-shaped unwritten filename to its later header UUID", async () => {
+    const id = crypto.randomUUID();
+    const transcript = join(root, `2026-10-24T01-34-00-000Z_${id}.jsonl`);
+    const f = await setup("pi-unwritten", "pi", "› Message\n", {}, false, transcript);
+    f.socket.send({ type: "submit", id: 900, pane_id: f.pane, text: "first", payload: "first", delivery: "immediate" });
+    expect((await f.socket.result(900)).ok).toBe(true);
+    const sent = await f.socket.wait((frame) => frame.type === "pending-messages"
+      && frame.messages.some((item: PendingMessage) => item.error?.code === "pi_transcript_pending" && item.text === "first"));
+    const receipt = sent.messages.find((item: PendingMessage) => item.error?.code === "pi_transcript_pending");
+    writeFileSync(transcript, JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: root }) + "\n"
+      + piLine("u1", null, "user", "first"));
+    // Opening Chat after creation starts the transcript watch. Its immediate initial poll must
+    // reconcile the receipt even though no watcher observed the missing-to-written transition.
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    await f.socket.wait((frame) => frame.type === "pending-messages"
+      && frame.removed?.some((item: any) => item.id === receipt.id && item.outcome === "consumed"));
+  }, 20_000);
+
+  it("keeps an automatic follow-up visible after Enter until the bound Pi JSONL user append", async () => {
+    const transcript = piFile("pi-follow-up");
+    const f = await setup("pi-follow-up", "pi", "› Message\n", {}, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    const queued = await f.queue(901, "follow after work");
+    const from = f.socket.seen.length;
+    await f.state("idle");
+    await f.waitBytes(`${paste("follow after work")}\r`);
+    const sent = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.pane_id === f.pane
+      && frame.messages.some((item: PendingMessage) => item.error?.code === "pi_transcript_pending" && item.text === "follow after work"), from);
+    const receipt = sent.messages.find((item: PendingMessage) => item.error?.code === "pi_transcript_pending");
+    expect(receipt.id).not.toBe(queued.id);
+    expect(f.socket.seen.some((frame) => frame.type === "pending-messages" && frame.removed?.some((item: any) => item.id === receipt.id && item.outcome === "consumed"))).toBe(false);
+    appendFileSync(transcript, piLine("u1", "a0", "user", "follow after work"));
+    await f.socket.wait((frame) => frame.type === "pending-messages" && frame.removed?.some((item: any) => item.id === receipt.id && item.outcome === "consumed"), from);
+  }, 20_000);
+
+  it("keeps explicit Send now non-resendable while Pi works", async () => {
+    const transcript = piFile("pi-send-now");
+    const f = await setup("pi-send-now", "pi", "› Message\n", {}, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    f.socket.send({ type: "submit", id: 903, pane_id: f.pane, text: "steer now", payload: "unused", delivery: "hold" });
+    const held = (await f.socket.result(903)).pending as PendingMessage;
+    const from = f.socket.seen.length;
+    f.socket.send({ type: "pending-action", id: 904, pane_id: f.pane, pending_id: held.id, action: "steer" });
+    expect((await f.socket.action(904)).ok).toBe(true);
+    const sent = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.error?.code === "pi_transcript_pending" && item.text === "steer now"), from);
+    const receipt = sent.messages.find((item: PendingMessage) => item.error?.code === "pi_transcript_pending");
+    f.socket.send({ type: "pending-action", id: 905, pane_id: f.pane, pending_id: receipt.id, action: "steer" });
+    expect(await f.socket.action(905)).toMatchObject({ ok: false, code: "pending_sent" });
+    appendFileSync(transcript, piLine("u1", "a0", "user", "steer now"));
+    await f.socket.wait((frame) => frame.type === "pending-messages" && frame.removed?.some((item: any) => item.id === receipt.id && item.outcome === "consumed"), from);
+  }, 20_000);
+
+  it("keeps an idle-status immediate send private to its originating connection", async () => {
+    const transcript = piFile("pi-compaction");
+    const f = await setup("pi-compaction", "pi", "› Message\n", {}, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    await f.state("idle");
+    const from = f.socket.seen.length;
+    f.socket.send({ type: "submit", id: 902, pane_id: f.pane, text: "during compaction", payload: "during compaction", delivery: "immediate" });
+    expect((await f.socket.result(902)).ok).toBe(true);
+    const sent = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.error?.code === "pi_transcript_pending" && item.text === "during compaction"), from);
+    const receipt = sent.messages.find((item: PendingMessage) => item.error?.code === "pi_transcript_pending");
+    const other = await f.another(true, true);
+    const barrier = other.seen.length;
+    other.send({ type: "ping", id: 9903 });
+    await other.wait((frame) => frame.type === "pong" && frame.id === 9903, barrier);
+    expect(other.seen.some((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.id === receipt.id))).toBe(false);
+    appendFileSync(transcript, piLine("u1", "a0", "user", "during compaction"));
+    await f.socket.wait((frame) => frame.type === "pending-messages" && frame.removed?.some((item: any) => item.id === receipt.id && item.outcome === "consumed"));
+  }, 20_000);
+
+  it("checks active Pi receipt capacity per connection before typing", async () => {
+    const transcript = piFile("pi-capacity");
+    const f = await setup("pi-capacity", "pi", "› Message\n", { piReceiptLimit: 1 }, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    f.socket.send({ type: "submit", id: 910, pane_id: f.pane, text: "owner one", payload: "owner one", delivery: "immediate" });
+    expect((await f.socket.result(910)).ok).toBe(true);
+    const ownerSent = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.text === "owner one"));
+    const ownerReceipt = ownerSent.messages.find((item: PendingMessage) => item.text === "owner one");
+
+    const other = await f.another(true, true);
+    other.send({ type: "submit", id: 911, pane_id: f.pane, text: "other owner", payload: "other owner", delivery: "immediate" });
+    expect((await other.result(911)).ok).toBe(true);
+    await other.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.text === "other owner"));
+
+    const before = f.bytes();
+    f.socket.send({ type: "submit", id: 912, pane_id: f.pane, text: "over limit", payload: "over limit", delivery: "immediate" });
+    expect(await f.socket.result(912)).toMatchObject({ ok: false, code: "pending_limit" });
+    expect(f.bytes()).toBe(before);
+
+    const replacement = piFile("pi-capacity-replacement");
+    fakePiTranscripts.set(f.pane, replacement);
+    const mismatch = await f.another(true, true);
+    await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.text === "owner one" && item.error?.code === "pi_transcript_target_changed"));
+    mismatch.send({ type: "ping", id: 9912 });
+    await mismatch.wait((frame) => frame.type === "pong" && frame.id === 9912);
+    f.socket.send({ type: "submit", id: 916, pane_id: f.pane, text: "while unavailable", payload: "while unavailable", delivery: "immediate" });
+    expect(await f.socket.result(916)).toMatchObject({ ok: true });
+    f.socket.send({ type: "pending-action", id: 917, pane_id: f.pane, pending_id: ownerReceipt.id, action: "discard" });
+    expect((await f.socket.action(917)).ok).toBe(true);
+    f.socket.send({ type: "submit", id: 918, pane_id: f.pane, text: "after discard", payload: "after discard", delivery: "immediate" });
+    expect(await f.socket.result(918)).toMatchObject({ ok: false, code: "pending_limit" });
+  }, 20_000);
+
+  it("keeps the second identical send pending after only one transcript append", async () => {
+    const transcript = piFile("pi-duplicate-reconcile");
+    const f = await setup("pi-duplicate-reconcile", "pi", "› Message\n", {}, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    for (const id of [923, 924]) {
+      f.socket.send({ type: "submit", id, pane_id: f.pane, text: "same", payload: "same", delivery: "immediate" });
+      expect((await f.socket.result(id)).ok).toBe(true);
+    }
+    const sent = await f.socket.event((frame) => frame.messages.some((item) => item.request_id === 924));
+    const first = sent.messages.find((item) => item.request_id === 923)!;
+    const second = sent.messages.find((item) => item.request_id === 924)!;
+    const consumed = f.socket.event((frame) => frame.removed?.some((item) => item.id === first.id && item.outcome === "consumed") === true);
+    appendFileSync(transcript, piLine("u1", "a0", "user", "same"));
+    await consumed;
+    // Attaching schedules another reconciliation before the serialized action below.
+    await f.another(true, true);
+    f.socket.send({ type: "pending-action", id: 925, pane_id: f.pane, pending_id: second.id, action: "steer" });
+    expect(await f.socket.action(925)).toMatchObject({ ok: false, code: "pending_sent" });
+    const secondConsumed = f.socket.event((frame) => frame.removed?.some((item) => item.id === second.id && item.outcome === "consumed") === true);
+    appendFileSync(transcript, piLine("u2", "u1", "user", "same"));
+    await secondConsumed;
+  }, 20_000);
+
+  it("releases capacity for confirmation-unavailable receipts", async () => {
+    const transcript = join(root, `not-a-production-session-${crypto.randomUUID()}.jsonl`);
+    const f = await setup("pi-unconfirmed-capacity", "pi", "› Message\n", { piReceiptLimit: 1 }, false, transcript);
+    f.socket.send({ type: "submit", id: 919, pane_id: f.pane, text: "unconfirmed", payload: "unconfirmed", delivery: "immediate" });
+    expect((await f.socket.result(919)).ok).toBe(true);
+    const sent = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.error?.code === "transcript_unconfirmed"));
+    const receipt = sent.messages.find((item: PendingMessage) => item.error?.code === "transcript_unconfirmed");
+    f.socket.send({ type: "submit", id: 920, pane_id: f.pane, text: "over unconfirmed", payload: "over unconfirmed", delivery: "immediate" });
+    expect(await f.socket.result(920)).toMatchObject({ ok: true });
+    f.socket.send({ type: "pending-action", id: 921, pane_id: f.pane, pending_id: receipt.id, action: "discard" });
+    expect((await f.socket.action(921)).ok).toBe(true);
+    f.socket.send({ type: "submit", id: 922, pane_id: f.pane, text: "after unconfirmed discard", payload: "after unconfirmed discard", delivery: "immediate" });
+    expect((await f.socket.result(922)).ok).toBe(true);
+  }, 20_000);
+
+  it("keeps a receipt pending through transient identity and transcript lookup failures", async () => {
+    const transcript = piFile("pi-transient");
+    const f = await setup("pi-transient", "pi", "› Message\n", {}, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    f.socket.send({ type: "submit", id: 913, pane_id: f.pane, text: "survive lookup", payload: "survive lookup", delivery: "immediate" });
+    expect((await f.socket.result(913)).ok).toBe(true);
+    const sent = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.text === "survive lookup"));
+    const receipt = sent.messages.find((item: PendingMessage) => item.text === "survive lookup");
+
+    failedPiIdentityLookups.add(f.pane);
+    const identityBarrier = await f.another(true, true);
+    identityBarrier.send({ type: "ping", id: 9913 });
+    await identityBarrier.wait((frame) => frame.type === "pong" && frame.id === 9913);
+    expect(f.socket.seen.some((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.id === receipt.id && item.error?.code === "pi_transcript_target_changed"))).toBe(false);
+    failedPiIdentityLookups.delete(f.pane);
+
+    unavailablePiTranscripts.add(f.pane);
+    const pathBarrier = await f.another(true, true);
+    pathBarrier.send({ type: "ping", id: 9914 });
+    await pathBarrier.wait((frame) => frame.type === "pong" && frame.id === 9914);
+    expect(f.socket.seen.some((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.id === receipt.id && item.error?.code === "pi_transcript_target_changed"))).toBe(false);
+    unavailablePiTranscripts.delete(f.pane);
+
+    appendFileSync(transcript, piLine("u1", "a0", "user", "survive lookup"));
+    await f.socket.wait((frame) => frame.type === "pending-messages" && frame.removed?.some((item: any) => item.id === receipt.id && item.outcome === "consumed"));
+  }, 20_000);
+
+  it("tracks a maximum-length message with the space closing its file mention", async () => {
+    const transcript = piFile("pi-best-effort");
+    const f = await setup("pi-best-effort", "pi", "› Message\n", {}, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    // The closing space is Pi-facing framing, outside the composer's message limit.
+    const text = `${"x".repeat(19_994)} @file`;
+    f.socket.send({ type: "submit", id: 914, pane_id: f.pane, text, payload: text, delivery: "immediate" });
+    expect(await f.socket.result(914)).toMatchObject({ ok: true });
+    const sent = await f.socket.event((frame) => frame.messages.some((item) => item.request_id === 914));
+    const receipt = sent.messages.find((item) => item.request_id === 914)!;
+    expect(receipt.text).toBe(`${text} `);
+    const consumed = f.socket.event((frame) => frame.removed?.some((item) => item.id === receipt.id && item.outcome === "consumed") === true);
+    appendFileSync(transcript, piLine("u1", "a0", "user", `${text} `));
+    await consumed;
+  }, 20_000);
+
+  it("matches the exact Pi-facing text after closing a trailing file mention", async () => {
+    const transcript = piFile("pi-facing-text");
+    const f = await setup("pi-facing-text", "pi", "› Message\n", {}, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    f.socket.send({ type: "submit", id: 915, pane_id: f.pane, text: "inspect @file", payload: "inspect @file", delivery: "immediate" });
+    expect((await f.socket.result(915)).ok).toBe(true);
+    const sent = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.request_id === 915));
+    const receipt = sent.messages.find((item: PendingMessage) => item.request_id === 915);
+    expect(receipt.text).toBe("inspect @file ");
+    appendFileSync(transcript, piLine("u1", "a0", "user", "inspect @file "));
+    await f.socket.wait((frame) => frame.type === "pending-messages" && frame.removed?.some((item: any) => item.id === receipt.id && item.outcome === "consumed"));
+  }, 20_000);
+});
 
 describe("connection-owned pending input", () => {
   it.each([

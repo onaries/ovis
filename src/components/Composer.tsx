@@ -87,6 +87,8 @@ export interface ComposerProps {
   metadata?: ConversationMetadata | null;
   /** replaces the placeholder: how a message answers the agent's waiting prompt */
   answerHint?: string | null;
+  /** a typed pick waiting in the card above for Confirm: Enter in the empty box confirms it, Escape cancels it */
+  waitingAnswer?: { confirm(): Promise<boolean | string>; cancel(): void } | null;
   /** what the agent suggests typing next (Claude's grey input text): the placeholder, taken with Tab */
   suggestion?: string | null;
   /** a cancelled send the agent put back in its input box: the empty box takes it again, for editing and resending */
@@ -242,6 +244,7 @@ export function Composer({
   backgroundWait = false,
   metadata,
   answerHint = null,
+  waitingAnswer = null,
   suggestion = null,
   restored = null,
   greeting = null,
@@ -262,7 +265,7 @@ export function Composer({
   activeRef.current = active;
   const machineId = useMachineId();
   const { fetchPaneFiles } = useMachineApi();
-  const { settings } = useSettings();
+  const { settings, resolvedLanguage } = useSettings();
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
   const usageEnabled = settings.showUsage && !mobile && machineId === "local" && providerForAgent(agent) !== null;
   const { report: usageReport } = useUsage(usageEnabled);
@@ -419,7 +422,8 @@ export function Composer({
   useEffect(() => {
     const frame = requestAnimationFrame(sizeTextarea);
     return () => cancelAnimationFrame(frame);
-  }, [sizeTextarea, settings.chatFontSize, settings.density]);
+  // the UI language orders Noto's CJK families in an interface font (lib/typography.ts)
+  }, [sizeTextarea, settings.chatFontSize, settings.chatFontFamily, settings.uiFontFamily, resolvedLanguage, settings.density]);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -492,7 +496,7 @@ export function Composer({
   useEffect(() => {
     const frame = requestAnimationFrame(fitStatus);
     return () => cancelAnimationFrame(frame);
-  }, [fitStatus, settings.uiFontSize,
+  }, [fitStatus, settings.uiFontSize, settings.uiFontFamily,
     settings.chatFontSize, settings.chatFontFamily, settings.density]);
 
   // the card's own width decides, not the window's: a sidebar or a narrow lane shrinks the card
@@ -900,8 +904,8 @@ export function Composer({
     }
   }, [awaitCommit, clearCommitWait, t]);
 
-  /** A quick reply follows the same delivery policy as Send, and leaves the box alone. */
-  const sendQuick = useCallback((reply: string) => {
+  /** A quick reply, or a typed pick's Confirm, follows the same delivery policy as Send, and leaves the box alone. */
+  const sendBeside = useCallback((deliver: () => ReturnType<typeof onSend>) => {
     if (!connected || sending) return;
     setNote(null);
     // a quick reply is not the box's text, so its note offers no send over a draft
@@ -912,14 +916,15 @@ export function Composer({
     };
     if (!composerDrafts.begin(draftKey)) return;
     try {
-      const result = onSend(reply);
+      const result = deliver();
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return; }
       void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
     } catch {
       composerDrafts.end(draftKey);
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
-  }, [connected, draftKey, onSend, sending]);
+  }, [connected, draftKey, sending]);
+  const sendQuick = useCallback((reply: string) => sendBeside(() => onSend(reply)), [onSend, sendBeside]);
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -963,15 +968,29 @@ export function Composer({
         setTextAndCaret(offered, offered.length);
         return;
       }
-      if (event.key !== "Enter") return;
-      const shouldSend = settings.enterSends
+      const shouldSend = event.key === "Enter" && (settings.enterSends
         ? !event.shiftKey && !event.metaKey && !event.ctrlKey
-        : (event.metaKey || event.ctrlKey) && !event.shiftKey;
+        : (event.metaKey || event.ctrlKey) && !event.shiftKey);
+      // a typed pick waits in the card above: the empty box's Enter is its Confirm and Escape its
+      // Cancel, so the keyboard alone answers, as it does in the agent's own menu. A held Enter's
+      // repeats confirm nothing: its first press was the pick
+      if (waitingAnswer !== null && textRef.current === "") {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          waitingAnswer.cancel();
+          return;
+        }
+        if (shouldSend) {
+          event.preventDefault();
+          if (!event.repeat) sendBeside(waitingAnswer.confirm);
+          return;
+        }
+      }
       if (!shouldSend) return;
       event.preventDefault();
       send();
     },
-    [agentStatus, choices, connected, menuDismissed, menuOpen, offered, onAbort, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, trigger],
+    [agentStatus, choices, connected, menuDismissed, menuOpen, offered, onAbort, selectCompletion, selectedIndex, send, sendBeside, setTextAndCaret, settings.enterSends, trigger, waitingAnswer],
   );
 
   const onPaste = useCallback(

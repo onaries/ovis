@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser, BrowserContext, Page, Route, WebSocket } from "playwright-core";
-import { herdrRpc, paneRead, paneSplit, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import { herdrRpc, paneFocus, paneRead, paneSplit, sessionSnapshot, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import type { TabMovedToWorkspace } from "../shared/protocol.ts";
 
 /**
  * The split view's edges (lib/split.ts), each on a browser context of its own: the other half's
@@ -418,6 +419,109 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       console.log("PASS a real mouse drag from a two-pane tab's title opens that pane in the other half");
     }
 
+    // A title dropped on another pane's title of its tab: the two trade places (herdr's pane.swap),
+    // with that title marked while over it, no half chosen, and no split view opened.
+    {
+      const [first, elsewhere] = await panesFor("title-swap", "title-swap-focus") as [string, string];
+      const beside = (await paneSplit(first, "right", false)).pane_id;
+      await paneFocus(elsewhere);
+      const { page, errors } = await open([first, beside], "terminal", (context) => context.addInitScript(() => {
+        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", alertDone: "off", followHerdrFocus: true }));
+      }));
+      const swapApplied = Promise.withResolvers<void>();
+      const releaseSwap = Promise.withResolvers<void>();
+      await page.route("**/api/pane/swap", async (route) => {
+        // Hold the HTTP answer while the source and restored focus events reach this browser.
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        const response = await route.fetch();
+        swapApplied.resolve();
+        await releaseSwap.promise;
+        await route.fulfill({ response });
+      });
+      const head = (pane: string) => page.locator(`[data-layout-pane="${pane}"] > .pane-frame-head`);
+      await head(beside).waitFor();
+      const left = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".pane-frame:not(.is-hidden)")]
+        .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0]?.getAttribute("data-layout-pane"));
+      assert.equal(await left(), first);
+      const focused = await sessionSnapshot();
+      const from = (await head(first).boundingBox())!;
+      const to = (await head(beside).boundingBox())!;
+      await page.mouse.move(from.x + 30, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(from.x + 38, from.y + from.height / 2 + 4, { steps: 2 });
+      await page.mouse.move(to.x + 60, to.y + to.height / 2, { steps: 8 });
+      await page.mouse.move(to.x + 61, to.y + to.height / 2);
+      await page.waitForFunction((pane) => document.querySelector(`[data-layout-pane="${pane}"] > .pane-frame-head`)?.classList.contains("is-swap-target") === true, beside);
+      assert.equal(await page.locator(".split-drop.is-visible").count(), 0, "no half is offered over a title it would swap with");
+      const swapped = page.waitForResponse((response) => response.url().endsWith("/api/pane/swap") && response.request().method() === "POST");
+      await page.mouse.up();
+      try {
+        await Promise.race([swapApplied.promise, swapped]);
+        const workspaceId = focused.panes.find((pane) => pane.pane_id === first)!.workspace_id;
+        await tabCreate({ workspaceId, label: "swap focus event marker" });
+        // This later roster event proves the preceding focus events were handled, without a sleep.
+        await page.locator(".tab-strip").getByRole("tab").filter({ hasText: "swap focus event marker" }).waitFor();
+        assert.ok(await head(beside).isVisible(), "following herdr focus leaves this browser on the rearranged tab");
+      } finally {
+        releaseSwap.resolve();
+      }
+      await (await swapped).finished();
+      await page.unroute("**/api/pane/swap");
+      await page.waitForFunction((pane) => {
+        const frames = [...document.querySelectorAll<HTMLElement>(".pane-frame:not(.is-hidden)")].sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+        return frames[0]?.getAttribute("data-layout-pane") === pane;
+      }, beside);
+      const x = (await sessionSnapshot()).layouts.flatMap((layout) => layout.panes);
+      assert.ok(x.find((pane) => pane.pane_id === beside)!.rect.x < x.find((pane) => pane.pane_id === first)!.rect.x, "herdr swapped the two");
+      assert.equal(await page.locator(".is-swap-target").count(), 0, "the mark is cleared");
+      assert.equal(await page.locator(".pane-slot").count(), 1, "a swap opens no split view");
+      const afterSwap = await sessionSnapshot();
+      assert.equal(afterSwap.focused_pane_id, focused.focused_pane_id, "title swapping preserves herdr's focused pane elsewhere");
+      assert.equal(afterSwap.focused_tab_id, focused.focused_tab_id, "title swapping preserves herdr's active tab");
+      assert.equal(afterSwap.focused_workspace_id, focused.focused_workspace_id, "title swapping preserves herdr's active workspace");
+      console.log("PASS a title dropped on another title of its tab trades the two panes' places");
+      // A refusal is an HTTP success with changed:false, not a successful layout change.
+      await page.route("**/api/pane/swap", (route) => route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({ ok: true, changed: false, reason: "cross_tab", target_pane_id: beside }),
+      }));
+      const refusedFrom = (await head(first).boundingBox())!;
+      const refusedTo = (await head(beside).boundingBox())!;
+      await page.mouse.move(refusedFrom.x + 30, refusedFrom.y + refusedFrom.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(refusedFrom.x + 38, refusedFrom.y + refusedFrom.height / 2 + 4, { steps: 2 });
+      await page.mouse.move(refusedTo.x + 60, refusedTo.y + refusedTo.height / 2, { steps: 8 });
+      await page.mouse.move(refusedTo.x + 61, refusedTo.y + refusedTo.height / 2);
+      await page.waitForFunction((pane) => document.querySelector(`[data-layout-pane="${pane}"] > .pane-frame-head`)?.classList.contains("is-swap-target") === true, beside);
+      await page.mouse.up();
+      await page.locator(".pane-notice[role='alert']").filter({ hasText: "The panes are in different tabs." }).waitFor();
+      assert.equal(await left(), beside, "a refused swap leaves the layout intact");
+      await page.unroute("**/api/pane/swap");
+      console.log("PASS a refused title swap shows herdr's reason");
+      // the workspace's sidebar row dropped on a title of that tab opens its pane in a half, as before:
+      // only a drag from a pane's own title swaps. The title is the pane the row does not carry
+      const snapshot = await sessionSnapshot();
+      const tabId = snapshot.panes.find((pane) => pane.pane_id === first)!.tab_id;
+      const carried = snapshot.layouts.find((layout) => layout.tab_id === tabId)!.focused_pane_id;
+      const other = carried === first ? beside : first;
+      const row = page.locator("[draggable='true']", { hasText: "ovis-test-split-title-swap" }).first();
+      const rowBox = (await row.boundingBox())!;
+      const title = (await head(other).boundingBox())!;
+      await page.mouse.move(rowBox.x + 20, rowBox.y + rowBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(rowBox.x + 28, rowBox.y + rowBox.height / 2 + 4, { steps: 2 });
+      await page.mouse.move(title.x + 60, title.y + title.height / 2, { steps: 8 });
+      await page.mouse.move(title.x + 61, title.y + title.height / 2);
+      await page.waitForFunction(() => document.querySelector(".split-drop")?.getAttribute("data-side") !== null);
+      assert.equal(await page.locator(".is-swap-target").count(), 0, "a sidebar row never marks a title");
+      await page.mouse.up();
+      await page.waitForFunction(() => document.querySelectorAll(".pane-slot").length === 2);
+      const after = (await sessionSnapshot()).layouts.flatMap((layout) => layout.panes);
+      assert.ok(after.find((pane) => pane.pane_id === beside)!.rect.x < after.find((pane) => pane.pane_id === first)!.rect.x, "the row's drop swapped nothing");
+      assert.deepEqual(errors, []);
+      console.log("PASS a sidebar row dropped on a title of its tab still opens a half");
+    }
+
     // 6b. A narrow window shows the active half alone; picking the hidden half's pane opens it in the
     //     shown half, and the hidden half keeps its own: the wide window shows both again.
     {
@@ -707,6 +811,68 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
         "the tab strip remains visible");
       assert.deepEqual(errors, []);
       console.log("PASS phone glass-header selectors follow pane-slot nesting without covering notices or tabs");
+    }
+
+    // A tab moved to another workspace goes as its pane, under a new ID: the half that showed it
+    // follows it there, the inactive half as much as the active one, and the split stays.
+    {
+      const [left, right, , , probe] = await panesFor("move-left", "move-right", "move-target", "move-back", "move-probe") as [string, string, string, string, string];
+      const { page, errors } = await open([left, right], "terminal");
+      await splitRight(page, right);
+      const shows = (side: string, pane: string) => page.waitForFunction(([which, id]) =>
+        document.querySelector(`.pane-slot[data-side="${which}"] [data-layout-pane="${id}"]:not([inert])`) !== null, [side, pane] as const);
+      const moveOut = async (side: string, to = "ovis-test-split-move-target"): Promise<string> => {
+        // a right press on the half's open tab opens its menu without making the half the active one
+        await half(page, side).locator('.tab-strip [role=tab][aria-selected="true"]').click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Move to workspace…", exact: true }).click();
+        const answered = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/tab/move-to-workspace"));
+        await page.getByRole("menuitem", { name: to, exact: true }).click();
+        const response = await answered;
+        assert.equal(response.status(), 200);
+        return ((await response.json()) as TabMovedToWorkspace).pane_id;
+      };
+      await shows("left", left);
+
+      const movedLeft = await moveOut("left");
+      assert.notEqual(movedLeft, left, "herdr gives the moved pane a new ID");
+      await shows("left", movedLeft);
+      assert.equal(await page.locator(".pane-slot").count(), 2, "the split stays when the inactive half's tab moves");
+      await isActive(page, "right");
+
+      const movedRight = await moveOut("right");
+      await shows("right", movedRight);
+      await shows("left", movedLeft);
+      assert.equal(await page.locator(".pane-slot").count(), 2, "the split stays when the active half's tab moves");
+      await isActive(page, "right");
+      // the lens picked for each pane went to its new ID with it (lib/paneMove.ts)
+      assert.deepEqual(await page.evaluate((ids) => ids.map((id) => localStorage.getItem(`ovis:view:${id}`)), [left, right, movedLeft, movedRight]),
+        [null, null, "terminal", "terminal"]);
+
+      // herdr can drop the old ID from a roster before the move answers: until it does, neither half
+      // falls back from its pane, and then each follows it. A later roster has come and gone before the
+      // check, so a fallback would have shown by then
+      const report = (pane: string, state: string) => herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "claude", state });
+      for (const [side, pane] of [["left", movedLeft], ["right", movedRight]] as const) {
+        let release = (): void => undefined;
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        await page.route("**/tab/move-to-workspace", async (route) => { const response = await route.fetch(); await held; await route.fulfill({ response }); });
+        // the page's roster without the pane: herdr moved it
+        const dropped = page.waitForResponse(async (response) => new URL(response.url()).pathname === "/api/machines" && !(await response.text()).includes(`"${pane}"`));
+        const moving = moveOut(side, "ovis-test-split-move-back");
+        await dropped;
+        await report(probe, "working");
+        await page.locator(`.pane-item:has(.pane-select[title^="${probe} —"]) [data-status="working"]`).first().waitFor({ state: "attached" });
+        await report(probe, "idle");
+        await settled(page);
+        assert.equal(await page.locator(".pane-slot").count(), 2, `the ${side} half stays while the move is answered`);
+        release();
+        await shows(side, await moving);
+        await page.unroute("**/tab/move-to-workspace");
+      }
+      assert.equal(await page.locator(".pane-slot").count(), 2);
+      await isActive(page, "right");
+      assert.deepEqual(errors, []);
+      console.log("PASS a tab moved to another workspace keeps its half of the split, active or not");
     }
 
     // A saved partner on a removed PC is discarded only after the roster arrives.

@@ -12,8 +12,10 @@
  * - An administrator's authorized keys live in %ProgramData%\ssh\administrators_authorized_keys
  *   with a fixed ACL; everyone else's in ~\.ssh\authorized_keys.
  */
+import { createHash, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { win32 } from "node:path";
-import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+import { REMOTE_BUNDLE_VERSION, type SshTarget } from "../shared/machines.ts";
 import type { BridgeDescriptor } from "./bridge.ts";
 import { shellQuote } from "./machine-security.ts";
 import { bundleFile, type InstallStage } from "./remote-bundle.ts";
@@ -29,6 +31,9 @@ export const HERDR_INSTALL_CMD = "https://herdr.dev/install.cmd";
 
 /** the upload is cut off after this long on the PC, as a dead SSH link may never deliver EOF */
 export const INSTALL_UPLOAD_TIMEOUT_S = 25 * 60;
+const INSTALL_EXTRACT_TIMEOUT_MS = 10 * 60_000;
+// Allow time for staging, progress probes and cleanup beyond the bounded upload and extraction.
+const INSTALL_LOCK_MAX_AGE_MINUTES = Math.ceil((INSTALL_UPLOAD_TIMEOUT_S * 1000 + INSTALL_EXTRACT_TIMEOUT_MS) / 60_000) + 5;
 /**
  * Takes `$base/install.lock` (a directory holding the owner's PID). A lock whose owner is
  * gone, or that outlived the longest possible install (the local SSH timeout is 30 minutes),
@@ -43,9 +48,32 @@ export const INSTALL_UPLOAD_TIMEOUT_S = 25 * 60;
  * other installers see it as in progress, and if its creator dies there, only the age check
  * can reclaim it.
  */
-export const POSIX_INSTALL_LOCK = `lock="$base/install.lock"; if ! mkdir "$lock" 2>/dev/null; then mkdir "$lock.reclaim" 2>/dev/null || { test -z "$(find "$lock.reclaim" -maxdepth 0 -mmin +2 2>/dev/null)" || rmdir "$lock.reclaim" 2>/dev/null; printf 'Another installation is in progress; retry shortly\\n' >&2; exit 1; }; owner=$(cat "$lock/pid" 2>/dev/null || true); if { test -n "$owner" && ! kill -0 "$owner" 2>/dev/null; } || test -n "$(find "$lock" -maxdepth 0 -mmin +35 2>/dev/null)"; then rm -rf "$lock"; mkdir "$lock" 2>/dev/null || { rmdir "$lock.reclaim"; printf 'Another installation is in progress; retry shortly\\n' >&2; exit 1; }; printf '%s' "$$" > "$lock/pid"; rmdir "$lock.reclaim"; else rmdir "$lock.reclaim"; printf 'Another installation is in progress; retry shortly\\n' >&2; exit 1; fi; fi; printf '%s' "$$" > "$lock/pid";`;
+export const POSIX_INSTALL_LOCK = `lock="$base/install.lock"; if ! mkdir "$lock" 2>/dev/null; then mkdir "$lock.reclaim" 2>/dev/null || { test -z "$(find "$lock.reclaim" -maxdepth 0 -mmin +2 2>/dev/null)" || rmdir "$lock.reclaim" 2>/dev/null; printf 'Another installation is in progress; retry shortly\\n' >&2; exit 1; }; owner=$(cat "$lock/pid" 2>/dev/null || true); if { test -n "$owner" && ! kill -0 "$owner" 2>/dev/null; } || test -n "$(find "$lock" -maxdepth 0 -mmin +${INSTALL_LOCK_MAX_AGE_MINUTES} 2>/dev/null)"; then rm -rf "$lock"; mkdir "$lock" 2>/dev/null || { rmdir "$lock.reclaim"; printf 'Another installation is in progress; retry shortly\\n' >&2; exit 1; }; printf '%s' "$$" > "$lock/pid"; rmdir "$lock.reclaim"; else rmdir "$lock.reclaim"; printf 'Another installation is in progress; retry shortly\\n' >&2; exit 1; fi; fi; printf '%s' "$$" > "$lock/pid";`;
 /** the exit trap's release: only a lock this shell still owns, never a successor's */
 export const POSIX_INSTALL_RELEASE = `test "$(cat "$lock/pid" 2>/dev/null)" != "$$" || rm -rf "$lock"`;
+
+/**
+ * Windows' mirror of {@link POSIX_INSTALL_LOCK}: the same directory mutex around the upload.
+ *
+ * The owner cannot be probed the way a POSIX shell's can. The PowerShell that stages the upload
+ * exits before the upload runs, so a PID written here would look dead while the install is alive,
+ * and every peer would reclaim a lock that is still in use. The lock therefore holds a unique
+ * `$owner` attempt beneath this server and target's stable `$reclaim` prefix. This process admits
+ * only one live attempt for that prefix, so a matching lock is its stopped predecessor; cleanup
+ * still compares the whole unique owner and can never remove a successor's lock. A peer's lock is
+ * reclaimed only after the bounded upload and extraction, plus a margin for the other SSH calls.
+ *
+ * Reclaiming happens under `install.lock.reclaim`, a second mutex, with the owner and age read
+ * again inside it: two installers that both judged the lock stale cannot then delete each other's
+ * fresh lock. A mutex left by a reclaimer that died is dropped after two minutes, and that run
+ * reports "in progress"; the retry takes over. Paths go through `Join-Path` so the scripts also run
+ * under `pwsh` off Windows, where the tests exercise them.
+ * Expects `$base`, `$reclaim` and `$owner`; sets `$lock`.
+ */
+export const WINDOWS_INSTALL_LOCK = `$lock = Join-Path $base 'install.lock'; $mutex = "$lock.reclaim"; $created = $false; try { New-Item -ItemType Directory $lock -ErrorAction Stop | Out-Null; $created = $true } catch {}; if (-not $created) { try { New-Item -ItemType Directory $mutex -ErrorAction Stop | Out-Null } catch { $stale = Get-Item -LiteralPath $mutex -ErrorAction SilentlyContinue; if ($stale -and ((Get-Date).ToUniversalTime() - $stale.LastWriteTimeUtc).TotalMinutes -gt 2) { Remove-Item -Recurse -Force $mutex -ErrorAction SilentlyContinue }; throw 'Another installation is in progress; retry shortly' }; try { if (Test-Path -LiteralPath $lock) { $held = ([string](Get-Content -LiteralPath (Join-Path $lock 'owner') -Raw -ErrorAction SilentlyContinue)).Trim(); $age = ((Get-Date).ToUniversalTime() - (Get-Item -LiteralPath $lock).LastWriteTimeUtc).TotalMinutes; if ($held.StartsWith($reclaim + ':') -or ($age -gt ${INSTALL_LOCK_MAX_AGE_MINUTES})) { Remove-Item -Recurse -Force $lock -ErrorAction SilentlyContinue } }; New-Item -ItemType Directory $lock -ErrorAction Stop | Out-Null; $created = $true } catch { throw 'Another installation is in progress; retry shortly' } finally { Remove-Item -Recurse -Force $mutex -ErrorAction SilentlyContinue } }; if (-not $created) { throw 'Another installation is in progress; retry shortly' }; Set-Content -LiteralPath (Join-Path $lock 'owner') -Value $owner -NoNewline -Encoding ascii`;
+
+/** the Windows release: only a lock this server still owns, never a successor's */
+export const WINDOWS_INSTALL_RELEASE = `$target = Join-Path $base 'install.lock'; if ((Test-Path -LiteralPath $target) -and (([string](Get-Content -LiteralPath (Join-Path $target 'owner') -Raw -ErrorAction SilentlyContinue)).Trim() -eq $owner)) { Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue }`;
 
 export interface HostInspection {
   platform: "linux-x64" | "linux-arm64" | "darwin-x64" | "darwin-arm64" | "win32-x64";
@@ -62,7 +90,32 @@ export interface HostInspection {
   registryDir: string;
 }
 export interface StartOptions { session?: string; herdrPath: string; inspection: HostInspection }
-export interface InstallOptions { cacheDir?: string; onProgress?(stage: InstallStage, done: number, total: number | null): void }
+/**
+ * The Windows lock's stable reclaim prefix. It is ASCII-safe even when the state directory,
+ * destination or account is not. The state directory and target outlive a restart (a PID does
+ * not), so this server can reclaim its stopped predecessor while another target or server waits.
+ */
+export function installLockOwner(stateDir: string, target: Pick<SshTarget, "destination" | "port"> = { destination: "" }): string {
+  return createHash("sha256").update(`${hostname()}\0${stateDir}\0${target.destination}\0${target.port ?? ""}`).digest("hex");
+}
+
+const activeWindowsInstalls = new Set<string>();
+const INSTALL_BUSY = "Another installation is in progress; retry shortly";
+
+/** One unique attempt per stable server/target owner; a stopped attempt remains reclaimable. */
+export async function withWindowsInstallAttempt<T>(reclaim: string, run: (owner: string) => Promise<T>): Promise<T> {
+  if (activeWindowsInstalls.has(reclaim)) throw new Error(INSTALL_BUSY);
+  activeWindowsInstalls.add(reclaim);
+  try { return await run(`${reclaim}:${randomUUID()}`); }
+  finally { activeWindowsInstalls.delete(reclaim); }
+}
+
+export interface InstallOptions {
+  cacheDir?: string;
+  /** who holds the Windows install lock; {@link installLockOwner} unless a caller says otherwise */
+  owner?: string;
+  onProgress?(stage: InstallStage, done: number, total: number | null): void;
+}
 
 export interface RemoteHost {
   readonly kind: "posix" | "windows";
@@ -214,50 +267,57 @@ export const windowsHost: RemoteHost = {
     const release = `${WINDOWS_BUNDLE}-${asset.sha256.slice(0, 16)}`;
     const base = (await ssh.runPowerShell(`Write-Output "${WINDOWS_BUNDLE_BASE}"`)).trim();
     if (!/^[A-Za-z]:\\/.test(base)) throw new Error("%LOCALAPPDATA% could not be read on this PC");
-    // the same shape as the POSIX install: verify here and there, stage, then swap the
-    // `remote-vN` junction (no privilege needed, unlike a symlink). The upload is its own
-    // step (sftp, see SshConnection.upload), so the lock is taken around it by hand.
-    const stage = `${base}\\install.${process.pid}`;
-    await ssh.runPowerShell([
-      "$ErrorActionPreference = 'Stop'",
-      `New-Item -ItemType Directory -Force ${psQuote(base)} | Out-Null`,
-      `try { New-Item -ItemType Directory ${psQuote(base + "\\install.lock")} -ErrorAction Stop | Out-Null } catch { throw 'Another installation is in progress; retry shortly' }`,
-      `New-Item -ItemType Directory -Force ${psQuote(stage)} | Out-Null`,
-    ].join("\n"));
-    const archive = `${stage}\\bundle.tgz`;
-    const cleanup = () => ssh.runPowerShell(`Remove-Item -Recurse -Force ${psQuote(stage)} -ErrorAction SilentlyContinue; Remove-Item -Force ${psQuote(base + "\\install.lock")} -ErrorAction SilentlyContinue`).catch(() => {});
-    try {
-      // sftp says nothing about how far it is: the file's size on the PC does
-      const upload = ssh.upload(input.path, archive);
-      let settled = false;
-      void upload.finally(() => { settled = true; });
-      while (!settled) {
-        await Promise.race([upload.catch(() => {}), Bun.sleep(2000)]);
-        if (settled) break;
-        const size = Number((await ssh.runPowerShell(`(Get-Item ${psQuote(archive)} -ErrorAction SilentlyContinue).Length`).catch(() => "")).trim());
-        if (Number.isFinite(size) && size > 0) input.onProgress?.(size);
-      }
-      await upload;
-      input.onProgress?.(asset.size);
-      input.onUploaded?.();
-    } catch (error) { await cleanup(); throw error; }
-    await ssh.runPowerShell([
-      "$ErrorActionPreference = 'Stop'",
-      `$base = ${psQuote(base)}`,
-      `$tmp = ${psQuote(stage)}`,
-      "try {",
-      `  if ((Get-FileHash -Algorithm SHA256 "$tmp\\bundle.tgz").Hash.ToLower() -ne '${asset.sha256}') { throw 'Remote bundle checksum mismatch' }`,
-      "  New-Item -ItemType Directory \"$tmp\\runtime\" | Out-Null",
-      // Git's GNU tar on PATH interprets a drive-letter archive as a remote host.
-      "  & \"$env:SystemRoot\\System32\\tar.exe\" -xzf \"$tmp\\bundle.tgz\" -C \"$tmp\\runtime\"; if ($LASTEXITCODE -ne 0) { throw 'Bundle extraction failed' }",
-      "  & \"$tmp\\runtime\\bin\\bun.exe\" --version | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'Bundled Bun does not run on this PC' }",
-      `  $release = "${release}"`,
-      "  if (-not (Test-Path $release)) { Move-Item \"$tmp\\runtime\" $release }",
-      `  $current = "${WINDOWS_BUNDLE}"`,
-      "  if (Test-Path $current) { if ((Get-Item $current).Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($current) } else { Move-Item $current \"$current-legacy-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())\" } }",
-      "  New-Item -ItemType Junction -Path $current -Target $release | Out-Null",
-      "} finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue; Remove-Item -Force \"$base\\install.lock\" -ErrorAction SilentlyContinue }",
-    ].join("\n"), undefined, 10 * 60_000);
+    const reclaim = options.owner ?? installLockOwner("", ssh.target);
+    await withWindowsInstallAttempt(reclaim, async (owner) => {
+      // the same shape as the POSIX install: verify here and there, stage, then swap the
+      // `remote-vN` junction (no privilege needed, unlike a symlink). The upload is its own
+      // step (sftp, see SshConnection.upload), so the lock is taken around it by hand.
+      const stage = `${base}\\install.${process.pid}`;
+      await ssh.runPowerShell([
+        "$ErrorActionPreference = 'Stop'",
+        `New-Item -ItemType Directory -Force ${psQuote(base)} | Out-Null`,
+        `$base = ${psQuote(base)}`,
+        `$reclaim = ${psQuote(reclaim)}`,
+        `$owner = ${psQuote(owner)}`,
+        WINDOWS_INSTALL_LOCK,
+        `New-Item -ItemType Directory -Force ${psQuote(stage)} | Out-Null`,
+      ].join("\n"));
+      const archive = `${stage}\\bundle.tgz`;
+      const cleanup = () => ssh.runPowerShell(`Remove-Item -Recurse -Force ${psQuote(stage)} -ErrorAction SilentlyContinue; $base = ${psQuote(base)}; $owner = ${psQuote(owner)}; ${WINDOWS_INSTALL_RELEASE}`).catch(() => {});
+      try {
+        // sftp says nothing about how far it is: the file's size on the PC does
+        const upload = ssh.upload(input.path, archive, INSTALL_UPLOAD_TIMEOUT_S * 1000);
+        let settled = false;
+        void upload.finally(() => { settled = true; });
+        while (!settled) {
+          await Promise.race([upload.catch(() => {}), Bun.sleep(2000)]);
+          if (settled) break;
+          const size = Number((await ssh.runPowerShell(`(Get-Item ${psQuote(archive)} -ErrorAction SilentlyContinue).Length`).catch(() => "")).trim());
+          if (Number.isFinite(size) && size > 0) input.onProgress?.(size);
+        }
+        await upload;
+        input.onProgress?.(asset.size);
+        input.onUploaded?.();
+      } catch (error) { await cleanup(); throw error; }
+      await ssh.runPowerShell([
+        "$ErrorActionPreference = 'Stop'",
+        `$base = ${psQuote(base)}`,
+        `$owner = ${psQuote(owner)}`,
+        `$tmp = ${psQuote(stage)}`,
+        "try {",
+        `  if ((Get-FileHash -Algorithm SHA256 "$tmp\\bundle.tgz").Hash.ToLower() -ne '${asset.sha256}') { throw 'Remote bundle checksum mismatch' }`,
+        "  New-Item -ItemType Directory \"$tmp\\runtime\" | Out-Null",
+        // Git's GNU tar on PATH interprets a drive-letter archive as a remote host.
+        "  & \"$env:SystemRoot\\System32\\tar.exe\" -xzf \"$tmp\\bundle.tgz\" -C \"$tmp\\runtime\"; if ($LASTEXITCODE -ne 0) { throw 'Bundle extraction failed' }",
+        "  & \"$tmp\\runtime\\bin\\bun.exe\" --version | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'Bundled Bun does not run on this PC' }",
+        `  $release = "${release}"`,
+        "  if (-not (Test-Path $release)) { Move-Item \"$tmp\\runtime\" $release }",
+        `  $current = "${WINDOWS_BUNDLE}"`,
+        "  if (Test-Path $current) { if ((Get-Item $current).Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($current) } else { Move-Item $current \"$current-legacy-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())\" } }",
+        "  New-Item -ItemType Junction -Path $current -Target $release | Out-Null",
+        `} finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue; ${WINDOWS_INSTALL_RELEASE} }`,
+      ].join("\n"), undefined, INSTALL_EXTRACT_TIMEOUT_MS);
+    });
   },
   async installHerdr(ssh) {
     // herdr's stable installer (the one its docs give for endpoint-security-blocked PowerShell)

@@ -77,6 +77,18 @@ describe("a phone's sheet in the history", () => {
     expect(fake.at()).toBe(0); expect(closed).toBe(1);
   });
 
+  it("marks the entry it opens over with its id, so a navigation that takes its entry can tell that entry", async () => {
+    const start = fake.at();
+    const leave = hooks.enter(() => undefined);
+    const under = (fake.entries[start]!.state as Record<string, unknown>)["ovis:sheet-under"];
+    const own = fake.entries[start + 1]!.state as Record<string, unknown>;
+    expect(typeof under).toBe("string");
+    expect(own["ovis:sheet"]).toBe(under);
+    expect(own["ovis:sheet-under"]).toBe(under);
+    leave(); await settled();
+    expect(fake.at()).toBe(start);
+  });
+
   it("gives its entry to a navigation an item makes, so Back goes to the pane before and Forward returns", async () => {
     // on pane a (entry 0); the retired entry of the first test lies at 1
     const leave = hooks.enter(() => {});

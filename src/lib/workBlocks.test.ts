@@ -8,9 +8,10 @@ const text = (value: string): Extract<ConversationPart, { kind: "text" }> => ({ 
 const thinking = (value: string): Extract<ConversationPart, { kind: "thinking" }> => ({ kind: "thinking", text: value });
 
 describe("splitTurn", () => {
-  it("folds every action and the narration between them into the work; the trailing prose is the answer", () => {
-    const split = splitTurn([thinking("hm"), tool("read"), text("looking…"), tool("edit"), text("done"), text("really")]);
-    expect(split.work).toEqual([thinking("hm"), tool("read"), text("looking…"), tool("edit")]);
+  it("folds actions and explicit narration into work while every assistant response stays in the answer", () => {
+    const narration = { ...text("looking…"), phase: "commentary" as const };
+    const split = splitTurn([thinking("hm"), tool("read"), narration, tool("edit"), text("done"), text("really")]);
+    expect(split.work).toEqual([thinking("hm"), tool("read"), narration, tool("edit")]);
     expect(split.answer).toEqual([text("done"), text("really")]);
   });
 
@@ -18,8 +19,8 @@ describe("splitTurn", () => {
     expect(splitTurn([text("  \n"), text("hi")])).toEqual({ work: [], answer: [text("hi")] });
   });
 
-  it("is all work when the turn ends on an action (still running)", () => {
-    expect(splitTurn([text("on it"), tool("bash")])).toEqual({ work: [text("on it"), tool("bash")], answer: [] });
+  it("keeps an unphased response visible when a tool follows it", () => {
+    expect(splitTurn([text("The substantive answer"), tool("bash")])).toEqual({ work: [tool("bash")], answer: [text("The substantive answer")] });
   });
 
   it("keeps Codex commentary inside work even after the last tool or with no tools", () => {
@@ -31,6 +32,16 @@ describe("splitTurn", () => {
   it("honors an explicit final answer even if a later record contains an action", () => {
     const final = { ...text("Done"), phase: "final_answer" as const };
     expect(splitTurn([tool("exec_command"), final, tool("cleanup")])).toEqual({ work: [tool("exec_command"), tool("cleanup")], answer: [final] });
+  });
+
+  it("keeps a multi-step answer and later closing sentence outside the work block", () => {
+    const answer = text("The report contains three sections.\n\n1. Summary.\n2. Details.\n3. Next steps.");
+    const check = { ...tool("bash"), summary: "bun test report" };
+    const closing = text("The report is ready.");
+    const parts = [answer, check, closing];
+    expect(splitTurn(parts)).toEqual({ work: [check], answer: [answer, closing] });
+    expect(workStartsOpen(true, parts)).toBe(true);
+    expect(workStartsOpen(false, parts)).toBe(false);
   });
 });
 
@@ -50,10 +61,10 @@ describe("workStartsOpen", () => {
     expect(workStartsOpen(false, [commentary("Checking."), tool("exec_command"), final("Done"), tool("cleanup")])).toBe(false);
   });
 
-  it("keeps a settled turn open when its words are followed by an action and no answer: the fold would hide all of them", () => {
-    expect(workStartsOpen(false, [text("on it"), tool("bash")])).toBe(true);
+  it("folds a settled turn when an unphased answer is followed by an action because the answer remains visible", () => {
+    expect(workStartsOpen(false, [text("The answer"), tool("bash")])).toBe(false);
     // a todo update after the closing summary is not even counted in the header
-    expect(workStartsOpen(false, [tool("read"), text("Here is the full answer."), tool("TodoWrite")])).toBe(true);
+    expect(workStartsOpen(false, [tool("read"), text("Here is the full answer."), tool("TodoWrite")])).toBe(false);
   });
 
   it("keeps a settled turn open when it ends in Codex commentary: folding would hide its last text", () => {

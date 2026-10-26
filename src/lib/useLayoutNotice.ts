@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
-import { routeMissing } from "./api.ts";
+import { ApiError, routeMissing } from "./api.ts";
 import type { Translate } from "./i18n.ts";
 
 /** Keeps the transient notice for refused layout calls. */
@@ -24,4 +24,15 @@ export function useLayoutRefused(setLayoutNotice: Dispatch<SetStateAction<string
     else console.warn(what, err);
   }, [t]);
   return layoutRefused;
+}
+
+/** Creates the callback for a tab move the palette asked for and the PC refused. */
+export function useMoveRefused(setLayoutNotice: Dispatch<SetStateAction<string | null>>, t: Translate) {
+  // the palette has closed, so herdr's refusal is said over the pane too (the tab's own menu has a
+  // line of its own)
+  const moveRefused = useCallback((err: unknown): void => {
+    const reason = err instanceof ApiError ? err.detail : err instanceof Error ? err.message : String(err);
+    setLayoutNotice(routeMissing(err) ? t("This PC's bridge does not offer this yet") : t("Move failed: {reason}", { reason }));
+  }, [t]);
+  return moveRefused;
 }

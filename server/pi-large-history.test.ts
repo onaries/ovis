@@ -8,6 +8,8 @@ import { withinRetentionBudget } from "./retention-budget.ts";
 const dir = mkdtempSync(join(tmpdir(), "pi-bounded-history-"));
 // the readers keep module-wide caches keyed by path: leave none behind for the files removed here
 afterAll(() => { forgetTranscriptState(); forgetAllPiIndexes(); rmSync(dir, { recursive: true, force: true }); });
+// a picture the chat shows is a real raster: the reader checks its leading bytes
+const FIXTURE_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
 const textOf = (page: ReturnType<typeof transcriptPage>) => page.turns.flatMap(t => t.parts).flatMap(p => p.kind === "text" ? [p.text] : []);
 const message = (id: string, parentId: string | null, role: string, text: string) => ({ id, parentId, type: "message", message: { role, content: [{ type: "text", text }] } });
 test("history beyond 64MiB remains paged and complete, stable on append, with bounded index retention", () => {
@@ -32,9 +34,11 @@ test("history beyond 64MiB remains paged and complete, stable on append, with bo
   add(message("u-next", parent, "user", "appended"));
   const newest = transcriptPage("pi-transcript", path); expect(newest.history_id).toBe(history); expect(textOf(newest)).toContain("appended");
   forgetTranscriptState(); expect(textOf(transcriptPage("pi-transcript", path))).toEqual(textOf(newest));
-  add({ id: "tool", type: "message", message: { role: "toolResult", toolCallId: "fixture-call", toolName: "read", content: [{ type: "text", text: "kept output" }, { type: "image", mimeType: "image/png", data: Buffer.from("fixture-image").toString("base64") }] } });
+  // the picture is served from a result that answers a call the page draws, as the page names it
+  add({ id: "call", type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "fixture-call", name: "read", arguments: {} }] } });
+  add({ id: "tool", type: "message", message: { role: "toolResult", toolCallId: "fixture-call", toolName: "read", content: [{ type: "text", text: "kept output" }, { type: "image", mimeType: "image/png", data: FIXTURE_PNG.toString("base64") }] } });
   expect(transcriptToolOutput("pi-transcript", path, "fixture-call")).toContain("kept output");
-  expect(Buffer.from(piTranscriptImage(path, "pi:fixture-call:0")!.bytes).toString()).toBe("fixture-image");
+  expect(Buffer.from(piTranscriptImage(path, "pi:fixture-call:0")!.bytes).equals(FIXTURE_PNG)).toBe(true);
   // Abandoned records remain inaccessible, even with large preceding history.
   add(message("other-branch", "u0", "assistant", "new branch"));
   expect(transcriptToolOutput("pi-transcript", path, "fixture-call")).toBeNull();
