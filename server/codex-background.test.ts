@@ -109,6 +109,39 @@ it("counts only acknowledged spawns and exposes their assigned task", () => {
   expect(tracker.detail("pane", id)).toMatchObject({ detail: { session_id: "parent", prompt: "Inspect task lifecycle" } });
 });
 
+const other = "22222222-2222-4222-8222-222222222222";
+const parallel = 'const jobs = await Promise.all([tools.multi_agent_v1__spawn_agent({agent_type:"explorer",message:"First assignment"}),tools.multi_agent_v1__spawn_agent({agent_type:"lazycodex-worker-high",message:"Second assignment"})]); text(jobs);';
+
+it("lists acknowledged parallel children without pairing their assignments by output order", () => {
+  const { path, tracker } = fixture(entry({ type: "custom_tool_call", name: "exec", input: parallel, call_id: "spawn" })
+    + entry({ type: "custom_tool_call_output", call_id: "spawn", output: [{ type: "text", text: "Script completed\nOutput:\n" + JSON.stringify([{ agent_id: other, nickname: "Worker" }, { agent_id: id, nickname: "Explorer" }]) }] }));
+  expect(tracker.countOf("pane")).toBe(2);
+  expect(tracker.tasksOf("pane")).toMatchObject([{ id: other, title: "Worker", category: null }, { id, title: "Explorer", category: null }]);
+  expect(tracker.detail("pane", id)).toMatchObject({ detail: { prompt: null, agent: null } });
+  expect(tracker.detail("pane", other)).toMatchObject({ detail: { prompt: null, agent: null } });
+  appendFileSync(path, call("wait_agent", { targets: [id, other] }) + output({ status: { [id]: { completed: "Done" }, [other]: "running" } }));
+  tracker.poll("pane", path);
+  expect(tracker.countOf("pane")).toBe(1);
+  expect(tracker.tasksOf("pane")).toMatchObject([{ id: other, status: "running" }, { id, status: "completed" }]);
+});
+
+it("keeps a successful parallel spawn when another receipt reports an error", () => {
+  const { tracker } = fixture(entry({ type: "custom_tool_call", name: "exec", input: parallel, call_id: "spawn" })
+    + output([{ agent_id: id, nickname: "Explorer" }, { agent_id: other, nickname: "Rejected", error: "refused" }], "spawn"));
+  expect(tracker.tasksOf("pane")).toMatchObject([{ id, title: "Explorer" }]);
+  expect(tracker.countOf("pane")).toBe(1);
+});
+
+it("collects partial parallel spawn receipts across yielded cells without duplicating children", () => {
+  const { path, tracker } = fixture(entry({ type: "custom_tool_call", name: "exec", input: parallel, call_id: "spawn" })
+    + entry({ type: "custom_tool_call_output", call_id: "spawn", output: `Script running with cell ID batch-1\nOutput:\n${JSON.stringify({ agent_id: other, nickname: "Worker" })}` }));
+  expect(tracker.countOf("pane")).toBe(1);
+  appendFileSync(path, call("wait", { cell_id: "batch-1" }, "cell") + output([{ agent_id: other, nickname: "Worker" }, { agent_id: id, nickname: "Explorer" }], "cell"));
+  tracker.poll("pane", path);
+  expect(tracker.countOf("pane")).toBe(2);
+  expect(tracker.tasksOf("pane").map((task) => task.id)).toEqual([other, id]);
+});
+
 it("records reported completion and leaves it completed when closed", () => {
   const { path, tracker, counts } = fixture();
   appendFileSync(path, call("multi_agent_v1__close_agent", { target: id }) + output({ previous_status: { completed: "Lifecycle verified" } }));

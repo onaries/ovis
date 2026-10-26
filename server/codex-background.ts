@@ -162,6 +162,17 @@ export class CodexBackgroundTasks {
     const accepted = answers.length > 0 && !answers.some((answer) => Object.hasOwn(answer, "error") || answer["isError"] === true);
     const agents = codexSubagentCalls(call.name, call.input, output);
     for (const agent of agents) this.apply(read, agent, call.at, at, accepted);
+    // An acknowledged child exists even when its assignment cannot be paired with a parallel result.
+    if (agents.some((agent) => agent.operation === "spawn" && agent.agent_id === null)) {
+      for (const answer of answers.slice(0, 64)) {
+        const agentId = text(answer["agent_id"]).slice(0, 256);
+        if (!agentId || Object.hasOwn(answer, "error") || answer["isError"] === true) continue;
+        this.apply(read, {
+          operation: "spawn", agent_id: agentId, nickname: text(answer["nickname"]).slice(0, 120) || null,
+          title: "", prompt: "", agent_type: null, status: null,
+        }, call.at, at, true);
+      }
+    }
     for (const answer of answers) {
       for (const [agentId, value] of Object.entries(row(answer["status"]))) {
         const found = read.tasks.get(agentId);

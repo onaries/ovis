@@ -10,7 +10,7 @@ function Fixture() {
   const [pane, setPane] = useState("parent");
   window.codexBackgroundQA = { count: setCount, pane: setPane };
   return <div className="terminal-host" style={{ height: "100dvh", display: "flex", flexDirection: "column", justifyContent: "end" }}>
-    <Composer key={pane} paneId={pane} connected agent="codex" agentStatus="working" backgroundTasks={count} autoFocus={false}
+    <Composer key={pane} paneId={pane} connected agent="codex" agentStatus="working" backgroundTasks={pane === "parent" ? count : 0} autoFocus={false}
       onSend={() => { throw new Error("The test must not send input"); }} onAbort={() => { throw new Error("The test must not stop an agent"); }}
       onUploadImage={async () => { throw new Error("The test must not upload files"); }} />
   </div>;

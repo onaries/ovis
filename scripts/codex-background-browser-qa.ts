@@ -15,16 +15,21 @@ const evidence = process.env.UI_EVIDENCE_DIR;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 const agentId = "11111111-1111-4111-8111-111111111111";
+const parallelId = "22222222-2222-4222-8222-222222222222";
 const record = (payload: unknown, type = "response_item") => JSON.stringify({ type, timestamp: new Date().toISOString(), payload }) + "\n";
 mkdirSync(join(root, "sessions"));
 const parent = join(root, "sessions", "parent.jsonl");
 const db = new Database(join(root, "state_5.sqlite"), { create: true });
 db.run("CREATE TABLE threads (id TEXT PRIMARY KEY, tokens_used INTEGER, source TEXT)");
 db.query("INSERT INTO threads VALUES (?, ?, ?)").run(agentId, 29_014, JSON.stringify({ subagent: { thread_spawn: { parent_thread_id: "parent-session" } } }));
+db.query("INSERT INTO threads VALUES (?, ?, ?)").run(parallelId, 99_000, JSON.stringify({ subagent: { thread_spawn: { parent_thread_id: "parent-session" } } }));
 const started = record({ id: "parent-session" }, "session_meta")
   + record({ type: "function_call", name: "multi_agent_v1__spawn_agent", arguments: JSON.stringify({ agent_type: "explorer", message: "Inspect Codex lifecycle without changing files" }), call_id: "spawn" })
   + record({ type: "function_call_output", call_id: "spawn", output: JSON.stringify({ agent_id: agentId, nickname: "Explorer QA" }) });
 const completed = record({ type: "user_message", message: `<subagent_notification>${JSON.stringify({ agent_path: agentId, status: { completed: "Lifecycle check completed" } })}</subagent_notification>` }, "event_msg");
+const parallelStarted = record({ id: "parent-session" }, "session_meta")
+  + record({ type: "custom_tool_call", name: "exec", input: 'text(await Promise.all([tools.spawn_agent({message:"First parallel assignment"}),tools.spawn_agent({message:"Second parallel assignment"})]));', call_id: "batch" })
+  + record({ type: "custom_tool_call_output", call_id: "batch", output: [{ type: "text", text: JSON.stringify([{ agent_id: parallelId, nickname: "Parallel QA Two" }, { agent_id: agentId, nickname: "Parallel QA One" }]) }] });
 const tracker = new CodexBackgroundTasks(() => {}, Date.now, root);
 let activityReads = 0;
 try {
@@ -106,12 +111,30 @@ try {
     await page.locator(".bg-task.is-completed .bg-task-open").click();
     await detail.getByText("Lifecycle check completed", { exact: true }).waitFor();
     await page.keyboard.press("Escape");
+    db.query("UPDATE threads SET tokens_used = 99000 WHERE id = ?").run(parallelId);
+    writeFileSync(parent, parallelStarted); tracker.poll("parent", null); tracker.poll("parent", parent);
+    await page.evaluate((count) => window.codexBackgroundQA.count(count), tracker.countOf("parent"));
+    await page.waitForFunction(() => document.querySelectorAll(".bg-task.is-running").length === 2);
+    const first = page.locator(".bg-task-open").filter({ hasText: "Parallel QA One" });
+    const second = page.locator(".bg-task-open").filter({ hasText: "Parallel QA Two" });
+    await first.getByText(/43k tokens/).waitFor();
+    await second.getByText(/99k tokens/).waitFor();
+    await settled();
+    if (evidence) await page.screenshot({ path: join(evidence, `codex-${width}-${theme}-parallel.png`) });
+    await first.click();
+    await detail.getByText("Reported by the parent session; live child output is not read.", { exact: true }).waitFor();
+    assert.equal(await detail.locator(".bg-agent-section").count(), 0, "unpaired assignments stay unknown");
+    await page.keyboard.press("Escape");
+    appendFileSync(parent, completed);
+    await page.evaluate(() => window.codexBackgroundQA.count(1));
+    await page.waitForFunction(() => document.querySelectorAll(".bg-task.is-running").length === 1);
+    await second.waitFor();
     await page.evaluate(() => window.codexBackgroundQA.pane("other"));
     await chip.waitFor({ state: "detached" });
     assert.equal(await page.locator(".bg-agent-detail").count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.deepEqual(errors, []);
-    console.log(`PASS Codex task discovery, live cumulative tokens, running/detail/completion and pane isolation ${width}px ${theme}`);
+    console.log(`PASS Codex parallel children, unknown assignment, cumulative tokens, lifecycle and pane isolation ${width}px ${theme}`);
     await page.close();
   }
   assert.equal(missing, 0, "Codex's composer must discover its parent-reported tasks");

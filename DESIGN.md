@@ -28,7 +28,9 @@ as requested, instead of introducing the separate agent workspace used by Codex-
 The existing plan poll also reads bounded increments of the verified parent rollout: native
 spawn receipts, wait results, completion notices, close and resume reports drive the running
 count. A tool finishing is not a child finishing. The list retains the newest ten endings in
-the last day. Details show the assigned prompt and parent-reported result, explicitly labelled;
+the last day. Parallel spawn receipts retain every acknowledged child by its ID and native
+nickname; an assignment that cannot be paired stays unknown. Details show the assigned prompt
+and parent-reported result, explicitly labelled;
 child transcripts and live child output are not inferred. Each child's cumulative input and
 output tokens (including cached input) come from Codex's read-only thread store, only when its
 native source names this parent. Resuming a child keeps its session-wide total; absent or
