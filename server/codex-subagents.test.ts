@@ -69,7 +69,7 @@ it("preserves unfamiliar notifications and does not infer cancellation or evalua
     expect(parseCodexTranscript(lines(item({ type: "custom_tool_call", name: "exec", input: script, call_id: "fake" })))[0]?.parts[0]).not.toHaveProperty("codex_subagents");
   }
   const text = lines(call("close_agent", { target: id }), output({ previous_status: { completed: "Old work" } }));
-  expect(parseCodexTranscript(text)[0]?.parts[0]).toMatchObject({ codex_subagents: [{ operation: "close", agent_id: id, status: null }] });
+  expect(parseCodexTranscript(text)[0]?.parts[0]).toMatchObject({ codex_subagents: [{ operation: "close", agent_id: id, status: "completed" }] });
 });
 
 it("retains the assignment across waits and shows separate outcomes when a child is reused", () => {

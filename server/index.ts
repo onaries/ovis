@@ -241,7 +241,7 @@ export function createServer(
   const draftTimer = setInterval(() => openCodeState.prune(), 60_000);
   draftTimer.unref();
   const core = createCore({ options: { ...options, stateDir, openCodeState, orderSequence }, devices, preferences, usage, usageLogin, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS });
-  const { sidecar, serialize, push, logPushError, omo, claudeAgents, plans, clientSnapshot, machines, broadcastAll, collector, queueFirstMessage } = core;
+  const { sidecar, serialize, push, logPushError, omo, claudeAgents, codexTasks, plans, clientSnapshot, machines, broadcastAll, collector, queueFirstMessage } = core;
   // started after createCore's Node probe (server/pty/sidecar.ts), which can hold the thread up to 3 s: that wait
   // would count against the read's own 2.5 s limit, and a read cut short leaves the owner unknown for 5 minutes
   identityOf(false, null);
@@ -530,13 +530,13 @@ export function createServer(
       const paneResponse = await handlePaneRequest(request, url, pathname, options);
       if (paneResponse) return paneResponse;
 
-      const tasksResponse = await handleTasksRequest(request, url, pathname, { omo, claudeAgents });
+      const tasksResponse = await handleTasksRequest(request, url, pathname, { omo, claudeAgents, codexTasks, plans });
       if (tasksResponse) return tasksResponse;
 
       // a GET a watching device may make on purpose: a subagent's prose and tool-call arguments (which can carry file
       // contents) are what the live conversation already shows it of the agents of this pane
       if (pathname === BACKGROUND_AGENT_PATH) {
-        return handleBackgroundAgentRequest(request, url, { paneGet, omoPane: (paneId) => omo.sessionOf(paneId) !== null, claudeAgents, read: options.backgroundAgentRead });
+        return handleBackgroundAgentRequest(request, url, { paneGet, omoPane: (paneId) => omo.sessionOf(paneId) !== null, claudeAgents, codexTasks, plans, read: options.backgroundAgentRead });
       }
 
       const planResponse = await handlePlanRequest(request, url, pathname, { omo, claudeAgents, plans });

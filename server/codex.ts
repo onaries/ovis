@@ -2378,7 +2378,7 @@ export async function codexOpenRollout(paneId: string, cwd: string | null | unde
  * conversation a TUI shows: when nothing of this folder tells, the screen is matched against
  * all of them (loadedConversation).
  */
-export async function codexTranscriptPath(paneId: string, cwd: string, home = defaultCodexHome(), panes?: HerdrPane[]): Promise<string | null> {
+export async function codexTranscriptPath(paneId: string, cwd: string, home = defaultCodexHome(), panes?: HerdrPane[], rememberMatch = true): Promise<string | null> {
   if (panes !== undefined) {
     const open = new Set(panes.map((pane) => pane.pane_id));
     for (const pane of [...boundRollouts.keys()]) if (!open.has(pane)) boundRollouts.delete(pane);
@@ -2458,6 +2458,7 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   });
   const matched = screen ? matchCodexTranscript(screen.text, candidates, new Set(titledElsewhere === null ? [] : [titledElsewhere])) : null;
   if (matched !== null) {
+    if (!rememberMatch) return matched;
     boundRollouts.delete(paneId);
     boundRollouts.set(paneId, { processes, path: matched, at: Date.now(), ...(matched === titledElsewhere ? { titled: true } : {}) });
     if (boundRollouts.size > 64) boundRollouts.delete(boundRollouts.keys().next().value!);

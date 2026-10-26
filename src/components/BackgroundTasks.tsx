@@ -36,7 +36,7 @@ const NODE_ICONS: Record<OmoRunNode["state"], ComponentType<LucideProps>> = {
  * A Claude pane's tasks are its subagents. Most Claude panes have none, so it asks when
  * the pane is shown (and when its count changes), and appears only when there are or were some.
  */
-export function BackgroundTasks({ paneId, count, omo, claude = false, plan = null }: { paneId: string; count: number; omo: boolean; claude?: boolean; plan?: PlanSummary | null }) {
+export function BackgroundTasks({ paneId, count, omo, claude = false, codex = false, plan = null }: { paneId: string; count: number; omo: boolean; claude?: boolean; codex?: boolean; plan?: PlanSummary | null }) {
   const t = useT();
   const { fetchPaneOmoActivity, fetchPanePlan } = useMachineApi();
   const machineId = useMachineId();
@@ -55,7 +55,7 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
   const [seen, setSeen] = useState(count > 0);
   useEffect(() => { if (count > 0) setSeen(true); }, [count]);
   useEffect(() => {
-    if (!claude || count > 0) return;
+    if ((!claude && !codex) || count > 0) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // The server answers within a second with what it knows, so a pane whose session it is still
@@ -68,7 +68,7 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
     ask(3);
     return () => { alive = false; clearTimeout(timer); };
     // asked when the pane is shown and again when its count changes
-  }, [claude, paneId, count]);
+  }, [claude, codex, paneId, count]);
   const [tasks, setTasks] = useState<OmoTask[] | null>(null);
   const [runs, setRuns] = useState<OmoRun[]>([]);
   const [failed, setFailed] = useState(false);
@@ -194,7 +194,7 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
       {(meta.length > 0 || (task.status !== "running" && task.status !== "completed")) && <span className="bg-task-meta">{[task.status !== "running" && task.status !== "completed" ? words[task.status] : null, meta || null].filter((item) => item !== null).join(" · ")}</span>}
     </span>;
     // a running task opens its detail: what a Claude subagent is doing, or why this PC cannot say
-    if (task.status === "running") {
+    if (task.status === "running" || task.detail_kind === "codex-subagent") {
       return <li key={task.id} className={`bg-task is-${task.status} is-openable`}>
         <button type="button" className="bg-task-open" aria-haspopup="dialog" aria-expanded={detail?.id === task.id} onClick={(event) => { event.currentTarget.focus(); setDetail(task); }}>
           <Icon className="bg-task-icon" aria-hidden="true" />

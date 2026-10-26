@@ -30,7 +30,7 @@ function staticArguments(input: string): Record<string, unknown> {
   return fields;
 }
 
-function replies(output: unknown): Record<string, unknown>[] {
+export function codexSubagentReplies(output: unknown): Record<string, unknown>[] {
   if (typeof output !== "string") return Array.isArray(output) ? output.map(record) : [record(output)];
   const text = output.slice(0, 262144);
   const candidates = [text, text.split(/\nOutput:\s*\n/).at(-1) ?? "", ...text.split("\n")];
@@ -68,7 +68,7 @@ export function codexSubagentCalls(name: string, input: string, output: unknown 
     }) : []
     : [{ kind: direct, args }];
   if (calls.length === 0) return [];
-  const answers = replies(output);
+  const answers = codexSubagentReplies(output);
   const spawned = answers.filter((row) => string(row.agent_id).length > 0);
   const states = new Map<string, unknown>();
   for (const answer of answers) for (const [id, value] of Object.entries(record(answer.status)).slice(0, 64)) if (id.length <= 256) states.set(id, value);
@@ -83,7 +83,9 @@ export function codexSubagentCalls(name: string, input: string, output: unknown 
       operation: call.kind, title, prompt, agent_type: string(call.args.agent_type).slice(0, 120) || null,
       agent_id: call.kind === "spawn" ? string(oneSpawn?.agent_id).slice(0, 256) || null : agentId,
       nickname: call.kind === "spawn" ? string(oneSpawn?.nickname).slice(0, 120) || null : null,
-      status: call.kind === "wait" && agentId !== null ? status(states.get(agentId)) : null,
+      status: call.kind === "wait" && agentId !== null ? status(states.get(agentId))
+        : calls.length === 1 && call.kind === "close" ? status(answers.find((answer) => Object.hasOwn(answer, "previous_status"))?.previous_status)
+        : calls.length === 1 && call.kind === "resume" ? status(answers.find((answer) => Object.hasOwn(answer, "status"))?.status) : null,
     }));
   }).slice(0, 64);
 }

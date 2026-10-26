@@ -184,6 +184,47 @@ it("reads a resumed thread's rollout only when its header is an interactive thre
   }
 }, 180_000);
 
+it("shows composer subagents when only the chat's short-exchange ownership proof identifies the parent", async () => {
+  const cwd = join(root, "composer-short"); mkdirSync(cwd);
+  const parent = "01a0c7a1-56d9-7e20-9f08-f7a2d973bd43";
+  const child = "01a0c7a1-56d9-7e20-9f08-f7a2d973bd44";
+  const path = join(codexHome, "sessions", `rollout-2026-10-26T00-00-00-${parent}.jsonl`);
+  const prompt = "Reply with only the number 42.";
+  const assigned = "Inspect this private fixture";
+  const timestamp = new Date().toISOString();
+  const item = (payload: unknown) => ({ type: "response_item", timestamp, payload });
+  writeFileSync(path, [
+    { type: "session_meta", payload: { id: parent, cwd } },
+    item({ type: "message", role: "user", content: [{ type: "input_text", text: prompt }] }),
+    item({ type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "42" }] }),
+    item({ type: "function_call", name: "spawn_agent", arguments: JSON.stringify({ agent_type: "explorer", message: assigned }), call_id: "spawn" }),
+    item({ type: "function_call_output", call_id: "spawn", output: JSON.stringify({ agent_id: child, nickname: "Fixture explorer" }) }),
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  const screen = join(cwd, "screen.txt");
+  writeFileSync(screen, `OpenAI Codex (v0.162.1)\n\n› ${prompt}\n\n• 42\n\n› \nCOMPOSER_SCREEN_READY\n`);
+  const opened = workspaces.length;
+  const paneId = await pane("composer-short", `SCREEN_FILE=${screen} ${join(root, "bin", "codex")}`, cwd);
+  const db = new Database(join(codexHome, "state_5.sqlite"));
+  db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, ?, ?, 'cli', ?)").run(parent, path, cwd, Math.ceil(Date.now() / 1000) + 2, Math.ceil(Date.now() / 1000) + 2, prompt);
+  db.close();
+  let app: ReturnType<typeof createServer> | undefined;
+  try {
+    await onScreen(paneId, "COMPOSER_SCREEN_READY");
+    app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(cwd, "state"), codexHome, machines: false });
+    const query = `pane_id=${encodeURIComponent(paneId)}`;
+    const response = await fetch(`http://127.0.0.1:${app.port}/api/pane/omo-tasks?${query}`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ tasks: [{ id: child, status: "running", detail_kind: "codex-subagent" }] });
+    const detail = await fetch(`http://127.0.0.1:${app.port}/api/pane/background-agent?${query}&agent_id=${child}`);
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({ session_id: parent, prompt: assigned });
+  } finally {
+    app?.stop();
+    const db = new Database(join(codexHome, "state_5.sqlite")); db.query("DELETE FROM threads WHERE id = ?").run(parent); db.close();
+    for (const workspace of workspaces.splice(opened)) await workspaceClose(workspace);
+  }
+});
+
 it("reads a literal short first answer through the conversation endpoint (regression)", async () => {
   const cwd = join(root, "short-first");
   mkdirSync(cwd);

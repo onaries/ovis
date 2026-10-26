@@ -8,6 +8,7 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const CHAT_JA: Record<string, string> = {
+  "Reported by the parent session; live child output is not read.": "親セッションが報告した作業と結果です。子のリアルタイム出力は読み取りません。",
   "Subagent": "サブエージェント",
   "Reported status: {status}": "報告された状態: {status}",
   "Spawn agent": "エージェントの作成を要求",

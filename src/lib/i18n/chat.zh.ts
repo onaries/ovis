@@ -8,6 +8,7 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const CHAT_ZH: Record<string, string> = {
+  "Reported by the parent session; live child output is not read.": "显示父会话报告的任务和结果，不读取子代理的实时输出。",
   "Subagent": "子代理",
   "Reported status: {status}": "报告的状态: {status}",
   "Spawn agent": "请求创建代理",

@@ -1,6 +1,8 @@
 import type { HerdrPane, PaneBackgroundAgentDetail } from "../shared/protocol.ts";
 import { backgroundAgentDetail, backgroundCommand, validDetailId, within, type ClaudeSubagentStatus } from "./claude-subagents.ts";
 import { badRequest, conflictResponse, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
+import type { CodexBackgroundTasks } from "./codex-background.ts";
+import type { SessionPlans } from "./session-plan.ts";
 
 export const BACKGROUND_AGENT_PATH = "/api/pane/background-agent";
 
@@ -10,12 +12,14 @@ export interface BackgroundAgentDeps {
   /** whether the pane is OmO's, whatever herdr names it: its tasks have no transcript to open */
   omoPane: (paneId: string) => boolean;
   claudeAgents: Pick<ClaudeSubagentStatus, "ensure" | "sessionOf">;
+  codexTasks?: Pick<CodexBackgroundTasks, "poll" | "detail">;
+  plans?: Pick<SessionPlans, "ensure" | "codexPathOf">;
   /** the read itself (backgroundAgentDetail); a test holds it to change the pane's session while it is out */
   read?: (parentPath: string, agentId: string) => ReturnType<typeof backgroundAgentDetail> | Promise<ReturnType<typeof backgroundAgentDetail>>;
   now?: () => number;
 }
 
-type Session = "omo" | "other" | { path: string; live: boolean; startedAt: number | null } | null;
+type Session = "omo" | "other" | { path: string; live: boolean; startedAt: number | null; kind?: "codex" } | null;
 
 /**
  * GET /api/pane/background-agent?pane_id=&agent_id=: what a running Claude Code subagent's own
@@ -40,6 +44,12 @@ export async function handleBackgroundAgentRequest(request: Request, url: URL, d
   const session = async (): Promise<Session> => {
     if (deps.omoPane(paneId)) return "omo";
     const pane = await deps.paneGet(paneId);
+    if (pane.agent === "codex" && deps.codexTasks && deps.plans) {
+      await within(1000, deps.plans.ensure(pane, true));
+      const path = deps.plans.codexPathOf(pane);
+      deps.codexTasks.poll(paneId, path);
+      return path === null ? null : { path, live: true, startedAt: null, kind: "codex" };
+    }
     if (pane.agent !== "claude") return "other";
     // a session the background lookup has not got to yet is looked up here, for a second at most
     await within(1000, deps.claudeAgents.ensure(pane));
@@ -50,10 +60,11 @@ export async function handleBackgroundAgentRequest(request: Request, url: URL, d
     if (before === "omo" || before === "other") return unsupported("details can be read for a Claude Code subagent only");
     if (before === null) return unavailable("the pane's Claude session is not known yet");
     // a background command of the session has no transcript of its own: its output is a screen's, which is never read
-    if (backgroundCommand(before.path, agentId)) return unsupported("a background command's output is not read");
-    const read = await (deps.read ?? backgroundAgentDetail)(before.path, agentId);
+    if (before.kind !== "codex" && backgroundCommand(before.path, agentId)) return unsupported("a background command's output is not read");
+    const read = before.kind === "codex" ? deps.codexTasks?.detail(paneId, agentId) ?? { refusal: "unavailable" as const }
+      : await (deps.read ?? backgroundAgentDetail)(before.path, agentId);
     const after = await session();
-    if (typeof after !== "object" || after === null || after.path !== before.path) return conflictResponse("background_target_changed", "the pane no longer runs the session the agent belongs to");
+    if (typeof after !== "object" || after === null || after.path !== before.path || after.kind !== before.kind) return conflictResponse("background_target_changed", "the pane no longer runs the session the agent belongs to");
     if ("refusal" in read) {
       if (read.refusal === "unavailable") return unavailable("the session's files cannot be read as they are");
       return jsonResponse({ error: { code: "background_agent_not_found", message: "no such subagent in the pane's session" } }, 404);

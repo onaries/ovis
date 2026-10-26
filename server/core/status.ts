@@ -7,7 +7,8 @@ import type { AgentStatus, HerdrPane, PlanSummary, ServerMessage, SessionSnapsho
 import { alertStatus, paneAlertsMuted, paneTitle } from "../../shared/notify-policy.ts";
 import { BackgroundWait } from "../background-wait.ts";
 import { ClaudeSubagentStatus } from "../claude-subagents.ts";
-import { codexOpenRollout, paneCodexHome } from "../codex.ts";
+import { CodexBackgroundTasks } from "../codex-background.ts";
+import { codexOpenRollout, codexTranscriptPath, paneCodexHome } from "../codex.ts";
 import { startStatusCollector } from "../collector.ts";
 import { CompletionTracker, type OmoRest } from "../completion.ts";
 import { Finishes } from "../finishes.ts";
@@ -115,12 +116,19 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     onChange: (paneId, running, turnRunning, promptAt) => claudeAgentsChanged(paneId, running, turnRunning, promptAt),
   });
   /** the plan each Claude Code, Codex and OmO pane keeps, for the sidebar's progress (server/session-plan.ts) */
+  const codexTasks = new CodexBackgroundTasks((paneId, count) => {
+    const status = completions.current(paneId);
+    if (status !== undefined) broadcastAll(paneStatus(paneId, status, { background_tasks: count }));
+  });
   const plans = new SessionPlans({
     claudePath: (paneId) => claudeAgents.sessionOf(paneId)?.path ?? null,
     omoPath: (paneId) => omo.pathOf(paneId),
-    // only what is certain without reading the screen: the chat's own matching stays the chat's
-    codexPath: async (pane) => codexOpenRollout(pane.pane_id, pane.cwd, await paneCodexHome(pane.pane_id, options.codexHome)),
+    codexPath: async (pane) => {
+      const home = await paneCodexHome(pane.pane_id, options.codexHome);
+      return await codexOpenRollout(pane.pane_id, pane.cwd, home) ?? (pane.cwd ? codexTranscriptPath(pane.pane_id, pane.cwd, home, undefined, false) : null);
+    },
     onChange: (paneId, summary) => planChanged(paneId, summary),
+    onCodexTranscript: (paneId, path) => codexTasks.poll(paneId, path),
   });
   /** herdr's snapshot with OmO's and GJC's own status in it: what the completion tracker and web push are given */
   const rawSnapshot = async (): Promise<SessionSnapshot> => {
@@ -136,7 +144,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     options.openCodeState?.reconcile(named.panes, promptCheckpoint);
     return named;
   };
-  const backgroundOf = (paneId: string): number => omo.backgroundOf(paneId) || claudeAgents.countOf(paneId);
+  const backgroundOf = (paneId: string): number => omo.backgroundOf(paneId) || claudeAgents.countOf(paneId) || codexTasks.countOf(paneId);
   /** the snapshot clients get: finishes settled, OmO panes named, background tasks, waits and plan progress */
   const clientSnapshot = async (): Promise<SessionSnapshot> => {
     // the order this read can show is the one of the moves confirmed before it starts: taken before any wait,
@@ -368,5 +376,5 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   const untrackOpenCode = trackVerifiedOpenCodePanes((paneId) => collector.trackPane(paneId));
   const tracked = { ...collector, stop() { untrackOpenCode(); stopMutes(); collector.stop(); } };
 
-  return { push, omo, gjc, claudeAgents, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector: tracked, waitTimer };
+  return { push, omo, gjc, claudeAgents, codexTasks, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector: tracked, waitTimer };
 }

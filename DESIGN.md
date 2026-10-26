@@ -23,6 +23,15 @@ cards under their originating conversation, with unknown token counts and durati
 Tool-call completion alone is not presented as the child's completion. No child transcript
 is opened and no additional polling endpoint is introduced.
 
+Codex's composer reuses Ovis's existing OmO/Claude background-task chip and detail sheet,
+as requested, instead of introducing the separate agent workspace used by Codex-style apps.
+The existing plan poll also reads bounded increments of the verified parent rollout: native
+spawn receipts, wait results, completion notices, close and resume reports drive the running
+count. A tool finishing is not a child finishing. The list retains the newest ten endings in
+the last day. Details show the assigned prompt and parent-reported result, explicitly labelled;
+child transcripts, token counts and live child output are not inferred. Session replacement
+clears the old list, and task changes do not complete, interrupt or submit the parent's turn.
+
 Agy's terminal fallback follows Copilot's recovery cadence: while native history is
 unavailable, use the normal two-second poll rather than rely on a file watcher that may
 not be bound yet. A verified native answer replaces the fallback without a reload or pane

@@ -39,7 +39,7 @@ export function BackgroundAgentDetail({ paneId, task, onClose }: { paneId: strin
   const t = useT();
   const id = useId();
   const { fetchPaneBackgroundAgent } = useMachineApi();
-  const supported = task.detail_kind === "claude-subagent";
+  const supported = task.detail_kind === "claude-subagent" || task.detail_kind === "codex-subagent";
   const [detail, setDetail] = useState<PaneBackgroundAgentDetail | null>(null);
   const [loading, setLoading] = useState(supported);
   const [failure, setFailure] = useState<Failure | null>(supported ? null : task.detail_kind === undefined ? "update" : "unsupported");
@@ -118,6 +118,7 @@ export function BackgroundAgentDetail({ paneId, task, onClose }: { paneId: strin
           {empty && note([t("Nothing recorded yet"), t("The agent may still be starting. Try Refresh in a moment.")])}
           {detail?.truncated === true && note([t("The agent wrote more than this view reads."), t("The middle part is left out.")])}
           {detail?.incomplete === true && note([t("Some records couldn't be read and are left out")])}
+          {detail !== null && task.detail_kind === "codex-subagent" && note([t("Reported by the parent session; live child output is not read.")])}
           {detail?.prompt !== null && detail?.prompt !== undefined && <section className="bg-agent-section">
             <h3 className="bg-agent-heading">{t("Prompt")}</h3>
             <p className="bg-agent-text">{detail.prompt}</p>

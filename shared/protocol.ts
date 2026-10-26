@@ -42,7 +42,7 @@ export interface HerdrUiConfig {
 export type HerdrWorkspace = WorkspaceInfo;
 export type HerdrTab = TabInfo;
 /**
- * `background_tasks`: an OmO pane's `task` children, or a Claude Code pane's subagents and background commands, still running, counted by the server; absent when none.
+ * `background_tasks`: an OmO pane's tasks, Claude Code subagents/commands or parent-reported Codex subagents still running; absent when none.
  * `background_wait`: the pane is at rest while work its turn started still runs, and the turn goes on when it ends (server/background-wait.ts); absent when not.
  * `plan`: how far the pane's agent's task list or checklist has progressed; absent when it keeps none.
  */

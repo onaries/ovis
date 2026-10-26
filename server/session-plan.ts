@@ -19,6 +19,7 @@ export interface SessionPlanDeps {
   codexPath: (pane: HerdrPane) => Promise<string | null>;
   /** a pane's summary changed (null: it has no plan now) */
   onChange: (paneId: string, summary: PlanSummary | null) => void;
+  onCodexTranscript?: (paneId: string, path: string | null) => void;
   now?: () => number;
   /** how soon a Codex pane whose rollout was not found is looked up again */
   retryMs?: number;
@@ -47,7 +48,8 @@ export class SessionPlans {
   private readonly wanted = new Map<string, string>();
   /** a snapshot has been seen: before one, a pane asked for by the endpoint is taken as it is */
   private refreshed = false;
-  private readonly looking = new Set<string>();
+  private readonly looking = new Map<string, { key: string; work: Promise<void> }>();
+  private readonly latest = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
 
@@ -64,6 +66,7 @@ export class SessionPlans {
   stop(): void {
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
+    this.latest.clear();
   }
 
   summaryOf(paneId: string): PlanSummary | null {
@@ -86,6 +89,11 @@ export class SessionPlans {
     return tracked?.where != null && tracked.key === keyOf(pane);
   }
 
+  codexPathOf(pane: HerdrPane): string | null {
+    const where = this.known(pane) ? this.panes.get(pane.pane_id)?.where : null;
+    return pane.agent === "codex" && where?.source === "codex-transcript" ? where.path : null;
+  }
+
   /**
    * Follows supported panes of a snapshot; a pane that runs another agent now has
    * no plan. Nothing is read here: snapshots can come several times a second, reads come with the poll.
@@ -94,9 +102,11 @@ export class SessionPlans {
     this.wanted.clear();
     this.refreshed = true;
     for (const pane of panes) if (pane.agent === "claude" || pane.agent === "codex" || pane.agent === "omo") this.wanted.set(pane.pane_id, keyOf(pane));
+    for (const paneId of this.latest.keys()) if (!this.wanted.has(paneId)) this.latest.delete(paneId);
     for (const [paneId, tracked] of this.panes) {
       if (this.wanted.has(paneId)) continue;
       this.panes.delete(paneId);
+      this.deps.onCodexTranscript?.(paneId, null);
       if (tracked.summary !== null) this.deps.onChange(paneId, null);
     }
     await Promise.all(panes.map((pane) => this.ensure(pane)));
@@ -109,6 +119,7 @@ export class SessionPlans {
   async ensure(pane: HerdrPane, asked = false): Promise<void> {
     if (pane.agent !== "claude" && pane.agent !== "codex" && pane.agent !== "omo") return;
     const key = keyOf(pane);
+    this.latest.set(pane.pane_id, key);
     if (pane.agent === "omo") {
       const path = this.deps.omoPath?.(pane.pane_id) ?? null;
       this.track(pane.pane_id, key, path === null ? null : { source: "omo-session", path });
@@ -121,16 +132,24 @@ export class SessionPlans {
     }
     const tracked = this.panes.get(pane.pane_id);
     const due = !tracked || tracked.key !== key || this.now() - tracked.at >= (tracked.where === null ? this.deps.retryMs ?? 15_000 : this.deps.relocateMs ?? 30_000);
-    if (!due || this.looking.has(pane.pane_id)) return;
-    this.looking.add(pane.pane_id);
-    try {
+    if (tracked?.key !== key) {
+      if (tracked) { tracked.where = null; tracked.sig = null; }
+      this.deps.onCodexTranscript?.(pane.pane_id, null);
+    }
+    const pending = this.looking.get(pane.pane_id);
+    if (pending) { if (pending.key === key) await pending.work; return; }
+    if (!due) return;
+    const work = (async () => { try {
       const path = await this.deps.codexPath(pane).catch(() => null);
+      if (this.latest.get(pane.pane_id) !== key) return;
       // the pane left, or runs another session, while it was looked up: what was found is not its
       if (!asked && this.refreshed && this.wanted.get(pane.pane_id) !== key) return;
       this.track(pane.pane_id, key, path === null ? null : { source: "codex-transcript", path });
     } finally {
       this.looking.delete(pane.pane_id);
-    }
+    } })();
+    this.looking.set(pane.pane_id, { key, work });
+    await work;
   }
 
   /** Where a pane's plan is now; what was read of the same file stands. */
@@ -138,6 +157,7 @@ export class SessionPlans {
     const current = this.panes.get(paneId);
     const same = current !== undefined && current.where?.path === where?.path && current.where?.source === where?.source;
     this.panes.set(paneId, { key, at: this.now(), where, sig: same ? current.sig : null, summary: current?.summary ?? null });
+    if (!same) this.deps.onCodexTranscript?.(paneId, null);
   }
 
   /** Reads the transcripts that grew, PLAN_BUDGET bytes in all; a pane whose summary changed is told. */
@@ -147,6 +167,7 @@ export class SessionPlans {
     // where the last one stopped if that ever shows
     const budget = { left: PLAN_BUDGET };
     for (const [paneId, tracked] of this.panes) {
+      this.deps.onCodexTranscript?.(paneId, tracked.where?.source === "codex-transcript" ? tracked.where.path : null);
       let summary: PlanSummary | null = null;
       if (tracked.where !== null) {
         const stat = plain(tracked.where.path);

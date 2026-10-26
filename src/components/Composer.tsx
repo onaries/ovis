@@ -1374,7 +1374,7 @@ export function Composer({
               <MessageSquarePlus aria-hidden="true" />
             </button>
           )}
-          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} claude={agent === "claude"} plan={plan} />
+          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} claude={agent === "claude"} codex={agent === "codex"} plan={plan} />
         </div>
         {/* between the two control groups of the card's last row. The agent's name, its separator and the
             state word are read, not drawn: the mark and the header name the agent, and Stop, the live row and

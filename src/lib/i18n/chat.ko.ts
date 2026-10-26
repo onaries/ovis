@@ -8,6 +8,7 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const CHAT_KO: Record<string, string> = {
+  "Reported by the parent session; live child output is not read.": "부모 세션이 보고한 작업과 결과입니다. 자식의 실시간 출력은 읽지 않습니다.",
   "Subagent": "서브에이전트",
   "Reported status: {status}": "보고된 상태: {status}",
   "Spawn agent": "에이전트 생성 요청",
