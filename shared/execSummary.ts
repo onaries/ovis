@@ -19,6 +19,20 @@ export function execSummary(input: string): string | null {
     }
     if (command.trim()) commands.push(command.trim().replace(/\s+/g, " "));
   }
+  if (!commands.length) {
+    // Only resolve an unchanged literal list mapped directly into the command argument.
+    const mapped = input.match(/^\s*const\s+([\w$]+)\s*=\s*\[((?:\s*\[\s*"(?:[^"\\]|\\.)*"\s*,\s*"(?:[^"\\]|\\.)*"\s*,\s*\d+\s*\]\s*,?)+)\]\s*;\s*const\s+[\w$]+\s*=\s*await\s+Promise\.all\(\s*\1\.map\(\s*async\s*\(\s*\[\s*([\w$]+)\s*,\s*([\w$]+)\s*,\s*([\w$]+)\s*\]\s*\)\s*=>\s*\{\s*const\s+[\w$]+\s*=\s*await\s+tools\.exec_command\(\s*\{\s*(?:cmd\s*:\s*\4|(?=cmd\s*[,}])\4)\s*[,}]/);
+    if (mapped) {
+      try {
+        const rows: unknown = JSON.parse(`[${mapped[2]!.replace(/,\s*$/, "")}]`);
+        if (Array.isArray(rows)) {
+          for (const row of rows) {
+            if (Array.isArray(row) && typeof row[1] === "string" && row[1].trim()) commands.push(row[1].trim().replace(/\s+/g, " "));
+          }
+        }
+      } catch { return null; }
+    }
+  }
   return commands.length ? commands.join(" · ").slice(0, 120) : null;
 }
 

@@ -27,6 +27,17 @@ it("names code-mode shell commands rather than only exec, including parallel cal
   if (part?.kind !== "tool") throw new Error("Missing tool row");
   expect(toolVerb(part, part.summary)).toBe("Ran");
 });
+it("names commands from a literal list directly mapped to exec_command", () => {
+  const input = 'const cmds = [["one", "nl -ba src/a.py", 20000], ["two", "rg -n todo src", 30000]];\nconst rs = await Promise.all(cmds.map(async ([n, c, m]) => { const x = await tools.exec_command({cmd: c, workdir: "/repo", max_output_tokens: m}); return {n, o:x.output}; }));\nfor (const r of rs) text(r.o);';
+  const part = parse(input);
+  expect(part).toMatchObject({ summary: "nl -ba src/a.py · rg -n todo src" });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(toolVerb(part, part.summary)).toBe("Ran");
+  expect(parse(input.replace('[n, c, m]', '[n, cmd, m]').replace('cmd: c', 'cmd'))).toMatchObject({ summary: "nl -ba src/a.py · rg -n todo src" });
+  expect(parse(input.replace('cmd: c', 'cmd: other'))).toMatchObject({ summary: "exec" });
+  expect(parse(input.replace('const rs =', 'cmds.reverse(); const rs ='))).toMatchObject({ summary: "exec" });
+  expect(parse('const cmds = [["one", "do not execute", 1]];')).toMatchObject({ summary: "exec" });
+});
 it("does not invent a shell command from comments, quoted examples or dynamic arguments", () => {
   for (const input of ['// tools.exec_command({cmd:"fake"})', 'const example = "tools.exec_command({cmd:\"fake\"})";', 'await tools.exec_command({cmd: command})', 'await tools.exec_command({description:"cmd: \'fake\'",cmd: command})', 'await tools.exec_command({cmd:`echo ${secret}`})']) {
     expect(parse(input)).toMatchObject({ summary: "exec" });
