@@ -18,6 +18,7 @@ Extension, a later build; see [Later builds](#later-builds)).
 | Minimum iOS | 15.0 | `IPHONEOS_DEPLOYMENT_TARGET` |
 | Signing | Automatic, no team yet | the owner picks the team in Xcode (section 3) |
 | Camera text | "Scan the QR code your PC shows under Settings, Phone & devices." | `NSCameraUsageDescription`, `Info.plist` |
+| Microphone text | "Dictate messages and commands to your agents with voice input." | `NSMicrophoneUsageDescription`, `Info.plist` |
 | Export compliance | no non-exempt encryption (only Apple's HTTPS) | `ITSAppUsesNonExemptEncryption = false`, so uploads skip the question |
 | Privacy manifest | no tracking; product interaction, device ID and coarse location collected for analytics, linked to the PC's install ID, not tracking (the PC's usage counts, section 5); UserDefaults for the app's own settings (reason `CA92.1`) | `app/ios/App/App/PrivacyInfo.xcprivacy` |
 
@@ -155,7 +156,9 @@ refuse addresses that are not an Ovis server, which is an app change, not a form
 > to the user's own computer, so there is no account to give you. To review the whole app without
 > a computer, tap "Try the demo" on the first screen: it runs the full interface with made-up
 > agents and terminals, entirely on the phone. "Scan QR code" uses the camera only to read the
-> pairing code a computer shows.
+> pairing code a computer shows. The app uses the microphone for voice input the user chooses:
+> turning Voice input on in Settings briefly opens it to ask for access; the mic button or the
+> keyboard shortcut starts dictation.
 
 ## 8. Release checklist
 

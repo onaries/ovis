@@ -33,12 +33,13 @@ export class MuseUnavailable extends Error {
   constructor() { super("Muse log is in a shape the reader does not know"); this.name = "MuseUnavailable"; }
 }
 
-/** Every record Muse 1.4.2 to 1.4.13 writes to a session log, as 160 logs of those builds hold them. */
+/** Every record Muse 1.4.2 to 1.4.13 writes to a session log, as 160 logs of those builds and the recorded 1.4.13 `/fork` hold them. */
 const RECORDS = new Set(["approval_wait.effect.started", "approval_wait.effect.terminal", "async.owner.attempt_admitted", "command.invoked",
   "peer_message.admission.requested", "peer_message.admission.settled", "reminder.cleanup_effect.started", "reminder.cleanup_effect.terminal",
   "run.model.configured", "runtime.branch_seed.diagnostics", "runtime.command_intake.branch.received",
   "runtime.command_intake.conversation_rewind.received", "runtime.command_intake.received", "runtime.command_intake.session_name.received",
-  "runtime.command_intake.settled", "runtime.model_reconfigure.completed", "runtime.retained_fact", "runtime.session",
+  "runtime.command_intake.settled", "runtime.model_reconfigure.completed", "runtime.model_selection.initialized",
+  "runtime.reasoning_effort_reconfigure", "runtime.retained_fact", "runtime.session",
   "runtime.session.capture_selection", "runtime.session.message_receipt.read", "runtime.session.message_receipt.state",
   "runtime.session.metadata", "runtime.session.route_facts", "runtime.session.task", "runtime.session.task_source_committed",
   "runtime.session_handoff.goal_safety", "runtime.session_start.intake_v2", "runtime.session_start.intake_v3",

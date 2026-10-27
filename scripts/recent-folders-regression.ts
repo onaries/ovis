@@ -118,7 +118,8 @@ try {
           await betaRow.waitFor({ state: "attached" });
           const openNew = async () => {
             if (width === 390) await page.locator('[aria-controls="workspace-drawer"]').click();
-            await page.locator(".machine-new").click();
+            // the test session's lone Host has no header: its + is the New workspace row
+            await page.locator(".machine-new-row").click();
             await page.getByRole("dialog").waitFor();
           };
           await openNew();

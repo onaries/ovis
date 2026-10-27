@@ -117,6 +117,32 @@ it("reads a redacted recorded CLI session with root task ancestry and a tool-onl
   expect(parseConversationMetadata(recorded, "copilot-transcript").model).toBe("fixture-model");
 });
 
+it.each(["assistant.message", "tool.execution_start"])("preserves string arguments from %s with bounded display and verified tool output", (type) => {
+  const dir = mkdtempSync(join(tmpdir(), "copilot-string-arguments-"));
+  const path = join(dir, "events.jsonl");
+  const inputs = ['{ "command": "pwd" }', "{not valid JSON", '"freeform"', "x".repeat(16_001)];
+  try {
+    writeFileSync(path, start + prompt("Check") + inputs.map((input, index) => {
+      const request = { toolCallId: `string-${index}`, arguments: input };
+      return line(type, type === "assistant.message"
+        ? { toolRequests: [{ ...request, name: "shell" }] }
+        : { ...request, toolName: "shell" })
+        + line("tool.execution_complete", { toolCallId: request.toolCallId, success: false, result: { content: `output ${index} `.repeat(1000) } });
+    }).join("") + answer("Finished."));
+    const page = transcriptPage("copilot-transcript", path);
+    const tools = page.turns.flatMap((turn) => turn.parts).filter((part) => part.kind === "tool");
+    expect(tools).toHaveLength(inputs.length);
+    for (const [index, tool] of tools.entries()) {
+      expect(tool.input).toBe(inputs[index]!.slice(0, 16_000));
+      expect(tool.error).toBe(true);
+      expect(tool.output_ref).toMatch(/^string-\d+@/);
+      expect(transcriptToolOutput("copilot-transcript", path, tool.output_ref!)).toBe(`output ${index} `.repeat(1000));
+    }
+    expect(tools[0]?.summary).toBe("pwd");
+    expect(page.turns.at(-1)?.parts.at(-1)).toEqual({ kind: "text", text: "Finished.", phase: "final_answer" });
+  } finally { forgetTranscriptState(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 it("keeps root prompts carrying parentAgentTaskId and pages at those prompts", () => {
   const dir = mkdtempSync(join(tmpdir(), "copilot-root-page-"));
   const path = join(dir, "events.jsonl");
@@ -587,6 +613,301 @@ it.skipIf(process.platform !== "linux")("keeps report-and-marker fallback for a 
     await fixture.command("extra");
     expect(copilotTranscriptFile(session, environment, argv, pid)).toBeNull();
   } finally { await fixture.close(); }
+});
+
+it.skipIf(process.platform !== "linux")("keeps marker fallback through ordinary partial lines but rejects pending and completed revocation", async () => {
+  const fixture = await logFixture([session]);
+  const { root, log, environment, pid } = fixture;
+  const path = join(root, "session-state", session, "events.jsonl");
+  const read = () => copilotTranscriptFile(session, environment, ["copilot"], pid);
+  try {
+    writeFileSync(path, start + prompt("existing conversation"));
+    appendFileSync(log, "CLI started\n");
+    expect(read()).toBe(path);
+    for (const tail of ["ordinary partial line", "2026-10-24T00:00:00.000Z [INFO] Writing session"]) {
+      appendFileSync(log, tail);
+      expect(read()).toBe(path);
+      expect(read()).toBe(path);
+      appendFileSync(log, "\n");
+      expect(read()).toBe(path);
+    }
+    appendFileSync(log, register(session, "Unregistering").trimEnd());
+    expect(read()).toBeNull();
+    appendFileSync(log, "\nordinary complete line\n");
+    expect(read()).toBeNull();
+    expect(read()).toBeNull();
+  } finally { await fixture.close(); }
+});
+
+for (const scenario of ["one append", "two appends", "rewrite"] as const) {
+  it.skipIf(process.platform !== "linux")(`revalidates marker fallback after ${scenario} during the first log read`, async () => {
+    const fixture = await logFixture([session]);
+    const { log, environment, pid } = fixture;
+    const realRead = fs.readSync;
+    let remaining = scenario === "one append" ? 1 : 2;
+    function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: fs.ReadPosition | null): number;
+    function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, options?: fs.ReadSyncOptions): number;
+    function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, offset?: number | fs.ReadSyncOptions, length?: number, position?: fs.ReadPosition | null): number {
+      const count = typeof offset === "number" ? realRead(fd, buffer, offset, length!, position ?? null) : realRead(fd, buffer, offset);
+      if (remaining > 0 && fs.readlinkSync(`/proc/self/fd/${fd}`) === log) {
+        remaining--;
+        appendFileSync(log, "concurrent ordinary append\n");
+      }
+      return count;
+    }
+    let reads: ReturnType<typeof spyOn<typeof fs, "readSync">> | undefined;
+    try {
+      appendFileSync(log, "CLI started\n");
+      reads = spyOn(fs, "readSync").mockImplementation(concurrentRead);
+      const raced = copilotProcessSession(environment, ["copilot"], pid);
+      expect(remaining).toBe(0);
+      if (scenario === "one append") expect(raced).toMatchObject({ sessionId: session, logged: false });
+      else expect(raced).toBeNull();
+      reads.mockRestore();
+      if (scenario === "rewrite") {
+        writeFileSync(log, "replaced initial log\n");
+        expect(copilotProcessSession(environment, ["copilot"], pid)).toBeNull();
+        appendFileSync(log, register(session));
+      }
+      expect(copilotProcessSession(environment, ["copilot"], pid)).toMatchObject({ sessionId: session, logged: scenario === "rewrite" });
+      appendFileSync(log, register(session, "Unregistering"));
+      expect(copilotProcessSession(environment, ["copilot"], pid)).toBeNull();
+    } finally { reads?.mockRestore(); await fixture.close(); }
+  });
+}
+
+for (const seen of ["an unregister", "another session's register"] as const) {
+  it.skipIf(process.platform !== "linux")(`keeps ${seen} seen during a raced first read when the log is rewritten to its first prefix`, async () => {
+    const fixture = await logFixture([session]);
+    const { log, environment, pid } = fixture;
+    const realRead = fs.readSync;
+    // the unregister lands during the first read, so the second read's own bytes include it and
+    // only the ordinary append during that second read makes it conflict
+    const appends = [seen === "an unregister" ? register(session, "Unregistering") : register(crypto.randomUUID()), "concurrent ordinary append\n"];
+    function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: fs.ReadPosition | null): number;
+    function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, options?: fs.ReadSyncOptions): number;
+    function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, offset?: number | fs.ReadSyncOptions, length?: number, position?: fs.ReadPosition | null): number {
+      const count = typeof offset === "number" ? realRead(fd, buffer, offset, length!, position ?? null) : realRead(fd, buffer, offset);
+      const next = appends[0];
+      if (next !== undefined && fs.readlinkSync(`/proc/self/fd/${fd}`) === log) {
+        appends.shift();
+        appendFileSync(log, next);
+      }
+      return count;
+    }
+    let reads: ReturnType<typeof spyOn<typeof fs, "readSync">> | undefined;
+    try {
+      appendFileSync(log, "CLI started\n");
+      reads = spyOn(fs, "readSync").mockImplementation(concurrentRead);
+      expect(copilotProcessSession(environment, ["copilot"], pid)).toBeNull();
+      expect(appends).toHaveLength(0);
+      reads.mockRestore();
+      // the second raced read saw the unregister; a rewrite that keeps only the first read's bytes
+      // must not bring the marker fallback back
+      writeFileSync(log, "CLI started\nrewritten line\n");
+      expect(copilotProcessSession(environment, ["copilot"], pid)).toBeNull();
+    } finally { reads?.mockRestore(); await fixture.close(); }
+  });
+}
+
+it.skipIf(process.platform !== "linux")("does not take a log rewritten during a raced bootstrap's next read as its continuation", async () => {
+  const fixture = await logFixture([session]);
+  const { log, environment, pid } = fixture;
+  const realRead = fs.readSync;
+  const appends = [register(session, "Unregistering"), "concurrent ordinary append\n"];
+  let rewrite = false;
+  function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: fs.ReadPosition | null): number;
+  function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, options?: fs.ReadSyncOptions): number;
+  function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, offset?: number | fs.ReadSyncOptions, length?: number, position?: fs.ReadPosition | null): number {
+    const count = typeof offset === "number" ? realRead(fd, buffer, offset, length!, position ?? null) : realRead(fd, buffer, offset);
+    if (fs.readlinkSync(`/proc/self/fd/${fd}`) === log) {
+      const next = appends.shift();
+      if (next !== undefined) appendFileSync(log, next);
+      else if (rewrite) {
+        rewrite = false;
+        // in place, after this call's first read of the log: the bytes it got are no longer the file
+        writeFileSync(log, "rewritten\n" + "o".repeat(200) + "\n");
+      }
+    }
+    return count;
+  }
+  let reads: ReturnType<typeof spyOn<typeof fs, "readSync">> | undefined;
+  try {
+    appendFileSync(log, "CLI started\n");
+    reads = spyOn(fs, "readSync").mockImplementation(concurrentRead);
+    expect(copilotProcessSession(environment, ["copilot"], pid)).toBeNull();
+    expect(appends).toHaveLength(0);
+    rewrite = true;
+    expect(copilotProcessSession(environment, ["copilot"], pid)).toBeNull();
+    expect(rewrite).toBe(false);
+    reads.mockRestore();
+    expect(copilotProcessSession(environment, ["copilot"], pid)).toBeNull();
+  } finally { reads?.mockRestore(); await fixture.close(); }
+});
+
+for (const registered of [false, true]) {
+  it.skipIf(process.platform !== "linux")(`revalidates ${registered ? "registered" : "marker"} evidence after temporary stat failure`, async () => {
+    const fixture = await logFixture([session]);
+    const { log, environment, pid } = fixture;
+    const read = () => copilotProcessSession(environment, ["copilot"], pid);
+    const realStat = fs.statSync;
+    const clock = spyOn(Date, "now");
+    let fail = false;
+    function currentStat(path: fs.PathLike, options?: fs.StatOptions & { bigint?: false }): fs.Stats;
+    function currentStat(path: fs.PathLike, options: fs.StatOptions & { bigint: true }): fs.BigIntStats;
+    function currentStat(path: fs.PathLike, options?: fs.StatOptions): fs.Stats | fs.BigIntStats;
+    function currentStat(path: fs.PathLike, options?: fs.StatOptions): fs.Stats | fs.BigIntStats {
+      if (fail && path === log) throw Object.assign(new Error("fixture temporary stat failure"), { code: "ENOENT" });
+      const stat = realStat(path, options);
+      if (!stat) throw new Error("fixture stat unexpectedly missing");
+      return stat;
+    }
+    let stats: ReturnType<typeof spyOn<typeof fs, "statSync">> | undefined;
+    try {
+      appendFileSync(log, registered ? register(session) : "CLI started\n");
+      const stat = realStat(log);
+      clock.mockReturnValue(Math.ceil(Math.max(stat.mtimeMs, stat.ctimeMs)) + 5000);
+      const original = read();
+      expect(original?.sessionId).toBe(session);
+      stats = spyOn(fs, "statSync").mockImplementation(currentStat);
+      fail = true;
+      expect(read()).toBeNull();
+      fail = false;
+      const recovered = read();
+      expect(recovered?.sessionId).toBe(session);
+      expect(recovered?.logged).toBe(registered);
+      if (original?.logged && recovered?.logged) expect(recovered.generation).toBe(original.generation);
+      appendFileSync(log, register(session, "Unregistering"));
+      fail = true;
+      expect(read()).toBeNull();
+      fail = false;
+      expect(read()).toBeNull();
+      appendFileSync(log, "ordinary append after unregister\n");
+      expect(read()).toBeNull();
+    } finally { stats?.mockRestore(); clock.mockRestore(); await fixture.close(); }
+  });
+
+  for (const writes of [1, 2]) {
+    it.skipIf(process.platform !== "linux")(`recovers ${registered ? "registered" : "marker"} continuity after ${writes} concurrent log appends`, async () => {
+      const fixture = await logFixture([session]);
+      const { root, log, environment, pid } = fixture;
+      const path = join(root, "session-state", session, "events.jsonl");
+      const read = () => copilotProcessSession(environment, ["copilot"], pid);
+      const realRead = fs.readSync;
+      let remaining = writes;
+      function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: fs.ReadPosition | null): number;
+      function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, options?: fs.ReadSyncOptions): number;
+      function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, offset?: number | fs.ReadSyncOptions, length?: number, position?: fs.ReadPosition | null): number {
+        const count = typeof offset === "number" ? realRead(fd, buffer, offset, length!, position ?? null) : realRead(fd, buffer, offset);
+        if (position === 0 && remaining > 0 && fs.readlinkSync(`/proc/self/fd/${fd}`) === log) {
+          remaining--;
+          appendFileSync(log, "concurrent ordinary append\n");
+        }
+        return count;
+      }
+      let reads: ReturnType<typeof spyOn<typeof fs, "readSync">> | undefined;
+      try {
+        writeFileSync(path, start + prompt("existing conversation"));
+        appendFileSync(log, registered ? register(session) : "CLI started\n");
+        const original = read();
+        expect(original?.sessionId).toBe(session);
+        reads = spyOn(fs, "readSync").mockImplementation(concurrentRead);
+        const raced = read();
+        expect(remaining).toBe(0);
+        if (writes === 1) expect(raced?.sessionId).toBe(session);
+        else expect(raced).toBeNull();
+        const recovered = read();
+        expect(recovered?.sessionId).toBe(session);
+        expect(recovered?.logged).toBe(registered);
+        if (original?.logged && recovered?.logged) expect(recovered.generation).toBe(original.generation);
+        appendFileSync(log, register(session, "Unregistering"));
+        expect(read()).toBeNull();
+        appendFileSync(log, "ordinary append after unregister\n");
+        expect(read()).toBeNull();
+      } finally { reads?.mockRestore(); await fixture.close(); }
+    });
+  }
+}
+
+it.skipIf(process.platform !== "linux")("does not fall back to a stale marker when the first log read races and its descriptor disappears", async () => {
+  const fixture = await logFixture([session]);
+  const { root, log, environment, pid } = fixture;
+  const path = join(root, "session-state", session, "events.jsonl");
+  const read = () => copilotTranscriptFile(session, environment, ["copilot"], pid);
+  const realRead = fs.readSync;
+  const realLink = fs.readlinkSync;
+  let missing = false;
+  function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: fs.ReadPosition | null): number;
+  function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, options?: fs.ReadSyncOptions): number;
+  function concurrentRead(fd: number, buffer: NodeJS.ArrayBufferView, offset?: number | fs.ReadSyncOptions, length?: number, position?: fs.ReadPosition | null): number {
+    const count = typeof offset === "number" ? realRead(fd, buffer, offset, length!, position ?? null) : realRead(fd, buffer, offset);
+    if (!missing && position === 0 && realLink(`/proc/self/fd/${fd}`) === log) {
+      appendFileSync(log, "concurrent ordinary append\n");
+      missing = true;
+    }
+    return count;
+  }
+  function currentLink(path: fs.PathLike, options?: fs.EncodingOption): string;
+  function currentLink(path: fs.PathLike, options: fs.BufferEncodingOption): Buffer<ArrayBuffer>;
+  function currentLink(path: fs.PathLike, options?: fs.EncodingOption | fs.BufferEncodingOption): string | Buffer<ArrayBuffer>;
+  function currentLink(path: fs.PathLike, options?: fs.EncodingOption | fs.BufferEncodingOption): string | Buffer<ArrayBuffer> {
+    const encoding = typeof options === "object" ? options?.encoding : options;
+    const target = encoding === "buffer" ? realLink(path, "buffer") : realLink(path, encoding);
+    if (missing && String(path).startsWith(`/proc/${pid}/fd/`) && target.toString() === log) {
+      throw Object.assign(new Error("fixture log descriptor closed"), { code: "ENOENT" });
+    }
+    return target;
+  }
+  let reads: ReturnType<typeof spyOn<typeof fs, "readSync">> | undefined;
+  let links: ReturnType<typeof spyOn<typeof fs, "readlinkSync">> | undefined;
+  try {
+    writeFileSync(path, start + prompt("stale held conversation"));
+    appendFileSync(log, register(other));
+    reads = spyOn(fs, "readSync").mockImplementation(concurrentRead);
+    links = spyOn(fs, "readlinkSync").mockImplementation(currentLink);
+    expect(read()).toBeNull();
+    expect(missing).toBe(true);
+    reads.mockRestore();
+    links.mockRestore();
+    await fixture.command("close");
+    expect(read()).toBeNull();
+    await fixture.command("open");
+    writeFileSync(log, "ordinary complete line\n");
+    expect(read()).toBeNull();
+    appendFileSync(log, register(session));
+    expect(read()).toBe(path);
+  } finally { reads?.mockRestore(); links?.mockRestore(); await fixture.close(); }
+});
+
+it.skipIf(process.platform !== "linux")("bypasses unchanged metadata after a failed read and revalidates the full prefix", async () => {
+  const fixture = await logFixture([]);
+  const { log, binding } = fixture;
+  const now = Date.now();
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  const timestamps = fixedLogTimestamps(log, now - 5000);
+  const realStat = fs.statSync;
+  let fail = false;
+  function currentStat(path: fs.PathLike, options?: fs.StatOptions & { bigint?: false }): fs.Stats;
+  function currentStat(path: fs.PathLike, options: fs.StatOptions & { bigint: true }): fs.BigIntStats;
+  function currentStat(path: fs.PathLike, options?: fs.StatOptions): fs.Stats | fs.BigIntStats;
+  function currentStat(path: fs.PathLike, options?: fs.StatOptions): fs.Stats | fs.BigIntStats {
+    if (fail && path === log) throw Object.assign(new Error("fixture temporary stat failure"), { code: "EIO" });
+    const stat = realStat(path, options);
+    if (!stat) throw new Error("fixture stat unexpectedly missing");
+    return stat;
+  }
+  const stats = spyOn(fs, "statSync").mockImplementation(currentStat);
+  try {
+    writeFileSync(log, register(session));
+    const original = binding();
+    expect(original?.sessionId).toBe(session);
+    fail = true;
+    expect(binding()).toBeNull();
+    fail = false;
+    writeFileSync(log, register(other));
+    expect(binding()?.sessionId).toBe(other);
+    expect(binding()?.generation).not.toBe(original?.generation);
+  } finally { stats.mockRestore(); timestamps.mockRestore(); clock.mockRestore(); await fixture.close(); }
 });
 
 for (const scenario of ["rewrite", "gap"] as const) {

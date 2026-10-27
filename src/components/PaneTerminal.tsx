@@ -1249,6 +1249,7 @@ export function PaneTerminal({
         isBusy={(id) => pendingMessages.isBusy(queueOwner, id)}
         onSendNow={(id) => actOnPending(id, "steer")}
         onAgentQueue={agent === "omo" || agent === "codex" && agentStatus === "working" && socketRef.current?.canQueuePendingMessages(agent) ? (id) => actOnPending(id, "agent-queue") : undefined}
+        onEdit={(id) => actOnPending(id, "edit")}
         onDiscard={(id) => actOnPending(id, "discard")}
       />}
       {/* The prompt card's place: under the held messages (which fold to their caption while it is

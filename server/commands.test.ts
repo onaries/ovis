@@ -175,6 +175,23 @@ describe("paneCommands", () => {
     expect(commands).toContainEqual(expect.objectContaining({ name: "deploy", description: "Deploy safely", source: "user" }));
     expect(commands).toContainEqual(expect.objectContaining({ name: "team:review", description: "Review this project thoroughly", source: "project" }));
   });
+
+  it("falls back to USERPROFILE when HOME is not set in default home resolution", () => {
+    const userProfile = temp("commands-userprofile-");
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    delete process.env.HOME;
+    process.env.USERPROFILE = userProfile;
+    try {
+      mkdirSync(join(userProfile, ".agents", "skills", "win-skill"), { recursive: true });
+      writeFileSync(join(userProfile, ".agents", "skills", "win-skill", "SKILL.md"), "---\nname: win-skill\ndescription: Discovered via USERPROFILE\n---\n");
+      const commands = paneCommands("omo", null);
+      expect(commands.some((command) => command.name === "skill:win-skill")).toBeTrue();
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previousUserProfile;
+    }
+  });
 });
 
 describe("skills and plugins", () => {

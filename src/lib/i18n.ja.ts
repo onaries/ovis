@@ -23,6 +23,7 @@ import { PALETTE_JA } from "./i18n/palette.ja.ts";
  * in English. Placeholders in braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "Preview": "プレビュー",
   "Working tree": "作業ツリー",
   "Changes": "変更",
   "Agent {status}": "エージェント {status}",
@@ -132,6 +133,7 @@ const BASE: Record<string, string> = {
   "Rename failed: {reason}": "名前を変更できませんでした: {reason}",
 
   // ---- PCs sidebar ----
+  "Filter workspaces and agents": "ワークスペースとエージェントを絞り込む",
   "Connecting…": "接続しています…",
   "Connected": "接続済み",
   "Reconnecting…": "再接続しています…",

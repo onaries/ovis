@@ -1,5 +1,6 @@
 import { closeSync, constants, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { parse } from "jsonc-parser";
 import { SkillIgnore } from "../skill-ignore.ts";
@@ -378,13 +379,26 @@ export function piTemplates(root: string, source: SlashCommand["source"]): Slash
 }
 
 
+/**
+ * The user's home for skill discovery: HOME, else USERPROFILE (native Windows often sets no HOME),
+ * else the OS's answer on Windows. Read, never written back to the environment: Git and the other
+ * tools the server starts pick their own home on Windows (HOMEDRIVE/HOMEPATH first).
+ */
+export function userHome(env: Record<string, string | undefined> = process.env, platform: NodeJS.Platform = process.platform): string {
+  return env["HOME"] || env["USERPROFILE"] || (platform === "win32" ? homedir() : "");
+}
+
 /** The nearest repository boundary wins; the home directory is never a project ancestor. */
 export function ancestorsToRepoRoot(cwd: string): string[] {
   const start = resolve(cwd);
-  const home = resolve(process.env.HOME ?? "");
-  if (start === home || home.startsWith(start.endsWith(sep) ? start : start + sep)) return [];
+  const rawHome = userHome();
+  const home = rawHome ? resolve(rawHome) : null;
+  const norm = (path: string): string => process.platform === "win32" ? path.toLowerCase() : path;
+  const normStart = norm(start);
+  const normHome = home !== null ? norm(home) : null;
+  if (normHome !== null && (normStart === normHome || normHome.startsWith(normStart.endsWith(sep) ? normStart : normStart + sep))) return [];
   const result: string[] = [];
-  for (let directory = start; directory !== home && directory !== dirname(directory); directory = dirname(directory)) {
+  for (let directory = start; (normHome === null || norm(directory) !== normHome) && directory !== dirname(directory); directory = dirname(directory)) {
     result.push(directory);
     if (existsSync(join(directory, ".git"))) return result;
   }

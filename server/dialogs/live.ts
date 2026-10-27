@@ -3,11 +3,12 @@ import { ANSI_RE, type OmoAsk, PI_MODEL_HINT_RE, type ParsedPrompt, SOLID_RULE_R
 import { registry } from "./registry.ts";
 import { CODEX_ASK_HINT_RE, CODEX_ASYNC_ASK_HINT_RE, CODEX_CONTINUE_HINT_RE } from "./codex.ts";
 import { OMO_FOOTER_LINES, OMO_HINT_LINES, OMO_NOT_FOOTER_RE, OMO_OPTIONS_HINT_RE, OMO_PENDING_HINT_RE, OMO_REVIEW_HINT_RE, OMO_TYPING_HINT_RE, omoModelListWaits } from "./omo.ts";
-import { CLAUDE_ASK_HINT_RE, CLAUDE_CONFIRM_HINT_RE, CLAUDE_EFFORT_HINT_RE, claudeModelListWaits, withoutClaudeTasks } from "./claude.ts";
+import { CLAUDE_ASK_HINT_RE, CLAUDE_CONFIRM_HINT_RE, CLAUDE_EFFORT_HINT_RE, claudeModelListWaits, withoutClaudeSidePanel, withoutClaudeTasks } from "./claude.ts";
 import { OMP_CLIPPED_SINGLE_HINT_RE, OMP_MULTI_CLIPPED_HINT_RE, OMP_MULTI_HINT_RE, OMP_REVIEW_HINT_RE, OMP_SINGLE_CLIPPED_HINT_RE, OMP_SINGLE_HINT_RE } from "./omp.ts";
 import { HERMES_HINT_RE } from "./hermes.ts";
 import { PI_INPUT_HINT_RE, PI_MENU_HINT_RE, PI_THINKING_HINT_LINES } from "./pi.ts";
 import { openCodeV1QuestionActive } from "./opencode.ts";
+import { isPiQuestionnaireScreen } from "./pi-questionnaire.ts";
 import { cmdFooterStart } from "./cmd.ts";
 
 /**
@@ -94,7 +95,8 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   // the last one, never for a hint that ended above later output (an answered, stale menu).
   const ends = (re: RegExp): boolean => [1, 2, 3].some((span) =>
     re.test(shown.slice(-span).join(" ")) && (span === 1 || !re.test(shown.slice(-span, -1).join(" "))));
-  // The rpiv reader validates its complete frame and Pi footer itself, including clipped hints.
+  // Pi custom readers validate their complete frame and Pi footer themselves.
+  if (prompt.responder.startsWith("pi-questionnaire-")) return true;
   if (prompt.responder === "pi-ask-question" || prompt.responder === "pi-ask-submit") return true;
   if (prompt.responder === "omp-question") return ends(OMP_SINGLE_HINT_RE) || ends(OMP_CLIPPED_SINGLE_HINT_RE) || ends(OMP_SINGLE_CLIPPED_HINT_RE) || ends(OMP_MULTI_HINT_RE)
     || ends(OMP_MULTI_CLIPPED_HINT_RE);
@@ -201,7 +203,10 @@ function hintAtEnd(shown: string[], atEnd: RegExp, footerLines: number, span = 3
   return false;
 }
 
-export function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = [], sent: string | null = null, working = false): ParsedPrompt | null {
+export function parsePrompt(agent: string, fullScreen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = [], sent: string | null = null, working = false): ParsedPrompt | null {
+  // Claude's menus are read, and their tail checked, on the session's side of a fullscreen side panel
+  const screen = agent === "claude" ? withoutClaudeSidePanel(fullScreen) : fullScreen;
+  if (agent === "pi" && isPiQuestionnaireScreen(screen)) return null; // requires native call binding
   const ctx = { agent, omoAsk, omoTrusted, omoOpen, sent, working };
   for (const reader of registry.readersFor(agent)) {
     // a result reader reads only below a send's own echo (outcome.ts), never a card on the whole screen

@@ -52,7 +52,7 @@ const isClient = (owner: PendingOwner): owner is Client => owner !== FIRST_MESSA
 /** a first message's lease is the delivering connection's, taken at each attempt: none is kept on the record */
 type PendingItem = PendingRecord<PendingOwner, PendingLease | null>;
 type SubmitReply = { ok: boolean; pending?: PendingMessage; code?: string; message?: string };
-type PiTypedReceipt = { owner: Client; message: PendingMessage; identity: PendingIdentity; anchor: PiDeliveryAnchor | null };
+type PiTypedReceipt = { owner: Client; resumeKey?: string; message: PendingMessage; identity: PendingIdentity; anchor: PiDeliveryAnchor | null };
 /** a first message refused before anything was typed because its connection could not type it yet stays queued for its next attach or turn */
 const FIRST_MESSAGE_RETRY_CODES = new Set(["input_not_ready", "pending_lease_lost", "disconnected", "read_only"]);
 /** a first message whose page left before it went, or that named none: held for an explicit Send now or Discard */
@@ -85,7 +85,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
   TYPED_SETTLE_MS: number;
 }) {
   const pendingAuthorities = new WeakMap<Client, Map<string, object>>();
-  const firstReceipts = new Map<string, Array<{ id: string; outcome: "sent" | "discarded" }>>();
+  const firstReceipts = new Map<string, Array<{ id: string; outcome: "sent" | "discarded" | "dismissed" }>>();
   /** the connections that could type into the pane now: attached, allowed to type, and with a ready lease */
   const typists = (paneId: string): Client[] => [...clients].filter((client) => {
     if (!client.data.attached.has(paneId)) return false;
@@ -134,6 +134,30 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
 
   /** Ovis-origin text whose Enter reached Pi but whose durable user record has not appeared yet. */
   const piTyped = new Map<string, PiTypedReceipt[]>();
+  // Presentation only, bound to both the authenticated device and an opaque browser
+  // correlator. Retaining a receipt never retains permission to send input.
+  const PI_RESUME_MS = 10 * 60 * 1000, PI_RESUME_LIMIT = 1024;
+  const livePiOwner = (owner: Client): boolean => clients.has(owner) && !connectionOf(owner).closing;
+  const piCompleted: Array<{ paneId: string; key: string; id: string; at: number }> = [];
+  const resumeKey = (client: Client, paneId: string): string | undefined => {
+    const id = client.data.attached.get(paneId)?.receiptResumeId;
+    return id ? JSON.stringify([client.data.deviceId ?? null, id]) : undefined;
+  };
+  const prunePi = (): void => {
+    const cutoff = Date.now() - PI_RESUME_MS;
+    while (piCompleted.length && (piCompleted[0]!.at < cutoff || piCompleted.length > PI_RESUME_LIMIT)) piCompleted.shift();
+    let count = 0;
+    for (const [paneId, items] of piTyped) {
+      const kept = items.filter((item) => {
+        if (!livePiOwner(item.owner) && (Date.parse(item.message.created_at) < cutoff || ++count > PI_RESUME_LIMIT)) {
+          releasePiSlot(item); return false;
+        }
+        return true;
+      });
+      if (kept.length) piTyped.set(paneId, kept); else piTyped.delete(paneId);
+      if (!kept.some((item) => item.message.error?.code === "pi_transcript_pending")) piConsumed.delete(paneId);
+    }
+  };
   /** Shared by every owner until the pane has no receipt that could reuse an earlier append. */
   const piConsumed = new Map<string, Set<string>>();
   const piCapacity = new PiReceiptCapacity<Client>(options.piReceiptLimit ?? 256);
@@ -183,8 +207,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     if (anchor === undefined || !clients.has(owner) || connectionOf(owner).closing) return;
     if (anchor === null) piCapacity.release(reservation);
     else if (!piCapacity.retain(owner, reservation)) return;
+    prunePi();
     const receipt: PiTypedReceipt = {
-      owner, identity: { ...identity }, anchor,
+      owner, resumeKey: resumeKey(owner, paneId), identity: { ...identity }, anchor,
       message: { id: `pi:${crypto.randomUUID()}`, request_id: requestId, text, state: "uncertain", created_at: new Date().toISOString(),
         error: anchor === null
           ? { code: "transcript_unconfirmed", message: "Pi's exact transcript could not be resolved before Enter" }
@@ -196,12 +221,14 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     publishPi(paneId);
     void reconcilePiDeliveries(paneId);
   };
-  const failPi = (paneId: string, items: readonly PiTypedReceipt[]): void => {
+  const failPi = (paneId: string, items: readonly PiTypedReceipt[], unavailable = false): void => {
     let changed = false;
     for (const item of items) {
       if (!activePiReceipt(paneId, item)) continue;
       releasePiSlot(item);
-      item.message.error = { code: "pi_transcript_target_changed", message: "The Pi terminal or session changed before its transcript append was confirmed" };
+      item.message.error = unavailable
+        ? { code: "transcript_unconfirmed", message: "Pi's transcript exceeded the confirmation budget" }
+        : { code: "pi_transcript_target_changed", message: "The Pi terminal or session changed before its transcript append was confirmed" };
       changed = true;
     }
     if (changed) {
@@ -210,6 +237,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     }
   };
   async function reconcilePiDeliveries(paneId: string): Promise<void> {
+    prunePi();
     const items = piTyped.get(paneId);
     if (!items?.some((item) => item.message.error?.code === "pi_transcript_pending")) return;
     await serialize(paneId, async () => {
@@ -242,9 +270,14 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       }
       if (result.retry) return;
       failPi(paneId, matching.filter((item) => result.changed.includes(item.message.id)));
+      failPi(paneId, matching.filter((item) => result.unavailable?.includes(item.message.id)), true);
       if (result.consumed.length === 0) return;
       const consumed = new Set(matching.filter((item) => activePiReceipt(paneId, item) && result.consumed.includes(item.message.id)).map((item) => item.message.id));
-      for (const item of matching) if (consumed.has(item.message.id)) releasePiSlot(item);
+      for (const item of matching) if (consumed.has(item.message.id)) {
+        releasePiSlot(item);
+        if (item.resumeKey) piCompleted.push({ paneId, key: item.resumeKey, id: item.message.id, at: Date.now() });
+      }
+      prunePi();
       const retained = (piTyped.get(paneId) ?? []).filter((item) => !consumed.has(item.message.id));
       if (retained.length > 0) piTyped.set(paneId, retained); else piTyped.delete(paneId);
       if (!retained.some((item) => item.message.error?.code === "pi_transcript_pending")) piConsumed.delete(paneId);
@@ -769,17 +802,53 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     pending.close(client);
     holdRequested(client);
     requested.delete(client);
-    // The browser retains a non-resendable local copy. Without this exact connection there is no
-    // authenticated server owner to receive transcript content or a later consumption receipt.
+    // Keep bounded presentation-only receipts across transient loss, not input authority.
+    // Revocation/read-only transitions do not retain a resumable presentation.
+    let resumable = true;
+    try { authorizeSocket(client); } catch { resumable = false; }
     for (const [paneId, items] of piTyped) {
-      for (const item of items) if (item.owner === client) releasePiSlot(item);
-      const retained = items.filter((item) => item.owner !== client);
+      const drop = (item: PiTypedReceipt): boolean => item.owner === client && (!resumable || !item.resumeKey);
+      for (const item of items) if (drop(item)) releasePiSlot(item);
+      const retained = items.filter((item) => !drop(item));
       if (retained.length > 0) piTyped.set(paneId, retained); else piTyped.delete(paneId);
       if (!retained.some((item) => item.message.error?.code === "pi_transcript_pending")) piConsumed.delete(paneId);
+      // Reload can attach its successor before the old socket's close reaches us.
+      // Rebind presentation only; never call drainPending or recover an input lease.
+      for (const successor of clients) if (successor !== client && livePiOwner(successor) && successor.data.attached.has(paneId)) {
+        if (resumePi(successor, paneId, client)) {
+          publishPi(paneId);
+          void reconcilePiDeliveries(paneId);
+        }
+      }
     }
+    prunePi();
+  }
+  function resumePi(client: Client, paneId: string, closing?: Client): boolean {
+    let rebound = false;
+    const key = resumeKey(client, paneId);
+    if (key && connectionOf(client).mode !== "observe") {
+      try {
+        authorizeSocket(client);
+        for (const item of piTyped.get(paneId) ?? []) {
+          if (item.resumeKey !== key || livePiOwner(item.owner) && item.owner !== closing) continue;
+          if (piSlots.has(item)) {
+            if (!piCapacity.retain(client)) continue;
+            piCapacity.remove(item.owner);
+          }
+          item.owner = client;
+          rebound = true;
+        }
+        const removed = piCompleted.filter((item) => item.paneId === paneId && item.key === key)
+          .map(({ id }) => ({ id, outcome: "consumed" as const }));
+        if (removed.length) send(client, { type: "pending-messages", pane_id: paneId, messages: [], removed });
+      } catch { /* failed authorization cannot resume even presentation */ }
+    }
+    return rebound;
   }
   /** A connection that attached the pane: it sees the pane's first messages and their receipts, and may be the one to type them. */
   function attached(client: Client, paneId: string): void {
+    prunePi();
+    resumePi(client, paneId);
     const messages = [...pending.list(FIRST_MESSAGE_OWNER, paneId), ...piMessages(paneId, client)];
     const removed = firstReceipts.get(paneId) ?? [];
     if ((messages.length > 0 || removed.length > 0) && connectionOf(client).mode !== "observe") {
@@ -946,6 +1015,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (message.resend_generation !== undefined && (!Number.isSafeInteger(message.resend_generation) || message.resend_generation < 0)) {
         result({ ok: false, code: "invalid_pending_action", message: "A resend generation must be a nonnegative integer" }); return;
       }
+      if (message.withdrawal_only !== undefined && (message.withdrawal_only !== true || message.action !== "discard")) {
+        result({ ok: false, code: "invalid_pending_action", message: "Withdrawal-only applies to discarding unsent input" }); return;
+      }
       const arrivedAt = Date.now();
       try {
         authorizeSocket(client);
@@ -958,6 +1030,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
           const piReceipt = client.data.attached.has(message.pane_id)
             ? piTyped.get(message.pane_id)?.find((candidate) => candidate.owner === client && candidate.message.id === message.pending_id) : undefined;
           if (piReceipt) {
+            if (message.withdrawal_only) return { ok: false, code: "pending_uncertain", message: "This receipt cannot prove withdrawal" };
             if (message.action === "steer") return { ok: false, code: "pending_sent", message: "This message was already sent to Pi" };
             return discardPiReceipt(client, message.pane_id, message.pending_id)
               ? { ok: true } : { ok: false, code: "pending_busy", message: "Pi transcript confirmation is still pending" };
@@ -967,7 +1040,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
             ?? (client.data.attached.has(message.pane_id) ? pending.get(FIRST_MESSAGE_OWNER, message.pane_id, message.pending_id) : undefined);
           if (!item) return replayPendingOutcome(client, message.pane_id, message.pending_id)
             ? { ok: true } : { ok: false, code: "pending_not_found", message: "This pending message does not belong to this connection" };
-          if (message.action === "discard") return pending.discard(item) ? { ok: true } : { ok: false, code: "pending_busy", message: "This message is already being sent" };
+          if (message.action === "discard") return pending.discard(item, message.withdrawal_only) ? { ok: true }
+            : item.message.state === "uncertain" ? { ok: false, code: "pending_uncertain", message: "Check the terminal before changing this message" }
+            : { ok: false, code: "pending_busy", message: "This message is already being sent" };
           if (item.message.state === "uncertain") return { ok: false, code: "pending_uncertain", message: "Check the terminal before sending this message again" };
           let dispatched = false;
           const reply = await pending.resend(item.paneId, item.message.id,
@@ -990,7 +1065,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
                 dispatched = true;
                 return await dispatchPending(item, false, arrivedAt, client);
               } catch (error) { return { ok: false, ...pendingFault(error) }; }
-            }, message.resend_generation);
+            }, message.resend_generation, (code) => code === "submit_changed");
           // A saved copy may already have completed this ID on another connection.
           if (!dispatched && pending.get(client, item.paneId, item.message.id) === item && pending.claim(item, false, message.action !== "agent-queue"))
             pending.settle(item, reply.ok ? undefined : { code: reply.code!, message: reply.message! }, reply.code === "submit_changed" || reply.code === "submit_partial");

@@ -10,16 +10,17 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_PORT } from "../shared/protocol.ts";
-import { HANDOVER_EXIT, moveLegacyStateDir, updateStateDir } from "./update-state.ts";
+import { HANDOVER_EXIT, moveLegacyStateDir, releaseIn, updateStateDir } from "./update-state.ts";
 
 /** The active release's supervisor, when it is still the build of this checkout's revision. */
-function releaseSupervisor(root: string, stateDir: string): string | null {
+export function releaseSupervisor(root: string, stateDir: string): string | null {
   try {
     const saved = JSON.parse(readFileSync(join(stateDir, "current.json"), "utf8")) as { directory?: unknown; source_revision?: unknown };
-    if (typeof saved.directory !== "string" || !saved.directory.startsWith(join(stateDir, "release-"))) return null;
+    const directory = typeof saved.directory === "string" ? releaseIn(stateDir, saved.directory) : null;
+    if (directory === null) return null;
     const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, windowsHide: true, encoding: "utf8" }).stdout.trim();
     if (saved.source_revision !== head) return null;
-    const file = join(saved.directory, "server", "supervisor.ts");
+    const file = join(directory, "server", "supervisor.ts");
     return existsSync(file) ? file : null;
   } catch { return null; }
 }

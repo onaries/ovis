@@ -1,0 +1,125 @@
+{
+  "source": "Synthetic screens from the exact installed questionnaire.ts renderer (2026-10-27); no live sessions.",
+  "rendererSha256": "3f1f719d81152ff013f5d36a97cc3976388d43f2d89bff0f19827d3443d903e6",
+  "single": {
+    "questions": [
+      {
+        "id": "scope",
+        "prompt": "Which implementation scope should we use for this change?",
+        "options": [
+          {
+            "value": "small",
+            "label": "Small compatibility fix",
+            "description": "Reuse the existing prompt card and guarded answer route."
+          },
+          {
+            "value": "large",
+            "label": "Larger follow-up",
+            "description": "Keep this as a separate future project."
+          }
+        ]
+      }
+    ]
+  },
+  "multi": {
+    "questions": [
+      {
+        "id": "scope",
+        "prompt": "Which implementation scope should we use for this change?",
+        "options": [
+          {
+            "value": "small",
+            "label": "Small compatibility fix",
+            "description": "Reuse the existing prompt card and guarded answer route."
+          },
+          {
+            "value": "large",
+            "label": "Larger follow-up",
+            "description": "Keep this as a separate future project."
+          }
+        ],
+        "label": "Scope"
+      },
+      {
+        "id": "verify",
+        "label": "Verification",
+        "prompt": "How should we verify the implementation?",
+        "allowOther": false,
+        "options": [
+          {
+            "value": "focused",
+            "label": "Focused tests",
+            "description": "Use synthetic fixtures only."
+          },
+          {
+            "value": "full",
+            "label": "Full checks"
+          }
+        ]
+      }
+    ]
+  },
+  "screens": {
+    "single": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n \u001b[39mWhich implementation scope should we use for this change?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing prompt card and guarded answer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate future project.\u001b[0m\n  \u001b[39m3. Type something.\u001b[0m\n\n \u001b[2m↑↓ navigate • Enter select • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "single-narrow": "\u001b[36m────────────────────────────\u001b[0m\n \u001b[39mWhich implementation scope\n should we use for this\n change?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing\n     \u001b[36mprompt card and guarded\n     \u001b[36manswer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate\n     \u001b[36mfuture project.\u001b[0m\n  \u001b[39m3. Type something.\u001b[0m\n\n \u001b[2m↑↓ navigate • Enter select\n \u001b[2m• Esc cancel\u001b[0m\n\u001b[36m────────────────────────────\u001b[0m",
+    "second": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n \u001b[39mWhich implementation scope should we use for this change?\u001b[0m\n\n  \u001b[39m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing prompt card and guarded answer route.\u001b[0m\n\u001b[36m> \u001b[0m\u001b[36m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate future project.\u001b[0m\n  \u001b[39m3. Type something.\u001b[0m\n\n \u001b[2m↑↓ navigate • Enter select • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "other": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n \u001b[39mWhich implementation scope should we use for this change?\u001b[0m\n\n  \u001b[39m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing prompt card and guarded answer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate future project.\u001b[0m\n\u001b[36m> \u001b[0m\u001b[36m3. Type something.\u001b[0m\n\n \u001b[2m↑↓ navigate • Enter select • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "input-empty": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n \u001b[39mWhich implementation scope should we use for this change?\u001b[0m\n\n  \u001b[39m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing prompt card and guarded answer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate future project.\u001b[0m\n\u001b[36m> \u001b[0m\u001b[36m3. Type something. ✎\u001b[0m\n\n \u001b[36mYour answer:\u001b[0m\n \u001b[36m──────────────────────────────────────────────────────────────────────────────\u001b[0m\n \u001b_pi:fc\u0007 \u001b_pi:/fc\u0007                                                                             \n \u001b[36m──────────────────────────────────────────────────────────────────────────────\u001b[0m\n\n \u001b[2mEnter to submit • Esc to cancel\u001b[0m\n\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "input-text": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n \u001b[39mWhich implementation scope should we use for this change?\u001b[0m\n\n  \u001b[39m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing prompt card and guarded answer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate future project.\u001b[0m\n\u001b[36m> \u001b[0m\u001b[36m3. Type something. ✎\u001b[0m\n\n \u001b[36mYour answer:\u001b[0m\n \u001b[36m──────────────────────────────────────────────────────────────────────────────\u001b[0m\n custom response\u001b_pi:fc\u0007 \u001b_pi:/fc\u0007                                                              \n \u001b[36m──────────────────────────────────────────────────────────────────────────────\u001b[0m\n\n \u001b[2mEnter to submit • Esc to cancel\u001b[0m\n\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "input-text-narrow": "\u001b[36m────────────────────────────\u001b[0m\n \u001b[39mWhich implementation scope\n should we use for this\n change?\u001b[0m\n\n  \u001b[39m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing\n     \u001b[36mprompt card and guarded\n     \u001b[36manswer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate\n     \u001b[36mfuture project.\u001b[0m\n\u001b[36m> \u001b[0m\u001b[36m3. Type something. ✎\u001b[0m\n\n \u001b[36mYour answer:\u001b[0m\n \u001b[36m──────────────────────────\u001b[0m\n custom response\u001b_pi:fc\u0007 \u001b_pi:/fc\u0007          \n \u001b[36m──────────────────────────\u001b[0m\n\n \u001b[2mEnter to submit • Esc to\n \u001b[2mcancel\u001b[0m\n\n\u001b[36m────────────────────────────\u001b[0m",
+    "input-long-narrow": "\u001b[36m────────────────────────────\u001b[0m\n \u001b[39mWhich implementation scope\n should we use for this\n change?\u001b[0m\n\n  \u001b[39m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing\n     \u001b[36mprompt card and guarded\n     \u001b[36manswer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate\n     \u001b[36mfuture project.\u001b[0m\n\u001b[36m> \u001b[0m\u001b[36m3. Type something. ✎\u001b[0m\n\n \u001b[36mYour answer:\u001b[0m\n \u001b[36m──────────────────────────\u001b[0m\n custom response with a    \n longer sentence that      \n wraps across multiple     \n editor rows on a narrow   \n pane\u001b_pi:fc\u0007 \u001b_pi:/fc\u0007                     \n \u001b[36m──────────────────────────\u001b[0m\n\n \u001b[2mEnter to submit • Esc to\n \u001b[2mcancel\u001b[0m\n\n\u001b[36m────────────────────────────\u001b[0m",
+    "no-other": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n \u001b[39mWhich implementation scope should we use for this change?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing prompt card and guarded answer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate future project.\u001b[0m\n\n \u001b[2m↑↓ navigate • Enter select • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "only-other": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n \u001b[39mWhat should we call it?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. Type something.\u001b[0m\n\n \u001b[2m↑↓ navigate • Enter select • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "multi-first": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n ← \u001b[44m\u001b[39m □ Scope \u001b[49m\u001b[0m \u001b[36m □ Verification \u001b[0m \u001b[2m ✓ Submit \u001b[0m →\n\n \u001b[39mWhich implementation scope should we use for this change?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing prompt card and guarded answer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate future project.\u001b[0m\n  \u001b[39m3. Type something.\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "multi-first-narrow": "\u001b[36m────────────────────────────\u001b[0m\n ← \u001b[44m\u001b[39m □ Scope \u001b[49m\u001b[0m \u001b[36m □ Verification\n \u001b[36m \u001b[0m \u001b[2m ✓ Submit \u001b[0m →\n\n \u001b[39mWhich implementation scope\n should we use for this\n change?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. Small compatibility fix\u001b[0m\n     \u001b[36mReuse the existing\n     \u001b[36mprompt card and guarded\n     \u001b[36manswer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate\n     \u001b[36mfuture project.\u001b[0m\n  \u001b[39m3. Type something.\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select\n \u001b[2m• Enter confirm • Esc\n \u001b[2mcancel\u001b[0m\n\u001b[36m────────────────────────────\u001b[0m",
+    "multi-second": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n ← \u001b[36m □ Scope \u001b[0m \u001b[44m\u001b[39m □ Verification \u001b[49m\u001b[0m \u001b[2m ✓ Submit \u001b[0m →\n\n \u001b[39mHow should we verify the implementation?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. Focused tests\u001b[0m\n     \u001b[36mUse synthetic fixtures only.\u001b[0m\n  \u001b[39m2. Full checks\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "review-empty": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n ← \u001b[36m □ Scope \u001b[0m \u001b[36m □ Verification \u001b[0m \u001b[44m\u001b[39m ✓ Submit \u001b[49m\u001b[0m →\n\n \u001b[36mReady to submit\u001b[0m\n\n\n \u001b[36mUnanswered: Scope, Verification\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "review-missing": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n ← \u001b[36m □ Scope \u001b[0m \u001b[32m ■ Verification \u001b[0m \u001b[44m\u001b[39m ✓ Submit \u001b[49m\u001b[0m →\n\n \u001b[36mReady to submit\u001b[0m\n\n \u001b[36mVerification: \u001b[0m\u001b[39mFocused tests\u001b[0m\n\n \u001b[36mUnanswered: Scope\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "review-missing-back": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n ← \u001b[36m □ Scope \u001b[0m \u001b[44m\u001b[39m ■ Verification \u001b[49m\u001b[0m \u001b[2m ✓ Submit \u001b[0m →\n\n \u001b[39mHow should we verify the implementation?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. Focused tests\u001b[0m\n     \u001b[36mUse synthetic fixtures only.\u001b[0m\n  \u001b[39m2. Full checks\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "multi-second-answered": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n ← \u001b[32m ■ Scope \u001b[0m \u001b[44m\u001b[39m ■ Verification \u001b[49m\u001b[0m \u001b[32m ✓ Submit \u001b[0m →\n\n \u001b[39mHow should we verify the implementation?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. Focused tests\u001b[0m\n     \u001b[36mUse synthetic fixtures only.\u001b[0m\n  \u001b[39m2. Full checks\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "review": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n ← \u001b[32m ■ Scope \u001b[0m \u001b[32m ■ Verification \u001b[0m \u001b[44m\u001b[39m ✓ Submit \u001b[49m\u001b[0m →\n\n \u001b[36mReady to submit\u001b[0m\n\n \u001b[36mScope: \u001b[0m\u001b[39mSmall compatibility fix\u001b[0m\n \u001b[36mVerification: \u001b[0m\u001b[39mFocused tests\u001b[0m\n\n \u001b[32mPress Enter to submit\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "review-narrow": "\u001b[36m────────────────────────────\u001b[0m\n ← \u001b[32m ■ Scope \u001b[0m \u001b[32m ■ Verification\n \u001b[32m \u001b[0m \u001b[44m\u001b[39m ✓ Submit \u001b[49m\u001b[0m →\n\n \u001b[36mReady to submit\u001b[0m\n\n \u001b[36mScope: \u001b[0m\u001b[39mSmall compatibility\n fix\u001b[0m\n \u001b[36mVerification: \u001b[0m\u001b[39mFocused tests\u001b[0m\n\n \u001b[32mPress Enter to submit\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select\n \u001b[2m• Enter confirm • Esc\n \u001b[2mcancel\u001b[0m\n\u001b[36m────────────────────────────\u001b[0m",
+    "back-second": "\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m\n ← \u001b[32m ■ Scope \u001b[0m \u001b[44m\u001b[39m ■ Verification \u001b[49m\u001b[0m \u001b[32m ✓ Submit \u001b[0m →\n\n \u001b[39mHow should we verify the implementation?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. Focused tests\u001b[0m\n     \u001b[36mUse synthetic fixtures only.\u001b[0m\n  \u001b[39m2. Full checks\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel\u001b[0m\n\u001b[36m────────────────────────────────────────────────────────────────────────────────\u001b[0m",
+    "long-tabs-first": "\u001b[36m────────────────────────────\u001b[0m\n ← \u001b[44m\u001b[39m □ Implementation\n \u001b[44mcompatibility scope \u001b[49m\u001b[0m \u001b[36m □\n \u001b[36mVerification expectations\n \u001b[36m \u001b[0m \u001b[2m ✓ Submit \u001b[0m →\n\n \u001b[39mWhich implementation scope\n should we use for this\n change?\u001b[0m\n\n\u001b[36m> \u001b[0m\u001b[36m1. 连续不断的中文答案需要\n  \u001b[36m在很窄的终端中自动换行并且\n  \u001b[36m保持正确的选项编号\u001b[0m\n     \u001b[36mReuse the existing\n     \u001b[36mprompt card and guarded\n     \u001b[36manswer route.\u001b[0m\n  \u001b[39m2. Larger follow-up\u001b[0m\n     \u001b[36mKeep this as a separate\n     \u001b[36mfuture project.\u001b[0m\n  \u001b[39m3. Type something.\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select\n \u001b[2m• Enter confirm • Esc\n \u001b[2mcancel\u001b[0m\n\u001b[36m────────────────────────────\u001b[0m",
+    "long-tabs-review": "\u001b[36m────────────────────────────\u001b[0m\n ← \u001b[32m ■ Implementation\n \u001b[32mcompatibility scope \u001b[0m \u001b[32m ■\n \u001b[32mVerification expectations\n \u001b[32m \u001b[0m \u001b[44m\u001b[39m ✓ Submit \u001b[49m\u001b[0m →\n\n \u001b[36mReady to submit\u001b[0m\n\n \u001b[36mImplementation\n \u001b[36mcompatibility scope: \u001b[0m\u001b[39m连续不\n 断的中文答案需要在很窄的终\n 端中自动换行并且保持正确的\n 选项编号\u001b[0m\n \u001b[36mVerification expectations:\n \u001b[36m\u001b[0m\u001b[39m连续不断的中文答案需要在很\n 窄的终端中自动换行并且保持\n 正确的选项编号\u001b[0m\n\n \u001b[32mPress Enter to submit\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select\n \u001b[2m• Enter confirm • Esc\n \u001b[2mcancel\u001b[0m\n\u001b[36m────────────────────────────\u001b[0m",
+    "review-custom": "\u001b[36m────────────────────────────\u001b[0m\n ← \u001b[32m ■ Scope \u001b[0m \u001b[32m ■ Verification\n \u001b[32m \u001b[0m \u001b[44m\u001b[39m ✓ Submit \u001b[49m\u001b[0m →\n\n \u001b[36mReady to submit\u001b[0m\n\n \u001b[36mScope: \u001b[0m\u001b[39m(wrote) A custom\n scope\u001b[0m\n \u001b[36mVerification: \u001b[0m\u001b[39mFocused tests\u001b[0m\n\n \u001b[32mPress Enter to submit\u001b[0m\n\n \u001b[2mTab/←→ navigate • ↑↓ select\n \u001b[2m• Enter confirm • Esc\n \u001b[2mcancel\u001b[0m\n\u001b[36m────────────────────────────\u001b[0m"
+  },
+  "longTabs": {
+    "questions": [
+      {
+        "id": "scope",
+        "prompt": "Which implementation scope should we use for this change?",
+        "options": [
+          {
+            "value": "small",
+            "label": "连续不断的中文答案需要在很窄的终端中自动换行并且保持正确的选项编号",
+            "description": "Reuse the existing prompt card and guarded answer route."
+          },
+          {
+            "value": "large",
+            "label": "Larger follow-up",
+            "description": "Keep this as a separate future project."
+          }
+        ],
+        "label": "Implementation compatibility scope"
+      },
+      {
+        "id": "verify",
+        "label": "Verification expectations",
+        "prompt": "How should we verify the implementation?",
+        "allowOther": false,
+        "options": [
+          {
+            "value": "focused",
+            "label": "连续不断的中文答案需要在很窄的终端中自动换行并且保持正确的选项编号",
+            "description": "Use synthetic fixtures only."
+          },
+          {
+            "value": "full",
+            "label": "Full checks"
+          }
+        ]
+      }
+    ]
+  }
+}

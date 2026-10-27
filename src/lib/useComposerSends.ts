@@ -4,6 +4,7 @@ import { answerFromText, answerRefusal, needsConfirmation, type TypedAnswer } fr
 import { composerDelivery, pendingActionUncertain, submitNotTyped, submitRefusal, type DraftRefusal } from "./compose.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import { pendingMessages } from "./pendingMessages.ts";
+import { composerDrafts } from "./composerDraft.ts";
 import type { AgentStatus, InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
 import { plainError } from "./paneTerminalShared.ts";
@@ -134,7 +135,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
     [agent, agentStatus, answering, heldByOpenQueue, sendAnswer, submitComposerMessage, queueStore, machineId, settings.autoSendQueued, showSentCommand, inputRowNow, stillOpenNote],
   );
 
-  const actOnPending = useCallback(async (id: string, action: "steer" | "discard" | "agent-queue"): Promise<void> => {
+  const actOnPending = useCallback(async (id: string, action: "steer" | "discard" | "agent-queue" | "edit"): Promise<void> => {
     const perform = async (): Promise<void> => {
       const owner = queueOwner, pane = paneId;
       const socket = socketRef.current, scope = pendingScopeRef.current;
@@ -144,18 +145,21 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       pendingMessages.refresh(owner);
       const message = pendingMessages.read(owner).find((item) => item.id === id);
       if (!message || message.state === "sending") return;
-      if (action !== "discard" && (message.state === "uncertain" || !socket?.connected || heldRef.current || secretRef.current !== null || observeRef.current || ended || heldByOpenQueue || answering !== null)) return;
+      // Editing needs this connection's withdrawal authority, not just a saved held
+      // copy. Uncertain Pi copies are receipts, not queued input.
+      if (action === "edit" && (!message.serverOwned || message.state !== "queued" && message.state !== "held" || message.resendInFlight)) return;
+      if ((action === "steer" || action === "agent-queue") && (message.state === "uncertain" || !socket?.connected || heldRef.current || secretRef.current !== null || observeRef.current || ended || heldByOpenQueue || answering !== null)) return;
       if (message.serverOwned && !pendingMessages.isOwned(owner, id, scope)) return;
       // keys held back in the terminal draft would run in front of the message: the server pastes a
       // server-owned row's text and sends Enter without looking for a partial line (only Claude's box
       // is checked there). The row stays as it is, so Send now after the draft is settled, or Discard, still works.
-      if (action !== "discard" && draftHeldForRef.current === pane) {
+      if ((action === "steer" || action === "agent-queue") && draftHeldForRef.current === pane) {
         pendingMessages.fail(owner, id, { code: "held_input", message: "send or discard the held input first" }, false);
         return;
       }
       // a screen a peek left open would take it, as it would the composer's Send
       const open = stillOpenRef.current;
-      if (action !== "discard" && open !== null && open.pane === pane) {
+      if ((action === "steer" || action === "agent-queue") && open !== null && open.pane === pane) {
         pendingMessages.fail(owner, id, { code: "still_open", message: stillOpenNote(open) }, false);
         return;
       }
@@ -164,15 +168,22 @@ export function useComposerSends(deps: ComposerSendsDeps) {
         if (message.serverOwned) {
           // A successful action can replay a prior discard. Only the matching sent removal,
           // published before the action result, proves that this explicit Send now ran anything.
-          let delivered = false;
+          let delivered = false, edited = false;
           const off = socket?.on((frame) => {
-            if (frame.type === "pending-messages" && frame.pane_id === pane
-              && frame.removed?.some((item) => item.id === id && item.outcome === "sent")) delivered = true;
+            if (frame.type !== "pending-messages" || frame.pane_id !== pane) return;
+            if (frame.removed?.some((item) => item.id === id && item.outcome === "sent")) delivered = true;
+            // The serialized discard receipt, not an ok result (which can replay a send),
+            // is the atomic withdrawal authority. Restore immediately even if WS closes
+            // before pending-result arrives. A concurrent delivery never restores text.
+            if (action === "edit" && !edited && frame.removed?.some((item) => item.id === id && item.outcome === "discarded")) {
+              edited = true;
+              composerDrafts.restorePending(`ovis:composer-draft:${owner}`, message.text);
+            }
           });
           try {
             const known = knownOutcomes(pane);
             const seen = inputRowNow() === "ready";
-            const result = socket?.pendingAction(pane, id, action, message.resendGeneration ?? 0);
+            const result = socket?.pendingAction(pane, id, action === "edit" ? "discard" : action, message.resendGeneration ?? 0, action === "edit");
             // offline: no frame left (the row shows submitNote's wording, not this message)
             if (!result) {
               pendingMessages.fail(owner, id, { code: "not_transmitted", message: "the connection dropped before this message was sent" }, pendingActionUncertain("not_transmitted", message.state));
@@ -208,6 +219,9 @@ export function useComposerSends(deps: ComposerSendsDeps) {
             pendingMessages.removeCopy(owner, id);
             if (action === "steer" && answer.pending === undefined && !answer.unconfirmed) showSentCommand(pane, message.text, known, seen);
           }
+          // A concurrent Edit can remove storage while this copy is busy. Its exact
+          // withdrawal refusal settles that copy instead of recreating a held row.
+          else if (answer.code === "pending_discarded") pendingMessages.removeCopy(owner, id);
           else pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, !submitNotTyped(answer.code), message.resendGeneration ?? 0);
         }
       } catch {

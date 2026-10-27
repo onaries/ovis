@@ -84,7 +84,7 @@ export function preparePrivateState(path: string, value: unknown, platform: Node
 }
 
 /** Records the rename in `directory` (best effort, see the top of this file). */
-function syncDirectory(directory: string, platform: NodeJS.Platform): PrivateStateWrite {
+export function syncDirectory(directory: string, platform: NodeJS.Platform): PrivateStateWrite {
   const fs = privateStateFs;
   if (platform === "win32") return { directorySynced: false };
   let directoryFd: number | null = null;

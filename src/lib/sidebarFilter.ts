@@ -121,8 +121,8 @@ export function paneLabels(pane: HerdrPane, entry: SidebarAgent | undefined, wor
   }))];
 }
 
-function filterMachine(query: string, machine: FilterMachine, selection: SidebarSelection, t: Translate, branches: ReadonlyMap<string, string> | undefined, count: { matches: number }): MachineFilter {
-  const matched = matchesQuery(query, machine.name);
+function filterMachine(query: string, machine: FilterMachine, selection: SidebarSelection, t: Translate, branches: ReadonlyMap<string, string> | undefined, named: boolean, count: { matches: number }): MachineFilter {
+  const matched = named && matchesQuery(query, machine.name);
   if (matched) count.matches += 1;
   const onThisPc = selection.machineId === machine.id;
   const workspaces = new Set<string>();
@@ -186,26 +186,28 @@ function filterMachine(query: string, machine: FilterMachine, selection: Sidebar
 
 /**
  * The filter `query` makes over `machines`, as the sidebar lists them. `branches` adds the branch
- * each workspace's row says; `t` names a tab the way the agent row does ("Tab 2"). The machines
- * and their snapshots are read, never written.
+ * each workspace's row says; `t` names a tab the way the agent row does ("Tab 2"). `unnamed`: the
+ * PCs drawn without their header (the sidebar's lone Host), whose name no row shows and so is not
+ * searched. The machines and their snapshots are read, never written.
  */
-export function sidebarFilter(query: string, machines: readonly FilterMachine[], selection: SidebarSelection, t: Translate, branches: SidebarBranchLabels = new Map()): SidebarFilter {
+export function sidebarFilter(query: string, machines: readonly FilterMachine[], selection: SidebarSelection, t: Translate, branches: SidebarBranchLabels = new Map(), unnamed: ReadonlySet<string> = new Set()): SidebarFilter {
   if (query.trim().length === 0) return query === "" ? NO_FILTER : { ...NO_FILTER, query };
   const count = { matches: 0 };
   const byMachine = new Map<string, MachineFilter>();
-  for (const machine of machines) byMachine.set(machine.id, filterMachine(query, machine, selection, t, branches.get(machine.id), count));
+  for (const machine of machines) byMachine.set(machine.id, filterMachine(query, machine, selection, t, branches.get(machine.id), !unnamed.has(machine.id), count));
   return { query, active: true, machines: byMachine, matches: count.matches };
 }
 
 /**
  * What the field offers as it is typed in (the browser's suggestions under it): the names the rows show, as
  * the filter finds them, each once, in the roster's order. PC names, workspace names and the branches their
- * rows say, and the title each agent row shows; never a path, a transcript or an id.
+ * rows say, and the title each agent row shows; never a path, a transcript or an id. A PC in `unnamed`
+ * (drawn without its header) offers no name.
  */
-export function filterSuggestions(machines: readonly FilterMachine[], branches: SidebarBranchLabels = new Map()): string[] {
+export function filterSuggestions(machines: readonly FilterMachine[], branches: SidebarBranchLabels = new Map(), unnamed: ReadonlySet<string> = new Set()): string[] {
   const labels = new Set<string>();
   for (const machine of machines) {
-    labels.add(machine.name);
+    if (!unnamed.has(machine.id)) labels.add(machine.name);
     for (const workspace of machine.snapshot?.workspaces ?? []) for (const label of workspaceLabels(workspace, branches.get(machine.id)?.get(workspace.workspace_id))) labels.add(label);
     for (const entry of sidebarAgents(machine.snapshot)) {
       const title = shownPaneTitle(entry.pane, entry.agent?.title);

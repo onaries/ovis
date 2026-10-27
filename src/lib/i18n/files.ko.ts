@@ -32,7 +32,6 @@ export const FILES_KO: Record<string, string> = {
   "Show the HTML file as": "HTML 파일 보기 방식",
   "Show the Markdown file as": "Markdown 파일 보기 방식",
   "Page": "페이지",
-  "Preview": "미리보기",
   "Source": "소스",
   "Too long to highlight": "너무 길어 강조 표시를 생략했습니다",
   "Too long to preview": "너무 길어 미리보기를 생략했습니다",

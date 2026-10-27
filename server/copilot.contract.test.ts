@@ -186,7 +186,9 @@ const handoffTest = async () => {
     expect(handoff()?.sessionId).toBe(handoffId);
     appendFileSync(parentLog, new Date().toISOString() + " [INFO] Registering foreground session: " + handoffId + "\n");
     expect((await read()).source).toBe("scrollback");
-    appendFileSync(parentLog, new Date().toISOString() + " [INFO] Unregistering foreground session: " + handoffId + "\n");
+    appendFileSync(parentLog, new Date().toISOString() + " [INFO] Unregistering foreground session: " + handoffId);
+    expect((await read()).source).toBe("scrollback");
+    appendFileSync(parentLog, "\n");
     expect((await read()).turns[0]?.parts[0]?.text).toBe("handoff history");
     const duplicate = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-copilot-handoff-peer" });
     try {

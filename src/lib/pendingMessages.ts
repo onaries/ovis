@@ -3,14 +3,17 @@ import { paneLifetimes, paneStateKey } from "./paneLifetime.ts";
 
 export interface PendingMessageView extends PendingMessage { serverOwned: boolean; resendInFlight?: true; resendGeneration?: number }
 type StoragePort = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-type Removal = { id: string; outcome: "sent" | "discarded" | "consumed" };
+type Removal = { id: string; outcome: "sent" | "discarded" | "consumed" | "dismissed" };
 const PREFIX = "ovis:pending:";
+const piReceipt = (message: PendingMessage): boolean => message.id.startsWith("pi:")
+  && (message.error?.code === "pi_transcript_pending" || message.error?.code === "transcript_unconfirmed");
 
 /** Connection proof stays in memory. A saved copy can never resume automatic delivery. */
 export class PendingMessageStore {
   private rows = new Map<string, PendingMessageView[]>();
   private scopes = new Map<string, Map<string, string>>();
   private removed = new Map<string, Map<string, Set<string>>>();
+  private settledPi = new Map<string, Set<string>>();
   private receiptOrder: Array<{ owner: string; id: string; scope: string }> = [];
   private saved = new Map<string, string | null>();
   private unsaved = new Set<string>();
@@ -63,7 +66,7 @@ export class PendingMessageStore {
     try {
       const raw = this.storage().getItem(PREFIX + owner);
       if (this.saved.get(owner) === raw) return;
-      const next = this.restored(raw);
+      const next = this.restored(raw).filter((message) => !piReceipt(message) || !this.settledPi.get(owner)?.has(message.id));
       // Another tab cannot alter or discard a live connection's authoritative rows.
       for (const own of this.read(owner).filter((message) => this.unsaved.has(owner) || message.serverOwned || this.isBusy(owner, message.id))) {
         const at = next.findIndex((message) => message.id === own.id);
@@ -95,7 +98,7 @@ export class PendingMessageStore {
   }
   accept(owner: string, message: PendingMessage, scope: string | null): void {
     const seen = this.removed.get(owner)?.get(message.id);
-    if (scope === null ? (seen?.size ?? 0) > 0 : seen?.has(scope)) return;
+    if (piReceipt(message) && this.settledPi.get(owner)?.has(message.id) || (scope === null ? (seen?.size ?? 0) > 0 : seen?.has(scope))) return;
     this.refresh(owner);
     const proofs = this.scopes.get(owner) ?? new Map<string, string>();
     this.scopes.set(owner, proofs);
@@ -118,8 +121,20 @@ export class PendingMessageStore {
     // a receipt settles a row this connection proves. A create request's first message (request_id < 0, no
     // connection's own) is the bridge's, told to every connection: its receipt also settles the copy kept since
     // a dropped connection (suspend), which no connection proves any more
+    this.refresh(owner);
     const unproved = new Set(this.read(owner).filter((message) => message.request_id < 0 && !message.serverOwned && proofs?.get(message.id) === undefined).map((message) => message.id));
-    const deleted = new Set(removed.filter((item) => proofs?.get(item.id) === scope || unproved.has(item.id)).map((item) => item.id));
+    // A consumed Pi ID is an exact server-attested receipt, replayed only to the same
+    // browser/device on attach. It can settle a saved non-authoritative copy across
+    // connection epochs; text, request IDs, and empty snapshots never can.
+    const resumed = new Set(this.read(owner).filter((message) => piReceipt(message) && !message.serverOwned && proofs?.get(message.id) === undefined).map((message) => message.id));
+    const deleted = new Set(removed.filter((item) => proofs?.get(item.id) === scope || unproved.has(item.id)
+      || item.outcome === "consumed" && resumed.has(item.id)).map((item) => item.id));
+    for (const item of removed) if (item.outcome === "consumed" && deleted.has(item.id) && item.id.startsWith("pi:")) {
+      const settled = this.settledPi.get(owner) ?? new Set<string>();
+      settled.add(item.id);
+      if (settled.size > 1024) settled.delete(settled.values().next().value!);
+      this.settledPi.set(owner, settled);
+    }
     const receipts = this.removed.get(owner) ?? new Map<string, Set<string>>();
     this.removed.set(owner, receipts);
     for (const item of removed) {

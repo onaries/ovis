@@ -122,9 +122,9 @@ class Socket {
   /** this connection's id, from its first snapshot: what a create request names as `first_message_connection` */
   async connection(): Promise<string> { return (await this.wait((frame) => frame.type === "snapshot")).connection; }
   /** `chat`: as the chat lens attaches, over a covered grid */
-  async attach(pane: string, chat = false) {
+  async attach(pane: string, chat = false, receiptResumeId?: string) {
     await this.wait((frame) => frame.type === "snapshot");
-    this.send({ type: "attach", pane_id: pane, cols: 100, rows: 30, ...(chat ? { keep_size: true } : {}) });
+    this.send({ type: "attach", pane_id: pane, cols: 100, rows: 30, ...(chat ? { keep_size: true } : {}), ...(receiptResumeId ? { receipt_resume_id: receiptResumeId } : {}) });
     await this.wait((frame) => frame.type === "input-ready" && frame.pane_id === pane && frame.ready !== false);
   }
   close() { this.ws.close(); }
@@ -224,6 +224,34 @@ describe("Ovis-origin Pi transcript receipts", () => {
       + piLine("a0", null, "assistant", "working"));
     return path;
   };
+
+  it.each(["before disconnect", "after disconnect"] as const)("resumes an exact Pi receipt consumed %s without typing again", async (when) => {
+    const transcript = piFile("pi-resume");
+    const f = await setup("pi-resume", "pi", "› Message\n", {}, false, transcript);
+    const token = crypto.randomUUID(), from = f.socket.seen.length;
+    f.socket.send({ type: "attach", pane_id: f.pane, cols: 100, rows: 30, receipt_resume_id: token });
+    await f.socket.wait((frame) => frame.type === "input-ready" && frame.pane_id === f.pane, from);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    f.socket.send({ type: "submit", id: 899, pane_id: f.pane, text: "same", payload: "same", delivery: "immediate" });
+    expect((await f.socket.result(899)).ok).toBe(true);
+    const sent = await f.socket.wait((frame) => frame.type === "pending-messages"
+      && frame.messages.some((item: PendingMessage) => item.error?.code === "pi_transcript_pending"));
+    const receipt = sent.messages.find((item: PendingMessage) => item.error?.code === "pi_transcript_pending");
+    await f.waitBytes(`${paste("same")}\r`);
+    const bytes = f.bytes();
+    if (when === "before disconnect") {
+      appendFileSync(transcript, piLine("ours", "a0", "user", "same"));
+      await f.removed(receipt.id, "consumed");
+    }
+    await f.socket.disconnect();
+    if (when === "after disconnect") appendFileSync(transcript, piLine("ours", "a0", "user", "same"));
+    const resumed = await f.another(false);
+    await resumed.attach(f.pane, true, token);
+    await f.removed(receipt.id, "consumed", resumed);
+    expect(resumed.seen.flatMap((frame) => frame.type === "pending-messages" ? frame.removed ?? [] : [])
+      .filter((item: { id: string }) => item.id === receipt.id)).toHaveLength(1);
+    expect(f.bytes()).toBe(bytes);
+  }, 20_000);
 
   it("binds a production-shaped unwritten filename to its later header UUID", async () => {
     const id = crypto.randomUUID();

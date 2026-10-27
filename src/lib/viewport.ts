@@ -68,7 +68,10 @@ const syncKeyboard = (): void => {
   const keyboardActive = focused || root.hasAttribute("data-keyboard");
   const reference = keyboardViewportReference(height, large, window.innerHeight, remembered, keyboardActive);
   const visible = keyboardActive && ((keyboard?.boundingRect.height ?? 0) > 0
-    || !!viewport && viewport.scale === 1 && reference - height > reference * 0.2);
+    // A pinch zoom narrows the visual viewport and is not a keyboard. Safari's per-site page zoom
+    // (Settings → Apps → Safari → Page Zoom, kept by the home-screen app) also reports as a scale
+    // below 1 while the visual viewport stays as wide as the layout, so the width tells them apart.
+    || !!viewport && Math.abs(viewport.width - document.documentElement.clientWidth) < 2 && reference - height > reference * 0.2);
   if (!visible) unobstructedHeights.set(width, { large, height: Math.max(reference, height) });
   root.toggleAttribute("data-keyboard", visible);
   if (visible && viewport) root.style.setProperty("--app-height", `${Math.round(height)}px`);

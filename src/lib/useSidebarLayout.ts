@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppLink } from "./deepLink.ts";
 import { watchDrawerSwipe } from "./edgeSwipe.ts";
 import { FILE_PANEL_DOCK_QUERY, storedFilePanelWidth } from "./filePanelWidth.ts";
@@ -41,5 +41,13 @@ export function useSidebarLayout({ initialLink }: SidebarLayoutParams) {
   const [sidebarWidth, setSidebarWidth] = useState(storedSidebarWidth);
   const filePanelAvailable = useMediaQuery(FILE_PANEL_DOCK_QUERY);
   const [filePanelWidth, setFilePanelWidth] = useState(storedFilePanelWidth);
-  return { drawerOpen, setDrawerOpen, drawerOpenRef, wideScreen, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, setSidebarWidth, filePanelAvailable, filePanelWidth, setFilePanelWidth };
+  // the palette's Filter workspaces and agents: the drawer or the sidebar comes out, and the sidebar shows its
+  // field and focuses it on each new count (components/MachineSidebar.tsx)
+  const [sidebarFilterRequest, setSidebarFilterRequest] = useState(0);
+  const openSidebarFilter = useCallback(() => {
+    if (window.matchMedia("(max-width: 768px)").matches) setDrawerOpen(true);
+    else setSidebarCollapsed(false);
+    setSidebarFilterRequest((count) => count + 1);
+  }, []);
+  return { drawerOpen, setDrawerOpen, drawerOpenRef, wideScreen, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, setSidebarWidth, filePanelAvailable, filePanelWidth, setFilePanelWidth, sidebarFilterRequest, openSidebarFilter };
 }

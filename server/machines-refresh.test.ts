@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import type { ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker } from "./completion.ts";
 import { handleMachineRequest } from "./machine-api.ts";
 import { bridgeAgentNews, MachineManager, SOURCE_CHECK_INTERVAL_MS } from "./machines.ts";
+import { privateStateFs } from "./private-state.ts";
 import type { PushService } from "./push.ts";
 import { REMOTE_LIMITS, RemoteResponseTooLarge } from "./remote-json.ts";
 
@@ -1019,5 +1020,43 @@ describe("workspace order evidence through the manager", () => {
     expect(refused.headers.get("retry-after")).toBe("1");
     expect(await refused.json()).toMatchObject({ error: { code: "source_unverified" } });
     expect(JSON.stringify(await (await ask("")).json())).not.toContain("fixture-token");
+  });
+});
+
+describe("saving a remote PC's snapshot", () => {
+  it("rewrites machines.json durably, and only when a refresh changed what it holds", async () => {
+    const { manager, drive, remote, runtime } = await remoteFixture();
+    const internals = manager as unknown as { stateDir: string; saveTimer?: unknown };
+    // each durable write creates its temporary file exclusively ("wx") and fsyncs it
+    const temporaries: string[] = [];
+    const open = spyOn(privateStateFs, "openSync");
+    const fsync = spyOn(privateStateFs, "fsyncSync");
+    cleanups.push(() => { open.mockRestore(); fsync.mockRestore(); });
+    open.mockImplementation(((path: string, flags: string, mode?: number) => {
+      if (flags === "wx" && path.includes("machines.json")) temporaries.push(path);
+      return openSync(path, flags, mode);
+    }) as typeof openSync);
+    // a refresh saves after a short wait (saveSoon): a save is done once its timer is gone
+    const refreshed = async () => {
+      await drive.refresh(runtime);
+      for (let attempt = 0; attempt < 200 && internals.saveTimer !== undefined; attempt++) await Bun.sleep(25);
+      expect(internals.saveTimer).toBeUndefined();
+    };
+    const saved = () => JSON.parse(readFileSync(join(internals.stateDir, "machines.json"), "utf8")) as { snapshot: SessionSnapshot | null }[];
+
+    await refreshed();
+    expect(temporaries).toHaveLength(1);
+    expect(fsync).toHaveBeenCalled();
+    expect(saved()[0]!.snapshot?.panes[0]?.agent_status).toBe("working");
+
+    // the same panes again, in a new object as every read brings: nothing to write
+    await refreshed();
+    await refreshed();
+    expect(temporaries).toHaveLength(1);
+
+    remote.set(snapshot("done"));
+    await refreshed();
+    expect(temporaries).toHaveLength(2);
+    expect(saved()[0]!.snapshot?.panes[0]?.agent_status).toBe("done");
   });
 });

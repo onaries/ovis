@@ -11,10 +11,18 @@
 // It stays first, ahead of a chosen font too, so the icons draw even when that font has none.
 // The chrome's code stack (--font-mono, lib/typography.ts) opens with it for the same reason
 export const SYMBOLS_FONT = '"Symbols Nerd Font Mono"';
+// Ovis Hangul Mono is the app's own too (PaneTerminal.css): D2Coding's Hangul under a name of its
+// own, with no Latin in its range, so it never sizes a cell (xterm measures `W`). It stands after
+// the Korean coding fonts a device may have and before the generic monospace: Hangul that Menlo,
+// Consolas or a phone's monospace lacks is drawn in a coding face beside the Latin, the same on
+// every device, instead of the system's proportional Apple SD Gothic Neo or Malgun Gothic. In Ovis
+// for Mac's window it is the Hangul left when measurableFontStack drops an installed D2Coding.
+export const HANGUL_FAMILY = "Ovis Hangul Mono";
+const HANGUL_FONT = `"${HANGUL_FAMILY}"`;
 // xterm sizes every cell from the first matching font, so a proportional one (Malgun Gothic)
 // must never win it: it stays behind the generic monospace as a per-glyph Hangul fallback
 const TERMINAL_TEXT_FONTS =
-  '"JetBrains Mono", "Fira Code", "D2Coding", Menlo, Monaco, "Cascadia Mono", Consolas, "Noto Sans Mono CJK KR", monospace, "Malgun Gothic"';
+  `"JetBrains Mono", "Fira Code", "D2Coding", Menlo, Monaco, "Cascadia Mono", Consolas, "Noto Sans Mono CJK KR", ${HANGUL_FONT}, monospace, "Malgun Gothic"`;
 export const TERMINAL_FONT_STACK = `${SYMBOLS_FONT}, ${TERMINAL_TEXT_FONTS}`;
 
 /** the chat's own stack: --font-ui in src/styles.css */
@@ -132,12 +140,13 @@ function finds(width: (family: string) => number, name: string): boolean {
  * wide glyphs from one: with JetBrains Mono and D2Coding installed, the app measured a grid in
  * Menlo and drew it in those, rows too short for their glyphs, and Hangul it measured as Apple SD
  * Gothic Neo was enlarged past its two cells. Left out, such a family falls back as if it were not
- * installed, and the terminal draws what Safari draws. The icon font and generic families stay.
+ * installed, and the terminal draws what Safari draws. The bundled icon and Hangul faces, which the
+ * canvas measures as the page draws them, and generic families stay.
  */
 export function measurableFontStack(stack: string, widths: FontWidths | null = browserFontWidths()): string {
   if (!widths) return stack;
   const names = stack.split(",").map((name) => name.trim());
-  const kept = names.filter((name) => name === SYMBOLS_FONT || GENERIC_FAMILIES.has(name) || !finds(widths.drawn, name) || finds(widths.measured, name));
+  const kept = names.filter((name) => name === SYMBOLS_FONT || name === HANGUL_FONT || GENERIC_FAMILIES.has(name) || !finds(widths.drawn, name) || finds(widths.measured, name));
   return kept.length === names.length ? stack : kept.join(", ");
 }
 
@@ -153,15 +162,20 @@ const FONT_LOAD_SAMPLE = "Mg가";
 /**
  * Resolves once the faces of `stack` are loaded, or failed, or the timeout passed: never rejects,
  * since a font that cannot load falls back like a missing one. An installed font has no face to
- * load and resolves at once.
+ * load and resolves at once. The bundled Hangul face is not waited for: it has no Latin, so it never
+ * sizes the grid, and fetching it here would fetch it on a device whose own Korean font draws the
+ * Hangul ahead of it, and hold the new font back until it came. It loads when a pane prints Korean
+ * that reaches it, and lib/terminalGlyphs.ts measures again then.
  */
 export async function loadFontStack(stack: string, sizePx: number, timeoutMs = FONT_LOAD_TIMEOUT_MS): Promise<void> {
   const fonts = typeof document === "undefined" ? undefined : document.fonts;
   if (!fonts || typeof fonts.load !== "function") return;
+  // CSS matches family names without regard to case: "ovis hangul mono" typed in Settings is the bundled face too
+  const families = stack.split(",").map((name) => name.trim()).filter((name) => name.replace(QUOTES, "").toLowerCase() !== HANGUL_FAMILY.toLowerCase()).join(", ");
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
-      fonts.load(`${sizePx}px ${stack}`, FONT_LOAD_SAMPLE),
+      fonts.load(`${sizePx}px ${families}`, FONT_LOAD_SAMPLE),
       new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
     ]);
   } catch {

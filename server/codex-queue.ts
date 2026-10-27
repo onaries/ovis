@@ -6,6 +6,26 @@ import { sameText } from "./dialogs/omo.ts";
 
 const CODEX_QUEUE_COUNT_RE = /^\?\s*(\d+)\s+questions?\b/;
 
+export function codexQueuedMessagePreviews(screen: string): string[] {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  const header = findLastIndex(lines, (line) => CODEX_QUEUE_HEADER_RE.test(cleanLine(line)));
+  if (header < 0) return [];
+  const tail = lines.slice(header + 1);
+  const composer = tail.findIndex((line) => /^\s*[›»](?:\s+(?!\d+\.)|$)/.test(line));
+  if (composer < 0 || !tail.slice(composer + 1).some((line) => /\b(?:default|minimal|none|low|medium|high|xhigh|max|ultra)(?:\s+fast)?\s*·/i.test(line))) return [];
+  const block = tail.slice(0, composer);
+  if (!block.some((line) => /edit last queued message|\?\s*\d+\s+questions?\b/i.test(line))) return [];
+  const messages: string[] = [];
+  for (const line of block) {
+    const text = line.trim();
+    if (/^(?:\?|.*edit last queued message|.*to answer)/i.test(text)) break;
+    const start = /^↳\s+(.*)$/.exec(text);
+    if (start) messages.push(start[1]!);
+    else if (messages.length && text) messages[messages.length - 1] += `\n${text}`;
+  }
+  return messages;
+}
+
 /**
  * How many questions wait in Codex's collapsed queue at the bottom of the screen, with the
  * main prompt right under it; 0 otherwise. The card (codexQueuedPrompt) and the send path

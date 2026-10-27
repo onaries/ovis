@@ -80,7 +80,7 @@ function Root() {
       // as App does: prefer Claude for its store, keeping the original request for picker changes
       if (target) setHistory({ workspaceId: target.workspaceId, agent: target.agent ?? null, askingPaneId: target.paneId ?? null, paneId: sessionHistorySourcePane(sessionHistoryAgent(target.agent) ?? "codex", snapshot.panes, { workspaceId: target.workspaceId, askingPaneId: target.paneId, selectedPaneId: selected }) });
     },
-    openPalette: noop, agentStarted: noop, openFind: noop, openSettings: noop, openAddPc: noop, toggleSidebar: noop, toggleTheme: noop, lock: null, enableNotifications: null,
+    openPalette: noop, agentStarted: noop, openFind: noop, openSettings: noop, openAddPc: noop, toggleSidebar: noop, openSidebarFilter: noop, toggleTheme: noop, lock: null, enableNotifications: null,
     refresh: noop, openFiles: null, splitPane: null, zoomPane: null,
   };
   window.qa.openHistory = (workspaceId, agent, paneId) => actions.openSessionHistory({ machineId: machine, workspaceId, agent, paneId, scope: "pane" });

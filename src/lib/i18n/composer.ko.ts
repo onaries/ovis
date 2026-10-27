@@ -11,6 +11,7 @@ export const COMPOSER_KO: Record<string, string> = {
   "Send to agent queue (Tab)": "에이전트 큐로 보내기 (Tab)",
   "Send to agent queue (Ctrl+Q)": "에이전트 큐로 보내기 (Ctrl+Q)",
   "Send to agent queue": "에이전트 큐로 보내기",
+  "Edit queued message": "대기 중인 메시지 편집",
   "Sent to Pi · waiting for transcript": "Pi로 보냄 · 대화 기록을 기다리는 중",
   "Sent to Pi · transcript confirmation unavailable": "Pi로 보냄 · 대화 기록을 확인할 수 없음",
   "Submit or clear edits before switching questions.": "문제를 전환하기 전에 보내지 않은 변경 사항을 제출하거나 지워 주세요.",

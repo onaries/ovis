@@ -1077,6 +1077,11 @@
 
 .chat-inline-error { color: var(--status-blocked); }
 
+.chat-codex-queue { align-self: stretch; min-width: 0; color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-codex-queue p { margin: 0 0 var(--space-2); }
+.chat-codex-queue ol { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.chat-codex-queue li { align-self: flex-end; max-width: 80%; padding: var(--space-3) var(--space-4); border: var(--hairline) solid var(--bubble-border); border-radius: var(--radius-lg); background: var(--bg-elevated); color: var(--text-strong); white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* a read that failed (ChatView.tsx FailureLine): the one line, Try again beside it where it is the
    way on, and a dim Details toggle under them for the advice and the PC's own words */
 .chat-failure {

@@ -1,3 +1,18 @@
+diff --git a/css/xterm.css b/css/xterm.css
+index e97b6439055da076119d8ce42225944623b80e9b..b92b1c89e81e4c0efd0e6c512c9158b47bdd7661 100644
+--- a/css/xterm.css
++++ b/css/xterm.css
+@@ -87,7 +87,9 @@
+ }
+ 
+ .xterm .composition-view.active {
+-    display: block;
++    /* flex-end: a composition clipped to its max-width overflows at its start, keeping its end in view */
++    display: flex;
++    justify-content: flex-end;
+ }
+ 
+ .xterm .xterm-viewport {
 diff --git a/src/browser/Terminal.ts b/src/browser/Terminal.ts
 index 0e945aa92b34cead9a28edb0e56d894f58ed9b51..43bfa621f1f1bd17ae79bd98a82e3f7f42e77fe0 100644
 --- a/src/browser/Terminal.ts
@@ -204,7 +219,7 @@ index 9ebc55d96f328720dcb87cc31147c6d5a76ebebe..208ea825de87d30677b559760469ba95
    compositionstart(): void;
    compositionupdate(ev: CompositionEvent): void;
 diff --git a/src/browser/input/CompositionHelper.ts b/src/browser/input/CompositionHelper.ts
-index 7542969a62fa6b5e84471a3bdecdc4bec82de542..260decc7a5e357c96bd51014661ee9e0711b3af5 100644
+index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd92c36316 100644
 --- a/src/browser/input/CompositionHelper.ts
 +++ b/src/browser/input/CompositionHelper.ts
 @@ -6,6 +6,11 @@
@@ -547,7 +562,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..260decc7a5e357c96bd51014661ee9e0
        // Ignore if a composition has started since the timeout
        if (!this._isComposing) {
          const newValue = this._textarea.value;
-@@ -216,25 +383,38 @@ export class CompositionHelper {
+@@ -216,25 +383,44 @@ export class CompositionHelper {
      }
  
      if (this._bufferService.buffer.isCursorInViewport) {
@@ -570,6 +585,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..260decc7a5e357c96bd51014661ee9e0
        this._compositionView.style.fontSize = this._optionsService.rawOptions.fontSize + 'px';
 +      this._compositionView.style.maxWidth = '';
 +      this._compositionView.style.overflow = '';
++      this._compositionView.style.transform = '';
        // Sync the textarea to the exact position of the composition view so the IME knows where the
        // text is.
        const compositionViewBounds = this._compositionView.getBoundingClientRect();
@@ -584,8 +600,13 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..260decc7a5e357c96bd51014661ee9e0
 +          compositionWidth = Math.max(1, Math.min(compositionWidth, bounds.right - compositionLeft));
 +        }
 +        this._compositionView.style.left = compositionLeft + 'px';
-+        this._compositionView.style.maxWidth = compositionWidth + 'px';
++        // A composition too long for the room right of the cursor moves left instead of losing its
++        // newest characters at the edge, and one wider than the bounds shows its end (flex-end in
++        // xterm.css), as a single-line field keeps its caret in view. 100% is the width drawn, which
++        // an embedder may still change after the measure above (a font fitted to the row).
++        this._compositionView.style.maxWidth = (bounds.right - bounds.left) + 'px';
 +        this._compositionView.style.overflow = 'hidden';
++        this._compositionView.style.transform = `translateX(min(0px, calc(${bounds.right - compositionLeft}px - 100%)))`;
 +      }
 +      this._textarea.style.left = compositionLeft + 'px';
 +      this._textarea.style.top = cursor.top + 'px';

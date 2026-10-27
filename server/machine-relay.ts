@@ -88,12 +88,17 @@ export class MachineRelay {
     if (this.closed) return;
     if (this.upstream.readyState !== WebSocket.OPEN) { this.close(); return; }
     let text = String(raw);
-    if (this.readOnly) {
-      try {
-        const message = JSON.parse(text);
-        if (message?.type === "role") text = JSON.stringify({ type: "role", mode: "observe" });
-      } catch { /* malformed frames are answered by the upstream server */ }
-    }
+    try {
+      const message = JSON.parse(text);
+      if (message?.type === "attach") {
+        // Receipt resumption is local-only: the shared bridge token carries no trusted
+        // origin-device namespace, so forwarding a browser UUID would cross devices.
+        delete message.receipt_resume_id;
+        text = JSON.stringify(message);
+      } else if (this.readOnly && message?.type === "role") {
+        text = JSON.stringify({ type: "role", mode: "observe" });
+      }
+    } catch { /* malformed frames are answered by the upstream server */ }
     if (this.upstream.bufferedAmount + Buffer.byteLength(text) > OUTPUT_HARD_BYTES) { this.close(OUTPUT_STALLED_CLOSE_CODE, "input overflow"); return; }
     this.upstream.send(text);
   }

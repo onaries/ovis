@@ -20,7 +20,7 @@ export interface SocketData {
   /** this connection's id, told to its page in the first snapshot: a create request names it as its first message's typist */
   connectionId: string;
   /** A fresh claim per attach lifetime; deleting it invalidates queued terminal keys. */
-  attached: Map<string, { keepSize: boolean }>;
+  attached: Map<string, { keepSize: boolean; receiptResumeId?: string }>;
   conversationInterests: Set<string>;
   output: Map<string, OutputWindow>;
 }

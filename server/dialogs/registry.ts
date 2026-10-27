@@ -1,3 +1,4 @@
+import { isPiQuestionnaireScreen } from "./pi-questionnaire.ts";
 import { readers } from "./index.ts";
 import { claudeModelListWaits, CLAUDE_EFFORT_GUARD_RE } from "./claude.ts";
 import { codexModelListWaits } from "./codex.ts";
@@ -24,6 +25,6 @@ export const registry = {
     return readers.find((reader) => reader.id === responder);
   },
   waits(agent: string, screen: string): boolean {
-    return claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE) || (agent === "codex" && codexModelListWaits(screen));
+    return (agent === "pi" && isPiQuestionnaireScreen(screen)) || claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE) || (agent === "codex" && codexModelListWaits(screen));
   },
 };

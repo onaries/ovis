@@ -390,26 +390,21 @@ try {
   await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
   console.log("PASS delayed machines poll preserves newer status; unavailable chat keeps DONE until terminal content is presented");
 
-  // Agents is global to the sidebar, so collapsing a PC's Spaces does not hide
-  // its reported agents or prevent explicit pane selection from that list.
+  // Agents is global to the sidebar: explicit pane selection from that list keeps its machine and pane target.
+  // The test session's only PC is the Host, drawn without its header: no caret folds it, and its + is the New
+  // workspace row under the workspaces. A PC's fold over Agents, with two PCs, is in sidebar-spacing-demo-regression.ts.
   await herdrRpc("pane.report_agent", { pane_id: paneB, source: "manual", agent: "codex", state: "idle" });
   await agentRow(paneB).waitFor();
-  const machineToggle = page.locator(".machine-group .machine-toggle");
-  // the PC's fold is the caret beside its +
-  assert.equal(await page.locator(".machine-group .machine-toggle + .machine-new").count(), 1);
-  await machineToggle.click();
-  await workspaceGroup(workspaces[0]!).waitFor({ state: "detached" });
-  assert.equal(await agentRow(paneA).isVisible(), true, "PC folding leaves Agents visible");
+  assert.equal(await page.locator(".machine-group .machine-header").count(), 0, "the lone Host is drawn without its header");
+  assert.equal(await page.locator(".machine-group .machine-new-row").count(), 1, "its + is the New workspace row");
   await agentRow(paneB).locator(".agent-select").click();
   await agentRow(paneB).locator('.agent-select[aria-current="true"]').waitFor();
   assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "null")),
     { machine_id: "local", pane_id: paneB }, "Agent selection retains its machine and pane target");
-  assert.equal(await machineToggle.getAttribute("aria-expanded"), "false", "Agent selection preserves the user's PC fold");
   painted.delete(paneA);
   await agentRow(paneA).locator(".agent-select").click();
   await agentRow(paneA).locator('.agent-select[aria-current="true"]').waitFor();
   await until(() => painted.has(paneA), "returning from Agents paints the current pane");
-  await machineToggle.click();
   await workspaceHeader(workspaces[0]!).locator('.workspace-select[aria-current="true"]').waitFor();
 
   // Reuse the real API roster as an offline cache in an isolated context. Its
@@ -717,11 +712,18 @@ try {
   await page.locator(`.pane-select[title^="${paneA} —"]`).click();
   await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
   await composer.fill("draft");
-  await page.keyboard.press("ControlOrMeta+Shift+ArrowDown");
-  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: the shortcut may not switch pane while a draft is typed
-  assert.ok((await selectedTitle())?.startsWith(`${paneA} —`), "a draft keeps Mod+Shift+arrows for selecting text");
+  // the caret at the end of a draft: up selects the text first, and the pane stays
+  await page.keyboard.press("ControlOrMeta+Shift+ArrowUp");
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: the shortcut may not switch pane while the draft has text that way
+  assert.ok((await selectedTitle())?.startsWith(`${paneA} —`), "a draft keeps Mod+Shift+arrows while they select text");
+  assert.deepEqual(await composer.evaluate((node: HTMLTextAreaElement) => [node.selectionStart, node.selectionEnd]), [0, 5], "up selected the draft");
+  // nothing is left to select that way: the next press switches panes, so a draft never stops the shortcut
+  await page.keyboard.press("ControlOrMeta+Shift+ArrowUp");
+  await until(async () => !(await selectedTitle())?.startsWith(`${paneA} —`), "a draft selected to its start lets the pane shortcut go");
+  await page.locator(`.pane-select[title^="${paneA} —"]`).click();
+  await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
   await composer.fill("");
-  console.log("PASS pane shortcut from the empty message box; a draft keeps text selection");
+  console.log("PASS pane shortcut from the empty message box; a draft keeps text selection until none is left that way");
   console.log("PASS terminal clipboard paste sends text once and preserves Ctrl+C");
 
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
@@ -1470,7 +1472,7 @@ try {
     await createGate;
     await route.continue();
   });
-  await page.getByRole("button", { name: /^New workspace on / }).click();
+  await page.locator(".machine-new-row").click();
   const dialog = page.getByRole("dialog", { name: /^New workspace/ });
   // opening Browse on home leaves Directory as typed, `~`, not the absolute path it lists
   await dialog.getByLabel(/^Directory/).fill("~");
@@ -1846,8 +1848,8 @@ try {
   await page.unroute("**/api/agents");
   await page.evaluate(() => localStorage.removeItem("ovis:new-session-agent"));
   console.log("PASS reopening after a failed agent start owns focus before paint, enables its fields and closes with Escape");
-  // the PC's + is New workspace again, not a tab in the workspace the last dialog was for
-  await page.getByRole("button", { name: /^New workspace on / }).click();
+  // the lone Host's New workspace row is New workspace again, not a tab in the workspace the last dialog was for
+  await page.locator(".machine-new-row").click();
   await page.getByRole("dialog", { name: /^New workspace/ }).waitFor();
   await page.keyboard.press("Escape");
   await page.getByRole("dialog", { name: /^New workspace/ }).waitFor({ state: "hidden" });

@@ -90,10 +90,14 @@ export function parseCopilotTranscript(jsonl: string, maxTurns = MAX_TURNS, base
   const addTool = (data: Row, ts: string | null, name: string, intention: string | null = null, at?: number, raw?: string): void => {
     const id = data.toolCallId;
     if (typeof id !== "string" || !CALL_ID.test(id) || pending.has(id)) return;
-    const args = row(data.arguments) ?? {};
+    const rawArgs = data.arguments;
+    let args = row(rawArgs) ?? {};
+    if (typeof rawArgs === "string") {
+      try { args = row(JSON.parse(rawArgs)) ?? {}; } catch { /* Preserve raw input even when it cannot summarize a call. */ }
+    }
     const part: Extract<ConversationPart, { kind: "tool" }> = {
       kind: "tool", name, summary: text(data.toolTitle) ?? intention ?? toolSummary(name, args),
-      input: JSON.stringify(args, null, 2).slice(0, 16_000), output: "",
+      input: (typeof rawArgs === "string" ? rawArgs : JSON.stringify(args, null, 2)).slice(0, 16_000), output: "",
     };
     assistant(ts).parts.push(part);
     pending.set(id, { part, requestAt: at, request: raw });
@@ -128,7 +132,7 @@ export function parseCopilotTranscript(jsonl: string, maxTurns = MAX_TURNS, base
         const request = row(candidate);
         const name = text(request?.name);
         if (request === null || typeof request.toolCallId !== "string" || !CALL_ID.test(request.toolCallId)
-          || name === null || (request.arguments != null && row(request.arguments) === null)) {
+          || name === null || (request.arguments != null && typeof request.arguments !== "string" && row(request.arguments) === null)) {
           throw new ConversationUnavailable("transcript_unreadable");
         }
         addTool(request, timestamp, name, text(request.intentionSummary), offset, raw);

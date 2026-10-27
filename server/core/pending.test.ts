@@ -61,6 +61,195 @@ afterAll(() => {
   mock.module("../pi.ts", () => ({ ...pi, piTranscriptPath: originalTranscriptPath }));
 });
 
+it.each(["delivery first", "withdrawal first", "ambiguous delivery first", "ambiguous plain discard"] as const)("serializes held-copy resend and Edit against one disposition: %s", async (order) => {
+  const ambiguous = order.startsWith("ambiguous");
+  const frames = new Map<Client, ServerMessage[]>(), clients = new Set<Client>();
+  const client = (): Client => {
+    const output: ServerMessage[] = [];
+    const owner = { data: connectionData({ deviceId: "device", readOnly: false }), getBufferedAmount: () => 0,
+      send: (value: string) => { output.push(JSON.parse(value)); return 1; } } as Client;
+    clients.add(owner); frames.set(owner, output); return owner;
+  };
+  const first = client(), second = client(), typed: string[] = [];
+  let queue = Promise.resolve<unknown>(undefined);
+  const serialize = <T>(_pane: string, task: () => T | Promise<T>): Promise<T> => {
+    const next = queue.catch(() => {}).then(task); queue = next; return next;
+  };
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const delivery = createPendingDelivery({
+    options: {}, clients, attachments: new Map(), serialize, lastTyped: new Map(),
+    sight: () => { throw new Error("withdrawal takes no input lease"); },
+    submitText: async (_pane, text) => {
+      entered.resolve(); await release.promise; typed.push(text);
+      if (ambiguous) throw new herdr.HerdrError("submit_changed", "Enter may have reached the terminal");
+    },
+    authorizeSocket: () => {},
+    clientSnapshot: async () => ({ panes: [{ pane_id: "p", terminal_id: "p", agent: null, agent_status: "idle" }] }) as SessionSnapshot,
+    omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
+  });
+  const item = delivery.pending.enqueue(first, "p", 1, "held text", null, { agent: "claude", terminalId: "p", session: null }, true);
+  const resend = () => delivery.pendingFrames.submit(second, {
+    type: "submit", id: 2, pane_id: "p", text: item.message.text, payload: item.message.text, delivery: "immediate", resend_id: item.message.id,
+  });
+  const edit = () => delivery.pendingFrames["pending-action"](first, {
+    type: "pending-action", id: 3, pane_id: "p", pending_id: item.message.id, action: "discard",
+    ...(order !== "ambiguous plain discard" ? { withdrawal_only: true as const } : {}),
+  });
+  if (order !== "withdrawal first") {
+    const sending = resend();
+    await entered.promise;
+    const editing = edit();
+    release.resolve();
+    await Promise.all([sending, editing]);
+  } else {
+    await edit();
+    release.resolve();
+    await resend();
+  }
+  const removals = frames.get(first)!.flatMap((frame) => frame.type === "pending-messages" ? frame.removed ?? [] : []);
+  if (ambiguous) {
+    expect(removals.some((receipt) => receipt.outcome === "discarded" || receipt.outcome === "sent")).toBe(false);
+    expect(frames.get(first)!.flatMap((frame) => frame.type === "pending-messages" ? frame.messages : []))
+      .toContainEqual(expect.objectContaining({ id: item.message.id, state: "uncertain", error: expect.objectContaining({ code: "submit_changed" }) }));
+  } else {
+    expect(removals.length).toBeGreaterThan(0);
+    expect(removals.every((receipt) => receipt.id === item.message.id && receipt.outcome === (order === "delivery first" ? "sent" : "discarded"))).toBe(true);
+  }
+  expect(typed).toEqual(order !== "withdrawal first" ? ["held text"] : []);
+  expect(frames.get(second)!.find((frame) => frame.type === "submit-result" && frame.id === 2)).toMatchObject({ ok: order === "delivery first" });
+  if (order === "ambiguous delivery first") {
+    expect(removals).toEqual([]);
+    expect(delivery.pending.list(first, "p")).toMatchObject([{ id: item.message.id, state: "uncertain" }]);
+    expect(frames.get(first)!.find((frame) => frame.type === "pending-result" && frame.id === 3)).toMatchObject({ ok: false, code: "pending_uncertain" });
+  } else {
+    expect(delivery.pending.list(first, "p")).toEqual([]);
+    if (ambiguous) expect(removals).toEqual([{ id: item.message.id, outcome: "dismissed" }]);
+  }
+});
+
+it.each(["before close", "after close", "overlapping reload", "same live browser", "no device", "read-only", "detach", "wrong browser", "wrong device", "revoked", "expired", "pending cap", "completed cap", "confirmation budget"] as const)(
+  "resumes only exact, authorized Pi presentation receipts: %s", async (when) => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-pi-resume-")); roots.push(root);
+    const path = join(root, "session.jsonl"); paths.set("p", path);
+    writeFileSync(path, JSON.stringify({ type: "session", version: 3, id: "session" }) + "\n"
+      + JSON.stringify({ type: "message", id: "base", parentId: null, message: { role: "assistant", content: [] } }) + "\n");
+    const token = crypto.randomUUID(), frames = new Map<Client, ServerMessage[]>(), clients = new Set<Client>();
+    const client = (deviceId: string | undefined = when === "no device" ? undefined : "device", receiptResumeId: string = token, readOnly = false): Client => {
+      const output: ServerMessage[] = [];
+      const owner = { data: connectionData({ deviceId, readOnly }), getBufferedAmount: () => 0,
+        send: (value: string) => { output.push(JSON.parse(value)); return 1; } } as Client;
+      owner.data.attached.set("p", { keepSize: false, receiptResumeId });
+      clients.add(owner); frames.set(owner, output); return owner;
+    };
+    const first = client(), typed: string[] = [], revoked = new Set<Client>();
+    let queue = Promise.resolve<unknown>(undefined);
+    const serialize = <T>(_pane: string, task: () => T | Promise<T>): Promise<T> => {
+      const next = queue.catch(() => {}).then(task); queue = next; return next;
+    };
+    const delivery = createPendingDelivery({
+      options: { piReceiptLimit: 1 }, clients, attachments: new Map(), serialize, lastTyped: new Map(),
+      sight: () => { throw new Error("presentation never takes an input lease"); },
+      submitText: async (_pane, text) => { typed.push(text); },
+      authorizeSocket: (owner) => { if (revoked.has(owner)) throw new Error("revoked"); },
+      clientSnapshot: async () => ({ panes: [{ pane_id: "p", terminal_id: "p", agent: "pi", agent_status: "idle" }] }) as SessionSnapshot,
+      omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
+    });
+    await delivery.pendingFrames.submit(first, { type: "submit", id: 1, pane_id: "p", text: "same", payload: "same", delivery: "immediate" });
+    await serialize("p", () => {});
+    const sent = frames.get(first)!.flatMap((frame) => frame.type === "pending-messages" ? frame.messages : [])
+      .find((message) => message.error?.code === "pi_transcript_pending")!;
+    expect(sent).toBeDefined();
+    if (when === "confirmation budget") {
+      // An oversized partial record is permanently beyond this receipt's scan budget.
+      appendFileSync(path, "x".repeat(16 * 1024 * 1024 + 1));
+      await delivery.reconcilePiDeliveries("p");
+      expect(frames.get(first)!.flatMap((frame) => frame.type === "pending-messages" ? frame.messages : [])
+        .some((message) => message.id === sent.id && message.error?.code === "transcript_unconfirmed")).toBe(true);
+      // A small, valid tail lets a new send capture its own bounded anchor.
+      appendFileSync(path, "\n" + JSON.stringify({ type: "message", id: "new-base", parentId: "base", message: { role: "assistant", content: [] } }) + "\n");
+      await delivery.pendingFrames.submit(first, { type: "submit", id: 2, pane_id: "p", text: "released", payload: "released", delivery: "immediate" });
+      expect(frames.get(first)!.find((frame) => frame.type === "submit-result" && frame.id === 2)).toMatchObject({ ok: true });
+      await serialize("p", () => {});
+      await delivery.reconcilePiDeliveries("p");
+      await delivery.pendingFrames["pending-action"](first, { type: "pending-action", id: 3, pane_id: "p", pending_id: sent.id, action: "discard" });
+      expect(frames.get(first)!.find((frame) => frame.type === "pending-result" && frame.id === 3)).toMatchObject({ ok: true });
+      await delivery.pendingFrames.submit(first, { type: "submit", id: 4, pane_id: "p", text: "still full", payload: "still full", delivery: "immediate" });
+      expect(frames.get(first)!.find((frame) => frame.type === "submit-result" && frame.id === 4)).toMatchObject({ ok: false, code: "pending_limit" });
+      expect(typed).toEqual(["same", "released"]);
+      return;
+    }
+    const append = () => appendFileSync(path, JSON.stringify({ type: "message", id: "ours", parentId: "base",
+      message: { role: "user", content: [{ type: "text", text: "same" }] } }) + "\n");
+    if (when === "pending cap") {
+      let lastToken = "";
+      for (let index = 0; index < 1025; index++) {
+        lastToken = crypto.randomUUID();
+        const owner = client("device", lastToken);
+        await delivery.pendingFrames.submit(owner, { type: "submit", id: index + 10, pane_id: "p", text: "waiting", payload: "waiting", delivery: "immediate" });
+        await serialize("p", () => {});
+        clients.delete(owner); delivery.closeConnection(owner);
+      }
+      const dropped = client("device", lastToken);
+      delivery.attached(dropped, "p");
+      await serialize("p", () => {});
+      expect(frames.get(dropped)!.filter((frame) => frame.type === "pending-messages")).toEqual([]);
+      expect(typed).toHaveLength(1026);
+      return;
+    }
+    if (when === "completed cap") {
+      append(); await delivery.reconcilePiDeliveries("p");
+      let parent = "ours", lastId = "";
+      for (let index = 0; index < 1025; index++) {
+        await delivery.pendingFrames.submit(first, { type: "submit", id: index + 10, pane_id: "p", text: `turn-${index}`, payload: `turn-${index}`, delivery: "immediate" });
+        await serialize("p", () => {});
+        lastId = `entry-${index}`;
+        appendFileSync(path, JSON.stringify({ type: "message", id: lastId, parentId: parent, message: { role: "user", content: [{ type: "text", text: `turn-${index}` }] } }) + "\n");
+        parent = lastId;
+        await delivery.reconcilePiDeliveries("p");
+      }
+      clients.delete(first); delivery.closeConnection(first);
+      const resumed = client(); delivery.attached(resumed, "p");
+      await serialize("p", () => {});
+      const removals = frames.get(resumed)!.flatMap((frame) => frame.type === "pending-messages" ? frame.removed ?? [] : []);
+      expect(removals).toHaveLength(1024);
+      expect(removals.some((item) => item.id === sent.id)).toBe(false);
+      expect(typed).toHaveLength(1026);
+      return;
+    }
+    if (when === "before close") { append(); await delivery.reconcilePiDeliveries("p"); }
+    if (when === "revoked") revoked.add(first);
+    const overlap = when === "overlapping reload" ? client() : undefined;
+    if (overlap) delivery.attached(overlap, "p");
+    if (when === "detach") first.data.attached.delete("p");
+    else if (when !== "same live browser") { clients.delete(first); delivery.closeConnection(first); }
+    if (when === "expired") {
+      const original = Date.now;
+      Date.now = () => original() + 11 * 60 * 1000;
+      try { await delivery.reconcilePiDeliveries("p"); } finally { Date.now = original; }
+    }
+    if (when !== "before close" && when !== "after close") append();
+    const next = when === "detach" ? first : overlap ?? client(when === "wrong device" ? "different" : when === "no device" ? undefined : "device", when === "wrong browser" ? crypto.randomUUID() : token, when === "read-only");
+    if (when === "detach") first.data.attached.set("p", { keepSize: false, receiptResumeId: token });
+    delivery.attached(next, "p");
+    await serialize("p", () => {});
+    if (when === "after close") {
+      await delivery.pendingFrames.submit(next, { type: "submit", id: 2, pane_id: "p", text: "blocked", payload: "blocked", delivery: "immediate" });
+      expect(frames.get(next)!.find((frame) => frame.type === "submit-result" && frame.id === 2)).toMatchObject({ ok: false, code: "pending_limit" });
+      append();
+    }
+    await delivery.reconcilePiDeliveries("p");
+    const consumed = frames.get(next)!.flatMap((frame) => frame.type === "pending-messages" ? frame.removed ?? [] : [])
+      .filter((item) => item.id === sent.id && item.outcome === "consumed");
+    expect(consumed.length > 0).toBe(["before close", "after close", "overlapping reload", "no device", "detach"].includes(when));
+    if (when === "same live browser") expect(frames.get(next)!.flatMap((frame) => frame.type === "pending-messages" ? frame.messages : [])).toEqual([]);
+    expect(typed).toEqual(["same"]);
+    if (when === "after close") {
+      await delivery.pendingFrames.submit(next, { type: "submit", id: 3, pane_id: "p", text: "released", payload: "released", delivery: "immediate" });
+      expect(frames.get(next)!.find((frame) => frame.type === "submit-result" && frame.id === 3)).toMatchObject({ ok: true });
+      expect(typed).toEqual(["same", "released"]);
+    }
+  });
+
 it.each(["identity", "transcript"] as const)("does not release another pane's slot after invalidation during %s lookup", async (at) => {
   const root = mkdtempSync(join(tmpdir(), "ovis-pending-capacity-")); roots.push(root);
   for (const pane of ["p", "q"]) {
@@ -194,4 +383,29 @@ it.each([
   await serialize("L", () => {});
   expect(reasons().at(-1)).toBe(code);
   expect(calls).toEqual([]);
+});
+
+it("keeps the owner's held row sendable when its own Send now fails before anything is typed", async () => {
+  const output: ServerMessage[] = [];
+  const owner = { data: connectionData({ deviceId: "device", readOnly: false }), getBufferedAmount: () => 0,
+    send: (value: string) => { output.push(JSON.parse(value)); return 1; } } as Client;
+  owner.data.attached.set("p", { keepSize: false });
+  let queue = Promise.resolve<unknown>(undefined);
+  const serialize = <T>(_pane: string, task: () => T | Promise<T>): Promise<T> => { const next = queue.catch(() => {}).then(task); queue = next; return next; };
+  const typed: string[] = [];
+  const delivery = createPendingDelivery({
+    options: {}, clients: new Set([owner]), attachments: new Map(), serialize, lastTyped: new Map(),
+    sight: (): TerminalSighting => ({ origin: null, pty: null, claim: null, facts: () => READY, write: () => {} }),
+    submitText: async (_pane, text) => { typed.push(text); },
+    authorizeSocket: () => {},
+    // herdr unreachable before any write: the dispatch's own answer says nothing was typed
+    clientSnapshot: async (): Promise<SessionSnapshot> => { throw new Error("herdr unreachable before any write"); },
+    omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
+  });
+  const item = delivery.pending.enqueue(owner, "p", 1, "held text", null as never, { agent: null, terminalId: "p", session: null }, true);
+  await delivery.pendingFrames["pending-action"](owner, { type: "pending-action", id: 10, pane_id: "p", pending_id: item.message.id, action: "steer" });
+  expect(output.find((frame) => frame.type === "pending-result" && frame.id === 10)).toMatchObject({ ok: false, code: "submit_failed" });
+  expect(typed).toEqual([]);
+  expect(delivery.pending.list(owner, "p")[0]?.state).toBe("held");
+  expect(() => delivery.pending.enqueue(owner, "p", 2, "another", null as never, { agent: null, terminalId: "p", session: null })).not.toThrow();
 });

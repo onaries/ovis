@@ -13,7 +13,7 @@ const render = (code: string, message: string, languages: string[], serverOwned 
     return renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(PendingMessages, {
       messages: [{ id: "p1", request_id: 1, text: "ls", state, created_at: "2026-10-14T00:00:00.000Z", serverOwned, error: { code, message } }],
       connected: true, blocked: false, unsaved: false, isBusy: () => false,
-      onSendNow: async () => {}, onDiscard: async () => {},
+      onSendNow: async () => {}, onEdit: async () => {}, onDiscard: async () => {},
     }) }));
   } finally {
     if (saved) Object.defineProperty(navigator, "languages", saved);
@@ -22,6 +22,20 @@ const render = (code: string, message: string, languages: string[], serverOwned 
 };
 
 describe("a pending row's refusal note", () => {
+  it("does not offer Edit on another tab's saved held copy", () => {
+    const html = render("held_input", "held", ["en"], false);
+    expect(html).not.toContain("Edit queued message");
+    expect(html).toContain("pending-message-send");
+  });
+  it("offers a labeled Edit only for unsent input, in every supported language", () => {
+    for (const language of ["en", "ja", "ko", "zh"] as const) {
+      const label = translate(language, "Edit queued message");
+      if (language !== "en") expect(label).not.toBe("Edit queued message");
+      expect(render("held_input", "held", [language])).toContain(`aria-label="${label}: ls"`);
+      expect(render("transcript_unconfirmed", "sent", [language], false, "uncertain")).not.toContain(`aria-label="${label}`);
+    }
+  });
+
   it.each(["en", "ko", "ja", "zh"] as const)("shows a confirmed agent change on an uncertain message in %s", (language) => {
     const fields = { from: "Build", to: "Plan" };
     const message = `Tab switched OpenCode's agent from ${JSON.stringify(fields.from)} to ${JSON.stringify(fields.to)}. Nothing more was typed.`;
@@ -95,5 +109,6 @@ describe("a pending row's refusal note", () => {
     expect(html).toContain("Sent to Pi · waiting for transcript");
     expect(html).not.toContain("pending-message-send");
     expect(html).not.toContain("Discard saved copy");
+    expect(html).not.toContain("Edit queued message");
   });
 });

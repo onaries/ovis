@@ -32,7 +32,6 @@ export const FILES_ZH: Record<string, string> = {
   "Show the HTML file as": "HTML 文件显示方式",
   "Show the Markdown file as": "Markdown 文件显示方式",
   "Page": "页面",
-  "Preview": "预览",
   "Source": "源代码",
   "Too long to highlight": "内容过长，未做语法高亮",
   "Too long to preview": "内容过长，未显示预览",

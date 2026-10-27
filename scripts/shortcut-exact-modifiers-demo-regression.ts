@@ -164,10 +164,11 @@ try {
         assert.equal(await tabName.evaluate((input) => input === document.activeElement), true, "the palette action focuses the name field");
         await page.keyboard.press("Escape");
 
-        // a binding on End gives way to a message box that has text, as the arrows do; an empty box lets it run
+        // a binding on End gives way to a message box with text after the caret, as the arrows do; an empty box lets it run
         const composer = page.locator(".composer-text").first();
         await composer.fill("draft");
-        assert.equal(await chord("End", "End"), true, "\u2318\u21e7End in a message box with text stays with the text");
+        await composer.evaluate((box: HTMLTextAreaElement) => box.setSelectionRange(0, 0));
+        assert.equal(await chord("End", "End"), true, "\u2318\u21e7End in a message box with text after the caret stays with the text");
         await composer.fill("");
         assert.equal(await chord("End", "End"), false, "with the box empty, \u2318\u21e7End runs Next pane");
 

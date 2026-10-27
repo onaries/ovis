@@ -49,6 +49,47 @@ describe("upstreamCloseCode", () => {
   });
 });
 
+describe("MachineRelay receipt isolation", () => {
+  for (const readOnly of [false, true]) {
+    test(`strips receipt resume IDs from every attach while preserving other fields (observe=${readOnly})`, async () => {
+      const received: Record<string, unknown>[] = [];
+      let resolve!: () => void;
+      const delivered = new Promise<void>((done) => { resolve = done; });
+      const upstream = Bun.serve({
+        port: 0, hostname: "127.0.0.1",
+        fetch(request, server) { return server.upgrade(request) ? undefined : new Response("no", { status: 400 }); },
+        websocket: {
+          message(_socket, raw) {
+            const message = JSON.parse(String(raw));
+            if (message.type !== "attach") return;
+            received.push(message);
+            if (received.length === 2) resolve();
+          },
+        },
+      });
+      const manager = {
+        endpoint: () => ({ url: `http://127.0.0.1:${upstream.port}`, token: "shared-bridge-token" }),
+        trackTerminal: () => () => {},
+      } as unknown as MachineManager;
+      const relay = new MachineRelay(manager, "pc", readOnly);
+      try {
+        await relay.ready;
+        const attach = { type: "attach", pane_id: "p", cols: 93, rows: 37, flow_control: "ack", keep_size: true };
+        const withResume = { ...attach, receipt_resume_id: "12345678-1234-4234-8234-123456789abc" };
+        relay.message(JSON.stringify(withResume));
+        relay.message(Buffer.from(JSON.stringify(withResume)));
+        await delivered;
+        expect(received).toEqual([attach, attach]);
+        // Neither initial nor repeated remote attach can claim a retained receipt.
+        expect(received.map((message) => message.receipt_resume_id)).toEqual([undefined, undefined]);
+      } finally {
+        relay.close();
+        upstream.stop(true);
+      }
+    });
+  }
+});
+
 describe("MachineRelay stall timer", () => {
   let upstream: Server<undefined>;
   beforeAll(() => {

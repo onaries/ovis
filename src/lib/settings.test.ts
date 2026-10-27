@@ -97,6 +97,20 @@ describe("saved theme migration", () => {
     expect(sanitizeSettings({ terminalMirrorWrap: "yes" }).terminalMirrorWrap).toBeNull();
   });
 
+  it("shows the sidebar filter until it is turned off, kept in its own key, out of an old tab's whole-record save", () => {
+    expect(loadSettings().sidebarFilter).toBe(true);
+    saveSettings(sanitizeSettings({ sidebarFilter: false }));
+    expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("sidebarFilter");
+    oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
+    expect(loadSettings().sidebarFilter).toBe(false);
+    expect(loadSettings().terminalFontSize).toBe(18);
+    saveSettings({ ...loadSettings(), sidebarFilter: true });
+    expect(loadSettings().sidebarFilter).toBe(true);
+    expect(sanitizeSettings({ sidebarFilter: "off" }).sidebarFilter).toBe(true);
+    records.set("ovis:sidebar-filter", "not json");
+    expect(loadSettings().sidebarFilter).toBe(true);
+  });
+
   it("survives repeated stale saves from an already-open old tab (f1)", () => {
     putOld({ theme: "dark", palette: "charcoal" });
     const stale = readOld();

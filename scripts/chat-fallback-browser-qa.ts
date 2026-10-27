@@ -11,6 +11,7 @@ import { parseClaudeTranscript } from "../server/conversation.ts";
 import type { ConversationTurn, InteractivePrompt } from "../shared/protocol.ts";
 import type {} from "./chat-fallback-fixture.tsx";
 import { parseInteractivePrompt } from "../server/prompt.ts";
+import { parseOmpTranscript } from "../server/transcript-records.ts";
 import piNavigation from "../server/fixtures/pi-ask-navigation.json";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-chat-fallback-")));
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -173,6 +174,84 @@ try {
     await head.click();
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "claude-hook-separate-replies.png") });
     console.log("PASS Claude hook narration and replies stay visible outside folded work; the tool remains inside");
+  }
+  {
+    // A turn reads in the agent's own order, as its terminal does: words written before a tool call
+    // stay above it, and each run of work sits between the words around it.
+    const rows = () => page.locator(".chat-turn-agent").last().evaluate((turn) => [...turn.children].flatMap((child) => {
+      if (child.classList.contains("chat-turn-meta")) return [];
+      if (child.classList.contains("work-block")) return [["work", ...[".work-block-title", ".work-block-summary"].map((part) => child.querySelector(part)?.textContent ?? "")].join(" ")];
+      const words = (child as HTMLElement).innerText.trim();
+      return words ? [words] : [];
+    }));
+    const message = (role: string, extra: Record<string, unknown>) => ({ type: "message", message: { role, ...extra } });
+    source = "pi-transcript";
+    turns = parseOmpTranscript(jsonl(
+      message("user", { content: [{ type: "text", text: "Update the test server." }] }),
+      message("assistant", { stopReason: "toolUse", content: [
+        { type: "thinking", thinking: "Check what it runs first." },
+        { type: "text", text: "I read this as: bring the test server up to date." },
+        { type: "toolCall", id: "one", name: "eval", arguments: { summary: "Checking the revision" } },
+      ] }),
+      message("toolResult", { toolCallId: "one", content: [{ type: "text", text: "rev a" }] }),
+      message("assistant", { stopReason: "toolUse", content: [{ type: "toolCall", id: "two", name: "eval", arguments: { summary: "Checking the service" } }] }),
+      message("toolResult", { toolCallId: "two", content: [{ type: "text", text: "active" }] }),
+      message("assistant", { stopReason: "toolUse", content: [{ type: "thinking", thinking: "Restart it." }, { type: "toolCall", id: "three", name: "eval", arguments: { summary: "Restarting" } }] }),
+      message("toolResult", { toolCallId: "three", content: [{ type: "text", text: "restarted" }] }),
+      message("assistant", { stopReason: "stop", content: [{ type: "text", text: "The test server runs the latest main." }] }),
+    ));
+    await page.evaluate(() => { window.chatFallbackQA.agent("pi"); window.chatFallbackQA.pane("agent"); window.chatFallbackQA.refresh(); });
+    await page.getByText("The test server runs the latest main.", { exact: true }).waitFor();
+    const piRows = await rows();
+    console.log("OmO/pi turn order:", JSON.stringify(piRows));
+    assert.deepEqual(piRows, ["I read this as: bring the test server up to date.", "work Worked \u00b7 3 commands", "The test server runs the latest main."], "words before the tool calls stay above their one work block");
+    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "pi-words-before-tools.png") });
+    source = "claude-transcript";
+    turns = parseClaudeTranscript(jsonl(
+      { type: "user", message: { content: "Check the catalog." } },
+      { type: "assistant", message: { content: [{ type: "text", text: "Checking the catalog first." }, { type: "tool_use", id: "a", name: "Bash", input: { command: "ls" } }], stop_reason: "tool_use" } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "a", content: "books" }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "Three books. Now the loans." }, { type: "tool_use", id: "b", name: "Bash", input: { command: "cat loans" } }], stop_reason: "tool_use" } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "b", content: "none" }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "No book is on loan." }], stop_reason: "end_turn" } },
+    ));
+    await page.evaluate(() => { window.chatFallbackQA.agent("claude"); window.chatFallbackQA.refresh(); });
+    await page.getByText("No book is on loan.", { exact: true }).waitFor();
+    assert.deepEqual(await rows(), ["Checking the catalog first.", "work Worked \u00b7 1 command", "Three books. Now the loans.", "work Worked \u00b7 1 command", "No book is on loan."], "each run of work stays between the words around it");
+    await page.evaluate(() => window.chatFallbackQA.status("working"));
+    const live = page.locator(".chat-turn-agent").last().locator(".work-block.is-live");
+    await live.waitFor();
+    assert.deepEqual(await rows(), ["Checking the catalog first.", "work Worked \u00b7 1 command", "Three books. Now the loans.", "work Working\u2026 \u00b7 1 command", "No book is on loan."], "while the turn runs, only its last run of work reads Working");
+    assert.equal(await live.count(), 1, "one Working at a time");
+    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "claude-runs-live.png") });
+    // An earlier run splits when its blank text gets words: every block keeps the fold it had.
+    const bash = (command: string) => ({ kind: "tool" as const, name: "Bash", summary: command, input: JSON.stringify({ command }), output: "" });
+    const said = (value: string) => ({ kind: "text" as const, text: value });
+    const shelves = (first: string): ConversationTurn[] => [
+      { role: "user", ts: null, parts: [said("List the shelves.")] },
+      { role: "assistant", ts: null, parts: [said("Three shelves.")] },
+      { role: "user", ts: null, parts: [said("Check each shelf.")] },
+      { role: "assistant", ts: null, parts: [bash("ls a"), said(first), bash("ls b"), said("Shelf b next."), bash("ls c")] },
+    ];
+    const heads = page.locator(".chat-turn-agent").last().locator(".work-block-head");
+    const opened = async () => Promise.all((await heads.all()).map(async (head) => await head.getAttribute("aria-expanded") === "true"));
+    turns = shelves("");
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await page.getByText("Shelf b next.", { exact: true }).waitFor();
+    assert.deepEqual(await opened(), [false, true], "while the turn runs only its working run is open");
+    const headRows = page.locator(".chat-turn-agent").last().locator(".work-block").last().locator(".work-block-rows");
+    await heads.last().click();
+    await headRows.waitFor({ state: "hidden" });
+    assert.deepEqual(await opened(), [false, false], "the reader folds the working run");
+    turns = shelves("Shelf a is empty.");
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await page.getByText("Shelf a is empty.", { exact: true }).waitFor();
+    assert.deepEqual(await opened(), [false, false, false], "a run that splits moves no fold to another block: the folded run stays folded");
+    await headRows.waitFor({ state: "hidden" });
+    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "claude-run-split.png") });
+    await page.evaluate(() => window.chatFallbackQA.status(undefined));
+    await live.waitFor({ state: "detached" });
+    console.log("PASS words and runs of work keep the agent's order, settled and live");
   }
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });

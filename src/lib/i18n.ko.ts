@@ -21,6 +21,7 @@ import { PALETTE_KO } from "./i18n/palette.ko.ts";
  * braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "Preview": "미리보기",
   "Working tree": "작업 트리",
   "Changes": "변경 사항",
   "Agent {status}": "에이전트 {status}",
@@ -130,6 +131,7 @@ const BASE: Record<string, string> = {
   "Rename failed: {reason}": "이름 바꾸기 실패: {reason}",
 
   // ---- PCs sidebar ----
+  "Filter workspaces and agents": "워크스페이스와 에이전트 필터",
   "Connecting…": "연결 중…",
   "Connected": "연결됨",
   "Reconnecting…": "재연결 중…",

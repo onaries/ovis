@@ -17,4 +17,13 @@ describe("Codex patches", () => {
   it("names each file a patch touches once, in order", () => {
     expect(patchFiles(PATCH + "*** Update File: src/a.ts\n*** Delete File: old.txt\n")).toEqual(["src/a.ts", "docs/b.md", "old.txt"]);
   });
+
+  it("finds an exec patch stored in a constant without evaluating code", () => {
+    const source = `const patch = ${JSON.stringify(PATCH)}; text(await tools.apply_patch(patch));`;
+    expect(patchText(source)).toBe(PATCH);
+    expect(patchText(source.replace("apply_patch(patch)", "apply_patch(other)"))).toBeNull();
+    expect(patchText(`const patch = ${JSON.stringify(PATCH)}; // tools.apply_patch(patch)`)).toBeNull();
+    expect(patchText(`const patch = ${JSON.stringify(PATCH)}; const example = "tools.apply_patch(patch)";`)).toBeNull();
+    expect(patchText('const patch = getPatch(); tools.apply_patch(patch)')).toBeNull();
+  });
 });

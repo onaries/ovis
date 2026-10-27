@@ -96,6 +96,8 @@ type Responder =
   | "pi-thinking"
   | "pi-ask-question"
   | "pi-ask-submit"
+  | "pi-questionnaire-question"
+  | "pi-questionnaire-submit"
   | "omo-model"
   | "omp-model"
   | "hermes-question"
@@ -137,6 +139,9 @@ export type ParsedPrompt = InteractivePrompt & {
   piAskForm?: { identity: string; index: number };
   /** Pi's custom row owns the inline editor, rather than only a selected menu row. */
   piAskTyping?: true;
+  /** Installed questionnaire editor contents; absent outside its guarded input mode. */
+  piQuestionnaireInput?: string;
+  piQuestionnaireInputRows?: string[];
   menuLabels: string[];
   selectedIndex: number;
   checkedOptionIndices: number[];

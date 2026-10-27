@@ -37,6 +37,7 @@ const LABELS: Record<string, string> = {
   "/work/app/src/b.ts": "app/src/b.ts",
   "/work/app-2/a.ts": "/work/app-2/a.ts",
   "/work/app/src/c.ts": "app/src/c.ts",
+  "/work/app/src/d.ts": "app/src/d.ts",
   "/work/app/docs/notes.md": "app/docs/notes.md",
   "/etc/hosts": "/etc/hosts",
   "src/relative.ts": "src/relative.ts",
@@ -55,6 +56,7 @@ const TURNS = [
   { role: "assistant", ts: "2026-10-21T10:00:05.000Z", parts: [
     tool("Edit", "/work/app/src/a.ts", { file_path: "/work/app/src/a.ts", old_string: "let a = 1;", new_string: "const a = 1;" }),
     tool("apply_patch", "2 files", "*** Begin Patch\n*** Update File: /work/app/src/b.ts\n@@\n-let b = 1;\n+const b = 1;\n*** Add File: /work/app-2/a.ts\n+export {};\n*** End Patch\n"),
+    tool("exec", "/work/app/src/d.ts", `const patch = ${JSON.stringify("*** Begin Patch\n*** Update File: /work/app/src/d.ts\n@@\n-old\n+new\n*** End Patch\n")}; text(await tools.apply_patch(patch));`),
     tool("MultiEdit", "/work/app/src/c.ts", { file_path: "/work/app/src/c.ts", edits: [{ old_string: "var c", new_string: "let c" }, { old_string: "c = 2", new_string: "c = 3" }] }),
     tool("SendUserFile", "2 files", { caption: "The notes", files: ["/work/app/docs/notes.md", "/etc/hosts"] }),
     read("src/relative.ts"),
@@ -67,7 +69,7 @@ const TURNS = [
   ] },
 ];
 /** Every tool-file label of the transcript, in order (a patch adds "(add)" after its label). */
-const ORDER = ["/work/app/src/a.ts", "/work/app/src/b.ts", "/work/app-2/a.ts", "/work/app/src/c.ts", "/work/app/docs/notes.md", "/etc/hosts", "src/relative.ts", "C:\\work\\app\\win.ts", "\\\\server\\share\\app\\unc.ts", "/work/app/../etc/passwd", "/work/app/문서/설계 노트.md", LONG];
+const ORDER = ["/work/app/src/a.ts", "/work/app/src/b.ts", "/work/app-2/a.ts", "/work/app/src/d.ts", "/work/app/src/c.ts", "/work/app/docs/notes.md", "/etc/hosts", "src/relative.ts", "C:\\work\\app\\win.ts", "\\\\server\\share\\app\\unc.ts", "/work/app/../etc/passwd", "/work/app/문서/설계 노트.md", LONG];
 
 /** The panes under test and their folders: one in ROOT, one with no folder known, one on a Windows folder. */
 const CWD: Record<string, string | null> = { [panes.omp]: ROOT, [panes.api]: null, [panes.cli]: "C:\\work\\app" };
@@ -378,6 +380,10 @@ async function demoChecks(browser: Browser, base: string): Promise<void> {
     let pane = await openPane(page, base, panes.omp);
     const inRoot = expected(ROOT, true, (path) => `Open ${path}`);
     assert.deepEqual(await shownFiles(pane), inRoot);
+    const execPatch = pane.locator(".work-row").filter({ hasText: "src/d.ts" });
+    assert.equal(await execPatch.count(), 1);
+    assert.match(await execPatch.innerText(), /Edited/);
+    assert.equal(await execPatch.getByText("const patch =", { exact: false }).count(), 0);
     record("relative-tool-target", "edit, patch, multi-edit and sent-file cards under /work/app read from the folder; titles keep the whole path", { labels: inRoot });
     const sibling = (await shownFiles(pane))[ORDER.indexOf("/work/app-2/a.ts")]!;
     assert.equal(sibling.text, "/work/app-2/a.ts");

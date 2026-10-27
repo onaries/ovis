@@ -83,6 +83,121 @@ describe("bridge pending input", () => {
     expect(f.queue.next("p1")).toBe(partial ? null : second);
   });
 
+  it.each(["submit_changed", "submit_partial", "submit_failed", "disconnected", "timeout", "unknown_failure"])(
+    "retains ambiguous held-copy disposition across generations and dismissal: %s", async (code) => {
+      const f = fixture(), item = f.enqueue(1);
+      f.queue.hold("a");
+      let deliveries = 0;
+      await f.queue.resend("p1", item.message.id, "fingerprint", async () => { deliveries++; return { ok: false, code, message: "Check the terminal" }; });
+      expect(item.message).toMatchObject({ state: "uncertain", error: { code } });
+      expect(f.queue.claim(item, false)).toBe(false);
+      f.advance(60_001);
+      const send = async () => { deliveries++; return { ok: true }; };
+      expect(await f.queue.resend("p1", item.message.id, "fingerprint", send, 1)).toMatchObject({ ok: false, code: "pending_uncertain" });
+      expect(f.queue.discard(item, true)).toBe(false);
+      expect(f.queue.list("a", "p1")).toMatchObject([{ id: item.message.id, state: "uncertain" }]);
+      expect(f.queue.discard(item)).toBe(true);
+      expect(f.queue.outcome("a", "p1", item.message.id)).toBe("dismissed");
+      expect(f.receipts.at(-1)?.removed).toEqual([{ id: item.message.id, outcome: "dismissed" }]);
+      expect(await f.queue.resend("p1", item.message.id, "fingerprint", send, 2)).toMatchObject({ ok: false, code: "pending_uncertain" });
+      expect(deliveries).toBe(1);
+    });
+  it("keeps an ambiguous disposition when its disconnected owner's row expires", async () => {
+    const f = fixture(), item = f.enqueue(1);
+    await f.queue.resend("p1", item.message.id, "fingerprint", async () => ({ ok: false, code: "submit_changed" }));
+    f.queue.close("a"); f.advance(60_001);
+    expect(f.queue.list("a", "p1")).toEqual([]);
+    expect(f.queue.outcome("a", "p1", item.message.id)).toBe("dismissed");
+    expect(await f.queue.resend("p1", item.message.id, "fingerprint", async () => ({ ok: true }), 1))
+      .toMatchObject({ ok: false, code: "pending_uncertain" });
+  });
+  it("keeps an ambiguous saved-only resend uncertain across generations without an original row", async () => {
+    const f = fixture();
+    await f.queue.resend("p1", "saved", "fingerprint", async () => ({ ok: false, code: "submit_changed" }));
+    let deliveries = 0;
+    expect(await f.queue.resend("p1", "saved", "fingerprint", async () => { deliveries++; return { ok: true }; }, 1))
+      .toMatchObject({ ok: false, code: "pending_uncertain" });
+    expect(deliveries).toBe(0);
+  });
+  it("leaves a definitively refused held copy withdrawable", async () => {
+    const f = fixture(), item = f.enqueue(1);
+    f.queue.hold("a");
+    await f.queue.resend("p1", item.message.id, "fingerprint", async () => ({ ok: false, code: "agent_blocked" }));
+    expect(item.message.state).toBe("held");
+    expect(f.queue.discard(item)).toBe(true);
+    expect(f.queue.outcome("a", "p1", item.message.id)).toBe("discarded");
+  });
+  it("refuses withdrawal after another connection delivered the same held ID", async () => {
+    const f = fixture(), item = f.enqueue(1);
+    f.queue.hold("a");
+    let deliveries = 0;
+    await f.queue.resend("p1", item.message.id, "fingerprint", async () => { deliveries++; return { ok: true }; });
+    expect(f.queue.discard(item)).toBe(false);
+    expect(f.queue.outcome("a", "p1", item.message.id)).toBe("sent");
+    expect(f.receipts.at(-1)?.removed).toEqual([{ id: item.message.id, outcome: "sent" }]);
+    expect(f.queue.claim(item, false)).toBe(false);
+    expect(deliveries).toBe(1);
+  });
+  it("refuses a delayed held-copy resend after authoritative withdrawal", async () => {
+    const f = fixture(), item = f.enqueue(1);
+    f.queue.hold("a");
+    expect(f.queue.discard(item)).toBe(true);
+    let deliveries = 0;
+    const reply = await f.queue.resend("p1", item.message.id, "fingerprint", async () => { deliveries++; return { ok: true }; });
+    expect(reply).toMatchObject({ ok: false, code: "pending_discarded" });
+    expect(deliveries).toBe(0);
+    expect(f.queue.outcome("a", "p1", item.message.id)).toBe("discarded");
+    expect(f.queue.claim(item, false)).toBe(false);
+  });
+  it("keeps withdrawal across retry generations and owner expiry", async () => {
+    const f = fixture(), item = f.enqueue(1);
+    await f.queue.resend("p1", item.message.id, "fingerprint", async () => ({ ok: false, code: "agent_blocked" }));
+    expect(f.queue.discard(item)).toBe(true);
+    f.queue.close("a"); f.advance(60_001);
+    let deliveries = 0;
+    for (const generation of [0, 1]) {
+      expect((await f.queue.resend("p1", item.message.id, "fingerprint", async () => { deliveries++; return { ok: true }; }, generation)).ok).toBe(false);
+    }
+    expect(deliveries).toBe(0);
+  });
+  it("lets a final delivery supersede an earlier retry refusal", async () => {
+    const f = fixture(), item = f.enqueue(1);
+    await f.queue.resend("p1", item.message.id, "fingerprint", async () => ({ ok: false, code: "agent_blocked" }));
+    expect(f.queue.claim(item, false)).toBe(true);
+    f.queue.settle(item);
+    let deliveries = 0;
+    for (const generation of [0, 1]) {
+      expect(await f.queue.resend("p1", item.message.id, "fingerprint", async () => { deliveries++; return { ok: true }; }, generation)).toEqual({ ok: true });
+    }
+    expect(deliveries).toBe(0);
+  });
+  it("bounds dispositions without evicting withdrawals inside the resend retention window", async () => {
+    const f = fixture(), first = f.enqueue(1), reserved = f.enqueue(2);
+    expect(f.queue.discard(first)).toBe(true);
+    for (let request = 3; request <= 1024; request++) expect(f.queue.discard(f.enqueue(request))).toBe(true);
+    expect(() => f.enqueue(1025)).toThrow(PendingInputError);
+    // Already accepted input still has room for its final outcome.
+    expect(f.queue.discard(reserved)).toBe(true);
+    const submit = async () => ({ ok: true });
+    expect((await f.queue.resend("p1", first.message.id, "fingerprint", submit)).ok).toBe(false);
+    f.advance(60_001);
+    expect(f.enqueue(1025)).toBeDefined();
+    // The bounded-window policy deliberately preserves stale-copy recovery after
+    // disposition eviction, just as after a bridge restart.
+    expect((await f.queue.resend("p1", first.message.id, "fingerprint", submit)).ok).toBe(true);
+  });
+  it("does not withdraw while a held-copy delivery is in flight", async () => {
+    const f = fixture(), item = f.enqueue(1);
+    const started = Promise.withResolvers<void>(), completion = Promise.withResolvers<{ ok: boolean }>();
+    const sending = f.queue.resend("p1", item.message.id, "fingerprint", () => { started.resolve(); return completion.promise; });
+    try {
+      await started.promise;
+      expect(f.queue.discard(item)).toBe(false);
+    } finally { completion.resolve({ ok: true }); }
+    expect(await sending).toEqual({ ok: true });
+    expect(f.queue.discard(item)).toBe(false);
+    expect(f.queue.outcome("a", "p1", item.message.id)).toBe("sent");
+  });
   it("regression: shares one resend outcome across stale cross-tab reads", async () => {
     const f = fixture();
     let finish!: (value: { ok: boolean }) => void;
@@ -124,12 +239,14 @@ describe("bridge pending input", () => {
     f.advance(60_001);
     expect(await f.queue.resend("p", "id", "text", async () => ({ ok: false }))).toEqual({ ok: false });
   });
-  it("control: keeps the resend receipt while its original live pending row still exists", async () => {
+  it("control: settles the original pending row and retains its sent disposition after resend receipt expiry", async () => {
     const f = fixture(), item = f.enqueue(1);
     const first = f.queue.resend("p1", item.message.id, "fingerprint", async () => ({ ok: true }));
     await first;
     f.advance(60_001);
-    expect(f.queue.resend("p1", item.message.id, "fingerprint", async () => ({ ok: false }))).toBe(first);
+    expect(f.queue.list("a", "p1")).toEqual([]);
+    expect(f.queue.outcome("a", "p1", item.message.id)).toBe("sent");
+    expect(await f.queue.resend("p1", item.message.id, "fingerprint", async () => ({ ok: false }))).toEqual({ ok: true });
   });
   it("deduplicates the same connection's request and rejects id reuse for another message", () => {
     const f = fixture();

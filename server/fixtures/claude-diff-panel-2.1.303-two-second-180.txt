@@ -1,0 +1,52 @@
+  menu should work?", header "Menu", three options, each with a long description of 60+ characters.│                                                                              ✕
+  Use no other tools.                                                                              │1 file changed +2                                             source: Current ▾
+                                                                                                   │
+⏺ User declined to answer questions                                                                │a.txt                                                                        +2
+  ⎿  · How should the sidebar menu work? (Always expanded / Collapsible / Move it to a top menubar)│
+                                                                                                   │───────────────────────────────────────────────────────────────────────────────
+✻ Cogitated for 6s · done 11:05 PM                                                                 │a.txt                                                                   [ ask ]
+                                                                                                   │───────────────────────────────────────────────────────────────────────────────
+❯ /diff                                                                                            │ 1  one
+  ⎿  Diff panel shown                                                                              │ 2 +two
+                                                                                                   │ 3 +three
+❯ Call AskUserQuestion again: one question "How should the sidebar menu work?", header "Menu",     │ 4
+  three options, each with a long description of 60+ characters. No other tools.                   │
+                                                                                                   │+5 files edited before this session (show)
+⏺ User declined to answer questions                                                                │
+  ⎿  · How should the sidebar menu work? (Always expanded / Collapsible / Move it to a top menubar)│
+                                                                                                   │
+✻ Baked for 5s · done 11:07 PM                                                                     │
+                                                                                                   │
+❯ Append a line "three" to a.txt with the Edit tool, then call AskUserQuestion once with two       │
+  questions: 1) "How far should the change go?", header "Scope", three options with 40+ character  │
+  descriptions; 2) "Add a regression test?", header "Tests", two options. No other tools.          │
+                                                                                                   │
+⏺ Update(a.txt)                                                                                    │
+  ⎿  Added 1 line                                                                                  │
+      1  one                                                                                       │
+      2  two                                                                                       │
+      3 +three                                                                                     │
+                                                                                                   │
+⏺ Added "three" to a.txt. Now asking the two questions.                                            │
+                                                                                                   │
+✻ Crunched for 9s · done 11:08 PM                                                                  │
+                                                                                                   │
+                                                                                                   │
+                                                                                                   │
+                                                                                                   │
+───────────────────────────────────────────────────────────────────────────────────────────────────│
+←  ☒ Scope  ☐ Tests  ✔ Submit  →                                                                   │
+                                                                                                   │
+Add a regression test?                                                                             │
+                                                                                                   │
+❯ 1. Add                                                                                           │
+     Add a regression test that checks the existing behavior still works after the change.         │
+  2. Skip                                                                                          │
+     Make only the change itself this time, with no regression test.                               │
+  3. Type something.                                                                               │
+───────────────────────────────────────────────────────────────────────────────────────────────────│
+  4. Chat about this                                                                               │
+                                                                                                   │
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel                                       │
+                                                                                                   │
+                                                                                                   │

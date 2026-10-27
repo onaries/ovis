@@ -316,6 +316,8 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
       // neither can see a client that only joins the attachment afterwards
       const claim = client.data.attached.get(message.pane_id) ?? { keepSize: false };
       claim.keepSize = message.keep_size === true;
+      // An opaque, bounded presentation correlator only: never used by input guards.
+      if (typeof message.receipt_resume_id === "string" && /^[a-f0-9-]{36}$/.test(message.receipt_resume_id)) claim.receiptResumeId = message.receipt_resume_id;
       if (!client.data.attached.has(message.pane_id)) client.data.attached.set(message.pane_id, claim);
       let attachment: PaneAttachment;
       try {

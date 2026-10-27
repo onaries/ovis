@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SshTarget } from "../shared/machines.ts";
 import type { SessionSnapshot } from "../shared/protocol.ts";
+import { writePrivateState } from "./private-state.ts";
+import { holdsDocument, readStateDocument, setAsideDamaged } from "./state-document.ts";
 
 /** `retiring`: this binding's key removal was started and has not succeeded yet. */
 interface ProfileState { binding: string; approved: boolean; connectionApproved: boolean; snapshot: SessionSnapshot | null; retiring?: true }
@@ -21,10 +22,21 @@ export class HerdrProfileState {
   private entries = new Map<string, ProfileState>();
   private dirty = false;
   private path: string;
-  constructor(private directory: string) {
+  /** the document this store last wrote: a flush that would write the same bytes writes nothing
+   * while the file still holds them */
+  private written: string | undefined;
+  /** where a file that was not JSON was moved at startup (setAsideDamaged), its approvals with it */
+  readonly setAside: string | null = null;
+  constructor(directory: string) {
     this.path = join(directory, "herdr-profile-state.json");
-    if (!existsSync(this.path)) return;
-    const saved: unknown = JSON.parse(readFileSync(this.path, "utf8"));
+    const read = readStateDocument(this.path);
+    if (read.kind === "missing") return;
+    if (read.kind === "malformed") {
+      this.setAside = setAsideDamaged(this.path);
+      console.error(`${this.path} is not JSON; it was set aside as ${this.setAside}, and herdr's saved machines need approving again`);
+      return;
+    }
+    const saved = read.value;
     if (!Array.isArray(saved)) throw new Error("Invalid herdr-profile-state.json; approvals were preserved");
     for (const item of saved) {
       if (!item || typeof item.profile_id !== "string" || !item.profile_id || this.entries.has(item.profile_id)
@@ -82,11 +94,17 @@ export class HerdrProfileState {
     if (errors.length) throw new AggregateError(errors, "Some saved machine keys could not be removed; cleanup will retry");
     return removed;
   }
+  /**
+   * Writes the approvals durably (writePrivateState): a crash must not leave the file unreadable. A
+   * refresh hands over a new snapshot object each time, so an unchanged one still marks the state
+   * dirty; only a document that differs from the one on disk pays for the write and its fsync.
+   */
   flush(): void {
     if (!this.dirty) return;
-    mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    const tmp = this.path + ".tmp";
-    writeFileSync(tmp, JSON.stringify([...this.entries].map(([profile_id, state]) => ({ profile_id, ...state }))), { mode: 0o600 });
-    chmodSync(tmp, 0o600); renameSync(tmp, this.path); this.dirty = false;
+    const document = [...this.entries].map(([profile_id, state]) => ({ profile_id, ...state }));
+    const text = JSON.stringify(document);
+    // the file on disk may have been deleted or replaced since this store wrote it
+    if (text !== this.written || !holdsDocument(this.path, text)) { writePrivateState(this.path, document); this.written = text; }
+    this.dirty = false;
   }
 }

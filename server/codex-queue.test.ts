@@ -1,7 +1,18 @@
 import { expect, it } from "bun:test";
 import { codexQueueInputEmpty } from "./prompt.ts";
+import { codexQueuedMessagePreviews } from "./codex-queue.ts";
 
 const screen = (input: string) => `• Working (2s • esc to interrupt)\n${input}\n  GPT-6.1-Sol high · /workspace\n  ? for shortcuts\n`;
+
+it("reads only visible Codex queue previews and clears them when the queue disappears", () => {
+  const queued = "• Working (2s • esc to interrupt)\n• Queued follow-up inputs\n  ↳ first message\n    wrapped line\n  ↳ second message\n    ⇧← edit last queued message\n› Ask Codex to do anything\n  GPT-6.1 Terra high · main\n";
+  expect(codexQueuedMessagePreviews(queued)).toEqual(["first message\nwrapped line", "second message"]);
+  expect(codexQueuedMessagePreviews(queued.replace("  ↳ first message\n    wrapped line\n  ↳ second message\n    ⇧← edit last queued message\n", ""))).toEqual([]);
+  expect(codexQueuedMessagePreviews(queued.replace("    ⇧← edit last queued message\n", ""))).toEqual([]);
+  expect(codexQueuedMessagePreviews(queued.replace("› Ask Codex to do anything", "› 1. Yes"))).toEqual([]);
+  expect(codexQueuedMessagePreviews(queued.replace("  GPT-6.1 Terra high · main", "  Approval required"))).toEqual([]);
+  expect(codexQueuedMessagePreviews(queued.replace("    ⇧← edit last queued message", "  ? 1 question\n    alt+↑ to answer"))).toEqual(["first message\nwrapped line", "second message"]);
+});
 
 it("recognizes Ultra's main prompt while retaining placeholder and queued-question guards", () => {
   const live = screen("» Ask Codex to do anything").replace("Sol high", "Sol ultra");
@@ -55,4 +66,13 @@ it("recognizes a fast-tier model footer without treating typed placeholder words
     expect(codexQueueInputEmpty(live.replace("high fast", "high faster"), colors.replace("high fast", "high faster"))).toBe(false);
     expect(codexQueueInputEmpty(live + "Select model\n", colors)).toBe(false);
   }
+});
+
+it("recognizes a two-word Codex model name without accepting typed placeholder words", () => {
+  const live = screen("› Ask Codex to do anything")
+    .replace("GPT-6.1-Sol high · /workspace", "GPT-6.1 Terra high · main · Context 65% left · 205M in · …");
+  const colors = live.replace("Ask Codex to do anything", "\x1b[2mAsk Codex to do anything\x1b[0m");
+  expect(codexQueueInputEmpty(live, colors)).toBe(true);
+  expect(codexQueueInputEmpty(live, live)).toBe(false);
+  expect(codexQueueInputEmpty(live.replace("Ask Codex to do anything", "unsent draft"), colors)).toBe(false);
 });

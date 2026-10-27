@@ -16,6 +16,29 @@
   unicode-range: U+E000-F8FF, U+F0000-FFFFD;
 }
 
+/* Hangul in a coding face (HANGUL_FAMILY in lib/fontFamily.ts): the syllables and compatibility
+   jamo of D2Coding 1.3.2, renamed as its license asks (THIRD_PARTY_NOTICES.md). The range holds
+   no Latin, so it never sizes a cell, and a weight is fetched only once a pane prints Korean that
+   reaches it, which a Korean font installed ahead of it in the stack keeps from it;
+   lib/terminalGlyphs.ts measures again when it arrives. Blocked rather than swapped, as the
+   icon font: past a swap face's short block period WebKit reports it failed while it still loads,
+   and the terminal could not tell when to measure again */
+@font-face {
+  font-family: "Ovis Hangul Mono";
+  src: url("../fonts/OvisHangulMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: block;
+  unicode-range: U+3131-318E, U+AC00-D7A3;
+}
+
+@font-face {
+  font-family: "Ovis Hangul Mono";
+  src: url("../fonts/OvisHangulMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: block;
+  unicode-range: U+3131-318E, U+AC00-D7A3;
+}
+
 .terminal-stack {
   display: flex;
   flex-direction: column;

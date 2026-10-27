@@ -25,6 +25,7 @@ import { PALETTE_ZH } from "./i18n/palette.zh.ts";
  * Placeholders in braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "Preview": "预览",
   "Working tree": "工作区",
   "Changes": "更改",
   "Agent {status}": "Agent 状态：{status}",
@@ -134,6 +135,7 @@ const BASE: Record<string, string> = {
   "Rename failed: {reason}": "重命名失败：{reason}",
 
   // ---- PCs sidebar ----
+  "Filter workspaces and agents": "筛选工作区和代理",
   "Connecting…": "正在连接…",
   "Connected": "已连接",
   "Reconnecting…": "正在重连…",

@@ -76,6 +76,8 @@ try {
         };
         Object.assign(window, { viewportFixture: fake });
         for (const key of ["height", "scale"] as const) Object.defineProperty(fake.viewport, key, { get: () => fake[key] });
+        // a pinch zoom narrows the visual viewport by its scale; Safari's page zoom keeps the width (fake.width)
+        Object.defineProperty(fake.viewport, "width", { get: () => fake.width ?? document.documentElement.clientWidth / fake.scale });
         Object.defineProperty(window, "visualViewport", { configurable: true, value: fake.viewport });
         Object.defineProperty(window, "innerHeight", { configurable: true, get: () => fake.layout });
         const originalMatchMedia = window.matchMedia.bind(window);
@@ -139,6 +141,14 @@ try {
         await checkState(page, false, 852, 34);
         await geometry(page, 400, 852, 852, "resize", 2); // pinch zoom is not a keyboard
         await checkState(page, false, 852, 34);
+        await geometry(page, 793, 852, 852);
+        // Safari page zoom 85%: the scale is below 1 but the visual viewport stays full width, so a keyboard still counts
+        await page.evaluate(() => { (window as any).viewportFixture.width = document.documentElement.clientWidth; });
+        await geometry(page, 472, 852, 852, "resize", 0.85);
+        await checkState(page, true, 472, 34);
+        await geometry(page, 793, 852, 852, "resize", 0.85);
+        await checkState(page, false, 852, 34);
+        await page.evaluate(() => { delete (window as any).viewportFixture.width; });
         await geometry(page, 793, 852, 852);
         await geometry(page, 210, 393, 393);
         await page.setViewportSize({ width: 852, height: 393 });
@@ -209,5 +219,5 @@ try {
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
   }
-  console.log("PASS mobile viewport: same-width split view, dismissal without blur, hardware keyboard, dual viewport resize, orientation, standalone, safe area, desktop, zoom, xterm, keyboard geometry");
+  console.log("PASS mobile viewport: same-width split view, dismissal without blur, hardware keyboard, dual viewport resize, orientation, standalone, safe area, desktop, zoom, page zoom, xterm, keyboard geometry");
 } finally { await browser?.close(); server.stop(); }

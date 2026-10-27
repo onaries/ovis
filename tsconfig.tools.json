@@ -13,6 +13,7 @@
     "scripts/herdr-theme-overrides.ts",
     "scripts/herdr-themes.test.ts",
     "scripts/check.ts",
+    "scripts/pi-questionnaire-browser-regression.ts",
     "scripts/cliproxy-settings-regression.ts",
     "scripts/build-site.ts",
     "scripts/ci-lanes.ts",

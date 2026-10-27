@@ -12,7 +12,7 @@ import type { ServerMessage } from "../shared/protocol.ts";
 
 const agent = process.argv[2] === "codex" ? "codex" : "omo";
 const queueKey = agent === "codex" ? "\t" : "\u0011";
-const screen = agent === "codex" ? "• Working (2s • esc to interrupt) · 1 background termin…\n› \x1b[2mAsk Codex to do anything\x1b[0m\n  GPT-6.1-Sol high fast · /tmp/work\n  ← for agents · ? for shor  ⚠ 3 warnings · f2 to view\n" : "Message OmO\n";
+const screen = agent === "codex" ? "• Working (2s • esc to interrupt) · 1 background termin…\n• Queued follow-up inputs\n  ↳ First queued preview\n    wrapped detail\n  ↳ Second queued preview\n    ⇧← edit last queued message\n› \x1b[2mAsk Codex to do anything\x1b[0m\n  GPT-6.1-Sol high fast · /tmp/work\n  ← for agents · ? for shor  ⚠ 3 warnings · f2 to view\n" : "Message OmO\n";
 const root = mkdtempSync(join(tmpdir(), `herdr-${agent}-queue-`));
 const evidence = process.env.UI_EVIDENCE_DIR || join(root, "evidence");
 mkdirSync(evidence, { recursive: true });
@@ -68,7 +68,7 @@ try {
       const page = await context.newPage();
       page.setDefaultTimeout(15_000);
       // Keep the raw recorder's lack of a real question separate from server input authority.
-      await page.route("**/api/pane/prompt?*", (route) => route.fulfill({ json: { prompt: null } }));
+      if (agent !== "codex") await page.route("**/api/pane/prompt?*", (route) => route.fulfill({ json: { prompt: null } }));
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       const frames: ServerMessage[] = [];
@@ -93,6 +93,14 @@ try {
       const box = card.getByRole("textbox", { name: "Message", exact: true });
       const send = card.getByRole("button", { name: "Send message", exact: true });
       await box.waitFor();
+      if (agent === "codex") {
+        const previews = card.locator(".chat-codex-queue");
+        await previews.waitFor();
+        assert.deepEqual(await previews.locator("li").allTextContents(), ["First queued preview\nwrapped detail", "Second queued preview"]);
+        assert.match(await previews.innerText(), /Queued messages · Codex · Preview/);
+        const watcher = await page.evaluate(async (paneId) => (await fetch(`/api/pane/prompt?pane_id=${encodeURIComponent(paneId)}&plan=0`)).json(), pane);
+        assert.equal(watcher.codex_queue_preview, undefined, "a watching device receives no queued text");
+      }
       assert.equal(await card.locator(".composer-agent-queue").count(), 0, "composer keeps one primary action");
       await box.fill(`native follow-up ${width}\nsecond line`);
       await send.waitFor();
@@ -161,6 +169,7 @@ try {
       await blocked;
       if (agent === "codex") {
         await blockedQueue.waitFor({ state: "detached" });
+        await card.locator(".chat-codex-queue").waitFor({ state: "detached" });
       } else {
       const blockedMark = frames.length;
       const refusal = receipt((frame) => frames.indexOf(frame) >= blockedMark && frame.type === "pending-result" && frame.pane_id === pane && frame.pending_id === secondId);

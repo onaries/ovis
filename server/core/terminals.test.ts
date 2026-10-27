@@ -17,7 +17,7 @@ const { createTerminalRegistry } = await import("./terminals.ts");
 
 afterEach(() => mock.restore());
 
-async function join({ readOnly = false, ready, recovering, times = 1 }: { readOnly?: boolean; ready: boolean; recovering?: boolean; times?: number }): Promise<ServerMessage[]> {
+async function join({ readOnly = false, ready, recovering, times = 1, receiptResumeId, verifyResume }: { readOnly?: boolean; ready: boolean; recovering?: boolean; times?: number; receiptResumeId?: string; verifyResume?: (id: string | undefined) => void }): Promise<ServerMessage[]> {
   const frames: ServerMessage[] = [];
   const client = {
     data: connectionData({ deviceId: undefined, readOnly }), readyState: WebSocket.OPEN,
@@ -35,11 +35,19 @@ async function join({ readOnly = false, ready, recovering, times = 1 }: { readOn
     holdFor: 0, heldRetry: 0, retryFor: 0, relookupFor: 0,
     holdPending() {}, holdPendingPane() {}, attached() {}, inputReady() {}, end() {},
   });
-  for (let attach = 0; attach < times; attach++) await registry.terminalFrames.attach(client, { type: "attach", pane_id: "p", cols: 80, rows: 24, keep_size: true });
+  for (let attach = 0; attach < times; attach++) await registry.terminalFrames.attach(client, { type: "attach", pane_id: "p", cols: 80, rows: 24, keep_size: true, receipt_resume_id: receiptResumeId });
+  verifyResume?.(client.data.attached.get("p")?.receiptResumeId);
   registry.closeAttachment("p");
   registry.conversations.stop();
   return frames;
 }
+
+it("retains only a bounded opaque resume ID on an attach claim", async () => {
+  const valid = crypto.randomUUID();
+  for (const value of [valid, "", "not-a-resume-id", "x".repeat(4096)]) {
+    await join({ ready: true, receiptResumeId: value, verifyResume: (id) => expect(id).toBe(value === valid ? valid : undefined) });
+  }
+});
 
 for (const readOnly of [false, true]) for (const ready of [false, true]) {
   it(`preserves input readiness ${ready} after replay for an ${readOnly ? "observer" : "owner"} joining a shared attach`, async () => {

@@ -30,7 +30,7 @@ export function codexRuntimeError(screen: string): "model_capacity" | null {
 
 /** The warning on the right can clip the shortcuts hint on the left without an ellipsis. */
 export function codexFooterLine(line: string): boolean {
-  if (/^(?:\S+\s+(?:default|minimal|none|low|medium|high|xhigh|max|ultra)(?:\s+fast)?\s*·|\d+% context left\b|⚠\s*\d+\s*warnings?\b|(?:←[^·]*·\s*)?\?\s*for shortcuts\b)/i.test(line)) return true;
+  if (/^(?:\S+(?:\s+\S+)*?\s+(?:default|minimal|none|low|medium|high|xhigh|max|ultra)(?:\s+fast)?\s*·|\d+% context left\b|⚠\s*\d+\s*warnings?\b|(?:←[^·]*·\s*)?\?\s*for shortcuts\b)/i.test(line)) return true;
   const [hint, warning] = line.split(/\s{2,}(?=⚠)/);
   return hint !== undefined && hint.length >= 6 && warning !== undefined
     && /^⚠\s*\d+\s*warnings?\s*·\s*f2 to view$/.test(warning)

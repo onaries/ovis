@@ -58,11 +58,38 @@ describe("keepsArrowsForText", () => {
 
   it("leaves Home and End to a field with text too, and only selection keys", () => {
     const draft = { tagName: "TEXTAREA", value: "draft", classList: classes("composer-text") };
-    expect(keepsKeyForText({ key: "Home", target: draft })).toBe(true);
-    expect(keepsKeyForText({ key: "End", target: draft })).toBe(true);
-    expect(keepsKeyForText({ key: "ArrowUp", target: draft })).toBe(true);
-    expect(keepsKeyForText({ key: "k", target: draft })).toBe(false);
-    expect(keepsKeyForText({ key: "Home", target: { tagName: "TEXTAREA", classList: classes("xterm-helper-textarea") } })).toBe(false);
+    expect(keepsKeyForText({ key: "Home", target: draft }, "previous-pane")).toBe(true);
+    expect(keepsKeyForText({ key: "End", target: draft }, "next-pane")).toBe(true);
+    expect(keepsKeyForText({ key: "ArrowUp", target: draft }, "previous-pane")).toBe(true);
+    expect(keepsKeyForText({ key: "k", target: draft }, "palette")).toBe(false);
+    expect(keepsKeyForText({ key: "Home", target: { tagName: "TEXTAREA", classList: classes("xterm-helper-textarea") } }, "previous-pane")).toBe(false);
+  });
+
+  it("lets the binding go where the field has no text left that way, so a draft never stops a pane switch", () => {
+    const draft = (selectionStart: number, selectionEnd: number, selectionDirection = "none") =>
+      ({ tagName: "TEXTAREA", value: "draft", selectionStart, selectionEnd, selectionDirection, classList: classes("composer-text") });
+    // the caret at the end: down has nothing left to select, up still does
+    expect(keepsKeyForText({ key: "ArrowDown", target: draft(5, 5) }, "next-pane")).toBe(false);
+    expect(keepsKeyForText({ key: "End", target: draft(5, 5) }, "next-pane")).toBe(false);
+    expect(keepsKeyForText({ key: "ArrowUp", target: draft(5, 5) }, "previous-pane")).toBe(true);
+    // up once selected to the start (its moving end): the next up switches
+    expect(keepsKeyForText({ key: "ArrowUp", target: draft(0, 5, "backward") }, "previous-pane")).toBe(false);
+    expect(keepsKeyForText({ key: "ArrowDown", target: draft(0, 5, "backward") }, "next-pane")).toBe(true);
+    // a selection made forward from the start still moves its end back
+    expect(keepsKeyForText({ key: "ArrowUp", target: draft(0, 5, "forward") }, "previous-pane")).toBe(true);
+    expect(keepsKeyForText({ key: "ArrowDown", target: draft(0, 5, "forward") }, "next-pane")).toBe(false);
+    // the caret inside the text: both ways still select
+    expect(keepsKeyForText({ key: "ArrowUp", target: draft(2, 2) }, "previous-pane")).toBe(true);
+    expect(keepsKeyForText({ key: "ArrowDown", target: draft(2, 2) }, "next-pane")).toBe(true);
+  });
+
+  it("gives a draft's edge only to the pane steps: another binding on those keys stays with the text", () => {
+    const atStart = { tagName: "TEXTAREA", value: "draft", selectionStart: 0, selectionEnd: 0, selectionDirection: "none", classList: classes("composer-text") };
+    const event = { key: "Home", code: "Home", ctrlKey: false, metaKey: true, shiftKey: true, altKey: false, target: atStart };
+    const shortcut = matchShortcut(event, true, { palette: "Home" });
+    expect(shortcut).toBe("palette");
+    expect(keepsKeyForText(event, shortcut!)).toBe(true);
+    expect(keepsKeyForText(event, "previous-pane")).toBe(false);
   });
 });
 

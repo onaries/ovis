@@ -4,6 +4,7 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdt
 import { basename, dirname, join, resolve } from "node:path";
 import { CHECKOUT_CHANGED_REASON, noInstalledNotes, noUpdateNotes, unmanagedUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../shared/update.ts";
 import { compareVersions, releaseNotes, releaseSummaries, SUMMARIES_FILE } from "./release-notes.ts";
+import { releaseIn } from "./update-state.ts";
 
 export interface Release {
   directory: string; revision: string; source_revision: string;
@@ -214,10 +215,10 @@ export class Updater {
       if (!reason) {
         try {
           const saved = JSON.parse(readFileSync(join(this.options.stateDir, "current.json"), "utf8")) as Release;
-          // Only directories created by this updater may be resumed.
-          if (saved.source_revision === this.sourceRevision && SHA.test(saved.revision) &&
-              saved.directory.startsWith(join(this.options.stateDir, "release-")) &&
-              await runCommand(saved.directory, ["git", "rev-parse", "HEAD"]) === saved.revision) this.release = saved;
+          // Only directories created by this updater may be resumed, under this state dir's name for them.
+          const directory = saved.source_revision === this.sourceRevision && SHA.test(saved.revision)
+            ? releaseIn(this.options.stateDir, saved.directory) : null;
+          if (directory !== null && await runCommand(directory, ["git", "rev-parse", "HEAD"]) === saved.revision) this.release = { ...saved, directory };
         } catch { /* missing/stale release: use the source checkout */ }
       }
       this.installed = this.brought(this.release);
@@ -455,6 +456,8 @@ export class Updater {
         this.patch({ current_revision: revision, current_version: packageVersion(next.directory), available: false });
         this.failedRevision = null;
         rmSync(join(this.options.stateDir, "failed.json"), { force: true });
+        // every release held here is named under this state dir (initialize names a resumed one so), so a
+        // name kept is a directory kept, even where the release was recorded under another spelling (#2029)
         for (const entry of readdirSync(this.options.stateDir, { withFileTypes: true })) {
           const directory = join(this.options.stateDir, entry.name);
           if (entry.isDirectory() && entry.name.startsWith("release-") && directory !== next.directory && directory !== previous?.directory) {

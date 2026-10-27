@@ -14,6 +14,8 @@ import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { knownStatus, STATUS_WORD } from "./status.ts";
 import { t, type Vars } from "./i18n.ts";
 import type { ActiveTrigger } from "./mentions.ts";
+import { submitNotTyped } from "../../shared/submit-outcome.ts";
+export { submitNotTyped } from "../../shared/submit-outcome.ts";
 
 /** This cap keeps one composer message inside a single WS frame. */
 export const MAX_COMPOSER_CHARS = 20_000;
@@ -59,21 +61,6 @@ export function insertNote(code: string, message: string): string {
   if (["input_not_ready", "not_attached", "attach_held", "pane_read_failed"].includes(code)) return t("Not inserted: the terminal is not ready. Nothing was typed.");
   if (code === "disconnected" || code === "timeout" || code === "insert_failed") return t("Not confirmed: the terminal did not confirm the text. Check it before inserting again.");
   return t("Not inserted: {message}", { message });
-}
-
-/** Why a composer message did not go (SubmitResult's code): the composer keeps the text and says this. */
-/** The server refused the message before any of it reached the pane: nothing was typed. */
-export function submitNotTyped(code: string): boolean {
-  return ["agent_blocked", "read_only", "submit_timeout", "agent_not_ready", "pending_input_unsupported", "agent_queue_unsupported", "invalid_delivery", "invalid_submit_text",
-    "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "first_message_launch_ended", "pending_lease_lost", "not_attached", "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft",
-    // Claude Code's rewind dialog was on screen: nothing went into it
-    "rewind_dialog_open",
-    // refused by this view while the terminal holds input (PaneTerminal), before anything was sent
-    "held_input",
-    // the connection dropped before the request's frame left the browser (HerdrSocket)
-    "not_transmitted",
-    // the wait for the bridge's snapshot ended before it said what the bridge takes: nothing left (HerdrSocket)
-    "capabilities_unknown"].includes(code);
 }
 
 /**

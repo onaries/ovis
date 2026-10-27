@@ -172,40 +172,45 @@ interface TranscriptStream {
 
 // In-place rewrites keep the inode. Change the cursor generation when observed,
 // invalidating settled turns and incremental parsers as well as the response cache.
-const transcriptRevisions = new Map<string, { identity: string; size: number; changed: string; generation: string; window?: { from: number; digest: string } }>();
+const transcriptRevisions = new Map<string, { identity: string; size: number; changed: string; generation: string; window?: { start: number; end: number; digests: BigUint64Array } }>();
 function transcriptGeneration(path: string, stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }, checkWindow = false): string {
   const identity = `${stat.dev}:${stat.ino}`;
   const changed = `${stat.mtimeMs}:${stat.ctimeMs}`;
   const previous = transcriptRevisions.get(path);
   let rewritten = previous !== undefined && previous.identity === identity && (stat.size < previous.size || (stat.size === previous.size && changed !== previous.changed));
   // Muse: a rewrite that also grew keeps the inode and passes the checks above, so the window last
-  // read must still hold the bytes it held. ponytail: the last 16 MiB only, where the settled turns
-  // come from; hash the whole log if a rewrite further back matters.
+  // read must still hold the bytes it held. One read from its start checks it and digests the new
+  // window, each chunk once. A growth past the whole window shares no bytes with it, so it counts as
+  // a rewrite instead of a read of both. ponytail: the last 16 MiB only, where the settled turns
+  // come from; digest the whole log if a rewrite further back matters.
   let window = previous?.identity === identity ? previous.window : undefined;
   if (checkWindow && (window === undefined || stat.size !== previous!.size || changed !== previous!.changed)) {
-    if (!rewritten && window !== undefined && windowDigest(path, window.from, previous!.size) !== window.digest) rewritten = true;
-    const from = Math.max(0, stat.size - TRANSCRIPT_WINDOW_BYTES);
-    window = { from, digest: windowDigest(path, from, stat.size) };
+    // the chunk boundary at or before the last 16 MiB, so the newest page is checked from its first byte
+    const start = Math.max(0, Math.floor((stat.size - TRANSCRIPT_WINDOW_BYTES) / WINDOW_CHUNK_BYTES) * WINDOW_CHUNK_BYTES);
+    if (window !== undefined && window.end <= start) rewritten = true;
+    const check = rewritten ? undefined : window;
+    const from = check?.start ?? start;
+    const bytes = windowBytes(path, from, stat.size);
+    const digests = bytes && chunkDigests(bytes);
+    if (check && (!digests || !sameOverlap(check, from, bytes!, digests))) rewritten = true;
+    // an empty log keeps no window: it has no bytes to check
+    const kept = digests?.slice((start - from) / WINDOW_CHUNK_BYTES);
+    window = kept?.length ? { start, end: stat.size, digests: kept } : undefined;
   }
   const generation = rewritten ? randomUUID() : previous?.identity === identity ? previous.generation : "";
   remember(transcriptRevisions, path, { identity, size: stat.size, changed, generation, window }, 64);
   return generation ? `-${generation}` : "";
 }
 
-/** A digest of bytes `from` to `to` of a file; empty when they cannot all be read. */
-function windowDigest(path: string, from: number, to: number): string {
-  let fd: number;
-  try { fd = openSync(path, "r"); } catch { return ""; }
+/** Bytes `from` to `to` of a file, or null when they cannot all be read. */
+function windowBytes(path: string, from: number, to: number): Buffer | null {
   try {
-    const hash = createHash("sha256");
-    const chunk = Buffer.alloc(Math.min(1024 * 1024, Math.max(1, to - from)));
-    for (let at = from, got = 0; at < to; at += got) {
-      got = readSync(fd, chunk, 0, Math.min(chunk.length, to - at), at);
-      if (got === 0) return "";
-      hash.update(chunk.subarray(0, got));
-    }
-    return hash.digest("hex");
-  } catch { return ""; } finally { closeSync(fd); }
+    const fd = openSync(path, "r");
+    try {
+      const bytes = Buffer.allocUnsafe(to - from);
+      return readSync(fd, bytes, 0, bytes.length, from) === bytes.length ? bytes : null;
+    } finally { closeSync(fd); }
+  } catch { return null; }
 }
 
 function transcriptStream(source: StreamSource, path: string, stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }, codexHome: string, agy?: AgyProjection, fd?: number): TranscriptStream {

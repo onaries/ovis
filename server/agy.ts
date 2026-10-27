@@ -65,7 +65,10 @@ export function agyCatalog(path: string, beforeOpen?: () => void): Set<number> {
       // Match the ledger's 32 MiB byte budget: 100,000 integer indices need
       // under 1 MiB; larger payload-heavy stores should fall back, not be copied per poll.
       if (snapshotFiles.reduce((bytes, file) => bytes + file.stat.size, 0n) > BigInt(SCAN_BYTES)) throw new AgyUnavailable();
+      // macOS: tmpdir() is under the /var symlink, which SQLITE_OPEN_NOFOLLOW refuses
+      // (assigned before resolving, so a failed realpath still removes the directory)
       snapshot = mkdtempSync(join(tmpdir(), "ovis-agy-catalog-"));
+      snapshot = realpathSync(snapshot);
       name = join(snapshot, "catalog.db");
       for (const [index, file] of snapshotFiles.entries()) {
         const target = openSync(index === 0 ? name : `${name}-wal`, "wx", 0o600);

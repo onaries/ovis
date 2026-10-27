@@ -240,4 +240,16 @@ describe("sidebarFilter", () => {
     expect(suggested.some((label) => label.includes("/home") || label.includes("/srv") || label.includes(":p"))).toBe(false);
     expect(roster).toEqual(machines());
   });
+
+  it("neither searches nor suggests the name of a PC drawn without its header", () => {
+    const lone = machines().slice(0, 1);
+    const unnamed = new Set(["local"]);
+    const byName = sidebarFilter("laptop", lone, nobody, t, new Map(), unnamed);
+    expect(machineFilter(byName, "local")!.matched).toBe(false);
+    expect(byName.matches).toBe(0);
+    // its rows are still found by their own names
+    expect(sorted(machineFilter(sidebarFilter("docs", lone, nobody, t, new Map(), unnamed), "local")!.matchedWorkspaces)).toEqual(["docs"]);
+    expect(filterSuggestions(lone, new Map(), unnamed)).not.toContain("Laptop");
+    expect(filterSuggestions(lone)).toContain("Laptop");
+  });
 });

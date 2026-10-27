@@ -1,20 +1,23 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneCommands } from "../commands.ts";
-import { ancestorsToRepoRoot, createWalkBudget, customCommands, customCommandSteps, readFrontmatter, walkSkills, walkSkillSteps } from "./walk.ts";
+import { userHome, ancestorsToRepoRoot, createWalkBudget, customCommands, customCommandSteps, readFrontmatter, walkSkills, walkSkillSteps } from "./walk.ts";
 import { source as claude } from "./claude.ts";
 import { source as devin } from "./devin.ts";
 import type { WalkRules } from "./walk.ts";
 
 const roots: string[] = [];
 const previousHome = process.env.HOME;
+const previousUserProfile = process.env.USERPROFILE;
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
+  if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = previousUserProfile;
 });
 function temp(): string {
   const root = mkdtempSync(join(tmpdir(), "skill-walk-"));
@@ -293,4 +296,24 @@ describe("repository ancestors", () => {
     expect(ancestorsToRepoRoot(home)).toEqual([]);
     expect(ancestorsToRepoRoot(join(home, ".."))).toEqual([]);
   });
+
+  it("finds the user's home without HOME, as native Windows starts it", () => {
+    expect(userHome({ HOME: "/home/user", USERPROFILE: "C:\\Users\\user" }, "win32")).toBe("/home/user");
+    expect(userHome({ HOME: "", USERPROFILE: "C:\\Users\\user" }, "win32")).toBe("C:\\Users\\user");
+    expect(userHome({}, "win32")).toBe(homedir());
+    expect(userHome({}, "linux")).toBe("");
+  });
+
+  it("falls back to USERPROFILE when HOME is unset", () => {
+    const home = temp();
+    delete process.env.HOME;
+    process.env.USERPROFILE = home;
+    const repo = join(home, "repo");
+    const cwd = join(repo, "sub");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(join(repo, ".git"));
+    expect(ancestorsToRepoRoot(cwd)).toEqual([cwd, repo]);
+    expect(ancestorsToRepoRoot(home)).toEqual([]);
+  });
+
 });

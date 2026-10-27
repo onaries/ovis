@@ -52,3 +52,11 @@ it("decodes literal commands without executing the script and preserves patch su
   expect(parse(`await tools.apply_patch(${JSON.stringify(patch)}); await tools.exec_command({cmd:"bun test"});`)).toMatchObject({ summary: "src/a.ts" });
   expect(parse('await tools.exec_command({cmd:"bun test"}); await tools.view_image({path:file});')).toMatchObject({ summary: "bun test" });
 });
+
+it("shows the edited file when a code-mode patch is passed by constant", () => {
+  const patch = "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch";
+  const part = parse(`const patch = ${JSON.stringify(patch)}; text(await tools.apply_patch(patch));`);
+  expect(part).toMatchObject({ name: "exec", summary: "src/a.ts" });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(toolVerb(part, part.summary)).toBe("Edited");
+});

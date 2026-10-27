@@ -1,4 +1,98 @@
 {
+  "0.4.19": {
+    "en": {
+      "new": [
+        "Update a PC's own older Ovis right from its card in this app.",
+        "Antigravity chat works on Windows.",
+        "Chat shows pictures from omp sessions and Codex tools.",
+        "OpenCode subagents show as background tasks, as Claude Code's do.",
+        "Settings can revoke every paired device at once."
+      ],
+      "improved": [
+        "Korean in the terminal uses a coding font that matches the Latin.",
+        "With only the Host shown, the sidebar starts with its workspaces.",
+        "The phone key bar can show or hide the keyboard in the terminal.",
+        "Queued or held messages can be edited back in the message box.",
+        "A device whose push alerts stopped is told why and can fix it."
+      ],
+      "fixed": [
+        "Chat shows an agent's words and tools in the order it wrote them.",
+        "A PC whose own Ovis restarts reconnects to it by itself.",
+        "Updates stay installed when your home folder is a symlink.",
+        "Connecting a remote PC from Windows no longer hangs.",
+        "Voice input in the Android and iOS apps can use the microphone."
+      ]
+    },
+    "ko": {
+      "new": [
+        "PC의 오래된 Ovis를 이 앱의 PC 카드에서 바로 업데이트합니다.",
+        "Windows에서도 Antigravity 채팅을 씁니다.",
+        "채팅에서 omp 세션과 Codex 도구의 그림을 보여 줍니다.",
+        "OpenCode 하위 에이전트가 Claude Code처럼 백그라운드 작업으로 보입니다.",
+        "설정에서 페어링된 기기를 한 번에 모두 폐기할 수 있습니다."
+      ],
+      "improved": [
+        "터미널의 한글이 영문과 어울리는 코딩 글꼴로 보입니다.",
+        "호스트만 보일 때는 사이드바가 머리글 없이 작업 공간부터 보여 줍니다.",
+        "휴대폰 키 바에서 터미널 키보드를 보이거나 숨길 수 있습니다.",
+        "대기 중이거나 보류된 메시지를 입력창으로 되돌려 고칠 수 있습니다.",
+        "푸시 알림이 끊긴 기기에 그 이유를 알리고 다시 켤 수 있게 합니다."
+      ],
+      "fixed": [
+        "채팅이 에이전트가 쓴 순서대로 글과 도구를 보여 줍니다.",
+        "PC의 Ovis가 다시 시작되면 저절로 다시 연결됩니다.",
+        "홈 폴더가 심볼릭 링크여도 업데이트가 그대로 유지됩니다.",
+        "Windows에서 원격 PC에 연결할 때 더 이상 멈추지 않습니다.",
+        "Android와 iOS 앱의 음성 입력이 마이크를 쓸 수 있습니다."
+      ]
+    },
+    "ja": {
+      "new": [
+        "PC の古い Ovis を、このアプリの PC カードからそのまま更新できます。",
+        "Windows でも Antigravity のチャットが使えます。",
+        "チャットで omp セッションと Codex ツールの画像を表示します。",
+        "OpenCode のサブエージェントが Claude Code と同じくバックグラウンドタスクとして表示されます。",
+        "設定から、ペアリングしたデバイスをまとめて取り消せます。"
+      ],
+      "improved": [
+        "ターミナルの韓国語が、英字に合うコーディング用フォントで表示されます。",
+        "ホストだけが表示されているときは、サイドバーが見出しなしでワークスペースから始まります。",
+        "スマホのキーバーで、ターミナルのキーボードを表示・非表示にできます。",
+        "待機中や保留中のメッセージを入力欄に戻して編集できます。",
+        "プッシュ通知が止まったデバイスに理由を伝え、再びオンにできます。"
+      ],
+      "fixed": [
+        "チャットが、エージェントが書いた順に文章とツールを表示します。",
+        "PC の Ovis が再起動しても、自動で再接続します。",
+        "ホームフォルダーがシンボリックリンクでも、更新がそのまま保たれます。",
+        "Windows からリモート PC に接続しても止まらなくなりました。",
+        "Android と iOS アプリの音声入力がマイクを使えます。"
+      ]
+    },
+    "zh": {
+      "new": [
+        "可以直接在本应用的电脑卡片上更新该电脑上较旧的 Ovis。",
+        "Windows 上也能使用 Antigravity 聊天。",
+        "聊天会显示 omp 会话和 Codex 工具中的图片。",
+        "OpenCode 子代理像 Claude Code 的一样显示为后台任务。",
+        "设置中可以一次撤销所有已配对的设备。"
+      ],
+      "improved": [
+        "终端里的韩文使用与英文相配的编程字体显示。",
+        "只显示主机时，侧边栏不再显示标题，直接列出工作区。",
+        "手机键栏可以在终端里显示或隐藏键盘。",
+        "排队或暂存的消息可以放回输入框中编辑。",
+        "推送通知停止的设备会被告知原因，并可重新开启。"
+      ],
+      "fixed": [
+        "聊天按代理书写的顺序显示文字和工具。",
+        "电脑上的 Ovis 重启后会自动重新连接。",
+        "主文件夹是符号链接时，更新也会保持安装。",
+        "从 Windows 连接远程电脑不再卡住。",
+        "Android 和 iOS 应用的语音输入可以使用麦克风。"
+      ]
+    }
+  },
   "0.4.18": {
     "en": {
       "new": [

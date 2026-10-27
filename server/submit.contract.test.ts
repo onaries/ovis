@@ -250,6 +250,7 @@ describe("WebSocket submit", () => {
     const { read, scroll } = mockClaudeInput(target.pane, codexWorkingScreen
       .replace("esc to interrupt)", "esc to interrupt) · 1 background termin…")
       .replace(" high ·", " high fast ·")
+      .replace("GPT-6.1-Sol", extended ? "GPT-6.1 Terra" : "GPT-6.1-Sol")
       + "  ← for agents · ? for shor  ⚠ 3 warnings · f2 to view\n");
     const key = extended ? "\u001b[9u" : "\t";
     const prompt = spyOn(herdr, "agentPrompt");

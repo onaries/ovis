@@ -25,6 +25,7 @@ describe("turnChangedFiles", () => {
     const patch = "*** Begin Patch\n*** Update File: old.ts\n*** Move to: new.ts\n@@\n-a\n+b\n*** Add File: added.ts\n+x\n*** Delete File: deleted.ts\n*** End Patch";
     expect(turnChangedFiles([tool("apply_patch", patch)])).toEqual(["old.ts", "added.ts", "deleted.ts", "new.ts"]);
     expect(turnChangedFiles([tool("exec", `await tools.apply_patch(${JSON.stringify(patch)})`)])).toEqual(["old.ts", "added.ts", "deleted.ts", "new.ts"]);
+    expect(turnChangedFiles([tool("exec", `const patch = ${JSON.stringify(patch)}; text(await tools.apply_patch(patch));`)])).toEqual(["old.ts", "added.ts", "deleted.ts", "new.ts"]);
     expect(turnChangedFiles([tool("apply_patch", JSON.stringify({ patch }))])).toEqual(["old.ts", "added.ts", "deleted.ts", "new.ts"]);
   });
 

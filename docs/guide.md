@@ -358,6 +358,12 @@ On a phone:
   pane is open. It is off by default, releases when the app is hidden, and resumes when
   you return. It needs HTTPS or localhost and browser support; power-saving mode may refuse it.
 
+On an iPad with a hardware keyboard (a Magic Keyboard, say), the small bar that rises from the
+bottom when a field gets the focus (language, arrows, dictation) is iPadOS's shortcuts bar for
+hardware keyboards. It covers the composer, and iPadOS then scrolls the whole page to reveal the
+field on every tap and keystroke. Turn it off with **Settings → General → Keyboard → Shortcuts**;
+the keyboard's globe key still switches languages.
+
 On a computer, install the app from `http://127.0.0.1:7317`. When the app runs on a PC you reach over SSH, tunnel to it first with `ssh -L 7317:127.0.0.1:7317 <this-pc>` and open that address on your own computer; the installer prints this line when you install over SSH.
 
 A plain HTTP LAN address also works in the browser, but it can't install the app or receive push.

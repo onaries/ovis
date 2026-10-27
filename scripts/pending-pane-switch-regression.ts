@@ -63,9 +63,16 @@ try {
   const statuses = new Map<string, string>();
   let admit = true;
   let routed: WebSocketRoute | undefined;
+  let holdDiscard = false, delayedDiscard: (() => void) | undefined;
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
     if (!admit) { void socket.close(); return; }
-    socket.connectToServer(); routed = socket;
+    const upstream = socket.connectToServer(); routed = socket;
+    socket.onMessage((data) => {
+      const frame = JSON.parse(String(data)) as ClientMessage;
+      if (holdDiscard && frame.type === "pending-action" && frame.action === "discard") {
+        delayedDiscard = () => upstream.send(data);
+      } else upstream.send(data);
+    });
   });
   page.on("websocket", (socket) => {
     sockets.push(socket);
@@ -160,6 +167,26 @@ try {
   console.log("PASS tab and workspace switches deliver queued messages once to the original pane without browser replay");
 
   await automatic(false);
+  {
+    await report("working");
+    const first = await queue("edit this exact row", "held");
+    const other = await queue("leave this other row", "held");
+    await composer().fill("@/tmp/attachment.png existing draft");
+    const actionAt = sent.length;
+    const row = rows().filter({ hasText: first.text });
+    await row.getByRole("button", { name: /^Edit queued message:/ }).click();
+    await row.waitFor({ state: "detached" });
+    await until(async () => await composer().inputValue() === "@/tmp/attachment.png existing draft\n\nedit this exact row", "Edit joins the existing draft");
+    assert.equal(await composer().evaluate((element) => element === document.activeElement), true, "Edit restores composer focus");
+    assert.equal(await rows().filter({ hasText: other.text }).count(), 1, "Edit keeps other queued IDs");
+    const actions = sent.slice(actionAt).filter(({ frame }) => frame.type === "pending-action");
+    assert.deepEqual(actions.map(({ frame }) => frame.type === "pending-action" ? [frame.pending_id, frame.action] : []), [[first.id, "discard"]]);
+    await report("idle");
+    await noBytes(delivered, "Edit never sends or replays the withdrawn row");
+    await rows().filter({ hasText: other.text }).getByRole("button", { name: "Discard", exact: true }).click();
+    await composer().fill("");
+  }
+  console.log("PASS Edit withdraws one exact ID, preserves the existing draft and other rows, focuses composer and types nothing");
   for (const destination of ["tab", "workspace"] as const) {
     await report("working");
     const pending = await queue(`pending across ${destination}`, "held");
@@ -196,6 +223,24 @@ try {
   }
   console.log("PASS tab and workspace navigation retain pending ownership, release the old lease and permit one explicit Send now");
   await automatic(true);
+  {
+    await report("working");
+    const pending = await queue("delivery wins edit race");
+    await composer().fill("keep this draft");
+    holdDiscard = true;
+    const resultAt = received.length;
+    await rows().filter({ hasText: pending.text }).getByRole("button", { name: /^Edit queued message:/ }).click();
+    await until(() => delayedDiscard !== undefined, "the Edit withdrawal waits at the transport boundary");
+    await report("idle");
+    delivered += paste(pending.text);
+    await until(() => bytes() === delivered, "automatic delivery wins before withdrawal");
+    await rows().filter({ hasText: pending.text }).waitFor({ state: "detached" });
+    holdDiscard = false; delayedDiscard!(); delayedDiscard = undefined;
+    await until(() => received.slice(resultAt).some(({ frame }) => frame.type === "pending-result" && frame.pending_id === pending.id), "the raced withdrawal settles");
+    assert.equal(await composer().inputValue(), "keep this draft", "a replayed sent receipt cannot restore delivered text");
+    await composer().fill("");
+  }
+  console.log("PASS delivery winning the Edit race does not duplicate its text in the draft");
 
   // A held terminal draft blocks Send now on a server-owned row: the server pastes the text and
   // sends Enter, so keys left in the draft (or a partial line in the pty) would run with it.

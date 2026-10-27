@@ -4,8 +4,12 @@
  * default font and with the bundled "JetBrains Mono Web": a long composition (CDP
  * Input.imeSetComposition, as Gboard's voice typing sends one) leaves the page and the terminal host
  * at scroll 0, keeps xterm's composition box inside the grid, and the grid is the pane's width less
- * its padding and less than one cell. On the isolated test herdr; UI_EVIDENCE_DIR=<dir> keeps the
- * screenshots.
+ * its padding and less than one cell. The box keeps its newest character in view: a composition too
+ * long for the room right of the cursor moves left, and one wider than the grid shows its end. A
+ * Japanese composition from a cursor far along its row, longer than the room to the edge but
+ * narrower than the grid, is shown whole (an odd number of cells to the edge, where the old box cut
+ * a wide character in half). On the isolated test herdr; UI_EVIDENCE_DIR=<dir> keeps
+ * the screenshots.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -15,6 +19,27 @@ import type { Browser } from "playwright-core";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
 
+/** Where xterm's composition box and its first and last characters are drawn, in viewport px. */
+function compositionGlyphs(): { left: number; right: number; first: { left: number; right: number }; last: { left: number; right: number } } | null {
+  const view = document.querySelector(".composition-view.active");
+  const text = view?.firstChild;
+  if (!view || !text || text.nodeType !== Node.TEXT_NODE || !text.textContent) return null;
+  const glyph = (start: number, end: number): { left: number; right: number } => {
+    const range = document.createRange();
+    range.setStart(text, start);
+    range.setEnd(text, end);
+    const { left, right } = range.getBoundingClientRect();
+    return { left, right };
+  };
+  const length = text.textContent.length;
+  const box = view.getBoundingClientRect();
+  return { left: box.left, right: box.right, first: glyph(0, 1), last: glyph(length - 1, length) };
+}
+
+/**
+ * Composes in a pane of its own at each width, mode and font, then from a cursor far along a row,
+ * and checks that nothing scrolls sideways and the composition's newest characters stay in view.
+ */
 export async function checkTerminalComposition(browser: Browser, origin: string): Promise<void> {
   const out = process.env["UI_EVIDENCE_DIR"];
   if (out) mkdirSync(out, { recursive: true });
@@ -63,13 +88,46 @@ export async function checkTerminalComposition(browser: Browser, origin: string)
       assert.ok(after.docScroll <= after.inner, `${label}: the page does not grow sideways (${after.docScroll} > ${after.inner}; ${after.scrollers.join(", ")})`);
       assert.equal(after.scrollX, 0, `${label}: the page is not scrolled sideways`);
       assert.equal(view.host, 0, `${label}: the terminal is not pushed sideways (${view.host})`);
-      if (mode === "direct") assert.ok(view.right !== null && view.right <= view.screenRight + 1, `${label}: the composition stays inside the grid (${view.right} > ${view.screenRight})`);
+      if (mode === "direct") {
+        assert.ok(view.right !== null && view.right <= view.screenRight + 1, `${label}: the composition stays inside the grid (${view.right} > ${view.screenRight})`);
+        const glyphs = await page.evaluate(compositionGlyphs);
+        assert.ok(glyphs && glyphs.last.right <= glyphs.right + 1 && glyphs.last.left >= glyphs.left - 1, `${label}: the newest character is in view (${JSON.stringify(glyphs)})`);
+      }
       assert.ok(view.screen <= view.room + 0.5 && view.room - view.screen < Math.max(view.cell, 12), `${label}: the grid fills the pane and stays inside it (${view.screen} of ${view.room})`);
       console.log("ok", label);
       await cdp.send("Input.imeSetComposition", { text: "", selectionStart: 0, selectionEnd: 0 }).catch(() => {});
       await ctx.close();
     }
-    console.log("PASS a long composition never pushes the terminal sideways and the grid fills the pane, at 412 and 720, Input line and Direct typing, default and bundled font");
+    // a Japanese word from far along the row: too long for the room to the edge, short enough for the grid
+    await herdrRpc("pane.send_text", { pane_id: ws.root_pane.pane_id, text: "clear\r" });
+    await herdrRpc("pane.send_text", { pane_id: ws.root_pane.pane_id, text: "x".repeat(31) });
+    {
+      const ctx = await browser.newContext({ viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2.625, locale: "ja-JP" });
+      await ctx.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", terminalInputMode: "direct" })));
+      const page = await ctx.newPage();
+      await page.goto(`${origin}/?pane=${encodeURIComponent(ws.root_pane.pane_id)}`);
+      await page.locator(".xterm-rows").waitFor();
+      await page.waitForFunction(() => document.querySelector(".xterm-rows")?.textContent?.includes("x".repeat(31)) ?? false, null, { timeout: 15_000 });
+      const cdp = await ctx.newCDPSession(page);
+      await page.locator(".xterm-helper-textarea").focus();
+      const word = "あああああああああかさたなはまや";
+      for (let i = 1; i <= word.length; i++) await cdp.send("Input.imeSetComposition", { text: word.slice(0, i), selectionStart: i, selectionEnd: i });
+      await page.waitForFunction((text) => document.querySelector(".composition-view.active")?.textContent === text, word, { timeout: 10_000 });
+      const screen = await page.evaluate(() => {
+        const { left, right } = document.querySelector(".xterm-screen")!.getBoundingClientRect();
+        return { left, right, host: document.querySelector<HTMLElement>(".pane-terminal")!.scrollLeft };
+      });
+      const glyphs = await page.evaluate(compositionGlyphs);
+      if (out) await page.screenshot({ path: `${out}/composition-412-direct-japanese.png` });
+      const label = "412 direct Japanese after 31 typed characters";
+      assert.equal(screen.host, 0, `${label}: the terminal is not pushed sideways (${screen.host})`);
+      assert.ok(glyphs && glyphs.left >= screen.left - 1 && glyphs.right <= screen.right + 1, `${label}: the composition stays inside the grid (${JSON.stringify(glyphs)}, ${JSON.stringify(screen)})`);
+      assert.ok(glyphs.first.left >= glyphs.left - 1 && glyphs.last.right <= glyphs.right + 1, `${label}: the whole composition is in view (${JSON.stringify(glyphs)})`);
+      console.log("ok", label);
+      await cdp.send("Input.imeSetComposition", { text: "", selectionStart: 0, selectionEnd: 0 }).catch(() => {});
+      await ctx.close();
+    }
+    console.log("PASS a long composition never pushes the terminal sideways and the grid fills the pane, at 412 and 720, Input line and Direct typing, default and bundled font, and its newest characters stay in view");
   } finally {
     await workspaceClose(ws.workspace.workspace_id).catch(() => {});
     rmSync(root, { recursive: true, force: true });

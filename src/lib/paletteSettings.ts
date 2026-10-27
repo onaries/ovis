@@ -58,6 +58,7 @@ export function actionAliases(t: Translate): Readonly<Record<string, string>> {
     zoom: t("maximize fullscreen full screen focus"),
     view: t("lens chat terminal conversation"),
     sidebar: t("panel drawer hide show"),
+    "filter-sidebar": t("search find narrow sidebar"),
     theme: t("dark light mode appearance colors"),
     settings: t("preferences options config"),
     "add-pc": t("remote machine computer connect ssh"),

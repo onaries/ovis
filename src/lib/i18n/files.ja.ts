@@ -32,7 +32,6 @@ export const FILES_JA: Record<string, string> = {
   "Show the HTML file as": "HTML ファイルの表示",
   "Show the Markdown file as": "Markdown ファイルの表示",
   "Page": "ページ",
-  "Preview": "プレビュー",
   "Source": "ソース",
   "Too long to highlight": "長すぎるため構文ハイライトを省略しました",
   "Too long to preview": "長すぎるためプレビューを省略しました",

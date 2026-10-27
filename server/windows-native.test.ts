@@ -5,7 +5,7 @@
  * on the Windows runners of reusable CI and the remote-bundle workflow (#271).
  */
 import { expect, it } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,8 +20,53 @@ import { windowsHost } from "./remote-host.ts";
 import type { SshConnection } from "./ssh.ts";
 import { psQuote } from "./powershell.ts";
 import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+import { isAgyProcessName, windowsHolders } from "./agy-store.ts";
+import { ancestorsToRepoRoot } from "./skills/walk.ts";
 
 const onWindows = process.platform === "win32";
+
+it.skipIf(!onWindows)("stops skill discovery at the user's home whatever its letter case", () => {
+  const home = mkdtempSync(join(tmpdir(), "herdr-home-case-"));
+  const before = process.env["HOME"];
+  try {
+    process.env["HOME"] = home.toLowerCase();
+    // home is itself a repository: a folder under it with no .git of its own must not reach it
+    mkdirSync(join(home, ".git"));
+    const cwd = join(home.toUpperCase(), "work", "sub");
+    mkdirSync(cwd, { recursive: true });
+    expect(ancestorsToRepoRoot(cwd)).toEqual([cwd]);
+    expect(ancestorsToRepoRoot(home.toUpperCase())).toEqual([]);
+  } finally {
+    if (before === undefined) delete process.env["HOME"]; else process.env["HOME"] = before;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(!onWindows)("finds this process holding an open file through Restart Manager, then observes its release", () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-agy-native-"));
+  const path = join(root, "conversation.lock");
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "w+");
+    expect(windowsHolders(path)).toContain(process.pid);
+    closeSync(fd);
+    fd = undefined;
+    const after = windowsHolders(path);
+    expect(after).not.toBeNull();
+    expect(after!).not.toContain(process.pid);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(!onWindows)("recognizes Windows Agy executable names and full paths regardless of letter case", () => {
+  expect(isAgyProcessName("agy.exe")).toBe(true);
+  expect(isAgyProcessName("AGY.ExE")).toBe(true);
+  expect(isAgyProcessName("C:\\Programs\\Antigravity\\AgY.eXe")).toBe(true);
+  expect(isAgyProcessName("c:\\PROGRAMS\\ANTIGRAVITY\\AGY.EXE")).toBe(true);
+  expect(isAgyProcessName("C:\\Programs\\agyx.exe")).toBe(false);
+});
 
 it.skipIf(!onWindows)("installs with native tar when PATH shadows tar, and preserves the runtime after bad extraction", async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "herdr-bundle-native-")));

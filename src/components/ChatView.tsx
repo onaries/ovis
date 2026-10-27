@@ -34,7 +34,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
-import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, todoGroups, visibleWorkParts, workFailed, workStartsOpen, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
+import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, turnSegments, type WorkSegment, todoGroups, visibleWorkParts, workFailed, workStartsOpen, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -708,17 +708,34 @@ function PendingWorkHead({ title, className = "" }: { title: string; className?:
   </div>;
 }
 
-function WorkBlockView({ paneId, parts, turnParts, rowKey, duration, live, waiting, defaultOpen, showThinking, pendingHead }: { paneId: string; parts: ConversationPart[]; turnParts: ConversationPart[]; rowKey: string; duration: string | null; live: boolean; waiting: boolean; defaultOpen: boolean; showThinking: boolean; pendingHead: boolean }) {
+/** What every work block of one turn reads, found once per turn rather than once per block. */
+interface TurnWork {
+  /** each part's index in the turn: rows are keyed and remembered by it, whichever block holds them */
+  at: ReadonlyMap<ConversationPart, number>;
+  /** runs of todo updates, found in the turn's own order before anything is hidden */
+  groups: ReadonlyMap<ToolPartType, TodoGroup>;
+  /** the updates a group row stands for, after its first */
+  grouped: ReadonlySet<ConversationPart>;
+}
+
+function turnWork(parts: ConversationPart[], rowKey: string): TurnWork {
+  const groups = todoGroups(parts, rowKey);
+  return {
+    at: new Map(parts.map((part, index) => [part, index])),
+    groups,
+    grouped: new Set([...groups.values()].flatMap((group) => group.attempts.slice(1).map((attempt) => attempt.part))),
+  };
+}
+
+function WorkBlockView({ paneId, parts, work, memoryKey, duration, live, waiting, defaultOpen, showThinking, pendingHead }: { paneId: string; parts: ConversationPart[]; work: TurnWork; memoryKey: string; duration: string | null; live: boolean; waiting: boolean; defaultOpen: boolean; showThinking: boolean; pendingHead: boolean }) {
   const t = useT();
-  const [chosenOpen, setOpen] = useChatRowToggle("work", null);
+  const [chosenOpen, setOpen] = useChatRowToggle(memoryKey, null);
   const open = chosenOpen ?? defaultOpen;
   // reading or working inside the block is a choice to keep it: the fold at the end of the turn
   // must not take the rows from under the reader's focus or close the row they opened
   const keepOpen = () => { if (chosenOpen === null) setOpen(true); };
-  // runs of todo updates, found in the turn's own order before anything is hidden
-  const groups = useMemo(() => todoGroups(turnParts, rowKey), [turnParts, rowKey]);
-  const grouped = new Set([...groups.values()].flatMap((group) => group.attempts.slice(1).map((attempt) => attempt.part)));
-  const toolKey = (part: ConversationPart) => `tool:${parts.indexOf(part)}`;
+  const { at, groups, grouped } = work;
+  const toolKey = (part: ConversationPart) => `tool:${at.get(part)}`;
   const images = useMemo(() => linePictures(parts), [parts]);
   const visible = visibleWorkParts(parts, showThinking);
   if (visible.length === 0) return live && !waiting && pendingHead ? <PendingWorkHead title={t("Working…")} /> : null;
@@ -740,11 +757,11 @@ function WorkBlockView({ paneId, parts, turnParts, rowKey, duration, live, waiti
     </div>
     {/* the rows open and fold at the block's measured height; folded and settled, they are not drawn */}
     <AnimatedHeight open={open} animateContent={false}>
-      <div className="work-block-rows" onFocus={keepOpen} onClick={keepOpen}>{visible.map((part, index) =>
-        part.kind === "thinking" ? <ThinkingRow key={index} stateKey={`thinking:${parts.indexOf(part)}`} text={part.text} />
-          : part.kind === "text" ? <div key={index} className="work-narration"><Markdown>{part.text}</Markdown></div>
+      <div className="work-block-rows" onFocus={keepOpen} onClick={keepOpen}>{visible.map((part) =>
+        part.kind === "thinking" ? <ThinkingRow key={`thinking:${at.get(part)}`} stateKey={`thinking:${at.get(part)}`} text={part.text} />
+          : part.kind === "text" ? <div key={`text:${at.get(part)}`} className="work-narration"><Markdown>{part.text}</Markdown></div>
             : part.kind === "tool" ? groups.has(part) ? <TodoGroupRow key={groups.get(part)!.id} paneId={paneId} group={groups.get(part)!} stateKeyOf={toolKey} />
-              : grouped.has(part) ? null : <WorkRow key={index} stateKey={toolKey(part)} paneId={paneId} part={part} /> : null)}
+              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} /> : null)}
         <TurnChangedFiles paneId={paneId} parts={parts} />
       </div>
     </AnimatedHeight>
@@ -1029,7 +1046,7 @@ function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPar
 }
 
 // a turn that did not change keeps its object across polls: skip re-rendering it
-const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, showThinking, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null }: TurnProps) {
+export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, showThinking, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null }: TurnProps) {
   const t = useT();
   // under the turn, not in its meta row: that row fades out once the pointer and focus leave
   const [copyFailed, setCopyFailed] = useChatRowToggle("copy-failed", false);
@@ -1089,15 +1106,36 @@ const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, showThink
       <SkillActivityList parts={turn.parts} />
     </article>;
   }
-  const { work, answer } = splitTurn(turn.parts);
+  const { answer } = splitTurn(turn.parts);
   const answerText = answer.map((part) => part.text).join("\n\n");
   const goal = turnGoal(turn.parts);
+  // in the agent's own order, as the terminal shows it: words written before a tool stay above it
+  const segments = turnSegments(turn.parts);
+  const runs = segments.filter((segment): segment is WorkSegment => segment.kind === "work");
+  // the turn's head is its last run that draws a row: it reads Working… while the turn runs and
+  // carries the turn's duration once it settles, even below the answer when tools came after it.
+  // The runs before it have the agent's words after them: they are done, read Worked and fold.
+  const head = runs.filter((run) => visibleWorkParts(run.parts, showThinking).length > 0).at(-1) ?? runs.at(-1);
+  const work = turnWork(turn.parts, rowKey);
+  // `null`: the head standing in while the running turn has no work yet
+  const block = (run: WorkSegment | null) => {
+    const isHead = run === null || run === head;
+    // a run is named by its first part, so it keeps its block and fold when an earlier run splits
+    // or grows; the stand-in by the part that will start the turn's first run, which takes its place
+    const key = `work:${run?.start ?? turn.parts.length}`;
+    return <WorkBlockView key={key} paneId={paneId} parts={run?.parts ?? []} work={work} memoryKey={key}
+      duration={isHead ? formatWorkDuration(turn.ts, turn.end_ts ?? null) : null} live={live && isHead} waiting={waiting && isHead}
+      // a settled turn folds its work, unless words the agent said last are in its final run
+      defaultOpen={(live && isHead) || (run !== null && run === segments.at(-1) && workStartsOpen(false, turn.parts))}
+      showThinking={showThinking} pendingHead={isHead && answer.length === 0} />;
+  };
   return <article className="chat-turn chat-turn-agent">
     <SkillActivityList parts={turn.parts} />
     {goal !== null && <GoalActivity goal={goal} />}
     {/* the pending head stands only above no answer: one above words would leave a gap when the turn ends */}
-    {(work.length > 0 || (live && answer.length === 0)) && <WorkBlockView paneId={paneId} parts={work} turnParts={turn.parts} rowKey={rowKey} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} pendingHead={answer.length === 0} />}
-    {answer.map((part, index) => <Markdown key={index} skills={skills}>{part.text}</Markdown>)}
+    {head === undefined && live && answer.length === 0 && block(null)}
+    {segments.map((segment) => segment.kind === "work" ? block(segment)
+      : segment.parts.map((part) => <Markdown key={`answer:${work.at.get(part)}`} skills={skills}>{part.text}</Markdown>))}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
       {/* a mouse reads one copy glyph and the words "Plain text"; touch reads the two formats */}
       <CopyButton className="chat-meta-btn" text={answerText} label={t("Copy as markdown")} onResult={copied}><span className="chat-meta-fmt">MD</span></CopyButton>
@@ -1218,6 +1256,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const [endPresentation, setEndPresentation] = useState<{ state: ChatState; key: string | undefined } | null>(null);
   const [prompt, setPrompt] = useState<InteractivePrompt | null>(null);
   const [compacting, setCompacting] = useState(false);
+  const [codexQueue, setCodexQueue] = useState<{ owner: string; previews: string[] } | null>(null);
   // Each prompt that appears is an occurrence of its own, and gets a card of its own. The prompt's
   // id is a hash of what it says, so the same question asked twice shares it. Navigation metadata
   // can change within an occurrence; only another id or a disappearance starts a new card.
@@ -1622,7 +1661,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const failedPromptReads = useRef(0);
   const pollPrompt = connected && !ended && agent !== null;
   useEffect(() => {
-    if (!pollPrompt) { setPrompt(null); setPromptStale(false); setCompacting(false); setCapacityErrorOwner(null); failedPromptReads.current = 0; setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
+    if (!pollPrompt) { setPrompt(null); setPromptStale(false); setCompacting(false); setCodexQueue(null); setCapacityErrorOwner(null); failedPromptReads.current = 0; setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
     if (!visible) return;
     let cancelled = false;
     let timer = 0;
@@ -1642,6 +1681,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
             return { ...current, steps: next.prompt.steps, can_step_back: next.prompt.can_step_back, own_text: next.prompt.own_text };
           });
           setCompacting(next.compacting);
+          setCodexQueue(next.codexQueue.length ? { owner: paneStorageId(machineId, paneId), previews: next.codexQueue } : null);
           setCapacityErrorOwner(next.runtimeError === "model_capacity" ? paneStorageId(machineId, paneId) : null);
           // unchanged outcomes keep their objects: the turns carrying them are not re-rendered
           setOutcomes((current) => JSON.stringify(current) === JSON.stringify(next.outcomes) ? current : next.outcomes);
@@ -1658,7 +1698,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       // the suggestion and the restored send stay as they are until the next read answers. Reads that
       // keep failing let the card say so (#1335): answering stays safe, the server re-reads first
       // a read the restart cancelled counts for neither side: the new poll's count is its own
-      catch { if (!cancelled) { failedPromptReads.current += 1; if (failedPromptReads.current >= PROMPT_STALE_READS) setPromptStale(true); } }
+      catch { if (!cancelled) { setCodexQueue(null); failedPromptReads.current += 1; if (failedPromptReads.current >= PROMPT_STALE_READS) setPromptStale(true); } }
       finally { if (!cancelled) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS); }
     };
     void readPrompt();
@@ -2165,6 +2205,10 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         {onOpenTerminal && <button type="button" className="btn chat-failure-retry" onClick={() => onOpenTerminal("")}>{t("Open Terminal")}</button>}
       </div>}
       {compacting && connected && !ended && <p className="chat-inline-state" role="status">{t("Compacting conversation…")}</p>}
+      {codexQueue?.owner === paneStorageId(machineId, paneId) && agent === "codex" && agentStatus === "working" && connected && !ended && <section className="chat-codex-queue" aria-label={`${t("Queued messages")} · Codex · ${t("Preview")}`}>
+        <p>{t("Queued messages")} · Codex · {t("Preview")}</p>
+        <ol>{codexQueue.previews.map((preview, index) => <li key={index}>{preview}</li>)}</ol>
+      </section>}
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
       {error !== null && !waiting && (errorStatus === 401
         ? <p className="chat-inline-state chat-inline-error" role="alert">{t("locked — the token gate is asking again")}</p>

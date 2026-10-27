@@ -1,8 +1,9 @@
-import { afterEach, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { afterEach, expect, it, spyOn } from "bun:test";
+import { existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HerdrProfileState } from "./herdr-profile-state.ts";
+import { privateStateFs } from "./private-state.ts";
 import type { SessionSnapshot } from "../shared/protocol.ts";
 
 const dirs: string[] = [];
@@ -79,4 +80,63 @@ it("retries a failed key removal when the old target returns, after a restart an
   expect(readded.approved("id", target)).toBe(false);
   readded.flush();
   expect(readFileSync(join(dir, "herdr-profile-state.json"), "utf8")).not.toContain("retiring");
+});
+it("sets aside approvals that are not JSON, bytes untouched, and starts without them", () => {
+  const dir = directory(), path = join(dir, "herdr-profile-state.json");
+  const zeros = Buffer.alloc(120);
+  writeFileSync(path, zeros);
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const store = new HerdrProfileState(dir);
+    expect(store.setAside).toMatch(/herdr-profile-state\.json\.corrupt-[^:]+$/);
+    expect(readFileSync(store.setAside!)).toEqual(zeros);
+    expect(existsSync(path)).toBe(false);
+    expect(store.approved("id", { destination: "BuildBox" })).toBe(false);
+    store.approve("id", { destination: "BuildBox" });
+    store.flush();
+    expect(new HerdrProfileState(dir).approved("id", { destination: "BuildBox" })).toBe(true);
+  } finally { error.mockRestore(); }
+});
+it("writes unchanged approvals again when their file was deleted or replaced on disk", () => {
+  const dir = directory(), path = join(dir, "herdr-profile-state.json");
+  const store = new HerdrProfileState(dir);
+  store.approve("id", { destination: "BuildBox" });
+  store.flush();
+  const saved = readFileSync(path, "utf8");
+  rmSync(path);
+  store.approve("id", { destination: "BuildBox" });
+  store.flush();
+  expect(readFileSync(path, "utf8")).toBe(saved);
+  writeFileSync(path, "[]");
+  store.approve("id", { destination: "BuildBox" });
+  store.flush();
+  expect(readFileSync(path, "utf8")).toBe(saved);
+  // the same length, other bytes
+  writeFileSync(path, saved.replace('"id"', '"xx"'));
+  store.approve("id", { destination: "BuildBox" });
+  store.flush();
+  expect(readFileSync(path, "utf8")).toBe(saved);
+});
+it("writes durably, and only when the document changed", () => {
+  const dir = directory();
+  const temporaries: string[] = [];
+  const open = spyOn(privateStateFs, "openSync").mockImplementation(((path: string, flags: string, mode?: number) => {
+    if (flags === "wx") temporaries.push(path);
+    return openSync(path, flags, mode);
+  }) as typeof openSync);
+  try {
+    const store = new HerdrProfileState(dir);
+    store.approve("id", { destination: "BuildBox" });
+    store.saveSnapshot("id", { panes: [{ pane_id: "test-pane" }] } as SessionSnapshot);
+    store.flush();
+    expect(temporaries).toHaveLength(1);
+    // every refresh brings a new snapshot object: the same panes write nothing
+    store.saveSnapshot("id", { panes: [{ pane_id: "test-pane" }] } as SessionSnapshot);
+    store.flush();
+    expect(temporaries).toHaveLength(1);
+    store.saveSnapshot("id", { panes: [{ pane_id: "other-pane" }] } as SessionSnapshot);
+    store.flush();
+    expect(temporaries).toHaveLength(2);
+    expect(new HerdrProfileState(dir).snapshot("id")?.panes[0]?.pane_id).toBe("other-pane");
+  } finally { open.mockRestore(); }
 });

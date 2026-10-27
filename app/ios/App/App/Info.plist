@@ -77,6 +77,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the QR code your PC shows under Settings, Phone &amp; devices.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Dictate messages and commands to your agents with voice input.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoadsInWebContent</key>

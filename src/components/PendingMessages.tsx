@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ArrowUp, Copy, ListEnd, X } from "lucide-react";
+import { ArrowUp, Copy, ListEnd, Pencil, X } from "lucide-react";
 import type { PendingMessageView } from "../lib/pendingMessages.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { openCodeRefusalNote, submitNote } from "../lib/compose.ts";
@@ -19,6 +19,7 @@ interface Props {
   isBusy: (id: string) => boolean;
   onSendNow: (id: string) => Promise<void>;
   onAgentQueue?: (id: string) => Promise<void>;
+  onEdit: (id: string) => Promise<void>;
   onDiscard: (id: string) => Promise<void>;
 }
 
@@ -41,7 +42,7 @@ export function pendingStatus(message: Pick<PendingMessageView, "state" | "error
 }
 
 /** Pending text is separate from the transcript; Send now acts on its ID, never on its text. */
-export function PendingMessages({ messages, active = true, connected, agent, blocked, inert = false, unsaved, isBusy, onSendNow, onAgentQueue, onDiscard }: Props) {
+export function PendingMessages({ messages, active = true, connected, agent, blocked, inert = false, unsaved, isBusy, onSendNow, onAgentQueue, onEdit, onDiscard }: Props) {
   const t = useT();
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -77,6 +78,15 @@ export function PendingMessages({ messages, active = true, connected, agent, blo
               const target = event.currentTarget, keyboard = event.detail === 0, stack = target.closest(".terminal-stack"), owner = stack?.getAttribute("data-pane-owner") ?? null;
               void onAgentQueue(message.id).finally(() => restoreFocus(keyboard, target, stack, owner));
             }}><ListEnd aria-hidden="true" /></button>}
+          {!uncertain && !sent && message.serverOwned && <button type="button" className="icon-button pending-message-action"
+            aria-label={`${t("Edit queued message")}: ${message.text}`} title={t("Edit queued message")}
+            disabled={busy || message.resendInFlight || message.serverOwned && !connected} onClick={(event) => {
+              const target = event.currentTarget, stack = target.closest(".terminal-stack"), owner = stack?.getAttribute("data-pane-owner");
+              void onEdit(message.id).then(() => {
+                if (activeRef.current && !target.isConnected && stack?.isConnected && stack.getAttribute("data-pane-owner") === owner)
+                  stack.querySelector<HTMLTextAreaElement>(".composer-text")?.focus({ preventScroll: true });
+              });
+            }}><Pencil aria-hidden="true" /></button>}
           {(uncertain || sent) && <button type="button" className="icon-button pending-message-action" aria-label={copied === message.id ? t("Copied") : t("Copy message")}
             title={t("Copy message")} onClick={(event) => {
               const text = event.currentTarget.closest(".pending-message")?.querySelector<HTMLElement>(".pending-message-bubble");

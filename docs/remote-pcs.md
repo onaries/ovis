@@ -91,6 +91,13 @@ The update path never takes over a terminal or stops herdr sessions.
 
 PC registrations and last snapshots persist in `<stateDir>/machines.json`; `OVIS_STATE_DIR` chooses the state directory. A disconnected PC retains its last roster with controls disabled. Retries back off from 1 second to 60 seconds. Other PCs keep working. Reconnection never changes a non-empty selection or sends held input. Composer drafts, held messages, terminal drafts, lenses, recent panes and notification identities include both machine and pane. Held messages have an explicit **Send now** action.
 
+A PC set up at another SSH address (destination, port or session) in its dialog moves there only once
+that setup connects. Until then, and after a setup there that is cancelled or fails, the PC keeps the
+address it had: `machines.json`, its reconnects and its updates that ask nobody use only that one, and
+it tries it again. Its card keeps its own panes, herdr version and update offer; what the setup finds
+at the new address is shown in its dialog only. Nothing of this app's is installed or started at the
+new address unless that setup's own approval allowed it.
+
 SSH commands ignore configured `LocalForward`, `RemoteForward` and `DynamicForward`
 tunnels. The app adds only its own loopback forward through the existing control socket, without
 rereading host config for that forwarding request. A Windows connection server has no control
@@ -106,9 +113,39 @@ The update runs on the server, not in a dialog: closing the dialog after approva
 
 A verified runtime is installed into a checksum-addressed directory before the selected managed bridge is restarted. Existing runtime directories remain available to other running bridges. The updater authenticates the old bridge and checks its socket, managed ownership and PID before stopping it. An approved replacement may have a different bridge protocol, but the new bridge must match the current protocol and bundle version before connecting; herdr itself is left running. A separately managed server must use its own update controls. The connection server's own app update (Settings → Updates) is separate from these bridge updates.
 
-An independently managed server is detected before downloading or installing a remote bundle and
-does not enter the automatic bridge-update queue. Update its app through its own Settings, then
-reconnect the PC here. On Windows, extraction always uses `%SystemRoot%\System32\tar.exe`, so Git
+An independently managed server is detected before downloading or installing a remote bundle, and
+nothing of this app's is ever installed over it or restarted in its place. When it is older than
+this app, the connection server asks it through the SSH tunnel how it updates (its own
+`GET /api/updates`, with the token its bridge descriptor holds). If it updates itself (a managed
+install, not blocked, with a newer release on offer that it installs by revision), the PC's card
+offers **Update this PC's Ovis to vX**, and with **Update PC bridges automatically** on it runs
+unasked. That update asks the server to install the exact release its own updater offers
+(`POST /api/updates/install`; a check for releases running there is waited out first, and no
+redirect is followed), shows its steps, waits up to 15 minutes for the new version's bridge to
+register, and then reconnects. An install that has not started within a minute fails with that
+reason. An update that fails is offered again, and the PC's card and the line under the header say
+that it failed, the card with why. One that ends on another version than this app's keeps where that
+server answers, with why it cannot be updated from here. A server older than this change takes
+these requests only as its own PC's: when it listens on that PC's loopback and has no `OVIS_TOKEN`.
+A server that cannot update itself (not started by
+its updater, a changed source checkout, an `OVIS_TOKEN` or paired-device gate this app cannot pass,
+a supervisor too old to install by revision, no newer release) keeps the message to update it through its own Settings, with the reason and where it
+answers: the HTTPS address it says Tailscale serves it at, or else its host and port to copy and open
+on that PC or through its own tailnet address. A server newer than this app is told to the user as
+an app update to install here, and it is not asked about its updates.
+
+While such a server is away (it restarts, updates itself, crashed, or its PC rebooted; a server that
+stops removes its bridge descriptor), the PC shows **Reconnecting…** with that reason and keeps
+retrying, as a PC that cannot be reached does, and reconnects once that server registers again. The
+connection server remembers, for the SSH address (destination, port and session) it learned it at,
+that a PC runs its own server, and while that server is away neither a reconnect nor an update that
+asks nobody installs or starts this app's bridge in its place; only a setup reviewed in its dialog
+may. A PC set up at another address in its dialog is not told by what the old one ran. An own
+update that ends on a version newer than this app's is told as an update of this app, as for any
+newer server. A remembered server that never comes
+back (a PC whose own Ovis was removed) is set up the same way, through **Reconnect / setup**.
+
+On Windows, extraction always uses `%SystemRoot%\System32\tar.exe`, so Git
 or MSYS tools earlier on PATH cannot reinterpret the archive's drive-letter path.
 
 ## Building and distributing runtimes

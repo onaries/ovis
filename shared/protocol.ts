@@ -668,6 +668,8 @@ export interface PanePromptResponse {
   compacting?: boolean;
   /** A live Codex failure that its native transcript does not record. */
   runtime_error?: "model_capacity";
+  /** Codex's on-screen queue previews; text may be truncated by the terminal. */
+  codex_queue_preview?: string[];
 }
 
 /**
@@ -820,7 +822,7 @@ export interface PendingMessage {
 
 export type ClientMessage =
   /** keep_size: the grid is covered (the chat lens), so the attach leaves the shared pty's size as it is */
-  | { type: "attach"; pane_id: string; cols: number; rows: number; flow_control?: "ack"; keep_size?: boolean }
+  | { type: "attach"; pane_id: string; cols: number; rows: number; flow_control?: "ack"; keep_size?: boolean; /** Opaque browser UUID for device-bound Pi presentation receipts only; never input authority. */ receipt_resume_id?: string }
   | { type: "detach"; pane_id: string }
   /** Native invalidations require "conversation-watch" and an attachment; observers may subscribe.
    * Detaching clears interest, so reconnect/reattach must enable it again. REST remains authoritative. */
@@ -863,14 +865,19 @@ export type ClientMessage =
    * `clear_draft`.
    * `resend_id`: stable held-copy ID for immediate or native-queue chat resends across connections; the bridge
    * shares the first outcome for 60 seconds after settlement. `resend_generation` defaults to 0;
-   * only a definitive no-input refusal permits the next attempt generation. Not with `send_anyway`:
+   * only a definitive no-input refusal permits the next attempt generation. A retained withdrawal
+   * overrides every generation with `pending_discarded`; the client drops that exact saved copy.
+   * Older clients treat this unknown refusal as uncertain and retain non-resendable text.
+   * A retained ambiguous resend or dismissed uncertain row refuses new attempts with
+   * `pending_uncertain`, including other generations of the same stable ID.
+   * Not with `send_anyway`:
    * that combination returns invalid_delivery before reserving or replaying an ID. No `clear_draft`.
    * Older peers ignore it. */
   | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; delivery?: "immediate" | "queue" | "hold" | "agent-queue"; clear_draft?: string; send_anyway?: true; resend_id?: string; resend_generation?: number }
   /** `agent-queue` requires "pending-agent-queue": transfers this same bridge ID with
    * paste + Ctrl+Q (OmO) or Tab (working Codex, "codex-agent-queue"). Success removes it as sent without opening a turn gate; a failure keeps it
    * held, or uncertain if input may have reached the terminal. The receipt proves key delivery. */
-  | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard" | "agent-queue"; resend_generation?: number; launch_ended?: true }
+  | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard" | "agent-queue"; resend_generation?: number; launch_ended?: true; withdrawal_only?: true }
   /** the terminal's input line typed into the pane without Enter (feature "terminal-insert"), answered
    * with an insert-result of the same id once herdr has the bytes. `text` is one line of the draft,
    * as written: a line break is refused (`unsafe_multiline`), since nothing reports whether the pane's
@@ -974,8 +981,10 @@ export type ServerMessage =
    * took or ran them; a refusal names why and nothing was typed, except `insert_failed`, whose bytes
    * may or may not have arrived. Older bridges never send it. */
   | { type: "insert-result"; id: number; pane_id: string; ok: boolean; code?: string; message?: string }
-  /** Owner-only receipt and state; only an explicit removed outcome permits deleting a retained client message. */
-  | { type: "pending-messages"; pane_id: string; messages: PendingMessage[]; removed?: Array<{ id: string; outcome: "sent" | "discarded" | "consumed" }> }
+  /** Owner-only receipt and state; only an explicit removed outcome permits deleting a retained client message.
+   * `dismissed` removes an uncertain copy, never proves withdrawal or delivery. Existing clients
+   * remove owned IDs for any explicit outcome; Edit restores only `discarded`. */
+  | { type: "pending-messages"; pane_id: string; messages: PendingMessage[]; removed?: Array<{ id: string; outcome: "sent" | "discarded" | "consumed" | "dismissed" }> }
   | { type: "secret-result"; id: number; pane_id: string; ok: boolean; code?: string }
   /** agent-status push for ANY pane, attached or not (server-side status collector) */
   | { type: "pane-status"; pane_id: string; agent_status: AgentStatus; finish_id?: number; finish_epoch?: string; /** a pane's running background tasks (OmO's, or a Claude Code pane's subagents and commands), when the frame is about them: it changes no status */ background_tasks?: number; /** every frame says it: absent, the pane does not wait on its turn's background work */ background_wait?: true; /** a pane's plan, when the frame is about it (null: it keeps none now); it changes no status */ plan?: PlanSummary | null }
