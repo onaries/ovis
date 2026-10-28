@@ -11,6 +11,7 @@ import "./ChatView.css";
 import "./ChatTimeline.css";
 
 import { AgentMark } from "./AgentMark.tsx";
+import { CapacityRetry } from "./CapacityRetry.tsx";
 import { AnimatedHeight } from "./AnimatedHeight.tsx";
 import { ChatDiffContext, TurnChangedFiles } from "./TurnChangedFiles.tsx";
 import type { RepoDiffTarget } from "../lib/repoDiff.ts";
@@ -144,6 +145,7 @@ const PROMPT_STALE_READS = 2;
 const LOAD_OLDER_PX = 400;
 
 export interface ChatViewProps {
+  onCapacityRetry?: () => Promise<boolean>;
   /** A fresh successful read for this displayed finish may acknowledge it. */
   presentationKey?: string;
   finishEpoch?: string;
@@ -1235,7 +1237,7 @@ function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolea
 }
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, localSend, navigation, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, onRewindInTerminal, onOpenDiff, cwd = null }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, localSend, navigation, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, onRewindInTerminal, onOpenDiff, onCapacityRetry, cwd = null }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -2270,6 +2272,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         <span className="chat-failure-line">{t("Selected model is at capacity. Please try a different model.")}</span>
         {onOpenTerminal && <button type="button" className="btn chat-failure-retry" onClick={() => onOpenTerminal("")}>{t("Open Terminal")}</button>}
       </div>}
+      {onCapacityRetry && agent === "codex" && <CapacityRetry key={`${paneStorageId(machineId, paneId)}:${historyId}`} failed={modelCapacity} allowed={active && visible && connected && !ended && interactive && !covered && !promptStale} onRetry={onCapacityRetry} />}
       {compacting && connected && !ended && <p className="chat-inline-state" role="status">{t("Compacting conversation…")}</p>}
       {codexQueue?.owner === paneStorageId(machineId, paneId) && agent === "codex" && agentStatus === "working" && connected && !ended && <section className="chat-codex-queue" aria-label={`${t("Queued messages")} · Codex · ${t("Preview")}`}>
         <p>{t("Queued messages")} · Codex · {t("Preview")}</p>

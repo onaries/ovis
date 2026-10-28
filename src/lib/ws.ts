@@ -882,7 +882,7 @@ export class HerdrSocket {
   /** `typed`: from the terminal's input line, typed into the pane like the keyboard (see ClientMessage).
    * `clearDraft`: an immediate send over the draft an input_draft refusal named (ClientMessage `clear_draft`)
    * `sendAnyway`: an immediate send after a refusal that showed the box (ClientMessage `send_anyway`) */
-  submit(paneId: string, text: string, payload: string, typed = false, delivery: SubmitDelivery = "immediate", clearDraft?: string, sendAnyway = false, resendId?: string, generation?: number): Promise<SubmitResult> | null {
+  submit(paneId: string, text: string, payload: string, typed = false, delivery: SubmitDelivery = "immediate", clearDraft?: string, sendAnyway = false, resendId?: string, generation?: number, capacityRetry = false): Promise<SubmitResult> | null {
     const socket = this.socket;
     if (!this.connected || socket === null || this.mode === "observe") return null;
     if (resendId !== undefined && sendAnyway) return Promise.resolve({ ok: false, code: "invalid_delivery", message: "Use a held-copy resend id only for an immediate chat message" });
@@ -894,6 +894,7 @@ export class HerdrSocket {
       // the wait ended before the snapshot said what this bridge takes: one that takes `submit` would get the
       // message as raw typed input, past every check it makes before typing (#1591), so nothing is sent
       if (!this.snapshotKnown) return CAPABILITIES_UNKNOWN;
+      if (capacityRetry && (!this.features.has("submit") || !this.features.has("codex-capacity-retry"))) return { ok: false, code: "unsupported", message: "Update this PC before enabling automatic capacity retries. Nothing was sent." };
       if (delivery === "agent-queue" && (!this.features.has("submit") || !this.features.has("agent-queue"))) {
         return { ok: false, code: "agent_queue_unsupported", message: "Update this PC to use the agent's native queue. Nothing was sent." };
       }
@@ -907,6 +908,7 @@ export class HerdrSocket {
       }
       const id = this.nextSubmit++;
       return this.submitRequest({ type: "submit", id, pane_id: paneId, text, payload, ...(typed ? { typed: true } : {}), ...(delivery !== "immediate" ? { delivery } : {}),
+        ...(capacityRetry ? { capacity_retry: true as const } : {}),
         ...(clearDraft !== undefined ? { clear_draft: clearDraft } : {}), ...(sendAnyway ? { send_anyway: true as const } : {}), ...(resendId !== undefined ? { resend_id: resendId, resend_generation: generation ?? 0 } : {}) });
     })();
   }

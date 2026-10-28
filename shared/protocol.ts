@@ -879,7 +879,7 @@ export type ClientMessage =
    * Not with `send_anyway`:
    * that combination returns invalid_delivery before reserving or replaying an ID. No `clear_draft`.
    * Older peers ignore it. */
-  | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; delivery?: "immediate" | "queue" | "hold" | "agent-queue"; clear_draft?: string; send_anyway?: true; resend_id?: string; resend_generation?: number }
+  | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; delivery?: "immediate" | "queue" | "hold" | "agent-queue"; clear_draft?: string; send_anyway?: true; resend_id?: string; resend_generation?: number; capacity_retry?: true }
   /** `agent-queue` requires "pending-agent-queue": transfers this same bridge ID with
    * paste + Ctrl+Q (OmO) or Tab (working Codex, "codex-agent-queue"). Success removes it as sent without opening a turn gate; a failure keeps it
    * held, or uncertain if input may have reached the terminal. The receipt proves key delivery. */
@@ -951,7 +951,7 @@ export interface ClientConnectionTrace {
 }
 
 /** What a server supports beyond the base protocol, listed in its first snapshot; older bridges list nothing. */
-export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "agent-queue" | "pending-agent-queue" | "codex-agent-queue" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping" | "terminal-insert";
+export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "agent-queue" | "pending-agent-queue" | "codex-agent-queue" | "codex-capacity-retry" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping" | "terminal-insert";
 
 export type ServerMessage =
   /** `connection`: this socket's id on the PC, for a create request's `first_message_connection`; older bridges send none */

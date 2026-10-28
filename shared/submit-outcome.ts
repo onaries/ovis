@@ -1,7 +1,7 @@
 /** The server refused the message before any of it reached the pane: nothing was typed.
  * Unknown failures are ambiguous on both sides of a held-copy resend. */
 export function submitNotTyped(code: string): boolean {
-  return ["agent_blocked", "read_only", "submit_timeout", "agent_not_ready", "pending_input_unsupported", "agent_queue_unsupported", "invalid_delivery", "invalid_submit_text",
+  return ["agent_blocked", "read_only", "submit_timeout", "agent_not_ready", "capacity_retry_stopped", "pending_input_unsupported", "agent_queue_unsupported", "invalid_delivery", "invalid_submit_text",
     "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "first_message_launch_ended", "pending_lease_lost", "not_attached", "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft",
     // Claude Code's rewind dialog was on screen: nothing went into it
     "rewind_dialog_open",

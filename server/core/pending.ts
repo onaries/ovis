@@ -26,7 +26,8 @@ import { typingGuards } from "../input-guard.ts";
 import { claudeForegroundSession } from "../claude-store.ts";
 import { HerdrError, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
 import { paneRunsCodex } from "../codex.ts";
-import { bindCommandProcess, claudeHeldIsGrey, codexQuestionsCollapsed, codexQueueInputEmpty, viewportShowsLive, isClaudeHeld, heldCandidate, noteSubmitted, parseInteractivePrompt, prepareCommandSend, shownInputBox } from "../prompt.ts";
+import { bindCommandProcess, claudeHeldIsGrey, codexInputEmpty, codexQuestionsCollapsed, codexQueueInputEmpty, viewportShowsLive, isClaudeHeld, heldCandidate, noteSubmitted, parseInteractivePrompt, prepareCommandSend, shownInputBox } from "../prompt.ts";
+import { codexRuntimeError } from "../dialogs/codex.ts";
 import { registry } from "../dialogs/registry.ts";
 import { paneRunsOmo } from "../conversation.ts";
 import { secretPrompt } from "../../shared/secret-prompt.ts";
@@ -88,6 +89,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
 }) {
   const pendingAuthorities = new WeakMap<Client, Map<string, object>>();
   const firstReceipts = new Map<string, Array<{ id: string; outcome: "sent" | "discarded" | "dismissed" }>>();
+  const capacityRetries = new Map<string, number>();
   /** the connections that could type into the pane now: attached, allowed to type, and with a ready lease */
   const typists = (paneId: string): Client[] => [...clients].filter((client) => {
     if (!client.data.attached.has(paneId)) return false;
@@ -408,7 +410,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       throw new HerdrError("pending_target_changed", "The pane's terminal or agent session changed; review the message before sending it again");
     }
   }
-  async function pendingContext(owner: Client, paneId: string, lease: PendingLease, identity?: PendingIdentity, pasted = false): Promise<{ pane: HerdrPane; identity: PendingIdentity; working: boolean; screen: string; processes: ProcessInfo | undefined }> {
+  async function pendingContext(owner: Client, paneId: string, lease: PendingLease, identity?: PendingIdentity, pasted = false, capacityRetry = false): Promise<{ pane: HerdrPane; identity: PendingIdentity; working: boolean; screen: string; processes: ProcessInfo | undefined }> {
     authorizePending(owner, paneId, lease);
     const { pane, identity: current, processes } = await currentIdentity(paneId, identity?.processPid ?? null);
     if (identity && !samePendingIdentity(identity, current)) {
@@ -429,6 +431,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       throw new HerdrError("agent_blocked", "The terminal is waiting for masked input; answer it with the secret-input form first");
     }
     const collapsed = current.agent === "codex" && codexQuestionsCollapsed(screen);
+    const capacityWaiting = capacityRetry && current.agent === "codex" && codexRuntimeError(screen) === "model_capacity";
     // a message Claude Code holds for its invisible characters is a card to answer first, also once its hint has gone.
     // Not so with this delivery's own paste in the box (`pasted`), which the check before the paste found
     // free of a held message: the same words as the message noted before would be taken for that one,
@@ -437,10 +440,10 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     const prompt = current.agent ? parseInteractivePrompt(current.agent, screen, null, true, [], held) : null;
     // as the card's own reader decides it: Claude's grey text under a hint left behind is no held message
     const waits = prompt !== null && !(pasted && isClaudeHeld(prompt)) && !(await claudeHeldIsGrey(paneId, prompt));
-    if (current.agent && (waits || registry.waits(current.agent, screen) || (pane.agent_status === "blocked" && !collapsed))) {
+    if (current.agent && (waits || registry.waits(current.agent, screen) || (pane.agent_status === "blocked" && !collapsed && !capacityWaiting))) {
       throw new HerdrError("agent_blocked", "The agent is waiting for an answer in the terminal");
     }
-    if (current.agent && !["working", "idle", "done"].includes(pane.agent_status) && !collapsed) {
+    if (current.agent && !["working", "idle", "done"].includes(pane.agent_status) && !collapsed && !capacityWaiting) {
       throw new HerdrError("agent_not_ready", "The agent's current input state is not known");
     }
     // the screen and card reads above awaited: what they were read for must still be in front
@@ -520,7 +523,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     }
   }
   async function dispatchPendingText(owner: Client, paneId: string, text: string, lease: PendingLease, identity: PendingIdentity,
-    automatic: boolean, arrivedAt: number, committing: (working: boolean, restarting?: boolean) => void = () => {}, requestId = 0): Promise<SubmitReply> {
+    automatic: boolean, arrivedAt: number, committing: (working: boolean, restarting?: boolean) => void = () => {}, requestId = 0, capacityRetry = false): Promise<SubmitReply> {
     let wrote = false;
     let watch: OpenCodeWatch | null = null;
     let piReservation: PiReceiptReservation<Client> | null = null;
@@ -531,7 +534,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // fixed wait: herdr holds a lone ESC typed into the pty ~150ms, so a Stop tapped just before reaches the pane first
       if (typed < TYPED_SETTLE_MS) await Bun.sleep(TYPED_SETTLE_MS - typed);
       mark = pending.mark(paneId);
-      const context = await pendingContext(owner, paneId, lease, identity);
+      const context = await pendingContext(owner, paneId, lease, identity, false, capacityRetry);
       const sent = modelSwitchText(context.identity.agent, text);
       piReservation = reservePiReceipt(owner, context.identity);
       const receiptText = piReceiptText(context.identity, text);
@@ -566,6 +569,22 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       };
       // Pending input is a guarded literal paste + Enter, never Codex's native Tab queue.
       // Keep the final key here so a disconnect, pane switch or new menu can cancel it.
+      if (capacityRetry) {
+        const scrollBefore = await paneScrollInfo(paneId);
+        const colors = (await paneRead({ paneId, source: "visible", format: "ansi" })).text;
+        const scrollAfter = await paneScrollInfo(paneId);
+        if (!(await paneRunsCodex(paneId))) throw new HerdrError("capacity_retry_stopped", "Codex is no longer in front of the pane");
+        const fresh = await pendingContext(owner, paneId, lease, identity, false, capacityRetry);
+        if (fresh.identity.agent !== "codex" || codexRuntimeError(fresh.screen) !== "model_capacity"
+          || !viewportShowsLive(scrollBefore, scrollAfter, colors, fresh.screen, fresh.screen)
+          || !codexInputEmpty(fresh.screen, colors) || pending.waiting(paneId))
+          throw new HerdrError("capacity_retry_stopped", "Codex is no longer at capacity with an empty input; automatic retry stopped");
+        const now = Date.now();
+        for (const [pane, at] of capacityRetries) if (now - at >= 30_000) capacityRetries.delete(pane);
+        if (capacityRetries.has(paneId)) throw new HerdrError("capacity_retry_stopped", "Another retry was sent less than 30 seconds ago");
+        capacityRetries.set(paneId, now);
+        authorizePending(owner, paneId, lease);
+      }
       wrote = true;
       if (command && skills.length > 0) {
         let typed = false;
@@ -595,7 +614,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       }
       // fixed wait: the TUI takes the paste before its Enter, which arriving with it could read as a newline
       await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
-      const beforeEnter = await pendingContext(owner, paneId, lease, identity, true);
+      const beforeEnter = await pendingContext(owner, paneId, lease, identity, true, capacityRetry);
       if (automatic && (beforeEnter.working || queueHeld(paneId))) throw new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed");
       authorizePending(owner, paneId, lease);
       const steering = !automatic && beforeEnter.working;
@@ -882,6 +901,11 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       }
       const waits = message.delivery === "queue" || message.delivery === "hold";
       const native = message.delivery === "agent-queue";
+      if (message.capacity_retry !== undefined && (message.capacity_retry !== true || waits || native || message.typed === true
+        || message.text !== "계속" || message.clear_draft !== undefined || message.send_anyway !== undefined || message.resend_id !== undefined)) {
+        result(false, "invalid_delivery", "A capacity retry sends only 계속 without clearing a draft");
+        return;
+      }
       if ((message.delivery !== undefined && message.delivery !== "immediate" && !waits && !native)
         || ((waits || native) && message.typed !== undefined && message.typed !== false)) {
         result(false, "invalid_delivery", "Use immediate delivery, or queue, hold or agent-queue a chat message");
@@ -968,6 +992,13 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         const dispatch = async () => {
           // held while this waited its turn (the attach was refused after the check above)
           if (attachments.get(message.pane_id)?.held) throw new HerdrError("attach_held", ATTACH_HELD_MESSAGE);
+          if (message.capacity_retry) {
+            const lease = pendingLease(client, message.pane_id);
+            const context = await pendingContext(client, message.pane_id, lease, undefined, false, true);
+            const reply = await dispatchPendingText(client, message.pane_id, framed.text, lease, context.identity, false, arrivedAt, undefined, message.id, true);
+            if (!reply.ok) throw new HerdrError(reply.code ?? "submit_failed", reply.message ?? "Capacity retry failed");
+            return;
+          }
           // A terminal-line send is not an Ovis Chat receipt. For Chat, capture Pi independently of
           // status so an idle/done report during automatic compaction cannot make the bubble vanish.
           const identity = message.typed === true ? null : (await currentIdentity(message.pane_id)).identity;

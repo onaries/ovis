@@ -16,10 +16,14 @@ const assignment = "TASK: Inspect the parser\nFind why tool labels lose their na
 const agentInput = `text(await tools.multi_agent_v1__spawn_agent({agent_type:"explorer",message:${JSON.stringify(assignment)}}));`;
 const input = 'const results = await Promise.all([tools.exec_command({cmd:"git status --short"}), tools.exec_command({cmd:"bun test"})]);';
 const imageInput = 'for (const name of ["phone.png", "desktop.png"]) { const r = await tools.view_image({path:"/repo/evidence/" + name}); image(r.image_url); } text(await tools.write_stdin({session_id:51623,chars:""}));';
+const dynamicInput = 'let p="*** Begin Patch\\n"; for (const f of files) { const r=await tools.exec_command({cmd:`rg ${f}`}); p+=r.output; } text(await tools.apply_patch(p));';
+const objectsInput = 'const cmds=[{cmd:"ssh example cat report.json",workdir:"/repo"}]; const rs=await Promise.allSettled(cmds.map(c=>tools.exec_command(c)));';
 const records = [
   { type: "event_msg", timestamp: "2026-10-24T13:00:00Z", payload: { type: "user_message", message: "Check the repository" } },
   { type: "response_item", timestamp: "2026-10-24T13:00:01Z", payload: { type: "custom_tool_call", call_id: "one", name: "exec", input } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "images", name: "exec", input: imageInput } },
+  { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "dynamic", name: "exec", input: dynamicInput } },
+  { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "objects", name: "exec", input: objectsInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:03Z", payload: { type: "custom_tool_call", call_id: "spawn", name: "exec", input: agentInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:04Z", payload: { type: "custom_tool_call_output", call_id: "spawn", output: `Script completed\nOutput:\n${JSON.stringify({ agent_id: agentId, nickname: "Parser Scout" })}` } },
 ];
@@ -69,38 +73,55 @@ try {
       const notice = page.locator('[role="alert"]').filter({ hasText: /capacity|처리 용량/ });
       await notice.waitFor({ timeout: 7000 });
       await page.locator(".work-row-head").filter({ hasText: "git status --short · bun test" }).waitFor();
-      const images = page.locator(".work-row-head").nth(1);
+      await page.locator(".work-row-head").filter({ hasText: "exec_command · apply_patch" }).waitFor();
+      await page.locator(".work-row-head").filter({ hasText: "ssh example cat report.json" }).waitFor();
+      const images = page.locator(".work-row-head").filter({ hasText: "view_image · write_stdin" });
       await images.click();
       await images.scrollIntoViewIfNeeded();
       const evidence = process.env.UI_EVIDENCE_DIR;
       if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, `codex-operations-${width}-${theme}.png`) }); }
       assert.equal((await images.innerText()).trim(), "view_image · write_stdin", "non-shell operations name their nested tools, without an exec or Ran prefix");
-      assert.equal(await images.locator("..").locator(".chat-tool-io").first().textContent(), imageInput, "expanding keeps the original JavaScript");
+      assert.equal(await images.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), imageInput, "expanding keeps the original JavaScript");
       await images.click();
       assert.equal(await page.locator(".work-block.is-live:not(.is-waiting)").count(), 0, "a failed turn must not still say Working");
       assert.match(await page.locator(".work-block-head").innerText(), /Needs you|내 응답 필요/);
       await notice.scrollIntoViewIfNeeded();
       if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, `codex-capacity-${width}-${theme}.png`) }); }
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no page overflow on phones");
+      await page.clock.install();
+      const retry = page.getByRole("button", { name: /Retry every 30 seconds|30초마다 재시도/ });
+      await retry.click();
+      await page.clock.fastForward(30_000);
+      await page.waitForFunction(() => document.querySelector("#capacity-retries")?.textContent === "1");
+      await page.clock.fastForward(30_000);
+      await page.waitForFunction(() => document.querySelector("#capacity-retries")?.textContent === "2");
+      if (evidence) await page.screenshot({ path: join(evidence, `codex-capacity-retry-${width}-${theme}.png`) });
+      await page.getByRole("button", { name: /Stop retrying|자동 재시도 중지/ }).click();
+      await page.clock.fastForward(30_000);
+      assert.equal(await page.locator("#capacity-retries").textContent(), "2", "Stop cancels future retries");
       await notice.getByRole("button").click();
       await page.getByText("Terminal opened", { exact: true }).waitFor();
+      await retry.click();
       await page.getByRole("button", { name: "Switch pane" }).click();
       await notice.waitFor({ state: "hidden" });
+      await page.clock.fastForward(30_000);
+      assert.equal(await page.locator("#capacity-retries").textContent(), "2", "another pane does not inherit retries");
       assert.equal(await page.locator(".chat-task-call").count(), 0, "other panes do not inherit the child assignment");
       await page.getByRole("button", { name: "Switch pane" }).click();
       await notice.waitFor();
+      assert.equal(await retry.getAttribute("aria-pressed"), "false");
       failed = false;
       await notice.waitFor({ state: "hidden" });
       const assigned = page.locator(".work-row-head").filter({ hasText: "Inspect the parser" });
       await assigned.focus();
       await page.keyboard.press("Enter");
-      const card = assigned.locator("..").locator(".chat-task-call");
+      const card = assigned.locator("..").locator("..").locator(".chat-task-call");
       await card.waitFor();
       assert.match(await card.innerText(), /Parser Scout/);
       assert.match(await card.innerText(), /explorer/);
       assert.equal(await card.locator("pre").textContent(), assignment);
       assert.equal(await page.locator(".chat-task-result").count(), 0, "spawn returning an id is not child completion");
-      const raw = assigned.locator("..").locator(".chat-teammate-raw");
+      const raw = assigned.locator("..").locator("..").locator(".chat-teammate-raw");
       await raw.locator("summary").click();
       assert.equal(await raw.locator("pre").textContent(), agentInput);
       await raw.locator("summary").click();
@@ -111,7 +132,7 @@ try {
       const waiting = page.locator(".work-row-head").filter({ hasText: /Wait for agent|에이전트 응답 대기/ });
       await waiting.waitFor();
       await waiting.click();
-      const waitingCard = waiting.locator("..").locator(".chat-task-call");
+      const waitingCard = waiting.locator("..").locator("..").locator(".chat-task-call");
       assert.match(await waitingCard.innerText(), /Reported status: running|보고된 상태: 실행 중/);
       assert.equal(await page.locator(".chat-task-result").count(), 0);
       await waiting.scrollIntoViewIfNeeded();

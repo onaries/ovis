@@ -11,7 +11,7 @@ import { OUTPUT_HARD_BYTES } from "../output-window.ts";
 import { type Client, connectionOf, presenceOf, send, type SocketData } from "./connections.ts";
 import { type AttachmentView, validGeometry } from "./terminals.ts";
 
-const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "agent-queue", "pending-agent-queue", "codex-agent-queue", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "terminal-insert"];
+const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "agent-queue", "pending-agent-queue", "codex-agent-queue", "codex-capacity-retry", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "terminal-insert"];
 
 type Frame<K extends ClientMessage["type"]> = Extract<ClientMessage, { type: K }>;
 

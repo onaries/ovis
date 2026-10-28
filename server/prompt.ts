@@ -44,6 +44,10 @@ export type { QueueFront } from "./codex-queue.ts";
 
 /** A bottom Codex composer with no draft. Placeholder words need verified dim colors. */
 export function codexQueueInputEmpty(screen: string, colors: string | null = null): boolean {
+  return screen.replace(ANSI_RE, "").split(/\r?\n/).some((line) => CODEX_WORKING_RE.test(line.trim())) && codexInputEmpty(screen, colors);
+}
+
+export function codexInputEmpty(screen: string, colors: string | null = null): boolean {
   const rows = screen.split(/\r?\n/).filter((line) => line.trim()).map((line) => ({ text: line.trim(), indent: line.length - line.trimStart().length }));
   const lines = rows.map((row) => row.text);
   const indent = Math.min(...rows.filter((row) => /^[›»]/.test(row.text)).map((row) => row.indent));
@@ -51,7 +55,6 @@ export function codexQueueInputEmpty(screen: string, colors: string | null = nul
   if (composer < 0 || codexQuestionsCollapsed(screen)) return false;
   const footer = lines.slice(composer + 1);
   if (footer.length === 0 || footer.length > 4 || footer.some((line) => !codexFooterLine(line))) return false;
-  if (!lines.slice(0, composer).some((line) => CODEX_WORKING_RE.test(line))) return false;
   if (/^[›»]$/.test(lines[composer]!)) return true;
   if (!/^[›»]\s+Ask Codex to do (?:anything|something)$/.test(lines[composer]!) || colors === null) return false;
   const colored = colors.split(/\r?\n/).reverse().find((line) => {

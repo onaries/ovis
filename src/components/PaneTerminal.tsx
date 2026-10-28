@@ -865,6 +865,13 @@ export function PaneTerminal({
     : null;
 
   const { composerSend, actOnPending, waitingAnswer } = useComposerSends({ agent, agentStatus, answerPanePrompt, answering, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputRowNow, knownOutcomes, observeRef, paneId, paneRef, pendingAnswer, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t, chatNavigation, setChatLocalSend, sessionRef });
+  const retryCapacity = useCallback(async (): Promise<boolean> => {
+    const pane = paneRef.current;
+    if (pane === null || !activeRef.current || observeRef.current || heldRef.current || secretRef.current !== null
+      || stillOpenRef.current !== null || composerDrafts.read(`ovis:composer-draft:${paneStorageId(machineId, pane)}`).text.trim()) return false;
+    const answer = await submitComposerMessage("계속", "immediate", undefined, false, undefined, undefined, true);
+    return answer?.ok === true && answer.pending === undefined && !answer.unconfirmed;
+  }, [machineId, submitComposerMessage]);
 
 
   // Capture the owner's pane for the entire upload batch, even across a pane switch.
@@ -1165,6 +1172,7 @@ export function PaneTerminal({
             onOutcomes={onChatOutcomes}
             interactive={!observing && role === "interact"}
             onRewindInTerminal={onOpenTerminal ? rewindInTerminal : undefined}
+            onCapacityRetry={retryCapacity}
           />
           </RenderBoundary>
         )}

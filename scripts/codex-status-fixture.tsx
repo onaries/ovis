@@ -7,9 +7,11 @@ import "../src/styles.css";
 function Fixture() {
   const [pane, setPane] = useState("capacity");
   const [terminal, setTerminal] = useState(false);
+  const [retries, setRetries] = useState(0);
   return <SettingsProvider><button onClick={() => setPane(pane === "capacity" ? "other" : "capacity")}>Switch pane</button>
     <output>{terminal ? "Terminal opened" : "Terminal closed"}</output>
-    <div style={{ position: "relative", height: "calc(100dvh - 50px)" }}><ChatView paneId={pane} agent="codex" agentStatus="working" connected={true} ended={false} refreshKey={0} onOpenTerminal={() => setTerminal(true)} /></div>
+    <output id="capacity-retries">{retries}</output>
+    <div style={{ position: "relative", height: "calc(100dvh - 50px)" }}><ChatView paneId={pane} agent="codex" agentStatus="working" connected={true} ended={false} refreshKey={0} interactive onCapacityRetry={async () => { setRetries((value) => value + 1); return true; }} onOpenTerminal={() => setTerminal(true)} /></div>
   </SettingsProvider>;
 }
 const root = document.getElementById("root");

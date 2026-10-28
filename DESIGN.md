@@ -3429,6 +3429,15 @@ and the scheduler's error, rather than instructions to sign in. They stop backgr
 the user reviews startup options. The existing VS Code-inspired explicit override remains the only
 headless choice; sign-in waits continue reconnecting automatically.
 
+### Codex capacity retries
+
+The Codex capacity notice retains the native CLI's model-switch guidance and adds an explicit,
+optional retry action, following Ovis's existing inline failure-and-retry controls. It sends the
+literal continuation `계속` every 30 seconds only while a fresh live capacity error and an empty
+native composer remain. It does not replay the original request. Stop cancels future attempts;
+leaving the pane, disconnecting, changing history, uncertain delivery, or recovery disarms it.
+The bridge serializes attempts per pane and enforces the interval across browser tabs.
+
 ### Accepted debt
 
 | Item | Location | Why accepted | Exit |

@@ -214,6 +214,56 @@ afterAll(async () => {
 });
 
 describe("WebSocket submit", () => {
+  it("capacity retries stop before Enter when a blocked screen replaces the error after paste", async () => {
+    const target = await recorder("codex-capacity-changed", join(root, "codex"));
+    await herdrRpc("pane.report_agent", { pane_id: target.pane, source: "manual", agent: "codex", state: "blocked" });
+    let screen = "■ Selected model is at capacity. Please try a different model.\n›\n  gpt-6.1-sol high · 38% context left";
+    const { read, scroll } = mockClaudeInput(target.pane, () => screen);
+    const originalText = herdr.paneSendText;
+    const text = spyOn(herdr, "paneSendText").mockImplementation(async (...args) => {
+      const result = await originalText(...args);
+      if (args[0] === target.pane) screen = "Paused for review\n›\n  gpt-6.1-sol high · 38% context left";
+      return result;
+    });
+    const keys = spyOn(herdr, "paneSendKeys"), socket = await Socket.connect();
+    try {
+      await attached(socket, target.pane);
+      socket.send({ type: "submit", id: 98999, pane_id: target.pane, text: "계속", payload: "계속", capacity_retry: true });
+      expect(await socket.result(98999)).toMatchObject({ ok: false, code: "submit_changed" });
+      expect(text).toHaveBeenCalledTimes(1);
+      expect(keys).not.toHaveBeenCalled();
+    } finally { text.mockRestore(); keys.mockRestore(); read.mockRestore(); scroll.mockRestore(); socket.close(); }
+  });
+  it("capacity retries recheck the live error and draft and serialize retries across tabs", async () => {
+    const target = await recorder("codex-capacity", join(root, "codex"));
+    await herdrRpc("pane.report_agent", { pane_id: target.pane, source: "manual", agent: "codex", state: "blocked" });
+    const capacity = "■ Selected model is at capacity. Please try a different model.\n›\n  gpt-6.1-sol high · 38% context left";
+    let screen = capacity;
+    const { read, scroll } = mockClaudeInput(target.pane, () => screen);
+    const first = await Socket.connect(), second = await Socket.connect();
+    const text = spyOn(herdr, "paneSendText"), keys = spyOn(herdr, "paneSendKeys");
+    let id = 99000;
+    const retry = async (socket: Socket) => {
+      const request = id++;
+      socket.send({ type: "submit", id: request, pane_id: target.pane, text: "계속", payload: "계속", capacity_retry: true });
+      return socket.result(request);
+    };
+    try {
+      await attached(first, target.pane); await attached(second, target.pane);
+      for (const changed of [capacity.replace("›", "› user draft"), capacity.replace("■ Selected model is at capacity. Please try a different model.", "• Working")]) {
+        screen = changed;
+        expect((await retry(first)).ok).toBe(false);
+        expect(text).not.toHaveBeenCalled(); expect(keys).not.toHaveBeenCalled();
+      }
+      screen = capacity;
+      expect(await retry(first)).toMatchObject({ ok: true });
+      expect(await retry(second)).toMatchObject({ ok: false, code: "capacity_retry_stopped" });
+      expect(text).toHaveBeenCalledTimes(1);
+      expect(text.mock.calls[0]?.[1]).toContain("계속");
+      expect(keys).toHaveBeenCalledTimes(1);
+      expect(keys.mock.calls[0]?.[1]).toEqual(["Enter"]);
+    } finally { text.mockRestore(); keys.mockRestore(); read.mockRestore(); scroll.mockRestore(); first.close(); second.close(); }
+  });
   for (const failure of ["idle", "draft", "question", "slash", "finished-after-paste"] as const) it(`Codex native queue protects ${failure}`, async () => {
     const socket = await Socket.connect();
     const target = failure === "question" ? codexApproval : codexWorking;
