@@ -33,6 +33,23 @@ export function execSummary(input: string): string | null {
       } catch { return null; }
     }
   }
+  if (!commands.length) {
+    const field = `${key}\\s*:\\s*(?:${LITERAL}|-?\\d+(?:\\.\\d+)?|true|false|null)`;
+    const object = `\\{\\s*${field}(?:\\s*,\\s*${field})*\\s*,?\\s*\\}`;
+    const mappedObjects = new RegExp(`^\\s*const\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*\\[\\s*(${object}(?:\\s*,\\s*${object})*\\s*,?)\\s*\\]\\s*;\\s*(?:const\\s+[A-Za-z_$][\\w$]*\\s*=\\s*)?await\\s+Promise\\.(?:all|allSettled)\\(\\s*\\1\\.map\\(\\s*(?:async\\s+)?\\(?\\s*([A-Za-z_$][\\w$]*)\\s*\\)?\\s*=>\\s*(?:await\\s+)?tools\\.exec_command\\(\\s*\\3\\s*\\)\\s*\\)\\s*\\)\\s*;`).exec(input);
+    if (mappedObjects?.[2] !== undefined) {
+      const json = `[${mappedObjects[2]}]`.replace(/"(?:[^"\\]|\\.)*"|([A-Za-z_$][\w$]*)\s*:|,\s*(?=[}\]])/g,
+        (token, name: string | undefined) => name !== undefined ? `${JSON.stringify(name)}:` : token.startsWith(",") ? "" : token);
+      try {
+        const rows: unknown = JSON.parse(json);
+        if (Array.isArray(rows)) {
+          for (const row of rows) {
+            if (row !== null && typeof row === "object" && "cmd" in row && typeof row.cmd === "string" && row.cmd.trim()) commands.push(row.cmd.trim().replace(/\s+/g, " "));
+          }
+        }
+      } catch { return null; }
+    }
+  }
   return commands.length ? commands.join(" · ").slice(0, 120) : null;
 }
 
@@ -42,6 +59,6 @@ export function execToolCalls(input: string): { name: string; argumentsAt: numbe
 }
 
 export function execToolSummary(input: string): string | null {
-  const names = new Set(execToolCalls(input).map((call) => call.name).filter((name) => name !== "exec_command" && name !== "apply_patch"));
+  const names = new Set(execToolCalls(input).map((call) => call.name));
   return names.size > 0 ? [...names].join(" · ").slice(0, 120) : null;
 }

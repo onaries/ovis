@@ -34,14 +34,42 @@ it("names commands from a literal list directly mapped to exec_command", () => {
   if (part?.kind !== "tool") throw new Error("Missing tool row");
   expect(toolVerb(part, part.summary)).toBe("Ran");
   expect(parse(input.replace('[n, c, m]', '[n, cmd, m]').replace('cmd: c', 'cmd'))).toMatchObject({ summary: "nl -ba src/a.py · rg -n todo src" });
-  expect(parse(input.replace('cmd: c', 'cmd: other'))).toMatchObject({ summary: "exec" });
-  expect(parse(input.replace('const rs =', 'cmds.reverse(); const rs ='))).toMatchObject({ summary: "exec" });
+  expect(parse(input.replace('cmd: c', 'cmd: other'))).toMatchObject({ summary: "exec_command" });
+  expect(parse(input.replace('const rs =', 'cmds.reverse(); const rs ='))).toMatchObject({ summary: "exec_command" });
   expect(parse('const cmds = [["one", "do not execute", 1]];')).toMatchObject({ summary: "exec" });
 });
 it("does not invent a shell command from comments, quoted examples or dynamic arguments", () => {
   for (const input of ['// tools.exec_command({cmd:"fake"})', 'const example = "tools.exec_command({cmd:\"fake\"})";', 'await tools.exec_command({cmd: command})', 'await tools.exec_command({description:"cmd: \'fake\'",cmd: command})', 'await tools.exec_command({cmd:`echo ${secret}`})']) {
-    expect(parse(input)).toMatchObject({ summary: "exec" });
+    expect(parse(input)).toMatchObject({ summary: input.startsWith("await ") ? "exec_command" : "exec" });
   }
+});
+it("names literal command objects passed unchanged through a parallel map", () => {
+  const commands = [
+    { cmd: "ssh host 'cat /tmp/final.json' ", workdir: "/repo", yield_time_ms: 10000, max_output_tokens: 12000 },
+    { cmd: 'ssh host \'echo "cmd: example"; echo $(date)\'', workdir: "/repo", max_output_tokens: 6000 },
+  ];
+  const rows = JSON.stringify(commands).replace(/"(cmd|workdir|yield_time_ms|max_output_tokens)":/g, "$1:");
+  const input = `const cmds=${rows};\nconst rs=await Promise.allSettled(cmds.map(c=>tools.exec_command(c)));\nfor(const r of rs) text(r);`;
+  const part = parse(input);
+  expect(part).toMatchObject({ summary: commands.map(({ cmd }) => cmd.trim()).join(" · ").slice(0, 120) });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(toolVerb(part, part.summary)).toBe("Ran");
+  expect(parse(input.replace("allSettled", "all"))).toMatchObject({ summary: part.summary });
+  for (const invalid of [
+    `const cmds=${rows};`,
+    input.replace("tools.exec_command(c)", "tools.exec_command(other)"),
+    input.replace("cmds.map", "other.map"),
+    input.replace("const rs=", "cmds.reverse(); const rs="),
+    input.replace('cmd:"', 'cmd:dynamic+"'),
+    `const example=${JSON.stringify(input)};`,
+  ]) expect(parse(invalid)).toMatchObject({ summary: invalid.includes("tools.exec_command") && !invalid.startsWith("const example=") ? "exec_command" : "exec" });
+});
+it("names dynamic shell and patch tools without claiming their generated commands or files", () => {
+  const input = 'const files=[["a.ts","old","new"]]; let p="*** Begin Patch\\n"; for (const [f,a,b] of files) { const r=await tools.exec_command({cmd:`rg -F ${a} ${f}`}); p+=r.output; } p+="*** End Patch"; text(await tools.apply_patch(p));';
+  const part = parse(input);
+  expect(part).toMatchObject({ summary: "exec_command · apply_patch" });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(workRowLabel(part, part.summary)).toEqual({ narration: true, verb: null });
 });
 it("decodes literal commands without executing the script and preserves patch summaries", () => {
   expect(parse('await tools.exec_command({cmd:"echo ${HOME}"})')).toMatchObject({ summary: "echo ${HOME}" });
