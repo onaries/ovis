@@ -403,6 +403,23 @@ describe("Command Code command catalog", () => {
     }));
   });
 
+  it("lists a command a project command folder links in from outside the repository", () => {
+    // Command Code 1.84.0 loadCommandsFromDirectory stats each entry (links followed) and has no root check,
+    // so a linked folder's commands run, and a same-name skill is reached only as /skill:<name>.
+    const home = temp();
+    const repo = temp();
+    put(join(repo, ".git"), "");
+    const outside = join(temp(), "shared-commands");
+    const linked = join(outside, "deploy.md");
+    put(linked, "Shared deploy");
+    mkdirSync(join(repo, ".commandcode", "commands"), { recursive: true });
+    symlinkSync(outside, join(repo, ".commandcode", "commands", "team"), "dir");
+    skill(join(home, ".commandcode", "skills"), "deploy");
+    const rows = source.discover(context(home, repo));
+    expect(rows.find(({ name }) => name === "deploy")).toEqual(expect.objectContaining({ source: "project", description: "team · Shared deploy", id: realpathSync(linked) }));
+    expect(rows.map(({ name }) => name)).toContain("skill:deploy");
+  });
+
   it("deduplicates a symlinked skill by canonical path", () => {
     const home = temp();
     const root = join(home, ".commandcode", "skills");

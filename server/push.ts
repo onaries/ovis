@@ -9,9 +9,11 @@
  * - push-subscriptions.json: survives restarts, so a reboot does not unsubscribe phones.
  *   A 404/410 from a push service means the device dropped it; the record is deleted.
  * - push-retired.json: the endpoint is also remembered, as a hash with the owner it was retired for
- *   (`RETIRED_LIMIT`, `RETIRED_TTL_MS`), so a restart does not forget it and a revocation finds it: a browser can keep handing over a subscription its push
+ *   (`RETIRED_LIMIT`), so a restart does not forget it and a revocation finds it: a browser can keep handing over a subscription its push
  *   service retired, and registering it again would only fail the next push, so it is refused as
- *   `subscription_gone` and the device subscribes anew (#1038).
+ *   `subscription_gone` and the device subscribes anew (#1038). A mark has no time limit: one that
+ *   expired would let any device that knows the endpoint register it as its own (#2012). Only its
+ *   owner's revocation removes it, or a thousand later retirements.
  * - push-keys.json (PUSH_EXTRA_KEYS): key pairs other than vapid.json's, each with the endpoints
  *   made for it. Only state-merge.ts writes it, for subscriptions taken over from the other state
  *   dir of an install that had two: each is signed with the key it was made for until its device
@@ -20,7 +22,7 @@
  *   `last_failure_at`, `last_failure`), by endpoint hash, with the owner and a hash of the keys it
  *   was recorded for. A device reads its own record through POST /api/push/status once it proves
  *   both, so a subscription its push service retired can still say why alerts stopped (#1039).
- *   Bounded like the retired list, and expired on every read and write; an explicit unsubscribe or
+ *   Bounded like the retired list, and expired (`DELIVERY_TTL_MS`) on every read and write; an explicit unsubscribe or
  *   the device's revocation removes it together with the endpoint's retired mark.
  *
  * Requests are built by web-push's generateRequestDetails (RFC 8291 aes128gcm + RFC
@@ -73,15 +75,13 @@ const PUSH_TIMEOUT_MS = 10_000;
 const DEFAULT_SUBJECT = "https://github.com/devswha/ovis";
 /** How many retired endpoints are remembered; the oldest is forgotten first. */
 const RETIRED_LIMIT = 1000;
-/** How long a retired endpoint is remembered: a browser that kept it this long has long since moved on. */
-const RETIRED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** The key pairs, besides vapid.json's, that subscriptions taken over from another state dir were made for. */
 export const PUSH_EXTRA_KEYS = "push-keys.json";
 
 type VapidKeys = { publicKey: string; privateKey: string };
-/** The delivery records are bounded the same way: as many, for as long since their last write. */
+/** The delivery records are bounded the same way, and kept for as long since their last write. */
 const DELIVERY_LIMIT = RETIRED_LIMIT;
-const DELIVERY_TTL_MS = RETIRED_TTL_MS;
+const DELIVERY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** How long an alert waits for the pane to change first, and the turn a finish is worth telling. */
 export interface AlertTiming {
@@ -152,7 +152,7 @@ export interface PushService {
   subscribe(subscription: PushSubscriptionRecord, alerts?: AlertPrefs, deviceId?: string | null, browserKeys?: readonly string[]): void;
   revokeDevice(id: string): void;
   unsubscribe(endpoint: string): void;
-  /** whether a push service answered 404/410 for this endpoint since the server started */
+  /** whether a push service answered 404/410 for this endpoint, in any spelling normalizeEndpoint takes as one */
   retired(endpoint: string): boolean;
   /** One confirmation push to one device, so enabling alerts proves the whole path works. */
   sendTest(endpoint: string): Promise<PushDelivery | null>;
@@ -231,6 +231,25 @@ function decodedLength(value: unknown): number {
   return Buffer.from(value, "base64url").length;
 }
 
+/**
+ * The form an endpoint is retired in: the URL as WHATWG serializes it (host in lowercase, no default
+ * port, no dot segments), without its fragment, which never reaches the push service. Those spellings
+ * of a retired endpoint are then that same endpoint (#2012); a query string, percent-encoding and a
+ * trailing slash are kept as they are, since a push service may tell them apart (WNS keeps its token in
+ * the query). What does not parse is returned as it is. Only the retired check uses it: a subscription,
+ * its key pair (push-keys.json), its history and state-merge.ts's records stay under the spelling the
+ * browser handed over, so nothing stored before has to be found under another one.
+ */
+export function normalizeEndpoint(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    url.hash = "";
+    return url.href;
+  } catch {
+    return endpoint;
+  }
+}
+
 /** The PushSubscription JSON a browser produces, checked before anything is stored. */
 export function parseSubscription(value: unknown, options: { loopbackHttp?: boolean } = {}): PushSubscriptionRecord | null {
   if (typeof value !== "object" || value === null) return null;
@@ -281,6 +300,8 @@ export function createPushService(options: PushServiceOptions): PushService {
 
   let vapid: { publicKey: string; privateKey: string } | null = null;
   let subscriptions: Map<string, PushSubscriptionRecord> | null = null;
+  /** the file still lists a subscription dropped in memory only (a retirement whose write failed): the next goodbye writes it */
+  let stale = false;
   const lastStatus = new Map<string, AgentStatus>();
   const titles = new Map<string, string>();
   // the workspace a pane was last seen in: an alert names it, so the tap of an ended pane can open
@@ -294,6 +315,10 @@ export function createPushService(options: PushServiceOptions): PushService {
    */
   let retiredEndpoints: Map<string, RetiredMark> | null = null;
   const endpointHash = (endpoint: string): string => createHash("sha256").update(endpoint).digest("base64url");
+  /** what a retired mark is keyed by: one key for every spelling of the endpoint (#2012) */
+  const retiredKey = (endpoint: string): string => endpointHash(normalizeEndpoint(endpoint));
+  /** a mark from before #2012 is keyed by the spelling as it was handed over */
+  const isRetired = (endpoint: string): boolean => retiredStore().has(retiredKey(endpoint)) || retiredStore().has(endpointHash(endpoint));
   /** endpoint -> the key pair it was made for, when that is not vapid.json's; loaded on first need */
   let extraKeys: Map<string, VapidKeys> | null = null;
 
@@ -345,6 +370,11 @@ export function createPushService(options: PushServiceOptions): PushService {
     if (Array.isArray(stored)) {
       for (const entry of stored) {
         const parsed = parseSubscription(entry, options);
+        // retired, but its removal could not be written (#2013): it stays gone, and the next goodbye writes the file without it
+        if (parsed && isRetired(parsed.endpoint)) {
+          stale = true;
+          continue;
+        }
         const alerts = (entry as { alerts?: unknown } | null)?.alerts;
         if (parsed) {
           const owner = (entry as PushSubscriptionRecord).device_id;
@@ -372,27 +402,31 @@ export function createPushService(options: PushServiceOptions): PushService {
   }
 
   /**
-   * Writes the list back without what expired or was dropped. Never throws: a read of the list (a
-   * subscribe's retired check) must not fail on it. What was dropped stays dropped in memory, and the
-   * next write that succeeds leaves it off disk too.
+   * Writes the list back. Never throws: neither a read of the list (a subscribe's retired check) nor a
+   * retirement may fail on it, as the list is telemetry (#2013). The list stays as it is in memory, and
+   * the next write that succeeds puts it on disk.
    */
   function rewriteRetired(): void {
     try {
       persistRetired();
     } catch (error) {
-      console.error(`Cannot write ${retiredPath} (${(error as NodeJS.ErrnoException).code ?? "unknown error"}); its expired entries stay on disk until the next write`);
+      retiredUnwritten = true;
+      console.error(`Cannot write ${retiredPath} (${(error as NodeJS.ErrnoException).code ?? "unknown error"}); retired endpoints are kept in memory until a write succeeds`);
     }
   }
+  /**
+   * The list on disk is not the one in memory (a write failed): a subscribe writes it first, so a mark
+   * a revocation removed in memory only cannot come back at a restart and drop the new subscription.
+   */
+  let retiredUnwritten = false;
 
   function persistRetired(): void {
     writeJsonPrivate(retiredPath, [...retiredStore()].map(([hash, { at, owner }]) => ({ hash, at, ...(owner === undefined ? {} : { owner }) })));
+    retiredUnwritten = false;
   }
 
   function retiredStore(): Map<string, RetiredMark> {
-    if (retiredEndpoints) {
-      if (expire(retiredEndpoints, (mark) => mark.at, RETIRED_TTL_MS)) rewriteRetired();
-      return retiredEndpoints;
-    }
+    if (retiredEndpoints) return retiredEndpoints;
     retiredEndpoints = new Map();
     let stored: unknown;
     try {
@@ -401,13 +435,12 @@ export function createPushService(options: PushServiceOptions): PushService {
       return retiredEndpoints; // an unreadable file only means a retired endpoint registers again once
     }
     if (!Array.isArray(stored)) return retiredEndpoints;
-    const cutoff = (options.now ?? Date.now)() - RETIRED_TTL_MS;
     for (const entry of stored.slice(-RETIRED_LIMIT)) {
       const { hash, at, owner } = (entry ?? {}) as { hash?: unknown; at?: unknown; owner?: unknown };
-      if (typeof hash !== "string" || typeof at !== "number" || at <= cutoff) continue;
+      if (typeof hash !== "string" || typeof at !== "number") continue;
       retiredEndpoints.set(hash, { at, ...(owner === null || typeof owner === "string" ? { owner } : {}) });
     }
-    // what was dropped (expired, over the bound, malformed) leaves the file too: a revocation later finds
+    // what was dropped (over the bound, malformed) leaves the file too: a revocation later finds
     // nothing of it to remove, and the device's marks must not stay on disk
     if (retiredEndpoints.size !== stored.length) {
       rewriteRetired();
@@ -419,6 +452,7 @@ export function createPushService(options: PushServiceOptions): PushService {
   function persist(next: Map<string, PushSubscriptionRecord>): void {
     writePrivateState(subscriptionsPath, [...next.values()]);
     subscriptions = next;
+    stale = false;
   }
 
   function without(remove: (endpoint: string, subscription: PushSubscriptionRecord) => boolean): Map<string, PushSubscriptionRecord> | null {
@@ -555,12 +589,29 @@ export function createPushService(options: PushServiceOptions): PushService {
     recordDelivery(identity, classifyFailure(status));
     if (gone) {
       const retired = retiredStore();
-      retired.delete(identity.hash);
-      retired.set(identity.hash, { at: (options.now ?? Date.now)(), ...(identity.owner === undefined ? {} : { owner: identity.owner }) });
+      const mark = retiredKey(subscription.endpoint);
+      // two spellings of one endpoint held by different owners share the mark: it then belongs to neither,
+      // so one owner's revocation cannot take a mark the other's subscription was retired under too
+      const previous = retired.get(mark);
+      const shared = (previous !== undefined && previous.owner === undefined)
+        || [...store().values()].some((held) => held.endpoint !== subscription.endpoint && retiredKey(held.endpoint) === mark && held.device_id !== identity.owner);
+      const owner = shared ? undefined : identity.owner;
+      retired.delete(mark);
+      retired.set(mark, { at: (options.now ?? Date.now)(), ...(owner === undefined ? {} : { owner }) });
       if (retired.size > RETIRED_LIMIT) retired.delete(retired.keys().next().value!);
-      persistRetired();
+      // the list is telemetry: a write that fails keeps the mark in memory, and never keeps the dead subscription (#2013)
+      rewriteRetired();
       const next = without((endpoint) => endpoint === subscription.endpoint);
-      if (next) persist(next);
+      if (next) {
+        try {
+          persist(next);
+        } catch (error) {
+          // the push service said it is gone: nothing is sent to it again, and the next write that succeeds leaves it off disk
+          subscriptions = next;
+          stale = true;
+          console.error(`Cannot write ${subscriptionsPath} (${(error as NodeJS.ErrnoException).code ?? "unknown error"}); the retired subscription is dropped in memory until a write succeeds`);
+        }
+      }
     } else {
       console.error(`web push to ${new URL(subscription.endpoint).host} failed: ${status ?? "no response"}`);
     }
@@ -670,6 +721,7 @@ export function createPushService(options: PushServiceOptions): PushService {
       next.set(subscription.endpoint, { ...subscription, ...(kept === undefined ? {} : { alerts: kept }),
         ...(deviceId === undefined ? {} : { device_id: deviceId }),
         ...(browser === undefined ? {} : { browser_keys: browser }) });
+      if (retiredUnwritten) persistRetired();
       persist(next);
       // the record of the subscription this replaces (another owner, other keys) is not the new one's
       const identity = identityOf({ ...subscription, device_id: deviceId });
@@ -686,17 +738,19 @@ export function createPushService(options: PushServiceOptions): PushService {
         retired.delete(hash);
         unmarked = true;
       }
-      if (unmarked) persistRetired();
+      // a write that fails must not keep the device's history: the next write that succeeds drops its marks from disk
+      if (unmarked) rewriteRetired();
       forgetDeliveries((record) => record.owner !== id);
     },
 
     unsubscribe(endpoint) {
       const next = without((key) => key === endpoint);
       if (next) persist(next);
+      else if (stale) persist(new Map(store()));
       const hash = endpointHash(endpoint);
       // an explicit goodbye takes the endpoint's history with it, but never its retired mark: this route proves
       // neither owner nor keys, and a mark it cleared would let anyone register a retired endpoint again with
-      // keys of their own (#1038). The mark goes with its time to live, or with its owner's revocation
+      // keys of their own (#1038). The mark goes only with its owner's revocation
       forgetDeliveries((record) => record.hash !== hash);
     },
 
@@ -716,7 +770,7 @@ export function createPushService(options: PushServiceOptions): PushService {
       return { registered: false, last_success_at: iso(mine.success_at), last_failure_at: iso(mine.failure_at), last_failure: mine.failure };
     },
 
-    retired: (endpoint) => retiredStore().has(endpointHash(endpoint)),
+    retired: isRetired,
 
     async sendTest(endpoint) {
       const subscription = store().get(endpoint);

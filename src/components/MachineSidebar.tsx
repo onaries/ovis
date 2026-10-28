@@ -14,6 +14,7 @@ import { SidebarActivityProvider, type SidebarActivity } from "../lib/sidebarAct
 import { filterSuggestions, machineFilter, sidebarFilter, type SidebarBranchLabels } from "../lib/sidebarFilter.ts";
 import { SidebarFilterProvider, useSidebarFilter } from "../lib/sidebarFilterContext.ts";
 import { UsageMeters } from "./UsageMeters.tsx";
+import { rowMenuAnchor } from "./RowMenu.tsx";
 import "./Machines.css";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
@@ -90,7 +91,9 @@ export function MachineSidebar(props: Props) {
   const closeFilter = () => { setQuery(""); setFilterAsked(false); };
   const clearFilter = () => { setQuery(""); filterInput.current?.focus(); };
   // a field the palette opened that goes while it holds the focus gives it back, as useFocusReturn does
-  // (lib/useFocusTrap.ts): to what had it when the field came, else to the sidebar's first row
+  // (lib/useFocusTrap.ts): to what had it when the field came, else to the sidebar's first row that takes it. What
+  // had it may be gone (Settings' switch), and a row's first control may not be drawn (a desktop's ⋯): each is
+  // tried until the focus lands
   useLayoutEffect(() => {
     if (!closable) return;
     const opener = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
@@ -98,8 +101,12 @@ export function MachineSidebar(props: Props) {
     return () => {
       const active = document.activeElement;
       if (active !== null && active !== document.body) return;
-      const back = opener?.isConnected && sidebar?.querySelector(".sidebar-filter")?.contains(opener) !== true ? opener : sidebar?.querySelector<HTMLElement>(".machine-list button:not([disabled])");
-      back?.focus({ preventScroll: true });
+      const rows = sidebar?.querySelectorAll<HTMLElement>('.machine-list :is(button:not([disabled]), [role="button"][tabindex="0"])') ?? [];
+      for (const back of [opener, ...rows]) {
+        if (back === null || !back.isConnected || back.closest(".sidebar-filter, [inert]") !== null || back.getClientRects().length === 0) continue;
+        back.focus({ preventScroll: true });
+        if (document.activeElement === back) return;
+      }
     };
   }, [closable]);
   // Escape in the field clears it; an empty field's Escape closes a field the palette opened, and is left to the
@@ -113,29 +120,44 @@ export function MachineSidebar(props: Props) {
   };
   // leaving the sidebar takes an empty field the palette opened with it: a press outside it, or the keyboard's focus
   // going out from the field or any row. A press inside keeps it, also when what it picked takes the focus to its
-  // pane (a row would move under the pointer), until a key is pressed. A move with no destination (another window
-  // taking the focus) is decided once the focus settles
+  // pane (a row would move under the pointer), until a key is pressed. A row's menu is drawn outside the sidebar
+  // (RowMenu) and is still inside it; a tab's menu is not. A move with no destination (another window taking the focus) is decided once
+  // the focus settles, on the field as it is then
   const pressedInside = useRef(false);
   const emptyField = useRef(true);
   emptyField.current = query === "";
+  const insideSidebar = (node: EventTarget | null): boolean => {
+    if (!(node instanceof Node)) return false;
+    if (shell.current?.contains(node) === true) return true;
+    const element = node instanceof Element ? node : node.parentElement;
+    const anchor = element === null ? null : rowMenuAnchor(element);
+    return anchor !== null && shell.current?.contains(anchor) === true;
+  };
+  const settleFrame = useRef(0);
   useEffect(() => {
     if (!closable) return;
+    // a press from before the field came (its last close) says nothing about this one
+    pressedInside.current = false;
     const onPointerDown = (event: PointerEvent): void => {
-      pressedInside.current = event.target instanceof Node && shell.current?.contains(event.target) === true;
+      pressedInside.current = insideSidebar(event.target);
       if (!pressedInside.current && emptyField.current) closeFilter();
     };
     const onKeyDown = (): void => { pressedInside.current = false; };
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("keydown", onKeyDown, true);
-    return () => { window.removeEventListener("pointerdown", onPointerDown, true); window.removeEventListener("keydown", onKeyDown, true); };
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+      cancelAnimationFrame(settleFrame.current);
+    };
   }, [closable]);
   const onSidebarBlur = (event: FocusEvent<HTMLDivElement>) => {
     if (!closable || query !== "" || pressedInside.current) return;
-    const sidebar = event.currentTarget;
     const next = event.relatedTarget;
-    if (next instanceof Node && sidebar.contains(next)) return;
+    if (insideSidebar(next)) return;
     if (next !== null) { closeFilter(); return; }
-    requestAnimationFrame(() => { if (!sidebar.contains(document.activeElement)) closeFilter(); });
+    cancelAnimationFrame(settleFrame.current);
+    settleFrame.current = requestAnimationFrame(() => { if (emptyField.current && !insideSidebar(document.activeElement)) closeFilter(); });
   };
   const drawerOpen = props.drawerOpen === true;
   const hiddenCount = props.hiddenCount ?? 0;
@@ -313,7 +335,7 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
     setBusy(true); setError(null);
     try { await request(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
-  if (machine.updating) {
+  if (machine.updating && machine.action_required !== "windows_login" && machine.action_required !== "windows_start_failed") {
     const updating = machine.updating;
     return <div className="machine-action is-updating" role="status">
       <p className="machine-action-text"><strong>{t(updating.ovis ? "Updating this PC's Ovis" : "Updating the bridge")}</strong><span>{t("You can keep using the app; this PC reconnects when it is done.")}</span></p>
@@ -325,6 +347,12 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
   if (machine.action_required === "connect") return <div className="machine-action is-setup" role="status">
     <p className="machine-action-text"><strong>{t("Saved in herdr")}</strong><span>{t("Connect once to enable automatic reconnection. Installation and startup need separate approval.")}</span></p>
     <button type="button" className="btn btn-primary" onClick={() => onSetup(machine, false)}>{t("Connect")}</button>
+  </div>;
+  if (machine.action_required === "windows_login" || machine.action_required === "windows_start_failed") return <div className="machine-action" role="status">
+    <p className="machine-action-text"><strong>{t(machine.action_required === "windows_start_failed" ? "Windows desktop startup failed" : "Waiting for Windows sign-in")}</strong>{machine.action_required === "windows_login" && <span>{t("Sign in to Windows on this PC; Ovis will reconnect automatically.")}</span>}</p>
+    {machine.error && machine.error !== "Waiting for Windows sign-in on this PC." && <p className="machine-action-reason">{machineErrorText(machine.error, t)}</p>}
+    <p className="field-hint">{t("Signing out of Windows ends herdr and its panes; lock the PC instead.")}</p>
+    <button type="button" className="btn" onClick={() => onSetup(machine, false)}>{t("Review startup options")}</button>
   </div>;
   // another app's bridge runs on this PC: neither an update from here nor an approval fixes that,
   // so it is named as what it is, with the server's reason and a plain reconnect
@@ -429,7 +457,7 @@ export function MachineActionBanner({ machines, onSetup }: { machines: Machine[]
     const kept = keepDismissed(dismissed, machines);
     if (kept.length !== dismissed.length) { setDismissed(kept); writeDismissed(kept); }
   }, [machines, dismissed]);
-  const running = machines.find((machine) => machine.updating);
+  const running = machines.find((machine) => machine.updating && machine.action_required !== "windows_login" && machine.action_required !== "windows_start_failed");
   if (running?.updating) {
     const view = describeProgress(running.updating.progress);
     return <div className="update-notice" role="status">
@@ -441,13 +469,15 @@ export function MachineActionBanner({ machines, onSetup }: { machines: Machine[]
   if (!first) return null;
   const conflict = first.action_required === "bridge_conflict";
   const update = first.action_required === "update_bridge";
+  const login = first.action_required === "windows_login";
+  const startupFailed = first.action_required === "windows_start_failed";
   const others = waiting.length > 1 ? t(" (+{n} more)", { n: waiting.length - 1 }) : "";
   const own = ownOvisAction(first);
   // a failed update of it says so here; the PC's card says why
   const failure = ownUpdateFailure(first);
   return <div className="update-notice" role="status">
-    <span title={failure === null ? undefined : machineErrorText(failure, t)}>{own ? t(failure ? "Updating {name}'s own Ovis failed{others}." : own.updatable ? "{name}'s own Ovis needs an update to reconnect{others}." : "{name}'s own Ovis needs an update on that PC{others}.", { name: first.name, others }) : t(conflict ? "{name} has a bridge connection conflict{others}." : update ? "{name} needs a bridge update to reconnect{others}." : "{name} needs web access setup{others}.", { name: first.name, others })}</span>
-    <button type="button" className="btn" onClick={() => update ? void machineRequest(`/${encodeURIComponent(first.id)}/update-bridge`, "POST").catch(() => onSetup(first, true)) : onSetup(first, false)}>{own ? t(own.updatable ? "Update this PC's Ovis" : "Reconnect") : t(conflict ? "Reconnect" : update ? "Update bridge" : "Set up web access")}</button>
+    <span title={failure === null ? undefined : machineErrorText(failure, t)}>{own ? t(failure ? "Updating {name}'s own Ovis failed{others}." : own.updatable ? "{name}'s own Ovis needs an update to reconnect{others}." : "{name}'s own Ovis needs an update on that PC{others}.", { name: first.name, others }) : t(startupFailed ? "Windows desktop startup failed on {name}{others}." : login ? "{name} is waiting for Windows sign-in{others}." : conflict ? "{name} has a bridge connection conflict{others}." : update ? "{name} needs a bridge update to reconnect{others}." : "{name} needs web access setup{others}.", { name: first.name, others })}</span>
+    <button type="button" className="btn" onClick={() => update ? void machineRequest(`/${encodeURIComponent(first.id)}/update-bridge`, "POST").catch(() => onSetup(first, true)) : onSetup(first, false)}>{own ? t(own.updatable ? "Update this PC's Ovis" : "Reconnect") : t(login || startupFailed ? "Review startup options" : conflict ? "Reconnect" : update ? "Update bridge" : "Set up web access")}</button>
     <button type="button" className="icon-button update-notice-dismiss" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={() => { const next = [...dismissed, ...waiting.map(noticeKey)]; setDismissed(next); writeDismissed(next); }}><X /></button>
   </div>;
 }

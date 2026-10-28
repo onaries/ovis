@@ -18,6 +18,14 @@ export class ConversationUnavailable extends Error {
   }
 }
 
+/** A read failed, but the pane still proves the same current conversation: retain the view and retry. */
+export class ConversationReadPending extends Error {
+  constructor() {
+    super("The conversation could not be read; try again shortly.");
+    this.name = "ConversationReadPending";
+  }
+}
+
 /** The pane's agent holds a session it has not written yet: a conversation with no turns, not a missing one. */
 export class ConversationNotStarted extends ConversationUnavailable {
   constructor(readonly sessionId: string, readonly source: RecognizedConversation["source"] = "omo-transcript", readonly identity: string = sessionId) {
@@ -70,4 +78,4 @@ export function answerVersion(key: string, signature: string): string {
  * while it is still inside the newest page); with `before`, the page ending there,
  * never reaching back past `since`.
  */
-export type ConversationPage = { before?: string; since?: string; from?: string };
+export type ConversationPage = { before?: string; since?: string; from?: string; history_id?: string };

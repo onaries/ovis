@@ -256,9 +256,11 @@ describe.skipIf(process.platform === "win32")("PtySession Rust fallback", () => 
     resetPtyHostForTests();
     previous = { ...process.env };
     process.env["OVIS_PTY_SIDECAR"] = "rust";
+    // a home without the app's own Node (server/pty/sidecar.ts looks there first), whatever this PC has
+    process.env["HOME"] = mkdtempSync(join(fixtures, "home-"));
   });
   afterEach(() => {
-    for (const key of ["OVIS_PTY_SIDECAR", "OVIS_PTY_SIDECAR_BIN", "PATH"]) {
+    for (const key of ["OVIS_PTY_SIDECAR", "OVIS_PTY_SIDECAR_BIN", "PATH", "HOME"]) {
       if (previous[key] === undefined) delete process.env[key];
       else process.env[key] = previous[key];
     }
@@ -270,6 +272,8 @@ describe.skipIf(process.platform === "win32")("PtySession Rust fallback", () => 
     const dir = mkdtempSync(join(fixtures, "bun-as-node-"));
     symlinkSync(process.execPath, join(dir, "node"));
     process.env["PATH"] = `${dir}:/usr/bin:/bin`;
+    // and no Node of the app's own (install.sh's) in its home
+    process.env["HOME"] = mkdtempSync(join(fixtures, "home-"));
     resetSidecarForTests();
     expect(nodeSidecarAvailable()).toBe(false);
   }
@@ -302,6 +306,33 @@ describe.skipIf(process.platform === "win32")("PtySession Rust fallback", () => 
       expect(spawn).not.toHaveBeenCalled();
     } finally { spawn.mockRestore(); }
   });
+
+  // #596: the installer no longer links its Node into ~/.local/bin, and herdr's PATH may hold a Node older than 18 first
+  for (const where of [".local/share/ovis/node", ".local/share/herdr-web-ui/node"]) {
+    it(`runs the Node the installer put in ~/${where} over an older one first on PATH, probed and spawned at one path`, async () => {
+      const real = Bun.which("node");
+      if (real === null) throw new Error("this test needs Node");
+      const home = mkdtempSync(join(fixtures, "home-"));
+      const appNode = join(home, where, "bin", "node");
+      mkdirSync(dirname(appNode), { recursive: true });
+      symlinkSync(real, appNode);
+      const old = mkdtempSync(join(fixtures, "old-node-"));
+      writeFileSync(join(old, "node"), "#!/bin/sh\necho 10.24.1\n", { mode: 0o755 });
+      process.env["HOME"] = home;
+      process.env["PATH"] = `${old}:/usr/bin:/bin`;
+      process.env["OVIS_PTY_SIDECAR"] = "node";
+      resetSidecarForTests();
+      const spawn = spyOn(Bun, "spawn");
+      let started: Run | undefined;
+      try {
+        expect(nodeSidecarAvailable()).toBe(true);
+        started = runOn("node", "sh", ["-c", "printf ok"]);
+        expect((spawn.mock.calls[0] as unknown as [string[]])[0][0]).toBe(appNode);
+        expect(await started.exited).toBe(0);
+        expect(started.output()).toBe("ok");
+      } finally { started?.session.kill(); spawn.mockRestore(); }
+    });
+  }
 
   it("tells the server to attach with the Rust host alone on a PC without Node, and to mirror with neither", () => {
     const log = spyOn(console, "log").mockImplementation(() => {});
@@ -483,12 +514,17 @@ function parity(host: "node" | "rust") {
     beforeEach(resetPtyHostForTests);
     const run = (command: string, args: string[], extra: Partial<PtySessionOptions> = {}) => runOn(host, command, args, extra);
     const previous = process.env["OVIS_PTY_SIDECAR"];
+    const home = process.env["HOME"];
     beforeAll(() => {
       process.env["OVIS_PTY_SIDECAR"] = host;
+      // a home without the app's own Node, so the Node host is the one on PATH whatever this PC has
+      process.env["HOME"] = mkdtempSync(join(fixtures, "home-"));
     });
     afterAll(() => {
       if (previous === undefined) delete process.env["OVIS_PTY_SIDECAR"];
       else process.env["OVIS_PTY_SIDECAR"] = previous;
+      if (home === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = home;
     });
 
     it("starts that host and hands the command its environment without the bridge token", async () => {

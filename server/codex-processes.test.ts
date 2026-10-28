@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
+import * as fs from "node:fs";
 import { appendFileSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1042,6 +1043,57 @@ describe("a thread of another folder Codex has loaded, as a resume through the p
     await loaded(other, ...many);
     expect(await resolve()).toBeNull();
   });
+
+  it.skipIf(process.platform !== "linux")("counts a loaded thread one read of the kernel's lock table left out", async () => {
+    // the kernel hands /proc/locks out a page at a time, and a lock another process takes or drops
+    // between two pages moves the lines after it: a read may leave a held lock out (#2046, #1965)
+    const rollout = otherFolderThread();
+    foreground = picker;
+    screen = `• ${otherAnswer}`;
+    // a conversation that gave the same answer: while it counts as loaded, none is offered
+    const peer = "01a16b22-7e1f-7072-8897-dddddddd0b00";
+    elsewhereThread(peer, [otherAnswer]);
+    const holder = await loaded(other, peer);
+    // the table as the kernel has it for these two locks, built here: a real read may tear too
+    const line = (index: number, id: string) => {
+      const ino = statSync(join(home, "thread-writer-locks", `${id}.lock`), { bigint: true }).ino.toString();
+      return `${index}: FLOCK  ADVISORY  WRITE ${holder.pid} 00:00:${ino} 0 EOF`;
+    };
+    const whole = `${line(1, other)}\n${line(2, peer)}\n`;
+    const withoutPeer = `${line(1, other)}\n`;
+    const readFile = fs.readFileSync;
+    /** /proc/locks without the peer's lock line in its first `torn` reads, and the reads made */
+    const tearing = async (torn: number): Promise<{ found: string | null; reads: number }> => {
+      let reads = 0;
+      const spy = spyOn(fs, "readFileSync").mockImplementation(((file: string, options: "utf8") => {
+        if (file !== "/proc/locks") return readFile(file, options);
+        reads += 1;
+        return reads > torn ? whole : withoutPeer;
+      }) as typeof fs.readFileSync);
+      try {
+        return { found: await resolve(), reads };
+      } finally { spy.mockRestore(); }
+    };
+    expect(await tearing(0)).toEqual({ found: null, reads: 1 });
+    // left out of every read, the peer is not loaded, and the other is offered alone
+    expect(await tearing(Infinity)).toEqual({ found: rollout, reads: 3 });
+    // left out of one read, or two, it is found in the next
+    expect(await tearing(1)).toEqual({ found: null, reads: 2 });
+    expect(await tearing(2)).toEqual({ found: null, reads: 3 });
+    // the holder opened the peer's lock between two reads: its open files are listed again
+    const readDirectory = fs.readdirSync;
+    let listings = 0;
+    const late = spyOn(fs, "readdirSync").mockImplementation(((directory: string, ...rest: unknown[]) => {
+      const names = (readDirectory as (path: string, ...more: unknown[]) => string[])(directory, ...rest);
+      if (directory !== `/proc/${holder.pid}/fd` || ++listings > 1) return names;
+      return names.filter((descriptor) => {
+        try { return !fs.readlinkSync(`${directory}/${descriptor}`).endsWith(`${peer}.lock`); } catch { return true; }
+      });
+    }) as typeof fs.readdirSync);
+    try {
+      expect(await tearing(1)).toEqual({ found: null, reads: 2 });
+    } finally { late.mockRestore(); }
+  }, 20_000);
 });
 
 it("does not guess a session when argv and proc data are unavailable", async () => {

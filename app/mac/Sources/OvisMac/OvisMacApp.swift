@@ -44,6 +44,7 @@ struct MainView: View {
         }
         .frame(minWidth: 520, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
         .task {
+            LaunchAgent.rotateLog()
             await model.refresh()
             await model.monitor()
         }
@@ -192,6 +193,7 @@ struct ContentView: View {
                 Spacer()
                 Button { Task { await model.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                     .help(L("Check again", "다시 확인"))
+                    .accessibilityLabel(L("Check again", "다시 확인"))
             }
             if status?.running == true { phone(status) }
             HStack {

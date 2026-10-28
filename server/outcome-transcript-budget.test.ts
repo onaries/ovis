@@ -178,6 +178,189 @@ it("names a fork made after the pi branch's last entry afresh, though that entry
   }
 });
 
+it("completes a pi send bound to a branch after the session leaves it and /tree comes back (#1879)", async () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "outcome-pi-branch-return-"));
+  const path = join(root, "session.jsonl");
+  const at = Date.parse("2026-10-20T00:00:00Z");
+  const line = (entry: object) => JSON.stringify(entry) + "\n";
+  fs.writeFileSync(path, line({ type: "message", id: "root", parentId: null }) + line({ type: "message", id: "a0", parentId: "root" })
+    + line({ type: "message", id: "a1", parentId: "a0" }));
+  const pane = { pane_id: root, terminal_id: "term", workspace_id: "w", tab_id: "t", focused: false, revision: 0,
+    agent: "pi", agent_status: "working", cwd: root };
+  const clock = spyOn(Date, "now").mockReturnValue(at + 30);
+  const binding = spyOn(conversation, "paneTranscript").mockResolvedValue({ source: "pi-transcript", path });
+  const snapshot = spyOn(client, "sessionSnapshot").mockResolvedValue({
+    panes: [pane], layouts: [], agents: [], workspaces: [], tabs: [], protocol: 22, version: "fixture",
+  });
+  const screen = spyOn(client, "paneRead").mockResolvedValue({ ...pane, text: "", source: "detection", format: "text", truncated: false });
+  try {
+    const sent = { id: "branch-return-model", text: "/model chosen-model", at, agent: "pi",
+      identity: JSON.stringify([pane.terminal_id, undefined]), screen: "", store: null, form: null,
+      invocations: commandInvocations("pi", "/model chosen-model", []) };
+    noteSubmitted(pane.pane_id, sent.text, sent);
+    const url = new URL(`http://localhost/api/pane/prompt?pane_id=${encodeURIComponent(pane.pane_id)}`);
+    const latest = async () => ((await (await handlePromptRequest(new Request(url), url))?.json()) as PanePromptResponse).outcomes?.at(-1);
+    expect(await latest()).toMatchObject({ state: "accepted", evidence: [] });
+    // a poll sees the session on a new branch from root
+    fs.appendFileSync(path, line({ type: "message", id: "b0", parentId: "root" }));
+    expect(await latest()).toMatchObject({ state: "accepted", evidence: [] });
+    // /tree back to a1, where the model the send chose is recorded
+    fs.appendFileSync(path, line({ type: "model_change", id: "chosen", parentId: "a1",
+      timestamp: new Date(at + 10).toISOString(), modelId: "chosen-model" }));
+    expect(await latest()).toMatchObject({ state: "result-observed", evidence: [{ kind: "transcript" }] });
+  } finally {
+    screen.mockRestore();
+    snapshot.mockRestore();
+    binding.mockRestore();
+    clock.mockRestore();
+    conversation.forgetTranscriptState();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("does not credit a pi send with a later identical send's result when its own went to the branch the session visited", async () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "outcome-pi-branch-visit-"));
+  const path = join(root, "session.jsonl");
+  const at = Date.parse("2026-10-20T00:00:00Z");
+  const line = (entry: object) => JSON.stringify(entry) + "\n";
+  fs.writeFileSync(path, line({ type: "message", id: "root", parentId: null }) + line({ type: "message", id: "a0", parentId: "root" })
+    + line({ type: "message", id: "a1", parentId: "a0" }));
+  const pane = { pane_id: root, terminal_id: "term", workspace_id: "w", tab_id: "t", focused: false, revision: 0,
+    agent: "pi", agent_status: "working", cwd: root };
+  const clock = spyOn(Date, "now").mockReturnValue(at + 30);
+  const binding = spyOn(conversation, "paneTranscript").mockResolvedValue({ source: "pi-transcript", path });
+  const snapshot = spyOn(client, "sessionSnapshot").mockResolvedValue({
+    panes: [pane], layouts: [], agents: [], workspaces: [], tabs: [], protocol: 22, version: "fixture",
+  });
+  const screen = spyOn(client, "paneRead").mockResolvedValue({ ...pane, text: "", source: "detection", format: "text", truncated: false });
+  try {
+    const send = (id: string, sentAt: number) => {
+      const sent = { id, text: "/model chosen-model", at: sentAt, agent: "pi",
+        identity: JSON.stringify([pane.terminal_id, undefined]), screen: "", store: null, form: null,
+        invocations: commandInvocations("pi", "/model chosen-model", []) };
+      noteSubmitted(pane.pane_id, sent.text, sent);
+    };
+    const url = new URL(`http://localhost/api/pane/prompt?pane_id=${encodeURIComponent(pane.pane_id)}`);
+    const outcomes = async () => ((await (await handlePromptRequest(new Request(url), url))?.json()) as PanePromptResponse).outcomes ?? [];
+    send("first", at);
+    await outcomes();
+    fs.appendFileSync(path, line({ type: "message", id: "b0", parentId: "root" }));
+    await outcomes();
+    // the first send's result, written on the branch the session went to
+    fs.appendFileSync(path, line({ type: "model_change", id: "first-result", parentId: "b0",
+      timestamp: new Date(at + 5).toISOString(), modelId: "chosen-model" }));
+    await outcomes();
+    // /tree back to a1, and the same command again
+    send("second", at + 10);
+    fs.appendFileSync(path, line({ type: "model_change", id: "second-result", parentId: "a1",
+      timestamp: new Date(at + 15).toISOString(), modelId: "chosen-model" }));
+    const shown = await outcomes();
+    expect(shown.find(({ id }) => id === "first")?.state).not.toBe("result-observed");
+    expect(shown.find(({ id }) => id === "second")).toMatchObject({ state: "result-observed",
+      evidence: [{ kind: "transcript", at: new Date(at + 15).toISOString() }] });
+  } finally {
+    screen.mockRestore();
+    snapshot.mockRestore();
+    binding.mockRestore();
+    clock.mockRestore();
+    conversation.forgetTranscriptState();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("keeps a pi branch when the session goes to another branch and back to its last entry between two polls", async () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "outcome-pi-branch-back-"));
+  const path = join(root, "session.jsonl");
+  const line = (entry: object) => JSON.stringify(entry) + "\n";
+  fs.writeFileSync(path, line({ type: "message", id: "root", parentId: null }) + line({ type: "message", id: "a0", parentId: "root" }));
+  const binding = spyOn(conversation, "paneTranscript").mockResolvedValue({ source: "pi-transcript", path });
+  try {
+    const before = await conversation.readCommandTranscript("branch-back");
+    fs.appendFileSync(path, line({ type: "message", id: "b0", parentId: "root" }) + line({ type: "message", id: "a1", parentId: "a0" }));
+    const after = await conversation.readCommandTranscript("branch-back");
+    expect(after?.records.map(({ entry }) => entry.id)).toEqual(["root", "a0", "a1"]);
+    expect(after?.identity).toBe(before?.identity);
+  } finally {
+    binding.mockRestore();
+    conversation.forgetTranscriptState();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("names a pi branch afresh on coming back to its last entry when something else was written under that entry", async () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "outcome-pi-branch-back-hidden-"));
+  const path = join(root, "session.jsonl");
+  const line = (entry: object) => JSON.stringify(entry) + "\n";
+  fs.writeFileSync(path, line({ type: "message", id: "root", parentId: null }) + line({ type: "message", id: "a0", parentId: "root" }));
+  const binding = spyOn(conversation, "paneTranscript").mockResolvedValue({ source: "pi-transcript", path });
+  try {
+    const before = await conversation.readCommandTranscript("branch-back-hidden");
+    // a poll sees another branch, then an answer under a0 no poll sees, and /tree back to a0 again
+    fs.appendFileSync(path, line({ type: "message", id: "b0", parentId: "root" }));
+    expect((await conversation.readCommandTranscript("branch-back-hidden"))?.identity).not.toBe(before?.identity);
+    fs.appendFileSync(path, line({ type: "message", id: "a1", parentId: "a0" }) + line({ type: "model_change", id: "chosen", parentId: "a0", modelId: "chosen-model" }));
+    const after = await conversation.readCommandTranscript("branch-back-hidden");
+    expect(after?.records.map(({ entry }) => entry.id)).toEqual(["root", "a0", "chosen"]);
+    expect(after?.identity).not.toBe(before?.identity);
+  } finally {
+    binding.mockRestore();
+    conversation.forgetTranscriptState();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("does not take a later entry that reuses a remembered pi branch's last id for that branch", async () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "outcome-pi-reused-id-"));
+  const path = join(root, "session.jsonl");
+  const line = (entry: object) => JSON.stringify(entry) + "\n";
+  const big = (id: string, parentId: string, mebibytes: number) => line({ type: "message", id, parentId,
+    message: { role: "assistant", content: "x".repeat(mebibytes * 1024 * 1024) } });
+  fs.writeFileSync(path, line({ type: "message", id: "root", parentId: null }) + line({ type: "message", id: "a0", parentId: "root" })
+    + line({ type: "message", id: "a1", parentId: "a0" }));
+  const binding = spyOn(conversation, "paneTranscript").mockResolvedValue({ source: "pi-transcript", path });
+  try {
+    const before = await conversation.readCommandTranscript("reused-id");
+    fs.appendFileSync(path, big("b0", "root", 15));
+    await conversation.readCommandTranscript("reused-id");
+    // another entry with a1's id, then enough that the window no longer holds the first a1
+    fs.appendFileSync(path, line({ type: "message", id: "a1", parentId: "b0" }));
+    expect(await conversation.readCommandTranscript("reused-id")).toBeNull();
+    fs.appendFileSync(path, big("b1", "a1", 2));
+    const after = await conversation.readCommandTranscript("reused-id");
+    expect(after?.records.map(({ entry }) => entry.id)).toEqual(["a1", "b1"]); // control: the first a1 is cut away
+    expect(after?.identity).not.toBe(before?.identity);
+  } finally {
+    binding.mockRestore();
+    conversation.forgetTranscriptState();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("names a pi branch afresh when an append cuts its last entry away and forks after the window's first entry", async () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "outcome-pi-leaf-cut-fork-"));
+  const path = join(root, "session.jsonl");
+  const entry = (id: string, parentId: string | null) => JSON.stringify({ type: "message", id, parentId,
+    message: { role: "assistant", content: "x".repeat(1024 * 1024) } }) + "\n";
+  fs.writeFileSync(path, JSON.stringify({ type: "session", id: "session", version: 3 }) + "\n");
+  for (let index = 0; index < 20; index++) fs.appendFileSync(path, entry(`a${index}`, index ? `a${index - 1}` : null));
+  const binding = spyOn(conversation, "paneTranscript").mockResolvedValue({ source: "pi-transcript", path });
+  try {
+    const before = await conversation.readCommandTranscript("leaf-cut-fork");
+    expect(before?.records.at(-1)?.entry.id).toBe("a19");
+    // h0 runs on from a19 and h13 after it; then /tree back to h0 for another answer
+    for (let index = 0; index < 14; index++) fs.appendFileSync(path, entry(`h${index}`, index ? `h${index - 1}` : "a19"));
+    fs.appendFileSync(path, entry("k", "h0") + JSON.stringify({ type: "model_change", id: "chosen", parentId: "k", modelId: "chosen-model" }) + "\n");
+    const after = await conversation.readCommandTranscript("leaf-cut-fork");
+    // control: a19 is cut away with the window's start and h0 heads it
+    expect(after?.records.map(({ entry }) => entry.id)).toEqual(["h0", "k", "chosen"]);
+    expect(after?.identity).not.toBe(before?.identity);
+  } finally {
+    binding.mockRestore();
+    conversation.forgetTranscriptState();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("keeps a pi branch when an append cuts its last entry out of the window", async () => {
   const root = fs.mkdtempSync(join(tmpdir(), "outcome-pi-leaf-cut-"));
   const path = join(root, "session.jsonl");

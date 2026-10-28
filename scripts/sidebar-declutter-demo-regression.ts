@@ -5,7 +5,9 @@
  * offline; one PC shown of two (Settings → Remote PCs) looks the same and says the other is hidden; a lone PC that
  * is not the Host keeps its header (its name and manage menu); two PCs keep both headers. Settings → Appearance →
  * Sidebar filter off leaves the Filter field out, and the command palette's Filter workspaces and agents opens and
- * focuses it, at a phone's and a desktop's width, light and dark. Screenshots go to UI_EVIDENCE_DIR when it is set.
+ * focuses it, at a phone's and a desktop's width, light and dark. On a desktop, that field's edges (#2079): its close
+ * gives the focus to a row that can take it when what opened it is gone, a row's menu counts as the sidebar, and a
+ * blur's late check never clears words typed after it. Screenshots go to UI_EVIDENCE_DIR when it is set.
  * Tags: sidebar, machines, filter, settings, palette, browser, regression, visual.
  * Usage: UI_EVIDENCE_DIR=<dir> bun scripts/sidebar-declutter-demo-regression.ts
  */
@@ -19,7 +21,8 @@ import { chromePath } from "./chrome-path.ts";
 import { openSettingsPage } from "./settings-page.ts";
 
 // Only this disposable fixture rewrites the demo's roster: `pcs=2` makes the demo's one PC two (the Host "Laptop"
-// and "Work PC"), `offline=1` disconnects the Host. No herdr session is opened, and nothing leaves the loopback.
+// and "Work PC"), `offline=1` disconnects the Host, `flat=1` takes the worktrees off its workspaces (no row then has a
+// fold of its own, so a row's first button is its ⋯, which a desktop does not draw). No herdr session is opened, and nothing leaves the loopback.
 const app = mkdtempSync(join(tmpdir(), "herdr-sidebar-declutter-"));
 const evidence = process.env["UI_EVIDENCE_DIR"];
 const patch = `(() => {
@@ -31,6 +34,7 @@ const patch = `(() => {
     const machine = structuredClone(original.find((item) => item.id === "local"));
     if (params.get("pcs") === "2") { machine.id = id; machine.kind = id === "local" ? "local" : "ssh"; machine.name = id === "local" ? "Laptop" : "Work PC"; }
     if (id === "local" && params.has("offline")) { machine.state = "disconnected"; machine.error = null; }
+    if (params.has("flat")) for (const workspace of machine.snapshot?.workspaces ?? []) delete workspace.worktree;
     return machine;
   });
   window.EventSource = class extends EventTarget {
@@ -282,6 +286,84 @@ async function filterHidden(browser: Browser, scene: Scene): Promise<void> {
   } finally { await context.close(); }
 }
 
+/** The asked-for field's edges on a desktop (#2079). */
+async function filterEdges(browser: Browser, scene: Scene): Promise<void> {
+  {
+    // the setting turned off while the field holds words: what had the focus then (Settings' switch) is gone when the
+    // field closes, and the desktop draws no row's ⋯, so the focus goes to a row that can take it
+    const { context, page, errors } = await newPage(browser, scene, "flat=1");
+    try {
+      await filterRow(page).waitFor();
+      await page.locator(".sidebar-filter-input").fill("zz");
+      await page.locator(".sidebar-footer-settings").click();
+      await openSettingsPage(page, "Appearance");
+      await page.locator(".settings-dialog").getByRole("switch", { name: "Sidebar filter", exact: true }).click();
+      await page.waitForFunction(() => localStorage.getItem("ovis:sidebar-filter") === "false");
+      await page.keyboard.press("Escape");
+      await page.locator(".settings-dialog").waitFor({ state: "detached" });
+      assert.equal(await page.locator(".sidebar-filter-input").inputValue(), "zz", "the field keeps its words");
+      await page.getByRole("button", { name: "Clear filter", exact: true }).click();
+      await page.getByRole("button", { name: "Close filter", exact: true }).click();
+      await filterRow(page).waitFor({ state: "detached" });
+      assert.ok(await page.evaluate(() => document.activeElement?.closest(".machine-list") !== null && document.activeElement.getClientRects().length > 0), `Close filter gives the focus to a row it can be seen on when its opener is gone (on ${await focusHeld(page)})`);
+      assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+  }
+  const { context, page, errors } = await newPage(browser, scene, "", { "ovis:sidebar-filter": "false" });
+  try {
+    await newRow(page).waitFor();
+    // a row's menu opened from the keyboard is drawn outside the sidebar, and is still the sidebar's
+    await paletteFilter(page);
+    const row = page.locator(".machine-list .workspace-select").first();
+    await row.focus();
+    const rowBox = await row.boundingBox();
+    await row.evaluate((element) => element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    await page.waitForFunction(() => document.activeElement?.closest(".row-menu") !== null);
+    assert.equal(await filterRow(page).count(), 1, "a row's menu taking the focus keeps the field");
+    const menuBox = await page.locator(".row-menu").boundingBox();
+    assert.ok(rowBox && menuBox && Math.abs(menuBox.y - rowBox.y - rowBox.height) < rowBox.height, `the menu sits under its row (${menuBox?.y} vs ${rowBox && rowBox.y + rowBox.height})`);
+    // and a press on its item lands with the field still there
+    await page.locator(".row-menu").getByRole("menuitem", { name: "Rename workspace", exact: true }).click();
+    await page.locator(".workspace-rename-input").waitFor();
+    assert.equal(await filterRow(page).count(), 1, "a press on a row's menu keeps the field");
+    await page.keyboard.press("Escape");
+    await page.locator(".workspace-rename-input").waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Close filter", exact: true }).click();
+    await filterRow(page).waitFor({ state: "detached" });
+    // an empty field's blur to nowhere (another window taking the focus) takes it once the focus settles, also
+    // right after the press that closed it last
+    await paletteFilter(page);
+    await page.evaluate(() => document.querySelector<HTMLInputElement>(".sidebar-filter-input")!.blur());
+    await filterRow(page).waitFor({ state: "detached" });
+    // a tab's menu is not the sidebar's: the focus going into it takes the empty field
+    await paletteFilter(page);
+    await page.locator(".tab-strip-tab").first().evaluate((element) => element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    await page.waitForFunction(() => document.activeElement?.closest(".row-menu") !== null);
+    await filterRow(page).waitFor({ state: "detached" });
+    await page.keyboard.press("Escape");
+    await page.locator(".row-menu").waitFor({ state: "detached" });
+    // that blur is decided a frame later, on the words the field holds then: focus back, words typed and the focus
+    // gone again before that frame keeps them
+    await paletteFilter(page);
+    const late = await page.evaluate(async () => {
+      const input = document.querySelector<HTMLInputElement>(".sidebar-filter-input")!;
+      input.blur();
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "zz");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      // a controlled field's change is committed in its own event
+      const committed = document.querySelector(".sidebar-filter-clear")?.getAttribute("aria-label") === "Clear filter";
+      input.blur();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return { committed, value: document.querySelector<HTMLInputElement>(".sidebar-filter-input")?.value ?? null };
+    });
+    assert.ok(late.committed, "the words were in the field before it lost the focus again");
+    assert.equal(late.value, "zz", "a blur's late check keeps words typed after it");
+    assert.deepEqual(errors, []);
+    console.log(`PASS ${sceneName(scene)}: the asked-for field gives the focus to a row, keeps a row's menu as the sidebar and no tab's, and keeps later words`);
+  } finally { await context.close(); }
+}
+
 /** The setting itself: on by default, turned off and on from Settings → Appearance, kept in its own key. */
 async function filterSetting(browser: Browser, scene: Scene): Promise<void> {
   const { context, page, errors } = await newPage(browser, scene, "", {}, false);
@@ -340,6 +422,7 @@ try {
         await loneHostOffline(browser, scene);
         await twoPcs(browser, scene);
         await filterHidden(browser, scene);
+        if (!phone) await filterEdges(browser, scene);
         await filterSetting(browser, scene);
       }
     } finally { await browser.close(); }

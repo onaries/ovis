@@ -68,11 +68,21 @@ window.WebSocket = function(...args) {
 Object.assign(window.WebSocket, { CONNECTING: Socket.CONNECTING, OPEN: Socket.OPEN, CLOSING: Socket.CLOSING, CLOSED: Socket.CLOSED });
 const fetch = window.fetch;
 window.focusCalls = [];
+// the catalog race (#1591): "later" holds every read of the pane's commands after the first, "all" holds
+// every one, until releaseCommandReads(); commandsParsed counts the answers the page has read
+window.holdCommandReads = sessionStorage.getItem("qa:hold-command-reads");
+window.commandReads = 0;
+window.heldCommandReads = [];
+window.commandsParsed = 0;
+window.releaseCommandReads = () => { window.holdCommandReads = null; window.heldCommandReads.splice(0).forEach(go => go()); };
 // answered prompt reads (each lists the pane's outcomes): a later one has seen what came before it
 window.promptReads = 0;
 window.fetch = (input, init) => {
   const url = typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
   if (url.includes("/pane/focus")) window.focusCalls.push(url);
+  if (url.includes("/pane/commands") && window.holdCommandReads !== null && (++window.commandReads > 1 || window.holdCommandReads === "all")) {
+    return new Promise((resolve, reject) => { window.heldCommandReads.push(() => fetch(input, init).then(resolve, reject)); });
+  }
   const answer = fetch(input, init);
   if (url.includes("/pane/prompt?")) answer.then(() => { window.promptReads += 1; }, () => {});
   return answer;
@@ -80,6 +90,7 @@ window.fetch = (input, init) => {
 const json = Response.prototype.json;
 Response.prototype.json = async function() {
   const value = await json.call(this);
+  if (Array.isArray(value.commands)) window.commandsParsed += 1;
   if (Array.isArray(value.turns)) {
     const history = Array.from({length: 24}, (_, index) => ({
       role: index % 2 ? "assistant" : "user",
@@ -693,6 +704,51 @@ try {
       assert.deepEqual(await page.evaluate("window.focusCalls"), [], "no peek or notice moves herdr's focus");
       assert.deepEqual(errors, []);
       console.log(`PASS ${tag}: a screen left open through the terminal lens holds Send behind the notice; its close clears it`);
+    } finally { await context.close(); }
+  }
+
+  // The catalog race (#1591). "later": the message box's read of the pane's commands answers and the
+  // terminal's own is still on its way when the receipt lands; the receipt reads the box's answer.
+  // "all": no read has answered when the message leaves, one answers before its receipt (40f64932).
+  for (const hold of ["later", "all"] as const) {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 844 }, locale: "en-US" });
+    try {
+      await context.addInitScript(({ pane, hold }) => {
+        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: "light", darkTheme: "amber", lightTheme: "amber", autoSendQueued: true }));
+        localStorage.setItem(`ovis:view:${pane}`, "chat");
+        sessionStorage.setItem("qa:hold-command-reads", hold);
+      }, { pane: owner, hold });
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => { errors.push(error.message); console.error(error.message); });
+      page.setDefaultTimeout(10_000);
+      await page.goto(`${server.url}?pane=${encodeURIComponent(owner)}`);
+      await chat(page).locator(".composer").waitFor();
+      await page.waitForFunction(() => (window as unknown as PeekWindow).promptReads > 0);
+      type HoldWindow = PeekWindow & { heldCommandReads: unknown[]; commandsParsed: number; releaseReceipt: (() => void) | null };
+      // every component asked for the list; all but the first ("later") or all of them ("all") still wait
+      await page.waitForFunction((count) => (window as unknown as HoldWindow).heldCommandReads.length >= count, hold === "later" ? 1 : 2);
+      if (hold === "later") {
+        await page.waitForFunction(() => (window as unknown as HoldWindow).commandsParsed === 1);
+        // the box has the list: its terminal row is in the menu
+        await box(page).fill("/conf");
+        await page.locator('.menu-item[data-terminal]').first().waitFor();
+        await send(page, "/doctor");
+      } else {
+        await page.evaluate(() => { Object.assign(window, { receiptMode: "hold" }); });
+        await send(page, "/doctor");
+        await page.waitForFunction(() => (window as unknown as HoldWindow).releaseReceipt !== null);
+        assert.equal(await peek(page).count(), 0, "no peek before the receipt");
+        await page.evaluate(() => { (window as unknown as { releaseCommandReads: () => void }).releaseCommandReads(); });
+        await page.waitForFunction(() => (window as unknown as HoldWindow).commandsParsed >= 1);
+        await page.evaluate(() => { (window as unknown as HoldWindow).releaseReceipt?.(); });
+      }
+      await peek(page).waitFor();
+      await hint(page).getByText("/doctor ran", { exact: true }).waitFor();
+      await capture(page, `catalog-race-${hold}`);
+      await page.evaluate(() => { (window as unknown as { releaseCommandReads: () => void }).releaseCommandReads(); });
+      assert.deepEqual(errors, []);
+      console.log(`PASS catalog race (${hold}): a receipt reads the command list another read already has, and opens the peek`);
     } finally { await context.close(); }
   }
 

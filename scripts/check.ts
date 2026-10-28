@@ -1392,6 +1392,13 @@ export async function main(groupSeams: GroupSeams & {
       console.log(`${result} ${step.name}${step.durationMs === null ? "" : ` (${(step.durationMs / 1000).toFixed(1)}s)`}`);
     }
   }
+  // why a failed run failed: a step's exit code or signal, which its FAILED line does not show, and
+  // what no step line shows at all (a source or dist that changed mid-run, a report that could not
+  // be saved, ...), which would otherwise end the run with every step ok (#1921); a run that passed
+  // says nothing more
+  const reasons = code === 0 ? [] : report.errors;
+  for (const reason of reasons) console.error(`check: ${reason}`);
+  if (reasons.length > 0) console.error(`check: report ${paths.reportPath}`);
   process.exit(code);
 }
 

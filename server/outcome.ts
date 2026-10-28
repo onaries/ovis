@@ -189,6 +189,12 @@ function claudeOutputEchoes(records: readonly CommandTranscriptRecord[]): Readon
   return outputs;
 }
 
+/**
+ * The only record types transcriptEvidence takes a pi, omp, gjc or OmO send's result from; a pi branch is resumed
+ * only when none was written off it meanwhile (resumedBranch in conversation.ts).
+ */
+export const PI_EVIDENCE_TYPES: ReadonlySet<string> = new Set(["model_change", "thinking_level_change", "compaction"]);
+
 /** Native envelopes, not conversational prose or the model/effort shown in a footer. */
 function transcriptEvidence(sent: CommandSend, records: readonly CommandTranscriptRecord[], until: number, used: ReadonlySet<number> = new Set(),
   echoOffset?: number | null, outputs?: ReadonlyMap<number, number>): { offset: number; at: number } | null {
@@ -221,7 +227,7 @@ function transcriptEvidence(sent: CommandSend, records: readonly CommandTranscri
     const name = invocation.name.toLocaleLowerCase();
     const argument = invocation.argument.split(/\s+/u)[0] ?? "";
     if (used.has(offset)) continue;
-    if (["pi", "omp", "gjc", "omo"].includes(sent.agent)) {
+    if (["pi", "omp", "gjc", "omo"].includes(sent.agent) && PI_EVIDENCE_TYPES.has(String(entry.type))) {
       if (entry.type === "model_change" && ["model", "models", "switch"].includes(name) && argument) {
         const model = typeof entry.model === "string" ? entry.model : entry.modelId;
         const qualified = typeof entry.provider === "string" ? `${entry.provider}/${model}` : model;

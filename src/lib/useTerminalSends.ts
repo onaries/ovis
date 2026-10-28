@@ -7,6 +7,7 @@ import { afterSend, afterSettled, greetingMemory, rememberGreeting } from "./gre
 import { hasModifiers, terminalChord, type StickyModifiers } from "./keys.ts";
 import type { InputRowState } from "./inputRow.ts";
 import { paneStorageId } from "../../shared/machines.ts";
+import { pendingMessages } from "./pendingMessages.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import type { Translate } from "./i18n.ts";
 import type { Terminal } from "@xterm/xterm";
@@ -137,10 +138,12 @@ export function useTerminalSends(deps: TerminalSendsDeps) {
     const result = submitComposerMessage(text, delivery);
     return result === null ? false : result.then((answer) => {
       if (!answer.ok) return submitNote(answer.code, answer.message, agent);
+      // an older bridge took it with no receipt: the held row goes, a row not confirmed keeps its text
+      if (answer.unconfirmed && pane !== null) pendingMessages.keepUnconfirmed(paneStorageId(machineId, pane), text);
       if (pane !== null && answer.pending === undefined && !answer.unconfirmed) showSentCommand(pane, text, known, seen);
       return true;
     });
-  }, [submitComposerMessage, agent, showSentCommand, inputRowNow, stillOpenNote]);
+  }, [submitComposerMessage, agent, machineId, showSentCommand, inputRowNow, stillOpenNote]);
 
   // the terminal's input line: the text typed like the keyboard would, into an agent's open
   // menu too, then Enter after the server's gap; several lines go as one paste

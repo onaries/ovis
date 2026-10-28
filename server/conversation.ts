@@ -49,7 +49,7 @@ import { CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF, codexOutputPicture, codexTranscr
 import { AmbiguousClaudeStore, claudeAttachSession, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
 import { forgetGjcPane, forgetGjcState, gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
 import { isOmoProcess, omoProcessIdentity, omoSessionForPane, processEnviron } from "./omo.ts";
-import { processStartedAtAsync } from "./process-start.ts";
+import { processAlive, processStartedAtAsync } from "./process-start.ts";
 import { ompBlobStore, ompPaneRoute, ompRouteOwns, ompRouteStore, ompRouteTranscript } from "./omp.ts";
 import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_IMAGE_REF, opencodeConversation, opencodeDatabasePath, opencodeImage, opencodeReadKey, opencodeSessionId, opencodeToolOutput } from "./opencode.ts";
 import { piTranscriptPath, unwrittenSession } from "./pi.ts";
@@ -66,7 +66,7 @@ import { forgetAllPiIndexes, forgetPiIndex, piAbandonedTurns, piBranchRecords, p
 import { copilotOffsetOutput, copilotOutput, copilotRootRecord, parseCopilotTranscript } from "./copilot.ts";
 import { copilotExplicitResume, copilotHandoffSession, copilotProcessSession, copilotTranscriptFile, copilotUnwrittenSession, openCopilotFile } from "./copilot-store.ts";
 import { parseConversationMetadata } from "./conversation-metadata.ts";
-import { answerVersion, ConversationNotStarted, ConversationUnavailable, type ConversationPage, HistoryChanged, type RecognizedConversation, type StreamSource, TRANSCRIPT_WINDOW_BYTES } from "./conversation-shared.ts";
+import { answerVersion, ConversationNotStarted, ConversationReadPending, ConversationUnavailable, type ConversationPage, HistoryChanged, type RecognizedConversation, type StreamSource, TRANSCRIPT_WINDOW_BYTES } from "./conversation-shared.ts";
 import { forgetHermesTranscriptState, hermesConversationPage, hermesToolOutput, hermesTranscriptForPane } from "./hermes.ts";
 
 import { createOmpTranscriptParser, isContextClear, MAX_TURNS, omoTaskResults, parseOmpTranscript, PI_IMAGE_REF, PI_PROMPT_IMAGE_REF, piImageBlock, piMessage, piNotice, piPromptImages, piResults, type TranscriptParser } from "./transcript-records.ts";
@@ -75,14 +75,15 @@ import { CLAUDE_IMAGE_REF, claudeImageType, claudeResultText, createClaudeTransc
 import { forgetSubagents, lineNotifications, subagentDetails, type SubagentDetail } from "./claude-subagents.ts";
 import { launchedAgents } from "./launched-agents.ts";
 import { readsStartScreen, startScreenMetadata } from "./start-screen.ts";
-import { commandTranscriptRecords, type CommandTranscriptRecord } from "./outcome.ts";
+import { commandTranscriptRecords, PI_EVIDENCE_TYPES, type CommandTranscriptRecord } from "./outcome.ts";
 import { type ClaudeBranch, claudeForks, followClaudeBranch, type PromptChain, turnStarts } from "./transcript-turns.ts";
 import { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
+import { userHome } from "./user-home.ts";
 
 export { isOmoProcess } from "./omo.ts";
 export { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
 export { createClaudeTranscriptParser, parseClaudeTranscript, unwrapPastes } from "./claude-transcript.ts";
-export { TRANSCRIPT_WINDOW_BYTES, ConversationUnavailable, ConversationNotStarted, HistoryChanged, answerVersion, type RecognizedConversation, type ConversationPage } from "./conversation-shared.ts";
+export { TRANSCRIPT_WINDOW_BYTES, ConversationReadPending, ConversationUnavailable, ConversationNotStarted, HistoryChanged, answerVersion, type RecognizedConversation, type ConversationPage } from "./conversation-shared.ts";
 
 const PI_PAGE_CACHE_BYTES = 4 * 1024 * 1024;
 
@@ -836,7 +837,7 @@ export async function paneRunsOmo(paneId: string, known?: KnownProcesses): Promi
     "pane.process_info",
     { pane_id: paneId },
   ).catch(() => null);
-  const home = process.env["HOME"] ?? "";
+  const home = userHome();
   return (info?.process_info?.foreground_processes ?? []).some((process) =>
     // a pid herdr does not report keeps the argv-only proof and fails the custom one closed
     omoProcessIdentity({
@@ -879,7 +880,7 @@ export async function paneProcessRoots(paneId: string, agent: string | null | un
     "pane.process_info", { pane_id: paneId },
   ).catch(() => null);
   const processes = info?.process_info as ProcessInfo | undefined;
-  const home = process.env["HOME"] ?? "";
+  const home = userHome();
   const directory = (path: string | null): string | null => {
     try { return path && statSync(path).isDirectory() ? path : null; } catch { return null; }
   };
@@ -983,7 +984,7 @@ export async function claudePanePid(pane: HerdrPane): Promise<number | null> {
 async function claudeTranscriptPath(paneId: string, cwds: readonly (string | null | undefined)[], onProcess?: (pid: number, attach: boolean) => void, known?: KnownProcesses): Promise<string> {
   const info = await herdrRpc<{ agent: { agent_session?: { value?: unknown } } }>("agent.get", { target: paneId });
   let session = info.agent.agent_session?.value;
-  const home = process.env["HOME"] ?? "";
+  const home = userHome();
   const processes = await claudeProcesses(paneId, known);
   const only = processes.length === 1 ? processes[0] : undefined;
   let processDir: string | null = null;
@@ -997,15 +998,21 @@ async function claudeTranscriptPath(paneId: string, cwds: readonly (string | nul
   const configDir = processDir || defaultClaudeConfigDir(home);
   const attach = only ? await claudeAttachSession(configDir, only.pid, only.argv) : null;
   if (only) onProcess?.(only.pid, attach !== null);
+  // the session the process's own PID record names, also beside the hook's: a /branch can leave the hook's behind (#2020);
+  // beside a reported session, a record that cannot be read only leaves that session as it was
+  const reported = typeof session === "string" && SESSION_ID.test(session);
+  const live = attach === null && only
+    ? await (reported ? claudeProcessSession(home, only.pid, configDir).catch(() => null) : claudeProcessSession(home, only.pid, configDir))
+    : null;
   if (attach !== null) {
     // only the job's state names what the attach shows: a session an earlier Claude in this pane
     // reported through the hook can still be herdr's, and a job with none (a shell command) keeps the terminal
     session = attach.session;
-  } else if ((typeof session !== "string" || !SESSION_ID.test(session)) && only) {
-    session = await claudeProcessSession(home, only.pid, configDir);
+  } else if (!reported) {
+    session = live;
   }
   if (typeof session !== "string" || !SESSION_ID.test(session)) throw new ConversationUnavailable("no_session_id");
-  const path = await claudeTranscriptFile(home, session, cwds, configDir);
+  const path = await claudeTranscriptFile(home, session, cwds, configDir, live);
   // Claude writes the file with its first message: until then the session it reports holds nothing
   if (!path) throw new ConversationNotStarted(session, "claude-transcript");
   return path;
@@ -1102,8 +1109,7 @@ async function ompTranscriptPath(paneId: string, cwd: string): Promise<{ path: s
   const info = await herdrRpc<{ agent: { agent_session?: { kind?: unknown; value?: unknown } } }>("agent.get", { target: paneId });
   const session = info.agent.agent_session;
   const path = session?.kind === "path" && typeof session.value === "string" ? session.value : null;
-  // a Windows bridge starts with HOME set to the profile directory (remote-entry.ts)
-  const home = process.env["HOME"] ?? "";
+  const home = userHome();
   const route = process.platform === "win32" ? null : await ompPaneRoute(paneId);
   // an omp whose store nothing proves, or two keeping different ones
   if (route === "unproved") throw new ConversationUnavailable("no_session_path");
@@ -1126,17 +1132,23 @@ async function ompTranscriptPath(paneId: string, cwd: string): Promise<{ path: s
 }
 
 /** A process-owned lifecycle registration, or a trusted report plus a unique held marker. */
-async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[], previousClaims?: ReadonlySet<string>): Promise<{ path: string; binding: string; peerClaims: ReadonlySet<string> }> {
+async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[], previousClaims?: ReadonlySet<string>, peerInfo?: Map<string, Awaited<ReturnType<typeof paneProcessInfo>> | null>): Promise<{ path: string; binding: string; peerClaims: ReadonlySet<string> }> {
   const report = pane.agent_session;
   // A request shares its peer snapshot across the read; the pane's own process
   // and lifecycle evidence are still validated afresh before returning history.
+  // With `peerInfo`, peers' processes come from (and fill) that cache, while their
+  // lifecycle logs are read again here, after this pane's own binding.
   let peerClaims: Promise<ReadonlySet<string>> | undefined = previousClaims === undefined ? undefined : Promise.resolve(previousClaims);
   const gatherPeerClaims = async (): Promise<Set<string>> => {
     const claims = new Set<string>();
     for (const peer of panes) {
       if (peer.pane_id === pane.pane_id || peer.agent !== "copilot") continue;
-      const info = await paneProcessInfo(peer.pane_id).catch(() => null);
+      const cached = peerInfo?.has(peer.pane_id) === true;
+      const info = cached ? peerInfo!.get(peer.pane_id) : await paneProcessInfo(peer.pane_id).catch(() => null);
+      peerInfo?.set(peer.pane_id, info ?? null);
       const processes = agentProcesses(info?.foreground_processes ?? [], "copilot");
+      // A cached peer process that has exited may have been replaced by one we never asked about.
+      if (cached && processes.some((entry) => typeof entry.pid === "number" && !processAlive(entry.pid))) throw new ConversationUnavailable("no_session_path");
       if (processes.length === 1 && typeof processes[0]?.pid === "number") {
         const live = copilotProcessSession(processEnviron(processes[0].pid), processes[0].argv ?? [], processes[0].pid);
         if (live?.logged) {
@@ -1493,7 +1505,37 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
   rememberPaneRead(paneId, resolved.path);
   const history = resolved.source === "copilot-transcript" ? copilotHistoryIdentity(resolved.path) : null;
   const prefix = history !== null && resolved.source === "copilot-transcript" ? copilotPrefix(paneId, `${resolved.binding}\0${history}`) : null;
-  const answer = transcriptPage(resolved.source, resolved.path, prefix === null ? page : copilotPage(page, prefix), resolved.codexHome ?? codexHome, resolved.piAgentDir);
+  let answer: RecognizedConversation;
+  try {
+    answer = transcriptPage(resolved.source, resolved.path, prefix === null ? page : copilotPage(page, prefix), resolved.codexHome ?? codexHome, resolved.piAgentDir);
+  } catch (error) {
+    if (resolved.source !== "copilot-transcript" || prefix === null || !(error instanceof ConversationUnavailable) || error.message !== "transcript_missing") throw error;
+    const paged = page.before !== undefined || page.since !== undefined || page.from !== undefined;
+    // Unpaged refreshes otherwise carry no proof of which history is on screen: older
+    // clients without it keep their fail-closed fallback, with no recheck to wait on.
+    if (page.history_id === undefined && !paged) throw error;
+    // A read failure is not an empty conversation. Only a fresh, matching binding
+    // and file generation permit retaining the view; never reuse the request's earlier peer claims.
+    try {
+      const fresh = await sessionSnapshot();
+      const pane = fresh.panes.find((candidate) => candidate.pane_id === paneId);
+      if (pane === undefined) throw new ConversationUnavailable("no_session_id");
+      // Peer checks await herdr, and either side can switch meanwhile: once every
+      // process is known, read this pane's binding and the peers' claims again with no
+      // herdr call between those reads and the comparison.
+      const peerInfo = new Map<string, Awaited<ReturnType<typeof paneProcessInfo>> | null>();
+      await copilotTranscriptPath(pane, fresh.panes, undefined, peerInfo);
+      const current = await copilotTranscriptPath(pane, fresh.panes, undefined, peerInfo);
+      if (current.path !== resolved.path || current.binding !== resolved.binding || copilotHistoryIdentity(resolved.path) !== history) {
+        throw new ConversationUnavailable("no_session_path");
+      }
+    } catch (cause) {
+      if (cause instanceof ConversationUnavailable && paged) throw new HistoryChanged();
+      throw cause;
+    }
+    if (page.history_id !== undefined && !page.history_id.startsWith(prefix)) throw new HistoryChanged();
+    throw new ConversationReadPending();
+  }
   const status = snapshot.panes.find((pane) => pane.pane_id === paneId)?.agent_status;
   if (resolved.source === "grok-transcript" && answer.turns.length === 0 && page.before === undefined
     && (status === "working" || status === "blocked")) {
@@ -1572,7 +1614,11 @@ const commandTranscripts = new Map<string, {
   partialStart: number; records: CommandTranscriptRecord[]; identity: string;
   /** pi: the active branch's name and its last node, which an append that runs on from it keeps */
   branch: string; leaf: string | null; answer: CommandTranscript | null;
+  /** pi: the last node each recent branch was read at (id and byte offset), newest last, so a session that comes back
+   * to one keeps its name */
+  branches: Map<string, { id: string; offset: number }>;
 }>();
+const REMEMBERED_BRANCHES = 8;
 
 /** `look`: the snapshot and herdr's `pane.process_info` the caller's poll already read, so neither is asked again. */
 export async function readCommandTranscript(paneId: string, codexHome?: string, look: { snapshot?: SessionSnapshot; processes?: KnownProcesses } = {}): Promise<CommandTranscript | null> {
@@ -1616,6 +1662,7 @@ export async function readCommandTranscript(paneId: string, codexHome?: string, 
   const identity = append ? cached.identity : `${source}\0${path}\0${file}:${stat.size}:${stat.mtimeMs}`;
   let branch = "";
   let leaf: string | null = null;
+  let branches = new Map<string, { id: string; offset: number }>();
   if (source === "pi-transcript") {
     const nodes = current.filter(record => typeof record.entry.id === "string");
     const byId = new Map(nodes.map((record, index) => [String(record.entry.id), { record, index }]));
@@ -1640,29 +1687,61 @@ export async function readCommandTranscript(paneId: string, codexHome?: string, 
     // An unexplained missing ancestor or ambiguous index cannot prove branch ownership.
     current = rooted ? active.reverse() : [];
     leaf = rooted && current.length > 0 ? String(current.at(-1)!.entry.id) : null;
-    // An append that runs on from the branch read before is that branch: the forks in the window change as it
-    // slides (its first node always looks like one), and the sends bound to the branch must keep seeing it (#1487).
-    // Any other append, a branch switch or a fork made since among them, names its branch afresh.
-    const continued = append && cached.leaf !== null && cached.branch !== "unresolved" && rooted
-      && runsOnFrom(cached.leaf, current, forks, nodes[0]);
-    branch = !rooted ? "unresolved" : continued ? cached.branch
-      : createHash("sha256").update(forks.map(({ entry }) => String(entry.id)).join("\0")).digest("hex");
+    // An append that runs on from the node a branch was last read at is that branch: the forks in the window change
+    // as it slides (its first node always looks like one), and the session can go to another branch and /tree back,
+    // yet the sends bound to the branch must keep seeing it (#1487, #1879). Any other path names its branch afresh.
+    if (append) branches = new Map(cached.branches);
+    const resumed = rooted ? resumedBranch(branches, nodes, current) : null;
+    const continued = resumed === null && append && cached.leaf !== null && cached.branch !== "unresolved" && rooted
+      && runsOnFromCut(cached.leaf, current, forks, nodes[0]);
+    branch = !rooted ? "unresolved" : resumed ?? (continued ? cached.branch
+      : createHash("sha256").update(forks.map(({ entry }) => String(entry.id)).join("\0")).digest("hex"));
+    if (branch !== "unresolved" && leaf !== null) {
+      branches.delete(branch);
+      branches.set(branch, { id: leaf, offset: current.at(-1)!.offset });
+      if (branches.size > REMEMBERED_BRANCHES) branches.delete(branches.keys().next().value!);
+    }
   }
   const cleared = current.reduce((last, { entry }, index) => isContextClear(entry, source) ? index : last, 0);
   const answer = branch === "unresolved" ? null
     : { identity: `${identity}\0${branch}`, records: cleared > 0 ? current.slice(cleared) : current };
-  remember(commandTranscripts, path, { signature, file, start, end: stat.size, digests, partialStart, records, identity, branch, leaf, answer }, 4);
+  remember(commandTranscripts, path, { signature, file, start, end: stat.size, digests, partialStart, records, identity, branch, leaf, answer, branches }, 4);
   return answer;
 }
 
 /**
- * Whether a pi path read after an append runs on from `leaf`, the last node of the path read before, with no fork
- * after it. `leaf` is on the path, or was cut away with the window's start and is the parent of its first node (the
- * first node read after it, as appends follow it), whose own fork mark only says its predecessor was cut away.
+ * The remembered pi branch (`branches`: name to the node it was last read at) that `path` runs on from. Its node is on
+ * the path, the same entry at the same offset (a later entry may reuse its id), and of what was written since (that node was then the file's last), nothing off the path is under it, and
+ * nothing off the path is a record a send's result could be (`PI_EVIDENCE_TYPES`): a result written on the branch the
+ * session went to must not leave a send waiting on its old branch for a later identical send's. `nodes` are the
+ * window's nodes in file order.
  */
-function runsOnFrom(leaf: string, path: readonly CommandTranscriptRecord[], forks: readonly CommandTranscriptRecord[], first: CommandTranscriptRecord | undefined): boolean {
-  const kept = path.find(({ entry }) => entry.id === leaf);
-  if (kept) return forks.every((fork) => fork.offset <= kept.offset);
+function resumedBranch(branches: ReadonlyMap<string, { id: string; offset: number }>, nodes: readonly CommandTranscriptRecord[], path: readonly CommandTranscriptRecord[]): string | null {
+  const onPath = new Map(path.map((record) => [String(record.entry.id), record]));
+  for (const [name, leaf] of branches) {
+    const at = onPath.get(leaf.id);
+    if (!at || at.offset !== leaf.offset) continue;
+    const under = new Set([leaf.id]);
+    const alone = nodes.every(({ entry, offset }) => {
+      if (offset <= at.offset) return true;
+      const id = String(entry.id);
+      if (typeof entry.parentId === "string" && under.has(entry.parentId)) {
+        under.add(id);
+        return onPath.has(id);
+      }
+      return onPath.has(id) || !PI_EVIDENCE_TYPES.has(String(entry.type));
+    });
+    if (alone) return name;
+  }
+  return null;
+}
+
+/**
+ * Whether a pi path read after an append runs on from `leaf`, the last node of the path read before, which was cut
+ * away with the window's start: it is the parent of the path's first node (the first node read after it, as appends
+ * follow it), whose own fork mark only says its predecessor was cut away, and no other fork follows.
+ */
+function runsOnFromCut(leaf: string, path: readonly CommandTranscriptRecord[], forks: readonly CommandTranscriptRecord[], first: CommandTranscriptRecord | undefined): boolean {
   const head = path[0];
   return head !== undefined && head === first && head.entry.parentId === leaf && forks.every((fork) => fork === head);
 }
@@ -1764,7 +1843,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
     if (live === null && page.before === undefined && start > stream.floor) head = metadataHead(path, stream, source, start);
     cursor = formatCursor(stream, start);
   } catch (error) {
-    if (error instanceof HistoryChanged) throw error;
+    if (error instanceof HistoryChanged || error instanceof ConversationUnavailable) throw error;
     throw new ConversationUnavailable("transcript_missing");
   }
 

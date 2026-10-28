@@ -18,6 +18,7 @@ import { isGjcProcess } from "./gjc-runtime.ts";
 import { isOmoProcess, omoProcessIdentity } from "./omo.ts";
 import { psQuote } from "./powershell.ts";
 import { descendantArgv, windowsProcessTable } from "./windows-processes.ts";
+import { userHome } from "./user-home.ts";
 
 /** kind -> the foreground-process test that proves the agent is running in the pane. */
 export const SHELL_AGENTS: Record<string, (argv: readonly string[]) => boolean> = {
@@ -299,7 +300,7 @@ export async function startShellAgent(kind: string, paneId: string, args: string
   const deadline = Date.now() + (options.timeoutMs ?? 60_000);
   while (Date.now() < deadline) {
     const info = await processInfo(paneId);
-    const started = info?.process_info?.foreground_processes?.find((entry) => kind === "omo" ? omoProcessIdentity(entry, "", process.env["HOME"] ?? "") !== null : isProcess(entry.argv ?? []));
+    const started = info?.process_info?.foreground_processes?.find((entry) => kind === "omo" ? omoProcessIdentity(entry, "", userHome()) !== null : isProcess(entry.argv ?? []));
     if (started) return started.pid;
     const shellPid = info?.process_info?.shell_pid;
     // the table query never outlasts what is left of the start's own time

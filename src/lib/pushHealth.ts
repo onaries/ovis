@@ -85,8 +85,17 @@ export function classifyPushHealth(input: PushHealthInput): PushHealth {
   return QUIET;
 }
 
-/** What Send test or a repair came to, for Settings' line (components/PushTestControls.tsx). */
-export type PushActionResult = "sent" | "unsupported" | "permission" | "missing" | "gone" | "read-only" | "failed";
+/**
+ * What Send test or a repair came to, for Settings' line (components/PushTestControls.tsx). A repair
+ * that made no subscription says why: the browser (or the app) would not make one ("refused"), the
+ * page's service worker never came up ("no-worker"), or the PC did not take it ("unregistered").
+ */
+export type PushActionResult = "sent" | "unsupported" | "permission" | "missing" | "gone" | "read-only" | "refused" | "no-worker" | "unregistered" | "failed";
+
+const REPAIR_FAILURES: ReadonlySet<PushActionResult> = new Set(["refused", "no-worker", "unregistered"]);
+
+/** A repair that did not mend the fault: its reason is the notice's and Settings' line while that fault stands. */
+export const repairFailed = (result: PushActionResult | null): boolean => result !== null && REPAIR_FAILURES.has(result);
 
 /**
  * A result with the subscription it is about: the endpoint tested, or the one a repair registered;
@@ -103,9 +112,28 @@ export interface PushHealthState {
   /** the test or repair under way, from the notice or Settings: the other waits */
   busy: "test" | "repair" | null;
   result: PushActionResult | null;
+  /** the fault whose notice this device closed: Settings still tells it, the notice does not until another fault or a working look */
+  dismissed: PushProblem | null;
 }
 
-let state: PushHealthState = { health: QUIET, busy: null, result: null };
+const DISMISSED_KEY = "ovis:push-notice-dismissed";
+const PROBLEMS: readonly PushProblem[] = ["permission", "missing", "gone", "key-mismatch", "rejected"];
+
+function readDismissed(fallback: PushProblem | null = null): PushProblem | null {
+  try {
+    const value = window.localStorage.getItem(DISMISSED_KEY);
+    return PROBLEMS.find((problem) => problem === value) ?? null;
+  } catch { return fallback; }
+}
+
+function writeDismissed(problem: PushProblem | null): void {
+  try {
+    if (problem) window.localStorage.setItem(DISMISSED_KEY, problem);
+    else window.localStorage.removeItem(DISMISSED_KEY);
+  } catch { /* storage blocked: the dismissal lasts until the page reloads */ }
+}
+
+let state: PushHealthState = { health: QUIET, busy: null, result: null, dismissed: readDismissed() };
 const listeners = new Set<() => void>();
 /** every refresh takes a number; an answer to an older one is dropped (a later success, disable or new subscription has spoken since) */
 let generation = 0;
@@ -121,6 +149,15 @@ let resultFor: string | null | undefined;
 function setState(next: PushHealthState): void {
   state = next;
   for (const listener of listeners) listener();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.storageArea !== window.localStorage || event.key !== null && event.key !== DISMISSED_KEY) return;
+    // Events can be queued behind a newer write: read what stands now, never replay event.newValue.
+    const dismissed = readDismissed(state.dismissed);
+    if (dismissed !== state.dismissed) setState({ ...state, dismissed });
+  });
 }
 
 function subscribe(listener: () => void): () => void {
@@ -208,15 +245,44 @@ export async function refreshPushHealth(wanted: boolean): Promise<void> {
   }
   // the PC out of reach says nothing new: what was known stands, a notice included, until it answers again
   if (!reached) return;
-  const health = classifyPushHealth(input);
+  let health = classifyPushHealth(input);
   // a fault found later is the latest word: the line of an earlier test does not stand beside it, nor
-  // does the line of a test or repair of a subscription since replaced
-  let result = health.problem === null ? state.result : null;
-  if (result !== null && endpoint !== undefined) {
+  // does the line of a test or repair of a subscription since replaced. Why a repair failed is about
+  // the fault it was meant to mend. No worker or no status answer proves no recovery.
+  const working = health.problem === null && input.status !== null && typeof input.status === "object";
+  const keepFailure = repairFailed(state.result) && input.wanted && input.supported && input.permission === "granted"
+    && !working && (health.problem === null || health.repair && (state.health.problem === null || health.problem === state.health.problem));
+  if (keepFailure && health.problem === null) health = state.health;
+  let result = (repairFailed(state.result) ? keepFailure : health.problem === null) ? state.result : null;
+  if (result !== null && !repairFailed(result) && endpoint !== undefined) {
     if (resultFor === undefined) resultFor = endpoint;
     else if (resultFor !== endpoint) result = null;
   }
-  setState({ ...state, health, result });
+  // Read the origin's current value even if this tab has not received its storage event yet.
+  const stored = readDismissed(state.dismissed);
+  const dismissed = keptDismissal(stored, health, input);
+  if (dismissed !== stored) writeDismissed(dismissed);
+  setState({ ...state, health, result, dismissed });
+}
+
+/**
+ * A closed notice stays closed for its fault. Another fault is news, and so is the same one after a
+ * look that found alerts working: the server answered for a subscription this device holds. A look
+ * that saw nothing (no worker yet, an older server) proves neither, and keeps it.
+ */
+function keptDismissal(dismissed: PushProblem | null, health: PushHealth, input: PushHealthInput): PushProblem | null {
+  if (dismissed === null) return null;
+  if (!input.wanted) return null;
+  if (health.problem !== null) return health.problem === dismissed ? dismissed : null;
+  return typeof input.status === "object" && input.status !== null ? null : dismissed;
+}
+
+/** Closes the notice on this device for the fault it tells; Settings → Alerts goes on telling it. */
+export function dismissPushNotice(): void {
+  const problem = state.health.problem;
+  if (problem === null) return;
+  writeDismissed(problem);
+  setState({ ...state, dismissed: problem });
 }
 
 /** Alerts turned off here, or the device locked: nothing is wrong any more, and no answer still out may say otherwise. */
@@ -224,7 +290,8 @@ export function resetPushHealth(): void {
   generation += 1;
   actions += 1;
   resultFor = undefined;
-  setState({ health: QUIET, busy: null, result: null });
+  writeDismissed(null);
+  setState({ health: QUIET, busy: null, result: null, dismissed: null });
 }
 
 /**

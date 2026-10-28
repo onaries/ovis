@@ -8,7 +8,7 @@ function socket(stopped: boolean) {
   const handler = createSocket({
     clients: new Set(), present: new Set(), stopped: () => stopped, admit: () => true, setRole() {}, watchPane() {}, unwatchPane() {},
     end: (_client, reason) => { ended.push(reason); }, holdPending() {}, attachments: new Map(),
-    clientSnapshot: async () => ({}) as SessionSnapshot, countVisit() {}, drainOutput() {}, frames: {} as never,
+    clientSnapshot: async () => ({}) as SessionSnapshot, browserSnapshot: (snapshot) => snapshot, countVisit() {}, drainOutput() {}, frames: {} as never,
   });
   const client = { data: connectionData({ deviceId: undefined, readOnly: false }) } as Client;
   return { handler, client, ended };

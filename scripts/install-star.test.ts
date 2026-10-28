@@ -57,7 +57,8 @@ const STAND_INS: Record<string, string> = {
   "plugin action invoke "*) ;;
   *) echo "unexpected herdr $*" >&2; exit 1 ;;
 esac`,
-  node: `echo v22.0.0`,
+  // a Node 22 for this PC: --version, and the probe install.sh's node_fits makes (version and architecture)
+  node: `case "$1" in -p) case "$(uname -m)" in aarch64 | arm64) echo "22 arm64" ;; *) echo "22 x64" ;; esac ;; *) echo v22.0.0 ;; esac`,
   // only the manifest of the ref being installed: what its id is, or a network that blocks the host
   curl: `echo "$*" >> "$SCRATCH/curl.calls"
 case "$*" in

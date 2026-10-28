@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
@@ -97,6 +97,46 @@ try {
           assert.equal(approvals, 1);
           assert.deepEqual(errors, []);
           console.log(`PASS ${width}px: version failure → validated update by Enter → separate approval → Open PC`);
+
+          await page.unroute("**/api/machines/setup**");
+          for (const decision of ["early_close", "cancel", "close", "start_headless"] as const) {
+            const actions: unknown[] = [];
+            await page.route("**/api/machines/setup**", async (route) => {
+              const request = route.request();
+              if (request.method() === "POST" && new URL(request.url()).pathname === "/api/machines/setup") {
+                assert.deepEqual(request.postDataJSON(), { destination: "fixture-only" });
+                job = { id: "login", machine_id: "fixture", target: { destination: "fixture-only" }, windows_startup: true, phase: decision === "early_close" ? "installing" : "starting", step: decision === "early_close" ? "Installing verified Windows bundle…" : "Waiting for Windows sign-in on this PC.", action_required: decision === "early_close" ? null : "windows_login", installations: [], challenge: null, error: null, ssh_output: null };
+              } else if (request.method() === "POST") {
+                actions.push(request.postDataJSON());
+                job = { ...job!, action_required: null, phase: decision === "start_headless" ? "connected" : "cancelled", step: decision === "start_headless" ? "Connected" : "Cancelled" };
+              }
+              await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job!) });
+            });
+            await page.reload();
+            await destination.fill("fixture-only");
+            await destination.press("Enter");
+            if (decision === "early_close") await dialog.getByText("Keep this dialog open until the PC connects.", { exact: true }).waitFor();
+            else {
+              await dialog.getByText("Waiting for Windows sign-in", { exact: true }).waitFor();
+              await dialog.getByText(/Starting without Windows sign-in can break Codex sandbox commands/).waitFor();
+            }
+            assert.deepEqual(actions, [], "waiting and polling never authorize a headless start");
+            assert.equal(await dialog.getByRole("button", { name: "Continue in background", exact: true }).count(), 0, "an unsaved waiting PC must not become unreachable in the background");
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+            if (decision === "start_headless") {
+              const shots = join(repo, "evidence/windows-startup"); mkdirSync(shots, { recursive: true });
+              await page.screenshot({ path: join(shots, `waiting-${width}.png`) });
+            }
+            await Promise.all([
+              page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/machines/setup/login"),
+              dialog.getByRole("button", { name: decision === "cancel" ? "Cancel connection" : decision === "close" || decision === "early_close" ? "Close PC setup" : "Start without Windows sign-in", exact: true }).click(),
+            ]);
+            assert.deepEqual(actions, [{ action: decision === "close" || decision === "early_close" ? "cancel" : decision }]);
+            if (decision === "start_headless") await dialog.getByRole("button", { name: "Open PC", exact: true }).waitFor();
+            await page.unroute("**/api/machines/setup**");
+          }
+          assert.deepEqual(errors, []);
+          console.log(`PASS ${width}px: Windows login waits without consent → cancel or explicit headless start`);
         } finally { await context.close(); }
       }
     } finally { await browser.close(); }

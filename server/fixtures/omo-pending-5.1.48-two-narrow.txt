@@ -1,0 +1,44 @@
+
+
+
+ [Linux 방식] [접속 주소] answer later
+ pending
+ Question accepted; the answer will arrive
+ as a user message.
+
+
+
+ todo done: Ask Linux method and address
+ questions
+ Ask: Call ask_user_question exactly once
+ with waitForAnswer false, with exactly two
+ questions. First header "Linux 방식",
+ question "NUC에서 프록시·봇을 돌릴 Linux는
+ 어떤 방식으로 올릴까요?", options "가상 컴
+ 퓨터 (추천)", "컨테이너 (메모 원안)… (+132
+ chars)
+ I. Questions
+   [✓] Ask Linux method and address
+ questions
+
+
+ I've posted both questions (how to run
+ Linux on the NUC, and which access address
+ to use), and your answers will come back as
+ a message.
+
+ Cache hit 84.6%, 0.4s
+
+? Question pending (2 unanswered) · 30m
+  Linux 방식 - NUC에서 프록시·봇을 돌릴 Li...
+[ 가상 컴퓨터 (추천) ]
+[ 컨테이너 (메모 원안) ]  [ own answer… ]
++1 more question
+click an option · shift+drag to select text
+enter or alt+up to answer · /answer · or just
+type your reply
+─────────────────────────────────────────────
+❯
+─────────────────────────────────────────────
+…• 35K/1M (3.5%) (auto)  claude-opus-5-5:high
+(😺 OmO Native by Q Kim)

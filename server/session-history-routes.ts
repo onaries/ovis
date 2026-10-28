@@ -22,6 +22,7 @@ import { herdrSocketPath, paneProcessInfo, sessionSnapshot, tabClose, tabCreate 
 import { badRequest, errorResponse, jsonResponse, readJsonObject } from "./http.ts";
 import { isSessionHistoryAgent, listSessions, type SessionHistoryOptions } from "./session-history.ts";
 import { descendantProcesses, type ProcessRow } from "./windows-processes.ts";
+import { userHome } from "./user-home.ts";
 
 export const SESSION_HISTORY_PATH = "/api/sessions/history";
 export const SESSION_RESUME_PATH = "/api/sessions/resume";
@@ -110,7 +111,7 @@ async function paneStore(paneId: string, options: StoreOptions): Promise<{ store
     if (below === null) return null;
     foreground = below;
   }
-  const home = options.stores?.home ?? process.env["HOME"] ?? "";
+  const home = options.stores?.home ?? userHome();
   const source = await paneClaudeSource(foreground, home, platform, table);
   const store = await claudeStoreOf(source, home, options.stores?.env ?? process.env);
   const claude = foreground.filter(isClaude);
@@ -128,7 +129,7 @@ async function paneStore(paneId: string, options: StoreOptions): Promise<{ store
 async function startedStore(paneId: string, listedDir: string, options: StoreOptions, stopped: () => boolean = () => false): Promise<{ store: NonNullable<Awaited<ReturnType<typeof paneStore>>>["store"]; writesListed: boolean } | null> {
   const deadline = Date.now() + (options.launchCheckMs ?? 15_000);
   const platform = options.platform ?? process.platform;
-  const home = options.stores?.home ?? process.env["HOME"] ?? "";
+  const home = options.stores?.home ?? userHome();
   let landed: Awaited<ReturnType<typeof paneStore>> = null;
   for (;;) {
     if (stopped()) return null;

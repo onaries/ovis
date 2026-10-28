@@ -199,6 +199,9 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *  GET    /api/pane/conversation?pane_id=    -> ConversationResponse (structured agent
  *         transcript turns - claude, codex, omp, omo, gjc, pi, devin, OpenCode, hermes, grok or agy;
  *         source:"scrollback" when the pane has no recognized, readable store.
+ *         Copilot page reads that fail while fresh ownership, file generation and the requested
+ *         history_id (or bound cursor) still match answer 503 conversation_read_pending:
+ *         retain the displayed view and retry, not fallback. A mismatched history_id answers 409.
  *         Grok requires exact live process/session evidence, Agy live process/session evidence;
  *         rewinds invalidate cursors.
  *         Grok/Agy optional activity describes the latest native turn, independently of pane status.)
@@ -516,7 +519,10 @@ export interface PlanSummary {
   current: string | null;
 }
 
-/** GET /api/pane/conversation: native conversation with settings, or scrollback fallback. */
+/**
+ * GET /api/pane/conversation: native conversation with settings, or scrollback fallback.
+ * A refresh may echo history_id as a query parameter to identify the view it would retain on failure.
+ */
 export interface ConversationResponse {
   /** Grok/Agy latest native turn; display feedback only, never input-delivery authority. */
   activity?: "thinking" | "working" | "idle";

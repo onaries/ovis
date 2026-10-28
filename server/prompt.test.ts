@@ -14,6 +14,8 @@ const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option
 // Real omo-ai 5.1.30 pane.read captures at 120 and 45 columns, with the recorded open calls.
 const omoPendingFixture = (name: string) => readFileSync(new URL(`./fixtures/omo-pending-5.1.30-${name}`, import.meta.url), "utf8");
 const omoExtensionTail = omoPendingFixture("extension-tail.txt");
+// Real omo-ai 5.1.48 captures of a two-question widget at 120 and 45 columns, with the recorded call.
+const omo48PendingFixture = (name: string) => readFileSync(new URL(`./fixtures/omo-pending-5.1.48-${name}`, import.meta.url), "utf8");
 const withOmoExtensionTail = (screen: string) => screen.replace(/(❯\n─+\n)/, `$1${omoExtensionTail}`);
 // OmO's omo-task widget rows under the input box, as a live pane shows them: a live row wrapped onto a
 // second line, a live row, a finished row and the `+N more` line
@@ -2079,6 +2081,62 @@ ${rule60}
     });
   }
 
+  // omo 5.1.48 joins the header and the question with " - " where 5.1.30 drew " — "
+  for (const width of ["wide", "narrow"]) {
+    test(`reads the real 5.1.48 two-question ${width} widget with its pending call`, () => {
+      const open = openOmoAsks(omo48PendingFixture("two.jsonl"));
+      const question = open[0]!.questions[0]!;
+      const screen = omo48PendingFixture(`two-${width}.txt`);
+      expect(screen).toContain(`${question.header} - `);
+      expect(parseInteractivePrompt("pi", screen, null, false, open)).toMatchObject({
+        agent: "omo", kind: "question", title: "Question 1 of 2", question: question.question, options: question.options,
+        multi_select: false, custom_option_index: question.options.length,
+      });
+    });
+  }
+
+  test("reads a 5.1.48 widget whose header holds the separator, and only for a call it shows", () => {
+    const jsonl = omo48PendingFixture("two.jsonl");
+    const screen = omo48PendingFixture("two-wide.txt");
+    const { header, question } = openOmoAsks(jsonl)[0]!.questions[0]!;
+    const read = (calls: string, shown: string) => parseInteractivePrompt("pi", shown, null, false, openOmoAsks(calls));
+    // a header holding " - " splits there first; the split after it is the one the call asked
+    const dashed = `${header} - x`;
+    const dashedCalls = jsonl.replaceAll(`"header":"${header}"`, `"header":"${dashed}"`);
+    expect(read(dashedCalls, screen.replaceAll(`${header} - `, `${dashed} - `))).toMatchObject({ agent: "omo", title: "Question 1 of 2" });
+    // a header or question the call does not hold, or nothing after the separator: no card
+    expect(read(dashedCalls, screen)).toBeNull();
+    expect(read(jsonl, screen.replaceAll(`${header} - `, `${header} - another `))).toBeNull();
+    expect(read(jsonl, screen.replaceAll(question, "..."))).toBeNull();
+  });
+
+  test("tries separators that share a space, and gives no card when two calls fit the line", () => {
+    const screen = omo48PendingFixture("two-wide.txt");
+    const call = (id: string, header: string, question: string, options: string[]) => [
+      JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id, name: "ask_user_question", arguments: { questions: [{ header, question, multiSelect: false, options: options.map((label) => ({ label })) }], waitForAnswer: false } }] } }),
+      JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: id, toolName: "ask_user_question", content: [{ type: "text", text: "Question accepted; the answer will arrive as a user message." }], details: { accepted: true, requestId: id, status: "pending" }, isError: false } }),
+    ].join("\n");
+    const actual = call("actual", "Plan -", "Choose deployment target?", ["Staging", "Production"]);
+    const decoy = call("decoy", "Plan", "- Choose deployment target?", ["Continue", "Cancel"]);
+    const widget = (separator: string) => screen.replace(/\? Question pending[^\n]*\n[^\n]*\n[^\n]*\n/,
+      `? 2 questions pending · 30m\n  Plan -${separator}Choose deployment target?\n[ Staging ]  [ Production ]  [ own answer\u2026 ]\n`);
+    const read = (calls: string, separator: string) => parseInteractivePrompt("pi", widget(separator), null, false, openOmoAsks(calls));
+    for (const separator of [" - ", " \u2014 "]) {
+      expect(read(actual, separator), separator).toMatchObject({ agent: "omo", title: "Plan -", options: [{ label: "Staging" }, { label: "Production" }] });
+      // both calls fit the line, split at either separator: no card rather than the wrong one
+      expect(read(`${actual}\n${decoy}`, separator), separator).toBeNull();
+    }
+    // a cut that leaves only one call's header still counts against the other call
+    const cut = (separator: string) => screen.replace(/\? Question pending[^\n]*\n[^\n]*\n[^\n]*\n/,
+      `? 2 questions pending · 30m\n  P - Deploy${separator}...\n[ Continue ]  [ Cancel ]  [ own answer\u2026 ]\n`);
+    const cutActual = call("cut-actual", "P - Deploy", "Choose deployment target?", ["Continue", "Cancel"]);
+    const cutDecoy = call("cut-decoy", "P", "Deploy - Choose another target?", ["Continue", "Cancel"]);
+    // one column narrower, the cut also takes the separator's space
+    for (const separator of [" - ", " \u2014 ", " -", " \u2014"]) {
+      expect(parseInteractivePrompt("pi", cut(separator), null, false, openOmoAsks(`${cutActual}\n${cutDecoy}`)), separator).toBeNull();
+    }
+  });
+
   for (const count of ["one", "two"]) for (const width of ["wide", "narrow"]) {
     test(`reads the real 5.1.30 ${count}-question ${width} widget with extension status below the box`, () => {
       const open = openOmoAsks(omoPendingFixture(`${count}.jsonl`));
@@ -4044,6 +4102,58 @@ describe("an answer and the menu it was made for", () => {
     const body = await response.json() as { error?: { code: string } };
     return { status: response.status, code: body.error?.code };
   }
+
+  // #2106 review: omp 18.13's approval menu on a terminal without extended key reporting, where Ctrl+J and Ctrl+M arrive
+  // as LF and CR and Ctrl+Enter and Shift+Enter as CR, all read as Enter, which takes the highlighted row (Approve when the
+  // panel opens); Ctrl+H and Ctrl+I arrive as Backspace and Tab. omp matches what arrives against its bindings: approve
+  // first, then deny, then the arrows, then Enter
+  test.each([
+    ["Ctrl+J", "ctrl+j"], ["Ctrl+M", "ctrl+m"], ["Ctrl+\u23ce", "ctrl+enter"], ["\u21e7\u23ce", "shift+enter"], ["Ctrl+I", "ctrl+i"], ["\u238b", "esc"],
+  ] as const)("denies when omp's Deny is bound to %s, on a terminal that delivers it as another key", async (deny, denyName) => {
+    // two actions never share a binding: with Deny on Ctrl+\u23ce, Approve keeps only Ctrl+Q
+    const approveDrawn = denyName === "ctrl+enter" ? "Ctrl+Q" : "Ctrl+\u23ce/Ctrl+Q";
+    const approveNames = denyName === "ctrl+enter" ? ["ctrl+q"] : ["ctrl+enter", "ctrl+q"];
+    const shown = readFileSync(new URL("./fixtures/omp-approval-18.13.2-unicode-wide.txt", import.meta.url), "utf8")
+      .replace("Ctrl+\u23ce/Ctrl+Q approve \u00b7 \u238b deny \u00b7", `${approveDrawn} approve \u00b7 ${deny} deny \u00b7`);
+    expect(shown).toContain(`${approveDrawn} approve \u00b7 ${deny} deny`);
+    const rows = ["approved", "approved for the session", "denied"];
+    const legacy = (key: string): string => /^(?:ctrl\+[jm]|(?:ctrl|shift)\+enter)$/.test(key) ? "enter"
+      : key === "ctrl+h" ? "backspace" : key === "ctrl+i" ? "tab" : key;
+    /** what omp 18.13 does with the keys the bridge sent, as a legacy terminal delivers them */
+    const outcome = (sent: string[]): string => {
+      let cursor = 0;
+      for (const key of sent) {
+        const received = legacy(key);
+        if (approveNames.includes(received)) return "approved";
+        if (received === denyName) return "denied";
+        if (received === "up") cursor = (cursor + rows.length - 1) % rows.length;
+        else if (received === "down") cursor = (cursor + 1) % rows.length;
+        else if (received === "enter") return rows[cursor]!;
+      }
+      return "waiting";
+    };
+    // omp redraws its cursor as the arrows arrive, which the bridge reads back before it selects
+    const lines = shown.split("\n");
+    const top = lines.findIndex((line) => line.startsWith("\u2502 \u276f Approve "));
+    expect(top).toBeGreaterThan(0);
+    const drawn = (cursor: number) => lines.map((line, index) => index < top || index > top + 2 ? line
+      : `\u2502 ${index - top === cursor ? "\u276f" : " "} ${line.slice(4)}`).join("\n");
+    expect(drawn(0)).toBe(shown);
+    for (const [option, expected] of [[2, "denied"], [0, "approved"], [1, "approved for the session"]] as const) {
+      await withPane("omp", "blocked", shown, async (pane) => {
+        let cursor = 0;
+        pane.onSent = (key) => {
+          if (key === "up") cursor = (cursor + rows.length - 1) % rows.length;
+          else if (key === "down") cursor = (cursor + 1) % rows.length;
+          pane.screen = drawn(cursor);
+        };
+        const shownCard = await card();
+        expect(shownCard?.options.map((row) => row.label)).toEqual(["Approve", "Approve bash for this session", "Deny"]);
+        expect(await answer(shownCard!.id, { option_index: option })).toEqual({ status: 200, code: undefined });
+        expect(outcome(pane.sent), `${deny} option ${option}: ${pane.sent.join(",")}`).toBe(expected);
+      });
+    }
+  });
 
   test.each(["whole", "heading-only", "command-only", "command-middle"])("refuses an old cmd heredoc card with a quoted native frame (%s)", async (layout) => {
     const screen = (prefix: string) => {

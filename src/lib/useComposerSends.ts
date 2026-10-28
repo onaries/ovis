@@ -3,7 +3,8 @@ import { ApiError } from "./api.ts";
 import { answerFromText, answerRefusal, needsConfirmation, type TypedAnswer } from "./promptAnswer.ts";
 import { composerDelivery, pendingActionUncertain, submitNotTyped, submitRefusal, type DraftRefusal } from "./compose.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
-import { pendingMessages } from "./pendingMessages.ts";
+import { pendingMessages, UNCONFIRMED_SEND } from "./pendingMessages.ts";
+import { paneStorageId } from "../../shared/machines.ts";
 import { composerDrafts } from "./composerDraft.ts";
 import type { AgentStatus, InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
@@ -123,6 +124,8 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway);
       return result === null ? false : result.then((answer) => {
         if (!answer.ok) return submitRefusal(answer.code, answer.message, answer.draft, answer.box, agent);
+        // an older bridge took it with no receipt: the box lets it go, a row keeps it as not confirmed
+        if (answer.unconfirmed && pane !== null) pendingMessages.keepUnconfirmed(paneStorageId(machineId, pane), text);
         // only a receipt that says the pane took it at once, on the connection and pane it left from
         if (delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed
           && paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
@@ -215,7 +218,9 @@ export function useComposerSends(deps: ComposerSendsDeps) {
             return;
           }
           const answer = await result;
-          if (answer.ok) {
+          // an older bridge's raw input has no receipt: the copy stays, not confirmed, rather than going as sent
+          if (answer.ok && answer.unconfirmed) pendingMessages.fail(owner, id, UNCONFIRMED_SEND, true, message.resendGeneration ?? 0);
+          else if (answer.ok) {
             pendingMessages.removeCopy(owner, id);
             if (action === "steer" && answer.pending === undefined && !answer.unconfirmed) showSentCommand(pane, message.text, known, seen);
           }

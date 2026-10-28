@@ -43,6 +43,7 @@ export const CHAT_JA: Record<string, string> = {
   "Show all {n} lines": "{n} 行すべて表示",
   "Empty task": "空のタスク",
   "Couldn't copy. Select the text and copy it manually.": "コピーできませんでした。テキストを選択して手動でコピーしてください。",
+  "Input": "入力",
   "Output": "出力",
   "Arguments omitted (too large)": "引数が大きすぎるため省略しました",
   "thinking": "思考",

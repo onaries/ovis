@@ -708,11 +708,25 @@ async function phoneSetup(): Promise<number> {
   return code;
 }
 
+/**
+ * The version that runs, or runs at the next start: the release Settings → Updates installed, else
+ * this checkout. herdr's plugin list names only the checkout's, which keeps the version first
+ * installed, so Ovis for Windows reads this line to tell an old server from an updated one.
+ */
+function runningVersion(): string | null {
+  try {
+    const version = (JSON.parse(readFileSync(join(dirname(activePluginScript(ROOT, port, APP_STATE_DIR)), "..", "package.json"), "utf8")) as { version?: unknown }).version;
+    return typeof version === "string" ? version : null;
+  } catch { return null; }
+}
+
 /** Reporting "down" is not an action failure: herdr logs a nonzero exit as failed. */
 async function status(): Promise<number> {
   const pid = recordedPid();
   const up = await health();
   process.stdout.write(`${up ? "running" : "down"} ${origin}${pid === null ? "" : ` (pid ${pid})`}\n`);
+  const version = runningVersion();
+  if (version !== null) process.stdout.write(`version: ${version}\n`);
   process.stdout.write(`config: ${CONFIG_FILES.length === 0 ? `none (settings go in ${join(CONFIG_DIR, "env")})` : CONFIG_FILES.join(", ")}\n`);
   warnShadowed();
   return 0;

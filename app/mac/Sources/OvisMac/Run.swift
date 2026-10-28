@@ -6,8 +6,15 @@ enum Ovis {
     static let legacyPluginID = "devswha.herdr-web-ui"
     static let agentLabel = "sh.ovis.herdr-server"
     static let installScript = URL(string: "https://ovis.sh/install.sh")!
+    /// Where the installer may come from: ovis.sh redirects to its copy on herdrweb.dev.
+    static let installerHosts: Set<String> = ["ovis.sh", "herdrweb.dev"]
     static let support = URL(string: "https://ovis.sh/support/")!
     static let tailscaleDownload = URL(string: "https://tailscale.com/download/mac")!
+
+    static func isInstallerSource(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && installerHosts.contains(url.host?.lowercased() ?? "")
+            && url.user == nil && url.password == nil
+    }
 }
 
 enum Paths {
@@ -19,6 +26,8 @@ enum Paths {
     static var bun: String { which("bun") ?? "\(home)/.bun/bin/bun" }
     static let launchAgent = "\(home)/Library/LaunchAgents/\(Ovis.agentLabel).plist"
     static let logDir = "\(home)/Library/Logs/Ovis"
+    /// herdr's output, written by launchd from the LaunchAgent.
+    static let serverLog = "\(logDir)/herdr-server.log"
     /// An app opened from Finder gets launchd's bare PATH; the installer and the tools it adds need these.
     static let path = ["\(home)/.local/bin", "\(home)/.bun/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
     private static func which(_ name: String) -> String? {

@@ -219,6 +219,8 @@ export const COMPOSER_JA: Record<string, string> = {
   "Comment": "コメント",
   "The conversation is over its {context} context: omp compacts it first": "会話が {context} のコンテキストを超えています。omp が先に圧縮します",
   "Question {n}": "質問 {n}",
+  "Approve": "承認",
+  "Deny": "拒否",
   "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.": "Tab キーで OpenCode のエージェントが {from} から {to} に切り替わりました。それ以上は入力していません。再送信する前にターミナルを確認してください。",
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode が別のスキルを添付しました。チャットのテキストはここに残っています。再送信する前にターミナルを確認してください。",
 };

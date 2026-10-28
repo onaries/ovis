@@ -467,8 +467,17 @@
 .markdown-h5 { color: inherit; font-weight: var(--fw-semibold); line-height: var(--lh-tight); }
 .markdown-h6 { color: var(--text-dim); font-weight: var(--fw-semibold); line-height: var(--lh-tight); }
 
+/* A marker sits outside its item, in this indent, and is drawn in the Chat font: in a monospace face
+   every digit and the ". " after it take a whole cell (`1ch`), so a fixed 20px cut "1." off on the
+   left (#1993). The indent is the widest marker in cells, never less than the 20px a bullet always
+   had; the list's widest number has --markdown-list-digits digits (Markdown.tsx). */
 .markdown-list {
-  padding-left: var(--space-5);
+  --markdown-list-digits: 1;
+  padding-left: max(var(--space-5), 2ch);
+}
+
+ol.markdown-list {
+  padding-left: max(var(--space-5), calc((var(--markdown-list-digits) + 2) * 1ch));
 }
 
 .markdown-list .markdown-list {

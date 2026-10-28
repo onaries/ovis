@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { SlashCommand } from "../../shared/protocol.ts";
 import { useMachineApi, useMachineId } from "./machineContext.tsx";
-import { cachedPaneCommands, onPaneCommandsInvalidated } from "./paneCommandCache.ts";
+import { cachedPaneCommands, onPaneCommandsInvalidated, paneCommandsNow } from "./paneCommandCache.ts";
 
 const EMPTY_COMMANDS: readonly SlashCommand[] = [];
 /** How long the hook waits before asking again after its 1st, 2nd, 3rd... failed read in a row. */
@@ -35,5 +35,7 @@ export function usePaneCommands(paneId: string | null, agent?: string | null): r
     const timer = setTimeout(() => setVersion((value) => value + 1), RETRY_MS[Math.min(failures, RETRY_MS.length) - 1]);
     return () => clearTimeout(timer);
   }, [failures, key]);
-  return loaded?.key === key ? loaded.commands : EMPTY_COMMANDS;
+  // a list another component read is the answer this hook's own read will bring: a chat mounted again
+  // draws its terminal command rows as such at once, not as plain bubbles until that read answers
+  return (paneId === null ? null : paneCommandsNow(paneId, machineId, agent)) ?? (loaded?.key === key ? loaded.commands : EMPTY_COMMANDS);
 }

@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "bun:test";
 
+import { agentRowTokens } from "./herdr-sidebar.ts";
 import { handleMachineRequest } from "./machine-api.ts";
 import type { MachineManager } from "./machines.ts";
 
@@ -17,6 +18,7 @@ const remote = Bun.serve({
     if (path === "/api/pane/conversation/image") return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } });
     if (path === "/api/pane/conversation/tool-output") return new Response("complete remote output", { headers: { "content-type": "text/plain; charset=utf-8" } });
     if (path === "/api/fs/file") return new Response("%PDF-1.7", { headers: { "content-type": "application/pdf" } });
+    if (path === "/api/session") return Response.json({ snapshot: { workspaces: [], tabs: [], panes: [{ pane_id: "w1:p1", workspace_id: "w1", tab_id: "t1", agent: "claude", tokens: { quota: "off · private", eta: "soon" } }], agents: [] } });
     if (path === "/api/sessions/history") {
       historyAsked.push(request.headers.get("authorization"));
       return Response.json({ workspace_id: "w1", agent: "pi", cwd: "/work", sessions: [{ id: "s1", title: null, firstMessage: "a private prompt", startedAt: null, updatedAt: "2026-10-01T00:00:00.000Z", resume: null }] });
@@ -190,4 +192,24 @@ it("gives a watching device a PC's plan card without Claude's plan file, even fr
   // a device that can drive still gets the whole plan
   expect((await poll("w1%3Ap1", false)).prompt).toMatchObject({ plan_file: "/home/u/.claude/plans/p.md", body: "1. A secret step from the plan file." });
   expect(promptAsked.slice(before)).toEqual(["0", "0", null]);
+});
+
+it("passes a PC's session on without the token values this server's sidebar rows hide (#2160)", async () => {
+  const rows = agentRowTokens(Bun.TOML.parse(`[ui.sidebar.agents]\nrows = [[{ token = "$quota", rules = [{ starts_with = "off", hide = true }] }, "$eta"]]`));
+  const sidebar = { get: () => rows, subscribe: () => () => undefined };
+  for (const readOnly of [true, false]) {
+    const response = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/session"), manager, undefined, undefined, readOnly, sidebar);
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain("off · private");
+    expect((JSON.parse(text) as { snapshot: { panes: { tokens: unknown }[] } }).snapshot.panes[0]!.tokens).toEqual({ eta: "soon" });
+  }
+  // any other method the PC answers with a body is filtered too (its session route takes them all)
+  const asked = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/session", { method: "OPTIONS", headers: { "x-herdr-machine": "1" } }), manager, undefined, undefined, true, sidebar);
+  expect(await asked.text()).not.toContain("off · private");
+  // a HEAD has no body to filter: it is answered as before
+  expect((await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/session", { method: "HEAD" }), manager, undefined, undefined, true, sidebar)).status).toBe(200);
+  // a server whose config names no rows passes the session on whole
+  const whole = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/session"), manager, undefined, undefined, true, { get: () => null, subscribe: () => () => undefined });
+  expect(await whole.text()).toContain("off · private");
 });

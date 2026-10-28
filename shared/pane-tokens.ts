@@ -62,6 +62,11 @@ export function paneTokenRuleMatches(rule: PaneTokenRule, value: string): boolea
   return false;
 }
 
+/** The `$name` tokens an agent's row draws: that agent's own rows, else `rows`; null where the config names none, and the row then draws every token. */
+export function paneTokenSpecs(layout: AgentRowTokens | null, agent: string | null): PaneTokenSpec[] | null {
+  return (layout && agent !== null && Object.hasOwn(layout.by_agent, agent) ? layout.by_agent[agent] : undefined) ?? layout?.rows ?? null;
+}
+
 /**
  * What a pane's tokens say on its agent row, in the order the row draws them: the tokens the
  * agent's herdr rows name, or every token (by name) where the config names none. A missing or
@@ -75,7 +80,7 @@ export function paneTokenValues(layout: AgentRowTokens | null, agent: string | n
     const value = Object.hasOwn(tokens, name) ? tokens[name] : undefined;
     return typeof value === "string" && value.trim() ? value : null;
   };
-  const specs = (layout && agent !== null && Object.hasOwn(layout.by_agent, agent) ? layout.by_agent[agent] : undefined) ?? layout?.rows ?? null;
+  const specs = paneTokenSpecs(layout, agent);
   if (specs === null) return Object.keys(tokens).sort().flatMap((name) => valueOf(name)?.trim() ?? []);
   const shown: string[] = [];
   const said = new Set<string>();

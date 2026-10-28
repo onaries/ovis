@@ -1,8 +1,9 @@
 #!/bin/sh
 # Adds the usual bun and node install places to the end of PATH, for a herdr that started with a
 # bare one. Sourced by preflight.sh and with-bun.sh. The home directory's own places come before
-# a version manager's shims and Homebrew, so the node found is the one an installer put in
-# ~/.local/bin. WITH_BUN_EXTRA_DIRS, a list written like PATH, replaces these places.
+# a version manager's shims and Homebrew. The Node install.sh installs is not among them: the
+# server finds it itself (server/pty/sidecar.ts). WITH_BUN_EXTRA_DIRS, a list written like PATH,
+# replaces these places.
 with_bun_add() {
   case "$1" in
     *:*) return 0 ;;

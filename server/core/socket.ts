@@ -21,7 +21,7 @@ export type FrameHandlers = { [K in Exclude<ClientMessage["type"], "presence">]:
 /** The frames of the connection itself: its liveness, its watches and its role. */
 type ConnectionFrame = "ping" | "watch" | "unwatch" | "role";
 
-export function createSocket({ clients, present, stopped, admit, setRole, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, countVisit, drainOutput, frames }: {
+export function createSocket({ clients, present, stopped, admit, setRole, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, browserSnapshot, countVisit, drainOutput, frames }: {
   clients: Set<Client>;
   present: Set<Client>;
   stopped: () => boolean;
@@ -33,6 +33,8 @@ export function createSocket({ clients, present, stopped, admit, setRole, watchP
   holdPending: (owner: Client) => void;
   attachments: ReadonlyMap<string, AttachmentView>;
   clientSnapshot: () => Promise<SessionSnapshot>;
+  /** a snapshot as a browser is told it: without the token values the sidebar rows hide (server/herdr-sidebar.ts) */
+  browserSnapshot: (snapshot: SessionSnapshot) => SessionSnapshot;
   countVisit: (snapshot?: Promise<SessionSnapshot>) => void;
   drainOutput: (client: Client) => void;
   /** every other frame type's handler, from the module that owns what it changes */
@@ -101,7 +103,8 @@ export function createSocket({ clients, present, stopped, admit, setRole, watchP
       const snapshot = clientSnapshot();
       countVisit(snapshot);
       try {
-        send(client, { type: "snapshot", snapshot: await snapshot, features: SERVER_FEATURES, connection: client.data.connectionId });
+        const read = await snapshot;
+        send(client, { type: "snapshot", snapshot: client.data.bridge ? read : browserSnapshot(read), features: SERVER_FEATURES, connection: client.data.connectionId });
       } catch (error) {
         const code = error instanceof HerdrError ? error.code : "snapshot_failed";
         send(client, { type: "error", code, message: error instanceof Error ? error.message : String(error) });

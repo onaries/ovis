@@ -188,6 +188,8 @@ describe("names from before Ovis", () => {
     "server/remote-host.ts": "a remote bundle published before the rename reads the old name",
     "install.sh": "reads the old settings of an earlier install",
     "install.ps1": "reads the old settings of an earlier install",
+    "app/windows/src/Setup.cs": "reads the token of an earlier install's settings, as install.ps1 does",
+    "app/windows/tests/SetupTests.cs": "tests that read",
     "docs/guide.md": "tells users the old names still work",
     "shared/telemetry.ts": "pinned to the deployed telemetry Worker, so not even a comment changes",
   };

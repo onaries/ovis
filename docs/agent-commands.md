@@ -188,7 +188,13 @@ Recognized Hermes informational result cards remain available.
   the exact text; a `model_change`, `thinking_level_change` or `compaction` record in pi, omp, gjc
   and OmO sessions (omp's `/handoff` writes a compaction with method `handoff`); a `compacted`
   record for Codex `/compact`. Records are claimed in send order, so two equal sends never share
-  one, and a rewritten transcript drops what it no longer holds.
+  one, and a rewritten transcript drops what it no longer holds. Known limit: a pi-family send the
+  agent dropped without a record takes the record of a later equal send on the same branch, and
+  that later send ends as unknown. In pi, only the session's active
+  branch counts: a send stays with the branch it was sent on, also after the session goes to
+  another branch and `/tree` comes back to it, unless meanwhile something was written under that
+  branch's last entry or a record a result could be was written elsewhere (`resumedBranch` in
+  [`server/conversation.ts`](../server/conversation.ts)); then the send ends as unknown.
 - `dialog`: a card answered from Chat, counted only for the send that raised that card.
 - `recognized-result`: a reader of kind `result` matched a complete, recorded layout that appeared
   after this send's own echo and was not on screen when it was sent. Hermes `/help`, `/status`,
@@ -214,7 +220,7 @@ program name), it stays with the next session herdr reports in the same terminal
 agent, or under the label herdr gave the pane at the send (herdr names an OmO pane `pi`). A send to
 a restarted agent while herdr still shows the session of the process before waits up to a minute
 (`STALE_SESSION_LAG_MS`) for the agent's own session. Known limits, all of which hide a row rather
-than show a wrong result, except the last:
+than show a wrong result, except the last two:
 
 - That minute is counted when Chat next asks. A session that appeared within it while no Chat was
   open is taken for a later one, and the row is hidden.

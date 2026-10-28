@@ -710,7 +710,7 @@ it("watch credentials cannot mutate HTTP state, read credential files, or elevat
   const relays: MachineRelay[] = [];
   const manager = { endpoint: () => ({ url: base, token: "test-watch" }), trackTerminal: () => () => {} } as unknown as MachineManager;
   const proxy = Bun.serve<{ relay: MachineRelay }>({ port: 0, hostname: "127.0.0.1", async fetch(request, instance) {
-    const relay = new MachineRelay(manager, "remote", true); relays.push(relay);
+    const relay = new MachineRelay(manager, "remote", true, (snapshot) => snapshot); relays.push(relay);
     await relay.ready;
     if (instance.upgrade(request, { data: { relay } })) return;
     relay.close(); return new Response(null, { status: 426 });

@@ -1,0 +1,35 @@
+
+                                            ████████████
+                                               ██  ██       ▄▀▀▄ █▀▄▀▄ █▀▀▄
+                                               ██  ██       ▀▄▄▀ █ █ █ █▄▄▀
+                                               ▒▒  ██                  █
+                                                   ██       v18.13.2
+
+                         Tip: Press Alt+P (or /switch) to switch provider, and Ctrl+P to cycle
+                                            role models smol -> slow -> etc
+
+
+ Run the fixture command.
+
+
+╭─── Write: 🗒 notes/fixture.txt ──────────────────────────────────────────────────────────────────────────────────────╮
+│   1 fictional                                                                                                       │
+│   2                                                                                                                 │
+│ … (streaming)                                                                                                       │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  ⎋ Working…
+╭─ Allow tool: write ─────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Reason: target not yet approved                                                                                     │
+│ Path: notes/fixture.txt · Content: fictional …                                                                      │
+│ Folder: /fixture/approval-home/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/cwd/notes                             │
+│   ☐ Remember across sessions                                                                                        │
+│   Approve Directory: /fixture/approval-home/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/cwd/notes                │
+│   Approve File                                                                                                      │
+│ ❯ Approve Once                                                                                                      │
+│   Deny                                                                                                              │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓ choose · ⏎ select · Ctrl+⏎/Ctrl+Q approve · ⎋ deny · Ctrl+O details · type to deny and steer                    │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ ⠹ 0s > ⬢ Approval fixture > 📁 …fixture/approval-home/xxxxxxxxxxxxx/cwd ▶──6%──────────────────────────╎───┃─────131K─
+╰─

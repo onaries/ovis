@@ -9,6 +9,7 @@
  * calls one made after it gets a same-named wrapper (`end`, `holdPending`, `authorizeSocket`, …). The server
  * listens once this returns, and calls `start` after that.
  */
+import type { SessionSnapshot } from "../../shared/protocol.ts";
 import type { DeviceStore } from "../devices.ts";
 import { ping } from "../herdr/client.ts";
 import type { PreferenceStore } from "../preferences.ts";
@@ -35,13 +36,15 @@ type CoreOptions = Parameters<typeof createTerminalRegistry>[0]["options"] & Par
     attachHoldMs?: number;
   };
 
-export function createCore({ options, devices, preferences, usage, usageLogin, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS }: {
+export function createCore({ options, devices, preferences, usage, usageLogin, browserSnapshot, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS }: {
   options: CoreOptions;
   devices: DeviceStore;
   /** the shared preferences (server/preferences.ts): the status hub's web push reads the muted panes from it */
   preferences: PreferenceStore;
   usage: UsageService;
   usageLogin: UsageLoginService;
+  /** a snapshot as a browser's /ws is told it (server/herdr-sidebar.ts snapshotWithoutHiddenTokens); a bridge connection gets it whole */
+  browserSnapshot: (snapshot: SessionSnapshot) => SessionSnapshot;
   TYPED_SETTLE_MS: number;
   KEY_SETTLE_MS: number;
   SUBMIT_DEADLINE_MS: number;
@@ -73,12 +76,12 @@ export function createCore({ options, devices, preferences, usage, usageLogin, T
 
   const submitText = createSubmitText({ options, lastTyped, attachments, terminalAttach, SUBMIT_DEADLINE_MS, TYPED_SETTLE_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS, SUBMIT_DELAY_MS });
 
-  const { pending, holdPending, holdPendingPane, drainPending, pendingFrames, queueFirstMessage, attached, closeConnection, reconcilePiDeliveries } = createPendingDelivery({ options, clients, attachments, sight, serialize, lastTyped, submitText, authorizeSocket: (client) => authorizeSocket(client), clientSnapshot: () => clientSnapshot(), omo: { sessionOf: (paneId) => omo.sessionOf(paneId) }, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, TYPED_SETTLE_MS });
+  const { pending, holdPending, holdPendingPane, drainPending, pendingFrames, queueFirstMessage, attached, closeConnection, reconcilePiDeliveries } = createPendingDelivery({ options, clients, attachments, sight, serialize, lastTyped, submitText, authorizeSocket: (client) => authorizeSocket(client), clientSnapshot: () => clientSnapshot(), omo: { sessionOf: (paneId) => omo.sessionOf(paneId) }, queueHeld: (paneId) => queueHeld(paneId), SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, TYPED_SETTLE_MS });
 
   const { mayType, authorizeSocket, admit, setRole, watchPane, unwatchPane, killWatches, end } = createConnections({ clients, present, pending: { close: closeConnection }, devices, detachClaimed, dropClaims });
-  const { push, omo, gjc, claudeAgents, opencodeAgents, codexTasks, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector, waitTimer } = createStatusHub({ options, devices, preferences, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin });
+  const { push, omo, gjc, claudeAgents, opencodeAgents, codexTasks, plans, clientSnapshot, queueHeld, countVisit, machines, broadcastAll, logPushError, collector, waitTimer } = createStatusHub({ options, devices, preferences, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin });
   const websocket = createSocket({
-    clients, present, stopped: () => stopped, admit, setRole, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, countVisit, drainOutput,
+    clients, present, stopped: () => stopped, admit, setRole, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, browserSnapshot, countVisit, drainOutput,
     // each frame type by name, with the handler of the module that owns it: anything else on a frame object never
     // becomes a frame a client can send, and a type named twice fails the build instead of replacing a handler
     frames: {

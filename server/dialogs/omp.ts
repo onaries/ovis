@@ -234,7 +234,191 @@ function parseOmpQuestion(screen: string): ParsedPrompt | null {
   });
 }
 
+/**
+ * omp's tool approval since 18.10 (`ApprovalDialogComponent`), in the composer's place. 18.10 draws
+ * only the call and a hint naming the keys; 18.13 adds a menu of choices and mounts the composer
+ * (its status row and frame) under the panel —
+ *
+ *   ╭─ Allow tool: bash ─────────────────────╮     ╭─ Allow tool: bash ───────────────────────────────╮
+ *   │ Command: ls -la                        │     │ Command: ls -la                                  │
+ *   ├────────────────────────────────────────┤     │ ❯ Approve                                        │
+ *   │ Ctrl+⏎/Ctrl+Q approve · ⎋ deny         │     │   Approve bash for this session                  │
+ *   ╰────────────────────────────────────────╯     │   Deny                                           │
+ *                                                  ├──────────────────────────────────────────────────┤
+ *                                                  │ ↑/↓ choose · ⏎ select · Ctrl+⏎/Ctrl+Q approve ·… │
+ *                                                  ╰──────────────────────────────────────────────────╯
+ *
+ * The keys are the user's bindings, drawn in the theme's symbol preset: words (`Ctrl+Enter`, `Esc`),
+ * keycaps (`⌃⏎`, `⎋`) or Nerd Font icons; the ascii preset also draws the box in `+-|`. A countdown
+ * adds `(Ns)` to the title. Not read: details taller than the panel, which scroll (the card would show
+ * part of the call), and a draft in the composer, which turns Enter into "deny and send"; the terminal
+ * answers those. A narrow pane cuts 18.13's hint: read only while the approve keys are still whole, since omp
+ * takes them before any other key (bound to Enter, the select on Deny would approve). Deny is then answered
+ * by moving to it, while fewer details than omp scrolls at show that none are hidden.
+ *
+ * omp cuts a detail at the panel's edge or past its length (`[…120ch elided…]`) and summarizes a multi-line one
+ * (`… +2 lines in the tool call`, or 18.13's one row ending ` …`): two calls could then draw the same panel, and
+ * a card read for one would answer the other. So is ast_edit's `+N more ops` (its first rewrite only): none of
+ * them is a card. Not the screen above it either: omp keeps redrawing the transcript there (a running tool's
+ * elapsed time) while it waits.
+ * Known limit: some tools never show their whole call (edit names only the files, lsp and debug the action and
+ * target), so two calls to them draw the same panel. A card read for the first answers the second only when
+ * the first was answered in the terminal and the second drawn before the card was read again.
+ */
+const OMP_DETAIL_CUT_RE = /…|\bin the tool call$|(?:^|· )\+\d+ more ops?(?: ·|$)/;
+/** a key may hold a space: the Nerd Font preset joins a modifier icon to its key with one (`\u{f0634} O`, Ctrl+O on macOS) */
+const OMP_APPROVAL_HINT_RE = /^(?:(\S+) choose · (\S.*?) select · )?(\S.*?) approve · (\S.*?) deny(?: · \S.*? (?:details|less))?( · \S.*? scroll)?( · type to deny and steer)?$/;
+const OMP_APPROVAL_CLIPPED_HINT_RE = /^(\S+) choose · (\S.*?) select · (\S.*?) approve · .*…$/;
+/** omp scrolls the details past this many rows (`PREVIEW_LIMITS.COLLAPSED_ITEMS`, 18.10 to 18.13) */
+const OMP_APPROVAL_DETAIL_ROWS = 8;
+const OMP_APPROVAL_TOP_RE = /^(?:╭─|\+-) (Allow tool: .*?\S)(?: \(\d+s\))? (?:─+╮|-+\+)$/;
+const OMP_PANEL_RULE_RE = /^(?:├─+┤|╰─+╯|\+-+\+)$/;
+const OMP_PANEL_ROW_RE = /^[│|] ?(.*?)\s*[│|]$/;
+/** the composer 18.13 mounts under the panel: its status row (the spinner and the turn's time, after a powerline cap in the Nerd
+ * Font preset), then the rest of its frame, the screen's last line */
+const OMP_STATUS_ROW_RE = /^(?:[\ue0b0-\ue0d4] )?\S \d+[smh] /u;
+const OMP_COMPOSER_FRAME_RE = /^╰─*$/;
+/** a choice row: the cursor (❯, its Nerd Font icon, or `>`) on the highlighted one, two spaces before the rest */
+const OMP_CHOICE_RE = /^(?:([❯\uf054>])|  )\s?(\S.*)$/u;
+const OMP_REMEMBER_RE = /^(?:[☐☑\uf096\uf14a]|\[[ x]\]) Remember across sessions$/u;
+/** the toggle ticked: the grants under it are kept across sessions */
+const OMP_REMEMBERED_RE = /^(?:[☑\uf14a]|\[x\]) /u;
+
+/** a modifier as omp draws it: a word with `+`, or a keycap or Nerd Font icon and the preset's joiner */
+const OMP_KEY_MODIFIERS: readonly [RegExp, string][] = [
+  [/^(?:Ctrl\+|[⌃\u{f0634}] ?)/u, "ctrl"],
+  [/^(?:Alt\+|Option\+|[⌥\u{f0635}] ?)/u, "alt"],
+  [/^(?:Shift\+|[⇧\u{f0636}] ?)/u, "shift"],
+];
+const OMP_KEY_NAMES: Readonly<Record<string, string>> = {
+  "⏎": KEY.enter, Enter: KEY.enter, "\u{f0311}": KEY.enter,
+  "⎋": KEY.escape, Esc: KEY.escape, "\u{f12b7}": KEY.escape,
+  "⇥": KEY.tab, Tab: KEY.tab, "\u{f0312}": KEY.tab,
+  "␣": KEY.space, Space: KEY.space, "\u{f1050}": KEY.space,
+  "↑": KEY.up, Up: KEY.up, "↓": KEY.down, Down: KEY.down,
+};
+
+/** One key of omp's hint as herdr's key name (`Ctrl+Q` → `ctrl+q`); null for one we cannot send as drawn (⌘, a word omp spells out). */
+function ompHintKey(drawn: string): string | null {
+  const modifiers: string[] = [];
+  let rest = drawn;
+  for (const [re, name] of OMP_KEY_MODIFIERS) {
+    const match = re.exec(rest);
+    if (match) { modifiers.push(name); rest = rest.slice(match[0].length); }
+  }
+  const base = OMP_KEY_NAMES[rest] ?? (/^[A-Za-z0-9]$/.test(rest) ? rest.toLowerCase() : null);
+  return base === null ? null : [...modifiers, base].join("+");
+}
+
+/**
+ * The keys sent as drawn: Esc and a Ctrl+letter arrive the same on every terminal. Without extended key reporting a
+ * terminal sends Ctrl+J and Ctrl+M as LF and CR, and Ctrl+Enter and Shift+Enter as CR, which omp reads as Enter (the
+ * highlighted row on 18.13's menu, or an approve key bound to Enter); Ctrl+H and Ctrl+I as Backspace and Tab. A choice
+ * whose key is none of these is answered by moving to its row, or the terminal answers it.
+ */
+const OMP_DIRECT_KEY_RE = /^(?:esc|ctrl\+[a-gkln-z])$/;
+/** a select key arrives unchanged too: Enter or Space themselves, or a direct key */
+const OMP_SELECT_KEY_RE = /^(?:enter|space|ctrl\+[a-gkln-z])$/;
+
+/** every key of a slash-separated hint (`Ctrl+⏎/Ctrl+Q`), or null when one cannot be sent */
+function ompHintKeys(drawn: string): string[] | null {
+  const keys = drawn.split("/").map(ompHintKey);
+  return keys.some((key) => key === null) ? null : keys as string[];
+}
+
+type OmpChoice = { label: string; cursor: boolean; toggle: boolean };
+
+/**
+ * 18.13's choices, the last rows over the hint, read up from Deny: Approve, or the one row that
+ * approves for the session and Approve over it; with grants, "Approve Once" (a grant may itself
+ * read "Approve"), the grants over it, and the toggle that keeps them across sessions on top.
+ * `first` is the first row of the menu (the rows above it are the call's details), `approve` the choice
+ * that approves this call alone.
+ */
+function ompChoices(rows: string[]): { choices: OmpChoice[]; first: number; approve: number } | null {
+  const choices: OmpChoice[] = [];
+  let once = false;
+  for (let index = rows.length - 1; index >= 0 && choices.length < 16; index -= 1) {
+    const match = OMP_CHOICE_RE.exec(rows[index]!);
+    if (!match) return null;
+    const choice = { label: match[2]!, cursor: match[1] !== undefined, toggle: OMP_REMEMBER_RE.test(match[2]!) };
+    choices.unshift(choice);
+    if (choices.length === 1 && choice.label !== "Deny") return null;
+    if (choices.length > 1 && choices.length <= 3 && choice.label === "Approve Once") once = true;
+    const done = once ? choice.toggle : choices.length > 1 && choices.length <= 3 && choice.label === "Approve";
+    if (!done) continue;
+    const approve = once ? choices.map((row) => row.label).lastIndexOf("Approve Once") : 0;
+    return choices.filter((row) => row.cursor).length === 1 ? { choices, first: index, approve } : null;
+  }
+  return null;
+}
+
+function parseOmpApprovalPanel(screen: string): ParsedPrompt | null {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/).map((line) => line.trim());
+  let bottom = findLastIndex(lines, (line) => line !== "");
+  // under 18.13's panel, the composer it mounts there, and nothing else
+  if (bottom > 0 && OMP_COMPOSER_FRAME_RE.test(lines[bottom]!) && OMP_STATUS_ROW_RE.test(lines[bottom - 1]!)) bottom -= 2;
+  if (bottom < 4 || !OMP_PANEL_RULE_RE.test(lines[bottom]!) || !OMP_PANEL_RULE_RE.test(lines[bottom - 2]!)) return null;
+  const hintRow = OMP_PANEL_ROW_RE.exec(lines[bottom - 1]!);
+  const full = hintRow ? OMP_APPROVAL_HINT_RE.exec(hintRow[1]!) : null;
+  const clipped = hintRow && !full ? OMP_APPROVAL_CLIPPED_HINT_RE.exec(hintRow[1]!) : null;
+  if (full?.[5] !== undefined || (!full && !clipped)) return null;
+  const [, chooseKeys, selectDrawn, approveDrawn] = (full ?? clipped)!;
+  const approveKeys = ompHintKeys(approveDrawn!);
+  // with the hint cut, the deny key is not shown: Deny is answered by moving to it
+  const denyKey = full ? ompHintKey(full[4]!) : null;
+  if (!approveKeys || (full && (!denyKey || approveKeys.includes(denyKey)))) return null;
+  const plainKey = approveKeys.find((key) => key !== KEY.escape && OMP_DIRECT_KEY_RE.test(key));
+  const directDeny = denyKey !== null && OMP_DIRECT_KEY_RE.test(denyKey) ? denyKey : null;
+  let top = bottom - 3;
+  while (top >= 0 && OMP_PANEL_ROW_RE.test(lines[top]!)) top -= 1;
+  const title = top >= 0 ? OMP_APPROVAL_TOP_RE.exec(lines[top]!) : null;
+  if (!title) return null;
+  const rows = lines.slice(top + 1, bottom - 2).map((line) => OMP_PANEL_ROW_RE.exec(line)![1]!);
+  const card = { kind: "approval" as const, title: title[1]!, question: title[1]!, multi_select: false, custom_option_index: null };
+  const internal = { responder: "omp-approval" as const, checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null };
+  if (chooseKeys === undefined) {
+    // 18.10 has no rows to move to: both answers need a key that arrives as drawn
+    if (rows.length === 0 || !plainKey || !directDeny || rows.some((row) => OMP_DETAIL_CUT_RE.test(row))) return null;
+    return finishPrompt("omp", {
+      ...card, body: rows.join("\n").trim() || null,
+      options: [{ label: own("Approve"), description: null }, { label: own("Deny"), description: null }],
+    }, { ...internal, menuLabels: ["Approve", "Deny"], selectedIndex: -1, optionSteps: [keySteps([plainKey]), keySteps([directDeny])] });
+  }
+  const selectKey = ompHintKey(selectDrawn!);
+  if ((chooseKeys !== "↑/↓" && chooseKeys !== "Up/Down") || !selectKey || !OMP_SELECT_KEY_RE.test(selectKey)) return null;
+  // omp takes the approve and deny keys before moving or selecting: bound to one of those, a move would answer
+  const moves: string[] = [KEY.up, KEY.down, selectKey];
+  if ([...approveKeys, ...(denyKey ? [denyKey] : [])].some((key) => moves.includes(key))) return null;
+  const menu = ompChoices(rows);
+  if (!menu) return null;
+  const { choices, first, approve } = menu;
+  // a grant taken while the toggle is ticked outlives the session: the terminal answers that, where the box shows
+  if (choices.some((choice) => choice.toggle && OMP_REMEMBERED_RE.test(choice.label))) return null;
+  if ((clipped && first >= OMP_APPROVAL_DETAIL_ROWS) || rows.slice(0, first).some((row) => OMP_DETAIL_CUT_RE.test(row))) return null;
+  const cursor = choices.findIndex((choice) => choice.cursor);
+  // the toggle answers nothing: it changes which grants the rows under it record
+  const offered = choices.flatMap((choice, row) => choice.toggle ? [] : [{ ...choice, row }]);
+  return finishPrompt("omp", {
+    ...card, body: rows.slice(0, first).join("\n").trim() || null,
+    options: offered.map((choice) => ({ label: choice.label, description: null })),
+  }, {
+    ...internal, menuLabels: offered.map((choice) => choice.label), selectedIndex: offered.findIndex((choice) => choice.cursor),
+    // Approve and Deny by their keys when those arrive as drawn, wherever the cursor is; every other row by moving to it
+    optionSteps: offered.map((choice) => choice.row === approve && plainKey ? keySteps([plainKey])
+      : directDeny && choice.row === choices.length - 1 ? keySteps([directDeny])
+      : keySteps([...navigationKeys(choice.row - cursor), selectKey])),
+  });
+}
+
+/** Whether omp's approval panel (not the older menu) is what the screen ends in. */
+export function ompApprovalPanelShown(screen: string): boolean {
+  return parseOmpApprovalPanel(screen) !== null;
+}
+
 function parseOmpApproval(screen: string): ParsedPrompt | null {
+  const panel = parseOmpApprovalPanel(screen);
+  if (panel) return panel;
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const headerIndex = findLastIndex(lines, (line) => /^\s*Allow tool:\s*\S+/i.test(cleanLine(line)));
   if (headerIndex < 0) return null;

@@ -20,7 +20,7 @@ export interface RepoDiffProps {
   theme: "dark" | "light";
   /** colored in the pool's worker; false draws plain rows, still windowed by the pool's manager (the setting off, or too long, which the host says) */
   colored: boolean;
-  /** the active find match: its row is marked and its text highlighted, and it is brought to the middle of the view */
+  /** the active find match: its row is marked and its text highlighted, and it is brought to the middle of the view (the match itself, when its row is taller than the view) */
   active?: DiffMark | null;
   /** the active match is on a line the folded context leaves out: the host shows the context whole */
   onUnfold?: () => void;
@@ -187,7 +187,7 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
 
   /**
    * One pass of the pending reveal, as VirtualSource's: a mounted row within a pixel of the middle
-   * ends it, one further off is scrolled there, and an unmounted one to the package's estimate of
+   * ends it (a row taller than the view, by the match's own lines), one further off is scrolled there, and an unmounted one to the package's estimate of
    * its place on its side. The render a scroll causes runs the next pass; a pass count bounds it.
    */
   const settle = useCallback((): void => {
@@ -204,7 +204,9 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     const view = root.getBoundingClientRect();
     let target: number;
     if (row !== null) {
-      const rect = row.getBoundingClientRect();
+      const box = row.getBoundingClientRect();
+      // a wrapped row taller than the view: its middle may not hold the match, so the match's own lines are centred
+      const rect = box.height > view.height ? textRange(row, pending.mark.start, pending.mark.end)?.getBoundingClientRect() ?? box : box;
       const delta = rect.top - view.top - (view.height - rect.height) / 2;
       if (Math.abs(delta) <= 1) { reveal.current = null; return; }
       target = root.scrollTop + delta;

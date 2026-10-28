@@ -32,6 +32,10 @@ const OMO_PENDING_STATUS_RE = /^\?\s+(?:Question pending \((\d+) unanswered\)|\d
 
 export const OMO_PENDING_HINT_RE = /^enter(?: or \S+)? to answer · \/answer · or just type your reply\b/;
 
+// between the widget's header and its question: " - " (omo 5.1.48), " — " (omo 5.1.30); the space
+// after it is left unconsumed, so separators sharing a space (`Plan - - Choose`) are each found
+const OMO_PENDING_SEPARATOR_RE = / [-—](?= )/g;
+
 interface OmoForm {
   /** the line the tab bar ends on (a narrow pane wraps it between tabs) */
   barEnd: number;
@@ -404,7 +408,7 @@ function parseOmoReview(screen: string, ask: OmoAsk | null, trusted: boolean): P
  * 5.1.19): OmO goes on working, or ends its turn, and the question stays open until answered:
  *
  *    ? Question pending (2 unanswered) · 30m          (`? 2 questions pending · 30m` for several calls)
- *      표시 위치 — 음성 사용량과 추정 비용을 어디에 보여줄까요?
+ *      표시 위치 - 음성 사용량과 추정 비용을 어디에 보여줄까요?     (`—` before omo 5.1.48)
  *    [ 설정 > 음성 입력 (추천) ]  [ 설정 + 사이드바 미터 ]  [ own answer… ]
  *    +1 more question
  *    enter to answer · /answer · or just type your reply
@@ -421,13 +425,26 @@ function parseOmoPending(screen: string, pending: readonly OmoAsk[]): ParsedProm
   const statusIndex = findLastIndex(lines.slice(0, hintIndex), (line) => OMO_PENDING_STATUS_RE.test(cleanLine(line)));
   if (statusIndex < 0 || hintIndex - statusIndex > 12) return null;
   const unanswered = OMO_PENDING_STATUS_RE.exec(cleanLine(lines[statusIndex]!))![1];
-  const shown = /^(.+?) — (.+)$/.exec(cleanLine(lines[statusIndex + 1] ?? ""));
-  if (!shown) return null;
-  // the line is cut at the pane's edge
-  const start = comparable(shown[2]!.replace(/(?:…|\.\.\.)$/, ""));
-  const matches = pending.filter((ask) => ask.wait === false).flatMap((ask) => ask.questions.flatMap((question, index) =>
-    sameHeader(shown[1]!, question.header) && comparable(question.question).startsWith(start) ? [{ ask, index }] : []));
-  if (matches.length !== 1) return null;
+  const line = cleanLine(lines[statusIndex + 1] ?? "");
+  // a header may hold the separator itself, so each place it occurs is a split to try; the line
+  // is cut at the pane's edge. A split with nothing after it still counts against the others:
+  // the cut may have left only that question's header, so a question it fits makes the line
+  // ambiguous. It never names a question on its own.
+  const splits = [...line.matchAll(OMO_PENDING_SEPARATOR_RE)].map((separator) => ({
+    header: line.slice(0, separator.index),
+    start: comparable(line.slice(separator.index + separator[0].length + 1).replace(/(?:…|\.\.\.)$/, "")),
+  }));
+  // A line cut at the pane's edge may have lost the separator itself, or its space: every question
+  // whose header and text begin with what is shown is a candidate too, so it can only make the
+  // line ambiguous.
+  const cut = /(?:\u2026|\.\.\.)$/.test(line);
+  const shown = comparable(line.replace(/(?:\u2026|\.\.\.)$/, ""));
+  const matches = pending.filter((ask) => ask.wait === false).flatMap((ask) => ask.questions.flatMap((question, index) => {
+    const fits = splits.filter((split) => sameHeader(split.header, question.header) && comparable(question.question).startsWith(split.start));
+    const fitsCut = cut && comparable(question.header + question.question).startsWith(shown);
+    return fits.length > 0 || fitsCut ? [{ ask, index, named: fits.some((split) => split.start !== "") }] : [];
+  }));
+  if (matches.length !== 1 || !matches[0]!.named) return null;
   const { ask, index } = matches[0]!;
   const asked = ask.questions[index]!;
   const tabs = cutSteps(ask, index, false, unanswered === undefined ? null : ask.questions.length - Number(unanswered));

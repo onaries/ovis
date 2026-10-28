@@ -242,6 +242,28 @@ describe("managed source updates with real Git repositories and builds", () => {
     }
   });
 
+  it("typechecks on Bun, not on an older node first on herdr's PATH", async () => {
+    // tsc is a `#!/usr/bin/env node` script; with install.sh's Node off the PATH (#596), herdr's PATH may start with Node 10
+    mkdirSync(join(upstream, "tools"), { recursive: true });
+    writeFileSync(join(upstream, "tools", "check-fixture"), "#!/usr/bin/env node\nif (typeof Bun === 'undefined') process.exit(42);\n", { mode: 0o755 });
+    const scripts = { typecheck: "./tools/check-fixture", build: "bun build-fixture.ts" };
+    writeFileSync(join(upstream, "package.json"), JSON.stringify({ name: "updater-fixture", scripts }));
+    await release("second", "v0.2.0");
+    const oldNode = join(directory, "old-node");
+    mkdirSync(oldNode);
+    writeFileSync(join(oldNode, "node"), "#!/bin/sh\necho 'SyntaxError: Unexpected token ?' >&2\nexit 1\n", { mode: 0o755 });
+    const path = process.env["PATH"];
+    process.env["PATH"] = `${oldNode}:${path ?? ""}`;
+    try {
+      await updater.request("install");
+    } finally {
+      if (path === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = path;
+    }
+    expect(updater.status.error).toBeNull();
+    expect(steps).toContain("build");
+  });
+
   it("checks without installing, then builds an exact revision without changing the source", async () => {
     const original = await git(root, "rev-parse", "HEAD");
     writeFileSync(join(upstream, "CHANGELOG.md"), "# Changelog\n\n## [0.2.0] - 2026-10-07\n\n### Added\n- Second.\n");

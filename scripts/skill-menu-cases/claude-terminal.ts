@@ -38,13 +38,20 @@ export const expect = async ({ page, width, scheme, box, menu, scenario, clear, 
   await scenario(`terminal group at ${tag}`, `group-${tag}.png`, async (capture) => {
     await box.fill("/");
     await menu.locator(".menu-item").first().waitFor();
+    assert.deepEqual(await menu.locator(".menu-heading").allTextContents(), ["Built in", "Project skills", "Terminal commands"]);
+    // the terminal group is listed last, each row with its badge; the hidden row is nowhere
     const groups = menu.locator(".composer-menu-group");
     const last = groups.nth((await groups.count()) - 1);
     assert.deepEqual(await last.locator(".menu-item-main").allTextContents(), TERMINAL_ROWS.map((name) => `/${name}`));
-    assert.equal(await last.locator(".composer-menu-badge").count(), TERMINAL_ROWS.length);
+    assert.equal(await last.locator(".menu-item .composer-menu-badge").count(), TERMINAL_ROWS.length);
+    assert.deepEqual(await last.locator(".composer-menu-badge").allTextContents(), TERMINAL_ROWS.map(() => "Terminal"));
+    assert.equal(await menu.locator(".composer-menu-badge").count(), TERMINAL_ROWS.length);
     assert.deepEqual((await rowNames()).sort(), commands.filter((command) => command.visibility !== "agent-hidden").map(({ name }) => name).sort());
     await menuFits("terminal group");
     await rowsBrief("terminal group");
+    // the badge stands whole beside the name: neither is cut, whatever the width
+    const cut = await menu.locator(".composer-menu-badge").evaluateAll((badges) => badges.filter((badge) => badge.scrollWidth > badge.clientWidth + 1).length);
+    assert.equal(cut, 0, "no badge is cut");
     await menu.evaluate((node) => { node.scrollTop = node.scrollHeight; });
     await capture();
   });
@@ -53,6 +60,10 @@ export const expect = async ({ page, width, scheme, box, menu, scenario, clear, 
     await clear();
     await box.fill("/conf");
     await menu.locator(".menu-item").first().waitFor();
+    // /config by its name first; /terminal-setup follows, found by its description ("Configure ")
+    const listed = await rowNames();
+    assert.equal(listed[0], "config");
+    assert.equal(await menu.locator(".menu-item .composer-menu-badge").count(), listed.filter((name) => TERMINAL_ROWS.includes(name)).length, "a typed query keeps the badge on the rows");
     await box.press("Enter");
     assert.equal(await box.inputValue(), "/config ");
     assert.deepEqual(await submits(), []);

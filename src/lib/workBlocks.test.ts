@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, splitTurn, todoGroups, turnSegments, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
+import { formatWorkDuration, runNames, splitTurn, todoGroups, turnSegments, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -73,6 +73,30 @@ describe("turnSegments", () => {
       { kind: "answer", start: 3, parts: [text("done")] },
     ]);
     expect(turnSegments([])).toEqual([]);
+  });
+});
+
+describe("runNames", () => {
+  // what Turn keeps between draws: each part's run name, by part index
+  const draw = (parts: ConversationPart[], previous: ReadonlyMap<number, string>) => {
+    const runs = turnSegments(parts).flatMap((segment) => segment.kind === "work" ? [segment] : []);
+    const names = runNames(runs, new Map(parts.map((part, index) => [part, index])), previous);
+    return { names, next: new Map(runs.flatMap((run, index) => run.parts.map((part) => [parts.indexOf(part), names[index]!] as const))) };
+  };
+
+  it("names a run by its first part the first time, and keeps the name while its parts change", () => {
+    const narration = { ...text("Checking."), phase: "commentary" as const };
+    const first = draw([text("Checking."), tool("ls")], new Map());
+    expect(first.names).toEqual(["work:1"]);
+    expect(draw([narration, tool("ls")], first.next).names).toEqual(["work:1"]);
+  });
+
+  it("gives a split run's first part the old name and never hands a shown name to a new run", () => {
+    const shown = draw([tool("A"), text(""), tool("B"), text("between"), tool("C")], new Map());
+    expect(shown.names).toEqual(["work:0", "work:4"]);
+    expect(draw([tool("A"), text("arrived"), tool("B"), text("between"), tool("C")], shown.next).names).toEqual(["work:0", "work:2", "work:4"]);
+    // the run named work:0 now starts at 2; a new run at 0 must not take its name
+    expect(draw([tool("new"), text("between"), tool("A")], new Map([[2, "work:0"]])).names).toEqual(["work:0+", "work:0"]);
   });
 });
 

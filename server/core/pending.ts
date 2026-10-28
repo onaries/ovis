@@ -65,11 +65,11 @@ const LAUNCH_GONE = { code: "first_message_launch_ended", message: "The agent st
 const FIRST_MESSAGE_RECEIPTS = 8;
 
 /**
- * The server's pending messages. `authorizeSocket`, `clientSnapshot` and `omo` belong to the
+ * The server's pending messages. `authorizeSocket`, `clientSnapshot`, `omo` and `queueHeld` belong to the
  * connections and the status hub, which are built after this (they take its store), so they are
  * called through: only a frame or a turn calls them, after `createServer` has returned.
  */
-export function createPendingDelivery({ options, clients, attachments, sight, serialize, lastTyped, submitText, authorizeSocket, clientSnapshot, omo, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, TYPED_SETTLE_MS }: {
+export function createPendingDelivery({ options, clients, attachments, sight, serialize, lastTyped, submitText, authorizeSocket, clientSnapshot, omo, queueHeld = () => false, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, TYPED_SETTLE_MS }: {
   options: { pendingStartTimeoutMs?: number; piReceiptLimit?: number; submitDeadlineMs?: number; submitDelayMs?: number; openCodeStateDir?: string };
   clients: Set<Client>;
   attachments: ReadonlyMap<string, AttachmentView>;
@@ -80,6 +80,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
   authorizeSocket: (client: Client) => void;
   clientSnapshot: () => Promise<SessionSnapshot>;
   omo: Pick<OmoStatus, "sessionOf">;
+  /** a pane shown at rest whose queue a busy signal still holds (server/core/status.ts queueStatus): no automatic send */
+  queueHeld?: (paneId: string) => boolean;
   SUBMIT_DEADLINE_MS: number;
   SUBMIT_DELAY_MS: number;
   TYPED_SETTLE_MS: number;
@@ -533,7 +535,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       const sent = modelSwitchText(context.identity.agent, text);
       piReservation = reservePiReceipt(owner, context.identity);
       const receiptText = piReceiptText(context.identity, text);
-      if (automatic && context.working) {
+      if (automatic && (context.working || queueHeld(paneId))) {
         pending.observe(paneId, "working", mark);
         throw new HerdrError("pending_wait", "The agent is working again; this message still waits for its next turn");
       }
@@ -571,7 +573,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         // the lookup above awaited the service: the pane, its session and its state are read again before every key
         const revalidate = async (): Promise<void> => {
           const current = await pendingContext(owner, paneId, lease, identity, typed);
-          if (automatic && !typed && current.working) throw new HerdrError("pending_wait", "The agent is working again; this message still waits for its next turn");
+          if (automatic && !typed && (current.working || queueHeld(paneId))) throw new HerdrError("pending_wait", "The agent is working again; this message still waits for its next turn");
         };
         const result = await typeWithSkills(text, skills, typing, herdrSkillAttachIo(paneId), revalidate).catch((error: unknown) => {
           // nothing was written before a refused check or guard: the message is unsent, not uncertain
@@ -594,7 +596,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // fixed wait: the TUI takes the paste before its Enter, which arriving with it could read as a newline
       await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
       const beforeEnter = await pendingContext(owner, paneId, lease, identity, true);
-      if (automatic && beforeEnter.working) throw new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed");
+      if (automatic && (beforeEnter.working || queueHeld(paneId))) throw new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed");
       authorizePending(owner, paneId, lease);
       const steering = !automatic && beforeEnter.working;
       // Capture Pi's exact active transcript position before Enter. Status is deliberately not
@@ -604,13 +606,14 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       committing(steering);
       // Claude Code queues what Enter commits during a turn; Ctrl+Enter sends it now (#737). herdr
       // encodes the key as the pane asked, and as a plain CR for a program that asked for nothing.
+      const sentAt = Date.now();
       await paneSendKeys(paneId, [steering && beforeEnter.identity.agent === "claude" ? "ctrl+enter" : "Enter"], undefined, allowed);
       // This proves only that Ovis committed Enter to Pi, not that Pi accepted, queued or recorded
       // the message. Keep a non-resendable receipt until the bound JSONL active branch appends it.
       if (receiptText !== undefined) {
         try { recordPiTyped(owner, paneId, requestId, receiptText, beforeEnter.identity, piAnchor, piReservation); } catch { /* Enter already succeeded; receipt tracking is best-effort. */ }
       }
-      noteSubmitted(paneId, sent, command);
+      noteSubmitted(paneId, sent, command, sentAt);
       if (command) watch?.commit(command, prompt, attached);
       return { ok: true };
     } catch (error) {
@@ -939,7 +942,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
             const mark = pending.mark(message.pane_id);
             const context = await pendingContext(client, message.pane_id, lease!);
             if (Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS)) throw new HerdrError("submit_timeout", "This pending message waited too long; nothing was typed");
-            if (!context.working) {
+            // a pane shown at rest whose queue a busy signal still holds is not ready for a queued message
+            const held = queueHeld(message.pane_id);
+            if (!context.working && !held) {
               // the agent left while the message was on its way: a chat follow-up is not typed into what is there now
               if (context.identity.agent === null) throw new HerdrError("agent_not_ready", "No agent is in front of this pane now; nothing was typed");
               // A request that raced the turn's finish still needs cancellable
@@ -948,7 +953,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
               // A held message is never typed by arriving after the turn: it waits for Send now.
               if (message.delivery === "queue" && !pending.waiting(message.pane_id)) return dispatchPendingText(client, message.pane_id, text, lease!, context.identity, false, arrivedAt, undefined, message.id);
             }
-            pending.observe(message.pane_id, context.pane.agent_status, mark);
+            pending.observe(message.pane_id, held && !context.working ? "working" : context.pane.agent_status, mark);
             // hold: kept for the owner's Send now, never sent by the turn's end
             const item = pending.enqueue(client, message.pane_id, message.id, text, lease!, context.identity, message.delivery === "hold");
             return { ok: true, pending: item.message };

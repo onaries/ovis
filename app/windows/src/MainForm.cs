@@ -120,6 +120,12 @@ namespace Ovis
                 case Phase.Installed:
                     Installed();
                     break;
+                case Phase.Outdated:
+                    Outdated();
+                    break;
+                case Phase.HerdrTooOld:
+                    HerdrTooOld();
+                    break;
             }
             ResumeLayout(true);
         }
@@ -130,29 +136,52 @@ namespace Ovis
             body.Controls.Add(Paragraph(Lang.L(
                 "This installs herdr, Bun and the Ovis server for your user only, with no administrator password, and starts herdr when you sign in to Windows. Then scan the QR code with Ovis on your phone.",
                 "herdr, Bun, Ovis 서버를 내 사용자 계정에만 설치합니다(관리자 권한 필요 없음). Windows에 로그인할 때 herdr가 자동으로 켜집니다. 설치가 끝나면 휴대폰의 Ovis로 QR 코드를 찍으면 됩니다.")));
-            if (model.GitMissing)
-            {
-                var git = Heading(Lang.L("First, Git for Windows", "먼저 Git for Windows가 필요합니다"));
-                git.Margin = new Padding(0, 6, 0, 4);
-                body.Controls.Add(git);
-                body.Controls.Add(Paragraph(model.CanUseWinget
-                    ? Lang.L("The installer needs Git. Install it with winget (Windows asks for permission), or download it yourself and open Ovis again.",
-                             "설치 프로그램에 Git이 필요합니다. winget으로 설치하거나(Windows가 허락을 물어봅니다) 직접 받아 설치한 뒤 Ovis를 다시 열어 주세요.")
-                    : Lang.L("The installer needs Git. Download and install it, then open Ovis again.",
-                             "설치 프로그램에 Git이 필요합니다. 받아서 설치한 뒤 Ovis를 다시 열어 주세요.")));
-                body.Controls.Add(model.CanUseWinget
-                    ? Buttons(
-                        Primary(Lang.L("Install Git", "Git 설치"), () => model.InstallGit()),
-                        Button(Lang.L("Download Git", "Git 내려받기"), () => Open(Links.GitDownload)),
-                        Button(Lang.L("Check again", "다시 확인"), () => model.Refresh()))
-                    : Buttons(
-                        Primary(Lang.L("Download Git", "Git 내려받기"), () => Open(Links.GitDownload)),
-                        Button(Lang.L("Check again", "다시 확인"), () => model.Refresh())));
-                return;
-            }
+            if (GitStep()) return;
             var install = Primary(Lang.L("Install", "설치"), () => model.Install());
             body.Controls.Add(Buttons(install));
             AcceptButton = install;
+        }
+
+        /// <summary>Install and Update both need Git for Windows: while it is missing, getting it is the step shown.</summary>
+        private bool GitStep()
+        {
+            if (!model.GitMissing) return false;
+            var git = Heading(Lang.L("First, Git for Windows", "먼저 Git for Windows가 필요합니다"));
+            git.Margin = new Padding(0, 6, 0, 4);
+            body.Controls.Add(git);
+            body.Controls.Add(Paragraph(model.CanUseWinget
+                ? Lang.L("The installer needs Git. Install it with winget (Windows asks for permission), or download it yourself and open Ovis again.",
+                         "설치 프로그램에 Git이 필요합니다. winget으로 설치하거나(Windows가 허락을 물어봅니다) 직접 받아 설치한 뒤 Ovis를 다시 열어 주세요.")
+                : Lang.L("The installer needs Git. Download and install it, then open Ovis again.",
+                         "설치 프로그램에 Git이 필요합니다. 받아서 설치한 뒤 Ovis를 다시 열어 주세요.")));
+            body.Controls.Add(model.CanUseWinget
+                ? Buttons(
+                    Primary(Lang.L("Install Git", "Git 설치"), () => model.InstallGit()),
+                    Button(Lang.L("Download Git", "Git 내려받기"), () => Open(Links.GitDownload)),
+                    Button(Lang.L("Check again", "다시 확인"), () => model.Refresh()))
+                : Buttons(
+                    Primary(Lang.L("Download Git", "Git 내려받기"), () => Open(Links.GitDownload)),
+                    Button(Lang.L("Check again", "다시 확인"), () => model.Refresh())));
+            return true;
+        }
+
+        private void Outdated()
+        {
+            body.Controls.Add(Heading(Lang.L("Update the Ovis server", "Ovis 서버를 업데이트해야 합니다")));
+            body.Controls.Add(Paragraph(Setup.UpdateMessage(model.UpdateReason, model.Plugin, model.Status != null && model.Status.Running, model.Status == null ? null : model.Status.RunningVersion, model.Status == null ? null : model.Status.Version, Model.AppVersion)));
+            if (GitStep()) return;
+            var update = Primary(Lang.L("Update", "업데이트"), () => model.Update());
+            body.Controls.Add(Buttons(update, Button(Lang.L("Check again", "다시 확인"), () => model.Refresh())));
+            AcceptButton = update;
+        }
+
+        private void HerdrTooOld()
+        {
+            body.Controls.Add(Heading(Lang.L("Update herdr first", "먼저 herdr를 업데이트해야 합니다")));
+            body.Controls.Add(Paragraph(Setup.HerdrMessage(model.Plugin, model.HerdrVersion)));
+            body.Controls.Add(Buttons(
+                Primary(Lang.L("Check again", "다시 확인"), () => model.Refresh()),
+                Button(Lang.L("Get help", "도움 받기"), () => Open(Links.Support))));
         }
 
         private void Installed()

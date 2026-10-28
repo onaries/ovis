@@ -109,6 +109,35 @@ it("accepts finish 10 after finish 4 without waiting for the resting agent to an
   expect(evidence.accept("resting-scope", 9, final)).toBe(false);
 });
 
+it("keeps proving a finish when Codex dates its answer again with a later task_complete", () => {
+  const evidence = new ConversationFinishEvidence();
+  const answered = { source: "codex-transcript", history_id: "rollout", turns: [
+    { role: "assistant", ts: "2026-10-19T00:00:00Z", end_ts: "2026-10-19T00:00:05Z", parts: [{ kind: "text", text: "Finished", phase: "final_answer" }] },
+  ] } satisfies Parameters<typeof conversationFinishPresented>[0];
+  const completed = structuredClone(answered);
+  completed.turns[0]!.end_ts = "2026-10-19T00:00:06Z";
+  // Read once before the pane was presented, then again after task_complete moved end_ts.
+  expect(evidence.accept("codex-scope", 3, answered)).toBe(true);
+  expect(evidence.accept("codex-scope", 3, completed, answered)).toBe(true);
+  expect(evidence.accept("codex-scope", 3, completed, completed)).toBe(true);
+  // Another answer is still not this finish's.
+  const other = structuredClone(completed);
+  other.turns[0]!.parts[0]!.text = "Something else";
+  expect(evidence.accept("codex-scope", 3, other, completed)).toBe(false);
+});
+
+it("does not take an older reply with the same text for the finish when no turn has a start time", () => {
+  const evidence = new ConversationFinishEvidence();
+  const newest = { source: "opencode-transcript", history_id: "session", turns: [
+    { role: "assistant", ts: null, end_ts: "2026-10-19T00:05:00Z", parts: [{ kind: "text", text: "Done", phase: "final_answer" }] },
+  ] } satisfies Parameters<typeof conversationFinishPresented>[0];
+  const older = structuredClone(newest);
+  older.turns[0]!.end_ts = "2026-10-19T00:01:00Z";
+  expect(evidence.accept("no-start-scope", 3, newest)).toBe(true);
+  expect(evidence.accept("no-start-scope", 3, older, newest)).toBe(false);
+  expect(evidence.accept("no-start-scope", 3, structuredClone(newest), older)).toBe(true);
+});
+
 for (const id of [5, 10]) {
   it(`accepts finish ${id} when the saved finish 4 has no answer proof`, () => {
     const local = Object.getOwnPropertyDescriptor(globalThis, "localStorage");

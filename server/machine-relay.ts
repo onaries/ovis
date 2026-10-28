@@ -3,6 +3,7 @@ import type { ServerWebSocket } from "bun";
 import { OUTPUT_HARD_BYTES, OUTPUT_HIGH_BYTES, OUTPUT_STALL_MS } from "./output-window.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../shared/terminal-flow.ts";
 import type { MachineManager } from "./machines.ts";
+import type { ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
 
 /**
  * The relay's backstop against its own sockets backing up, with this PC's rule (reconcileOutput):
@@ -39,7 +40,11 @@ export class MachineRelay {
   private stall = new RelayStallClock();
   readonly ready: Promise<void>;
 
-  constructor(manager: MachineManager, id: string, private readonly readOnly = false) {
+  /**
+   * `browserSnapshot`: the PC's snapshot frame as the browser is told it, without the token values this
+   * server's sidebar rows hide (#2160). Other frames pass as they came.
+   */
+  constructor(manager: MachineManager, id: string, private readonly readOnly: boolean, private readonly browserSnapshot: (snapshot: SessionSnapshot) => SessionSnapshot) {
     const endpoint = manager.endpoint(id);
     if (!endpoint) throw new Error("This PC is disconnected");
     this.upstream = authenticatedWebSocket(endpoint.url.replace("http:", "ws:") + "/ws", endpoint.token);
@@ -54,7 +59,7 @@ export class MachineRelay {
       this.upstream.addEventListener("close", () => { clearTimeout(timeout); reject(new Error("Remote websocket closed")); }, { once: true });
     });
     this.upstream.onmessage = (event) => {
-      const raw = String(event.data);
+      const raw = this.told(String(event.data));
       if (this.closed) return;
       if (!this.client) {
         this.bytes += Buffer.byteLength(raw);
@@ -65,6 +70,18 @@ export class MachineRelay {
     this.upstream.onclose = (event) => this.close(upstreamCloseCode(event.code), event.reason || "Remote connection ended");
     this.timer = setInterval(() => this.tick(), 100);
     this.timer.unref();
+  }
+  /**
+   * A frame as the browser is told it: a frame that names `tokens` anywhere is read, whatever its key
+   * order, and a snapshot among them re-written where a value leaves; the rest pass unread.
+   */
+  private told(raw: string): string {
+    if (!raw.includes('"tokens"')) return raw;
+    let message: ServerMessage;
+    try { message = JSON.parse(raw) as ServerMessage; } catch { return raw; }
+    if (message.type !== "snapshot") return raw;
+    const snapshot = this.browserSnapshot(message.snapshot);
+    return snapshot === message.snapshot ? raw : JSON.stringify({ ...message, snapshot });
   }
   /** One stall-clock sample of both sockets' queues; the 100 ms timer calls it, and tests inject `now`. */
   tick(now = Date.now()): void {

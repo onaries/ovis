@@ -14,12 +14,20 @@ apart.
 | --- | --- |
 | **Install** | `irm https://ovis.sh/install.ps1 \| iex` in Windows PowerShell, with `OVIS_NO_OPEN=1` and an empty stdin. Then herdr's server is set to start at sign-in (below) and started. |
 | **Install Git** | Shown instead of Install while Git for Windows is missing (install.ps1 needs it): `winget install --id Git.Git`, which asks for administrator approval, or **Download Git** for https://git-scm.com/download/win. |
-| Status (on open) | `herdr plugin list --json` finds the plugin, `scripts/plugin.ts status` gives its address, and `GET /api/access` gives the phone address, drawn as a QR code. |
+| Status (on open) | `herdr plugin list --json` finds the plugin, `scripts/plugin.ts status` gives its address and the version that runs, and `GET /api/access` gives the phone address, drawn as a QR code. |
+| **Update** | Shown instead of Start when the server is older than the app, under the old id, or of a version nothing reports. Under the old id: install.ps1, which moves it to the new id with its settings and token. Otherwise: the plugin's `stop`, then `herdr plugin install devswha/ovis --ref <tag> --yes`, herdr's reinstall, which keeps the plugin's config and state; the tag is the newest release `git ls-remote` lists, never older than the app, so a server that updated itself past the app is not taken back. Then the server starts and herdr is set to start at sign-in, as for Install. A herdr older than the server needs is named instead, with `herdr update` to run. |
 | **Make the phone address** | `scripts/plugin.ts phone`, the installer's Tailscale step. |
 | **Restart** / **Start** | The plugin's `stop-windows` and `start-windows` actions, or `herdr server` when herdr is not running. |
 | **Remove** | The guide's Uninstall steps (`stop-windows`, `herdr plugin uninstall`, `tailscale serve … off`), then the sign-in start and the Start menu entry are removed. |
 
-Releases up to 0.4.13 install the plugin as `devswha.herdr-web-ui`; the app finds it under either id.
+Releases up to 0.4.13 install the plugin as `devswha.herdr-web-ui`; the app finds it under either id, and offers
+Update for the old one. A running server's version is only what it reports itself (`current_version` of
+`GET /api/updates`, with the token from the plugin's `env`/`.env` when it has one); a stopped one's is the `version:`
+line of `plugin.ts status` (the release its next start runs). herdr's list stays at the version first installed while
+Settings → Updates runs newer releases, so it is never taken for the version that runs: a stopped server known only by
+it is offered Start, and a running one that does not say is offered Update with "cannot read its version". The update
+installs the newest release, so it never goes back. A linked checkout or a fork is never moved or reinstalled, and a
+build without a version (0.0.0, a local build) compares none.
 
 Every program it runs has a time limit (two minutes; the installer 45, winget 30, the phone step 5). Past it,
 the program and what it started are ended, except herdr and anything under it. The QR encoder's MIT notice

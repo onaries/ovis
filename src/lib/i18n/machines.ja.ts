@@ -5,6 +5,17 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const MACHINES_JA: Record<string, string> = {
+  "Keep this dialog open until the PC connects.": "PC が接続されるまで、このダイアログを開いたままにしてください。",
+  "Waiting for Windows sign-in": "Windows へのサインインを待機中",
+  "Windows desktop startup failed": "Windows デスクトップでの起動に失敗しました",
+  "Windows desktop startup failed on {name}{others}.": "{name} の Windows デスクトップでの起動に失敗しました{others}。",
+  "Sign in to Windows on this PC; Ovis will reconnect automatically.": "この PC で Windows にサインインすると、Ovis が自動的に再接続します。",
+  "Review startup options": "起動方法を確認",
+  "{name} is waiting for Windows sign-in{others}.": "{name} は Windows へのサインインを待機しています{others}。",
+  "Start without Windows sign-in": "Windows にサインインせず起動",
+  "Starting without Windows sign-in…": "Windows にサインインせず起動中…",
+  "Signing out of Windows ends herdr and its panes; lock the PC instead.": "Windows からサインアウトすると herdr とそのペインが終了します。代わりに PC をロックしてください。",
+  "Starting without Windows sign-in can break Codex sandbox commands, and desktop-control tools may be unavailable. This choice applies to one start.": "Windows にサインインせず起動すると、Codex のサンドボックスコマンドが失敗したり、デスクトップ操作ツールを利用できなかったりする場合があります。この選択は今回の起動にのみ適用されます。",
   "Expand {name}": "{name} を展開",
   "Collapse {name}": "{name} を折りたたむ",
   "Disconnected": "切断されました",

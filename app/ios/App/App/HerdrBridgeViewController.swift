@@ -372,6 +372,10 @@ class HerdrBridgeViewController: CAPBridgeViewController {
         return configuration
     }
 
+    override func webView(with frame: CGRect, configuration: WKWebViewConfiguration) -> WKWebView {
+        WebViewWithoutFormBar(frame: frame, configuration: configuration)
+    }
+
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(HerdrShellPlugin())
         bridge?.registerPluginInstance(OvisPushPlugin())
@@ -541,6 +545,15 @@ class HerdrBridgeViewController: CAPBridgeViewController {
         guard let window = (scene?.delegate as? SceneDelegate)?.window else { return }
         window.rootViewController = HerdrBridgeViewController()
     }
+}
+
+/// The app's web view, without WebKit's form accessory bar: the up and down arrows and the check
+/// mark it puts over the keyboard (#2043). The client has its own key bar, and on a phone the bar
+/// took another row of the screen; a page cannot remove it. WebKit asks the web view for the
+/// keyboard's accessory view (since iOS 13), so this public override does what
+/// @capacitor/keyboard's `hideFormAccessoryBar` does by patching WebKit's private content view.
+private final class WebViewWithoutFormBar: WKWebView {
+    override var inputAccessoryView: UIView? { nil }
 }
 
 /// Passes every navigation callback to Capacitor's own delegate and reports a main-frame load

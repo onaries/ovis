@@ -130,14 +130,16 @@ function fixtures(): { main: string; detached: string; plain: string; long: stri
   const plain = join(root, "plain");
   mkdirSync(plain);
 
-  // one line longer than any screen, its match 600 characters in, beside a short one
+  // one line longer than any screen, its match 600 characters in, beside a short one; below it an
+  // unchanged line that wraps taller than any view, its match at the very end
   const long = join(root, "long");
   mkdirSync(join(long, "src"), { recursive: true });
   git(long, "init", "-q", "-b", "main");
-  writeFileSync(join(long, "src/long.ts"), `export const short = 1;\nexport const wide = "${"x".repeat(600)} old";\n`);
+  const tall = `export const tall = "${"word ".repeat(3000)}haystack";\n`;
+  writeFileSync(join(long, "src/long.ts"), `export const short = 1;\nexport const wide = "${"x".repeat(600)} old";\n${tall}`);
   git(long, "add", ".");
   git(long, "commit", "-q", "-m", "long");
-  writeFileSync(join(long, "src/long.ts"), `export const short = 1;\nexport const wide = "${"x".repeat(600)} needle";\n`);
+  writeFileSync(join(long, "src/long.ts"), `export const short = 1;\nexport const wide = "${"x".repeat(600)} needle";\n${tall}`);
 
   // a branch forked from main, which went on without it: base-only commits, branch commits, staged
   // and unstaged work, a rename, untracked text and binary files, local and remote branches
@@ -1312,11 +1314,45 @@ try {
       await inViewAcross("needle in split");
       await page.getByRole("button", { name: "Unified", exact: true }).click();
     }
+    // wrapped rows: a match at the end of a row taller than the view is brought into view itself, not the row's middle
+    await page.evaluate(() => window.repoDiffQA.settings({ wrapCode: true }));
+    await query.fill("haystack");
+    const down = (): Promise<{ count: string; place: string; text: string; row: { top: number; bottom: number }; match: { top: number; bottom: number }; view: { top: number; bottom: number } }> => page.evaluate(() => {
+      const bar = document.querySelector(".repo-diff-find");
+      const range = [...(CSS.highlights.get("repo-diff-find") ?? [])][0] as Range | undefined;
+      const row = document.querySelector(".repo-diff diffs-container")?.shadowRoot?.querySelector<HTMLElement>("[data-line][data-find-active]")?.getBoundingClientRect();
+      const match = range?.getBoundingClientRect();
+      const view = document.querySelector(".repo-diff-scroll")?.getBoundingClientRect();
+      return {
+        count: [...(bar?.querySelector(".find-bar-count")?.childNodes ?? [])].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join(""),
+        place: bar?.querySelector(".repo-diff-find-place")?.textContent ?? "",
+        text: range?.toString() ?? "",
+        row: { top: row?.top ?? 0, bottom: row?.bottom ?? 0 },
+        match: { top: match?.top ?? 0, bottom: match?.bottom ?? 0 },
+        view: { top: view?.top ?? 0, bottom: view?.bottom ?? 0 },
+      };
+    });
+    try {
+      await page.waitForFunction(() => {
+        const range = [...(CSS.highlights.get("repo-diff-find") ?? [])][0] as Range | undefined;
+        const view = document.querySelector(".repo-diff-scroll")?.getBoundingClientRect();
+        if (!range || !view || range.toString() !== "haystack") return false;
+        const match = range.getBoundingClientRect();
+        return match.height > 0 && match.top >= view.top - 1 && match.bottom <= view.bottom + 1;
+      });
+    } catch (error) {
+      throw new Error(`${label} tall wrapped row: the match never came into view: ${JSON.stringify(await down())}`, { cause: error });
+    }
+    const tall = await down();
+    assert.deepEqual([tall.count, tall.place], ["1 of 1", "Unchanged line 3"], `${label}: the tall row's match is the active one: ${JSON.stringify(tall)}`);
+    assert.ok(tall.row.bottom - tall.row.top > tall.view.bottom - tall.view.top, `${label}: the wrapped row is taller than the view: ${JSON.stringify(tall)}`);
+    await findShot(page, width, theme, "tall-row");
+    await page.evaluate(() => window.repoDiffQA.settings({ wrapCode: false }));
     await page.keyboard.press("Escape");
     await query.waitFor({ state: "detached" });
     await closeDiff(page);
     assert.deepEqual(errors, [], `${label}: no errors after the long line`);
-    console.log(`PASS ${label}: a match past the right edge of an unwrapped row is scrolled into view across${phone ? "" : ", in split too"}, and back for one at the start`);
+    console.log(`PASS ${label}: a match past the right edge of an unwrapped row is scrolled into view across${phone ? "" : ", in split too"}, and back for one at the start; one at the end of a wrapped row taller than the view is brought into view itself`);
 
     // a comparison changed under live results drops them; a patch on its way, an offline PC and a watch-only device have none to search.
     // The Files list stays open beneath, as when a row opens a diff: closing a phone's sheet goes Back in history, which would race the next open

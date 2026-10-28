@@ -8,6 +8,9 @@ const PREFIX = "ovis:pending:";
 const piReceipt = (message: PendingMessage): boolean => message.id.startsWith("pi:")
   && (message.error?.code === "pi_transcript_pending" || message.error?.code === "transcript_unconfirmed");
 
+/** A row's error for a message an older bridge took with no receipt (SubmitResult `unconfirmed`). */
+export const UNCONFIRMED_SEND = { code: "submit_unconfirmed", message: "This PC sent no receipt, so nothing confirmed the pane took this message" };
+
 /** Connection proof stays in memory. A saved copy can never resume automatic delivery. */
 export class PendingMessageStore {
   private rows = new Map<string, PendingMessageView[]>();
@@ -237,6 +240,15 @@ export class PendingMessageStore {
         ...(attemptedGeneration !== undefined ? { resendGeneration: uncertain ? attemptedGeneration : attemptedGeneration + 1 } : {}),
         state: uncertain ? "uncertain" : attemptedGeneration !== undefined ? "held" : message.serverOwned ? message.state : "held" };
     }));
+  }
+  /**
+   * Keeps a message an older bridge took with no receipt as a row not confirmed: it may or may not
+   * have reached the pane, so its text stays to copy or discard and is never sent again from here.
+   */
+  keepUnconfirmed(owner: string, text: string): void {
+    const id = `unconfirmed:${[...crypto.getRandomValues(new Uint32Array(2))].map((part) => part.toString(36)).join("-")}`;
+    this.refresh(owner);
+    this.write(owner, [...this.read(owner), { id, request_id: 0, text, created_at: new Date().toISOString(), state: "uncertain", error: UNCONFIRMED_SEND, serverOwned: false }]);
   }
   removeCopy(owner: string, id: string): void {
     if (this.read(owner).some((message) => message.id === id && message.serverOwned)) return;

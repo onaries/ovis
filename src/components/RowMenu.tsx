@@ -67,6 +67,15 @@ const POPOVER_ITEMS = '[role="menuitem"], [role="menuitemcheckbox"]';
 // the sheet is modal: its Cancel is one of the stops
 const SHEET_ITEMS = '.row-sheet-item, .row-sheet-cancel';
 
+// each open menu's button: the menu is drawn outside what holds it, and a surface that keeps its own focus
+// (MachineSidebar's asked-for filter) counts its rows' menus as its own, and no other's
+const anchors = new WeakMap<Element, HTMLElement>();
+/** The button of the open menu or sheet `node` is in, else null. */
+export function rowMenuAnchor(node: Element): HTMLElement | null {
+  const surface = node.closest(".row-menu, .row-sheet");
+  return surface === null ? null : anchors.get(surface) ?? null;
+}
+
 export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail, header, items, align = "end", onClose, variant }: Props) {
   const t = useT();
   const sheet = useMediaQuery(SHEET_QUERY);
@@ -77,6 +86,13 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   const [place, setPlace] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   // where the button was when the menu was placed: a scroll that leaves it there is not a reason to close
   const placedAt = useRef<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const node = surface.current;
+    if (node === null) return;
+    anchors.set(node, anchor);
+    return () => { anchors.delete(node); };
+  }, [anchor, sheet]);
 
   useLayoutEffect(() => () => {
     const target = restoreFocusTo === undefined ? anchor : restoreFocusTo;

@@ -1,7 +1,68 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
+import { brotliDecompressSync } from "node:zlib";
 
 import { chatFontStack, type FontWidths, HANGUL_FAMILY, loadFontStack, measurableFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "./fontFamily.ts";
+
+// woff2's known table tags, by the index its table directory writes for them
+const WOFF2_TAGS = ["cmap", "head", "hhea", "hmtx", "maxp", "name", "OS/2", "post", "cvt ", "fpgm", "glyf", "loca", "prep", "CFF ", "VORG", "EBDT", "EBLC", "gasp", "hdmx", "kern", "LTSH", "PCLT", "VDMX", "vhea", "vmtx", "BASE", "GDEF", "GPOS", "GSUB"];
+
+/** The code points a woff2 file maps to a glyph (its format 4 cmaps), as inclusive ranges. */
+function cmapRanges(file: Buffer): [number, number][] {
+  const view = new DataView(file.buffer, file.byteOffset, file.byteLength);
+  expect(view.getUint32(0)).toBe(0x774f4632); // "wOF2"
+  let at = 48;
+  const base128 = (): number => {
+    let value = 0;
+    for (;;) {
+      const byte = file[at++]!;
+      value = value * 128 + (byte & 0x7f);
+      if (!(byte & 0x80)) return value;
+    }
+  };
+  const tables: { tag: string; length: number }[] = [];
+  for (let index = view.getUint16(12); index > 0; index -= 1) {
+    const flags = file[at++]!;
+    const tag = (flags & 0x3f) === 0x3f ? file.toString("latin1", at, (at += 4)) : WOFF2_TAGS[flags & 0x3f] ?? "?";
+    const length = base128();
+    // glyf and loca are transformed unless their version says not; another table only when it says so
+    const transformed = tag === "glyf" || tag === "loca" ? flags >> 6 === 0 : flags >> 6 !== 0;
+    tables.push({ tag, length: transformed ? base128() : length });
+  }
+  const data = brotliDecompressSync(file.subarray(at, at + view.getUint32(20)));
+  let offset = 0;
+  for (const table of tables) {
+    if (table.tag === "cmap") break;
+    offset += table.length;
+  }
+  const cmap = new DataView(data.buffer, data.byteOffset + offset);
+  const points = new Set<number>();
+  for (let index = 0; index < cmap.getUint16(2); index += 1) {
+    const sub = cmap.getUint32(8 + index * 8);
+    expect(cmap.getUint16(sub)).toBe(4);
+    const segments = cmap.getUint16(sub + 6) / 2;
+    for (let segment = 0; segment < segments; segment += 1) {
+      const end = cmap.getUint16(sub + 14 + segment * 2);
+      const start = cmap.getUint16(sub + 16 + segments * 2 + segment * 2);
+      const delta = cmap.getInt16(sub + 16 + segments * 4 + segment * 2);
+      const rangeAt = sub + 16 + segments * 6 + segment * 2;
+      const rangeOffset = cmap.getUint16(rangeAt);
+      for (let point = start; point <= end && point !== 0xffff; point += 1) {
+        const entry = rangeOffset === 0 ? point : cmap.getUint16(rangeAt + rangeOffset + (point - start) * 2);
+        // a glyph array's 0 is the missing glyph as it stands; any other entry takes the delta too
+        const glyph = rangeOffset !== 0 && entry === 0 ? 0 : (entry + delta) & 0xffff;
+        if (glyph !== 0) points.add(point);
+      }
+    }
+  }
+  const ranges: [number, number][] = [];
+  for (const point of [...points].sort((a, b) => a - b)) {
+    const last = ranges.at(-1);
+    if (last && last[1] === point - 1) last[1] = point;
+    else ranges.push([point, point]);
+  }
+  return ranges;
+}
 
 describe("terminal font stack", () => {
   it("is the built-in stack when nothing is typed", () => {
@@ -42,10 +103,11 @@ describe("terminal font stack", () => {
     for (const face of faces) {
       const file = /url\("([^"]+)"\)/.exec(face)![1]!;
       expect(existsSync(new URL(file, new URL("../components/", import.meta.url)))).toBe(true);
-      const ranges = /unicode-range:\s*([^;]+);/.exec(face)![1]!.split(",").map((range) => range.trim().replace(/^U\+/i, "").split("-").map((hex) => Number.parseInt(hex, 16)));
-      // Latin, punctuation, box drawing and the rest below the CJK blocks stay with the cell's font
-      expect(ranges.filter(([low, high = low]) => low! <= 0x2fff || high! <= 0x2fff)).toEqual([]);
-      expect(ranges.some(([low, high = low]) => low! <= 0xac00 && 0xd7a3 <= high!)).toBe(true);
+      // the compatibility jamo and the syllables, nothing else: Latin, punctuation, box drawing and the
+      // private use area stay with the cell's font and the icon font
+      expect(/unicode-range:\s*([^;]+);/.exec(face)![1]!.trim()).toBe("U+3131-318E, U+AC00-D7A3");
+      // and the file draws exactly what the range sends it
+      expect(cmapRanges(readFileSync(new URL(file, new URL("../components/", import.meta.url))))).toEqual([[0x3131, 0x318e], [0xac00, 0xd7a3]]);
     }
   });
 

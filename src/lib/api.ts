@@ -290,7 +290,7 @@ export async function fetchPaneTranscript(paneId: string, lines: number, machine
 }
 
 /** Which turns (ConversationResponse.cursor): the page `before` a cursor, not past `since`; the newest ones `from` a held start. */
-export type ConversationPageQuery = { before?: string; since?: string; from?: string; limit?: number; /** Revalidate a new finish without borrowing another key's 304. */ fresh?: boolean };
+export type ConversationPageQuery = { before?: string; since?: string; from?: string; limit?: number; /** History currently displayed, even if its cached response was evicted. */ history_id?: string; /** Revalidate a new finish without borrowing another key's 304. */ fresh?: boolean };
 
 /**
  * The last answer per newest-page conversation URL and its ETag. The chat reads it again on
@@ -361,12 +361,19 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
   const url = conversationUrl(paneId, machineId, page);
   const polled = page.before === undefined;
   const known = polled ? conversationAnswers.get(url) : undefined;
+  const requestUrl = page.history_id === undefined ? url : `${url}&history_id=${encodeURIComponent(page.history_id)}`;
   const { response, body } = await withChatReadDeadline(async (signal) => {
-    const response = await fetch(url, { cache: "no-store", signal, ...(known && !page.fresh ? { headers: { "if-none-match": known.etag } } : {}) });
+    const response = await fetch(requestUrl, { cache: "no-store", signal, ...(known && !page.fresh ? { headers: { "if-none-match": known.etag } } : {}) });
     if (response.status === 304 && known) return { response, body: known.body };
     if (!response.ok) throw await errorFrom(url, response);
     return { response, body: (await response.json()) as ConversationResponse };
-  }, chatReadDeadlineMs(machineId));
+  }, chatReadDeadlineMs(machineId)).catch((cause: unknown) => {
+    if (cause instanceof ApiError && cause.status === 409) {
+      conversationAnswers.delete(url);
+      conversationAnswers.delete(conversationUrl(paneId, machineId, {}));
+    }
+    throw cause;
+  });
   // Cache changes occur after the bounded read: a late, aborted answer cannot replace it.
   if (response.status === 304 && known) {
     conversationAnswers.delete(url);

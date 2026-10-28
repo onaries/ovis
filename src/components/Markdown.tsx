@@ -225,10 +225,14 @@ function Inline({ nodes, interactive = true, standalone = false }: { nodes: Inli
 /** A list, nested lists and tables in its items; a task item's box stands in for its bullet. */
 function List({ block }: { block: ListBlock }) {
   const Tag = block.ordered ? "ol" : "ul";
+  // the widest number's digits: its marker sets the list's indent (ChatView.css). The browser counts
+  // from 1 when `start` is past a 32-bit integer, so such a start sets no wider indent
+  const first = block.start !== undefined && block.start <= 2 ** 31 - 1 ? block.start : 1;
+  const digits = block.ordered ? String(first + block.items.length - 1).length : 1;
   const t = useT();
   const id = useId();
   return (
-    <Tag className="markdown-list" start={block.ordered ? block.start : undefined}>
+    <Tag className="markdown-list" start={block.ordered ? block.start : undefined} style={digits > 1 ? { "--markdown-list-digits": digits } as CSSProperties : undefined}>
       {block.items.map((item, index) => (
         <li key={index} className={item.checked === undefined ? undefined : "markdown-task"}>
           {/* a task's box shows its state; the agent's text owns it, so it cannot be ticked here. Drawn,

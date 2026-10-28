@@ -329,6 +329,132 @@ it.skipIf(process.platform !== "linux")("binds only the reported UUID to the for
   expect((await read()).source).toBe("scrollback");
 }, 20_000);
 
+it.skipIf(process.platform !== "linux")("retries failed Copilot page reads only while fresh ownership and file generation still agree", async () => {
+  const session = "12aa83d8-48bc-41f2-a498-7055c5c44a07";
+  const switched = "12aa83d8-48bc-41f2-a498-7055c5c44a08";
+  for (const id of [session, switched]) {
+    mkdirSync(join(home, "session-state", id), { recursive: true });
+    writeFileSync(file(id), fixture(id, "retained history")
+      + Array.from({ length: 55 }, (_, i) => event("user.message", { content: `prompt ${i}` })).join(""));
+  }
+  const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-copilot-read-retry" });
+  const current = created.root_pane.pane_id;
+  const realRead = fs.readSync;
+  let failingFile = file(session);
+  let fail = false;
+  let onFailure = () => {};
+  function failedRead(fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: fs.ReadPosition | null): number;
+  function failedRead(fd: number, buffer: NodeJS.ArrayBufferView, options?: fs.ReadSyncOptions): number;
+  function failedRead(fd: number, buffer: NodeJS.ArrayBufferView, offset?: number | fs.ReadSyncOptions, length?: number, position?: fs.ReadPosition | null): number {
+    // Leave the bounded header/identity checks real; fail only a transcript page read.
+    if (fail && (length ?? 0) > 64 * 1024 && fs.readlinkSync(`/proc/self/fd/${fd}`) === failingFile) {
+      fail = false;
+      onFailure();
+      throw Object.assign(new Error("synthetic private path must not escape"), { code: "EIO" });
+    }
+    return typeof offset === "number" ? realRead(fd, buffer, offset, length!, position ?? null) : realRead(fd, buffer, offset);
+  }
+  let reads: ReturnType<typeof spyOn<typeof fs, "readSync">> | undefined;
+  const append = () => appendFileSync(failingFile, event("assistant.message", { content: "fixture ".repeat(10_000) }));
+  try {
+    await startFixture(current, session, "--lifecycle");
+    const info = await paneProcessInfo(current);
+    const pid = info?.foreground_processes?.find((process) => process.argv?.includes(executable))?.pid;
+    expect(pid).toBeDefined();
+    const log = join(home, "logs", `process-100-${pid}.log`);
+    const lifecycle = (id: string, action = "Registering") =>
+      appendFileSync(log, `${new Date().toISOString()} [INFO] ${action} foreground session: ${id}\n`);
+    const url = `http://127.0.0.1:${app.port}/api/pane/conversation?pane_id=${encodeURIComponent(current)}`;
+    reads = spyOn(fs, "readSync").mockImplementation(failedRead);
+    const initial = await (await fetch(url)).json() as { history_id: string; cursor: string };
+    expect(initial.cursor).toBeString();
+    append(); fail = true;
+    const legacyFailure = await fetch(url);
+    expect(legacyFailure.status).toBe(200);
+    expect(await legacyFailure.json()).toEqual({ source: "scrollback", turns: [] });
+    expect(fail).toBe(false);
+    for (const query of [`&history_id=${encodeURIComponent(initial.history_id)}`, `&from=${encodeURIComponent(initial.cursor)}`, `&before=${encodeURIComponent(initial.cursor)}`]) {
+      append(); fail = true;
+      const failed = await fetch(url + query, { headers: { "if-none-match": '"old-answer"' } });
+      expect(failed.status).toBe(503);
+      expect(failed.headers.get("etag")).toBeNull();
+      expect(failed.headers.get("cache-control")).toBe("no-store");
+      expect(await failed.json()).toEqual({ error: {
+        code: "conversation_read_pending", message: "The conversation could not be read; try again shortly.",
+      } });
+      expect(fail).toBe(false);
+      const recovered = await fetch(url);
+      expect(recovered.status).toBe(200);
+      expect((await recovered.json()).history_id).toBe(initial.history_id);
+    }
+    lifecycle(switched);
+    failingFile = file(switched);
+    append(); fail = true;
+    const switchedBeforeRead = await fetch(`${url}&history_id=${encodeURIComponent(initial.history_id)}`);
+    expect(fail).toBe(false);
+    expect(switchedBeforeRead.status).toBe(409);
+    expect((await (await fetch(url)).json()).history_id).not.toBe(initial.history_id);
+    failingFile = file(session);
+    lifecycle(session);
+    appendFileSync(file(session), "malformed complete record\n");
+    expect((await (await fetch(url)).json()).source).toBe("scrollback");
+    writeFileSync(file(session), fixture(session, "recovered history")
+      + Array.from({ length: 55 }, (_, i) => event("user.message", { content: `recovered prompt ${i}` })).join(""));
+    for (const selector of ["", "from", "before"]) {
+      lifecycle(session);
+      const before = await (await fetch(url)).json() as { cursor: string };
+      expect(before.cursor).toBeString();
+      append(); fail = true; onFailure = () => lifecycle(session, "Unregistering");
+      const revoked = await fetch(url + (selector ? `&${selector}=${encodeURIComponent(before.cursor)}` : ""));
+      expect(fail).toBe(false);
+      expect(revoked.status).toBe(selector ? 409 : 200);
+      if (!selector) expect(await revoked.json()).toEqual({ source: "scrollback", turns: [] });
+    }
+    for (const paged of [false, true]) {
+      lifecycle(session);
+      const before = await (await fetch(url)).json() as { cursor: string };
+      expect(before.cursor).toBeString();
+      append(); fail = true; onFailure = () => lifecycle(switched);
+      const changed = await fetch(url + (paged ? `&from=${encodeURIComponent(before.cursor)}` : ""));
+      expect(fail).toBe(false);
+      expect(changed.status).toBe(paged ? 409 : 200);
+      if (!paged) expect(await changed.json()).toEqual({ source: "scrollback", turns: [] });
+    }
+    lifecycle(session);
+    await fetch(url);
+    append(); fail = true; onFailure = () => {
+      rmSync(file(session));
+      writeFileSync(file(session), fixture(session, "replacement file"));
+    };
+    const replaced = await fetch(url);
+    expect(fail).toBe(false);
+    expect(replaced.status).toBe(200);
+    expect(await replaced.json()).toEqual({ source: "scrollback", turns: [] });
+    onFailure = () => {};
+    const displayed = await (await fetch(url)).json() as { history_id: string };
+    expect(displayed.history_id).toBeString();
+    fs.renameSync(file(session), `${file(session)}.replaced`);
+    writeFileSync(file(session), fixture(session, "replaced before the next refresh"));
+    append(); fail = true;
+    const replacedBeforeRead = await fetch(`${url}&history_id=${encodeURIComponent(displayed.history_id)}`);
+    expect(fail).toBe(false);
+    expect(replacedBeforeRead.status).toBe(409);
+    expect((await (await fetch(url)).json()).history_id).not.toBe(displayed.history_id);
+    for (const selector of ["from", "before"]) {
+      writeFileSync(file(session), fixture(session, "file removed during the read")
+        + Array.from({ length: 55 }, (_, i) => event("user.message", { content: `prompt ${i}` })).join(""));
+      lifecycle(session);
+      const before = await (await fetch(url)).json() as { cursor: string };
+      expect(before.cursor).toBeString();
+      append(); fail = true; onFailure = () => rmSync(file(session));
+      const missing = await fetch(`${url}&${selector}=${encodeURIComponent(before.cursor)}`);
+      expect(fail).toBe(false);
+      expect(missing.status).toBe(409);
+      expect((await missing.json()).error.code).toBe("history_changed");
+    }
+  } finally { reads?.mockRestore(); await workspaceClose(created.workspace.workspace_id); }
+}, 20_000);
+
 it.skipIf(process.platform !== "linux")("reads a resumed CLI without marker or report and follows foreground switches rather than stale reports", async () => {
   const resumed = "12aa83d8-48bc-41f2-a498-7055c5c44a03";
   const forked = "12aa83d8-48bc-41f2-a498-7055c5c44a04";

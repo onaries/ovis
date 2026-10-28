@@ -1220,7 +1220,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   with `hide = true` takes its token off; herdr's colors and weights are not drawn, the line keeps
   the app's dim. Where herdr's config names no rows, the row draws every token, by name. The rows
   are this server's herdr config, as herdr's sidebar is the client's, and apply to every PC's agents
-  (server/herdr-sidebar.ts, told on the machine events). The values are text, never markup; a blank
+  (server/herdr-sidebar.ts, told on the machine events). The server applies the hide rules: a value
+  they hide wherever the rows name it is left out of every snapshot a browser gets (the PC roster,
+  the session read, the `/ws` snapshot and a PC's relayed or proxied ones), and the rows' event
+  carries no rule's operands. Another Ovis server reading this PC with its bridge token gets the
+  snapshots whole and applies its own rows. The values are text, never markup; a blank
   or missing token draws nothing; the row's tooltip, and a phone's ⋯ sheet under its place
   (`.row-sheet-detail`, wrapped, scrolling past a third of the screen so the actions stay in
   reach, and following the row while open), say each whole. A PC that is away draws none, as it draws no
@@ -1555,6 +1559,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   Pane actions are not tab actions. Up to 768px, where a split tab shows one pane at a time, the
   tab's menu lists the tab's panes first, the open one marked current, over a hairline.
   Only at these narrow widths does it omit Split and Zoom pane; Unzoom pane stays available whenever the tab is zoomed.
+- A vertical mouse wheel over a strip whose tabs do not fit scrolls it sideways, as Zed's tab bar
+  and VS Code's editor tabs do, by the wheel's own unit (pixels, lines or pages). Touch, a trackpad's sideways
+  swipe, a pinch and a strip whose tabs fit are left to the browser.
 - Mouse dragging previews an accent insertion line, with edge scrolling for an overflowing strip.
   The snapshot's tab order is authoritative: a tab's stable `number` is not its place. A drop calls
   `tab.move` with an insertion boundary before removal, within that workspace and PC. The visible
@@ -1819,7 +1826,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (lib/repoDiffFind.ts: added, removed and unchanged lines, an unchanged line once on its new
   side), literally and case-sensitively, never the mounted rows, so a match folded away or
   outside the window of rows is found; a match on a folded line turns Fold context off, and the
-  row is brought to the middle by the same measured reveal as a virtualized source, and an
+  row is brought to the middle by the same measured reveal as a virtualized source (a wrapped row
+  taller than the view by the match's own lines, so a match near its end is not left below), and an
   unwrapped row is scrolled across until the match is in view beside the line numbers. The active
   row gets an inset `--accent` ring (only its side's column in split) and its text is painted in
   reverse through a CSS highlight, so it is not told by the tint alone. Enter / Shift+Enter step
@@ -2197,7 +2205,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the summary is words, so it is the interface face too. Pending and failed counts are their own
   items after it (`.work-row-state` outlined in `--border`, `.work-row-failed` on its tint), never
   cut and never colour alone. Opened, it shows the list the row stands for with a caption saying
-  what it is, then every update in order as ordinary rows, each with its state in words.
+  what it is, then every update in order as ordinary rows, each with its state in words. An
+  update opened there shows what it sent and got back, not the list again: its input as the agent
+  sent it (JSON indented) under "Input", then its whole output.
 - The list it stands for is the latest update that completed, judged only by what the transcript
   records (`call_id` / `state` on the tool part, `shared/protocol.ts`): Claude Code's tool_result
   says ok or error (an empty result is ok); Codex records no outcome, so an answered Codex update,
@@ -2209,8 +2219,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   with no completed update it shows none.
 - The run is named by its first call's own id in its turn's row (by the row and that call's index
   when the agent records no id), so appended updates and the next poll keep it open, focused and
-  where the reader left it. This follows the app's own Codex-style work block (Codex app, Claude
-  app: one row per action, folded under the turn); Agent of Empires' todo cards gave only the
+  where the reader left it. When the second update turns a single row into the run, the run opens
+  if that row was open, and the keyboard's focus stays on that update inside it (on the run's head
+  when it is folded), never dropped to the page, also while the reader is in another app. This
+  follows the app's own Codex-style work block (Codex app, Claude app: one row per action, folded
+  under the turn); Agent of Empires' todo cards gave only the
   evidence that contiguous plan updates read better as one item, and none of its code is used.
 
 ### Plan (`.bg-tasks-plan`, `.bg-step`, `.plan-count`)
@@ -3260,8 +3273,18 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   where subscribing anew mends it (the push service retired the subscription, the server does not
   know it, it was made for another server key), reading **Turning alerts on…** and disabled
   while the repair runs; **Alerts**, opening Settings → Alerts, for a refusal, which
-  re-subscribing does not mend and Send test answers. Not dismissible: the line leaves on the
-  push the repair or a test proves, or when alerts are turned off here.
+  re-subscribing does not mend and Send test answers. The update notice's dismiss button closes
+  the line for that fault on this device, across reloads and open browser tabs. Another fault,
+  a look where the server answers for a held subscription with no fault, alerts turned off or
+  the device locking ends the dismissal; a look that proves nothing keeps it. Settings keeps
+  showing the fault even while the line is dismissed.
+- A failed **Turn alerts on again** replaces the fault sentence with its reason: the browser
+  would not make a push subscription (in Brave, turn on **Use Google services for push
+  messaging** in its privacy settings), the page's service worker is not running (reload, then
+  try again), or the PC did not take the subscription (try again). The reason and the repair
+  stay in Settings through looks with no new health evidence; a notice already showing the
+  fault keeps them too. Working alerts, another fault, alerts turned off or a new repair ends
+  the old reason.
 - What it says is decided once (`lib/pushHealth.ts`) and read by this line and by the Test
   notification row of Settings → Alerts alike, so the two never disagree and no second banner
   competes: Settings' hint carries the same sentence, its **Turn alerts on again** is the same
@@ -3275,7 +3298,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   existing Send test / Turn alerts on again pair, extended rather than a second surface. Neither
   the Codex app nor the Claude app surfaces push-delivery health, so there is no precedent to
   follow there; Agent of Empires' classifier (MIT, THIRD_PARTY_NOTICES.md) is adapted for the
-  rule, with its repair narrowed to the faults re-subscribing mends.
+  rule, with its repair narrowed to the faults re-subscribing mends. Dismissal follows the update
+  notice's button and the PC-action notice's per-fault lifetime (`lib/machineNotice.ts`).
 
 ### Token gate
 - A centered password card replaces the entire shell while authentication is required. It has a real
@@ -3390,6 +3414,20 @@ The values are the ones in `src/styles.css`.
   Paste and keyboard visibility); it is not an app-action toolbar. Hardware keyboards use the same global
   bindings on phones and desktops.
 - `document.title` is `<pane title> · Ovis` while selected, otherwise `Ovis`.
+
+### Windows remote startup
+
+An absent Windows herdr waits for the account's desktop sign-in. The PC's existing status notice
+offers **Review startup options**; the existing setup dialog explains the sandbox and possible
+desktop-tool limitations before **Start without Windows sign-in** authorizes one start. It adds no
+persistent preference, second dialog, or new visual treatment. This follows the visible-state and
+explicit-override pattern of [VS Code Workspace Trust](https://code.visualstudio.com/docs/editing/workspaces/workspace-trust),
+adapted to choosing a remote startup environment rather than granting workspace trust. No code or
+visual assets are copied. Cancel stops pending attempts; existing servers and panes stay running.
+Task Scheduler failures use the same notice and dialog with **Windows desktop startup failed**
+and the scheduler's error, rather than instructions to sign in. They stop background retries until
+the user reviews startup options. The existing VS Code-inspired explicit override remains the only
+headless choice; sign-in waits continue reconnecting automatically.
 
 ### Accepted debt
 

@@ -7,6 +7,7 @@
  * focus (TabStrip.css), so the menu is never only behind a right-click. Where the canvas shows a
  * split tab's panes one at a time (SOLO_PANE_QUERY), that menu lists them first.
  * That menu also carries the open pane's actions, so a lone pane shows no ellipsis of its own.
+ * A strip whose tabs do not fit scrolls sideways by touch, a trackpad or a mouse wheel.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Bot, Ellipsis, Folder, FolderInput, Pencil, Plus, Terminal, X } from "lucide-react";
@@ -210,6 +211,24 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
   useLayoutEffect(() => {
     if (!scroll.current.moved) bringOpenTab();
   }, [faces]);
+  // a mouse wheel turns vertically: over a strip whose tabs do not fit it moves them sideways.
+  // React's own onWheel is passive, so the listener is the strip's own; `end` coming or going (a
+  // split opened or closed) draws the strip as a new node, which needs it again.
+  const tabsHidden = loneTabHidden(cramped, tabs.length);
+  useEffect(() => {
+    const row = strip.current;
+    if (!row) return;
+    const onWheel = (event: WheelEvent): void => {
+      if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || row.scrollWidth <= row.clientWidth) return;
+      event.preventDefault();
+      // deltaY is in pixels, lines (Firefox's mouse wheel) or pages, as deltaMode says
+      const step = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? Number.parseFloat(getComputedStyle(row).fontSize) * 1.5 || 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? row.clientWidth : 1;
+      row.scrollLeft += event.deltaY * step;
+    };
+    row.addEventListener("wheel", onWheel, { passive: false });
+    return () => row.removeEventListener("wheel", onWheel);
+  }, [shown, tabsHidden, end === undefined]);
   const onScroll = (): void => {
     const row = strip.current;
     if (row) scroll.current = stripScrolled(scroll.current, row.scrollLeft, row.scrollWidth - row.clientWidth);

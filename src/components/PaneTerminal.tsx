@@ -19,6 +19,7 @@ import { heldCountShown, heldOpenAtFold, heldOpenOnFocus, heldRefocusDue, heldRo
 import { arrangeNotices, dismissNotice, NO_DISMISSALS, settleDismissed, type DismissedNotices } from "../lib/composerNotices.ts";
 import { MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, agentDisplayLabel, typedTerminalCommand } from "../lib/compose.ts";
 import { usePaneCommands } from "../lib/usePaneCommands.ts";
+import { paneCommandsNow } from "../lib/paneCommandCache.ts";
 import { autoReturnArmed, paneLensFlags, screenReturnArmed, type PeekRequest, type TerminalPeek } from "../lib/terminalPeek.ts";
 import { FrameGate, inputRowState, readScreen, readsInputRow, type InputRowState } from "../lib/inputRow.ts";
 import { outcomeCommand } from "../lib/outcomeChip.ts";
@@ -462,6 +463,8 @@ export function PaneTerminal({
   // read at the receipt, not at the send: a catalog that arrives in between still counts
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
+  // and the list the message box read, when this terminal's own read of it has not answered yet (#1591)
+  const machineIdRef = useRef(machineId); machineIdRef.current = machineId;
   const agentRef = useRef(agent); agentRef.current = agent;
   // The frames of the pane's stream (lib/inputRow.ts FrameGate): the agent's input row is read only
   // off a whole frame drawn for this grid, never mid-frame or between a resize and the redraw for it
@@ -479,7 +482,7 @@ export function PaneTerminal({
   const receiptRowRef = useRef<{ pane: string; text: string; state: InputRowState } | null>(null);
   // `seen`: the agent's empty input row was on screen as the text left (read before it was typed)
   const showSentCommand = useCallback((pane: string, text: string, known: readonly string[] | null, seen: boolean) => {
-    const command = typedTerminalCommand(commandsRef.current, text);
+    const command = typedTerminalCommand(paneCommandsNow(pane, machineIdRef.current, agentRef.current) ?? commandsRef.current, text);
     const open = onPeekRef.current;
     if (command === null || open === undefined || paneRef.current !== pane || !activeRef.current || !presentedRef.current || !shownRef.current
       || !chatMountedRef.current || observeRef.current || heldRef.current || endedRef.current || unsupportedRef.current) return;

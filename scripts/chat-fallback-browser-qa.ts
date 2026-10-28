@@ -249,6 +249,29 @@ try {
     assert.deepEqual(await opened(), [false, false, false], "a run that splits moves no fold to another block: the folded run stays folded");
     await headRows.waitFor({ state: "hidden" });
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "claude-run-split.png") });
+    // Words before a run's tools join it later (a Codex record marks them commentary): the run
+    // keeps the fold the reader gave it (#2063). A history without an ID keeps each row's memory
+    // by its place, so the turn sits on row 5, which the four rows above left with none.
+    const sorting = (words: { kind: "text"; text: string; phase?: "commentary" }): ConversationTurn[] => [
+      ...shelves("Shelf a is empty."),
+      { role: "user", ts: null, parts: [said("Sort the shelves.")] },
+      { role: "assistant", ts: null, parts: [words, bash("sort a")] },
+    ];
+    turns = sorting(said("Sorting shelf a."));
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await page.getByText("Sorting shelf a.", { exact: true }).waitFor();
+    assert.deepEqual(await rows(), ["Sorting shelf a.", "work Working\u2026 \u00b7 1 command"], "the words stand above the working run");
+    assert.deepEqual(await opened(), [true], "the working run is open");
+    await heads.last().click();
+    await headRows.waitFor({ state: "hidden" });
+    assert.deepEqual(await opened(), [false], "the reader folds the working run");
+    turns = sorting({ ...said("Sorting shelf a."), phase: "commentary" });
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    // drawn once the words left the turn for its run of work
+    await page.waitForFunction(() => [...[...document.querySelectorAll(".chat-turn-agent")].at(-1)!.children].every((child) => child.classList.contains("work-block")));
+    assert.deepEqual(await opened(), [false], "words that join the run keep it folded");
+    assert.equal(await page.getByText("Sorting shelf a.", { exact: true }).isVisible(), false, "and fold with it");
+    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "run-words-join-fold.png") });
     await page.evaluate(() => window.chatFallbackQA.status(undefined));
     await live.waitFor({ state: "detached" });
     console.log("PASS words and runs of work keep the agent's order, settled and live");

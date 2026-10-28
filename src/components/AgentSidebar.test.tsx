@@ -27,7 +27,8 @@ describe("AgentSidebar phone sheet live row", () => {
   let historyState: unknown;
   let steppedBack: Promise<void>;
   let originalTokens: ReturnType<typeof currentAgentRowTokens>;
-  const anchor = { isConnected: true, focus() {}, querySelector: () => null };
+  // RowMenu asks the anchor whether it sits inside a dialog; this row is not in one.
+  const anchor = { isConnected: true, focus() {}, querySelector: () => null, closest: () => null };
 
   beforeEach(() => {
     originalTokens = currentAgentRowTokens();

@@ -5,6 +5,7 @@ import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { herdrStateDir } from "./plugin-state.ts";
+import { updateStateDir } from "../server/update-state.ts";
 
 /**
  * The plugin's settings files, read by hand the way a headless PC runs `status` or `pair`:
@@ -71,6 +72,40 @@ describe("plugin settings files", () => {
   it("says where settings go when there are none", async () => {
     const run = await status();
     expect(run.out).toContain(`config: none (settings go in ${join(scratch, ".config", "ovis", "env")})`);
+  });
+});
+
+/** Ovis for Windows reads this line to tell a server older than the app from one that updated itself. */
+describe("the version status names", () => {
+  function checkout(version: string): string {
+    const root = join(scratch, "checkout");
+    mkdirSync(root);
+    writeFileSync(join(root, "package.json"), JSON.stringify({ version }));
+    Bun.spawnSync(["git", "init", "-q", root]);
+    Bun.spawnSync(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: root });
+    return root;
+  }
+
+  it("is the checkout's while no update is installed", async () => {
+    const root = checkout("0.4.1");
+    const result = await run("status", { HERDR_PLUGIN_ROOT: root, OVIS_STATE_DIR: join(scratch, "app-state"), PORT: "1" });
+    expect(result.exitCode, result.err).toBe(0);
+    expect(result.out).toContain("version: 0.4.1\n");
+  });
+
+  it("is the release Settings \u2192 Updates installed, which herdr's plugin list does not name", async () => {
+    const root = checkout("0.4.1");
+    const state = join(scratch, "app-state");
+    const updates = updateStateDir(root, 1, state);
+    const release = join(updates, "release-test");
+    mkdirSync(join(release, "scripts"), { recursive: true });
+    writeFileSync(join(release, "scripts", "plugin.ts"), "");
+    writeFileSync(join(release, "package.json"), JSON.stringify({ version: "0.4.9" }));
+    const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root }).stdout.toString().trim();
+    writeFileSync(join(updates, "current.json"), JSON.stringify({ source_revision: revision, directory: release }));
+    const result = await run("status", { HERDR_PLUGIN_ROOT: root, OVIS_STATE_DIR: state, PORT: "1" });
+    expect(result.exitCode, result.err).toBe(0);
+    expect(result.out).toContain("version: 0.4.9\n");
   });
 });
 

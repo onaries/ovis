@@ -151,7 +151,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
   const rendered = useCallback(({ item, index }: { item: Row; index: number }) => {
     let memory = memories.get(item.key);
     if (!memory) {
-      memory = { toggles: new Map(), outputs: new Map() };
+      memory = { toggles: new Map(), outputs: new Map(), runs: new Map() };
       memories.set(item.key, memory);
     }
     return <ChatRowMemoryContext.Provider value={memory}>

@@ -8,7 +8,7 @@ import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { forgetTranscriptState, paneConversation } from "./conversation.ts";
 import * as herdr from "./herdr/client.ts";
 import { terminalBreadcrumb } from "./gjc-runtime.ts";
-import { isOmpHelper, isOmpProcess, ompAgentDir, ompHeldTranscript, ompLaunch, ompLaunchDir, ompStoreLayout } from "./omp.ts";
+import { isOmpHelper, isOmpProcess, ompAgentDir, ompHeldTranscript, ompLaunch, ompLaunchDir, ompLoadsIntegration, ompStoreLayout } from "./omp.ts";
 import layouts from "./fixtures/omp-18.8.7-store-layouts.json";
 import * as ompProbe from "./omp-process.ts";
 import * as omo from "./omo.ts";
@@ -42,6 +42,58 @@ it("keeps a process's sessions where its profile puts them, and nowhere it canno
   // omp ignores a cwd option without its value, so it says nothing about the store
   expect(ompAgentDir(["omp", "--cwd"], null, home)).toBe("/home/u/.omp/agent");
   expect(ompAgentDir(["omp", "--cwd", "--profile", "work"], null, home)).toBe("/home/u/.omp/agent");
+});
+
+it("sees herdr's omp integration wherever omp loads extensions from, and only there", () => {
+  const home = mkdtempSync(join(tmpdir(), "ovis-omp-integration-"));
+  try {
+    const install = (...dir: string[]) => {
+      mkdirSync(join(home, ...dir), { recursive: true });
+      writeFileSync(join(home, ...dir, "herdr-omp-agent-state.ts"), "// installed by herdr\n");
+    };
+    const project = join(home, "project");
+    const loads = (argv: string[], environ: string[] | null = null, cwd: string | null = project) => ompLoadsIntegration(argv, environ, home, cwd);
+    expect(loads(["omp"])).toBe(false);
+    // a file named on the command line loads even when discovery is off
+    expect(loads(["omp", "-e", "/opt/herdr/herdr-omp-agent-state.ts"])).toBe(true);
+    expect(loads(["omp", "--no-extensions", "--extension=/opt/herdr/herdr-omp-agent-state.ts"])).toBe(true);
+    expect(loads(["omp", "--hook", "herdr-omp-agent-state.ts"])).toBe(true);
+    expect(loads(["omp", "-e", "/opt/other.ts"])).toBe(false);
+    // the project's own extensions, but not the home directory's
+    install("project", ".omp", "extensions");
+    expect(loads(["omp"])).toBe(true);
+    expect(loads(["omp", "--no-extensions"])).toBe(false);
+    expect(loads(["omp"], null, null)).toBe(false);
+    install(".omp", "extensions");
+    expect(loads(["omp"], null, home)).toBe(false);
+    // the agent directory the environment names
+    install("custom", "extensions");
+    expect(loads(["omp"], [`PI_CODING_AGENT_DIR=${join(home, "custom")}`], home)).toBe(true);
+    expect(loads(["omp", "--profile", "work"], [`PI_CODING_AGENT_DIR=${join(home, "custom")}`], home)).toBe(false);
+    install(".omp", "profiles", "work", "agent", "extensions");
+    expect(loads(["omp"], ["PI_PROFILE=work"], home)).toBe(true);
+    expect(loads(["omp"], ["OMP_PROFILE=", "PI_PROFILE=work"], home)).toBe(false);
+    install(".omp-custom", "agent", "extensions");
+    expect(loads(["omp"], ["PI_CONFIG_DIR=.omp-custom"], home)).toBe(true);
+    install(".omp", "agent", "extensions");
+    expect(loads(["omp"], null, home)).toBe(true);
+    expect(loads(["omp", "--session-dir", "/tmp/s"], null, home)).toBe(true);
+    expect(loads(["omp", "--no-extensions"], null, home)).toBe(false);
+    // a trusted extension is the only one omp loads
+    expect(loads(["omp", "--trusted-extension", "/opt/other.ts"], null, home)).toBe(false);
+    expect(loads(["omp", "--trusted-extension=/opt/herdr-omp-agent-state.ts"], null, home)).toBe(true);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+it("reads the extension files and --no-extensions from omp's argv", () => {
+  const read = (argv: string[]) => { const launch = ompLaunch(argv); return launch && { extensions: launch.extensions, noExtensions: launch.noExtensions }; };
+  expect(read(["omp"])).toEqual({ extensions: [], noExtensions: false });
+  expect(read(["omp", "-e", "a.ts", "--extension=b.ts", "--hook", "c.ts", "--no-extensions"])).toEqual({ extensions: ["a.ts", "b.ts", "c.ts"], noExtensions: true });
+  expect(read(["omp", "--trusted-extension", "d.ts"])).toEqual({ extensions: ["d.ts"], noExtensions: true });
+  // a value is never an option, and nothing after the terminator is one
+  expect(read(["omp", "--model", "--no-extensions", "--", "-e", "x.ts"])).toEqual({ extensions: [], noExtensions: false });
 });
 
 it("reads omp's cwd and store options from its argv the way omp does", () => {
@@ -87,7 +139,11 @@ it("reads omp's cwd and store options from its argv the way omp does", () => {
     [["omp", "--profile"], null],
     [["omp", "--profile", "--cwd", "/a"], null],
   ];
-  for (const [argv, expected] of cases) expect([argv, ompLaunch(argv)]).toEqual([argv, expected]);
+  const stores = (launch: ReturnType<typeof ompLaunch>) => launch && {
+    profile: launch.profile, sessionDir: launch.sessionDir, cwd: launch.cwd,
+    ...launch.sessionDirValue === undefined ? {} : { sessionDirValue: launch.sessionDirValue },
+  };
+  for (const [argv, expected] of cases) expect([argv, stores(ompLaunch(argv))]).toEqual([argv, expected]);
 });
 
 it("names a launch directory only for an absolute cwd, never resolved against the server's own", () => {

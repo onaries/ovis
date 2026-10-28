@@ -346,6 +346,8 @@
 
 .machine-dialog::backdrop { background: var(--scrim); }
 
+.machine-dialog .modal-footer { flex-wrap: wrap; }
+
 .machine-dialog .modal-title {
   display: flex;
   align-items: center;

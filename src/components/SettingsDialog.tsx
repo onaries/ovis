@@ -28,6 +28,7 @@ import type { Machine, MachineSettings } from "../../shared/machines.ts";
 import { canHideMachine, isMachineShown, setHiddenMachines, useHiddenMachines, withMachineHidden } from "../lib/hiddenMachines.ts";
 import { fetchRemoteAccess, fetchVoiceStatus, machineRequest, saveVoiceConfig } from "../lib/api.ts";
 import { isLoopbackHost, phonePlan } from "../lib/phone.ts";
+import type { PushActionResult } from "../lib/pushHealth.ts";
 import type { AgentIntegration, HealthAuth, PluginActions, RemoteAccess } from "../../shared/protocol.ts";
 import type { SecurityFacts } from "../lib/useAccess.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
@@ -71,7 +72,7 @@ export interface SettingsDialogProps {
   herdrVersion: string | null;
   /** what protects this server, from the last bridge health check: never an earlier answer once one fails */
   security: SecurityFacts;
-  onEnableNotifications: () => Promise<boolean>;
+  onEnableNotifications: () => Promise<PushActionResult>;
   /** the last change the server refused to save (lib/preferencesSync.ts); null once a save lands */
   saveError: UserError | null;
   /** three saves failed in a row: nothing is sent until Retry, a reconnect or a longer wait */
@@ -540,7 +541,7 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
   );
 }
 
-function AlertsPage({ onEnableNotifications }: { onEnableNotifications: () => Promise<boolean> }) {
+function AlertsPage({ onEnableNotifications }: { onEnableNotifications: () => Promise<PushActionResult> }) {
   const { settings, update } = useSettings();
   const t = useT();
   // the Sound switch as last set: the preview waits for the audio, and must not play once it is off

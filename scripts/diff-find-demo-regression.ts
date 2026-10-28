@@ -50,8 +50,24 @@ async function settled(page: Page, count: string, place: string, step: string): 
   }
   return bar(page);
 }
+/**
+ * A sheet rising or dropping (a closed one is drawn until its slide ends, lib/sheets.ts) or a button's
+ * hover fading would be caught at a moment of its own: every finite animation ends first, then any
+ * transition still running is taken to its end for the shot.
+ */
 async function shot(page: Page, name: string, state: string): Promise<void> {
-  if (evidence) await page.screenshot({ path: join(evidence, `diff-find-${name}-${state}.png`) });
+  if (!evidence) return;
+  await page.evaluate(() => Promise.all(document.getAnimations().filter((animation) => animation.effect?.getTiming().iterations !== Infinity).map((animation) => animation.finished.catch(() => undefined))));
+  await page.screenshot({ path: join(evidence, `diff-find-${name}-${state}.png`), animations: "disabled" });
+}
+/**
+ * The page's clock is Playwright's (installed before the load, it runs on its own): run past the demo's
+ * one-shot turn completion (site/demo/transport.ts, 4500 ms after load), so every shot shows its
+ * finished status, and its finish droplet is not drawn, as in terminal-keyboard-demo-regression.ts.
+ */
+async function pastDemoTurn(page: Page): Promise<void> {
+  await page.clock.runFor(5_000);
+  await page.addStyleTag({ content: ".droplet { visibility: hidden !important; }" });
 }
 /** Files → Changes → a file's diff, from the header on a computer or More on a phone. */
 async function openDiff(page: Page, phone: boolean, path: string): Promise<void> {
@@ -84,11 +100,14 @@ async function check(browser: Browser, origin: string, width: 390 | 1440, theme:
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (message) => { if (message.type() === "error") errors.push(`console: ${message.text()}`); });
+    await page.clock.install();
     await page.goto(origin);
+    await pastDemoTurn(page);
     await openDiff(page, phone, "src/money.ts");
     if (language === "ko") {
       await page.evaluate((theme) => localStorage.setItem("ovis:settings", JSON.stringify({ language: "ko", theme })), theme);
       await page.reload();
+      await pastDemoTurn(page);
       await page.locator(".repo-diff-viewer").waitFor();
     }
     await rows(page);

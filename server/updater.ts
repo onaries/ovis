@@ -427,7 +427,9 @@ export class Updater {
         this.patch({ step: "dependencies" });
         await run([process.execPath, "install", "--frozen-lockfile"]);
         this.patch({ step: "typecheck" });
-        await run([process.execPath, "run", "typecheck"]);
+        // --bun: tsc's `#!/usr/bin/env node` would otherwise run on whatever node herdr's PATH has first, which
+        // may be older than tsc supports now that install.sh no longer puts its own Node there (#596)
+        await run([process.execPath, "--bun", "run", "typecheck"]);
         this.patch({ step: "build" });
         await run([process.execPath, "run", "build"]);
         // the release's Rust PTY host, checked against its manifest; without it the release runs the Node sidecar

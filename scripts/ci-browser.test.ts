@@ -26,15 +26,70 @@ bash() {
 source "$1"
 `;
 
+/**
+ * A hang guard, not a speed check: the stubbed lane still forks a few processes for every browser
+ * script, and took up to 5 s on a host at load 100 of 128 cores, where a 5 s limit killed it (#2110).
+ * Each lane test gets the guard and room to report what the lane printed. The guard ends the lane and
+ * every process under it (ending only its bash leaves the script's pipeline running), then stops
+ * reading and fails with what was printed: it never waits for the output to close, which a process
+ * the lane left behind can hold open. The lane stays in the test's own process group, which
+ * scripts/ci-tests.ts ends when the file finishes or the run is interrupted, so such a process goes
+ * with it.
+ */
+const LANE_HANG_MS = 60_000;
+const LANE_TEST_MS = LANE_HANG_MS + 10_000;
+
+/** Ends `pid` and every process under it, read from the process table before any is ended. */
+async function endTree(pid: number): Promise<void> {
+  if (process.platform === "win32") {
+    await Bun.spawn(["taskkill", "/pid", String(pid), "/T", "/F"], { stdout: "ignore", stderr: "ignore" }).exited;
+    return;
+  }
+  const table = await new Response(Bun.spawn(["ps", "-A", "-o", "pid=,ppid="], { stdout: "pipe", stderr: "ignore" }).stdout).text();
+  const children = new Map<number, number[]>();
+  for (const line of table.split("\n")) {
+    const [own, parent] = line.trim().split(/\s+/).map(Number);
+    if (own && parent !== undefined) children.set(parent, [...(children.get(parent) ?? []), own]);
+  }
+  const tree: number[] = [];
+  for (const pending = [pid]; pending.length > 0;) {
+    const next = pending.pop()!;
+    tree.push(next);
+    pending.push(...(children.get(next) ?? []));
+  }
+  for (const member of tree) try { process.kill(member, "SIGKILL"); } catch { /* already gone */ }
+}
+
 async function lane(fail = "", kept = false, ci = "") {
   const dir = mkdtempSync(join(tmpdir(), "hwc-browser-test-"));
   try {
     const child = Bun.spawn(["bash", "-c", stub, "stub", join(import.meta.dir, "ci-browser.sh")], {
       cwd: dir,
       env: { ...process.env, BROWSER_PARALLEL: "", CI: ci, CHECK_DIR: kept ? dir : "", UI_EVIDENCE_DIR: "", FAIL_SCRIPT: fail, TMPDIR: dir },
-      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5_000,
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
-    const [text, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    // read as it comes, so what the lane printed is there even when the guard stops reading
+    const readers = [child.stdout.getReader(), child.stderr.getReader()];
+    const printed = ["", ""];
+    const drained = Promise.all(readers.map(async (reader, index) => {
+      const decoder = new TextDecoder();
+      for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) printed[index] += decoder.decode(chunk.value, { stream: true });
+    }));
+    const ended = Promise.withResolvers<void>();
+    let hung = false;
+    const guard = setTimeout(() => {
+      hung = true;
+      // only a lane whose bash still runs: once it has exited, its pid may name another process
+      const running = child.exitCode === null && child.signalCode === null;
+      void (running ? endTree(child.pid) : Promise.resolve()).finally(() => {
+        for (const reader of readers) reader.cancel().catch(() => {});
+        ended.resolve();
+      });
+    }, LANE_HANG_MS);
+    await Promise.race([Promise.all([drained, child.exited]), ended.promise]).finally(() => clearTimeout(guard));
+    const [text, error] = printed as [string, string];
+    if (hung) throw new Error(`the stubbed lane's output did not end within ${LANE_HANG_MS / 1000} s; what it printed:\n${text}`);
+    const code = await child.exited;
     expect(error).toBe("");
     const demo = text.match(/^\[[^\]]+\] DEMO_DIR=(.+)$/m)?.[1];
     expect(demo).toBeDefined();
@@ -71,7 +126,7 @@ describe("browser lane", () => {
     expect(text).toMatch(/^PASS stubbed browser step$/m);
     expect(text).toMatch(/^FAIL stubbed browser marker$/m);
     expect(text).toMatch(/^Browser lane total: seconds=\d+ exit=7$/m);
-  });
+  }, LANE_TEST_MS);
 
   it("summarizes every script and exits zero on success without enabling local evidence", async () => {
     const { text, code, evidence } = await lane();
@@ -85,7 +140,7 @@ describe("browser lane", () => {
     expect(text).toMatch(/^\[\d{4}-\d\d-\d\dT[^\]]+\] SERVER listening on http:\/\/127\.0\.0\.1:3000$/m);
     expect(text).toMatch(/^PASS stubbed browser step$/m);
     expect(text).toMatch(/^FAIL stubbed browser marker$/m);
-  });
+  }, LANE_TEST_MS);
 
   it("keeps only cheap existing screenshots when CHECK_DIR is set", async () => {
     const { text, code, evidence } = await lane("", true);
@@ -97,7 +152,7 @@ describe("browser lane", () => {
     for (const script of ["ui-regression.ts", "ui-contexts-regression.ts", "key-bar-customization-demo-regression.ts"]) {
       expect(text).toMatch(new RegExp(`^\\[[^\\]]+\\] STEP=scripts/${script} EVIDENCE=$`, "m"));
     }
-  });
+  }, LANE_TEST_MS);
 
   it("creates evidence under .ci when CI has no CHECK_DIR", async () => {
     const { text, code, evidence } = await lane("", false, "1");
@@ -105,7 +160,7 @@ describe("browser lane", () => {
     expect(evidence).toBe(true);
     expect(text).toMatch(/^\[[^\]]+\] STEP=scripts\/file-viewer-regression\.ts EVIDENCE=.ci\/browser-evidence$/m);
     expect(text).toMatch(/^Browser lane total: seconds=\d+ exit=0$/m);
-  });
+  }, LANE_TEST_MS);
 });
 
 // Browser scripts that CI does not run: they are run by hand. A new browser script belongs in

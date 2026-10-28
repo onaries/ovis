@@ -1,7 +1,8 @@
 import type { CommandForm, HerdrPane, SlashCommand } from "../shared/protocol.ts";
 import { AGENT_SOURCES } from "./skills/index.ts";
 import type { AgentCommandSource, ProcessRoots } from "./skills/index.ts";
-import { ancestorsToRepoRoot, userHome } from "./skills/walk.ts";
+import { ancestorsToRepoRoot } from "./skills/walk.ts";
+import { userHome } from "./user-home.ts";
 
 const DESCRIPTIONS: Record<string, string> = {
   clear: "Clear the conversation", compact: "Compact conversation context", config: "Open configuration",

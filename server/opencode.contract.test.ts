@@ -305,8 +305,8 @@ describe("OpenCode v2 native service", () => {
   let connected = Promise.withResolvers<void>();
   /** runs once, inside the next session lookup, before the fake answers it */
   let duringLookup: (() => Promise<void>) | undefined;
-  /** every chunk the stand-in reads from its terminal, reported by the stand-in itself */
-  let onTyped: ((chunk: string, start: number) => void) | undefined;
+  /** every chunk the stand-in reads from its terminal, reported by the stand-in itself with when it read it (ms since the epoch) */
+  let onTyped: ((chunk: string, start: number, at: number) => void) | undefined;
   const typedWaiters = new Set<() => void>();
   /** while set, session lookups get no answer (the bridge's own request timeout ends them) */
   let withholdLookups = false;
@@ -318,8 +318,8 @@ describe("OpenCode v2 native service", () => {
   const withheld = new Set<() => void>();
   /** how /api/event answers: normally, never (held), 404 or 503 */
   let eventMode: "ok" | "slow" | "absent" | "error" = "ok";
-  /** when the fake last answered any request of the bridge's (not the stand-in's reports) */
-  let lastRequestAt = 0;
+  /** when the fake received each request of the bridge's (not the stand-in's reports), in ms since the epoch */
+  const requestsAt: number[] = [];
   const typed = (): string => existsSync(typedLog) ? readFileSync(typedLog, "latin1") : "";
   /** each event 10 ms after the last, so the evidence names exactly which event settled a send */
   let clock = 0;
@@ -357,9 +357,10 @@ const { appendFileSync, readFileSync, statSync } = require("node:fs");
 let typed = "";
 process.stdin.setRawMode(true);
 process.stdin.on("data", (chunk) => {
+  const at = performance.timeOrigin + performance.now();
   appendFileSync(${JSON.stringify(typedLog)}, chunk);
   const start = statSync(${JSON.stringify(typedLog)}).size - chunk.length;
-  fetch(readFileSync(${JSON.stringify(join(nativeRoot, "fake.url"))}, "utf8") + "/test/typed", { method: "POST", headers: { "x-typed-start": String(start) }, body: chunk }).catch(() => {});
+  fetch(readFileSync(${JSON.stringify(join(nativeRoot, "fake.url"))}, "utf8") + "/test/typed", { method: "POST", headers: { "x-typed-start": String(start), "x-typed-at": String(at) }, body: chunk }).catch(() => {});
   const before = typed;
   typed += chunk.toString("latin1");
   if (!before.endsWith("@effect") && typed.endsWith("@effect")) process.stdout.write("\\u001b[2J\\u001b[H" + readFileSync(${JSON.stringify(join(nativeRoot, "screen.txt"))}, "utf8"));
@@ -373,11 +374,11 @@ process.stdin.on("data", (chunk) => {
         const url = new URL(request.url);
         if (url.pathname === "/api/info") return Response.json(info);
         if (url.pathname === "/test/typed") return request.text().then((chunk) => {
-          onTyped?.(chunk, Number(request.headers.get("x-typed-start")));
+          onTyped?.(chunk, Number(request.headers.get("x-typed-start")), Number(request.headers.get("x-typed-at")));
           for (const wake of typedWaiters) wake();
           return new Response(null, { status: 204 });
         });
-        lastRequestAt = performance.now();
+        requestsAt.push(performance.timeOrigin + performance.now());
         if (url.pathname === "/api/event" && eventMode === "slow") return new Promise<Response>((resolve) => withheld.add(() => resolve(new Response(null, { status: 503 }))));
         if (url.pathname === "/api/event" && eventMode !== "ok") return new Response(null, { status: eventMode === "absent" ? 404 : 503 });
         if (hangAll && url.pathname !== "/api/info") {
@@ -1015,13 +1016,23 @@ process.stdin.on("data", (chunk) => {
             await untilStatus("working");
           }
           const before = typed().length;
+          // Measured from the last thing this send itself waited on before its first byte: its submit, the
+          // queued send's idle report, or a request of the bridge's. A send that types before asking the
+          // service anything (a /command) was measured from the previous send's requests (#2143).
           // Reports can arrive out of order; identify this send's first byte, regardless of chunking.
-          onTyped = (_chunk, start) => { if (start === before) typedFirst.resolve(performance.now() - lastRequestAt); };
+          let since = performance.timeOrigin + performance.now();
+          requestsAt.length = 0;
+          onTyped = (_chunk, start, at) => {
+            if (start === before) typedFirst.resolve(at - Math.max(since, ...requestsAt.filter((requestAt) => requestAt <= at)));
+          };
           const completed = typedSince(before);
           ws.send(JSON.stringify({ type: "submit", id: request, pane_id: nativePane, text, payload: text, ...(path === "queued" ? { delivery: "queue" } : {}) }));
           const answer = await frame((message) => message.type === "submit-result" && message.id === request);
           expect(answer).toMatchObject({ ok: true });
-          if (path === "queued") await reportState("idle");
+          if (path === "queued") {
+            since = performance.timeOrigin + performance.now();
+            await reportState("idle");
+          }
           gaps[`${path}/${mode}`] = Math.round(await typedFirst.promise);
           // Keep this delivery's observer and service alive until its whole send has reached the TUI.
           await completed;

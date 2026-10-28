@@ -146,11 +146,15 @@ describe("slash commands follow the pane's process", () => {
     for (const id of opened) await herdrRpc("workspace.close", { workspace_id: id }).catch(() => undefined);
   });
 
-  /** A pane with any reported label, running a program of the given name that only waits. */
+  /**
+   * A pane with any reported label, running a program of the given name that only waits. The program
+   * is a small shell named so (argv[0]) that says when it is up and then waits in a read: herdr lists
+   * no argv for a process in uninterruptible sleep, as a fresh bun is while it pages its binary in,
+   * even after it has said so, and the commands are read from that argv (#2085).
+   */
   async function waiting(program: string, agent: string | null = "pi"): Promise<string> {
     const ready = join(root, `${program}-${opened.length}.ready`);
-    writeFileSync(join(root, "wait.js"), "require('node:fs').writeFileSync(process.argv[2], ''); setInterval(() => {}, 1000);");
-    if (!existsSync(join(root, program))) copyFileSync(process.execPath, join(root, program));
+    writeFileSync(join(root, program), `#!/bin/bash\nexec -a "$0" /bin/sh -c ': > "$1"; read _' "$0" "$1"\n`);
     chmodSync(join(root, program), 0o755);
     const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>(
       "workspace.create", { label: `ovis-test-commands-${program}`, cwd: root, focus: false },
@@ -164,7 +168,7 @@ describe("slash commands follow the pane's process", () => {
       });
     });
     try {
-      await herdrRpc("pane.send_text", { pane_id: created.root_pane.pane_id, text: `exec '${join(root, program)}' '${join(root, "wait.js")}' '${ready}'\n` });
+      await herdrRpc("pane.send_text", { pane_id: created.root_pane.pane_id, text: `exec '${join(root, program)}' '${ready}'\n` });
       await started;
     } finally { watcher.close(); }
     if (agent) await herdrRpc("pane.report_agent", { pane_id: created.root_pane.pane_id, source: "manual", agent, state: "idle" });

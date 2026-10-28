@@ -9,7 +9,7 @@ import { mergeCatalogSources } from "./catalog-sources.ts";
 import { paneCommands, rememberPaneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
-import { conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
+import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { openCodeInstalledVersion } from "./opencode-service.ts";
 import { DevinHistoryChanged } from "./devin.ts";
@@ -256,6 +256,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       before: url.searchParams.get("before") ?? undefined,
       since: url.searchParams.get("since") ?? undefined,
       from: url.searchParams.get("from") ?? undefined,
+      history_id: url.searchParams.get("history_id") ?? undefined,
     };
     try {
       const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);
@@ -267,6 +268,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       return jsonResponse(conversation, 200, headers);
     } catch (error) {
       if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
+      if (error instanceof ConversationReadPending) return jsonResponse({ error: { code: "conversation_read_pending", message: error.message } }, 503, { "cache-control": "no-store" });
       // an unrecognized pane is not an error: the client falls back to the
       // scrollback transcript, exactly like chatmux's terminal fallback. Its metadata is only
       // ever what the agent's own status line states

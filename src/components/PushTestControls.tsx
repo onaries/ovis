@@ -3,11 +3,13 @@ import { ApiError } from "../lib/api.ts";
 import { useT } from "../lib/i18n.ts";
 import { inNativeApp } from "../lib/nativeApp.ts";
 import { notificationState } from "../lib/notifications.ts";
-import { pushSupported, registeredPushEndpoint, testDevicePush } from "../lib/push.ts";
-import { runPushAction, usePushHealth, type PushActionOutcome, type PushActionResult } from "../lib/pushHealth.ts";
+import { pushSupported, testDevicePush } from "../lib/push.ts";
+import { repairFailed, runPushAction, usePushHealth, type PushActionOutcome, type PushActionResult } from "../lib/pushHealth.ts";
+import { repairOutcome } from "../lib/useNotifications.ts";
 import { useSettings } from "../lib/settings.ts";
+import { repairFailureText } from "./PushHealthNotice.tsx";
 
-export function PushTestControls({ onEnable }: { onEnable: () => Promise<boolean> }) {
+export function PushTestControls({ onEnable }: { onEnable: () => Promise<PushActionResult> }) {
   const { settings } = useSettings();
   const t = useT();
   // the same state as the notice over the pane (lib/pushHealth.ts): one fault, one repair, wherever it is read
@@ -16,14 +18,14 @@ export function PushTestControls({ onEnable }: { onEnable: () => Promise<boolean
   wanted.current = settings.alertsOn;
   const supported = pushSupported();
   const denied = notificationState() === "denied";
-  const enable = !settings.alertsOn || health.repair || result === "missing" || result === "gone" || result === "permission";
+  const enable = !settings.alertsOn || health.repair || repairFailed(result) || result === "missing" || result === "gone" || result === "permission";
 
   const send = (repair: boolean) => runPushAction(repair ? "repair" : "test", async (): Promise<PushActionOutcome> => {
     // the subscription the line will be about: the one tested, or the one the repair registered; none
     // held when the test found none, and unknown (the next look's) when the action stopped before it knew
     let endpoint: string | undefined;
     try {
-      if (repair) return await onEnable() ? { result: "sent", endpoint: registeredPushEndpoint() } : { result: "failed" };
+      if (repair) return repairOutcome(await onEnable());
       const result = await testDevicePush((tested) => { endpoint = tested; });
       return { result, endpoint: result === "missing" ? null : endpoint };
     } catch (error) {
@@ -38,7 +40,8 @@ export function PushTestControls({ onEnable }: { onEnable: () => Promise<boolean
   const hint = !supported || result === "unsupported" ? t("Push alerts need HTTPS or localhost, and on iPhone the home-screen app.")
     : denied ? inNativeApp() ? t("Allow notifications for Ovis in the phone's Settings, then try again.") : t("Allow notifications in your browser settings, then try again.")
     : result === "sent" ? t("Test notification sent. Check this device for the alert.")
-    : result === "missing" || health.problem === "missing" ? t("This device's push subscription is missing. Turn alerts on again.")
+    // a repair that failed says why before the fault it did not mend
+    : repairFailureText(t, result) ?? (result === "missing" || health.problem === "missing" ? t("This device's push subscription is missing. Turn alerts on again.")
     : result === "gone" || health.problem === "gone" ? t("The push service retired this device's subscription. Turn alerts on again to make a new one.")
     : result === "permission" ? t("Allow notifications to test alerts on this device.")
     : result === "read-only" ? t("This device can only watch.")
@@ -46,7 +49,7 @@ export function PushTestControls({ onEnable }: { onEnable: () => Promise<boolean
     : health.problem === "key-mismatch" ? t("This device's push subscription was made for another server key. Turn alerts on again to make a new one.")
     : health.problem === "rejected" ? t("The push service refused the last alert to this device. Send a test to check whether it still does.")
     : health.transient !== null ? t("The last alert did not reach this device; the next one is tried as usual. Send a test to check.")
-    : !settings.alertsOn ? t("Alerts off") : null;
+    : !settings.alertsOn ? t("Alerts off") : null);
 
   return (
     <div className="settings-item">

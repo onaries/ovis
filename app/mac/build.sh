@@ -13,6 +13,17 @@ cd "$(dirname "$0")"
 version=${OVIS_MAC_VERSION:-1.0.0}
 build=${OVIS_MAC_BUILD:-1}
 app=build/Ovis.app
+# numbers and dots only, as macOS takes a bundle's version: anything else would also break the sed below
+for value in "$version" "$build"; do
+  case $value in
+    '' | .* | *. | *..* | *[!0-9.]*)
+      echo "OVIS_MAC_VERSION and OVIS_MAC_BUILD take numbers and dots (1.2.3), not '$value'" >&2
+      exit 1
+      ;;
+  esac
+done
+# the keychain as one argument, whatever its path holds
+if [ -n "${OVIS_KEYCHAIN:-}" ]; then set -- --keychain "$OVIS_KEYCHAIN"; else set --; fi
 
 swift build -c release --arch arm64 --arch x86_64
 bin=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
@@ -30,10 +41,8 @@ iconutil -c icns build/AppIcon.iconset -o "$app/Contents/Resources/AppIcon.icns"
 cp -R Resources/ko.lproj "$app/Contents/Resources/"
 cp Resources/carry-drafts.js "$app/Contents/Resources/"
 
-keychain=${OVIS_KEYCHAIN:+--keychain "$OVIS_KEYCHAIN"}
 if [ -n "${OVIS_SIGN_IDENTITY:-}" ]; then
-  # shellcheck disable=SC2086 # $keychain is two words or none
-  codesign --force --options runtime --timestamp --entitlements Ovis.entitlements $keychain --sign "$OVIS_SIGN_IDENTITY" "$app"
+  codesign --force --options runtime --timestamp --entitlements Ovis.entitlements "$@" --sign "$OVIS_SIGN_IDENTITY" "$app"
 else
   codesign --force --entitlements Ovis.entitlements --sign - "$app"
 fi
@@ -47,8 +56,7 @@ hdiutil create -quiet -volname Ovis -srcfolder build/dmg -ov -format UDZO build/
 rm -rf build/dmg
 
 if [ -n "${OVIS_SIGN_IDENTITY:-}" ]; then
-  # shellcheck disable=SC2086
-  codesign --force --timestamp $keychain --sign "$OVIS_SIGN_IDENTITY" build/Ovis.dmg
+  codesign --force --timestamp "$@" --sign "$OVIS_SIGN_IDENTITY" build/Ovis.dmg
 fi
 if [ -n "${OVIS_NOTARY_KEY:-}" ]; then
   xcrun notarytool submit build/Ovis.dmg --key "$OVIS_NOTARY_KEY" --key-id "$OVIS_NOTARY_KEY_ID" --issuer "$OVIS_NOTARY_ISSUER" --wait

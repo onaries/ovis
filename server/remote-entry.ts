@@ -5,9 +5,9 @@ import { createServer } from "./index.ts";
 import { bridgeIdentity, descriptorLive, descriptorPath, registerBridge } from "./bridge.ts";
 import { acquireOwnerDirectory } from "./owner-guard.ts";
 import { parseProcessLine, refusedSocket, staleMarker } from "./herdr-marker.ts";
-import { psQuote } from "./powershell.ts";
+import { startHeadlessWindowsHerdr, startInteractiveWindowsHerdr, windowsStartupStatus } from "./windows-herdr-start.ts";
 import { ShellAgentLocator } from "./shell-agent.ts";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
@@ -34,29 +34,10 @@ function staleWindowsMarker(path: string): boolean {
   });
 }
 
-/**
- * Bun's children on Windows share its job object and die with it (live-verified: a bridge
- * killed for an update took its herdr along). WMI creates the daemon from outside that job,
- * so herdr's sessions outlive every bridge. WMI does not pass the caller's environment on,
- * and herdr finds its socket directory through it (APPDATA), so it goes along explicitly.
- */
-async function spawnDetachedWindows(exe: string, args: string[], log: string): Promise<void> {
-  for (const value of [exe, ...args, log]) if (/["\r\n\0]/.test(value)) throw new Error(`Invalid characters in ${value}`);
-  const quote = psQuote;
-  const line = `cmd.exe /d /c ""${exe}" ${args.join(" ")} >> "${log}" 2>&1"`;
-  const environment = Object.entries(process.env).filter(([name, value]) => value !== undefined && !/[\r\n\0=]/.test(name) && !/[\r\n\0]/.test(value)).map(([name, value]) => quote(`${name}=${value}`));
-  const script = [
-    `$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0; EnvironmentVariables = [string[]]@(${environment.join(", ")}) }`,
-    `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${quote(line)}; CurrentDirectory = ${quote(homedir())}; ProcessStartupInformation = $startup }`,
-    "exit $r.ReturnValue",
-  ].join("\n");
-  const ps = Bun.spawn(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
-  const [code, stderr] = await Promise.all([ps.exited, new Response(ps.stderr).text()]);
-  if (code !== 0) throw new Error(`herdr could not be started through WMI (${code}): ${stderr.trim()}`);
-}
-
 const descriptor = descriptorPath();
 mkdirSync(dirname(descriptor), { recursive: true, mode: 0o700 });
+async function startBridge(): Promise<void> {
+if (windows) rmSync(windowsStartupStatus(dirname(descriptor), session), { force: true });
 // the lock records its owner's birth: a PID that now belongs to another process does not block this start
 const lock = acquireOwnerDirectory(descriptor + ".lock", { running: "Another bridge is starting; retry shortly", starting: "Another bridge is starting; retry shortly" });
 try {
@@ -77,7 +58,22 @@ try {
     const args = session ? ["--session", session, "server"] : ["server"];
     // one log per session on Windows: cmd holds the file a running daemon's output goes to
     const log = join(dirname(descriptor), windows && session ? `herdr-${session}.log` : "herdr.log");
-    if (windows) await spawnDetachedWindows(herdr, args, log);
+    if (windows) {
+      const registry = dirname(descriptor);
+      const status = windowsStartupStatus(registry, session);
+      if (process.env["OVIS_WINDOWS_HEADLESS_START"] !== "1") {
+        try {
+          if (await startInteractiveWindowsHerdr(herdr, args, log) === "waiting_login") {
+            writeFileSync(status, "waiting_login");
+            return;
+          }
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+          writeFileSync(status, `interactive_failed: ${error.message}`);
+          return;
+        }
+      } else await startHeadlessWindowsHerdr(herdr, args, log);
+    }
     else Bun.spawn([herdr, ...args], { stdin: "ignore", stdout: Bun.file(log), stderr: Bun.file(log) }).unref();
     let ready = false;
     // a cold first start (fresh HOME, slow disk or CI runner) can take well over ten seconds
@@ -88,7 +84,7 @@ try {
   if (info.herdr.protocol < 22) throw new Error("herdr 0.9+ is required; update it explicitly before connecting");
   const token = randomBytes(32).toString("hex");
   // started over SSH with a bare PATH: omo and gjc are often only on the login shell's
-  const server = createServer({ port: 0, hostname: "127.0.0.1", token, machines: false, stateDir: descriptor + ".state", shellAgents: new ShellAgentLocator() });
+  const server = createServer({ port: 0, hostname: "127.0.0.1", token, machines: false, bridgeOnly: true, stateDir: descriptor + ".state", shellAgents: new ShellAgentLocator() });
   const registration = registerBridge(server.port, token);
   if (!registration.registered) {
     // the app finds a bridge only through its descriptor: an unregistered one serves nobody, and
@@ -101,3 +97,5 @@ try {
   process.on("SIGINT", close);
   }
 } finally { lock.release(); }
+}
+await startBridge();

@@ -28,6 +28,9 @@ export function MachineDialog({ machine, updateRemote = false, onClose, onConnec
   const finished = !!job && ["failed", "cancelled", "connected"].includes(job.phase);
   const secretAllowed = window.isSecureContext;
   const needsBridgeUpdate = job?.phase === "failed" && job.action_required === "update_bridge";
+  const startupFailed = job?.phase === "starting" && job.action_required === "windows_start_failed";
+  const waitingForLogin = job?.phase === "starting" && (job.action_required === "windows_login" || startupFailed);
+  const keepOpen = job?.windows_startup === true;
   // the PC's own Ovis, older than this app: the update asks it to update itself, or it cannot be from here
   const own = job?.remote_ovis ?? (job || !machine ? null : ownOvisAction(machine));
   const ownUpdate = own?.updatable === true;
@@ -36,7 +39,7 @@ export function MachineDialog({ machine, updateRemote = false, onClose, onConnec
   // approved install keeps going on the server and shows in the sidebar
   // React's autoFocus runs at mount, while the dialog is still closed; showModal() then moves focus
   // to the first focusable element (Close), so the field is focused again once the dialog is open
-  useEffect(() => { mounted.current = true; dialog.current?.showModal(); destinationField.current?.focus(); return () => { mounted.current = false; const current = jobRef.current; if (current && !["connected", "failed", "cancelled", "installing", "starting"].includes(current.phase)) void answerMachineSetup(current.id, { action: "cancel" }).catch(() => {}); }; }, []);
+  useEffect(() => { mounted.current = true; dialog.current?.showModal(); destinationField.current?.focus(); return () => { mounted.current = false; const current = jobRef.current; if (current && !["connected", "failed", "cancelled"].includes(current.phase) && (current.windows_startup || !["installing", "starting"].includes(current.phase))) void answerMachineSetup(current.id, { action: "cancel" }).catch(() => {}); }; }, []);
   const running = !!job && ["installing", "starting"].includes(job.phase);
   useEffect(() => {
     if (!job || finished) return;
@@ -58,14 +61,14 @@ export function MachineDialog({ machine, updateRemote = false, onClose, onConnec
     // a PC saved in herdr keeps its catalog name, which the server does not read from here
     try { const next = await startMachineSetup({ destination: destination.trim(), ...(name.trim() && !machine?.herdr_profile_id ? { name: name.trim() } : {}), ...(port ? { port: Number(port) } : {}), ...(key.trim() ? { identity_file: key.trim() } : {}), ...(session.trim() ? { session: session.trim() } : {}), ...(machine ? { machine_id: machine.id } : {}), ...(needsBridgeUpdate || updateRemote ? { update_remote: true } : {}) });
       if (mounted.current) setJob(next);
-      else if (!["connected", "failed", "cancelled", "installing", "starting"].includes(next.phase)) await answerMachineSetup(next.id, { action: "cancel" });
+      else if (!["connected", "failed", "cancelled"].includes(next.phase) && (next.windows_startup || !["installing", "starting"].includes(next.phase))) await answerMachineSetup(next.id, { action: "cancel" });
     }
     catch (e) { if (mounted.current) setError(e instanceof Error ? e.message : String(e)); }
     finally { if (mounted.current) setPending(false); }
   };
   const inheritedStarted = useRef(false);
   useEffect(() => {
-    if (!machine?.herdr_profile_id || inheritedStarted.current) return;
+    if ((!machine?.herdr_profile_id && machine?.action_required !== "windows_login" && machine?.action_required !== "windows_start_failed") || inheritedStarted.current) return;
     inheritedStarted.current = true;
     void begin();
   }, []);
@@ -91,10 +94,13 @@ export function MachineDialog({ machine, updateRemote = false, onClose, onConnec
         <p className="field-hint">{t("Uses the web server account’s SSH config and ssh-agent. Agent CLI tools and logins use the environment on the target PC.")}</p>
         </>}
       </form>}
-      {job && job.challenge?.kind !== "host_key" && <div className="machine-progress" role="status">{running && job.progress ? <BridgeUpdateProgress update={{ job_id: job.id, step: job.step, progress: job.progress }} /> : <strong>{job.step}</strong>}{job.error && <p>{machineErrorText(job.error, t)}</p>}{job.ssh_output && <SshOutput text={job.ssh_output} />}</div>}
+      {job && job.challenge?.kind !== "host_key" && <div className="machine-progress" role="status">{waitingForLogin ? <strong>{t(startupFailed ? "Windows desktop startup failed" : "Waiting for Windows sign-in")}</strong> : running && job.progress ? <BridgeUpdateProgress update={{ job_id: job.id, step: job.step, progress: job.progress }} /> : <strong>{job.step === "Starting without Windows sign-in…" ? t("Starting without Windows sign-in…") : job.step}</strong>}{waitingForLogin && job.step !== "Waiting for Windows sign-in on this PC." && <p>{machineErrorText(job.step, t)}</p>}{job.error && <p>{machineErrorText(job.error, t)}</p>}{job.ssh_output && <SshOutput text={job.ssh_output} />}</div>}
+      {waitingForLogin && <p className="field-hint">{t("Starting without Windows sign-in can break Codex sandbox commands, and desktop-control tools may be unavailable. This choice applies to one start.")}</p>}
+      {waitingForLogin && <p className="field-hint">{t("Signing out of Windows ends herdr and its panes; lock the PC instead.")}</p>}
       {needsBridgeUpdate && <p className="field-hint">{t(ownUpdate ? "It updates itself through its own updater, then this PC reconnects; herdr sessions keep running." : "This PC runs a bridge from a different version of Ovis. Update it to reconnect; herdr sessions keep running.")}</p>}
       {job?.phase === "failed" && own && !own.updatable && <OwnOvisAddress own={own} />}
-      {running && <p className="field-hint">{t("You can close this; the install keeps going and the sidebar shows it.")}</p>}
+      {running && keepOpen && <p className="field-hint">{t("Keep this dialog open until the PC connects.")}</p>}
+      {running && !waitingForLogin && !keepOpen && <p className="field-hint">{t("You can close this; the install keeps going and the sidebar shows it.")}</p>}
       {job?.phase === "approval" && <><ul className="machine-install-list">{job.installations.map((item) => <li key={item}>{item}</li>)}</ul><p className="field-hint">{t(ownUpdate ? "That PC's own updater installs it there. Existing herdr sessions keep running." : "Installs into your home directory. Existing herdr sessions keep running.")}</p></>}
       {job?.challenge && <div className="machine-challenge">{job.challenge.kind === "host_key" ? <HostKeyQuestion prompt={job.challenge.prompt} host={job.target.destination} sshOutput={job.ssh_output} /> : <><pre>{job.challenge.prompt}</pre><form onSubmit={(e) => { e.preventDefault(); void act({ action: "answer", challenge_id: job.challenge!.id, answer: secret }); }}>
         <label className="field"><span className="field-label">{t("Password or key passphrase")}</span><input autoFocus className="input" type="password" autoComplete="off" value={secret} disabled={!secretAllowed || pending} onChange={(e) => setSecret(e.target.value)} /></label>
@@ -104,8 +110,9 @@ export function MachineDialog({ machine, updateRemote = false, onClose, onConnec
       {error && <p className="machine-error" role="alert">{error}</p>}
     </div>
     <footer className="modal-footer">
-      {job && !finished && <button className="btn" disabled={pending} onClick={() => void act({ action: "cancel" })}>{t(running ? "Cancel install" : "Cancel connection")}</button>}
-      {running && <button className="btn btn-primary" onClick={onClose}>{t("Continue in background")}</button>}
+      {job && !finished && <button className="btn" disabled={pending} onClick={() => void act({ action: "cancel" })}>{t(running && !waitingForLogin ? "Cancel install" : "Cancel connection")}</button>}
+      {waitingForLogin && <button className="btn" disabled={pending} onClick={() => void act({ action: "start_headless" })}>{t("Start without Windows sign-in")}</button>}
+      {running && !keepOpen && <button className="btn btn-primary" onClick={onClose}>{t("Continue in background")}</button>}
       {job?.challenge?.kind === "host_key" && <><button className="btn" disabled={pending} onClick={() => void act({ action: "answer", challenge_id: job.challenge!.id, answer: "no" })}>{t("Reject")}</button><button className="btn btn-primary" disabled={pending} onClick={() => void act({ action: "answer", challenge_id: job.challenge!.id, answer: "yes" })}>{t("Trust fingerprint")}</button></>}
       {job?.phase === "approval" && <button className="btn btn-primary" disabled={pending} onClick={() => void act({ action: "approve" })}>{t("Install and connect")}</button>}
       {job?.phase === "connected" ? <button className="btn btn-primary" onClick={() => onConnected(job.machine_id)}>{t("Open PC")}</button> : (!job || finished) && <button className="btn btn-primary" form="machine-connect-form" type="submit" disabled={pending}>{t(pending ? "Connecting…" : needsBridgeUpdate && ownUpdate ? "Update this PC's Ovis and connect" : needsBridgeUpdate ? "Update bridge and connect" : job ? "Retry connection" : "Connect")}</button>}

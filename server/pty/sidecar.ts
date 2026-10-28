@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { HerdrIdentity } from "../../shared/machines.ts";
 import { rustSidecar } from "./host.ts";
 
@@ -21,13 +23,15 @@ const MIN_NODE_MAJOR = 18;
 /**
  * `bun run` puts a `node` that is Bun itself first on PATH when the PC has none, and
  * node-pty must not load in Bun (oven-sh/bun#18546): only a `node` that is Node 18 or newer counts.
- * The probe is written for any Node, however old (no `??`), so an old one answers and is refused.
+ * Nor one built for another architecture than this server (an x64 Node under Rosetta on an arm64
+ * Mac): node-pty's prebuilt addon is installed for the server's. The probe is written for any
+ * Node, however old (no `??`), so an old one answers and is refused.
  */
 export function isRealNode(executable: string, env: Record<string, string | undefined> = process.env, timeoutMs = PROBE_TIMEOUT_MS): boolean {
   try {
-    const asked = Bun.spawnSync([executable, "-p", "process.versions.bun ? 'bun' : process.versions.node"], { env, windowsHide: true, stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: timeoutMs });
-    const major = /^(\d+)\./.exec(asked.stdout.toString().trim())?.[1];
-    return asked.success && major !== undefined && Number(major) >= MIN_NODE_MAJOR;
+    const asked = Bun.spawnSync([executable, "-p", "process.versions.bun ? 'bun' : process.versions.node + ' ' + process.arch"], { env, windowsHide: true, stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: timeoutMs });
+    const answer = /^(\d+)\.\S* (\S+)$/.exec(asked.stdout.toString().trim());
+    return asked.success && answer !== null && Number(answer[1]) >= MIN_NODE_MAJOR && answer[2] === process.arch;
   } catch {
     return false;
   }
@@ -36,33 +40,41 @@ export function isRealNode(executable: string, env: Record<string, string | unde
 const probed = new Map<string, boolean>();
 
 /**
- * The Node a PTY sidecar spawned with `env` runs, as an absolute path, when it is real Node: resolved
- * on that spawn's own PATH, so the check and the spawn can never find two different `node`s.
+ * Where install.sh puts the Node it installs for the sidecar, and where it put it before the rename.
+ * It no longer links that Node into ~/.local/bin, where it overrode the user's own (#596), so the
+ * server looks for it here itself.
  */
-export function realNode(env: Record<string, string | undefined>): string | null {
-  const found = Bun.which("node", { PATH: env["PATH"] ?? "" });
-  if (found === null) return null;
-  let ok = probed.get(found);
-  if (ok === undefined) {
-    ok = isRealNode(found, env);
-    probed.set(found, ok);
-  }
-  return ok ? found : null;
-}
+const APP_NODE_DIRS = [".local/share/ovis/node", ".local/share/herdr-web-ui/node"];
 
 /**
- * Looked up on the PATH the sidecar's spawn inherits (PtySession passes process.env), not the
- * one this process was launched with: a remote bundle adds its own bin/ at runtime
- * (server/remote-entry.ts), and a bare Bun.which() would not see the Node shipped there.
+ * The Node a PTY sidecar spawned with `env` runs, as an absolute path, when it is real Node: the
+ * app's own Node, else the `node` on that spawn's own PATH, so the check and the spawn can never
+ * find two different `node`s. The PATH is the one the spawn inherits (PtySession passes
+ * process.env), not the one this process was launched with: a remote bundle adds its own bin/ at
+ * runtime (server/remote-entry.ts), and a bare Bun.which() would not see the Node shipped there.
  */
-function nodeOnPath(): boolean {
-  const found = Bun.which("node", { PATH: process.env["PATH"] ?? "" });
-  return found !== null && isRealNode(found);
+export function realNode(env: Record<string, string | undefined>): string | null {
+  const home = env["HOME"];
+  const installed = home ? APP_NODE_DIRS.map((dir) => join(home, dir, "bin", "node")).filter((path) => existsSync(path)) : [];
+  const onPath = Bun.which("node", { PATH: env["PATH"] ?? "" });
+  for (const found of onPath === null ? installed : [...installed, onPath]) {
+    let ok = probed.get(found);
+    if (ok === undefined) {
+      ok = isRealNode(found, env);
+      probed.set(found, ok);
+    }
+    if (ok) return found;
+  }
+  return null;
+}
+
+function nodeHere(): boolean {
+  return realNode(process.env) !== null;
 }
 
 const here: SidecarRuntime = {
   rust: () => rustSidecar() !== null,
-  node: nodeOnPath,
+  node: nodeHere,
   pty: () => {
     try {
       Bun.resolveSync("@lydell/node-pty", import.meta.dir);

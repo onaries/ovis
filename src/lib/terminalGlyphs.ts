@@ -30,7 +30,7 @@
  */
 import type { Terminal } from "@xterm/xterm";
 
-import { BOX_GLYPHS, boxBackground, boxDrawing, boxRun, pixelPlacement, type BoxDrawing } from "./terminalBoxGlyphs.ts";
+import { BOX_GLYPHS, boxBackground, boxDrawing, boxRun, isBoxGlyph, pixelPlacement, type BoxDrawing } from "./terminalBoxGlyphs.ts";
 
 /** Spacing up to this is rounding between the font and the cell grid, not a misfit glyph. */
 const MIN_SPACING_PX = 1;
@@ -119,18 +119,29 @@ export interface LateFace {
 }
 
 export interface LateFaces {
-  /** Follows every face of `families` that covers a character of `text` and has not loaded yet. */
-  ask(families: string, text: string): void;
+  /**
+   * Follows every face of `families` that covers a character of `text` and has not loaded yet.
+   * `painted` text is drawn as boxes, not from a font: its faces are followed quietly, and their
+   * arrival measures nothing again until a character they cover is asked for as drawn from the font.
+   * True when that happened: xterm measured the text with a stand-in, and it is measured again in
+   * the next frame.
+   */
+  ask(families: string, text: string, painted?: boolean): boolean;
   stop(): void;
 }
 
 interface Relay {
   fire: (() => void) | null;
+  /** a face followed for painted text alone has arrived */
+  arrivedQuietly: ((face: LateFace) => void) | null;
 }
 
-/** A face that never loads holds on to the relay alone, and a stopped terminal's relay holds nothing. */
-function whenLoaded(face: LateFace, relay: Relay): void {
-  face.loaded.then(() => relay.fire?.(), () => undefined);
+/**
+ * A face that never loads holds on to the relay and its own entry alone, never a closure of the
+ * terminal's (it would keep the terminal), and a stopped terminal's relay holds nothing.
+ */
+function whenLoaded(face: LateFace, relay: Relay, entry: { quiet: boolean }): void {
+  face.loaded.then(() => entry.quiet ? relay.arrivedQuietly?.(face) : relay.fire?.(), () => undefined);
 }
 
 /**
@@ -139,10 +150,16 @@ function whenLoaded(face: LateFace, relay: Relay): void {
  * arrive before it, so the terminal measures and draws again once, not once a face. Each face is
  * followed by its own `loaded` promise and starts no load: the page loads the faces its text reaches
  * (a face behind a font that draws the character never loads), one face that fails or stalls holds
- * back none of the others, and a face that failed is not followed.
+ * back none of the others, and a face that failed is not followed. A face followed only for
+ * characters drawn as boxes measures nothing again when it arrives, since nothing drawn used it, but
+ * xterm measured those characters with the stand-in too: the first time one is drawn from the font
+ * (under the cursor), the terminal measures again then.
  */
 export function followLateFaces<Face extends LateFace>(fonts: Iterable<Face> | undefined, frame: (callback: () => void) => void, arrived: () => void): LateFaces {
-  const followed = new WeakSet<Face>();
+  // each face followed, and whether only painted text asked for it so far
+  const followed = new WeakMap<Face, { quiet: boolean }>();
+  // faces that arrived while only painted text had asked for them
+  const arrivedQuietly = new Set<LateFace>();
   let waiting = false;
   let stopped = false;
   const relay: Relay = {
@@ -151,24 +168,44 @@ export function followLateFaces<Face extends LateFace>(fonts: Iterable<Face> | u
       waiting = true;
       frame(() => {
         waiting = false;
-        if (!stopped) arrived();
+        if (stopped) return;
+        // everything is measured again: what arrived quietly is measured with it
+        arrivedQuietly.clear();
+        arrived();
       });
     },
+    arrivedQuietly: (face) => arrivedQuietly.add(face),
   };
   return {
-    ask(families, text) {
-      if (!fonts || stopped) return;
+    ask(families, text, painted = false) {
+      if (!fonts || stopped) return false;
+      let stale = false;
       const names = new Set(families.split(",").map(familyKey));
       for (const face of fonts) {
-        if ((face.status !== "unloaded" && face.status !== "loading") || followed.has(face)) continue;
         if (!names.has(familyKey(face.family)) || !coversAny(face.unicodeRange, text)) continue;
-        followed.add(face);
-        whenLoaded(face, relay);
+        const following = followed.get(face);
+        if (following) {
+          if (painted) continue;
+          following.quiet = false;
+          // the face arrived while its characters were boxes: this one is drawn from it, and xterm's width is the stand-in's
+          if (arrivedQuietly.delete(face)) {
+            stale = true;
+            relay.fire?.();
+          }
+          continue;
+        }
+        if (face.status !== "unloaded" && face.status !== "loading") continue;
+        const entry = { quiet: painted };
+        followed.set(face, entry);
+        whenLoaded(face, relay, entry);
       }
+      return stale;
     },
     stop() {
       stopped = true;
       relay.fire = null;
+      relay.arrivedQuietly = null;
+      arrivedQuietly.clear();
     },
   };
 }
@@ -218,6 +255,8 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
   const widths = new Map<string, number>();
   // the characters that asked for their faces in that font (every style's: a face of each weight is followed)
   const asked = new Set<string>();
+  // the box characters that asked while drawn as boxes
+  const askedPainted = new Set<string>();
   let measuredFont = "";
   // a box character's drawing, for the cell size it was drawn in
   const boxes = new Map<string, BoxDrawing | null>();
@@ -308,6 +347,7 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
     if (font !== measuredFont) {
       widths.clear();
       asked.clear();
+      askedPainted.clear();
       measuredFont = font;
     }
     const cellWidth = Number.parseFloat(screen.style.width) / term.cols;
@@ -319,15 +359,6 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
       const bold = span.classList.contains("xterm-bold");
       const italic = span.classList.contains("xterm-italic");
       const style = `${italic ? "italic " : ""}${bold ? fontWeightBold : fontWeight} ${fontSize}px`;
-      // every character drawn asks for its faces once, whether or not its span is fitted: xterm
-      // measured it too, and a span that already fills its cells is wrong once a late face arrives
-      let fresh = "";
-      for (const char of shown) {
-        if (asked.has(char)) continue;
-        asked.add(char);
-        fresh += char;
-      }
-      if (fresh !== "") lateFaces.ask(fontFamily ?? "", fresh);
       const widthOf = (glyph: string): number => {
         const key = `${bold ? 1 : 0}${italic ? 1 : 0}${glyph}`;
         let width = widths.get(key);
@@ -340,8 +371,37 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
       };
       // boxes drawn and icons fitted to their cells. The cell under the cursor keeps the font's glyph:
       // xterm draws an underline or bar cursor as the span's own border and shadow, which they would cover
-      if ((BOX_GLYPHS.test(shown) || ANY_PRIVATE_USE.test(shown)) && !span.classList.contains("xterm-cursor") && cellWidth > 0 && rowHeight > 0
-        && rebuild(span, shown, cellWidth, rowHeight, fontSize, widthOf)) continue;
+      const rebuilt = (BOX_GLYPHS.test(shown) || ANY_PRIVATE_USE.test(shown)) && !span.classList.contains("xterm-cursor") && cellWidth > 0 && rowHeight > 0
+        && rebuild(span, shown, cellWidth, rowHeight, fontSize, widthOf);
+      // every character drawn asks for its faces once, whether or not its span is fitted: xterm
+      // measured it too, and a span that already fills its cells is wrong once a late face arrives.
+      // A box character drawn as a box is painted, not taken from a face, and asks quietly: a
+      // Powerline prompt's separators would otherwise draw every row again when the icon font arrives
+      let fresh = "";
+      let painted = "";
+      for (const char of shown) {
+        if (rebuilt && isBoxGlyph(char)) {
+          if (!askedPainted.has(char)) {
+            askedPainted.add(char);
+            painted += char;
+          }
+          continue;
+        }
+        if (asked.has(char)) continue;
+        asked.add(char);
+        fresh += char;
+      }
+      if (painted !== "") lateFaces.ask(fontFamily ?? "", painted, true);
+      if (fresh !== "" && lateFaces.ask(fontFamily ?? "", fresh)) {
+        widths.clear();
+        // a box under the cursor, drawn from a face that arrived while it was painted: xterm spaced it
+        // for the stand-in's width, so its one cell is spaced from the face now, before the next frame
+        // measures everything again
+        if (span.classList.contains("xterm-cursor") && isBoxGlyph(shown) && [...shown].length === 1 && cellWidth > 0) {
+          span.style.letterSpacing = `${cellWidth - widthOf(shown)}px`;
+        }
+      }
+      if (rebuilt) continue;
       // under the cursor an icon is fitted in the cursor's own span, which keeps its background and border
       if (span.classList.contains("xterm-cursor") && [...shown].length === 1 && oversizedIcon(shown, widthOf(shown), cellWidth)) {
         span.style.cssText += `;font-size:${fontSize * iconScale([widthOf(shown)], cellWidth)}px;letter-spacing:0px`;

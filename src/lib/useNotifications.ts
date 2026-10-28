@@ -1,11 +1,27 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { AlertPrefs } from "../../shared/notify-policy.ts";
 import type { Settings } from "./settings.ts";
-import { sendTestPush } from "./api.ts";
+import { ApiError, sendTestPush } from "./api.ts";
 import { notificationState, refreshNotificationState, requestNotificationPermission, type NotificationState } from "./notifications.ts";
 import { ensurePushSubscription, pushSupported, registeredPushEndpoint, removePushSubscription } from "./push.ts";
-import { refreshPushHealth, resetPushHealth, runPushAction } from "./pushHealth.ts";
+import { refreshPushHealth, resetPushHealth, runPushAction, type PushActionOutcome, type PushActionResult } from "./pushHealth.ts";
 import { hasNativePlugin, PUSH_PLUGIN } from "./nativeApp.ts";
+
+/**
+ * Why making and registering this device's subscription threw. The PC's own answer is an ApiError
+ * (a retired endpoint the browser keeps handing over is "gone"), and a fetch that never reached it
+ * a TypeError; anything else came from the browser's PushManager or the app's push plugin, which
+ * would not make a subscription (Brave with its push service off, a phone without one).
+ */
+export function subscribeFailure(error: unknown): PushActionResult {
+  if (error instanceof ApiError) return error.code === "subscription_gone" ? "gone" : "unregistered";
+  return error instanceof TypeError ? "unregistered" : "refused";
+}
+
+/** A repair's outcome, about the subscription it registered when it got that far (lib/pushHealth.ts). */
+export function repairOutcome(result: PushActionResult): PushActionOutcome {
+  return result === "sent" ? { result, endpoint: registeredPushEndpoint() } : { result };
+}
 
 /** The browser's notification permission and whether this device has a push subscription. */
 export function useNotificationState() {
@@ -49,22 +65,34 @@ export interface NotificationSwitchParams {
 export function useNotificationSwitch({ updateSettings, locked, notifications, setNotifications, alerts, alertsRef, alertsOn, setPushOn }: NotificationSwitchParams) {
   const alertsOnRef = useRef(alertsOn);
   alertsOnRef.current = alertsOn;
-  const enableNotifications = useCallback(async () => {
+  // what it came to is the repair's answer too (lib/pushHealth.ts): "sent" once this device is
+  // subscribed and its confirmation push went out, else why not
+  const enableNotifications = useCallback(async (): Promise<PushActionResult> => {
     // in-app alerts need no permission: the switch goes on whatever the browser answers
     updateSettings({ alertsOn: true });
     const current = notificationState();
     const next = current === "default" ? await requestNotificationPermission() : current;
     setNotifications(next);
-    if (next !== "granted") return false;
+    if (next !== "granted") return "permission";
     try {
-      const endpoint = await ensurePushSubscription(alertsRef.current);
+      let endpoint: string | null;
+      try {
+        endpoint = await ensurePushSubscription(alertsRef.current);
+      } catch (err) {
+        console.warn("web push unavailable, alerts stay tab-only", err);
+        return subscribeFailure(err);
+      }
       setPushOn(endpoint !== null);
+      // no subscription and nothing thrown: push is not here at all, or the service worker never came up
+      if (endpoint === null) return pushSupported() ? "no-worker" : "unsupported";
       // the confirmation push proves the whole path (server -> push service -> this device)
-      if (endpoint) await sendTestPush(endpoint);
-      return endpoint !== null;
-    } catch (err) {
-      console.warn("web push unavailable, alerts stay tab-only", err);
-      return false;
+      try {
+        await sendTestPush(endpoint);
+      } catch (err) {
+        console.warn("the confirmation push failed", err);
+        return "failed";
+      }
+      return "sent";
     } finally {
       // what the confirmation push came to is now the device's latest delivery: the notice reads it
       void refreshPushHealth(alertsOnRef.current);
@@ -82,7 +110,7 @@ export function useNotificationSwitch({ updateSettings, locked, notifications, s
 
   // the notice's repair is Settings' Turn alerts on again: one flow, one state (lib/pushHealth.ts)
   const repairNotifications = useCallback(() => {
-    void runPushAction("repair", async () => await enableNotifications() ? { result: "sent", endpoint: registeredPushEndpoint() } : { result: "failed" }, () => alertsOnRef.current);
+    void runPushAction("repair", async () => repairOutcome(await enableNotifications()), () => alertsOnRef.current);
   }, [enableNotifications]);
 
   // in the app, alerts turned off while the PC could not be told keep the app's endpoint (lib/push.ts),

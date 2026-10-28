@@ -218,6 +218,11 @@ What is there:
   one goes with its web view. `@capacitor/barcode-scanner` kept every old one alive (its scanner
   manager holds the view controller, which holds the bridge and the plugin), so
   `app/patches` makes that manager for each scan instead of keeping it.
+  `HerdrBridgeViewController` also hides WebKit's form accessory bar (the up and down arrows and the check mark over the
+  keyboard), as `@capacitor/keyboard`'s `hideFormAccessoryBar` would, without that plugin or its
+  patch of WebKit's private content view: its web view is a `WKWebView` subclass whose
+  `inputAccessoryView` is nil, which WebKit asks for since iOS 13. The client has its own key bar,
+  and a page cannot remove WebKit's.
 - In the client, `src/lib/nativeApp.ts` notices the app through `window.Capacitor`, as the app
   injects it; the browser build carries no Capacitor code. Inside the app:
   - Settings → Phone & devices has a Change PC row, and so does the pairing screen (a PC that

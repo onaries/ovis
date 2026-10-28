@@ -306,6 +306,9 @@ try {
           // the run the next update formed is open, and in it the update the reader opened still is
           const attempts = await page.locator("[data-todo-group] .work-todo-attempts .work-row-head").evaluateAll((heads) => heads.map((head) => head.getAttribute("aria-expanded")));
           expect(JSON.stringify(attempts) === JSON.stringify(["true", "false"]), `${name}: the opened update stays open inside its Plan row (${JSON.stringify(attempts)})`);
+          // and keeps the keyboard's focus: the row the reader clicked moved into the run, the focus with it (#1601)
+          const focused = await page.evaluate(() => document.activeElement === document.querySelector("[data-todo-group] .work-todo-attempts .work-row-head") ? "attempt" : document.activeElement?.tagName ?? "none");
+          expect(focused === "attempt", `${name}: the focus stays on the update the reader opened (${focused})`);
         }
         let resumed: number | null = null;
         if (scenario !== "following") {

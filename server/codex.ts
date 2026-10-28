@@ -1531,33 +1531,40 @@ async function heldThreadIds(home: string): Promise<Map<string, { loadedAt: numb
     } catch { /* unlocked and removed meanwhile */ }
   }
   if (named.size === 0) return held;
-  let table: string;
-  try { table = readFileSync("/proc/locks", "utf8"); } catch { return null; }
-  // the lock files each holder has open: inode numbers are only unique within a file system
-  const openBy = new Map<string, Set<string>>();
-  for (const line of table.split("\n")) {
-    // a held write flock: one a process waits for reads "N: -> FLOCK ..."
-    const lock = /^\d+:\s+FLOCK\s+\S+\s+WRITE\s+(\d+)\s+[0-9a-f]+:[0-9a-f]+:(\d+)\s/.exec(line);
-    const name = lock ? named.get(lock[2]!) : undefined;
-    if (lock === null || name === undefined) continue;
-    let names = openBy.get(lock[1]!);
-    if (names === undefined) {
-      names = new Set();
-      openBy.set(lock[1]!, names);
-      try {
-        for (const descriptor of readdirSync(`/proc/${lock[1]}/fd`)) {
-          try {
-            const target = readlinkSync(`/proc/${lock[1]}/fd/${descriptor}`);
-            if (nodePath.dirname(target) === folder) names.add(nodePath.basename(target));
-          } catch { /* closed while listing */ }
+  // the kernel hands /proc/locks out a page at a time, and a lock any process takes or drops between
+  // two pages moves the lines after it: one read may leave a held lock out (or show one twice). So a
+  // lock file no read has shown held is looked for in two more reads before it counts as nobody's
+  const unseen = () => [...named.values()].some((name) => !held.has(name.slice(0, -".lock".length).toLowerCase()));
+  for (let read = 0; read < 3 && unseen(); read++) {
+    let table: string;
+    try { table = readFileSync("/proc/locks", "utf8"); } catch { return null; }
+    // the lock files each holder has open, listed again for each read: a holder may have opened
+    // another since the last one. Inode numbers are only unique within a file system
+    const openBy = new Map<string, Set<string>>();
+    for (const line of table.split("\n")) {
+      // a held write flock: one a process waits for reads "N: -> FLOCK ..."
+      const lock = /^\d+:\s+FLOCK\s+\S+\s+WRITE\s+(\d+)\s+[0-9a-f]+:[0-9a-f]+:(\d+)\s/.exec(line);
+      const name = lock ? named.get(lock[2]!) : undefined;
+      if (lock === null || name === undefined) continue;
+      let names = openBy.get(lock[1]!);
+      if (names === undefined) {
+        names = new Set();
+        openBy.set(lock[1]!, names);
+        try {
+          for (const descriptor of readdirSync(`/proc/${lock[1]}/fd`)) {
+            try {
+              const target = readlinkSync(`/proc/${lock[1]}/fd/${descriptor}`);
+              if (nodePath.dirname(target) === folder) names.add(nodePath.basename(target));
+            } catch { /* closed while listing */ }
+          }
+        } catch (error) {
+          // gone, and its lock with it; another user's process: what it holds cannot be told, and a
+          // thread left out could be the one a pane shows
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
         }
-      } catch (error) {
-        // gone, and its lock with it; another user's process: what it holds cannot be told, and a
-        // thread left out could be the one a pane shows
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
       }
+      if (names.has(name)) hold(name.slice(0, -".lock".length).toLowerCase(), born.get(name) ?? 0, execRun(readArgv(lock[1]!)));
     }
-    if (names.has(name)) hold(name.slice(0, -".lock".length).toLowerCase(), born.get(name) ?? 0, execRun(readArgv(lock[1]!)));
   }
   return held;
 }

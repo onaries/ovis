@@ -75,6 +75,17 @@ describe("usePaneCommands after a failed read", () => {
     expect(fetchSpy.mock.calls.length).toBe(calls);
   });
 
+  it("draws the list another hook read on its first render, before its own read answers", async () => {
+    await act(async () => { renderer = create(createElement(Probe, { pane: "w-first:p1" })); });
+    await settle(() => seen.length > 0);
+    const firsts: string[][] = [];
+    function Later() { const rows = usePaneCommands("w-first:p1", "claude"); if (firsts.length === 0) firsts.push(rows.map((command) => command.name)); return null; }
+    let later: ReactTestRenderer | null = null;
+    await act(async () => { later = create(createElement(Later)); });
+    expect(firsts).toEqual([["config"]]);
+    await act(async () => { later?.unmount(); });
+  });
+
   it("keeps the list it had while a fresh read fails", async () => {
     await act(async () => { renderer = create(createElement(Probe, { pane: "w-retry:p2" })); });
     await settle(() => seen.length > 0);

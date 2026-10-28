@@ -14,7 +14,7 @@
     "build": "bun --bun vite build",
     "server": "bun run server/index.ts",
     "start": "bun run build && bun run server/managed.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json",
+    "typecheck": "bun --bun tsc --noEmit && bun --bun tsc --noEmit -p tsconfig.tools.json",
     "check": "bun scripts/check.ts",
     "test": "bun test",
     "test:unit": "bun scripts/ci-tests.ts unit",

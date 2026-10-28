@@ -12,6 +12,7 @@ import { TOOL_OUTPUT_CHARS, trimOutput } from "./tool-output.ts";
 import { darwinTerminal } from "./darwin-process.ts";
 import { processStartedAt } from "./process-start.ts";
 import { hermesSkillPrompt } from "./skill-activity.ts";
+import { userHome } from "./user-home.ts";
 
 export interface HermesMessageRow {
   id: number;
@@ -73,8 +74,8 @@ function parseToolInput(rawArgs: unknown): { inputStr: string; inputObj: Record<
 }
 
 /** Uses HERMES_HOME when set, otherwise the user's .hermes directory. */
-export function defaultHermesHome(userHome?: string): string {
-  return process.env["HERMES_HOME"] || join(userHome ?? process.env["HOME"] ?? "", ".hermes");
+export function defaultHermesHome(home = userHome()): string {
+  return process.env["HERMES_HOME"] || join(home, ".hermes");
 }
 
 /** Locates the session database within the selected Hermes home. */

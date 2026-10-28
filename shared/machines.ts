@@ -24,7 +24,7 @@ export interface Machine {
   enabled: boolean;
   state: MachineState;
   error: string | null;
-  /** set when retrying cannot help: the user has to update the remote bridge or approve setup */
+  /** Attention needed; windows_login retries, windows_start_failed waits for a startup decision. */
   action_required?: MachineAction | null;
   /** a bridge update running for this PC right now (in the background, or from its dialog) */
   updating?: MachineUpdate | null;
@@ -84,7 +84,7 @@ export interface HerdrIdentity {
   /** without attach, the terminal lens shows the pane's screen repainted a few times a second (server/mirror.ts) */
   terminal_mirror?: boolean;
 }
-export type MachineAction = "connect" | "update_bridge" | "setup" | "bridge_conflict";
+export type MachineAction = "connect" | "update_bridge" | "setup" | "bridge_conflict" | "windows_login" | "windows_start_failed";
 /** `ovis`: the PC's own Ovis updates itself (Machine.remote_ovis); absent for a bridge this app installs */
 export interface MachineUpdate { job_id: string; step: string; progress: SetupProgress | null; ovis?: boolean }
 /**
@@ -114,6 +114,8 @@ export interface SetupJob {
   challenge: SetupChallenge | null;
   installations: string[];
   error: string | null;
+  /** An unsaved Windows destination may wait for login; its setup must stay in the current dialog. */
+  windows_startup?: boolean;
   /**
    * set on a failed job when retrying as-is cannot connect: the user has to update the
    * bridge or approve setup. The dialog turns "update_bridge" into its update-and-connect
@@ -130,7 +132,7 @@ export interface SetupJob {
   /** the PC's own Ovis, when it is older than this app (Machine.remote_ovis): a first connect has no PC to carry it */
   remote_ovis?: RemoteOvis | null;
 }
-export type SetupAction = { action: "answer"; challenge_id: string; answer: string } | { action: "approve" } | { action: "cancel" };
+export type SetupAction = { action: "answer"; challenge_id: string; answer: string } | { action: "approve" } | { action: "cancel" } | { action: "start_headless" };
 /**
  * A device was durably enrolled (server/devices.ts): its registry write succeeded, whether at a
  * gated pairing or when a first-pair cookie came back. Never for an unconfirmed credential, a

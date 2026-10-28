@@ -205,6 +205,32 @@ describe("followLateFaces", () => {
     expect(frames).toHaveLength(0);
   });
 
+  it("measures again for a face that arrived while its characters were boxes once one is drawn from it", async () => {
+    const lines = face("Late Lines", "U+2500-257F");
+    const { late, frames, arrivals, runFrames } = follow([lines]);
+    late.ask("Late Lines, monospace", "\u2500", true);
+    lines.arrive();
+    await settled([lines]);
+    expect(frames).toHaveLength(0);
+    late.ask("Late Lines, monospace", "\u2500");
+    runFrames();
+    expect(arrivals()).toBe(1);
+    // measured again: drawing it from the face once more changes nothing
+    late.ask("Late Lines, monospace", "\u2500");
+    expect(frames).toHaveLength(0);
+  });
+
+  it("measures again on arrival for a face a character drawn from it asked for while it loaded", async () => {
+    const lines = face("Late Lines", "U+2500-257F");
+    const { late, arrivals, runFrames } = follow([lines]);
+    late.ask("Late Lines, monospace", "\u2500", true);
+    late.ask("Late Lines, monospace", "\u2502");
+    lines.arrive();
+    await settled([lines]);
+    runFrames();
+    expect(arrivals()).toBe(1);
+  });
+
   it("measures nothing again for a terminal that stopped", async () => {
     const icons = face('"Symbols Nerd Font Mono"', ICON_RANGE);
     const hangul = face("Ovis Hangul Mono", HANGUL_RANGE);
@@ -221,7 +247,7 @@ describe("followLateFaces", () => {
   });
 });
 
-const GLOBALS = ["document", "HTMLSpanElement", "MutationObserver", "requestAnimationFrame"] as const;
+const GLOBALS = ["document", "HTMLSpanElement", "MutationObserver", "requestAnimationFrame", "window"] as const;
 
 /** What the renderer needs of a span: its text, classes, inline style and children. */
 class FakeSpan {
@@ -232,6 +258,7 @@ class FakeSpan {
   classList = { contains: (name: string) => this.className.split(" ").includes(name) };
   append(...nodes: FakeSpan[]): void { this.children.push(...nodes); }
   replaceChildren(...nodes: FakeSpan[]): void { this.children = nodes; }
+  getBoundingClientRect() { return { left: 0, top: 0, width: 0 }; }
 }
 
 /**
@@ -239,20 +266,24 @@ class FakeSpan {
  * 6px wide while its face has not loaded (the stand-in's width) and 13px once it has, xterm's rows
  * redrawn only when the test says (`draw`), and frames run by hand.
  */
-function glyphPage(faces: FakeFace[]) {
+function glyphPage(faces: FakeFace[], texts = ["\uf07b", "가"]) {
   const before = GLOBALS.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
   const frames: (() => void)[] = [];
   const observers: ((records: { addedNodes: FakeSpan[] }[]) => void)[] = [];
   const icons = faces.find((each) => each.family.includes("Symbols"))!;
-  const measure = { font: "", measureText: (text: string) => ({ width: /[\ue000-\uf8ff]/u.test(text) ? (icons.status === "loaded" ? 13 : 6) : 7.8 }) };
+  // a late box-drawing face draws its lines 13px wide, the stand-in 7.8px
+  const lines = faces.find((each) => each.family.includes("Late Lines"));
+  const measure = { font: "", measureText: (text: string) => ({ width: /[\ue000-\uf8ff]/u.test(text) ? (icons.status === "loaded" ? 13 : 6)
+    : /[\u2500-\u257f]/u.test(text) && lines?.status === "loaded" ? 13 : 7.8 }) };
   const define = (name: string, value: unknown) => Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
   define("document", { fonts: faces, createElement: (tag: string) => tag === "canvas" ? { getContext: () => measure } : new FakeSpan() });
   define("HTMLSpanElement", FakeSpan);
   define("MutationObserver", class { constructor(callback: (records: { addedNodes: FakeSpan[] }[]) => void) { observers.push(callback); } observe() {} disconnect() {} });
   define("requestAnimationFrame", (callback: () => void) => frames.push(callback));
+  define("window", { devicePixelRatio: 1 });
   const span = (text: string): FakeSpan => Object.assign(new FakeSpan(), { textContent: text });
-  const drawn = [span("\uf07b"), span("가")];
-  const rows = { querySelectorAll: () => drawn };
+  const drawn = texts.map(span);
+  const rows = { querySelectorAll: () => drawn, getBoundingClientRect: () => ({ left: 0, top: 0, width: 78 }), offsetWidth: 78 };
   const screen = { style: { width: "78px", height: "15px" }, querySelector: () => null };
   const term = {
     cols: 10, rows: 1, refreshes: 0,
@@ -265,7 +296,12 @@ function glyphPage(faces: FakeFace[]) {
     term, stop,
     runFrames: () => { for (const callback of frames.splice(0)) callback(); },
     /** xterm draws a row again: its new span goes through the observer, as a MutationObserver delivers it */
-    draw: (text: string): FakeSpan => { const added = span(text); observers[0]!([{ addedNodes: [added] }]); return added; },
+    draw: (text: string, className = "", letterSpacing = ""): FakeSpan => {
+      const added = Object.assign(span(text), { className });
+      added.style["letterSpacing"] = letterSpacing;
+      observers[0]!([{ addedNodes: [added] }]);
+      return added;
+    },
     restore: () => { for (const [name, descriptor] of before) descriptor ? Object.defineProperty(globalThis, name, descriptor) : Reflect.deleteProperty(globalThis, name); },
   };
 }
@@ -302,5 +338,56 @@ describe("adjustTerminalGlyphs with late faces", () => {
 
     const redrawn = page.draw("\uf07b");
     expect(iconSize(redrawn)).toBeCloseTo(7.8, 5);
+  });
+
+  it("follows no face for Powerline's separators, which are drawn as boxes, not taken from the icon font", async () => {
+    const icons = face('"Symbols Nerd Font Mono"', ICON_RANGE);
+    page = glyphPage([icons], ["\ue0b0 main \ue0b1", "\ue0b2\ue0b7"]);
+    icons.arrive();
+    await settled([icons]);
+    page.runFrames();
+    expect(page.term.refreshes).toBe(0);
+  });
+
+  it("still follows a face for a box-drawing diagonal, which is drawn from the font", async () => {
+    const icons = face('"Symbols Nerd Font Mono"', ICON_RANGE);
+    const lines = face("Late Lines", "U+2500-257F");
+    page = glyphPage([icons, lines], ["\u2571\u2500"]);
+    page.term.options.fontFamily = `${page.term.options.fontFamily}, "Late Lines"`;
+    page.draw("\u2572\u2500");
+    lines.arrive();
+    await settled([lines]);
+    page.runFrames();
+    expect(page.term.refreshes).toBe(1);
+  });
+
+  for (const [where, text, className] of [["under the cursor", "\u2500", "xterm-cursor"], ["with a joiner", "\u2500\ufe0e", ""]] as const) {
+    it(`measures again a box character first drawn ${where}, after its face arrived while it was a box`, async () => {
+      const icons = face('"Symbols Nerd Font Mono"', ICON_RANGE);
+      const lines = face("Late Lines", "U+2500-257F");
+      page = glyphPage([icons, lines], []);
+      page.term.options.fontFamily = `${page.term.options.fontFamily}, "Late Lines"`;
+      page.draw("\u2500\u2500");
+      lines.arrive();
+      await settled([lines]);
+      page.runFrames();
+      expect(page.term.refreshes).toBe(0);
+
+      // xterm measured it with the stand-in, and now draws it from the face
+      const drawn = page.draw(text, className, "0px");
+      page.runFrames();
+      expect(page.term.refreshes).toBe(1);
+      // under the cursor it takes its one cell before the frame that measures everything again
+      if (className !== "") expect(Number.parseFloat(drawn.style["letterSpacing"]!)).toBeCloseTo(7.8 - 13, 5);
+    });
+  }
+
+  it("still follows the icon font for an icon drawn beside a separator", async () => {
+    const icons = face('"Symbols Nerd Font Mono"', ICON_RANGE);
+    page = glyphPage([icons], ["\ue0b0 \uf07b"]);
+    icons.arrive();
+    await settled([icons]);
+    page.runFrames();
+    expect(page.term.refreshes).toBe(1);
   });
 });

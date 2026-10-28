@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 import type { PushDeliveryFailure, PushSubscriptionStatus } from "../../shared/protocol.ts";
-import { classifyPushHealth, failureIsNewer, readPushHealth, refreshPushHealth, resetPushHealth, runPushAction, type PushHealthInput } from "./pushHealth.ts";
+import { classifyPushHealth, dismissPushNotice, failureIsNewer, readPushHealth, refreshPushHealth, resetPushHealth, runPushAction, type PushHealthInput } from "./pushHealth.ts";
 import { refreshNotificationState } from "./notifications.ts";
 import { ensurePushSubscription, registeredPushEndpoint } from "./push.ts";
 
@@ -279,7 +279,7 @@ describe("the shared health state", () => {
     expect(readPushHealth().busy).toBe("repair");
     release.resolve();
     await repair;
-    expect(readPushHealth()).toEqual({ health: { problem: null, repair: false, transient: null }, busy: null, result: "sent" });
+    expect(readPushHealth()).toEqual({ health: { problem: null, repair: false, transient: null }, busy: null, result: "sent", dismissed: null });
     // a failing action still frees the state, as failed
     await expect(runPushAction("test", async () => { throw new Error("no"); }, () => true)).rejects.toThrow("no");
     expect(readPushHealth().busy).toBeNull();
@@ -324,6 +324,168 @@ describe("the shared health state", () => {
     // a test that found no subscription while a registration made one: its "missing" is not the new one's
     await runPushAction("test", async () => ({ result: "missing", endpoint: null }), () => true);
     expect(readPushHealth()).toMatchObject({ health: { problem: null }, result: null });
+  });
+
+  it("keeps why a repair failed while the fault it was meant to mend stands", async () => {
+    // a browser that will not make a subscription (Brave with its push service off): the repair fails every time
+    live = null;
+    await refreshPushHealth(true);
+    expect(readPushHealth().health.problem).toBe("missing");
+    await runPushAction("repair", async () => ({ result: "refused" }), () => true);
+    expect(readPushHealth()).toMatchObject({ health: { problem: "missing", repair: true }, busy: null, result: "refused" });
+    // a later look at the same fault keeps the reason, rather than asking for the repair that just failed
+    await refreshPushHealth(true);
+    expect(readPushHealth().result).toBe("refused");
+    // a test's failure is still dropped by a fault found later
+    await runPushAction("test", async () => ({ result: "failed" }), () => true);
+    expect(readPushHealth().result).toBeNull();
+    // once a subscription works, the reason has nothing left to explain
+    await runPushAction("repair", async () => ({ result: "no-worker" }), () => true);
+    expect(readPushHealth().result).toBe("no-worker");
+    live = standIn("https://push.example/9");
+    await refreshPushHealth(true);
+    expect(readPushHealth()).toMatchObject({ health: { problem: null }, result: null });
+  });
+
+  it("keeps a no-worker repair failure through looks with no health evidence", async () => {
+    live = null;
+    await refreshPushHealth(true);
+    const worker = Object.getOwnPropertyDescriptor(navigator, "serviceWorker")!;
+    Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: async () => undefined } });
+    await runPushAction("repair", async () => ({ result: "no-worker" }), () => true);
+    await refreshPushHealth(true);
+    expect(readPushHealth()).toMatchObject({ health: { problem: "missing", repair: true }, result: "no-worker" });
+    // An older server also supplies no evidence that the failed repair worked.
+    Object.defineProperty(navigator, "serviceWorker", worker);
+    live = standIn("https://push.example/9");
+    answer = async () => Response.json({ error: { code: "not_found", message: "no route" } }, { status: 404 });
+    await refreshPushHealth(true);
+    expect(readPushHealth().result).toBe("no-worker");
+    answer = async () => Response.json(status({ last_success_at: at(3) }));
+    await refreshPushHealth(true);
+    expect(readPushHealth()).toMatchObject({ health: { problem: null }, result: null });
+  });
+
+  it("ends a repair failure when another fault replaces it or alerts turn off", async () => {
+    answer = async () => Response.json(gone);
+    await refreshPushHealth(true);
+    await runPushAction("repair", async () => ({ result: "refused" }), () => true);
+    live!.options.applicationServerKey = new Uint8Array(65).fill(7).buffer as ArrayBuffer;
+    await refreshPushHealth(true);
+    expect(readPushHealth()).toMatchObject({ health: { problem: "key-mismatch" }, result: null });
+    await runPushAction("repair", async () => ({ result: "unregistered" }), () => true);
+    expect(readPushHealth().result).toBe("unregistered");
+    await refreshPushHealth(false);
+    expect(readPushHealth()).toMatchObject({ health: { problem: null }, result: null });
+  });
+
+  describe("a dismissed notice", () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "window");
+    let records: Map<string, string>;
+    let events: EventTarget;
+    let tabs = 0;
+    const openTab = async (): Promise<typeof import("./pushHealth.ts")> => {
+      const path = `./pushHealth.ts?dismissal-tab-${++tabs}`;
+      return import(path);
+    };
+    const storageEvent = (newValue: string | null, key: string | null = "ovis:push-notice-dismissed") => {
+      events.dispatchEvent(Object.assign(new Event("storage"), { key, newValue, storageArea: window.localStorage }));
+    };
+    beforeEach(() => {
+      records = new Map();
+      events = new EventTarget();
+      Object.defineProperty(globalThis, "window", { configurable: true, value: {
+        addEventListener: events.addEventListener.bind(events),
+        removeEventListener: events.removeEventListener.bind(events),
+        localStorage: { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => void records.set(key, value), removeItem: (key: string) => void records.delete(key) },
+      } });
+    });
+    afterEach(() => {
+      if (original) Object.defineProperty(globalThis, "window", original);
+      else Reflect.deleteProperty(globalThis, "window");
+    });
+
+    it("clears a persisted dismissal when another already-open tab sees recovery", async () => {
+      const other = await openTab();
+      expect(other.readPushHealth().dismissed).toBeNull();
+      live = null;
+      await refreshPushHealth(true);
+      dismissPushNotice();
+      live = standIn("https://push.example/9");
+      answer = async () => Response.json(status({ last_success_at: at(3) }));
+      await other.refreshPushHealth(true);
+      expect(records.has("ovis:push-notice-dismissed")).toBe(false);
+      live = null;
+      const later = await openTab();
+      await later.refreshPushHealth(true);
+      expect(later.readPushHealth()).toMatchObject({ health: { problem: "missing" }, dismissed: null });
+    });
+
+    it("shares dismissals and clears through storage events without replaying stale values", async () => {
+      live = null;
+      const other = await openTab();
+      await other.refreshPushHealth(true);
+      await refreshPushHealth(true);
+      dismissPushNotice();
+      storageEvent("missing");
+      expect(other.readPushHealth().dismissed).toBe("missing");
+      records.set("ovis:push-notice-dismissed", "gone");
+      // A queued event for the earlier dismissal must read the newer stored value.
+      storageEvent("missing");
+      expect(other.readPushHealth().dismissed).toBe("gone");
+      // A tab with a cached "missing" must not overwrite a newer matching dismissal.
+      live = standIn("https://push.example/9");
+      answer = async () => Response.json(gone);
+      await refreshPushHealth(true);
+      expect(records.get("ovis:push-notice-dismissed")).toBe("gone");
+      records.delete("ovis:push-notice-dismissed");
+      storageEvent(null);
+      expect(other.readPushHealth().dismissed).toBeNull();
+      records.set("ovis:push-notice-dismissed", "invalid");
+      storageEvent("invalid");
+      expect(other.readPushHealth().dismissed).toBeNull();
+      records.set("ovis:push-notice-dismissed", "missing");
+      storageEvent(null, null);
+      expect(other.readPushHealth().dismissed).toBe("missing");
+    });
+
+    it("stays closed for its fault on this device, until another fault or a look that finds alerts working", async () => {
+      // nothing to close while nothing is wrong
+      dismissPushNotice();
+      expect(readPushHealth().dismissed).toBeNull();
+      live = null;
+      await refreshPushHealth(true);
+      dismissPushNotice();
+      expect(readPushHealth()).toMatchObject({ health: { problem: "missing" }, dismissed: "missing" });
+      expect(records.get("ovis:push-notice-dismissed")).toBe("missing");
+      // the same fault again, and a look that saw nothing (no worker registered yet), keep it closed
+      await refreshPushHealth(true);
+      expect(readPushHealth().dismissed).toBe("missing");
+      const worker = Object.getOwnPropertyDescriptor(globalThis.navigator, "serviceWorker")!;
+      Object.defineProperty(globalThis.navigator, "serviceWorker", { configurable: true, value: { getRegistration: async () => undefined } });
+      await refreshPushHealth(true);
+      Object.defineProperty(globalThis.navigator, "serviceWorker", worker);
+      expect(readPushHealth()).toMatchObject({ health: { problem: null }, dismissed: "missing" });
+      // another fault is news
+      live = standIn("https://push.example/2");
+      answer = async () => Response.json(gone);
+      await refreshPushHealth(true);
+      expect(readPushHealth()).toMatchObject({ health: { problem: "gone" }, dismissed: null });
+      expect(records.has("ovis:push-notice-dismissed")).toBe(false);
+      // a look that finds alerts working ends a dismissal, so the next time they fail is news again
+      dismissPushNotice();
+      answer = async () => Response.json(status({ last_success_at: at(3) }));
+      await refreshPushHealth(true);
+      expect(readPushHealth()).toMatchObject({ health: { problem: null }, dismissed: null });
+      // and so does turning alerts off
+      answer = async () => Response.json(gone);
+      await refreshPushHealth(true);
+      dismissPushNotice();
+      expect(records.get("ovis:push-notice-dismissed")).toBe("gone");
+      resetPushHealth();
+      expect(readPushHealth().dismissed).toBeNull();
+      expect(records.has("ovis:push-notice-dismissed")).toBe(false);
+    });
   });
 
   it("keeps a known fault through an answer that proves nothing", async () => {

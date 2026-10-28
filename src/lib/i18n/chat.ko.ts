@@ -43,6 +43,7 @@ export const CHAT_KO: Record<string, string> = {
   "Show all {n} lines": "{n}줄 모두 보기",
   "Empty task": "빈 할 일",
   "Couldn't copy. Select the text and copy it manually.": "복사하지 못했습니다. 텍스트를 선택해 직접 복사하세요.",
+  "Input": "입력",
   "Output": "출력",
   "Arguments omitted (too large)": "인자가 너무 커서 생략됨",
   "thinking": "생각",

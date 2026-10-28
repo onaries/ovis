@@ -64,6 +64,8 @@ const CARD_TEXT = [
   "Comment",
   "The conversation is over its {context} context: omp compacts it first",
   "Question {n}",
+  "Approve",
+  "Deny",
 ] as const;
 
 export type CardTextKey = (typeof CARD_TEXT)[number];

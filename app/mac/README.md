@@ -52,15 +52,17 @@ cookies and drafts stay in the app's own WebKit store, apart from any browser's.
 
 | Button | What runs |
 | --- | --- |
-| **Install** | `install.sh`, downloaded fresh from https://ovis.sh/install.sh, with `OVIS_NO_OPEN=1` and an empty stdin. Then a LaunchAgent, `~/Library/LaunchAgents/sh.ovis.herdr-server.plist`, runs `herdr server` at login. |
-| Status (on open) | `herdr plugin list --json` finds the plugin, `scripts/plugin.ts status` gives its address, and `GET /api/access` gives the phone address, drawn as a QR code. |
-| **Make the phone address** | `scripts/plugin.ts phone`, the installer's Tailscale step. |
-| **Restart** / **Start** | The plugin's `stop` and `start` actions, or the LaunchAgent when herdr is not running. |
-| **Remove** | The guide's Uninstall steps (`stop`, `herdr plugin uninstall`, `tailscale serve … off`), then the LaunchAgent is disabled and deleted. |
+| **Install** | `install.sh`, downloaded fresh from https://ovis.sh/install.sh over HTTPS (following only a redirect to ovis.sh or herdrweb.dev, where it is served from), with `OVIS_NO_OPEN=1` and an empty stdin. Then a LaunchAgent, `~/Library/LaunchAgents/sh.ovis.herdr-server.plist`, runs `herdr server` at login. |
+| Status (on open) | `herdr plugin list --json` finds the plugin, `scripts/plugin.ts status` gives its address, and `GET /api/access` gives the phone address, drawn as a QR code. The app asks only a loopback address, never through a redirect, and draws the code only for Tailscale's HTTPS name of this Mac (`https://<name>.ts.net`). |
+| **Make the phone address** | `scripts/plugin.ts phone`, the installer's Tailscale step, from the code the server runs now. Settings → Updates runs newer releases from the state dir while herdr's checkout stays at the first one, so the app reads it from the processes: `plugin.ts status` names the launcher (`server/managed.ts` of this checkout), whose supervisor runs the bridge (`server/index.ts`) in the code's dir. When that cannot be read, or the dir is neither the checkout nor a `release-*` dir with its own `plugin.ts`, the checkout's runs. When it fails, the window shows its output. |
+| **Restart** / **Start** | The plugin's `stop` and `start`, or the LaunchAgent when herdr is not running. herdr set up from a terminal has no LaunchAgent: Start then runs herdr for this login only and makes no login item. |
+| **Remove** | The guide's Uninstall steps (`stop`, `herdr plugin uninstall`, `tailscale serve … off` for the HTTPS port Tailscale serves the app on, found with `tailscale serve status` when the server is down), then the LaunchAgent is disabled and deleted. A step that fails stops there and shows why; Try again goes on from it. |
 
 Why a LaunchAgent: herdr runs the app from its startup hook, and a headless `herdr server` runs
 startup hooks like the TUI's server does. A user who never opens a terminal still gets the app,
-and a later `herdr` in a terminal attaches to that same server.
+and a later `herdr` in a terminal attaches to that same server. herdr's output goes to
+`~/Library/Logs/Ovis/herdr-server.log`; past 10 MB the app moves it to `herdr-server.log.1` when it
+opens or starts herdr.
 
 What it never does:
 - It never boots out a loaded LaunchAgent, and Remove never stops herdr. That herdr may hold the
@@ -75,6 +77,7 @@ On a Mac with Xcode (the maintainer's test Mac, `ssh eamac`):
 
 ```sh
 app/mac/build.sh                     # ad hoc signed, for a local try
+(cd app/mac && swift test)           # the unit tests; no CI job runs them
 OVIS_SIGN_IDENTITY="Developer ID Application: … (5987KT43TJ)" \
 OVIS_NOTARY_KEY=~/.appstoreconnect/private_keys/AuthKey_<id>.p8 \
 OVIS_NOTARY_KEY_ID=<id> OVIS_NOTARY_ISSUER=<issuer> \

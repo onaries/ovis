@@ -98,6 +98,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path app/windows/build | Out-Null
           "skip=false" >> $env:GITHUB_OUTPUT
           $built | Out-File -Encoding ascii -NoNewline app/windows/build-source.txt
+      # which screen the app shows for what a PC has (app/windows/tests): an old or moved server, a herdr too old
+      - name: Test what the app shows for each PC
+        if: steps.source.outputs.skip != 'true' && hashFiles('app/windows/tests/Ovis.Tests.csproj') != ''
+        run: |
+          dotnet build app/windows/tests/Ovis.Tests.csproj -c Release -nologo -o "$env:RUNNER_TEMP/ovis-tests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP/ovis-tests/Ovis.Tests.exe"
+          exit $LASTEXITCODE
       - name: Build Ovis.exe and Ovis.msix
         if: steps.source.outputs.skip != 'true'
         env:
@@ -106,7 +114,8 @@ jobs:
           OVIS_MSIX_PUBLISHER: ${{ vars.OVIS_MSIX_PUBLISHER }}
           OVIS_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.OVIS_MSIX_PUBLISHER_DISPLAY_NAME }}
         run: |
-          $version = if ($env:RELEASE_TAG) { $env:RELEASE_TAG.Substring(1) } else { '0.0.0' }
+          # a pull request's build is the version it would ship as, so its update screen compares as a release's does
+          $version = if ($env:RELEASE_TAG) { $env:RELEASE_TAG.Substring(1) } else { (Get-Content -Raw package.json | ConvertFrom-Json).version -replace '-.*$', '' }
           powershell -NoProfile -ExecutionPolicy Bypass -File app/windows/build.ps1 -Version $version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Move-Item app/windows/build-source.txt app/windows/build/build-source.txt
@@ -119,6 +128,63 @@ jobs:
             app/windows/build/Ovis.msix
             app/windows/build/build-source.txt
           if-no-files-found: error
+      # The built Ovis.exe on a PC like the one the update screen was made for: a server from 0.3.45 under the old
+      # id and herdr 0.9.3 stopped, told by stand-ins for herdr and bun. It must open on Update, and the screenshot
+      # shows it. The stand-ins go where the app looks before the system PATH (Paths.RefreshPath); this runner is thrown away.
+      - name: Open Ovis.exe on an old server
+        if: github.event_name == 'pull_request'
+        run: |
+          $bin = Join-Path $env:LOCALAPPDATA 'Programs\Herdr\bin'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          $root = Join-Path $env:APPDATA 'herdr\plugins\github\devswha.herdr-web-ui-210f619d6b7b'
+          @{ id = 'cli:plugin'; result = @{ plugins = @(@{ plugin_id = 'devswha.herdr-web-ui'; plugin_root = $root; version = '0.3.45'; min_herdr_version = '0.9.0'; enabled = $true; source = @{ kind = 'github'; owner = 'devswha'; repo = 'herdr-web-ui'; requested_ref = 'v0.3.45' } }) } } |
+            ConvertTo-Json -Depth 6 -Compress | Set-Content -Encoding ascii (Join-Path $bin 'plugin-list.json')
+          # The app runs every word quoted ("herdr" "plugin" "list"), so the stand-in compares them unquoted (%~1).
+          # cmd finds it by that quoted name on PATH, where %~dp0 names the current directory, not the stand-in's:
+          # the list goes by its full path.
+          $list = Join-Path $bin 'plugin-list.json'
+          Set-Content -Encoding ascii (Join-Path $bin 'herdr.cmd') @(
+            '@echo off',
+            ('if "%~1 %~2"=="plugin list" (type "' + $list + '" & exit /b 0)'),
+            'if "%~1 %~2"=="status server" (echo {"running":false} & exit /b 0)',
+            'if "%~1"=="--version" (echo herdr 0.9.3 & exit /b 0)',
+            'exit /b 1')
+          Set-Content -Encoding ascii (Join-Path $bin 'bun.cmd') @('@echo off', 'echo down http://127.0.0.1:7317', 'echo config: none')
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
+          $app = Start-Process -PassThru app/windows/build/Ovis.exe
+          $byName = { param($name) New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::NameProperty), $name }
+          $window = $null; $update = $null
+          $deadline = (Get-Date).AddSeconds(60)
+          while (-not $update -and (Get-Date) -lt $deadline) {
+            $window = [Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children,
+              (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ProcessIdProperty), $app.Id))
+            if ($window) { $update = $window.FindFirst([Windows.Automation.TreeScope]::Descendants, (& $byName 'Update')) }
+            if (-not $update) { Start-Sleep -Milliseconds 500 }
+          }
+          $shots = Join-Path $env:RUNNER_TEMP 'ovis-qa'
+          New-Item -ItemType Directory -Force -Path $shots | Out-Null
+          if ($window) {
+            $box = $window.Current.BoundingRectangle
+            $bitmap = New-Object Drawing.Bitmap ([int]$box.Width), ([int]$box.Height)
+            $graphics = [Drawing.Graphics]::FromImage($bitmap)
+            $graphics.CopyFromScreen([int]$box.X, [int]$box.Y, 0, 0, $bitmap.Size)
+            $bitmap.Save((Join-Path $shots 'update-screen.png'), [Drawing.Imaging.ImageFormat]::Png)
+            $graphics.Dispose(); $bitmap.Dispose()
+          }
+          $texts = if ($window) { $window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } } else { @() }
+          $texts | Set-Content -Encoding utf8 (Join-Path $shots 'update-screen.txt')
+          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force $bin
+          $texts | ForEach-Object { Write-Output "  $_" }
+          if (-not $update) { Write-Output '::error::Ovis.exe did not show Update for a 0.3.45 server under the old id.'; exit 1 }
+          if (-not ($texts | Where-Object { $_ -like '*0.3.45*' })) { Write-Output '::error::The update screen does not name the 0.3.45 server.'; exit 1 }
+          if ($texts | Where-Object { $_ -in 'Start', 'Install' }) { Write-Output '::error::The update screen also offers Start or Install.'; exit 1 }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && github.event_name == 'pull_request'
+        with:
+          name: ovis-windows-qa
+          path: ${{ runner.temp }}/ovis-qa
+          if-no-files-found: ignore
   # the only job with a token that can write, and never for a pull request
   attach:
     needs: build

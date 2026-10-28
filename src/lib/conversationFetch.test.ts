@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 
-import { fetchPaneConversation, conversationAnswerBytes, peekPaneConversation } from "./api.ts";
+import { ApiError, fetchPaneConversation, conversationAnswerBytes, peekPaneConversation } from "./api.ts";
 import { ConversationRefresh } from "./conversationRefresh.ts";
 import type { ConversationResponse } from "../../shared/protocol.ts";
 
@@ -16,6 +16,36 @@ afterEach(() => {
 });
 
 describe("conversation polling", () => {
+  it("echoes displayed history, retains it on a retryable read, and forgets it on a rejected history", async () => {
+    const requests: { history: string | null; etag: string | null }[] = [];
+    let status = 200;
+    let history = "history-a";
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      requests.push({ history: new URL(url, "http://fixture").searchParams.get("history_id"), etag: new Headers(init?.headers).get("if-none-match") });
+      if (status === 304) return new Response(null, { status });
+      if (status !== 200) return Response.json({ error: { code: status === 409 ? "history_changed" : "conversation_read_pending", message: "retry" } }, { status });
+      return Response.json({ source: "copilot-transcript", history_id: history, cursor: null, turns: [] }, { headers: { etag: `"${history}"` } });
+    }) as typeof fetch;
+    const first = await fetchPaneConversation("retained-history");
+    const displayed = { history_id: first.history_id };
+    status = 503;
+    await expect(fetchPaneConversation("retained-history", "local", displayed)).rejects.toBeInstanceOf(ApiError);
+    expect(peekPaneConversation("retained-history")).toBe(first);
+    status = 304;
+    expect(await fetchPaneConversation("retained-history", "local", displayed)).toBe(first);
+    status = 409;
+    await expect(fetchPaneConversation("retained-history", "local", { ...displayed, from: "held-a" })).rejects.toBeInstanceOf(ApiError);
+    expect(peekPaneConversation("retained-history")).toBeUndefined();
+    status = 200; history = "history-b";
+    expect((await fetchPaneConversation("retained-history")).history_id).toBe(history);
+    expect(requests).toEqual([
+      { history: null, etag: null },
+      ...Array.from({ length: 2 }, () => ({ history: "history-a", etag: '"history-a"' })),
+      { history: "history-a", etag: null },
+      { history: null, etag: null },
+    ]);
+  });
+
   it("revalidates a new finish without borrowing the previous finish's ETag", async () => {
     const sent: (string | null)[] = [];
     const body: ConversationResponse = { source: "claude-transcript", turns: [] };
@@ -565,7 +595,7 @@ describe("conversation invalidation refresh", () => {
   });
 });
 
-it("a timed-out JSON body cannot replace the last conversation ETag, even when it answers late", async () => {
+it.each([200, 409])("a timed-out read cannot replace or clear the last conversation ETag after a late %s response", async (status) => {
   const originalTimer = globalThis.setTimeout;
   const clock = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay: number) => originalTimer(callback, delay === 15_000 ? 10 : delay)) as typeof setTimeout);
   try {
@@ -574,7 +604,7 @@ it("a timed-out JSON body cannot replace the last conversation ETag, even when i
     const current = await fetchPaneConversation(pane);
     let resolve!: (body: ConversationResponse) => void;
     const late = new Promise<ConversationResponse>((done) => { resolve = done; });
-    const lateResponse = Response.json({}, { headers: { etag: '"obsolete"' } });
+    const lateResponse = Response.json({}, { status, headers: { etag: '"obsolete"' } });
     lateResponse.json = () => late;
     globalThis.fetch = (async (_url: string) => lateResponse) as typeof fetch;
     await expect(fetchPaneConversation(pane)).rejects.toThrow("timed out");

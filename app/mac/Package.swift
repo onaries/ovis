@@ -6,5 +6,6 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(name: "OvisMac", path: "Sources/OvisMac"),
+        .testTarget(name: "OvisMacTests", dependencies: ["OvisMac"], path: "Tests/OvisMacTests"),
     ]
 )

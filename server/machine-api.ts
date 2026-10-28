@@ -1,12 +1,13 @@
-import type { DevicePairedEvent, MachineEvent, MachineRoster, SetupAction, SetupRequest } from "../shared/machines.ts";
+import type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, SetupAction, SetupRequest } from "../shared/machines.ts";
 import type { AgentRowTokens } from "../shared/pane-tokens.ts";
 import type { SharedPreferences } from "../shared/preferences.ts";
-import type { PanePromptResponse } from "../shared/protocol.ts";
+import type { PanePromptResponse, SessionSnapshot } from "../shared/protocol.ts";
 import type { SeenFinish } from "../shared/seen.ts";
 import { MachineManager } from "./machines.ts";
 import { canSendSecret, sameOrigin } from "./machine-security.ts";
 import { isJsonObject, jsonResponse, setRequestRoute } from "./http.ts";
 import { crossSiteFileRead } from "./file-view.ts";
+import { decidedRowTokens, reportedTokenValues, snapshotWithoutHiddenTokens, withoutHiddenTokens } from "./herdr-sidebar.ts";
 import { parseJson, readCapped, REMOTE_LIMITS, RemoteResponseInvalid, RemoteResponseTooLarge } from "./remote-json.ts";
 
 const fail = (code: string, message: string, status: number) => jsonResponse({ error: { code, message } }, status);
@@ -72,7 +73,9 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
     if (!parts.length && request.method === "GET") {
       setRequestRoute("/api/machines");
       const asked = url.searchParams.getAll("verify_source_boot");
-      if (asked.length === 0) return jsonResponse({ machines: manager.list() } satisfies MachineRoster);
+      // as the machine events tell it: without the token values herdr's rows hide (withoutHiddenTokens)
+      const shown = () => withoutHiddenTokens(herdrSidebar?.get() ?? null, manager.list());
+      if (asked.length === 0) return jsonResponse({ machines: shown() } satisfies MachineRoster);
       if (asked.length > 1 || asked[0] === "") return fail("invalid_query", "verify_source_boot names one PC", 400);
       const machineId = asked[0]!;
       const proof = await manager.verifySourceBoot(machineId, request.signal);
@@ -83,7 +86,7 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
         if (proof.refused === "interval") response.headers.set("retry-after", "1");
         return response;
       }
-      return jsonResponse({ machines: manager.list(), verified_source_boot: { machine_id: machineId, boot_id: proof.boot_id } } satisfies MachineRoster, 200, { "cache-control": "no-store" });
+      return jsonResponse({ machines: shown(), verified_source_boot: { machine_id: machineId, boot_id: proof.boot_id } } satisfies MachineRoster, 200, { "cache-control": "no-store" });
     }
     if (parts[0] === "events" && parts.length === 1 && request.method === "GET") {
       setRequestRoute("/api/machines/events");
@@ -107,17 +110,47 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
           unwatchDevice = onRevoke?.(close);
           if (closed) return;
           const send = (text: string) => { if (closed) return; if ((controller.desiredSize ?? 0) < -4) { close(); return; } try { controller.enqueue(encoder.encode(text)); } catch { close(); } };
-          stop = manager.subscribe((event) => send(`data: ${JSON.stringify(event)}\n\n`));
+          // herdr's sidebar rows are this PC's config, as herdr's own sidebar takes the client's for every PC.
+          // A roster leaves without the values their hide rules hide (withoutHiddenTokens), so no browser holds one;
+          // the rules' decisions (decidedRowTokens) go first, in the same write, showing the values of this roster and
+          // of the one the browser holds until it lands, and hiding any other where a rule hides, as a value kept from
+          // a roster told under other rows. New rows are told with the roster again under them.
+          // Read before listening: a change this read finds is told to the browsers already listening, and to this one once.
+          let rows = herdrSidebar?.get() ?? null;
+          let reported = new Map<string, Set<string>>();
+          let roster: Machine[] | undefined;
+          let toldSidebar: string | undefined;
+          const sidebarFrame = (...values: Map<string, Set<string>>[]): string => {
+            if (!herdrSidebar) return "";
+            const told = JSON.stringify({ type: "herdr-sidebar", agents: decidedRowTokens(rows, ...values) } satisfies MachineEvent);
+            if (told === toldSidebar) return "";
+            toldSidebar = told;
+            return `data: ${told}\n\n`;
+          };
+          const sendSidebar = () => { const frame = sidebarFrame(reported); if (frame) send(frame); };
+          const sendRoster = (machines: Machine[]) => {
+            roster = machines;
+            const shown = withoutHiddenTokens(rows, machines);
+            const incoming = reportedTokenValues(shown);
+            const frame = sidebarFrame(reported, incoming);
+            reported = incoming;
+            send(`${frame}data: ${JSON.stringify({ type: "machines", machines: shown } satisfies MachineEvent)}\n\n`);
+          };
+          stop = manager.subscribe((event) => {
+            if (event.type === "machines") { sendRoster(event.machines); return; }
+            // a PC's own snapshot, relayed as it came: told as the roster is, without what the rows hide
+            const told = event.type === "machine-message" && event.message.type === "snapshot"
+              ? { ...event, message: { ...event.message, snapshot: snapshotWithoutHiddenTokens(rows, event.message.snapshot) } }
+              : event;
+            send(`data: ${JSON.stringify(told)}\n\n`);
+          });
           // the shared preferences ride the same stream, one connection per browser; the document
           // opens it, so a page that reconnects (or whose GET lost a race) holds the latest
           const sendPreferences = (shared: SharedPreferences) => send(`data: ${JSON.stringify({ type: "preferences", preferences: shared } satisfies MachineEvent)}\n\n`);
           stopPreferences = preferences?.subscribe(sendPreferences);
           if (preferences) sendPreferences(preferences.get());
-          // herdr's sidebar rows are this PC's config, as herdr's own sidebar takes the client's for every PC
-          const sendSidebar = (agents: AgentRowTokens | null) => send(`data: ${JSON.stringify({ type: "herdr-sidebar", agents } satisfies MachineEvent)}\n\n`);
-          // read before listening: a change this read finds is told to the browsers already listening, and to this one once
-          if (herdrSidebar) sendSidebar(herdrSidebar.get());
-          stopSidebar = herdrSidebar?.subscribe(sendSidebar);
+          sendSidebar();
+          stopSidebar = herdrSidebar?.subscribe((next) => { rows = next; if (roster) sendRoster(roster); else sendSidebar(); });
           const sendSeen = (finishes: SeenFinish[]) => send(`data: ${JSON.stringify({ type: "seen", finishes } satisfies MachineEvent)}\n\n`);
           if (seen) sendSeen(seen.list());
           stopSeen = seen?.subscribe((finish) => sendSeen([finish]));
@@ -229,6 +262,13 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
           }
           if (answer.outcomes) answer.outcomes = answer.outcomes.map(({ preview: _preview, result_text: _resultText, ...outcome }) => outcome);
           body = new TextEncoder().encode(JSON.stringify(answer));
+        }
+        // a PC's session as the roster tells it, without the token values this server's rows hide (#2160)
+        // any method the PC answers with a body (its route takes them all); a HEAD's is empty
+        if (path === "session" && response.ok && body && body.byteLength > 0) {
+          const answer = parseJson<{ snapshot?: SessionSnapshot }>(body);
+          const shown = answer.snapshot && snapshotWithoutHiddenTokens(herdrSidebar?.get() ?? null, answer.snapshot);
+          if (shown && shown !== answer.snapshot) body = new TextEncoder().encode(JSON.stringify({ ...answer, snapshot: shown }));
         }
         return new Response(body, { status: response.status, headers: {
           "content-type": response.headers.get("content-type") ?? "application/json", "cache-control": "no-store", ...(etag ? { etag } : {}),

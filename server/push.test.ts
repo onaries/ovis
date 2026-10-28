@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import webpush from "web-push";
 
 import { paneAlertsMuted, type AlertPrefs } from "../shared/notify-policy.ts";
 import { paneStorageId } from "../shared/machines.ts";
@@ -345,21 +346,103 @@ describe("push delivery", () => {
     expect((await post("/api/push/subscribe", { subscription: other }))?.status).toBe(204);
   });
 
-  it("forgets a retired endpoint after its time to live and ignores a malformed file", async () => {
+  // regression (fails on main): 30 days after the retirement the mark expired, and a watch device registered the owner's endpoint (#2012)
+  it("never hands a retired endpoint to another device, however long ago it was retired, and ignores a malformed file", async () => {
     let clock = 1_000_000;
     const push = createPushService({ loopbackHttp: true, stateDir, now: () => clock });
-    push.subscribe(fake.subscription);
+    push.subscribe(fake.subscription, undefined, "owner");
     fake.answerWith(410);
-    await push.sendTest(fake.subscription.endpoint);
-    expect(push.retired(fake.subscription.endpoint)).toBe(true);
-    // control: inside the time to live it is still remembered (read first: a load past it rewrites the file without it)
-    expect(createPushService({ loopbackHttp: true, stateDir, now: () => 1_000_000 + 1000 }).retired(fake.subscription.endpoint)).toBe(true);
+    expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: 410, gone: true });
     clock += 31 * 24 * 60 * 60 * 1000;
-    expect(createPushService({ loopbackHttp: true, stateDir, now: () => clock }).retired(fake.subscription.endpoint)).toBe(false);
-    expect(readFileSync(join(stateDir, "push-retired.json"), "utf8")).not.toContain("hash");
+    // the watch device holds the endpoint and keys of its own
+    const theirs = { endpoint: fake.subscription.endpoint, keys: { p256dh: Buffer.alloc(65, 4).toString("base64url"), auth: Buffer.alloc(16, 7).toString("base64url") } };
+    const subscribeAs = (service: PushService) => handlePushRequest(new Request("http://localhost/api/push/subscribe", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ subscription: theirs }),
+    }), "/api/push/subscribe", service, "watch");
+    for (const service of [push, createPushService({ loopbackHttp: true, stateDir, now: () => clock })]) {
+      const response = (await subscribeAs(service))!;
+      expect(response.status).toBe(410);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe("subscription_gone");
+    }
+    expect(JSON.parse(readFileSync(join(stateDir, "push-subscriptions.json"), "utf8"))).toEqual([]);
+    expect(readFileSync(join(stateDir, "push-retired.json"), "utf8")).toContain("owner");
     // a malformed file is ignored, never fatal
     writeFileSync(join(stateDir, "push-retired.json"), "not json");
     expect(createPushService({ loopbackHttp: true, stateDir }).retired(fake.subscription.endpoint)).toBe(false);
+  });
+
+  // a mark written before #2012 is the hash of the spelling handed over, and so is the history
+  it("keeps refusing, and forgets on goodbye, an endpoint retired under the spelling it was handed over", async () => {
+    const legacy = `${fake.subscription.endpoint}#legacy`;
+    const raw = createHash("sha256").update(legacy).digest("base64url");
+    writeFileSync(join(stateDir, "push-retired.json"), JSON.stringify([{ hash: raw, at: 1, owner: "owner" }]));
+    writeFileSync(join(stateDir, "push-delivery.json"), JSON.stringify([{ hash: raw, owner: "owner", keys: "k", success_at: null, failure_at: Date.now(), failure: "gone", at: Date.now() }]));
+    const push = createPushService({ loopbackHttp: true, stateDir });
+    const request = (method: string, path: string, body: unknown) => handlePushRequest(new Request(`http://localhost${path}`, {
+      method, headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    }), path, push, "watch");
+    expect((await request("POST", "/api/push/subscribe", { subscription: { ...fake.subscription, endpoint: legacy } }))?.status).toBe(410);
+    expect((await request("POST", "/api/push/test", { endpoint: legacy }))?.status).toBe(410);
+    expect(existsSync(join(stateDir, "push-subscriptions.json"))).toBe(false);
+    expect((await request("DELETE", "/api/push/subscribe", { endpoint: legacy }))?.status).toBe(204);
+    expect(JSON.parse(readFileSync(join(stateDir, "push-delivery.json"), "utf8"))).toEqual([]);
+  });
+
+  // regression: a subscription file that cannot be written kept the retired subscription, and the next push went to it again
+  it("stops pushing to a retired subscription when the subscription file cannot be written", async () => {
+    const push = createPushService({ loopbackHttp: true, stateDir });
+    push.subscribe(fake.subscription, undefined, null);
+    push.publicKey(); // the key pair is on disk before the disk fills
+    fake.answerWith(410);
+    const rename = spyOn(privateStateFs, "renameSync").mockImplementation(() => { throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }); });
+    const quiet = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: 410, gone: true });
+      expect(await push.sendTest(fake.subscription.endpoint)).toBeNull();
+      expect(fake.received).toHaveLength(0);
+      expect(quiet.mock.calls.some(([line]) => String(line).includes("push-subscriptions.json"))).toBe(true);
+    } finally { rename.mockRestore(); quiet.mockRestore(); }
+    // a restart, with the file still listing it, does not bring it back: it is retired
+    expect(await createPushService({ loopbackHttp: true, stateDir }).sendTest(fake.subscription.endpoint)).toBeNull();
+    expect(fake.received).toHaveLength(0);
+    // the device's goodbye, though nothing of it is left in memory, writes the file without it
+    push.unsubscribe(fake.subscription.endpoint);
+    expect(JSON.parse(readFileSync(join(stateDir, "push-subscriptions.json"), "utf8"))).toEqual([]);
+    expect(await createPushService({ loopbackHttp: true, stateDir }).sendTest(fake.subscription.endpoint)).toBeNull();
+    // the next write that succeeds leaves it off disk too
+    push.subscribe({ ...fake.subscription, endpoint: `${fake.subscription.endpoint}-other` }, undefined, null);
+    expect((JSON.parse(readFileSync(join(stateDir, "push-subscriptions.json"), "utf8")) as { endpoint: string }[]).map((entry) => entry.endpoint)).toEqual([`${fake.subscription.endpoint}-other`]);
+  });
+
+  // regression: storing endpoints normalized let a key pair push-keys.json kept for another spelling sign for this one
+  it("keeps a subscription and the key pair it was made for under the spelling it was handed over", async () => {
+    const { endpoint, keys } = fake.subscription;
+    expect(parseSubscription({ endpoint: `${endpoint}#x`, keys }, { loopbackHttp: true })?.endpoint).toBe(`${endpoint}#x`);
+    // a foreign key pair left for an old spelling of this endpoint, no longer subscribed
+    const stale = webpush.generateVAPIDKeys();
+    writeFileSync(join(stateDir, "push-keys.json"), JSON.stringify({ keys: [{ ...stale, endpoints: [`${endpoint}#old-import`] }] }));
+    const push = subscribed();
+    expect(await push.sendTest(endpoint)).toEqual({ ok: true });
+    expect(fake.received[0]).toMatchObject({ vapidKey: push.publicKey(), vapidValid: true });
+  });
+
+  // regression (fails on main): a fragment, or any other spelling of the same URL, got past the retired check (#2012)
+  it("refuses another spelling of a retired endpoint as that endpoint", async () => {
+    const push = subscribed();
+    fake.answerWith(410);
+    expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: 410, gone: true });
+    const post = (path: string, body: unknown) => handlePushRequest(new Request(`http://localhost${path}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    }), path, push, "watch");
+    const url = new URL(fake.subscription.endpoint);
+    const variants = [`${fake.subscription.endpoint}#attacker`, `HTTP://${url.host}/push/x/..${url.pathname.slice("/push".length)}`];
+    for (const endpoint of variants) {
+      const again = (await post("/api/push/subscribe", { subscription: { ...fake.subscription, endpoint } }))!;
+      expect(again.status).toBe(410);
+      const tested = (await post("/api/push/test", { endpoint }))!;
+      expect(tested.status).toBe(410);
+    }
+    expect(JSON.parse(readFileSync(join(stateDir, "push-subscriptions.json"), "utf8"))).toEqual([]);
   });
 
   it("keeps a device through a failure that is not a goodbye", async () => {
@@ -746,7 +829,7 @@ describe("push delivery health (#1039)", () => {
     const response = (await statusRequest(restarted, fake.subscription, null))!;
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(expected);
-    // forgotten after its time to live, like the retired endpoint
+    // forgotten after its time to live (the retired mark is not: #2012)
     expect(createPushService({ loopbackHttp: true, stateDir, now: () => clock + 31 * 24 * 60 * 60 * 1000 }).status(fake.subscription, null)).toBeNull();
     // an explicit unsubscribe removes it
     restarted.unsubscribe(fake.subscription.endpoint);
@@ -754,7 +837,7 @@ describe("push delivery health (#1039)", () => {
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual([]);
   });
 
-  it("expires on the running service; a goodbye takes the history, and only a revocation also the retired mark", async () => {
+  it("expires the history on the running service, never the retired mark; a goodbye takes the history, and only a revocation also the mark", async () => {
     let clock = 1_700_000_000_000;
     const push = createPushService({ loopbackHttp: true, stateDir, now: () => clock });
     const endpoint = fake.subscription.endpoint;
@@ -765,13 +848,13 @@ describe("push delivery health (#1039)", () => {
       expect(push.status(fake.subscription, owner)?.last_failure).toBe("gone");
       expect(push.retired(endpoint)).toBe(true);
     };
-    // 31 days on, without a restart: the history and the retired mark are gone, on disk too
+    // 31 days on, without a restart: the history is gone, on disk too, and the retired mark stays (#2012)
     await retire(null);
     clock += 31 * 24 * 60 * 60 * 1000;
     expect(push.status(fake.subscription, null)).toBeNull();
-    expect(push.retired(endpoint)).toBe(false);
+    expect(push.retired(endpoint)).toBe(true);
     expect(JSON.parse(readFileSync(join(stateDir, "push-delivery.json"), "utf8"))).toEqual([]);
-    expect(JSON.parse(readFileSync(join(stateDir, "push-retired.json"), "utf8"))).toEqual([]);
+    expect(JSON.parse(readFileSync(join(stateDir, "push-retired.json"), "utf8"))).toHaveLength(1);
     // an explicit unsubscribe forgets the history, and keeps the mark: it proves neither owner nor keys
     await retire(null);
     push.unsubscribe(endpoint);
@@ -837,6 +920,59 @@ describe("push delivery health (#1039)", () => {
     third.revokeDevice("device-b");
     expect(third.retired(endpoint)).toBe(true);
     expect(createPushService({ loopbackHttp: true, stateDir, now: () => clock }).retired(endpoint)).toBe(true);
+  });
+
+  // regression: two owners' spellings of one endpoint share its mark, and the last retirement took it for its owner alone
+  it("keeps a mark two owners' spellings were retired under through either owner's revocation", async () => {
+    const push = createPushService({ loopbackHttp: true, stateDir });
+    const endpoint = fake.subscription.endpoint;
+    push.subscribe(fake.subscription, undefined, "device-a");
+    push.subscribe({ ...fake.subscription, endpoint: `${endpoint}#b` }, undefined, "device-b");
+    fake.answerWith(410);
+    expect(await push.sendTest(endpoint)).toEqual({ ok: false, status: 410, gone: true });
+    expect(await push.sendTest(`${endpoint}#b`)).toEqual({ ok: false, status: 410, gone: true });
+    push.revokeDevice("device-b");
+    expect(push.retired(endpoint)).toBe(true);
+    push.revokeDevice("device-a");
+    expect(push.retired(endpoint)).toBe(true);
+    expect(createPushService({ loopbackHttp: true, stateDir }).retired(endpoint)).toBe(true);
+  });
+
+  // regression: a mark a revocation removed in memory only came back at a restart and dropped the endpoint subscribed again
+  it("writes the marks a revocation removed before the endpoint is subscribed again", async () => {
+    const push = createPushService({ loopbackHttp: true, stateDir });
+    push.subscribe(fake.subscription, undefined, "device-a");
+    fake.answerWith(410);
+    expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: 410, gone: true });
+    // the list cannot be replaced for a while: a directory stands at its temporary path
+    const blocker = join(stateDir, `push-retired.json.${process.pid}.tmp`);
+    mkdirSync(blocker);
+    const quiet = spyOn(console, "error").mockImplementation(() => undefined);
+    try { push.revokeDevice("device-a"); } finally { quiet.mockRestore(); }
+    rmSync(blocker, { recursive: true });
+    const response = await handlePushRequest(new Request("http://localhost/api/push/subscribe", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ subscription: fake.subscription }),
+    }), "/api/push/subscribe", push, "device-b");
+    expect(response?.status).toBe(204);
+    fake.answerWith(201);
+    expect(await createPushService({ loopbackHttp: true, stateDir }).sendTest(fake.subscription.endpoint)).toEqual({ ok: true });
+  });
+
+  it("revocation takes the device's history and marks when the retired list cannot be written", async () => {
+    const push = createPushService({ loopbackHttp: true, stateDir });
+    push.subscribe(fake.subscription, undefined, "device-a");
+    fake.answerWith(410);
+    expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: 410, gone: true });
+    // the list cannot be replaced any more: a directory stands at its path
+    rmSync(join(stateDir, "push-retired.json"));
+    mkdirSync(join(stateDir, "push-retired.json"));
+    const quiet = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      push.revokeDevice("device-a");
+      expect(push.retired(fake.subscription.endpoint)).toBe(false);
+      expect(push.status(fake.subscription, "device-a")).toBeNull();
+      expect(JSON.parse(readFileSync(join(stateDir, "push-delivery.json"), "utf8"))).toEqual([]);
+    } finally { quiet.mockRestore(); }
   });
 
   it("foreign and unknown health are indistinguishable", async () => {
@@ -977,24 +1113,24 @@ describe("push delivery health (#1039)", () => {
     expect(hashes("push-retired.json")).toEqual(["h-new"]);
   });
 
-  it("answers a subscribe when the retired list's expiry cannot be written", async () => {
-    let clock = 1_700_000_000_000;
-    const push = createPushService({ loopbackHttp: true, stateDir, now: () => clock });
-    push.subscribe(fake.subscription, undefined, null);
-    fake.answerWith(410);
-    expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: 410, gone: true });
-    // the list cannot be replaced any more: a directory stands at its path
-    rmSync(join(stateDir, "push-retired.json"));
+  // regression (fails on main): the failed write threw before the subscription was removed, and the next push went to it again (#2013)
+  it("forgets a retired subscription when the retired list cannot be written, and keeps the mark in memory", async () => {
+    // the list cannot be written: a directory stands at its path
     mkdirSync(join(stateDir, "push-retired.json"));
-    clock += 31 * 24 * 60 * 60 * 1000;
     const quiet = spyOn(console, "error").mockImplementation(() => undefined);
     try {
-      // the expired mark is dropped in memory, and the subscribe that reads the list is answered
+      const push = createPushService({ loopbackHttp: true, stateDir });
+      push.subscribe(fake.subscription, undefined, null);
+      fake.answerWith(410);
+      expect(await push.sendTest(fake.subscription.endpoint)).toEqual({ ok: false, status: 410, gone: true });
+      expect(JSON.parse(readFileSync(join(stateDir, "push-subscriptions.json"), "utf8"))).toEqual([]);
+      expect(await push.sendTest(fake.subscription.endpoint)).toBeNull();
+      expect(push.retired(fake.subscription.endpoint)).toBe(true);
+      // the browser handing it over again is still told to subscribe anew
       const response = await handlePushRequest(new Request("http://localhost/api/push/subscribe", {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ subscription: fake.subscription }),
       }), "/api/push/subscribe", push, null);
-      expect(response?.status).toBe(204);
-      expect(push.retired(fake.subscription.endpoint)).toBe(false);
+      expect(response?.status).toBe(410);
       expect(quiet.mock.calls.some(([line]) => String(line).includes("push-retired.json"))).toBe(true);
     } finally { quiet.mockRestore(); }
   });

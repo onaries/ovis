@@ -385,6 +385,38 @@ it.skipIf(!NATIVE)("follows the current PID record without retaining a previous 
   } finally { writeFileSync(path, previous); }
 });
 
+it.skipIf(!NATIVE)("follows a /branch the PID record names while Herdr's report stays on the session it came from (#2020)", async () => {
+  const BRANCH = "09512ed9-5df9-4105-954e-6597a3119b75";
+  const ELSEWHERE = "6d1c2b3a-4f5e-4a7b-8c9d-0e1f2a3b4c5d";
+  const branch = (id: string, from: string) => writeFileSync(join(project, `${id}.jsonl`), [
+    { type: "user", message: { content: `Prompt ${from}` }, sessionId: id, forkedFrom: { sessionId: from, messageUuid: "e92def5e-231f-4b62-9766-8c9c44012d9b" } },
+    { type: "assistant", message: { content: [{ type: "text", text: `Answer ${from}` }] }, sessionId: id, forkedFrom: { sessionId: from, messageUuid: "a7bd68ec-e176-4943-a826-289ef8d3d01c" } },
+    { type: "user", message: { content: "Prompt after the branch" }, sessionId: id },
+    { type: "assistant", message: { content: [{ type: "text", text: `Answer in ${id}` }] }, sessionId: id },
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  branch(BRANCH, FIRST);
+  branch(ELSEWHERE, SECOND);
+  const hooked = await pane(FIRST);
+  await herdrRpc("pane.report_agent_session", {
+    pane_id: hooked.pane, source: "herdr:claude", agent: "claude", seq: 1, agent_session_id: FIRST, session_start_source: "startup",
+  });
+  const path = join(root, ".claude", "sessions", `${hooked.pid}.json`);
+  const record = JSON.parse(readFileSync(path, "utf8"));
+  try {
+    expect((await read(hooked.pane)).turns.at(-1)?.parts[0]).toMatchObject({ text: `Answer ${FIRST}` });
+    // Claude rewrites its PID record for the branch; Herdr's report stays on FIRST
+    writeFileSync(path, JSON.stringify({ ...record, sessionId: BRANCH }));
+    expect((await read(hooked.pane)).turns.at(-1)?.parts[0]).toMatchObject({ text: `Answer in ${BRANCH}` });
+    // a session that is no branch of the reported one keeps the report's
+    writeFileSync(path, JSON.stringify({ ...record, sessionId: ELSEWHERE }));
+    expect((await read(hooked.pane)).turns.at(-1)?.parts[0]).toMatchObject({ text: `Answer ${FIRST}` });
+  } finally {
+    writeFileSync(path, JSON.stringify(record));
+    rmSync(join(project, `${BRANCH}.jsonl`));
+    rmSync(join(project, `${ELSEWHERE}.jsonl`));
+  }
+});
+
 it.skipIf(!NATIVE)("refuses a reused PID record rather than selecting another same-cwd session", async () => {
   const path = join(root, ".claude", "sessions", `${first.pid}.json`);
   const previous = readFileSync(path, "utf8");

@@ -62,6 +62,7 @@ try {
   let compacting = false;
   await page.route("**/api/**/prompt?*", route => route.fulfill({ json: { prompt: null, suggestion: null, compacting } }));
   let unavailable = false, terminalFails = false;
+  let readPending = false, gapPending = false;
   let holdTerminal = false;
   let terminalText = "Fictional terminal fallback";
   /** product panes ("machine/pane") whose conversation requests wait for the script, and those that fail */
@@ -107,6 +108,19 @@ try {
       await route.fulfill({ json: { source: "scrollback", turns: [] } });
       return;
     }
+    if (readPending || (gapPending && url.searchParams.has("before"))) {
+      const displayed = url.searchParams.get("history_id");
+      if (displayed !== null && displayed !== epoch) {
+        await route.fulfill({ status: 409, json: { error: { code: "history_changed", message: "reload history" } } });
+        return;
+      }
+      if (displayed === null && !url.searchParams.has("before") && !url.searchParams.has("from")) {
+        await route.fulfill({ json: { source: "scrollback", turns: [] } });
+        return;
+      }
+      await route.fulfill({ status: 503, json: { error: { code: "conversation_read_pending", message: "The conversation could not be read; try again shortly." } } });
+      return;
+    }
     const captured = epoch;
     const cursor = url.searchParams.get("before") ?? url.searchParams.get("from");
     if (cursor && !cursor.startsWith(`${epoch}:`)) {
@@ -116,7 +130,7 @@ try {
     if (url.searchParams.has("before")) {
       routeEvents.dispatchEvent(new Event("older"));
       if (holdOlder) await new Promise<void>((resolve) => releases.push(resolve));
-      await route.fulfill({ json: { source: "omp-transcript", history_id: captured, cursor: null, turns: [user("old earlier")] } });
+      await route.fulfill({ json: { source: "omp-transcript", history_id: captured, cursor: url.searchParams.get("since"), turns: [user("old earlier")] } });
     } else {
       const tool = { role: "assistant", ts: "reused", parts: [{ kind: "tool", name: "Read", summary: "same", input: "{}", output: "preview", output_ref: "reused", output_size: 9000 }] };
       await route.fulfill({ json: { source: "omp-transcript", history_id: epoch, cursor: before, turns: newest ? [user(newest), tool] : [] } });
@@ -139,6 +153,44 @@ try {
   await compactionLine.waitFor({ state: "detached" });
   console.log("PASS live compaction appears and clears without a new transcript turn");
   const refresh = () => page.evaluate(() => window.qa.refresh());
+  await page.locator(".work-block-head").click();
+  await page.locator(".work-row-head").click();
+  const retainedTurn = await page.getByText("old newest", { exact: true }).elementHandle();
+  for (const gap of [false, true]) {
+    readPending = !gap; gapPending = gap;
+    if (gap) before = "one:200";
+    const failed = page.waitForResponse((response) => response.url().includes("/conversation?") && response.status() === 503);
+    await refresh();
+    await failed;
+    await page.getByText("Couldn't load the conversation", { exact: true }).waitFor();
+    assert.equal(await retainedTurn!.evaluate((node) => node.isConnected), true, "failed newest/gap reads keep the same mounted turn");
+    assert.equal(await page.locator(".work-block-head").getAttribute("aria-expanded"), "true", "failed reads keep opened work");
+    assert.equal(await page.locator(".work-row-head").getAttribute("aria-expanded"), "true", "failed reads keep opened tool details");
+    assert.equal(await page.locator(".chat-terminal-fallback").count(), 0, "a retryable read does not replace the conversation");
+    readPending = false; gapPending = false;
+    await refresh();
+    await page.getByText("Couldn't load the conversation", { exact: true }).waitFor({ state: "hidden" });
+    assert.equal(await page.getByText("old newest", { exact: true }).isVisible(), true);
+  }
+  // A session switched before an unpaged read fails: retrying it must not retain the old session.
+  await page.evaluate(() => window.qa.chat("switched-before-read"));
+  await page.waitForFunction(() => window.qa.answered.includes("local/switched-before-read"));
+  await page.getByText("old newest", { exact: true }).waitFor();
+  const switchedTurn = await page.getByText("old newest", { exact: true }).elementHandle();
+  epoch = "different-session"; before = null; readPending = true;
+  const rejectedHistory = page.waitForResponse((response) => response.url().includes("/conversation?") && response.status() === 409);
+  const freshFallback = page.waitForResponse((response) => response.url().includes("/conversation?") && !new URL(response.url()).searchParams.has("history_id") && response.status() === 200);
+  await refresh();
+  await rejectedHistory; await freshFallback;
+  await page.getByText("old newest", { exact: true }).waitFor({ state: "hidden" });
+  assert.equal(await switchedTurn!.evaluate((node) => node.isConnected), false, "an unpaged history mismatch clears old turns even when its fresh retry fails");
+  assert.equal(await page.getByText("old newest", { exact: true }).count(), 0);
+  readPending = false;
+  // Restore the original single-page fixture before the existing history-change cases.
+  epoch = "one-reset"; before = "one-reset:100";
+  await refresh();
+  await page.getByText("old newest", { exact: true }).waitFor();
+  console.log("PASS newest and gap read failures retain mounted messages, opened work and tool details, then recover");
   // A newly exposed older page belongs to a new fixture history, not a sliding newest cursor.
   await page.setViewportSize({ width: 1280, height: 800 });
   epoch = "one-paged"; before = "one-paged:100";

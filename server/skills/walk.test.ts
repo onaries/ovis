@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneCommands } from "../commands.ts";
-import { userHome, ancestorsToRepoRoot, createWalkBudget, customCommands, customCommandSteps, readFrontmatter, walkSkills, walkSkillSteps } from "./walk.ts";
+import { userHome } from "../user-home.ts";
+import { ancestorsToRepoRoot, createWalkBudget, customCommands, customCommandSteps, readFrontmatter, walkSkills, walkSkillSteps } from "./walk.ts";
 import { source as claude } from "./claude.ts";
 import { source as devin } from "./devin.ts";
 import type { WalkRules } from "./walk.ts";
@@ -302,9 +303,11 @@ describe("repository ancestors", () => {
     expect(userHome({ HOME: "", USERPROFILE: "C:\\Users\\user" }, "win32")).toBe("C:\\Users\\user");
     expect(userHome({}, "win32")).toBe(homedir());
     expect(userHome({}, "linux")).toBe("");
+    // USERPROFILE is Windows' alone: a missing HOME elsewhere is not filled from it
+    expect(userHome({ HOME: "", USERPROFILE: "/profile" }, "linux")).toBe("");
   });
 
-  it("falls back to USERPROFILE when HOME is unset", () => {
+  it("falls back to USERPROFILE when HOME is unset on Windows", () => {
     const home = temp();
     delete process.env.HOME;
     process.env.USERPROFILE = home;
@@ -312,8 +315,28 @@ describe("repository ancestors", () => {
     const cwd = join(repo, "sub");
     mkdirSync(cwd, { recursive: true });
     mkdirSync(join(repo, ".git"));
-    expect(ancestorsToRepoRoot(cwd)).toEqual([cwd, repo]);
-    expect(ancestorsToRepoRoot(home)).toEqual([]);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      expect(ancestorsToRepoRoot(cwd)).toEqual([cwd, repo]);
+      expect(ancestorsToRepoRoot(home)).toEqual([]);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("meets a home in another letter case on Windows, from below it and from above it", () => {
+    const root = temp();
+    mkdirSync(join(root, ".git"));
+    const home = join(root, "Home");
+    const cwd = join(home, "work");
+    mkdirSync(cwd, { recursive: true });
+    expect(ancestorsToRepoRoot(cwd, home.toUpperCase(), "win32")).toEqual([cwd]);
+    expect(ancestorsToRepoRoot(root, home.toUpperCase(), "win32")).toEqual([]);
+    expect(ancestorsToRepoRoot(root.toUpperCase(), home, "win32")).toEqual([]);
+    // elsewhere letter case tells folders apart
+    expect(ancestorsToRepoRoot(cwd, home.toUpperCase(), "linux")).toEqual([cwd, home, root]);
+    expect(ancestorsToRepoRoot(root, home.toUpperCase(), "linux")).toEqual([root]);
   });
 
 });

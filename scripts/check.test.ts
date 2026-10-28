@@ -1503,4 +1503,46 @@ describe("check CLI", () => {
     expect(missingBuildReport.verification.status).toBe("unknown");
     expect(missingBuildReport.errors).toContain("built dist identity unavailable; cannot verify the built artifact");
   }, 180_000);
+
+  it.skipIf(process.platform !== "linux" || process.arch !== "x64")("says on the console why a run whose steps all passed failed when the source changed mid-run", () => {
+    const cwd = scratch();
+    git(cwd, "init", "-q");
+    git(cwd, "config", "user.name", "check test");
+    git(cwd, "config", "user.email", "check@example.invalid");
+    writeFileSync(join(cwd, ".gitignore"), "node_modules/\n.check/\ndist/\n");
+    writeFileSync(join(cwd, "tracked.txt"), "before");
+    const noOp = 'node -e "process.exit(0)" --';
+    writeFileSync(join(cwd, "package.json"), JSON.stringify({
+      name: "check-cli-fixture",
+      scripts: {
+        "generate:types": noOp,
+        "generate:themes": noOp,
+        typecheck: noOp,
+        build: 'node -e "const fs=require(\'node:fs\');fs.mkdirSync(\'dist\',{recursive:true});fs.writeFileSync(\'dist/index.html\',\'fixture\')"',
+        // the unit tests pass, but edit a tracked file while the check runs
+        "test:unit": 'node -e "require(\'node:fs\').writeFileSync(\'tracked.txt\',\'after\')"',
+      },
+    }));
+    git(cwd, "add", ".gitignore", "package.json", "tracked.txt");
+    git(cwd, "commit", "-qm", "fixture");
+    const actionlintDirectory = join(cwd, "node_modules", ".cache", "actionlint-1.7.12");
+    mkdirSync(actionlintDirectory, { recursive: true });
+    writeFileSync(join(actionlintDirectory, "actionlint"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(actionlintDirectory, "actionlint"), 0o755);
+    // an admission port of its own: on the shared one this run would wait behind every real run
+    const env: Record<string, string | undefined> = { ...process.env, CHECK_DIR: ".check", CHECK_LOCK_PORT: String(freePortRange(MAX_RUNS_LIMIT)) };
+    for (const name of ["CHECK_REPORT", "GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH"]) delete env[name];
+
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL("./check.ts", import.meta.url)), "fast"], { cwd, env, encoding: "utf8", timeout: 30_000 });
+
+    expect(result.status).toBe(1);
+    const reportPath = join(cwd, ".check", "report.json");
+    const report = JSON.parse(readFileSync(reportPath, "utf8")) as { steps: { status: string }[]; errors: string[] };
+    expect(report.steps.every((step) => step.status === "success")).toBe(true);
+    expect(report.errors).toEqual(["source changed during the check; verification was invalidated"]);
+    // the start line names the report on stdout; the failure's reason and the report come last, on stderr
+    const said = result.stderr.split("\n");
+    expect(said).toContain("check: source changed during the check; verification was invalidated");
+    expect(said).toContain(`check: report ${reportPath}`);
+  }, 60_000);
 });
