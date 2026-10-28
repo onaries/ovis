@@ -71,6 +71,29 @@ it("names dynamic shell and patch tools without claiming their generated command
   if (part?.kind !== "tool") throw new Error("Missing tool row");
   expect(workRowLabel(part, part.summary)).toEqual({ narration: true, verb: null });
 });
+it("names literal strings mapped to the command property, including shorthand", () => {
+  const commands = [
+    'ssh -x -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 macbook \'mount | grep -i -E "nucbox|macfuse|sshfs"\' </dev/null',
+    'ssh -x -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 macbook \'stat -f "%N %HT %Su" /Users/safemotion/nucbox-projects\' </dev/null',
+  ];
+  const input = `const cmds=${JSON.stringify(commands)};const r=await Promise.all(cmds.map(cmd=>tools.exec_command({cmd,yield_time_ms:10000,max_output_tokens:1000}))); for(let i=0;i<r.length;i++) text(JSON.stringify({idx:i,...r[i]}));`;
+  const summary = commands.join(" · ").slice(0, 120);
+  expect(parse(input)).toMatchObject({ summary });
+  expect(toolVerb({ name: "exec", input }, summary)).toBe("Ran");
+  expect(parse('const cmds=["git status", "bun test",];await Promise.all(cmds.map(cmd=>tools.exec_command({cmd})));')).toMatchObject({ summary: "git status · bun test" });
+  expect(parse(input.replace("all(", "allSettled(").replace("map(cmd=>", "map(async (c)=>").replace("({cmd,", "({cmd:c,"))).toMatchObject({ summary });
+  for (const invalid of [
+    input.replace("const r=", "cmds.reverse();const r="),
+    input.replace("{cmd,", "{cmd:other,"),
+    input.replace("cmds.map", "other.map"),
+    input.replace("{cmd,", '{cmd,cmd:"different",'),
+    input.replace("{cmd,", "{cmd,...options,"),
+    input.replace("yield_time_ms:10000", "yield_time_ms:change(cmds)"),
+    input.replace("yield_time_ms:10000", "workdir:`${change(cmds)}`"),
+    input.replace(JSON.stringify(commands), '["literal",dynamic]'),
+    `const example=${JSON.stringify(input)};`,
+  ]) expect(parse(invalid)).toMatchObject({ summary: invalid.startsWith("const example=") ? "exec" : "exec_command" });
+});
 it("decodes literal commands without executing the script and preserves patch summaries", () => {
   expect(parse('await tools.exec_command({cmd:"echo ${HOME}"})')).toMatchObject({ summary: "echo ${HOME}" });
   for (const input of ["await tools.exec_command({cmd:'git status --short'})", 'await tools.exec_command({cmd:`git status --short`})']) {

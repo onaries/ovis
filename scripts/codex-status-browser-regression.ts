@@ -18,12 +18,14 @@ const input = 'const results = await Promise.all([tools.exec_command({cmd:"git s
 const imageInput = 'for (const name of ["phone.png", "desktop.png"]) { const r = await tools.view_image({path:"/repo/evidence/" + name}); image(r.image_url); } text(await tools.write_stdin({session_id:51623,chars:""}));';
 const dynamicInput = 'let p="*** Begin Patch\\n"; for (const f of files) { const r=await tools.exec_command({cmd:`rg ${f}`}); p+=r.output; } text(await tools.apply_patch(p));';
 const objectsInput = 'const cmds=[{cmd:"ssh example cat report.json",workdir:"/repo"}]; const rs=await Promise.allSettled(cmds.map(c=>tools.exec_command(c)));';
+const stringsInput = 'const cmds=["ssh example mount", "ssh example stat"];const r=await Promise.all(cmds.map(cmd=>tools.exec_command({cmd,yield_time_ms:10000,max_output_tokens:1000})));for(const x of r) text(x);';
 const records = [
   { type: "event_msg", timestamp: "2026-10-24T13:00:00Z", payload: { type: "user_message", message: "Check the repository" } },
   { type: "response_item", timestamp: "2026-10-24T13:00:01Z", payload: { type: "custom_tool_call", call_id: "one", name: "exec", input } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "images", name: "exec", input: imageInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "dynamic", name: "exec", input: dynamicInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "objects", name: "exec", input: objectsInput } },
+  { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "strings", name: "exec", input: stringsInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:03Z", payload: { type: "custom_tool_call", call_id: "spawn", name: "exec", input: agentInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:04Z", payload: { type: "custom_tool_call_output", call_id: "spawn", output: `Script completed\nOutput:\n${JSON.stringify({ agent_id: agentId, nickname: "Parser Scout" })}` } },
 ];
@@ -75,6 +77,7 @@ try {
       await page.locator(".work-row-head").filter({ hasText: "git status --short · bun test" }).waitFor();
       await page.locator(".work-row-head").filter({ hasText: "exec_command · apply_patch" }).waitFor();
       await page.locator(".work-row-head").filter({ hasText: "ssh example cat report.json" }).waitFor();
+      await page.locator(".work-row-head").filter({ hasText: "ssh example mount · ssh example stat" }).waitFor();
       const images = page.locator(".work-row-head").filter({ hasText: "view_image · write_stdin" });
       await images.click();
       await images.scrollIntoViewIfNeeded();

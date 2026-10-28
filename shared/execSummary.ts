@@ -50,6 +50,19 @@ export function execSummary(input: string): string | null {
       } catch { return null; }
     }
   }
+  if (!commands.length) {
+    const string = '"(?:[^"\\\\]|\\\\.)*"';
+    const option = `(?!cmd\\s*:)[A-Za-z_$][\\w$]*\\s*:\\s*(?:${string}|-?\\d+(?:\\.\\d+)?|true|false|null)`;
+    const mappedStrings = new RegExp(`^\\s*const\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*\\[\\s*(${string}(?:\\s*,\\s*${string})*\\s*,?)\\s*\\]\\s*;\\s*(?:const\\s+[A-Za-z_$][\\w$]*\\s*=\\s*)?await\\s+Promise\\.(?:all|allSettled)\\(\\s*\\1\\.map\\(\\s*(?:async\\s+)?\\(?\\s*([A-Za-z_$][\\w$]*)\\s*\\)?\\s*=>\\s*(?:await\\s+)?tools\\.exec_command\\(\\s*\\{\\s*(?:cmd\\s*:\\s*\\3|(?=cmd\\s*[,}])\\3)(?:\\s*,\\s*${option})*\\s*,?\\s*\\}\\s*\\)\\s*\\)\\s*\\)\\s*;`).exec(input);
+    if (mappedStrings?.[2] !== undefined) {
+      try {
+        const rows: unknown = JSON.parse(`[${mappedStrings[2].replace(/,\s*$/, "")}]`);
+        if (Array.isArray(rows)) {
+          for (const row of rows) if (typeof row === "string" && row.trim()) commands.push(row.trim().replace(/\s+/g, " "));
+        }
+      } catch { return null; }
+    }
+  }
   return commands.length ? commands.join(" · ").slice(0, 120) : null;
 }
 
