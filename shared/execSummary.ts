@@ -1,6 +1,6 @@
 const LITERAL = '"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|`(?:[^`\\\\]|\\\\.)*`';
 
-/** Literal code-mode commands only; no script is evaluated and dynamic expressions stay unnamed. */
+/** Never evaluates code; only literal commands or proven prefixes name a shell call. */
 export function execSummary(input: string): string | null {
   // Skip strings and comments outside calls so quoted examples never become command labels.
   const key = '(?:[A-Za-z_$][\\w$]*|"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\')';
@@ -61,6 +61,27 @@ export function execSummary(input: string): string | null {
           for (const row of rows) if (typeof row === "string" && row.trim()) commands.push(row.trim().replace(/\s+/g, " "));
         }
       } catch { return null; }
+    }
+  }
+  if (!commands.length) {
+    const id = "[A-Za-z_$][\\w$]*";
+    const string = '"(?:[^"\\\\]|\\\\.)*"';
+    const value = `(?:${LITERAL}|${id}(?:\\.${id})*|load\\(\\s*(?:${LITERAL})\\s*\\))`;
+    const option = `(?!cmd\\s*:)${id}\\s*:\\s*(?:${string}|-?\\d+(?:\\.\\d+)?|true|false|null)`;
+    const bound = new RegExp(`${LITERAL}|/\\*[\\s\\S]*?\\*/|//[^\\n]*|\\bconst\\s+(${id})\\s*=\\s*(${string})((?:\\s*\\+\\s*${value})*)\\s*;\\s*(?:text\\(\\s*)?await\\s+tools\\.exec_command\\(\\s*\\{\\s*cmd\\s*:\\s*\\1(?:\\s*,\\s*${option})*\\s*,?\\s*\\}\\s*\\)\\s*\\)?\\s*;`, "gs");
+    const sites = execToolCalls(input);
+    for (const match of input.matchAll(bound)) {
+      const argumentsAt = match.index + match[0].lastIndexOf("tools.exec_command(") + "tools.exec_command(".length;
+      if (!sites.some((site) => site.name === "exec_command" && site.argumentsAt === argumentsAt)) continue;
+      const literal = match[2];
+      if (literal === undefined) continue;
+      let command: string;
+      try { command = JSON.parse(literal); }
+      catch (error) { if (!(error instanceof SyntaxError)) throw error; continue; }
+      const prefix = command.trimStart().match(/^[\w./-]+(?:[ \t]+-[A-Za-z]+)?(?=\s)/)?.[0];
+      if (match[3]) {
+        if (prefix !== undefined) commands.push(`${prefix} …`);
+      } else if (command.trim()) commands.push(command.trim().replace(/\s+/g, " "));
     }
   }
   return commands.length ? commands.join(" · ").slice(0, 120) : null;

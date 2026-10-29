@@ -104,6 +104,30 @@ it("decodes literal commands without executing the script and preserves patch su
   expect(parse('await tools.exec_command({cmd:"bun test"}); await tools.view_image({path:file});')).toMatchObject({ summary: "bun test" });
 });
 
+it("shows a proven command prefix for a concatenated constant passed directly to exec_command", () => {
+  const input = String.raw`const summary=JSON.parse(load("folderPatinaSummaryOutput").trim());store("folderPatinaSummary",summary);
+if(load("folderPatinaExit")!==0||summary.ok!==true||summary.status!=="verified"||summary.exitCode!==0)throw Error("Patina verification failed");
+const command="node -e 'const fs=require(\"node:fs\"),crypto=require(\"node:crypto\");const r=JSON.parse(fs.readFileSync(\""+summary.receiptPath+"\",\"utf8\"));console.log(JSON.stringify({keys:Object.keys(r),status:r.status,exitCode:r.exitCode,sourceHash:r.sourceHash,outputHash:r.outputHash,completedAt:r.completedAt}));const hash=p=>crypto.createHash(\"sha256\").update(fs.readFileSync(p)).digest(\"hex\");if(hash(\""+load("folderDocDraft")+"\")!==\""+summary.sourceHash+"\"||hash(\""+summary.outputPath+"\")!==\""+summary.outputHash+"\")throw Error(\"Patina file hash mismatch\");'\ndiff -u "+load("folderDocDraft")+" "+summary.outputPath;
+text(await tools.exec_command({cmd:command,max_output_tokens:3500}));`;
+  const part = parse(input);
+  expect(part).toMatchObject({ summary: "node -e …", input });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(toolVerb(part, part.summary)).toBe("Ran");
+  expect(parse('const command="git status --short";text(await tools.exec_command({cmd:command}));')).toMatchObject({ summary: "git status --short" });
+  for (const invalid of [
+    input.replace("cmd:command", "cmd:other"),
+    input.replace("text(await", 'other();text(await'),
+    input.replace("{cmd:command,", '{cmd:command,cmd:"different",'),
+    input.replace("{cmd:command,", "{cmd:command,...options,"),
+    input.replace('"node -e ', '"node'),
+    `const example=${JSON.stringify(input)};`,
+    `/* ${input} */`,
+    'const command="node " + resolveCommand();text(await tools.exec_command({cmd:command}));',
+    'const command="node"+suffix;text(await tools.exec_command({cmd:command}));',
+    'const example=/const command="node "+suffix;text(await tools.exec_command({cmd:command}));/;',
+  ]) expect(parse(invalid)).toMatchObject({ summary: invalid.startsWith("const example=") || invalid.startsWith("/*") ? "exec" : "exec_command" });
+});
+
 it("shows the edited file when a code-mode patch is passed by constant", () => {
   const patch = "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch";
   const part = parse(`const patch = ${JSON.stringify(patch)}; text(await tools.apply_patch(patch));`);
