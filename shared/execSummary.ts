@@ -94,5 +94,9 @@ export function execToolCalls(input: string): { name: string; argumentsAt: numbe
 
 export function execToolSummary(input: string): string | null {
   const names = new Set(execToolCalls(input).map((call) => call.name));
+  if (names.size === 0) {
+    const catalog = /^\s*const\s+([A-Za-z_$][\w$]*)\s*=\s*ALL_TOOLS\s*\.\s*filter\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*\/((?:\\.|[^/\\\n])+)\/[dgimsuvy]*\s*\.\s*test\s*\(\s*\2\.name\s*\+\s*(?:" "|' ')\s*\+\s*\2\.description\s*\)\s*\)\s*;\s*text\s*\(\s*\1\s*\)\s*;?\s*$/.exec(input);
+    return catalog ? `Search tools: ${catalog[3]}`.slice(0, 120) : null;
+  }
   return names.size > 0 ? [...names].join(" · ").slice(0, 120) : null;
 }

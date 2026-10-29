@@ -19,6 +19,7 @@ const imageInput = 'for (const name of ["phone.png", "desktop.png"]) { const r =
 const dynamicInput = 'let p="*** Begin Patch\\n"; for (const f of files) { const r=await tools.exec_command({cmd:`rg ${f}`}); p+=r.output; } text(await tools.apply_patch(p));';
 const objectsInput = 'const cmds=[{cmd:"ssh example cat report.json",workdir:"/repo"}]; const rs=await Promise.allSettled(cmds.map(c=>tools.exec_command(c)));';
 const stringsInput = 'const cmds=["ssh example mount", "ssh example stat"];const r=await Promise.all(cmds.map(cmd=>tools.exec_command({cmd,yield_time_ms:10000,max_output_tokens:1000})));for(const x of r) text(x);';
+const catalogInput = 'const matches = ALL_TOOLS.filter(x => /confluence|atlassian/i.test(x.name + " " + x.description));\ntext(matches);';
 const boundInput = String.raw`const command="node -e '"+load("receipt")+"'\ndiff -u "+load("draft")+" "+summary.outputPath;text(await tools.exec_command({cmd:command,max_output_tokens:3500}));`;
 const records = [
   { type: "event_msg", timestamp: "2026-10-24T13:00:00Z", payload: { type: "user_message", message: "Check the repository" } },
@@ -28,6 +29,7 @@ const records = [
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "objects", name: "exec", input: objectsInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "strings", name: "exec", input: stringsInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "bound", name: "exec", input: boundInput } },
+  { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "catalog", name: "exec", input: catalogInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:03Z", payload: { type: "custom_tool_call", call_id: "spawn", name: "exec", input: agentInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:04Z", payload: { type: "custom_tool_call_output", call_id: "spawn", output: `Script completed\nOutput:\n${JSON.stringify({ agent_id: agentId, nickname: "Parser Scout" })}` } },
 ];
@@ -85,6 +87,11 @@ try {
       assert.equal(await bound.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), boundInput);
       await bound.click();
       const images = page.locator(".work-row-head").filter({ hasText: "view_image · write_stdin" });
+      const catalog = page.locator(".work-row-head").filter({ hasText: "Search tools: confluence|atlassian" });
+      assert.equal((await catalog.innerText()).trim(), "Search tools: confluence|atlassian");
+      await catalog.click();
+      assert.equal(await catalog.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), catalogInput);
+      await catalog.click();
       await images.click();
       await images.scrollIntoViewIfNeeded();
       const evidence = process.env.UI_EVIDENCE_DIR;

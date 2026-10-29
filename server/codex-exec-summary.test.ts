@@ -4,6 +4,24 @@ import { toolVerb } from "../src/lib/toolVerbs.ts";
 import { workRowLabel } from "../src/lib/workRowLabel.ts";
 
 const parse = (input: string) => parseCodexTranscript(JSON.stringify({ type: "response_item", payload: { type: "custom_tool_call", call_id: "one", name: "exec", input } }))[0]?.parts[0];
+it("names a printed tool catalog search without executing its predicate", () => {
+  const input = 'const matches = ALL_TOOLS.filter(x => /confluence|atlassian/i.test(x.name + " " + x.description));\ntext(matches);';
+  const part = parse(input);
+  expect(part).toMatchObject({ summary: "Search tools: confluence|atlassian", input });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(workRowLabel(part, part.summary)).toEqual({ narration: true, verb: null });
+  for (const other of [
+    `const example = ${JSON.stringify(input)};`,
+    `/* ${input} */`,
+    `// ${input.replaceAll("\n", "\n// ")}`,
+    input.replace("ALL_TOOLS", "other.ALL_TOOLS"),
+    input.replace("text(matches)", "text(other)"),
+    input.replace('x.name + " " + x.description', 'change() + x.description'),
+    input.replace("const matches", "let matches"),
+  ]) expect(parse(other)).toMatchObject({ summary: "exec" });
+  expect(parse(input + '\nawait tools.view_image({path:file});')).toMatchObject({ summary: "view_image" });
+});
+
 it("shows nested image and terminal calls instead of an exec-only heading", () => {
   const input = 'for (const name of ["phone.png", "desktop.png"]) { const r = await tools.view_image({path:"/repo/evidence/" + name}); image(r.image_url); } text(await tools.write_stdin({session_id:51623,chars:""}));';
   const part = parse(input);
