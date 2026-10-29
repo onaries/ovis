@@ -4,6 +4,7 @@ import { type OpenCodeFormFieldOption, type OpenCodeFormInfo } from "../opencode
 import { createHash } from "node:crypto";
 import type { ReaderContext } from "./registry.ts";
 import type { InteractionPlan } from "./interaction-plan.ts";
+import type { PiAskUserForm } from "../pi-ask-bridge.ts";
 
 /**
  * A parser that several readers call on the same screen, run once per read: the readers of one
@@ -96,6 +97,7 @@ type Responder =
   | "pi-thinking"
   | "pi-ask-question"
   | "pi-ask-submit"
+  | "pi-ask-user"
   | "pi-questionnaire-question"
   | "pi-questionnaire-submit"
   | "omo-model"
@@ -137,11 +139,17 @@ export type ParsedPrompt = InteractivePrompt & {
   };
   /** Pi's active tab, from colors verified against the live detection screen by the caller. */
   piAskForm?: { identity: string; index: number };
+  /** @eko24ive/pi-ask's ask_user form, as the web UI's pi extension reports it (server/pi-ask-bridge.ts). */
+  piAskUser?: PiAskUserForm;
   /** Pi's custom row owns the inline editor, rather than only a selected menu row. */
   piAskTyping?: true;
   /** Installed questionnaire editor contents; absent outside its guarded input mode. */
   piQuestionnaireInput?: string;
   piQuestionnaireInputRows?: string[];
+  /** omp says it cut the question (server/omp-ask.ts): it fills the panel's four rows and the footer offers to expand it */
+  ompQuestionCut?: true;
+  /** Claude's /effort: the state its Ultracode switch shows, null without one; checked before `s`, never sent */
+  claudeUltracode?: boolean | null;
   menuLabels: string[];
   selectedIndex: number;
   checkedOptionIndices: number[];
@@ -332,7 +340,10 @@ export function publicPrompt(parsed: ParsedPrompt): InteractivePrompt {
     body: parsed.body,
     options: parsed.options,
     multi_select: parsed.multi_select,
+    ...(parsed.text_format ? { text_format: parsed.text_format } : {}),
     ...(parsed.optional ? { optional: true as const } : {}),
+    ...(parsed.checks_with_text ? { checks_with_text: true as const } : {}),
+    ...(parsed.drafts_saved ? { drafts_saved: true as const } : {}),
     custom_option_index: parsed.custom_option_index,
     ...(parsed.queued ? { queued: parsed.queued } : {}),
     ...(parsed.steps ? { steps: parsed.steps } : {}),
@@ -343,6 +354,7 @@ export function publicPrompt(parsed: ParsedPrompt): InteractivePrompt {
     ...(parsed.default_custom_text ? { default_custom_text: parsed.default_custom_text } : {}),
     ...(parsed.fallback ? { fallback: true as const } : {}),
     ...(parsed.own_text ? { own_text: parsed.own_text } : {}),
+    ...(parsed.screen_words ? { screen_words: parsed.screen_words } : {}),
   };
   parsedByPublicPrompt.set(prompt, parsed);
   return prompt;

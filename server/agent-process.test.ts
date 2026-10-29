@@ -28,6 +28,17 @@ describe("the agent process in front", () => {
     expect(agentProcessInFront(info(sdk), "omo", null, parent.pid)?.pid).toBe(sdk.pid);
   });
 
+  // bunx or npx run omp's npm package entry point (its `bin`), and herdr names the process omp (#2280)
+  it("takes omp started from its npm package's entry point, never another package's", () => {
+    const entry = (pid: number, runtime: string, script: string) => ({ pane_id: "fixture", foreground_processes: [{ pid, name: "omp", argv: [runtime, script, "--continue"] }] });
+    expect(agentProcessInFront(entry(300, "bun", "/tmp/bunx-1000-@oh-my-pi/pi-coding-agent@latest/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js"), "omp")?.pid).toBe(300);
+    expect(agentProcessInFront(entry(301, "/usr/local/bin/node", "C:\\Users\\me\\AppData\\Local\\npm-cache\\_npx\\1\\node_modules\\@oh-my-pi\\pi-coding-agent\\dist\\cli.js"), "omp")?.pid).toBe(301);
+    expect(agentProcessInFront(entry(302, "bun", "/opt/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"), "omp")).toBeNull();
+    expect(agentProcessInFront(entry(303, "bun", "/opt/node_modules/@oh-my-pi/pi-coding-agent/dist/other.js"), "omp")).toBeNull();
+    expect(agentProcessInFront(entry(304, "sh", "/opt/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js"), "omp")).toBeNull();
+    expect(agentProcessInFront(entry(305, "python3", "/opt/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js"), "omp")).toBeNull();
+  });
+
   it("names none where herdr names no agent or none of its programs runs", () => {
     expect(agentProcessInFront(info(launcher, native), null)).toBeNull();
     expect(agentProcessInFront(info({ pid: 7, argv: ["pwsh.exe"] }), "codex")).toBeNull();

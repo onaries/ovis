@@ -73,10 +73,11 @@ function indexAtColumn(line: string, column: number): number {
 
 /**
  * Claude Code's fullscreen layout (`"tui": "fullscreen"`) can draw a side panel to the right of the
- * session, its diff panel (`/diff`, `1 file changed +2 … source: Current ▾`) on a pane of 110 columns
- * or more: every row from the screen's top carries the panel's left edge `│` in one column, the
- * panel's own text after it, down through the prompt and its footer. Those rows are cut at that edge
- * so the session's menus read as without the panel (measured on 2.1.303). A screen whose edge stops
+ * session, its diff panel (`/diff`, `1 file changed +2 … source: Current ▾`) on a wide pane (from about
+ * 110 columns on 2.1.303; only the edge is checked here, not the pane's width): every row from the
+ * screen's top carries the panel's left edge `│` in one column, the panel's own text after it,
+ * down through the prompt and its footer. Those rows are cut at that edge so the session's menus read
+ * as without the panel (measured on 2.1.303). A screen whose edge stops
  * before its last non-blank row (a markdown table scrolled above a plan, say) is left as it is.
  */
 const CLAUDE_SIDE_PANEL_MIN_COLUMN = 40;
@@ -92,15 +93,18 @@ export function withoutClaudeSidePanel(screen: string): string {
     }
     return columns;
   };
+  const top = edges(lines[0] ?? "").filter((at) => at >= CLAUDE_SIDE_PANEL_MIN_COLUMN);
+  if (top.length === 0) return screen;
+  // each row's edges once, past the top row's check that turns away most screens
+  const rowEdges = lines.map((line, index) => index === 0 ? top : edges(line));
   const rowsAt = (column: number): number => {
     let rows = 0;
-    while (rows < lines.length && edges(lines[rows]!).includes(column)) rows += 1;
+    while (rows < lines.length && rowEdges[rows]!.includes(column)) rows += 1;
     return rows;
   };
   // the panel's edge runs through the footer; a table's column divider stops where the table ends
   const throughFooter = (rows: number): boolean => rows >= CLAUDE_SIDE_PANEL_MIN_ROWS && lines.slice(rows).every((line) => line.trim() === "");
-  const column = edges(lines[0] ?? "").filter((at) => at >= CLAUDE_SIDE_PANEL_MIN_COLUMN)
-    .find((at) => throughFooter(rowsAt(at)));
+  const column = top.find((at) => throughFooter(rowsAt(at)));
   if (column === undefined) return screen;
   const rows = rowsAt(column);
   return lines.map((line, index) => index < rows ? line.slice(0, indexAtColumn(line, column)).trimEnd() : line).join("\n");
@@ -166,7 +170,9 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
   const title = tabs && current >= 0
     ? tabs.whole && tabs.tabs.length > 1 ? own("{label} · {n} of {total}", { label: tabs.tabs[current]!.label, n: current + 1, total: tabs.tabs.length }) : tabs.tabs[current]!.label
     : chip ?? own(multiSelect ? "Multiple choice" : "Question");
-  return finishPrompt("claude", {
+  // read off the screen, not part of the question: left out of the card's id
+  const words = claudeWordsAbove(raw, rows[0]!.lineIndex);
+  const parsed = finishPrompt("claude", {
     kind: "question", title, question, body: null,
     options: optionRows.map((row) => ({ label: row.label, description: row.description ?? null })),
     // a multiple choice takes its typed answer where its Submit row shows: Enter there sends it
@@ -186,6 +192,129 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
       ],
     } : {}),
   });
+  return words === null ? parsed : { ...parsed, screen_words: words };
+}
+
+/**
+ * Claude's tool call line, `● Write(a.ts)` or an MCP call `● plugin/server - tool (MCP)(…)`: an ASCII name
+ * right before its `(`; Claude's own text opens with ● too (`● 패치(Patch)는 …` is text)
+ */
+const CLAUDE_CALL_RE = /^[●⏺]\s+(?:[\w.:/-]+|\S.* \(MCP\))\(/;
+
+/** a collapsed group of tool calls, `Read 2 files (ctrl+o to expand)` (2.1.311), its bullet drawn or not */
+const CLAUDE_COLLAPSED_RE = /\(ctrl\+o\s+to\s+expand\)/i;
+
+/** a list item, or a line of a table or a rule, opens a line of its own: never the rest of the line above it */
+const OWN_LINE_RE = /^\s*(?:(?:[-*•]|\d+[.)])\s|[│├└┌┬┼─╭╰])/;
+
+/** words and sentence punctuation only: a line with a path, a URL, code or a command's signs keeps its breaks */
+const PROSE_RE = /^[\p{L}\p{N}\s.,:;!?'"’‘“”()\-–—…%&。、，！？：；「」『』（）]+$/u;
+
+/** a command's option (`--oneline`, `-rf`): its line is a command, never prose to join */
+const OPTION_RE = /(?:^|\s)--?\w/;
+
+/**
+ * A line that is a command or a path, read on its own: it opens with a common command (`git push`,
+ * `bun test`, a `$ ` prompt), or it is one token with a `/` or a file's extension. Such a line keeps
+ * its breaks on both sides, whatever the rest of its paragraph says. A command this list does not
+ * name is caught only by its options or its signs (OPTION_RE, PROSE_RE).
+ */
+const COMMAND_LINE_RE = /^\s*(?:\$\s+\S|(?:git|gh|npm|npx|bun|bunx|yarn|pnpm|node|deno|python3?|pip3?|uv|cargo|rustc|go|make|cd|ls|rm|cp|mv|mkdir|cat|echo|curl|wget|ssh|scp|rsync|sudo|docker|kubectl|helm|terraform|export|source|chmod|chown|tar|grep|rg|sed|awk|find|touch|kill|systemctl|brew|apt|apt-get|dnf|herdr|claude|codex|tmux)(?:\s|$)|\S*(?:\/|\w\.[a-z][a-z0-9]{0,5}\b)\S*[.,;:]?\s*$)/;
+
+/** how a sentence ends, a closing quote or bracket after it allowed */
+const SENTENCE_END_RE = /[.!?\u2026\u3002\uff01\uff1f]["'\u201d\u2019)\]\u300d\u300f\uff09]*$/u;
+
+/** a script written without spaces between words: a line of it the pane broke goes on without a space */
+const UNSPACED_RE = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]/u;
+
+/**
+ * Claude's own words over its question (#2088). Claude Code 2.1.311 writes a turn's text to the
+ * session file only with the answer, so while the question waits the screen is the only place they
+ * are. They are the text block right over the question panel's top rule, as recorded at 120 and 40
+ * columns: a `●` line that is no tool call, the lines under it at its two-column indent, paragraphs
+ * parted by blank lines.
+ *
+ *   ● The file a.txt has a made-up bug: its
+ *     last line is missing a trailing
+ *     …
+ *   ────────────────────────────────────────
+ *    ☐ Fix
+ *
+ * The rule is the panel's own only with nothing but the panel's header and question under it.
+ * Anything else right over the panel (the user's prompt, a tool's output or its collapsed group, a
+ * status line) is not Claude's words, and no words are read then. Neither are a block whose `●`
+ * start is above the screen's top: its lines read the same as the user's own prompt wrapped under
+ * its `❯`.
+ *
+ * Lines the pane wrapped are joined back only where that cannot change what they say: two lines of
+ * plain prose, the first one too full for the next one's first word, and not ending in a colon (what
+ * follows may be a command), in a paragraph that ends as a sentence does. A paragraph of commands
+ * (`git merge experimental-feature-branch` over `git push` reads as prose and can fill the line)
+ * ends in none of a sentence's marks: every break in it stays as drawn, as do all other breaks.
+ */
+function claudeWordsAbove(lines: string[], firstRow: number): string | null {
+  let rule = -1;
+  for (let index = firstRow - 1; index >= Math.max(0, firstRow - 60) && rule < 0; index -= 1) {
+    const line = cleanLine(lines[index]!);
+    if (SOLID_RULE_RE.test(line)) rule = index;
+    // the user's prompt, Claude's text or a tool between: the rule above them is not this panel's
+    else if (/^[❯●⏺⎿✻]/.test(line)) return null;
+  }
+  if (rule < 0) return null;
+  const width = Bun.stringWidth(cleanLine(lines[rule]!));
+  // each line as drawn (its width says where the pane wrapped it) and its text, the block's indent off
+  const block: { drawn: string; text: string }[] = [];
+  let start = -1;
+  for (let index = rule - 1; index >= 0 && start < 0; index -= 1) {
+    const drawn = lines[index]!.replace(ANSI_RE, "").trimEnd();
+    if (CLAUDE_COLLAPSED_RE.test(drawn) || /^\s*⎿/.test(drawn)) return null;
+    if (drawn === "") block.unshift({ drawn, text: "" });
+    else if (drawn.startsWith("  ")) block.unshift({ drawn, text: drawn.slice(2) });
+    else if (/^[●⏺]\s/.test(drawn) && !CLAUDE_CALL_RE.test(drawn)) {
+      block.unshift({ drawn, text: drawn.replace(/^[●⏺]\s+/, "") });
+      start = index;
+    } else return null;
+  }
+  if (start < 0) return null;
+  // a hint a narrow pane wrapped: "(ctrl+o" over "to expand)"
+  if (CLAUDE_COLLAPSED_RE.test(block.map(({ text }) => text.trim()).join(" "))) return null;
+  // the block's paragraphs, each its lines as drawn
+  const groups: { drawn: string; text: string }[][] = [[]];
+  for (const line of block) {
+    if (line.text !== "") groups.at(-1)!.push(line);
+    else if (groups.at(-1)!.length > 0) groups.push([]);
+  }
+  const paragraphs: string[] = [];
+  for (const group of groups.filter((lines) => lines.length > 0)) {
+    const sentence = SENTENCE_END_RE.test(group.at(-1)!.text.trimEnd());
+    let paragraph = "";
+    let previous = { drawn: "", text: "" };
+    for (const line of group) {
+      const { text } = line;
+      if (paragraph === "") paragraph = text;
+      else if (!sentence) paragraph += `\n${text}`;
+      else {
+        const next = text.trimStart();
+        const first = /^\S+/.exec(next)![0];
+        const before = [...previous.text.trimEnd()].at(-1) ?? "";
+        const unspaced = UNSPACED_RE.test(before) || UNSPACED_RE.test([...next][0]!);
+        const prose = PROSE_RE.test(previous.text) && PROSE_RE.test(text) && !OPTION_RE.test(previous.text) && !OPTION_RE.test(text)
+          && !COMMAND_LINE_RE.test(previous.text) && !COMMAND_LINE_RE.test(text) && !OWN_LINE_RE.test(text) && before !== ":";
+        // Claude Code can break a line where the word would have just reached the edge (2.1.311 at 40
+        // columns: "  properly. It's a contrived example," over "so"); a script without spaces breaks
+        // anywhere, so only a line filled to the edge goes on
+        const full = unspaced
+          ? Bun.stringWidth(previous.drawn) >= width - 1
+          : Bun.stringWidth(previous.drawn) + 1 + Bun.stringWidth(first) >= width;
+        paragraph += prose && full ? `${unspaced ? "" : " "}${next}` : `\n${text}`;
+      }
+      previous = line;
+    }
+    paragraphs.push(paragraph);
+  }
+  // capped as a card's body is, never inside a character
+  const words = [...paragraphs.join("\n\n")].slice(0, 12_000).join("");
+  return words.trim() === "" ? null : words;
 }
 
 /** A single question's header chip (`☐ Dataset`), the question's own short name; null when there is none. */
@@ -706,72 +835,154 @@ function parseClaudeModel(screen: string): ParsedPrompt | null {
 }
 
 /**
- * Claude Code's `/effort` slider, as 2.1.294 draws it:
+ * Claude Code's `/effort` slider, as 2.1.311 draws it in a pane of 70 columns or more, Ultracode's
+ * switch beside the slider:
  *
  *   Effort
  *
  *                Faster                             Smarter
- *                ────────────────────▲─────────────────────      Ultracode  off
+ *                ──────────────────────────────▲───────────      Ultracode  on
  *                low     medium     high     xhigh      max      Tab to toggle
- *
+ *                Ultracode: dynamic workflows on every task
  *
  *   ←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel
  *
+ * and in a narrower one, the switch on two lines of its own under the slider:
+ *
+ *         ──────────────────────────────▲───────────
+ *         low     medium     high     xhigh      max
+ *
+ *
+ *                       Ultracode  off
+ *                       Tab to toggle
+ *
+ *   ←/→ to adjust · Enter to confirm · s for this session
+ *   only · Esc to cancel
+ *
  * ▲ stands over the level the slider is on. The levels are the card's options, picked with ←/→
- * and `s`, never Enter. Ultracode is left to the terminal.
+ * and `s`, never Enter: Enter saves the level as the default for new sessions.
+ *
+ * The line under the names is blank while the switch is off, and Claude's "Ultracode: dynamic
+ * workflows on every task" while it is on. The switch's key (Tab, unless the user bound another)
+ * flips it in the dialog only: `s` applies it, with the level ▲ is over, for this session, and Esc
+ * drops it. Nothing of it is saved for later sessions. So the card's own row for it is Tab, then
+ * `s` once the slider shows the switch flipped, and only where the slider names Tab as its key. A
+ * user who unbound the key gets the state alone, no key's line with it: the levels stay, with no
+ * row for the switch. Without Ultracode (a model that has no xhigh, dynamic workflows turned off)
+ * Claude draws no switch and no line for it, not even the blank one: at max the level's
+ * description is the line right under the names. So the names are found under the track.
  *
  * 2.1.301 describes the level ▲ is over between the names and the hint, after a blank line:
- * "~1.5x the estimated cost of medium (the default)", or two lines at max.
+ * "~1.5x the estimated cost of medium (the default)", or two lines at max. 2.1.311 draws max's
+ * under the Ultracode line, and in a narrow pane above the switch.
  */
 const CLAUDE_EFFORT_LEVEL_RE = /\b(?:low|medium|high|xhigh|max)\b/g;
 
 /** how far ▲ may stand from the middle of a level's name and still be over it */
 const CLAUDE_EFFORT_ALIGN = 3;
 
-/** lines between the level names and the hint, at most: blank ones, or the level's description that a narrow pane wrapped */
-const CLAUDE_EFFORT_UNDER_LINES = 8;
+/**
+ * lines between the level names and the hint, at most: the Ultracode line, the level's description
+ * that a narrow pane wrapped, and the switch's two lines drawn under them there
+ */
+const CLAUDE_EFFORT_UNDER_LINES = 12;
 
-/** a line of level names and nothing else (the toggle's hint aside) */
-const claudeEffortLevelsOnly = (line: string): boolean =>
-  line.trim() !== "" && line.replace(CLAUDE_EFFORT_LEVEL_RE, "").replace(/Tab to toggle/i, "").trim() === "";
+/** the switch's state: at the end of the track, or on a line of its own in a narrow pane */
+const CLAUDE_ULTRACODE_STATE_RE = /(?:^|\s{2,})Ultracode {2}(on|off)$/;
+
+/** the switch's key: at the end of the names, or on the line under the state in a narrow pane */
+const CLAUDE_ULTRACODE_KEY_RE = /(?:^|\s{2,})(\S+(?: \S+)*) to toggle$/;
+
+/** Claude's own line under the names while the switch is on, cut short by a narrow pane maybe */
+const CLAUDE_ULTRACODE_LINE_RE = /^Ultracode:(?:\s|…|$)/;
+
+/** a line of level names and nothing else (the switch's key aside): a key's line alone names none */
+function claudeEffortLevelsOnly(line: string): boolean {
+  const names = line.replace(CLAUDE_ULTRACODE_KEY_RE, "");
+  return names.search(CLAUDE_EFFORT_LEVEL_RE) >= 0 && names.replace(CLAUDE_EFFORT_LEVEL_RE, "").trim() === "";
+}
+
+/**
+ * Ultracode's switch as the slider draws it, beside the slider (70 columns or more) or under it on
+ * its own lines: its state and its key (null: the user unbound it, and Claude draws the state
+ * alone), or null when it draws none. Undefined: a drawing this reader does not know (a key without
+ * its state, or a switch drawn twice or in both places), which gets no card.
+ */
+function claudeUltracodeSwitch(lines: string[], labelsIndex: number, hintIndex: number): { on: boolean; key: string | null } | null | undefined {
+  const besideState = CLAUDE_ULTRACODE_STATE_RE.exec(lines[labelsIndex - 1]!);
+  const besideKey = CLAUDE_ULTRACODE_KEY_RE.exec(lines[labelsIndex]!);
+  const under: { on: boolean; key: string | null }[] = [];
+  // under the slider a state has its key on the line under it, or none where the key is unbound:
+  // a key under anything but a state (the names, a second key under the first) is half a switch
+  for (let index = labelsIndex; index < hintIndex; index += 1) {
+    const state = CLAUDE_ULTRACODE_STATE_RE.exec(lines[index]!.trim());
+    const key = CLAUDE_ULTRACODE_KEY_RE.exec(lines[index + 1]!.trim());
+    if (state) under.push({ on: state[1] === "on", key: key?.[1] ?? null });
+    else if (key) return undefined;
+  }
+  if ((besideKey && !besideState) || under.length > 1 || (besideState && under.length > 0)) return undefined;
+  if (besideState) return { on: besideState[1] === "on", key: besideKey?.[1] ?? null };
+  return under[0] ?? null;
+}
 
 function parseClaudeEffort(screen: string): ParsedPrompt | null {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/).map((line) => line.trimEnd());
   const hintIndex = findLastIndex(lines, (_, index) => CLAUDE_EFFORT_HINT_RE.test(wrapped(lines, index)));
   if (hintIndex < 0) return null;
-  // the names: the nearest line of them above the hint with a blank line under it, which also
-  // passes over a level's description. Names cut or wrapped by a narrow pane are not read
+  // the names: the nearest line of them above the hint right under the ▲ track, which passes over
+  // what lies between them (Claude's Ultracode line, a level's description, the switch a narrow
+  // pane draws under the slider). Names cut or wrapped by a narrow pane are not read: a line of
+  // names under them is the rest of them
   let labelsIndex = -1;
   for (let index = hintIndex - 1; index > 0 && hintIndex - index <= CLAUDE_EFFORT_UNDER_LINES + 1; index -= 1) {
-    if (claudeEffortLevelsOnly(lines[index]!) && lines[index + 1]!.trim() === "") { labelsIndex = index; break; }
+    if (claudeEffortLevelsOnly(lines[index]!) && /^\s*─*▲/.test(lines[index - 1]!) && !claudeEffortLevelsOnly(lines[index + 1]!)) { labelsIndex = index; break; }
   }
   if (labelsIndex < 0) return null;
   const labels = lines[labelsIndex]!;
-  const track = lines[labelsIndex - 1] ?? "";
+  const track = lines[labelsIndex - 1]!;
   const scale = /^\s*[─▲]+/.exec(track)?.[0] ?? "";
   const titled = lines.slice(Math.max(0, labelsIndex - 4), Math.max(0, labelsIndex - 1)).some((line) => line.trim() === "Effort");
   if (!titled || scale.split("▲").length !== 2) return null;
+  // the switch and the line under the names agree: Claude's Ultracode line while the switch is on,
+  // a blank line while it is off, and no Ultracode line where it draws no switch
+  const ultracode = claudeUltracodeSwitch(lines, labelsIndex, hintIndex);
+  const under = lines[labelsIndex + 1]!.trim();
+  const said = CLAUDE_ULTRACODE_LINE_RE.test(under);
+  if (ultracode === undefined || (ultracode === null ? said : ultracode.on ? !said : under !== "")) return null;
   const arrow = track.indexOf("▲");
-  const levels = [...labels.matchAll(CLAUDE_EFFORT_LEVEL_RE)].map((match) => ({ name: match[0], middle: match.index + match[0].length / 2 }));
+  const levels = [...labels.replace(CLAUDE_ULTRACODE_KEY_RE, "").matchAll(CLAUDE_EFFORT_LEVEL_RE)].map((match) => ({ name: match[0], middle: match.index + match[0].length / 2 }));
   if (levels.length < 2 || new Set(levels.map(({ name }) => name)).size !== levels.length) return null;
   const distance = (index: number) => Math.abs(levels[index]!.middle - arrow);
   const selectedIndex = levels.reduce((best, _, index) => distance(index) < distance(best) ? index : best, 0);
   if (distance(selectedIndex) > CLAUDE_EFFORT_ALIGN) return null;
   const names = levels.map(({ name }) => name);
+  // the switch from the card only with the key the card sends: a key the user bound instead is
+  // theirs to press, and an unbound one leaves the switch to `/effort ultracode on|off`
+  const toggle = ultracode !== null && /^tab$/i.test(ultracode.key ?? "");
   return finishPrompt("claude", {
-    // where the slider stands is no part of what the card asks: one card wherever ▲ is
+    // where the slider stands is no part of what the card asks: one card wherever ▲ is. The
+    // switch's row names the state it turns to, so the card differs with the switch
     kind: "question",
     title: "",
     question: own("Set effort for this session"),
     body: null,
-    options: names.map((label) => ({ label, description: null })),
+    options: [
+      ...names.map((label) => ({ label, description: null })),
+      ...(toggle ? [{ label: own(ultracode.on ? "Turn Ultracode off" : "Turn Ultracode on"), description: own("Keeps the effort level, for this session only") }] : []),
+    ],
     multi_select: false,
     custom_option_index: null,
   }, {
     responder: "claude-effort", menuLabels: names, selectedIndex,
     checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
-    // `s`, never Enter: the level stays in this session, and the default for new ones is left alone
-    optionSteps: names.map((_, index) => [...keySteps(sliderKeys(index - selectedIndex)), { text: "s" }]),
+    // `s`, never Enter: the level stays in this session, and the default for new ones is left
+    // alone. The switch flips with Tab, and `s` applies it with the level ▲ is over
+    optionSteps: [
+      ...names.map((_, index) => [...keySteps(sliderKeys(index - selectedIndex)), { text: "s" }]),
+      ...(toggle ? [[{ keys: [KEY.tab] }, { text: "s" }]] : []),
+    ],
+    // the state the switch shows, which the card does not send: an answer's last look checks it before `s`
+    claudeUltracode: ultracode?.on ?? null,
   });
 }
 
@@ -883,7 +1094,12 @@ export const readers: readonly DialogReader[] = [
   {
     id: "claude-effort", agents: ["claude"], priority: 60,
     reread: "before-commit", list: "slider",
-    interaction: (parsed) => pickerPlan(parsed, parseClaudeEffort, parsed.optionSteps ?? [], (shown, cursor) => shown.menuLabels[cursor]),
+    // the level under ▲, and Ultracode's switch as the Tabs sent so far leave it: a level's `s`
+    // waits for the switch unchanged, the switch's own `s` for it flipped
+    interaction: (parsed) => pickerPlan(parsed, parseClaudeEffort, parsed.optionSteps ?? [], (shown, cursor, toggles) => {
+      const drawn = shown.claudeUltracode ?? null;
+      return `${shown.menuLabels[cursor]} ${drawn === null ? "no switch" : drawn !== (toggles % 2 === 1) ? "on" : "off"}`;
+    }),
     parse: (screen) => {
       const parsed = parseClaudeEffort(screen);
       return parsed?.responder === "claude-effort" ? parsed : null;

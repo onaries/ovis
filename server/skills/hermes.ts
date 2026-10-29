@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import type { CommandForm, SlashCommand } from "../../shared/protocol.ts";
+import { hermesHome as resolveHermesHome, platformHermesHome } from "../hermes-home.ts";
 import type { AgentCommandContext, AgentCommandSource } from "./index.ts";
 import { environRecord, plainObject, readFrontmatter, readSkillText } from "./walk.ts";
 
@@ -222,8 +223,14 @@ function projectRoot(cwd: string | null | undefined, home: string): string | nul
 }
 
 function discover(ctx: AgentCommandContext): SlashCommand[] {
-  const env = new Map(Object.entries(environRecord(ctx.env)));
-  const hermesHome = env.get("HERMES_HOME") || join(ctx.home, ".hermes");
+  // A Windows pane's environment cannot be read (no /proc), so its Hermes home would resolve under
+  // <profile>\AppData\Local while transcripts use the server's %LOCALAPPDATA% (#2247): an unread one
+  // takes only that variable from the server. Not HERMES_HOME: the server's profile is not the pane's.
+  // a copy of the server's environment is a plain object, and Windows names are case-insensitive
+  const serverLocalAppData = Object.entries(ctx.serverEnv ?? process.env).find(([key]) => key.toUpperCase() === "LOCALAPPDATA")?.[1];
+  const environ = ctx.env ? environRecord(ctx.env) : serverLocalAppData ? { LOCALAPPDATA: serverLocalAppData } : {};
+  const env = new Map(Object.entries(environ));
+  const hermesHome = resolveHermesHome(ctx.home, environ);
   const expand = (entry: string): string => entry.replace(/\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (token, braced: string | undefined, bare: string | undefined) => env.get(braced ?? bare ?? "") ?? token).replace(/^~(?=\/|$)/, ctx.home);
   const path = (entry: string): string => canonical(resolve(hermesHome, expand(entry)));
   // Only skills and quick_commands are consumed; no credentials or unrelated settings escape.
@@ -240,7 +247,7 @@ function discover(ctx: AgentCommandContext): SlashCommand[] {
   for (const entry of strings(settings.external_dirs)) roots.push({ path: path(entry), tier: 3, origin: "user" });
   const disabled = new Set(strings(settings.disabled));
   disabled.delete("hermes-agent");
-  const bundled = new Set(skillFiles(join(ctx.home, ".hermes", "hermes-agent", "skills")).map((skill) => slug(typeof skill.fields.name === "string" ? skill.fields.name : basename(dirname(skill.path)))));
+  const bundled = new Set(skillFiles(join(platformHermesHome(ctx.home, environ), "hermes-agent", "skills")).map((skill) => slug(typeof skill.fields.name === "string" ? skill.fields.name : basename(dirname(skill.path)))));
   const entries = new Map<string, { tier: number; root: string; origin: "project" | "user"; path: string; description: string }[]>();
   const seenRoots = new Set<string>();
   for (const directory of roots) {

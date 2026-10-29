@@ -909,7 +909,7 @@ try {
         // Settings is opened again below: its close's step back lands first, or, landing over a second late,
         // it is taken for a Back and closes the Settings opened meanwhile (settingsHistory's landing deadline)
         await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
-        for (const id of ["dracula", "nord", "vesper"]) {
+        for (const id of ["dracula", "nord", "vesper", "black"]) {
           await openSettings(page);
           await openSettingsPage(page, "Appearance");
           await page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "Dark", exact: true }).click();

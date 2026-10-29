@@ -76,6 +76,20 @@ export function readScreen(buffer: IBuffer, cols: number, rows: number): ScreenS
   return { cols, rows: out };
 }
 
+/** The live screen as logical lines, preserving spaces across xterm wraps (as in useTerminalMount). */
+export function readScreenLines(buffer: IBuffer, rows: number): string[] | null {
+  const lines: string[] = [];
+  for (let y = 0; y < rows; y++) {
+    const line = buffer.getLine(buffer.baseY + y);
+    // A clipped first line or missing row cannot prove what the screen says.
+    if (!line || (y === 0 && line.isWrapped)) return null;
+    const text = line.translateToString(y === rows - 1 || !buffer.getLine(buffer.baseY + y + 1)?.isWrapped);
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += text;
+    else lines.push(text);
+  }
+  return lines;
+}
+
 /** a full-width rule of pi's TUI and its family */
 const RULE = /^─{10,}$/;
 const blank = (cell: ScreenCell): boolean => cell.char.trim() === "";
@@ -422,10 +436,10 @@ const SYNC = /\u001b\[\?2026([hl])/g;
 
 /**
  * Whether the screen xterm has parsed is a frame the recognizers may read. herdr wraps each frame
- * it draws in a synchronized-update block (`CSI ? 2026 h` … `l`), which xterm 5.5 does not honour,
- * and a read of its stream can end inside one: a frame is read only once its block has closed. A
- * grid resized here (a fit, a phone peek's narrower grid, a pane's grid adopted) holds the old
- * screen until the agent draws again for the new one: from the resize on, nothing is read until a
+ * it draws in a synchronized-update block (`CSI ? 2026 h` … `l`). xterm 6 holds its drawing until a
+ * block closes, but what it has parsed can still end inside one: a frame is read only once its
+ * block has closed. A grid resized here (a fit, a phone peek's narrower grid, a pane's grid
+ * adopted) holds the old screen until the agent draws again for the new one: from the resize on, nothing is read until a
  * whole frame has come for the new grid, written after the pane's grid said it was that size. When
  * the pane's grid itself changes size, herdr may first draw the old screen again, reflowed for the
  * new size (an idle box cut at its borders reads as gone), before the agent's own redraw, or both

@@ -5,7 +5,7 @@ import type { Machine } from "../../shared/machines.ts";
 import type { AgentStatus, HerdrPane } from "../../shared/protocol.ts";
 import machinesFixture from "../../site/demo/fixtures/machines.json";
 import { useSidebarActivityState, type SidebarActivity } from "./sidebarActivity.tsx";
-import { cleanSeen, loadSeen, receiveSeen, saveSeen, seenKey, SEEN_LIMIT } from "./seenFinishes.ts";
+import { loadSeen, receiveSeen, saveSeen, seenKey, SEEN_LIMIT } from "./seenFinishes.ts";
 import type { SeenFinish } from "../../shared/seen.ts";
 import { conversationFinishEvidence } from "./panePresentation.ts";
 import { shareSeen } from "./api.ts";
@@ -598,6 +598,33 @@ describe("sidebar finish acknowledgement through React effects", () => {
     expect(told[1]).toMatchObject({ pane, id: 1, answer: expect.any(String) });
   });
 
+  it("retries a failed share once, with the answer fingerprint that arrived before the retry", async () => {
+    // Given a share of a finish whose answer was not read yet, failed with a transient error.
+    jest.useFakeTimers();
+    const pane = "proof-late-answer";
+    const told: SeenFinish[] = [];
+    const client = await open(roster({ [pane]: 1 }), pane, false, async (finish) => {
+      told.push(finish);
+      if (told.length === 1) throw Object.assign(new Error("restart"), { status: 503 });
+    });
+    expect(told).toEqual([{ pc: "local", epoch: "server-a", pane, id: 1 }]);
+
+    // When the answer is read before the retry is due.
+    expect(conversationFinishEvidence.accept(seenKey("local", "server-a", pane), 1, {
+      source: "pi-transcript", history_id: "session",
+      turns: [{ role: "assistant", ts: "2026-10-19T00:00:00Z", end_ts: "2026-10-19T00:00:01Z",
+        parts: [{ kind: "text", text: "Finished", phase: "final_answer" }] }],
+    })).toBe(true);
+    await client.update(roster({ [pane]: 1 }), pane);
+    expect(told).toHaveLength(1);
+    await act(async () => { jest.advanceTimersByTime(1_000); });
+    await act(async () => { jest.advanceTimersByTime(60_000); });
+
+    // Then the retry shares it once, carrying the answer.
+    expect(told).toHaveLength(2);
+    expect(told[1]).toMatchObject({ pane, id: 1, answer: expect.any(String) });
+  });
+
   it("does not let a late network rejection erase a newer share, and bounds share retention", async () => {
     const told: SeenFinish[] = [];
     let rejectFirst!: (error: Error) => void;
@@ -703,6 +730,25 @@ describe("sidebar finish acknowledgement through React effects", () => {
     expect(client.status("a")).toBe("done");
   });
 
+  it("does not cache a retired epoch's scope again while it retires", async () => {
+    const client = await open(roster({ a: 1 }, {}, "retire-1"), "a");
+    const set = Map.prototype.set;
+    let cached: unknown[] = [];
+    const spy = spyOn(Map.prototype, "set").mockImplementation(function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+      // A scope's cached record maps panes to IDs; a change notice carries its epoch.
+      if (value && typeof value === "object" && !Object.hasOwn(value, "epoch")) cached.push(key);
+      return set.call(this, key, value);
+    });
+    try {
+      for (let epoch = 2; epoch <= 4; epoch++) {
+        cached = [];
+        await client.update(roster({ a: 1 }, {}, `retire-${epoch}`), "a");
+        expect(cached).not.toContain(JSON.stringify(["local", `retire-${epoch - 1}`]));
+        expect(client.status("a")).toBe("idle");
+      }
+    } finally { spy.mockRestore(); }
+  });
+
   it("drops the prior epoch even if pane IDs and finish counters are identical", async () => {
     const client = await open(roster({ a: 1 }), "a");
     await client.update(roster({ a: 1 }, {}, "server-b"));
@@ -798,7 +844,7 @@ describe("sidebar finish acknowledgement through React effects", () => {
     data.set("ovis:seen:local", '{"a":5}');
     data.set("ovis:settings", "{}");
     for (let i = 0; i <= SEEN_LIMIT; i++) data.set(seenKey("local", "server-a", `p${i}`), JSON.stringify({ id: 1, at: i }));
-    cleanSeen();
+    loadSeen("local", "server-a");
     expect(data.has("ovis:seen:local")).toBe(false);
     expect(data.has(seenKey("local", "server-a", "p0"))).toBe(false);
     expect(data.has(seenKey("local", "server-a", `p${SEEN_LIMIT}`))).toBe(true);

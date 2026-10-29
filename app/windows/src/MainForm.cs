@@ -205,7 +205,8 @@ namespace Ovis
 
         private void Phone(Status status)
         {
-            if (status.PhoneUrl != null)
+            var step = Setup.Phone(status.PhoneUrl, status.Tailscale, status.AccessLocked);
+            if (step == PhoneStep.Qr)
             {
                 var row = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 12) };
                 var size = (int)Math.Round(180 * DeviceDpi / 96.0);
@@ -228,7 +229,15 @@ namespace Ovis
                 row.Controls.Add(words);
                 body.Controls.Add(row);
             }
-            else if (status.Tailscale == "running")
+            else if (step == PhoneStep.TokenNeeded)
+            {
+                // what the server told without its token is not that Tailscale is missing: say what stood in the way
+                body.Controls.Add(Heading(Lang.L("Ovis cannot read this PC's phone address", "이 PC의 휴대폰 주소를 읽지 못했습니다")));
+                body.Controls.Add(Paragraph(Lang.L(
+                    "The Ovis server asks for its token, and Ovis did not find it, or it did not work, in the server's settings (env or .env in herdr's config folder for the plugin). Open Ovis in the browser to connect your phone, or put the server's token there and check again.",
+                    "Ovis 서버가 토큰을 요구하는데, 서버 설정(herdr의 플러그인 설정 폴더에 있는 env 또는 .env)에서 그 토큰을 찾지 못했거나 그 토큰이 맞지 않습니다. 브라우저에서 Ovis를 열어 휴대폰을 연결하거나, 서버의 토큰을 그곳에 넣은 뒤 다시 확인해 주세요.")));
+            }
+            else if (step == PhoneStep.MakeAddress)
             {
                 body.Controls.Add(Heading(Lang.L("Your phone needs an address for this PC", "휴대폰이 열 주소가 아직 없습니다")));
                 body.Controls.Add(Paragraph(Lang.L("Tailscale runs here: let it serve the app to your own devices.", "이 PC에 Tailscale이 있습니다. 내 기기들에서만 열리는 주소를 만듭니다.")));
@@ -237,10 +246,10 @@ namespace Ovis
             else
             {
                 body.Controls.Add(Heading(Lang.L("Your phone needs a way to reach this PC", "휴대폰에서 이 PC에 올 길이 필요합니다")));
-                body.Controls.Add(Paragraph(status.Tailscale == "stopped"
+                body.Controls.Add(Paragraph(step == PhoneStep.SignInTailscale
                     ? Lang.L("Tailscale is installed but not signed in. Sign in to it, then check again.", "Tailscale이 설치돼 있지만 로그인되지 않았습니다. 로그인한 뒤 다시 확인해 주세요.")
                     : Lang.L("Install Tailscale on this PC and on your phone, sign in to both with the same account, then check again.", "이 PC와 휴대폰에 Tailscale을 설치하고 같은 계정으로 로그인한 뒤 다시 확인해 주세요.")));
-                if (status.Tailscale != "stopped") body.Controls.Add(Buttons(Button(Lang.L("Get Tailscale", "Tailscale 받기"), () => Open(Links.TailscaleDownload))));
+                if (step == PhoneStep.InstallTailscale) body.Controls.Add(Buttons(Button(Lang.L("Get Tailscale", "Tailscale 받기"), () => Open(Links.TailscaleDownload))));
             }
         }
 

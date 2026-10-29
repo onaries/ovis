@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { firstMessageFault, launchArgsFault, MODEL_NAME } from "./launch-rules.ts";
+import { CLAUDE_EFFORTS, CLAUDE_ULTRACODE_SETTINGS, firstMessageFault, launchArgsFault, MODEL_NAME } from "./launch-rules.ts";
 
 describe("an agent's launch arguments", () => {
   it("refuses a control character in any argument, a tab and a line break included", () => {
@@ -24,6 +24,21 @@ describe("an agent's launch arguments", () => {
     // other agents' arguments are theirs: only control characters are refused there
     expect(launchArgsFault("omp", ["--model", "two words"])).toBeNull();
   });
+  it("still takes Claude Code's --effort ultracode, which the dialog no longer lists as a level", () => {
+    expect(CLAUDE_EFFORTS).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    // Claude Code 2.1.311 still reads it as xhigh with Ultracode on; the refusal names it with the levels
+    expect(launchArgsFault("claude", ["--effort", "ultracode"])).toBeNull();
+    expect(launchArgsFault("claude", ["--effort", "ultra"])).toBe("agent.args --effort must be one of low, medium, high, xhigh, max, ultracode");
+  });
+  it("passes Ultracode's --settings as the agent's own flag, after an effort or on its own", () => {
+    // the one settings object the dialog's switch passes: Ultracode on, nothing else
+    expect(JSON.parse(CLAUDE_ULTRACODE_SETTINGS)).toEqual({ ultracode: true });
+    expect(launchArgsFault("claude", ["--effort", "medium", "--settings", CLAUDE_ULTRACODE_SETTINGS])).toBeNull();
+    expect(launchArgsFault("claude", ["--permission-mode", "plan", "--model", "opus", "--effort", "high", "--settings", "{\"ultracode\":true}"])).toBeNull();
+    expect(launchArgsFault("claude", ["--settings", "{\"ultracode\":true}"])).toBeNull();
+    // the effort beside it is still checked
+    expect(launchArgsFault("claude", ["--effort", "INVALID", "--settings", "{\"ultracode\":true}"])).toContain("--effort");
+  });
 });
 
 describe("every spelling the CLIs accept for a model or an effort", () => {
@@ -42,6 +57,9 @@ describe("every spelling the CLIs accept for a model or an effort", () => {
     ["claude", ["--model=two words"], "--model"],
     ["codex", ["-m", "gpt-6.1", "--model=gpt-6.1", "--config", "model_reasoning_effort=high", "-c", "model_reasoning_effort=\"xhigh\"", "-c", "model=\"gpt-6.1\""], null],
     ["claude", ["--effort=max", "--model=opus[1m]"], null],
+    ["claude", ["--effort=ultracode"], null],
+    ["claude", ["--effort=medium", "--settings={\"ultracode\":true}"], null],
+    ["codex", ["--config=model_reasoning_effort=ultracode"], "model_reasoning_effort"],
     // a flag's value is the flag's: "--" there is not the end of the options
     ["codex", ["-m", "--"], "--model"],
   ] as const)("%s %j", (kind, args, flag) => {

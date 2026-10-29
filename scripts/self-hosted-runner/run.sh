@@ -3,6 +3,7 @@
 #
 # Usage: scripts/self-hosted-runner/run.sh [--repo OWNER/NAME] [--count N] [--labels self-hosted-ovis]
 #          [--reserved N] [--reserved-labels self-hosted-ovis-main] [--env-file FILE] [--build] [--once]
+#          [--cache-dir DIR [--cache-wait SECONDS] | --no-cache]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,9 +17,12 @@ RESERVED_LABELS="self-hosted-ovis-main"
 ENV_FILE=""
 BUILD=0
 ONCE=0
+CACHE=1
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ovis-ci-runner"
+CACHE_WAIT=120
 
 usage() {
-  sed -n '2,5p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,6p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -31,6 +35,9 @@ while [ $# -gt 0 ]; do
     --env-file) ENV_FILE="${2:?--env-file needs a value}"; shift 2 ;;
     --build) BUILD=1; shift ;;
     --once) ONCE=1; shift ;;
+    --cache-dir) CACHE_DIR="${2:?--cache-dir needs a value}"; shift 2 ;;
+    --cache-wait) CACHE_WAIT="${2:?--cache-wait needs a value}"; shift 2 ;;
+    --no-cache) CACHE=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -43,6 +50,7 @@ case "$COUNT" in ''|*[!0-9]*|0) echo "--count must be a positive integer" >&2; e
 # at most four digits: a longer number could wrap around in shell arithmetic and pass as a small one
 case "$RESERVED" in ''|*[!0-9]*|?????*) echo "--reserved must be a whole number up to --count" >&2; exit 2 ;; esac
 if [ "$((10#$RESERVED))" -gt "$((10#$COUNT))" ]; then echo "--reserved must not exceed --count" >&2; exit 2; fi
+case "$CACHE_WAIT" in ''|*[!0-9]*|?????*) echo "--cache-wait must be a whole number of seconds" >&2; exit 2 ;; esac
 # What this host can take (CHECK_HOST_* in scripts/check.ts), for every runner container: read now,
 # so a missing file stops the launcher instead of every container failing to start.
 ENV_ARGS=()
@@ -80,6 +88,215 @@ if [ "$BUILD" = 1 ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build -t "$IMAGE" "$SCRIPT_DIR"
 fi
 
+# Host caches (README "Host caches"): a bare mirror of the repository's branches and tags, and Bun's
+# install cache for the default branch's bun.lock. Only this launcher writes them: the mirror from
+# GitHub, the Bun cache from the downloads Bun checks against that lockfile. Every runner container
+# gets them read-only at /cache, so no job can change what a later one checks out or installs.
+MIRROR=""
+BUN_CACHES=""
+REPO_CACHE=""
+CACHE_CONTAINER="${PREFIX}cache"
+# Each repository has its own caches: a launcher moved to another --repo never hands its runners the
+# old one's packages. GitHub's names never hold a slash or start with a dot.
+case "$REPO" in
+  .*|*/.*|*/*/*|*[!A-Za-z0-9._/-]*|*/|/*) [ "$CACHE" = 1 ] && echo "[cache] $REPO is not an OWNER/NAME this launcher can keep caches for: running without them" >&2; CACHE=0 ;;
+  */*) ;;
+  *) [ "$CACHE" = 1 ] && echo "[cache] $REPO is not an OWNER/NAME this launcher can keep caches for: running without them" >&2; CACHE=0 ;;
+esac
+if [ "$CACHE" = 1 ]; then
+  # an unusable cache directory costs downloads, never the runners
+  if REPO_CACHE="$(umask 022 && mkdir -p "$CACHE_DIR/$REPO" && cd "$CACHE_DIR/$REPO" && pwd -P)"; then
+    MIRROR="$REPO_CACHE/git/repo.git"
+    BUN_CACHES="$REPO_CACHE/bun"
+  else
+    echo "[cache] cannot use $CACHE_DIR/$REPO: running without host caches" >&2
+    CACHE=0
+  fi
+fi
+# The cache loop runs in its own process: files here tell the launcher it warmed the caches, and it
+# that the launcher is stopping. Made with the EXIT trap that removes it.
+STATE_DIR=""
+# Git over a saturated or stalled link: give up on a transfer slower than 1 KB/s for a minute, and on
+# any command after its deadline, rather than hold every refresh (and, at start, every runner).
+# timeout without --foreground runs git in a process group of its own and signals all of it at the
+# deadline, transport helpers included. That group is outside the cache loop's, which cleanup stops:
+# the trap passes the stop on, then waits for timeout, which kills a git that ignores it 5 s later,
+# and kills what is left of the group, so the launcher outlives every part of it. A signal is handled between commands, so once `&` has started
+# timeout, $! names it: before its setpgid the process itself, after it the whole group.
+# A subshell, so its trap never replaces the caller's.
+git_net() (
+  limit="$1" status=0; shift
+  # a no-op job first, so a stop before timeout starts never signals an older job's reused pid
+  : &
+  # every step may fail (set -e applies inside a trap too): wait reports timeout's status
+  trap 'kill -TERM "$!" 2>/dev/null || true; kill -TERM -- "-$!" 2>/dev/null || true; wait "$!" || true
+    kill -KILL -- "-$!" 2>/dev/null || true; exit 143' TERM
+  GIT_TERMINAL_PROMPT=0 timeout -k 5 "$limit" \
+    git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 "$@" &
+  wait "$!" || status=$?
+  # timeout ends with git; a transport helper that ignored the signal is still in its group
+  kill -KILL -- "-$!" 2>/dev/null || true
+  exit "$status"
+)
+
+# Sets DEFAULT_REF to the default branch GitHub names on this refresh, once the mirror holds it; it
+# stays empty (and this fails) when GitHub's answer is missing, so no other branch is ever taken.
+refresh_mirror() {
+  local tmp head dir url="https://github.com/$REPO.git"
+  DEFAULT_REF=""
+  # a mirror of anything else (set up by hand, say) is not this repository's: start again
+  if [ -d "$MIRROR/objects" ] && [ "$(git -C "$MIRROR" config remote.origin.url)" != "$url" ]; then
+    echo "[cache] $MIRROR does not mirror $url: setting it up again" >&2
+    rm -rf "$MIRROR" || return 1
+  fi
+  for dir in "$REPO_CACHE"/git/.new-*; do
+    if [ -d "$dir" ] && [ -n "$(find "$dir" -maxdepth 0 -mmin +60)" ]; then rm -rf "$dir"; fi
+  done
+  if [ ! -d "$MIRROR/objects" ]; then
+    # set up under another name, so a half-configured mirror never takes the real one's
+    mkdir -p "$REPO_CACHE/git" && tmp="$(mktemp -d "$REPO_CACHE/git/.new-XXXXXX")" || return 1
+    # gc.pruneExpire never: a job reads objects from the mirror without copying them, so an object
+    # of a deleted or force-pushed branch must stay while a job may still need it
+    if ! { git -c init.defaultBranch=main init -q --bare "$tmp" &&
+      git -C "$tmp" config remote.origin.url "$url" &&
+      git -C "$tmp" config remote.origin.fetch '+refs/heads/*:refs/heads/*' &&
+      git -C "$tmp" config --add remote.origin.fetch '+refs/tags/*:refs/tags/*' &&
+      git -C "$tmp" config gc.pruneExpire never &&
+      git -C "$tmp" config gc.auto 0 &&
+      git -C "$tmp" config maintenance.auto false &&
+      git -C "$tmp" config fetch.unpackLimit 1 &&
+      chmod 0755 "$tmp" && mv -T "$tmp" "$MIRROR"; }; then
+      rm -rf "$tmp"
+      [ -d "$MIRROR/objects" ] || return 1
+    fi
+  fi
+  # no pull request refs: only this repository's own branches and tags
+  git_net 900 -C "$MIRROR" fetch --quiet --prune --no-write-fetch-head origin || return 1
+  # The default branch, whose bun.lock alone the Bun cache follows: asked of GitHub every time, never
+  # taken from the mirror's own HEAD (a new mirror's names main, whatever the repository's is).
+  # Into a file, not a pipe: git_net runs right under this shell, which a stop then waits for.
+  git_net 120 -C "$MIRROR" ls-remote --symref origin HEAD > "$STATE_DIR/default-branch" || return 1
+  head="$(sed -n 's|^ref: \(refs/heads/[^[:space:]]*\)[[:space:]]*HEAD$|\1|p' "$STATE_DIR/default-branch")"
+  case "$head" in refs/heads/?*) ;; *) return 1 ;; esac
+  git -C "$MIRROR" rev-parse --verify -q "$head^{commit}" >/dev/null || return 1
+  if [ "$(git -C "$MIRROR" symbolic-ref -q HEAD)" != "$head" ]; then
+    git -C "$MIRROR" symbolic-ref HEAD "$head" || return 1
+  fi
+  # With automatic maintenance off, every fetch adds a pack (fetch.unpackLimit 1): join them now and
+  # then, keeping every object (--keep-unreachable), so none a job still reads goes away.
+  if [ "$(find "$MIRROR/objects/pack" -name '*.pack' | wc -l)" -gt 50 ]; then
+    git -C "$MIRROR" repack -q -a -d --keep-unreachable || return 1
+  fi
+  DEFAULT_REF="$head"
+}
+
+# One directory per bun.lock (named after its blob), and `current` pointing at the default branch's
+# (DEFAULT_REF, which refresh_mirror has just confirmed).
+refresh_bun_cache() {
+  local lock commit version tmp failed old dir status
+  [ -n "$DEFAULT_REF" ] || return 1
+  lock="$(git -C "$MIRROR" rev-parse --verify -q "$DEFAULT_REF:bun.lock")" || return 0
+  commit="$(git -C "$MIRROR" rev-parse --verify -q "$DEFAULT_REF^{commit}")" || return 1
+  version="$BUN_CACHES/$lock"
+  failed="$BUN_CACHES/.failed-$lock"
+  mkdir -p "$BUN_CACHES" || return 1
+  if [ ! -d "$version" ]; then
+    # a build that failed is retried after 30 minutes, not every refresh: each try downloads it all
+    [ -n "$(find "$failed" -mmin -30 2>/dev/null)" ] && return 1
+    tmp="$(mktemp -d "$BUN_CACHES/.new-XXXXXX")" || return 1
+    docker rm -f "$CACHE_CONTAINER" >/dev/null 2>&1 || true
+    # The runner's hardening, the host user's files, no package scripts, and only what the lockfile
+    # pins: --frozen-lockfile refuses to resolve anything else and Bun checks every download's
+    # integrity against it. Not in the runners' network namespace: their check.ts slots are theirs.
+    # --foreground keeps it in this process group, which the launcher's exit stops whole; --init gives
+    # the container a PID 1 that passes the deadline's SIGTERM on (a bare PID 1 ignores it), and -k
+    # ends the client if it still waits. Whatever ended it, docker rm -f below ends the container.
+    status=0
+    timeout --foreground -k 5 900 docker run --rm --init \
+      --name "$CACHE_CONTAINER" \
+      --security-opt no-new-privileges \
+      --cap-drop ALL \
+      --pids-limit 8192 \
+      --user "$(id -u):$(id -g)" \
+      -e HOME=/tmp \
+      -e BUN_INSTALL_CACHE_DIR=/cache/bun \
+      -e COMMIT="$commit" \
+      -v "$MIRROR:/cache/git/repo.git:ro" \
+      -v "$tmp:/cache/bun" \
+      --entrypoint bash \
+      "$IMAGE" -c 'set -e
+        git clone -q --shared --no-checkout /cache/git/repo.git /tmp/src
+        cd /tmp/src
+        git checkout -q --detach "$COMMIT"
+        bun install --frozen-lockfile --ignore-scripts' </dev/null >/dev/null || status=$?
+    if [ "$status" != 0 ]; then
+      docker rm -f "$CACHE_CONTAINER" >/dev/null 2>&1 || true
+      rm -rf "$tmp"
+      # Every failure waits 30 minutes (a crash or the OOM killer as well): only the launcher's own
+      # stop is no reason to wait before the next start's build.
+      if [ ! -e "$STATE_DIR/stopping" ]; then touch "$failed"; fi
+      return 1
+    fi
+    rm -f "$failed"
+    # mktemp's 0700, or a package's own modes, would keep the runner's own user out
+    chmod -R a+rX "$tmp"
+    # another launcher may have finished the same lockfile first
+    mv -T "$tmp" "$version" 2>/dev/null || rm -rf "$tmp"
+  fi
+  old="$(readlink "$BUN_CACHES/current" 2>/dev/null || true)"
+  if [ "$old" != "$lock" ]; then
+    # its mtime now says when it was replaced
+    if [ -n "$old" ] && [ -d "$BUN_CACHES/$old" ]; then touch "$BUN_CACHES/$old"; fi
+    ln -sfn "$lock" "$BUN_CACHES/.current-new" && mv -T "$BUN_CACHES/.current-new" "$BUN_CACHES/current"
+  fi
+  # A replaced version stays an hour, so a job copying it when it was replaced finishes first.
+  for dir in "$BUN_CACHES"/* "$BUN_CACHES"/.new-*; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ "${dir##*/}" != "$lock" ] || continue
+    if [ -n "$(find "$dir" -maxdepth 0 -mmin +60)" ]; then rm -rf "$dir"; fi
+  done
+  find "$BUN_CACHES" -maxdepth 1 -name '.failed-*' -mmin +60 -delete 2>/dev/null || true
+}
+
+# git and Docker write with the umask: the runner containers read the caches as another user.
+# The Bun cache is built only after this refresh confirmed the default branch: never from a stale or
+# initial HEAD. On a stop, the trap waits for the command running now (bash runs it after that
+# command ends), so the launcher's own wait outlives every git and docker client of the refresh.
+refresh_caches() (
+  umask 022
+  trap 'exit 143' TERM
+  if ! refresh_mirror; then
+    echo "[cache] could not refresh the git mirror $MIRROR from github.com/$REPO, or GitHub named no default branch it holds" >&2
+  elif ! refresh_bun_cache; then
+    echo "[cache] could not build the Bun cache in $BUN_CACHES for the default branch's bun.lock" >&2
+  fi
+  return 0
+)
+
+# The first refresh says when it is done, so runners can start with warm caches; then one a minute.
+cache_loop() {
+  trap 'exit 143' TERM
+  refresh_caches
+  : > "$STATE_DIR/warm"
+  [ "$ONCE" = 1 ] && return 0
+  while true; do
+    # a schedule, not a wait: one small fetch a minute keeps the mirror near GitHub
+    sleep 60
+    refresh_caches
+  done
+}
+
+# Set when each runner starts, so a cache that appeared since is used.
+cache_args() {
+  CACHE_ARGS=()
+  [ "$CACHE" = 1 ] || return 0
+  CACHE_ARGS=(-v "$REPO_CACHE:/cache:ro")
+  # actions/checkout and every other git command of the job read objects from the mirror first and
+  # fetch only what it lacks; an object is named by its hash, so the head checked out is the same
+  if [ -d "$MIRROR/objects" ]; then
+    CACHE_ARGS+=(-e GIT_ALTERNATE_OBJECT_DIRECTORIES=/cache/git/repo.git/objects)
+  fi
+}
+
 start_netns() {
   local running
   running="$(docker inspect -f '{{.State.Running}}' "$NETNS" 2>/dev/null || true)"
@@ -113,10 +330,11 @@ slot_loop() {
       continue
     fi
     delay=30
-    # No docker socket, no host mounts, no privileges. tini is already the entrypoint.
+    # No docker socket, no host mount but the read-only caches, no privileges. tini is already the entrypoint.
     # The token goes in on stdin (entrypoint.sh), so it is never in the container's environment.
     # a runner started after the namespace container went away would have no network
     start_netns
+    cache_args
     if printf '%s\n' "$token" | docker run --rm -i \
       --name "$name" \
       --network "container:$NETNS" \
@@ -127,6 +345,7 @@ slot_loop() {
       -e RUNNER_URL="https://github.com/$REPO" \
       -e RUNNER_NAME="$name" \
       -e RUNNER_LABELS="$labels" \
+      ${CACHE_ARGS[@]+"${CACHE_ARGS[@]}"} \
       ${ENV_ARGS[@]+"${ENV_ARGS[@]}"} \
       "$IMAGE"; then
       container_status=0
@@ -141,19 +360,27 @@ slot_loop() {
 }
 
 PIDS=()
+CACHE_PID=""
 cleaned=0
 cleanup() {
   [ "$cleaned" = 1 ] && return
   cleaned=1
   trap '' INT TERM
   echo "stopping runner slots..." >&2
+  # the whole refresh, git and the Bun cache build included: none may outlive the launcher
+  if [ -n "$STATE_DIR" ]; then : > "$STATE_DIR/stopping"; fi
+  if [ -n "$CACHE_PID" ]; then kill -TERM -- "-$CACHE_PID" 2>/dev/null || true; fi
+  docker stop -t 5 "$CACHE_CONTAINER" >/dev/null 2>&1 || true
   for pid in "${PIDS[@]:-}"; do
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   done
   for slot in $(seq 1 "$COUNT"); do
     docker stop -t 30 "${PREFIX}${slot}" >/dev/null 2>&1 || true
   done
+  # the runners, and the cache loop with every git and docker client it started
   wait 2>/dev/null || true
+  # a build client killed while its container still ran left the container behind
+  docker rm -f "$CACHE_CONTAINER" >/dev/null 2>&1 || true
   docker stop -t 5 "$NETNS" >/dev/null 2>&1 || true
   # Remove any runner of this host that is still registered.
   ids="$(gh api "repos/$REPO/actions/runners" --paginate \
@@ -161,10 +388,29 @@ cleanup() {
   for id in $ids; do
     gh api -X DELETE "repos/$REPO/actions/runners/$id" >/dev/null 2>&1 || true
   done
+  if [ -n "$STATE_DIR" ]; then rm -rf "$STATE_DIR"; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+if [ "$CACHE" = 1 ]; then
+  STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ovis-ci-runner.XXXXXX")"
+  # in a process group of its own (job control on for this one start), so cleanup stops it whole
+  set -m
+  cache_loop &
+  CACHE_PID="$!"
+  set +m
+  # The first runners wait for warm caches, up to --cache-wait: a refresh that hangs or fails costs
+  # downloads, never the runners. Short naps, so a stop signal is handled at once.
+  deadline=$((SECONDS + 10#$CACHE_WAIT))
+  while [ ! -e "$STATE_DIR/warm" ] && kill -0 "$CACHE_PID" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+    sleep 0.1
+  done
+  if [ ! -e "$STATE_DIR/warm" ]; then
+    echo "[cache] the caches are not ready after ${CACHE_WAIT}s: starting the runners without waiting for them" >&2
+  fi
+fi
 
 start_netns
 for slot in $(seq 1 "$COUNT"); do

@@ -34,7 +34,7 @@ import { TOUCH_WHEEL_QUEUE_LIMIT, TOUCH_WHEEL_REPORTS_PER_FRAME } from "../src/l
 const REPS = Number(process.env["TOUCH_BURST_REPS"] ?? 2);
 const DRAIN_LIMIT_MS = 300;
 const state = mkdtempSync(join(tmpdir(), "herdr-touch-burst-"));
-const evidence = process.env["UI_EVIDENCE_DIR"] ?? join(state, "evidence");
+const evidence = process.env["UI_EVIDENCE_DIR"] || join(state, "evidence");
 const frames = join(evidence, "measure-frames");
 mkdirSync(frames, { recursive: true });
 const workspaces: string[] = [];

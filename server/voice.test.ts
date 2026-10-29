@@ -229,6 +229,19 @@ describe("voice transcribe", () => {
     expect((form.get("file") as File).name).toBe("audio.webm");
   });
 
+  it("keeps the provider form within 32 fields when the pane has many hints", async () => {
+    handler = transcriptAnswer;
+    const hints = Array.from({ length: 50 }, (_, i) => `/command-${i}`);
+    const response = await transcribe(service({ OVIS_OPENAI_API_KEY: KEY }), clipForm({ keywords: JSON.stringify(hints), language: "vi" }));
+    expect(response.status).toBe(200);
+
+    const form = requests[0]!.init.body as FormData;
+    expect([...form.keys()]).toHaveLength(32);
+    expect(form.getAll("languages[]")).toEqual(["vi", "en"]);
+    expect(form.get("prompt")).toMatch(/\S/);
+    expect(form.getAll("keywords[]")).toEqual(hints.slice(0, 26));
+  });
+
   it("adds the polished text when asked", async () => {
     handler = (url, init) => {
       if (url.endsWith("/audio/transcriptions")) return transcriptAnswer();

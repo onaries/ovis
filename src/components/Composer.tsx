@@ -36,6 +36,7 @@ import {
   composerStatusWord,
   contextLeftPercent,
   type DraftRefusal,
+  draftSendNote,
   formatTokens,
   imageMention,
   insertLeadingMention,
@@ -907,28 +908,39 @@ export function Composer({
     }
   }, [awaitCommit, clearCommitWait, t]);
 
-  /** A quick reply, or a typed pick's Confirm, follows the same delivery policy as Send, and leaves the box alone. */
-  const sendBeside = useCallback((deliver: () => ReturnType<typeof onSend>) => {
+  /**
+   * A quick reply, or a typed pick's Confirm, follows the same delivery policy as Send, and leaves the box alone.
+   * `draft`: Send it's terminal draft. Its note, with the draft and its buttons, stays until the send is confirmed,
+   * and one that did not go names the draft (draftSendNote).
+   */
+  const sendBeside = useCallback((deliver: () => ReturnType<typeof onSend>, draft?: string) => {
     if (!connected || sending) return;
-    setNote(null);
-    // a quick reply is not the box's text, so its note offers no send over a draft
+    if (draft === undefined) setNote(null);
     const settle = (result: boolean | string | DraftRefusal): void => {
-      if (mounted.current && typeof result !== "boolean") {
-        setNote(typeof result === "string" ? result : "plain" in result && result.plain === true ? result.note : submitNote("input_draft", result.note));
-      }
+      if (!mounted.current) return;
+      // false sent nothing: Send it's note stays as it was
+      if (draft !== undefined) { if (result === true) setNote(null); else if (result !== false) setNote(draftSendNote(result, draft)); return; }
+      // a quick reply is not the box's text, so its note offers no send over a draft
+      if (typeof result !== "boolean") setNote(typeof result === "string" ? result : "plain" in result && result.plain === true ? result.note : submitNote("input_draft", result.note));
+    };
+    const unconfirmed = (): void => {
+      const note = t("Not confirmed. Check the terminal before sending again.");
+      if (mounted.current) setNote(draft === undefined ? note : draftSendNote(note, draft));
     };
     if (!composerDrafts.begin(draftKey)) return;
     const sendId = composerDrafts.sendOf(draftKey);
     try {
       const result = deliver();
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey, sendId); return; }
-      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey, sendId));
+      void result.then(settle).catch(unconfirmed).finally(() => composerDrafts.end(draftKey, sendId));
     } catch {
       composerDrafts.end(draftKey, sendId);
-      if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
+      unconfirmed();
     }
   }, [connected, draftKey, sending]);
   const sendQuick = useCallback((reply: string) => sendBeside(() => onSend(reply)), [onSend, sendBeside]);
+  /** Send it: the terminal draft a DraftRefusal named goes as it is, as Clear it and send with the draft for the message. */
+  const sendDraft = useCallback((draft: string) => sendBeside(() => onSend(draft, draft), draft), [onSend, sendBeside]);
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1109,7 +1121,7 @@ export function Composer({
 
       {/* why the message in the box did not go: on the box's top edge, read with it, its one way on beside it */}
       {note !== null && noteLine !== null && (
-        <div className={`composer-note${typeof note === "object" && !("failure" in note) ? " composer-note-offer" : ""}`} role="alert">
+        <div className="composer-note" role="alert">
           <TriangleAlert className="composer-note-icon" aria-hidden="true" />
           <div className="composer-note-text">
             {noteLine}
@@ -1123,8 +1135,11 @@ export function Composer({
               not tell empty, sent over only in the same Claude terminal the refusal was for */}
           {typeof note === "object" && ("failure" in note
             ? offersRetry(note.failure) && <button type="button" className="composer-note-action" disabled={!connected} onClick={() => retryUpload(note.attachment)}>{t("Try again")}</button>
-            : <button type="button" className="composer-note-action" disabled={!connected || uploading || roomless !== undefined || sending || text.trim().length === 0}
-              onClick={() => "draft" in note ? send(note.draft) : send(undefined, true)}>{"draft" in note ? t("Clear it and send") : t("Send anyway")}</button>)}
+            : <div className="composer-note-actions">
+              {"draft" in note && <button type="button" className="composer-note-action" disabled={!connected || sending} onClick={() => sendDraft(note.draft)}>{t("Send it")}</button>}
+              <button type="button" className="composer-note-action" disabled={!connected || uploading || roomless !== undefined || sending || text.trim().length === 0}
+                onClick={() => "draft" in note ? send(note.draft) : send(undefined, true)}>{"draft" in note ? t("Clear it and send") : t("Send anyway")}</button>
+            </div>)}
         </div>
       )}
 

@@ -85,6 +85,47 @@ describe("Hermes commands", () => {
     ]);
   });
 
+  it("reads Windows Hermes skills under LOCALAPPDATA, where 0.21.5 keeps its home and checkout", () => {
+    const f = fixture();
+    const hermes = join(f.root, "local", "hermes");
+    f.skill(join(hermes, "skills"), "stock", { name: "Stock Skill", description: "Installed stock." });
+    f.skill(join(hermes, "skills"), "mine", { description: "Personal." });
+    f.skill(join(hermes, "hermes-agent", "skills"), "other/stock", { name: "Stock Skill" });
+    f.skill(join(f.home, ".hermes", "skills"), "wrong-home");
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      expect(paneCommands("hermes", f.cwd, f.home, { environ: [`LOCALAPPDATA=${join(f.root, "local")}`] }).filter((command) => command.source === "skill")).toMatchObject([
+        { name: "mine", description: "Personal.", origin: "user" },
+        { name: "stock-skill", description: "Installed stock.", origin: "bundled" },
+      ]);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("finds Windows Hermes under the server's LOCALAPPDATA when the pane's environment cannot be read, and a read one wins", () => {
+    const f = fixture();
+    const redirected = join(f.root, "redirected");
+    f.skill(join(redirected, "hermes", "skills"), "redirected", { description: "Redirected store." });
+    f.skill(join(f.root, "pane", "hermes", "skills"), "pane-local", { description: "Pane store." });
+    f.skill(join(f.home, "AppData", "Local", "hermes", "skills"), "profile-default");
+    f.skill(join(f.profile, "skills"), "server-profile");
+    const skills = (environ: string[] | null, server: Record<string, string>) =>
+      paneCommands("hermes", f.cwd, f.home, { environ }, null, server).filter((command) => command.source === "skill").map((command) => command.name);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      expect(skills(null, { LOCALAPPDATA: redirected })).toEqual(["redirected"]);
+      expect(skills(null, { LocalAppData: redirected })).toEqual(["redirected"]);
+      // only LOCALAPPDATA comes from the server: its HERMES_HOME is the server's profile, not the pane's
+      expect(skills(null, { LOCALAPPDATA: redirected, HERMES_HOME: f.profile })).toEqual(["redirected"]);
+      expect(skills([`LOCALAPPDATA=${join(f.root, "pane")}`], { LOCALAPPDATA: redirected, HERMES_HOME: f.profile })).toEqual(["pane-local"]);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
   it("never offers untrusted projects, disabled discovery, non-repositories or a home repository", () => {
     const f = fixture();
     f.skill(join(f.repo, ".hermes", "skills"), "private-project");

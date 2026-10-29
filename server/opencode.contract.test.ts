@@ -6,12 +6,13 @@ import { join } from "node:path";
 
 import { createServer } from "./index.ts";
 import { forgetTranscriptState } from "./conversation.ts";
-import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
+import { herdrRpc, paneRead, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 import type { CommandOutcome, ConversationPart, ConversationResponse, SlashCommand } from "../shared/protocol.ts";
 import { CATALOG_SOURCE_BUDGET_MS, mergeCatalogSources } from "./catalog-sources.ts";
 import { paneContext } from "./pane-context.ts";
 import { closeOpenCodeNative, openCodeNativeState } from "./opencode-native.ts";
 import { forgetOpenCodeService, openCodeServiceOptions, OPENCODE_HTTP_TIMEOUT_MS } from "./opencode-service.ts";
+import { skillRowSelected } from "./opencode-skill-attach.ts";
 
 // Real herdr metadata + HTTP + an OpenCode store of the test's own, handed to the server (opencodeDb).
 const root = mkdtempSync(join(tmpdir(), "ovis-opencode-contract-"));
@@ -352,6 +353,7 @@ describe("OpenCode v2 native service", () => {
     const recorded = (name: string) => readFileSync(join(import.meta.dir, "fixtures", `opencode-autocomplete-2.0.32-ansi-narrow-${name}.ansi`), "utf8").replace(/\n/g, "\r\n");
     writeFileSync(join(nativeRoot, "screen.txt"), recorded("first-selected"));
     writeFileSync(join(nativeRoot, "accepted.txt"), recorded("accepted"));
+    writeFileSync(join(nativeRoot, "closed.txt"), recorded("closed"));
     writeFileSync(standIn, `#!${process.execPath}
 const { appendFileSync, readFileSync, statSync } = require("node:fs");
 let typed = "";
@@ -365,6 +367,8 @@ process.stdin.on("data", (chunk) => {
   typed += chunk.toString("latin1");
   if (!before.endsWith("@effect") && typed.endsWith("@effect")) process.stdout.write("\\u001b[2J\\u001b[H" + readFileSync(${JSON.stringify(join(nativeRoot, "screen.txt"))}, "utf8"));
   if (before.endsWith("@effect") && typed.endsWith("@effect\\t")) process.stdout.write("\\u001b[2J\\u001b[H" + readFileSync(${JSON.stringify(join(nativeRoot, "accepted.txt"))}, "utf8"));
+  // Ctrl-L: the prompt with its autocomplete closed (closedPrompt)
+  if (chunk.toString("latin1") === "\\u000c") process.stdout.write("\\u001b[2J\\u001b[H" + readFileSync(${JSON.stringify(join(nativeRoot, "closed.txt"))}, "utf8"));
 });
 `);
     chmodSync(standIn, 0o755);
@@ -676,6 +680,22 @@ process.stdin.on("data", (chunk) => {
     check();
   });
 
+  /**
+   * The stand-in redraws only as it is typed to, so a test that left @effect's row selected (as Tab leaving the skill
+   * unconfirmed does) leaves it on screen for the next. A send reads its autocomplete and the agent named beside it
+   * from the first screen showing that row, which could then be the old one, not the one its own @effect draws.
+   * This draws the prompt with the autocomplete closed: once the stand-in has read its Ctrl-L (typed.log ends with it,
+   * written before the redraw) and herdr shows no selected row, every screen after it is the next send's own.
+   */
+  const closedPrompt = async (): Promise<void> => {
+    await herdrRpc("pane.send_text", { pane_id: nativePane, text: "\u000c" });
+    for (const deadline = Date.now() + 5_000;;) {
+      if (typed().endsWith("\u000c") && !skillRowSelected((await paneRead({ paneId: nativePane, source: "visible", format: "ansi" })).text, "effect")) break;
+      if (Date.now() > deadline) throw new Error("the stand-in's closed prompt was not drawn");
+      await Bun.sleep(25);
+    }
+  };
+
   it("delivers a queued message completely when Tab leaves the skill unconfirmed", async () => {
     const acceptedPath = join(nativeRoot, "accepted.txt");
     const accepted = readFileSync(acceptedPath, "utf8");
@@ -714,6 +734,7 @@ process.stdin.on("data", (chunk) => {
     const selected = readFileSync(selectedPath, "utf8");
     const accepted = readFileSync(acceptedPath, "utf8");
     const { ws, frame } = await socket();
+    await closedPrompt();
     const before = typed().length;
     let uncertainId: string | undefined;
     try {
@@ -1128,15 +1149,17 @@ process.stdin.on("data", (chunk) => {
       await within(closed.promise, "the stream closing after the last verified pane stopped being OpenCode");
       expect(openCodeNativeState()).toEqual({ stream: false, panes: [] });
 
-      // a replacement server: its collector learns the pane verified before it started, and ends it
+      // a replacement server, started before the old one stops (the last server's stop releases every pane):
+      // its collector learns the pane verified before it started, and ends it
       opened = Promise.withResolvers<void>();
       closed = Promise.withResolvers<void>();
       ending = await startPane("ses_lifecycleHandover");
       await verify(ending.paneId);
       await within(opened.promise, "the stream opening for the handed-over pane");
-      server.stop();
+      const replaced = server;
       server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), opencodeDb: database });
       await server.statusReady;
+      replaced.stop();
       expect(openCodeNativeState()).toEqual({ stream: true, panes: [ending.paneId] });
       await workspaceClose(ending.workspaceId);
       ending = undefined;

@@ -26,6 +26,8 @@ import { handleTasksRequest } from "./tasks-routes.ts";
 import { handlePlanRequest } from "./plan-routes.ts";
 import { ShellAgentLocator } from "./shell-agent.ts";
 import { handleAgentsRequest } from "./agents-routes.ts";
+import { AgentDetector, catalogLocator, defaultLoginProbe } from "./agent-catalog-detect.ts";
+import { handleAgentCatalogRequest } from "./agent-catalog-routes.ts";
 import { forgetPageMedia } from "./file-view.ts";
 import { handleFileRequest } from "./file-routes.ts";
 import { BACKGROUND_AGENT_PATH, handleBackgroundAgentRequest, type BackgroundAgentDeps } from "./background-agent.ts";
@@ -56,6 +58,8 @@ import { handleSessionHistoryRequest, handleSessionResumeRequest, SESSION_HISTOR
 import { HerdrSidebarConfig, herdrConfigPath, snapshotWithoutHiddenTokens } from "./herdr-sidebar.ts";
 import { readHerdrUi } from "./herdr-ui.ts";
 import { closeCodexDaemonSources } from "./codex-daemon.ts";
+import { holdOpenCodeNative } from "./opencode-native.ts";
+import { holdFilePool } from "./file-pool.ts";
 import { MachineRelay } from "./machine-relay.ts";
 import { sameOrigin } from "./machine-security.ts";
 import { handlePluginRequest } from "./plugin-routes.ts";
@@ -67,14 +71,14 @@ export const SUBMIT_DELAY_MS = 120;
  * an Alt+key: a composer message waits this long after the pane's last keystroke, so a
  * Stop tapped just before Send still reaches the pane first.
  */
-const TYPED_SETTLE_MS = 300;
+export const TYPED_SETTLE_MS = 300;
 /**
  * A terminal key (WS `keys`) goes through herdr's RPC, around the attach pty: it waits this long
  * after the pane's last pty keystroke so it never overtakes typing on its way through the
  * sidecar and the attach, and the whole TYPED_SETTLE_MS when that keystroke ended in an ESC
  * herdr may still be holding. Short enough that a held arrow between typed letters shows no lag.
  */
-const KEY_SETTLE_MS = 40;
+export const KEY_SETTLE_MS = 40;
 /**
  * Nothing of a composer message is typed once this long has passed since it reached the
  * server (it can wait behind a stalled one in the pane's queue): it answers submit_timeout
@@ -203,6 +207,8 @@ export function createServer(
     sidecar?: boolean | (() => boolean);
     /** where omo and gjc are found for the offer and the start (server/shell-agent.ts); unset, this server's PATH alone. The real entrypoints (this file's and remote-entry.ts) add their user's login shell; tests pass a fixture one. */
     shellAgents?: ShellAgentLocator;
+    /** what GET /api/agent-catalog finds installed; unset, the agents' binaries on this server's PATH alone. The real entrypoints (this file's and remote-entry.ts) add their user's login shell's PATH, where installers put agents. */
+    agentDetector?: AgentDetector;
   } = {},
 ): ServerInstance {
   /**
@@ -220,7 +226,6 @@ export function createServer(
   const merge = options.siblingStateDir ? mergeSiblingState(stateDir, options.siblingStateDir) : null;
   const devices = new DeviceStore(stateDir, merge?.devicesBlocked ?? null);
   const preferences = new PreferenceStore(stateDir);
-  const seen = new SeenStore(stateDir);
   // Chat's own rewind (#1500, never released) kept its rewinds here; nothing reads them since #1577
   try {
     rmSync(join(stateDir, "claude-rewinds.json"), { force: true });
@@ -231,6 +236,8 @@ export function createServer(
   const cliProxy = options.cliProxy ?? new CLIProxyService(stateDir);
   const cliProxyRoutes = new CLIProxyRoutes(cliProxy);
   const usageLogin = options.usageLogin ?? new UsageLoginService();
+  // a sign-in runs in a herdr tab, which outlives this server: the next one must know its home is taken (#2313)
+  usageLogin.persistTo(stateDir);
   const usage = options.usage ?? new UsageService(undefined, undefined, (refresh) => cliProxy.report(refresh));
   const voice = options.voice ?? new VoiceService({ stateDir, env: process.env, fetch });
   /** a login named here is taken as it is: a tagged node has none of its own to read (OVIS_TAILSCALE_OWNER) */
@@ -245,6 +252,7 @@ export function createServer(
   const portalGuards = () => ({ tokenSet: token !== "", serveOnly });
 
   const shellAgents = options.shellAgents ?? new ShellAgentLocator({ probe: null });
+  const agentDetector = options.agentDetector ?? new AgentDetector({ locate: catalogLocator({ probe: null }) });
   const openCodeState = new OpenCodePromptState();
   const draftTimer = setInterval(() => openCodeState.prune(), 60_000);
   draftTimer.unref();
@@ -254,6 +262,8 @@ export function createServer(
   const browserSnapshot = <S extends SessionSnapshot>(snapshot: S): S => options.bridgeOnly ? snapshot : snapshotWithoutHiddenTokens(herdrSidebar.get(), snapshot);
   const core = createCore({ options: { ...options, stateDir, openCodeState, orderSequence }, devices, preferences, usage, usageLogin, browserSnapshot, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS });
   const { sidecar, serialize, push, logPushError, omo, claudeAgents, opencodeAgents, codexTasks, plans, clientSnapshot, machines, broadcastAll, collector, queueFirstMessage } = core;
+  // read finishes are kept until this server knows their herdr run ended
+  const seen = new SeenStore(stateDir, (pc, epoch) => machines?.finishEnded(pc, epoch) ?? false);
   // started after createCore's Node probe (server/pty/sidecar.ts), which can hold the thread up to 3 s: that wait
   // would count against the read's own 2.5 s limit, and a read cut short leaves the owner unknown for 5 minutes
   identityOf(false, null);
@@ -292,9 +302,10 @@ export function createServer(
       // the connection server that reaches this one as its PC reads its update status and asks for the
       // update on offer: an Ovis run on this PC by itself is updated through its own updater, never
       // replaced (server/machines.ts ownOffer). An install still names the offered revision and the
-      // custom header (update-api.ts), and whoever holds the token already drives every pane here
-      const bridgeUpdatePath = pathname === "/api/updates" || pathname === "/api/updates/install";
-      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === SESSION_HISTORY_PATH || pathname === SESSION_RESUME_PATH || pathname === "/api/agents" || pathname === "/api/agent/rename" || pathname === "/api/agent/commands" || pathname === "/api/integrations" || pathname === "/api/plugins/actions" || pathname === "/api/plugin/action" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/worktree/") || pathname.startsWith("/api/tab/") || pathname === "/api/layout/ratio" || pathname.startsWith("/api/fs/") || pathname === "/ws" || bridgeUpdatePath;
+      // custom header (update-api.ts), and whoever holds the token already drives every pane here. Only those two
+      // requests, each by its own method and with no query: the token opens nothing else of these routes (#2054)
+      const bridgeUpdatePath = url.search === "" && (pathname === "/api/updates" ? request.method === "GET" : pathname === "/api/updates/install" && request.method === "POST");
+      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === SESSION_HISTORY_PATH || pathname === SESSION_RESUME_PATH || pathname === "/api/agents" || pathname === "/api/agent-catalog" || pathname === "/api/agent/rename" || pathname === "/api/agent/commands" || pathname === "/api/integrations" || pathname === "/api/plugins/actions" || pathname === "/api/plugin/action" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/worktree/") || pathname.startsWith("/api/tab/") || pathname === "/api/layout/ratio" || pathname.startsWith("/api/fs/") || pathname === "/ws" || bridgeUpdatePath;
       const ip = bunServer.requestIP(request);
       const loopback = ip !== null && isLoopbackAddress(ip.address);
       const forwarded = cameThroughProxy(request.headers);
@@ -365,9 +376,20 @@ export function createServer(
       const repositoryDiff = /^\/api\/(?:machines\/[^/]+\/)?workspace\/diff\//.test(pathname);
       // earlier sessions carry their first prompts
       const sessionHistory = /^\/api\/(?:machines\/[^/]+\/)?sessions\/history$/.test(pathname);
-      // an agent's commands in a folder are read from that folder's command files, as a directory listing and a file read are
-      const agentCommands = /^\/api\/(?:machines\/[^/]+\/)?agent\/commands$/.test(pathname);
-      if (readOnly && (fileRead || directoryListing || repositoryDiff || sessionHistory || agentCommands || mutating && !ownPreferences)) {
+      // an agent's commands in a folder, and a pane's, are read from that folder's command files (each row
+      // carries a file's first line and its path), as a directory listing and a file read are; the
+      // composer's menu that lists them is a drive feature (#2132)
+      const commandRows = /^\/api\/(?:machines\/[^/]+\/)?(?:agent|pane)\/commands$/.test(pathname);
+      // the paths under a pane's folder that match a query are a directory listing too; they feed the
+      // composer's @-mention picker, a drive feature (#2244)
+      const paneFiles = /^\/api\/(?:machines\/[^/]+\/)?pane\/files$/.test(pathname);
+      // where a plugin action's run stands carries what its command printed when it failed, asked for by a
+      // log id: only the device that started the run (a POST, which a watching device cannot send) asks it
+      const pluginRun = /^\/api\/(?:machines\/[^/]+\/)?plugin\/action$/.test(pathname);
+      // a repository's checkouts are its folders' paths and branches, those not open in herdr too; the worktree
+      // dialog that lists them is a drive feature, and the sidebar names a branch only for a driving device (#2250)
+      const worktreeList = /^\/api\/(?:machines\/[^/]+\/)?worktree\/list$/.test(pathname);
+      if (readOnly && (fileRead || directoryListing || repositoryDiff || sessionHistory || commandRows || paneFiles || pluginRun || worktreeList || mutating && !ownPreferences)) {
         setRequestRoute("watch-refusal");
         return jsonResponse({ error: { code: "read_only", message: "this device can only watch" } }, 403);
       }
@@ -391,7 +413,7 @@ export function createServer(
         if (pathname.startsWith("/api/machines/local/")) {
           if (!sameOrigin(request) || (request.method !== "GET" && request.headers.get("x-herdr-machine") !== "1")) return jsonResponse({ error: { code: "invalid_origin", message: "Use PC controls from this app" } }, 403);
           pathname = pathname.replace("/api/machines/local/", "/api/");
-          if (!/^\/api\/(session|agents|integrations|pane\/|workspace\/|worktree\/|tab\/|layout\/ratio$|agent\/(?:rename|commands)$|plugins\/actions$|plugin\/action$|sessions\/(?:history|resume)$)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
+          if (!/^\/api\/(session|agents|agent-catalog$|integrations|pane\/|workspace\/|worktree\/|tab\/|layout\/ratio$|agent\/(?:rename|commands)$|plugins\/actions$|plugin\/action$|sessions\/(?:history|resume)$)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
           url.pathname = pathname;
         } else {
           // a worktree made with an agent waits on git and then agent.start, up to 150 s on the PC, and a
@@ -465,7 +487,14 @@ export function createServer(
       }
 
       if (pathname === "/api/updates" || pathname.startsWith("/api/updates/")) {
-        return handleUpdateRequest(request, pathname, options.updates);
+        // the bridge token cannot read /api/access: where this server answers comes with its update status (#2191)
+        // the port is this server's own; a tailscale that cannot be read only leaves the https address out
+        const where = bridgeAuthorized ? async () => {
+          const port = bunServer.port ?? DEFAULT_PORT;
+          const serving = await remoteAccess(port).then((access) => access.tailscale.serving_url, () => null);
+          return { port, serving_url: serving };
+        } : undefined;
+        return handleUpdateRequest(request, pathname, options.updates, where);
       }
       if (pathname === "/api/herdr/update") { setRequestRoute(pathname); return handleHerdrUpdateRequest(request, options.herdrUpdate); }
       if (pathname === "/api/portal" || pathname.startsWith("/api/portal/")) {
@@ -560,6 +589,9 @@ export function createServer(
       const agentsResponse = await handleAgentsRequest(request, pathname, shellAgents);
       if (agentsResponse) return agentsResponse;
 
+      const catalogResponse = await handleAgentCatalogRequest(request, pathname, agentDetector);
+      if (catalogResponse) return catalogResponse;
+
       const integrationsResponse = await handleIntegrationsRequest(request, pathname);
       if (integrationsResponse) return integrationsResponse;
 
@@ -650,6 +682,10 @@ export function createServer(
   const relay = target ? loopbackRelay(target, server.port ?? 0) : null;
   const registration = options.registerBridge ? registerBridge(relay?.port ?? server.port ?? 0, bridgeToken) : null;
 
+  // OpenCode's stream and watches are shared by every server in this process: the last one to stop resets them
+  const releaseOpenCodeNative = holdOpenCodeNative();
+  // the file threads are shared by every server in this process too: the last one to stop ends them
+  const releaseFilePool = holdFilePool();
   core.start();
 
   return {
@@ -670,9 +706,11 @@ export function createServer(
         registration?.close();
         relay?.stop();
         closeCodexDaemonSources();
+        releaseOpenCodeNative();
       });
       void shellAgents.stop();
       server.stop(true);
+      releaseFilePool();
       requestLog.close();
     },
   };
@@ -688,7 +726,7 @@ if (import.meta.main) {
   const portal = new PortalService({ stateDir });
   let instance: ReturnType<typeof createServer>;
   try {
-    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), portal, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), stateDir, siblingStateDir: siblingStateDir(stateDir) });
+    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), portal, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir) });
   } catch (err) {
     const { code, syscall } = err as { code?: string; syscall?: string };
     // only the bind itself: a permission error reading a state file keeps its own message and path

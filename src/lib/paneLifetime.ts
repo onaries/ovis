@@ -242,21 +242,28 @@ export class PaneLifetimes {
 
   /**
    * Text a store held only in this page for a PC whose herdr was just replaced (an edit storage
-   * refused, input held but not yet saved): kept for recovery with the rest.
+   * refused, input held but not yet saved), or only in this page while its herdr is not proven:
+   * kept for recovery with the rest. The ID of the record that holds it, null for blank text.
+   * `own`: a record of its own, never one already kept for the same words, so whoever discards it
+   * takes no other tab's or earlier page's copy with it.
    */
-  keep(machineId: string, paneId: string, kind: UnsentKind, text: string): void {
+  keep(machineId: string, paneId: string, kind: UnsentKind, text: string, own = false): string | null {
     let storage: Storage | null = null;
     try { storage = this.storage(); } catch { /* no storage: the text is kept in this page */ }
-    this.archive(storage, machineId, paneId, kind, [text], this.titles.get(machineId) ?? new Map());
+    const [id] = this.archive(storage, machineId, paneId, kind, [text], this.titles.get(machineId) ?? new Map(), own);
     this.notify();
+    return id ?? null;
   }
 
-  private archive(storage: Storage | null, machineId: string, paneId: string, kind: UnsentKind, values: readonly string[], titles: ReadonlyMap<string, string>): void {
+  /** the IDs of the records holding the texts, an earlier one for a text already kept */
+  private archive(storage: Storage | null, machineId: string, paneId: string, kind: UnsentKind, values: readonly string[], titles: ReadonlyMap<string, string>, own = false): string[] {
     const title = titles.get(paneId);
+    const ids: string[] = [];
     for (const text of values) {
       if (text.trim() === "") continue;
       // the same text of the same pane is kept once (two tabs, or a store and storage, can both hand it over)
-      if (this.unsent().some((item) => item.machine_id === machineId && item.pane_id === paneId && item.kind === kind && item.text === text)) continue;
+      const same = own ? undefined : this.unsent().find((item) => item.machine_id === machineId && item.pane_id === paneId && item.kind === kind && item.text === text);
+      if (same !== undefined) { ids.push(same.id); continue; }
       const record: UnsentText = { id: this.newId(), machine_id: machineId, pane_id: paneId, ...(title && title !== paneId ? { pane_title: title } : {}), kind, text, at: this.now() };
       const { id, ...stored } = record;
       try {
@@ -264,7 +271,9 @@ export class PaneLifetimes {
         storage.setItem(UNSENT_PREFIX + id, JSON.stringify(stored));
       } catch { this.pageUnsent = [...this.pageUnsent, record]; }
       this.unsentCache = null;
+      ids.push(record.id);
     }
+    return ids;
   }
 
   /** The text earlier herdrs' panes left, newest first. */

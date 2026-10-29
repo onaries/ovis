@@ -11,8 +11,8 @@ import { Turn } from "./ChatView.tsx";
 const text = (value: string): ConversationPart => ({ kind: "text", text: value });
 const tool = (command: string): ConversationPart => ({ kind: "tool", name: "Bash", summary: command, input: JSON.stringify({ command }), output: "" });
 
-const render = (parts: ConversationPart[], state: { live: boolean; waiting?: boolean }): string => {
-  const turn: ConversationTurn = { role: "assistant", ts: "2026-01-01T12:00:00Z", end_ts: "2026-01-01T12:01:00Z", parts };
+const render = (parts: ConversationPart[], state: { live: boolean; waiting?: boolean }, role: ConversationTurn["role"] = "assistant"): string => {
+  const turn: ConversationTurn = { role, ts: "2026-01-01T12:00:00Z", end_ts: "2026-01-01T12:01:00Z", parts };
   const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
   Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
   try {
@@ -27,6 +27,17 @@ const render = (parts: ConversationPart[], state: { live: boolean; waiting?: boo
 
 const titles = (html: string) => [...html.matchAll(/class="work-block-title">([^<]*)</g)].map((match) => match[1]);
 const expanded = (html: string) => [...html.matchAll(/class="work-block-head" aria-expanded="(true|false)"/g)].map((match) => match[1] === "true");
+
+describe("a bash-mode command", () => {
+  it("shows the command, then what it printed, and the output of a failed one as an error", () => {
+    const html = render([{ kind: "shell", command: "ls missing", stdout: "", stderr: "ls: missing: No such file or directory" }], { live: false }, "user");
+    expect(html).toContain('<code>ls missing</code>');
+    expect(html).toContain('<pre class="chat-tool-io chat-shell-stderr">ls: missing: No such file or directory</pre>');
+    // a command whose output is not recorded yet, or printed nothing, has no empty box
+    expect(render([{ kind: "shell", command: "true" }], { live: false }, "user")).not.toContain("<pre");
+    expect(render([{ kind: "shell", command: "true", stdout: "", stderr: "" }], { live: false }, "user")).not.toContain("<pre");
+  });
+});
 
 describe("an agent turn's work blocks", () => {
   it("says Working… for a running turn that has written no work or words yet", () => {
@@ -69,7 +80,7 @@ describe("a run of todo updates, opened", () => {
   it("shows each update's own input and output, not only the list it left (#1601)", () => {
     const parts = [todo("t1", [{ op: "init", list: [{ phase: "Fix", items: LIST }] }], 0), todo("t2", [{ op: "done", task: LIST[0] }], 1)];
     // the reader opened both updates: the run opens with them
-    const memory: ChatRowMemory = { toggles: new Map([["tool:0", true], ["tool:1", true]]), outputs: new Map(), runs: new Map() };
+    const memory: ChatRowMemory = { toggles: new Map([["tool:0", true], ["tool:1", true]]), outputs: new Map(), runs: new Map(), dormant: new Map() };
     const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
     Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
     let html: string;
@@ -123,7 +134,7 @@ describe("an agent turn's folded work, drawn again", () => {
     Object.defineProperty(globalThis, "getComputedStyle", { configurable: true, value: () => ({ getPropertyValue: () => "" }) });
     Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
     Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
-    memory = { toggles: new Map(), outputs: new Map(), runs: new Map() };
+    memory = { toggles: new Map(), outputs: new Map(), runs: new Map(), dormant: new Map() };
   });
 
   afterEach(async () => {
@@ -139,7 +150,7 @@ describe("an agent turn's folded work, drawn again", () => {
   it("keeps a block folded when the words before its tools join it (#2063)", async () => {
     // a later Codex record marks the words commentary; an empty commentary record is filled in
     for (const [before, after] of [[text("Checking."), commentary("Checking.")], [commentary(""), commentary("Checking.")]] as const) {
-      memory = { toggles: new Map(), outputs: new Map(), runs: new Map() };
+      memory = { toggles: new Map(), outputs: new Map(), runs: new Map(), dormant: new Map() };
       await draw([before, tool("ls")]);
       await toggle(0);
       expect(opened()).toEqual([false]);
@@ -150,6 +161,43 @@ describe("an agent turn's folded work, drawn again", () => {
       await act(async () => { renderer!.unmount(); });
       renderer = undefined;
     }
+  });
+
+  it("keeps a block folded when it merges with reasoning the chat does not show (#2111)", async () => {
+    const reasoning: ConversationPart = { kind: "thinking", text: "Weighing it." };
+    // the hidden reasoning is a run of its own that draws no block: one block, the tools'
+    await draw([reasoning, text("Checking."), tool("ls")]);
+    expect(opened()).toEqual([true]);
+    await toggle(0);
+    expect(opened()).toEqual([false]);
+    // the words become commentary: reasoning, words and tools are one run, still the folded block
+    await draw([reasoning, commentary("Checking."), tool("ls")]);
+    expect(opened()).toEqual([false]);
+    await remount([reasoning, commentary("Checking."), tool("ls")]);
+    expect(opened()).toEqual([false]);
+    // the words become the answer: the reasoning is a hidden run again, and the tools keep the fold
+    await draw([reasoning, answer("Checking."), tool("ls")]);
+    expect(opened()).toEqual([false]);
+    await remount([reasoning, answer("Checking."), tool("ls")]);
+    expect(opened()).toEqual([false]);
+  });
+
+  it("keeps a block's fold while its run is hidden reasoning alone, until it draws again", async () => {
+    const reasoning: ConversationPart = { kind: "thinking", text: "Weighing it." };
+    await draw([commentary("Checking."), reasoning]);
+    await toggle(0);
+    expect(opened()).toEqual([false]);
+    // the words become the answer: what is left of the run draws no block, through every redraw
+    // while the reasoning streams
+    await draw([answer("Checking."), reasoning]);
+    expect(opened()).toEqual([]);
+    await draw([answer("Checking."), { ...reasoning, text: "Weighing it again." }]);
+    expect(opened()).toEqual([]);
+    // a tool joins the reasoning: the block is drawn again, as the reader left it
+    await draw([answer("Checking."), { ...reasoning, text: "Weighing it again." }, tool("ls")]);
+    expect(opened()).toEqual([false]);
+    await remount([answer("Checking."), { ...reasoning, text: "Weighing it again." }, tool("ls")]);
+    expect(opened()).toEqual([false]);
   });
 
   it("keeps a merged block's fold when a part leaves it", async () => {

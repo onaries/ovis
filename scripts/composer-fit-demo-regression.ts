@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
@@ -297,7 +297,13 @@ try {
         assert.ok((await page.locator('.composer-surface > [aria-live="polite"]').textContent())?.includes("retry.txt"), "success is announced");
 
         const success = await page.locator('.composer-surface > [aria-live="polite"]').textContent();
-        await page.locator('.composer-controls-left input[type="file"]').setInputFiles({ name: "too-large.bin", mimeType: "application/octet-stream", buffer: Buffer.alloc(MAX_ATTACHMENT_BYTES + 1) });
+        // A file on disk, not a buffer: Playwright sends a buffer to the page as base64 (some 45 MB
+        // here), which on a loaded CI host outlasted setInputFiles' 30 s; Chromium reads a path's
+        // size without its bytes, and the app refuses by size before reading.
+        const tooLarge = join(app, "too-large.bin");
+        writeFileSync(tooLarge, "");
+        truncateSync(tooLarge, MAX_ATTACHMENT_BYTES + 1);
+        await page.locator('.composer-controls-left input[type="file"]').setInputFiles(tooLarge);
         await note.filter({ hasText: "too-large.bin" }).waitFor();
         assert.equal(await note.getAttribute("role"), "alert");
         assert.equal(await page.locator('.composer-surface > [aria-live="polite"]').textContent(), success, "oversize failure is not also announced politely");

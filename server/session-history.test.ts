@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, spyOn } from "bu
 import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, opendirSync, readdirSync, type BigIntStats, type Dir, type Dirent, type Stats, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { SessionHistoryAgent, SessionSnapshot } from "../shared/protocol.ts";
 import { HEAD_BYTES, HERMES_CANDIDATES, listSessions, MAX_ENTRIES, MAX_ROWS, MAX_STATS, MAX_WALK, SESSION_HISTORY_AGENTS } from "./session-history.ts";
@@ -468,6 +468,43 @@ describe("listSessions", () => {
     });
     expect(rows.map((row) => row.firstMessage)).not.toContain("outside the store");
     expect(rows).toEqual([]);
+  });
+
+  it("finds Windows Hermes under LOCALAPPDATA, where 0.21.5 keeps it, and an earlier build's root only while it is the only store", () => {
+    const home = newHome();
+    const local = join(home, "Local");
+    install("hermes", home);
+    mkdirSync(local);
+    renameSync(join(home, ".hermes"), join(local, "hermes"));
+    expect(listSessions("hermes", CWD, { home, env: { LOCALAPPDATA: local }, platform: "win32" }).map((row) => row.id)).toEqual(EXPECTED.hermes);
+    const legacy = newHome();
+    install("hermes", legacy);
+    expect(listSessions("hermes", CWD, { home: legacy, env: { LOCALAPPDATA: join(legacy, "Local") }, platform: "win32" }).map((row) => row.id)).toEqual(EXPECTED.hermes);
+  });
+
+  it("looks for stores under the OS's home, never a relative path, when the environment names none", () => {
+    const looked: string[] = [];
+    listSessions("claude", CWD, { env: {}, platform: "linux", stat: (path, bigint) => { looked.push(path); return statAs(path, bigint); } });
+    expect(looked.length).toBeGreaterThan(0);
+    expect(looked.filter((path) => !isAbsolute(path))).toEqual([]);
+  });
+
+  it("counts Windows Hermes's home probes against the listing's checks", () => {
+    const home = newHome();
+    const looked: string[] = [];
+    const stat = (path: string, bigint?: boolean) => { looked.push(path); return statAs(path, bigint); };
+    expect(listSessions("hermes", CWD, { home, env: { LOCALAPPDATA: join(home, "Local") }, platform: "win32", spent: MAX_STATS, stat })).toEqual([]);
+    expect(looked).toEqual([]);
+    listSessions("hermes", CWD, { home, env: { LOCALAPPDATA: join(home, "Local") }, platform: "win32", stat });
+    expect(looked).toContain(join(home, "Local", "hermes", "state.db"));
+  });
+
+  it("looks in USERPROFILE on Windows when no home is given, even with HOME set", () => {
+    const profile = newHome();
+    install("hermes", profile);
+    mkdirSync(join(profile, "AppData", "Local"), { recursive: true });
+    renameSync(join(profile, ".hermes"), join(profile, "AppData", "Local", "hermes"));
+    expect(listSessions("hermes", CWD, { env: { HOME: newHome(), USERPROFILE: profile }, platform: "win32" }).map((row) => row.id)).toEqual(EXPECTED.hermes);
   });
 
   const sideFiles = (dir: string) => readdirSync(dir).filter((name) => /-(wal|shm)$/.test(name)).sort();

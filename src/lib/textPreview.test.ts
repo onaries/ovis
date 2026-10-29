@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { loadKatex, ParsedMarkdown } from "../components/Markdown.tsx";
 import { OpenFileContext } from "./filePaths.ts";
 import { SettingsProvider } from "./settings.ts";
-import { parseMarkdown } from "./markdown.ts";
+import { parseMarkdown } from "../../shared/markdown.ts";
 import { TEXT_PREVIEW_BYTES } from "./filePreviewText.ts";
 import { hasPreview, PREVIEW_CHUNK_ELEMENTS, PREVIEW_ELEMENT_LIMIT, previewChunks, previewElements } from "./textPreview.ts";
 

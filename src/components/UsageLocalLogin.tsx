@@ -1,7 +1,32 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ProviderUsage } from "../../shared/protocol.ts";
 import type { UsageLoginProvider } from "../../shared/usage-login.ts";
 import { fetchUsageLoginAccounts, startUsageLogin } from "../lib/api.ts";
 import { useT } from "../lib/i18n.ts";
+import { usageName } from "../lib/usage.ts";
+
+/**
+ * Signs in again to an expired account this PC lists: the same sign-in as Add account, in a new
+ * terminal tab, but in that account's own credential home, which the server finds by its key.
+ */
+export function UsageSignInAgain({ usage, onStarted }: { readonly usage: ProviderUsage; readonly onStarted: (paneId: string) => void }) {
+  const t = useT();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const provider = usage.id;
+  if (provider !== "claude" && provider !== "codex") return null;
+  return <span className="usage-sign-in-again">
+    {/* busy, not disabled: a disabled button drops focus, and the popover's Escape with it */}
+    <button type="button" className="btn" aria-busy={busy} aria-label={t("Sign in again to {name}", { name: usageName(usage) })} onClick={() => {
+      if (busy) return;
+      setBusy(true); setError(null);
+      void startUsageLogin({ provider, account: usage.key }).then((started) => onStarted(started.pane_id))
+        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : t("Could not start account sign-in")))
+        .finally(() => setBusy(false));
+    }}>{busy ? t("Starting…") : t("Sign in again")}</button>
+    {error && <span className="settings-hint account-error" role="alert">{error}</span>}
+  </span>;
+}
 
 export function UsageLocalLogin({ provider, onStarted }: { readonly provider: UsageLoginProvider; readonly onStarted: (paneId: string) => void }) {
   const t = useT();

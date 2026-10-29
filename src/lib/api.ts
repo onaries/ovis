@@ -213,13 +213,16 @@ export class ApiError extends Error {
   readonly code: string | null;
   /** the server's own words, without the URL and status the message starts with */
   readonly detail: string;
+  /** how long the server asked to wait before trying again (`Retry-After` in seconds), in ms; null when it did not say */
+  readonly retryAfterMs: number | null;
 
-  constructor(url: string, status: number, detail: string, code: string | null) {
+  constructor(url: string, status: number, detail: string, code: string | null, retryAfterMs: number | null = null) {
     super(`${url} failed (${status}): ${detail}`);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.detail = detail;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -250,7 +253,10 @@ async function errorFrom(url: string, response: Response): Promise<ApiError> {
     /* non-JSON error body */
   }
   if (code !== null && Object.hasOwn(UNUSABLE_ANSWER, code)) detail = UNUSABLE_ANSWER[code]!();
-  return new ApiError(url, response.status, detail, code);
+  // only the seconds form (the server's `retry-after: 1`); an HTTP date is not one this API sends
+  const retryAfter = response.headers.get("retry-after");
+  const seconds = retryAfter !== null && /^\d+$/.test(retryAfter.trim()) ? Number(retryAfter.trim()) : null;
+  return new ApiError(url, response.status, detail, code, seconds === null ? null : seconds * 1000);
 }
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -290,7 +296,15 @@ export async function fetchPaneTranscript(paneId: string, lines: number, machine
 }
 
 /** Which turns (ConversationResponse.cursor): the page `before` a cursor, not past `since`; the newest ones `from` a held start. */
-export type ConversationPageQuery = { before?: string; since?: string; from?: string; limit?: number; /** History currently displayed, even if its cached response was evicted. */ history_id?: string; /** Revalidate a new finish without borrowing another key's 304. */ fresh?: boolean };
+export type ConversationPageQuery = {
+  before?: string; since?: string; from?: string; limit?: number;
+  /** History currently displayed, even if its cached response was evicted. */
+  history_id?: string;
+  /** Prompts per page: the chat's history-page setting, kept in the URL so its cache key matches. */
+  prompts?: number;
+  /** Revalidate a new finish without borrowing another key's 304. */
+  fresh?: boolean;
+};
 
 /**
  * The last answer per newest-page conversation URL and its ETag. The chat reads it again on
@@ -310,11 +324,41 @@ interface ConversationAnswer {
   body: ConversationResponse;
   /** the body's rough size: what the count cap alone cannot bound */
   bytes: number;
+  /** the pane the answer belongs to: a pane the chat has open keeps every page size it read */
+  pane: string;
+}
+
+/** The pane alone, without the page query: one pane can hold several sizes and cursors at once. */
+function paneKey(paneId: string, machineId: string): string {
+  return `${machineId}\u0000${paneId}`;
 }
 const conversationAnswers = new Map<string, ConversationAnswer>();
-const CONVERSATION_ANSWERS_KEPT = 16;
-/** …and this much of them, about four ordinary conversation pages each. */
-const CONVERSATION_ANSWERS_BYTES = 8 * 1024 * 1024;
+export const CONVERSATION_ANSWERS_KEPT = 24;
+/** …and this much of them: enough for the panes of ten open tabs at the default page size. */
+export const CONVERSATION_ANSWERS_BYTES = 64 * 1024 * 1024;
+/** One pane's page is a page, not a session: past this a page is fetched again rather than kept. */
+export const CONVERSATION_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
+/** The panes of the tabs the chat has open: their answers go last when the cache must make room. */
+const pinnedConversations = new Set<string>();
+
+/**
+ * The UTF-8 length of a body's JSON, counted without encoding a copy of it. `String.length` counts
+ * UTF-16 code units, which under-reports CJK and emoji by up to three times; a page's cap is bytes.
+ */
+function utf8Length(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    // a well-formed pair is four bytes as one character; a lone surrogate is escaped by JSON.stringify
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+}
 
 /**
  * The body a cache entry carries: the server's own count when it sends one for the body as it is,
@@ -324,19 +368,39 @@ export function conversationAnswerBytes(body: ConversationResponse, contentLengt
   const declared = Number(contentLength);
   const identity = contentEncoding === null || contentEncoding.trim().toLowerCase() === "identity";
   if (identity && Number.isFinite(declared) && declared > 0) return declared;
-  return JSON.stringify(body)?.length ?? 0;
+  return utf8Length(JSON.stringify(body) ?? "");
 }
 
-/** Drops the least recently used answers until the cache is back inside both caps. */
+/**
+ * Drops the least recently used answers until the cache is back inside both caps. An answer the
+ * chat still has a pane open for is dropped only once no unpinned one is left. The pane, not its
+ * URL, is what is pinned: the chat reads its newest page at the page size the setting names, so a
+ * pin taken on the URL alone would never match the entry the open pane actually holds.
+ */
 function trimConversationAnswers(keep: string): void {
   let total = 0;
   for (const answer of conversationAnswers.values()) total += answer.bytes;
-  while (conversationAnswers.size > CONVERSATION_ANSWERS_KEPT || total > CONVERSATION_ANSWERS_BYTES) {
-    const oldest = conversationAnswers.keys().next().value;
-    if (oldest === undefined || oldest === keep) break;
-    total -= conversationAnswers.get(oldest)!.bytes;
-    conversationAnswers.delete(oldest);
+  const over = (): boolean => conversationAnswers.size > CONVERSATION_ANSWERS_KEPT || total > CONVERSATION_ANSWERS_BYTES;
+  while (over()) {
+    let victim: string | undefined;
+    for (const [url, answer] of conversationAnswers) {
+      if (url === keep) continue;
+      if (!pinnedConversations.has(answer.pane)) { victim = url; break; }
+      victim ??= url;
+    }
+    if (victim === undefined) break;
+    total -= conversationAnswers.get(victim)!.bytes;
+    conversationAnswers.delete(victim);
   }
+}
+
+/** The chat's open pane keeps its pages: `pin`ed panes are evicted last. */
+export function pinPaneConversation(paneId: string, machineId = "local"): void {
+  pinnedConversations.add(paneKey(paneId, machineId));
+}
+
+export function unpinPaneConversation(paneId: string, machineId = "local"): void {
+  pinnedConversations.delete(paneKey(paneId, machineId));
 }
 
 function conversationUrl(paneId: string, machineId: string, page: ConversationPageQuery): string {
@@ -345,6 +409,7 @@ function conversationUrl(paneId: string, machineId: string, page: ConversationPa
   if (page.since !== undefined) query.set("since", page.since);
   if (page.from !== undefined) query.set("from", page.from);
   if (page.limit !== undefined) query.set("limit", String(page.limit));
+  if (page.prompts !== undefined) query.set("prompts", String(page.prompts));
   return machinePath(machineId, `pane/conversation?${query.toString()}`);
 }
 
@@ -352,8 +417,8 @@ function conversationUrl(paneId: string, machineId: string, page: ConversationPa
  * The newest page last answered for this pane (no page query), without asking the server: a chat
  * that mounts draws it at once while its read revalidates it. It leaves the cache order alone.
  */
-export function peekPaneConversation(paneId: string, machineId = "local", page: ConversationPageQuery = {}): ConversationResponse | undefined {
-  return conversationAnswers.get(conversationUrl(paneId, machineId, page))?.body;
+export function peekPaneConversation(paneId: string, machineId = "local", page: number | ConversationPageQuery = {}): ConversationResponse | undefined {
+  return conversationAnswers.get(conversationUrl(paneId, machineId, typeof page === "number" ? { prompts: page } : page))?.body;
 }
 
 /** GET /api/pane/conversation: structured turns, or scrollback fallback; `page` as ConversationResponse.cursor describes. */
@@ -368,9 +433,10 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
     if (!response.ok) throw await errorFrom(url, response);
     return { response, body: (await response.json()) as ConversationResponse };
   }, chatReadDeadlineMs(machineId)).catch((cause: unknown) => {
+    // a rejected history is the pane's, whatever page size it was read at: none of its pages may draw again
     if (cause instanceof ApiError && cause.status === 409) {
-      conversationAnswers.delete(url);
-      conversationAnswers.delete(conversationUrl(paneId, machineId, {}));
+      const pane = paneKey(paneId, machineId);
+      for (const [cached, answer] of conversationAnswers) if (cached === url || answer.pane === pane) conversationAnswers.delete(cached);
     }
     throw cause;
   });
@@ -384,8 +450,11 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
   if (!polled) return body;
   conversationAnswers.delete(url);
   if (etag !== null) {
-    conversationAnswers.set(url, { etag, body, bytes: conversationAnswerBytes(body, response.headers.get("content-length"), response.headers.get("content-encoding")) });
-    trimConversationAnswers(url);
+    const bytes = conversationAnswerBytes(body, response.headers.get("content-length"), response.headers.get("content-encoding"));
+    if (bytes <= CONVERSATION_ANSWER_MAX_BYTES) {
+      conversationAnswers.set(url, { etag, body, bytes, pane: paneKey(paneId, machineId) });
+      trimConversationAnswers(url);
+    }
   }
   return body;
 }

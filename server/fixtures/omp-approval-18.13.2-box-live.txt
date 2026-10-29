@@ -1,0 +1,36 @@
+
+                                            ████████████
+                                               ██  ██       ▄▀▀▄ █▀▄▀▄ █▀▀▄
+                                               ██  ██       ▀▄▄▀ █ █ █ █▄▄▀
+                                               ▒▒  ██                  █
+                                                   ██       v18.13.2
+
+                        Tip: Pair up live: `/collab` shares your session through an end-to-end
+                          encrypted relay link — a teammate runs `/join <link>` to watch tool
+                                 calls stream and prompt the agent from their own omp
+
+ Model scope: gpt-5.6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-6-astra, gpt-6-luna, gpt-6-sol, gpt-6.1-sol, gpt-6.1-terra
+ (Ctrl+P to cycle)
+
+
+ Run the bash command: ls -la . Nothing else.
+
+
+ Specifying bash command execution
+
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ $ ls -la .                                                                                                          │
+╰─── elapsed 42.0s ───────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  ⎋ Listing current directory
+
+╭─ Allow tool: bash ──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Command: ls -la .                                                                                                   │
+│ ❯ Approve                                                                                                           │
+│   Approve bash for this session                                                                                     │
+│   Deny                                                                                                              │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓ choose · ⏎ select · Ctrl+⏎/Ctrl+Q approve · ⎋ deny · Ctrl+O details · type to deny and steer                    │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭── ⠹ 44s > ◔ GPT-5.6 Luna 👁 > 🗑 work/omp2 > S0.00 ▶─3%────────────────╎──┃───272K─◀ 📁 DIR: List current directory ──╮
+╰─                                                                                                                   ─╯

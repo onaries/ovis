@@ -193,7 +193,7 @@ function discover(ctx: AgentCommandContext): SlashCommand[] {
   const budget = createWalkBudget();
   const { home, cwd } = ctx;
   const agentDir = join(home, ".commandcode");
-  const directories = cwd ? ancestorsToRepoRoot(cwd) : [];
+  const directories = cwd ? ancestorsToRepoRoot(cwd, home) : [];
   const repoRoot = directories.at(-1) ?? cwd ?? home;
   const userSettings = readSettings(join(agentDir, "settings.json"));
   const projectSettingsDir = join(repoRoot, ".commandcode");

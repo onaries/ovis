@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseMarkdown, type InlineNode, type MarkdownBlock } from "./markdown.ts";
+import { parseMarkdown, type InlineNode, type MarkdownBlock } from "../../shared/markdown.ts";
 
 const text = (nodes: InlineNode[]): string => nodes.map((node) => node.type === "text" || node.type === "code" || node.type === "math" ? node.value
   : node.type === "image" ? `[img ${node.alt}]` : text(node.children)).join("");

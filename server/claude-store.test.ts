@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
@@ -175,11 +175,12 @@ describe("a claude attach pane's job (#1645)", () => {
     expect(claudeAttachArgs(["claude", "attach", "release notes"])).toEqual(first("release notes"));
     expect(claudeAttachArgs(["claude", "attach", "release", "notes"])).toEqual(first("release", false));
     // debug options and --setting-sources after a name: Claude still reads it as a name (#1876)
-    for (const after of [["--debug"], ["-d", "api,hooks"], ["--debug=api"], ["-d2e"], ["--debug-to-stderr", "--setting-sources", "user,project"], ["--setting-sources=user"]]) {
+    for (const after of [["--debug"], ["-d"], ["--debug=api"], ["-d2e"], ["--debug-to-stderr", "--setting-sources", "user,project"], ["--setting-sources=user"]]) {
       expect(claudeAttachArgs(["claude", "attach", "release", ...after])).toEqual(first("release"));
     }
-    // anything else after it keeps the terminal
-    for (const after of [["--verbose"], ["--setting-sources"], ["--debug", "api", "notes"], ["-d", "--verbose"], ["--model", "opus"]]) {
+    // anything else after it keeps the terminal, a debug value apart from its option too: Claude (2.1.311) takes it
+    // for an extra argument and looks no name up (#2125)
+    for (const after of [["--verbose"], ["--setting-sources"], ["-d", "api,hooks"], ["--debug", "api"], ["--debug", "api", "notes"], ["-d", "--verbose"], ["--model", "opus"]]) {
       expect(claudeAttachArgs(["claude", "attach", "release", ...after])).toEqual(first("release", false));
     }
     // root options before it, each with the values it takes
@@ -649,6 +650,12 @@ describe("claudeTranscriptFile", () => {
       { type: "user", message: { content: "Newer prompt" } },
     ].map((entry) => JSON.stringify(entry)).join("\n"));
     expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"])).toBe(original);
+    // a newer turn whose keys are escaped is a newer turn all the same (#2130)
+    writeFileSync(original, [
+      JSON.stringify({ type: "continued-in", sessionId: SESSION, continuedInSessionId: other }),
+      JSON.stringify({ type: "user", message: { content: "Newer prompt" } }).replace('"type"', '"\\u0074ype"'),
+    ].join("\n"));
+    expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"])).toBe(original);
     writeFileSync(original, JSON.stringify({ type: "continued-in", sessionId: SESSION, continuedInSessionId: missing }));
     expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"])).toBe(original);
   });
@@ -673,6 +680,10 @@ describe("claudeTranscriptFile", () => {
       resumed(folder);
       const job = join(folder, `${BG}.jsonl`);
       writeFileSync(job, JSON.stringify({ type: "user", message: { content: "real conversation prompt" } }));
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"])).toBe(job);
+      // the same records written with a space after each colon (#2130)
+      const original = join(folder, `${SESSION}.jsonl`);
+      writeFileSync(original, readFileSync(original, "utf8").replaceAll('":', '": '));
       expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"])).toBe(job);
     });
 
@@ -803,6 +814,30 @@ describe("claudeTranscriptFile", () => {
       mkdirSync(join(projects, claudeProjectDir("/w/first")));
       branched(join(projects, claudeProjectDir("/w/first")), BRANCH, null);
       expect(await claudeTranscriptFile(dir, SESSION, ["/w/first", "/w/project"], join(dir, ".claude"), BRANCH)).toBe(branch);
+    });
+
+    it("follows a branch's continuation beside it, not the same id in a project a cwd names first (#2130)", async () => {
+      const { dir, projects, folder } = setup();
+      const CONTINUED = "88888888-8888-4888-8888-888888888888";
+      const branch = branched(folder, BRANCH, SESSION);
+      appendFileSync(branch, JSON.stringify({ type: "continued-in", sessionId: BRANCH, continuedInSessionId: CONTINUED }) + "\n");
+      const beside = branched(folder, CONTINUED, null);
+      mkdirSync(join(projects, claudeProjectDir("/w/first")));
+      branched(join(projects, claudeProjectDir("/w/first")), CONTINUED, null);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/first", "/w/project"], join(dir, ".claude"), BRANCH)).toBe(beside);
+      // control: a reported transcript that is no checked branch keeps looking its continuation up by cwd first
+      expect(await claudeTranscriptFile(dir, BRANCH, ["/w/first", "/w/project"], join(dir, ".claude")))
+        .toBe(join(projects, claudeProjectDir("/w/first"), `${CONTINUED}.jsonl`));
+    });
+
+    it("reads a first record whose keys are escaped as the record it is (#2130)", async () => {
+      const { dir, folder, original } = setup();
+      const path = join(folder, `${BRANCH}.jsonl`);
+      // the first user record names no parent; only a later one claims SESSION
+      const first = JSON.stringify({ type: "user", message: { content: "hi" }, sessionId: BRANCH }).replace('"type"', '"\\u0074ype"');
+      writeFileSync(path, `${first}\n${JSON.stringify({ type: "user", message: { content: "again" }, sessionId: BRANCH, forkedFrom: { sessionId: SESSION } })}\n`);
+      expect(JSON.parse(first).type).toBe("user"); // control: the record is a user record
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], join(dir, ".claude"), BRANCH)).toBe(original);
     });
 
     it("takes the branch's parent only from its own first conversation record (#2118)", async () => {

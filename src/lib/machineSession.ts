@@ -33,6 +33,10 @@ export class MachineSession {
   constructor(readonly machineId: string, options: MachineSessionOptions = {}) {
     this.socket = options.socket ?? new HerdrSocket(`${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws?machine_id=${encodeURIComponent(machineId)}`);
     this.store = options.pendingStore ?? pendingMessages;
+    // A features frame says what the bridge takes before the snapshot only for the herdr this page already
+    // proved: the herdr-lifetime fence (paneLifetimes.observe) runs on the snapshot, and a send or receipt made
+    // before it for a replaced herdr's reused pane IDs would be retired as unsent text while it is live (#2257)
+    this.socket.trustFeatures((frame) => this.knownHerdr(frame.herdr_lifetime));
     // Installed before view subscribers, and kept even while this PC has no mounted pane.
     this.offMessage = this.socket.on((message) => {
       if (this.closed) return;
@@ -40,8 +44,11 @@ export class MachineSession {
       // the roster does: the earlier herdr's drafts and lenses leave the reused pane IDs before any
       // pane hears of it
       if (message.type === "snapshot") paneLifetimes.observe([{ id: this.machineId, snapshot: message.snapshot }]);
-      if (message.type === "snapshot" && this.currentScope === null) this.currentScope = `${this.identity}:${this.currentEpoch}`;
-      if (message.type === "snapshot" && message.connection !== undefined) this.currentConnection = message.connection;
+      // the connection's first trusted word from the server (a features frame naming the known herdr, else the
+      // snapshot) opens its scope: a send can leave once the features are known, and its receipt is this connection's own
+      const told = message.type === "snapshot" || (message.type === "features" && this.knownHerdr(message.herdr_lifetime));
+      if (told && this.currentScope === null) this.currentScope = `${this.identity}:${this.currentEpoch}`;
+      if (told && message.connection !== undefined) this.currentConnection = message.connection;
       if (message.type === "role-ack") this.role = message;
       let sent = false;
       if (message.type === "pending-messages" && this.currentScope !== null) {
@@ -60,8 +67,13 @@ export class MachineSession {
     this.offPresence = watchPageInUse((active) => this.socket.setPresence(active));
   }
 
+  /** a herdr this page proved from an earlier snapshot of this PC, still the one it knows */
+  private knownHerdr(lifetime: string | undefined): boolean {
+    return lifetime !== undefined && paneLifetimes.generation(this.machineId) === lifetime;
+  }
+
   get scope(): string | null { return this.currentScope; }
-  /** the PC's id for this open connection (its first snapshot), for a create request's `first_message_connection`; null while closed or from an older bridge */
+  /** the PC's id for this open connection (its features frame or first snapshot), for a create request's `first_message_connection`; null while closed or from an older bridge */
   get connection(): string | null { return this.currentConnection; }
   get epoch(): number { return this.currentEpoch; }
 

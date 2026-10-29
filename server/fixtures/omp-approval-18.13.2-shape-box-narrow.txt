@@ -1,0 +1,31 @@
+
+             ████████████
+                ██  ██       ▄▀▀▄ █▀▄▀▄ █▀▀▄
+                ██  ██       ▀▄▄▀ █ █ █ █▄▄▀
+                ▒▒  ██                  █
+                    ██       v18.13.2
+
+   Tip: `/copy code` grabs the last code block to your
+   clipboard — `/copy cmd` grabs the last shell/python
+                         command
+
+
+ Run the fixture command.
+
+
+╭───────────────────────────────────────────────────────╮
+│ $ ls -la                                              │
+╰─── elapsed 1.0s ──────────────────────────────────────╯
+
+  ⎋ Working…
+
+╭─ Allow tool: bash ────────────────────────────────────╮
+│ Command: ls -la                                       │
+│ ❯ Approve                                             │
+│   Approve bash for this session                       │
+│   Deny                                                │
+├───────────────────────────────────────────────────────┤
+│ ↑/↓ choose · ⏎ select · Ctrl+⏎/Ctrl+Q approve · ⎋ de… │
+╰───────────────────────────────────────────────────────╯
+╭── ⠏ 1s > ⬢ Shape fixture > 🗑 …narrow/cwd ▶─6%─┃131K───╮
+╰─                                                     ─╯

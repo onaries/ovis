@@ -58,7 +58,7 @@ export function FileReader({ target }: { target: ReaderTarget }) {
   }, [path, target.machine]);
 
   if (locked === null) return <main className="file-reader"><p className="file-viewer-note" role="status">{t("Opening…")}</p></main>;
-  if (locked) return <AccessGate reason={lockReason} initialCode="" onUnlocked={() => setLocked(false)} />;
+  if (locked) return <AccessGate reason={lockReason} initialCode="" consumePairCode={() => ""} pairingUnconfirmed={false} onUnlocked={() => setLocked(false)} />;
   // the app's update line is not here, so a part that cannot load (math, a diagram) is told on its own
   return <div className="file-reader-frame">
     <ChunkFailureNotice />

@@ -61,6 +61,18 @@ test("reads WAL tool states and results while excluding abandoned branches", () 
   expect(f.page().version).not.toBe(first.version);
 });
 
+test("pages by the prompts a chat asks for, each page starting at a prompt", () => {
+  const f = fixture();
+  ["one", "two", "three", "four", "five", "six"].forEach((content, index) => f.node(index + 1, index === 0 ? null : index, { role: index % 2 === 0 ? "user" : "assistant", content }));
+  const texts = (page: ReturnType<typeof f.page>) => page.turns.map((turn) => (turn.parts[0] as { text: string }).text);
+  const newest = f.page({ prompts: 1 });
+  expect(texts(newest)).toEqual(["five", "six"]);
+  const older = f.page({ before: newest.cursor!, prompts: 2 });
+  expect(texts(older)).toEqual(["one", "two", "three", "four"]);
+  expect(older.cursor).toBeNull();
+  expect(texts(f.page())).toEqual(["one", "two", "three", "four", "five", "six"]);
+});
+
 test("pagination, grouping, append and branch replacement", () => {
   const f = fixture();
   f.node(1, null, { role: "user", content: "one" });

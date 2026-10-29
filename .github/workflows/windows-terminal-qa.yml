@@ -1,0 +1,97 @@
+name: Windows terminal QA
+# A mirrored pane on native Windows (scripts/windows-terminal-browser-qa.ts): there the browser
+# draws a pane from pane.read instead of attaching to it. PowerShell's history under the
+# wheel, a touch drag and a tap, horizontal panning across output, and text insertion and IME
+# composition at a phone's width, in Chromium against herdr's isolated test session.
+#
+# A pull request that touches the mirror, the terminal's viewport or the xterm patch runs it, and
+# once a week it runs on main: the Windows runner image changes without a commit here. Not a
+# required check. GitHub-hosted only: a fork's pull request never reaches the self-hosted runners.
+on:
+  pull_request:
+    paths:
+      - 'scripts/windows-terminal-browser-qa.ts'
+      - 'scripts/test-herdr.ts'
+      - 'scripts/test-shell.ts'
+      - 'scripts/chrome-path.ts'
+      - 'scripts/build-xterm.ts'
+      - 'patches/@xterm*'
+      - 'src/lib/*erminal*'
+      - 'src/lib/usePane*'
+      - 'src/lib/*[Vv]iewport*'
+      - 'src/lib/*[Ww]heel*'
+      - 'src/lib/pinchFontSize.ts'
+      - 'src/lib/settings.ts'
+      - 'src/styles.css'
+      - 'src/lib/narrowPaneFont.ts'
+      - 'src/components/PaneCanvas.*'
+      - 'src/components/PaneTerminal.*'
+      - 'src/components/TerminalInput.*'
+      - 'src/components/TerminalViewportTools.*'
+      - 'server/mirror.ts'
+      - 'server/mirror-input.ts'
+      - 'server/core/terminal*.ts'
+      - 'server/pane-routes.ts'
+      - 'server/windows-herdr-start.ts'
+      - 'server/herdr/client.ts'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/actions/setup-ci/**'
+      - '.github/workflows/windows-terminal-qa.yml'
+  schedule:
+    - cron: '41 3 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-terminal-qa-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  qa:
+    name: Native Windows mirrored terminal
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      # a pull request's merge with main, as in ci.yml: its head alone would run the QA script as it was
+      # when the branch was cut, which fails against current code once main fixes the script (#2243)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      # herdr's own installer takes its newest release; CI tests against 0.9.3 everywhere else
+      - name: Install checksum-pinned herdr 0.9.3
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'herdr-windows-x86_64.zip'
+          $dir = Join-Path $env:RUNNER_TEMP 'herdr-bin'
+          curl.exe --fail --location --retry 3 https://github.com/herdrdev/herdr/releases/download/v0.9.3/herdr-windows-x86_64.zip -o $zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($hash -ne 'c75b1fa49f7a3ba4b8b11789912a6147e4214a3b6fd3556d0f80076c8887d795') {
+            Write-Output "::error::herdr-windows-x86_64.zip has SHA-256 $hash, not the pinned one."
+            exit 1
+          }
+          Expand-Archive -Path $zip -DestinationPath $dir
+          $dir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - run: bun install --frozen-lockfile
+      - name: Get Playwright version
+        id: playwright-version
+        shell: bash
+        run: echo "version=$(bun -e 'console.log(require("playwright-core/package.json").version)')" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browser
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-cache/playwright
+          key: playwright-workspace-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright-version.outputs.version }}
+      - run: bun node_modules/playwright-core/cli.js install chromium
+      - run: bun run build
+      - name: Mirrored terminal QA
+        run: bun scripts/windows-terminal-browser-qa.ts
+      - name: Keep the test herdr's log
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-terminal-qa-herdr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ~/AppData/Roaming/herdr/sessions/ovis-test/test-server.log
+          if-no-files-found: ignore

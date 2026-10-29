@@ -93,6 +93,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   /** `done` for agents herdr loses track of (server/completion.ts), kept across restarts */
   const completions = new CompletionTracker(join(options.stateDir ?? defaultStateDir(), "completions.json"));
   const finishes = new Finishes(options.herdrIdentity);
+  /** the herdr identity that answered the lifecycle subscription, bound to that connection; null while it is closed (currentHerdrLifetime) */
+  let liveHerdr: string | null = null;
   /** OmO panes get their status from OmO's session files: herdr reports none for them (server/omo-status.ts) */
   const omo = new OmoStatus({
     discover: (panes) => omoPanes(panes),
@@ -327,7 +329,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   /** A pane's status frame: every one says whether the pane waits on its turn's background work. */
   const paneStatus = (paneId: string, status: AgentStatus, about: { background_tasks?: number; plan?: PlanSummary | null } = {}): ServerMessage =>
     ({ type: "pane-status", pane_id: paneId, agent_status: status, ...finishes.status(paneId, status), ...about, ...(waits.waiting(paneId) ? { background_wait: true as const } : {}) });
-  const machines = options.machines === false ? null : new MachineManager(options.stateDir ?? defaultStateDir(), push, completions, clientSnapshot, { bootId: options.orderSequence?.epoch });
+  const machines = options.machines === false ? null : new MachineManager(options.stateDir ?? defaultStateDir(), push, completions, clientSnapshot, { bootId: options.orderSequence?.epoch, localFinishEpoch: () => finishes.epoch });
   if (machines && options.herdrProfiles) machines.watchHerdrProfiles(options.herdrProfiles);
 
   function broadcastAll(message: ServerMessage): void {
@@ -490,6 +492,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
 
   const collector = startStatusCollector({
     onStatus,
+    // the herdr this server's lifecycle subscription was answered by, while that subscription is open
+    herdrLive: { identity: () => finishes.herdrIdentity(), onChange: (identity) => { liveHerdr = identity; } },
     // a finish reported as done, now in front at herdr's terminal: seen, idle again
     onFocus: (paneId) => {
       // The split canvas follows herdr's focused pane (also the sole visible pane while zoomed).
@@ -561,5 +565,14 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   const tracked = { ...collector, stop() { untrackOpenCode(); stopMutes(); stopSubmitted(); collector.stop(); } };
 
   const queueHeld = (paneId: string): boolean => queueStatus(paneId, "idle") === "working";
-  return { push, omo, gjc, claudeAgents, opencodeAgents, codexTasks, plans, clientSnapshot, queueHeld, countVisit, machines, broadcastAll, logPushError, collector: tracked, waitTimer };
+  /**
+   * The herdr this server reads now, as a snapshot names it, known without asking herdr anything: only the
+   * one whose lifecycle subscription is open, under the same socket. A socket file alone proves nothing: a
+   * herdr that died can leave its file behind. undefined proves none.
+   */
+  const currentHerdrLifetime = (): string | undefined => {
+    const identity = finishes.herdrIdentity();
+    return identity === null || identity !== liveHerdr ? undefined : herdrLifetime(identity);
+  };
+  return { push, omo, gjc, claudeAgents, opencodeAgents, codexTasks, plans, clientSnapshot, currentHerdrLifetime, queueHeld, countVisit, machines, broadcastAll, logPushError, collector: tracked, waitTimer };
 }

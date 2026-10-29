@@ -300,6 +300,19 @@ describe("owner guard", () => {
     expect(alive(other.pid)).toBe(true);
   });
 
+  it.skipIf(windows)("refuses a guard planted as a link, creating nothing where it points", () => {
+    // Given: the guard's path is a dangling link to a file outside its directory
+    const lock = join(root, "links", "usage-logins.json");
+    mkdirSync(join(root, "links"));
+    const outside = join(root, "outside-guard");
+    symlinkSync(outside, guardPath(lock));
+    // When / Then: nothing runs under it, and no file appears where it points
+    let ran = false;
+    expect(() => withOwnerGuard(lock, () => { ran = true; })).toThrow(OwnerGuardUnavailable);
+    expect(ran).toBe(false);
+    expect(existsSync(outside)).toBe(false);
+  });
+
   it("serializes competing reclaimers", async () => {
     const other = unrelated();
     const lock = join(root, "supervisor.lock");

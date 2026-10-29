@@ -165,6 +165,12 @@ describe("outcomeRows", () => {
     ]);
     expect(outcomeRows([], [old])).toEqual([{ kind: "sent", outcome: old }]);
   });
+
+  test("a bash-mode command sent as `!` takes its chip from the shell turn that records it", () => {
+    const sent = outcome({ text: '! echo "Hello"', created_at: "2026-10-20T10:00:00.000Z" });
+    const shell: ConversationTurn = { role: "user", ts: "2026-10-20T10:00:01.000Z", parts: [{ kind: "shell", command: 'echo "Hello"', stdout: "Hello", stderr: "" }] };
+    expect(outcomeRows([...earlier, shell], [sent]).filter((row) => row.outcome === sent)).toEqual([{ kind: "turn", index: 2, outcome: sent }]);
+  });
 });
 
 describe("outcomeResultText", () => {

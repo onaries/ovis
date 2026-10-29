@@ -4,6 +4,7 @@
  * sent. The pane's agent conversation is watched while a client that shows the pane asks for it.
  */
 import type { ClientMessage, ServerMessage } from "../../shared/protocol.ts";
+import { RECEIPT_RESUME_ID } from "../../shared/receipt-resume.ts";
 import { ConversationMonitor } from "../conversation-monitor.ts";
 import { type SightingFacts, sightingFacts } from "../input-guard.ts";
 import { OUTPUT_HARD_BYTES, OUTPUT_HIGH_BYTES, OUTPUT_STALL_MS, OutputWindow, wireBytes } from "../output-window.ts";
@@ -211,6 +212,8 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
     if (!attachment || attachment.kind === "mirror" || (attachment.cols === cols && attachment.rows === rows)) return;
     attachment.cols = cols;
     attachment.rows = rows;
+    attachment.resizes = (attachment.resizes ?? 0) + 1;
+    attachment.resizedTo = [...(attachment.resizedTo ?? []).slice(-15), `${cols}x${rows}`];
     attachment.process.resize(cols, rows);
     // herdr redraws the whole screen for a new size: a repaint still waiting would send it twice
     clearTimeout(attachment.repaint);
@@ -317,7 +320,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
       const claim = client.data.attached.get(message.pane_id) ?? { keepSize: false };
       claim.keepSize = message.keep_size === true;
       // An opaque, bounded presentation correlator only: never used by input guards.
-      if (typeof message.receipt_resume_id === "string" && /^[a-f0-9-]{36}$/.test(message.receipt_resume_id)) claim.receiptResumeId = message.receipt_resume_id;
+      if (typeof message.receipt_resume_id === "string" && RECEIPT_RESUME_ID.test(message.receipt_resume_id)) claim.receiptResumeId = message.receipt_resume_id;
       if (!client.data.attached.has(message.pane_id)) client.data.attached.set(message.pane_id, claim);
       let attachment: PaneAttachment;
       try {

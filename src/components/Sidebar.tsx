@@ -207,7 +207,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
   const repositoryAnswers = useRef(new Map<string, boolean>());
   useEffect(() => {
     const known = repositoryAnswers.current;
-    if (!online || unmarked === "") { known.clear(); setRepositoryWorkspaces(new Set()); return; }
+    // a watching device is refused the listing (#2250): nothing to ask
+    if (!online || unmarked === "" || watching) { known.clear(); setRepositoryWorkspaces(new Set()); return; }
     const ids = unmarked.split("\n");
     for (const id of [...known.keys()]) if (!ids.includes(id)) known.delete(id);
     let live = true;
@@ -218,8 +219,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
       (error: unknown) => { if (live && error instanceof ApiError && error.status < 500) known.set(id, false); },
     ))).then(publish);
     return () => { live = false; };
-  }, [listWorktrees, unmarked, online]);
-  const { branches, rememberOpened } = useWorktreeBranches(snapshot, online, true, repositoryWorkspaces);
+  }, [listWorktrees, unmarked, online, watching]);
+  const { branches, rememberOpened } = useWorktreeBranches(snapshot, online, true, repositoryWorkspaces, watching);
   // the sidebar's filter (lib/sidebarFilter.ts): which rows stay, which are context; it learns the branch
   // each row says from here, since the inventory is this roster's. What it last said outlives a fold of the
   // PC (which unmounts this roster), so a branch stays findable on a PC drawn folded
@@ -412,7 +413,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     const sameRepo = linked || repoKey === undefined ? [] : (snapshot?.workspaces.filter((candidate) => candidate.workspace_id !== workspace.workspace_id && candidate.worktree?.repo_key === repoKey) ?? []);
     const worktrees = sameRepo.filter((candidate) => candidate.worktree?.is_linked_worktree);
     const otherHeads = sameRepo.length > worktrees.length;
-    const worktreeItems: RowMenuItem[] = (workspace.worktree || repositoryWorkspaces.has(workspace.workspace_id)) && !linked ? [
+    // making or opening a worktree is a drive feature, and the dialog's checkout list is refused to a watching device
+    const worktreeItems: RowMenuItem[] = (workspace.worktree || repositoryWorkspaces.has(workspace.workspace_id)) && !linked && !watching ? [
       { id: "new-worktree", label: t("New worktree"), icon: GitBranch, run: () => setWorktreeDialog({ mode: "create", workspace }) },
       { id: "open-worktree", label: t("Open worktree…"), icon: FolderOpen, run: () => setWorktreeDialog({ mode: "open", workspace }) },
     ] : [];

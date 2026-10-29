@@ -8,7 +8,7 @@ import { VOICE_DEFAULTS, type VoiceStatus } from "../shared/voice.ts";
 import type { HerdrUiConfig } from "../shared/protocol.ts";
 import type {} from "./chat-history-fixture.tsx";
 import { parseAgyTranscript } from "../server/agy.ts";
-import { buildXtermSource } from "./build-xterm.ts";
+import { buildXtermSource, xtermSourcePlugin } from "./build-xterm.ts";
 import { chromePath } from "./chrome-path.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-history-browser-"));
@@ -29,13 +29,7 @@ function nextRoute(name: string): Promise<void> {
 try {
   // the app's own xterm, as Vite aliases it: the patched source, not the package's minified build
   const xterm = buildXtermSource(join(import.meta.dir, ".."));
-  const build = await Bun.build({ entrypoints: ["scripts/chat-history-fixture.tsx"], outdir: root, target: "browser", define: { "process.env.NODE_ENV": '"development"' }, plugins: [{
-    name: "xterm-source-aliases",
-    setup(build) {
-      build.onResolve({ filter: /^@xterm\/xterm$/ }, () => ({ path: join(xterm, "browser/public/Terminal.js") }));
-      build.onResolve({ filter: /^(browser|common)\// }, ({ path }) => ({ path: join(xterm, path + ".js") }));
-    },
-  }] });
+  const build = await Bun.build({ entrypoints: ["scripts/chat-history-fixture.tsx"], outdir: root, target: "browser", define: { "process.env.NODE_ENV": '"development"' }, plugins: [xtermSourcePlugin(xterm)] });
   assert.ok(build.success, String(build.logs));
   server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
     const path = new URL(request.url).pathname;
@@ -58,6 +52,8 @@ try {
   page.on("pageerror", (error) => { errors.push(error.message); console.error(error.stack); });
   let epoch = "one", newest = "old newest", before: string | null = null;
   let holdOlder = false;
+  /** the cursor an older page answers with: null ends the history there */
+  let olderNext: string | null = null;
   let product = false;
   let compacting = false;
   await page.route("**/api/**/prompt?*", route => route.fulfill({ json: { prompt: null, suggestion: null, compacting } }));
@@ -130,7 +126,7 @@ try {
     if (url.searchParams.has("before")) {
       routeEvents.dispatchEvent(new Event("older"));
       if (holdOlder) await new Promise<void>((resolve) => releases.push(resolve));
-      await route.fulfill({ json: { source: "omp-transcript", history_id: captured, cursor: url.searchParams.get("since"), turns: [user("old earlier")] } });
+      await route.fulfill({ json: { source: "omp-transcript", history_id: captured, cursor: olderNext ?? url.searchParams.get("since"), turns: [user("old earlier")] } });
     } else {
       const tool = { role: "assistant", ts: "reused", parts: [{ kind: "tool", name: "Read", summary: "same", input: "{}", output: "preview", output_ref: "reused", output_size: 9000 }] };
       await route.fulfill({ json: { source: "omp-transcript", history_id: epoch, cursor: before, turns: newest ? [user(newest), tool] : [] } });
@@ -279,6 +275,25 @@ try {
   await page.getByText(newest, { exact: true }).waitFor();
   assert.equal(await page.locator(".chat-older").count(), 0);
   console.log("PASS held-cursor and older-page 409 recovery discard history and immediately reload");
+
+  // A page size chosen while the chat is open reaches the next older page, not only the newest.
+  epoch = "eight"; newest = "paged newest"; before = "eight:100"; olderNext = "eight:50";
+  await refresh();
+  await page.getByText(newest, { exact: true }).waitFor();
+  const olderAsked = async () => {
+    const answered = page.waitForResponse((response) => response.url().includes("/conversation?") && new URL(response.url()).searchParams.has("before"));
+    await page.locator(".chat-older").click();
+    const response = await answered;
+    await response.finished();
+    return new URL(response.url()).searchParams.get("prompts");
+  };
+  assert.equal(await olderAsked(), "10", "older pages are asked for at the default size");
+  await page.evaluate(() => window.qa.historyPrompts(50));
+  await page.locator(".chat-older").waitFor();
+  assert.equal(await olderAsked(), "50", "the next older page is asked for at the size just chosen");
+  await page.evaluate(() => window.qa.historyPrompts(10));
+  olderNext = null;
+  console.log("PASS a page size changed in a mounted chat applies to the next older page");
   assert.deepEqual(errors, []);
   console.log("PASS reused tool ids after clear, machine switch and unmount cancellation; no browser errors");
 

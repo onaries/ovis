@@ -5,6 +5,7 @@
  * code, so the browser bundle can take it.
  */
 import type { ConversationTurn, InteractivePrompt, SessionHistoryAgent, SessionHistoryRow, SlashCommand } from "../../shared/protocol.ts";
+import { AGENT_CATALOG, catalogRow, meetsMinVersion, type AgentCatalogResponse } from "../../shared/agent-catalog.ts";
 
 export interface DemoSpec {
   key: string;
@@ -20,6 +21,20 @@ export interface DemoSpec {
   /** a second tab, labelled `label`, in this spec's workspace instead of a workspace of its own */
   tabOf?: string;
 }
+
+/** The demo PC's versions of the agents its panes run; every other catalog agent is not installed there. */
+const DEMO_INSTALLED: Readonly<Record<string, string>> = { claude: "2.1.311", codex: "0.163.0", omp: "18.8.7", pi: "0.73.1", hermes: "0.22.5" };
+
+/** GET /api/agent-catalog on the demo PC, a Linux one: the real catalog, with the agents above installed. */
+export const DEMO_AGENT_CATALOG: AgentCatalogResponse = {
+  platform: "linux",
+  agents: AGENT_CATALOG.map((entry) => {
+    const version = DEMO_INSTALLED[entry.id];
+    return catalogRow(entry, "linux", version === undefined
+      ? { installed: false, binary: null, on_path: null, version: null, version_error: null, meets_min_version: null }
+      : { installed: true, binary: entry.detect.binaries[0]!, on_path: true, version, version_error: null, meets_min_version: entry.min_version === null ? null : meetsMinVersion(version, entry.min_version.version) });
+  }),
+};
 
 // The sidebar reads as two repositories, each with its own agent and two agent worktrees under it.
 export const SPECS: DemoSpec[] = [
@@ -40,6 +55,17 @@ const RESUME_FLAGS: Record<SessionHistoryAgent, string[]> = {
   omo: ["--session-id"], opencode: ["--session"], hermes: ["--resume"], grok: ["--resume"], agy: ["--conversation"], devin: ["--resume"],
 };
 export const SESSION_HISTORY_AGENTS = Object.keys(RESUME_FLAGS) as SessionHistoryAgent[];
+
+/**
+ * The session a launch's arguments resume: the agent's own resume flags, then the id, as its history
+ * rows give them (`claude --resume <id>`, `codex resume <id>`); any other arguments resume none.
+ */
+export function resumedSession(agent: string | null, args: unknown): string | null {
+  if (agent === null || !(SESSION_HISTORY_AGENTS as string[]).includes(agent) || !Array.isArray(args)) return null;
+  const flags = RESUME_FLAGS[agent as SessionHistoryAgent];
+  const id: unknown = args[flags.length];
+  return args.length === flags.length + 1 && flags.every((flag, index) => args[index] === flag) && typeof id === "string" ? id : null;
+}
 
 /**
  * Web push on the demo: the fictional workstation's key, and two subscriptions its push service has

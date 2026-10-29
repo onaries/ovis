@@ -152,14 +152,14 @@ function claudeCommands(root: string, source: SlashCommand["source"], budget: Wa
  * `skillOverrides` from settings, lowest scope first so a later scope wins: user, project, local, managed.
  * "off" hides a skill from the `/` menu; the other three states still list it.
  */
-function skillOverrides(config: string, ancestors: readonly string[]): Map<string, string> {
+function skillOverrides(config: string, ancestors: readonly string[], managed: string): Map<string, string> {
   const read = (path: string): Record<string, unknown> => { try { return plainObject(plainObject(JSON.parse(readFileSync(path, "utf8"))).skillOverrides); } catch { return {}; } };
   const near = [...ancestors].reverse();
   const files = [
     join(config, "settings.json"),
     ...near.map((directory) => join(directory, ".claude", "settings.json")),
     ...near.map((directory) => join(directory, ".claude", "settings.local.json")),
-    join(managedSettingsDir(), "managed-settings.json"),
+    join(managed, "managed-settings.json"),
   ];
   const result = new Map<string, string>();
   for (const file of files) for (const [name, state] of Object.entries(read(file))) if (typeof state === "string") result.set(name, state);
@@ -177,9 +177,9 @@ function mainCheckout(repo: string): string | null {
   } catch { return null; /* not a linked worktree */ }
 }
 
-function managedSettingsDir(): string {
+function managedSettingsDir(serverEnv: Readonly<Record<string, string | undefined>>): string {
   if (process.platform === "darwin") return "/Library/Application Support/ClaudeCode";
-  if (process.platform === "win32") return join(process.env.ProgramFiles ?? "C:\\Program Files", "ClaudeCode");
+  if (process.platform === "win32") return join(serverEnv["ProgramFiles"] ?? "C:\\Program Files", "ClaudeCode");
   return "/etc/claude-code";
 }
 
@@ -263,23 +263,24 @@ export const source: AgentCommandSource = {
     verify: "Confirm a code change works by running your app", "workflow-authoring": "Load the reference for writing workflow scripts",
     voice: "Toggle voice mode", "web-setup": "Set up cloud sessions with GitHub", workflows: "Browse workflows",
   },
-  discover({ home, cwd, env, version }) {
+  discover({ home, cwd, env, version, serverEnv = process.env }) {
     const budget = createWalkBudget();
+    const managed = managedSettingsDir(serverEnv);
     const config = environValue(env, "CLAUDE_CONFIG_DIR") || join(home, ".claude");
-    const ancestors = cwd ? ancestorsToRepoRoot(cwd) : [];
+    const ancestors = cwd ? ancestorsToRepoRoot(cwd, home) : [];
     const projectSkills = ancestors.flatMap((directory) => claudeSkills(join(directory, ".claude", "skills"), "project", budget));
     const repo = ancestors.at(-1);
     if (repo && projectSkills.length === 0) {
       const main = mainCheckout(repo);
       if (main) projectSkills.push(...claudeSkills(join(main, ".claude", "skills"), "project", budget));
     }
-    const overrides = skillOverrides(config, ancestors);
+    const overrides = skillOverrides(config, ancestors, managed);
     const shown = ({ name }: SlashCommand): boolean => !reservedName(name);
     const visible = (command: SlashCommand): boolean => shown(command) && overrides.get(command.name) !== "off";
     // Skills beat legacy command files; within each kind enterprise > personal > nearest project.
     // Plugin rows are namespaced, and skillOverrides never applies to them.
     const candidates = [
-      ...claudeSkills(join(managedSettingsDir(), ".claude", "skills"), "user", budget).filter(visible),
+      ...claudeSkills(join(managed, ".claude", "skills"), "user", budget).filter(visible),
       ...claudeSkills(join(config, "skills"), "user", budget).filter(visible),
       ...projectSkills.filter(visible),
       ...claudeCommands(join(config, "commands"), "user", budget).filter(visible),

@@ -8,6 +8,7 @@ import { paneLifetimes } from "./paneLifetime.ts";
 import { inUse } from "./paneTerminalShared.ts";
 import { modalOpen } from "./focus.ts";
 import type { PendingMessageView } from "./pendingMessages.ts";
+import { FONT_LOAD_TIMEOUT_MS, type FontSettled } from "./fontFamily.ts";
 
 export interface PaneAttachDeps {
   activeRef: RefObject<boolean>;
@@ -15,6 +16,7 @@ export interface PaneAttachDeps {
   cached: boolean;
   coarseRef: RefObject<boolean>;
   deferAttachRef: RefObject<(pane: string) => boolean>;
+  fontSettledRef: RefObject<FontSettled>;
   draftPaneRef: RefObject<string | null>;
   findOpenRef: RefObject<boolean>;
   fitRef: RefObject<FitAddon | null>;
@@ -65,7 +67,7 @@ export interface PaneAttachDeps {
 }
 
 export function usePaneAttach(deps: PaneAttachDeps): void {
-  const { activeRef, autoSelected, cached, coarseRef, deferAttachRef, draftPaneRef, findOpenRef, fitRef, fittedRef, fixedGridRef, frameGateRef, hyperlinksRef, hostRef, machineId, mirrored, modifyOtherKeysRef, observeRef, paneId, pending, presented, presentationRef, releaseRef, releasedRef, retireOutputRef, secretRef, setDraft, setComposing, setEnded, setHeld, setInputError, setInputReady, setOutputError, setOutputReady, setReleased, setSecret, setUnsupported, setWatching, sharedGridRef, socketRef, stalledRef, terminalId, termRef, chatViewRef, cancelLeaveRef, cachedRef, watchingRef, keyboardHoldsRef, followRef, followCursorRef, leaveRef, shownRef } = deps;
+  const { activeRef, autoSelected, cached, coarseRef, deferAttachRef, fontSettledRef, draftPaneRef, findOpenRef, fitRef, fittedRef, fixedGridRef, frameGateRef, hyperlinksRef, hostRef, machineId, mirrored, modifyOtherKeysRef, observeRef, paneId, pending, presented, presentationRef, releaseRef, releasedRef, retireOutputRef, secretRef, setDraft, setComposing, setEnded, setHeld, setInputError, setInputReady, setOutputError, setOutputReady, setReleased, setSecret, setUnsupported, setWatching, sharedGridRef, socketRef, stalledRef, terminalId, termRef, chatViewRef, cancelLeaveRef, cachedRef, watchingRef, keyboardHoldsRef, followRef, followCursorRef, leaveRef, shownRef } = deps;
 
   // Reset on a pane or terminal replacement: a herdr restart can keep the pane ID.
   // Old composition timers must never see the new terminal.
@@ -124,26 +126,54 @@ export function usePaneAttach(deps: PaneAttachDeps): void {
       return leavePane;
     }
     if (deferAttachRef.current(paneId)) return leavePane;
-    // under the keyboard (a pane picked while typing) the fit waits for it to go, and the attach adopts
-    // the pane's size meanwhile
-    const held = keyboardHoldsRef.current(true);
-    if (!held) {
-      try {
-        fit?.fit();
-        fittedRef.current();
-      } catch {
-        /* not laid out yet; the ResizeObserver will follow up */
+    const attach = (): void => {
+      // under the keyboard (a pane picked while typing) the fit waits for it to go, and the attach adopts
+      // the pane's size meanwhile
+      const held = keyboardHoldsRef.current(true);
+      if (!held) {
+        try {
+          fit?.fit();
+          fittedRef.current();
+        } catch {
+          /* not laid out yet; the ResizeObserver will follow up */
+        }
       }
+      // A pane exempt from watching still asks to keep an existing attachment's size while away.
+      const away = !inUse();
+      socket.attach(paneId, term.cols, term.rows, chatViewRef.current || away || !shownRef.current || followRef.current || held);
+      // no blur or hidden comes for a tab already out of use: it lets go of this pane after a moment too
+      if (away) leaveRef.current();
+      // the chat lens covers the grid and its composer takes the keyboard: focusing the hidden
+      // grid sent the keys straight to the pane, and showed a phone's IME text mid-screen
+      if (activeRef.current && !chatViewRef.current && !autoSelected && !coarseRef.current && !modalOpen() && !findOpenRef.current) term.focus();
+    };
+    const font = fontSettledRef.current;
+    if (font.done) {
+      attach();
+      return leavePane;
     }
-    // A pane exempt from watching still asks to keep an existing attachment's size while away.
-    const away = !inUse();
-    socket.attach(paneId, term.cols, term.rows, chatViewRef.current || away || !shownRef.current || followRef.current || held);
-    // no blur or hidden comes for a tab already out of use: it lets go of this pane after a moment too
-    if (away) leaveRef.current();
-    // the chat lens covers the grid and its composer takes the keyboard: focusing the hidden
-    // grid sent the keys straight to the pane, and showed a phone's IME text mid-screen
-    if (activeRef.current && !chatViewRef.current && !autoSelected && !coarseRef.current && !modalOpen() && !findOpenRef.current) term.focus();
-    return leavePane;
+    // A new terminal's first font is still loading (the bundled face, fonts/fonts.css): the first fit
+    // and the size the pty is attached at wait for it, within the font effect's own bound, so the pane
+    // is not sized for a fallback's cell and then again for the face's (two SIGWINCHes, a reflow).
+    // The backstop only covers a font effect that never ran.
+    let gone = false;
+    let attached = false;
+    let backstop: ReturnType<typeof setTimeout> | undefined;
+    void Promise.race([font.settled, new Promise<void>((resolve) => { backstop = setTimeout(resolve, FONT_LOAD_TIMEOUT_MS + 1000); })]).then(() => {
+      clearTimeout(backstop);
+      if (gone || termRef.current !== term || socketRef.current !== socket) return;
+      // the pane was cached, let go of (released, and maybe watched) or taken up again (resume
+      // attaches it) while the font loaded: the release and resume own its attach from there
+      if (cachedRef.current || releasedRef.current || socket.isAttached(paneId)) return;
+      attached = true;
+      attach();
+    });
+    return () => {
+      gone = true;
+      clearTimeout(backstop);
+      // the pane is left as an attached one is: whoever attached or watched it meanwhile
+      if (attached || socket.isAttached(paneId) || watchingRef.current) leavePane();
+    };
   }, [paneId, terminalId]);
 
   // the message the tab kept its pane for has gone (or was held): out of use, it lets go now

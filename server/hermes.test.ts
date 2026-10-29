@@ -27,6 +27,26 @@ describe("hermes paths", () => {
     expect(defaultHermesHome("/test/home")).toBe("/test/home/.hermes");
     expect(hermesDbPath("/test/home/.hermes")).toBe("/test/home/.hermes/state.db");
   });
+
+  it("finds Windows Hermes where the pinned 0.21.5 keeps it, and an earlier build's root only while it alone holds a store", () => {
+    const root = mkdtempSync(join(tmpdir(), "hermes-home-"));
+    try {
+      const profile = join(root, "profile");
+      const local = join(root, "local");
+      const env = { LOCALAPPDATA: local };
+      const store = (dir: string) => { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, "state.db"), ""); };
+      expect(defaultHermesHome(profile, env, "win32")).toBe(join(local, "hermes"));
+      expect(defaultHermesHome(profile, {}, "win32")).toBe(join(profile, "AppData", "Local", "hermes"));
+      store(join(profile, ".hermes"));
+      expect(defaultHermesHome(profile, env, "win32")).toBe(join(profile, ".hermes"));
+      store(join(local, "hermes"));
+      expect(hermesDbPath(defaultHermesHome(profile, env, "win32"))).toBe(join(local, "hermes", "state.db"));
+      expect(defaultHermesHome(profile, { ...env, HERMES_HOME: join(root, "set") }, "win32")).toBe(join(root, "set"));
+      expect(defaultHermesHome(profile, env, "linux")).toBe(join(profile, ".hermes"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("hermes process identification", () => {

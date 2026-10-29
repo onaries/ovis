@@ -161,10 +161,14 @@ function reconcile(): void {
   if (differs < have - 1) { rewind(have - differs - 1); return; }
   let base = state !== null && typeof state === "object" ? state : {};
   if (have === 0 && wanted.length > 0) {
-    // a new opening: its base entry is marked, so a Back onto it is told from a foreign entry
+    // a new opening: its base entry is marked, so a Back onto it is told from a foreign entry. It
+    // drops the lost mark and the anchor an earlier opening that took over a phone sheet's entry
+    // left there (a preview opened over that opening copies both): its entries copy the base's,
+    // and their closing would be told by the earlier opening's anchor
+    const { [LOST_KEY]: _lost, [ANCHOR_KEY]: _anchor, ...unanchored } = base as Record<string, unknown>;
     opening = Math.random().toString(36).slice(2);
     openedOver = undefined;
-    writeState("replaceState", { ...base, [BASE_KEY]: opening });
+    writeState("replaceState", { ...unanchored, [BASE_KEY]: opening });
     base = window.history.state as object;
   }
   if (have > 0 && differs === have - 1) {

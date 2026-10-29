@@ -41,6 +41,92 @@ export const ATTACH_HOLD_MS = 100;
  * not start the hold. A refusal and a screen both begin with something else.
  */
 const ATTACH_PREAMBLE_RE = /^(?:\x1b\[(?:\?[\d;]+[hl]|\d* q))*(?:\x1b(?:\[(?:\?[\d;]*|\d+ ?| )?)?)?$/;
+/**
+ * Whole control sequences and controls, which say nothing about whether the attach took: a CSI, an
+ * OSC or string (BEL or ST ended), any other escape (`ESC 7`, `ESC ( B`) and C0 controls
+ */
+const ATTACH_CONTROL_HEAD_RE = /^(?:\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P^_X][^\x1b]*\x1b\\|\x1b(?![[\]P^_X])[ -/]*[0-~]|[\x00-\x1a\x1c-\x1f\x7f])*/;
+/** how herdr's refusal line starts: its CLI's error prefix, or the bare words */
+const ATTACH_REFUSAL_LEADS = ["herdr: ", "terminal attach"];
+
+/**
+ * Printable screen text past the control sequences that no refusal line can start with: herdr is
+ * drawing the screen, so the attach took and its bytes need not wait out the hold (#1642). Anything
+ * a refusal may still turn out to be (`h`, `herdr: ser`, a sequence not ended yet) waits.
+ */
+export function attachScreenStarted(held: string): boolean {
+  const rest = held.replace(ATTACH_CONTROL_HEAD_RE, "");
+  if (rest === "" || rest.startsWith("\x1b")) return false;
+  // herdr's words anywhere in it (a sequence cut short can swallow the line's first letter) wait out the hold
+  return !ATTACH_REFUSAL_LEADS.some((lead) => rest.includes(lead) || lead.startsWith(rest));
+}
+
+/**
+ * Where a refusal line may begin in output that came after an early release: the refusal is the
+ * attach's last line, so only a line herdr's words start and nothing follows, or the start of those
+ * words at the very end. -1 when there is none.
+ */
+export function refusalLineStart(text: string): number {
+  let at = -1;
+  for (const lead of ATTACH_REFUSAL_LEADS) {
+    for (let found = text.indexOf(lead); found !== -1; found = text.indexOf(lead, found + 1)) {
+      if (/^[^\r\n]*[\r\n]*$/.test(text.slice(found))) {
+        at = at === -1 ? found : Math.min(at, found);
+        break;
+      }
+    }
+    for (let length = Math.min(text.length, lead.length - 1); length > 0; length--) {
+      if (text.endsWith(lead.slice(0, length))) {
+        at = at === -1 ? text.length - length : Math.min(at, text.length - length);
+        break;
+      }
+    }
+  }
+  return at;
+}
+/**
+ * How long an attach resized since it started is held at most, waiting for herdr's screen at the pty's
+ * current grid. herdr draws its first screen at the grid the attach started at and redraws for a new grid
+ * about 50 ms after the resize (herdr 0.9.5): a hold that ran out before that redraw sent the old-size
+ * screen as the first frame (#2289). Past this the bytes go out anyway, so no attach stays held.
+ */
+export const ATTACH_RESIZE_REDRAW_MS = 1_000;
+/**
+ * The most output any hold keeps: it goes out as one frame, and a frame over a client's output window
+ * (OUTPUT_HARD_BYTES, 1 MiB) ends that client as stalled. A busy pane fills it well within the wait,
+ * and can in the 100 ms hold too. A refusal is a line, so it is never this long.
+ */
+export const ATTACH_HOLD_MAX_BYTES = 256 * 1024;
+export const SYNC_START = "\x1b[?2026h";
+export const SYNC_END = "\x1b[?2026l";
+const ROW_START_RE = /\x1b\[(\d+);1H/g;
+const PLAIN_ROW_RE = /^[\x20-\x7e]*$/;
+
+/**
+ * The grid of a whole herdr screen, from the body of one synchronized update; null when it is not one.
+ * herdr (0.9.5) draws a whole screen, its first and the redraw for each new grid, as one update that
+ * moves to the start of each row, 1 to the last, and fills each row to the width. The width is read
+ * from the rows of plain ASCII only, whose width no table disagrees on (herdr and Bun count spacing
+ * marks differently): an update with none, or whose plain rows differ, is not taken for a screen.
+ */
+export function screenGrid(update: string): { cols: number; rows: number } | null {
+  // each row's first move only: herdr places the cursor before the update ends, and at column 1 that is
+  // one more move to a row's start, with no text after it
+  const moves = new Map<number, RegExpExecArray>();
+  for (const move of update.matchAll(ROW_START_RE)) if (!moves.has(Number(move[1]))) moves.set(Number(move[1]), move);
+  const rows = moves.size;
+  if (rows === 0) return null;
+  let cols: number | null = null;
+  for (let row = 1; row <= rows; row++) {
+    const move = moves.get(row);
+    if (!move) return null;
+    const text = Bun.stripANSI(update.slice(move.index + move[0].length, moves.get(row + 1)?.index ?? update.length));
+    if (!PLAIN_ROW_RE.test(text)) continue;
+    if (cols !== null && cols !== text.length) return null;
+    cols = text.length;
+  }
+  return cols === null ? null : { cols, rows };
+}
 /** how often a terminal another web bridge holds is tried again, while clients here still want it */
 export const ATTACH_HELD_RETRY_MS = 3_000;
 /**
@@ -109,6 +195,10 @@ export interface PtyAttachment extends AttachmentState {
   process: PtySession;
   /** a held terminal's next try takes the slot from the other bridge for this client (`take-over`) */
   takeOver?: (client: Client) => void;
+  /** how many times the pty took a new grid: an attach tells from it that it was resized since it started */
+  resizes?: number;
+  /** the latest grids the pty took (`<cols>x<rows>`), so a screen at one of them is known for an old one */
+  resizedTo?: string[];
 }
 
 /**
@@ -272,6 +362,8 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       // its first bytes wait ATTACH_HOLD_MS: a refusal (herdr's setup, teardown and message)
       // is dropped then, never painted into the clients' terminal
       let held: string | null = "";
+      /** held's UTF-8 size, as a client's output window counts it */
+      let heldBytes = 0;
       let heldSince = 0;
       let holding = false;
       let holdTimer: ReturnType<typeof setTimeout> | undefined;
@@ -290,6 +382,26 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         // A pane may print the same bytes without exiting: never keep its text indefinitely.
         if (outputTail.pending) tailTimer = setTimeout(flushTail, holdFor);
       };
+      // After an early release, until the hold would have ended, what may be a refusal line waits
+      // for the exit: a refusal is dropped then, anything else is passed on when the window ends.
+      let guardUntil = 0;
+      let guarded = "";
+      let guardTimer: ReturnType<typeof setTimeout> | undefined;
+      const flushGuard = (): void => {
+        clearTimeout(guardTimer);
+        const data = guarded;
+        guarded = "";
+        if (data) publish(data);
+      };
+      const guard = (data: string): void => {
+        clearTimeout(guardTimer);
+        const text = guarded + data;
+        const at = Date.now() < guardUntil ? refusalLineStart(text) : -1;
+        guarded = at === -1 ? "" : text.slice(at);
+        const visible = at === -1 ? text : text.slice(0, at);
+        if (visible) publish(visible);
+        if (guarded) guardTimer = setTimeout(flushGuard, Math.max(0, guardUntil - Date.now()));
+      };
       /** ended before its exit came: what it still prints is no attach's */
       let retired = false;
       /** a synthetic retirement calls ended before killing; the process's later onExit is the same end */
@@ -300,7 +412,9 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         // a read that ended inside what could have been a probe is output after all
         const data = held + probes.flush();
         held = null;
-        if (data) publish(data);
+        // the look for a resize's redraw is over: an update it kept open is not kept for the session
+        update = null;
+        if (data) guard(data);
       };
       const took = (): void => {
         // a closed attachment's kill skips onExit, which would clear this timer: a newer
@@ -354,9 +468,13 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         trying = false;
         clearTimeout(holdTimer);
         clearTimeout(tailTimer);
+        clearTimeout(guardTimer);
         clearTimeout(attachment.recovery);
         attachment.recovery = undefined;
         if (attachments.get(paneId) !== attachment) return;
+        // what an early release kept back is herdr's refusal or takeover words, or the pane's own output
+        if (code !== 0 && (ATTACH_REFUSING_RE.test(output) || isTakeoverExit(output))) guarded = "";
+        else flushGuard();
         if (attachment.ready) {
           attachment.recovering = true;
           broadcast(paneId, { type: "input-ready", pane_id: paneId, ready: false });
@@ -481,6 +599,65 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       if (!Bun.which(command, { PATH: process.env["PATH"] ?? "", cwd: process.env["HOME"] ?? "/" })) {
         throw new HerdrError("attach_failed", `herdr could not be started: ${command} is not an executable on the server's PATH (set OVIS_HERDR_BIN to herdr's full path)`);
       }
+      // A resize since this attach started, even one back to its first grid, makes herdr's screens
+      // until its redraw for the pty's current grid the wrong size (#2289). Only an update that began
+      // after the latest resize can be that redraw, and only the latest whole screen counts: a read can
+      // bring the old grid's screen queued from before a resize and a redraw for a grid in between.
+      let resizes = attachment.resizes ?? 0;
+      const startGrid = `${attachment.cols}x${attachment.rows}`;
+      let resized = false;
+      /** the latest whole screen since the latest resize is at the pty's current grid */
+      let screenAtGrid = false;
+      // Each read is looked at once, never everything held (which grows with a busy pane for the whole
+      // wait): an update not ended yet is kept as its reads, joined only when its end comes.
+      let update: string[] | null = null;
+      /** the stream's last bytes: a marker a read cut is found with the next one */
+      let edge = "";
+      const noteResize = (): void => {
+        if ((attachment.resizes ?? 0) === resizes) return;
+        resizes = attachment.resizes ?? 0;
+        resized = true;
+        screenAtGrid = false;
+        update = null;
+        edge = "";
+      };
+      const look = (data: string): void => {
+        const near = edge + data;
+        edge = near.slice(-(SYNC_START.length - 1));
+        if (update) {
+          update.push(data);
+          if (!near.includes(SYNC_END)) return;
+        } else {
+          const start = near.indexOf(SYNC_START);
+          if (start === -1) return;
+          update = [near.slice(start)];
+        }
+        const text = update.join("");
+        let start = text.indexOf(SYNC_START);
+        for (let end = text.indexOf(SYNC_END, start); start !== -1 && end !== -1; end = text.indexOf(SYNC_END, start)) {
+          const grid = screenGrid(text.slice(start + SYNC_START.length, end));
+          // a screen at a grid the pty had is an old one; any other (a diff of the top rows) says nothing
+          if (grid && grid.cols === attachment.cols && grid.rows === attachment.rows) screenAtGrid = true;
+          else if (grid && (`${grid.cols}x${grid.rows}` === startGrid || attachment.resizedTo?.includes(`${grid.cols}x${grid.rows}`))) screenAtGrid = false;
+          start = text.indexOf(SYNC_START, end);
+        }
+        update = start === -1 ? null : [text.slice(start)];
+      };
+      /** not resized since it started, or herdr's latest whole screen since the latest resize is at the pty's current grid */
+      const atGrid = (): boolean => {
+        noteResize();
+        return !resized || screenAtGrid;
+      };
+      /** the hold's own time is over: a resized attach waits on for that redraw, no longer than ATTACH_RESIZE_REDRAW_MS */
+      let redrawWait = false;
+      const holdEnded = (): void => {
+        if (!atGrid()) {
+          redrawWait = true;
+          holdTimer = setTimeout(took, Math.max(0, ATTACH_RESIZE_REDRAW_MS - holdFor));
+          return;
+        }
+        took();
+      };
       const session = new PtySession({
         command,
         // --takeover goes after the id: before it, herdr reads the id as an unknown option
@@ -502,12 +679,32 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
           } else data = probes.flush() + data;
           if (!data) return;
           output = (output + data).slice(-1024);
-          if (held === null) return publish(data);
+          if (held === null) return guard(data);
+          noteResize();
           held += data;
+          heldBytes += Buffer.byteLength(data);
+          if (resized) look(data);
+          // a busy pane's output while it is held: it goes out before it is too much for one frame
+          if (holding && heldBytes > ATTACH_HOLD_MAX_BYTES) {
+            clearTimeout(holdTimer);
+            guardUntil = heldSince + holdFor;
+            took();
+            return;
+          }
           if (!holding && !ATTACH_PREAMBLE_RE.test(held)) {
             holding = true;
             heldSince = Date.now();
-            holdTimer = setTimeout(took, holdFor);
+            holdTimer = setTimeout(holdEnded, holdFor);
+          }
+          // a screen, not a refusal: the attach took, and a tab switch waits on it. A pane another
+          // bridge held keeps the whole hold: a displacement right after its screen spends no click.
+          // A pane resized since the attach started waits for herdr's screen at its current grid:
+          // input sent before it would reach the program before that grid
+          // (the grid first: it looks at each read once, where the screen's start looks at all that was held)
+          if (holding && (redrawWait || !attachment.held) && atGrid() && attachScreenStarted(held)) {
+            clearTimeout(holdTimer);
+            if (!redrawWait) guardUntil = heldSince + holdFor;
+            took();
           }
         },
         onExit: ended,

@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import * as herdr from "./herdr/client.ts";
 import { HerdrError } from "./herdr/client.ts";
+import { setFilePoolOptions } from "./file-pool.ts";
 import { createServer } from "./index.ts";
 
 describe("file routes", () => {
@@ -72,5 +73,85 @@ describe("file routes", () => {
   it("plays no page media it never gave out", async () => {
     expect(await error(await fetch(url("/api/fs/page-media/not-a-token")))).toEqual([404, "not_found"]);
     expect(await error(await fetch(url("/api/fs/page-media/not-a-token"), { method: "POST", headers: { origin: url("") } }))).toEqual([400, "method_not_allowed"]);
+  });
+
+  it("answers 503 while its file thread is stuck, and every other request meanwhile", async () => {
+    setFilePoolOptions({ worker: new URL("./file-worker.fake.ts", import.meta.url), workers: 1, waiting: 0, deadlineMs: 500 });
+    try {
+      const stuck = fetch(url(`/api/fs/stat?path=${q(join(folder, "stuck"))}`));
+      // the stat waits on its thread, not on the server's: the server answers the rest
+      const health = await fetch(url("/api/health?scope=bridge"));
+      expect(health.status).toBe(200);
+      const refused = await stuck;
+      expect(refused.headers.get("retry-after")).toBe("1");
+      expect(await error(refused)).toEqual([503, "file_busy"]);
+      // that thread is still in its call, so the one there is stays taken
+      expect(await error(await fetch(url(`/api/fs/stat?path=${q(notes)}`)))).toEqual([503, "file_busy"]);
+    } finally {
+      setFilePoolOptions();
+    }
+    // found and described, then held while it is opened and read: the headers wait no longer than the deadline
+    const heldOpen = join(folder, "held-open");
+    writeFileSync(heldOpen, "small");
+    setFilePoolOptions({ worker: new URL("./file-worker.fake.ts", import.meta.url), workers: 2, waiting: 0, deadlineMs: 500 });
+    try {
+      const started = performance.now();
+      expect(await error(await fetch(url(`/api/fs/file?path=${q(heldOpen)}`)))).toEqual([503, "file_busy"]);
+      expect(performance.now() - started).toBeLessThan(5_000);
+    } finally {
+      setFilePoolOptions();
+    }
+    expect((await fetch(url(`/api/fs/stat?path=${q(notes)}`))).status).toBe(200);
+  });
+
+  it("streams a file in the range asked for, describes it to HEAD, and refuses a range past its end", async () => {
+    const big = join(folder, "clip.bin");
+    const bytes = Buffer.from(Array.from({ length: 300 * 1024 }, (_, index) => index % 251));
+    writeFileSync(big, bytes);
+    const whole = await fetch(url(`/api/fs/file?path=${q(big)}`));
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get("accept-ranges")).toBe("bytes");
+    // larger than one read, from a disk that answers at once: sent with its length, as a download shows it
+    expect(whole.headers.get("content-length")).toBe(String(bytes.length));
+    const large = await fetch(url(`/api/fs/file?path=${q(big)}`), { headers: { range: "bytes=1000-299999" } });
+    expect(large.status).toBe(206);
+    expect(large.headers.get("content-length")).toBe("299000");
+    expect(large.headers.get("content-range")).toBe(`bytes 1000-299999/${bytes.length}`);
+    expect(Buffer.from(await large.arrayBuffer()).equals(bytes.subarray(1000, 300000))).toBe(true);
+    expect(Buffer.from(await whole.arrayBuffer()).equals(bytes)).toBe(true);
+    const part = await fetch(url(`/api/fs/file?path=${q(big)}`), { headers: { range: "bytes=100-109" } });
+    expect(part.status).toBe(206);
+    expect(part.headers.get("content-range")).toBe(`bytes 100-109/${bytes.length}`);
+    // a body that fits in one read keeps its length; a longer one streams without it
+    expect(part.headers.get("content-length")).toBe("10");
+    const small = join(folder, "small.bin");
+    writeFileSync(small, bytes.subarray(0, 1000));
+    const smallAnswer = await fetch(url(`/api/fs/file?path=${q(small)}`));
+    expect(smallAnswer.headers.get("content-length")).toBe("1000");
+    expect(Buffer.from(await smallAnswer.arrayBuffer()).equals(bytes.subarray(0, 1000))).toBe(true);
+    expect(Buffer.from(await part.arrayBuffer()).equals(bytes.subarray(100, 110))).toBe(true);
+    const head = await fetch(url(`/api/fs/file?path=${q(big)}`), { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-length")).toBe(String(bytes.length));
+    const past = await fetch(url(`/api/fs/file?path=${q(big)}`), { headers: { range: `bytes=${bytes.length}-` } });
+    expect(past.status).toBe(416);
+    expect(past.headers.get("content-range")).toBe(`bytes */${bytes.length}`);
+  });
+
+  it("renders a page on a file thread, and plays its video from the address that render gave out", async () => {
+    const site = join(folder, "site");
+    mkdirSync(site);
+    writeFileSync(join(site, "clip.mp4"), Buffer.alloc(9 * 1024 * 1024, 7));
+    writeFileSync(join(site, "report.html"), `<img src="dot.png"><video src="clip.mp4"></video>`);
+    writeFileSync(join(site, "dot.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const page = await fetch(url(`/api/fs/file?path=${q(join(site, "report.html"))}&render=1`));
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain(`<img src="data:image/png;base64,iVBORw==">`);
+    const address = /src="(http:\/\/[^"]+\/api\/fs\/page-media\/[A-Za-z0-9_-]{32})"/.exec(html)?.[1];
+    expect(address).toBeDefined();
+    const played = await fetch(address!, { headers: { range: "bytes=0-3" } });
+    expect(played.status).toBe(206);
+    expect(new Uint8Array(await played.arrayBuffer())).toEqual(new Uint8Array(4).fill(7));
   });
 });

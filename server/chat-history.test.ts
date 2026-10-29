@@ -139,6 +139,73 @@ for (const source of ["omp-transcript", "omo-transcript", "gjc-transcript"] as c
   });
 }
 
+for (const via of ["an answer", "/model and /effort"] as const) {
+  test(`claude-transcript: the model and effort ${via} set past the metadata head stay when the newest page has no answer`, () => {
+    let parent: string | null = null;
+    let count = 0;
+    const record = (row: Record<string, unknown>, from = parent) => { const uuid = `r${count++}`; parent = uuid; return { ...row, uuid, parentUuid: from }; };
+    const prompt = (text: string) => record({ type: "user", message: { role: "user", content: text } });
+    const answer = (model: string, effort: string) => record({ type: "assistant", effort, message: { role: "assistant", model, content: [{ type: "text", text: "ok" }] } });
+    const output = (text: string) => record({ type: "user", message: { role: "user", content: `<local-command-stdout>${text}</local-command-stdout>` } });
+    const prompts = (label: string) => Array.from({ length: 130 }, (_, i) => prompt(`${label} ${i}`));
+    const padding = () => record({ type: "system", subtype: "informational", content: "x".repeat(70 * 1024) }); // past the 64 KiB metadata head
+    const sonnet = { model: "claude-sonnet-5-5", reasoning_effort: "high" };
+    const path = fixture(jsonl([
+      prompt("start"), answer("claude-opus-5-5", "medium"), padding(),
+      ...via === "an answer" ? [prompt("on sonnet"), answer("claude-sonnet-5-5", "high")]
+        : [output("Set model to `Sonnet 5.5` and saved as your default for new sessions"), output("Set effort level to high (saved as your default for new sessions)")],
+    ]));
+    expect(transcriptPage("claude-transcript", path).metadata).toEqual(sonnet);
+    // many prompts and no answer: the newest page starts after the setting
+    appendFileSync(path, jsonl(prompts("turn")));
+    const page = transcriptPage("claude-transcript", path);
+    expect(page.cursor).toBeString();
+    expect(page.metadata).toEqual(sonnet);
+    forgetTranscriptState();
+    expect(transcriptPage("claude-transcript", path).metadata).toEqual(sonnet);
+    // a later answer wins, until a rewind to before it leaves it off the branch
+    const back = parent;
+    appendFileSync(path, jsonl([prompt("on haiku"), answer("claude-haiku-5-5", "low"), ...prompts("haiku")]));
+    expect(transcriptPage("claude-transcript", path).metadata).toEqual({ model: "claude-haiku-5-5", reasoning_effort: "low" });
+    appendFileSync(path, jsonl([record({ type: "user", message: { role: "user", content: "rewound" } }, back), ...prompts("rewound")]));
+    expect(transcriptPage("claude-transcript", path).metadata).toEqual(sonnet);
+    forgetTranscriptState();
+    expect(transcriptPage("claude-transcript", path).metadata).toEqual(sonnet);
+    // a clear forgets them, also once the newest page starts past the cleared head
+    appendFileSync(path, jsonl([claudeClear, padding(), ...prompts("after clear")]));
+    const cleared = transcriptPage("claude-transcript", path);
+    expect(cleared.cursor).toBeString();
+    expect(cleared.metadata).toEqual({ model: null, reasoning_effort: null });
+  });
+}
+
+test("claude-transcript: a setting every rewind left off the branch is not replayed past the metadata head, and a long answer's is", () => {
+  let parent: string | null = null;
+  let count = 0;
+  const record = (row: Record<string, unknown>, from = parent) => { const uuid = `r${count++}`; parent = uuid; return { ...row, uuid, parentUuid: from }; };
+  const prompt = (text: string, from = parent) => record({ type: "user", message: { role: "user", content: text } }, from);
+  const answer = (model: string, effort: string | null, text = "ok") => record({ type: "assistant", effort, message: { role: "assistant", model, content: [{ type: "text", text }] } });
+  const prompts = (label: string) => Array.from({ length: 130 }, (_, i) => prompt(`${label} ${i}`));
+  const padding = () => record({ type: "system", subtype: "informational", content: "x".repeat(70 * 1024) });
+  const rows = [prompt("start"), answer("claude-opus-5-5", "medium")];
+  const opus = parent;
+  // the same Sonnet twice, each answer then rewound past, with the first rewind's prompt between them
+  rows.push(padding(), prompt("on sonnet"), answer("claude-sonnet-5-5", "high"), prompt("back", opus));
+  const back = parent;
+  rows.push(answer("claude-sonnet-5-5", "high"), prompt("back again", back), ...prompts("turn"));
+  const path = fixture(jsonl(rows));
+  const page = transcriptPage("claude-transcript", path);
+  expect(page.cursor).toBeString();
+  expect(page.metadata).toEqual({ model: "claude-opus-5-5", reasoning_effort: "medium" });
+  forgetTranscriptState();
+  expect(transcriptPage("claude-transcript", path).metadata).toEqual({ model: "claude-opus-5-5", reasoning_effort: "medium" });
+  // an answer too long for the branch to follow still names what it ran at
+  appendFileSync(path, jsonl([padding(), prompt("long"), answer("claude-sonnet-5-5", null, "x".repeat(1024 * 1024 + 1)), ...prompts("after long")]));
+  expect(transcriptPage("claude-transcript", path).metadata).toEqual({ model: "claude-sonnet-5-5", reasoning_effort: null });
+  forgetTranscriptState();
+  expect(transcriptPage("claude-transcript", path).metadata).toEqual({ model: "claude-sonnet-5-5", reasoning_effort: null });
+});
+
 test("metadata clears old context and ignores hidden assistant usage", () => {
   const text = jsonl([{ type: "model_change", modelId: "old" }, message("assistant", "answer", { model: "old", usage: { input: 123 } }), clear]);
   expect(parseConversationMetadata(text, "omp-transcript")).toEqual({ model: null, reasoning_effort: null });

@@ -29,7 +29,7 @@ import type { AgentKind, HerdrPane, SessionHistoryAgent, SessionHistoryResponse,
 import { ApiError, routeMissing } from "../lib/api.ts";
 import { useLocale, useT } from "../lib/i18n.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
-import { claudeResumeRequest, inFlightGuard, paneShowingRow, resumeTabRequest, rowKey, rowStore, sessionHistoryAgent, sessionHistorySourcePane, sessionRowTime, standingResume, type RecentResume } from "../lib/sessionHistory.ts";
+import { claudeResumeRequest, inFlightGuard, paneShowingRow, recentlyResumedPane, resumeTabRequest, rowKey, rowStore, sessionHistoryAgent, sessionHistorySourcePane, sessionRowTime, standingResume, type RecentResume } from "../lib/sessionHistory.ts";
 import { useSheetSwipe } from "../lib/sheets.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 
@@ -255,7 +255,7 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, sourcePane
                 // a pane that reports the session, else the pane of a Resume a moment ago; a record whose pane
                 // the roster has not listed yet withholds Resume and offers nothing to open until it does
                 const resumed = standingResume(recent, panes, machineId, workspace.workspace_id, agent, row.id, momentAgo, rowStore(row));
-                const shown = paneShowingRow(panes, workspace.workspace_id, agent, row) ?? (resumed === undefined ? undefined : panes.find((pane) => pane.pane_id === resumed.paneId && pane.workspace_id === workspace.workspace_id));
+                const shown = paneShowingRow(panes, workspace.workspace_id, agent, row) ?? recentlyResumedPane(recent, panes, machineId, workspace.workspace_id, agent, row.id, momentAgo, rowStore(row));
                 const withheld = resumed !== undefined && shown === undefined;
                 const resumable = row.resume !== null && row.resume.argv.length > 0;
                 // a Claude row its bridge bound to no store: no Resume that could start it in another

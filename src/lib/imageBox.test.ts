@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { imageSlotStyle, standaloneImage } from "./imageBox.ts";
-import { parseInline, parseMarkdown, type InlineNode } from "./markdown.ts";
+import { parseInline, parseMarkdown, type InlineNode } from "../../shared/markdown.ts";
 
 function paragraphLines(source: string, html = false): InlineNode[][] {
   const block = parseMarkdown(source, 0, html)[0];

@@ -18,10 +18,11 @@ export function resolveWorkspaceRoot(start: string, home: string): string | null
 /**
  * The folder a chat's tool paths read from: the pane's `cwd` when it is an absolute POSIX path
  * (trailing slashes trimmed, never `/` itself), else null and the paths stay as written. A Windows
- * drive or UNC folder is not guessed at.
+ * drive or UNC folder is not guessed at, a UNC one written with forward slashes (`//server/share`)
+ * included.
  */
 export function toolPathRoot(cwd: string | null | undefined): string | null {
-  if (cwd == null || !cwd.startsWith("/")) return null;
+  if (cwd == null || !cwd.startsWith("/") || cwd.startsWith("//")) return null;
   const root = cwd.replace(/\/+$/, "");
   return root === "" ? null : root;
 }

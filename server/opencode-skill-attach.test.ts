@@ -10,6 +10,9 @@ const ansi = (name: "first-selected" | "second-selected" | "third-selected" | "a
 const narrow = (name: "first-selected" | "accepted") => readFileSync(join(import.meta.dir, "fixtures", `opencode-autocomplete-2.0.32-ansi-narrow-${name}.ansi`), "utf8");
 const withoutDropdown = (screen: string) => screen.split("\n").filter((line) => !/^ *┃ .* ┃$/u.test(line.replace(/\u001b\[[0-9;:]*m/gu, "").trimEnd())).join("\n");
 const AGENT = "                      ┃  Build · MiniMax M3.1 Flash Free OpenCode";
+/** input drawn in the padding's own colour (255), so Tab's separator looks like the padding */
+const samePadding = (screen: string) => screen.replaceAll("\u001b[38;2;238;238;238m", "\u001b[38;2;255;255;255m");
+const MODEL_ONLY = " \u2503 MiniMax M3.1 Flash Free";
 /** the recorded accept, for the second skill row instead */
 const acceptedTwo = () => ansi("accepted").replace("@effect", "@effect-two");
 /** a recorded box with `@effect-two` typed in the input row (the rows as recorded) */
@@ -149,6 +152,14 @@ describe("skillAccepted", () => {
   it("accepts a styled token after a model-only status row changes", () => {
     const screen = narrow("accepted").replace("MiniMax M3.1 Flash Free", "Another Model");
     expect(skillAccepted(screen, "effect", " ┃ MiniMax M3.1 Flash Free")).toBe(true);
+  });
+
+  it("accepts a styled token across a resize during Tab, whichever row names no agent", () => {
+    // wide before Tab, narrow model-only row after it; and the reverse
+    expect(skillAccepted(narrow("accepted"), "effect", AGENT)).toBe(true);
+    expect(skillAccepted(ansi("accepted"), "effect", MODEL_ONLY)).toBe(true);
+    // two rows that both name an agent are still compared
+    expect(skillAccepted(ansi("accepted").replace("Build", "Plan "), "effect", AGENT)).toBe(false);
   });
 
   it.each(["redrawn agent", "bordered content", "no bold"])("recognizes an attached token with %s", (kind) => {
@@ -318,6 +329,54 @@ describe("typeWithSkills", () => {
     const io = pane((writes) => writes.includes(`keys:${OPENCODE_SKILL_ACCEPT_KEY}`) ? after : ansi("first-selected"));
     await expect(typeWithSkills("@effect go", ["effect"], () => true, io, async () => {})).rejects.toMatchObject({ code: "submit_changed" });
     expect(io.writes).toEqual(["text:@effect", `keys:${OPENCODE_SKILL_ACCEPT_KEY}`]);
+  });
+
+  it.each([["wide", "narrow"], ["narrow", "wide"]] as const)("records a skill attached when the pane resizes from %s to %s during Tab", async (from, to) => {
+    const before = from === "wide" ? ansi("first-selected") : narrow("first-selected");
+    const after = to === "wide" ? ansi("accepted") : narrow("accepted");
+    const io = simulatedInput(() => after, "@effect ", before);
+    const result = await typeWithSkills("@effect go", ["effect"], () => true, io, async () => {});
+    expect(result).toEqual({ attached: ["effect"], missed: [], prompt: [{ typed: "@effect " }, { pasted: "go" }] });
+    expect(io.input()).toBe("@effect go");
+  });
+
+  it.each(["settles on the other agent", "stays model-only until the deadline"])("refuses a switch seen after Tab that a model-only redraw hides and then %s", async (kind) => {
+    const switched = ansi("accepted").replace("Build", "Plan ");
+    const io = simulatedInput((now) => now === 0 || kind === "settles on the other agent" && now >= 100 ? switched : narrow("accepted"), "@effect ");
+    const delivery = typeWithSkills("@effect go", ["effect"], () => true, io, async () => {}).then(async () => { await io.sendKeys(["Enter"], () => true); });
+    await expect(delivery).rejects.toMatchObject({ code: "submit_changed", message: expect.stringContaining(JSON.stringify("Plan")) });
+    expect(io.writes).toEqual(["text:@effect", `keys:${OPENCODE_SKILL_ACCEPT_KEY}`]);
+    expect(io.entered()).toBe(false);
+  });
+
+  it("refuses a switch that shows only after a first model-only read", async () => {
+    const io = simulatedInput((now) => now === 0 ? narrow("accepted") : ansi("accepted").replace("Build", "Plan "), "@effect ");
+    const delivery = typeWithSkills("@effect go", ["effect"], () => true, io, async () => {}).then(async () => { await io.sendKeys(["Enter"], () => true); });
+    await expect(delivery).rejects.toMatchObject({ code: "submit_changed", message: expect.stringContaining(JSON.stringify("Plan")) });
+    expect(io.writes).toEqual(["text:@effect", `keys:${OPENCODE_SKILL_ACCEPT_KEY}`]);
+    expect(io.entered()).toBe(false);
+  });
+
+  it("accepts after a transient other agent is named back before a model-only redraw", async () => {
+    const screens = [ansi("accepted").replace("Build", "Plan "), withoutDropdown(ansi("first-selected")), narrow("accepted")];
+    const io = pane((writes) => writes.includes(`keys:${OPENCODE_SKILL_ACCEPT_KEY}`) ? screens.shift() ?? narrow("accepted") : ansi("first-selected"));
+    expect(await typeWithSkills("@effect go", ["effect"], () => true, io, async () => {})).toEqual({ attached: ["effect"], missed: [], prompt: [{ typed: "@effect " }, { pasted: "go" }] });
+  });
+
+  it("keeps input and record equal when a narrow redraw drops the agent and input matches the padding colour", async () => {
+    const io = simulatedInput(() => samePadding(narrow("accepted")), "@effect ", samePadding(ansi("first-selected")));
+    const result = await typeWithSkills("@effect go", ["effect"], () => true, io, async () => {});
+    expect(result.attached).toEqual(["effect"]);
+    expect(io.input()).toBe("@effect go");
+    expect(result.prompt.map((piece) => "typed" in piece ? piece.typed : piece.pasted).join("")).toBe(io.input());
+  });
+
+  it("types Tab's padding-coloured space once when a model-only wait ends on a blank redraw", async () => {
+    // the attached token shows while the row names no agent; the deadline read finds no prompt at all
+    const io = simulatedInput((now) => now >= OPENCODE_SKILL_ACCEPT_WAIT_MS ? "" : samePadding(narrow("accepted")), "@effect ", samePadding(ansi("first-selected")));
+    const result = await typeWithSkills("@effect go", ["effect"], () => true, io, async () => {});
+    expect(io.input()).toBe("@effect go");
+    expect(result.prompt.map((piece) => "typed" in piece ? piece.typed : piece.pasted).join("")).toBe(io.input());
   });
 
   it("does not record a model-only redraw as an agent switch after attachment", async () => {

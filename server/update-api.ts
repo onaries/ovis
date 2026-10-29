@@ -124,7 +124,12 @@ async function expectedRevision(request: Request): Promise<string | null> {
 
 const running = (status: UpdateStatus) => ["checking", "building", "restarting"].includes(status.phase);
 
-export function handleUpdateRequest(request: Request, pathname: string, service?: UpdateService): Response | Promise<Response> {
+/**
+ * `where` adds where this server answers to GET /api/updates (UpdateStatus.port, serving_url): passed
+ * only for the connection server's bridge token, which cannot read GET /api/access (#2191).
+ */
+export function handleUpdateRequest(request: Request, pathname: string, service?: UpdateService,
+  where?: () => Promise<Pick<UpdateStatus, "port" | "serving_url">>): Response | Promise<Response> {
   const status = service?.status() ?? unmanagedUpdateStatus();
   const reply = (body: unknown, code = 200) => {
     const response = jsonResponse(body, code);
@@ -132,7 +137,11 @@ export function handleUpdateRequest(request: Request, pathname: string, service?
     return response;
   };
   const fail = (code: string, message: string, http: number) => reply({ error: { code, message } }, http);
-  if (pathname === "/api/updates" && request.method === "GET") { setRequestRoute(pathname); return withServed(status, service).then((value) => reply(value)); }
+  if (pathname === "/api/updates" && request.method === "GET") {
+    setRequestRoute(pathname);
+    // a failed lookup leaves the status as it was: the connection server then asks /api/access as of an older server
+    return Promise.all([withServed(status, service), where?.().catch(() => undefined)]).then(([value, at]) => reply(at ? { ...value, ...at } : value));
+  }
   if (pathname === "/api/updates/notes" && request.method === "GET") { setRequestRoute(pathname); return reply(service?.notes() ?? noUpdateNotes()); }
   if (pathname === "/api/updates/installed" && request.method === "GET") { setRequestRoute(pathname); return reply(service?.installed() ?? noInstalledNotes()); }
   if (request.method !== "POST" || (pathname !== "/api/updates/check" && pathname !== "/api/updates/install")) {

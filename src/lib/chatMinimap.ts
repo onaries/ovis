@@ -18,7 +18,7 @@ export function minimapTurns(turns: readonly ConversationTurn[]): MinimapTurn[] 
   const result: MinimapTurn[] = [];
   turns.forEach((turn, row) => {
     if (turn.role !== "user" || turn.parts.some((part) => part.kind === "compact" || part.kind === "notice" || part.kind === "task_result")) return;
-    const text = turn.parts.map((part) => part.kind === "text" ? part.text : "").join(" ").replace(/\s+/g, " ").trim();
+    const text = turn.parts.map((part) => part.kind === "text" ? part.text : part.kind === "shell" ? `!${part.command}` : "").join(" ").replace(/\s+/g, " ").trim();
     result.push({ row, preview: text.length > 120 ? `${text.slice(0, 119)}…` : text });
   });
   return result;

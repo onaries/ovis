@@ -1098,7 +1098,7 @@ try {
     for (let parent = element.parentElement; parent; parent = parent.parentElement) if (parent.tagName === "BLOCKQUOTE") depth += 1;
     return depth;
   });
-  // the parser nests 32 levels (MAX_QUOTE_DEPTH in src/lib/markdown.ts); the 33rd holds the rest as text
+  // the parser nests 32 levels (MAX_QUOTE_DEPTH in shared/markdown.ts); the 33rd holds the rest as text
   assert.equal(quoteDepth, 33, "the quote nests to the parser's limit");
   assert.equal(await deep.getByRole("alert").count(), 0, "the preview renders, not its fallback");
   console.log("PASS A Markdown file of 20 000 nested quotes renders, and the app stays");

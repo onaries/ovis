@@ -26,6 +26,12 @@ export interface AgentCommandContext {
   readonly roots: ProcessRoots;
   /** the running agent's version, read from its own store; null or absent when unknown */
   readonly version?: string | null;
+  /**
+   * The server's own environment, the fallback for a setting the pane's process does not name
+   * (absent: `process.env`). A scan on a file thread (`file-pool.ts`) is handed the server's copy:
+   * a Bun thread keeps the environment the process started with, not what the server set since.
+   */
+  readonly serverEnv?: Readonly<Record<string, string | undefined>>;
 }
 export interface AgentCommandSource {
   readonly builtins: readonly string[];

@@ -35,15 +35,17 @@ const OMP_STATUS_ROW_RE = /^(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \S+|π) · /u;
 const OMP_PANEL_BOTTOM_RE = /^╰─+╯$/u;
 
 /**
- * omp prints its status row right under the Ask panel's bottom border while the question waits (#1644): that row,
- * there and nowhere else, is not later output. Alone it proves nothing; the border right above it does, and only
+ * omp prints its status row right under the Ask panel's bottom border while the question waits (#1644), one empty
+ * row lower in the composer shapes that keep a gap over it (`rule`, `field`, `rail`; pi-tui `bottomBarGap`): that row,
+ * there and nowhere else, is not later output. Alone it proves nothing; the border above it does, and only
  * as the panel's own: right under the panel's last row, the last line shown once the row is left out. Another
  * box drawn under an old panel ends in a border too, but its own (empty) rows sit between that border and the hint.
  */
 function withoutOmpStatusRow(visible: string[], cleanLines: string[]): string[] {
   const end = findLastIndex(cleanLines, (line) => line !== "");
-  if (end < 2 || !OMP_STATUS_ROW_RE.test(cleanLines[end]!) || !OMP_PANEL_BOTTOM_RE.test(cleanLines[end - 1]!)
-    || cleanLines[end - 2] !== visible.at(-2)) return visible;
+  const border = cleanLines[end - 1] === "" ? end - 2 : end - 1;
+  if (border < 1 || !OMP_STATUS_ROW_RE.test(cleanLines[end]!) || !OMP_PANEL_BOTTOM_RE.test(cleanLines[border]!)
+    || cleanLines[border - 1] !== visible.at(-2)) return visible;
   return visible.slice(0, -1);
 }
 

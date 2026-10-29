@@ -1,0 +1,30 @@
+
+
+
+• Creating a new agent
+  → /rename    name your agent
+  → /init      initialize your agent's memory
+  → /login     sign in with Letta
+  → /agents    list all agents
+  → /resume    resume a previous conversation
+
+
+› Reply with exactly: first turn ok
+
+
+• first turn ok
+
+
+› Use the shell tool to run: ls -la . Then write a 300-word essay about lighthouses.
+
+
+• List List files in current directory
+  └  Running... (0s)
+
+⡛ Letta Code is deliberating… (esc to interrupt)
+  └  Tip: Use /search [query] to search messages across all agents.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+›
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                     Letta Code · gemini-3.1-flash-lite

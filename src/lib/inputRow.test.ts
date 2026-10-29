@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { FrameGate, inputRowState, readScreen, readsInputRow, type InputRowState, type ScreenSnapshot } from "./inputRow.ts";
+import { FrameGate, inputRowState, readScreen, readScreenLines, readsInputRow, type InputRowState, type ScreenSnapshot } from "./inputRow.ts";
 import { matchHerdrWidths } from "./terminalWidths.ts";
 import { SCREEN_AUTO_RETURN, watchReturn } from "./terminalPeek.ts";
 
@@ -18,6 +18,27 @@ const terminal = (cols: number, rows = 40): Terminal => {
   matchHerdrWidths(term);
   return term;
 };
+
+test("logical screen lines preserve spaces across wraps but not hard line breaks", async () => {
+  const term = terminal(40, 5);
+  const text = `${"a".repeat(39)} b`;
+  try {
+    await parse(term, `${text}\r\nnext`);
+    expect(readScreenLines(term.buffer.active, term.rows)).toEqual([text, "next", "", ""]);
+  } finally {
+    term.dispose();
+  }
+});
+
+test("logical screen lines reject a wrapped line clipped at the screen top", async () => {
+  const term = terminal(40, 2);
+  try {
+    await parse(term, `${"a".repeat(81)}\r\nnext`);
+    expect(readScreenLines(term.buffer.active, term.rows)).toBeNull();
+  } finally {
+    term.dispose();
+  }
+});
 
 /** A static recording (one row per line, SGR only) as the screen shows it. */
 async function screenOf(text: string, cols: number): Promise<ScreenSnapshot> {
@@ -179,7 +200,8 @@ describe("inputRowState on recorded screens", () => {
     const claude = readdirSync(CLAUDE).filter((file) => file.startsWith("claude-") && file.endsWith(".txt"));
     const found = Object.fromEntries(await Promise.all(claude.map(async (file) =>
       [file, inputRowState("claude", await screenOf(readFileSync(join(CLAUDE, file), "utf8"), columnsOf(file)))] as const)));
-    const ready = ["claude-rewind-2.1.304-closed-40.txt", "claude-rewind-2.1.304-confirm-apple-esc-esc-120.txt", "claude-rewind-2.1.304-confirm-apple-esc-esc-40.txt"];
+    // the /effort dialog after `s`: closed, its result above the box
+    const ready = ["claude-effort-2.1.311-set-120.txt", "claude-rewind-2.1.304-closed-40.txt", "claude-rewind-2.1.304-confirm-apple-esc-esc-120.txt", "claude-rewind-2.1.304-confirm-apple-esc-esc-40.txt"];
     expect(claude.length).toBeGreaterThan(10);
     for (const file of claude) expect([file, found[file]]).toEqual([file, ready.includes(file) ? "ready" : "gone"]);
   });

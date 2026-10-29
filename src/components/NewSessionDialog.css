@@ -130,10 +130,11 @@
   white-space: nowrap;
 }
 
-/* the launch's own choices, model and effort, side by side where both fit a field's width, else stacked */
+/* the launch's own choices, model and effort, side by side at every width: a column is 9rem at least, or half
+   the row on a phone narrower than two of those */
 .new-session-launch {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(9rem, calc((100% - var(--space-3)) / 2)), 1fr));
   column-gap: var(--space-3);
 }
 
@@ -145,6 +146,45 @@
 .new-session-launch .select {
   width: 100%;
   min-width: 0;
+}
+
+/* Ultracode: one line under Model and Effort, the switch, its name and a short note that gives way first;
+   positioned, so its visually hidden description is anchored inside the dialog's scrolling body */
+.new-session-ultracode {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-bottom: var(--space-4);
+}
+
+/* the switch keeps Settings' finger-sized box; its track starts at the fields' left edge */
+.new-session-ultracode .settings-toggle {
+  flex: none;
+  margin-inline-start: calc(var(--space-1) * -1);
+}
+
+.new-session-ultracode-label {
+  flex: none;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+/* while the dialog starts the agent, the name reads as disabled as its switch */
+.new-session-ultracode .settings-toggle:disabled + .new-session-ultracode-label {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.new-session-ultracode-note {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* the first message: a few lines of the message box's own face and measure, grown by hand */

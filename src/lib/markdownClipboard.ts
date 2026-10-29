@@ -10,7 +10,8 @@ export interface ClipboardNode {
 
 export interface ClipboardPayload {
   readonly text: string;
-  readonly html: string;
+  /** null: plain text only (a selection reaching past the chat) */
+  readonly html: string | null;
 }
 
 const OMIT = new Set(["BUTTON", "INPUT", "SCRIPT", "STYLE", "TEMPLATE", "SVG", "IFRAME", "OBJECT", "EMBED", "LINK", "META"]);
@@ -38,7 +39,7 @@ function richHtml(node: ClipboardNode): string {
 }
 
 /** The browser owns plain-text layout and whitespace; only the rich representation is rebuilt. */
-export function renderedClipboardPayload(nodes: readonly ClipboardNode[], text: string): ClipboardPayload {
+export function renderedClipboardPayload(nodes: readonly ClipboardNode[], text: string): ClipboardPayload & { readonly html: string } {
   return { text, html: nodes.map(richHtml).join("") };
 }
 
@@ -52,11 +53,13 @@ function fromDom(node: Node): ClipboardNode {
  * A tool-file label reads shortened (`app/src/a.ts`) while its `data-raw-path` is the path as written
  * (`/work/app/src/a.ts`): a selection that takes the whole label copies that path. The missing head
  * goes into the label's own text for the copy alone and comes out again, so no boundary moves.
+ * `read` learns whether any label grew. A label the page hides (a chat under a terminal peek, one not
+ * rendered at all) is not what the reader selected and stays as it is.
  */
-function withRawToolPaths<T>(selection: Selection, root: Element, read: () => T): T {
+function withRawToolPaths<T>(selection: Selection, scope: ParentNode, read: (grew: boolean) => T): T {
   const grown: { text: Text; head: number }[] = [];
   try {
-    for (const label of root.querySelectorAll<HTMLElement>("[data-raw-path]")) {
+    for (const label of scope.querySelectorAll<HTMLElement>("[data-raw-path]")) {
       const text = label.firstChild;
       const raw = label.dataset["rawPath"] ?? "";
       if (!(text instanceof Text) || label.childNodes.length !== 1 || text.data === raw || !raw.endsWith(text.data)) continue;
@@ -64,23 +67,34 @@ function withRawToolPaths<T>(selection: Selection, root: Element, read: () => T)
         const range = selection.getRangeAt(index);
         return range.comparePoint(text, 0) === 0 && range.comparePoint(text, text.length) === 0;
       });
-      if (!whole) continue;
+      if (!whole || label.getClientRects().length === 0 || getComputedStyle(label).visibility !== "visible") continue;
       const head = raw.slice(0, raw.length - text.data.length);
       text.insertData(0, head);
       grown.push({ text, head: head.length });
     }
-    return read();
+    return read(grown.length > 0);
   } finally {
     for (const { text, head } of grown) text.deleteData(0, head);
   }
 }
 
-/** Only claim ranges wholly in this chat; composer fields and the terminal keep native copy. */
+/**
+ * Claim ranges wholly in this chat. A selection reaching past it (Select All, a drag out of the
+ * chat) is claimed only when it takes a shown, shortened tool-file label whole, so the copy carries
+ * the path as written; any other keeps native copy, as composer fields and the terminal do. That
+ * claim is the browser's plain text alone: rebuilding HTML from the whole page would carry what
+ * the plain text leaves out (a composer's unsent draft, a hidden chat).
+ */
 export function chatSelectionClipboardPayload(selection: Selection, root: Element): ClipboardPayload | null {
   if (selection.isCollapsed || selection.rangeCount === 0) return null;
   for (let index = 0; index < selection.rangeCount; index++) {
     const range = selection.getRangeAt(index);
-    if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
+    if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) {
+      // a selection with no part in this chat is another chat's (which copies it with its HTML),
+      // or the page's: whichever chat's listener runs first must not take it over
+      if (![...Array(selection.rangeCount).keys()].some((other) => selection.getRangeAt(other).intersectsNode(root))) return null;
+      return withRawToolPaths(selection, document, (grew) => grew ? { text: selection.toString(), html: null } : null);
+    }
   }
   return withRawToolPaths(selection, root, () => selectionPayload(selection));
 }

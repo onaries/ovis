@@ -30,7 +30,7 @@ export const NOTICE_VERSION = 4;
  * herdr's canonical theme names. A literal list, not an import, so the Worker's copy only changes with a deploy.
  */
 export const TELEMETRY_THEME_IDS = [
-  "amber", "charcoal", "codex", "catppuccin", "catppuccin-latte", "tokyo-night", "tokyo-night-day", "dracula", "nord",
+  "amber", "charcoal", "codex", "catppuccin", "catppuccin-latte", "tokyo-night", "black", "tokyo-night-day", "dracula", "nord",
   "gruvbox", "gruvbox-light", "one-dark", "one-light", "solarized", "solarized-light", "kanagawa",
   "kanagawa-lotus", "rose-pine", "rose-pine-dawn", "vesper",
 ] as const;

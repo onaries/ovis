@@ -5,8 +5,10 @@
  * Anything else is the prompt's own "type something" answer when it has one.
  */
 import type { InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
+import { CASE_FOLDING_DATA } from "./caseFolding.generated.ts";
+import { CONFUSABLES_DATA } from "./confusables.generated.ts";
 import { t } from "./i18n.ts";
-import { promptWords } from "./promptText.ts";
+import { optionName, promptWords } from "./promptText.ts";
 
 export type TypedAnswer = Pick<PromptAnswer, "option_index" | "option_indices" | "custom_text">;
 
@@ -20,8 +22,44 @@ function boundLetter(label: string): string | null {
   return label.match(/\(([a-z])\)$/i)?.[1]?.toLowerCase() ?? null;
 }
 
+/**
+ * text as a page shows it, for comparing what is typed with what a card shows (never what is sent): one
+ * Unicode form by look (NFKC: `e` and a combining accent is `é`, the ligature `ﬁ` is `fi`), without
+ * the marks a page does not draw (format characters and every default-ignorable code point: zero-width
+ * space and joiners, word joiner, soft hyphen, byte order mark, the combining grapheme joiner, variation
+ * selectors, Hangul fillers; a visible accent stays), its spacing collapsed. Rows that read alike then name each other (#2220).
+ */
+const spaced = (text: string): string => text.normalize("NFKC").replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").replace(/\s+/g, " ").trim().toLowerCase();
+
+const caseFolds = new Map(CASE_FOLDING_DATA.split(";").map((entry) => {
+  const [from, to] = entry.split("=") as [string, string];
+  return [String.fromCodePoint(parseInt(from, 16)), String.fromCodePoint(...to.split(" ").map((hex) => parseInt(hex, 16)))];
+}));
+/** Unicode's full case folding (CaseFolding.txt C and F): `Straße`, `STRASSE` and `STRAẞE` all fold to `strasse` */
+const toCasefold = (text: string): string => Array.from(text, (char) => caseFolds.get(char) ?? char).join("");
+
+const confusables = new Map(CONFUSABLES_DATA.split(";").map((entry) => {
+  const [from, to] = entry.split("=") as [string, string];
+  return [String.fromCodePoint(parseInt(from, 16)), String.fromCodePoint(parseInt(to, 16))];
+}));
+/** Each letter Unicode draws like an ASCII letter or digit (confusables.txt, UTS #39) as that one: Cyrillic `о` and Greek `ο` as `o`, `1` as `l` */
+const unconfused = (text: string): string => Array.from(text, (char) => confusables.get(char) ?? char).join("");
+
+/**
+ * What a name reads as, for telling rows apart (#2220): Unicode's compatibility caseless form (Unicode 3.13,
+ * D146: NFKD(toCasefold(NFKD(toCasefold(NFD(x)))))), then its letters, marks and digits alone. Marks a page
+ * does not draw, spacing, punctuation, blanks such as U+2800 and controls such as U+007F all go; the last
+ * NFD puts the marks left in canonical order again, so a skeleton is its own skeleton. Then a letter drawn
+ * like a Latin one is that Latin letter (unconfused), folded again (#2233): only after the case folding, so a
+ * capital `I` stays `i` and every name keeps the skeleton of its other case. Two rows with one skeleton may
+ * look the same, so a typed name picks neither (their numbers and a click still do). That over-refuses pairs
+ * like `production.` and `production`.
+ */
+export const skeleton = (text: string): string => toCasefold(unconfused(toCasefold(toCasefold(text.normalize("NFD")).normalize("NFKD")).normalize("NFKD"))).normalize("NFKD")
+  .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").replace(/[^\p{L}\p{M}\p{N}]/gu, "").normalize("NFD");
+
 function bareLabel(label: string): string {
-  return label.replace(/\s*\((?:[a-z]|esc|recommended)\)$/i, "").trim().toLowerCase();
+  return spaced(label.replace(/\s*\((?:[a-z]|esc|recommended)\)$/i, ""));
 }
 
 /** null: the prompt only takes its options, and the text names none of them. */
@@ -34,21 +72,49 @@ export function answerFromText(prompt: InteractivePrompt, text: string): TypedAn
     const index = Number(token) - 1;
     return valid.includes(index) ? index : null;
   };
-  if (prompt.multi_select) {
-    const indices = value.split(/[\s,]+/).filter(Boolean).map(byNumber);
-    if (indices.every((index) => index !== null)) return { option_indices: [...new Set(indices as number[])] };
-    return prompt.custom_option_index !== null ? { custom_text: value } : null;
-  }
-  const numbered = byNumber(value);
-  if (numbered !== null) return { option_index: numbered };
-  const lower = value.toLowerCase();
+  const typed = (): TypedAnswer | null => prompt.custom_option_index !== null ? { custom_text: value } : null;
   // a label the bridge wrote is named as the card shows it, in the user's language, or in English
   const words = promptWords(prompt);
-  const names = (label: string): boolean => label.toLowerCase() === lower || bareLabel(label) === lower || boundLetter(label) === lower;
-  // an option's own words first: a translated label never takes the words another option shows
-  const named = valid.find((index) => names(prompt.options[index]!.label)) ?? valid.find((index) => names(words.label(index)));
-  if (named !== undefined) return { option_index: named };
-  return prompt.custom_option_index !== null ? { custom_text: value } : null;
+  /**
+   * the one option `said` names as the card shows the options; null for words that name several (rows that read alike), undefined for none.
+   * `literal`: only a row's own name counts, not words that merely look like one (a typed row number, which `1` beside rows `I` and `l` still is)
+   */
+  const nameOf = (said: string, literal = false): number | null | undefined => {
+    const lower = spaced(said);
+    const names = (label: string): boolean => spaced(label) === lower || bareLabel(label) === lower || boundLetter(label) === lower;
+    const only = (label: (index: number) => string, named = names): number | null | undefined => {
+      const found = valid.filter((index) => named(label(index)));
+      if (found.length > 1) return null;
+      // rows that may look the same pick none: the one named shares its skeleton with another row, or the
+      // words read as two rows' names
+      const alike = (shape: string): number => valid.filter((index) => skeleton(label(index)) === shape).length;
+      if (found.length === 1) return alike(skeleton(label(found[0]!))) > 1 ? null : found[0];
+      return !literal && alike(skeleton(said)) > 1 ? null : undefined;
+    };
+    // an option's own words first: a translated label never takes the words another option shows
+    // an omp card in Markdown is named by the words it shows alone (optionName, as the card draws them):
+    // its raw Markdown may be another option's words (`*main*` beside `` `*main*` ``)
+    if (prompt.text_format === "markdown") return only((index) => optionName(prompt, prompt.options[index]!.label).words, (shown) => spaced(shown) === lower);
+    const own = only((index) => prompt.options[index]!.label);
+    return own !== undefined ? own : only((index) => words.label(index));
+  };
+  // One rule for a single and a multiple choice. The whole text first: a row's shown name picks that row
+  // alone, words several rows show pick none. Only words no row shows are read as numbers, and each number
+  // must then name no other row: an omp card's `` `2` `` or `` `1 2` ``, typed, is that row, never rows 2 or 1 and 2
+  const whole = nameOf(value, /^[\d\s,]+$/.test(value));
+  if (whole === null) return typed();
+  if (whole !== undefined) return prompt.multi_select ? { option_indices: [whole] } : { option_index: whole };
+  const tokens = prompt.multi_select ? value.split(/[\s,]+/).filter(Boolean) : [value];
+  const indices = tokens.map(byNumber);
+  // a number is the row the card shows it on, as a click on that row is, also where the row's name looks like
+  // another row's (#2233)
+  const own = (token: string, index: number | null): boolean => {
+    const named = nameOf(token, true);
+    return index !== null && (named === undefined || named === index);
+  };
+  // separators alone (`,,,`) are no numbers but the text itself (#2233)
+  if (tokens.length === 0 || !tokens.every((token, at) => own(token, indices[at]!))) return typed();
+  return prompt.multi_select ? { option_indices: [...new Set(indices as number[])] } : { option_index: indices[0]! };
 }
 
 function range(prompt: InteractivePrompt): string {
@@ -56,9 +122,14 @@ function range(prompt: InteractivePrompt): string {
   return numbers.length > 1 ? `${numbers[0]}–${numbers.at(-1)}` : String(numbers[0] ?? 1);
 }
 
+/** A multi-select whose checks and typed answer go together: Submit and Send both send the whole step. */
+export function sendsChecksWithText(prompt: InteractivePrompt): boolean {
+  return prompt.multi_select && !prompt.fallback && (prompt.checks_with_text === true || prompt.agent === "opencode");
+}
+
 /** Pi switches native tabs, not web-owned drafts. Keep edits visible until sent or cleared. */
 export function blocksStepNavigation(prompt: InteractivePrompt, selected: ReadonlySet<number>, custom: string): boolean {
-  if (prompt.agent !== "pi" || !prompt.steps?.some(step => step.can_navigate)) return false;
+  if (prompt.agent !== "pi" || prompt.drafts_saved || !prompt.steps?.some(step => step.can_navigate)) return false;
   return custom !== (prompt.default_custom_text ?? "") || prompt.multi_select
     && JSON.stringify([...selected].sort((a, b) => a - b)) !== JSON.stringify(prompt.default_option_indices ?? []);
 }

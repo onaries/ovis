@@ -623,6 +623,8 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
                 heldReady.push(() => { record(raw, "in"); socket.send(raw); });
                 return;
               }
+              // an older bridge, without the read-only view: it sends no features frame, and its snapshot lists no watch
+              if (legacy && frame.type === "features") return;
               if (legacy && frame.type === "snapshot") {
                 frame.features = frame.features.filter((feature: string) => feature !== "watch");
                 raw = JSON.stringify(frame);
@@ -1213,21 +1215,46 @@ export async function checkFocusedWindowReclaimsTerminalSize(browser: Browser, o
     // both windows are in use the whole time: neither gets a focus event
     const inFront = async (page: Page) => { await page.addInitScript(() => Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true })); };
     const settings = { language: "en", defaultView: "terminal" };
-    // input-ready comes before an attach's resize reaches the pty: each window's size is read
-    // once the shell reports the grid that window asked for (its last resize frame out)
-    const askedGrid = async (page: Page): Promise<string> => {
-      await page.waitForFunction(() => (window as unknown as { frames_: { dir: string; type: string }[] }).frames_.some((f) => f.dir === "out" && f.type === "resize"), undefined, { timeout: 10_000 });
-      const frame = (await framesOf(page)).filter((f) => f.dir === "out" && f.type === "resize").at(-1)!;
-      return `${frame.rows} ${frame.cols}`;
+    // A window asks for its grid with its attach, or with a resize after it. A first attach waits
+    // for the terminal's font (#2272), so it often goes out at the final grid and no resize follows;
+    // one that keeps the pane's size (keep_size) asks with the resize that comes later. input-ready
+    // comes before the pty takes the grid, so each window's size is read once the shell reports the
+    // grid that window last asked for.
+    const asking = async (page: Page) => {
+      await inFront(page);
+      await page.addInitScript(() => {
+        const asked: string[] = [];
+        (window as unknown as { asked_: string[] }).asked_ = asked;
+        const send = WebSocket.prototype.send;
+        WebSocket.prototype.send = function (this: WebSocket, data: Parameters<WebSocket["send"]>[0]) {
+          try {
+            const frame = JSON.parse(String(data));
+            if (frame.type === "resize" || (frame.type === "attach" && frame.keep_size !== true)) asked.push(`${frame.rows} ${frame.cols}`);
+          } catch {}
+          return send.call(this, data);
+        };
+      });
     };
-    const desktop = await openRecording(browser, contexts, origin, paneId, { viewport: { width: 1280, height: 800 } }, settings, false, inFront);
+    const tookAskedGrid = async (page: Page, what: string): Promise<string> => {
+      const deadline = Date.now() + 10_000;
+      let asked: string | undefined;
+      let seen = "";
+      // the latest grid asked, once no font face can still arrive and refit the terminal
+      const latest = () => page.evaluate(() => document.fonts.status === "loaded" ? (window as unknown as { asked_: string[] }).asked_.at(-1) : undefined);
+      while (Date.now() < deadline) {
+        asked = await latest();
+        // a grid asked while the shell answered is waited for in turn
+        if (asked) { seen = await size(); if (seen === asked && await latest() === asked) return asked; }
+        await Bun.sleep(100);
+      }
+      throw new Error(asked ? `${what}: the pane is ${seen}, not ${asked}` : `${what}: the window never asked for a grid`);
+    };
+    const desktop = await openRecording(browser, contexts, origin, paneId, { viewport: { width: 1280, height: 800 } }, settings, false, asking);
     await attached(desktop);
-    const desktopSize = await askedGrid(desktop);
-    await sizeBecomes(desktopSize, "the desktop took the pane at its own size");
-    const phone = await openRecording(browser, contexts, origin, paneId, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }, { ...settings, terminalInputMode: "line" }, false, inFront);
+    const desktopSize = await tookAskedGrid(desktop, "the desktop took the pane at its own size");
+    const phone = await openRecording(browser, contexts, origin, paneId, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }, { ...settings, terminalInputMode: "line" }, false, asking);
     await attached(phone);
-    const phoneSize = await askedGrid(phone);
-    await sizeBecomes(phoneSize, "the phone took the pane at its own size");
+    const phoneSize = await tookAskedGrid(phone, "the phone took the pane at its own size");
 
     await desktop.locator(".xterm").click();
     await sizeBecomes(desktopSize, "a click in the desktop terminal");

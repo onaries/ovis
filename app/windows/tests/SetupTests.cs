@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Ovis
 {
@@ -106,6 +107,20 @@ namespace Ovis
                     if (unknown.Length == 0 || unknown == Setup.UpdateMessage(UpdateReason.Older, plugin, false, null, null, App)) throw new Exception("the unknown version has no words of its own: " + unknown);
                     Equal(UpdateReason.VersionUnknown, Setup.Reason(Setup.ParsePlugin(List(Entry(Links.PluginId, "unknown"))), "", "", true, App));
                 }),
+                Case("a server running without the update supervisor is not offered Update: the plugin's reinstall would not replace it", () =>
+                {
+                    // also one the plugin just started, whose supervisor has not reported yet: right after an update
+                    var plugin = Setup.ParsePlugin(List(Entry(Links.PluginId, "0.4.15")));
+                    Equal(UpdateReason.None, Setup.Reason(plugin, null, null, true, App, true));
+                    // a version it does report still decides
+                    Equal(UpdateReason.Older, Setup.Reason(plugin, "0.4.15", null, true, App, true));
+                    // and the old id still moves
+                    Equal(UpdateReason.LegacyId, Setup.Reason(Setup.ParsePlugin(List(Entry(Links.LegacyPluginId, "0.3.45"))), null, null, true, App, true));
+                    Equal(true, Setup.UpdatesUnmanaged("{\"managed\":false,\"current_version\":null}"));
+                    Equal(false, Setup.UpdatesUnmanaged("{\"managed\":true,\"current_version\":\"0.4.19\"}"));
+                    Equal(false, Setup.UpdatesUnmanaged("{\"error\":{\"code\":\"unauthorized\"}}"));
+                    Equal(false, Setup.UpdatesUnmanaged("<html>"));
+                }),
                 Case("a linked checkout or a fork, under either id, or an app built without a version, is never offered a reinstall", () =>
                 {
                     foreach (var id in new[] { Links.PluginId, Links.LegacyPluginId })
@@ -151,6 +166,24 @@ namespace Ovis
                     Equal("0.4.19", Setup.StatusVersion("running http://127.0.0.1:7317 (pid 4)\r\nversion: 0.4.19\r\nconfig: none\r\n"));
                     Equal(null, Setup.StatusVersion("down http://127.0.0.1:7317\nconfig: none (settings go in C:\\x\\env)\n"));
                     Equal(null, Setup.StatusVersion(""));
+                    // the process it recorded, alive, whether herdr answers ("running") or not ("down")
+                    Equal(4, Setup.StatusPid("running http://127.0.0.1:7317 (pid 4)\r\nversion: 0.4.19\r\n"));
+                    Equal(2, Setup.StatusPid("down http://127.0.0.1:17317 (pid 2)\nconfig: none\n"));
+                    Equal((int?)null, Setup.StatusPid("down http://127.0.0.1:7317\nconfig: none (settings go in C:\\x (pid 9)\\env)\n"));
+                    Equal((int?)null, Setup.StatusPid("down http://127.0.0.1:7317 (pid x)\n"));
+                    Equal((int?)null, Setup.StatusPid(null));
+                    // what the plugin's own stop says when it ended a server it verified, in every release's words
+                    Equal(true, Setup.StoppedServer("stopped Ovis (pid 4)\r\n"));
+                    Equal(true, Setup.StoppedServer("stopped herdr web ui (pid 4)\n"));
+                    Equal(false, Setup.StoppedServer("Ovis is not running\n"));
+                    Equal(false, Setup.StoppedServer("herdr web ui is not running\n"));
+                    Equal(false, Setup.StoppedServer(null));
+                    // the app's own bridge health, which needs no herdr, and not another program's answer on the port
+                    Equal(true, Setup.BridgeHealth("{\"ok\":true,\"auth\":{\"required\":false,\"authenticated\":true},\"bridge_protocol\":1}"));
+                    Equal(false, Setup.BridgeHealth("{\"ok\":true}"));
+                    Equal(false, Setup.BridgeHealth("{\"ok\":false,\"bridge_protocol\":1}"));
+                    Equal(false, Setup.BridgeHealth("{\"ok\":true,\"bridge_protocol\":\"1\"}"));
+                    Equal(false, Setup.BridgeHealth("<html>"));
                     Equal("0.4.22", Setup.UpdatesVersion("{\"managed\":true,\"current_revision\":\"abc\",\"current_version\":\"0.4.22\",\"latest_version\":\"0.4.22\"}"));
                     Equal(null, Setup.UpdatesVersion("{\"managed\":false,\"current_version\":null}"));
                     Equal(null, Setup.UpdatesVersion("{\"error\":{\"code\":\"unauthorized\"}}"));
@@ -163,6 +196,59 @@ namespace Ovis
                     Equal("new", Setup.EnvToken(new[] { "HERDR_WEB_TOKEN=old\nOVIS_TOKEN=new\n" }));
                     Equal("old", Setup.EnvToken(new[] { "HERDR_WEB_TOKEN=old\n" }));
                     Equal(null, Setup.EnvToken(new[] { "OVIS_TOKEN=\n", "PORT=1" }));
+                    // the environment as a layer under the files: only the old name set there still counts
+                    var oldOnly = new Dictionary<string, string> { { "HERDR_WEB_TOKEN", "legacy" } };
+                    Equal("legacy", Setup.EnvToken(new[] { Setup.EnvironmentLayer(name => oldOnly.ContainsKey(name) ? oldOnly[name] : null), "PORT=1\n" }));
+                    Equal("file", Setup.EnvToken(new[] { Setup.EnvironmentLayer(name => oldOnly.ContainsKey(name) ? oldOnly[name] : null), "OVIS_TOKEN=file\n" }));
+                    Equal("", Setup.EnvironmentLayer(name => null));
+                }),
+                Case("the old id's plugin.ts is told the state dir herdr keeps for it, found as herdr finds it", () =>
+                {
+                    var windows = new Dictionary<string, string> { { "LOCALAPPDATA", @"C:\Users\u\AppData\Local" }, { "USERPROFILE", @"C:\Users\u" } };
+                    Equal(@"C:\Users\u\AppData\Local\herdr\plugins\devswha.herdr-web-ui", Setup.HerdrPluginStateDir(Links.LegacyPluginId, name => windows.ContainsKey(name) ? windows[name] : null));
+                    windows["XDG_STATE_HOME"] = @"D:\state";
+                    Equal(@"D:\state\herdr\plugins\devswha.herdr-web-ui", Setup.HerdrPluginStateDir(Links.LegacyPluginId, name => windows.ContainsKey(name) ? windows[name] : null));
+                    Equal(@"C:\Users\u\AppData\Local\herdr\plugins\devswha.herdr-web-ui", Setup.HerdrPluginStateDir(Links.LegacyPluginId, name => name == "USERPROFILE" ? @"C:\Users\u" : null));
+                }),
+                Case("the phone step: a server behind a token the app could not read is not told to install Tailscale", () =>
+                {
+                    Equal(PhoneStep.TokenNeeded, Setup.Phone(null, null, true));
+                    Equal(PhoneStep.Qr, Setup.Phone("https://pc.tail1.ts.net", "running", false));
+                    Equal(PhoneStep.MakeAddress, Setup.Phone(null, "running", false));
+                    Equal(PhoneStep.SignInTailscale, Setup.Phone(null, "stopped", false));
+                    Equal(PhoneStep.InstallTailscale, Setup.Phone(null, "missing", false));
+                    Equal(PhoneStep.InstallTailscale, Setup.Phone(null, null, false));
+                }),
+                Case("Windows PowerShell started as the app starts it writes its host, warning and error lines as text, not CLIXML", () =>
+                {
+                    // each word one argument, as cmd hands the app's words over
+                    var words = Setup.PowerShellArguments("Write-Host 'a host line'; Write-Warning 'a warning'; Write-Error 'it broke'; exit 3");
+                    var start = new System.Diagnostics.ProcessStartInfo("powershell.exe", string.Join(" ", words.Select(word => word.IndexOf(' ') >= 0 ? "\"" + word + "\"" : word)))
+                    {
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        RedirectStandardInput = true,
+                        CreateNoWindow = true,
+                    };
+                    using (var shell = System.Diagnostics.Process.Start(start))
+                    {
+                        shell.StandardInput.Close();
+                        var stdout = shell.StandardOutput.ReadToEndAsync();
+                        var stderr = shell.StandardError.ReadToEndAsync();
+                        if (!shell.WaitForExit(60000))
+                        {
+                            shell.Kill();
+                            throw new Exception("powershell did not end within 60 s");
+                        }
+                        if (!System.Threading.Tasks.Task.WaitAll(new System.Threading.Tasks.Task[] { stdout, stderr }, 10000)) throw new Exception("powershell's output did not close within 10 s");
+                        var output = stdout.Result + stderr.Result;
+                        Equal(3, shell.ExitCode);
+                        Equal(false, output.Contains("CLIXML") || output.Contains("<Objs"));
+                        Contains(output, "a host line");
+                        Contains(output, "a warning");
+                        Contains(output, "it broke");
+                    }
                 }),
                 Case("versions: X.Y.Z from herdr's, a tag's or a preview's spelling, and nothing else", () =>
                 {

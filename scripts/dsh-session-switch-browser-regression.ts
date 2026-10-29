@@ -13,7 +13,7 @@ import { UsageService } from "../server/usage.ts";
 import { chromePath } from "./chrome-path.ts";
 
 const root = mkdtempSync(join(tmpdir(), "dsh-switch-"));
-const evidence = process.env.UI_EVIDENCE_DIR ?? join(root, "evidence");
+const evidence = process.env.UI_EVIDENCE_DIR || join(root, "evidence");
 mkdirSync(evidence, { recursive: true });
 const ids = ["f2c92739-0fc4-44fb-a6b7-27b0815e789b", "1b0c6063-8d61-4b71-b33a-6afcfedabf46"] as const;
 const answers = ["First attached conversation", "Second attached conversation"] as const;

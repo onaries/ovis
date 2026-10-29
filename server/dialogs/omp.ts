@@ -20,6 +20,11 @@ export const OMP_MULTI_CLIPPED_HINT_RE = /(?:space|␠|␣)\s+toggle.*(?:enter|�
 
 export const OMP_REVIEW_HINT_RE = /(?:enter|⏎)\s+submit.*↑\/↓\s*scroll.*(?:esc|⎋)\s*cancel/i;
 
+/** omp shows a question in at most this many rows, the last one cut with `…` (pi-tui ask-dialog.ts `MAX_HEADER_ROWS`) */
+const OMP_QUESTION_ROWS = 4;
+
+const OMP_EXPAND_HINT_RE = /\s\u00b7\s\S+\sexpand(?:\s\u00b7|$)/;
+
 const OMP_TABS_HINT_RE = /(?:tab|⇥).*?(?:←|left).*?(?:→|right)|(?:←|left).*?(?:→|right).*?(?:tab|⇥)/i;
 
 /** OMP options have a marker; their descriptions and wrapped labels are indented below them. */
@@ -59,11 +64,12 @@ function parseOmpRows(lines: string[], startDivider: number, endDivider: number)
   return rows;
 }
 
-function ompQuestionText(lines: string[], startDivider: number, hasQuestionTabs: boolean): string | null {
+/** The question, and how many rows it takes in the panel (0 when it is not read from the panel's header). */
+function ompQuestionText(lines: string[], startDivider: number, hasQuestionTabs: boolean): { text: string | null; rows: number } {
   const panelTop = findLastIndex(lines, (_, index) => index < startDivider && /^\s*╭/.test(lines[index]!));
   const headerDivider = panelTop >= 0 ? panelTop
     : findLastIndex(lines, (_, index) => index < startDivider && isDivider(lines[index]!));
-  if (headerDivider < 0) return nearestQuestion(lines, startDivider);
+  if (headerDivider < 0) return { text: nearestQuestion(lines, startDivider), rows: 0 };
   const headerRows = lines.slice(headerDivider + 1, startDivider);
   // With question navigation, OMP draws its tab bar before the question title. Drop its leading
   // rows by position and the tab cells' extra left padding, not by their text: the strip can wrap
@@ -80,7 +86,10 @@ function ompQuestionText(lines: string[], startDivider: number, hasQuestionTabs:
   const header = headerRows.map((line, index) => ({ line: cleanLine(line), index })).filter(({ line, index }) => line
     && !(hasQuestionTabs && index >= firstHeaderRow && index < firstHeaderRow + tabRows)
     && !/^[←→].*Submit/i.test(line) && !/^[☐☑✔]\s+\S/.test(line) && !/^Question \d+\/\d+/i.test(line)).map(({ line }) => line);
-  return header.length > 0 ? normalizeText(header.join(" ")) : nearestQuestion(lines, startDivider);
+  if (header.length === 0) return { text: nearestQuestion(lines, startDivider), rows: 0 };
+  const shown = headerRows.slice(Math.max(firstHeaderRow, 0) + tabRows);
+  while (shown.length > 0 && !cleanLine(shown.at(-1)!)) shown.pop();
+  return { text: normalizeText(header.join(" ")), rows: shown.length };
 }
 
 /** The panel adds one space; TabBar cells start with one space, plus a wrapped separator when present. */
@@ -197,7 +206,7 @@ function parseOmpQuestion(screen: string): ParsedPrompt | null {
   const hint = wrapped(lines, hintIndex);
   const multiSelect = OMP_MULTI_HINT_RE.test(hint) || OMP_MULTI_CLIPPED_HINT_RE.test(hint);
   const currentMulti = /(?:space|␠|␣)\s+toggle.*(?:enter|⏎)\s+(?:submit|next)/i.test(hint);
-  const question = ompQuestionText(lines, startDivider, OMP_TABS_HINT_RE.test(hint));
+  const { text: question, rows: questionRows } = ompQuestionText(lines, startDivider, OMP_TABS_HINT_RE.test(hint));
   if (!question || selectedIndex < 0 || optionRows.length === 0 || customIndex !== rows.length - 1
     || (hintIndex === clippedHintIndex && !ompRowsHaveAlignedMarkers(lines, rows))) return null;
   return finishPrompt("omp", {
@@ -206,6 +215,9 @@ function parseOmpQuestion(screen: string): ParsedPrompt | null {
     multi_select: multiSelect, custom_option_index: multiSelect ? null : optionRows.length,
   }, {
     responder: "omp-question", menuLabels: rows.map((row) => row.label), selectedIndex,
+    // omp offers `<key> expand` only for a question past its four rows or a description past its two
+    // (pi-tui ask-dialog.ts `#expandHint`, 18.12.6 to 18.13.2); a footer cut short shows neither
+    ...(questionRows === OMP_QUESTION_ROWS && OMP_EXPAND_HINT_RE.test(hint) ? { ompQuestionCut: true as const } : {}),
     checkedOptionIndices: optionRows.flatMap((row, index) => row.checked ? [index] : []),
     customMenuIndex: customIndex, rejectWithEscapeIndex: null,
     // OMP's Other row opens its own text prompt on Enter. The ordinary Enter in
@@ -274,10 +286,64 @@ const OMP_APPROVAL_DETAIL_ROWS = 8;
 const OMP_APPROVAL_TOP_RE = /^(?:╭─|\+-) (Allow tool: .*?\S)(?: \(\d+s\))? (?:─+╮|-+\+)$/;
 const OMP_PANEL_RULE_RE = /^(?:├─+┤|╰─+╯|\+-+\+)$/;
 const OMP_PANEL_ROW_RE = /^[│|] ?(.*?)\s*[│|]$/;
-/** the composer 18.13 mounts under the panel: its status row (the spinner and the turn's time, after a powerline cap in the Nerd
- * Font preset), then the rest of its frame, the screen's last line */
-const OMP_STATUS_ROW_RE = /^(?:[\ue0b0-\ue0d4] )?\S \d+[smh] /u;
-const OMP_COMPOSER_FRAME_RE = /^╰─*$/;
+/**
+ * The composer 18.13 mounts under the panel, empty, as each built-in `composer.shape` draws it (pi-tui
+ * `components/composer/*.ts` and `components/editor.ts`, 18.13.2), its rows trimmed. The frame is drawn in the theme's
+ * box glyphs (`+-|` in the ascii symbol preset); the prompt's `╰─ ` and `❯ ` and the field and rail caps are always
+ * these. With `showHardwareCursor: false` the empty prompt holds omp's own cursor (`▏`, ascii `|`). `null` is the
+ * status row, whose text the user's status-line settings choose: read by its place and the space omp pads each
+ * segment group with (OMP_STATUS_ROW_RE). With no segments at all, omp leaves the row out, and the gap over it.
+ * A shape an extension adds, a hook's status line under the bar, a draft in the prompt (omp then also redraws the hint
+ * and the Deny row), or anything else under the panel matches none: the terminal answers.
+ */
+const CURSOR = "(?: [▏|])?";
+/** a rule as omp draws one, across the pane: a run of its glyphs, never a word that holds some (`-rw-r--r--`) */
+const OMP_RULE = /^(?:─{4,}|-{4,})$/u;
+/** a top rule (claude, rule): its run of glyphs, then the status' right group when it rides the rule, then the rule's last glyph */
+const OMP_STATUS_RULE = /^(?:─{4,}(?:[^─].*)?─|-{4,}(?:[^-].*)?-)$/u;
+/** the box's top border: a rule out of each corner, in one glyph set, the status between */
+const OMP_BOX_TOP = /^(?:╭─.*─╮|\+-.*-\+)$/u;
+const OMP_PROMPT = new RegExp(`^❯${CURSOR}$`, "u");
+const OMP_COMPOSERS: readonly (readonly (RegExp | null)[])[] = [
+  // band (the default): the status band (an empty row without one), then the prompt's gutter
+  [null, new RegExp(`^╰─${CURSOR}$`, "u")],
+  [/^$/u, new RegExp(`^╰─${CURSOR}$`, "u")],
+  // box: the status in the top border, then the prompt row merged into the bottom border; with IME-safe cursor
+  // layout, the prompt row on its own over a whole bottom border
+  [OMP_BOX_TOP, /^(?:╰─? +(?:[▏|] *)?─?╯|\+-? +(?:[▏|] *)?-?\+)$/u],
+  [OMP_BOX_TOP, /^[│|](?: [▏|])?$/u, /^(?:╰─+╯|\+-+\+)$/u],
+  // claude: a top rule, the prompt, a closing rule, the status' left group
+  [OMP_STATUS_RULE, OMP_PROMPT, OMP_RULE, null],
+  [OMP_STATUS_RULE, OMP_PROMPT, OMP_RULE],
+  // rule: a top rule, the prompt, a gap, the status' left group
+  [OMP_STATUS_RULE, OMP_PROMPT, /^$/u, null],
+  [OMP_STATUS_RULE, OMP_PROMPT],
+  // pi: the prompt between two rules, then the status
+  [OMP_RULE, /^[▏|]?$/u, OMP_RULE, null],
+  [OMP_RULE, /^[▏|]?$/u, OMP_RULE],
+  // borderless: never without its status, as a bare `❯` is also a shell's prompt
+  [OMP_PROMPT, null],
+  // field (its right cap left off with IME-safe layout), then rail: one filled row, a gap, the status
+  [/^▐(?: +(?:[▏|] *)?▌| [▏|])?$/u, /^$/u, null],
+  [/^▐(?: +(?:[▏|] *)?▌| [▏|])?$/u],
+  [new RegExp(`^▎${CURSOR}$`, "u"), /^$/u, null],
+  [new RegExp(`^▎${CURSOR}$`, "u")],
+];
+/**
+ * the status row as drawn: the band's powerline cap (Nerd Font preset), the space omp pads a segment group with, or with
+ * no left group the band's gauge rule up to the right group's cap (ascii `-…< `); never text from a line's first character
+ */
+const OMP_STATUS_ROW_RE = /^(?:[\ue0b0-\ue0d4] | +|─+|-+< )\S/u;
+
+/** the last row over omp's composer when the screen ends in one, else the screen's last row; `raw` holds the rows untrimmed */
+function ompAboveComposer(lines: string[], raw: string[]): number {
+  const last = findLastIndex(lines, (line) => line !== "");
+  for (const rows of OMP_COMPOSERS) {
+    const top = last - rows.length + 1;
+    if (top > 0 && rows.every((row, index) => row === null ? OMP_STATUS_ROW_RE.test(raw[top + index]!) : row.test(lines[top + index]!))) return top - 1;
+  }
+  return last;
+}
 /** a choice row: the cursor (❯, its Nerd Font icon, or `>`) on the highlighted one, two spaces before the rest */
 const OMP_CHOICE_RE = /^(?:([❯\uf054>])|  )\s?(\S.*)$/u;
 const OMP_REMEMBER_RE = /^(?:[☐☑\uf096\uf14a]|\[[ x]\]) Remember across sessions$/u;
@@ -354,10 +420,10 @@ function ompChoices(rows: string[]): { choices: OmpChoice[]; first: number; appr
 }
 
 function parseOmpApprovalPanel(screen: string): ParsedPrompt | null {
-  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/).map((line) => line.trim());
-  let bottom = findLastIndex(lines, (line) => line !== "");
+  const raw = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  const lines = raw.map((line) => line.trim());
   // under 18.13's panel, the composer it mounts there, and nothing else
-  if (bottom > 0 && OMP_COMPOSER_FRAME_RE.test(lines[bottom]!) && OMP_STATUS_ROW_RE.test(lines[bottom - 1]!)) bottom -= 2;
+  const bottom = ompAboveComposer(lines, raw);
   if (bottom < 4 || !OMP_PANEL_RULE_RE.test(lines[bottom]!) || !OMP_PANEL_RULE_RE.test(lines[bottom - 2]!)) return null;
   const hintRow = OMP_PANEL_ROW_RE.exec(lines[bottom - 1]!);
   const full = hintRow ? OMP_APPROVAL_HINT_RE.exec(hintRow[1]!) : null;

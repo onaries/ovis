@@ -34,6 +34,10 @@ describe("workspace-relative paths", () => {
     expect(toolPathRoot("C:\\work\\app")).toBeNull();
     expect(toolPathRoot("C:/work/app")).toBeNull();
     expect(toolPathRoot("\\\\server\\share\\app")).toBeNull();
+    // a UNC folder written with forward slashes is not a POSIX folder
+    expect(toolPathRoot("//server/share/app")).toBeNull();
+    expect(toolPathRoot("//server/share/app/")).toBeNull();
+    expect(label("//server/share/app/a.ts", "//server/share/app")).toBe("//server/share/app/a.ts");
     expect(label("/work/app/src/a.ts", null)).toBe("/work/app/src/a.ts");
     expect(label("/work/app/src/a.ts", "/")).toBe("/work/app/src/a.ts");
     expect(label("C:\\work\\app\\src\\a.ts", "C:\\work\\app")).toBe("C:\\work\\app\\src\\a.ts");

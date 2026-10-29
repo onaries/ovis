@@ -162,8 +162,32 @@ function ensureStream(service: OpenCodeService): Stream {
   return next;
 }
 
-/** A global reset: closes the stream, forgets every pane and watch, and cancels verifications in flight. */
+/**
+ * The servers running in this process (createServer holds, its stop releases): the stream, the verified
+ * panes and the watches are shared by all of them, so a server that stops resets them only when no other
+ * still runs. After the last release a verification still on its way opens no stream (`released`).
+ */
+let holders = 0;
+let released = false;
+
+/** Held by a running server; the release (idempotent) of the last holder resets everything (closeOpenCodeNative). */
+export function holdOpenCodeNative(): () => void {
+  holders += 1;
+  released = false;
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    holders -= 1;
+    if (holders > 0) return;
+    closeOpenCodeNative();
+    released = true;
+  };
+}
+
+/** A global reset: closes the stream, forgets every pane and watch, and cancels verifications in flight. What follows starts over. */
 export function closeOpenCodeNative(): void {
+  released = false;
   for (const verification of inFlight) verification.cancelled = true;
   inFlight.clear();
   inFlightByPane.clear();
@@ -227,8 +251,8 @@ export async function openCodePaneService(pane: Pick<HerdrPane, "agent" | "agent
     own?.delete(verification);
     if (own?.size === 0) inFlightByPane.delete(paneId!);
   }
-  // a reset or the pane's release while this was asked: nothing it found is used or kept
-  if (verification.cancelled) return null;
+  // a reset or the pane's release while this was asked, or the last server stopped: nothing it found is used or kept
+  if (verification.cancelled || released) return null;
   if (!held) {
     // no longer an OpenCode v2 pane on a verified service: it holds the stream no more
     if (paneId !== undefined && verifiedPanes.has(paneId)) releaseOpenCodePane(paneId);

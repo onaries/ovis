@@ -237,6 +237,49 @@
   overflow-wrap: anywhere;
 }
 
+/* What the agent said before asking, read off the terminal (#2088): its prose, as the chat shows
+   an answer, under a caption that says where it came from. Like the body it gives way, eight lines
+   at rest and two when the card is short, with its own scroll. */
+.prompt-card-words {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.prompt-card-words-text {
+  min-height: 2lh;
+  max-height: 8lh;
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt-card-words .prompt-card-hint {
+  margin: 0;
+}
+
+/* omp's own Markdown (text_format) keeps the card's question size, and an option's inline code reads as the chat's */
+.markdown.prompt-card-question {
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+
+.prompt-card-option code {
+  padding: var(--hairline) var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 0.87em;
+}
+
 /* a question in Codex's queue: the agent is not waiting on it, so the card says who answers what */
 .prompt-card-hint {
   color: var(--text-dim);

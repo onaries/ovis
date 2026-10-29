@@ -7,29 +7,35 @@ import type { HerdrPane, ServerMessage, SessionSnapshot } from "../../shared/pro
 import * as client from "../herdr/client.ts";
 import * as omo from "../omo.ts";
 import * as processStart from "../process-start.ts";
+import * as prompt from "../prompt.ts";
 import { connectionData, type Client } from "./connections.ts";
 import { createPendingDelivery } from "./pending.ts";
 
 const roots: string[] = [];
 afterEach(() => { mock.restore(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
+type Foreground = { pid: number; name: string; argv: string[] };
+
 // An argv-silent custom OmO is known by its session holder alone; the bundled Claude SDK child it runs a turn in
 // looks like omo by its path and exits when the turn ends, while the OmO and its session stay (#1545).
-it("delivers a queued follow-up to a custom OmO whose SDK child exits at the end of the turn", async () => {
+const parent: Foreground = { pid: 41001, name: "run", argv: ["/opt/team-ai/bin/run"] };
+const sdk: Foreground = { pid: 41002, name: "claude", argv: ["/opt/node_modules/omo-ai/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"] };
+
+/** A working OmO pane whose session holders are `holderPids`, all started at 1 000, with herdr giving no per-process cwd (macOS). */
+function omoPane(holderPids: number[], foreground: Foreground[]) {
   const root = mkdtempSync(join(tmpdir(), "ovis-pending-omo-holder-")); roots.push(root);
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");
   mkdirSync(cwd, { recursive: true });
   const holders = join(agentDir, "sessions", omo.omoSessionFolder(cwd), "session-holders", "sess-1");
   mkdirSync(holders, { recursive: true });
-  writeFileSync(join(holders, "41001.json"), JSON.stringify({ pid: 41001, processStartedAtMs: 1_000, cwd }));
+  for (const pid of holderPids) writeFileSync(join(holders, `${pid}.json`), JSON.stringify({ pid, processStartedAtMs: 1_000, cwd }));
   spyOn(processStart, "processStartedAtAsync").mockResolvedValue(1_000);
+  spyOn(processStart, "processStartedAt").mockReturnValue(1_000);
   spyOn(omo, "processEnviron").mockReturnValue([`OMO_CODING_AGENT_DIR=${agentDir}`]);
   // herdr gives no per-process cwd here (macOS): the pane's own directory places the OmO
-  const parent = { pid: 41001, name: "run", argv: ["/opt/team-ai/bin/run"] };
-  const sdk = { pid: 41002, name: "claude", argv: ["/opt/node_modules/omo-ai/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"] };
-  let foreground = [parent, sdk];
-  spyOn(client, "paneProcessInfo").mockImplementation(async () => ({ pane_id: "p", shell_pid: 41000, foreground_processes: foreground }));
+  const state = { foreground };
+  spyOn(client, "paneProcessInfo").mockImplementation(async () => ({ pane_id: "p", shell_pid: 41000, foreground_processes: state.foreground }));
   spyOn(client, "paneRead").mockResolvedValue({ text: "" } as Awaited<ReturnType<typeof client.paneRead>>);
   const writes: string[] = [];
   spyOn(client, "paneSendText").mockImplementation(async (_pane: string, text: string) => { writes.push(text); });
@@ -50,18 +56,54 @@ it("delivers a queued follow-up to a custom OmO whose SDK child exits at the end
     omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 1_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
   });
   const settle = async () => { for (let turn = 0; turn < 6; turn++) { await tail.catch(() => {}); await new Promise(setImmediate); } };
+  const queue = async (text: string) => {
+    await delivery.pendingFrames.submit(owner, { type: "submit", id: 1, pane_id: "p", text, payload: text, delivery: "queue" });
+    await settle();
+    const queued = frames.find((frame) => frame.type === "submit-result") as Extract<ServerMessage, { type: "submit-result" }> | undefined;
+    return delivery.pending.get(owner, "p", queued!.pending!.id)!;
+  };
+  const drain = async () => {
+    pane.agent_status = "idle";
+    delivery.pending.status("p", "idle");
+    delivery.drainPending("p");
+    await settle();
+  };
+  return { state, writes, queue, drain };
+}
 
-  await delivery.pendingFrames.submit(owner, { type: "submit", id: 1, pane_id: "p", text: "FOLLOWUP", payload: "FOLLOWUP", delivery: "queue" });
-  await settle();
-  const queued = frames.find((frame) => frame.type === "submit-result") as Extract<ServerMessage, { type: "submit-result" }> | undefined;
-  const item = delivery.pending.get(owner, "p", queued!.pending!.id)!;
+it("delivers a queued follow-up to a custom OmO whose SDK child exits at the end of the turn", async () => {
+  const fixture = omoPane([parent.pid], [parent, sdk]);
+  const item = await fixture.queue("FOLLOWUP");
   expect(item.identity.processPid).toBe(parent.pid);
 
-  foreground = [parent];
-  pane.agent_status = "idle";
-  delivery.pending.status("p", "idle");
-  delivery.drainPending("p");
-  await settle();
+  fixture.state.foreground = [parent];
+  await fixture.drain();
   expect(item.message.error?.code).toBeUndefined();
-  expect(writes).toEqual(["\x1b[200~FOLLOWUP\x1b[201~"]);
+  expect(fixture.writes).toEqual(["\x1b[200~FOLLOWUP\x1b[201~"]);
+});
+
+it("binds a queued command's outcome to the OmO it was queued for when another holder comes before it, without reading holders again (#2190)", async () => {
+  const peer: Foreground = { pid: 41003, name: "run", argv: ["/opt/team-ai/bin/run-peer"] };
+  const fixture = omoPane([parent.pid, peer.pid], [parent, peer, sdk]);
+  const item = await fixture.queue("/context");
+  expect(item.identity.processPid).toBe(parent.pid);
+
+  const holderReads = spyOn(omo, "heldOmoProcess");
+  const realBind = prompt.bindCommandProcess;
+  const bound: Parameters<typeof prompt.bindCommandProcess>[1][] = [];
+  spyOn(prompt, "bindCommandProcess").mockImplementation((...args: Parameters<typeof prompt.bindCommandProcess>) => {
+    bound.push(args[1]);
+    realBind(...args);
+  });
+  // herdr lists the other holder first by the time the turn ends
+  fixture.state.foreground = [peer, parent];
+  await fixture.drain();
+  expect(item.message.error?.code).toBeUndefined();
+  expect(fixture.writes).toEqual(["\x1b[200~/context\x1b[201~"]);
+  expect(bound).toHaveLength(1);
+  await bound[0]?.visibility?.binding;
+  expect(bound[0]?.visibility?.process).toEqual({ pid: parent.pid, started: 1_000, held: true });
+  // the pending checks read the holders for the queued process; the binding reads none of its own
+  expect(holderReads.mock.calls.map((call) => call[3])).toEqual(holderReads.mock.calls.map(() => parent.pid));
+  expect(holderReads).toHaveBeenCalled();
 });

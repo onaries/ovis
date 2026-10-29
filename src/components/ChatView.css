@@ -101,6 +101,25 @@
 .chat-terminal-fallback summary { cursor: pointer; }
 .chat-terminal-fallback pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* the turn a Letta transcript writes only when it ends: a few rows of the terminal's tail, quiet
+   under the turns, at a fixed height so the chat does not move while it scrolls inside */
+.chat-terminal-fallback.is-live summary { font-size: var(--fs-xs); }
+.chat-terminal-fallback.is-live pre {
+  --live-rows: 12;
+  height: calc(var(--live-rows) * 1.5 * var(--fs-xs));
+  line-height: 1.5;
+  overflow-y: auto;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 480px) {
+  .chat-terminal-fallback.is-live pre { --live-rows: 8; }
+}
+
 /* a user turn opens a new exchange: space separates it from the answer above, not a rule
    (the one rule of an exchange closes its folded work) */
 .chat-turn-user {
@@ -404,7 +423,7 @@
   border-radius: var(--radius-lg);
 }
 
-/* a README's centered logo and badges (lib/markdownHtml.ts) */
+/* a README's centered logo and badges (shared/markdownHtml.ts) */
 .markdown .markdown-center {
   text-align: center;
 }
@@ -1090,6 +1109,36 @@ ol.markdown-list {
 .chat-codex-queue p { margin: 0 0 var(--space-2); }
 .chat-codex-queue ol { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
 .chat-codex-queue li { align-self: flex-end; max-width: 80%; padding: var(--space-3) var(--space-4); border: var(--hairline) solid var(--bubble-border); border-radius: var(--radius-lg); background: var(--bg-elevated); color: var(--text-strong); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* a sent message the agent has not written as a turn yet (SentWaiting.tsx): the user's own bubble,
+   its words faded to --text-dim (still 4.5:1), so the turn that replaces it reads as the same bubble
+   coming up to full strength. A late one's clock sits where the turn's time will be */
+.chat-sent-waiting-list {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  gap: var(--space-2);
+}
+
+.chat-turn-waiting .chat-bubble {
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
+.chat-turn-waiting .chat-turn-meta {
+  opacity: 1;
+}
+
+.chat-sent-late {
+  display: inline-flex;
+  color: var(--text-dim);
+  font-size: var(--chat-fs-xs);
+}
+
+.chat-sent-late svg {
+  width: 1em;
+  height: 1em;
+}
 
 /* a read that failed (ChatView.tsx FailureLine): the one line, Try again beside it where it is the
    way on, and a dim Details toggle under them for the advice and the PC's own words */
@@ -1909,6 +1958,31 @@ ol.markdown-list {
   color: var(--text-strong);
   font-size: inherit;
 }
+
+/* a command the user ran in the agent's shell (bash mode): the command, then what it printed */
+.chat-shell-command {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.chat-shell-command > svg {
+  width: var(--fs-md);
+  height: var(--fs-md);
+  flex: none;
+}
+
+.chat-shell-command > code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.chat-shell-stderr { color: var(--status-blocked); }
 
 /* a changed screen after the send: a passing view folded under the chip, never a result */
 .chat-outcome-preview {

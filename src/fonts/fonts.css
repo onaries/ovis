@@ -9,15 +9,24 @@
  */
 @import "./pretendard/pretendardvariable-dynamic-subset.css";
 
-/* The code face of the chat and the chrome (--font-mono in styles.css). Its family name is the
-   app's own on purpose: the terminal's stack (lib/fontFamily.ts) names "JetBrains Mono", and
-   xterm sizes every cell from the first font that matches, so a web font under that name would
-   change the grid on every device that has no JetBrains Mono installed. An installed copy is
-   used as it is and saves the download. */
+/* The code face of the terminal, the chat and the chrome (lib/fontFamily.ts, --font-mono in
+   styles.css): every device draws the terminal in it, so its cell and row are the same in Chrome,
+   Safari and Ovis for Mac. Its family name is the app's own, apart from an installed "JetBrains
+   Mono", and it is always the bundled file, never a local() copy: Ovis for Mac's web view draws an
+   installed font that its canvas, which xterm measures with, cannot see, so a face resolved to the
+   installed copy was dropped from the terminal there (lib/fontFamily.ts, measurableFontStack). */
 @font-face {
   font-family: "JetBrains Mono Web";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: local("JetBrains Mono Regular"), local("JetBrainsMono-Regular"), url("./JetBrainsMono-Regular.woff2") format("woff2");
+  src: url("./JetBrainsMono-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono Web";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./JetBrainsMono-Bold.woff2") format("woff2");
 }

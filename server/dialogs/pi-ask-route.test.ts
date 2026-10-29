@@ -378,25 +378,23 @@ test("Pi ask settling does not delay a recognized next question", async () => {
   });
 });
 
-test("Pi ask does not suppress fallback without a successful answer", async () => {
+test("Pi's unknown blocker after a refused rpiv answer gets no generic card: no key is guessed into pi", async () => {
   await withPane(fixtures.review, async pane => {
     const card = await pane.card();
     expect(await pane.answer(card.id, { option_index: 99 })).toBe(400);
     pane.screen = closingScreen;
-    const unknown = await pane.card();
-    expect(unknown.fallback).toBe(true);
-    expect(unknown.options.map(option => option.label)).toEqual(["↑", "↓", "Enter", "Esc"]);
+    expect(await pane.read()).toBeNull();
   });
 });
 
-test("Pi ask fallback protection expires instead of hiding a persistent unknown blocker", async () => {
+test("Pi's unknown blocker stays without a generic card after an rpiv answer settles", async () => {
   await withPane(fixtures.review, async pane => {
     const card = await pane.card();
     pane.onSent = key => { if (key === "enter") pane.screen = closingScreen; };
     expect(await pane.answer(card.id, { option_index: 0 })).toBe(200);
     expect(await pane.read()).toBeNull();
     const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 4_000);
-    try { expect((await pane.card()).fallback).toBe(true); }
+    try { expect(await pane.read()).toBeNull(); }
     finally { clock.mockRestore(); }
   });
 });

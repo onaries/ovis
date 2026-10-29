@@ -1,0 +1,15 @@
+❯ /effort
+
+─────────────────────────────────────────────────────────────────────
+  Effort
+
+              Faster                             Smarter
+              ──────────────────────────────▲───────────
+              low     medium     high     xhigh      max
+              Ultracode: dynamic workflows on every task
+
+                            Ultracode  on
+                            Tab to toggle
+
+  ←/→ to adjust · Enter to confirm · s for this session only · Esc
+  to cancel

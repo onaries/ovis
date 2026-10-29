@@ -6,12 +6,12 @@
  */
 import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
 import { mergeCatalogSources } from "./catalog-sources.ts";
-import { paneCommands, rememberPaneCommands } from "./commands.ts";
+import { rememberPaneCommands, scanPaneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
-import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
+import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
 import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
-import { openCodeInstalledVersion } from "./opencode-service.ts";
+import { openCodeFlagVersion, openCodeInstalledVersion } from "./opencode-service.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import { agentRename, HerdrError, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
 import { paneContext, resolveAgent, versionSourceOf } from "./pane-context.ts";
@@ -19,6 +19,9 @@ import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "./dialogs/claude.ts";
 import { claudeRewindOpen } from "./prompt.ts";
 import { expandedDirectory } from "./workspace-routes.ts";
+import { ConversationDiagnostics } from "./conversation-diagnostics.ts";
+
+const conversationDiagnostics = new ConversationDiagnostics();
 
 /** the native stores createServer was given; unset, each reader finds its own */
 export type PaneStores = { codexHome?: string; grokHome?: string; museData?: string; opencodeDb?: string; devinDbPath?: string; hermesHome?: string; openCodeStateDir?: string };
@@ -32,6 +35,13 @@ const READ_FORMATS = new Set<ReadFormat>(["ansi", "text"]);
 const UINT32_MAX = 4294967295;
 
 /** The answer for a pane route, or null when the path is not one. */
+/** `prompts=` from the chat's history-page setting; a junk value is no value. */
+function pagePromptsOf(raw: string | null): number | undefined {
+  if (raw === null) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
 export async function handlePaneRequest(request: Request, url: URL, pathname: string, options: PaneStores): Promise<Response | null> {
 
   if (pathname === "/api/pane/rename") {
@@ -80,13 +90,15 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     if (directory !== "" && cwd === null) return badRequest("invalid_cwd", "cwd must be an existing directory");
     try {
       // OpenCode types its skills one way per version: before any pane runs it, its service file says which
-      return jsonResponse({ commands: paneCommands(agent, cwd, undefined, undefined, agent === "opencode" ? openCodeInstalledVersion(options.openCodeStateDir) : undefined) });
+      return jsonResponse({ commands: await scanPaneCommands(agent, cwd, undefined, agent === "opencode" ? openCodeInstalledVersion(options.openCodeStateDir) : undefined, request.signal) });
     } catch (error) {
       return errorResponse(error);
     }
   }
 
   if (pathname === "/api/pane/commands" || pathname === "/api/pane/files") {
+    // the commands scan's wait counts from here, its herdr lookups included (`scanPaneCommands`)
+    const began = performance.now();
     setRequestRoute(pathname);
     if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
     const paneId = url.searchParams.get("pane_id");
@@ -103,9 +115,12 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         const { version: stored } = resolveAgent(context.pane, roots, store);
         // a pane with no session yet has no stored version: OpenCode's service file still says how it types its skills
         // (syntax only: the catalog's pin stays unverified, since only the store or a verified service may verify it).
-        // A pane with a session whose transcript is unreadable gets none: that session may be an OpenCode 1 one
-        const version = stored ?? (agent === "opencode" && !context.pane.agent_session ? openCodeInstalledVersion(options.openCodeStateDir) : null);
-        const scanned = paneCommands(agent, context.cwd, undefined, { ...roots.omo, environ: roots.environ }, version);
+        // A pane with a session whose transcript is unreadable gets none: that session may be an OpenCode 1 one.
+        // A TUI started without the service (--standalone, --server) has no service file: its own flags say v2 (#1551)
+        const argv = roots.processes?.foreground_processes?.find((entry) => entry.pid === roots.pid)?.argv;
+        const version = stored ?? (agent === "opencode" && !context.pane.agent_session ? openCodeInstalledVersion(options.openCodeStateDir) ?? openCodeFlagVersion(argv) : null);
+        // on a file thread: a skill folder on a slow mount stalls only this request (#2254)
+        const scanned = await scanPaneCommands(agent, context.cwd, { ...roots.omo, environ: roots.environ }, version, request.signal, began);
         const commands = await mergeCatalogSources(agent, context.pane, context.cwd, scanned, undefined, { codexHome: options.codexHome, openCodeStateDir: options.openCodeStateDir });
         rememberPaneCommands(context.pane, agent, commands);
         return jsonResponse({ commands });
@@ -257,9 +272,11 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       since: url.searchParams.get("since") ?? undefined,
       from: url.searchParams.get("from") ?? undefined,
       history_id: url.searchParams.get("history_id") ?? undefined,
+      prompts: pagePromptsOf(url.searchParams.get("prompts")),
     };
     try {
       const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);
+      conversationDiagnostics.recovered(paneId, requestIdContext.getStore()?.id);
       // no-store keeps the browser's own cache out of it, so the chat sees the 304.
       // weak: the same answer goes out gzipped or plain (compress.ts), which are not the same bytes
       const etag = `W/"${version}"`;
@@ -268,11 +285,17 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       return jsonResponse(conversation, 200, headers);
     } catch (error) {
       if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
-      if (error instanceof ConversationReadPending) return jsonResponse({ error: { code: "conversation_read_pending", message: error.message } }, 503, { "cache-control": "no-store" });
+      if (error instanceof ConversationReadPending) {
+        conversationDiagnostics.unavailable(paneId, error, requestIdContext.getStore()?.id);
+        return jsonResponse({ error: { code: "conversation_read_pending", message: error.message } }, 503, { "cache-control": "no-store" });
+      }
       // an unrecognized pane is not an error: the client falls back to the
       // scrollback transcript, exactly like chatmux's terminal fallback. Its metadata is only
       // ever what the agent's own status line states
-      if (error instanceof ConversationUnavailable) return jsonResponse({ source: "scrollback", turns: [], ...(error.screen ? { metadata: error.screen, screen: true } : {}) });
+      if (error instanceof ConversationUnavailable) {
+        conversationDiagnostics.unavailable(paneId, error, requestIdContext.getStore()?.id);
+        return jsonResponse({ source: "scrollback", turns: [], ...(error.screen ? { metadata: error.screen, screen: true } : {}) });
+      }
       return errorResponse(error);
     }
   }

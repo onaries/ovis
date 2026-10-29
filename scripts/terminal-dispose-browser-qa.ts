@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
-import { buildXtermSource } from "./build-xterm.ts";
+import { buildXtermSource, xtermSourcePlugin } from "./build-xterm.ts";
 import { chromePath } from "./chrome-path.ts";
 
 const root = join(import.meta.dir, "..");
@@ -10,6 +10,7 @@ const entry = join(import.meta.dir, "terminal-dispose-fixture.ts");
 const bundle = await Bun.build({
   entrypoints: [entry],
   target: "browser",
+  plugins: [xtermSourcePlugin(xterm)],
   files: {
     [entry]: `
       import { Terminal } from ${JSON.stringify(join(xterm, "browser/public/Terminal.js"))};
@@ -48,6 +49,7 @@ const bundle = await Bun.build({
             disposeAfterPendingFrame(retire);
           }
           const pendingFrames = frames.size;
+          const disposedBeforeFrames = disposed;
           const scheduled = Array.from(frames.entries());
           // Restore first so xterm callbacks that request another frame reach Chromium instead of
           // being stranded in this one-shot queue. Keep cancellation aware of still-pending fakes.
@@ -61,22 +63,18 @@ const bundle = await Bun.build({
             catch (error) { errors.push(String(error)); }
           }
           window.cancelAnimationFrame = originalCancelFrame;
+          // the deferred disposal waits for the task after xterm's frame, not the frame itself
+          const disposedAfterFrames = disposed;
           // The bug is ordering between a render frame and the task it schedules.
           // Give a frame requested by an xterm callback its own turn before removing the error hook.
           await new Promise(resolve => originalFrame(() => originalFrame(() => setTimeout(resolve, 0))));
           window.removeEventListener("error", onError);
-          output.textContent = JSON.stringify({ errors, disposed, pendingFrames, stdinDisabled, detachedAtCleanup });
+          output.textContent = JSON.stringify({ errors, disposed, disposedBeforeFrames, disposedAfterFrames, pendingFrames, stdinDisabled, detachedAtCleanup });
           console.info("DISPOSED:" + mode);
         });
       }
     `,
   },
-  plugins: [{
-    name: "xterm-source-aliases",
-    setup(build) {
-      build.onResolve({ filter: /^(browser|common)\// }, ({ path }) => ({ path: join(xterm, path + ".js") }));
-    },
-  }],
 });
 assert.equal(bundle.success, true, String(bundle.logs));
 const script = bundle.outputs.find((file) => file.path.endsWith(".js"));
@@ -97,12 +95,16 @@ try {
     const finished = page.waitForEvent("console", { predicate: (message) => message.text() === `DISPOSED:${mode}`, timeout: 10_000 });
     await page.getByRole("button", { name: mode, exact: false }).click();
     await finished;
-    const result: { errors: string[]; disposed: number; pendingFrames: number; stdinDisabled: boolean; detachedAtCleanup: boolean } = JSON.parse(await page.locator("#result").innerText());
+    const result: { errors: string[]; disposed: number; disposedBeforeFrames: number; disposedAfterFrames: number; pendingFrames: number; stdinDisabled: boolean; detachedAtCleanup: boolean } = JSON.parse(await page.locator("#result").innerText());
     assert.ok(result.pendingFrames > 0);
     assert.equal(result.disposed, 1);
-    if (mode === "immediate") assert.ok(result.errors.some((error) => error.includes("dimensions")), JSON.stringify(result));
-    else {
-      assert.deepEqual(result.errors, []);
+    // xterm 5.5 threw "dimensions" from the frame of a terminal disposed at once; 6.0 does not (#1617),
+    // and neither path may
+    assert.deepEqual(result.errors, [], JSON.stringify(result));
+    if (mode === "deferred") {
+      // ordered after xterm's pending frame and the task it schedules: still alive until both have run
+      assert.equal(result.disposedBeforeFrames, 0, "deferred disposal ran before xterm's pending frame");
+      assert.equal(result.disposedAfterFrames, 0, "deferred disposal ran before the task after xterm's frame");
       assert.equal(result.stdinDisabled, true);
       assert.equal(result.detachedAtCleanup, true);
     }

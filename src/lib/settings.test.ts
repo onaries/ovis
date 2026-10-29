@@ -111,6 +111,19 @@ describe("saved theme migration", () => {
     expect(loadSettings().sidebarFilter).toBe(true);
   });
 
+  it("keeps the history page size in its own key, out of an old tab's whole-record save", () => {
+    expect(loadSettings().historyPrompts).toBe(10);
+    saveSettings(sanitizeSettings({ historyPrompts: 50 }));
+    expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("historyPrompts");
+    oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
+    expect(loadSettings().historyPrompts).toBe(50);
+    expect(loadSettings().terminalFontSize).toBe(18);
+    records.set("ovis:history-prompts", "12");
+    expect(loadSettings().historyPrompts).toBe(10);
+    records.set("ovis:history-prompts", "not json");
+    expect(loadSettings().historyPrompts).toBe(10);
+  });
+
   it("survives repeated stale saves from an already-open old tab (f1)", () => {
     putOld({ theme: "dark", palette: "charcoal" });
     const stale = readOld();

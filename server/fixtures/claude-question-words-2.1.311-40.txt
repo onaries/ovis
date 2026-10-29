@@ -1,0 +1,37 @@
+  has a made-up bug where the last
+  line is missing a newline, and that
+  there are two ways to fix it. Then,
+  in the same reply, call
+  AskUserQuestion once with one
+  question "Which fix do you want?",
+  header "Fix", options "Patch" (add
+  the newline) and "Rewrite" (rewrite
+  the file).
+
+● The file a.txt has a made-up bug: its
+  last line is missing a trailing
+  newline, so the final line doesn't end
+  properly. It's a contrived example,
+  so I haven't checked or changed
+  anything yet.
+
+  There are two ways to fix it. You can
+  patch the file by adding the missing
+  newline, or rewrite the file from
+  scratch. Which one do you want?
+────────────────────────────────────────
+ ☐ Fix
+
+Which fix do you want?
+
+❯ 1. Patch
+     Add the missing newline to the end
+     of the last line.
+  2. Rewrite
+     Rewrite the file from scratch.
+  3. Type something.
+────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc
+to cancel

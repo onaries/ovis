@@ -20,7 +20,7 @@ import panes from "../site/demo/fixtures/panes.json";
 // so /settings comes back by itself; /copy is not on omp's list and stays. Claude's /btw answer,
 // left open when its peek is ended by hand, holds the next message behind the still-open notice.
 const app = mkdtempSync(join(tmpdir(), "terminal-autoswitch-"));
-const evidence = join(process.env.UI_EVIDENCE_DIR ?? "/tmp/terminal-autoswitch-shots", "edges");
+const evidence = join(process.env.UI_EVIDENCE_DIR || "/tmp/terminal-autoswitch-shots", "edges");
 mkdirSync(evidence, { recursive: true });
 await buildDemoApp(app);
 const html = await Bun.file(join(app, "index.html")).text();

@@ -184,6 +184,112 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
   console.log("PASS plan meters beside the Settings gear: session left by default, accounts, order, hiding, week and used, row fit, popover, refresh, Escape, off switch and phone fit");
 }
 
+/** An expired sign-in on this PC, one through the hub and Antigravity's, each expired: only the first can sign in again here. */
+const expiredReport = (): UsageReport => ({
+  providers: [
+    { id: "claude", key: "claude:u1", account: "me@example.com", plan: "max", problem: null, checked_at: at(0), windows: [{ kind: "session", scope: null, used_percent: 42, resets_at: at(2), starts_at: null }] },
+    { id: "claude", key: "claude:team", account: "me@team.example", plan: "team", problem: "expired", checked_at: null, windows: [] },
+    { id: "codex", key: "codex:cliproxy:hub-1", account: "hub@example.com", plan: "plus", problem: "expired", checked_at: null, windows: [] },
+    { id: "antigravity", key: "antigravity@keychain", account: null, plan: null, problem: "expired", checked_at: null, windows: [] },
+  ],
+});
+
+/**
+ * Sign in again: offered for the expired account on this PC, in the popover and in its Settings row,
+ * never for the hub's or Antigravity's; it asks the server by the account's key and hands the tab over.
+ */
+export async function checkUsageSignInAgain(browser: Browser, origin: string): Promise<void> {
+  for (const phone of [false, true]) {
+    const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 800 }, locale: "en-US", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+    try {
+      const posted: unknown[] = [];
+      const answers = [
+        { status: 409, json: { error: { code: "cli_unavailable", message: "Install the official CLI on this PC before signing in" } } },
+        { status: 200, json: { pane_id: "w9:p9", workspace_id: "w9", manual: false, device_auth: false } },
+      ];
+      await context.route("**/api/usage*", (route) => route.fulfill({ json: expiredReport() }));
+      await context.route("**/api/usage/login", (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        posted.push(route.request().postDataJSON());
+        return route.fulfill(answers[(posted.length - 1) % answers.length]!);
+      });
+      await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ showUsage: true })));
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(origin);
+      const openDrawer = async () => { if (phone) await page.getByRole("button", { name: "Open workspace list", exact: true }).click(); };
+      await openDrawer();
+      await page.locator(".usage-strip").click();
+      const popover = page.getByRole("dialog", { name: "Subscription usage", exact: true });
+      await popover.waitFor();
+      const again = popover.getByRole("button", { name: /^Sign in again/ });
+      assert.equal(await again.count(), 1, "only the expired account on this PC can sign in again");
+      assert.equal(await again.getAttribute("aria-label"), "Sign in again to Claude · me@team.example");
+      assert.deepEqual(await popover.locator(".usage-note.is-problem").allTextContents(), [
+        "Sign-in expired.", "Sign-in expired. Open Codex to renew it.", "Sign-in expired. Open Antigravity to renew it.",
+      ]);
+      if (phone) {
+        const box = await popover.boundingBox();
+        assert.ok(box && box.x >= 0 && box.x + box.width <= 390, "the popover stays inside the phone's screen");
+      }
+      // a refusal is said where the button is, and the popover stays
+      await again.click();
+      await popover.getByRole("alert").filter({ hasText: "Install the official CLI on this PC before signing in" }).waitFor();
+      // started: the popover gives way to the sign-in tab
+      await again.click();
+      await popover.waitFor({ state: "detached" });
+
+      await openDrawer();
+      await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
+      await openSettingsPage(page, "Subscription usage");
+      const rows = page.locator(".usage-accounts-row");
+      // the rows come with the usage report, loaded once the page is shown: count them once they are
+      await rows.nth(3).waitFor();
+      assert.equal(await rows.count(), 4);
+      const rowAgain = page.locator(".settings-dialog").getByRole("button", { name: /^Sign in again/ });
+      assert.equal(await rowAgain.count(), 1, "Settings offers it on the expired row of this PC only");
+      assert.equal(await rows.nth(1).getByRole("button", { name: "Sign in again to Claude · me@team.example", exact: true }).count(), 1);
+      assert.equal(await rows.evaluateAll((all) => all.every((row) => row.scrollWidth <= row.clientWidth)), true, "each account row fits, the button included");
+      await rowAgain.click();
+      await page.locator(".settings-dialog").getByRole("alert").filter({ hasText: "Install the official CLI" }).waitFor();
+      await rowAgain.click();
+      await page.locator(".settings-dialog").waitFor({ state: "detached" });
+      assert.deepEqual(posted, Array(4).fill({ provider: "claude", account: "claude:team" }), "the server is asked by the account's key, never a path");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  }
+  // a watching device signs in to nothing: no button in either place, and the popover says how instead
+  const watching = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+  try {
+    await watching.route("**/api/usage*", (route) => route.fulfill({ json: expiredReport() }));
+    await watching.route("**/api/health*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json() as { auth: Record<string, unknown> };
+      await route.fulfill({ response, json: { ...body, auth: { ...body.auth, role: "watch" } } });
+    });
+    await watching.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ showUsage: true })));
+    const page = await watching.newPage();
+    await page.goto(origin);
+    await page.locator(".usage-strip").click();
+    const popover = page.getByRole("dialog", { name: "Subscription usage", exact: true });
+    await popover.waitFor();
+    assert.equal(await popover.getByRole("button", { name: /^Sign in again/ }).count(), 0, "no Sign in again in a watching device's popover");
+    assert.equal(await popover.locator(".usage-note.is-problem").first().textContent(), "Sign-in expired. Open Claude to renew it.");
+    await page.keyboard.press("Escape");
+    await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
+    await openSettingsPage(page, "Subscription usage");
+    await page.locator(".usage-accounts-row").nth(3).waitFor();
+    assert.equal(await page.locator(".usage-accounts-row").count(), 4);
+    assert.equal(await page.locator(".settings-dialog").getByRole("button", { name: /^Sign in again/ }).count(), 0, "no Sign in again in a watching device's Settings");
+  } finally {
+    await watching.close();
+  }
+  console.log("PASS Sign in again: offered only for an expired account on this PC, in the popover and its Settings row, refusal shown, tab handed over, phone fit, none on a watching device");
+}
+
 if (import.meta.main) {
   await import("./test-herdr.ts");
   const { mkdtempSync, rmSync } = await import("node:fs");
@@ -202,6 +308,7 @@ if (import.meta.main) {
     });
     browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     await checkUsageMeters(browser, `http://127.0.0.1:${server.port}`);
+    await checkUsageSignInAgain(browser, `http://127.0.0.1:${server.port}`);
   } finally {
     await browser?.close();
     server?.stop();

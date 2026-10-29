@@ -53,15 +53,35 @@ describe("setAsideDamaged", () => {
     writeFileSync(path, "damaged");
     const steps: string[] = [];
     const links = withoutLinks();
-    const fsync = spyOn(fs, "fsyncSync").mockImplementation(() => { steps.push("fsync"); });
+    // which file each descriptor is, so the step names the file that was synced
+    const opened = new Map<number, string>();
+    const realOpen = fs.openSync;
+    const open = spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+      const fd = realOpen(target, flags, mode);
+      opened.set(fd, basename(String(target)));
+      return fd;
+    }) as typeof fs.openSync);
+    const fsync = spyOn(fs, "fsyncSync").mockImplementation((fd: number) => { steps.push(`fsync ${opened.get(fd)}`); });
     const unlink = spyOn(fs, "unlinkSync");
     unlink.mockImplementation(((target: fs.PathLike) => { steps.push(`unlink ${basename(String(target))}`); unlink.mockRestore(); fs.unlinkSync(target); }) as typeof fs.unlinkSync);
     try {
       const aside = setAsideDamaged(path, new Date("2026-10-26T07:06:23.123Z"));
       expect(readFileSync(aside, "utf8")).toBe("damaged");
-      expect(steps.indexOf("fsync")).toBeGreaterThanOrEqual(0);
-      expect(steps.indexOf("fsync")).toBeLessThan(steps.indexOf("unlink machines.json"));
-    } finally { links.mockRestore(); fsync.mockRestore(); unlink.mockRestore(); }
+      const synced = `fsync ${basename(aside)}`;
+      expect(steps.indexOf(synced)).toBeGreaterThanOrEqual(0);
+      expect(steps.indexOf(synced)).toBeLessThan(steps.indexOf("unlink machines.json"));
+    } finally { links.mockRestore(); open.mockRestore(); fsync.mockRestore(); unlink.mockRestore(); }
+  });
+
+  it("removes a copy that cannot be flushed, leaving the original where it was", () => {
+    const dir = directory(), path = join(dir, "machines.json");
+    writeFileSync(path, "damaged");
+    const fsync = spyOn(fs, "fsyncSync").mockImplementation(() => { throw Object.assign(new Error("I/O error"), { code: "EIO" }); });
+    try {
+      expect(() => setAsideDamaged(path)).toThrow(/\(EIO\)$/);
+      expect(readdirSync(dir)).toEqual(["machines.json"]);
+      expect(readFileSync(path, "utf8")).toBe("damaged");
+    } finally { fsync.mockRestore(); }
   });
 
   it("removes a copy that cannot be made private, leaving the original where it was", () => {

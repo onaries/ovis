@@ -497,8 +497,8 @@ it("names the OmO process holding a session, not the bundled SDK child beside it
     const pane = { pane_id: "p", cwd } as HerdrPane;
     const parent = { pid, argv: ["/opt/team-ai/bin/run"] };
     const sdk = { pid: pid + 1, argv: [`${OMO_AI}/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`] };
-    expect(await heldOmoProcess(pane, [parent, sdk], root)).toBe(pid);
-    expect(await heldOmoProcess(pane, [sdk, parent], root)).toBe(pid);
+    expect(await heldOmoProcess(pane, [parent, sdk], root)).toEqual({ pid, started: 1_792_000_000_000 });
+    expect(await heldOmoProcess(pane, [sdk, parent], root)).toEqual({ pid, started: 1_792_000_000_000 });
     expect(await heldOmoProcess(pane, [sdk], root)).toBeNull();
     expect(await heldOmoProcess({ ...pane, cwd: join(root, "elsewhere") }, [parent, sdk], root)).toBeNull();
   } finally { start.mockRestore(); environ.mockRestore(); rmSync(root, { recursive: true, force: true }); }

@@ -1,7 +1,7 @@
 import { constants, closeSync, fstatSync, lstatSync, openSync, opendirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { createHash, randomUUID, type Hash } from "node:crypto";
-import { processAlive, processStartedAt } from "./process-start.ts";
+import { readProcessBirth } from "./process-owner.ts";
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEADER_BYTES = 64 * 1024;
@@ -22,7 +22,7 @@ interface ForegroundCheckpoint {
 }
 const foregroundCheckpoints = new Map<number, ForegroundCheckpoint>();
 interface InitialLogRead { dev: bigint; ino: bigint; path: string; size: number; hash: string }
-const foregroundLogProcesses = new Map<number, { started: number; observed: boolean; initialRead?: InitialLogRead }>();
+const foregroundLogProcesses = new Map<number, { started: string; observed: boolean; initialRead?: InitialLogRead }>();
 
 /** Revalidate every consumed byte: unchanged boundary samples cannot prove an append. */
 function logPrefix(fd: number, size: number): Hash | null {
@@ -46,8 +46,10 @@ function loggedForeground(pid: number, logDirectories: readonly string[]): Foreg
 }
 
 function scanForegroundLog(pid: number, logDirectories: readonly string[]): ForegroundBinding | null | undefined | typeof VERIFIED_UNREGISTER | typeof LOG_READ_CHANGED {
-  const started = processStartedAt(pid);
-  if (started === null) return undefined;
+  if (process.platform !== "linux") return undefined;
+  const birth = readProcessBirth(pid);
+  if (birth.state !== "identified") return undefined;
+  const started = birth.birth.value;
   let owner = foregroundLogProcesses.get(pid);
   if (owner?.started !== started) {
     foregroundLogProcesses.delete(pid);
@@ -57,8 +59,8 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
   if (owner === undefined) {
     if (foregroundLogProcesses.size >= 256) {
       for (const [previousPid, previous] of foregroundLogProcesses) {
-        const current = processStartedAt(previousPid);
-        if ((current !== null && current !== previous.started) || !processAlive(previousPid)) {
+        const current = readProcessBirth(previousPid);
+        if (current.state === "absent" || (current.state === "identified" && current.birth.value !== previous.started)) {
           foregroundLogProcesses.delete(previousPid);
           foregroundCheckpoints.delete(previousPid);
         }
@@ -89,7 +91,14 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
       let target: string;
       try { target = readlinkSync(`/proc/${pid}/fd/${descriptor.name}`); }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") continue;
+        if (code === "EINTR" || code === "EAGAIN" || code === "EBUSY" || code === "EIO" || code === "ESTALE") {
+          // Keep only the prefix to revalidate, never permission to serve a failed scan.
+          const cached = foregroundCheckpoints.get(pid);
+          if (cached) cached.readConflict = true;
+          return LOG_READ_CHANGED;
+        }
         return unavailable();
       }
       if (target.endsWith(" (deleted)") && LOG_NAME.test(basename(target.slice(0, -10)))) {

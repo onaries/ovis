@@ -2,11 +2,12 @@ import { afterAll, beforeAll, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createServer } from "./index.ts";
-import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
+import { type EventFrame, herdrRpc, type HerdrSubscription, paneProcessInfo, sessionSnapshot, subscribeEvents, workspaceClose, workspaceCreate } from "./herdr/client.ts";
+import { agentProcesses } from "./conversation.ts";
 import type { ConversationResponse, InteractivePrompt } from "../shared/protocol.ts";
 
 // omp names its session file when it starts and writes it with the first message (seen on a
@@ -33,11 +34,31 @@ process.stdin.setRawMode(true);
 process.stdin.resume();
 process.stdin.on("data", (data) => {
   if (!data.includes(0x1b)) return;
-  draw(cancelled);
+  // the key is noted before the screen that says so, which the test waits for
   writeFileSync(marker, JSON.stringify([...data]));
+  draw(cancelled);
 });
 draw(generating);
 `;
+// omp 18.13.2's Ask with Markdown in its question and options as recorded (server/fixtures/omp-ask-18.13.2-md-*):
+// a stand-in draws the screen and notes every key it gets; the session file holds the call it draws
+const askSession = join(slug, "2026-10-28T06-38-25-019Z_omp-ask.jsonl");
+const askMarker = join(root, "ask-keys");
+const ASK = `
+const { appendFileSync, readFileSync } = require("node:fs");
+const [screen, moved, marker] = process.argv.slice(2);
+const draw = (file) => process.stdout.write("\\x1b[2J\\x1b[H" + readFileSync(file, "utf8").replace(/\\n$/, "").split("\\n").join("\\r\\n"));
+process.stdin.setRawMode(true);
+process.stdin.resume();
+process.stdin.on("data", (data) => {
+  appendFileSync(marker, data);
+  if (data.includes(0x0d)) process.stdout.write("\\x1b[2J\\x1b[HAnswered.\\r\\n");
+  else if (/\\x1b(?:\\[|O)B/.test(data.toString("latin1"))) draw(moved);
+});
+draw(screen);
+`;
+let askWorkspaceId: string | undefined;
+let askPaneId: string;
 let server: ReturnType<typeof createServer>;
 let seq = Date.now() * 1000;
 
@@ -51,12 +72,8 @@ beforeAll(async () => {
   const created = await workspaceCreate({ cwd: root, label: "ovis-test-omp-contract" });
   workspaceId = created.workspace.workspace_id;
   paneId = created.root_pane.pane_id;
-  await herdrRpc("pane.send_text", { pane_id: paneId, text: `${fakeOmp}\n` });
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const pane = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
-    if (pane?.agent === "omp") break;
-    await Bun.sleep(50);
-  }
+  await herdrAfter([{ type: "pane.agent_status_changed", pane_id: paneId }], () => herdrRpc("pane.send_text", { pane_id: paneId, text: `${fakeOmp}\n` }),
+    "saw the stand-in omp", (events) => events.some((event) => event.data?.["agent"] === "omp"));
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "herdr:omp", agent: "omp", state: "idle", seq: ++seq });
   await herdrRpc("pane.report_agent_session", { pane_id: paneId, source: "herdr:omp", agent: "omp", seq: ++seq, agent_session_path: fresh, session_start_source: "startup" });
   // omp writes the pane's cwd into its session header
@@ -71,22 +88,42 @@ beforeAll(async () => {
   handoffPaneId = split.pane.pane_id;
   const screens = ["generating-narrow.txt", "cancelled-narrow.txt"].map((name) => fileURLToPath(new URL(`./fixtures/omp-handoff-18.8.7-${name}`, import.meta.url)));
   // omp keeps its sessions under its own home, which the bridge reads from the process
-  await herdrRpc("pane.send_text", { pane_id: handoffPaneId, text: `HOME='${root}' exec '${join(handoffBin, "omp")}' '${join(root, "handoff.js")}' '${screens[0]}' '${screens[1]}' '${handoffMarker}'\n` });
-  for (const deadline = Date.now() + 5_000; (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === handoffPaneId)?.agent !== "omp";) {
-    if (Date.now() > deadline) throw new Error("the stand-in omp did not start in the handoff pane");
-    await Bun.sleep(50);
-  }
+  await herdrAfter([drawnOn(handoffPaneId, "Generating handoff"), { type: "pane.agent_status_changed", pane_id: handoffPaneId }],
+    () => herdrRpc("pane.send_text", { pane_id: handoffPaneId, text: `HOME='${root}' exec '${join(handoffBin, "omp")}' '${join(root, "handoff.js")}' '${screens[0]}' '${screens[1]}' '${handoffMarker}'\n` }),
+    "drew the stand-in's handoff status and saw its omp",
+    (events) => events.some((event) => event.event === "pane.output_matched")
+      && events.some((event) => event.event === "pane.agent_status_changed" && event.data?.["agent"] === "omp"));
   await herdrRpc("pane.report_agent", { pane_id: handoffPaneId, source: "herdr:omp", agent: "omp", state: "idle", seq: ++seq });
   await herdrRpc("pane.report_agent_session", { pane_id: handoffPaneId, source: "herdr:omp", agent: "omp", seq: ++seq, agent_session_path: handoffSession, session_start_source: "startup" });
+  writeFileSync(askSession, readFileSync(new URL("./fixtures/omp-ask-18.13.2-md-open.jsonl", import.meta.url), "utf8").split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line).type === "session" ? JSON.stringify({ ...JSON.parse(line), cwd: root }) : line).join("\n") + "\n");
+  writeFileSync(join(root, "ask.js"), ASK);
+  const asking = await workspaceCreate({ cwd: root, label: "ovis-test-omp-ask-contract" });
+  askWorkspaceId = asking.workspace.workspace_id;
+  askPaneId = asking.root_pane.pane_id;
+  const askScreen = fileURLToPath(new URL("./fixtures/omp-ask-18.13.2-md-single-60.txt", import.meta.url));
+  // omp moves its cursor (`\u276f`) to the next row on Down
+  const movedScreen = join(root, "ask-moved.txt");
+  writeFileSync(movedScreen, readFileSync(askScreen, "utf8").replace("\u2502 \u276f \u25cb Use local socket", "\u2502   \u25cb Use local socket").replace("\u2502   \u25cb Remote relay", "\u2502 \u276f \u25cb Remote relay"));
+  // herdr takes a report for a pane only once it has seen the pane's omp itself, which it announces
+  await herdrAfter([drawnOn(askPaneId, "Which route should carry"), { type: "pane.agent_status_changed", pane_id: askPaneId }],
+    () => herdrRpc("pane.send_text", { pane_id: askPaneId, text: `HOME='${root}' exec '${join(handoffBin, "omp")}' '${join(root, "ask.js")}' '${askScreen}' '${movedScreen}' '${askMarker}'\n` }),
+    "drew the stand-in's Ask panel and saw its omp",
+    (events) => events.some((event) => event.event === "pane.output_matched")
+      && events.some((event) => event.event === "pane.agent_status_changed" && event.data?.["agent"] === "omp"));
+  await herdrRpc("pane.report_agent", { pane_id: askPaneId, source: "herdr:omp", agent: "omp", state: "blocked", seq: ++seq });
+  await herdrRpc("pane.report_agent_session", { pane_id: askPaneId, source: "herdr:omp", agent: "omp", seq: ++seq, agent_session_path: askSession, session_start_source: "startup" });
   process.env["HOME"] = root;
   server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state") });
-});
+  // herdr takes a few seconds to see each stand-in's omp; every wait above is bounded on its own
+}, 30_000);
 
 afterAll(async () => {
   server?.stop();
   if (originalHome === undefined) delete process.env["HOME"];
   else process.env["HOME"] = originalHome;
   if (workspaceId) await workspaceClose(workspaceId);
+  if (askWorkspaceId) await workspaceClose(askWorkspaceId);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -109,16 +146,31 @@ it("answers a session omp has not written yet as an empty conversation, then fol
   expect(written.turns.map((turn) => turn.role)).toEqual(["user", "assistant"]);
 });
 
-/** The pane's card once `wanted` holds for it, within a deadline. */
-async function promptWhen(wanted: (prompt: InteractivePrompt | null) => boolean): Promise<InteractivePrompt | null> {
-  let last: InteractivePrompt | null = null;
-  for (const deadline = Date.now() + 10_000; Date.now() < deadline; await Bun.sleep(50)) {
-    const response = await fetch(`http://127.0.0.1:${server.port}/api/pane/prompt?pane_id=${encodeURIComponent(handoffPaneId)}`);
-    expect(response.status).toBe(200);
-    last = (await response.json() as { prompt: InteractivePrompt | null }).prompt;
-    if (wanted(last)) return last;
-  }
-  throw new Error(`the handoff pane's card did not settle: ${JSON.stringify(last)}`);
+/** herdr's subscription to `text` showing in the pane */
+function drawnOn(pane: string, text: string): HerdrSubscription {
+  return { type: "pane.output_matched", pane_id: pane, source: "visible", match: { type: "substring", value: text } };
+}
+
+/** Runs `trigger` once herdr's subscription to `subscriptions` has started, and waits until its events say `done` (by default, the first one), bounded. */
+function herdrAfter(subscriptions: HerdrSubscription[], trigger: () => unknown, what: string, done: (events: EventFrame[]) => boolean = (events) => events.length > 0): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let over = false;
+    const events: EventFrame[] = [];
+    const finish = (error?: Error) => { if (over) return; over = true; clearTimeout(timer); subscription.close(); if (error) reject(error); else resolve(); };
+    const subscription = subscribeEvents(subscriptions, {
+      onStarted: () => { Promise.resolve().then(trigger).catch((error: Error) => finish(error)); },
+      onEvent: (event) => { events.push(event); if (done(events)) finish(); },
+      onError: (error) => finish(error),
+    });
+    const timer = setTimeout(() => finish(new Error(`herdr never ${what}`)), 10_000);
+  });
+}
+
+/** The pane's card as the server reads it now. */
+async function promptOf(pane: string): Promise<InteractivePrompt | null> {
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/pane/prompt?pane_id=${encodeURIComponent(pane)}`);
+  expect(response.status).toBe(200);
+  return (await response.json() as { prompt: InteractivePrompt | null }).prompt;
 }
 
 it("cancels omp's /handoff from its card, and keeps the same conversation when a handoff compacts it in place", async () => {
@@ -127,18 +179,19 @@ it("cancels omp's /handoff from its card, and keeps the same conversation when a
   expect(before.source).toBe("omp-transcript");
   expect(before.turns.filter((turn) => turn.role === "user")).toHaveLength(2);
 
-  const card = await promptWhen((prompt) => prompt !== null);
+  // the stand-in drew its status and herdr saw its omp before the server started: one read each step
+  const card = await promptOf(handoffPaneId);
   expect(card).toMatchObject({ agent: "omp", question: "Generating handoff…", options: [{ label: "Cancel", description: null }] });
-  const answered = await fetch(`http://127.0.0.1:${server.port}/api/pane/prompt/answer`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pane_id: handoffPaneId, prompt_id: card!.id, option_index: 0 }),
-  });
-  expect(answered.status).toBe(200);
-  for (const deadline = Date.now() + 10_000; !existsSync(handoffMarker); await Bun.sleep(50)) {
-    if (Date.now() > deadline) throw new Error("the stand-in omp got no key");
-  }
+  let answering!: Promise<Response>;
+  await herdrAfter([drawnOn(handoffPaneId, "Handoff cancelled")], () => {
+    answering = fetch(`http://127.0.0.1:${server.port}/api/pane/prompt/answer`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pane_id: handoffPaneId, prompt_id: card!.id, option_index: 0 }),
+    });
+  }, "drew the stand-in's cancelled handoff");
+  expect((await answering).status).toBe(200);
   expect(JSON.parse(readFileSync(handoffMarker, "utf8"))).toEqual([0x1b]);
-  expect(await promptWhen((prompt) => prompt === null)).toBeNull();
+  expect(await promptOf(handoffPaneId)).toBeNull();
   // cancelled: omp left the session as it was, and the chat on the same conversation
   expect(readFileSync(handoffSession, "utf8")).toBe(original);
   expect((await read(handoffPaneId)).history_id).toBe(before.history_id);
@@ -149,6 +202,126 @@ it("cancels omp's /handoff from its card, and keeps the same conversation when a
   expect(after.history_id).toBe(before.history_id);
   expect(after.turns.slice(0, before.turns.length)).toEqual(before.turns);
 });
+
+it("shows an omp Ask card in the open call's Markdown, answered by the keys of the menu on screen (#1644)", async () => {
+  // the stand-in drew its panel and the pane reports the session before the server starts: one read each step
+  const card = await promptOf(askPaneId);
+  expect(card).toMatchObject({
+    agent: "omp", text_format: "markdown", custom_option_index: 2,
+    question: "Which **route** should carry the `fixture` session? See [the guide](https://example.com/guide).",
+    options: [
+      { label: "Use `local` socket", description: "Keeps the **session** on *this* PC." },
+      { label: "Remote relay", description: "Goes through [the relay](https://example.com/relay) with `ssh`." },
+    ],
+  });
+
+  // the call answered in the terminal: the same screen is no longer that call's, and its card is as drawn
+  const open = readFileSync(askSession, "utf8");
+  appendFileSync(askSession, JSON.stringify({ type: "message", id: "r1", parentId: "c328f4b1", timestamp: new Date().toISOString(), message: { role: "toolResult", toolCallId: "omp-md-ask", toolName: "ask", content: [{ type: "text", text: "answered" }] } }) + "\n");
+  const drawn = await promptOf(askPaneId);
+  expect(drawn?.text_format).toBeUndefined();
+  expect(drawn).toMatchObject({ question: "Which route should carry the fixture session? See the guide (https://example.com/guide).", options: [{ label: "Use local socket" }, { label: "Remote relay" }] });
+  writeFileSync(askSession, open);
+
+  // the Markdown card answers as the screen's card: its id, and Down then Enter to the second row
+  const rich = await promptOf(askPaneId);
+  expect(rich?.text_format).toBe("markdown");
+  expect(rich!.id).toBe(card!.id);
+  // the stand-in notes each key before it draws "Answered." for the Enter
+  let answering!: Promise<Response>;
+  await herdrAfter([drawnOn(askPaneId, "Answered.")], () => {
+    answering = fetch(`http://127.0.0.1:${server.port}/api/pane/prompt/answer`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pane_id: askPaneId, prompt_id: rich!.id, option_index: 1 }),
+    });
+  }, "drew the stand-in's answer");
+  const answered = await answering;
+  expect(answered.status, await answered.text()).toBe(200);
+  expect(readFileSync(askMarker, "latin1")).toMatch(/^\x1b(?:\[|O)B\r$/);
+});
+
+// herdr 0.9.5 keeps naming a pane omp while its omp is stopped behind the shell (job control), and the screen still
+// shows omp's last dialog, the same card to the parser: the shell holds the input then, and gets no card and no key
+it("offers no card and sends no key while omp is stopped behind its shell, over 18.13's panel and 18.10's", async () => {
+  const standIn = join(root, "handoff-bin", "omp");
+  for (const [fixture, tail, drawn] of [
+    ["omp-approval-18.13.2-unicode-narrow", "\u276f\n FOREIGN-2245\n", "FOREIGN-2245"],
+    ["omp-approval-18.10.4-unicode-narrow", null, "approve \u00b7"],
+  ] as const) {
+    const shown = readFileSync(new URL(`./fixtures/${fixture}.txt`, import.meta.url), "utf8");
+    const screen = join(root, `${fixture}.txt`);
+    writeFileSync(screen, shown);
+    // what a shell may leave there: the panel without omp's composer, a bare prompt and its own output under it
+    const stale = join(root, `${fixture}-stale.txt`);
+    writeFileSync(stale, tail === null ? shown : `${shown.trimEnd().split("\n").slice(0, -2).join("\n")}\n${tail}`);
+    const ompKeys = join(root, `${fixture}-omp-keys`);
+    const shellKeys = join(root, `${fixture}-shell-keys`);
+    const created = await workspaceCreate({ cwd: root, label: `ovis-test-omp-stopped-${fixture}` });
+    let pid: number | undefined;
+    try {
+      const pane = created.root_pane.pane_id;
+      // not exec'd: the shell stays behind the stand-in, as it does behind omp
+      await herdrAfter([drawnOn(pane, "Allow tool: bash"), { type: "pane.agent_status_changed", pane_id: pane }],
+        () => herdrRpc("pane.send_text", { pane_id: pane, text: `HOME='${root}' '${standIn}' '${join(root, "ask.js")}' '${screen}' '${screen}' '${ompKeys}'\n` }),
+        "drew the stand-in's approval panel and saw its omp",
+        (events) => events.some((event) => event.event === "pane.output_matched")
+          && events.some((event) => event.event === "pane.agent_status_changed" && event.data?.["agent"] === "omp"));
+      const live = await promptOf(pane);
+      expect(live, fixture).toMatchObject({ kind: "approval", title: "Allow tool: bash" });
+      pid = agentProcesses((await paneProcessInfo(pane))?.foreground_processes ?? [], "omp")[0]?.pid;
+      expect(pid, fixture).toBeNumber();
+      await herdrAfter([drawnOn(pane, "Stopped")], () => process.kill(pid!, "SIGSTOP"), "saw the shell stop the stand-in");
+      await herdrAfter([drawnOn(pane, "CLEARED-2245")], () => herdrRpc("pane.send_text", { pane_id: pane, text: "clear; printf 'CLEARED-%s\\n' 2245\n" }), "cleared the screen");
+      // the shell draws the dialog omp left, then takes one key raw: the first byte anything sends it
+      await herdrAfter([drawnOn(pane, drawn)], () => herdrRpc("pane.send_text", {
+        pane_id: pane, text: `clear; cat '${stale}'; stty raw -echo; dd bs=1 count=1 of='${shellKeys}' 2>/dev/null; stty sane; printf 'DD-%s\\n' DONE\n`,
+      }), "drew the stale dialog from the shell");
+      // herdr 0.9.5 keeps naming the pane omp here (the case this guards), 0.9.3 drops the name: the outcome is the same
+      expect(["omp", null], fixture).toContain((await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane)?.agent ?? null);
+      expect(await promptOf(pane), fixture).toBeNull();
+      const answered = await fetch(`http://127.0.0.1:${server.port}/api/pane/prompt/answer`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pane_id: pane, prompt_id: live!.id, option_index: 0 }),
+      });
+      expect(answered.status, fixture).toBe(409);
+      await herdrAfter([drawnOn(pane, "DD-DONE")], () => herdrRpc("pane.send_text", { pane_id: pane, text: "Z" }), "saw the shell take its key");
+      expect(readFileSync(shellKeys, "latin1"), fixture).toBe("Z");
+      expect(existsSync(ompKeys), fixture).toBe(false);
+    } finally {
+      if (pid !== undefined) process.kill(pid, "SIGKILL");
+      await workspaceClose(created.workspace.workspace_id);
+    }
+  }
+}, 60_000);
+
+// bunx and npx run omp's npm package entry point (its `bin`, dist/cli.js) with bun: the process's argv is the runtime and that
+// script, and omp names the process omp itself (prctl, as this stand-in does), which herdr reports (#2280)
+// omp names itself through Linux's prctl here, as omp does; macOS's process name comes from its executable
+it.skipIf(process.platform !== "linux")("offers the approval card of an omp started from its npm package's entry point", async () => {
+  const entry = join(root, "npm", "node_modules", "@oh-my-pi", "pi-coding-agent", "dist", "cli.js");
+  mkdirSync(dirname(entry), { recursive: true });
+  writeFileSync(entry, `
+const { dlopen, FFIType, ptr } = require("bun:ffi");
+const libc = dlopen("libc.so.6", { prctl: { args: [FFIType.i32, FFIType.ptr, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 } });
+libc.symbols.prctl(15, ptr(Buffer.from("omp\\0")), 0n, 0n, 0n);
+${ASK}`);
+  const screen = fileURLToPath(new URL("./fixtures/omp-approval-18.13.2-unicode-narrow.txt", import.meta.url));
+  const keys = join(root, "npm-entry-keys");
+  const created = await workspaceCreate({ cwd: root, label: "ovis-test-omp-npm-entry" });
+  try {
+    const pane = created.root_pane.pane_id;
+    await herdrAfter([drawnOn(pane, "Allow tool: bash"), { type: "pane.agent_status_changed", pane_id: pane }],
+      () => herdrRpc("pane.send_text", { pane_id: pane, text: `HOME='${root}' exec '${process.execPath}' '${entry}' '${screen}' '${screen}' '${keys}'\n` }),
+      "drew the stand-in's approval panel and saw its omp",
+      (events) => events.some((event) => event.event === "pane.output_matched")
+        && events.some((event) => event.event === "pane.agent_status_changed" && event.data?.["agent"] === "omp"));
+    const [process_] = (await paneProcessInfo(pane))?.foreground_processes ?? [];
+    expect(process_).toMatchObject({ name: "omp", argv: [process.execPath, entry, screen, screen, keys] });
+    expect(await promptOf(pane)).toMatchObject({ agent: "omp", kind: "approval", title: "Allow tool: bash" });
+  } finally {
+    await workspaceClose(created.workspace.workspace_id);
+  }
+}, 30_000);
 
 // omp 18.8.7's pictures as recorded (server/fixtures/omp-pictures-18.8.7-*): the bytes sit in the blob
 // store beside the session store, the transcript holds `blob:sha256:<digest>`

@@ -173,7 +173,7 @@ export function altSequence(data: string): string | null {
 
 /**
  * xterm's modifyOtherKeys level after CSI > 4 ; Pv m, or CSI > 4 n, which turns it off. Other
- * resources leave it as it was. xterm.js 5.5 ignores the request and types Ctrl+Enter as a plain
+ * resources leave it as it was. xterm.js (5.5 and 6.0) ignores the request and types Ctrl+Enter as a plain
  * CR, the same as Enter, so PaneTerminal keeps the level here and sends that key itself.
  * herdr passes the pane program's request on to the attached client, and again on every
  * attach; Claude Code asks for level 2.

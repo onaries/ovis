@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import type { InteractivePrompt } from "../../shared/protocol.ts";
 import { answerKeys, claudeRewindOpen, parseInteractivePrompt } from "../prompt.ts";
+import { executeInteractionPlan } from "./interaction-plan.ts";
+import { registry } from "./registry.ts";
+import { parsedByPublicPrompt, type AnswerStep } from "./shared.ts";
 
 const fixture = (state: string, width: number): string =>
   readFileSync(new URL(`../fixtures/claude-goal-2.1.304-${state}-${width}.txt`, import.meta.url), "utf8");
@@ -34,6 +37,159 @@ describe("Claude Code's terminal rewind", () => {
     const screen = rewind("select-banana", 40);
     expect(claudeRewindOpen(screen)).toBe(true);
     expect(parseInteractivePrompt("claude", screen)).toBeNull();
+  });
+});
+
+/** Claude Code 2.1.311's /effort, recorded through an isolated herdr's pane.read from the command down (fixtures named by Ultracode's state and width; none: a model without it) */
+const effort = (state: string, width: number): string =>
+  readFileSync(new URL(`../fixtures/claude-effort-2.1.311-${state}-${width}.txt`, import.meta.url), "utf8");
+
+const LEVELS = ["low", "medium", "high", "xhigh", "max"];
+
+const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
+
+describe("Claude Code's /effort with Ultracode (#2232)", () => {
+  test("offers the switch beside the slider, 70 columns or more, as a row that turns it the other way", () => {
+    for (const [state, width] of [["off", 120], ["off-max", 120]] as const) {
+      const prompt = parseInteractivePrompt("claude", effort(state, width));
+      expect(labels(prompt), state).toEqual([...LEVELS, "Turn Ultracode on"]);
+      expect(prompt?.own_text?.labels, state).toEqual({ 5: { key: "Turn Ultracode on" } });
+      expect(prompt?.own_text?.descriptions, state).toEqual({ 5: { key: "Keeps the effort level, for this session only" } });
+    }
+    // on: Claude's own line under the names, where the slider drew a blank line before
+    for (const [state, width] of [["on", 120], ["on-max", 120], ["on", 70]] as const) {
+      expect(labels(parseInteractivePrompt("claude", effort(state, width))), `${state} ${width}`).toEqual([...LEVELS, "Turn Ultracode off"]);
+    }
+  });
+
+  test("reads the slider of a pane under 70 columns, where the switch has two lines of its own under it", () => {
+    expect(labels(parseInteractivePrompt("claude", effort("off", 60)))).toEqual([...LEVELS, "Turn Ultracode on"]);
+    for (const [state, width] of [["on", 69], ["on", 60], ["on-max", 60]] as const) {
+      expect(labels(parseInteractivePrompt("claude", effort(state, width))), `${state} ${width}`).toEqual([...LEVELS, "Turn Ultracode off"]);
+    }
+  });
+
+  test("is one card for each state of the switch, wherever ▲ is and at any width", () => {
+    const id = (state: string, width: number) => parseInteractivePrompt("claude", effort(state, width))?.id;
+    const off = id("off", 120);
+    const on = id("on", 120);
+    expect(off).toBeDefined();
+    expect(on).toBeDefined();
+    expect(on).not.toBe(off);
+    for (const [state, width] of [["off-max", 120], ["off", 60]] as const) expect(id(state, width), `${state} ${width}`).toBe(off);
+    for (const [state, width] of [["on-max", 120], ["on", 70], ["on", 69], ["on", 60], ["on-max", 60]] as const) expect(id(state, width), `${state} ${width}`).toBe(on);
+  });
+
+  test("moves ▲ from the level it is over, and turns the switch with Tab, then s", () => {
+    // ▲ over xhigh, as the session started
+    const atXhigh = parseInteractivePrompt("claude", effort("on", 60))!;
+    expect(answerKeys(atXhigh, { option_index: 1 })).toEqual([{ keys: ["left"] }, { keys: ["left"] }, { text: "s" }]);
+    expect(answerKeys(atXhigh, { option_index: 3 })).toEqual([{ text: "s" }]);
+    expect(answerKeys(atXhigh, { option_index: 5 })).toEqual([{ keys: ["tab"] }, { text: "s" }]);
+    // ▲ over max, its description between the names and the switch
+    const atMax = parseInteractivePrompt("claude", effort("on-max", 60))!;
+    expect(answerKeys(atMax, { option_index: 3 })).toEqual([{ keys: ["left"] }, { text: "s" }]);
+    expect(answerKeys(atMax, { option_index: 5 })).toEqual([{ keys: ["tab"] }, { text: "s" }]);
+  });
+
+  test("offers the levels alone for a model without Ultracode, which draws no switch", () => {
+    for (const width of [120, 60]) {
+      const prompt = parseInteractivePrompt("claude", effort("none", width));
+      expect(labels(prompt), String(width)).toEqual(LEVELS);
+      expect(() => answerKeys(prompt!, { option_index: 5 })).toThrow();
+    }
+  });
+
+  test("reads the slider at max for a model without Ultracode, max's description right under the names", () => {
+    // 2.1.311 keeps the line under the names for the switch only: without one, ▲ over max puts
+    // the level's description there (as off-max-120 draws it under that line)
+    const none = effort("none", 120);
+    const description = effort("off-max", 120).split("\n").find((line) => line.includes("May use excessive tokens"))!;
+    const atMax = none
+      .replace(`${"─".repeat(30)}▲${"─".repeat(11)}`, `${"─".repeat(40)}▲─`)
+      .replace("max\n\n", `max\n${description}\n\n`);
+    expect(atMax).not.toBe(none);
+    const prompt = parseInteractivePrompt("claude", atMax)!;
+    expect(labels(prompt)).toEqual(LEVELS);
+    expect(prompt.id).toBe(parseInteractivePrompt("claude", none)!.id);
+    expect(answerKeys(prompt, { option_index: 3 })).toEqual([{ keys: ["left"] }, { text: "s" }]);
+    expect(parsedByPublicPrompt.get(prompt)?.claudeUltracode).toBeNull();
+    // names a narrow pane wrapped are still not read, with no blank line under them to tell: the
+    // line of names under them is the rest of them
+    const wrapped = none
+      .replace(`${"─".repeat(30)}▲`, `${"─".repeat(20)}▲${"─".repeat(10)}`)
+      .replace("high     xhigh      max", `high\n${" ".repeat(39)}xhigh      max`);
+    expect(parseInteractivePrompt("claude", wrapped.replace(`high\n${" ".repeat(39)}xhigh`, "high     xhigh"))!.id).toBe(prompt.id);
+    expect(parseInteractivePrompt("claude", wrapped)).toBeNull();
+    expect(registry.waits("claude", wrapped)).toBe(true);
+  });
+
+  test("offers the levels alone where the user unbound the switch's key, and Claude draws its state alone", () => {
+    // {"context": "EffortSlider", "bindings": {"tab": null}}: Claude names no key, so draws no key's line
+    const unbound = [
+      [effort("off", 120).replace("      Tab to toggle", ""), false],
+      [effort("off", 60).replace("                       Tab to toggle\n", ""), false],
+      [effort("on", 120).replace("      Tab to toggle", ""), true],
+    ] as const;
+    for (const [screen, drawn] of unbound) {
+      expect(screen).not.toContain("to toggle");
+      const prompt = parseInteractivePrompt("claude", screen)!;
+      expect(labels(prompt), screen).toEqual(LEVELS);
+      expect(answerKeys(prompt, { option_index: 1 }), screen).toEqual([{ keys: ["left"] }, { keys: ["left"] }, { text: "s" }]);
+      expect(() => answerKeys(prompt, { option_index: 5 }), screen).toThrow();
+      // the state drawn still guards a level's s
+      expect(parsedByPublicPrompt.get(prompt)?.claudeUltracode, screen).toBe(drawn);
+    }
+  });
+
+  test("sends no level's s where the unbound switch shows another state than the card was read from", async () => {
+    const reader = registry.readerFor("claude-effort")!;
+    const off = effort("off", 120).replace("      Tab to toggle", "");
+    const on = effort("on", 120).replace("      Tab to toggle", "");
+    for (const [shown, result] of [[off, "answered"], [on, "prompt_changed"]] as const) {
+      const plan = reader.interaction!(parsedByPublicPrompt.get(parseInteractivePrompt("claude", off)!)!);
+      const sent: AnswerStep[] = [];
+      const outcome = await executeInteractionPlan(plan, 3, {
+        rereadMoves: true,
+        active: () => true,
+        cancelled: () => false,
+        read: async () => shown,
+        send: async (step) => { sent.push(step); },
+      });
+      expect(outcome).toBe(result);
+      expect(sent).toEqual(result === "answered" ? [{ text: "s" }] : []);
+    }
+  });
+
+  test("keeps the switch's drawn state for the answer's last look, out of the card it sends", () => {
+    for (const [state, width, drawn] of [["on", 120, true], ["off", 60, false], ["none", 120, null]] as const) {
+      const prompt = parseInteractivePrompt("claude", effort(state, width))!;
+      expect(parsedByPublicPrompt.get(prompt)?.claudeUltracode, `${state} ${width}`).toBe(drawn);
+      expect(prompt, `${state} ${width}`).not.toHaveProperty("claudeUltracode");
+    }
+  });
+
+  test("offers no card once s applied the switch, and holds nothing", () => {
+    const set = effort("set", 120);
+    expect(parseInteractivePrompt("claude", set)).toBeNull();
+    expect(registry.waits("claude", set)).toBe(false);
+  });
+
+  test("sends the switch's s only once the slider shows it flipped at the same level", async () => {
+    const reader = registry.readerFor("claude-effort")!;
+    for (const [shown, result] of [[effort("on", 60), "answered"], [effort("off", 60), "prompt_changed"], [effort("on-max", 60), "prompt_changed"]] as const) {
+      const plan = reader.interaction!(parsedByPublicPrompt.get(parseInteractivePrompt("claude", effort("off", 60))!)!);
+      const sent: AnswerStep[] = [];
+      const outcome = await executeInteractionPlan(plan, 5, {
+        rereadMoves: true,
+        active: () => true,
+        cancelled: () => false,
+        read: async () => shown,
+        send: async (step) => { sent.push(step); },
+      });
+      expect(outcome).toBe(result);
+      expect(sent).toEqual(result === "answered" ? [{ keys: ["tab"] }, { text: "s" }] : [{ keys: ["tab"] }]);
+    }
   });
 });
 
@@ -173,5 +329,145 @@ describe("Claude's question beside its fullscreen diff panel", () => {
     // later output in the hint's place, the panel's edge still beside it
     const hint = "Enter to select · ↑/↓ to navigate · Esc to cancel";
     expect(parseInteractivePrompt("claude", panel("english").replace(hint, "● Done.".padEnd(hint.length)))).toBeNull();
+  });
+});
+
+describe("Claude's words over its question (#2088)", () => {
+  // live-captured from Claude Code 2.1.311 in a 119- and a 40-column pane while the question waited;
+  // its session file had neither the words nor the call until the answer
+  const asked = (width: number) => readFileSync(new URL(`../fixtures/claude-question-words-2.1.311-${width}.txt`, import.meta.url), "utf8");
+  /** the screen with the words' lines (from their `●` line down to the panel's rule) replaced by `lines` */
+  const withAbove = (screen: string, lines: string[]): string => {
+    const rows = screen.split("\n");
+    const start = rows.findIndex((row) => row.startsWith("● The file"));
+    const rule = rows.findIndex((row, index) => index > start && /^─{8,}$/.test(row));
+    return [...rows.slice(0, start), ...lines, ...rows.slice(rule)].join("\n");
+  };
+
+  test("reads the words over the question at 119 columns, the pane's wrapping joined back", () => {
+    const prompt = parseInteractivePrompt("claude", asked(120));
+    expect(prompt).toMatchObject({ kind: "question", title: "Fix", question: "Which fix do you want?" });
+    expect(prompt?.screen_words).toBe([
+      "The file a.txt has a made-up bug: its last line is missing a trailing newline, so the file doesn't end cleanly. I haven't opened or changed the file.",
+      "There are two ways to fix it. Patch adds the missing newline to the end of the last line, a minimal edit. Rewrite regenerates the whole file from scratch, which is heavier and riskier.",
+    ].join("\n\n"));
+  });
+
+  test("reads the words over the question at 40 columns", () => {
+    expect(parseInteractivePrompt("claude", asked(40))?.screen_words).toBe([
+      "The file a.txt has a made-up bug: its last line is missing a trailing newline, so the final line doesn't end properly. It's a contrived example, so I haven't checked or changed anything yet.",
+      "There are two ways to fix it. You can patch the file by adding the missing newline, or rewrite the file from scratch. Which one do you want?",
+    ].join("\n\n"));
+  });
+
+  test("keeps the card's id whatever the words are: they are not part of the question", () => {
+    const quiet = parseInteractivePrompt("claude", withAbove(asked(40), []));
+    expect(quiet?.screen_words).toBeUndefined();
+    expect(parseInteractivePrompt("claude", asked(40))?.id).toBe(quiet!.id);
+  });
+
+  test("reads no words when the user's prompt is right over the question", () => {
+    const panel = readFileSync(new URL("../fixtures/claude-diff-panel-2.1.303-english-180.txt", import.meta.url), "utf8");
+    const prompt = parseInteractivePrompt("claude", panel);
+    expect(prompt).toMatchObject({ kind: "question", title: "Color" });
+    expect(prompt?.screen_words).toBeUndefined();
+  });
+
+  test("reads no words when a tool's output is right over the question", () => {
+    const prompt = parseInteractivePrompt("claude", withAbove(asked(120), ["● Read(a.txt)", "  ⎿  Read 3 lines", ""]));
+    expect(prompt).toMatchObject({ kind: "question", title: "Fix" });
+    expect(prompt?.screen_words).toBeUndefined();
+  });
+
+  test("reads no words whose start is above the screen's top: they read as the user's wrapped prompt does", () => {
+    const rows = asked(40).split("\n");
+    const cut = rows.slice(rows.findIndex((row) => row.startsWith("● The file")) + 1).join("\n");
+    const prompt = parseInteractivePrompt("claude", cut);
+    expect(prompt).toMatchObject({ kind: "question", title: "Fix" });
+    expect(prompt?.screen_words).toBeUndefined();
+  });
+
+  test("reads no words over a collapsed group of tool calls, its bullet drawn or not (live 2.1.311, 43 columns)", () => {
+    const tools = readFileSync(new URL("../fixtures/claude-question-tools-2.1.311-43.txt", import.meta.url), "utf8");
+    for (const screen of [tools, tools.replace("  Read 2 files (ctrl+o to expand)", "● Read 2 files (ctrl+o to expand)")]) {
+      const prompt = parseInteractivePrompt("claude", screen);
+      expect(prompt).toMatchObject({ kind: "question", title: "File", question: "Which file should I fix?" });
+      expect(prompt?.screen_words).toBeUndefined();
+    }
+    // the hint wrapped by a narrow pane, and a group whose bullet is drawn above Claude's own line
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), ["● Searched for 2 patterns, read 1 file (ctrl+o", "  to expand)", ""]))?.screen_words).toBeUndefined();
+  });
+
+  test("reads no words over a plugin's MCP call", () => {
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), ["● plugin/thing - do (MCP)(x: 1)", ""]))?.screen_words).toBeUndefined();
+  });
+
+  test("reads no words of an earlier turn over a rule that is not the question's own", () => {
+    const rows = asked(40).split("\n");
+    const start = rows.findIndex((row) => row.startsWith("● The file"));
+    const rule = rows.findIndex((row, index) => index > start && /^─{8,}$/.test(row));
+    const screen = [...rows.slice(0, start), "● Earlier task: Rewrite is safest.", "─".repeat(40), "❯ New task: use Patch.", "", ...rows.slice(rule + 1)].join("\n");
+    const prompt = parseInteractivePrompt("claude", screen);
+    expect(prompt).toMatchObject({ kind: "question", title: "Fix" });
+    expect(prompt?.screen_words).toBeUndefined();
+  });
+
+  test("keeps the breaks of a command, a path or a URL: joining them could change what they say", () => {
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), [
+      "● Use this shell snippet:",
+      "  # Safety: do not remove saved backups.",
+      "  rm -rf backups",
+      "",
+    ]))?.screen_words).toBe("Use this shell snippet:\n# Safety: do not remove saved backups.\nrm -rf backups");
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), [
+      "● See https://example.com/docs/very/long",
+      "  /path/to/the/page for the details.",
+      "",
+    ]))?.screen_words).toBe("See https://example.com/docs/very/long\n/path/to/the/page for the details.");
+  });
+
+  test("keeps two commands on their lines", () => {
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), ["● Run these:", "  git log --oneline --decorate --graph", "  git status", ""]))?.screen_words)
+      .toBe("Run these:\ngit log --oneline --decorate --graph\ngit status");
+  });
+
+  test("keeps commands without options on their lines, though the first one fills the pane", () => {
+    // "  git merge experimental-feature-branch" is 39 columns: "git" would not have fit after it
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), ["● Merge and push:", "", "  git merge experimental-feature-branch", "  git push", ""]))?.screen_words)
+      .toBe("Merge and push:\n\ngit merge experimental-feature-branch\ngit push");
+  });
+
+  test("keeps command lines apart in a paragraph that ends in a path with a period", () => {
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), ["● Merge and push:", "", "  git merge experimental-feature-branch", "  git push", "  docs/release-notes.md.", ""]))?.screen_words)
+      .toBe("Merge and push:\n\ngit merge experimental-feature-branch\ngit push\ndocs/release-notes.md.");
+  });
+
+  test("keeps command lines apart when text follows them with no blank line", () => {
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), ["● Merge and push:", "", "  git merge experimental-feature-branch", "  git push", "  Then the branch is on the remote.", ""]))?.screen_words)
+      .toBe("Merge and push:\n\ngit merge experimental-feature-branch\ngit push\nThen the branch is on the remote.");
+  });
+
+  test("reads Korean prose with a word in parentheses as Claude's words, not a tool call", () => {
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), ["● 패치(Patch)는 기존 내용을 보존합니다.", ""]))?.screen_words).toBe("패치(Patch)는 기존 내용을 보존합니다.");
+  });
+
+  test("joins Korean at its spaces, and Chinese without one only where the line was full", () => {
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), ["● 마지막 줄에 줄바꿈이 빠져 있어서", "  파일이 깔끔하게 끝나지 않습니다.", ""]))?.screen_words)
+      .toBe("마지막 줄에 줄바꿈이 빠져 있어서 파일이 깔끔하게 끝나지 않습니다.");
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), ["● 文件最后一行缺少换行符所以文件没有正常", "  地结束。", ""]))?.screen_words)
+      .toBe("文件最后一行缺少换行符所以文件没有正常地结束。");
+    expect(parseInteractivePrompt("claude", withAbove(asked(40), ["● 文件缺少换行符。", "  请选择修复方式。", ""]))?.screen_words)
+      .toBe("文件缺少换行符。\n请选择修复方式。");
+  });
+
+  test("keeps a list's items on lines of their own", () => {
+    const prompt = parseInteractivePrompt("claude", withAbove(asked(40), [
+      "● Two ways to fix it:",
+      "  - Patch: add the missing newline to",
+      "    the end of the last line.",
+      "  - Rewrite: rewrite the whole file.",
+      "",
+    ]));
+    expect(prompt?.screen_words).toBe("Two ways to fix it:\n- Patch: add the missing newline to the end of the last line.\n- Rewrite: rewrite the whole file.");
   });
 });

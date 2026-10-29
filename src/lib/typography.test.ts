@@ -9,8 +9,8 @@ const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 const token = (name: string): string => new RegExp(`${name}:\\s*([^;]+);`).exec(styles)![1]!.trim();
 
 describe("the built-in stacks", () => {
-  it("keep the terminal's stack apart: xterm never takes the bundled code face", () => {
-    expect(TERMINAL_FONT_STACK).not.toContain("JetBrains Mono Web");
+  it("draw the terminal and the chrome's code in the same bundled face", () => {
+    expect(TERMINAL_FONT_STACK.startsWith('"Symbols Nerd Font Mono", "JetBrains Mono Web", ')).toBe(true);
     expect(token("--font-mono")).toContain('"JetBrains Mono Web"');
   });
 });

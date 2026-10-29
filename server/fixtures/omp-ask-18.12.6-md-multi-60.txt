@@ -1,0 +1,50 @@
+
+╭─── Ask 3 questions ──────────────────────────────────────╮
+├─── [route] · options:2 ──────────────────────────────────┤
+│  Which route should carry the fixture session? See the   │
+│  guide (https://example.com/guide).                      │
+│  ○ Use local socket                                      │
+│    ↳ Keeps the session on this PC.                       │
+│  ○ Remote relay                                          │
+│    ↳ Goes through the relay with ssh.                    │
+├─── [targets] · multi · options:2 ────────────────────────┤
+│  Pick the targets:                                       │
+│                                                          │
+│  - Desktop first                                         │
+│  - Phone 390px                                           │
+│                                                          │
+│  ```sh                                                   │
+│    bun run qa                                            │
+│  ```                                                     │
+│  ☐ Desktop                                               │
+│    ↳ Old wide layout.                                    │
+│  ☐ Phone                                                 │
+│    ↳ Narrow layout.                                      │
+├─── [preview] · options:2 ────────────────────────────────┤
+│  Which config reads better?                              │
+│  ○ YAML                                                  │
+│    ↳ Indented keys.                                      │
+│  ○ JSON                                                  │
+│    ↳ Braces.                                             │
+╰──────────────────────────────────────────────────────────╯
+────────────────────────────────────────────────────────────
+ Update Available
+ New version 18.13.2 is available. Run: omp update
+────────────────────────────────────────────────────────────
+
+  ⎋ Working…
+╭─ Ask ────────────────────────────────────────────────────╮
+│  Route    Targets    Preview    Submit                   │
+│ Pick the targets:                                        │
+│                                                          │
+│ - Desktop first                                          │
+│ - Phone 390px                                          … │
+├──────────────────────────────────────────────────────────┤
+│ ❯ ☐ Desktop                                              │
+│       Old wide layout.                                   │
+│   ☐ Phone                                                │
+│       Narrow layout.                                     │
+│   ☐ Other (type your own)                                │
+├──────────────────────────────────────────────────────────┤
+│ ␣ toggle · ⏎ next · ↑/↓ move · ⇥/←/→ question · ⎋ cance… │
+╰──────────────────────────────────────────────────────────╯

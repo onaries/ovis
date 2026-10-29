@@ -3,7 +3,9 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { BUNDLE_WORKFLOW, bundleInput, bundleProblems, check, DEPLOYED_FILE, WORKER_SOURCES, workerFingerprint, workerProblems } from "./release-guards.ts";
+import { BUNDLE_PLATFORMS, BUNDLE_WORKFLOW, bundleInput, bundleProblems, check, DEPLOYED_FILE, type Get, manifestUrl, publishedProblems, releaseCheck, WORKER_SOURCES, workerFingerprint, workerProblems } from "./release-guards.ts";
+import { bundleManifestSource } from "../server/remote-bundle.ts";
+import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
 
 const made: string[] = [];
 /** a throwaway identity, unsigned whatever the user's git config says */
@@ -33,8 +35,85 @@ describe("bundleProblems", () => {
   });
 
   it("counts what the bundle runs, not its tests, docs or fixtures", () => {
-    expect(["server/index.ts", "shared/machines.ts", "integrations/gjc.ts", "bun.lock", "patches/x.patch", "scripts/build-remote-bundle.ts", "scripts/install-gjc-integration.ts", "scripts/pty-sidecar.ts", "crates/pty-sidecar/src/main.rs", "crates/pty-sidecar/Cargo.lock"].every(bundleInput)).toBe(true);
-    expect(["server/index.test.ts", "integrations/gjc.test.ts", "scripts/install-gjc-integration.test.ts", "server/AGENTS.md", "server/fixtures/a.json", "src/App.tsx", "serverless.ts", "scripts/release-notes.ts", "crates/pty-sidecar/README.md"].some(bundleInput)).toBe(false);
+    expect(["server/index.ts", "shared/machines.ts", "integrations/gjc.ts", "bun.lock", "patches/x.patch", "scripts/build-remote-bundle.ts", "scripts/install-gjc-integration.ts", "scripts/install-pi-integration.ts", "integrations/pi-ask.ts", "scripts/pty-sidecar.ts", "crates/pty-sidecar/src/main.rs", "crates/pty-sidecar/Cargo.lock"].every(bundleInput)).toBe(true);
+    expect(["server/index.test.ts", "integrations/gjc.test.ts", "scripts/install-gjc-integration.test.ts", "scripts/install-pi-integration.test.ts", "server/AGENTS.md", "server/fixtures/a.json", "src/App.tsx", "serverless.ts", "scripts/release-notes.ts", "crates/pty-sidecar/README.md"].some(bundleInput)).toBe(false);
+  });
+});
+
+describe("publishedProblems", () => {
+  /**
+   * GitHub as remote PCs see it: a manifest URL answers its JSON (a string as written); an archive
+   * of `size` bytes answers a GET of its first byte the way GitHub does (206, `bytes 0-0/<size>`);
+   * a HEAD answers 200 for anything, so only a GET can tell; anything else 404.
+   */
+  const github = (files: Record<string, unknown>): Get => async (url, init) => {
+    if (init.method === "HEAD") return new Response(null, { status: 200 });
+    if (!(url in files)) return new Response("Not Found", { status: 404 });
+    const file = files[url];
+    if (typeof file === "number") return new Response("x", { status: 206, headers: { "content-range": `bytes 0-0/${file}` } });
+    return new Response(typeof file === "string" ? file : JSON.stringify(file), { status: 200 });
+  };
+  const asset = (platform: string) => `https://github.com/devswha/ovis/releases/download/remote-v39/herdr-web-ui-${platform}.tgz`;
+  const manifest = (version: string, platforms = BUNDLE_PLATFORMS) => ({ version, assets: Object.fromEntries(platforms.map((platform) => [platform, { url: asset(platform), sha256: "a".repeat(64) }])) });
+  const archives: Record<string, number> = Object.fromEntries(BUNDLE_PLATFORMS.map((platform) => [asset(platform), 214_845_782]));
+
+  it("reads the manifest URL remote PCs download, for every platform the bundle workflow publishes", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "hwc-bundles-"));
+    made.push(directory);
+    for (const platform of BUNDLE_PLATFORMS) expect(await bundleManifestSource(platform, { directory, manifest: "" })).toBe(manifestUrl(Number(REMOTE_BUNDLE_VERSION)));
+    const published = /assert len\(result\['assets'\]\) == (\d+)/.exec(readFileSync(join(import.meta.dir, "..", BUNDLE_WORKFLOW), "utf8"))?.[1];
+    expect(BUNDLE_PLATFORMS).toHaveLength(Number(published));
+  });
+
+  it("passes a bundle whose manifest and archives are all published", async () => {
+    expect(await publishedProblems(39, github({ [manifestUrl(39)]: manifest("39"), ...archives }))).toEqual([]);
+  });
+
+  it("fails a bundle that is only tagged, while its workflow has not published the manifest", async () => {
+    const [problem] = await publishedProblems(39, github(archives));
+    expect(problem).toContain("remote-v39 is tagged but not published");
+    expect(problem).toContain(`${manifestUrl(39)} answered 404`);
+    const offline: Get = async () => { throw new Error("getaddrinfo ENOTFOUND github.com"); };
+    expect((await publishedProblems(39, offline))[0]).toContain("ENOTFOUND");
+  });
+
+  it("fails a manifest of another version, one missing a platform, and an archive that cannot be downloaded", async () => {
+    expect((await publishedProblems(39, github({ [manifestUrl(39)]: manifest("38"), ...archives })))[0]).toContain('names version "38"');
+    expect((await publishedProblems(39, github({ [manifestUrl(39)]: null, ...archives })))[0]).toContain("names version null");
+    expect((await publishedProblems(39, github({ [manifestUrl(39)]: manifest("39", BUNDLE_PLATFORMS.slice(1)), ...archives })))[0]).toContain("no bundle for linux-x64");
+    const { [asset("win32-x64")]: _, ...partial } = archives;
+    expect((await publishedProblems(39, github({ [manifestUrl(39)]: manifest("39"), ...partial })))[0]).toContain(`${asset("win32-x64")} answered 404`);
+    expect((await publishedProblems(39, github({ [manifestUrl(39)]: manifest("39"), ...archives, [asset("linux-arm64")]: 0 })))[0]).toContain(`${asset("linux-arm64")} is empty`);
+  });
+
+  it("fails an archive that announces its size but never delivers its first byte", async () => {
+    /** every archive answers 206 with a positive size, and `body()` as its body */
+    const broken = (body: () => ReadableStream<Uint8Array> | null): Get => async (url, init) => {
+      if (url === manifestUrl(39)) return github({ [manifestUrl(39)]: manifest("39") })(url, init);
+      return new Response(body(), { status: 206, headers: { "content-range": "bytes 0-0/100" } });
+    };
+    const failing = () => new ReadableStream<Uint8Array>({ pull(controller) { controller.error(new Error("connection reset")); } });
+    expect((await publishedProblems(39, broken(failing)))[0]).toContain(`${asset("linux-x64")} failed before its first byte (connection reset)`);
+    expect((await publishedProblems(39, broken(() => null)))[0]).toContain(`${asset("linux-x64")} is empty`);
+    expect((await publishedProblems(39, broken(() => new ReadableStream({ start(controller) { controller.close(); } }))))[0]).toContain(`${asset("linux-x64")} is empty`);
+  });
+
+  it("passes an archive of undeclared size once its first byte arrives, and fails one that declares zero bytes", async () => {
+    /** a host without ranges: every archive answers 200 with `headers`, streaming one byte */
+    const whole = (headers: Record<string, string>): Get => async (url, init) => {
+      if (url === manifestUrl(39)) return github({ [manifestUrl(39)]: manifest("39") })(url, init);
+      return new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1])); controller.close(); } }), { status: 200, headers });
+    };
+    const response = await whole({})(asset("linux-x64"), {});
+    expect(response.headers.get("content-length")).toBeNull();
+    expect(await publishedProblems(39, whole({}))).toEqual([]);
+    expect((await publishedProblems(39, whole({ "content-length": "0" })))[0]).toContain(`${asset("linux-x64")} is empty`);
+  });
+
+  it("fails a manifest remote PCs would refuse as too large, and one that is not JSON", async () => {
+    const padded = JSON.stringify({ ...manifest("39"), padding: "x".repeat(1024 * 1024) });
+    expect((await publishedProblems(39, github({ [manifestUrl(39)]: padded, ...archives })))[0]).toContain("is larger than remote PCs accept");
+    expect((await publishedProblems(39, github({ [manifestUrl(39)]: "<html>", ...archives })))[0]).toContain("is not JSON");
   });
 });
 
@@ -117,6 +196,27 @@ describe("check", () => {
     expect(check(dir, true).problems[0]).toContain("remote-v2 is not published");
     run(dir, "tag", "remote-v2");
     expect(check(dir, true).problems).toEqual([]);
+  });
+
+  it("fails the Release run while the tagged bundle is not downloadable, and asks only about a tagged one", async () => {
+    const dir = released({ "server/index.ts": "b", "shared/machines.ts": 'export const REMOTE_BUNDLE_VERSION = "2";\n' });
+    releasePr(dir);
+    const asked: string[] = [];
+    const unpublished: Get = async (url) => { asked.push(url); return new Response("Not Found", { status: 404 }); };
+    const untagged = await releaseCheck(dir, unpublished);
+    expect(untagged.problems).toHaveLength(1);
+    expect(untagged.problems[0]).toContain("Push the tag remote-v2");
+    expect(asked).toEqual([]);
+    run(dir, "tag", "remote-v2");
+    const tagged = await releaseCheck(dir, unpublished);
+    expect(tagged.version).toBe("1.1.0");
+    expect(tagged.problems).toEqual([expect.stringContaining("remote-v2 is tagged but not published")]);
+    expect(asked).toEqual([manifestUrl(2)]);
+    const archive = (platform: string) => `https://github.com/devswha/ovis/releases/download/remote-v2/herdr-web-ui-${platform}.tgz`;
+    const published: Get = async (url) => url === manifestUrl(2)
+      ? Response.json({ version: "2", assets: Object.fromEntries(BUNDLE_PLATFORMS.map((platform) => [platform, { url: archive(platform), sha256: "b".repeat(64) }])) })
+      : BUNDLE_PLATFORMS.some((platform) => url === archive(platform)) ? new Response("x", { status: 206, headers: { "content-range": "bytes 0-0/1000" } }) : new Response("Not Found", { status: 404 });
+    expect(await releaseCheck(dir, published)).toEqual({ version: "1.1.0", problems: [] });
   });
 
   it("passes a change merged after the release PR, which the Release run checks instead", () => {

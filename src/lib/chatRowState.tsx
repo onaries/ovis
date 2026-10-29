@@ -6,6 +6,8 @@ export interface ChatRowMemory {
   readonly outputs: Map<string, string>;
   /** an agent turn's part index → the name of the run of work it was in when last drawn (runNames) */
   readonly runs: Map<number, string>;
+  /** the same for runs that drew no block (hidden reasoning alone): taken back once they draw again */
+  readonly dormant: Map<number, string>;
   /** the row whose head holds the keyboard's focus (useRowFocus): one object per focus, so a head that left can tell its record from a newer one */
   focused?: { readonly key: string };
 }

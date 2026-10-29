@@ -16,12 +16,14 @@ import { paneStorageId } from "../../shared/machines.ts";
 import { secretPrompt } from "../../shared/secret-prompt.ts";
 import type { ClientRole, ServerMessage } from "../../shared/protocol.ts";
 import { terminalTheme, type Palette, type ResolvedTheme, type Settings } from "./settings.ts";
-import { measurableFontStack, TERMINAL_FONT_STACK } from "./fontFamily.ts";
+import { measurableFontStack, openingFontStack, TERMINAL_FONT_STACK } from "./fontFamily.ts";
 import type { Translate } from "./i18n.ts";
 import { isAppShortcut } from "./shortcuts.ts";
 import { keyboardHoldsGrid, keyboardUp } from "./keyboard.ts";
-import { fileUriPath, hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider, terminalFileLinks } from "./terminalFileLinks.ts";
+import { fileUriPath } from "../../shared/fileUri.ts";
+import { hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider, terminalFileLinks } from "./terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "./terminalGlyphs.ts";
+import { fitLineHeight } from "./terminalLineHeight.ts";
 import { keepDeleteRepeatText, keyboardNeedsText, restoreDeleteRepeatCaret } from "./deleteRepeat.ts";
 import { pinchFontSize } from "./pinchFontSize.ts";
 import { narrowPaneFontSize } from "./narrowPaneFont.ts";
@@ -48,6 +50,7 @@ export interface TerminalMountDeps {
   activeRef: RefObject<boolean>;
   barKeyRef: RefObject<{ key: string; chord: string | null; } | null>;
   baseFontRef: RefObject<number>;
+  pinchingRef: RefObject<boolean>;
   cachedRef: RefObject<boolean>;
   cachedReleaseRef: RefObject<boolean>;
   cancelLeaveRef: RefObject<() => void>;
@@ -163,7 +166,7 @@ export interface TerminalMountDeps {
 }
 
 export function useTerminalMount(deps: TerminalMountDeps): void {
-  const { activeRef, barKeyRef, baseFontRef, cachedRef, cachedReleaseRef, cancelLeaveRef, cancelTouchRef, chatMountedRef, chatOutputRef, chatViewRef, clearModifiers, clipboardTimerRef, coarseRef, commitPendingText, composingRef, compositionCommitPendingRef, deferAttachRef, draftHeldForRef, draftPaneRef, endedRef, findOpenRef, fitRef, fittedRef, fixedGridRef, followCursorRef, followRef, frameGateRef, heldRef, hostRef, hyperlinksRef, keyboardHoldsRef, keyboardToggleFocusRef, leaveRef, lineScroll, machineId, machineSessions, mirroredRef, mirrorWrapRef, modifiersRef, modifyOtherKeysRef, narrowFontRef, noteClipboard, observeRef, onChatSuggestion, onInputRowFrameRef, onRoleAckRef, onServerMessageRef, openFileRef, openWebRef, osc52AllowedRef, outputTargetRef, palette, paneRef, pendingEpochRef, pendingScopeRef, pendingSubmissionsRef, pinchBadgeRef, pinchStatusRef, presentationRef, presentedRef, reassertIfStaleRef, reattachRef, redrawGreeting, releaseAwayRef, idleReleaseRef, setIdleView, releaseRef, releasedRef, retireOutputRef, secretRef, sessionRef, setChatInvalidation, setChatRefresh, setChatSent, setComposing, setConnected, setConnectedBefore, setConversationPushes, setDraft, setEnded, setHeld, setInputError, setInputReady, setObserving, setOutputError, setOutputReady, setParsedTarget, setReleased, setSecret, setSelectionQuote, setTerminal, setUnsupported, setWatching, sharedGridRef, shortcutSettings, shownRef, sizesPty, socketRef, stackRef, stalledRef, stopKeyRef, submitRetention, t, tRef, termRef, terminalFontSize, theme, updateSettings, uploadFileRef, watchingRef, wheelStateRef } = deps;
+  const { activeRef, barKeyRef, baseFontRef, pinchingRef, cachedRef, cachedReleaseRef, cancelLeaveRef, cancelTouchRef, chatMountedRef, chatOutputRef, chatViewRef, clearModifiers, clipboardTimerRef, coarseRef, commitPendingText, composingRef, compositionCommitPendingRef, deferAttachRef, draftHeldForRef, draftPaneRef, endedRef, findOpenRef, fitRef, fittedRef, fixedGridRef, followCursorRef, followRef, frameGateRef, heldRef, hostRef, hyperlinksRef, keyboardHoldsRef, keyboardToggleFocusRef, leaveRef, lineScroll, machineId, machineSessions, mirroredRef, mirrorWrapRef, modifiersRef, modifyOtherKeysRef, narrowFontRef, noteClipboard, observeRef, onChatSuggestion, onInputRowFrameRef, onRoleAckRef, onServerMessageRef, openFileRef, openWebRef, osc52AllowedRef, outputTargetRef, palette, paneRef, pendingEpochRef, pendingScopeRef, pendingSubmissionsRef, pinchBadgeRef, pinchStatusRef, presentationRef, presentedRef, reassertIfStaleRef, reattachRef, redrawGreeting, releaseAwayRef, idleReleaseRef, setIdleView, releaseRef, releasedRef, retireOutputRef, secretRef, sessionRef, setChatInvalidation, setChatRefresh, setChatSent, setComposing, setConnected, setConnectedBefore, setConversationPushes, setDraft, setEnded, setHeld, setInputError, setInputReady, setObserving, setOutputError, setOutputReady, setParsedTarget, setReleased, setSecret, setSelectionQuote, setTerminal, setUnsupported, setWatching, sharedGridRef, shortcutSettings, shownRef, sizesPty, socketRef, stackRef, stalledRef, stopKeyRef, submitRetention, t, tRef, termRef, terminalFontSize, theme, updateSettings, uploadFileRef, watchingRef, wheelStateRef } = deps;
 
     // Where this terminal is: its pane, and whether it is active, presented, shown and not the chat view.
     // Counted on every commit that changes it: an explicit copy still waiting for herdr's text is
@@ -204,8 +207,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         scrollback: 0,
         allowProposedApi: true,
         fontSize: terminalFontSize,
-        // a chosen family follows in the font effect below, once its faces have loaded
-        fontFamily: measurableFontStack(TERMINAL_FONT_STACK),
+        // a chosen family, and the bundled Latin face, follow in the font effect once their faces have loaded
+        fontFamily: measurableFontStack(openingFontStack(TERMINAL_FONT_STACK)),
         theme: terminalTheme(theme, palette),
         // a program's own colors suit one background (Claude Code's question titles are #ffffff, near
         // 1:1 on a light palette): xterm moves a foreground under 4.5:1 toward black or white. Dim text
@@ -218,6 +221,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         // Option+drag selects on macOS, as Shift+drag does elsewhere; a plain drag is forced below
         macOptionClickForcesSelection: true,
       });
+      fitLineHeight(term);
       const fit = new FitAddon();
       // Every fit first settles the font: a split pane under 80 columns draws smaller to reach
       // them (btop refuses a narrower screen), and returns to the user's size once it is wide enough.
@@ -234,6 +238,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         };
         // a grid this client does not drive gains no columns from a smaller font
         term.options.fontSize = narrowFontRef.current && !observeRef.current && !fixedGridRef.current ? narrowPaneFontSize(base, colsAt) : base;
+        fitLineHeight(term);
         fitGrid();
       };
       term.loadAddon(fit);
@@ -1210,7 +1215,10 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           if (observeRef.current && !nowObserving) commitPendingText();
           observeRef.current = nowObserving;
           // no fit runs while observing: a font shrunk for this client's own grid would stay
-          if (nowObserving) term.options.fontSize = baseFontRef.current;
+          if (nowObserving) {
+            term.options.fontSize = baseFontRef.current;
+            fitLineHeight(term);
+          }
           setObserving(nowObserving);
           syncInputViewport();
           term.options.disableStdin = nowObserving || heldRef.current;
@@ -1237,6 +1245,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
             fixedGridRef.current = true;
             // nor while the grid is fixed (a mirrored pane): back to the user's size
             term.options.fontSize = baseFontRef.current;
+            fitLineHeight(term);
             syncInputViewport();
           }
           // kept while the terminal lens ignores it: another device may drive the grid, and the
@@ -1627,7 +1636,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         touchPixels = 0;
         tracking = false;
       };
-      let pinch: { first: number; second: number; startSize: number; startDistance: number; size: number } | null = null;
+      let pinch: { first: number; second: number; startSize: number; startDistance: number; size: number; startCols: number; startRows: number } | null = null;
       // from a second finger until every finger lifts: the stroke is a pinch, never a scroll
       let pinchStroke = false;
       let pinchWatchPending = false;
@@ -1640,6 +1649,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         if (baseFontRef.current === size) return;
         baseFontRef.current = size;
         term.options.fontSize = size;
+        fitLineHeight(term);
         if (adopted() || chatViewRef.current) return;
         // a pinch under the keyboard fits what the finger sees: the keyboard going refits the rows
         try {
@@ -1651,11 +1661,15 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       };
       const finishPinch = (save: boolean): void => {
         const finished = pinch;
+        pinchingRef.current = false;
         if (finished && (!save || finished.size === finished.startSize)) applyLiveFont(finished.startSize);
         pinch = null;
         const current = paneRef.current;
         if (pinchWatchPending && current && releasedRef.current && watchingRef.current) socket.watch(current, term.cols, term.rows);
         pinchWatchPending = false;
+        // a pinch that keeps its size sizes no pty, unless the grid changed under it (the terminal's face arrived mid-pinch)
+        if (finished && !(save && finished.size !== finished.startSize) && (term.cols !== finished.startCols || term.rows !== finished.startRows)
+            && current && inUse() && !adopted() && !chatViewRef.current && sizesPty()) socket.resize(current, term.cols, term.rows, true);
         if (finished && save && finished.size !== finished.startSize) {
           // a pinch can end after the pane went behind a sibling of its split: it saves the size, sizing no pty
           if (current && inUse() && !adopted() && !chatViewRef.current && sizesPty()) socket.resize(current, term.cols, term.rows, true);
@@ -1701,7 +1715,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
               !host.contains(a.target as Node) || !host.contains(b.target as Node) ||
               spread(a, b) <= 0) return;
           const startSize = baseFontRef.current;
-          pinch = { first: a.identifier, second: b.identifier, startSize, startDistance: spread(a, b), size: startSize };
+          pinch = { first: a.identifier, second: b.identifier, startSize, startDistance: spread(a, b), size: startSize, startCols: term.cols, startRows: term.rows };
+          pinchingRef.current = true;
           if (pinchBadgeRef.current) {
             pinchBadgeRef.current.textContent = `${startSize}px`;
             pinchBadgeRef.current.hidden = false;

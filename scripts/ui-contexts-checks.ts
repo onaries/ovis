@@ -12,7 +12,7 @@ import { checkSecretInput } from "./secret-input-regression.ts";
 import { checkTerminalCopy } from "./terminal-copy-regression.ts";
 import { checkTerminalCopyOff } from "./terminal-copy-off-regression.ts";
 import { checkPaneFind } from "./pane-find-regression.ts";
-import { checkUsageMeters } from "./usage-regression.ts";
+import { checkUsageMeters, checkUsageSignInAgain } from "./usage-regression.ts";
 import { checkNotificationStartup } from "./notification-startup-regression.ts";
 import { checkNotificationView } from "./notification-view-regression.ts";
 import { checkMobileViewport } from "./mobile-viewport-regression.ts";
@@ -96,6 +96,7 @@ export async function runUiContextChecks(): Promise<void> {
     await timed("checkTerminalCopyOff", () => checkTerminalCopyOff(browser!));
     await timed("checkPaneFind", () => checkPaneFind(browser!, origin));
     await timed("checkUsageMeters", () => checkUsageMeters(browser!, origin));
+    await timed("checkUsageSignInAgain", () => checkUsageSignInAgain(browser!, origin));
     await timed("checkNotificationStartup", () => checkNotificationStartup(browser!, origin, paneA, paneB));
     await timed("checkNotificationView", () => checkNotificationView(browser!, origin));
     await timed("checkMobileViewport", () => checkMobileViewport(browser!, origin, paneB));

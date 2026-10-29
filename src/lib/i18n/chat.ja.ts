@@ -63,6 +63,7 @@ export const CHAT_JA: Record<string, string> = {
   "Earlier messages": "以前のメッセージ",
   "beginning of conversation": "会話の始まり",
   "Conversation unavailable — show terminal output": "会話を読み取れません。ターミナルの出力を表示",
+  "Live terminal": "ライブターミナル",
   "No conversation yet — say something below": "まだ会話はありません。下から話しかけてください",
   "New messages": "新しいメッセージ",
   "{n} edit": "編集 {n} 件",
@@ -225,4 +226,5 @@ export const CHAT_JA: Record<string, string> = {
   "Show full message": "メッセージ全体を表示",
   "Open link": "リンクを開く",
   "Share link": "リンクを共有",
+  "Sent · waiting for the agent's next turn": "送信済み · エージェントの次のターンを待っています",
 };

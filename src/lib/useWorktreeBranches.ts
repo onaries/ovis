@@ -12,14 +12,17 @@ const NONE: ReadonlySet<string> = new Set();
 /** Use the existing worktree API; pane status updates never trigger a git inventory poll. */
 /** `roster`: this reader is the PC's roster, whose branches the panes' composers name too (lib/paneBranch.ts). */
 /** `unmarked`: git workspaces herdr has not marked as a repository's (no `worktree`), read one by one. */
-export function useWorktreeBranches(snapshot: SessionSnapshot | null, online: boolean, roster = false, unmarked: ReadonlySet<string> = NONE): {
+/** `watching`: this device may only watch, and the PC refuses it the listing (#2250): nothing is asked. */
+export function useWorktreeBranches(snapshot: SessionSnapshot | null, online: boolean, roster = false, unmarked: ReadonlySet<string> = NONE, watching = false): {
   branches: ReadonlyMap<string, WorkspaceBranch>;
   rememberOpened(opened: WorktreeOpened): void;
 } {
   const machineId = useMachineId();
   const { listWorktrees } = useMachineApi();
   const visible = usePageVisible();
-  const owner = useMemo(() => ({ cache: new WorkspaceBranchCache(), pending: null as Promise<void> | null }), [machineId]);
+  // `refused`: the PC answered that this device may only watch (#2250): it is not asked again until the
+  // device's role changes, which starts over (a device signed in to drive reads branches again)
+  const owner = useMemo(() => ({ cache: new WorkspaceBranchCache(), pending: null as Promise<void> | null, refused: watching }), [machineId, watching]);
   const [, publish] = useState(0);
   const [refresh, setRefresh] = useState(0);
   const workspaces = snapshot?.workspaces ?? [];
@@ -30,7 +33,7 @@ export function useWorktreeBranches(snapshot: SessionSnapshot | null, online: bo
     owner.cache.reconcile(workspaces);
     const repositories = worktreeRepositories(workspaces);
     const unmarkedIds = unmarkedKey === "" ? [] : unmarkedKey.split("\n");
-    if (!online || !visible || (repositories.length === 0 && unmarkedIds.length === 0)) {
+    if (!online || !visible || owner.refused || (repositories.length === 0 && unmarkedIds.length === 0)) {
       owner.cache.invalidate();
       return;
     }
@@ -41,23 +44,27 @@ export function useWorktreeBranches(snapshot: SessionSnapshot | null, online: bo
       // A create or structural change may restart this effect while its previous RPC awaits.
       // Wait for that same-PC cycle to finish before opening another inventory connection.
       if (owner.pending) await owner.pending;
-      if (stopped) return;
+      if (stopped || owner.refused) return;
       const generation = owner.cache.generation;
       const cycle = (async () => {
         let changed = false;
         for (const repository of repositories) {
-          if (stopped || generation !== owner.cache.generation) break;
+          if (stopped || owner.refused || generation !== owner.cache.generation) break;
           try {
             const listing = await listWorktrees(repository.workspaceId);
             if (!stopped) changed = owner.cache.applyListing(repository.repoKey, listing, generation) || changed;
-          } catch { /* Retain a last known branch only while its exact checkout still exists. */ }
+          } catch (error) {
+            // Retain a last known branch only while its exact checkout still exists.
+            if (error instanceof ApiError && error.code === "read_only") owner.refused = true;
+          }
         }
         for (const workspaceId of unmarkedIds) {
-          if (stopped || generation !== owner.cache.generation) break;
+          if (stopped || owner.refused || generation !== owner.cache.generation) break;
           try {
             const listing = await listWorktrees(workspaceId);
             if (!stopped) changed = owner.cache.applyUnmarked(workspaceId, listing, generation) || changed;
           } catch (error) {
+            if (error instanceof ApiError && error.code === "read_only") { owner.refused = true; break; }
             // a refusal (4xx) says it is no checkout now; a failure to ask keeps the last known branch
             if (!stopped && error instanceof ApiError && error.status < 500) changed = owner.cache.forgetUnmarked(workspaceId, generation) || changed;
           }
@@ -67,7 +74,7 @@ export function useWorktreeBranches(snapshot: SessionSnapshot | null, online: bo
       owner.pending = cycle;
       await cycle;
       if (owner.pending === cycle) owner.pending = null;
-      if (!stopped) timer = setTimeout(() => void poll(), BRANCH_POLL_MS);
+      if (!stopped && !owner.refused) timer = setTimeout(() => void poll(), BRANCH_POLL_MS);
     }
 
     void poll();

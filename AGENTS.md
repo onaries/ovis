@@ -53,10 +53,13 @@ to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](sr
   and never stop it.
 - Mac and iOS Simulator checks run on the maintainer's test MacBook Air, `ssh eamac`, which stays
   awake for it. Never drive the MacBook Pro (`ssh macbook`, `ssh mymac`): it is the maintainer's
-  working machine, and automation there takes over their keyboard and focus. Native Windows
-  checks run on the maintainer's Windows 11 PC, `ssh home-window`, which never sleeps on AC. On
-  either box, run a PR's checks in a fresh `git clone` in a temporary directory (`/tmp` on eamac,
-  `%TEMP%` on Windows) and delete it afterwards. Leave their own checkouts alone.
+  working machine, and automation there takes over their keyboard and focus. On eamac, run a PR's
+  checks in a fresh `git clone` in `/tmp` and delete it afterwards; leave its own checkout alone.
+- Native Windows checks run in the Windows 11 VM on this PC, `ssh winvm`. Never use `home-window`:
+  it is the maintainer's own PC. This runs a PR's Windows CI steps in the VM's desktop session, in a
+  fresh `%TEMP%` clone that it deletes afterwards (one such run at a time):
+  `ssh winvm "pwsh -File C:\ProgramData\winvm\Invoke-InSession.ps1 -Command '& C:\ProgramData\winvm\pr-check.ps1 -Pr <N>'"`.
+  When a run leaves state behind, `winvm reset`, then `winvm start`.
 
 ## Maintainer workflow
 - A session that changes code, in any harness, stops at an open PR: only the maintainer's merge

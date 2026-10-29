@@ -1,0 +1,419 @@
+{
+  "recorded": "2026-10-28, Linux: pi 1.4.0 (@earendil-works/pi-coding-agent) + @eko24ive/pi-ask 1.2.0 + integrations/pi-ask.ts installed by scripts/install-pi-integration.ts. pi resumed a session whose last assistant message holds an unanswered ask_user call, so pi-ask reopened its form (source ask:resume). `started`, `submit-result` and `completed` are pi-ask's own events as a recorder extension saw them; `state` is GET /v1/state from the bridge's socket while the form was open (`openCalls` from pi's getBranch()); `refused` and `accepted` are the POST /v1/submit exchanges, envelopes as sent; `<session>` stands for the session file's path. `transcript` is the session file after the answer, header cwd replaced. `screen` is the pane's text while the form was open (the 120-column terminal's last rows).",
+  "started": {
+    "version": 1,
+    "flowId": "tool:toolu_feat1202ask",
+    "toolCallId": "toolu_feat1202ask",
+    "source": "ask:resume",
+    "title": "Release plan",
+    "questions": [
+      {
+        "id": "scope",
+        "label": "Scope",
+        "prompt": "Which part should ship first?",
+        "type": "single",
+        "required": false,
+        "options": [
+          {
+            "value": "server",
+            "label": "Server",
+            "description": "Bridge and prompt route",
+            "recommended": true
+          },
+          {
+            "value": "client",
+            "label": "Client",
+            "description": "Card polish only"
+          }
+        ]
+      },
+      {
+        "id": "checks",
+        "label": "Checks",
+        "prompt": "Which checks should run before the push?",
+        "type": "multi",
+        "required": false,
+        "options": [
+          {
+            "value": "unit",
+            "label": "Unit tests"
+          },
+          {
+            "value": "browser",
+            "label": "Browser QA"
+          },
+          {
+            "value": "lint",
+            "label": "Lint"
+          }
+        ]
+      },
+      {
+        "id": "tone",
+        "label": "Tone",
+        "prompt": "Which release note tone?",
+        "type": "preview",
+        "required": false,
+        "options": [
+          {
+            "value": "short",
+            "label": "Short",
+            "preview": "Pi's ask_user questions show as chat cards."
+          },
+          {
+            "value": "long",
+            "label": "Long",
+            "preview": "With the pi integration installed, pi-ask's ask_user form\\nshows as a chat card and is answered from the browser."
+          }
+        ]
+      }
+    ],
+    "createdAt": 1793173155865
+  },
+  "state": {
+    "version": 1,
+    "pid": 4047124,
+    "sessionFile": "<session>",
+    "flows": [
+      {
+        "flowId": "tool:toolu_feat1202ask",
+        "toolCallId": "toolu_feat1202ask",
+        "source": "ask:resume",
+        "title": "Release plan",
+        "questions": [
+          {
+            "id": "scope",
+            "label": "Scope",
+            "prompt": "Which part should ship first?",
+            "type": "single",
+            "required": false,
+            "options": [
+              {
+                "value": "server",
+                "label": "Server",
+                "description": "Bridge and prompt route",
+                "recommended": true
+              },
+              {
+                "value": "client",
+                "label": "Client",
+                "description": "Card polish only"
+              }
+            ]
+          },
+          {
+            "id": "checks",
+            "label": "Checks",
+            "prompt": "Which checks should run before the push?",
+            "type": "multi",
+            "required": false,
+            "options": [
+              {
+                "value": "unit",
+                "label": "Unit tests"
+              },
+              {
+                "value": "browser",
+                "label": "Browser QA"
+              },
+              {
+                "value": "lint",
+                "label": "Lint"
+              }
+            ]
+          },
+          {
+            "id": "tone",
+            "label": "Tone",
+            "prompt": "Which release note tone?",
+            "type": "preview",
+            "required": false,
+            "options": [
+              {
+                "value": "short",
+                "label": "Short",
+                "preview": "Pi's ask_user questions show as chat cards."
+              },
+              {
+                "value": "long",
+                "label": "Long",
+                "preview": "With the pi integration installed, pi-ask's ask_user form\\nshows as a chat card and is answered from the browser."
+              }
+            ]
+          }
+        ],
+        "createdAt": 1793173155865
+      }
+    ],
+    "openCalls": [
+      "toolu_feat1202ask"
+    ]
+  },
+  "refused": {
+    "request": {
+      "flowId": "tool:toolu_feat1202ask",
+      "createdAt": 1793173155865,
+      "sessionFile": "<session>",
+      "response": {
+        "kind": "answer",
+        "mode": "submit",
+        "answers": {
+          "scope": {
+            "values": [
+              "nope"
+            ]
+          }
+        }
+      }
+    },
+    "reply": {
+      "ok": false,
+      "error": "invalid_answer",
+      "message": "Unknown option value \"nope\" for question \"scope\"."
+    }
+  },
+  "accepted": {
+    "request": {
+      "flowId": "tool:toolu_feat1202ask",
+      "createdAt": 1793173155865,
+      "sessionFile": "<session>",
+      "response": {
+        "kind": "answer",
+        "mode": "submit",
+        "answers": {
+          "scope": {
+            "values": [
+              "server"
+            ]
+          },
+          "checks": {
+            "values": [
+              "unit",
+              "browser"
+            ],
+            "customText": "typecheck"
+          },
+          "tone": {
+            "customText": "Plain and short"
+          }
+        }
+      }
+    },
+    "reply": {
+      "ok": true
+    }
+  },
+  "submitResult": {
+    "version": 1,
+    "requestId": "herdr-web-ui-<uuid>",
+    "flowId": "tool:toolu_feat1202ask",
+    "ok": true
+  },
+  "completed": {
+    "version": 1,
+    "flowId": "tool:toolu_feat1202ask",
+    "toolCallId": "toolu_feat1202ask",
+    "source": "ask:resume",
+    "result": {
+      "title": "Release plan",
+      "cancelled": false,
+      "mode": "submit",
+      "questions": [
+        {
+          "id": "scope",
+          "label": "Scope",
+          "prompt": "Which part should ship first?",
+          "type": "single"
+        },
+        {
+          "id": "checks",
+          "label": "Checks",
+          "prompt": "Which checks should run before the push?",
+          "type": "multi"
+        },
+        {
+          "id": "tone",
+          "label": "Tone",
+          "prompt": "Which release note tone?",
+          "type": "preview"
+        }
+      ],
+      "answers": {
+        "scope": {
+          "values": [
+            "server"
+          ],
+          "labels": [
+            "Server"
+          ],
+          "indices": [
+            1
+          ]
+        },
+        "checks": {
+          "values": [
+            "unit",
+            "browser",
+            "typecheck"
+          ],
+          "labels": [
+            "Unit tests",
+            "Browser QA",
+            "typecheck"
+          ],
+          "indices": [
+            1,
+            2
+          ],
+          "customText": "typecheck"
+        },
+        "tone": {
+          "values": [
+            "Plain and short"
+          ],
+          "labels": [
+            "Plain and short"
+          ],
+          "indices": [],
+          "customText": "Plain and short"
+        }
+      }
+    },
+    "completedAt": 1793173164344
+  },
+  "transcript": [
+    {
+      "type": "session",
+      "version": 3,
+      "id": "2c990717-c91b-4ec8-8a37-7d0ac97ea774",
+      "timestamp": "2026-10-28T07:39:14.410Z",
+      "cwd": "<cwd>"
+    },
+    {
+      "type": "message",
+      "id": "u0000001",
+      "parentId": null,
+      "timestamp": "2026-10-28T06:40:21.815Z",
+      "message": {
+        "role": "user",
+        "content": "Plan the release with me.",
+        "timestamp": 1793169621816
+      }
+    },
+    {
+      "type": "message",
+      "id": "a0000001",
+      "parentId": "u0000001",
+      "timestamp": "2026-10-28T06:40:21.815Z",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "toolu_feat1202ask",
+            "name": "ask_user",
+            "arguments": {
+              "title": "Release plan",
+              "questions": [
+                {
+                  "id": "scope",
+                  "label": "Scope",
+                  "prompt": "Which part should ship first?",
+                  "type": "single",
+                  "options": [
+                    {
+                      "value": "server",
+                      "label": "Server",
+                      "description": "Bridge and prompt route",
+                      "recommended": true
+                    },
+                    {
+                      "value": "client",
+                      "label": "Client",
+                      "description": "Card polish only"
+                    }
+                  ]
+                },
+                {
+                  "id": "checks",
+                  "label": "Checks",
+                  "prompt": "Which checks should run before the push?",
+                  "type": "multi",
+                  "options": [
+                    {
+                      "value": "unit",
+                      "label": "Unit tests"
+                    },
+                    {
+                      "value": "browser",
+                      "label": "Browser QA"
+                    },
+                    {
+                      "value": "lint",
+                      "label": "Lint"
+                    }
+                  ]
+                },
+                {
+                  "id": "tone",
+                  "label": "Tone",
+                  "prompt": "Which release note tone?",
+                  "type": "preview",
+                  "options": [
+                    {
+                      "value": "short",
+                      "label": "Short",
+                      "preview": "Pi's ask_user questions show as chat cards."
+                    },
+                    {
+                      "value": "long",
+                      "label": "Long",
+                      "preview": "With the pi integration installed, pi-ask's ask_user form\\nshows as a chat card and is answered from the browser."
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "api": "anthropic-messages",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "usage": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 0,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1793169621816
+      }
+    },
+    {
+      "type": "thinking_level_change",
+      "id": "e2b4930b",
+      "parentId": "a0000001",
+      "timestamp": "2026-10-28T07:39:15.702Z",
+      "thinkingLevel": "off"
+    },
+    {
+      "type": "custom",
+      "customType": "ask:pending-dismissed",
+      "data": {
+        "toolCallId": "toolu_feat1202ask"
+      },
+      "id": "a9b4afd6",
+      "parentId": "e2b4930b",
+      "timestamp": "2026-10-28T07:39:24.345Z"
+    }
+  ],
+  "screen": "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Release plan\n\n ←  ☐ Scope   ☐ Checks   ☐ Tone   ☰ Review  →\n\n Which part should ship first?\n\n❯ 1. Server\n     (recommended) | Bridge and prompt route\n  2. Client\n     Card polish only\n  3. Type your own\n\n t question type · Enter confirm · N/Shift+N note · Esc dismiss · ? settings\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n~/.cache/feat-1202-tmp/proj\n0.0%/0 (auto)                                                                                                    unknown"
+}

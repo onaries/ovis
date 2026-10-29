@@ -28,7 +28,10 @@
   flex-direction: column;
 }
 
+/* one pill: beside a name that fills the line it moves to the next line whole, never split across two lines.
+   Its own words wrap inside it only in a column narrower than the pill (a phone's row with Revoke? open) */
 .devices-current {
+  display: inline-block;
   margin-left: var(--space-2);
   padding: 0 var(--space-2);
   border-radius: var(--radius-pill);

@@ -30,7 +30,9 @@ import { claudeProjectDir } from "./claude-store.ts";
 import { cmdSlug } from "./cmd.ts";
 import { grokSessionGroups } from "./grok-store.ts";
 import { directoryKey, interactiveCodexRollout, storedCwds, withoutVerbatimPrefix } from "./codex.ts";
+import { hermesHome } from "./hermes-home.ts";
 import { opencodeDatabasePath } from "./opencode.ts";
+import { environmentHome } from "./user-home.ts";
 
 /** At most this much of any one file is read. */
 export const HEAD_BYTES = 64 * 1024;
@@ -1014,7 +1016,8 @@ function agySessions(cwds: readonly string[], home: string, budget: Budget, read
  */
 export function listSessions(agent: SessionHistoryAgent, cwd: string, options: SessionHistoryOptions = {}): Row[] {
   const env = options.env ?? process.env;
-  const home = options.home ?? homedir();
+  // the OS's answer when the environment names no home, as before: never a relative store path
+  const home = options.home ?? (environmentHome(env, options.platform ?? process.platform) || homedir());
   const read = options.readHead;
   const budget = new Budget(options.stat ?? ((path, bigint) => bigint ? statSync(path, { bigint: true }) : statSync(path)), options.platform ?? process.platform, options.resolve, options.lstat, options.fstat, options.opendir, options.opened);
   budget.used = options.spent ?? 0;
@@ -1050,7 +1053,7 @@ export function listSessions(agent: SessionHistoryAgent, cwd: string, options: S
         const data = join(env["XDG_DATA_HOME"] || join(home, ".local", "share"), "opencode");
         return opencodeSessions(cwds, named ? dirname(named) : data, named ?? opencodeDatabasePath(env, home), budget);
       }
-      case "hermes": return hermesSessions(cwds, options.hermesHome ?? (env["HERMES_HOME"] || join(home, ".hermes")), budget);
+      case "hermes": return hermesSessions(cwds, options.hermesHome ?? hermesHome(home, env, budget.platform, (path) => budget.stat(path) !== null), budget);
       case "devin": return devinSessions(cwds, join(env["XDG_DATA_HOME"] || join(home, ".local", "share"), "devin", "cli", "sessions.db"), budget);
       case "grok": return grokSessions(cwds, home, env, budget, read);
       case "agy": return agySessions(cwds, home, budget, read);

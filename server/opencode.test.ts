@@ -375,6 +375,18 @@ describe("a page of an OpenCode session", () => {
     expect(since.cursor).toBe(middle.cursor);
   });
 
+  it("pages at the size the chat asks for, and those pages meet exactly too", () => {
+    const s = store();
+    for (let n = 0; n < 120; n++) { s.prompt(`p${n}`); s.answer(`a${n}`); s.idle(); }
+    const prompts = (turns: { role: string; parts: unknown[] }[]) => turns.filter((turn) => turn.role === "user").map((turn) => (turn.parts[0] as { text: string }).text);
+    const newest = page(opencodeConversation(s.path, s.session, { prompts: 10 }));
+    expect(prompts(newest.turns)).toEqual(Array.from({ length: 10 }, (_, n) => `p${110 + n}`));
+    const older = page(opencodeConversation(s.path, s.session, { before: newest.cursor!, prompts: 10 }));
+    expect(prompts(older.turns)).toEqual(Array.from({ length: 10 }, (_, n) => `p${100 + n}`));
+    // the page a reader that asks for no size gets is the one it always had
+    expect(page(opencodeConversation(s.path, s.session)).turns.length).toBe(100);
+  });
+
   it("holds a chat's start while it is inside the newest page", () => {
     const s = store();
     for (let n = 0; n < 60; n++) { s.prompt(`p${n}`); s.answer(`a${n}`); s.idle(); }

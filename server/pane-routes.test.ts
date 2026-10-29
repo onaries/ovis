@@ -1,24 +1,27 @@
-import { afterEach, beforeEach, expect, it } from "bun:test";
+import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { paneCommands } from "./commands.ts";
+import { commandScansSettled, paneCommands, scanPaneCommands, setCommandsWait } from "./commands.ts";
+import { filePoolSize, setFilePoolOptions } from "./file-pool.ts";
 import { HERMES_ECHO_RE } from "./dialogs/hermes.ts";
 import { registry } from "./dialogs/registry.ts";
 import { findLastIndex } from "./dialogs/shared.ts";
 import { handlePaneRequest } from "./pane-routes.ts";
 import { paneAgentOf, resolveAgent } from "./pane-context.ts";
 import { openCodeServiceOptions } from "./opencode-service.ts";
+import * as conversation from "./conversation.ts";
+import { requestIdContext } from "./http.ts";
 
 // The real RPC client against a unix socket this test owns; only herdr's answers are synthetic.
 let root: string;
 let listener: ReturnType<typeof Bun.listen>;
 let socketBefore: string | undefined;
-let panes: Record<string, { agent?: string; session?: string; process: { pid: number; argv: string[]; cwd: string }[] }>;
+let panes: Record<string, { agent?: string; session?: string; cwd?: string; process: { pid: number; argv: string[]; cwd: string }[] }>;
 
 const paneInfo = (id: string) => ({
-  pane_id: id, workspace_id: "w", tab_id: "w:t1", terminal_id: id, cwd: root, focused: false, revision: 0,
+  pane_id: id, workspace_id: "w", tab_id: "w:t1", terminal_id: id, cwd: panes[id]?.cwd ?? root, focused: false, revision: 0,
   ...(panes[id]?.agent ? { agent: panes[id]!.agent } : {}),
   ...(panes[id]?.session ? { agent_session: { agent: "opencode", source: "herdr:opencode", kind: "id", value: panes[id]!.session } } : {}),
 });
@@ -41,6 +44,8 @@ beforeEach(() => {
         const result = request.method === "pane.get" ? { pane: paneInfo(id) }
           : request.method === "pane.process_info" ? { process_info: { foreground_processes: panes[id]?.process ?? [] } }
           : request.method === "session.snapshot" ? { snapshot: { panes: Object.keys(panes).map(paneInfo), agents: [] } }
+          // an agent with no session yet (a Claude pane's commands route asks which transcript it writes)
+          : request.method === "agent.get" ? { agent: {} }
           : null;
         if (result === null) throw new Error(`unexpected RPC ${request.method}`);
         socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
@@ -57,6 +62,78 @@ afterEach(() => {
 });
 
 const OMO_PROCESS = { pid: 2147483647, argv: ["omo"], cwd: "" };
+
+it("diagnoses fallback and recovery without changing the conversation or 304 response", async () => {
+  const id = crypto.randomUUID();
+  const pane = `private-pane-${crypto.randomUUID()}`;
+  const url = new URL(`http://x/api/pane/conversation?pane_id=${pane}`);
+  const lines: string[] = [];
+  const warn = spyOn(console, "warn").mockImplementation((line: unknown) => { lines.push(String(line)); });
+  const read = spyOn(conversation, "paneConversation").mockRejectedValueOnce(
+    new conversation.ConversationUnavailable("no_session_path", undefined, "copilot_process_lookup_failed"),
+  ).mockResolvedValue({
+    source: "copilot-transcript", turns: [], metadata: { model: null, reasoning_effort: null },
+    cursor: null, history_id: "private-history", version: "fixture",
+  });
+  const ask = (headers?: HeadersInit) => requestIdContext.run({ id, route: "unmatched" }, () =>
+    handlePaneRequest(new Request(url, { headers }), url, "/api/pane/conversation", {}));
+  try {
+    const fallback = (await ask())!;
+    expect(fallback.status).toBe(200);
+    expect(await fallback.json()).toEqual({ source: "scrollback", turns: [] });
+    const recovered = (await ask({ "if-none-match": 'W/"fixture"' }))!;
+    expect(recovered.status).toBe(304);
+    expect(recovered.headers.get("etag")).toBe('W/"fixture"');
+    const records = lines.map((line) => JSON.parse(line));
+    expect(records[0]).toMatchObject({ event: "conversation.failed", operation: "conversation.copilot_process_lookup_failed", request_id: id });
+    expect(records[1]).toMatchObject({ event: "conversation.recovered", episode_id: records[0].episode_id, request_id: id });
+    expect(lines.join("\n")).not.toContain(pane);
+    expect(lines.join("\n")).not.toContain("private-history");
+  } finally { read.mockRestore(); warn.mockRestore(); }
+});
+
+it("diagnoses pending reads while preserving the retry response", async () => {
+  const url = new URL(`http://x/api/pane/conversation?pane_id=${crypto.randomUUID()}`);
+  const lines: string[] = [];
+  const warn = spyOn(console, "warn").mockImplementation((line: unknown) => { lines.push(String(line)); });
+  const read = spyOn(conversation, "paneConversation").mockRejectedValue(new conversation.ConversationReadPending());
+  try {
+    const response = (await handlePaneRequest(new Request(url), url, "/api/pane/conversation", {}))!;
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ error: {
+      code: "conversation_read_pending", message: new conversation.ConversationReadPending().message,
+    } });
+    expect(JSON.parse(lines[0]!)).toMatchObject({ event: "conversation.failed", operation: "conversation.read_pending" });
+  } finally { read.mockRestore(); warn.mockRestore(); }
+});
+
+it("does not report a plain shell's scrollback view as a conversation failure", async () => {
+  panes["w:shell"] = { process: [{ pid: 2147483645, argv: ["/bin/bash"], cwd: root }] };
+  const url = new URL("http://x/api/pane/conversation?pane_id=w:shell");
+  const lines: string[] = [];
+  const warn = spyOn(console, "warn").mockImplementation((line: unknown) => { lines.push(String(line)); });
+  try {
+    for (let i = 0; i < 3; i++) {
+      const response = (await handlePaneRequest(new Request(url), url, "/api/pane/conversation", {}))!;
+      expect(await response.json()).toMatchObject({ source: "scrollback", turns: [] });
+    }
+    expect(lines.filter((line) => line.includes("conversation."))).toEqual([]);
+  } finally { warn.mockRestore(); }
+});
+
+it("still reports an agent pane herdr gives no folder, and does not count it as a recovery", async () => {
+  panes["w:nocwd"] = { agent: "copilot", cwd: "", process: [] };
+  const url = new URL("http://x/api/pane/conversation?pane_id=w:nocwd");
+  const lines: string[] = [];
+  const warn = spyOn(console, "warn").mockImplementation((line: unknown) => { lines.push(String(line)); });
+  try {
+    const response = (await handlePaneRequest(new Request(url), url, "/api/pane/conversation", {}))!;
+    expect(await response.json()).toMatchObject({ source: "scrollback", turns: [] });
+    const records = lines.filter((line) => line.includes("conversation.")).map((line) => JSON.parse(line));
+    expect(records).toEqual([expect.objectContaining({ event: "conversation.failed", operation: "conversation.agent_cwd_missing" })]);
+  } finally { warn.mockRestore(); }
+});
 
 it("names an omo pane that herdr labels pi omo in the commands route, and types into it as omo only once omo holds a session", async () => {
   panes["w:p1"] = { agent: "pi", process: [{ ...OMO_PROCESS, cwd: root }] };
@@ -115,6 +192,133 @@ it("lists a Hermes skill added on disk before a successful reload on the next co
     expect(await names()).toContain("fixture-added");
   });
 });
+
+/**
+ * A Claude pane whose project settings file is a FIFO: the commands scan reads it, and that read waits
+ * until its writer closes it, as a call on a stalled mount (9p, a network share) would. The writer, on
+ * a thread of its own, opens the FIFO (its open returns once the scan opens it to read), says
+ * "opened", holds it until `release` or for `holdMs`, and then says which: "ok" or "not-equal" (let
+ * go before it began to wait), or "timed-out" (this test's thread was held as long as the read).
+ */
+async function stalledClaudePane(paneId: string, holdMs: number, run: (f: { saying(count: number, ms: number): Promise<string | undefined>; release(): void; ask(): Promise<Response> }) => Promise<void>): Promise<void> {
+  const project = join(root, "project");
+  mkdirSync(join(project, ".claude", "skills", "fifo-guard"), { recursive: true });
+  writeFileSync(join(project, ".claude", "skills", "fifo-guard", "SKILL.md"), "---\nname: fifo-guard\ndescription: Listed once the stalled read returns.\n---\nBody.\n");
+  const fifo = join(project, ".claude", "settings.json");
+  expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+  const homeBefore = process.env["HOME"];
+  process.env["HOME"] = root;
+  panes[paneId] = { agent: "claude", cwd: project, process: [{ pid: 2147483644, argv: ["claude"], cwd: project }] };
+  const gate = new Int32Array(new SharedArrayBuffer(4));
+  const release = () => { Atomics.store(gate, 0, 1); Atomics.notify(gate, 0); };
+  const writer = new Worker(URL.createObjectURL(new Blob([`
+    import { closeSync, openSync } from "node:fs";
+    self.onmessage = ({ data }) => {
+      const fd = openSync(data.fifo, "w");
+      postMessage("opened");
+      const outcome = Atomics.wait(new Int32Array(data.gate), 0, 0, data.holdMs);
+      closeSync(fd);
+      postMessage(outcome);
+    };
+  `], { type: "application/typescript" })));
+  const said: string[] = [];
+  let heard = () => {};
+  writer.addEventListener("message", (event: MessageEvent<string>) => { said.push(event.data); heard(); });
+  writer.postMessage({ fifo, gate: gate.buffer, holdMs });
+  try {
+    await run({
+      /** the writer's `count`th word, waited for at most `ms` */
+      saying: (count, ms) => new Promise((done) => {
+        const timer = setTimeout(() => done(said[count - 1]), ms);
+        heard = () => { if (said.length >= count) { clearTimeout(timer); done(said[count - 1]); } };
+        heard();
+      }),
+      release,
+      ask: async () => {
+        const url = new URL(`http://x/api/pane/commands?pane_id=${paneId}`);
+        return (await handlePaneRequest(new Request(url), url, "/api/pane/commands", {}))!;
+      },
+    });
+  } finally {
+    release();
+    // a writer still waiting for a reader (the scan never opened the FIFO) gets one, and ends
+    if (said.length === 0) closeSync(openSync(fifo, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK));
+    writer.terminate();
+    if (homeBefore === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = homeBefore;
+  }
+}
+
+const commandNames = async (response: Response): Promise<string[]> => ((await response.json()) as { commands: { name: string }[] }).commands.map((command) => command.name);
+
+it("scans a pane's skill folders off the server's thread, so a read that stalls holds up nothing else (#2254)", async () => {
+  await stalledClaudePane("w:stall", 3_000, async ({ saying, release, ask }) => {
+    const answer = ask();
+    expect(await saying(1, 10_000)).toBe("opened");
+    // the scan is inside its read: this thread still runs, and lets the writer go
+    release();
+    expect(["ok", "not-equal"]).toContain((await saying(2, 10_000))!);
+    const response = await answer;
+    expect(response.status).toBe(200);
+    expect(await commandNames(response)).toContain("fifo-guard");
+  });
+}, 30_000);
+
+it("answers 503 past a request's wait, and lets the request asked again wait for the same scan (#2254)", async () => {
+  setFilePoolOptions();
+  setCommandsWait(200);
+  try {
+    await stalledClaudePane("w:slow", 10_000, async ({ saying, release, ask }) => {
+      const first = ask();
+      expect(await saying(1, 10_000)).toBe("opened");
+      const refused = await first;
+      expect(refused.status).toBe(503);
+      expect(refused.headers.get("retry-after")).toBe("1");
+      expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("file_busy");
+      // the scan goes on: the next read of the same pane waits for it rather than taking another thread
+      // (asked here as the route asks, so it joins at once, before the scan is let go)
+      setCommandsWait(10_000);
+      const again = scanPaneCommands("claude", join(root, "project"), { environ: null }, null);
+      release();
+      expect((await again).map((command) => command.name)).toContain("fifo-guard");
+      // one scan, on one thread: a second would have taken another, the first still being busy
+      expect(filePoolSize().threads).toBe(1);
+    });
+  } finally {
+    setCommandsWait();
+    setFilePoolOptions();
+  }
+}, 30_000);
+
+it("hands a scan that finished after its request gave up to the next request once, then scans again (#2254)", async () => {
+  setFilePoolOptions();
+  setCommandsWait(200);
+  try {
+    await stalledClaudePane("w:late", 10_000, async ({ saying, release, ask }) => {
+      const first = ask();
+      expect(await saying(1, 10_000)).toBe("opened");
+      expect((await first).status).toBe(503);
+      // the scan finishes with nobody waiting for it
+      release();
+      await commandScansSettled();
+      // a skill added since: the kept answer, taken by the next request, does not have it
+      const project = join(root, "project");
+      rmSync(join(project, ".claude", "settings.json"));
+      writeFileSync(join(project, ".claude", "settings.json"), "{}");
+      mkdirSync(join(project, ".claude", "skills", "added-later"), { recursive: true });
+      writeFileSync(join(project, ".claude", "skills", "added-later", "SKILL.md"), "---\nname: added-later\ndescription: Added after the slow scan.\n---\n");
+      setCommandsWait(10_000);
+      const kept = (await scanPaneCommands("claude", project, { environ: null }, null)).map((command) => command.name);
+      expect(kept).toContain("fifo-guard");
+      expect(kept).not.toContain("added-later");
+      // taken once: the request after it scans again
+      expect((await scanPaneCommands("claude", project, { environ: null }, null)).map((command) => command.name)).toContain("added-later");
+    });
+  } finally {
+    setCommandsWait();
+    setFilePoolOptions();
+  }
+}, 30_000);
 
 it("reflects a /reload-skills typed in Hermes's own terminal on the next commands request", async () => {
   await hermesPane("w:typed", async ({ skill, names }) => {
@@ -192,13 +396,13 @@ it("lists OpenCode's skills for a folder with no pane in the form its installed 
 });
 
 /** an OpenCode pane (herdr labels it opencode) in a project with one skill, under a HOME and state dir of the test's own */
-async function openCodePane(run: (f: { state: string; skill(): Promise<{ trigger?: string; provenance?: { verified?: boolean } } | undefined> }) => Promise<void>, session?: string): Promise<void> {
+async function openCodePane(run: (f: { state: string; skill(): Promise<{ trigger?: string; provenance?: { verified?: boolean } } | undefined> }) => Promise<void>, session?: string, argv = ["opencode"]): Promise<void> {
   const homeBefore = process.env["HOME"];
   process.env["HOME"] = mkdtempSync(join(tmpdir(), "ovis-pane-routes-home-"));
   mkdirSync(join(root, ".opencode", "skills", "effect"), { recursive: true });
   writeFileSync(join(root, ".opencode", "skills", "effect", "SKILL.md"), "---\nname: effect\ndescription: Apply Effect.\n---\nBody.\n");
   const state = mkdtempSync(join(root, "opencode-state-"));
-  panes["w:p1"] = { agent: "opencode", ...(session ? { session } : {}), process: [{ pid: 2147483644, argv: ["opencode"], cwd: root }] };
+  panes["w:p1"] = { agent: "opencode", ...(session ? { session } : {}), process: [{ pid: 2147483644, argv, cwd: root }] };
   openCodeServiceOptions.stateDir = join(root, "elsewhere");
   try {
     await run({
@@ -229,6 +433,26 @@ it("offers a session-less OpenCode pane's skill in the form its installed versio
     expect(v2?.trigger).toBe("@");
     expect(v2?.provenance?.verified).toBe(false);
   });
+});
+
+it("offers a session-less OpenCode pane started with --standalone or --server its skill with @, unverified (#1551)", async () => {
+  // OpenCode 2's own flags: such a TUI runs without the background service, so no service file names its version
+  for (const argv of [["opencode", "--standalone"], ["opencode", "--server", "http://127.0.0.1:9"], ["opencode", "--server=http://127.0.0.1:9"]]) {
+    await openCodePane(async ({ skill }) => {
+      const v2 = await skill();
+      expect(v2?.trigger).toBe("@");
+      expect(v2?.provenance?.verified).toBe(false);
+    }, undefined, argv);
+  }
+  // a pane with a session it cannot read may be an OpenCode 1 one: the flag alone does not decide it;
+  // and a word after `--` is a directory, not a flag
+  for (const [session, argv] of [["ses_paneRoutesUnread", ["opencode", "--standalone"]], [undefined, ["opencode", "--", "--standalone"]]] as const) {
+    await openCodePane(async ({ skill }) => {
+      const row = await skill();
+      expect(row).toBeDefined();
+      expect(row?.trigger).toBeUndefined();
+    }, session, [...argv]);
+  }
 });
 
 it("does not give a pane with an OpenCode session it cannot read the service file's version", async () => {

@@ -1,11 +1,18 @@
 import { expect, it, spyOn } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Terminal } from "@xterm/xterm";
+import { readFileSync } from "node:fs";
+import { claudeMainAtRest } from "./compose.ts";
+import { inputRowState, readScreen, readScreenLines } from "./inputRow.ts";
+import { matchHerdrWidths } from "./terminalWidths.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { PendingMessageStore, pendingMessages } from "./pendingMessages.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 import { useComposerSends, type ComposerSendsDeps } from "./useComposerSends.ts";
-import type { HerdrSocket, SubmitResult } from "./ws.ts";
+import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
+import { currentWaitingSends, forgetWaitingSends, settleWaitingSends, waitingKey } from "./sentWaiting.ts";
+import type { InteractivePrompt } from "../../shared/protocol.ts";
 
 // A bridge without `submit` takes a message as raw input and sends no receipt (ws.ts `unconfirmed`):
 // nothing says the pane got it, so its text must not go as if it had (#1591).
@@ -37,6 +44,54 @@ function sends(pane: string, answer: SubmitResult, shown: string[], extra: Parti
   }
   renderToStaticMarkup(createElement(Composer));
   return actions;
+}
+
+const waiting = "Waiting for 2 background agents to finish";
+const idleBox = ["─".repeat(40), "❯", "─".repeat(40)];
+const closedClaude = readFileSync(new URL("../../server/fixtures/claude-rewind-2.1.304-closed-40.txt", import.meta.url), "utf8");
+
+for (const autoSendQueued of [false, true]) {
+  it.each([
+    ["wrapped running turn", [
+      "✻ Investigating the authentication flow further… (3m 35s · ↓ 4.8k tokens) · esc to interrupt",
+      waiting, ...idleBox,
+    ], false],
+    ["spinner above thirteen agents", [
+      "✻ Investigating… (3m 35s · ↓ 4.8k tokens)",
+      ...Array.from({ length: 13 }, (_, index) => `◯ background-agent-${index}`),
+      waiting, ...idleBox,
+    ], false],
+    ["short duration", ["✻ Investigating… (3s)", waiting, ...idleBox], false],
+    ["duration without ellipsis", ["✻ Investigating (3s)", waiting, ...idleBox], false],
+    ["compaction", ["✻ Compacting conversation… (3s)", waiting, ...idleBox], false],
+    ["idle footer", [waiting, ...closedClaude.trimEnd().split("\n")], true],
+    ["plain idle", [waiting, ...idleBox], true],
+    ["idle without waiting evidence", [...idleBox], false],
+    ["permission dialog", [waiting, "Do you want to proceed?", "❯ 1. Yes", "  2. No", "esc to cancel"], false],
+  ] as const)(`Claude %s chooses safe delivery with autoSendQueued=${autoSendQueued}`, async (_name, rows, immediate) => {
+    const term = new Terminal({ cols: 40, rows: 60, scrollback: 0, allowProposedApi: true });
+    matchHerdrWidths(term);
+    try {
+      await new Promise<void>((resolve) => term.write(rows.join("\r\n"), resolve));
+      const shown: string[] = [], deliveries: SubmitDelivery[] = [];
+      const actions = sends("claude-at-rest", { ok: true }, shown, {
+        agentStatus: "working",
+        settings: { autoSendQueued },
+        inputAtRest: () => {
+          const screen = readScreen(term.buffer.active, term.cols, term.rows);
+          return claudeMainAtRest(inputRowState("claude", screen), readScreenLines(term.buffer.active, term.rows) ?? []);
+        },
+        submitComposerMessage: (_text, delivery) => {
+          deliveries.push(delivery);
+          return Promise.resolve({ ok: true });
+        },
+      });
+      expect(await actions.composerSend("follow up")).toBe(true);
+      expect(deliveries).toEqual([immediate ? "immediate" : autoSendQueued ? "queue" : "hold"]);
+    } finally {
+      term.dispose();
+    }
+  });
 }
 
 it.each([
@@ -88,4 +143,78 @@ it.each([
     pendingMessages.removeCopy(owner, message.id);
     saved.restore();
   }
+});
+
+it.each(["refusal", "rejection"] as const)("a connection %s leaves no waiting line", async (kind) => {
+  const pane = `closed-${kind}`, key = waitingKey("local", pane);
+  const error = new Error("herdr closed the connection before answering agent.prompt");
+  const actions = sends(pane, { ok: false, code: "closed", message: error.message }, [], {
+    setPromptRefresh: () => {},
+    submitComposerMessage: () => kind === "rejection" ? Promise.reject(error) : Promise.resolve({ ok: false, code: "closed", message: error.message }),
+  });
+  try {
+    if (kind === "rejection") await expect(actions.composerSend("not typed yet")).rejects.toBe(error);
+    else expect(await actions.composerSend("not typed yet")).not.toBe(true);
+    expect(currentWaitingSends(key)).toEqual([]);
+  } finally { forgetWaitingSends(key); }
+});
+
+it("records a confirmed send for its original pane after navigation without following the new pane", async () => {
+  const pane = "receipt-original", key = waitingKey("local", pane), paneRef = { current: pane };
+  let follow = 0;
+  const { promise: receipt, resolve: release } = Promise.withResolvers<SubmitResult>();
+  const actions = sends(pane, { ok: true }, [], { paneRef, setChatLocalSend: () => { follow++; }, submitComposerMessage: () => receipt });
+  const result = actions.composerSend("from original pane");
+  paneRef.current = "another-pane";
+  release({ ok: true });
+  try {
+    expect(await result).toBe(true);
+    expect(currentWaitingSends(key)).toMatchObject([{ text: "from original pane" }]);
+    expect(follow).toBe(0);
+  } finally { forgetWaitingSends(key); }
+});
+
+it("timestamps a send before the receipt so a turn written during the request settles it", async () => {
+  const pane = "receipt-time", key = waitingKey("local", pane);
+  const clock = spyOn(Date, "now").mockReturnValue(1000);
+  const { promise, resolve } = Promise.withResolvers<SubmitResult>();
+  try {
+    const result = sends(pane, { ok: true }, [], { submitComposerMessage: () => promise }).composerSend("written before receipt");
+    clock.mockReturnValue(3000);
+    resolve({ ok: true });
+    expect(await result).toBe(true);
+    expect(currentWaitingSends(key)[0]?.at).toBe(1000);
+    settleWaitingSends(key, [{ role: "user", ts: new Date(2000).toISOString(), parts: [{ kind: "text", text: "written before receipt" }] }]);
+    expect(currentWaitingSends(key)).toEqual([]);
+  } finally { clock.mockRestore(); forgetWaitingSends(key); }
+});
+
+it("Send it sends the named draft over itself, only at once and never as an answer", async () => {
+  const calls: Array<[string, SubmitDelivery, string | undefined]> = [], shown: string[] = [];
+  const t = (text: string) => text;
+  const submitComposerMessage = (text: string, delivery: SubmitDelivery, clearDraft?: string) => {
+    calls.push([text, delivery, clearDraft]);
+    return Promise.resolve({ ok: true } as const);
+  };
+  const prompt: InteractivePrompt = {
+    id: "menu", agent: "claude", kind: "question", title: "Question", question: "?", body: null,
+    options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null,
+  };
+  // at rest: the draft's text goes at once, with the clear of that same draft before it
+  expect(await sends("send-it", { ok: true }, shown, { t, agentStatus: "idle", submitComposerMessage }).composerSend("fix the tests", "fix the tests")).toBe(true);
+  expect(calls).toEqual([["fix the tests", "immediate", "fix the tests"]]);
+  // a turn started since: queued, the text could go again after the draft itself was sent in the terminal
+  const working = await sends("send-it", { ok: true }, shown, { t, agentStatus: "working", inputAtRest: () => false, submitComposerMessage })
+    .composerSend("fix the tests", "fix the tests");
+  expect(typeof working).toBe("string");
+  expect(calls).toHaveLength(1);
+  // a menu opened since: the draft is never taken for one of its choices
+  const blocked = await sends("send-it", { ok: true }, shown, { t, answering: prompt, submitComposerMessage })
+    .composerSend("1", "1");
+  expect(typeof blocked).toBe("string");
+  expect(calls).toHaveLength(1);
+  // Clear it and send of other text still queues behind a turn, as before
+  expect(await sends("send-it", { ok: true }, shown, { t, agentStatus: "working", inputAtRest: () => false, submitComposerMessage })
+    .composerSend("my new message", "fix the tests")).toBe(true);
+  expect(calls).toEqual([["fix the tests", "immediate", "fix the tests"], ["my new message", "hold", undefined]]);
 });

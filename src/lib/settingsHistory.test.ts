@@ -189,6 +189,38 @@ describe("recordSettings", () => {
     await settled();
   });
 
+  it("does not carry an earlier opening's anchor into Settings opened again over the same entries", async () => {
+    const seen: boolean[] = [];
+    fake.window.addEventListener("popstate", () => seen.push(settingsSteppedOff()));
+    fake.window.history.pushState({ "ovis:nav": "a" });
+    fake.window.history.pushState({ "ovis:nav": "b" });
+    openSheet(fake.window.history, "palette-5");
+    const push = fake.window.history.pushState;
+    fake.window.history.pushState = (state: unknown) => { fake.window.history.pushState = push; fake.window.history.replaceState(withoutSheet(state)); };
+    recordSettings([{ page: null, keyBar: false }, { page: "remote", keyBar: false }]);
+    await settled();
+    // a preview opened over Settings, which then closes under it: the preview's entry stays
+    fake.window.history.pushState(outsideSettings(fake.window.history.state));
+    recordSettings([]);
+    await settled();
+    // Settings opened again from the preview's entry, with Sign out's sheet inside it, then Cancel
+    recordSettings([{ page: null, keyBar: false }, { page: "devices", keyBar: false }]);
+    await settled();
+    openSheet(fake.window.history, "sign-out-2");
+    fake.window.history.go(-1);
+    await settled();
+    // the browser's Back menu, past the preview this opening began from onto B: B's pane, no closing
+    fake.window.history.go(-5);
+    await settled();
+    expect(settingsEntry(fake.window.history.state)).toBeNull();
+    expect((fake.window.history.state as Record<string, unknown>)["ovis:nav"]).toBe("b");
+    expect(seen).toEqual([false, false]);
+    recordSettings([]);
+    await settled();
+    fake.window.history.go(-(fake.held().length - 1));
+    await settled();
+  });
+
   it("does not take a jump from Settings past the entry it opened over for Settings closing", async () => {
     const seen: boolean[] = [];
     fake.window.addEventListener("popstate", () => seen.push(settingsSteppedOff()));

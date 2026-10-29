@@ -1,4 +1,4 @@
-import { fileUriPath } from "./terminalFileLinks.ts";
+import { fileUriPath } from "./fileUri.ts";
 import { parseHtmlBlock, startsHtml } from "./markdownHtml.ts";
 
 export type InlineNode =
@@ -30,7 +30,7 @@ export interface ListBlock {
 
 export type MarkdownBlock =
   | { type: "math"; value: string }
-  /** `align`: centered by the HTML a README wrote it in (lib/markdownHtml.ts) */
+  /** `align`: centered by the HTML a README wrote it in (markdownHtml.ts) */
   | { type: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6; content: InlineNode[]; align?: "center" }
   | { type: "paragraph"; lines: InlineNode[][]; align?: "center" }
   | ListBlock
@@ -38,6 +38,37 @@ export type MarkdownBlock =
   | { type: "code"; language: string; value: string }
   | { type: "table"; header: InlineNode[][]; rows: InlineNode[][][] }
   | { type: "hr" };
+
+/**
+ * The characters `nodes` show as text, as a card draws them (#2220): emphasis, strikethrough and code
+ * their text, a link or a file link its words, with its address after them when `addresses` (unless the
+ * words are the address). Null for a node that shows something else than characters: math, a picture.
+ * The one reading of what an Ask card's option says: the server holds it to omp's screen, the card draws
+ * it, and a typed answer names the option by it.
+ */
+export function shownText(nodes: InlineNode[], addresses = false): string | null {
+  let out = "";
+  for (const node of nodes) {
+    switch (node.type) {
+      case "text": case "code": out += node.value; break;
+      case "strong": case "em": case "del": {
+        const inner = shownText(node.children, addresses);
+        if (inner === null) return null;
+        out += inner;
+        break;
+      }
+      case "link": case "file": {
+        const words = shownText(node.children);
+        if (words === null) return null;
+        const href = node.type === "link" ? node.href : node.path;
+        out += addresses && href && words !== href && words !== href.replace(/^mailto:/, "") ? `${words} (${href})` : words;
+        break;
+      }
+      case "math": case "image": return null;
+    }
+  }
+  return out;
+}
 
 export function safeMarkdownHref(href: string): string | null {
   const value = href.trim();
@@ -370,7 +401,7 @@ export function foldCode(value: string): { head: string; lines: number } | null 
 /** Quotes nest by one call each: past this many levels, what is left is read as plain lines. */
 const MAX_QUOTE_DEPTH = 32;
 
-/** `html`: a file's markdown, whose HTML blocks are read as markdown (lib/markdownHtml.ts); an agent's text keeps them as text */
+/** `html`: a file's markdown, whose HTML blocks are read as markdown (markdownHtml.ts); an agent's text keeps them as text */
 export function parseMarkdown(source: string, depth = 0, html = false): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: MarkdownBlock[] = [];

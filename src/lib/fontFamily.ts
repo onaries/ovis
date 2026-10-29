@@ -19,10 +19,18 @@ export const SYMBOLS_FONT = '"Symbols Nerd Font Mono"';
 // for Mac's window it is the Hangul left when measurableFontStack drops an installed D2Coding.
 export const HANGUL_FAMILY = "Ovis Hangul Mono";
 const HANGUL_FONT = `"${HANGUL_FAMILY}"`;
+// JetBrains Mono Web is the app's own Latin (fonts/fonts.css, regular and bold), first among the
+// text fonts: every device draws the terminal in the same face, so Chrome, Safari, Ovis for Mac,
+// Windows, Linux and a phone show the same cell, row and grid. The installed fonts after it stood
+// first before and differed by device (Menlo, Consolas, Noto Sans Mono CJK KR, or a JetBrains Mono
+// that Chrome draws and Safari and Ovis for Mac's canvas cannot see); they draw only if the face
+// does not load. A font typed in Settings still goes ahead of it.
+export const MONO_FAMILY = "JetBrains Mono Web";
+const MONO_FONT = `"${MONO_FAMILY}"`;
 // xterm sizes every cell from the first matching font, so a proportional one (Malgun Gothic)
 // must never win it: it stays behind the generic monospace as a per-glyph Hangul fallback
 const TERMINAL_TEXT_FONTS =
-  `"JetBrains Mono", "Fira Code", "D2Coding", Menlo, Monaco, "Cascadia Mono", Consolas, "Noto Sans Mono CJK KR", ${HANGUL_FONT}, monospace, "Malgun Gothic"`;
+  `${MONO_FONT}, "JetBrains Mono", "Fira Code", "D2Coding", Menlo, Monaco, "Cascadia Mono", Consolas, "Noto Sans Mono CJK KR", ${HANGUL_FONT}, monospace, "Malgun Gothic"`;
 export const TERMINAL_FONT_STACK = `${SYMBOLS_FONT}, ${TERMINAL_TEXT_FONTS}`;
 
 /** the chat's own stack: --font-ui in src/styles.css */
@@ -140,14 +148,55 @@ function finds(width: (family: string) => number, name: string): boolean {
  * wide glyphs from one: with JetBrains Mono and D2Coding installed, the app measured a grid in
  * Menlo and drew it in those, rows too short for their glyphs, and Hangul it measured as Apple SD
  * Gothic Neo was enlarged past its two cells. Left out, such a family falls back as if it were not
- * installed, and the terminal draws what Safari draws. The bundled icon and Hangul faces, which the
- * canvas measures as the page draws them, and generic families stay.
+ * installed, and the terminal draws what Safari draws. The bundled icon, Latin and Hangul faces,
+ * which the canvas measures as the page draws them, and generic families stay.
  */
 export function measurableFontStack(stack: string, widths: FontWidths | null = browserFontWidths()): string {
   if (!widths) return stack;
   const names = stack.split(",").map((name) => name.trim());
-  const kept = names.filter((name) => name === SYMBOLS_FONT || name === HANGUL_FONT || GENERIC_FAMILIES.has(name) || !finds(widths.drawn, name) || finds(widths.measured, name));
+  const kept = names.filter((name) => name === SYMBOLS_FONT || name === MONO_FONT || name === HANGUL_FONT || GENERIC_FAMILIES.has(name) || !finds(widths.drawn, name) || finds(widths.measured, name));
   return kept.length === names.length ? stack : kept.join(", ");
+}
+
+/**
+ * The stack a terminal opens with: without the bundled Latin face until it has loaded. xterm measures
+ * its cell (and lib/terminalLineHeight.ts its row) once, when the family is set, so a terminal opened
+ * before the face arrived would keep a fallback's cell and draw the face in it. The font effect
+ * (useTerminalRefits.ts) loads the stack and sets it whole, a different family, which xterm measures
+ * anew, as for a font typed in Settings.
+ */
+export function openingFontStack(stack: string, fonts: Pick<FontFaceSet, "check"> | undefined = typeof document === "undefined" ? undefined : document.fonts): string {
+  if (!fonts || !stack.includes(MONO_FONT)) return stack;
+  return fonts.check(`13px ${MONO_FONT}`, "M") ? stack : stack.split(",").map((name) => name.trim()).filter((name) => name !== MONO_FONT).join(", ");
+}
+
+/** Settles once, when a terminal's first font is set: the face it was waited for within loadFontStack's bound, or the fallback. */
+export interface FontSettled {
+  readonly done: boolean;
+  readonly settled: Promise<void>;
+  settle(): void;
+}
+
+export function fontSettled(): FontSettled {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const signal = { done: false, settled: promise, settle: () => { signal.done = true; resolve(); } };
+  return signal;
+}
+
+/**
+ * Resolves once the bundled Latin face has loaded or failed, with no timeout: a face slower than
+ * loadFontStack's wait is set when it arrives. Its own load, not the stack's: the font set's load
+ * rejects as soon as any face it asks for fails (a typed font's subset that is not found), which
+ * would end the wait while the bundled face still loads.
+ */
+export async function monoFaceArrived(sizePx: number): Promise<void> {
+  const fonts = typeof document === "undefined" ? undefined : document.fonts;
+  if (!fonts || typeof fonts.load !== "function") return;
+  try {
+    await fonts.load(`${sizePx}px ${MONO_FONT}`, "M");
+  } catch {
+    /* a face that fails leaves the fallback, as measured */
+  }
 }
 
 /** The chat body's `font-family`, or null to keep the UI font. */

@@ -476,6 +476,48 @@ describe("native tool call id and state on GET /api/pane/conversation", () => {
   }, 20_000);
 });
 
+describe("a Claude bash-mode command on GET /api/pane/conversation", () => {
+  it("answers it as one shell part, and leaves out the streams Claude Code has not recorded yet", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-bash-mode-contract-"));
+    const cwd = realpathSync(root);
+    const originalHome = process.env["HOME"];
+    const id = "3b7e9c2a-5d14-4f8b-9a63-0c2e7f1d8b45";
+    const file = join(cwd, ".claude", "projects", claudeProjectDir(cwd), `${id}.jsonl`);
+    mkdirSync(join(file, ".."), { recursive: true });
+    const user = (content: string, second: number) => `${JSON.stringify({ type: "user", timestamp: `2026-10-27T03:00:0${second}.000Z`, message: { role: "user", content } })}\n`;
+    writeFileSync(file, user('<bash-input>echo "Hello"</bash-input>', 0) + user("<bash-stdout>Hello</bash-stdout><bash-stderr></bash-stderr>", 1)
+      + user("<bash-input>ls missing</bash-input>", 2) + user("<bash-stdout></bash-stdout><bash-stderr>ls: missing: No such file or directory</bash-stderr>", 3)
+      + user("<bash-input>sleep 60</bash-input>", 4));
+    let app: ReturnType<typeof createServer> | undefined;
+    let workspace: string | undefined;
+    try {
+      process.env["HOME"] = cwd;
+      forgetTranscriptState();
+      const created = await workspaceCreate({ cwd, label: "herdr-web-ui-test-bash-mode" });
+      workspace = created.workspace.workspace_id;
+      const paneId = created.root_pane.pane_id;
+      await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "claude", state: "idle" });
+      await herdrRpc("pane.report_agent_session", { pane_id: paneId, source: "herdr:claude", agent: "claude", seq: Date.now() * 1000, agent_session_id: id });
+      app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(cwd, "state") });
+      const response = await fetch(`http://127.0.0.1:${app.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
+      expect(response.status).toBe(200);
+      const body = await response.json() as { source: string; turns: { role: string; parts: unknown[] }[] };
+      expect(body.source).toBe("claude-transcript");
+      expect(body.turns.map((turn) => [turn.role, turn.parts])).toEqual([
+        ["user", [{ kind: "shell", command: 'echo "Hello"', stdout: "Hello", stderr: "" }]],
+        ["user", [{ kind: "shell", command: "ls missing", stdout: "", stderr: "ls: missing: No such file or directory" }]],
+        // no output entry yet: the JSON has neither stream, not empty ones
+        ["user", [{ kind: "shell", command: "sleep 60" }]],
+      ]);
+    } finally {
+      app?.stop();
+      if (workspace !== undefined) await workspaceClose(workspace);
+      if (originalHome === undefined) delete process.env["HOME"]; else process.env["HOME"] = originalHome;
+      forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
 describe("usage API", () => {
   it("returns OpenCode Go windows without exposing its credential", async () => {
     const usageState = mkdtempSync(join(tmpdir(), "herdr-opencode-contract-"));
@@ -725,6 +767,14 @@ describe("update API", () => {
     });
     try {
       expect(await (await call("/api/updates", `Bearer ${bridge}`)).json()).toMatchObject({ managed: true, available: true, latest_revision: offered });
+      // where it answers comes with the status, to the bridge token only: /api/access stays its own token's (#2191)
+      const told = await (await call("/api/updates", `Bearer ${bridge}`)).json() as UpdateStatus;
+      expect(told.port).toBe(own.port);
+      expect(told.serving_url === null || typeof told.serving_url === "string").toBe(true);
+      expect((await call("/api/access", `Bearer ${bridge}`)).status).toBe(401);
+      const owner = await (await call("/api/updates", "Bearer own-token")).json() as UpdateStatus;
+      expect(owner).toMatchObject({ managed: true, latest_revision: offered });
+      expect("port" in owner || "serving_url" in owner).toBe(false);
       // the install still names the offer, as from the app's own controls
       expect((await call("/api/updates/install", `Bearer ${bridge}`, "{}")).status).toBe(400);
       expect(requests).toEqual([]);
@@ -733,6 +783,15 @@ describe("update API", () => {
       // a wrong bridge token is refused like any other, and the token opens no other update route
       expect((await call("/api/updates", `Bearer ${"c".repeat(64)}`)).status).toBe(401);
       for (const path of ["/api/updates/notes", "/api/updates/installed", "/api/updates/check", "/api/herdr/update"]) expect((await call(path, `Bearer ${bridge}`)).status).toBe(401);
+      // only the read and the install it grants, each by its own method and with no query (#2054)
+      const send = (method: string, path: string, body?: string) => fetch(`http://127.0.0.1:${own.port}${path}`, {
+        method, ...(body === undefined ? {} : { body }), headers: { authorization: `Bearer ${bridge}`, "x-herdr-update": "1", "content-type": "application/json" },
+      });
+      const install = JSON.stringify({ expected_revision: offered });
+      for (const [method, path, body] of [["GET", "/api/updates?anything=1"], ["HEAD", "/api/updates"], ["POST", "/api/updates", install], ["DELETE", "/api/updates"],
+        ["GET", "/api/updates/install"], ["PUT", "/api/updates/install", install], ["POST", "/api/updates/install?anything=1", install]] as const) {
+        expect({ method, path, status: (await send(method, path, body)).status }).toEqual({ method, path, status: 401 });
+      }
       expect(requests).toHaveLength(1);
     } finally { own.stop(); rmSync(ownState, { recursive: true, force: true }); }
   });

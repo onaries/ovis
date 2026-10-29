@@ -114,6 +114,26 @@ describe("owner records", () => {
     expect(ownerGone({ pid: child.pid, birth: earlierBirth })).toBe(true);
   });
 
+  // an owner killed without letting go of its lock, whose live parent has not reaped it yet
+  it.skipIf(process.platform !== "linux" || !Bun.which("setsid"))("proves an exited, unreaped owner gone, its birth still matching", async () => {
+    // the inner shell exits at once; its parent turns into a sleep that never reaps it
+    const parent = Bun.spawn(["sh", "-c", "setsid sh -c 'echo $$; exec sleep 0.2' & exec sleep 30"], { stdout: "pipe", stderr: "ignore" });
+    try {
+      const reader = parent.stdout.getReader();
+      const pid = Number(new TextDecoder().decode((await reader.read()).value).trim());
+      const reading = readProcessBirth(pid);
+      expect(reading.state).toBe("identified");
+      const record = { pid, birth: reading.state === "identified" ? reading.birth : undefined };
+      const state = () => readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]!.split(" ")[0];
+      const deadline = Date.now() + 5_000;
+      while (state() !== "Z" && Date.now() < deadline) await Bun.sleep(20);
+      expect(state()).toBe("Z");
+      expect(probeProcess(pid), "control: the zombie still answers signal 0").toBe("running");
+      expect(ownerGone(record), "regression: a zombie owner with its own birth kept its lock").toBe(true);
+      expect(ownerGone({ pid }), "a PID-only record of a zombie").toBe(true);
+    } finally { parent.kill("SIGKILL"); }
+  }, 30_000);
+
   it("keeps legacy, foreign-platform and unreadable owners live", () => {
     const child = unrelated();
     // control: a PID-only record from an older version cannot be proved gone while its PID runs

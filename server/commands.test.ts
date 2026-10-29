@@ -176,6 +176,17 @@ describe("paneCommands", () => {
     expect(commands).toContainEqual(expect.objectContaining({ name: "team:review", description: "Review this project thoroughly", source: "project" }));
   });
 
+  it("stops the project walk at the home it is given, not the server's own", () => {
+    const root = temp("commands-given-home-");
+    const home = join(root, "home");
+    const cwd = join(home, "work");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(join(root, ".git"));
+    mkdirSync(join(root, ".claude", "commands"), { recursive: true });
+    writeFileSync(join(root, ".claude", "commands", "above-home.md"), "Above the home\n");
+    expect(paneCommands("claude", cwd, home).map((command) => command.name)).not.toContain("above-home");
+  });
+
   it("falls back to USERPROFILE when HOME is not set in default home resolution, on Windows", () => {
     const userProfile = temp("commands-userprofile-");
     const previousHome = process.env.HOME;

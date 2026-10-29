@@ -38,6 +38,14 @@ export interface UpdateStatus {
    * restart instead of offering an install.
    */
   revision_bound_install?: boolean;
+  /**
+   * Where this server answers, told only to the connection server that reaches it as its PC (its
+   * bridge token), which cannot read GET /api/access (#2191): the port it listens on, and the HTTPS
+   * address Tailscale already serves it at (RemoteAccess.port, TailscaleAccess.serving_url). Absent
+   * from any other caller's answer and from an older server.
+   */
+  port?: number;
+  serving_url?: string | null;
 }
 
 export type UpdateErrorCode = "update_offer_changed";

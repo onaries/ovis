@@ -77,8 +77,29 @@ export function omoAsksAfter(open: OmoAsks, entry: Entry): OmoAsks {
 }
 
 
-/** Incremental question replay shared with the status reader's JSONL projection. */
+/**
+ * One record of an omp session applied to its open `ask` calls. omp records the call when its
+ * dialog opens and its toolResult when it is answered or cancelled. A user message starts a new
+ * turn, so no call stays open past one.
+ */
+export function ompAsksAfter(open: OmoAsks, entry: Entry): OmoAsks {
+  const message = entry.type === "message" ? entry.message : undefined;
+  if (message?.role === "user") return open.length > 0 ? [] : open;
+  if (message?.role === "assistant") {
+    const calls = (Array.isArray(message.content) ? message.content as Record<string, unknown>[] : [])
+      .filter((part) => part?.["type"] === "toolCall" && typeof part["id"] === "string" && part["name"] === "ask" && part["incomplete"] !== true)
+      .map((part) => ({ id: part["id"] as string, wait: true, args: part["arguments"] }));
+    const ids = new Set(calls.map((call) => call.id));
+    return calls.length > 0 ? [...open.filter((call) => !ids.has(call.id)), ...calls] : open;
+  }
+  if (message?.role === "toolResult" && typeof message.toolCallId === "string") return without(open, message.toolCallId);
+  return open;
+}
+
+/** Incremental question replay shared with the status reader's JSONL projection; `after` applies one record (omoAsksAfter, or ompAsksAfter for omp). */
 export class OmoAskReader {
+  constructor(private readonly after: (open: OmoAsks, entry: Entry) => OmoAsks = omoAsksAfter) {}
+
   private files = new Map<string, { id: string; size: number; mtime: number; offset: number; asks: OmoAsks }>();
 
   read(path: string): OmoAsks {
@@ -93,7 +114,7 @@ export class OmoAskReader {
       state.offset = readOmoLines(fd, state.offset, stat.size, (line) => {
         const text = "text" in line ? line.text : line.record;
         if (text === undefined) return;
-        try { state!.asks = omoAsksAfter(state!.asks, JSON.parse(text)); } catch { /* partial or invalid record */ }
+        try { state!.asks = this.after(state!.asks, JSON.parse(text)); } catch { /* partial or invalid record */ }
       });
       state.size = stat.size;
       state.mtime = stat.mtimeMs;

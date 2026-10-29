@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ProviderUsage, UsageWindow } from "../../shared/protocol.ts";
-import { composerUsage, formatPercent, formatResetIn, glanceWindow, meterPercent, meterText, moveInOrder, orderProviders, providerForAgent, statusWindows, tightestWindow, usageName, windowLabel } from "./usage.ts";
+import { canSignInAgain, composerUsage, formatPercent, formatResetIn, glanceWindow, meterPercent, meterText, moveInOrder, orderProviders, providerForAgent, statusWindows, tightestWindow, usageName, windowLabel } from "./usage.ts";
 
 const NOW = Date.parse("2026-09-29T12:00:00Z");
 const window = (used_percent: number, kind: UsageWindow["kind"] = "week", scope: string | null = null): UsageWindow => ({ kind, scope, used_percent, resets_at: null, starts_at: null });
@@ -55,6 +55,18 @@ describe("usage meters", () => {
     expect(moveInOrder(["a", "b", "c"], ["x", "b"], "c", -1)).toEqual(["a", "c", "b", "x"]);
     expect(moveInOrder(["a", "b", "c"], [], "a", -1)).toEqual(["a", "b", "c"]);
     expect(moveInOrder(["a", "b"], [], "a", 1)).toEqual(["b", "a"]);
+  });
+
+  it("offers signing in again only for an expired sign-in this PC's own CLI holds", () => {
+    const expired = (id: ProviderUsage["id"], key: string, problem: ProviderUsage["problem"] = "expired"): ProviderUsage => ({ ...provider(id, []), key, problem });
+    expect(canSignInAgain(expired("claude", "claude:team"))).toBe(true);
+    expect(canSignInAgain(expired("codex", "codex@0123456789ab"))).toBe(true);
+    expect(canSignInAgain(expired("codex", "codex:cliproxy:hub-1"))).toBe(false);
+    expect(canSignInAgain(expired("antigravity", "antigravity@keychain"))).toBe(false);
+    expect(canSignInAgain(expired("cursor", "cursor:c1"))).toBe(false);
+    expect(canSignInAgain(expired("opencode", "opencode@0123456789ab"))).toBe(false);
+    expect(canSignInAgain(expired("claude", "claude:team", null))).toBe(false);
+    expect(canSignInAgain(expired("claude", "claude:team", "failed"))).toBe(false);
   });
 
   it("counts a meter as used or left, and names the account", () => {

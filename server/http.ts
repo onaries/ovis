@@ -9,6 +9,7 @@
 import { randomBytes } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { FileBusyError } from "./file-pool.ts";
 import { HerdrError } from "./herdr/client.ts";
 
 /** The outer HTTP boundary also correlates errors caught inside route handlers. */
@@ -41,6 +42,8 @@ export function errorResponse(error: unknown): Response {
     const status = error.code === "connect_failed" || error.code === "timeout" ? 502 : 404;
     return jsonResponse({ error: { code: error.code, message: error.message } }, status);
   }
+  // every file thread busy, or the disk too slow to answer in time (file-pool.ts): worth another try soon
+  if (error instanceof FileBusyError) return jsonResponse({ error: { code: error.code, message: error.message } }, 503, { "retry-after": "1" });
   // A system error carries absolute paths, the herdr socket and whatever a dependency
   // throws; the client is told none of it but a handle to quote in a bug report, and the
   // real exception is logged here beside that handle. Short enough to say out loud, long

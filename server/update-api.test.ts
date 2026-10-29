@@ -109,3 +109,22 @@ describe("a manual install", () => {
     expect(sent).toEqual([{ type: "update-status-request" }]);
   });
 });
+
+describe("the update status", () => {
+  const read = async (where?: () => Promise<Pick<UpdateStatus, "port" | "serving_url">>) => {
+    const response = await handleUpdateRequest(new Request("http://127.0.0.1/api/updates"), "/api/updates", service(() => offer()), where);
+    return { status: response.status, body: await response.json() as UpdateStatus };
+  };
+
+  it("tells where it answers only when asked to, and still answers when that cannot be read (#2191)", async () => {
+    expect(await read(async () => ({ port: 7317, serving_url: "https://pc.example.ts.net" }))).toMatchObject({ status: 200, body: { latest_revision: offered, port: 7317, serving_url: "https://pc.example.ts.net" } });
+    const plain = await read();
+    expect(plain.status).toBe(200);
+    expect("port" in plain.body || "serving_url" in plain.body).toBe(false);
+    // tailscale that cannot be started: the status stands without them, and the asker falls back to /api/access
+    const failed = await read(async () => { throw new Error("spawn EACCES"); });
+    expect(failed.status).toBe(200);
+    expect(failed.body.latest_revision).toBe(offered);
+    expect("port" in failed.body).toBe(false);
+  });
+});

@@ -130,12 +130,17 @@ jobs:
           if-no-files-found: error
       # The built Ovis.exe on a PC like the one the update screen was made for: a server from 0.3.45 under the old
       # id and herdr 0.9.3 stopped, told by stand-ins for herdr and bun. It must open on Update, and the screenshot
-      # shows it. The stand-ins go where the app looks before the system PATH (Paths.RefreshPath); this runner is thrown away.
+      # shows it. The stand-ins go in the first directory of the app's PATH (Paths.RefreshPath: Bun's own bin), and a
+      # real herdr or bun there is set aside meanwhile, so a later setup step cannot slip a real one in front of them.
       - name: Open Ovis.exe on an old server
         if: github.event_name == 'pull_request'
         run: |
-          $bin = Join-Path $env:LOCALAPPDATA 'Programs\Herdr\bin'
+          $bin = Join-Path $env:USERPROFILE '.bun\bin'
           New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          $aside = @(foreach ($name in 'herdr', 'bun') { foreach ($ext in '.exe', '.cmd', '.bat') {
+            $real = Join-Path $bin ($name + $ext)
+            if (Test-Path -LiteralPath $real) { Move-Item -LiteralPath $real ($real + '.qa-aside'); $real }
+          } })
           $root = Join-Path $env:APPDATA 'herdr\plugins\github\devswha.herdr-web-ui-210f619d6b7b'
           @{ id = 'cli:plugin'; result = @{ plugins = @(@{ plugin_id = 'devswha.herdr-web-ui'; plugin_root = $root; version = '0.3.45'; min_herdr_version = '0.9.0'; enabled = $true; source = @{ kind = 'github'; owner = 'devswha'; repo = 'herdr-web-ui'; requested_ref = 'v0.3.45' } }) } } |
             ConvertTo-Json -Depth 6 -Compress | Set-Content -Encoding ascii (Join-Path $bin 'plugin-list.json')
@@ -174,7 +179,8 @@ jobs:
           $texts = if ($window) { $window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } } else { @() }
           $texts | Set-Content -Encoding utf8 (Join-Path $shots 'update-screen.txt')
           Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force $bin
+          Remove-Item -Force (Join-Path $bin 'herdr.cmd'), (Join-Path $bin 'bun.cmd'), $list
+          foreach ($real in $aside) { Move-Item -LiteralPath ($real + '.qa-aside') $real }
           $texts | ForEach-Object { Write-Output "  $_" }
           if (-not $update) { Write-Output '::error::Ovis.exe did not show Update for a 0.3.45 server under the old id.'; exit 1 }
           if (-not ($texts | Where-Object { $_ -like '*0.3.45*' })) { Write-Output '::error::The update screen does not name the 0.3.45 server.'; exit 1 }

@@ -7,6 +7,7 @@ import { acquireOwnerDirectory } from "./owner-guard.ts";
 import { parseProcessLine, refusedSocket, staleMarker } from "./herdr-marker.ts";
 import { startHeadlessWindowsHerdr, startInteractiveWindowsHerdr, windowsStartupStatus } from "./windows-herdr-start.ts";
 import { ShellAgentLocator } from "./shell-agent.ts";
+import { AgentDetector, catalogLocator, defaultLoginProbe } from "./agent-catalog-detect.ts";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -84,7 +85,7 @@ try {
   if (info.herdr.protocol < 22) throw new Error("herdr 0.9+ is required; update it explicitly before connecting");
   const token = randomBytes(32).toString("hex");
   // started over SSH with a bare PATH: omo and gjc are often only on the login shell's
-  const server = createServer({ port: 0, hostname: "127.0.0.1", token, machines: false, bridgeOnly: true, stateDir: descriptor + ".state", shellAgents: new ShellAgentLocator() });
+  const server = createServer({ port: 0, hostname: "127.0.0.1", token, machines: false, bridgeOnly: true, stateDir: descriptor + ".state", shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }) });
   const registration = registerBridge(server.port, token);
   if (!registration.registered) {
     // the app finds a bridge only through its descriptor: an unregistered one serves nobody, and

@@ -4,7 +4,7 @@ const REPEAT_MS = 30_000;
 const MAX_FAILURES = 128;
 const TRANSPORT_CODES = ["timeout", "connect_failed", "socket_error", "closed", "bad_frame", "server_unavailable"] as const;
 type TransportCode = typeof TRANSPORT_CODES[number];
-type FailureCode = TransportCode | "refresh_failed" | "connection_lost" | "action_required";
+type FailureCode = TransportCode | "refresh_failed" | "connection_lost" | "action_required" | "conversation_unavailable" | "conversation_read_pending";
 
 export function transportFailureCode(code: string): TransportCode | null {
   return TRANSPORT_CODES.find((known) => known === code) ?? null;
@@ -33,13 +33,14 @@ interface Failure {
   visible: boolean;
 }
 
-/** Connection failures only: no access log, input, credentials, peer names, or exception text. */
+/** Bounded failure episodes: no access log, input, credentials, peer names, or exception text. */
 export class ConnectionDiagnostics {
   private failures = new Map<string, Failure>();
 
   constructor(
-    private component: "herdr.rpc" | "machine.local" | "machine.remote" | "websocket",
-    private write: (line: string) => void = (line) => console.warn(line),
+    private component: "herdr.rpc" | "machine.local" | "machine.remote" | "websocket" | "conversation",
+    /** a budgeted sink returns false to decline a line: the failure then stays unseen */
+    private write: (line: string) => unknown = (line) => console.warn(line),
     private now: () => number = Date.now,
   ) {}
 
@@ -66,9 +67,13 @@ export class ConnectionDiagnostics {
       failure.suppressed++;
       return;
     }
+    // A declined line shows nothing, so no recovery may follow it; the next failure tries again.
+    if (!this.emit("failed", failure, fields, now)) {
+      failure.suppressed++;
+      return;
+    }
     failure.loggedAt = now;
     failure.visible = true;
-    this.emit("failed", failure, fields, now);
     failure.suppressed = 0;
   }
 
@@ -85,7 +90,7 @@ export class ConnectionDiagnostics {
     failure.suppressed = 0;
   }
 
-  private emit(event: "failed" | "recovered", failure: Failure, fields: Fields, now: number): void {
+  private emit(event: "failed" | "recovered", failure: Failure, fields: Fields, now: number): boolean {
     // Pick fields explicitly. Never spread an exception, request, response, or caller's object.
     const record: Record<string, string | number> = {
       time: new Date(now).toISOString(), event: `${this.component}.${event}`, episode_id: failure.id,
@@ -93,13 +98,13 @@ export class ConnectionDiagnostics {
       code: failure.code, failures: failure.count, suppressed: failure.suppressed,
       since_first_failure_ms: Math.max(0, now - failure.since),
     };
-    if (fields.request_id && /^br-[a-z0-9]+-[0-9]+$/.test(fields.request_id)) record.request_id = fields.request_id;
+    if (fields.request_id && (/^br-[a-z0-9]+-[0-9]+$/.test(fields.request_id) || /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(fields.request_id))) record.request_id = fields.request_id;
     if (fields.machine_id && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(fields.machine_id)) record.machine_id = fields.machine_id;
     if (fields.phase === "connect" || fields.phase === "response") record.phase = fields.phase;
     for (const field of ["elapsed_ms", "connect_ms", "timeout_ms", "pending", "close_code"] as const) {
       const value = fields[field];
       if (typeof value === "number" && Number.isFinite(value) && value >= 0) record[field] = Math.round(value);
     }
-    try { this.write(JSON.stringify(record)); } catch { /* diagnostics must not change delivery or cleanup */ }
+    try { return this.write(JSON.stringify(record)) !== false; } catch { /* diagnostics must not change delivery or cleanup */ return true; }
   }
 }

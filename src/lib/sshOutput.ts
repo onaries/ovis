@@ -1,4 +1,4 @@
-import { trimUrl } from "./markdown.ts";
+import { trimUrl } from "../../shared/markdown.ts";
 
 /**
  * ssh's stderr as the setup dialog shows it. Tailscale SSH's browser check prints a URL and

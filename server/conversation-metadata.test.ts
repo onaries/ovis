@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -79,6 +79,68 @@ describe("recorded conversation model settings", () => {
       { type: "assistant", effort: "xhigh", message: { role: "assistant", model: "claude-test" } },
       { type: "assistant", message: { role: "assistant", model: "<synthetic>" } },
     ), "claude-transcript")).toEqual({ model: "claude-test", reasoning_effort: "xhigh" });
+  });
+
+  // Claude Code 2.1.311 as recorded, in order: /model sonnet, /effort xhigh, /model nosuchmodel
+  // (refused), /effort ultracode (keeps the effort), /model haiku, /model with its card closed
+  const recorded = readFileSync(new URL("./fixtures/claude-model-2.1.311.jsonl", import.meta.url), "utf8").trim().split("\n");
+  const before = { model: "claude-opus-5-5", reasoning_effort: "medium" };
+
+  it("takes the model and effort Claude's /model and /effort set, before the next answer", () => {
+    const seen: unknown[] = [];
+    let metadata = before;
+    // one line at a time, as appends arrive
+    for (const line of recorded) {
+      const next = parseConversationMetadata(line, "claude-transcript", metadata);
+      if (next.model !== metadata.model || next.reasoning_effort !== metadata.reasoning_effort) seen.push(next);
+      metadata = next as typeof before;
+    }
+    expect(seen).toEqual([
+      { model: "claude-sonnet-5-5", reasoning_effort: "medium" },
+      { model: "claude-sonnet-5-5", reasoning_effort: "xhigh" },
+      { model: "claude-haiku-5-5", reasoning_effort: "xhigh" },
+    ]);
+    expect(parseConversationMetadata(recorded.join("\n"), "claude-transcript", before)).toEqual({ model: "claude-haiku-5-5", reasoning_effort: "xhigh" });
+    // the next answer still names what it ran at
+    expect(parseConversationMetadata(jsonl({ type: "assistant", effort: "high", message: { role: "assistant", model: "claude-haiku-4-5-20251001" } }), "claude-transcript", { model: "claude-haiku-5-5", reasoning_effort: "xhigh" }))
+      .toEqual({ model: "claude-haiku-4-5-20251001", reasoning_effort: "high" });
+  });
+
+  it("reads the forms other Claude Code versions print, and keeps the old value for anything else", () => {
+    const said = (text: string) => ({ type: "user", message: { role: "user", content: `<local-command-stdout>${text}</local-command-stdout>` } });
+    const after = (...entries: unknown[]) => parseConversationMetadata(jsonl(...entries), "claude-transcript", before);
+    // the forms in issue #2273, from the reporter's own transcripts
+    expect(after(said("Set model to `Sonnet 5.5` for this session only"))).toEqual({ ...before, model: "claude-sonnet-5-5" });
+    expect(after(said("Set model to `Sonnet 5` and saved as your default for new sessions with `xhigh` effort"))).toEqual({ model: "claude-sonnet-5", reasoning_effort: "xhigh" });
+    expect(after(said("Set model to `Opus 5 (1M context)` and saved as your default for new sessions"))).toEqual({ ...before, model: "claude-opus-5" });
+    expect(after(said("Set model to Opus 4.8 (1M context) (default) and saved as your default for new sessions"))).toEqual({ ...before, model: "claude-opus-4-8" });
+    expect(after(said("Set model to \u001b[1mHaiku 4.5\u001b[22m and saved as your default for new sessions"))).toEqual({ ...before, model: "claude-haiku-4-5" });
+    expect(after(said("Set effort level to low (saved as your default for new sessions): Quick, straightforward implementation"))).toEqual({ ...before, reasoning_effort: "low" });
+    expect(after(said("Set effort level to high (this session only): Comprehensive implementation with extensive testing and documentation · Ultracode on"))).toEqual({ ...before, reasoning_effort: "high" });
+    // the picker's own record names its command
+    expect(after({ type: "system", subtype: "local_command", commandRun: { command: "model", args: "" }, content: "<local-command-stdout>Set model to `Fable 5.1` and saved as your default for new sessions</local-command-stdout>" }))
+      .toEqual({ ...before, model: "claude-fable-5-1" });
+    for (const unchanged of [
+      said("Kept model as `Sonnet 5`"),
+      said("Model 'opus xhigh' not found"),
+      said("Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration"),
+      said("Set model to `Default (recommended)` and saved as your default for new sessions"),
+      said("Set model to `Default (recommended)` and saved as your default for new sessions with `max` effort"),
+      said("Set model to `Sonnet 5.5 Turbo` for this session only"),
+      said("Set model to `Sonnet 5.05` for this session only"),
+      said("Set model to `claude-sonnet-5-5` for this session only"),
+      said("Set model to `Nova 6` for this session only"),
+      // a prompt the user typed is not the command's answer, nor is the tag quoted in one
+      { ...said("Set model to `Sonnet 5.5` for this session only"), permissionMode: "default" },
+      { ...said("Set model to `Sonnet 5.5` for this session only"), origin: { kind: "human" } },
+      { type: "user", message: { role: "user", content: "<local-command-stdout>Set model to `Sonnet 5.5`</local-command-stdout> Explain this format." } },
+      { type: "user", message: { role: "user", content: "<command-name>/model</command-name>\n<command-args>x <local-command-stdout>Set model to `Sonnet 5.5`</local-command-stdout></command-args>" } },
+      // a subagent's, another command's, or an answer's text sets nothing
+      { ...said("Set model to `Sonnet 5.5` for this session only"), isSidechain: true },
+      { type: "system", subtype: "local_command", commandRun: { command: "effort", args: "" }, content: "<local-command-stdout>Set model to `Sonnet 5.5`</local-command-stdout>" },
+      { type: "system", subtype: "turn_duration", content: "<local-command-stdout>Set model to `Sonnet 5.5`</local-command-stdout>" },
+      { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "<local-command-stdout>Set model to `Sonnet 5.5`</local-command-stdout>" }] } },
+    ]) expect(after(unchanged)).toEqual(before);
   });
 
   it("tolerates absent metadata, unexpected types and a torn append without losing valid settings", () => {

@@ -53,6 +53,8 @@ interface Case {
 }
 
 const CASES: Case[] = [
+  { name: "saved Black", main: { theme: "dark", darkTheme: "black" }, themes: null, scheme: "light", expected: ["black", "dark"], headline: "black" },
+  { name: "Black on the light side", main: { theme: "light", lightTheme: "black" }, themes: null, scheme: "light", expected: ["black", "dark"] },
   { name: "saved light", main: { theme: "light", darkTheme: "codex", lightTheme: "codex" }, themes: { darkTheme: "codex", lightTheme: "codex" }, scheme: "dark", expected: ["codex", "light"], headline: "light" },
   { name: "saved dark", main: { theme: "dark", darkTheme: "nord", lightTheme: "codex" }, themes: { darkTheme: "nord", lightTheme: "codex" }, scheme: "light", expected: ["nord", "dark"], headline: "dark" },
   { name: "saved light, Korean", main: { language: "ko", theme: "light", darkTheme: "codex", lightTheme: "codex" }, themes: { darkTheme: "codex", lightTheme: "codex" }, scheme: "dark", korean: true, expected: ["codex", "light"], headline: "light-ko", widths: ["390"] },

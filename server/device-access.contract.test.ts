@@ -811,6 +811,96 @@ it("a route spelled with a trailing, doubled or encoded slash is no route, for a
   }
 });
 
+it("a pane's command rows are refused to a watching device on this PC, its alias and another PC's route, as a folder's are, and answered for a driving one (#2132)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-pane-commands-"));
+  const store = new DeviceStore(root);
+  const watch = store.pair(store.startPairing().code, "Watch", "watch")!;
+  store.match(watch.token);
+  const drive = store.pair(store.startPairing().code, "Drive", "drive")!;
+  store.match(drive.token);
+  const server = createServer({ port: 0, stateDir: root, token: "test-pane-commands", tailscaleOwner: null });
+  const base = `http://127.0.0.1:${server.port}`;
+  const query = "?pane_id=ovis-test-absent:p1";
+  try {
+    // a custom command's row carries its file's first line and its path: what a folder's command files hold
+    for (const path of ["api/pane/commands", "api/machines/local/pane/commands", "api/machines/pc1/pane/commands"]) {
+      const response = await fetch(`${base}/${path}${query}`, { headers: { cookie: `ovis_device=${watch.token}` } });
+      expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
+    }
+    // a driving device reaches the route: this PC asks herdr for the pane, its alias too, and no such PC is connected
+    const driving = { cookie: `ovis_device=${drive.token}` };
+    for (const path of ["api/pane/commands", "api/machines/local/pane/commands"]) {
+      const response = await fetch(`${base}/${path}${query}`, { headers: driving });
+      expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 404, "pane_not_found"]);
+    }
+    expect((await fetch(`${base}/api/machines/pc1/pane/commands${query}`, { headers: driving })).status).toBe(503);
+  } finally {
+    server.stop(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("the paths under a pane's folder and a plugin run's output are refused to a watching device on this PC, its alias and another PC's route, and answered for a driving one (#2244)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-pane-files-"));
+  const store = new DeviceStore(root);
+  const watch = store.pair(store.startPairing().code, "Watch", "watch")!;
+  store.match(watch.token);
+  const drive = store.pair(store.startPairing().code, "Drive", "drive")!;
+  store.match(drive.token);
+  const server = createServer({ port: 0, stateDir: root, token: "test-pane-files", tailscaleOwner: null });
+  const base = `http://127.0.0.1:${server.port}`;
+  // the @-mention picker's paths, and where a plugin action's run stands (what its command printed when it failed)
+  const routes = ["pane/files?pane_id=ovis-test-absent:p1&q=commands", "plugin/action?plugin_id=ovis-test-absent&log_id=plugin-log-1"];
+  try {
+    for (const route of routes) {
+      for (const prefix of ["api", "api/machines/local", "api/machines/pc1"]) {
+        const path = `${prefix}/${route}`;
+        const response = await fetch(`${base}/${path}`, { headers: { cookie: `ovis_device=${watch.token}` } });
+        expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
+      }
+    }
+    // a driving device reaches the routes: this PC asks herdr, its alias too, and no such PC is connected
+    const driving = { cookie: `ovis_device=${drive.token}` };
+    for (const prefix of ["api", "api/machines/local"]) {
+      for (const [route, code] of [[routes[0], "pane_not_found"], [routes[1], "plugin_log_not_found"]] as const) {
+        const response = await fetch(`${base}/${prefix}/${route}`, { headers: driving });
+        expect([prefix, route, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([prefix, route, 404, code]);
+      }
+    }
+    for (const route of routes) expect((await fetch(`${base}/api/machines/pc1/${route}`, { headers: driving })).status).toBe(503);
+  } finally {
+    server.stop(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("a repository's checkouts are refused to a watching device on this PC, its alias and another PC's route, and answered for a driving one (#2250)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-worktree-list-"));
+  const store = new DeviceStore(root);
+  const watch = store.pair(store.startPairing().code, "Watch", "watch")!;
+  store.match(watch.token);
+  const drive = store.pair(store.startPairing().code, "Drive", "drive")!;
+  store.match(drive.token);
+  const server = createServer({ port: 0, stateDir: root, token: "test-worktree-list", tailscaleOwner: null });
+  const base = `http://127.0.0.1:${server.port}`;
+  // every checkout of the workspace's repository: paths and branches, those not open in herdr too
+  const route = "worktree/list?workspace_id=ovis-test-absent";
+  try {
+    for (const prefix of ["api", "api/machines/local", "api/machines/pc1"]) {
+      const path = `${prefix}/${route}`;
+      const response = await fetch(`${base}/${path}`, { headers: { cookie: `ovis_device=${watch.token}` } });
+      expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
+    }
+    // a driving device reaches the route: this PC asks herdr, its alias too, and no such PC is connected
+    const driving = { cookie: `ovis_device=${drive.token}` };
+    for (const prefix of ["api", "api/machines/local"]) {
+      const response = await fetch(`${base}/${prefix}/${route}`, { headers: driving });
+      expect([prefix, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([prefix, 404, "workspace_not_found"]);
+    }
+    expect((await fetch(`${base}/api/machines/pc1/${route}`, { headers: driving })).status).toBe(503);
+  } finally {
+    server.stop(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("revoking a paired device removes its persistent push subscription", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-device-push-"));
   const server = createServer({ port: 0, stateDir: root, token: "test-push-owner", tailscaleOwner: null, machines: false, pushLoopbackHttp: true });

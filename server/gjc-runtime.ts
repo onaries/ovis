@@ -7,6 +7,7 @@ import { readGjcNativeBinding, validateGjcNativeTranscript } from "./gjc-native.
 import { darwinTerminal } from "./darwin-process.ts";
 import { herdrRpc } from "./herdr/client.ts";
 import { processStartedAt, processStartedAtAsync } from "./process-start.ts";
+import { userHome } from "./user-home.ts";
 import { descendantArgv, windowsProcessTable, type ProcessRow } from "./windows-processes.ts";
 
 export interface GjcTerminal { id: string; startedAt: number }
@@ -339,7 +340,7 @@ function sameNativeVersion(left: NonNullable<ReturnType<typeof readGjcNativeBind
 export function gjcTranscriptForPane(
   paneId: string,
   cwd: string,
-  home = process.env["HOME"] ?? process.env["USERPROFILE"] ?? "",
+  home = userHome(),
   options: GjcTranscriptOptions = {},
 ): Promise<string | null> {
   const token: LookupToken = { cancelled: false };

@@ -9,7 +9,6 @@
   "scripts/prompt-dock-demo-regression.ts": 1,
   "scripts/pty-compare.ts": 1,
   "scripts/remote-bundle-smoke.ts": 1,
-  "scripts/terminal-arrows-clicks-regression.ts": 9,
   "scripts/terminal-command-backspace-regression.ts": 3,
   "scripts/terminal-copy-regression.ts": 14,
   "scripts/terminal-input-regression.ts": 8,

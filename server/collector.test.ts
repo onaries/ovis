@@ -67,6 +67,50 @@ describe("parseFocusFrame", () => {
   });
 });
 
+describe("herdr liveness", () => {
+  /** a collector whose stood-in herdr's socket reads as `socket.now`, and what it said answers on it */
+  function watched() {
+    const herdr = fakeHerdr([]);
+    const socket: { now: string | null } = { now: "herdr-a" };
+    const said: (string | null)[] = [];
+    const collector = startStatusCollector({ ...recorder().handlers, herdrLive: { identity: () => socket.now, onChange: (identity) => said.push(identity) } }, herdr.deps);
+    return { herdr, socket, said, collector };
+  }
+
+  it("names the herdr that answers the lifecycle subscription, until it closes (#2257)", () => {
+    const { herdr, said, collector } = watched();
+    try {
+      expect(said).toEqual([]);
+      herdr.lifecycle().start();
+      expect(said).toEqual(["herdr-a"]);
+      // herdr went away: the connection closed, whatever its socket file still says
+      herdr.lifecycle().drop("socket_error");
+      expect(said).toEqual(["herdr-a", null]);
+    } finally {
+      collector.stop();
+    }
+  });
+
+  it("names no herdr when its socket was replaced between the attempt and the answer (#2257)", () => {
+    const { herdr, socket, said, collector } = watched();
+    try {
+      // attempted to herdr-a; by the time an answer is read, the socket is another herdr's
+      socket.now = "herdr-b";
+      herdr.lifecycle().start();
+      expect(said).toEqual([null]);
+    } finally {
+      collector.stop();
+    }
+  });
+
+  it("names none once the collector stops, whose own close reports none (#2257)", () => {
+    const { herdr, said, collector } = watched();
+    herdr.lifecycle().start();
+    collector.stop();
+    expect(said).toEqual(["herdr-a", null]);
+  });
+});
+
 describe("lifecycle invalidations", () => {
   it("tells when the lifecycle subscription is live, also when only a reopened one starts", async () => {
     // a structure change before this is not heard of: a caller that creates a workspace waits for it

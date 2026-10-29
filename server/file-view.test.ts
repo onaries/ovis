@@ -1,11 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { appendFileSync, chmodSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 import * as fileView from "./file-view.ts";
-import { crossSiteFileRead, fileInfo, fileResponse, forgetPageMedia, locateFile, locateFileInFolder, PAGE_MEDIA_LIFETIME_MS, PAGE_MEDIA_PER_RENDER, pageFileHooks, pageMediaResponse, pageMediaSource, resolveFilePath } from "./file-view.ts";
+import { crossSiteFileRead, fileInfo, fileResponse, forgetPageMedia, locateFile, locateFileInFolder, PAGE_MEDIA_LIFETIME_MS, PAGE_MEDIA_PER_RENDER, pageFileHooks, pageMediaResponse, pageMediaSource, resolveFilePath, STREAM_CHUNK_BYTES, watchPageMedia } from "./file-view.ts";
+import { setFilePoolOptions } from "./file-pool.ts";
+import { runFileTask } from "./file-tasks.ts";
 import { clearFileCache, filesNamed } from "./files.ts";
+
+// pageFileHooks reach the thread they are set on alone: the tasks here run on it, not on file threads
+beforeAll(() => setFilePoolOptions({ inline: runFileTask }));
+afterAll(() => setFilePoolOptions());
 
 /** Every descriptor a page's file was read through: open now, and any closed twice. */
 const live = new Set<number>();
@@ -75,18 +81,34 @@ describe("file view", () => {
   it("serves HTML as sandboxed plain text, and a download as an attachment", async () => {
     const root = temp();
     writeFileSync(join(root, "page.html"), "<script>alert(1)</script>");
-    const response = fileResponse(fileInfo(join(root, "page.html"))!, true);
+    const response = await fileResponse(fileInfo(join(root, "page.html"))!, true);
     expect(response.headers.get("content-type")).toStartWith("text/plain");
     expect(response.headers.get("content-security-policy")).toStartWith("sandbox");
     expect(response.headers.get("content-disposition")).toBe("attachment; filename*=UTF-8''page.html");
     expect(await response.text()).toBe("<script>alert(1)</script>");
   });
 
+  it("streams a large file from a slow disk from its descriptor, and closes it once sent", async () => {
+    const root = temp();
+    const bytes = Buffer.from(Array.from({ length: 600 * 1024 }, (_, index) => index % 253));
+    writeFileSync(join(root, "clip.bin"), bytes);
+    // every disk counts as slow: the body is streamed, not sent as a file Bun reads on this thread
+    pageFileHooks.fastDiskMs = -1;
+    const whole = await fileResponse(fileInfo(join(root, "clip.bin"))!, false);
+    expect(whole.status).toBe(200);
+    expect(Buffer.from(await whole.arrayBuffer()).equals(bytes)).toBe(true);
+    const part = await fileResponse(fileInfo(join(root, "clip.bin"))!, false, false, null, new Request("http://x/", { headers: { range: "bytes=1000-400000" } }));
+    expect(part.status).toBe(206);
+    expect(part.headers.get("content-range")).toBe(`bytes 1000-400000/${bytes.length}`);
+    expect(Buffer.from(await part.arrayBuffer()).equals(bytes.subarray(1000, 400001))).toBe(true);
+    await closing([...live][0] ?? -1);
+  });
+
   it("draws an HTML page only when asked to render it, with no origin and no network", async () => {
     const root = temp();
     writeFileSync(join(root, "report.html"), "<p>chart</p>");
     writeFileSync(join(root, "notes.txt"), "<p>not a page</p>");
-    const page = fileResponse(fileInfo(join(root, "report.html"))!, false, true);
+    const page = await fileResponse(fileInfo(join(root, "report.html"))!, false, true);
     expect(page.headers.get("content-type")).toStartWith("text/html");
     const policy = page.headers.get("content-security-policy")!;
     // its script runs, but never with this app's origin, cookie or storage
@@ -101,9 +123,15 @@ describe("file view", () => {
     expect(policy).toContain("frame-ancestors 'self'");
     expect(await page.text()).toBe("<p>chart</p>");
     // asked without render, or as a download, it stays the source; another text file never renders
-    expect(fileResponse(fileInfo(join(root, "report.html"))!, false).headers.get("content-type")).toStartWith("text/plain");
-    expect(fileResponse(fileInfo(join(root, "report.html"))!, true, true).headers.get("content-type")).toStartWith("text/plain");
-    const text = fileResponse(fileInfo(join(root, "notes.txt"))!, false, true);
+    // (each body left unread is cancelled, which closes the descriptor it streams from)
+    const source = await fileResponse(fileInfo(join(root, "report.html"))!, false);
+    await source.body?.cancel();
+    expect(source.headers.get("content-type")).toStartWith("text/plain");
+    const download = await fileResponse(fileInfo(join(root, "report.html"))!, true, true);
+    await download.body?.cancel();
+    expect(download.headers.get("content-type")).toStartWith("text/plain");
+    const text = await fileResponse(fileInfo(join(root, "notes.txt"))!, false, true);
+    await text.body?.cancel();
     expect(text.headers.get("content-type")).toStartWith("text/plain");
     expect(text.headers.get("content-security-policy")).toStartWith("sandbox;");
   });
@@ -133,7 +161,7 @@ describe("file view", () => {
       `<img id="cdn" src="https://example.com/a.png"><img id="rooted" src="/etc/hosts">`,
       `<img id="unc" src="%5C%5Chost%5Cshare%5Ca.png"><img id="drive" src="C%3A%5Ca.png"><img id="slash" src="%2Fetc%2Fhosts">`,
     ].join(""));
-    const html = await fileResponse(fileInfo(join(site, "report.html"))!, false, true).text();
+    const html = await (await fileResponse(fileInfo(join(site, "report.html"))!, false, true)).text();
     // its own files, in its folder or below, as the kind of file each element takes, with the element's attributes kept
     const data = (mime: string, text: string) => `data:${mime};base64,${Buffer.from(text).toString("base64")}`;
     expect(html).toContain(`<link rel="stylesheet" href="${data("text/css", "h1 { color: teal }")}">`);
@@ -183,7 +211,7 @@ describe("file view", () => {
     ].join(""));
     const source = "http://127.0.0.1:7317/api/fs/page-media/";
     const media = { source, client: "10.0.0.2", device: "phone" };
-    const page = fileResponse(fileInfo(join(site, "report.html"))!, false, true, media);
+    const page = await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media);
     const policy = page.headers.get("content-security-policy")!;
     // media from that one path, and still nothing else from this server or the web
     expect(policy).toContain(`media-src data: blob: ${source}`);
@@ -214,7 +242,7 @@ describe("file view", () => {
     expect(served.headers.get("access-control-allow-origin")).toBeNull();
     expect((await served.arrayBuffer()).byteLength).toBe(big);
     // a new address on the next render (the first one stays its own), none for a guess
-    const again = await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media).text();
+    const again = await (await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media)).text();
     expect(again).toMatch(new RegExp(`<video id="big" src="${source}[A-Za-z0-9_-]{32}"`));
     expect(again).not.toContain(played);
     expect(pageMediaResponse("A".repeat(32), "10.0.0.2")).toBeNull();
@@ -230,7 +258,7 @@ describe("file view", () => {
     const before = process.env["OVIS_MEDIA_ROOTS"];
     process.env["OVIS_MEDIA_ROOTS"] = ["/nonexistent-share", join(root, "share")].join(delimiter);
     try {
-      const shared = await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media).text();
+      const shared = await (await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media)).text();
       expect(shared).toMatch(new RegExp(`<audio id="linked" src="${source}[A-Za-z0-9_-]{32}">`));
       // there it decides where the file lies, however the page reaches it, never under a hidden name or elsewhere above
       expect(shared).toMatch(new RegExp(`<audio id="above" src="${source}[A-Za-z0-9_-]{32}">`));
@@ -243,14 +271,14 @@ describe("file view", () => {
       else process.env["OVIS_MEDIA_ROOTS"] = before;
     }
     // without a media source (a PC's bridge, a Host that is not plain) the page is drawn as before
-    expect(await fileResponse(fileInfo(join(site, "report.html"))!, false, true).text()).toContain(`<video id="big" src="big.mp4"`);
+    expect(await (await fileResponse(fileInfo(join(site, "report.html"))!, false, true)).text()).toContain(`<video id="big" src="big.mp4"`);
   });
 
   it("seeks a page's video by Range", async () => {
     const root = temp();
     writeFileSync(join(root, "clip.mp4"), Buffer.alloc(9 * 1024 * 1024, 7));
     writeFileSync(join(root, "page.html"), `<video src="clip.mp4"></video>`);
-    const html = await fileResponse(fileInfo(join(root, "page.html"))!, false, true, { source: "http://127.0.0.1:1/api/fs/page-media/", client: null, device: null }).text();
+    const html = await (await fileResponse(fileInfo(join(root, "page.html"))!, false, true, { source: "http://127.0.0.1:1/api/fs/page-media/", client: null, device: null })).text();
     const token = /page-media\/([A-Za-z0-9_-]{32})/.exec(html)![1]!;
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) => pageMediaResponse(token, null, request) ?? new Response(null, { status: 404 }) });
     try {
@@ -277,7 +305,7 @@ describe("file view", () => {
   it("ends a page's media address a fixed time after its render, however often it plays", async () => {
     const root = temp();
     const rendered = Date.now();
-    const [token] = tokensOf(await fileResponse(fileInfo(streamedPage(root))!, false, true, owner("10.0.0.2")).text());
+    const [token] = tokensOf(await (await fileResponse(fileInfo(streamedPage(root))!, false, true, owner("10.0.0.2"))).text());
     // playing it does not stretch its life: each play near the end still ends at the same moment
     for (const at of [1, PAGE_MEDIA_LIFETIME_MS / 2, PAGE_MEDIA_LIFETIME_MS - 60_000]) expect(await plays(token!, "10.0.0.2", rendered + at)).toBe(true);
     expect(pageMediaResponse(token!, "10.0.0.2", null, rendered + PAGE_MEDIA_LIFETIME_MS + 60_000)).toBeNull();
@@ -287,7 +315,7 @@ describe("file view", () => {
 
   it("plays a page's media only to the client that rendered it", async () => {
     const root = temp();
-    const [token] = tokensOf(await fileResponse(fileInfo(streamedPage(root))!, false, true, owner("10.0.0.2")).text());
+    const [token] = tokensOf(await (await fileResponse(fileInfo(streamedPage(root))!, false, true, owner("10.0.0.2"))).text());
     // an address the page's script passed on, asked for from elsewhere
     expect(pageMediaResponse(token!, "203.0.113.9")).toBeNull();
     expect(pageMediaResponse(token!, "203.0.113.9 via 127.0.0.1")).toBeNull();
@@ -298,9 +326,9 @@ describe("file view", () => {
   it("drops a device's page media when it is revoked, and a client's when it signs out", async () => {
     const root = temp();
     const page = fileInfo(streamedPage(root))!;
-    const [phone] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.2", "phone")).text());
-    const [laptop] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.3", "laptop")).text());
-    const [shared] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.4")).text());
+    const [phone] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2", "phone"))).text());
+    const [laptop] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.3", "laptop"))).text());
+    const [shared] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.4"))).text());
     forgetPageMedia({ device: "phone" });
     expect(pageMediaResponse(phone!, "10.0.0.2")).toBeNull();
     expect(await plays(laptop!, "10.0.0.3")).toBe(true);
@@ -309,14 +337,46 @@ describe("file view", () => {
     expect(await plays(laptop!, "10.0.0.3")).toBe(true);
   });
 
+  it("keeps no page media for a device or client forgotten while its page was being drawn", async () => {
+    const root = temp();
+    const page = fileInfo(streamedPage(root))!;
+    // the render runs as a file task, after this turn: the device is revoked and the client signs out meanwhile
+    const revoked = fileResponse(page, false, true, owner("10.0.0.2", "phone"));
+    const signedOut = fileResponse(page, false, true, owner("10.0.0.4"));
+    const kept = fileResponse(page, false, true, owner("10.0.0.3", "laptop"));
+    forgetPageMedia({ device: "phone" });
+    forgetPageMedia({ client: "10.0.0.4" });
+    const [phone] = tokensOf(await (await revoked).text());
+    const [shared] = tokensOf(await (await signedOut).text());
+    const [laptop] = tokensOf(await (await kept).text());
+    expect(pageMediaResponse(phone!, "10.0.0.2")).toBeNull();
+    expect(pageMediaResponse(shared!, "10.0.0.4")).toBeNull();
+    expect(await plays(laptop!, "10.0.0.3")).toBe(true);
+  });
+
+  it("keeps no page media for a device revoked while its request was still finding the page", async () => {
+    const root = temp();
+    const page = fileInfo(streamedPage(root))!;
+    // the request notes the forgetting before it looks for the file; the revocation lands during that look
+    const watch = watchPageMedia();
+    forgetPageMedia({ device: "phone" });
+    try {
+      const [phone] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2", "phone"), null, watch)).text());
+      expect(pageMediaResponse(phone!, "10.0.0.2")).toBeNull();
+    } finally { watch.done(); }
+    // a request begun after it is not held to it
+    const [later] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2", "phone"))).text());
+    expect(await plays(later!, "10.0.0.2")).toBe(true);
+  });
+
   it("refuses a page's media once the file is written over in place", async () => {
     const root = temp();
     const page = fileInfo(streamedPage(root))!;
     const clip = join(root, "clip-0.mp4");
     const second = Math.floor(Date.now() / 1000) - 60;
     utimesSync(clip, second, second);
-    const [touched] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.2")).text());
-    const [grown] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.2")).text());
+    const [touched] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2"))).text());
+    const [grown] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2"))).text());
     const { ino } = statSync(clip);
     // grown in place (same inode), its modification time put back: only its size tells
     appendFileSync(clip, "more");
@@ -324,7 +384,7 @@ describe("file view", () => {
     expect(statSync(clip).ino).toBe(ino);
     expect(pageMediaResponse(grown!, "10.0.0.2")).toBeNull();
     // rewritten at the same size: only its modification time tells
-    const [rewritten] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.2")).text());
+    const [rewritten] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2"))).text());
     expect(await plays(rewritten!, "10.0.0.2")).toBe(true);
     utimesSync(clip, second + 5, second + 5);
     expect(pageMediaResponse(rewritten!, "10.0.0.2")).toBeNull();
@@ -333,7 +393,7 @@ describe("file view", () => {
 
   it("streams at most so many files from one render", async () => {
     const root = temp();
-    const html = await fileResponse(fileInfo(streamedPage(root, "page.html", PAGE_MEDIA_PER_RENDER + 1))!, false, true, owner("10.0.0.2")).text();
+    const html = await (await fileResponse(fileInfo(streamedPage(root, "page.html", PAGE_MEDIA_PER_RENDER + 1))!, false, true, owner("10.0.0.2"))).text();
     expect(tokensOf(html)).toHaveLength(PAGE_MEDIA_PER_RENDER);
     // the one past the cap is left as the page wrote it
     expect(html).toContain(`<video id="v${PAGE_MEDIA_PER_RENDER}" src="clip-${PAGE_MEDIA_PER_RENDER}.mp4">`);
@@ -359,10 +419,10 @@ describe("file view", () => {
     writeFileSync(join(root, "same.html"), `${"<img src=\"missing.png\">".repeat(5_000)}<img id="last" src="a.png">`);
     writeFileSync(join(root, "many.html"), `${many}<img id="last" src="a.png">`);
     const started = performance.now();
-    expect(await fileResponse(fileInfo(join(root, "same.html"))!, false, true).text()).toContain(`<img id="last" src="data:image/png;base64,`);
+    expect(await (await fileResponse(fileInfo(join(root, "same.html"))!, false, true)).text()).toContain(`<img id="last" src="data:image/png;base64,`);
     expect(performance.now() - started).toBeLessThan(2_000);
     // the thousand-and-first URL is left as it is
-    expect(await fileResponse(fileInfo(join(root, "many.html"))!, false, true).text()).toContain(`<img id="last" src="a.png">`);
+    expect(await (await fileResponse(fileInfo(join(root, "many.html"))!, false, true)).text()).toContain(`<img id="last" src="a.png">`);
   });
 
   it("refuses another site's page loading a file, but not a navigation or this app", () => {
@@ -392,7 +452,7 @@ describe("page files read through the descriptor that was validated", () => {
   const source = "http://127.0.0.1:1/api/fs/page-media/";
   const owner = (device: string | null = null) => ({ source, client: null, device });
   const tokensOf = (html: string): string[] => [...html.matchAll(/page-media\/([A-Za-z0-9_-]{32})/g)].map((match) => match[1]!);
-  const render = async (page: string, media: ReturnType<typeof owner> | null = owner()) => (await fileResponse(fileInfo(page)!, false, true, media).text());
+  const render = async (page: string, media: ReturnType<typeof owner> | null = owner()) => (await (await fileResponse(fileInfo(page)!, false, true, media)).text());
   const png = (text: string) => Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from(text)]);
   /** a file of `bytes` whose first bytes say which it is */
   const marked = (path: string, mark: string, bytes = BIG) => { writeFileSync(path, mark); truncateSync(path, bytes); };
@@ -616,7 +676,7 @@ describe("page files read through the descriptor that was validated", () => {
     const { page } = layout();
     const found = fileInfo(page)!;
     rmSync(page);
-    const gone = fileResponse(found, false, true);
+    const gone = await fileResponse(found, false, true);
     expect(gone.status).toBe(404);
     expect(await gone.json()).toEqual({ error: { code: "not_found", message: "no readable file at that path" } });
   });
@@ -731,7 +791,7 @@ describe("page files read through the descriptor that was validated", () => {
         renameSync(site, join(root, "parked"));
         symlinkSync(outside, site);
       };
-      const response = fileResponse(found, false, true, owner());
+      const response = await fileResponse(found, false, true, owner());
       expect(response.status).toBe(404);
       expect(await response.text()).not.toContain("OUTSIDE-PAGE-SECRET");
       delete pageFileHooks.platform;
@@ -746,7 +806,7 @@ describe("page files read through the descriptor that was validated", () => {
     writeFileSync(join(root, "pages", "sub", "f.png"), png("BESIDE-THE-TARGET"));
     const linked = join(site, "linked.html");
     symlinkSync(join(root, "pages", "real.html"), linked);
-    const response = fileResponse(fileInfo(linked)!, false, true, null);
+    const response = await fileResponse(fileInfo(linked)!, false, true, null);
     expect(response.status).toBe(200);
     expect(await response.text()).toContain(`src="data:image/png;base64,${png("BESIDE-THE-TARGET").toString("base64")}"`);
   });
@@ -768,7 +828,7 @@ describe("page files read through the descriptor that was validated", () => {
         unlinkSync(site);
         renameSync(parked, site);
       };
-      const response = fileResponse(found, false, true, owner());
+      const response = await fileResponse(found, false, true, owner());
       expect(response.status).toBe(404);
       expect(await response.text()).not.toContain("OUTSIDE-PAGE-SECRET");
       delete pageFileHooks.platform;
@@ -796,7 +856,7 @@ describe("page files read through the descriptor that was validated", () => {
       unlinkSync(site);
       renameSync(parked, site);
     };
-    const response = fileResponse(found, false, true, owner());
+    const response = await fileResponse(found, false, true, owner());
     expect(resolvedTo).toBe(hidden);
     // neither that folder's page nor its files, nor the asked page drawn with them
     expect(response.status).toBe(404);
@@ -1308,5 +1368,312 @@ describe("locateFile", () => {
     writeFileSync(join(root, "docs/notes.md"), "notes");
     clearFileCache();
     expect(await locateFile("notes.md", root)).toMatchObject({ info: { path: join(root, "docs/notes.md") } });
+  });
+});
+
+describe("Claude scratch fallback served from what it opened in its folder (#2259)", () => {
+  const roots: string[] = [];
+  beforeEach(trackDescriptors);
+  afterEach(() => {
+    descriptorsClosed();
+    clearFileCache();
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+  /** A pane, its scratch folder holding `name` (`inside`), and `outside` beside that folder under the same name. */
+  const fixture = (name: string, inside: string, outside: string) => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-scratch-open-"));
+    roots.push(root);
+    const cwd = join(root, "pane");
+    const scratch = join(root, "scratch");
+    mkdirSync(cwd);
+    mkdirSync(scratch);
+    writeFileSync(join(scratch, name), inside);
+    writeFileSync(join(root, name), outside);
+    /** the scratch file replaced by a link to the one outside */
+    const swap = () => { unlinkSync(join(scratch, name)); symlinkSync(join(root, name), join(scratch, name)); };
+    return { cwd, scratch, swap };
+  };
+  /** A body sent from its descriptor's own path keeps that descriptor until the body and its answer are collected: once both are gone, each is closed. */
+  const bodiesCollected = async () => {
+    // bounded by collections, not by time: a body still held fails here, with its descriptors named,
+    // however slow the machine
+    for (let collections = 0; live.size > 0; collections += 1) {
+      if (collections === 50) throw new Error(`descriptors still open after ${collections} collections: ${[...live].join(", ")}`);
+      Bun.gc(true);
+      // the collected bodies' finalizers run on a later turn of the event loop: the next close they
+      // bring, or that turn when this collection let none go
+      await Promise.race([closing([...live][0]!), new Promise((resolve) => setImmediate(resolve))]);
+    }
+  };
+  /** A server that sends `answer` once, holding it no longer than that: a handler that kept it would keep its descriptor past the collection. */
+  const serveOnce = (answer: Response) => {
+    const slot: { answer: Response | null } = { answer };
+    return Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+      const sent = slot.answer;
+      slot.answer = null;
+      return sent ?? new Response(null, { status: 410 });
+    } });
+  };
+  const fromScratch = async (name: string, cwd: string, scratch: string) => {
+    const found = await fileView.findFile(name, cwd, async () => scratch);
+    if (found === null || !("info" in found)) throw new Error("expected the scratch file");
+    return found;
+  };
+
+  it("refuses a link swapped in after the file was found", async () => {
+    const { cwd, scratch, swap } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    const found = await fromScratch("note.txt", cwd, scratch);
+    swap();
+    const swapped = await fileResponse(found.info, false, false, null, null, undefined, found.within);
+    expect(await swapped.text()).not.toContain("OUTSIDE-SECRET");
+    expect(swapped.status).toBe(404);
+  });
+
+  it("refuses a link swapped in between the open's check and the open itself", async () => {
+    const { cwd, scratch, swap } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    const found = await fromScratch("note.txt", cwd, scratch);
+    pageFileHooks.afterResolve = () => { delete pageFileHooks.afterResolve; swap(); };
+    const swapped = await fileResponse(found.info, false, false, null, null, undefined, found.within);
+    expect(pageFileHooks.afterResolve).toBeUndefined();
+    expect(await swapped.text()).not.toContain("OUTSIDE-SECRET");
+    expect(swapped.status).toBe(404);
+  });
+
+  it("describes the file only from what it opened in the folder", async () => {
+    const { scratch, swap } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    pageFileHooks.afterResolve = () => { delete pageFileHooks.afterResolve; swap(); };
+    expect(await locateFileInFolder("note.txt", scratch)).toBeNull();
+    expect(pageFileHooks.afterResolve).toBeUndefined();
+  });
+
+  it("renders a page only from what it opened in the folder", async () => {
+    const { cwd, scratch, swap } = fixture("page.html", "<p>INSIDE</p>", "<p>OUTSIDE-SECRET</p>");
+    const found = await fromScratch("page.html", cwd, scratch);
+    expect(await (await fileResponse(found.info, false, true, null, null, undefined, found.within)).text()).toContain("INSIDE");
+    swap();
+    const swapped = await fileResponse(found.info, false, true, null, null, undefined, found.within);
+    expect(await swapped.text()).not.toContain("OUTSIDE-SECRET");
+    expect(swapped.status).toBe(404);
+  });
+
+  it("refuses a link swapped in before the viewer opens, by the path it was given, what it found", async () => {
+    const { cwd, scratch, swap } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    const mayBeScratch = (path: string) => path.startsWith(scratch);
+    const stat = await fromScratch("note.txt", cwd, scratch);
+    // the viewer's next request names the file by the path stat answered
+    const byPath = await fileView.findFile(stat.info.path, cwd, async () => scratch, mayBeScratch);
+    expect(byPath).toMatchObject({ info: { path: stat.info.path }, within: realpathSync(scratch) });
+    if (byPath === null || !("info" in byPath)) throw new Error("expected the scratch file");
+    expect(await (await fileResponse(byPath.info, false, false, null, null, undefined, byPath.within)).text()).toBe("INSIDE");
+    swap();
+    expect(await fileView.findFile(stat.info.path, cwd, async () => scratch, mayBeScratch)).toBeNull();
+    // a path outside the pane's scratch folder is a direct link, as before
+    const outside = join(scratch, "..", "note.txt");
+    expect(await fileView.findFile(outside, cwd, async () => scratch, () => true)).toMatchObject({ info: { path: outside } });
+  });
+
+  it("finds a path in the folder only there, in any name form, never past it", async () => {
+    for (const [stored, swapped] of [["NFD", "NFC"], ["NFC", "NFD"]] as const) {
+      const name = "é.txt".normalize(stored);
+      const { cwd, scratch } = fixture(name, "INSIDE", "OUTSIDE-SECRET");
+      // a file system that stores one form for both cannot hold the swapped name beside it
+      if (existsSync(join(scratch, name.normalize(swapped)))) return;
+      const mayBeScratch = (path: string) => path.startsWith(scratch);
+      const stat = await fromScratch(name, cwd, scratch);
+      // the file the viewer was told of gone, and a link to the file outside put there under the other form of its name
+      unlinkSync(join(scratch, name));
+      symlinkSync(join(scratch, "..", name), join(scratch, name.normalize(swapped)));
+      const byPath = await fileView.findFile(stat.info.path, cwd, async () => scratch, mayBeScratch);
+      if (byPath !== null && "info" in byPath) expect(await (await fileResponse(byPath.info, false, false, null, null, undefined, byPath.within ?? null)).text()).not.toContain("OUTSIDE-SECRET");
+      expect(byPath).toBeNull();
+    }
+  });
+
+  it("finds a path given in full in the folder only where it points, never a file deeper whose path ends in it", async () => {
+    const { cwd, scratch } = fixture("other.txt", "INSIDE", "OUTSIDE-SECRET");
+    mkdirSync(join(scratch, "sub"));
+    writeFileSync(join(scratch, "sub", "a.txt"), "DEEPER");
+    const mayBeScratch = (path: string) => path.startsWith(scratch);
+    // `<scratch>/a.txt` is not there: not found, as a missing path anywhere else
+    expect(await fileView.findFile(join(scratch, "a.txt"), cwd, async () => scratch, mayBeScratch)).toBeNull();
+    // a bare name is still found deeper in the scratch folder, as the fallback always did
+    expect(await fileView.findFile("a.txt", cwd, async () => scratch, mayBeScratch)).toMatchObject({ info: { path: join(scratch, "sub", "a.txt") } });
+  });
+
+  it("keeps sending the file it opened when a link is swapped in while it is sent", async () => {
+    // larger than one read too: such a body is sent after its headers, never from the path
+    for (const inside of ["INSIDE", "I".repeat(STREAM_CHUNK_BYTES + 1)]) {
+      const { cwd, scratch, swap } = fixture("note.txt", inside, "OUTSIDE-SECRET");
+      await (async () => {
+        const found = await fromScratch("note.txt", cwd, scratch);
+        const responses = await Promise.all([false, true].map((download) => fileResponse(found.info, download, false, null, null, undefined, found.within)));
+        expect(responses.map((response) => response.status)).toEqual([200, 200]);
+        swap();
+        for (const response of responses) expect(await response.text()).toBe(inside);
+      })();
+    }
+    await bodiesCollected();
+  });
+
+  it("sends a file larger than one read with its exact length, whole and by range", async () => {
+    // only Linux names an open file by its descriptor (`/proc/self/fd`); elsewhere it is streamed without one
+    if (process.platform !== "linux") return;
+    const size = 2 * STREAM_CHUNK_BYTES + 4096;
+    // bytes that tell their own offset, so a range sent from the wrong place is seen
+    const bytes = Buffer.from(Array.from({ length: size }, (_, at) => at % 251));
+    const { cwd, scratch } = fixture("big.bin", "", "OUTSIDE-SECRET");
+    writeFileSync(join(scratch, "big.bin"), bytes);
+    // a disk that answers at once, whatever this machine's load: the case a file body is for
+    pageFileHooks.fastDiskMs = 60_000;
+    await (async () => {
+      const found = await fromScratch("big.bin", cwd, scratch);
+      const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => fileResponse(found.info, true, false, null, request, undefined, found.within) });
+      try {
+        const whole = await fetch(server.url);
+        expect(whole.headers.get("content-length")).toBe(String(size));
+        expect(Buffer.from(await whole.arrayBuffer()).equals(bytes)).toBe(true);
+        // more than one read: sent as a file body, not read before the headers
+        const [first, last] = [10, STREAM_CHUNK_BYTES + 5000];
+        const part = await fetch(server.url, { headers: { range: `bytes=${first}-${last}` } });
+        expect(part.status).toBe(206);
+        expect(part.headers.get("content-range")).toBe(`bytes ${first}-${last}/${size}`);
+        expect(part.headers.get("content-length")).toBe(String(last - first + 1));
+        expect(Buffer.from(await part.arrayBuffer()).equals(bytes.subarray(first, last + 1))).toBe(true);
+      } finally { await server.stop(true); }
+    })();
+    await bodiesCollected();
+  });
+
+  it("keeps a large file's exact length while many answers let go of wait to be collected (#2286)", async () => {
+    // only Linux names an open file by its descriptor (`/proc/self/fd`); elsewhere it is streamed without one
+    if (process.platform !== "linux") return;
+    const size = STREAM_CHUNK_BYTES + 4096;
+    const bytes = Buffer.from(Array.from({ length: size }, (_, at) => at % 251));
+    const { cwd, scratch } = fixture("big.bin", "", "OUTSIDE-SECRET");
+    writeFileSync(join(scratch, "big.bin"), bytes);
+    pageFileHooks.fastDiskMs = 60_000;
+    // a host with room for them all, as most Linux systems are, whatever this one's limit
+    pageFileHooks.openFiles = 524_288;
+    await (async () => {
+      const found = await fromScratch("big.bin", cwd, scratch);
+      // answers already let go of, as a busy server's are before a collection: each still holds its
+      // descriptor; more than the cap there once was (256), and well within any open-file limit
+      for (let at = 0; at < 384; at += 1) await fileResponse(found.info, true, false, null, null, undefined, found.within);
+      // the next answer made at once, before the event loop turns and a collection that happens to run lets any go
+      const server = serveOnce(await fileResponse(found.info, true, false, null, null, undefined, found.within));
+      try {
+        const next = await fetch(server.url);
+        expect(next.headers.get("content-length")).toBe(String(size));
+        expect(Buffer.from(await next.arrayBuffer()).equals(bytes)).toBe(true);
+      } finally { await server.stop(true); }
+    })();
+    await bodiesCollected();
+  });
+
+  it("holds no more such bodies than a quarter of this process's open files (#2286)", async () => {
+    if (process.platform !== "linux") return;
+    const size = STREAM_CHUNK_BYTES + 4096;
+    const bytes = Buffer.from(Array.from({ length: size }, (_, at) => at % 251));
+    const { cwd, scratch } = fixture("big.bin", "", "OUTSIDE-SECRET");
+    writeFileSync(join(scratch, "big.bin"), bytes);
+    pageFileHooks.fastDiskMs = 60_000;
+    // a host whose hard limit is 1,024: the server's own sockets, terminals and file threads need the rest
+    pageFileHooks.openFiles = 1024;
+    await (async () => {
+      const found = await fromScratch("big.bin", cwd, scratch);
+      // downloads still under way, kept until the next answer is sent, so no collection lets one go
+      const held: Response[] = [];
+      for (let at = 0; at < 256; at += 1) held.push(await fileResponse(found.info, true, false, null, null, undefined, found.within));
+      const server = serveOnce(await fileResponse(found.info, true, false, null, null, undefined, found.within));
+      try {
+        const next = await fetch(server.url);
+        expect(held).toHaveLength(256);
+        // past the cap: streamed from its descriptor, whole, rather than holding one more descriptor
+        expect(next.headers.get("content-length")).toBeNull();
+        expect(Buffer.from(await next.arrayBuffer()).equals(bytes)).toBe(true);
+      } finally { await server.stop(true); }
+    })();
+    await bodiesCollected();
+  });
+
+  it("answers a burst of ranges while many bodies are held without stopping the event loop for a collection (#2286)", async () => {
+    if (process.platform !== "linux") return;
+    const size = 4 * STREAM_CHUNK_BYTES;
+    const { cwd, scratch } = fixture("video.mp4", "", "OUTSIDE-SECRET");
+    writeFileSync(join(scratch, "video.mp4"), Buffer.alloc(size, 7));
+    pageFileHooks.fastDiskMs = 60_000;
+    pageFileHooks.openFiles = 524_288;
+    // a forced collection (`Bun.gc(true)`) holds every terminal and request on this thread for as long
+    // as it takes on the whole heap: hundreds of milliseconds each on a large one
+    const collect = Bun.gc;
+    const forced: boolean[] = [];
+    Bun.gc = (force?: boolean) => { forced.push(force === true); return collect(force); };
+    try {
+      await (async () => {
+        const found = await fromScratch("video.mp4", cwd, scratch);
+        // a player seeking through a long video: downloads still under way, then many more ranges
+        const held: Response[] = [];
+        // past where a collection is asked for (256), and well within any open-file limit
+        for (let at = 0; at < 384; at += 1) {
+          const first = (at * STREAM_CHUNK_BYTES) % (size - STREAM_CHUNK_BYTES - 1);
+          const request = new Request("http://localhost/", { headers: { range: `bytes=${first}-${first + STREAM_CHUNK_BYTES}` } });
+          const answer = await fileResponse(found.info, false, false, null, request, undefined, found.within);
+          expect(answer.status).toBe(206);
+          held.push(answer);
+        }
+        expect(forced.filter(Boolean)).toEqual([]);
+        // the downloads end: a body streamed from its descriptor lets it go then
+        for (const answer of held) await answer.body?.cancel();
+      })();
+    } finally { Bun.gc = collect; }
+    await bodiesCollected();
+  });
+
+  it("names the descriptor a file thread opens in the folder in its cell, and takes back one it refuses", async () => {
+    const { cwd, scratch, swap } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    const found = await fromScratch("note.txt", cwd, scratch);
+    const cell = () => { const opened = new Int32Array(new SharedArrayBuffer(4)); opened[0] = -1; return opened; };
+    const kept = cell();
+    let named = -1;
+    pageFileHooks.afterAuthorize = () => { named = Atomics.load(kept, 0); };
+    const opened = runFileTask({ op: "open", path: found.info.path, get: { range: null, ifRange: false }, opened: kept, within: found.within });
+    // named before it was authorized, and handed back with the body read
+    expect(named).toBeGreaterThanOrEqual(0);
+    expect(opened).toMatchObject({ bytes: new TextEncoder().encode("INSIDE") });
+    expect(Atomics.load(kept, 0)).toBe(-1);
+    delete pageFileHooks.afterAuthorize;
+    const refused = cell();
+    pageFileHooks.afterOpen = () => { delete pageFileHooks.afterOpen; swap(); };
+    expect(runFileTask({ op: "open", path: found.info.path, get: { range: null, ifRange: false }, opened: refused, within: found.within })).toBeNull();
+    // taken back before it was closed: the pool never closes that number again (`abandon`)
+    expect(Atomics.load(refused, 0)).toBe(-1);
+  });
+
+  it("names the descriptor a file thread describes a file in the folder from in its cell, and takes it back", async () => {
+    const { scratch } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    const described = new Int32Array(new SharedArrayBuffer(4));
+    described[0] = -1;
+    let named = -1;
+    pageFileHooks.afterAuthorize = () => { named = Atomics.load(described, 0); };
+    expect(runFileTask({ op: "describe", path: join(scratch, "note.txt"), folder: scratch, opened: described })).toMatchObject({ info: { size: 6 }, within: realpathSync(scratch) });
+    delete pageFileHooks.afterAuthorize;
+    expect(named).toBeGreaterThanOrEqual(0);
+    expect(Atomics.load(described, 0)).toBe(-1);
+  });
+
+  it("still serves the file in the folder whole, by range and to a HEAD", async () => {
+    const { cwd, scratch } = fixture("note.txt", "0123456789", "OUTSIDE-SECRET");
+    const found = await fromScratch("note.txt", cwd, scratch);
+    const whole = await fileResponse(found.info, false, false, null, null, undefined, found.within);
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get("content-type")).toStartWith("text/plain");
+    expect(await whole.text()).toBe("0123456789");
+    const range = await fileResponse(found.info, false, false, null, new Request("http://ovis/", { headers: { range: "bytes=2-4" } }), undefined, found.within);
+    expect(range.status).toBe(206);
+    expect(range.headers.get("content-range")).toBe("bytes 2-4/10");
+    expect(await range.text()).toBe("234");
+    const head = await fileResponse(found.info, false, false, null, new Request("http://ovis/", { method: "HEAD" }), undefined, found.within);
+    expect(head.headers.get("content-length")).toBe("10");
+    expect(head.body).toBeNull();
   });
 });

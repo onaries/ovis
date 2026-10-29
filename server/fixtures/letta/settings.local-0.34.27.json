@@ -1,0 +1,13 @@
+{
+  "lastAgent": "agent-local-97f4bceb-2f0d-4a16-8b9f-abb2f3d4a72c",
+  "sessionsByServer": {
+    "local:/home/user/.letta/lc-local-backend": {
+      "agentId": "agent-local-97f4bceb-2f0d-4a16-8b9f-abb2f3d4a72c",
+      "conversationId": "local-conv-1"
+    }
+  },
+  "lastSession": {
+    "agentId": "agent-local-97f4bceb-2f0d-4a16-8b9f-abb2f3d4a72c",
+    "conversationId": "local-conv-1"
+  }
+}

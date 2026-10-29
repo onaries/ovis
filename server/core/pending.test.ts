@@ -1,9 +1,10 @@
-import { afterAll, afterEach, expect, it, mock } from "bun:test";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, expect, it, mock, spyOn } from "bun:test";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ServerMessage, SessionSnapshot } from "../../shared/protocol.ts";
+import * as claudeStore from "../claude-store.ts";
 import * as herdr from "../herdr/client.ts";
 import * as pi from "../pi.ts";
 import type { SightingFacts } from "../input-guard.ts";
@@ -17,7 +18,7 @@ const originalProcessInfo = herdr.paneProcessInfo;
 const { paneSendText, paneSendKeys, paneRead } = herdr;
 const originalTranscriptPath = pi.piTranscriptPath;
 let lookup: { at: "identity" | "transcript"; entered: () => void; release: Promise<void> } | null = null;
-type Processes = { shell_pid: number; foreground_processes: { pid: number; name: string }[] };
+type Processes = { shell_pid: number; foreground_processes: { pid: number; name: string; argv?: string[] }[] };
 /** what herdr's process read answers for a pane a case sets up */
 const processes = new Map<string, Processes>();
 /** each text, key, screen read or pty write the bridge asks for in such a pane, where no herdr answers */
@@ -402,10 +403,64 @@ it("keeps the owner's held row sendable when its own Send now fails before anyth
     clientSnapshot: async (): Promise<SessionSnapshot> => { throw new Error("herdr unreachable before any write"); },
     omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
   });
-  const item = delivery.pending.enqueue(owner, "p", 1, "held text", null as never, { agent: null, terminalId: "p", session: null }, true);
+  const item = delivery.pending.enqueue(owner, "p", 1, "held text", null, { agent: null, terminalId: "p", session: null }, true);
   await delivery.pendingFrames["pending-action"](owner, { type: "pending-action", id: 10, pane_id: "p", pending_id: item.message.id, action: "steer" });
   expect(output.find((frame) => frame.type === "pending-result" && frame.id === 10)).toMatchObject({ ok: false, code: "submit_failed" });
   expect(typed).toEqual([]);
   expect(delivery.pending.list(owner, "p")[0]?.state).toBe("held");
-  expect(() => delivery.pending.enqueue(owner, "p", 2, "another", null as never, { agent: null, terminalId: "p", session: null })).not.toThrow();
+  expect(() => delivery.pending.enqueue(owner, "p", 2, "another", null, { agent: null, terminalId: "p", session: null })).not.toThrow();
+});
+
+// the test process stands in for the attach client; its own CLAUDE_CONFIG_DIR would name another store
+it.skipIf(Boolean(process.env["CLAUDE_CONFIG_DIR"]))("holds a message queued for a claude attach job's session once that job's state cannot be read before Send now (#2125)", async () => {
+  const JOB = "dc5643bd", SESSION_A = "0b8e6f0e-8d3f-4c1a-9a53-6c2b7a1d9e42";
+  const home = mkdtempSync(join(tmpdir(), "ovis-pending-attach-")); roots.push(home);
+  const state = join(home, ".claude", "jobs", JOB, "state.json");
+  mkdirSync(join(home, ".claude", "jobs", JOB), { recursive: true });
+  writeFileSync(state, JSON.stringify({ sessionId: `${JOB}-6228-4376-a66c-ad9820b26f37`, resumeSessionId: SESSION_A }));
+  // the real lookup, in this test's own Claude store
+  const real = claudeStore.claudeForegroundSession;
+  /** reads that find no session, as a record caught while being rewritten does, before the real lookup again */
+  let missed = 0;
+  const session = spyOn(claudeStore, "claudeForegroundSession").mockImplementation(async (found) => {
+    if (missed === 0) return real(found, home);
+    missed--;
+    return null;
+  });
+  const output: ServerMessage[] = [];
+  const owner = { data: connectionData({ deviceId: "device", readOnly: false }), getBufferedAmount: () => 0,
+    send: (value: string) => { output.push(JSON.parse(value)); return 1; } } as Client;
+  owner.data.attached.set("p", { keepSize: false });
+  let queue = Promise.resolve<unknown>(undefined);
+  const serialize = <T>(_pane: string, task: () => T | Promise<T>): Promise<T> => { const next = queue.catch(() => {}).then(task); queue = next; return next; };
+  const delivery = createPendingDelivery({
+    options: {}, clients: new Set([owner]), attachments: new Map(), serialize, lastTyped: new Map(),
+    sight: (): TerminalSighting => ({ origin: null, pty: null, claim: null, facts: () => READY, write: (data: string) => { calls.push(`pty ${data}`); } }),
+    submitText: async (pane) => { calls.push(`submit ${pane}`); },
+    authorizeSocket: () => {},
+    clientSnapshot: async () => ({ panes: [{ pane_id: "p", terminal_id: "p", agent: "claude", agent_status: "idle" }] }) as SessionSnapshot,
+    omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
+  });
+  processes.set("p", { shell_pid: SHELL, foreground_processes: [{ pid: process.pid, name: "claude", argv: ["claude", "attach", JOB] }] });
+  try {
+    const item = delivery.pending.enqueue(owner, "p", 1, "for session A", null, { agent: "claude", terminalId: "p", session: null, claudeSession: SESSION_A }, true);
+    // each Send now a new attempt, as the client numbers them: the same generation would replay the last reply
+    const steer = async (id: number) => {
+      await delivery.pendingFrames["pending-action"](owner, { type: "pending-action", id, pane_id: "p", pending_id: item.message.id, action: "steer", resend_generation: id });
+      return output.find((frame) => frame.type === "pending-result" && frame.id === id);
+    };
+    // control: the job still names session A, so the check goes on to read the screen (which this pane answers with an error)
+    expect(await steer(10)).not.toMatchObject({ code: "pending_target_changed" });
+    expect(calls).toEqual(["read p"]);
+    // control: one read that misses it is read again, and finds session A
+    missed = 1;
+    expect(await steer(11)).not.toMatchObject({ code: "pending_target_changed" });
+    expect(missed).toBe(0);
+    expect(calls).toEqual(["read p", "read p"]);
+    // the job's state no longer readable: the session it shows is not known any more
+    writeFileSync(state, '{"sessionId":');
+    expect(await steer(12)).toMatchObject({ ok: false, code: "pending_target_changed" });
+    expect(calls).toEqual(["read p", "read p"]); // no text, no Enter, not even a screen read for it
+    expect(delivery.pending.list(owner, "p")).toMatchObject([{ id: item.message.id, state: "held" }]);
+  } finally { session.mockRestore(); }
 });

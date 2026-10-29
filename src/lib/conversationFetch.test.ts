@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 
-import { ApiError, fetchPaneConversation, conversationAnswerBytes, peekPaneConversation } from "./api.ts";
+import { ApiError, CONVERSATION_ANSWER_MAX_BYTES, CONVERSATION_ANSWERS_BYTES, CONVERSATION_ANSWERS_KEPT, fetchPaneConversation, conversationAnswerBytes, peekPaneConversation, pinPaneConversation, unpinPaneConversation } from "./api.ts";
 import { ConversationRefresh } from "./conversationRefresh.ts";
 import type { ConversationResponse } from "../../shared/protocol.ts";
 
@@ -44,6 +44,20 @@ describe("conversation polling", () => {
       { history: "history-a", etag: null },
       { history: null, etag: null },
     ]);
+  });
+
+  it.each([{ from: "history-a:50" }, { before: "history-a:50" }])("forgets every page size of a pane whose history a read rejects: %o", async (held) => {
+    let status = 200;
+    globalThis.fetch = (async (_url: string) => status === 200
+      ? Response.json({ source: "claude-transcript", history_id: "history-a", cursor: "history-a:100", turns: [] }, { headers: { etag: '"history-a"' } })
+      : Response.json({ error: { code: "history_changed", message: "reload" } }, { status })) as unknown as typeof fetch;
+    const pane = `rejected-sized-${Object.keys(held)[0]}`;
+    await fetchPaneConversation(pane);
+    await fetchPaneConversation(pane, "local", { prompts: 10 });
+    await fetchPaneConversation(pane, "local", { prompts: 25 });
+    status = 409;
+    await expect(fetchPaneConversation(pane, "local", { ...held, history_id: "history-a", prompts: 10 })).rejects.toBeInstanceOf(ApiError);
+    expect([peekPaneConversation(pane), peekPaneConversation(pane, "local", 10), peekPaneConversation(pane, "local", 25)]).toEqual([undefined, undefined, undefined]);
   });
 
   it("revalidates a new finish without borrowing the previous finish's ETag", async () => {
@@ -102,22 +116,49 @@ describe("conversation polling", () => {
 
   it("gives up the oldest answers when they outgrow the byte budget, not only when there are too many", async () => {
     const asked = new Map<string, string | null>();
-    // ~3 MiB of turns per pane: a third of the cache budget, so four of them do not fit
-    const filler = "x".repeat(3 * 1024 * 1024);
+    // one answer just under its own maximum (the body carries the filler twice, as a turn and as a
+    // field): enough of them outgrow the cache's byte budget while the count cap is still far away,
+    // so only the budget can evict
+    const filler = "x".repeat(CONVERSATION_ANSWER_MAX_BYTES / 2 - 64 * 1024);
+    const panes = Math.ceil(CONVERSATION_ANSWERS_BYTES / CONVERSATION_ANSWER_MAX_BYTES) + 1;
+    expect(panes).toBeLessThan(CONVERSATION_ANSWERS_KEPT);
     globalThis.fetch = (async (url: string, init?: RequestInit) => {
       const etag = new Headers(init?.headers).get("if-none-match");
       asked.set(String(url), etag);
       if (etag !== null) return new Response(null, { status: 304, headers: { etag } });
       return new Response(JSON.stringify({ source: "claude-transcript", turns: [{ text: filler }], cursor: null, filler }), { status: 200, headers: { etag: `"${asked.size}"` } });
     }) as typeof fetch;
-    for (let pane = 0; pane < 5; pane++) await fetchPaneConversation(`big:p${pane}`);
+    for (let pane = 0; pane < panes; pane++) await fetchPaneConversation(`big:p${pane}`);
     asked.clear();
     // the newest panes are still cached, the ones the budget pushed out are not
-    await fetchPaneConversation("big:p4");
-    expect([...asked.values()]).toEqual([`"5"`]);
+    await fetchPaneConversation(`big:p${panes - 1}`);
+    expect([...asked.values()]).toEqual([`"${panes}"`]);
     asked.clear();
     await fetchPaneConversation("big:p0");
     expect([...asked.values()]).toEqual([null]);
+  });
+
+  it("keeps the open pane's page at the size it was read, not the size a pin was taken at", async () => {
+    // one answer just under its own maximum: only the byte budget can evict
+    const filler = "x".repeat(CONVERSATION_ANSWER_MAX_BYTES / 2 - 64 * 1024);
+    const panes = Math.ceil(CONVERSATION_ANSWERS_BYTES / CONVERSATION_ANSWER_MAX_BYTES) + 1;
+    let reads = 0;
+    globalThis.fetch = (async (_url: string, _init?: RequestInit) => {
+      reads += 1;
+      return new Response(JSON.stringify({ source: "claude-transcript", turns: [{ text: filler }], cursor: null, filler }), { status: 200, headers: { etag: `"${reads}"` } });
+    }) as typeof fetch;
+    // the chat's open pane reads its newest page at the page size the setting names
+    pinPaneConversation("open:p1");
+    const open = await fetchPaneConversation("open:p1", "local", { prompts: 10 });
+    // the control: the same read on a pane the chat does not have open
+    const control = await fetchPaneConversation("control:p1", "local", { prompts: 10 });
+    expect(peekPaneConversation("control:p1", "local", 10)).toBe(control);
+    for (let pane = 0; pane < panes; pane++) await fetchPaneConversation(`big:p${pane}`);
+    // pinned by pane: the answer the open pane actually holds survives the budget
+    expect(peekPaneConversation("open:p1", "local", 10)).toBe(open);
+    // the control is gone
+    expect(peekPaneConversation("control:p1", "local", 10)).toBeUndefined();
+    unpinPaneConversation("open:p1");
   });
 });
 
@@ -183,6 +224,17 @@ it("counts a compressed answer by its parsed body, not the bytes on the wire", (
   expect(conversationAnswerBytes(body, "300")).toBe(300);
   expect(conversationAnswerBytes(body, "300", "identity")).toBe(300);
   expect(conversationAnswerBytes(body, "300", "gzip")).toBe(JSON.stringify(body).length);
+});
+
+it("counts a body's JSON in bytes, so a CJK page cannot slip under the per-answer cap", () => {
+  // the oracle is an encoder, not this module's own counter
+  const cjk = { turns: [{ text: "字".repeat(1000) }] } as unknown as Parameters<typeof conversationAnswerBytes>[0];
+  const json = JSON.stringify(cjk);
+  expect(conversationAnswerBytes(cjk, null, "gzip")).toBe(new TextEncoder().encode(json).length);
+  // the code-unit length this used to report is a third of it
+  expect(conversationAnswerBytes(cjk, null, "gzip")).toBeGreaterThan(json.length * 2);
+  const emoji = { turns: [{ text: "🙂".repeat(100) }] } as unknown as Parameters<typeof conversationAnswerBytes>[0];
+  expect(conversationAnswerBytes(emoji, null, "gzip")).toBe(new TextEncoder().encode(JSON.stringify(emoji)).length);
 });
 
 /** The browser timer the refresher uses, advanced without sleeping or a DOM. */

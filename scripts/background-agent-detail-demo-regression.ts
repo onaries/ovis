@@ -16,7 +16,7 @@ import { chromePath } from "./chrome-path.ts";
 // bridge's `detail_kind` for the older-bridge case and answers the error cases the server would.
 // All files and HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-background-agent-demo-"));
-const evidence = process.env.UI_EVIDENCE_DIR ?? "";
+const evidence = process.env.UI_EVIDENCE_DIR || "";
 if (evidence) mkdirSync(evidence, { recursive: true });
 
 interface Case { kind?: string; strip?: boolean; role?: "watch" }

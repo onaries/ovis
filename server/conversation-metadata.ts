@@ -3,6 +3,8 @@ import { piContextWindow } from "./pi-models.ts";
 import { cmdContextWindow } from "./cmd.ts";
 import { copilotRecords } from "./copilot.ts";
 import { museModel } from "./muse.ts";
+import { localCommandStdout } from "./claude-transcript.ts";
+import { CLAUDE_FAMILY, VERSION } from "./start-screen.ts";
 import type { ConversationMetadata, ConversationResponse } from "../shared/protocol.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -35,6 +37,63 @@ function contextOf(used: number, model: string | null, window: number | null, be
   return { used, window: long ? CLAUDE_LONG_WINDOW : null };
 }
 
+// Claude Code's /model answer names the model by its display name: in backticks (2.1.3xx), or bare
+// before "and saved" / "for this session" in older versions (bold ones lose the bold to the strip)
+const CLAUDE_MODEL_SET = /^Set model to (?:`([^`]+)`|(.+?)(?= and saved | for this session|$))/u;
+// only the plain "<Family> <major>[.<minor>]" maps back to an id, the inverse of modelLabel's
+// rule (src/lib/modelName.ts) and of the start screen's (start-screen.ts); its answers name the
+// same id in a 1M window or as the default
+const CLAUDE_MODEL_NAME = new RegExp(`^(${CLAUDE_FAMILY}) (${VERSION})(?:\\.(0|${VERSION}))?(?: \\(1M context\\))?(?: \\(default\\))?$`, "iu");
+// the efforts Claude Code records on its answers (`entry.effort`)
+const CLAUDE_EFFORT = "(low|medium|high|xhigh|max)";
+const CLAUDE_EFFORT_SET = new RegExp(`^Set effort level to ${CLAUDE_EFFORT}(?= |$)`, "u");
+const CLAUDE_MODEL_EFFORT = new RegExp(` with \`${CLAUDE_EFFORT}\` effort$`, "u");
+
+/**
+ * What a Claude Code /model or /effort answer set, so the pill follows it before the next answer
+ * names it. Only the command's own record counts: a `local_command` entry (for its own command
+ * when it names one), or a user entry that is the whole output and was not typed (a prompt carries
+ * `origin` or `permissionMode`). Any other answer (kept, refused, a name of another form, an
+ * effort no answer records) sets nothing, and the value stays as it was.
+ */
+function claudeCommandSetting(entry: RecordValue): { model: string | null; effort: string | null } {
+  const none = { model: null, effort: null };
+  if (entry.isSidechain === true) return none;
+  const local = entry.type === "system" && entry.subtype === "local_command";
+  const answer = entry.type === "user" && entry.isMeta !== true && !("origin" in entry) && !("permissionMode" in entry);
+  if (!local && !answer) return none;
+  const said = localCommandStdout(local ? entry.content : record(entry.message).content)?.split("\n")[0];
+  if (!said) return none;
+  const command = label(record(entry.commandRun).command);
+  const set = CLAUDE_MODEL_SET.exec(said);
+  if (set && (command === null || command === "model")) {
+    const name = CLAUDE_MODEL_NAME.exec(set[1] ?? set[2] ?? "");
+    // a model it cannot name keeps the pill whole: no new effort beside the old model
+    if (!name) return none;
+    return { model: `claude-${name[1]!.toLowerCase()}-${name[2]}${name[3] === undefined ? "" : `-${name[3]}`}`, effort: CLAUDE_MODEL_EFFORT.exec(said)?.[1] ?? null };
+  }
+  const effort = CLAUDE_EFFORT_SET.exec(said);
+  return effort && (command === null || command === "effort") ? { model: null, effort: effort[1]! } : none;
+}
+
+/**
+ * The model and effort one Claude record sets, as parseConversationMetadata reads it: an answer names
+ * what it ran at (any answer names its model; one that records an effort names that too, even an
+ * empty one), and a /model or /effort answer what it set (claudeCommandSetting). An absent field
+ * leaves the value as it was.
+ */
+export function claudeSetting(value: unknown): { model?: string; effort?: string | null } {
+  const entry = record(value);
+  const set: { model?: string; effort?: string | null } = {};
+  const model = entry.type === "assistant" ? label(record(entry.message).model) : null;
+  if (model) set.model = model;
+  if (entry.type === "assistant" && "effort" in entry) set.effort = label(entry.effort);
+  const command = claudeCommandSetting(entry);
+  if (command.model) set.model = command.model;
+  if (command.effort) set.effort = command.effort;
+  return set;
+}
+
 /** Read recorded settings, never infer effort from the presence of thinking text.
  * Codex turn_context is a snapshot; omp/omo setting changes are separate events.
  * `piAgentDir` is the agent directory of the pi process that writes the transcript (contextOf). */
@@ -43,6 +102,8 @@ export function parseConversationMetadata(text: string, source: ConversationResp
   const metadata: ConversationMetadata = before ? { ...before } : { model: null, reasoning_effort: null };
   // Agy's exported rows do not attest the selected model or reasoning effort.
   if (source === "agy-transcript") return metadata;
+  // Letta's transcript names no model or effort
+  if (source === "letta-transcript") return metadata;
   if (source === "copilot-transcript") {
     for (const { type, data } of copilotRecords(text)) {
       const model = type === "session.start" ? label(data.selectedModel)
@@ -130,14 +191,14 @@ export function parseConversationMetadata(text: string, source: ConversationResp
       }
     } else if (source === "claude-transcript") {
       const message = record(entry.message);
-      if (entry.type === "assistant" && label(message.model)) metadata.model = label(message.model);
+      const set = claudeSetting(entry);
+      if (set.model !== undefined) metadata.model = set.model;
+      if (set.effort !== undefined) metadata.reasoning_effort = set.effort;
       // a subagent's request fills its own context, not this one's
       if (entry.type === "assistant" && entry.isSidechain !== true && label(message.model)) {
         const usage = record(message.usage);
         metadata.context = contextOf(count(usage.input_tokens) + count(usage.cache_creation_input_tokens) + count(usage.cache_read_input_tokens), metadata.model, null, metadata.context);
       }
-      // Claude Code records the effort each response ran at; versions before it record none
-      if (entry.type === "assistant" && "effort" in entry) metadata.reasoning_effort = label(entry.effort);
     }
   }
   return metadata;

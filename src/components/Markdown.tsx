@@ -1,10 +1,10 @@
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { BookOpen, Check, Copy, ImageOff, Maximize2 } from "lucide-react";
 
-import { foldCode, mathNestsTooDeep, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock } from "../lib/markdown.ts";
+import { foldCode, mathNestsTooDeep, parseInline, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock } from "../../shared/markdown.ts";
 import { codeIsFilePath, OpenFileContext, splitFilePaths } from "../lib/filePaths.ts";
 import { FilePathLink } from "./FilePathLink.tsx";
-import { fileUriPath } from "../lib/terminalFileLinks.ts";
+import { fileUriPath } from "../../shared/fileUri.ts";
 import { WebPanelContext } from "../lib/webPanel.ts";
 import { MachineContext } from "../lib/machineContext.tsx";
 import { CHAT_HIGHLIGHT_LIMIT, languageForFence } from "../lib/highlight.ts";
@@ -340,6 +340,24 @@ export const Markdown = memo(function Markdown({ children, className, html = fal
   const blocks = useMemo(() => parseMarkdown(children, 0, html), [children, html]);
   const parsed = <ParsedMarkdown blocks={blocks} className={className} />;
   return skills === null ? parsed : <SkillMatcherContext.Provider value={skills}>{parsed}</SkillMatcherContext.Provider>;
+});
+
+/** `nodes` with each link, file link and picture as its words: text in a control that answers when clicked opens nothing itself. */
+function withoutLinks(nodes: InlineNode[]): InlineNode[] {
+  return nodes.flatMap((node): InlineNode[] => {
+    switch (node.type) {
+      case "link": case "file": return withoutLinks(node.children);
+      case "image": return node.alt === "" ? [] : [{ type: "text", value: node.alt }];
+      case "strong": case "em": case "del": return [{ ...node, children: withoutLinks(node.children) }];
+      default: return [node];
+    }
+  });
+}
+
+/** One line of inline Markdown inside a button or a checkbox's label (an Ask card's option): emphasis, code and math, with no link in it. */
+export const InlineMarkdown = memo(function InlineMarkdown({ children }: { children: string }) {
+  const nodes = useMemo(() => withoutLinks(parseInline(children, false)), [children]);
+  return <Inline nodes={nodes} interactive={false} />;
 });
 
 /**

@@ -1,0 +1,6 @@
+{"kind":"user","text":"Use your shell tool to run: echo fixture-ok && ls. Then reply in one short sentence.","captured_at":"2026-10-29T01:53:05.293Z","source_line_id":"user-mvsw2ivj-7t557v"}
+{"kind":"tool_call","name":"Bash","argsText":"{\"command\":\"echo fixture-ok && ls\",\"description\":\"Run test command to check fixture and list files\"}","resultText":"fixture-ok\n","resultOk":true,"captured_at":"2026-10-29T01:53:05.293Z","source_line_id":"Bash-1793238783145231402-1"}
+{"kind":"assistant","text":"I have successfully run the command and verified the environment.","captured_at":"2026-10-29T01:53:05.293Z","source_line_id":"ui-msg-5","source_message_id":"ui-msg-5"}
+{"kind":"user","text":"Read notes.txt and tell me its second line.","captured_at":"2026-10-29T01:55:05.021Z","source_line_id":"user-mvsw53jx-6tdo87"}
+{"kind":"tool_call","name":"Read","argsText":"{\"file_path\":\"/home/user/proj/notes.txt\"}","resultText":"1\talpha\n2\tbeta\n3\t","resultOk":true,"captured_at":"2026-10-29T01:55:05.021Z","source_line_id":"Read-1793238903065214259-2"}
+{"kind":"assistant","text":"The second line of notes.txt is \"beta\".","captured_at":"2026-10-29T01:55:05.021Z","source_line_id":"ui-msg-9","source_message_id":"ui-msg-9"}

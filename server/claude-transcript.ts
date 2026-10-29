@@ -1,15 +1,17 @@
-import type { ConversationPart, ConversationTurn } from "../shared/protocol.ts";
+import type { ConversationPart, ConversationTurn, OmoTaskResult } from "../shared/protocol.ts";
 import { invokedSkill } from "./skill-activity.ts";
 import { claudeCommandEcho } from "./skill-invocations/claude.ts";
-import { agentTaskResult, claudePeerId, claudePeerNotice, isContextClear, MAX_TURNS, toolSummary, type TranscriptParser } from "./transcript-records.ts";
+import { agentTaskResult, claudePeerId, claudePeerNotice, isContextClear, MAX_TURNS, OMO_TASK_RESULT_MAX, toolSummary, type TranscriptParser } from "./transcript-records.ts";
 import { taskNotification, type SubagentDetail } from "./claude-subagents.ts";
 import { trimOutput } from "./tool-output.ts";
 import { base64Size, inlineImageType, MAX_IMAGE_BYTES } from "./codex-images.ts";
 
 /** Slash-command and bookkeeping entries Claude logs as user turns — not conversations. */
-export function isCommandEntry(text: string): boolean {
+export function isCommandEntry(text: string, entry: { origin?: unknown; permissionMode?: unknown }): boolean {
   if (claudeCommandEcho(text)) return false;
-  return text.startsWith("<command-") || text.startsWith("<local-command") || text.startsWith("<task-");
+  return text.startsWith("<command-") || text.startsWith("<local-command") || text.startsWith("<task-")
+    // bash-mode output, only as the whole entry: the parser joins it to its command
+    || (!("origin" in entry) && !("permissionMode" in entry) && text.trimStart().startsWith("<bash-std") && taggedStreams(text, "bash") !== null);
 }
 
 /**
@@ -20,35 +22,77 @@ export function isCommandEntry(text: string): boolean {
 const LOCAL_COMMAND_MAX_CHARS = 4000;
 
 function localCommandOutput(content: unknown): string {
-  if (typeof content !== "string") return "";
+  return capNotice((taggedStreams(content, "local-command") ?? []).map(({ text }) => text.trim()).filter((text) => text.length > 0).join("\n"));
+}
+
+/** What a slash command printed to stdout, terminal controls stripped, when the whole entry is its output. */
+export function localCommandStdout(content: unknown): string | null {
+  const streams = taggedStreams(content, "local-command");
+  return streams === null ? null : streams.filter(({ stream }) => stream === "stdout").map(({ text }) => text.trim()).join("\n");
+}
+
+/** Bash payloads are opaque: only an unambiguous boundary identifies stderr. */
+function bashStreams(content: string): { stream: "stdout" | "stderr"; text: string }[] | null {
+  const envelope = content.trim();
+  if (envelope.startsWith("<bash-stdout>") && envelope.endsWith("</bash-stderr>")) {
+    const inner = envelope.slice("<bash-stdout>".length, -"</bash-stderr>".length);
+    const candidates = [...inner.matchAll(/<\/bash-stdout>\s*<bash-stderr>/g)];
+    const first = candidates[0];
+    if (first === undefined) return null;
+    if (candidates.length === 1) {
+      return [
+        { stream: "stdout", text: stripTerminalControls(inner.slice(0, first.index)).trimEnd() },
+        { stream: "stderr", text: stripTerminalControls(inner.slice(first.index + first[0].length)).trimEnd() },
+      ];
+    }
+    // Multiple boundaries never establish stderr: retain every inner character verbatim.
+    return [{ stream: "stdout", text: stripTerminalControls(inner) }];
+  }
+  // Older records can carry a single stream, but not reordered or partial envelopes.
+  const single = /^<bash-(stdout|stderr)>([\s\S]*)<\/bash-\1>$/.exec(envelope);
+  const stream = single?.[1], text = single?.[2];
+  return (stream === "stdout" || stream === "stderr") && text !== undefined
+    ? [{ stream, text: stripTerminalControls(text).trimEnd() }] : null;
+}
+
+/**
+ * The streams a whole entry holds, `<{tag}-stdout>…</{tag}-stdout>` and `<{tag}-stderr>…`, in order and with
+ * terminal controls stripped; ambiguous bash output stays verbatim in stdout. Null when the entry
+ * holds anything else.
+ */
+function taggedStreams(content: unknown, tag: "local-command" | "bash"): { stream: "stdout" | "stderr"; text: string }[] | null {
+  if (typeof content !== "string") return null;
+  if (tag === "bash") return bashStreams(content);
   // the whole entry is the output, one stream after another: a tag quoted inside an echo's
   // arguments is not an answer
-  const streams: string[] = [];
+  const streams: { stream: "stdout" | "stderr"; text: string }[] = [];
   let at = 0;
   for (;;) {
     while (at < content.length && /\s/.test(content[at]!)) at++;
     if (at === content.length) break;
-    const stream = content.startsWith("<local-command-stdout>", at) ? "stdout" : content.startsWith("<local-command-stderr>", at) ? "stderr" : null;
-    if (stream === null) return "";
-    const start = at + `<local-command-${stream}>`.length;
+    const stream = content.startsWith(`<${tag}-stdout>`, at) ? "stdout" : content.startsWith(`<${tag}-stderr>`, at) ? "stderr" : null;
+    if (stream === null) return null;
+    const start = at + `<${tag}-${stream}>`.length;
     // a closing tag the output prints itself ends nothing: the stream's own one is at the end of
     // the entry or before the next stream. Each candidate looks only at the whitespace after it.
-    const close = `</local-command-${stream}>`;
+    const close = `</${tag}-${stream}>`;
     let end = content.indexOf(close, start);
     let next = 0;
     while (end !== -1) {
       next = end + close.length;
       while (next < content.length && /\s/.test(content[next]!)) next++;
-      if (next === content.length || content.startsWith("<local-command-stdout>", next) || content.startsWith("<local-command-stderr>", next)) break;
+      if (next === content.length || content.startsWith(`<${tag}-stdout>`, next) || content.startsWith(`<${tag}-stderr>`, next)) break;
       end = content.indexOf(close, end + close.length);
     }
-    if (end === -1) return "";
-    const text = stripTerminalControls(content.slice(start, end)).trim();
-    if (text.length > 0) streams.push(text);
+    if (end === -1) return null;
+    streams.push({ stream, text: stripTerminalControls(content.slice(start, end)) });
     at = next;
   }
-  return capNotice(streams.join("\n"));
+  return streams;
 }
+
+/** The command of a bash-mode entry (`!` in Claude Code): the whole entry is `<bash-input>…</bash-input>`. */
+const BASH_INPUT = /^\s*<bash-input>([\s\S]*)<\/bash-input>\s*$/;
 
 /** Lines of one notice Claude Code writes as separate entries, a moment apart. */
 const NOTICE_JOIN_MS = 1000;
@@ -134,6 +178,239 @@ export function unwrapPastes(text: string): string {
   return changed ? visible.replace(/^\n+|\n+$/g, "") : text;
 }
 
+/**
+ * senpi (OmO's engine, its anthropic-subscription provider) runs Claude Code through the SDK but runs
+ * the tools on its own host: Claude Code records each call with senpi's PreToolUse denial as its
+ * result, then senpi sends the host's result as the next prompt's text, one
+ * `Tool result (<tool>, id=<call id>):\n` block before the result's own blocks, and a block that is
+ * exactly "\n\n" between that and the next message it sends along (session-sync.ts
+ * buildDeltaPromptBlocks). The result is the call's, not anything the person typed.
+ */
+const HOST_RESULT_HEADER = /^Tool result \((.+), id=([A-Za-z0-9_-]{1,128})\):\n$/;
+const HOST_MESSAGE_BREAK = "\n\n";
+/** senpi's denial, in each wording it has shipped: the host runs the tool, and this is not its result */
+const HOST_HANDOFF = /^PreToolUse:\S+ hook error: [\s\S]*\bSenpi (?:executes|runs) this tool on the host and returns its result as the next user message\b/;
+
+/** One host tool result in a prompt's blocks: the call it answers, its header's index, and the end of its blocks (exclusive). */
+export interface HostToolResult { name: string; id: string; header: number; end: number }
+
+const isTextBlock = (block: unknown, text?: string): block is { type: "text"; text: string } =>
+  typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text"
+  && typeof (block as { text?: unknown }).text === "string" && (text === undefined || (block as { text: string }).text === text);
+
+/**
+ * The host tool results a prompt's blocks carry, in order. Only a message's first block can be a
+ * header: one quoted inside a message's text, or inside another result, is that message's words.
+ */
+export function hostToolResults(content: readonly unknown[]): HostToolResult[] {
+  const results: HostToolResult[] = [];
+  for (let start = 0; start < content.length;) {
+    let end = start;
+    while (end < content.length && !isTextBlock(content[end], HOST_MESSAGE_BREAK)) end++;
+    const header = content[start];
+    const match = isTextBlock(header) ? HOST_RESULT_HEADER.exec(header.text) : null;
+    if (match !== null) results.push({ name: match[1]!, id: match[2]!, header: start, end });
+    start = end + 1;
+  }
+  return results;
+}
+
+/**
+ * The host tool results of an entry: only a program's prompt (the SDK's) carries them, so a person at
+ * Claude Code's own prompt only quotes one.
+ */
+export function entryHostToolResults(entry: { type?: unknown; promptSource?: unknown; entrypoint?: unknown }, content: unknown): HostToolResult[] {
+  const sdk = entry.promptSource === "sdk" || (typeof entry.entrypoint === "string" && entry.entrypoint.startsWith("sdk"));
+  return sdk && entry.type === "user" && Array.isArray(content) ? hostToolResults(content) : [];
+}
+
+/** The blocks host results take in a prompt, the breaks around them included: the rest is the prompt's own. */
+function hostedBlocks(results: readonly HostToolResult[]): Set<number> {
+  const hosted = new Set<number>();
+  for (const host of results) for (let at = host.header - 1; at <= host.end; at++) hosted.add(at);
+  return hosted;
+}
+
+/** senpi's denial of a call it runs on its host: the result comes later, as a host tool result. */
+export function isHostHandoff(result: { content?: unknown; is_error?: unknown }): boolean {
+  return result.is_error === true && HOST_HANDOFF.test(claudeResultText(result.content));
+}
+
+/**
+ * senpi's own messages in an SDK prompt. It sends what it tells the model in the person's seat, each
+ * message in blocks of its own, and marks none of them, so they are known by the wrappers senpi and
+ * OmO write: reminders and monitor events, Kibitzer's memory notes, memory, goal and stream-rule
+ * checks, OmO's mode pointers and environment, Kibitzer's own prompts, a team member's message.
+ * A block holding anything besides such wrappers is the person's, whole.
+ */
+const SENPI_WRAPPERS = new Set([
+  "system-reminder", "recalled-memory", "memory_notice", "goal_stall_check", "system-interrupt", "environment_context",
+  "ultrawork-mode", "kibitzer-wake", "kibitzer-seed", "kibitzer-reseed", "peer_message",
+]);
+const isSenpiWrapper = (tag: string): boolean => SENPI_WRAPPERS.has(tag) || /^omo-[a-z0-9-]+$/.test(tag);
+const WRAPPED = /^\s*<([A-Za-z_][\w-]*)(\s[^>]*)?>([\s\S]*?)<\/\1>\s*/;
+/** a notification senpi cut short: the reminder, then where the rest of it went, in the same block */
+const TAIL_CAPPED = /^\[…notification tail capped…\]\nBuffered output overflowed; full output: \S+(?:\s*$|\n\n)/;
+/** the goal extension's continuation prompt (goal/prompt.js), after a stall check when there is one */
+const GOAL_CONTINUATION = "Continue working toward the active thread goal.\n";
+const isGoalContinuation = (text: string): boolean =>
+  text.startsWith(GOAL_CONTINUATION) && text.includes("\n<untrusted_objective>\n") && text.includes("\n</untrusted_objective>\n");
+/** a fresh session's replay of the history before it (prompt-bridge.js buildPromptBlocks) */
+const HISTORY_OPENER = "<conversation_history>\n";
+const HISTORY_CLOSER = "\n</conversation_history>";
+const RECOVERED_OPENER = "<recovered_tool_results>\n";
+const RECOVERED_CLOSER = "\n</recovered_tool_results>";
+/** the instruction after the replay, in each wording senpi ships: to answer the message below, or to go on with a turn */
+const HISTORY_INSTRUCTIONS = new Set([
+  "The above is the conversation history so far, provided as context. Respond as the assistant to the user message below only. Never emit \"USER:\" or \"ASSISTANT:\" labels or continue the transcript.",
+  "The above is the conversation history so far, provided as context. There is no new user message: the last entries are results of tool calls you made in your current turn, not anything the user sent. Continue that turn as the assistant. Never emit \"USER:\" or \"ASSISTANT:\" labels or continue the transcript.",
+]);
+/**
+ * OmO's report of a background task that ended: `task completion name:… id:st_… <fields> status:… duration:…`,
+ * then `result:"…"`, then `next:` naming how to reach the task
+ */
+const TASK_COMPLETION = /^task completion (?:\(resumed turn\) )?name:(\S+) id:(st_[A-Za-z0-9_-]+) ((?:[^\n]* )?status:\S+ duration:[^\n]*)\nresult:"/;
+
+/**
+ * OmO's report of a task that ended at the start of a block, as the card OmO's own transcript shows,
+ * and how much of the block it takes; null when the block does not start with a whole report.
+ */
+function senpiTaskReport(text: string): { task: OmoTaskResult; length: number } | null {
+  const head = TASK_COMPLETION.exec(text);
+  if (head === null) return null;
+  const [line, name, id, fields] = head as unknown as [string, string, string, string];
+  // the report ends with its closing quote, a `result_file:` line when OmO kept the whole result,
+  // and the `next:` line naming this task; then the block ends or senpi's next message follows
+  const trailer = new RegExp(`"\\n(?:result_file:\\S+\\n)?next:Use task_send\\(\\{ to: "${id}", message: "\\.\\.\\." \\}\\) to continue\\.(?=$|\\n\\n)`, "g");
+  trailer.lastIndex = line.length;
+  const closing = trailer.exec(text);
+  // a report with no `next:` line is the rest of the block, up to its closing quote
+  const end = closing !== null ? closing.index : text.length > line.length && text.endsWith("\"") ? text.length - 1 : -1;
+  if (end === -1) return null;
+  const result = text.slice(line.length, end);
+  const field = (key: string): string | null => new RegExp(`(?:^| )${key}:(\\S+)`).exec(fields)?.[1] ?? null;
+  const count = (key: string): number | null => { const value = field(key); return value !== null && /^\d+$/.test(value) ? Number(value) : null; };
+  // `agent:explore(<model>)` or `category:deep-low(<model>)`; a fallback names the model that ran last: `fallback:<id>-><name>`
+  const ran = /(?:^| )(?:agent|category):([^\s(]+)(?:\(([^)\s]*)\))?/.exec(fields);
+  const model = / fallback:\S*->(.+?) status:/.exec(fields)?.[1] ?? ran?.[2] ?? null;
+  const raw = field("status");
+  // `3m 20s`, `4.2s`, `1h 2m`, `850ms`
+  const spent = /(?:^| )duration:(.+?)(?= tokens:| tools:| tps:|$)/.exec(fields)?.[1];
+  const units: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1_000, ms: 1 };
+  const parts = spent === undefined ? [] : [...spent.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)\b/g)];
+  const duration = parts.length === 0 ? null : Math.round(parts.reduce((sum, [, amount, unit]) => sum + Number(amount) * units[unit!]!, 0));
+  const agent = ran?.[1] ?? null;
+  const task: OmoTaskResult = {
+    id,
+    title: name !== id ? name : agent ?? id,
+    agent,
+    model,
+    status: raw === "completed" ? "completed" : raw === "cancelled" || raw === "canceled" || raw === "aborted" ? "cancelled" : "failed",
+    duration_ms: duration,
+    turns: null,
+    tool_calls: count("tools"),
+    tokens: count("tokens"),
+    result: result.slice(0, OMO_TASK_RESULT_MAX),
+    ...(result.length > OMO_TASK_RESULT_MAX ? { result_cut: true } : {}),
+  };
+  return { task, length: closing !== null ? closing.index + closing[0].length : text.length };
+}
+
+type Notice = Extract<ConversationPart, { kind: "notice" }>;
+type TaskResults = Extract<ConversationPart, { kind: "task_result" }>;
+
+/**
+ * A block made only of senpi's own messages (it can join several with a blank line): the reports and
+ * team members' messages among them, in order, or null when the block holds anything else.
+ */
+function senpiMessages(text: string): (OmoTaskResult | Notice)[] | null {
+  const found: (OmoTaskResult | Notice)[] = [];
+  let rest = text;
+  while (rest.length > 0) {
+    const report = senpiTaskReport(rest);
+    if (report !== null) {
+      found.push(report.task);
+      rest = rest.slice(report.length).replace(/^\n\n/, "");
+      continue;
+    }
+    // the end of a notification senpi cut short, after its reminder
+    const capped = rest !== text ? TAIL_CAPPED.exec(rest) : null;
+    if (capped !== null) {
+      rest = rest.slice(capped[0].length);
+      continue;
+    }
+    const match = WRAPPED.exec(rest);
+    if (match === null || match[0].length === 0 || !isSenpiWrapper(match[1]!)) break;
+    if (match[1] === "peer_message") {
+      const body = match[3]!.trim();
+      const from = /\bfrom="([^"]*)"/.exec(match[2] ?? "")?.[1]?.trim() ?? "";
+      if (body.length > 0) found.push({ kind: "notice", text: body, source: `peer:${from}` });
+    }
+    rest = rest.slice(match[0].length);
+  }
+  if (rest === text) return null;
+  return rest.trim() === "" || isGoalContinuation(rest) ? found : null;
+}
+
+/** What senpi itself put in an SDK prompt, beside what a person or a lead sent. */
+export interface SenpiPrompt {
+  /** a program sent it through Claude Code's SDK */
+  sdk: boolean;
+  hosts: HostToolResult[];
+  /** the prompt's blocks with senpi's own as null, and each break between its messages as an empty text */
+  own: unknown[];
+  /**
+   * In the order senpi sent them: OmO's reports of tasks that ended, drawn as the card OmO's own
+   * transcript draws, and team members' messages, drawn as another session's
+   */
+  notices: (TaskResults | Notice)[];
+}
+
+/** Where a fresh session's replay ends: the instruction after it (and after any recovered results), or -1. */
+function replayEnd(content: readonly unknown[]): number {
+  const instruction = (at: number): boolean => isTextBlock(content[at]) && HISTORY_INSTRUCTIONS.has(content[at].text);
+  // no history to replay: the instruction alone
+  if (instruction(0)) return 0;
+  if (!isTextBlock(content[0], HISTORY_OPENER)) return -1;
+  // the first closer the instruction follows (a replayed message can hold a closer of its own)
+  for (let at = 2; at < content.length; at++) {
+    if (!instruction(at)) continue;
+    if (isTextBlock(content[at - 1], HISTORY_CLOSER)) return at;
+    if (!isTextBlock(content[at - 1], RECOVERED_CLOSER)) continue;
+    let opener = at - 2;
+    while (opener > 0 && !isTextBlock(content[opener], RECOVERED_OPENER)) opener--;
+    if (opener > 0 && isTextBlock(content[opener - 1], HISTORY_CLOSER)) return at;
+  }
+  return -1;
+}
+
+/** Only a program's prompt (the SDK's) carries senpi's messages: a person at Claude Code's own prompt only quotes one. */
+export function senpiPrompt(entry: { type?: unknown; promptSource?: unknown; entrypoint?: unknown }, content: unknown): SenpiPrompt {
+  const hosts = entryHostToolResults(entry, content);
+  if (!Array.isArray(content) || !(entry.promptSource === "sdk" || (typeof entry.entrypoint === "string" && entry.entrypoint.startsWith("sdk")))) {
+    return { sdk: false, hosts, own: Array.isArray(content) ? content : [], notices: [] };
+  }
+  const senpi = hostedBlocks(hosts);
+  for (let at = replayEnd(content); at >= 0; at--) senpi.add(at);
+  const notices: (TaskResults | Notice)[] = [];
+  const own = content.map((block, at) => {
+    if (senpi.has(at)) return null;
+    if (!isTextBlock(block)) return block;
+    if (block.text === HOST_MESSAGE_BREAK) return { type: "text", text: "" };
+    if (isGoalContinuation(block.text)) return null;
+    const messages = senpiMessages(block.text);
+    if (messages === null) return block;
+    for (const message of messages) {
+      if ("kind" in message) { notices.push(message); continue; }
+      // reports sent one after another share one card, as OmO's own wake does
+      const last = notices.at(-1);
+      if (last?.kind === "task_result") last.tasks.push(message); else notices.push({ kind: "task_result", tasks: [message] });
+    }
+    return null;
+  });
+  return { sdk: true, hosts, own, notices };
+}
+
 /** A parsed JSONL line's message shape (only the fields we read). */
 export interface TranscriptEntry {
   type?: string;
@@ -146,6 +423,11 @@ export interface TranscriptEntry {
   parentUuid?: string | null;
   isMeta?: boolean;
   isCompactSummary?: boolean;
+  origin?: unknown;
+  permissionMode?: unknown;
+  /** "sdk" (with an `sdk-…` entrypoint): a program sent the prompt through Claude Code's SDK, not a person at its prompt */
+  promptSource?: unknown;
+  entrypoint?: unknown;
   /** "updates": Claude Code shows the entry's thinking text as a progress message, not as reasoning */
   thinkingDisplay?: unknown;
   message?: { role?: string; content?: unknown; stop_reason?: unknown };
@@ -212,6 +494,8 @@ interface ClaudeParseState {
   turns: ConversationTurn[];
   /** Tool parts still waiting for their result, by tool_use id. */
   pending: Map<string, Extract<ConversationPart, { kind: "tool" }>>;
+  /** Every tool part by its tool_use id: a host tool result answers its call after Claude Code's own result did. */
+  calls: Map<string, Extract<ConversationPart, { kind: "tool" }>>;
   /** The agent's last entry called a tool: its turn is not over. */
   atWork: boolean;
   /** Injected feedback can resume the model after a completed reply. */
@@ -223,7 +507,7 @@ interface ClaudeParseState {
 
 function claudeParseState(options: ClaudeTranscriptOptions): ClaudeParseState {
   return {
-    turns: [], pending: new Map(), atWork: false, completed: false,
+    turns: [], pending: new Map(), calls: new Map(), atWork: false, completed: false,
     noticed: options.noticed ?? new Set(), lastPrompt: null, peersSeen: new Set(),
   };
 }
@@ -242,7 +526,7 @@ export function createClaudeTranscriptParser(options: ClaudeTranscriptOptions = 
 }
 
 function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeParseState): TranscriptParser {
-  const { turns, pending, noticed, peersSeen } = state;
+  const { turns, pending, calls, noticed, peersSeen } = state;
   /** Where a notice goes: before the turn at work it was written in, else at the end. */
   const noticeAt = (): number => state.atWork && turns.at(-1)?.role === "assistant" ? turns.length - 1 : turns.length;
   /** True when the block was a notification (shown or not): it is no turn of anyone's typing. */
@@ -290,7 +574,7 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
       return;
     }
     if (entry.isMeta) return;
-    if (isContextClear(entry, "claude-transcript")) { turns.length = 0; pending.clear(); state.lastPrompt = null; return; }
+    if (isContextClear(entry, "claude-transcript")) { turns.length = 0; pending.clear(); calls.clear(); state.lastPrompt = null; return; }
     const content = entry.message?.content;
     // a compaction's summary marks where the conversation was folded, readable on request
     if (entry.isCompactSummary) {
@@ -308,7 +592,7 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
     const queued = entry.type === "attachment" ? entry.attachment : undefined;
     if (queued?.commandMode === "task-notification" && typeof queued.prompt === "string" && notified(queued.prompt, entry.timestamp ?? null)) return;
     if (queued?.type === "queued_command" && queued.commandMode === "prompt" && queued.origin?.kind === "human") {
-      if (typeof queued.prompt === "string" && queued.prompt.trim() && !isCommandEntry(queued.prompt.trim())) {
+      if (typeof queued.prompt === "string" && queued.prompt.trim() && !isCommandEntry(queued.prompt.trim(), queued)) {
         turns.push({ role: "user", ts: entry.timestamp ?? null, parts: [{ kind: "text", text: unwrapPastes(queued.prompt) }] });
       }
       return;
@@ -351,14 +635,61 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
         pushPrompt({ role: "user", ts: entry.timestamp ?? null, parts: [{ kind: "text", text: invocation.text }, { kind: "skill", skill: invocation.skill }] }, entry);
         return;
       }
-      if (isCommandEntry(content)) return;
+      // bash mode: the command opens a turn like a prompt, and the entry after it holds what it printed
+      const own = !("origin" in entry) && !("permissionMode" in entry);
+      const command = own ? BASH_INPUT.exec(content)?.[1] : undefined;
+      if (command !== undefined) {
+        pushPrompt({ role: "user", ts: entry.timestamp ?? null, parts: [{ kind: "shell", command }] }, entry);
+        return;
+      }
+      const printed = own ? taggedStreams(content, "bash") : null;
+      const shell = state.lastPrompt?.turn.parts[0];
+      if (printed !== null && shell?.kind === "shell" && shell.stdout === undefined) {
+        const of = (stream: "stdout" | "stderr") => capNotice(printed.filter((part) => part.stream === stream).map(({ text }) => text).join("\n"));
+        shell.stdout = of("stdout");
+        shell.stderr = of("stderr");
+      }
+      if (printed !== null) return;
+      if (isCommandEntry(content, entry)) return;
       pushPrompt({ role: "user", ts: entry.timestamp ?? null, parts: [{ kind: "text", text: unwrapPastes(content) }] }, entry);
       return;
     }
 
     if (entry.type === "user" && Array.isArray(content)) {
+      // the host's results of senpi's calls are the calls' output; what else the entry holds is still the prompt
+      const sent = senpiPrompt(entry, content);
+      for (const host of sent.hosts) {
+        const call = calls.get(host.id);
+        let tool: Extract<ConversationPart, { kind: "tool" }>;
+        // the call id is Claude Code's own and unique; the header's name is senpi's mapping of it
+        if (call !== undefined) tool = call;
+        // a call this read never saw (before the window): still a tool's output by the header, so it
+        // goes in the work, never in the person's seat
+        else {
+          tool = { kind: "tool", name: host.name, summary: host.name, input: "", output: "", call_id: host.id };
+          assistantTurn(entry.timestamp).parts.push(tool);
+        }
+        const blocks = content.slice(host.header + 1, host.end);
+        delete tool.output_ref; delete tool.output_size; delete tool.error;
+        trimOutput(tool, claudeResultText(blocks), host.id);
+        // senpi sends no failure flag with the result: like an empty result, it reads as done
+        tool.state = "ok";
+        if (tool.skill) tool.skill.status = "loaded";
+        const pictures = blocks.flatMap((block, at) => {
+          const mediaType = claudeImageType(block);
+          const ref = mediaType === null ? null : claudeImageRef(entry.uuid, host.header + 1 + at);
+          return mediaType === null || ref === null ? [] : [{ media_type: mediaType, ref }];
+        });
+        if (pictures.length > 0) tool.images = pictures; else delete tool.images;
+      }
+      // senpi's notices are no one's typing: a task that ended is its card, a team member's message is
+      // theirs, and the rest is what senpi told the model, hidden as Claude Code's own reminders are
+      const ts = entry.timestamp ?? null;
+      for (const notice of sent.notices) turns.splice(noticeAt(), 0, { role: "user", ts, parts: [notice] });
+      // the results, the breaks around them and senpi's notices were senpi's, not the person's
+      const blocks = sent.own;
       const invocations: ConversationPart[] = [];
-      const prompt = content.flatMap((block: unknown) => {
+      const said = blocks.flatMap((block: unknown) => {
         if (block === null || typeof block !== "object") return [];
         const part = block as { type?: string; text?: unknown };
         // a notice can share an entry with a tool's result
@@ -368,15 +699,19 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
           invocations.push({ kind: "skill", skill: invocation.skill });
           return [invocation.text];
         }
-        return part.type === "text" && typeof part.text === "string" && !isCommandEntry(part.text.trim()) ? [part.text] : [];
+        return part.type === "text" && typeof part.text === "string" && !isCommandEntry(part.text.trim(), entry) ? [part.text] : [];
       }).join("\n");
-      for (const [index, block] of content.entries()) {
+      // a notice before or after the person's words leaves its break behind
+      const prompt = sent.sdk ? said.replace(/^\n+|\n+$/g, "") : said;
+      for (const [index, block] of blocks.entries()) {
         if (typeof block !== "object" || block === null) continue;
         const result = block as { type?: string; tool_use_id?: string; content?: unknown; is_error?: unknown };
         if (result.type !== "tool_result" || typeof result.tool_use_id !== "string") continue;
         const tool = pending.get(result.tool_use_id);
         if (tool === undefined) continue;
         pending.delete(result.tool_use_id);
+        // senpi took the call to its host: no outcome yet, and its output arrives as a host tool result
+        if (isHostHandoff(result)) continue;
         trimOutput(tool, claudeResultText(result.content), result.tool_use_id);
         if (result.is_error === true) tool.error = true;
         // the result's flag, and only it, says how the call went: an empty result is still a success
@@ -386,7 +721,7 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
         const pictures = Array.isArray(result.content) ? claudeImages(entry.uuid, result.content, index) : [];
         if (pictures.length > 0) tool.images = pictures;
       }
-      const images = claudeImages(entry.uuid, content).map((image) => ({ kind: "image" as const, ...image }));
+      const images = claudeImages(entry.uuid, blocks).map((image) => ({ kind: "image" as const, ...image }));
       if (prompt.trim() || images.length > 0) pushPrompt({ role: "user", ts: entry.timestamp ?? null, parts: [...images, ...(prompt.trim() ? [{ kind: "text" as const, text: unwrapPastes(prompt) }] : []), ...invocations] }, entry);
       return;
     }
@@ -426,6 +761,7 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
           if (typeof id === "string" && id.length > 0) { part.call_id = id; part.state = "pending"; }
           turn.parts.push(part);
           pending.set(String(id ?? ""), part);
+          if (typeof id === "string" && id.length > 0) calls.set(id, part);
         }
         // unsupported transcript blocks are intentionally ignored
       }

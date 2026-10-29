@@ -1,4 +1,6 @@
 import type { CommandForm, HerdrPane, SlashCommand } from "../shared/protocol.ts";
+import { FileBusyError, fileTask } from "./file-pool.ts";
+import type { FileTask } from "./file-tasks.ts";
 import { AGENT_SOURCES } from "./skills/index.ts";
 import type { AgentCommandSource, ProcessRoots } from "./skills/index.ts";
 import { ancestorsToRepoRoot } from "./skills/walk.ts";
@@ -55,13 +57,140 @@ export function cachedPaneCommands(pane: HerdrPane): { agent: string | null; com
   return cached?.identity === catalogIdentity(pane) ? cached : undefined;
 }
 
-export function paneCommands(agent: string | null | undefined, cwd: string | null | undefined, home = userHome(), process: ProcessRoots = {}, version?: string | null): SlashCommand[] {
+/**
+ * How long one request waits for its scan, counted from when the request arrived (its herdr lookups
+ * included), before it is answered 503: under the minute a signed-in API request may go without a
+ * byte before Bun closes it (`index.ts`), with room for what the route does after the scan.
+ */
+export const COMMANDS_WAIT_MS = 45_000;
+/**
+ * A scan that finished after every request waiting for it gave up is kept this long for the next
+ * request for it: longer than the menu's longest pause before it asks again (`usePaneCommands`).
+ */
+export const UNCLAIMED_SCAN_MS = 35_000;
+let waitMs = COMMANDS_WAIT_MS;
+
+/** For tests: how long a request waits for a scan; no argument restores the default. */
+export function setCommandsWait(ms = COMMANDS_WAIT_MS): void {
+  waitMs = ms;
+}
+
+/**
+ * A scan under way: the requests waiting for it, whether a thread runs it yet, and how to drop it
+ * while it still waits for one.
+ */
+interface Scan { result: Promise<SlashCommand[]>; waiters: number; running: boolean; abort: AbortController }
+/** Scans under way, by what they were asked: a request for the same scan waits for that one. */
+const scans = new Map<string, Scan>();
+/** Scans that finished with nobody waiting for them, by what they were asked, each taken once. */
+const unclaimed = new Map<string, { commands: SlashCommand[]; size: number; timer: ReturnType<typeof setTimeout> }>();
+/**
+ * At most this many unclaimed answers, of about this many characters in all, are kept; the oldest go
+ * first. A request that leaves (a client gone) can be repeated for many folders, and each answer
+ * holds every skill's description.
+ */
+const UNCLAIMED_LIMITS = { entries: 16, chars: 8 * 1024 * 1024 };
+let unclaimedLimits = UNCLAIMED_LIMITS;
+let unclaimedChars = 0;
+
+/** For tests: how many unclaimed answers, and how many characters, are kept; no argument restores the defaults. */
+export function setUnclaimedLimits(limits: Partial<typeof UNCLAIMED_LIMITS> = {}): void {
+  unclaimedLimits = { ...UNCLAIMED_LIMITS, ...limits };
+  for (const key of [...unclaimed.keys()]) dropUnclaimed(key);
+}
+
+function dropUnclaimed(key: string): SlashCommand[] | undefined {
+  const kept = unclaimed.get(key);
+  if (kept === undefined) return undefined;
+  unclaimed.delete(key);
+  clearTimeout(kept.timer);
+  unclaimedChars -= kept.size;
+  return kept.commands;
+}
+
+function keepUnclaimed(key: string, commands: SlashCommand[]): void {
+  dropUnclaimed(key);
+  const size = commands.reduce((sum, command) => sum + JSON.stringify(command).length, 0);
+  if (size > unclaimedLimits.chars) return;
+  while (unclaimed.size > 0 && (unclaimed.size >= unclaimedLimits.entries || unclaimedChars + size > unclaimedLimits.chars)) dropUnclaimed(unclaimed.keys().next().value!);
+  const timer = setTimeout(() => { if (unclaimed.get(key)?.timer === timer) dropUnclaimed(key); }, UNCLAIMED_SCAN_MS);
+  timer.unref?.();
+  unclaimed.set(key, { commands, size, timer });
+  unclaimedChars += size;
+}
+
+/** Once every scan under way has finished (tests). */
+export async function commandScansSettled(): Promise<void> {
+  await Promise.allSettled([...scans.values()].map((scan) => scan.result));
+}
+
+/**
+ * `paneCommands` run on a file thread (`file-pool.ts`), never on the server's: the scan reads every
+ * skill and command folder the agent would, synchronously, and a folder on a slow mount (9p, a
+ * network share) took 10-27 s there, stalling every terminal and request with it (#2254).
+ *
+ * A request waits for its scan until `COMMANDS_WAIT_MS` after it `began`, or until `signal` aborts,
+ * and is then refused with `FileBusyError` (503). A scan a thread runs goes on: a request for the
+ * same scan made meanwhile (the menu asks again after a failed read) waits for it rather than
+ * starting another, and if it finishes after everyone waiting gave up, the next request for it
+ * takes that answer (within `UNCLAIMED_SCAN_MS`), so a scan slower than one request's wait still
+ * answers. A scan still waiting for a thread when its last request leaves is dropped, so it holds
+ * no waiting place. An answer a request received is not kept: the next request scans again, and
+ * sees a skill added since. An agent with no scan answers at once, without a thread.
+ */
+export function scanPaneCommands(agent: string | null | undefined, cwd: string | null | undefined, process: ProcessRoots = {}, version?: string | null, signal?: AbortSignal, began = performance.now()): Promise<SlashCommand[]> {
+  if (!agent || !Object.hasOwn(AGENT_SOURCES, agent)) return Promise.resolve([]);
+  if (signal?.aborted) return Promise.reject(new FileBusyError("the request was cancelled"));
+  // plain data only: a thread is handed a copy
+  const roots: ProcessRoots = { agentDir: process.agentDir ?? null, pluginDir: process.pluginDir ?? null, environ: process.environ ?? null };
+  const task: FileTask = { op: "commands", agent, cwd: cwd ?? null, home: userHome(), roots, version: version ?? null, serverEnv: { ...globalThis.process.env } };
+  const key = JSON.stringify(task);
+  const kept = dropUnclaimed(key);
+  if (kept !== undefined) return Promise.resolve(kept);
+  let scan = scans.get(key);
+  if (scan === undefined) {
+    const abort = new AbortController();
+    const started: Scan = { result: Promise.resolve([]), waiters: 0, running: false, abort };
+    started.result = fileTask<SlashCommand[]>(task, abort.signal, () => { started.running = true; });
+    // settled before any waiter hears it: a scan nobody waits for any more is kept for the next request
+    started.result.then((commands) => {
+      if (scans.get(key) === started) scans.delete(key);
+      if (started.waiters === 0) keepUnclaimed(key, commands);
+    }, () => { if (scans.get(key) === started) scans.delete(key); });
+    scans.set(key, started);
+    scan = started;
+  }
+  const joined = scan;
+  joined.waiters += 1;
+  return new Promise<SlashCommand[]>((done, fail) => {
+    let waiting = true;
+    const leave = (): boolean => {
+      if (!waiting) return false;
+      waiting = false;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
+      joined.waiters -= 1;
+      // nobody waits for a scan no thread took yet: it gives up its waiting place
+      if (joined.waiters === 0 && !joined.running) {
+        if (scans.get(key) === joined) scans.delete(key);
+        joined.abort.abort();
+      }
+      return true;
+    };
+    const timer = setTimeout(() => { if (leave()) fail(new FileBusyError("the skill folders did not answer in time")); }, Math.max(0, began + waitMs - performance.now()));
+    const cancel = () => { if (leave()) fail(new FileBusyError("the request was cancelled")); };
+    signal?.addEventListener("abort", cancel, { once: true });
+    joined.result.then((commands) => { if (leave()) done(commands); }, (error: unknown) => { if (leave()) fail(error); });
+  });
+}
+
+export function paneCommands(agent: string | null | undefined, cwd: string | null | undefined, home = userHome(), process: ProcessRoots = {}, version?: string | null, serverEnv?: Readonly<Record<string, string | undefined>>): SlashCommand[] {
   if (!agent || !Object.hasOwn(AGENT_SOURCES, agent)) return [];
   const source = AGENT_SOURCES[agent];
   if (!source) return [];
   const builtins = new Map(builtinCommands(agent, version).map((command) => [command.name, command]));
-  const ancestors = cwd ? ancestorsToRepoRoot(cwd) : [];
-  const discovered = source.discover({ home, cwd, repoRoot: ancestors.at(-1) ?? null, env: process.environ ?? null, roots: process, version });
+  const ancestors = cwd ? ancestorsToRepoRoot(cwd, home) : [];
+  const discovered = source.discover({ home, cwd, repoRoot: ancestors.at(-1) ?? null, env: process.environ ?? null, roots: process, version, ...(serverEnv ? { serverEnv } : {}) });
   const commands: SlashCommand[] = [];
   // one row per file: the same (trigger, name, id) reached twice, e.g. through a link; a row without an id is its own
   const seen = new Set<string>();

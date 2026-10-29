@@ -361,19 +361,26 @@ async function processStarts(infos: Iterable<ProcessInfo>): Promise<(pid: number
 }
 
 /**
- * The pid of the foreground OmO process that holds a session, as typing picks it (paneProcessRoots), or null: an
- * argv-silent custom OmO is known only by its holder, and its bundled Claude SDK child, listed after it, looks like
- * omo by its path but comes and goes with each turn. A process herdr gives no cwd for is placed in the pane's, as
- * discovery places it (macOS has no /proc to ask). Starts are read without holding the event loop.
+ * The foreground OmO process that holds a session, as typing picks it (paneProcessRoots), or null: an argv-silent
+ * custom OmO is known only by its holder, and its bundled Claude SDK child, listed after it, looks like omo by its path
+ * but comes and goes with each turn. `prefer` (the process a send is already bound to) wins while it holds one, so two
+ * holders that herdr lists in another order keep the one a send went to (#2190). A process herdr gives no cwd for is
+ * placed in the pane's, as discovery places it (macOS has no /proc to ask). Starts are read without holding the event
+ * loop; `started` is the start its holder record was checked against, so a pid reused after the check is not taken
+ * for it.
  */
 export async function heldOmoProcess(
   pane: HerdrPane,
   foreground: readonly { pid: number; argv?: readonly string[] | null; cwd?: string | null }[],
   home = userHome(),
-): Promise<number | null> {
+  prefer: number | null = null,
+): Promise<{ pid: number; started: number | null } | null> {
   const processes: OmoForeground[] = foreground.map(({ pid, argv, cwd }) => ({ pid, ...(argv ? { argv: [...argv] } : {}), ...(cwd ? { cwd } : {}) }));
   const startOf = await processStarts([{ process_info: { foreground_processes: processes } }]);
-  return processes.find((entry) => omoProcessIdentity(entry, paneFallbackCwd(pane), home, processEnviron, startOf)?.held === true)?.pid ?? null;
+  const holds = (entry: OmoForeground): boolean => omoProcessIdentity(entry, paneFallbackCwd(pane), home, processEnviron, startOf)?.held === true;
+  const preferred = processes.find((entry) => entry.pid === prefer);
+  const held = preferred && holds(preferred) ? preferred : processes.find(holds);
+  return held ? { pid: held.pid, started: startOf(held.pid) } : null;
 }
 
 type OmoForeground = { pid: number; argv?: string[]; cwd?: string };

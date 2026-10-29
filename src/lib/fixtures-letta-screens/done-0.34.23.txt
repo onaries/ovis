@@ -1,0 +1,30 @@
+     drwxrwxr-x 4 user000 user000 4096 Oct 29 14:15 .
+     drwxrwxr-x 6 user000 user000 4096 Oct 29 14:15 ..
+     … +3 lines (ctrl+o to expand)
+
+• Lighthouses have stood for centuries as stoic guardians of the coastline, casting their sweeping beams across
+  treacherous waters to guide mariners safely home. These remarkable structures, often perched on jagged cliffs or
+  solitary offshore reefs, represent one of humanity's most enduring triumphs over the perilous nature of the sea. Long
+  before the advent of modern GPS and satellite navigation, a lighthouse was the singular difference between life and
+  shipwreck for sailors navigating dark nights, violent storms, and hidden shoals.
+
+  The history of the lighthouse is deeply intertwined with human ingenuity and maritime trade. From the ancient Pharos
+  of Alexandria—one of the Seven Wonders of the Ancient World—to the sophisticated cast-iron and steel towers of the
+  nineteenth and twentieth centuries, lighthouse engineering evolved alongside human civilization. Early beacons relied
+  simply on wood or coal fires burned in open braziers, which gradually gave way to enclosed lanterns fueled by whale
+  oil, lard, and eventually kerosene. The true revolution, however, arrived with the invention of the Fresnel lens in
+  the early 1800s. This intricate array of glass prisms and lenses captured and magnified the light of a single lamp,
+  projecting a brilliant beam visible for miles across the horizon.
+
+  Beyond their practical utility, lighthouses hold a profound place in cultural folklore and human imagination. They
+  symbolize safety, resilience, and unwavering steadfastness in the face of overwhelming odds. The lives of lighthouse
+  keepers were defined by profound isolation and relentless dedication; they braved fierce elements, tended delicate
+  machinery, and maintained the vital flame through blinding blizzards and howling gales. Although automation has
+  largely replaced the solitary keeper with remote sensors and computerized LED arrays, the romantic allure of the
+  lighthouse remains undiminished. Today, these historic beacons continue to captivate our spirits, reminding us of our
+  eternal quest to find light amidst the darkness.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+› a queued follow-up I typed
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                     Letta Code · gemini-3.1-flash-lite

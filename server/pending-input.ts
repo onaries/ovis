@@ -70,8 +70,8 @@ export class PendingInputs<Owner, Lease> {
     private readonly perPane: (owner: Owner) => boolean = () => false,
   ) {}
 
-  /** Cross-connection held copies share one outcome; never evict an in-flight send. */
   /**
+   * Cross-connection held copies share one outcome; never evict an in-flight send.
    * `ambiguous`: which failed reply may have typed input. A saved copy's resend from another
    * connection only has the client's conservative list; the owner's own Send now knows the
    * dispatch's real answer, where only `submit_changed` means input may have arrived.

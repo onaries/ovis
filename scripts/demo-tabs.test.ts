@@ -122,3 +122,46 @@ it("the demo moves a one-pane tab to another workspace without stale tab or work
     }
   }
 });
+
+/** A tab started on a history row's resume shows that session, as herdr reports it; a launch's other arguments name none. */
+it("the demo reads a resumed session from an agent's own resume flag, never from other launch arguments", async () => {
+  const saved = new Map(["window", "location", "PushManager"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  try {
+    const storage = new Map<string, string>();
+    (globalThis as any).location = new URL("http://demo.test/demo/app/");
+    (globalThis as any).window = {
+      fetch, WebSocket, EventSource: class {},
+      localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
+    };
+    const transport = "../site/demo/transport.ts?resume";
+    await import(transport);
+    const demo = (globalThis as any).window;
+    const post = async (url: string, body: unknown) => (await demo.fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+    const workspace = (await post("/api/workspace/create", { cwd: "/home/demo/resume-check", label: "resume-check" })).workspace_id as string;
+    const session = async (kind: string, args: string[]) => {
+      const made = await post("/api/tab/create", { workspace_id: workspace, agent: { kind, args } });
+      return (await (await demo.fetch("/api/session")).json()).snapshot.panes.find((pane: any) => pane.pane_id === made.pane_id).agent_session;
+    };
+    // the arguments a history row resumes by, as the history dialog starts them
+    const resumeArgs = async (agent: string) => {
+      const rows = (await (await demo.fetch(`/api/sessions/history?workspace_id=${encodeURIComponent(workspace)}&agent=${agent}`)).json()).sessions;
+      return { id: rows[0].id as string, args: (rows[0].resume.argv as string[]).slice(1) };
+    };
+
+    assert.equal(await session("claude", ["--settings", "{\"ultracode\":true}"]), null, "Ultracode's settings object is no session id");
+    assert.equal(await session("claude", ["--effort", "high"]), null, "nor is an effort level");
+    const claude = await resumeArgs("claude");
+    assert.deepEqual(claude.args, ["--resume", claude.id]);
+    assert.equal((await session("claude", claude.args))?.value, claude.id);
+    const codex = await resumeArgs("codex");
+    assert.deepEqual(codex.args, ["resume", codex.id]);
+    assert.equal((await session("codex", codex.args))?.value, codex.id);
+    // another agent's resume flag is not this one's
+    assert.equal(await session("codex", claude.args), null);
+  } finally {
+    for (const [key, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as any)[key];
+    }
+  }
+});

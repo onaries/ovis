@@ -116,19 +116,6 @@ function parseHermesClarify(screen: string): ParsedPrompt | null {
  * A result counts only when it is complete: its layout's own lines are all there, and the CLI has
  * moved on, back at its idle `❯` prompt or on to the next command's echo.
  */
-export interface HermesResult {
-  /** the reader whose layout it is */
-  reader: HermesResultReader;
-  /** the command as echoed */
-  command: string;
-  /** the screen line of the echo */
-  echoLine: number;
-  /** the block under the echo, as shown */
-  lines: string[];
-  /** a reload that succeeded */
-  catalogChanged?: true;
-}
-
 type HermesResultReader = "hermes-help" | "hermes-status" | "hermes-version" | "hermes-profile" | "hermes-reload-skills";
 
 export const HERMES_ECHO_RE = /^⚙\uFE0F?\s+(\/\S+)$/;
@@ -221,17 +208,6 @@ function blockAt(lines: string[], start: number, layout: (typeof HERMES_LAYOUTS)
 }
 
 const screenLines = (screen: string): string[] => screen.replace(ANSI_RE, "").split(/\r?\n/);
-
-/** Every complete result block on a Hermes screen, top to bottom. */
-export function hermesResults(screen: string): HermesResult[] {
-  const lines = screenLines(screen);
-  return lines.flatMap((line, echoLine) => {
-    const command = HERMES_ECHO_RE.exec(line.trimEnd())?.[1];
-    const layout = HERMES_LAYOUTS.find((candidate) => command !== undefined && candidate.names.includes(command));
-    const block = layout ? blockAt(lines, echoLine + 1, layout) : null;
-    return layout && block ? [{ reader: layout.reader, command: command!, echoLine, ...block }] : [];
-  });
-}
 
 /**
  * A result reader is given what is below this send's own echo (server/outcome.ts) and the text sent:

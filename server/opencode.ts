@@ -242,12 +242,12 @@ export function opencodeTurns(records: readonly (OpencodeRecord | null)[]): Conv
 export interface RowMeta { id: string; seq: number; type: string; updated: number; size: number }
 
 /**
- * Where the page ending before `rows` (newest first) starts: at the prompt MAX_PAGE_PROMPTS back,
+ * Where the page ending before `rows` (newest first) starts: at the prompt `pagePrompts` back,
  * else at the earliest prompt inside the window, else at `floor` when the window reaches it. With
  * no prompt in the window the newest page starts mid-turn, at a whole row; an older page is read
  * once, so it reaches further back for one, up to four windows.
  */
-export function pageStart(rows: Iterable<RowMeta>, floor: number, widen: boolean, window = OPENCODE_WINDOW_BYTES): number {
+export function pageStart(rows: Iterable<RowMeta>, floor: number, widen: boolean, window = OPENCODE_WINDOW_BYTES, pagePrompts = MAX_PAGE_PROMPTS): number {
   let bytes = 0;
   let prompts = 0;
   let earliest: number | undefined;
@@ -257,7 +257,7 @@ export function pageStart(rows: Iterable<RowMeta>, floor: number, widen: boolean
     if (bytes > (widen && earliest === undefined ? 4 * window : window)) return earliest ?? newer ?? row.seq;
     if (row.type === "user") {
       earliest = row.seq;
-      if (++prompts === MAX_PAGE_PROMPTS) return row.seq;
+      if (++prompts === pagePrompts) return row.seq;
     }
     newer = row.seq;
   }
@@ -265,7 +265,13 @@ export function pageStart(rows: Iterable<RowMeta>, floor: number, widen: boolean
 }
 
 /** The page asked for: as conversation.ts's ConversationPage. */
-export type OpencodePage = { before?: string; since?: string; from?: string };
+export type OpencodePage = { before?: string; since?: string; from?: string; prompts?: number };
+
+/** The prompts a page keeps: the reader's choice inside MAX_PAGE_PROMPTS, else MAX_PAGE_PROMPTS. */
+function pagePrompts(page: OpencodePage): number {
+  const asked = page.prompts;
+  return typeof asked === "number" && Number.isFinite(asked) ? Math.min(MAX_PAGE_PROMPTS, Math.max(1, Math.floor(asked))) : MAX_PAGE_PROMPTS;
+}
 
 export type OpencodeAnswer =
   | { kind: "unavailable"; reason: string }
@@ -475,7 +481,7 @@ const ROW_QUERIES: Record<OpencodeRowSize, { page: string; pageDescending: strin
 export function opencodeConversation(path: string, sessionId: string, page: OpencodePage = {}, rowSize?: OpencodeRowSize): OpencodeAnswer {
   if (!SESSION_ID.test(sessionId)) return { kind: "unavailable", reason: "no_session_id" };
   const key = opencodeReadKey(path, sessionId);
-  const cacheKey = `${key}\0${page.before ?? ""}\0${page.since ?? ""}\0${page.from ?? ""}`;
+  const cacheKey = `${key}\0${page.before ?? ""}\0${page.since ?? ""}\0${page.from ?? ""}\0${pagePrompts(page)}`;
   try {
     const answer = withStore(path, (db): OpencodeAnswer => {
       // A broken or changing 1.x store leaves the terminal as the source of the conversation.
@@ -500,12 +506,12 @@ export function opencodeConversation(path: string, sessionId: string, page: Open
         const before = cursorOf(db, sessionId, view.historyId, page.before, end);
         const floor = page.since === undefined ? 0 : cursorOf(db, sessionId, view.historyId, page.since, end);
         if (before === null || floor === null || floor > before) return { kind: "history_changed" };
-        start = before === floor ? floor : pageStart(descending(floor, before), floor, true);
+        start = before === floor ? floor : pageStart(descending(floor, before), floor, true, OPENCODE_WINDOW_BYTES, pagePrompts(page));
         to = before;
       } else {
         const held = page.from === undefined ? null : cursorOf(db, sessionId, view.historyId, page.from, end);
         if (page.from !== undefined && held === null) return { kind: "history_changed" };
-        const newest = pageStart(descending(0, end), 0, false);
+        const newest = pageStart(descending(0, end), 0, false, OPENCODE_WINDOW_BYTES, pagePrompts(page));
         // a chat that shows older pages keeps every turn after its held start while they are
         // inside the newest page; once the page moved past it, it fetches the turns between
         start = held !== null && held >= newest ? held : newest;
@@ -810,12 +816,12 @@ function conversation1(db: Database, cacheKey: string, sessionId: string, page: 
     const before = cursorOf(page.before);
     const floor = page.since === undefined ? 0 : cursorOf(page.since);
     if (before === null || floor === null || floor > before) return { kind: "history_changed" };
-    start = before === floor ? floor : pageStart(descending(floor, before), floor, true);
+    start = before === floor ? floor : pageStart(descending(floor, before), floor, true, OPENCODE_WINDOW_BYTES, pagePrompts(page));
     to = before;
   } else {
     const held = page.from === undefined ? null : cursorOf(page.from);
     if (page.from !== undefined && held === null) return { kind: "history_changed" };
-    const newest = pageStart(descending(0, end), 0, false);
+    const newest = pageStart(descending(0, end), 0, false, OPENCODE_WINDOW_BYTES, pagePrompts(page));
     start = held !== null && held >= newest ? held : newest;
   }
 

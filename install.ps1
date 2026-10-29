@@ -100,8 +100,19 @@ if (-not $move -and (Find-Plugin $legacyId)) {
 }
 if ($legacy) {
     Write-Host "Ovis: moving the installed plugin to its Ovis id; its settings and token come along"
-    # stopped first: under both ids, each would start a server on herdr's next start
-    & bun (Join-Path $legacy.plugin_root 'scripts\plugin.ts') stop | Out-Null
+    # stopped first: under both ids, each would start a server on herdr's next start. Its stop is told the
+    # state dir herdr hands it (as scripts/plugin-state.ts finds herdr's): run from here without it, a
+    # release from before 0.4.13 looks for its pid in ~/.local/state, says it is not running, and its
+    # server, which can outlive herdr, keeps the old checkout's files open for the uninstall below
+    $herdrState = if ($null -ne $env:XDG_STATE_HOME) { [IO.Path]::Combine($env:XDG_STATE_HOME, 'herdr') }
+        elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'herdr' }
+        else { Join-Path $env:USERPROFILE 'AppData\Local\herdr' }
+    $givenState = $env:HERDR_PLUGIN_STATE_DIR
+    $env:HERDR_PLUGIN_STATE_DIR = Join-Path $herdrState "plugins\$legacyId"
+    try { $stopped = & bun (Join-Path $legacy.plugin_root 'scripts\plugin.ts') stop }
+    finally { $env:HERDR_PLUGIN_STATE_DIR = $givenState }
+    # a server started by hand from the checkout keeps its pid in its own dir, which the given one hides
+    if ($LASTEXITCODE -eq 0 -and -not ($stopped -match '^stopped ')) { & bun (Join-Path $legacy.plugin_root 'scripts\plugin.ts') stop | Out-Null }
     # removed with its server up, the old checkout would keep serving, and the new id's start would
     # find the port answering and leave it
     if ($LASTEXITCODE -ne 0) { throw "Could not stop the server of the old id, so nothing was moved. Stop it (herdr plugin action invoke $legacyId.stop, or restart herdr), then run this again." }

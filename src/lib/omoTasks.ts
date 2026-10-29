@@ -68,7 +68,7 @@ export function taskCallItems(input: Record<string, unknown>): TaskCallItem[] | 
  * lines of their own (`<analysis>` … `</analysis>`, `<next_steps>`): an opening tag becomes the
  * section's name in bold, a closing one goes. Tags inside a code block, and any line with more
  * on it than the tag, are the answer's own and stay. A code block opens and closes as the chat's
- * Markdown (lib/markdown.ts) reads one: it opens at a line starting with three backticks, after
+ * Markdown (shared/markdown.ts) reads one: it opens at a line starting with three backticks, after
  * up to three spaces (a tab is not a fence there), and closes only at a line of three backticks
  * alone, so a fence line that names a language inside a block is part of the block.
  */

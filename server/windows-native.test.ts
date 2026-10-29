@@ -5,13 +5,14 @@
  * on the Windows runners of reusable CI and the remote-bundle workflow (#271).
  */
 import { expect, it, spyOn } from "bun:test";
-import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { rm } from "node:fs/promises";
 
 import { claudeProcessSession, forgetClaudeSessions, processClaudeConfigDir } from "./claude-store.ts";
+import { agentStartArgs } from "./claude-settings-file.ts";
 import { Database } from "bun:sqlite";
 
 import { codexRolloutPath, directoryKey, sameDirectory, storedCwdCondition } from "./codex.ts";
@@ -24,8 +25,88 @@ import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
 import { isAgyProcessName, windowsHolders } from "./agy-store.ts";
 import { ancestorsToRepoRoot } from "./skills/walk.ts";
 import { startInteractiveWindowsHerdr } from "./windows-herdr-start.ts";
+import ts from "typescript-api";
 
 const onWindows = process.platform === "win32";
+
+/** The JSON in `path` once it is whole; a file still being written reads as not there yet (#2165). */
+function completeJson<T>(path: string): T | undefined {
+  let text: string;
+  try { text = readFileSync(path, "utf8"); }
+  // a Windows scanner can hold the file just renamed into place for a moment
+  catch (error) { if (["ENOENT", "EBUSY", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined; throw error; }
+  try { return JSON.parse(text) as T; }
+  catch (error) { if (error instanceof SyntaxError) return undefined; throw error; }
+}
+
+/** Waits for the whole JSON in `path`, looking again on every change in `dir`, until `ms` runs out. */
+function watchJson<T>(dir: string, path: string, ms: number): { result: Promise<T>; looked: () => Promise<void>; close: () => Promise<void> } {
+  const watcher = watch(dir);
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const lookers: (() => void)[] = [];
+  const result = new Promise<T>((resolve, reject) => {
+    deadline = setTimeout(() => reject(new Error(`${path} was not written`)), ms);
+    watcher.on("change", () => {
+      try {
+        const value = completeJson<T>(path);
+        if (value !== undefined) { clearTimeout(deadline); resolve(value); }
+      } catch (error) { clearTimeout(deadline); reject(error); }
+      for (const looker of lookers.splice(0)) looker();
+    });
+  });
+  // A waiting host has no child and therefore no result; still observe a later rejection on failure.
+  void result.catch(() => {});
+  return {
+    result,
+    // the next look at the file, or the result's failure if that comes first
+    looked: () => Promise.race([new Promise<void>((resolve) => lookers.push(resolve)), result.then(() => {})]),
+    close: async () => {
+      clearTimeout(deadline);
+      const closed = new Promise<void>((resolve) => watcher.once("close", resolve));
+      watcher.close();
+      await closed;
+    },
+  };
+}
+
+it("waits past a half-written result until the whole file is renamed into place (#2165)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ovis-result-wait-"));
+  const path = join(root, "result.json");
+  const waiting = watchJson<{ pid: number }>(root, path, 15_000);
+  try {
+    let settled = false;
+    void waiting.result.then(() => { settled = true; }, () => { settled = true; });
+    // what the hosted runner saw: the name already there, its content not yet
+    const looked = waiting.looked();
+    writeFileSync(path, "{\"pid\":");
+    await looked;
+    // the watcher has seen the half-written file and is still waiting
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    writeFileSync(`${path}.tmp`, JSON.stringify({ pid: 7 }));
+    renameSync(`${path}.tmp`, path);
+    expect(await waiting.result).toEqual({ pid: 7 });
+  } finally {
+    await waiting.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A hosted Windows runner can take more than bun's default 5 s on any native call (#2104).
+it("gives every Windows-only case a budget sized for a busy hosted runner (#2104)", () => {
+  const file = ts.createSourceFile(import.meta.path, readFileSync(import.meta.path, "utf8"), ts.ScriptTarget.Latest);
+  const cases: { name: string; budget: number | undefined }[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(file) === "it.skipIf") {
+      const [name, , budget] = node.arguments;
+      cases.push({ name: name!.getText(file), budget: budget && ts.isNumericLiteral(budget) ? Number(budget.text) : undefined });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  expect(cases.length).toBeGreaterThan(10);
+  expect(cases.filter(({ budget }) => budget === undefined || budget < 30_000)).toEqual([]);
+});
 
 it.skipIf(!onWindows)("waits when Windows accepts an interactive task without running it, but rejects a failed launcher", async () => {
   const root = mkdtempSync(join(tmpdir(), "ovis-desktop-not-run-"));
@@ -70,22 +151,15 @@ it.skipIf(!onWindows)("starts a desktop child outside the launcher, preserving q
   const sentinel = "private-launch-sentinel-\"&%!\n한글";
   const previous = process.env["OVIS_START_TEST_SECRET"];
   let pid: number | undefined;
-  const watcher = watch(root);
-  let deadline: ReturnType<typeof setTimeout> | undefined;
-  const result = new Promise<{ pid: number; secret: string; args: string[]; session: number }>((resolve, reject) => {
-    deadline = setTimeout(() => reject(new Error("the desktop child did not answer")), 15_000);
-    watcher.on("change", () => {
-      if (existsSync(resultPath)) { clearTimeout(deadline); resolve(JSON.parse(readFileSync(resultPath, "utf8"))); }
-    });
-  });
-  // A waiting host has no child and therefore no result; still observe a later rejection on failure.
-  void result.catch(() => {});
-  writeFileSync(script, `import { watch, existsSync, writeFileSync } from 'node:fs';
+  const waiting = watchJson<{ pid: number; secret: string; args: string[]; session: number }>(root, resultPath, 15_000);
+  writeFileSync(script, `import { watch, existsSync, renameSync, writeFileSync } from 'node:fs';
 import { dlopen, FFIType } from 'bun:ffi';
 const { symbols } = dlopen('kernel32.dll', { ProcessIdToSessionId: { args: [FFIType.u32, FFIType.ptr], returns: FFIType.i32 } });
 const session = new Uint32Array(1); if (!symbols.ProcessIdToSessionId(process.pid, session)) throw new Error('no session');
 watch(${JSON.stringify(root)}, () => { if (existsSync(${JSON.stringify(stopPath)})) process.exit(0); });
-writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:process.pid, secret:process.env.OVIS_START_TEST_SECRET, args:process.argv.slice(2), session:session[0]}));
+// written whole under another name first: the result's name only appears with all of it (#2165)
+writeFileSync(${JSON.stringify(`${resultPath}.tmp`)}, JSON.stringify({pid:process.pid, secret:process.env.OVIS_START_TEST_SECRET, args:process.argv.slice(2), session:session[0]}));
+renameSync(${JSON.stringify(`${resultPath}.tmp`)}, ${JSON.stringify(resultPath)});
 `);
   process.env["OVIS_START_TEST_SECRET"] = sentinel;
   const failures: unknown[] = [];
@@ -95,7 +169,7 @@ writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:process.pid, se
       expect(existsSync(resultPath)).toBe(false);
     } else {
       // The launcher already exited, but this child's watch still runs in the desktop session.
-      const child = await result;
+      const child = await waiting.result;
       pid = child.pid;
       expect(child.session).toBeGreaterThan(0);
       expect(child.secret).toBe(sentinel);
@@ -105,10 +179,7 @@ writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:process.pid, se
     expect(readdirSync(root).filter((name) => name.startsWith("herdr-start-"))).toEqual([]);
   } catch (error) { failures.push(error); }
   try {
-    clearTimeout(deadline);
-    const closed = new Promise<void>((resolve) => watcher.once("close", resolve));
-    watcher.close();
-    await closed;
+    await waiting.close();
     if (previous === undefined) delete process.env["OVIS_START_TEST_SECRET"]; else process.env["OVIS_START_TEST_SECRET"] = previous;
     // Only this fixture's child is stopped, never a herdr daemon or another test's task.
     if (pid !== undefined) try { process.kill(pid); } catch {}
@@ -127,9 +198,9 @@ writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:process.pid, se
 
 it.skipIf(!onWindows)("stops skill discovery at the user's home whatever its letter case", () => {
   const home = mkdtempSync(join(tmpdir(), "herdr-home-case-"));
-  const before = process.env["HOME"];
+  const before = process.env["USERPROFILE"];
   try {
-    process.env["HOME"] = home.toLowerCase();
+    process.env["USERPROFILE"] = home.toLowerCase();
     // home is itself a repository: a folder under it with no .git of its own must not reach it
     mkdirSync(join(home, ".git"));
     const cwd = join(home.toUpperCase(), "work", "sub");
@@ -139,10 +210,10 @@ it.skipIf(!onWindows)("stops skill discovery at the user's home whatever its let
     // and a folder above home in another case is not a project of its own either
     expect(ancestorsToRepoRoot(dirname(home).toUpperCase())).toEqual([]);
   } finally {
-    if (before === undefined) delete process.env["HOME"]; else process.env["HOME"] = before;
+    if (before === undefined) delete process.env["USERPROFILE"]; else process.env["USERPROFILE"] = before;
     rmSync(home, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 it.skipIf(!onWindows)("finds this process holding an open file through Restart Manager, then observes its release", () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-agy-native-"));
@@ -160,7 +231,7 @@ it.skipIf(!onWindows)("finds this process holding an open file through Restart M
     if (fd !== undefined) closeSync(fd);
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 it.skipIf(!onWindows)("recognizes Windows Agy executable names and full paths regardless of letter case", () => {
   expect(isAgyProcessName("agy.exe")).toBe(true);
@@ -168,7 +239,7 @@ it.skipIf(!onWindows)("recognizes Windows Agy executable names and full paths re
   expect(isAgyProcessName("C:\\Programs\\Antigravity\\AgY.eXe")).toBe(true);
   expect(isAgyProcessName("c:\\PROGRAMS\\ANTIGRAVITY\\AGY.EXE")).toBe(true);
   expect(isAgyProcessName("C:\\Programs\\agyx.exe")).toBe(false);
-});
+}, 30_000);
 
 it.skipIf(!onWindows)("installs with native tar when PATH shadows tar, and preserves the runtime after bad extraction", async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "herdr-bundle-native-")));
@@ -250,7 +321,7 @@ it.skipIf(!onWindows)("keeps a session file inside its store on a real Windows f
       expect(gjcSessionFile(root, outside)).toBeNull();
     }
   } finally { rmSync(home, { recursive: true, force: true }); }
-});
+}, 30_000);
 
 it.skipIf(!onWindows)("reads a Codex rollout path stored with the \\\\?\\ prefix, and still keeps it inside the store", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-codex-native-")));
@@ -269,7 +340,7 @@ it.skipIf(!onWindows)("reads a Codex rollout path stored with the \\\\?\\ prefix
     // raw `..` segments (join would fold them) that climb from the store to `outside`, which exists
     expect(codexRolloutPath(`\\\\?\\${home}\\sessions\\..\\..\\..\\other.jsonl`, home)).toBeNull();
   } finally { rmSync(root, { recursive: true, force: true }); }
-});
+}, 30_000);
 
 it.skipIf(!onWindows)("finds Codex's thread under the on-disk casing when herdr reports another spelling of the directory (#740)", () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "herdr-codex-cwd-")));
@@ -288,7 +359,7 @@ it.skipIf(!onWindows)("finds Codex's thread under the on-disk casing when herdr 
     mkdirSync(join(root, "Other"));
     expect(sameDirectory(reported, join(root, "Other"))).toBe(false);
   } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
-});
+}, 30_000);
 
 it.skipIf(!onWindows)("finds a Claude's own store from the start it records, which the process table repeats", async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "herdr-claude-native-")));
@@ -316,4 +387,40 @@ it.skipIf(!onWindows)("finds a Claude's own store from the start it records, whi
     if (serverConfigDir !== undefined) process.env["CLAUDE_CONFIG_DIR"] = serverConfigDir;
     rmSync(home, { recursive: true, force: true });
   }
-});
+}, 30_000);
+
+it.skipIf(!onWindows)("gives Claude Code a settings file whose path an npm install's PowerShell shim passes on intact, where the JSON loses its quotes (#2232)", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-claude-settings-native-")));
+  try {
+    const json = JSON.stringify({ ultracode: true });
+    // a space in the folder, as a profile's %LOCALAPPDATA% can have
+    const dir = join(root, "claude settings");
+    const started = agentStartArgs("claude", ["--settings", json], { platform: "win32", dir });
+    expect(started[0]).toBe("--settings");
+    const path = started[1]!;
+    expect(dirname(path)).toBe(dir);
+    expect(readFileSync(path, "utf8")).toBe(json);
+    expect(agentStartArgs("claude", ["--settings", json], { platform: "win32", dir })).toEqual(started);
+    // npm's claude.ps1 in small: Windows PowerShell hands its $args to a native program, here this Bun
+    // writing down the argv it got
+    const seen = join(root, "argv.jsonl");
+    const program = join(root, "argv.ts");
+    writeFileSync(program, `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(seen)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`);
+    const shim = join(root, "claude.ps1");
+    // with a BOM, or Windows PowerShell reads a path outside ASCII in the ANSI code page
+    writeFileSync(shim, `\uFEFF& ${psQuote(process.execPath)} ${psQuote(program)} $args\n`);
+    // herdr's launch of a PowerShell script, once with the file's path and once with the JSON itself
+    const script = [path, json].map((value) => `& ${psQuote(shim)} '--settings' ${psQuote(value)}`).join("\n");
+    // as in the bundle install case: started from PowerShell 7, its module path would come along
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "psmodulepath"));
+    const child = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { stdout: "ignore", stderr: "pipe", env });
+    const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    if (code !== 0) throw new Error(stderr);
+    const runs = readFileSync(seen, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as string[]);
+    expect(runs).toHaveLength(2);
+    expect(runs[0]).toEqual(["--settings", path]);
+    // the reason for the file: the JSON arrives without its quotes, which Claude Code refuses as invalid
+    expect(runs[1]![0]).toBe("--settings");
+    expect(runs[1]![1]).not.toBe(json);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30_000);

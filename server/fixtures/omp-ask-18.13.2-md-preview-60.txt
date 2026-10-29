@@ -1,0 +1,50 @@
+
+
+ Please run the synthetic Markdown Ask capture scenario.
+
+
+╭─── Ask 3 questions ──────────────────────────────────────╮
+├─── [route] · options:2 ──────────────────────────────────┤
+│  Which route should carry the fixture session? See the   │
+│  guide (https://example.com/guide).                      │
+│  ○ Use local socket                                      │
+│    ↳ Keeps the session on this PC.                       │
+│  ○ Remote relay                                          │
+│    ↳ Goes through the relay with ssh.                    │
+├─── [targets] · multi · options:2 ────────────────────────┤
+│  Pick the targets:                                       │
+│                                                          │
+│  - Desktop first                                         │
+│  - Phone 390px                                           │
+│                                                          │
+│  ```sh                                                   │
+│    bun run qa                                            │
+│  ```                                                     │
+│  ☐ Desktop                                               │
+│    ↳ Old wide layout.                                    │
+│  ☐ Phone                                                 │
+│    ↳ Narrow layout.                                      │
+├─── [preview] · options:2 ────────────────────────────────┤
+│  Which config reads better?                              │
+│  ○ YAML                                                  │
+│    ↳ Indented keys.                                      │
+│  ○ JSON                                                  │
+│    ↳ Braces.                                             │
+╰──────────────────────────────────────────────────────────╯
+
+  ⎋ Working…
+╭─ Ask ────────────────────────────────────────────────────╮
+│  Route    Targets    Preview    Submit                   │
+│ Which config reads better?                               │
+├──────────────────────────────────────────────────────────┤
+│ ❯ ○ YAML                                                 │
+│       Indented keys.                                     │
+│       │ key: value                                       │
+│   ○ JSON                                                 │
+│       Braces.                                            │
+│   ○ Other (type your own)                                │
+│                                                          │
+│                                                          │
+├──────────────────────────────────────────────────────────┤
+│ ⏎ select · n note · ↑/↓ move · ⇥/←/→ question · ⎋ cance… │
+╰──────────────────────────────────────────────────────────╯

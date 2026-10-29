@@ -168,7 +168,7 @@ export const source: AgentCommandSource = {
   // the popup builds without `apps` and every `debug*` command (bottom_pane/command_popup.rs:91-93); typed by hand they still dispatch
   agentHidden: ["apps", "debug-config", "debug-m-drop", "debug-m-update"],
   pin: "0.163.0",
-  discover({ home, cwd, env, version }) {
+  discover({ home, cwd, env, version, serverEnv = process.env }) {
     const codexHome = environValue(env, "CODEX_HOME") || join(home, ".codex");
     let config: Record<string, unknown> = {};
     try { config = plainObject(Bun.TOML.parse(readFileSync(join(codexHome, "config.toml"), "utf8"))); }
@@ -204,14 +204,14 @@ export const source: AgentCommandSource = {
         result.push({ name: namespace ? `${namespace}:${skill.name}` : skill.name, description: skill.description, source: "skill", trigger: "$", origin, id });
       }
     };
-    for (const directory of cwd ? ancestorsToRepoRoot(cwd) : []) {
+    for (const directory of cwd ? ancestorsToRepoRoot(cwd, home) : []) {
       load(join(directory, ".agents", "skills"), "project");
       load(join(directory, ".codex", "skills"), "project");
     }
     load(join(home, ".agents", "skills"), "user");
     load(join(codexHome, "skills"), "user");
     load(join(codexHome, "skills", ".system"), "bundled");
-    const admin = adminSkillsRoot(process.platform, env, process.env.ProgramData);
+    const admin = adminSkillsRoot(process.platform, env, serverEnv["ProgramData"]);
     if (admin) load(admin, "bundled");
 
     const cache = join(codexHome, "plugins", "cache");

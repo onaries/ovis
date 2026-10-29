@@ -674,6 +674,54 @@
   --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
+/* Black: Tokyo Night colors on black surfaces; see DESIGN.md. */
+[data-theme="dark"][data-palette="black"] {
+  --droplet-ring: var(--border-strong);
+  --bg: #000000;
+  --bg-panel: #000000;
+  --bg-elevated: #0a0a0a;
+  --bg-hover: #161616;
+  --bg-input: #000000;
+  --border: #59628c;
+  --border-strong: #5a638d;
+  --text: #c0caf5;
+  --text-dim: #a9b1d6;
+  --text-strong: #c0caf5;
+  --accent: #7aa2f7;
+  --accent-tint: rgba(122, 162, 247, 0.13);
+  --primary: #7aa2f7;
+  --primary-hover: #82a6f7;
+  --primary-text: #1a1b26;
+  --primary-tint: rgba(122, 162, 247, 0.16);
+  --status-idle: #697196;
+  --status-working: #7aa2f7;
+  --status-blocked: #fc7a92;
+  --status-done: #9ece6a;
+  --status-working-tint: rgba(122, 162, 247, 0.14);
+  --status-blocked-tint: rgba(252, 122, 146, 0.14);
+  --status-done-tint: rgba(158, 206, 106, 0.14);
+  --danger-tint: rgba(252, 122, 146, 0.12);
+  --notice: #e0af68;
+  --danger-text: #fc7a92;
+  --scrim: rgba(0, 0, 0, 0.5);
+  --term-bg: #000000;
+  --term-fg: #c0caf5;
+  --term-cursor: #c0caf5;
+  --term-selection: #2d3650;
+  --line-number: #a9b1d6;
+  --syntax-function: #7aa2f7;
+  --syntax-keyword: #bb9af7;
+  --syntax-string: #9ece6a;
+  --syntax-number: #ff9e64;
+  --syntax-type: #e0af68;
+  --syntax-variable: #c0caf5;
+  --syntax-meta: #7dcfff;
+  --bubble-border: var(--border);
+  --shadow-drawer: 0 0 40px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border);
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
 /* tokyo-night-day: pinned herdr mapping with reviewed repairs (scripts/herdr-theme-overrides.ts). */
 [data-theme="light"][data-palette="tokyo-night-day"] {
   --bg: #e1e2e7;

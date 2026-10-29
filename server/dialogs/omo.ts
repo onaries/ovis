@@ -158,15 +158,22 @@ function omoQuestionView(lines: string[], start: number, end: number, cut: boole
 }
 
 /**
- * The question of the session's call a cut-off form shows: the one whose options end with the
- * rows in view, each matched by its first line (which the pane may cut). Unique, or -1.
+ * A cut-off form that more than one question of a call fits: it names none of them, and it counts against every
+ * other open call it might be, instead of leaving the only other call that fits to take it (#2092).
  */
-function askedQuestion(view: OmoQuestionView, ask: OmoAsk): number {
+const AMBIGUOUS = "ambiguous" as const;
+
+/**
+ * The question of the session's call a cut-off form shows: the one whose options end with the
+ * rows in view, each matched by its first line (which the pane may cut), and that the rest of the
+ * screen can show (`shows`). Unique, -1 for none, or AMBIGUOUS when several fit.
+ */
+function askedQuestion(view: OmoQuestionView, ask: OmoAsk, shows: (index: number) => boolean = () => true): number | typeof AMBIGUOUS {
   const start = (raw: string): string => comparable(cleanLine(raw).replace(/^(?:→\s+)?\d+\.\s+/, "").replace(/\s+✓$/, ""));
   const last = view.rows.at(-1)?.number;
   const matches = ask.questions.flatMap((question, index) => question.options.length === last
-    && view.rows.every((row) => comparable(question.options[row.number - 1]!.label).startsWith(start(row.label[0]!))) ? [index] : []);
-  return matches.length === 1 ? matches[0]! : -1;
+    && view.rows.every((row) => comparable(question.options[row.number - 1]!.label).startsWith(start(row.label[0]!))) && shows(index) ? [index] : []);
+  return matches.length > 1 ? AMBIGUOUS : matches[0] ?? -1;
 }
 
 /**
@@ -193,7 +200,7 @@ function cutSteps(ask: OmoAsk, current: number, currentAnswered: boolean, answer
  * in a multiple choice, clear the previous answer (Backspace), navigate and toggle each choice
  * with Space, then move on with Tab.
  */
-function parseOmoQuestion(screen: string, ask: OmoAsk | null, trusted: boolean): ParsedPrompt | null {
+function parseOmoQuestion(screen: string, ask: OmoAsk | null, trusted: boolean): ParsedPrompt | null | typeof AMBIGUOUS {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const hintIndex = findLastIndex(lines, (_, index) => OMO_OPTIONS_HINT_RE.test(wrapped(lines, index, OMO_HINT_LINES)));
   if (hintIndex < 0) return null;
@@ -212,13 +219,18 @@ function parseOmoQuestion(screen: string, ask: OmoAsk | null, trusted: boolean):
   let question: string;
   let options: InteractivePrompt["options"];
   if (known) {
-    index = form ? form.tabs.findIndex((tab) => tab.current) : askedQuestion(view, known);
+    // the screen must show this question's rows, numbered to its last option: only a question it can show makes a
+    // cut-off form ambiguous (#2092)
+    const shows = (asked: OmoAsk["questions"][number]): boolean => asked.multiSelect === multiSelect
+      && (view.rows.at(-1)?.number ?? 0) === asked.options.length
+      && (view.question.length === 0 || sameText(joinWrapped(view.question, width), asked.question))
+      && view.rows.every((row, at) => sameText(shownLabels[at]!.replace(/\s+✓$/, ""), asked.options[row.number - 1]!.label));
+    const fit = form ? form.tabs.findIndex((tab) => tab.current) : askedQuestion(view, known, (at) => shows(known.questions[at]!));
+    if (fit === AMBIGUOUS) return AMBIGUOUS;
+    index = fit;
     if (index < 0) return null;
     const asked = known.questions[index]!;
-    // the screen must show this question's rows, numbered to its last option
-    if (asked.multiSelect !== multiSelect || (view.rows.at(-1)?.number ?? 0) !== asked.options.length) return null;
-    if (view.question.length > 0 && !sameText(joinWrapped(view.question, width), asked.question)) return null;
-    if (!view.rows.every((row, at) => sameText(shownLabels[at]!.replace(/\s+✓$/, ""), asked.options[row.number - 1]!.label))) return null;
+    if (!shows(asked)) return null;
     tabs = form ? form.tabs : cutSteps(known, index, currentAnswered, omoAnsweredCount(lines, view.own.lineIndex, hintIndex));
     question = normalizeText(asked.question);
     options = asked.options.map((option) => ({ label: normalizeText(option.label), description: option.description && normalizeText(option.description) }));
@@ -272,7 +284,7 @@ function parseOmoQuestion(screen: string, ask: OmoAsk | null, trusted: boolean):
  *
  * The card offers to save what is typed (Enter, which moves on as an answer does) or to discard it.
  */
-function parseOmoTyping(screen: string, ask: OmoAsk | null, trusted: boolean): ParsedPrompt | null {
+function parseOmoTyping(screen: string, ask: OmoAsk | null, trusted: boolean): ParsedPrompt | null | typeof AMBIGUOUS {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const hintIndex = findLastIndex(lines, (_, index) => OMO_TYPING_HINT_RE.test(wrapped(lines, index, OMO_HINT_LINES)));
   if (hintIndex < 0) return null;
@@ -289,7 +301,18 @@ function parseOmoTyping(screen: string, ask: OmoAsk | null, trusted: boolean): P
   let tabs: OmoForm["tabs"];
   let question: string;
   if (known) {
-    index = form ? form.tabs.findIndex((tab) => tab.current) : view.rows.length > 0 ? askedQuestion(view, known) : -1;
+    // as parseOmoQuestion matches it, but for the choice mode, which the typing hint does not show: only a question
+    // whose whole labels are the rows in view makes the cut-off form ambiguous (#2092)
+    const width = screenWidth(lines);
+    const shownLabels = view.rows.map((row) => joinWrapped(row.label, width, /^(?:\u2192\s+)?\d+\.\s+/).replace(/\s+\u2713$/, ""));
+    const shows = (at: number): boolean => {
+      const asked = known.questions[at]!;
+      return (view.question.length === 0 || sameText(joinWrapped(view.question, width), asked.question))
+        && view.rows.every((row, rowAt) => sameText(shownLabels[rowAt]!, asked.options[row.number - 1]!.label));
+    };
+    const fit = form ? form.tabs.findIndex((tab) => tab.current) : view.rows.length > 0 ? askedQuestion(view, known, shows) : -1;
+    if (fit === AMBIGUOUS) return AMBIGUOUS;
+    index = fit;
     if (index < 0) return null;
     tabs = form ? form.tabs : cutSteps(known, index, false, null);
     question = normalizeText(known.questions[index]!.question);
@@ -571,8 +594,12 @@ const agents = ["omo", "pi", "claude", ""] as const;
 
 const forms = onePerPass((screen: string, ctx: ReaderContext): (ParsedPrompt | null)[] => {
   const read = (ask: OmoAsk | null, trusted: boolean) => [parseOmoQuestion(screen, ask, trusted), parseOmoTyping(screen, ask, trusted), parseOmoReview(screen, ask, trusted)];
-  const matched = ctx.omoOpen.flatMap((ask) => read(ask, false)).filter((form) => form !== null);
-  return ctx.omoOpen.length > 0 ? matched.length === 1 ? matched : [] : read(ctx.omoAsk, ctx.omoTrusted);
+  if (ctx.omoOpen.length === 0) return read(ctx.omoAsk, ctx.omoTrusted).map((form) => form === AMBIGUOUS ? null : form);
+  // the form must be exactly one question of one open call: a call it fits more than one way counts too (#2092)
+  const fits = ctx.omoOpen.flatMap((ask) => read(ask, false));
+  if (fits.includes(AMBIGUOUS)) return [];
+  const matched = fits.filter((form): form is ParsedPrompt => form !== null && form !== AMBIGUOUS);
+  return matched.length === 1 ? matched : [];
 });
 
 export const readers: readonly DialogReader[] = [

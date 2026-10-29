@@ -4,7 +4,7 @@ import { OpenFileContext } from "../lib/filePaths.ts";
 import { resolveFromDocument } from "../lib/fileReader.ts";
 import type { Lines } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
-import type { MarkdownBlock } from "../lib/markdown.ts";
+import type { MarkdownBlock } from "../../shared/markdown.ts";
 import { useSettings, type MarkdownWidth } from "../lib/settings.ts";
 import { CodeLines } from "./HighlightedCode.tsx";
 import { ProgressiveMarkdown } from "./Markdown.tsx";

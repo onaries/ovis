@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { answerKeys, parseInteractivePrompt } from "../prompt.ts";
 import { paneCommands } from "../commands.ts";
-import { HERMES_ECHO_RE, hermesEchoOf, hermesResults } from "./hermes.ts";
+import { HERMES_ECHO_RE, hermesEchoOf } from "./hermes.ts";
 import { registry } from "./registry.ts";
 import { findLastIndex, publicPrompt } from "./shared.ts";
 
@@ -89,7 +89,6 @@ describe("Hermes result readers", () => {
 
   it("accepts an idle /version whose update check printed nothing (T24-AV-2)", () => {
     const screen = lines(fixture("version-120")).filter((line) => !line.startsWith("Update available")).join("\n");
-    expect(hermesResults(screen).some((result) => result.reader === "hermes-version")).toBeTrue();
     expect(parse("hermes-version", below(screen, "/version"), "/version")?.resultText?.split("\n").at(-1)).toStartWith("OpenAI SDK: ");
     // still printing: the prompt is not idle yet
     const busy = screen.replace(/^❯ /m, "⠋ ");
@@ -110,7 +109,6 @@ describe("Hermes result readers", () => {
       [...all.slice(0, echo + 2), "  ➕ Added Skills:", all[count]!, ...all.slice(count + 1)],
     ];
     for (const screen of cases.map((case_) => case_.join("\n"))) {
-      expect(hermesResults(screen).some((result) => result.reader === "hermes-reload-skills" && result.echoLine === echo)).toBeFalse();
       expect(parse("hermes-reload-skills", below(screen, "/reload-skills"), "/reload-skills")).toBeNull();
     }
   });
@@ -148,7 +146,7 @@ describe("Hermes result readers", () => {
   });
 
   it("reads nothing from a result whose start or end is not on screen", () => {
-    expect(hermesResults(fixture("help-120-cut")).some((result) => result.reader === "hermes-help")).toBeFalse();
+    expect(parse("hermes-help", below(fixture("help-120-cut"), "/help"), "/help")).toBeNull();
     const status = lines(fixture("status-120"));
     const last = findLastIndex(status, (line) => line.startsWith("Agent Running: "));
     const cut = [...status.slice(0, last), ...status.slice(last + 1)].join("\n");

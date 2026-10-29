@@ -78,7 +78,14 @@ interface SignIn {
  * across reads; one PC can hold several, each of its own account. `locked`: a keychain item this
  * session cannot read.
  */
-type Found = { source: string } & (SignIn | { locked: true; account?: Account | null });
+type Found = { source: string; home?: CredentialHome } & (SignIn | { locked: true; account?: Account | null });
+
+/**
+ * Where a Claude or Codex sign-in lives, as its CLI is told to sign in there again: the default home
+ * (no variable set, the keychain item the CLI names by default), or a directory, as it was configured.
+ * A tag, not a source string: a configured directory may well be named `default` or `keychain`.
+ */
+export type CredentialHome = { readonly kind: "default" } | { readonly kind: "dir"; readonly dir: string };
 
 interface Reading {
   plan: string | null;
@@ -274,12 +281,14 @@ function claudeAccount(path: string): Account | null {
  * pointed at (CLAUDE_CONFIG_DIR, and ~/.claude-* for the usual second account). For such a
  * directory it names the keychain item after the directory's hash, and keeps .claude.json in it.
  */
-function claudeHomes(ctx: UsageContext): Array<{ source: string; service: string; dir: string; config: string }> {
-  const homes = [{ source: "default", service: "Claude Code-credentials", dir: join(ctx.home, ".claude"), config: join(ctx.home, ".claude.json") }];
+function claudeHomes(ctx: UsageContext): Array<{ source: string; service: string; dir: string; config: string; home: CredentialHome }> {
+  const homes: Array<{ source: string; service: string; dir: string; config: string; home: CredentialHome }> = [
+    { source: "default", service: "Claude Code-credentials", dir: join(ctx.home, ".claude"), config: join(ctx.home, ".claude.json"), home: { kind: "default" } },
+  ];
   const dirs = [ctx.env["CLAUDE_CONFIG_DIR"], ...siblingDirs(ctx.home, ".claude-")].filter((dir): dir is string => Boolean(dir));
   for (const dir of new Set(dirs)) {
     const hash = createHash("sha256").update(dir).digest("hex").slice(0, 8);
-    homes.push({ source: dir, service: `Claude Code-credentials-${hash}`, dir, config: join(dir, ".claude.json") });
+    homes.push({ source: dir, service: `Claude Code-credentials-${hash}`, dir, config: join(dir, ".claude.json"), home: { kind: "dir", dir } });
   }
   return homes;
 }
@@ -306,7 +315,7 @@ const claude: UsageProvider = {
       const account = claudeAccount(home.config);
       const keychain = await fromKeychain(ctx, home.service, user ? [user, undefined] : [undefined], claudeSignIn);
       const file = claudeSignIn(readText(join(home.dir, ".credentials.json")));
-      return keychainOrFile(keychain, file, home.source, account);
+      return keychainOrFile(keychain, file, home.source, account).map((found) => ({ ...found, home: home.home }));
     }));
     return found.flat();
   },
@@ -365,9 +374,10 @@ const codex: UsageProvider = {
     const found: Found[] = [];
     for (const home of new Set(homes.filter((home): home is string => Boolean(home)))) {
       const signIn = codexSignIn(readText(join(home, "auth.json")));
-      if (signIn) found.push({ ...signIn, source: home });
+      if (signIn) found.push({ ...signIn, source: home, home: { kind: "dir", dir: home } });
     }
-    return found.length ? found : keychainFound(await fromKeychain(ctx, "Codex Auth", [undefined], codexSignIn), "keychain");
+    return found.length ? found : keychainFound(await fromKeychain(ctx, "Codex Auth", [undefined], codexSignIn), "keychain")
+      .map((found): Found => ({ ...found, home: { kind: "default" } }));
   },
   async read(ctx, signIn) {
     const body = await requestJson(ctx, "https://chatgpt.com/backend-api/wham/usage", {
@@ -1015,8 +1025,7 @@ export class UsageService {
     // the key reaches the browser, the credential's path must not)
     const identity = (account: Account | null | undefined) => {
       const known = account ?? found.account ?? null;
-      const place = createHash("sha256").update(found.source).digest("hex").slice(0, 12);
-      return { key: known ? `${provider.id}:${known.id}` : `${provider.id}@${place}`, account: known?.label ?? null };
+      return { key: accountKey(provider.id, known, found.source), account: known?.label ?? null };
     };
     // the last numbers stay, named by what went wrong since - unless the place now holds another
     // account's sign-in: those numbers and that name were someone else's
@@ -1050,6 +1059,34 @@ export class UsageService {
       return keep("failed", signIn.plan ?? null, RETRY_MS);
     }
   }
+}
+
+/** The key an account is listed by: its id, or, for a sign-in that names none, where it was found, hashed. */
+function accountKey(id: UsageProviderId, account: Account | null | undefined, source: string): string {
+  return account ? `${id}:${account.id}` : `${id}@${createHash("sha256").update(source).digest("hex").slice(0, 12)}`;
+}
+
+/**
+ * Where the Claude or Codex account listed as `key` keeps its sign-in now (its CredentialHome),
+ * read from its files without asking any provider: a key is all the browser names,
+ * never a place. Their reading names no account, so the key the list showed is the one its files
+ * give. Null when no sign-in here has that key now: a hub's, another provider's, or one whose home
+ * holds another account since. One account signed in in several homes (each its own token) is
+ * `ambiguous`: the list shows it once, so which home the user meant cannot be told.
+ */
+export async function localSignInPlace(ctx: UsageContext, key: string): Promise<{ provider: "claude" | "codex"; home: CredentialHome } | { provider: "claude" | "codex"; ambiguous: true } | null> {
+  for (const provider of [claude, codex]) {
+    const id = provider.id === "claude" ? "claude" : "codex";
+    if (!key.startsWith(`${id}:`) && !key.startsWith(`${id}@`)) continue;
+    // the same token in two places is one sign-in, as the list counts it
+    const tokens = new Set<string>();
+    const places = (await provider.signIns(ctx))
+      .filter((found) => "locked" in found || (!tokens.has(found.token) && Boolean(tokens.add(found.token))))
+      .filter((found) => accountKey(id, found.account, found.source) === key);
+    if (places.length > 1) return { provider: id, ambiguous: true };
+    if (places[0]?.home) return { provider: id, home: places[0].home };
+  }
+  return null;
 }
 
 export async function handleUsageRequest(request: Request, url: URL, service: UsageService): Promise<Response> {

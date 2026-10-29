@@ -1464,10 +1464,11 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ## JetBrains Mono
 
-`src/fonts/JetBrainsMono-Regular.woff2` is `fonts/webfonts/JetBrainsMono-Regular.woff2` from the
-[JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) v2.304 release, unchanged. It draws code in
-the chat and the interface (the stylesheet loads it under the family name "JetBrains Mono Web"; the
-terminal does not use it), under the SIL Open Font License 1.1 below (the release's `OFL.txt`).
+`src/fonts/JetBrainsMono-Regular.woff2` and `src/fonts/JetBrainsMono-Bold.woff2` are
+`fonts/webfonts/JetBrainsMono-Regular.woff2` and `fonts/webfonts/JetBrainsMono-Bold.woff2` from the
+[JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) v2.304 release, unchanged. They draw the
+terminal's Latin and the code in the chat and the interface (the stylesheet loads them under the family
+name "JetBrains Mono Web"), under the SIL Open Font License 1.1 below (the release's `OFL.txt`).
 
 ```
 Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
@@ -1675,13 +1676,16 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ## xterm.js
 
-The browser terminal includes xterm.js 5.5.0 with a local composition-ordering and reset patch.
+The browser terminal includes xterm.js 6.0.0 with a local composition-ordering and reset patch.
+xterm.js 6 includes parts of Visual Studio Code's base library (`src/vs/base`), under the same
+MIT license.
 The queue/watermark approach follows joonhoekim's MIT-licensed proposal in
 https://github.com/xtermjs/xterm.js/pull/6090.
 
 Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
 Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+Copyright (c) Microsoft Corporation (`src/vs/base`)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -1771,7 +1775,7 @@ that share it.
 | d3-path, for d3-sankey | https://github.com/d3/d3-path | 1.0.9 | BSD 3-Clause |
 | marked | https://github.com/markedjs/marked | 16.4.2 | MIT, with the BSD-style license of John Gruber's Markdown |
 | chevrotain, @chevrotain/gast, @chevrotain/regexp-to-ast, @chevrotain/utils | https://github.com/Chevrotain/chevrotain | 13.2.0 | Apache 2.0 |
-| DOMPurify | https://github.com/cure53/DOMPurify | 3.4.16 | Apache 2.0 or MPL 2.0 |
+| DOMPurify | https://github.com/cure53/DOMPurify | 3.4.17 | Apache 2.0 or MPL 2.0 |
 | `web-worker`, inside elkjs | - | - | Apache 2.0 |
 | singular value decomposition from JamaJS, inside layout-base 2.0.1 | https://github.com/dragonfly-ai/JamaJS | - | Apache 2.0 |
 

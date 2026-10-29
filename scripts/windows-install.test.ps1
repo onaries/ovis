@@ -4,7 +4,7 @@ $installer = Join-Path $PSScriptRoot '..\install.ps1'
 $originalPath = $env:PATH
 $originalLocalAppData = $env:LOCALAPPDATA
 $originalUserProfile = $env:USERPROFILE
-$state = @{ installed = $false; installs = 0; uninstalls = 0; ref = ''; running = $true; started = $false; failInstall = $false; bunVersion = '1.4.2'; failBun = $false; windowsRelease = $true; refId = 'devswha.ovis'; installedId = ''; manifestBlocked = $false; startedLegacy = $false }
+$state = @{ installed = $false; installs = 0; uninstalls = 0; ref = ''; running = $true; started = $false; failInstall = $false; bunVersion = '1.4.2'; failBun = $false; windowsRelease = $true; refId = 'devswha.ovis'; installedId = ''; manifestBlocked = $false; startedLegacy = $false; legacyInstalled = $false; stopStateDirs = @(); handStarted = $false }
 $global:herdrInstallOpened = @()
 # gh is a stand-in .cmd, first on PATH: the installer runs gh as a process, and no real star is read or given.
 # mode.txt beside it is what it answers: starred, not, refuses (the star itself), upstream, signed-out, hangs or
@@ -29,6 +29,12 @@ function bun {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '--version') { $state.bunVersion }
     elseif ($args[-1] -eq 'status') { 'running http://127.0.0.1:7317 (pid 1234)'; 'config: none' }
+    # the old id's stop: where it was told to look for its server's pid
+    # (a server started by hand from the checkout is found only without one)
+    elseif ($args[-1] -eq 'stop' -and $args[0] -like '*legacy root*') {
+        $state.stopStateDirs += "$env:HERDR_PLUGIN_STATE_DIR"
+        if ($state.handStarted -and $env:HERDR_PLUGIN_STATE_DIR) { 'herdr web ui is not running' } else { 'stopped herdr web ui (pid 1234)' }
+    }
     else { throw "Unexpected Bun command: $args" }
 }
 function herdr {
@@ -38,12 +44,16 @@ function herdr {
         'plugin list --json' {
             $plugins = @()
             if ($state.installed) { $plugins = @(@{ plugin_id = $state.installedId; plugin_root = $pluginRoot }) }
+            if ($state.legacyInstalled) { $plugins += @{ plugin_id = 'devswha.herdr-web-ui'; plugin_root = (Join-Path $ghStandIn 'legacy root') } }
             @{ result = @{ plugins = $plugins } } | ConvertTo-Json -Depth 4 -Compress
         }
         'status server --json' { @{ running = $state.running } | ConvertTo-Json -Compress }
         'plugin action invoke devswha.ovis.start-windows' { $state.started = $true; '{}' }
         'plugin action invoke devswha.herdr-web-ui.start-windows' { $state.started = $true; $state.startedLegacy = $true; '{}' }
         'plugin uninstall devswha.ovis' { $state.installed = $false; $state.uninstalls++; 'Uninstalled' }
+        'plugin uninstall devswha.herdr-web-ui' { $state.legacyInstalled = $false; 'Uninstalled' }
+        'plugin config-dir devswha.ovis' { Join-Path $ghStandIn 'config\devswha.ovis' }
+        'plugin config-dir devswha.herdr-web-ui' { Join-Path $ghStandIn 'config\devswha.herdr-web-ui' }
         default {
             if ($args[0] -eq 'plugin' -and $args[1] -eq 'install') {
                 if ($state.failInstall) { $global:LASTEXITCODE = 1; return }
@@ -177,6 +187,36 @@ exit /b 1
     }
     $state.installed = $false; $state.started = $false; $state.refId = 'devswha.ovis'; $state.manifestBlocked = $false
     Write-Host 'PASS a release from before the rename installs under its old id'
+
+    # An install under the old id moves to the new one. Its server is stopped with the state dir herdr hands the
+    # plugin, where a release from before 0.4.13 keeps its pid: told nothing, that stop looks in ~/.local/state,
+    # finds no server, and the one that outlived herdr keeps the old checkout open for the uninstall.
+    $savedXdg = $env:XDG_STATE_HOME; $savedPluginState = $env:HERDR_PLUGIN_STATE_DIR
+    try {
+        Remove-Item Env:\HERDR_PLUGIN_STATE_DIR -ErrorAction SilentlyContinue
+        $xdgState = Join-Path $ghStandIn 'xdg state'
+        foreach ($xdg in $null, $xdgState) {
+            if ($xdg) { $env:XDG_STATE_HOME = $xdg } else { Remove-Item Env:\XDG_STATE_HOME -ErrorAction SilentlyContinue }
+            $state.installed = $false; $state.legacyInstalled = $true; $state.stopStateDirs = @(); $state.started = $false
+            & $installer -Ref ''
+            $expected = Join-Path $(if ($xdg) { $xdg } else { $env:LOCALAPPDATA }) 'herdr\plugins\devswha.herdr-web-ui'
+            Assert ($state.stopStateDirs.Count -eq 1 -and $state.stopStateDirs[0] -eq $expected) "The old id's stop must look for its pid where herdr keeps the plugin's state ($expected), not: $($state.stopStateDirs -join ', ')"
+            Assert (-not $state.legacyInstalled -and $state.installedId -eq 'devswha.ovis' -and $state.started) 'An install under the old id must move to the new id and start'
+            Assert ($null -eq $env:HERDR_PLUGIN_STATE_DIR) 'The state dir given to the old stop must not stay set for later commands'
+        }
+        # a server started by hand from the old checkout: not found through herdr's dir, so the stop asks again without it
+        $state.installed = $false; $state.legacyInstalled = $true; $state.stopStateDirs = @(); $state.handStarted = $true
+        & $installer -Ref ''
+        Assert ($state.stopStateDirs.Count -eq 2 -and $state.stopStateDirs[0] -and -not $state.stopStateDirs[1]) "A stop that found no server through herdr's dir must ask once more without it: $($state.stopStateDirs -join ' | ')"
+        $state.handStarted = $false
+    } finally {
+        foreach ($pair in @(@('XDG_STATE_HOME', $savedXdg), @('HERDR_PLUGIN_STATE_DIR', $savedPluginState))) {
+            if ($null -eq $pair[1]) { Remove-Item "Env:$($pair[0])" -ErrorAction SilentlyContinue }
+            else { Set-Item "Env:$($pair[0])" $pair[1] }
+        }
+        $state.legacyInstalled = $false
+    }
+    Write-Host 'PASS an install under the old id stops its server through the state dir herdr gives it, and moves'
 
     # Browser opening is covered through a stand-in; this harness never starts a real browser.
     $savedCi = $env:CI; $savedNoOpen = $env:OVIS_NO_OPEN; $savedSsh = $env:SSH_CONNECTION

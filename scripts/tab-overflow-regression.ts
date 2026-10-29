@@ -13,7 +13,7 @@ const TAB_LABELS = ["api", "web", "docs", "deploy", "review", "tests", "release-
  * More tabs than fit, on a desktop with a mouse (#1515): a vertical wheel over the strip scrolls it
  * sideways, by the wheel's own unit (pixels, lines or pages), until the last tab is in view, also
  * after a split closed under it drew the strip as a new node. A sideways wheel (a trackpad, a tilt
- * wheel), a pinch and a strip whose tabs fit are left to the browser.
+ * wheel), a diagonal trackpad swipe (#2103), a pinch and a strip whose tabs fit are left to the browser.
  */
 export async function checkTabOverflow(browser: Browser, origin: string): Promise<void> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-tab-overflow-")));
@@ -86,6 +86,9 @@ export async function checkTabOverflow(browser: Browser, origin: string): Promis
         assert.ok(moved.moved >= Math.min(least, moved.room - 1), `a wheel in ${mode === 1 ? "lines" : "pages"} scrolls the strip (${moved.moved}px of ${moved.room})`);
       }
       assert.equal(await leftAlone({ deltaX: 120, deltaY: 10 }), true, "a sideways wheel or trackpad swipe is the browser's");
+      // mostly down, a little sideways either way: turned into sideways scroll from deltaY alone, the
+      // strip would move against the swipe's own sideways part (#2103)
+      for (const deltaX of [20, -20]) assert.equal(await leftAlone({ deltaX, deltaY: 40 }), true, `a diagonal trackpad swipe (deltaX ${deltaX}) is the browser's`);
       assert.equal(await leftAlone({ deltaY: 120, ctrlKey: true }), true, "a pinch is the browser's");
 
       // a workspace whose tabs fit: its strip leaves the wheel to the page
@@ -104,11 +107,11 @@ export async function checkTabOverflow(browser: Browser, origin: string): Promis
       // the split half's own strip is drawn (the roster arrived) before the split closes under it
       await page.locator('.pane-slot[data-side="left"] .tab-strip [role="tab"]', { hasText: /^last-tab$/ }).waitFor({ state: "attached", timeout: 15_000 });
       await page.locator('.pane-slot[data-side="right"]').getByRole("button", { name: "Close this half", exact: true }).click();
-      await page.waitForFunction(() => document.querySelectorAll(".pane-slot").length === 1 && document.querySelectorAll(".tab-strip").length === 1);
+      await page.waitForFunction(() => document.querySelectorAll(".pane-slot").length === 1 && document.querySelectorAll(".tab-strip").length === 1, null, { timeout: 15_000 });
       await overflowing();
       await wheelScrolls("after a split closed");
     } finally { await context.close(); }
-    console.log("PASS a vertical mouse wheel scrolls an overflowing tab strip sideways to its last tab (pixels, lines, pages; also after a split closed), and leaves a sideways wheel, a pinch and a strip that fits to the browser");
+    console.log("PASS a vertical mouse wheel scrolls an overflowing tab strip sideways to its last tab (pixels, lines, pages; also after a split closed), and leaves a sideways wheel, a diagonal swipe, a pinch and a strip that fits to the browser");
   } finally {
     if (workspaceId) await workspaceClose(workspaceId).catch(() => {});
     if (fewId) await workspaceClose(fewId).catch(() => {});

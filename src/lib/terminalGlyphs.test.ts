@@ -1,24 +1,27 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Terminal } from "@xterm/xterm";
 
-import { adjustTerminalGlyphs, coversAny, displayText, followLateFaces, glyphFit, iconScale, type LateFace, oversizedIcon, textPresentation } from "./terminalGlyphs.ts";
+import { adjustTerminalGlyphs, coversAny, displayText, followLateFaces, glyphFit, graphemes, iconScale, type LateFace, oversizedIcon, stretchedView, textPresentation } from "./terminalGlyphs.ts";
 
 // iPhone Safari at 13px: Menlo cells are 7.84px, Hangul from Apple SD Gothic Neo 11.24px
 const IOS_CELL = 7.8367;
 const IOS_HANGUL = 11.245;
 
 describe("glyphFit", () => {
-  it("enlarges an iPhone Hangul syllable, capped, and centers what is left", () => {
+  it("widens an iPhone Hangul syllable as far as a stretch goes, enlarges it for the rest, capped, and centers what is left", () => {
     const fit = glyphFit(2 * IOS_CELL - IOS_HANGUL, IOS_HANGUL, IOS_CELL);
-    expect(fit?.scale).toBe(1.2);
+    expect(fit?.stretch).toBe(1.1);
+    expect(fit!.scale * fit!.stretch).toBeCloseTo(1.2, 6);
     // the glyph and the spacing after scaling still fill exactly the two cells
-    expect(IOS_HANGUL * fit!.scale + fit!.spacing).toBeCloseTo(2 * IOS_CELL, 6);
+    expect(IOS_HANGUL * fit!.scale * fit!.stretch + fit!.spacing).toBeCloseTo(2 * IOS_CELL, 6);
     expect(fit!.spacing).toBeGreaterThan(0);
   });
 
-  it("enlarges a 1em Han glyph only until it fills 90% of its cells", () => {
+  it("widens a 1em Hangul or Han glyph until it fills 90% of its cells, keeping its height", () => {
     const fit = glyphFit(2 * IOS_CELL - 13, 13, IOS_CELL);
-    expect(13 * fit!.scale).toBeCloseTo(0.9 * 2 * IOS_CELL, 6);
+    // D2Coding's syllable beside Menlo: enlarged it grew as tall as the row, and Korean lines touched
+    expect(fit!.scale).toBe(1);
+    expect(13 * fit!.stretch).toBeCloseTo(0.9 * 2 * IOS_CELL, 6);
     expect(fit!.spacing).toBeCloseTo(0.1 * 2 * IOS_CELL, 6);
   });
 
@@ -27,7 +30,7 @@ describe("glyphFit", () => {
   });
 
   it("only centers a narrow glyph in one cell, never enlarges it", () => {
-    expect(glyphFit(IOS_CELL - 3.25, 3.25, IOS_CELL)).toEqual({ scale: 1, spacing: IOS_CELL - 3.25 });
+    expect(glyphFit(IOS_CELL - 3.25, 3.25, IOS_CELL)).toEqual({ scale: 1, stretch: 1, spacing: IOS_CELL - 3.25 });
   });
 
   it("leaves rounding-level spacing and glyphs wider than their cells alone", () => {
@@ -273,8 +276,9 @@ function glyphPage(faces: FakeFace[], texts = ["\uf07b", "가"]) {
   const icons = faces.find((each) => each.family.includes("Symbols"))!;
   // a late box-drawing face draws its lines 13px wide, the stand-in 7.8px
   const lines = faces.find((each) => each.family.includes("Late Lines"));
+  // and Hangul 13px, a 1em syllable
   const measure = { font: "", measureText: (text: string) => ({ width: /[\ue000-\uf8ff]/u.test(text) ? (icons.status === "loaded" ? 13 : 6)
-    : /[\u2500-\u257f]/u.test(text) && lines?.status === "loaded" ? 13 : 7.8 }) };
+    : /[\u2500-\u257f]/u.test(text) && lines?.status === "loaded" ? 13 : /^[\uac00-\ud7a3]/u.test(text) ? 13 : 7.8 }) };
   const define = (name: string, value: unknown) => Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
   define("document", { fonts: faces, createElement: (tag: string) => tag === "canvas" ? { getContext: () => measure } : new FakeSpan() });
   define("HTMLSpanElement", FakeSpan);
@@ -312,6 +316,65 @@ const iconSize = (span: FakeSpan): number | null => {
   const size = glyphs?.style["cssText"]?.match(/font-size:([\d.]+)px/);
   return size ? Number(size[1]) : null;
 };
+
+/** a declaration of a span's inline style, as the fit appended it (the last one wins) */
+const declared = (span: FakeSpan, property: string): string | undefined =>
+  [...span.style["cssText"]!.matchAll(new RegExp(`(?:^|;)${property}:([^;]*)`, "g"))].at(-1)?.[1];
+
+describe("adjustTerminalGlyphs fitting wide glyphs", () => {
+  let page: ReturnType<typeof glyphPage> | undefined;
+  afterEach(() => {
+    page?.stop();
+    page?.restore();
+    page = undefined;
+  });
+
+  it("draws a Hangul run at the font's own height, widened to its cells, and keeps the next column", () => {
+    page = glyphPage([face('"Symbols Nerd Font Mono"', ICON_RANGE)], []);
+    // xterm gives each 13px syllable the rest of its two 7.8px cells
+    const cells = page.draw("한글입", "", `${2 * 7.8 - 13}px`);
+    // xterm's span keeps the cells' background on a box neither stretched nor clipped, the glyphs inside it are fitted
+    expect(declared(cells, "transform")).toBeUndefined();
+    expect(declared(cells, "clip-path")).toBeUndefined();
+    expect(cells.style["letterSpacing"]).toBe("0px");
+    const run = cells.children[0]!;
+    expect(run.textContent).toBe("한글입");
+    expect(declared(run, "font-size")).toBeUndefined();
+    const stretch = Number(declared(run, "transform")?.match(/^scaleX\(([\d.]+)\)$/)?.[1]);
+    expect(13 * stretch).toBeCloseTo(0.9 * 2 * 7.8, 5);
+    expect(declared(run, "transform-origin")).toBe("0 0");
+    const px = (property: string): number => Number.parseFloat(declared(run, property)!);
+    // each syllable and its spacing, stretched, take its two cells, centered
+    expect((13 + px("letter-spacing")) * stretch).toBeCloseTo(2 * 7.8, 5);
+    expect(px("padding-left") * stretch * 2).toBeCloseTo(2 * 7.8 - 13 * stretch, 5);
+    // laid out unstretched, the run with its margin ends where its three syllables' six cells end
+    expect(px("padding-left") + 3 * (13 + px("letter-spacing")) + px("margin-right")).toBeCloseTo(6 * 7.8, 5);
+  });
+
+  it("counts a syllable with a mark that does not compose as one character, so the next column stays", () => {
+    page = glyphPage([face('"Symbols Nerd Font Mono"', ICON_RANGE)], []);
+    // NFC keeps U+0301 after the syllable: two characters in four cells
+    const run = page.draw("한\u0301글", "", `${2 * 7.8 - 13}px`).children[0]!;
+    expect(graphemes(run.textContent)).toBe(2);
+    const px = (property: string): number => Number.parseFloat(declared(run, property)!);
+    expect(px("padding-left") + 2 * (13 + px("letter-spacing")) + px("margin-right")).toBeCloseTo(4 * 7.8, 5);
+  });
+});
+
+describe("stretchedView", () => {
+  it("adds the stretch to xterm's move of a long composition, counting the stretched width", () => {
+    expect(stretchedView("translateX(min(0px, calc(40px - 100%)))", "scaleX(1.1)")).toBe("translateX(min(0px, calc(40px - 110%))) scaleX(1.1)");
+    // as Chromium gives the same value back
+    expect(stretchedView("translateX(min(0px, -100% + 40px))", "scaleX(1.1)")).toBe("translateX(min(0px, calc(40px - 110%))) scaleX(1.1)");
+    expect(stretchedView("translateX(min(0px, calc(-3.5px - 100%)))", "scaleX(1.1)")).toBe("translateX(min(0px, calc(-3.5px - 110%))) scaleX(1.1)");
+    expect(stretchedView("translateX(min(0px, -100% - 3.5px))", "scaleX(1.1)")).toBe("translateX(min(0px, calc(-3.5px - 110%))) scaleX(1.1)");
+  });
+
+  it("is the stretch alone with no move, and xterm's move alone with no stretch", () => {
+    expect(stretchedView("", "scaleX(1.08)")).toBe("scaleX(1.08)");
+    expect(stretchedView("translateX(min(0px, calc(40px - 100%)))", "")).toBe("translateX(min(0px, calc(40px - 100%)))");
+  });
+});
 
 describe("adjustTerminalGlyphs with late faces", () => {
   let page: ReturnType<typeof glyphPage> | undefined;

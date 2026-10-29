@@ -7,12 +7,17 @@
  * as falling apart (kana and Han too, at 0.87em to 1em).
  *
  * So each span the renderer draws with extra spacing is adjusted after the fact:
- * - a glyph in two cells that fills less than FILL of them is drawn larger, up to
- *   MAX_SCALE, the way a CJK coding font sizes it against its Latin;
+ * - a glyph in two cells that fills less than FILL of them is drawn wider, up to
+ *   MAX_SCALE, the way a CJK coding font sizes it against its Latin. It is widened before it
+ *   is enlarged: the row is as tall as the Latin font's line, and a syllable enlarged to fill
+ *   Menlo's 1.2em of two cells grew as tall as the row, so Korean lines nearly touched;
  * - the glyph is centered in its cells: padding moves the text right by half the spacing
  *   left over, a negative margin takes it back after the span so the next span keeps its
- *   column, and a clip trims the trailing half so a background or block cursor stays on its
- *   own cells.
+ *   column, and a clip trims the trailing half so an underline stays on its own cells.
+ *   All of that goes on a span inside xterm's, which keeps the cells' background and block
+ *   cursor: a stretched or clipped box ends inside a device pixel, and a background painted
+ *   there left a line of the pane between it and the next cell's (a light seam after every
+ *   Korean word in a dark block).
  * A glyph wider than its cells is left to run over, as in a native terminal.
  *
  * The renderer also hands the browser each cell's text as written, and two kinds of text
@@ -41,6 +46,11 @@ const MIN_SPACING_PX = 1;
 const FILL = 0.9;
 /** The most a wide glyph is enlarged, so it never towers over the Latin beside it. */
 const MAX_SCALE = 1.2;
+/**
+ * The most a wide glyph is widened alone (horizontal scaling, 장평 in Korean typesetting, where
+ * 90-110% is common); a glyph that needs more is enlarged for the rest.
+ */
+const MAX_STRETCH = 1.1;
 
 /** how many copies of a glyph xterm's WidthCache measures at once (WidthCacheSettings.REPEAT) */
 const XTERM_MEASURE_REPEAT = 32;
@@ -58,7 +68,9 @@ const TEXT_PRESENTATION = "\ufe0e";
 export interface GlyphFit {
   /** font-size multiplier for the span; 1 keeps it */
   scale: number;
-  /** the letter-spacing left after scaling; its half goes before each glyph */
+  /** horizontal scaling of the span, after `scale`; 1 keeps it */
+  stretch: number;
+  /** the space left beside each glyph once it is drawn; its half goes before the glyph */
   spacing: number;
 }
 
@@ -71,8 +83,9 @@ export function glyphFit(spacing: number, glyphWidth: number, cellWidth: number)
   const slot = glyphWidth + spacing;
   if (glyphWidth >= FILL * slot) return null;
   const wide = Math.round(slot / cellWidth) >= 2;
-  const scale = wide ? Math.min(MAX_SCALE, (FILL * slot) / glyphWidth) : 1;
-  return { scale, spacing: slot - glyphWidth * scale };
+  const widen = wide ? Math.min(MAX_SCALE, (FILL * slot) / glyphWidth) : 1;
+  const stretch = Math.min(widen, MAX_STRETCH);
+  return { scale: widen / stretch, stretch, spacing: slot - glyphWidth * widen };
 }
 
 /** Nerd Font icons and the like: the private use areas, where a font's glyph is meant to fill one cell. */
@@ -223,6 +236,33 @@ export function oversizedIcon(char: string, width: number, cellWidth: number): b
 /** The font-size multiplier that fits every icon of a run into its cell. */
 export function iconScale(widths: readonly number[], cellWidth: number): number {
   return Math.min(1, ...widths.map((width) => cellWidth / width));
+}
+
+let segmenter: Intl.Segmenter | undefined;
+
+/** How many characters a text shows: letter-spacing is added once a grapheme, and a span's cells are counted the same way. */
+export function graphemes(text: string): number {
+  segmenter ??= new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  let count = 0;
+  for (const _ of segmenter.segment(text)) count += 1;
+  return count;
+}
+
+/**
+ * The composition view's transform with a glyph stretch added. xterm moves a long text at the right
+ * edge left by `translateX(min(0px, calc(<room>px - 100%)))`, 100% being the box's width, and a
+ * browser gives that back in its own form (Chromium: `min(0px, -100% + <room>px)`): the move is
+ * written again from its room with the stretched width, the stretch applying first, so the text
+ * still ends at the edge.
+ */
+export function stretchedView(base: string, stretch: string): string {
+  if (stretch === "") return base;
+  if (base === "") return stretch;
+  // the last length is the room, signed (Chromium writes a negative one as `-100% - 3.5px`)
+  const room = base.includes("100%") ? base.match(/(?:-\s*)?[\d.]+px(?![\s\S]*px)/)?.[0].replace(/\s/g, "") : undefined;
+  if (room === undefined) return `${base} ${stretch}`;
+  const factor = Number(stretch.match(/^scaleX\(([\d.]+)\)$/)?.[1] ?? 1);
+  return `translateX(min(0px, calc(${room} - ${+(100 * factor).toFixed(4)}%))) ${stretch}`;
 }
 
 /** The text to draw for a cell span: composed when it carries marks or decomposed Hangul. */
@@ -430,9 +470,20 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
         if (spacing !== xtermSpacing) span.style.letterSpacing = `${spacing}px`;
         continue;
       }
-      const half = fit.spacing / 2;
-      // appended in one write: later declarations win over xterm's letter-spacing
-      span.style.cssText += `;${fit.scale !== 1 ? `font-size:${fontSize * fit.scale}px;` : ""}letter-spacing:${fit.spacing}px;padding-left:${half}px;margin-right:${-half}px;clip-path:inset(0 ${half}px 0 0)`;
+      // the glyphs' own lengths, before the stretch: each glyph and its spacing then take their
+      // cells, and the margin brings xterm's span to the column after them, so it ends there
+      const spaced = fit.spacing / fit.stretch;
+      const half = spaced / 2;
+      const slot = glyphWidth + spacing;
+      const margin = fit.stretch === 1 ? -half : graphemes(shown) * slot * (1 - 1 / fit.stretch) - half;
+      const stretch = fit.stretch !== 1 ? `transform:scaleX(${fit.stretch});transform-origin:0 0;` : "";
+      // an inline-block (xterm's rule for a row's spans) takes no underline or strikethrough from the span around it: it asks for them
+      const glyphs = document.createElement("span");
+      glyphs.className = BOX_CLASS;
+      glyphs.style.cssText = `${fit.scale !== 1 ? `font-size:${fontSize * fit.scale}px;` : ""}${stretch}letter-spacing:${spaced}px;padding-left:${half}px;margin-right:${margin}px;clip-path:inset(0 ${half}px 0 0);text-decoration:inherit;font-weight:inherit`;
+      glyphs.textContent = shown;
+      span.style.letterSpacing = "0px";
+      span.replaceChildren(glyphs);
     }
   };
 
@@ -511,6 +562,10 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
    */
   const view = screen.querySelector<HTMLElement>(".composition-view");
   const probe = document.createElement("span").style;
+  // xterm's own transform of the box (a long text at the right edge is moved left to show its end),
+  // which the stretch is added to, and the transform this module wrote last
+  let viewBase = "";
+  let viewWritten = "";
   const fitView = (): void => {
     if (!view) return;
     const { fontFamily, fontSize, fontWeight } = term.options;
@@ -518,6 +573,7 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
     let size = `${fontSize}px`;
     let spacing = "";
     let padding = "";
+    let stretch = "";
     const cellWidth = Number.parseFloat(screen.style.width) / term.cols;
     const first = String.fromCodePoint((view.textContent ?? "").codePointAt(0) ?? 0x20);
     // the row's spacing is xterm's, from its own measure of the glyph (WidthCache: a run of it in
@@ -536,16 +592,29 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
       const fit = glyphFit(cells * cellWidth - drawn, glyphWidth, cellWidth);
       if (fit) {
         size = `${fontSize * fit.scale}px`;
-        spacing = `${fit.spacing}px`;
-        padding = `${fit.spacing / 2}px`;
+        spacing = `${fit.spacing / fit.stretch}px`;
+        padding = `${fit.spacing / fit.stretch / 2}px`;
+        if (fit.stretch !== 1) stretch = `scaleX(${fit.stretch})`;
       }
     }
     // each write is a mutation this observer sees again: only what differs is written, compared
     // as the browser stores it (15.600000000000001px reads back rounded)
+    if (view.style.transform !== viewWritten) viewBase = view.style.transform;
+    probe.transform = stretchedView(viewBase, stretch);
+    // a transform the browser cannot read keeps xterm's, and the glyph its own width
+    if (stretch !== "" && probe.transform === "") {
+      probe.transform = viewBase;
+      stretch = "";
+      spacing = padding = "";
+    }
     probe.fontSize = size;
     probe.letterSpacing = spacing;
     probe.paddingLeft = padding;
     if (view.style.fontSize !== probe.fontSize) view.style.fontSize = probe.fontSize;
+    if (view.style.transform !== probe.transform) view.style.transform = probe.transform;
+    viewWritten = view.style.transform;
+    const origin = stretch === "" ? "" : "0 0";
+    if (view.style.transformOrigin !== origin) view.style.transformOrigin = origin;
     if (view.style.letterSpacing !== probe.letterSpacing) view.style.letterSpacing = probe.letterSpacing;
     if (view.style.paddingLeft !== probe.paddingLeft) view.style.paddingLeft = probe.paddingLeft;
   };

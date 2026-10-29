@@ -83,7 +83,8 @@ export interface OutcomeRowOptions {
 const SEND_SKEW_MS = 2_000;
 
 function turnText(turn: ConversationTurn): string {
-  return turn.parts.filter((part): part is Extract<typeof part, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n\n");
+  // a bash-mode command was sent as `!` and the command
+  return turn.parts.flatMap((part) => part.kind === "text" ? [part.text] : part.kind === "shell" ? [`!${part.command}`] : []).join("\n\n");
 }
 
 function turnTime(turn: ConversationTurn): number | null {

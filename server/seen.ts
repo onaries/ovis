@@ -6,7 +6,8 @@ import { damagedCopy, readStateDocument, writeStateDocument } from "./state-docu
 /**
  * The finishes some browser of this server presented (shared/seen.ts), kept in the state directory
  * beside preferences.json, so a finish read on the phone is read on the desktop too. A change is
- * held, and told, only once it is on disk.
+ * held, and told, only once it is on disk. A finish of a herdr run this server knows has ended
+ * (MachineManager.finishEnded) is never handed out or taken, and the next write leaves it out of the file.
  */
 export class SeenStore {
   /** insertion order is write order: the first entries are the oldest */
@@ -16,7 +17,11 @@ export class SeenStore {
   /** Until this store has replaced the file, a write reads it again first: it may have been damaged or repaired since. */
   private unsettled = true;
 
-  constructor(stateDir: string) {
+  /**
+   * `ended`: whether this server knows a PC's finish epoch has ended. A record of any other epoch is
+   * kept, the one a PC's snapshot names now or not: a late read can name a run that is over (#2206).
+   */
+  constructor(stateDir: string, private readonly ended: (pc: string, epoch: string) => boolean = () => false) {
     this.path = join(stateDir, "seen.json");
     try {
       const disk = this.readDisk();
@@ -47,9 +52,13 @@ export class SeenStore {
     return { finishes, damaged };
   }
 
-  list(): SeenFinish[] { return [...this.finishes.values()]; }
+  list(): SeenFinish[] {
+    return [...this.finishes.values()].filter((finish) => !this.over(finish));
+  }
 
   record(finish: SeenFinish): SeenFinish {
+    // answered as sent: a browser that still shows the run that ended has nothing to keep
+    if (this.over(finish)) return finish;
     let base = this.finishes;
     let keepDamaged = false;
     if (this.unsettled) {
@@ -66,6 +75,7 @@ export class SeenStore {
     const finishes = new Map(base);
     finishes.delete(key);
     finishes.set(key, next);
+    for (const [old, kept] of finishes) if (this.over(kept)) finishes.delete(old);
     for (const old of finishes.keys()) {
       if (finishes.size <= MAX_SEEN) break;
       finishes.delete(old);
@@ -81,6 +91,10 @@ export class SeenStore {
   subscribe(listener: (finish: SeenFinish) => void): () => void {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
+  }
+
+  private over(finish: SeenFinish): boolean {
+    return this.ended(finish.pc, finish.epoch);
   }
 }
 

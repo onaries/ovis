@@ -101,22 +101,26 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     node.addEventListener("focusin", focusChanged);
     node.addEventListener("focusout", focusOut);
     node.addEventListener("click", interaction, true);
+    // on the document: a copy goes to where the selection starts, so one that begins outside the
+    // chat (Select All) never reaches the chat itself. A field's own copy (the composer, a
+    // copy button's hidden textarea) stays native.
     const copy = (event: ClipboardEvent) => {
       const selection = getSelection();
       if (event.defaultPrevented || !event.clipboardData || !selection) return;
+      if (event.target instanceof Element && event.target.closest("input, textarea, [contenteditable=true]")) return;
       const payload = chatSelectionClipboardPayload(selection, node);
       if (!payload) return;
       event.clipboardData.setData("text/plain", payload.text);
-      event.clipboardData.setData("text/html", payload.html);
+      if (payload.html !== null) event.clipboardData.setData("text/html", payload.html);
       event.preventDefault();
     };
-    node.addEventListener("copy", copy);
+    document.addEventListener("copy", copy);
     return () => {
       document.removeEventListener("selectionchange", selectionChanged);
       node.removeEventListener("focusin", focusChanged);
       node.removeEventListener("focusout", focusOut);
       node.removeEventListener("click", interaction, true);
-      node.removeEventListener("copy", copy);
+      document.removeEventListener("copy", copy);
     };
   }, [scroller, positions, rowKeys, onOpen, following, manualLayout]);
 
@@ -151,7 +155,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
   const rendered = useCallback(({ item, index }: { item: Row; index: number }) => {
     let memory = memories.get(item.key);
     if (!memory) {
-      memory = { toggles: new Map(), outputs: new Map(), runs: new Map() };
+      memory = { toggles: new Map(), outputs: new Map(), runs: new Map(), dormant: new Map() };
       memories.set(item.key, memory);
     }
     return <ChatRowMemoryContext.Provider value={memory}>

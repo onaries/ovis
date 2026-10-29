@@ -44,7 +44,11 @@ const nodeCursor = (value: string | undefined, id: string, epoch: string, revisi
   return decoded[3] as number;
 };
 
-export interface DevinPageOptions { before?: string; since?: string; from?: string; limit?: number }
+export interface DevinPageOptions {
+  before?: string; since?: string; from?: string; limit?: number;
+  /** Prompts per page, the chat's history-page setting: the page starts at the prompt this many back. */
+  prompts?: number;
+}
 export interface DevinPage {
   source: "devin-transcript";
   turns: ConversationTurn[];
@@ -66,6 +70,13 @@ export function forgetDevinState(sessionId?: string, cwd?: string, dbPath?: stri
 
 type Node = { node_id: number; parent_node_id: number | null; chat_message: string | null; created_at: number; depth: number; bytes: number };
 type ToolState = { tool_call_id: string; tool_call_json: string | null; tool_call_update_json: string | null };
+
+/** Where the page holding the last `prompts` user turns starts: the first of them, or 0 when there are fewer. */
+function promptsBack(turns: readonly { turn: ConversationTurn }[], prompts: number): number {
+  let users = 0;
+  for (let index = turns.length - 1; index >= 0; index--) if (turns[index]!.turn.role === "user" && ++users === prompts) return index;
+  return 0;
+}
 
 /** Reads a single exact, visible native session in a readonly WAL snapshot. */
 export function devinConversation(sessionId: string, cwd: string, options: DevinPageOptions = {}, dbPath = defaultDevinDbPath()): DevinPage {
@@ -193,9 +204,12 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
       }
     }
     const limit = Math.min(200, Math.max(1, Math.floor(options.limit ?? 100) || 100));
-    const page = turns.filter(({ node }) => (before === null || positions.get(node)! < positions.get(before)!)
+    const inRange = turns.filter(({ node }) => (before === null || positions.get(node)! < positions.get(before)!)
       && (since === null || positions.get(node)! >= positions.get(since)!)
-      && (from === null || positions.get(node)! >= positions.get(from)!)).slice(-limit);
+      && (from === null || positions.get(node)! >= positions.get(from)!));
+    const page = options.limit === undefined && typeof options.prompts === "number" && Number.isFinite(options.prompts)
+      ? inRange.slice(promptsBack(inRange, Math.min(50, Math.max(1, Math.floor(options.prompts))))).slice(-200)
+      : inRange.slice(-limit);
     const first = page[0]?.node;
     const pageCursor = first === undefined || (from === null && first === turns[0]?.node) ? null
       : from !== null && first === from ? options.from! : cursor(sessionId, epoch, revision, first);

@@ -1,0 +1,5 @@
+{"kind":"user","text":"Reply with exactly: second conversation ok","captured_at":"2026-10-29T01:55:46.561Z","source_line_id":"user-mvsw60vy-gtmdpv"}
+{"kind":"assistant","text":"second conversation ok","captured_at":"2026-10-29T01:55:46.561Z","source_line_id":"ui-msg-11","source_message_id":"ui-msg-11"}
+{"kind":"user","text":"Use the shell tool to run: cat missing-file.txt. Then tell me in one sentence what happened.","captured_at":"2026-10-29T01:59:01.253Z","source_line_id":"user-mvswa5bi-bfsv6p"}
+{"kind":"tool_call","name":"Bash","argsText":"{\"command\":\"cat missing-file.txt\",\"description\":\"Read missing file\"}","resultText":"Exit code: 1\ncat: missing-file.txt: No such file or directory\n","resultOk":false,"captured_at":"2026-10-29T01:59:01.253Z","source_line_id":"Bash-1793239139187262013-3"}
+{"kind":"assistant","text":"When I ran the command to read the missing file, it failed because the file does not exist.","captured_at":"2026-10-29T01:59:01.253Z","source_line_id":"ui-msg-15","source_message_id":"ui-msg-15"}

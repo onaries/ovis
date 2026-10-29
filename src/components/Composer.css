@@ -972,7 +972,7 @@
 }
 
 /* why the message did not go: a band on the box's top edge, the box's own width, so it reads as
-   the box's; a note with its one way on (send over the terminal's draft) keeps the button at its
+   the box's; a note with its ways on (send over the terminal's draft) keeps the buttons at its
    end, or under the reason when the row is too short for both */
 .composer-note {
   display: flex;
@@ -996,14 +996,17 @@
   color: var(--status-blocked);
 }
 
+/* pre-line: the draft a Send it did not send goes on its own line under the reason (draftSendNote) */
 .composer-note-text {
   flex: 1 1 12rem;
   min-width: 0;
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 /* what the line leaves out (the advice, the PC's own words) folds under it: a dim Details toggle */
 .composer-note-details {
+  white-space: normal;
   margin-top: var(--space-1);
   color: var(--text-dim);
   font-size: var(--fs-xs);
@@ -1034,7 +1037,10 @@
   }
 }
 
-.composer-note-offer .composer-note-action {
+/* Send it and Clear it and send keep together at the note's end, and go under the reason together */
+.composer-note-actions {
+  display: flex;
+  gap: var(--space-2);
   margin-left: auto;
 }
 

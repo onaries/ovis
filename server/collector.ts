@@ -86,6 +86,13 @@ export interface StatusCollectorHandlers {
   onReconciled?: (panes: readonly HerdrPane[]) => void;
   onPaneEnded: (paneId: string) => void;
   onStructureChange: () => void;
+  /**
+   * Which herdr answers on the lifecycle subscription while it is open: `onChange` gets herdr's identity
+   * (`identity`, read from its socket) when the subscription starts, only if it is still the one read before
+   * that connection was attempted, and null when it closes or is refused. A herdr that died closes it,
+   * while its socket file can stay behind; a file replaced meanwhile names none.
+   */
+  herdrLive?: { identity: () => string | null; onChange: (identity: string | null) => void };
   /** herdr's focus moved onto this pane: whoever is at its terminal has it in front */
   onFocus?: (paneId: string) => void;
 }
@@ -197,6 +204,7 @@ function resilientSubscription(
   onRestart: () => void,
   isStopped: () => boolean,
   onFirstStart?: () => void,
+  liveness?: { identity: () => string | null; onChange: (identity: string | null) => void },
 ): { close: () => void } {
   let subscription: Subscription | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -208,16 +216,23 @@ function resilientSubscription(
     if (isStopped()) return;
     const retry = attempted;
     attempted = true;
+    // the herdr this connection is attempted to: the one that answers it is no other
+    const attemptedTo = liveness?.identity() ?? null;
     subscription = deps.subscribe(subscriptions, {
       onEvent,
       onStarted: () => {
         delay = deps.reconnectMinMs;
+        if (liveness) {
+          const now = liveness.identity();
+          liveness.onChange(attemptedTo !== null && now === attemptedTo ? now : null);
+        }
         if (retry) onRestart();
         else onFirstStart?.();
       },
       onError: logSubscriptionError,
       onClose: () => {
         subscription = null;
+        liveness?.onChange(null);
         if (isStopped()) return;
         retryTimer = setTimeout(open, delay);
         delay = Math.min(delay * 2, deps.reconnectMaxMs);
@@ -233,6 +248,8 @@ function resilientSubscription(
       const current = subscription;
       subscription = null;
       current?.close();
+      // a subscription its caller closes reports no close of its own: it is not live any more either
+      liveness?.onChange(null);
     },
   };
 }
@@ -556,6 +573,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       structureStarted.resolve();
       if (trackedPanes.size > 0) void reconcile();
     },
+    handlers.herdrLive,
   );
 
   // Its own connection: a focus type an older herdr refuses must not cost pane exits.

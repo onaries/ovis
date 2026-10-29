@@ -1,5 +1,5 @@
 import type { FileInfo } from "../../shared/protocol.ts";
-import { fileUriPath } from "./terminalFileLinks.ts";
+import { fileUriPath } from "../../shared/fileUri.ts";
 
 /** Bigger images are offered as a download: a phone decodes an image whole. */
 export const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;

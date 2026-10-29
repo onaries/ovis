@@ -12,7 +12,7 @@ export function isTakeoverExit(output: string): boolean {
  * bridge is that terminal: answered here, the queries never reach a browser or the replay, where
  * a browser joining later answered them again and herdr typed the late reply into the pane.
  */
-const STARTUP_PROBES: ReadonlyArray<readonly [query: string, reply: string]> = [
+export const STARTUP_PROBES: ReadonlyArray<readonly [query: string, reply: string]> = [
   ["\x1b[?1016$p", "\x1b[?1016;4$y"], // pixel mouse coordinates (DECRQM): permanently off, cells it is
   ["\x1b[c", "\x1b[?1;2c"], // device attributes (DA1): xterm.js's own answer
 ];

@@ -244,6 +244,19 @@ export function openCodeInstalledVersion(stateDir?: string): string | null {
   return readOpenCodeService(stateDir ?? openCodeServiceOptions.stateDir)?.version ?? null;
 }
 
+/**
+ * "2" when the pane's OpenCode runs with a flag only OpenCode 2 has: `--standalone` (a private server) and
+ * `--server <url>` start a TUI without the background service, so no service file names its version
+ * (#1551). Read from herdr's process info, nothing spawned; a major alone verifies no pin. Words after
+ * `--` are operands (a directory named `--standalone`), not flags.
+ */
+export function openCodeFlagVersion(argv: unknown): string | null {
+  if (!Array.isArray(argv)) return null;
+  const end = argv.indexOf("--");
+  const flags = argv.slice(1, end === -1 ? undefined : end);
+  return flags.some((word) => word === "--standalone" || word === "--server" || (typeof word === "string" && word.startsWith("--server="))) ? "2" : null;
+}
+
 export function forgetOpenCodeService(): void {
   verified = null;
 }

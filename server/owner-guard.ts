@@ -18,6 +18,8 @@ import { legacyOwnerReplaced, newOwnerRecord, ownerGone, parseOwnerRecord, type 
 
 /** The guard could not be taken; the callback did not run. */
 export class OwnerGuardUnavailable extends Error {}
+/** Another process holds the guard, and the caller asked not to wait for it; the callback did not run. */
+export class OwnerGuardBusy extends OwnerGuardUnavailable {}
 /** The callback ran, but the guard was not handed back cleanly (its unlock or its close failed). */
 export class OwnerGuardReleaseFailed extends Error {}
 
@@ -39,8 +41,11 @@ export const guardLibrary: { path: string; posix?(calls: PosixGuardCalls): Posix
   path: process.platform === "darwin" ? "libSystem.B.dylib" : process.platform === "win32" ? "kernel32.dll" : "libc.so.6",
 };
 
-const LOCK_EX = 2, LOCK_UN = 8, EINTR = 4;
+const LOCK_EX = 2, LOCK_NB = 4, LOCK_UN = 8, EINTR = 4;
+/** what flock sets when LOCK_NB finds the lock held (EWOULDBLOCK, which is EAGAIN) */
+const EWOULDBLOCK = process.platform === "darwin" ? 35 : 11;
 const GENERIC_READ_WRITE = 0xc000_0000, FILE_SHARE_READ_WRITE = 3, OPEN_ALWAYS = 4, FILE_ATTRIBUTE_NORMAL = 0x80, LOCKFILE_EXCLUSIVE_LOCK = 2;
+const LOCKFILE_FAIL_IMMEDIATELY = 1, ERROR_LOCK_VIOLATION = 33;
 const INVALID_HANDLE = 0xffff_ffff_ffff_ffffn;
 
 const flockSymbol = { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 } as const;
@@ -79,20 +84,22 @@ function library() {
 const describeError = (error: unknown) => (error as NodeJS.ErrnoException)?.code ?? (error instanceof Error ? error.message : String(error));
 
 /**
- * Blocks until this process holds the guard; the returned function releases it. Every native
- * failure is reported: the handle or descriptor is always closed, and a failed unlock or close
- * throws OwnerGuardReleaseFailed instead of passing for a clean release.
+ * Blocks until this process holds the guard (or, with `wait` false, throws OwnerGuardBusy at once
+ * while another holds it); the returned function releases it. Every native failure is reported:
+ * the handle or descriptor is always closed, and a failed unlock or close throws
+ * OwnerGuardReleaseFailed instead of passing for a clean release.
  */
-function lockGuard(path: string): () => void {
+function lockGuard(path: string, wait = true): () => void {
   if (process.platform === "win32") {
     const loaded: WindowsGuardCalls = (library() as ReturnType<typeof windowsLibrary>).symbols;
     const calls = guardLibrary.windows ? guardLibrary.windows(loaded) : loaded;
     const handle = calls.CreateFileW(Buffer.from(`${path}\0`, "utf16le"), GENERIC_READ_WRITE, FILE_SHARE_READ_WRITE, null, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, null);
     if (handle === INVALID_HANDLE) throw new OwnerGuardUnavailable(`${path} could not be opened (error ${calls.GetLastError()})`);
     const overlapped = new Uint8Array(32);
-    if (!calls.LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, overlapped)) {
+    if (!calls.LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK | (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY), 0, 1, 0, overlapped)) {
       const code = calls.GetLastError();
       const closed = calls.CloseHandle(handle) ? "" : `; closing it failed too (error ${calls.GetLastError()})`;
+      if (!wait && code === ERROR_LOCK_VIOLATION) throw new OwnerGuardBusy(`${path} is held by another process${closed}`);
       throw new OwnerGuardUnavailable(`${path} could not be locked (error ${code})${closed}`);
     }
     return () => {
@@ -106,14 +113,16 @@ function lockGuard(path: string): () => void {
   const loaded: PosixGuardCalls = { ...(library() as ReturnType<typeof posixLibrary>), close: closeSync };
   const calls = guardLibrary.posix ? guardLibrary.posix(loaded) : loaded;
   let fd: number;
-  try { fd = openSync(path, constants.O_RDWR | constants.O_CREAT, 0o600); }
+  // never through a link: a guard planted as one would make this create, and lock, a file elsewhere
+  try { fd = openSync(path, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600); }
   catch (error) { throw new OwnerGuardUnavailable(`${path} could not be opened: ${describeError(error)}`); }
   for (;;) {
-    if (calls.flock(fd, LOCK_EX) === 0) break;
+    if (calls.flock(fd, wait ? LOCK_EX : LOCK_EX | LOCK_NB) === 0) break;
     const code = calls.errno();
     if (code === EINTR) continue;
     let closed = "";
     try { calls.close(fd); } catch (error) { closed = `; closing it failed too (${describeError(error)})`; }
+    if (!wait && code === EWOULDBLOCK) throw new OwnerGuardBusy(`${path} is held by another process${closed}`);
     throw new OwnerGuardUnavailable(`${path} could not be locked (errno ${code})${closed}`);
   }
   return () => {
@@ -129,12 +138,12 @@ export function guardPath(lockPath: string): string { return `${lockPath}.guard`
 
 /**
  * Runs `fn` while holding the guard of `lockPath`; `fn` must be synchronous. Throws
- * OwnerGuardUnavailable, without running `fn`, when the guard cannot be taken, and
- * OwnerGuardReleaseFailed, after `fn` ran, when it cannot be released cleanly (with `fn`'s own
- * error as its cause when `fn` threw too).
+ * OwnerGuardUnavailable, without running `fn`, when the guard cannot be taken (OwnerGuardBusy when
+ * `wait` is false and another process holds it), and OwnerGuardReleaseFailed, after `fn` ran, when
+ * it cannot be released cleanly (with `fn`'s own error as its cause when `fn` threw too).
  */
-export function withOwnerGuard<T>(lockPath: string, fn: () => T): T {
-  const release = lockGuard(guardPath(lockPath));
+export function withOwnerGuard<T>(lockPath: string, fn: () => T, { wait = true }: { wait?: boolean } = {}): T {
+  const release = lockGuard(guardPath(lockPath), wait);
   let result: T;
   try { result = fn(); }
   catch (error) {
@@ -206,6 +215,9 @@ function describe(lock: string, state: OwnerSample): string {
   return named.record ? `lock ${lock}, owner pid ${named.pid} generation ${named.record.generation}` : `lock ${lock}, owner pid ${named.pid}`;
 }
 
+/** How long a release that does not wait retries a guard another process holds. */
+const RELEASE_WAIT_MS = 5_000;
+
 /** Test seams, each called synchronously: before the guard is taken, once it is held, after the stale owner is re-proved, and with the complete staged directory before it is renamed into place. */
 export interface OwnerLockHooks { observed?(): void; locked?(): void; validated?(): void; staged?(staging: string): void }
 export interface OwnerLease { record: OwnerRecord; release(): void }
@@ -214,8 +226,13 @@ export interface OwnerLease { record: OwnerRecord; release(): void }
  * Takes the owner directory `lock` for this process. A live owner (or one that cannot be proved
  * gone) throws `errors.running`; a lock that changed while this start waited for the guard, or a
  * guard that is unavailable, throws `errors.starting`. Nothing is signalled beyond signal 0.
+ *
+ * With `wait` false neither taking the lock nor releasing it waits on a guard another process holds
+ * (one stopped while it holds it, say): taking it throws `errors.starting` at once, so a caller can
+ * keep its own deadline, and a release retries for RELEASE_WAIT_MS before it leaves the lock to be
+ * reclaimed once this process has exited.
  */
-export function acquireOwnerDirectory(lock: string, errors: { running: string; starting: string }, hooks: OwnerLockHooks = {}): OwnerLease {
+export function acquireOwnerDirectory(lock: string, errors: { running: string; starting: string }, hooks: OwnerLockHooks = {}, { wait = true }: { wait?: boolean } = {}): OwnerLease {
   const seen = sample(lock);
   if (verdict(seen) === "live") throw new Error(`${errors.running} (${describe(lock, seen)})`);
   hooks.observed?.();
@@ -241,7 +258,7 @@ export function acquireOwnerDirectory(lock: string, errors: { running: string; s
         throw error;
       }
       return directoryIdentity(lock);
-    });
+    }, { wait });
   } catch (error) {
     if (error instanceof OwnerGuardUnavailable) throw new Error(`${errors.starting} (${describe(lock, seen)}; ${error.message})`);
     // the start fails rather than run on a guard it may still hold; a lock it published names
@@ -253,13 +270,19 @@ export function acquireOwnerDirectory(lock: string, errors: { running: string; s
     record,
     /** Removes the lock only while it is still this acquisition's directory and generation. */
     release() {
-      try {
-        withOwnerGuard(lock, () => {
-          const now = sample(lock);
-          if (now.directory === published && now.owner !== null && parseOwnerRecord(now.owner)?.generation === record.generation) rmSync(lock, { recursive: true, force: true });
-        });
-      } catch (error) {
-        console.error(`Releasing the startup lock ${lock} failed: ${error instanceof Error ? error.message : error}`);
+      const deadline = Date.now() + RELEASE_WAIT_MS;
+      for (;;) {
+        try {
+          withOwnerGuard(lock, () => {
+            const now = sample(lock);
+            if (now.directory === published && now.owner !== null && parseOwnerRecord(now.owner)?.generation === record.generation) rmSync(lock, { recursive: true, force: true });
+          }, { wait });
+          return;
+        } catch (error) {
+          if (error instanceof OwnerGuardBusy && Date.now() < deadline) { Bun.sleepSync(25); continue; }
+          console.error(`Releasing the startup lock ${lock} failed: ${error instanceof Error ? error.message : error}`);
+          return;
+        }
       }
     },
   };

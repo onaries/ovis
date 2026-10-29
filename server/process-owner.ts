@@ -122,11 +122,25 @@ export function parseOwnerRecord(text: string): OwnerRecord | null {
  * holds the old PID. `birth` is whatever was persisted: it is validated here, never trusted.
  */
 export function ownerGone(owner: { pid: number; birth?: unknown }): boolean {
-  if (probeProcess(owner.pid) === "absent") return true;
+  if (probeProcess(owner.pid) === "absent" || exitedUnreaped(owner.pid)) return true;
   const recorded = parseBirth(owner.birth);
   if (!recorded || recorded.platform !== process.platform) return false;
   const reading = readProcessBirth(owner.pid);
   return reading.state === "absent" || (reading.state === "identified" && reading.birth.value !== recorded.value);
+}
+
+/**
+ * Linux: the PID holds a process that has exited but whose parent has not reaped it yet (state Z).
+ * It runs no code and holds nothing, whoever it was, yet it still answers signal 0 with its birth.
+ */
+function exitedUnreaped(pid: number): boolean {
+  if (process.platform !== "linux") return false;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[0] === "Z";
+  } catch {
+    return false; // gone meanwhile: the probe above decides next time
+  }
 }
 
 /**

@@ -299,7 +299,9 @@ describe("repository ancestors", () => {
   });
 
   it("finds the user's home without HOME, as native Windows starts it", () => {
-    expect(userHome({ HOME: "/home/user", USERPROFILE: "C:\\Users\\user" }, "win32")).toBe("/home/user");
+    // a HOME set for Git or Emacs is not where the agents keep their stores: they ask Windows
+    expect(userHome({ HOME: "/home/user", USERPROFILE: "C:\\Users\\user" }, "win32")).toBe("C:\\Users\\user");
+    expect(userHome({ HOME: "/home/user" }, "win32")).toBe("/home/user");
     expect(userHome({ HOME: "", USERPROFILE: "C:\\Users\\user" }, "win32")).toBe("C:\\Users\\user");
     expect(userHome({}, "win32")).toBe(homedir());
     expect(userHome({}, "linux")).toBe("");

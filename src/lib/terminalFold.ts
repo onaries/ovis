@@ -241,7 +241,7 @@ export function webLinkAt(text: string, offset: number): { url: string; start: n
 }
 
 /**
- * The OSC 8 target (`ESC ] 8 ; ; uri`) of grid cell `x` on buffer row `y`, or null. xterm 5.5 keeps it in its own link
+ * The OSC 8 target (`ESC ] 8 ; ; uri`) of grid cell `x` on buffer row `y`, or null. xterm (5.5 and 6.0) keeps it in its own link
  * service with no public way to read it, so this reads its internals and finds nothing where they are not there; the
  * caller applies the grid's own link policy (http(s) or file only) to what it finds.
  */

@@ -1,4 +1,4 @@
-import type { InlineNode } from "./markdown.ts";
+import type { InlineNode } from "../../shared/markdown.ts";
 
 /**
  * An image's box before it decodes (components/Markdown.tsx `ReservedImage`). A bare <img> is zero

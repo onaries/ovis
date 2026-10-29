@@ -212,6 +212,8 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     if (!scroll.current.moved) bringOpenTab();
   }, [faces]);
   // a mouse wheel turns vertically: over a strip whose tabs do not fit it moves them sideways.
+  // Anything with sideways motion (a trackpad, even a mostly vertical diagonal swipe) is the
+  // browser's: moved by deltaY alone, the strip would go against the swipe's sideways part (#2103).
   // React's own onWheel is passive, so the listener is the strip's own; `end` coming or going (a
   // split opened or closed) draws the strip as a new node, which needs it again.
   const tabsHidden = loneTabHidden(cramped, tabs.length);
@@ -219,7 +221,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     const row = strip.current;
     if (!row) return;
     const onWheel = (event: WheelEvent): void => {
-      if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || row.scrollWidth <= row.clientWidth) return;
+      if (event.ctrlKey || event.deltaX !== 0 || event.deltaY === 0 || row.scrollWidth <= row.clientWidth) return;
       event.preventDefault();
       // deltaY is in pixels, lines (Firefox's mouse wheel) or pages, as deltaMode says
       const step = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? Number.parseFloat(getComputedStyle(row).fontSize) * 1.5 || 16

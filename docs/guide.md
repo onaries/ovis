@@ -156,7 +156,7 @@ Every agent herdr runs shows up with its live status, terminal and alerts. The c
 
 | Agent | Chat | Answer prompts from chat |
 | --- | --- | --- |
-| **Claude Code** | Native transcript, resolved through herdr | ✓ approvals, questions, plan and menu picks, and the `/model` list (picked for the session) |
+| **Claude Code** | Native transcript, resolved through herdr | ✓ approvals, questions, plan and menu picks, the `/model` list, and the `/effort` levels with Ultracode's switch (each picked for the session) |
 | **Codex** | Native rollout, with tool results and commentary/final phases | ✓ approvals and questions, including queued ones, and the `/model` lists (picked for the session) |
 | **omp** | Native session file, in the store the pane's omp process writes to: `~/.omp/agent`, a profile's, or where its `--session-dir`, or the `PI_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_DIR`, `PI_CONFIG_DIR` or XDG data and state directories it was started with, put it (absolute paths only, not values from omp's `.env` files; on Windows only `~/.omp` and its profiles) | ✓ approvals, questions, and the model picker of `/model` and `/switch` (picked for the session: the chat sends `/model` as `/switch`, since omp's own `/model` opens its role hub) |
 | **omo** | Native session file, found through the pane's process tree | ✓ the `/model` list (picked for the session); other menus — use Terminal |
@@ -169,7 +169,7 @@ Every agent herdr runs shows up with its live status, terminal and alerts. The c
 | **Hermes** | Native SQLite session store | — use Terminal |
 | **Muse Code** | **Linux untested with real Muse.** Native session log, bound to the pane by the session lock Muse writes for its process; panes in one folder each show their own session. macOS and Linux; Windows uses Terminal. See [Muse chat](muse-chat.md). | — use Terminal |
 | **Antigravity (agy)** | **Experimental; macOS untested.** Native ledger, selected by the running process’s held conversation lock. Linux native-tested; Windows uses terminal text. See [Agy behavior and limits](agy-chat.md). | — use Terminal |
-| **Letta Code** | The terminal's text. Choose **Letta Code** in **New workspace**, **New tab with agent…** or **New worktree** where `letta` is installed, or run `letta` in a herdr pane's **Terminal**. | — use Terminal |
+| **Letta Code** | **Experimental; Linux and macOS.** Read-only native transcript from where the pane's own `letta` process keeps it (`~/.letta/transcripts`, or its `LETTA_CONFIG_DIR` / `LETTA_TRANSCRIPT_ROOT`), when herdr's Letta integration is installed (`herdr integration install letta`, experimental), it names a conversation for the pane, and Letta's own record in the project folder (`.letta/settings.local.json`) names the same one, is older than that `letta` process and is writable by it, and `letta` is still in the folder it started in (for a local-backend conversation, Letta's local store must also name that agent for it). That holds when `letta` resumes the conversation it last had in that folder (`letta`, or `letta --conversation <id>` on that one). After `/new` or `/resume`, a start on another conversation (`--new` included), once `letta` has moved to another folder (its SetWorkingDirectory or EnterWorktree tools), another `letta` writing that record, while another pane runs `letta` in the same folder, with two panes on one conversation, in the home folder, or before the conversation's first turn on this PC ends, Chat uses the terminal's text until `letta` starts again on that conversation. Letta writes a turn only when it ends, so while `letta` works on a turn or waits for you, Chat shows the live terminal, and the turn joins the conversation once it is done; a cancelled one never does. Only turns Letta Code wrote on this PC show. Choose **Letta Code** in **New workspace**, **New tab with agent…** or **New worktree** where `letta` is installed, or run `letta` in a herdr pane's **Terminal**. Windows uses Terminal. | — use Terminal |
 | **GitHub Copilot CLI** | Linux native transcript when the foreground session is verified. See [Copilot setup and limits](copilot-chat.md). | — recorded choices are read-only; answer questions and approvals in Terminal |
 | **Anything else** | The terminal's text | — use Terminal |
 
@@ -200,6 +200,35 @@ Status tracking reads the same binding. Without it, a GJC pane keeps herdr's own
 which follows GJC's provider child: a finished turn can stay on working, so no done alert
 comes and no INPUT shows for an open question. Install the extension and restart GJC to
 get both chat and done alerts back.
+
+The `ask_user` form of the [`@eko24ive/pi-ask`](https://www.npmjs.com/package/@eko24ive/pi-ask)
+pi package draws its own widget, which the chat cannot read off the screen, and pi-ask answers
+only through its own events inside the pi process, never typed keys. To answer it from the chat,
+explicitly install the web UI's pi extension on each PC that runs pi, from this checkout:
+
+```sh
+bun scripts/install-pi-integration.ts
+```
+
+Nothing installs it for you: the web UI never adds or changes pi's settings, hooks or extensions
+on its own. Restart running pi sessions to load it. The installer writes only its own file,
+`~/.pi/agent/extensions/herdr-web-ui.js` (or under `PI_CODING_AGENT_DIR`), and refuses to replace
+a file it did not write; it does not replace pi settings or other extensions, and no running
+session is modified by it. To remove it, run the same command with `--remove` and restart pi.
+Without the extension the form stays in Terminal, exactly as before. On a remote PC with only the
+runtime bundle, run it with the bundle's Bun as for GJC above. The extension listens on a socket
+only your user can open, `herdr-web-ui-ask/<pid>.sock` in the same directory, and relays the
+card's answer to pi-ask as its submit event: the form then shows as a card with one question per
+step, its options and **Type your own answer**. The card shows only when the pane's pi process
+answers on that socket, writes the session herdr reports for the pane, has one form open and
+that form's `ask_user` call is still unanswered on pi's current branch (after a `/tree` move
+too); anything else, a form opened by `/answer` or `/ask:replay`, Windows, and pi without the
+extension use Terminal. pi-ask is never answered with typed keys: a pi pane never gets the
+generic card of guessed keys that other agents get for a prompt no reader knows, and where the
+extension serves the pane's pi, pi's own dialogs (select, confirm, input) show no card either, since
+a pi-ask form can open there at any moment. The terminal answers those; without the extension,
+pi's own dialogs keep their cards as before. Notes and
+**Elaborate** stay in Terminal. Checked with pi 1.4.0 and pi-ask 1.2.0.
 
 Command Code chat needs the session herdr reports for the pane. Command Code sends that report
 and herdr keeps only the sessions of the agents it knows natively, so no released herdr accepts

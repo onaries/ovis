@@ -1,4 +1,4 @@
-import type { InlineNode, MarkdownBlock } from "./markdown.ts";
+import type { InlineNode, MarkdownBlock } from "../../shared/markdown.ts";
 
 /** How the viewer shows a text file: chosen in its header, Preview unless the user asked for the source. */
 export type TextViewMode = "preview" | "code";

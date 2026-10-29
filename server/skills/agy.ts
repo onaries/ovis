@@ -113,7 +113,7 @@ export const source: AgentCommandSource = {
         }
       }
     };
-    const project = cwd ? ancestorsToRepoRoot(cwd) : [];
+    const project = cwd ? ancestorsToRepoRoot(cwd, home) : [];
     for (const directory of project) {
       for (const prefix of [".agents", ".agent", "_agents", "_agent"]) scan(join(directory, prefix, "skills"), "project");
     }

@@ -75,6 +75,16 @@ const PROMPT_REFUSED = new Set(["agent_not_found", "agent_not_ready", "agent_blo
 export const modelSwitchText = (agent: string | null, text: string): string =>
   agent === "omp" && text.trim() === "/model" ? "/switch" : text;
 
+/**
+ * Claude Code reads `\` + Enter as a new line, so the Enter after a message whose last character is a
+ * backslash adds a line instead of sending: the message stays in the input box (Claude Code 2.1.312,
+ * #2277). A space after it lets the Enter send, and Claude Code records the message without the space.
+ * A framed payload gets the space inside its closing paste marker.
+ * A chat or queued message gets it; the terminal's input line types `\` + Enter as the keyboard does.
+ */
+export const closeBackslash = (agent: string | null, text: string): string =>
+  agent === "claude" ? text.replace(/\\(\u001b\[201~)?$/, "\\ $1") : text;
+
 /** How long after its process starts an omp that has not reported is waited for: from cold it takes up to about 20 s. */
 const OMP_STARTUP_MS = 30_000;
 
@@ -401,6 +411,11 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             }
           };
           if (clearDraft !== undefined) await clearScreenReady();
+          // Send it names the terminal's draft as the message itself. An empty box can mean it
+          // was already sent there; only Clear it and send of different text may continue.
+          if (clearDraft !== undefined && text === clearDraft && claudeInputEmpty(...reads)) {
+            throw new HerdrError("agent_not_ready", "The named draft is no longer in Claude Code's input box; nothing was cleared or sent");
+          }
           if (claudeInputDraft(...reads)) {
             // only the draft the user was shown goes, never what has since replaced it
             const draft = claudeClearableDraft(...reads);
@@ -455,8 +470,10 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           seen ??= roots.processes;
           agent = resolveAgent(pane, typingRoots(roots)).agent;
         }
-        const sent = modelSwitchText(agent, text);
+        const switched = modelSwitchText(agent, text);
+        const sent = closeBackslash(agent, switched);
         sentText = sent;
+        payload = switched === text ? closeBackslash(agent, payload) : sent;
         if (pane && agent === "omp") {
           pane = await untilOmpReported(paneId, pane, inTime, options.ompReportPollMs ?? OMP_REPORT_POLL_MS, options.ompStartupMs ?? OMP_STARTUP_MS);
           // the last look waited on herdr: the device may have lost its access meanwhile
@@ -511,7 +528,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           };
           try {
             const typing = typeWithSkills(text, skills, allowed, writes, revalidate);
-            bindCommandProcess(paneId, command, seen);
+            bindCommandProcess(paneId, command, seen, pane);
             const { attached, missed, prompt } = await typing;
             // fixed wait: a TUI busy with the typing takes an Enter in the same chunk for a newline (SUBMIT_DELAY_MS)
             await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
@@ -536,7 +553,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           const sentAt = Date.now();
           const delivery = agentPrompt(paneId, closeMention(sent), undefined, mayType);
           // which agent process got it, read alongside the delivery for the outcome's row, never before it
-          bindCommandProcess(paneId, command, seen);
+          bindCommandProcess(paneId, command, seen, pane);
           await delivery;
           noteSubmitted(paneId, sent, recorded(command), sentAt);
           if (command) watch?.commit(command, [{ pasted: closeMention(sent) }], []);
@@ -569,7 +586,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
       // a mirrored pane's browser never learned the program's paste mode, so `payload` came as bare
       // lines: several of them are shaped here as the same block typed into the mirror is. herdr is
       // asked only for such a block, so a one-line message never waits on it.
-      const shaped = await mirrorInput(closeMention(sentText === text ? payload : sentText), async () => await terminalAttach() ? null : await paneAgentOf(paneId));
+      const shaped = await mirrorInput(closeMention(payload), async () => await terminalAttach() ? null : await paneAgentOf(paneId));
       inTime();
       await paneSendText(paneId, shaped, undefined, mayType).catch(refusal);
       // fixed wait: a TUI busy with the paste takes an Enter in the same chunk for a newline (SUBMIT_DELAY_MS)

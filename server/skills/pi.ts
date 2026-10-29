@@ -67,9 +67,9 @@ const readJson = (path: string): unknown => { try { return JSON.parse(readFileSy
 const canonical = (path: string): string => { try { return realpathSync(path); } catch { return resolve(path); } };
 
 /** PI_CODING_AGENT_DIR from the pane's own environ first, then the server's, else ~/.pi/agent. */
-function agentDirectory(home: string, env: readonly string[] | null): string {
+function agentDirectory(home: string, env: readonly string[] | null, serverEnv: AgentCommandContext["serverEnv"]): string {
   const own = environValue(env, "PI_CODING_AGENT_DIR");
-  const dir = own || process.env["PI_CODING_AGENT_DIR"];
+  const dir = own || (serverEnv ?? process.env)["PI_CODING_AGENT_DIR"];
   if (!dir) return join(home, ".pi", "agent");
   return dir === "~" || dir.startsWith("~/") ? join(home, dir.slice(2)) : dir;
 }
@@ -142,14 +142,14 @@ function settingsSkills(home: string, agentDir: string, settings: Record<string,
   return { added, forced, excluded };
 }
 
-function discoverSkills({ home, cwd, env }: AgentCommandContext): SlashCommand[] {
-  const agentDir = agentDirectory(home, env);
+function discoverSkills({ home, cwd, env, serverEnv }: AgentCommandContext): SlashCommand[] {
+  const agentDir = agentDirectory(home, env, serverEnv);
   const settings = plainObject(readJson(join(agentDir, "settings.json")));
   const listed = settingsSkills(home, agentDir, settings);
   const user = [...recursive(join(agentDir, "skills")), ...recursive(join(home, ".agents", "skills")), ...listed.added].filter((skill) => !listed.excluded(skill.path));
   const result = asCommands([...user, ...listed.forced], "user");
   if (cwd && projectTrusted(agentDir, settings, cwd)) {
-    for (const directory of ancestorsToRepoRoot(cwd)) {
+    for (const directory of ancestorsToRepoRoot(cwd, home)) {
       result.push(...asCommands(recursive(join(directory, ".pi", "skills")), "project"), ...asCommands(recursive(join(directory, ".agents", "skills")), "project"));
     }
   }
@@ -169,7 +169,7 @@ export const source: AgentCommandSource = {
     // pi's packages and extension commands stay out: no file scan can know them, and they are in
     // the terminal's own `/` menu either way
     const { home, cwd } = ctx;
-    const agentDir = agentDirectory(home, ctx.env);
+    const agentDir = agentDirectory(home, ctx.env, ctx.serverEnv);
     const trusted = cwd !== null && cwd !== undefined && projectTrusted(agentDir, plainObject(readJson(join(agentDir, "settings.json"))), cwd);
     return [
       ...piTemplates(join(agentDir, "prompts"), "user"),

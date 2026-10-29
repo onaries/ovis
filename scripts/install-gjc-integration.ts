@@ -16,13 +16,14 @@ export interface InstallGjcIntegrationResult {
   path: string;
 }
 
-async function buildExtension(): Promise<string> {
-  const entrypoint = join(import.meta.dir, "..", "integrations", "gjc.ts");
-  const staging = mkdtempSync(join(tmpdir(), "herdr-gjc-integration-"));
+/** Bundles one integrations/ entry into a standalone file, as the agent loads it. */
+export async function buildIntegration(name: string, target: "bun" | "node"): Promise<string> {
+  const entrypoint = join(import.meta.dir, "..", "integrations", `${name}.ts`);
+  const staging = mkdtempSync(join(tmpdir(), `herdr-${name}-integration-`));
   try {
     const result = await Bun.build({
       entrypoints: [entrypoint],
-      target: "bun",
+      target,
       format: "esm",
       splitting: false,
       outdir: staging,
@@ -30,23 +31,23 @@ async function buildExtension(): Promise<string> {
     });
     if (!result.success) {
       const diagnostics = result.logs.map((entry) => entry.message).join("\n");
-      throw new Error(`Could not build the GJC integration${diagnostics ? `:\n${diagnostics}` : "."}`);
+      throw new Error(`Could not build the ${name} integration${diagnostics ? `:\n${diagnostics}` : "."}`);
     }
     const output = result.outputs[0];
-    if (!output) throw new Error("GJC integration build produced no output.");
+    if (!output) throw new Error(`The ${name} integration build produced no output.`);
     return await output.text();
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
 }
 
-function existingOwnership(path: string): "missing" | "owned" {
+function existingOwnership(path: string, banner: string): "missing" | "owned" {
   try {
     const target = lstatSync(path);
     if (!target.isFile() || target.isSymbolicLink()) throw new Error(`Refusing to modify ${path}: target is not a regular installer-owned file.`);
     const [firstLine, secondLine] = readFileSync(path, "utf8").split(/\r?\n/, 2);
-    if (firstLine !== GJC_INTEGRATION_OWNERSHIP_BANNER
-      && !(firstLine === "// @bun" && secondLine === GJC_INTEGRATION_OWNERSHIP_BANNER)) throw new Error(`Refusing to modify ${path}: ownership banner is missing.`);
+    if (firstLine !== banner
+      && !(firstLine === "// @bun" && secondLine === banner)) throw new Error(`Refusing to modify ${path}: ownership banner is missing.`);
     return "owned";
   } catch (error) {
     if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") return "missing";
@@ -54,7 +55,7 @@ function existingOwnership(path: string): "missing" | "owned" {
   }
 }
 
-function replaceAtomically(path: string, content: string): void {
+function replaceAtomically(path: string, content: string, banner: string): void {
   const directory = dirname(path);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const temporary = join(directory, `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
@@ -63,11 +64,11 @@ function replaceAtomically(path: string, content: string): void {
     // Bun recognizes its pragma only on the first line.
     const pragma = body.match(/^\/\/ @bun\r?\n/);
     const owned = pragma
-      ? `${pragma[0]}${GJC_INTEGRATION_OWNERSHIP_BANNER}\n${body.slice(pragma[0].length)}`
-      : `${GJC_INTEGRATION_OWNERSHIP_BANNER}\n${body}`;
+      ? `${pragma[0]}${banner}\n${body.slice(pragma[0].length)}`
+      : `${banner}\n${body}`;
     writeFileSync(temporary, owned, { flag: "wx", mode: 0o600 });
     chmodSync(temporary, 0o600);
-    if (existingOwnership(path) === "owned") {
+    if (existingOwnership(path, banner) === "owned") {
       renameSync(temporary, path);
     } else {
       // A hard link installs a fully-written file atomically and fails rather than replacing a
@@ -79,21 +80,32 @@ function replaceAtomically(path: string, content: string): void {
   }
 }
 
+/** Install or remove only the one file at `extensionPath`, and only while it carries `banner`. */
+export async function installExtensionFile(
+  extensionPath: string,
+  banner: string,
+  options: { remove?: boolean; build: () => Promise<string> },
+): Promise<InstallGjcIntegrationResult> {
+  if (options.remove) {
+    if (existingOwnership(extensionPath, banner) === "owned") rmSync(extensionPath);
+    return { action: "removed", path: extensionPath };
+  }
+
+  existingOwnership(extensionPath, banner);
+  const content = await options.build();
+  replaceAtomically(extensionPath, content, banner);
+  return { action: "installed", path: extensionPath };
+}
+
 /** Install or remove only herdr-web-ui.js under a selected GJC agent directory. */
 export default async function installGjcIntegration(
   options: InstallGjcIntegrationOptions = {},
 ): Promise<InstallGjcIntegrationResult> {
   const agentDir = resolve(options.agentDir ?? join(homedir(), ".gjc", "agent"));
-  const extensionPath = join(agentDir, "extensions", "herdr-web-ui.js");
-  if (options.remove) {
-    if (existingOwnership(extensionPath) === "owned") rmSync(extensionPath);
-    return { action: "removed", path: extensionPath };
-  }
-
-  existingOwnership(extensionPath);
-  const content = await (options.build ?? buildExtension)();
-  replaceAtomically(extensionPath, content);
-  return { action: "installed", path: extensionPath };
+  return installExtensionFile(join(agentDir, "extensions", "herdr-web-ui.js"), GJC_INTEGRATION_OWNERSHIP_BANNER, {
+    remove: options.remove,
+    build: options.build ?? (() => buildIntegration("gjc", "bun")),
+  });
 }
 
 function parseArguments(args: string[]): InstallGjcIntegrationOptions {

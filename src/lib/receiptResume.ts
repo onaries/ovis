@@ -1,3 +1,5 @@
+import { RECEIPT_RESUME_ID } from "../../shared/receipt-resume.ts";
+
 /** Presentation-only correlation; never a credential, lease, or permission to send input.
  * Its own key survives a reload without changing any existing draft/storage shape. */
 const KEY = "ovis:pi-receipt-resume";
@@ -6,7 +8,7 @@ export function receiptResumeId(): string {
   if (memory) return memory;
   try {
     const saved = localStorage.getItem(KEY);
-    if (saved && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(saved)) return memory = saved;
+    if (saved && RECEIPT_RESUME_ID.test(saved)) return memory = saved;
   } catch { /* memory-only when browser storage is unavailable */ }
   if (typeof crypto.randomUUID === "function") memory = crypto.randomUUID();
   else {

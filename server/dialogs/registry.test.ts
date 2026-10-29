@@ -35,6 +35,7 @@ const snapshot: Record<string, readonly [DialogReader["reread"], DialogReader["l
   "pi-questionnaire-submit": ["each-move", "none"],
   "pi-ask-question": ["before-commit", "none"],
   "pi-ask-submit": ["before-commit", "none"],
+  "pi-ask-user": ["before-commit", "none"],
   "pi-question": ["none", "none"],
   "pi-confirm": ["none", "none"],
   "pi-input": ["none", "none"],
@@ -93,7 +94,7 @@ const order: Record<string, readonly string[]> = {
   omo: ["omo-model", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
   omp: ["omp-question", "omp-submit", "omp-approval", "omp-model", "omp-handoff", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
   opencode: ["opencode-question", "opencode-v1-question", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
-  pi: ["pi-thinking", "pi-model", "omo-model", "pi-questionnaire-question", "pi-questionnaire-submit", "pi-ask-question", "pi-ask-submit", "pi-question", "pi-confirm", "pi-input", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  pi: ["pi-thinking", "pi-model", "omo-model", "pi-questionnaire-question", "pi-questionnaire-submit", "pi-ask-question", "pi-ask-submit", "pi-ask-user", "pi-question", "pi-confirm", "pi-input", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
 };
 
 describe("dialog reader order", () => {

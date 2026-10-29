@@ -8,13 +8,15 @@
  */
 import type { CreateTabRequest, CreateWorkspaceRequest, WorkspaceCreated } from "../../shared/protocol.ts";
 import type { ClaudeLaunchMode, CodexLaunchMode } from "./agentLaunchMode.ts";
-import { firstPromptDelivery, launchAgent, launchChoiceFault } from "./agentLaunchMode.ts";
+import { firstPromptDelivery, launchAgent, launchCapabilities, launchChoiceFault } from "./agentLaunchMode.ts";
 
 export interface NewSessionFields {
   /** the agent kind; "" is a plain shell */
   agent: string;
   model: string;
   effort: string;
+  /** Claude Code's Ultracode switch; absent or false adds nothing */
+  ultracode?: boolean;
   prompt: string;
 }
 
@@ -22,7 +24,7 @@ export type FirstPrompt = { text: string; via: "positional" | "pending" };
 
 export type NewSessionLaunch =
   | { agent: { kind: string; args?: string[] } | null; prompt: FirstPrompt | null }
-  | { fault: "model" | "effort" | "prompt" };
+  | { fault: "model" | "effort" | "ultracode" | "prompt" };
 
 /** The create request's agent for the fields, or the first choice the launch does not take. */
 export function newSessionLaunch(fields: NewSessionFields, modes: { claudeLaunchMode: ClaudeLaunchMode; codexLaunchMode: CodexLaunchMode }): NewSessionLaunch {
@@ -31,9 +33,18 @@ export function newSessionLaunch(fields: NewSessionFields, modes: { claudeLaunch
   const via = firstPromptDelivery(fields.agent, fields.prompt);
   const text = fields.prompt.trim();
   return {
-    agent: launchAgent(fields.agent, modes, { model: fields.model, effort: fields.effort, prompt: via === "positional" ? text : "" }),
+    agent: launchAgent(fields.agent, modes, { model: fields.model, effort: fields.effort, ultracode: fields.ultracode, prompt: via === "positional" ? text : "" }),
     prompt: via === null ? null : { text, via },
   };
+}
+
+/**
+ * The dialog's launch for its fields: a switch the agent's launch does not take is not shown, so it neither
+ * blocks Start nor goes with the launch. The agent list can move the kind past the picker's resets, as when a
+ * remembered Claude Code the PC no longer offers gives way to a shell with Ultracode left on.
+ */
+export function dialogLaunch(fields: NewSessionFields, modes: { claudeLaunchMode: ClaudeLaunchMode; codexLaunchMode: CodexLaunchMode }): NewSessionLaunch {
+  return newSessionLaunch({ ...fields, ultracode: fields.ultracode && launchCapabilities(fields.agent).ultracode }, modes);
 }
 
 /** The request's `first_message`: the prompt the bridge queues, or null when there is none or the agent takes it itself. */

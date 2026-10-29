@@ -70,7 +70,9 @@ export function useSidebarActivityState(machines: readonly Machine[], selectedMa
           if (checked.has(scope)) continue;
           checked.add(scope);
           const before = (next ?? current).get(pc);
-          if (!before || before.epoch !== epoch) continue;
+          // An epoch retired since this state was set is replaced by the effect; reading it here
+          // would only cache its scope again.
+          if (!before || before.epoch !== epoch || epochs.current.get(pc) !== epoch) continue;
           const record = loadSeen(pc, epoch);
           if (before.record === record) continue;
           next ??= new Map(current);
@@ -132,6 +134,8 @@ export function useSidebarActivityState(machines: readonly Machine[], selectedMa
       const epoch = machine.snapshot?.finish_epoch;
       if (!epoch) continue;
       const previousEpoch = epochs.current.get(machine.id);
+      // Before cleanSeen: its notification can run the subscriber's state update right away.
+      epochs.current.set(machine.id, epoch);
       if (previousEpoch && previousEpoch !== epoch) {
         cleanSeen([{ pc: machine.id, epoch: previousEpoch }]);
         for (const [key, finish] of shared.current) {
@@ -140,9 +144,6 @@ export function useSidebarActivityState(machines: readonly Machine[], selectedMa
           }
         }
       }
-      epochs.current.delete(machine.id);
-      epochs.current.set(machine.id, epoch);
-      while (epochs.current.size > SEEN_LIMIT) epochs.current.delete(epochs.current.keys().next().value!);
       const pane = machine.state === "connected" && machine.id === selectedMachineId && pageVisible && paneInFront()
         ? machine.snapshot?.panes.find((pane) => pane.pane_id === presentedPaneId) : undefined;
       if (pane?.agent_status === "done" && !pane.background_wait && pane.finish_id !== undefined && pane.finish_id > 0) {

@@ -8,6 +8,9 @@
  * BROWSER_SCRIPTS: comma-separated list of scripts to run (default: all from ci-browser.sh)
  * BROWSER_EXCLUDE: comma-separated list of scripts to leave out of that list
  * BROWSER_RETRY: 0 runs a failed script once only (default: a failed script runs a second time)
+ * BROWSER_SCRIPT_TIMEOUT_SECONDS: how long one run of a script may take (default 600), so a hung
+ *   script fails and names itself instead of using up the job's timeout. At the bound the script's
+ *   process tree is stopped, its last log lines are printed at once, and it is not run again.
  *
  * A script that fails and then passes is reported as flaky, not hidden: its first log is kept as
  * <script>.attempt-1.log and printed, summary.json lists it, and under GitHub Actions it gets a
@@ -15,12 +18,30 @@
  */
 import { availableParallelism } from "node:os";
 import { basename, join } from "node:path";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const repo = join(import.meta.dir, "..");
 const FAILURE_TAIL_LINES = 400;
 const HEARTBEAT_MS = 60_000;
+/** The longest run seen on a loaded CI host was about 6 minutes (security-summary, 2026-10-28). */
+const DEFAULT_SCRIPT_TIMEOUT_SECONDS = 600;
+/** How long a stopped script gets to exit after SIGTERM, and again after SIGKILL. */
+const STOP_GRACE_MS = 5_000;
+const TIMEOUT_TAIL_LINES = 40;
+/** The exit code a timed-out script is given, as timeout(1) does. */
+export const TIMEOUT_EXIT_CODE = 124;
+
+/** The longest delay setTimeout takes; a longer one fires at once. */
+const MAX_TIMEOUT_SECONDS = Math.floor((2 ** 31 - 1) / 1000);
+
+/** BROWSER_SCRIPT_TIMEOUT_SECONDS: a positive number of seconds up to about 24 days; unset or empty is the default. */
+export function scriptTimeoutSeconds(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") return DEFAULT_SCRIPT_TIMEOUT_SECONDS;
+  const seconds = Number(value);
+  if (!(Number.isFinite(seconds) && seconds > 0 && seconds <= MAX_TIMEOUT_SECONDS)) throw new Error(`BROWSER_SCRIPT_TIMEOUT_SECONDS must be a positive number of seconds up to ${MAX_TIMEOUT_SECONDS}, not "${value}"`);
+  return seconds;
+}
 
 /** The scripts the serial lane runs, in its order (the demo build, which takes an argument, is not one). */
 export function serialBrowserScripts(source = readFileSync(join(repo, "scripts/ci-browser.sh"), "utf8")): string[] {
@@ -47,6 +68,8 @@ interface ScriptResult {
   firstLog?: string;
   site?: string;
   message?: string;
+  /** the run was stopped at its deadline */
+  stopped?: boolean;
 }
 
 /**
@@ -119,12 +142,90 @@ async function timestampLog(stream: ReadableStream<Uint8Array>, log: string): Pr
   if (partial) appendFileSync(log, `[${new Date().toISOString()}] ${partial}\n`);
 }
 
-async function runScript(script: string, env: Record<string, string>, log: string): Promise<ScriptResult> {
+/** The variable every process of one script run inherits, so a process its parent left behind is still found. */
+const RUN_MARK = "CI_BROWSER_PARALLEL_RUN";
+
+/**
+ * The processes of one run: on Linux every process whose environment carries the run's mark, which
+ * also finds one whose parent exited and that was moved to init; and, while the script itself has
+ * not exited (after that its pid may belong to another process), the script and its tree in `ps`
+ * (Chromium and the servers a script starts are its children's children).
+ */
+async function runProcesses(child: { pid: number; exitCode: number | null; signalCode: string | null }, mark: string): Promise<number[]> {
+  const running = () => child.exitCode === null && child.signalCode === null;
+  const tree = running() ? [child.pid, ...(await descendants(child.pid))] : [];
+  const found = new Set(running() ? tree : []);
+  let entries: string[] = [];
+  try { entries = readdirSync("/proc"); } catch { /* no /proc: the ps tree is all there is */ }
+  const wanted = `${RUN_MARK}=${mark}`;
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      if (readFileSync(`/proc/${entry}/environ`, "latin1").split("\0").includes(wanted)) found.add(Number(entry));
+    } catch { /* gone, or another user's */ }
+  }
+  found.delete(process.pid);
+  return [...found];
+}
+
+/** Every process below `root`, from `ps`; none when `ps` cannot run. */
+async function descendants(root: number): Promise<number[]> {
+  let table = "";
+  try {
+    const ps = Bun.spawn(["ps", "-A", "-o", "pid=,ppid="], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    [table] = await Promise.all([new Response(ps.stdout).text(), ps.exited]);
+  } catch { return []; }
+  const children = new Map<number, number[]>();
+  for (const line of table.split("\n")) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+    if (!pid || ppid === undefined) continue;
+    children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+  }
+  const found: number[] = [];
+  const next = [root];
+  while (next.length > 0) {
+    for (const pid of children.get(next.pop()!) ?? []) { found.push(pid); next.push(pid); }
+  }
+  return found;
+}
+
+const signal = (pids: number[], name: NodeJS.Signals): void => {
+  for (const pid of pids) {
+    try { process.kill(pid, name); } catch { /* already gone */ }
+  }
+};
+
+/** Resolves true when `done` settles within `ms`, false at the bound. */
+function within(done: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    done.then(() => true),
+    new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Stops what is left of a run: SIGTERM, which lets Playwright close its browser, then, once the
+ * run has ended or the grace is over, SIGKILL for whatever is still there, such as a child that
+ * ignores SIGTERM and writes elsewhere. The processes are read again before each signal, so a pid
+ * freed since is not signalled (on Linux the mark is checked on the process itself).
+ */
+async function stopRun(child: Parameters<typeof runProcesses>[0], mark: string, finished: Promise<unknown>): Promise<void> {
+  signal(await runProcesses(child, mark), "SIGTERM");
+  await within(finished, STOP_GRACE_MS);
+  const left = await runProcesses(child, mark);
+  if (left.length === 0) return;
+  signal(left, "SIGKILL");
+  await within(finished, STOP_GRACE_MS);
+}
+
+async function runScript(script: string, env: Record<string, string>, log: string, timeoutSeconds: number): Promise<ScriptResult> {
   const started = Date.now();
   writeFileSync(log, "");
+  const mark = `${process.pid}-${crypto.randomUUID()}`;
   const child = Bun.spawn(["bun", script], {
     cwd: repo,
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...env, [RUN_MARK]: mark },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -133,12 +234,26 @@ async function runScript(script: string, env: Record<string, string>, log: strin
   const heartbeat = setInterval(() => {
     console.log(`[running] ${script} (${Math.round((Date.now() - started) / 1000)}s, log ${log})`);
   }, HEARTBEAT_MS);
-  const [code] = await Promise.all([
-    child.exited.finally(() => clearInterval(heartbeat)),
-    timestampLog(child.stdout, log),
-    timestampLog(child.stderr, log),
-  ]);
-  return { script, seconds: (Date.now() - started) / 1000, code, log };
+  // The run ends when the script has exited and its output is read.
+  const drained = Promise.all([timestampLog(child.stdout, log), timestampLog(child.stderr, log)]);
+  const finished = Promise.all([child.exited, drained]);
+  const stopped = (code: number, message: string): ScriptResult => {
+    appendFileSync(log, `[${new Date().toISOString()}] ${message}: stopped by scripts/ci-browser-parallel.ts\n`);
+    return { script, seconds: (Date.now() - started) / 1000, code, log, message, stopped: true };
+  };
+  try {
+    if (!(await within(child.exited, timeoutSeconds * 1000))) {
+      await stopRun(child, mark, finished);
+      return stopped(TIMEOUT_EXIT_CODE, `Timed out after ${timeoutSeconds}s`);
+    }
+    const code = await child.exited;
+    // A script's output ends with it, unless a process it started is still holding it open.
+    if (await within(drained, STOP_GRACE_MS)) return { script, seconds: (Date.now() - started) / 1000, code, log };
+    await stopRun(child, mark, drained);
+    return stopped(code || 1, `Exited ${code}, but a process it started still held its output`);
+  } finally {
+    clearInterval(heartbeat);
+  }
 }
 
 async function main(): Promise<void> {
@@ -165,6 +280,7 @@ async function main(): Promise<void> {
   if (baseEvidenceDir) mkdirSync(baseEvidenceDir, { recursive: true });
 
   const retry = process.env.BROWSER_RETRY !== "0";
+  const timeoutSeconds = scriptTimeoutSeconds(process.env.BROWSER_SCRIPT_TIMEOUT_SECONDS);
   const queue = [...scripts];
   const results: ScriptResult[] = [];
   const lock = { active: 0 };
@@ -192,16 +308,25 @@ async function main(): Promise<void> {
         CHECK_BROWSER_EVIDENCE_DIR: evidenceDir ?? "",
       };
       console.log(`[worker-${workerId}] START ${script}`);
-      let result = await runScript(script, env, log);
-      if (result.code !== 0 && retry) {
+      let result = await runScript(script, env, log, timeoutSeconds);
+      // A run that had to be stopped is not run again: a second hang would cost the same bound once more.
+      if (result.code !== 0 && retry && !result.stopped) {
         const firstLog = join(logDir, `${scriptName}.attempt-1.log`);
         renameSync(log, firstLog);
         console.log(`[worker-${workerId}] FAIL ${script} (${result.seconds.toFixed(1)}s) exit=${result.code}, log ${firstLog}; running it once more`);
-        const second = await runScript(script, env, log);
+        const second = await runScript(script, env, log, timeoutSeconds);
         result = { ...second, seconds: result.seconds + second.seconds, firstLog };
       }
+      if (result.stopped) {
+        // Said now, not only in the summary: a hang is what the job's own timeout would otherwise end.
+        const lines = readFileSync(log, "utf8").trimEnd().split("\n");
+        const kind = result.code === TIMEOUT_EXIT_CODE ? "TIMEOUT" : "STOPPED";
+        console.log(`[worker-${workerId}] ${kind} ${script}: ${result.message}; what it started was stopped. Last ${Math.min(lines.length, TIMEOUT_TAIL_LINES)} lines of ${log}:`);
+        console.log(lines.slice(-TIMEOUT_TAIL_LINES).join("\n"));
+      }
       const outcome = scriptOutcome(result.code, result.firstLog !== undefined);
-      if (outcome !== "pass") {
+      // A stopped run already says why in its message; its first run's log, if it had one, is kept.
+      if (outcome !== "pass" && !result.stopped) {
         const { site, message } = failureSite(readFileSync(outcome === "flaky" ? result.firstLog! : result.log, "utf8"));
         if (site) result.site = site;
         if (message) result.message = message;

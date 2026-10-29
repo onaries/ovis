@@ -23,7 +23,8 @@ export function authorizedTranscript(path: string, sessionDir: string): { path: 
   let fd: number | undefined;
   try {
     fd = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK);
-    const stat = fstatSync(fd);
+    // exact: Windows' file indexes do not fit a number
+    const stat = fstatSync(fd, { bigint: true });
     return stat.isFile() ? { path: canonical, root, identity: `${stat.dev}:${stat.ino}` } : null;
   } catch { return null; }
   finally { if (fd !== undefined) closeSync(fd); }

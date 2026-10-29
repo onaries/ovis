@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, createReadStream, fstatSync, lstatSync, openSync, readlinkSync, readSync } from "node:fs";
+import { constants, createReadStream, lstatSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { ConversationPart } from "../shared/protocol.ts";
+import { type Held, heldOpenPlatform, openHeldDirectory } from "./held-open.ts";
 
 type ImagePart = Extract<ConversationPart, { kind: "image" }>;
 type RecordValue = Record<string, unknown>;
@@ -185,7 +186,8 @@ const BLOB_WINDOW = 1024 * 1024;
  */
 function blobStoreIdentity(blobs: string): string | null {
   try {
-    const stat = lstatSync(blobs);
+    // exact: Windows' file indexes do not fit a number
+    const stat = lstatSync(blobs, { bigint: true });
     return stat.isDirectory() ? `${stat.dev}:${stat.ino}` : null;
   } catch { return null; }
 }
@@ -201,37 +203,34 @@ export function blobPlatformForTests(platform: NodeJS.Platform | null): void {
 /** What openBlob opens: the store directory, then the blob in it. */
 type BlobOpening = "store" | "blob";
 /** Where a test stands around openBlob's opens, to change the store at that moment (aroundBlobOpenForTests). */
-let aroundBlobOpen: ((opening: BlobOpening, open: () => number) => number) | null = null;
+let aroundBlobOpen: ((opening: BlobOpening, open: () => Held) => Held) | null = null;
 
 /** Lets a test run `around` each of openBlob's opens, or stops it (null). */
-export function aroundBlobOpenForTests(around: ((opening: BlobOpening, open: () => number) => number) | null): void {
+export function aroundBlobOpenForTests(around: ((opening: BlobOpening, open: () => Held) => Held) | null): void {
   aroundBlobOpen = around;
 }
 
 /**
  * Opens the blob `digest` in the store `blobs` without following a link to either, from the very
- * directory `checked` names (its identity: blobStoreIdentity, or ompBlobAnchor's). On Linux the store
- * is opened first, as a directory and not through a link (O_NOFOLLOW), and held to be that directory
- * and the one `blobs` names (its descriptor's own path, /proc/self/fd); the blob is then opened through
- * that descriptor, so nothing put in the store's place, or above it, a link or another directory, can
- * stand in for it. It needs /proc: a Linux without it serves no omp blob. Node has no
- * descriptor-relative open on macOS or Windows, and a blob opened there by name can come from wherever
- * a path above it is swapped to for that moment: there no omp blob is read at all. A descriptor, or null.
+ * directory `checked` names (its identity: blobStoreIdentity, or ompBlobAnchor's). The store is opened
+ * first, as a directory and not through a link, and held (held-open.ts) to be that directory and the one
+ * `blobs` names (the held directory's own path); the blob is then opened through the held directory,
+ * so nothing put in the store's place, or above it, a link or another directory, can stand in for it.
+ * Linux needs /proc for that, macOS and Windows a native open relative to the held directory: a
+ * platform without one, or a Linux without /proc, serves no omp blob. The blob held, or null.
  */
-function openBlob(blobs: string, digest: string, checked: string): number | null {
-  const flags = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
-  const opened = (opening: BlobOpening, open: () => number) => aroundBlobOpen ? aroundBlobOpen(opening, open) : open();
-  if (blobPlatform !== "linux") return null;
-  let store: number;
-  try { store = opened("store", () => openSync(blobs, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)); } catch { return null; }
+function openBlob(blobs: string, digest: string, checked: string): Held | null {
+  const opened = (opening: BlobOpening, open: () => Held) => aroundBlobOpen ? aroundBlobOpen(opening, open) : open();
+  if (!heldOpenPlatform(blobPlatform)) return null;
+  let store: Held;
+  try { store = opened("store", () => openHeldDirectory(blobs)); } catch { return null; }
   try {
     // the directory opened must be the one checked, not one moved into its place since
-    const held = fstatSync(store);
-    if (`${held.dev}:${held.ino}` !== checked) return null;
+    if (store.stat().identity !== checked) return null;
     // a link above the store is followed by the open: the directory opened must be the one named
-    if (readlinkSync(`/proc/self/fd/${store}`) !== blobs) return null;
-    return opened("blob", () => openSync(`/proc/self/fd/${store}/${digest}`, flags));
-  } catch { return null; } finally { closeSync(store); }
+    if (!store.isAt(blobs)) return null;
+    return opened("blob", () => store.open(digest, "file"));
+  } catch { return null; } finally { store.close(); }
 }
 
 /**
@@ -244,18 +243,18 @@ function openBlob(blobs: string, digest: string, checked: string): number | null
 function* ompBlobSteps(blobs: string, digest: string, keep: boolean, anchor?: string): Steps<{ mediaType: string; bytes: Buffer | null } | null> {
   const store = anchor ?? blobStoreIdentity(blobs);
   if (store === null) return null;
-  const fd = openBlob(blobs, digest, store);
-  if (fd === null) return null;
+  const blob = openBlob(blobs, digest, store);
+  if (blob === null) return null;
   try {
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_IMAGE_BYTES) return null;
+    const stat = blob.stat();
+    if (!stat.file || stat.size === 0 || stat.size > MAX_IMAGE_BYTES) return null;
     const bytes = keep ? Buffer.alloc(stat.size) : null;
     const window = bytes ?? Buffer.alloc(Math.min(stat.size, BLOB_WINDOW));
     const hash = createHash("sha256");
     let type: string | null = null;
     for (let at = 0; at < stat.size;) {
       const offset = bytes === null ? 0 : at;
-      const got = readSync(fd, window, offset, Math.min(BLOB_WINDOW, stat.size - at), at);
+      const got = blob.read(window, offset, Math.min(BLOB_WINDOW, stat.size - at), at);
       if (got === 0) return null;
       const piece = window.subarray(offset, offset + got);
       if (at === 0) type = imageType(piece);
@@ -265,7 +264,7 @@ function* ompBlobSteps(blobs: string, digest: string, keep: boolean, anchor?: st
     }
     if (hash.digest("hex") !== digest || blobStoreIdentity(blobs) !== store) return null;
     return type === null ? null : { mediaType: type, bytes };
-  } catch { return null; } finally { closeSync(fd); }
+  } catch { return null; } finally { blob.close(); }
 }
 
 /** ompBlobPicture's answer for a blob, without holding it: the type, or null when ompBlobPicture would refuse it. */

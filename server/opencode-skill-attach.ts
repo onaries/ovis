@@ -161,11 +161,18 @@ function promptState(screen: string, id: string, inputFg?: string): { agent: str
   return { agent, attached: false, space: false, token: null, prefix: null };
 }
 
-/** A closed autocomplete, a styled token in the prompt, and the same agent (not necessarily model). */
+/**
+ * A closed autocomplete, a styled token in the prompt, and the same agent (not necessarily model).
+ * The agents are compared only when both rows name one: a narrow model-only row (before or after a
+ * resize during Tab) shows no agent, so it can neither confirm nor refute one. That means a model-only
+ * row is accepted here even when the row before Tab named an agent; a caller must not take that alone
+ * as "same agent". typeWithSkills holds such a row until its deadline and refuses a switch it saw.
+ */
 export function skillAccepted(screen: string, id: string, agent: string, inputFg?: string): boolean {
   if (autocomplete(screen, id)) return false;
   const state = promptState(screen, id, inputFg);
-  return state?.attached === true && state.agent === agentName(agent);
+  const before = agentName(agent);
+  return state?.attached === true && (state.agent === null || before === null || state.agent === before);
 }
 
 /** The `@id` tokens of `text` that name one of `skills`, in order, each once. */
@@ -246,6 +253,8 @@ export async function typeWithSkills(text: string, skills: readonly string[], al
         const deadline = io.now() + OPENCODE_SKILL_ACCEPT_WAIT_MS;
         const from = agentName(box.agent);
         let lastAgent: string | null = null;
+        // another agent named after Tab and not named back since: a model-only read cannot clear it
+        let switched: string | null = null;
         do {
           const screen = await io.screen();
           const late = io.now() >= deadline;
@@ -253,13 +262,21 @@ export async function typeWithSkills(text: string, skills: readonly string[], al
           if (state?.token != null && state.token !== id && (state.prefix === box.inputPrefix || !box.inputTokens.includes(state.token))) {
             throw new HerdrError("submit_changed", "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.");
           }
-          if (state?.token === id && !autocomplete(screen, id)) insertedSpace ||= state.space;
+          // Tab's space is evidence of its own: a text-coloured separator, or the token drawn attached
+          // (accepting the row typed `@id `). Neither waits on the agent check below, so a later blank or
+          // partial read cannot make the rest add a second space.
+          if (state?.token === id && !autocomplete(screen, id)) insertedSpace ||= state.space || state.attached;
           // Two consistent reads confirm a switch. A switch still showing on the last read has had no second
           // read, but it is not resolved either, and the rest and Enter would go to that other agent.
           if (from !== null && state?.agent != null && state.agent !== from && (state.agent === lastAgent || late)) {
             throw new HerdrError("submit_changed", `Tab switched OpenCode's agent from ${JSON.stringify(from)} to ${JSON.stringify(state.agent)}. Nothing more was typed.`);
           }
-          accepted = skillAccepted(screen, id, box.agent, box.inputFg);
+          if (from !== null && state?.agent != null) switched = state.agent === from ? null : state.agent;
+          if (switched !== null && late) {
+            throw new HerdrError("submit_changed", `Tab switched OpenCode's agent from ${JSON.stringify(from)} to ${JSON.stringify(switched)}. Nothing more was typed.`);
+          }
+          // a model-only row cannot show a switch from a named agent: it is taken only once the wait is up
+          accepted = switched === null && (from === null || state?.agent != null || late) && skillAccepted(screen, id, box.agent, box.inputFg);
           insertedSpace ||= accepted;
           if (accepted || late) break;
           lastAgent = state?.agent ?? null;

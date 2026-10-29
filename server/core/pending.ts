@@ -17,7 +17,7 @@
  * pane after, so another session or process of the same kind gets none.
  * First messages live in memory: a restart of the bridge loses those not sent yet.
  */
-import { closeMention, type createSubmitText, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, pendingFault, pendingIdentity, pendingText, submitFraming } from "./composer.ts";
+import { closeBackslash, closeMention, type createSubmitText, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, pendingFault, pendingIdentity, pendingText, submitFraming } from "./composer.ts";
 import { type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE } from "./terminal-process.ts";
 import type { AttachmentView, TerminalSighting } from "./terminals.ts";
@@ -225,14 +225,16 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     publishPi(paneId);
     void reconcilePiDeliveries(paneId);
   };
-  const failPi = (paneId: string, items: readonly PiTypedReceipt[], unavailable = false): void => {
+  const failPi = (paneId: string, items: readonly PiTypedReceipt[], reason: "changed" | "budget" | "ambiguous" = "changed"): void => {
     let changed = false;
     for (const item of items) {
       if (!activePiReceipt(paneId, item)) continue;
       releasePiSlot(item);
-      item.message.error = unavailable
+      item.message.error = reason === "budget"
         ? { code: "transcript_unconfirmed", message: "Pi's transcript exceeded the confirmation budget" }
-        : { code: "pi_transcript_target_changed", message: "The Pi terminal or session changed before its transcript append was confirmed" };
+        : reason === "ambiguous"
+          ? { code: "transcript_unconfirmed", message: "Pi's transcript shows the same text submitted before this send" }
+          : { code: "pi_transcript_target_changed", message: "The Pi terminal or session changed before its transcript append was confirmed" };
       changed = true;
     }
     if (changed) {
@@ -274,7 +276,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       }
       if (result.retry) return;
       failPi(paneId, matching.filter((item) => result.changed.includes(item.message.id)));
-      failPi(paneId, matching.filter((item) => result.unavailable?.includes(item.message.id)), true);
+      failPi(paneId, matching.filter((item) => result.unavailable?.includes(item.message.id)), "budget");
+      failPi(paneId, matching.filter((item) => result.ambiguous?.includes(item.message.id)), "ambiguous");
       if (result.consumed.length === 0) return;
       const consumed = new Set(matching.filter((item) => activePiReceipt(paneId, item) && result.consumed.includes(item.message.id)).map((item) => item.message.id));
       for (const item of matching) if (consumed.has(item.message.id)) {
@@ -368,29 +371,34 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
    * runs now: the reads are made again from what is, so a replacement that came meanwhile is never checked against
    * the old process's birth. While the foreground keeps changing, the latest process with no birth.
    */
-  async function currentIdentity(paneId: string, bound: number | null = null): Promise<{ pane: HerdrPane; identity: PendingIdentity; shellPid: number | null; processes: ProcessInfo | undefined }> {
+  async function currentIdentity(paneId: string, bound: number | null = null): Promise<{ pane: HerdrPane; identity: PendingIdentity; shellPid: number | null; processes: ProcessInfo | undefined;
+    /** the process is the OmO holding a session, under the start its holder record was checked against */
+    held: { pid: number; started: number | null } | null }> {
     // The same normalized snapshot the client sees includes a known Codex finish that
     // herdr reports as unknown. Nothing is inferred from a bare unknown state.
     const pane = (await clientSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
     if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
     const base = pendingIdentity(pane);
-    const pick = async (info: ProcessInfo | undefined): Promise<number | null> => {
-      const held = base.agent === "omo" ? await heldOmoProcess(pane, info?.foreground_processes ?? []) : null;
-      return agentProcessInFront(info, base.agent, bound, held)?.pid ?? info?.foreground_processes?.[0]?.pid ?? null;
+    const pick = async (info: ProcessInfo | undefined): Promise<{ pid: number | null; held: { pid: number; started: number | null } | null }> => {
+      // the bound process first while it holds one: two holders listed in another order keep the bound one (#2190)
+      const held = base.agent === "omo" ? await heldOmoProcess(pane, info?.foreground_processes ?? [], undefined, bound) : null;
+      return { pid: agentProcessInFront(info, base.agent, bound, held?.pid)?.pid ?? info?.foreground_processes?.[0]?.pid ?? null, held };
     };
     const inFront = (info: ProcessInfo | undefined, pid: number | null): boolean =>
       pid === null ? (info?.foreground_processes ?? []).length === 0 : (info?.foreground_processes ?? []).some((entry) => entry.pid === pid);
     let info = await paneProcessInfo(paneId);
     for (let attempt = 1; ; attempt++) {
-      const pid = await pick(info);
+      const { pid, held } = await pick(info);
       const processBirth = pid === null ? null : await processStartedAtAsync(pid);
       // Claude's own PID record says which session it runs, also without herdr's hook
       const claudeSession = base.agent === "claude" ? await claudeForegroundSession(info?.foreground_processes ?? []) : null;
       const after = await paneProcessInfo(paneId);
       const settled = inFront(after, pid);
       if (settled || attempt === 3) {
-        const processPid = settled ? pid : await pick(after);
-        return { pane, shellPid: after?.shell_pid ?? null, processes: after, identity: {
+        const processPid = settled ? pid : (await pick(after)).pid;
+        // a holder only as checked, with the birth read for it since: a pid reused in between is no holder
+        const processHeld = settled && held?.pid === pid && held.started !== null && held.started === processBirth ? held : null;
+        return { pane, shellPid: after?.shell_pid ?? null, processes: after, held: processHeld, identity: {
           ...base, processPid, processBirth: settled ? processBirth : null,
           omoSession: omo.sessionOf(paneId)?.sessionId ?? null,
           claudeSession: settled ? claudeSession : null,
@@ -403,17 +411,35 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
    * The process a check passed for is still in front, read once more after the awaits that followed it and just
    * before a write: herdr cannot compare and send in one step, so this keeps the window to the write's own call.
    */
-  async function stillInFront(paneId: string, pid: number | null | undefined): Promise<void> {
-    if (pid == null) return;
-    const info = await paneProcessInfo(paneId);
-    if (!(info?.foreground_processes ?? []).some((entry) => entry.pid === pid)) {
-      throw new HerdrError("pending_target_changed", "The pane's terminal or agent session changed; review the message before sending it again");
-    }
+  async function stillInFront(paneId: string, pid: number | null | undefined, pinned: PendingIdentity | null = null): Promise<void> {
+    const inFront = async (): Promise<NonNullable<ProcessInfo["foreground_processes"]>> => {
+      const foreground = (await paneProcessInfo(paneId))?.foreground_processes ?? [];
+      if (pid != null && !foreground.some((entry) => entry.pid === pid)) throw new HerdrError(TARGET_CHANGED.code, TARGET_CHANGED.message);
+      return foreground;
+    };
+    // /clear and /resume switch Claude's session in the same process, so its PID in front says nothing of the
+    // session the message is pinned to: that is read from Claude's own records (once more for a record caught being
+    // rewritten), and the process is then asked for again, as one that left the front still alive keeps its record
+    // (#2279). Neither can be compared in the write's own call: a switch during that last herdr read is not seen
+    const session = pinned?.agent === "claude" ? pinned.claudeSession ?? null : null;
+    if (pid == null && session === null) return;
+    const foreground = await inFront();
+    if (session === null) return;
+    if ((await claudeForegroundSession(foreground) ?? await claudeForegroundSession(foreground)) !== session) throw new HerdrError(TARGET_CHANGED.code, TARGET_CHANGED.message);
+    await inFront();
   }
-  async function pendingContext(owner: Client, paneId: string, lease: PendingLease, identity?: PendingIdentity, pasted = false, capacityRetry = false): Promise<{ pane: HerdrPane; identity: PendingIdentity; working: boolean; screen: string; processes: ProcessInfo | undefined }> {
+  async function pendingContext(owner: Client, paneId: string, lease: PendingLease, identity?: PendingIdentity, pasted = false, capacityRetry = false): Promise<{ pane: HerdrPane; identity: PendingIdentity; working: boolean; screen: string; processes: ProcessInfo | undefined; held: { pid: number; started: number | null } | null }> {
     authorizePending(owner, paneId, lease);
-    const { pane, identity: current, processes } = await currentIdentity(paneId, identity?.processPid ?? null);
-    if (identity && !samePendingIdentity(identity, current)) {
+    let { pane, identity: current, processes, held: holder } = await currentIdentity(paneId, identity?.processPid ?? null);
+    // a Claude session known before and unknown now (its PID record or its job's state cannot be read) may be
+    // another one: nothing is typed for it (#2125). It is read once more first, as a record being rewritten
+    // fails only for a moment. After this delivery's own paste too: an Enter for a session that cannot be told
+    // may commit the paste in another one, so the message is left uncertain without it (#2279). A session
+    // learned only now is a match
+    const unknown = (): boolean => identity?.claudeSession != null && current.claudeSession == null;
+    if (unknown()) ({ pane, identity: current, processes, held: holder } = await currentIdentity(paneId, identity?.processPid ?? null));
+    const lost = unknown();
+    if (identity && (!samePendingIdentity(identity, current) || lost)) {
       throw new HerdrError(TARGET_CHANGED.code, TARGET_CHANGED.message);
     }
     if (identity) {
@@ -447,9 +473,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       throw new HerdrError("agent_not_ready", "The agent's current input state is not known");
     }
     // the screen and card reads above awaited: what they were read for must still be in front
-    await stillInFront(paneId, current.processPid);
+    await stillInFront(paneId, current.processPid, identity ?? null);
     authorizePending(owner, paneId, lease);
-    return { pane, identity: current, working: current.agent !== null && (pane.agent_status === "working" || collapsed), screen, processes };
+    return { pane, identity: current, working: current.agent !== null && (pane.agent_status === "working" || collapsed), screen, processes, held: holder };
   }
   /**
    * The live screen for claudeInputDraft, and the viewport's colors when viewportShowsLive verifies
@@ -535,7 +561,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (typed < TYPED_SETTLE_MS) await Bun.sleep(TYPED_SETTLE_MS - typed);
       mark = pending.mark(paneId);
       const context = await pendingContext(owner, paneId, lease, identity, false, capacityRetry);
-      const sent = modelSwitchText(context.identity.agent, text);
+      const sent = closeBackslash(context.identity.agent, modelSwitchText(context.identity.agent, text));
       piReservation = reservePiReceipt(owner, context.identity);
       const receiptText = piReceiptText(context.identity, text);
       if (automatic && (context.working || queueHeld(paneId))) {
@@ -552,8 +578,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // catalog budget, at the pane's own version) is openCodeSkillsToType's, as for any other send
       const opencode = await openCodeSkillsToType(context.pane, prepareCommandSend(context.pane, text, context.screen), text, context.screen, options.openCodeStateDir);
       let command = opencode.sent;
-      // the process this message goes to, from the identity read above: recording reads nothing more before the write
-      bindCommandProcess(paneId, command, context.processes);
+      // the process this message goes to, from the identity read above: recording reads nothing more before the write,
+      // and an OmO's holder is the one checked there, never read again (#2190)
+      bindCommandProcess(paneId, command, context.processes, context.pane, context.identity.agent === "omo" ? context.held : undefined);
       const skills = opencode.skills;
       let attached: string[] = [];
       let prompt: PromptPiece[] = [{ pasted: closeMention(sent) }];
@@ -561,7 +588,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       watch = startOpenCodeWatch(context.pane, command, options.openCodeStateDir);
       if (Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS)) throw new HerdrError("submit_timeout", "The pending message waited too long; nothing was typed");
       // the input-box checks and the catalog above awaited after the check: what it was made for must still be in front
-      await stillInFront(paneId, context.identity.processPid);
+      await stillInFront(paneId, context.identity.processPid, identity);
       authorizePending(owner, paneId, lease);
       // asked again right before herdr is written to: its connect is awaited (#666)
       const allowed = (): boolean => {
@@ -614,14 +641,19 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       }
       // fixed wait: the TUI takes the paste before its Enter, which arriving with it could read as a newline
       await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
-      const beforeEnter = await pendingContext(owner, paneId, lease, identity, true, capacityRetry);
+      let beforeEnter = await pendingContext(owner, paneId, lease, identity, true, capacityRetry);
       if (automatic && (beforeEnter.working || queueHeld(paneId))) throw new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed");
       authorizePending(owner, paneId, lease);
-      const steering = !automatic && beforeEnter.working;
       // Capture Pi's exact active transcript position before Enter. Status is deliberately not
       // evidence: Pi can report idle/done while its TUI is staging an automatic-compaction input.
+      const beforeCapturePid = beforeEnter.identity.processPid;
       const piAnchor = await preparePiReceipt(paneId, beforeEnter.identity).catch(() => null);
-      if (piAnchor !== undefined) await stillInFront(paneId, beforeEnter.identity.processPid);
+      if (piAnchor !== undefined) {
+        beforeEnter = await pendingContext(owner, paneId, lease, identity, true);
+        if (automatic && (beforeEnter.working || queueHeld(paneId))) throw new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed");
+        await stillInFront(paneId, beforeCapturePid);
+      }
+      const steering = !automatic && beforeEnter.working;
       committing(steering);
       // Claude Code queues what Enter commits during a turn; Ctrl+Enter sends it now (#737). herdr
       // encodes the key as the pane asked, and as a plain CR for a program that asked for nothing.

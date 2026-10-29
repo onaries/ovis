@@ -1,4 +1,4 @@
-import type { MarkdownBlock } from "./markdown.ts";
+import type { MarkdownBlock } from "../../shared/markdown.ts";
 import { createOffThreadQueue, type OffThreadJob, type WorkerLike } from "./offThread.ts";
 
 /**

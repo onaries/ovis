@@ -109,7 +109,7 @@ jobs:
         if: needs.changes.outputs.draft != 'true'
       - run: bun run build
         if: needs.changes.outputs.draft != 'true'
-      - run: bun test ./scripts/windows-plugin.test.ts ./scripts/plugin-runtime.test.ts ./scripts/phone-setup.test.ts ./server/windows-native.test.ts
+      - run: bun test ./scripts/windows-plugin.test.ts ./scripts/plugin-runtime.test.ts ./scripts/phone-setup.test.ts ./server/windows-native.test.ts ./server/omp-images.test.ts
         if: needs.changes.outputs.draft != 'true'
   macos-session:
     name: Native macOS session identity
@@ -132,7 +132,7 @@ jobs:
           exit 0
       - run: bun install --frozen-lockfile
         if: needs.changes.outputs.draft != 'true'
-      - run: bun test ./server/claude-store.test.ts ./server/process-start.test.ts ./server/darwin-process.test.ts ./server/grok.test.ts
+      - run: bun test ./server/claude-store.test.ts ./server/process-start.test.ts ./server/darwin-process.test.ts ./server/grok.test.ts ./server/omp-images.test.ts
         if: needs.changes.outputs.draft != 'true'
   rust-pty-host:
     # The Rust PTY host (crates/pty-sidecar) is the default where it is installed or built, and its

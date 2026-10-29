@@ -17,13 +17,11 @@ const errors: string[] = [];
 const evidence = process.env.UI_EVIDENCE_DIR;
 if (evidence) mkdirSync(evidence, { recursive: true });
 const probe = resolve("scripts/fixtures/modifier-probe.py");
-/** how long input that must not arrive gets to show up */
-const NO_SEND_WAIT_MS = 400;
 
-async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
+async function until(check: () => boolean | Promise<boolean>, label: string | (() => string)): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (!(await check())) {
-    assert(Date.now() < deadline, `timed out: ${label}`);
+    assert(Date.now() < deadline, `timed out: ${typeof label === "string" ? label : label()}`);
     await Bun.sleep(20);
   }
 }
@@ -37,6 +35,36 @@ interface Session {
   /** a point of the grid, in page pixels from its top left corner */
   point: (x: number, y: number) => Promise<{ x: number; y: number }>;
   close: () => Promise<void>;
+}
+
+/**
+ * Waits until xterm reports the mouse, as herdr's attach asks it to: until then a press is a plain
+ * selection that the page never hands on as a click. The attach's first output can be parsed after
+ * the pane says it takes input.
+ */
+async function mouseReporting(s: Session): Promise<void> {
+  await s.page.locator(".xterm.enable-mouse-events").waitFor();
+}
+
+/** the letter `mark` types: no step below types it otherwise */
+const MARK = "z";
+
+/**
+ * Proves what an action sent, nothing included, without waiting a set time for what must not come:
+ * types a letter after it and waits until the program has read the letter and its frame is reported.
+ * Anything the action sent went out first, on the same socket and through the same pty (or, on a
+ * mirror, the same queue of herdr writes), so the program read it first and its frame came first.
+ * `frames` are the ones reported from index `from` up to the mark's.
+ */
+async function mark(s: Session, label: string, from = s.frames.length): Promise<{ read: string; frames: Session["frames"] }> {
+  await s.page.locator(".xterm-helper-textarea").focus();
+  await s.page.keyboard.press(MARK);
+  let read = "";
+  await until(() => (read += s.received()).includes(MARK), () => `${label}: the mark received (read ${JSON.stringify(read)})`);
+  assert.equal(read.slice(read.indexOf(MARK)), MARK, `${label}: nothing read after the mark`);
+  const at = () => s.frames.findIndex((frame, i) => i >= from && frame.type === "input" && frame.text === MARK);
+  await until(() => at() >= 0, `${label}: the mark's frame reported`);
+  return { read: read.slice(0, -MARK.length), frames: s.frames.slice(from, at()) };
 }
 
 /** A pane of its own running the stdin logger after `modes` were set, shown in a desktop browser. */
@@ -113,10 +141,10 @@ try {
       assert.equal(got, `\x1bO${final}`, `${key} in application cursor mode`);
     }
     // Playwright reports a sent frame some time after it left, even after the program has read it:
-    // wait for the four, give a duplicate time to show, then compare them all
-    await until(() => s.frames.length - before >= arrows.length, "the four arrow frames are reported");
-    await Bun.sleep(NO_SEND_WAIT_MS);
-    assert.deepEqual(s.frames.slice(before), arrows.map(([, , name]) => ({ type: "keys", pane_id: s.pane, keys: [name] })), "each arrow is one named key, sent once");
+    // the mark's frame comes after every arrow's, a duplicate's included
+    const after = await mark(s, "decckm", before);
+    assert.equal(after.read, "", "no arrow arrives twice");
+    assert.deepEqual(after.frames, arrows.map(([, , name]) => ({ type: "keys", pane_id: s.pane, keys: [name] })), "each arrow is one named key, sent once");
     if (evidence) await s.page.screenshot({ path: join(evidence, "arrows-decckm.png") });
     await s.close();
   }
@@ -127,32 +155,57 @@ try {
     const s = await open(browser, attached, "normal", "\\033[?1049h");
     const input = s.page.locator(".xterm-helper-textarea");
     await input.focus();
+    // An arrow goes through herdr's RPC, around the attach pty the letter before it was typed into.
+    // herdr has no barrier for bytes in that pty, so the server holds the arrow KEY_SETTLE_MS after the
+    // letter (TYPED_SETTLE_MS after an ESC, which herdr holds ~150ms): a margin, not an
+    // acknowledgement (#634), which a stall on a busy PC outlasts. server/core/key-settle.test.ts
+    // proves the hold with the shipped settle values; here the letter is read before its arrow is
+    // pressed. A letter typed while the arrow waits goes behind it in the pane's queue, which is order
+    // by construction: pressed at once.
     let got = "";
     for (let round = 0; round < 5; round += 1) {
       await s.page.keyboard.press("a");
+      await until(() => (got += s.received()).length >= round * 5 + 1, "a letter received");
       await s.page.keyboard.press("ArrowLeft");
       await s.page.keyboard.press("b");
+      await until(() => (got += s.received()).length >= round * 5 + 5, "an arrow and the letter after it received");
     }
-    await until(() => (got += s.received()).length >= 25, "letters and arrows received");
     assert.equal(got, "a\x1b[Db".repeat(5), "an arrow between two letters arrives between them");
-    // herdr holds a lone ESC typed into the attach pty ~150ms: an arrow right after it must wait for it
+    // Diagnostic only: a letter, an arrow and a letter pressed at once, where only the settle margin
+    // keeps the arrow behind the first letter. Logged, not asserted. The first letter goes through the
+    // attach pty and the rest may go through herdr, so no mark typed after them can vouch for it: all
+    // five bytes are read, in whatever order, before the next step.
+    let together = "";
+    await s.page.keyboard.press("a");
+    await s.page.keyboard.press("ArrowLeft");
+    await s.page.keyboard.press("b");
+    await until(() => (together += s.received()).length >= 5, () => `a, ArrowLeft and b at once received (read ${JSON.stringify(together)})`);
+    console.log(`a, ArrowLeft and b pressed at once arrived ${together === "a\x1b[Db" ? "in order" : `as ${JSON.stringify(together)}: the arrow outran the settle margin`}`);
     got = "";
     await s.page.keyboard.press("Escape");
+    await until(() => (got += s.received()).length >= 1, "Escape received");
     await s.page.keyboard.press("ArrowUp");
-    await until(() => (got += s.received()).length >= 4, "Escape and ArrowUp received");
-    assert.equal(got, "\x1b\x1b[A", "an arrow does not overtake the Escape before it");
-    // Ctrl+arrow and Shift+arrow were never plain arrows: they keep the path they had
+    await until(() => (got += s.received()).length >= 4, "ArrowUp received");
+    assert.equal(got, "\x1b\x1b[A", "an arrow after an Escape arrives after it");
+    // Ctrl+arrow and Shift+arrow were never plain arrows: they keep the path they had. The earlier
+    // keys' frames, which Playwright may report late, are all reported once a mark's is.
+    assert.equal((await mark(s, "the keys before Ctrl+ArrowLeft")).read, "", "nothing more after the Escape and ArrowUp");
     const before = s.frames.length;
     await s.page.keyboard.press("Control+ArrowLeft");
-    // earlier keys' frames may still be reported late: only the frames about Left count here
-    const aboutLeft = () => s.frames.slice(before).filter((frame) => frame.text === "\x1b[1;5D" || frame.keys?.some((key) => key.endsWith("left")));
-    await until(() => aboutLeft().length > 0, "Ctrl+ArrowLeft sent");
-    await Bun.sleep(NO_SEND_WAIT_MS);
-    assert.deepEqual(aboutLeft(), [{ type: "input", pane_id: s.pane, text: "\x1b[1;5D" }]);
-    await until(() => (got = s.received()).length >= 6, "Ctrl+ArrowLeft received");
+    const chord = await mark(s, "Ctrl+ArrowLeft", before);
+    assert.equal(chord.read, "\x1b[1;5D", "Ctrl+ArrowLeft received once");
+    assert.deepEqual(chord.frames, [{ type: "input", pane_id: s.pane, text: "\x1b[1;5D" }]);
+    // Alt+arrow moves a word as Ctrl+arrow does off a Mac (ESC b on one): xterm.js 5.5's mapping,
+    // which 6.0 dropped (xterm.js #5346) and the patch keeps
+    const altBefore = s.frames.length;
+    // xterm's own platform test (navigator.platform), not the host's
+    const altLeft = await s.page.evaluate(() => /Mac/.test(navigator.platform)) ? "\x1bb" : "\x1b[1;5D";
+    await s.page.keyboard.press("Alt+ArrowLeft");
+    assert.equal((await mark(s, "Alt+ArrowLeft", altBefore)).read, altLeft, "Alt+ArrowLeft moves a word");
 
     // A held arrow: keyboard autorepeat (~30/s) with letters typed between some of the repeats.
-    // Every key must arrive in order within the bounded delivery wait below.
+    // Every key must arrive in order within the bounded delivery wait below. The repeat after a
+    // letter waits for the letter to be read, as the arrow after a letter does above.
     // Keep the autorepeat pacing; shared-runner latency is diagnostic, not a correctness threshold.
     const tokens: Array<{ text: string; sent: number; arrived?: number }> = [];
     let buffer = "";
@@ -168,15 +221,18 @@ try {
     const REPEAT_MS = 33;
     try {
       // ArrowDown stays down: each further keydown is an autorepeat; a letter is typed between some repeats
-      const start = performance.now();
+      let due = performance.now();
       for (let i = 0; i < 60; i += 1) {
-        const due = start + i * REPEAT_MS;
+        // fixed wait: the autorepeat rate is the input under test
         while (performance.now() < due) await Bun.sleep(1);
+        due += REPEAT_MS;
         tokens.push({ text: "\x1b[B", sent: performance.now() });
         await s.page.keyboard.down("ArrowDown");
         if (i % 7 === 3) {
-          tokens.push({ text: "x", sent: performance.now() });
+          const letter = tokens.push({ text: "x", sent: performance.now() }) - 1;
           await s.page.keyboard.press("x");
+          await until(() => tokens[letter]!.arrived !== undefined, () => `a letter between held repeats received in order (left over ${JSON.stringify(buffer)})`);
+          due = Math.max(due, performance.now());
         }
       }
       await s.page.keyboard.up("ArrowDown");
@@ -208,15 +264,14 @@ try {
     const expected = "\x1b[B".repeat(101) + "y" + "\x1b[B".repeat(99);
     await until(() => (burst += s.received()).length >= expected.length, "the burst arrives");
     console.log(`burst of 200 repeats: drained in ${(performance.now() - burstStart).toFixed(1)} ms; letter after arrow ${burst.slice(0, burst.indexOf("y")).split("\x1b[B").length - 1}, arrows ${burst.split("\x1b[B").length - 1}, other ${JSON.stringify(burst.replaceAll("\x1b[B", ""))}`);
-    await Bun.sleep(NO_SEND_WAIT_MS);
-    burst += s.received();
+    burst += (await mark(s, "the burst")).read;
     assert.equal(burst, expected, "the burst arrives complete and in order");
 
     // a program that did not ask for the mouse gets nothing from a click (herdr keeps it)
+    await mouseReporting(s);
     const box = (await s.page.locator(".xterm-screen").boundingBox())!;
     await s.page.mouse.click(box.x + 120, box.y + 90);
-    await Bun.sleep(NO_SEND_WAIT_MS);
-    assert.equal(s.received(), "", "a click reaches no program that did not turn the mouse on");
+    assert.equal((await mark(s, "a click without mouse mode")).read, "", "a click reaches no program that did not turn the mouse on");
     await s.close();
   }
 
@@ -224,6 +279,7 @@ try {
   {
     const s = await open(browser, attached, "mouse", "\\033[?1049h\\033[?1000h\\033[?1006hhttps://example.test/621\\r\\n");
     const at = await s.point(100, 70);
+    await mouseReporting(s);
     let got = "";
     const click = /\x1b\[<0;(\d+);(\d+)M[\s\S]*\x1b\[<0;(\d+);(\d+)m/;
     await s.page.mouse.click(at.x, at.y);
@@ -245,8 +301,7 @@ try {
     await s.page.mouse.move(link.x, link.y);
     await until(async () => (await s.page.locator(".xterm-screen.xterm-cursor-pointer").count()) === 1, "the link is under the pointer");
     await s.page.mouse.click(link.x, link.y);
-    await Bun.sleep(NO_SEND_WAIT_MS);
-    assert.doesNotMatch(s.received(), /\x1b\[<0;/, "a click on a link sends the program no button");
+    assert.doesNotMatch((await mark(s, "a link click")).read, /\x1b\[<0;/, "a click on a link sends the program no button");
     // in a new tab, as a chat link: window.open with a features string ("noopener" too) opens a popup window
     assert.deepEqual(await s.page.evaluate(() => (window as unknown as { opened: unknown[] }).opened), [["link", "https://example.test/621", "_blank", "noopener noreferrer"]], "and opens the link once, in a new tab with no opener or referrer");
 
@@ -261,8 +316,7 @@ try {
       await menu.waitFor();
       await s.page.keyboard.press("Escape");
       await menu.waitFor({ state: "detached" });
-      await Bun.sleep(NO_SEND_WAIT_MS);
-      assert.doesNotMatch(s.received(), /\x1b\[<(?:0|16);/, "Mac Control-click opens the menu without sending a button");
+      assert.doesNotMatch((await mark(s, "Mac Control-click")).read, /\x1b\[<(?:0|16);/, "Mac Control-click opens the menu without sending a button");
     } else {
       await until(() => /\x1b\[<16;\d+;\d+M[\s\S]*\x1b\[<16;\d+;\d+m/.test(got += s.received()), "Ctrl+click received with Ctrl");
     }
@@ -293,15 +347,13 @@ try {
     await s.page.mouse.move(to.x, to.y, { steps: 4 });
     await s.page.mouse.up();
     await until(async () => (await s.page.locator(".xterm-selection div").count()) > 0, "a drag selects");
-    await Bun.sleep(NO_SEND_WAIT_MS);
-    assert.doesNotMatch(s.received(), /\x1b\[<0;/, "a drag sends the program no button");
+    assert.doesNotMatch((await mark(s, "a drag")).read, /\x1b\[<0;/, "a drag sends the program no button");
 
     // the selection modifier held by the user: a click that asks for selection is not the program's
     await s.page.keyboard.down("Shift");
     await s.page.mouse.click(at.x, at.y);
     await s.page.keyboard.up("Shift");
-    await Bun.sleep(NO_SEND_WAIT_MS);
-    assert.doesNotMatch(s.received(), /\x1b\[<0;/, "Shift+click sends the program no button");
+    assert.doesNotMatch((await mark(s, "Shift+click")).read, /\x1b\[<0;/, "Shift+click sends the program no button");
 
     await s.close();
   }
@@ -319,9 +371,9 @@ try {
     const before = s.frames.length;
     const box = await s.page.locator(".xterm-screen").boundingBox();
     await s.page.mouse.click(box!.x + 80, box!.y + 60);
-    await Bun.sleep(NO_SEND_WAIT_MS);
-    assert.deepEqual(s.frames.slice(before).filter((frame) => frame.text?.startsWith("\x1b[<")), [], "a click on a mirrored pane sends nothing");
-    assert.equal(s.received(), "", "and the program reads nothing");
+    const after = await mark(s, "a mirrored click", before);
+    assert.deepEqual(after.frames.filter((frame) => frame.text?.startsWith("\x1b[<")), [], "a click on a mirrored pane sends nothing");
+    assert.equal(after.read, "", "and the program reads nothing");
     await s.close();
   }
 

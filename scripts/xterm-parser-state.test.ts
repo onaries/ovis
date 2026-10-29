@@ -1,5 +1,5 @@
 /**
- * `Terminal.oscStringState()` (patches/@xterm%2Fxterm@5.5.0.patch) reads private parser fields
+ * `Terminal.oscStringState()` (patches/@xterm%2Fxterm@6.0.0.patch) reads private parser fields
  * by their owning classes: EscapeSequenceParser.currentState and _oscParser, OscParser._state and
  * _id, and the ParserState/OscState values those fields hold. PaneTerminal decides from it whether
  * a replayed OSC may still dispatch as a clipboard write. These checks read the installed xterm
@@ -43,8 +43,8 @@ function methodBody(node: ts.ClassDeclaration, name: string): string {
 }
 
 describe("xterm parser state behind oscStringState", () => {
-  it("is xterm 5.5.0, the version the accessor was written for", () => {
-    expect(JSON.parse(readFileSync(join(xterm, "package.json"), "utf8")).version).toBe("5.5.0");
+  it("is xterm 6.0.0, the version the accessor was ported to", () => {
+    expect(JSON.parse(readFileSync(join(xterm, "package.json"), "utf8")).version).toBe("6.0.0");
   });
 
   it("keeps the parser fields the accessor reads", () => {

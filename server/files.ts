@@ -1,6 +1,8 @@
 import { readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
+import { fileTask } from "./file-pool.ts";
+
 const CACHE_MS = 5_000;
 const MAX_ENTRIES = 5_000;
 /** git lists paths cheaply, so a tracked data set of thousands of files does not hide the rest */
@@ -93,8 +95,11 @@ async function gitFiles(cwd: string, limit = MAX_GIT_ENTRIES): Promise<string[] 
   }
 }
 
-/** Breadth first, each folder taking at most its share, so one huge folder cannot use up the walk. */
-function walkFiles(cwd: string): string[] {
+/**
+ * Breadth first, each folder taking at most its share, so one huge folder cannot use up the walk.
+ * Synchronous: the lookups here run it on a file thread (`file-pool.ts`).
+ */
+export function walkFiles(cwd: string): string[] {
   const files: string[] = [];
   let visited = 0;
   let level = [cwd];
@@ -132,7 +137,7 @@ function walkFiles(cwd: string): string[] {
 async function inventory(cwd: string): Promise<string[]> {
   const hit = cache.get(cwd);
   if (hit && hit.expires > Date.now()) return hit.files;
-  const files = (await gitFiles(cwd)) ?? walkFiles(cwd);
+  const files = (await gitFiles(cwd)) ?? await fileTask<string[]>({ op: "walk", cwd });
   files.sort();
   cache.set(cwd, { expires: Date.now() + CACHE_MS, files });
   return files;
@@ -194,8 +199,8 @@ export async function filesNamed(cwd: string, name: string, limit = 10, anyForm 
     if (shared === undefined) {
       const begun = generation;
       // not cut to MAX_GIT_ENTRIES: a name is matched against every path
-      const pending: Promise<string[]> = gitFiles(cwd, Infinity).then((listed) => {
-        const found = [...new Set([...listed ?? [], ...walkFiles(cwd)])];
+      const pending: Promise<string[]> = gitFiles(cwd, Infinity).then(async (listed) => {
+        const found = [...new Set([...listed ?? [], ...await fileTask<string[]>({ op: "walk", cwd })])];
         if (begun === generation) {
           walked.set(cwd, { expires: Date.now() + CACHE_MS, files: found });
           if (walked.size > 16) walked.delete(walked.keys().next().value!);

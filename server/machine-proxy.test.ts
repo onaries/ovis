@@ -9,6 +9,9 @@ const asked: (string | null)[] = [];
 const promptAsked: (string | null)[] = [];
 const PLAN_CARD = { id: "claude-plan:abc", agent: "claude", kind: "plan", title: "Plan", question: "Would you like to proceed?", options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null };
 const historyAsked: (string | null)[] = [];
+const commandsAsked: string[] = [];
+const filesAsked: string[] = [];
+const worktreesAsked: string[] = [];
 const faviconAsked: { search: string; authorization: string | null; cookie: string | null }[] = [];
 const diffAsked: { path: string; search: string; authorization: string | null; cookie: string | null; forwarded: string | null }[] = [];
 const remote = Bun.serve({
@@ -22,6 +25,20 @@ const remote = Bun.serve({
     if (path === "/api/sessions/history") {
       historyAsked.push(request.headers.get("authorization"));
       return Response.json({ workspace_id: "w1", agent: "pi", cwd: "/work", sessions: [{ id: "s1", title: null, firstMessage: "a private prompt", startedAt: null, updatedAt: "2026-10-01T00:00:00.000Z", resume: null }] });
+    }
+    if (path === "/api/pane/commands" || path === "/api/agent/commands") {
+      commandsAsked.push(path);
+      // a PC whose skill folders are too slow to scan in time (#2254)
+      if (new URL(request.url).searchParams.get("pane_id") === "busy") return Response.json({ error: { code: "file_busy", message: "the skill folders did not answer in time" } }, { status: 503, headers: { "retry-after": "1" } });
+      return Response.json({ commands: [{ name: "deploy", description: "SECRET", source: "custom", id: "/work/.commandcode/commands/deploy.md" }] });
+    }
+    if (path === "/api/pane/files" || path === "/api/plugin/action") {
+      filesAsked.push(path);
+      return Response.json(path === "/api/pane/files" ? { files: [".env.SECRET"] } : { log_id: "plugin-log-1", status: "failed", exit_code: 1, output: "SECRET", opened_pane_id: null });
+    }
+    if (path === "/api/worktree/list") {
+      worktreesAsked.push(path);
+      return Response.json({ source: { repo_key: "repo" }, worktrees: [{ path: "/work-wt/SECRET", branch: "SECRET", open_workspace_id: null }] });
     }
     if (path === "/api/fs/favicon") {
       faviconAsked.push({ search: new URL(request.url).search, authorization: request.headers.get("authorization"), cookie: request.headers.get("cookie") });
@@ -86,6 +103,54 @@ it("never forwards a PC's session history to a watching device, nor a route spel
   expect(driven.status).toBe(200);
   expect(JSON.stringify(await driven.json())).toContain("a private prompt");
   expect(historyAsked).toEqual(["Bearer remote-token"]);
+});
+
+it("never asks a PC for a pane's or a folder's command rows for a watching device (#2132)", async () => {
+  const base = "http://127.0.0.1/api/machines/pc1";
+  for (const path of ["pane/commands?pane_id=w1:p1", "agent/commands?agent=claude"]) {
+    const watched = await handleMachineRequest(new Request(`${base}/${path}`), manager, undefined, undefined, true);
+    expect([path, watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
+  }
+  expect(commandsAsked).toEqual([]);
+  // a driving device gets the PC's rows
+  const driven = await handleMachineRequest(new Request(`${base}/pane/commands?pane_id=w1:p1`), manager);
+  expect(driven.status).toBe(200);
+  expect(JSON.stringify(await driven.json())).toContain("SECRET");
+  expect(commandsAsked).toEqual(["/api/pane/commands"]);
+});
+
+it("passes on a PC's 503 with its Retry-After, so the menu knows to ask again (#2254)", async () => {
+  const busy = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/pane/commands?pane_id=busy"), manager);
+  expect(busy.status).toBe(503);
+  expect(busy.headers.get("retry-after")).toBe("1");
+  expect(((await busy.json()) as { error: { code: string } }).error.code).toBe("file_busy");
+});
+
+it("never asks a PC for the paths under a pane's folder or a plugin run's output for a watching device (#2244)", async () => {
+  const base = "http://127.0.0.1/api/machines/pc1";
+  const routes = ["pane/files?pane_id=w1:p1&q=env", "plugin/action?plugin_id=deploy&log_id=plugin-log-1"];
+  for (const path of routes) {
+    const watched = await handleMachineRequest(new Request(`${base}/${path}`), manager, undefined, undefined, true);
+    expect([path, watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
+  }
+  expect(filesAsked).toEqual([]);
+  // a driving device gets the PC's answers
+  for (const path of routes) {
+    const driven = await handleMachineRequest(new Request(`${base}/${path}`), manager);
+    expect([path, driven.status, JSON.stringify(await driven.json()).includes("SECRET")]).toEqual([path, 200, true]);
+  }
+  expect(filesAsked).toEqual(["/api/pane/files", "/api/plugin/action"]);
+});
+
+it("never asks a PC for a repository's checkouts for a watching device (#2250)", async () => {
+  const url = "http://127.0.0.1/api/machines/pc1/worktree/list?workspace_id=w1";
+  const watched = await handleMachineRequest(new Request(url), manager, undefined, undefined, true);
+  expect([watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([403, "read_only"]);
+  expect(worktreesAsked).toEqual([]);
+  // a driving device gets the PC's answer
+  const driven = await handleMachineRequest(new Request(url), manager);
+  expect([driven.status, JSON.stringify(await driven.json()).includes("SECRET")]).toEqual([200, true]);
+  expect(worktreesAsked).toEqual(["/api/worktree/list"]);
 });
 
 it("forwards conversation images and complete output, while rejecting arbitrary nested paths", async () => {

@@ -1,0 +1,11 @@
+❯ /effort
+
+────────────────────────────────────────────────────────────
+  Effort
+
+         Faster                             Smarter
+         ──────────────────────────────▲───────────
+         low     medium     high     xhigh      max
+
+  ←/→ to adjust · Enter to confirm · s for this session
+  only · Esc to cancel

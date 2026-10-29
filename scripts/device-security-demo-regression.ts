@@ -583,6 +583,37 @@ try {
             await capture(page, `${prefix}-watch`, { ...about("disabled-watch"), note: "a watching device gets the explanation and no button (no disabled control is drawn)" });
             measurements[prefix]!.watchCopy = await contrast(page, ".devices-revoke-all .settings-description");
             assert.deepEqual(await overflow(page), [], "the watch words fit");
+            // the current device's pill beside names of every length up to a long one (#1179: "iPhone · Safari"
+            // at 390 split it between its two words): one box each time, on the name's line or the next, and one
+            // line high, as beside a one-letter name (a box of its own could still wrap its words inside it).
+            // The name is set in place and put back, so React's own text stays what it rendered
+            const split = await page.locator(".devices-current").evaluate((badge) => {
+              const name = badge.parentElement!.firstChild as Text;
+              const rendered = name.data;
+              const long = "iPhone · Safari on the long-named phone";
+              const broken: string[] = [];
+              name.data = long.slice(0, 1);
+              const oneLine = badge.getBoundingClientRect().height;
+              for (let n = 1; n <= long.length; n++) {
+                name.data = long.slice(0, n);
+                if (badge.getClientRects().length !== 1 || badge.getBoundingClientRect().height !== oneLine) broken.push(name.data);
+              }
+              // a column narrower than the pill itself (Japanese at 320 with Revoke? open beside it): its words wrap
+              // inside it, and it stays in the column instead of running under the row's buttons. The column is as
+              // wide as the pill's widest word and its margin (measured with wrapping allowed), the least any pill needs
+              const column = badge.closest<HTMLElement>(".devices-name")!;
+              badge.style.whiteSpace = "normal";
+              badge.style.width = "min-content";
+              const narrow = Math.ceil(badge.getBoundingClientRect().width + parseFloat(getComputedStyle(badge).marginLeft));
+              badge.style.whiteSpace = "";
+              badge.style.width = "";
+              column.style.maxWidth = `${narrow}px`;
+              if (badge.getBoundingClientRect().right > column.getBoundingClientRect().right + 0.5) broken.push(`pill past a ${narrow}px column`);
+              column.style.maxWidth = "";
+              name.data = rendered;
+              return broken;
+            });
+            assert.deepEqual(split, [], `the this-device pill stays one box beside every name, and inside a narrow column, at ${width}`);
             await page.close();
           }
 

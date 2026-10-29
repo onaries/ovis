@@ -3,6 +3,7 @@ import type { Machine } from "../../shared/machines.ts";
 import type { HerdrPane, SessionSnapshot } from "../../shared/protocol.ts";
 import { ComposerDraftStore } from "./composerDraft.ts";
 import { PaneLifetimes } from "./paneLifetime.ts";
+import { PendingMessageStore } from "./pendingMessages.ts";
 
 class MemoryStorage implements Storage {
   readonly data = new Map<string, string>();
@@ -107,6 +108,121 @@ describe("pane state per herdr lifetime", () => {
     expect(storage.getItem("ovis:pending:w1:p1")).toBeNull();
     expect(storage.getItem("ovis:queue:w1:p1")).toBeNull();
     expect(lifetimes.unsent().map(({ kind, text }) => `${kind}:${text}`).sort()).toEqual(["pending:an older queued line", "pending:and tag it", "pending:deploy it"]);
+  });
+
+  it("keeps a message an older bridge took with no receipt for recovery across a reload, never back in the reused pane id (#2172)", () => {
+    const storage = new MemoryStorage();
+    const lifetimes = page(storage);
+    const pending = new PendingMessageStore(() => lifetimes.paneStorage, lifetimes);
+    lifetimes.onRetire((machineId) => pending.forget(machineId));
+    lifetimes.observe([pc("local", undefined)], title);
+    pending.keepUnconfirmed("w1:p1", "deploy the fix");
+    expect(pending.read("w1:p1")).toMatchObject([{ text: "deploy the fix", state: "uncertain" }]);
+    // the composer is empty and the row is in this page alone: a reload keeps the text in recovery
+    const reloaded = page(storage);
+    const after = new PendingMessageStore(() => reloaded.paneStorage, reloaded);
+    reloaded.observe([pc("local", undefined)], title);
+    expect(after.read("w1:p1")).toEqual([]);
+    expect(reloaded.unsent().map(({ machine_id, pane_id, pane_title, kind, text }) => ({ machine_id, pane_id, pane_title, kind, text }))).toEqual([
+      { machine_id: "local", pane_id: "w1:p1", pane_title: "api", kind: "pending", text: "deploy the fix" },
+    ]);
+    // the PC's server names its herdr later: the page's row goes to recovery, where its text already is
+    lifetimes.observe([pc("local", "herdr-a")], title);
+    expect(pending.read("w1:p1")).toEqual([]);
+    expect(lifetimes.unsent().map(({ text }) => text)).toEqual(["deploy the fix"]);
+  });
+
+  it("gives each unconfirmed row its own recovery record: discarding one never takes another tab's, or an older one with the same words", () => {
+    const storage = new MemoryStorage();
+    const [a, b] = [page(storage), page(storage)];
+    const [pendingA, pendingB] = [new PendingMessageStore(() => a.paneStorage, a), new PendingMessageStore(() => b.paneStorage, b)];
+    for (const tab of [a, b]) tab.observe([pc("local", undefined)], title);
+    storage.setItem("ovis:unsent:older", JSON.stringify({ machine_id: "local", pane_id: "w1:p1", kind: "pending", text: "yes", at: 1 }));
+    pendingA.keepUnconfirmed("w1:p1", "yes");
+    pendingB.keepUnconfirmed("w1:p1", "yes");
+    expect(a.unsent()).toHaveLength(3);
+    pendingA.removeCopy("w1:p1", pendingA.read("w1:p1")[0]!.id);
+    // tab B's row and the older record still have their text after a reload
+    const reloaded = page(storage);
+    reloaded.observe([pc("local", undefined)], title);
+    expect(reloaded.unsent().map(({ text }) => text)).toEqual(["yes", "yes"]);
+    expect(reloaded.unsent().some((item) => item.id === "older")).toBe(true);
+  });
+
+  it("drops the recovery copy of an unconfirmed row discarded in the same page, and makes one for a stored PC only when storage refuses the row", () => {
+    const storage = new MemoryStorage();
+    const lifetimes = page(storage);
+    const pending = new PendingMessageStore(() => lifetimes.paneStorage, lifetimes);
+    lifetimes.observe([pc("local", undefined, [pane("w1:p1", "api"), pane("w1:p2", "web")])], title);
+    pending.keepUnconfirmed("w1:p1", "yes");
+    pending.keepUnconfirmed("w1:p1", "yes");
+    pending.keepUnconfirmed("w1:p2", "no");
+    // the same words sent twice are two messages: one record each
+    expect(lifetimes.unsent().map(({ pane_id, text }) => `${pane_id}=${text}`).sort()).toEqual(["w1:p1=yes", "w1:p1=yes", "w1:p2=no"]);
+    const [first, second] = pending.read("w1:p1");
+    pending.removeCopy("w1:p1", first!.id);
+    expect(lifetimes.unsent().map(({ pane_id, text }) => `${pane_id}=${text}`).sort()).toEqual(["w1:p1=yes", "w1:p2=no"]);
+    pending.removeCopy("w1:p1", second!.id);
+    expect(lifetimes.unsent().map(({ pane_id, text }) => `${pane_id}=${text}`)).toEqual(["w1:p2=no"]);
+
+    // storage that refuses the row on a stored PC: the row is in this page alone, its text in recovery
+    const full = new MemoryStorage();
+    const refusing = page(full);
+    const unsaved = new PendingMessageStore(() => refusing.paneStorage, refusing);
+    refusing.observe([pc("local", "herdr-a")], title);
+    full.refuse = "ovis:pending:";
+    unsaved.keepUnconfirmed("w1:p1", "deploy the fix");
+    expect(unsaved.isUnsaved("w1:p1")).toBe(true);
+    expect(refusing.unsent().map(({ kind, text }) => `${kind}:${text}`)).toEqual(["pending:deploy the fix"]);
+
+    const stored = new MemoryStorage();
+    const proven = page(stored);
+    const kept = new PendingMessageStore(() => proven.paneStorage, proven);
+    proven.observe([pc("local", "herdr-a")], title);
+    kept.keepUnconfirmed("w1:p1", "deploy the fix");
+    expect(proven.unsent()).toEqual([]);
+    expect(new PendingMessageStore(() => proven.paneStorage, proven).read("w1:p1")).toMatchObject([{ text: "deploy the fix", state: "uncertain" }]);
+  });
+
+  it("drops an unconfirmed row's recovery copy once storage takes the row on the same herdr, so a reload offers it once", () => {
+    const storage = new MemoryStorage();
+    const lifetimes = page(storage);
+    const pending = new PendingMessageStore(() => lifetimes.paneStorage, lifetimes);
+    lifetimes.onRetire((machineId) => pending.forget(machineId));
+    storage.refuse = "ovis:pane-lifetime:";
+    lifetimes.observe([pc("local", "herdr-a")], title);
+    pending.keepUnconfirmed("w1:p1", "deploy the fix");
+    expect(lifetimes.unsent().map(({ text }) => text)).toEqual(["deploy the fix"]);
+    storage.refuse = null;
+    lifetimes.observe([pc("local", "herdr-a")], title);
+    expect(lifetimes.stored("local")).toBe(true);
+    const reloaded = page(storage);
+    reloaded.observe([pc("local", "herdr-a")], title);
+    expect(new PendingMessageStore(() => reloaded.paneStorage, reloaded).read("w1:p1")).toMatchObject([{ text: "deploy the fix", state: "uncertain" }]);
+    expect(reloaded.unsent()).toEqual([]);
+  });
+
+  it("drops the recovery copy of a row storage refused once a later write saves it, so a reload offers it once", () => {
+    const storage = new MemoryStorage();
+    const lifetimes = page(storage);
+    const pending = new PendingMessageStore(() => lifetimes.paneStorage, lifetimes);
+    lifetimes.onRetire((machineId) => pending.forget(machineId));
+    lifetimes.observe([pc("local", "herdr-a")], title);
+    storage.refuse = "ovis:pending:";
+    pending.keepUnconfirmed("w1:p1", "first");
+    expect(lifetimes.unsent().map(({ text }) => text)).toEqual(["first"]);
+    // storage has room again: the next message's write saves the whole list, the first row with it
+    storage.refuse = null;
+    pending.keepUnconfirmed("w1:p1", "second");
+    expect(lifetimes.unsent()).toEqual([]);
+    const reloaded = page(storage);
+    reloaded.observe([pc("local", "herdr-a")], title);
+    const after = new PendingMessageStore(() => reloaded.paneStorage, reloaded);
+    const [first] = after.read("w1:p1");
+    expect(after.read("w1:p1").map(({ text }) => text)).toEqual(["first", "second"]);
+    after.removeCopy("w1:p1", first!.id);
+    expect(after.read("w1:p1").map(({ text }) => text)).toEqual(["second"]);
+    expect(reloaded.unsent()).toEqual([]);
   });
 
   it("never rolls the stored state back to a herdr it outlived, and follows one that came after", () => {

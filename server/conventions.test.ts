@@ -219,3 +219,23 @@ describe("herdr socket", () => {
       "server/collector.ts is the only status subscription (startStatusCollector), and `events.subscribe` is sent only by subscribeEvents in server/herdr/client.ts: take pane status from the collector's callbacks (onStatus, onPaneEnded, onBaseline) in server/index.ts instead of subscribing again.");
   });
 });
+
+describe("remote PC bundle boundary", () => {
+  // scripts/build-remote-bundle.ts ships server/, shared/ and integrations/ but not src/: code there that
+  // imports src/ loads from a checkout, where every check runs, and not on a remote PC (#2220)
+  const SRC_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["'](?:\.\.\/)+src\//;
+
+  it("never imports src/ from code the remote bundle carries", () => {
+    const shipped = [...serverCode(), ...files("{shared,integrations}/**/*.{ts,mjs,js}").filter((file) => !file.endsWith(".test.ts"))];
+    fail(matches(shipped, SRC_IMPORT).map((found) => found.at),
+      "The remote PC bundle (scripts/build-remote-bundle.ts) carries server/, shared/ and integrations/, not src/: move what this code needs from src/ into shared/, as shared/markdown.ts was.");
+  });
+
+  it("knows an import of src/ from a mention", () => {
+    expect(SRC_IMPORT.test("import { parseInline } from \"../src/lib/markdown.ts\";")).toBe(true);
+    expect(SRC_IMPORT.test("const m = await import('../../src/lib/x.ts')")).toBe(true);
+    expect(SRC_IMPORT.test("import \"../src/styles.css\";")).toBe(true);
+    expect(SRC_IMPORT.test("import { a } from \"../shared/markdown.ts\";")).toBe(false);
+    expect(SRC_IMPORT.test("import { a } from \"./src-files.ts\";")).toBe(false);
+  });
+});

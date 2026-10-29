@@ -244,6 +244,31 @@ move it, how it commits, and when it gives up to the terminal. Running a plan al
 screen again before the committing key and refuses when the prompt changed; `rereadMoves`, set
 for `each-move` readers and for list readers, adds a check after each move as well.
 
+Claude Code's `/effort` card (`claude-effort` in [`claude.ts`](../server/dialogs/claude.ts))
+offers the five levels, low to max. A level's row moves the slider with ←/→ and presses `s`, never
+Enter (Enter saves the level as the default for new sessions), so the level holds for this session
+only. Since 2.1.284 Ultracode is no level but a switch the slider draws beside itself in a pane of
+70 columns or more, and on two lines of its own under itself in a narrower one; while it is on,
+Claude writes "Ultracode: dynamic workflows on every task" under the level names. The reader takes
+either layout, with the switch on or off. Where the slider names Tab as the switch's key, the card
+has one more row, **Turn Ultracode on** or **Turn Ultracode off** ("Keeps the effort level, for
+this session only"; "Ultracode" stays English in every language). It presses Tab, then `s` once the
+slider, read again, shows the switch flipped with ▲ still on the same level: Claude applies
+Ultracode with that level for this session and writes nothing to its settings. Otherwise no `s`
+goes out and the answer is refused with `prompt_changed`; Claude keeps the unapplied flip in its
+dialog until Esc. A level's row, too, presses `s` only while the switch still shows the state the
+card was read with. A model without Ultracode (one without xhigh) or dynamic workflows turned off
+leaves only the level rows, at every level including max, where Claude writes max's description
+right under the level names. Another key bound to the switch also leaves only the level rows, and
+so does a key unbound in `keybindings.json` (`"tab": null` in the `EffortSlider` context): Claude
+then draws the switch's state with no "… to toggle" line. A key without its state, a switch drawn
+twice or both beside and under the slider, and a line under the level names that does not match
+the switch (Claude's Ultracode line while it is on, a blank line while it is off, no Ultracode line
+without a switch) give no card, and neither does a pane of about 44 columns or fewer, where Claude
+cuts the level names. Known limit: the switch row applies the level ▲ stands over in Claude's
+dialog, so a level moved in the terminal and not applied goes with it, and a level row likewise
+applies a flip left unapplied there.
+
 Readers that show results in Chat today include Claude Code's `/goal` status card,
 Hermes's informational results, and the steps of omp's `/handoff` that can be
 answered from a card. A step that needs an editor or native editing ends as `terminal-required`
@@ -265,23 +290,39 @@ only where that flag is cited in the code; a row without one has no Resume butto
 ## Starting an agent with a first message
 
 New workspace and New tab can pass a model and an effort only where the agent's launch takes them:
-Claude Code (`--model`, `--effort`) and Codex (`--model`, `-c model_reasoning_effort=`). Every
-other agent starts with its own configuration. Any agent can get a first message. Codex takes the
-message as its own argument after `--`, so a message such as `logout` is never read as a
-subcommand. Claude Code and every other agent get it through the bridge's pending record
-(`first_message` on the create request): it is queued for the pane and sent once when the agent
-is ready, like any queued message, and it can be discarded or sent now. Only the page that sent the
-request (`first_message_connection`) types it on its own, while it has the pane attached; if that page
-disconnects or leaves the pane first, the message is held until someone sends it now or discards it,
-and the pane's other messages go at their turn. A pane holds one first message, bound to the agent
-the launch brought up: its process (the one a shell-started agent's launch saw come up) and session,
-as known when the message is queued and as learned at each event of the pane after. A `/resume` or
-another process of the same kind holds it with `pending_target_changed`, and that agent ending
-before the message went holds it with `first_message_launch_ended`, at the pane's next event; Send
-now then answers the same code to a client whose `pending-action` frame says `launch_ended`, and
-`pending_target_changed` to an older one. First messages live in the
-bridge's memory, so a restart drops the ones not sent yet. The bridge checks launch arguments by the
-dialog's rules in `shared/launch-rules.ts`.
+Claude Code (`--model`, and `--effort` low, medium, high, xhigh or max) and Codex (`--model`,
+`-c model_reasoning_effort=`). Every other agent starts with its own configuration.
+
+Claude Code also gets an Ultracode switch. On, it adds `--settings '{"ultracode":true}'` after the
+effort, which it keeps; off adds nothing, so Claude Code's own settings decide. Claude Code applies
+the setting for that session only. On a Windows PC the bridge passes the same text as the path of a
+file holding it ([`claude-settings-file.ts`](../server/claude-settings-file.ts)): Windows
+PowerShell 5.1 strips the JSON's quotes on the way through the `claude.ps1` shim of an npm install,
+and a path arrives intact (if the file cannot be written, the JSON goes as it is). The file is in
+`%LOCALAPPDATA%\ovis\claude-settings`, a folder only that Windows user and the administrators
+reach, where `%TEMP%` can be one other accounts write to. Ultracode needs Claude Code 2.1.284 or
+later (Claude Code's settings reference says an older one runs the session at xhigh), a model with
+xhigh and dynamic workflows turned on; otherwise Claude Code ignores it without an error, and the
+dialog cannot tell. The bridge still takes `--effort ultracode` from other clients, which Claude
+Code reads as xhigh with Ultracode on. A resumed session, from herdr's own auto-resume or from
+Resume in Earlier sessions, starts with the agent's resume flag alone, so no launch argument is
+applied again, Ultracode included.
+
+Any agent can get a first message. Codex takes the message as its own argument after `--`, so a
+message such as `logout` is never read as a subcommand. Claude Code and every other agent get it
+through the bridge's pending record (`first_message` on the create request): it is queued for the
+pane and sent once when the agent is ready, like any queued message, and it can be discarded or sent
+now. Only the page that sent the request (`first_message_connection`) types it on its own, while it
+has the pane attached; if that page disconnects or leaves the pane first, the message is held until
+someone sends it now or discards it, and the pane's other messages go at their turn. A pane holds
+one first message, bound to the agent the launch brought up: its process (the one a shell-started
+agent's launch saw come up) and session, as known when the message is queued and as learned at each
+event of the pane after. A `/resume` or another process of the same kind holds it with
+`pending_target_changed`, and that agent ending before the message went holds it with
+`first_message_launch_ended`, at the pane's next event; Send now then answers the same code to a
+client whose `pending-action` frame says `launch_ended`, and `pending_target_changed` to an older
+one. First messages live in the bridge's memory, so a restart drops the ones not sent yet. The
+bridge checks launch arguments by the dialog's rules in `shared/launch-rules.ts`.
 
 ## Adding a command form or a reader
 

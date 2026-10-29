@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "./index.ts";
 import { herdrRpc, paneProcessInfo, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
-import { forgetTranscriptState } from "./conversation.ts";
+import { forgetTranscriptState, paneConversation } from "./conversation.ts";
 import { copilotHandoffSession, copilotProcessSession } from "./copilot-store.ts";
 import { processEnviron } from "./omo.ts";
-import * as processStart from "./process-start.ts";
+import * as processOwner from "./process-owner.ts";
 
 const id = "12aa83d8-48bc-41f2-a498-7055c5c44a01";
 const other = "12aa83d8-48bc-41f2-a498-7055c5c44a02";
@@ -173,8 +173,8 @@ const handoffTest = async () => {
     const ancestry = spyOn(fs, "readFileSync").mockImplementation(alteredStat);
     try { expect(handoff()).toBeNull(); } finally { ancestry.mockRestore(); }
     expect(handoff()?.sessionId).toBe(handoffId);
-    const realStarted = processStart.processStartedAt;
-    const unavailableStart = spyOn(processStart, "processStartedAt").mockImplementation((pid) => pid === parent ? null : realStarted(pid));
+    const realBirth = processOwner.readProcessBirth;
+    const unavailableStart = spyOn(processOwner, "readProcessBirth").mockImplementation((pid) => pid === parent ? { state: "unknown" } : realBirth(pid));
     try {
       writeFileSync(parentLog, new Date().toISOString() + " [INFO] Registering foreground session: " + other + "\n");
       expect(copilotProcessSession(processEnviron(parent), parentProcess.argv, parent, "unregistered")).toBeNull();
@@ -195,6 +195,9 @@ const handoffTest = async () => {
       await startFixture(duplicate.root_pane.pane_id, handoffId);
       await herdrRpc("pane.report_agent_session", { pane_id: duplicate.root_pane.pane_id, agent: "copilot",
         source: "herdr:copilot", seq: Date.now() * 1000 + 1, agent_session_id: handoffId });
+      await expect(paneConversation(current)).rejects.toMatchObject({
+        message: "no_session_path", diagnostic: "copilot_peer_conflict",
+      });
       expect((await read()).source).toBe("scrollback");
     } finally { await workspaceClose(duplicate.workspace.workspace_id); }
     expect((await read()).turns[0]?.parts[0]?.text).toBe("handoff history");
@@ -521,13 +524,15 @@ it.skipIf(process.platform !== "linux")("reads a resumed CLI without marker or r
     expect((await fetch(outputUrl(newRef!))).status).toBe(200);
     expect((await fetch(`${url}&before=${encodeURIComponent(returned.cursor!)}`)).status).toBe(200);
     await herdrRpc("pane.send_text", { pane_id: current, text: `:switch ${forked}\n:switch ${resumed}\n` });
+    // each switch logs the old session's unregistering before the new one's registering: a read between the two
+    // fails closed (scrollback, no history), which is not the switch-back this waits for
     let unobserved = await read();
-    for (const deadline = Date.now() + 5000; unobserved.history_id === returned.history_id;) {
-      if (Date.now() > deadline) throw new Error("unobserved switch-back did not advance binding");
+    for (const deadline = Date.now() + 5000;;) {
+      if (unobserved.source === "copilot-transcript" && unobserved.history_id !== returned.history_id && unobserved.turns[0]?.parts[0]?.text === resumed) break;
+      if (Date.now() > deadline) throw new Error(`unobserved switch-back did not advance binding: ${unobserved.source} ${unobserved.turns[0]?.parts[0]?.text}`);
       await Bun.sleep(50);
       unobserved = await read();
     }
-    expect(unobserved.turns[0]?.parts[0]?.text).toBe(resumed);
     expect((await fetch(`${url}&before=${encodeURIComponent(returned.cursor!)}`)).status).toBe(409);
     expect((await fetch(outputUrl(newRef!))).status).toBe(404);
     await herdrRpc("pane.send_text", { pane_id: current, text: ":unregister\n" });

@@ -663,3 +663,30 @@ describe("queued input while a busy signal holds a Claude pane's queue (#2072)",
     expect(delivery.pending.list(client, h.pane.pane_id)[0]?.state).toBe("queued");
   });
 });
+
+describe("the herdr a features frame names (#2257)", () => {
+  it("is the snapshot's herdr, and only the one that answered the lifecycle subscription while its socket is still that herdr's", async () => {
+    let socket: string | null = "herdr-socket-a";
+    const h = hub(undefined, undefined, undefined, () => socket);
+    const live = handlers.herdrLive!;
+    // the collector reads herdr's identity through the hub's own reader
+    expect(live.identity()).toBe("herdr-socket-a");
+    // no subscription answered yet: a socket file alone proves no herdr
+    expect(h.status.currentHerdrLifetime()).toBeUndefined();
+    live.onChange("herdr-socket-a");
+    const named = h.status.currentHerdrLifetime();
+    expect(named).toBeString();
+    expect((await h.snapshot()).herdr_lifetime).toBe(named);
+    // herdr died: the subscription closes, while its socket file (still "herdr-socket-a" here) stays behind
+    live.onChange(null);
+    expect(h.status.currentHerdrLifetime()).toBeUndefined();
+    // the socket became another herdr's after that one answered: it is not the herdr that answered
+    live.onChange("herdr-socket-a");
+    socket = "herdr-socket-b";
+    expect(h.status.currentHerdrLifetime()).toBeUndefined();
+    // once the new herdr answers, it is named
+    live.onChange("herdr-socket-b");
+    expect(h.status.currentHerdrLifetime()).toBeString();
+    expect(h.status.currentHerdrLifetime()).not.toBe(named);
+  });
+});

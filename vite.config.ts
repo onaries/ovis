@@ -56,6 +56,8 @@ export default defineConfig({
     { find: /^@xterm\/xterm$/, replacement: `${xtermSource}/browser/public/Terminal.js` },
     { find: /^browser\//, replacement: `${xtermSource}/browser/` },
     { find: /^common\//, replacement: `${xtermSource}/common/` },
+    { find: /^vs\/nls$/, replacement: `${xtermSource}/vs/patches/nls.js` },
+    { find: /^vs\//, replacement: `${xtermSource}/vs/` },
     { find: "@shared", replacement: new URL("./shared", import.meta.url).pathname },
   ] },
 });

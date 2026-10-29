@@ -13,8 +13,9 @@ import { chromePath } from "./chrome-path.ts";
 // every copy keep the path as written; a sibling folder, a path outside, a relative or Windows
 // path, a pane with no folder or a Windows folder all read as written; switching panes takes no
 // other pane's folder along. A chat with nothing to open a file in (a bare ChatView, built here)
-// shows the same short label as text, with the whole path as its title and no button. Copying a
-// whole label, either form, copies the path as written. On a phone every file link is a finger's
+// shows the same short label as text, with the whole path as its title and no button; a UNC folder
+// written with forward slashes reads every path as written. Copying a whole label, either form, or
+// a selection reaching past the chat (Select All) copies the path as written. On a phone every file link is a finger's
 // size. The viewer's loading state is a held file answer, released by the script.
 // Screenshots go to UI_EVIDENCE_DIR as tool-paths-<width>-<theme>[-ko]-<state>.png when it is set.
 // All files and HTTP traffic stay in this disposable, loopback-only app; no herdr is opened.
@@ -43,6 +44,7 @@ const LABELS: Record<string, string> = {
   "src/relative.ts": "src/relative.ts",
   "C:\\work\\app\\win.ts": "C:\\work\\app\\win.ts",
   "\\\\server\\share\\app\\unc.ts": "\\\\server\\share\\app\\unc.ts",
+  "//server/share/app/fwd.ts": "//server/share/app/fwd.ts",
   "/work/app/../etc/passwd": "/work/app/../etc/passwd",
   "/work/app/문서/설계 노트.md": "app/문서/설계 노트.md",
   [LONG]: `app/${"n".repeat(300)}.ts`,
@@ -62,6 +64,7 @@ const TURNS = [
     read("src/relative.ts"),
     read("C:\\work\\app\\win.ts"),
     read("\\\\server\\share\\app\\unc.ts"),
+    read("//server/share/app/fwd.ts"),
     read("/work/app/../etc/passwd"),
     read("/work/app/문서/설계 노트.md"),
     read(LONG),
@@ -69,7 +72,7 @@ const TURNS = [
   ] },
 ];
 /** Every tool-file label of the transcript, in order (a patch adds "(add)" after its label). */
-const ORDER = ["/work/app/src/a.ts", "/work/app/src/b.ts", "/work/app-2/a.ts", "/work/app/src/d.ts", "/work/app/src/c.ts", "/work/app/docs/notes.md", "/etc/hosts", "src/relative.ts", "C:\\work\\app\\win.ts", "\\\\server\\share\\app\\unc.ts", "/work/app/../etc/passwd", "/work/app/문서/설계 노트.md", LONG];
+const ORDER = ["/work/app/src/a.ts", "/work/app/src/b.ts", "/work/app-2/a.ts", "/work/app/src/d.ts", "/work/app/src/c.ts", "/work/app/docs/notes.md", "/etc/hosts", "src/relative.ts", "C:\\work\\app\\win.ts", "\\\\server\\share\\app\\unc.ts", "//server/share/app/fwd.ts", "/work/app/../etc/passwd", "/work/app/문서/설계 노트.md", LONG];
 
 /** The panes under test and their folders: one in ROOT, one with no folder known, one on a Windows folder. */
 const CWD: Record<string, string | null> = { [panes.omp]: ROOT, [panes.api]: null, [panes.cli]: "C:\\work\\app" };
@@ -216,15 +219,21 @@ import { createRoot } from "react-dom/client";
 import { ChatView } from "./src/components/ChatView.tsx";
 import { MachineContext } from "./src/lib/machineContext.tsx";
 import { SettingsProvider } from "./src/lib/settings.ts";
-const FOLDERS = { local: "${ROOT}", remote: "/srv/other", unknown: null };
+const FOLDERS = { local: "${ROOT}", remote: "/srv/other", unknown: null, unc: "//server/share/app" };
 function Fixture() {
   const [machine, setMachine] = useState("local");
-  window.toolPathsQa = { machine: setMachine };
-  return <div className="terminal-host"><div className="terminal-stack is-chat" style={{ position: "relative", height: "100vh", width: "100%" }}>
+  const [second, setSecond] = useState(false);
+  window.toolPathsQa = { machine: setMachine, second: setSecond };
+  return <div className="terminal-host"><div className="terminal-stack is-chat" style={{ position: "relative", height: second ? "50vh" : "100vh", width: "100%" }}>
     <MachineContext.Provider value={machine}>
       <ChatView key={machine} paneId="same-pane" refreshKey={0} connected ended={false} agent="claude" agentStatus="done" cwd={FOLDERS[machine]} />
     </MachineContext.Provider>
-  </div></div>;
+  </div>
+  {second && <div className="tool-paths-second is-chat" style={{ position: "relative", height: "50vh", width: "100%" }}>
+    <MachineContext.Provider value="local">
+      <ChatView paneId="second-pane" refreshKey={0} connected ended={false} agent="claude" agentStatus="done" cwd={FOLDERS.local} />
+    </MachineContext.Provider>
+  </div>}</div>;
 }
 createRoot(document.getElementById("root")).render(<SettingsProvider><Fixture /></SettingsProvider>);
 `;
@@ -262,10 +271,16 @@ async function noPageScroll(page: Page, label: string): Promise<void> {
   assert.ok(overflow.scroll <= overflow.width, `${label}: the page scrolls sideways (${overflow.scroll} > ${overflow.width})`);
 }
 
-interface Copied { text: string; html: string; selection: string; labels: string[] }
-/** Selects what `select` picks in the page, presses the copy keys and reads the clipboard back. */
+interface Copied { text: string; html: string; selection: string; labels: string[]; claimed: boolean | null }
+/** Selects what `select` picks in the page, presses the copy keys and reads the clipboard back; `claimed`: the page took the copy over from the browser. */
 async function copyOf(page: Page, scope: Locator, select: (labels: Element[]) => void): Promise<Copied> {
-  await page.evaluate(() => navigator.clipboard.writeText(""));
+  await page.evaluate(() => {
+    const qa = window as unknown as { copyClaimed: boolean | null };
+    qa.copyClaimed = null;
+    // on the window, after every handler of the page
+    window.addEventListener("copy", (event) => { qa.copyClaimed = event.defaultPrevented; }, { once: true });
+    return navigator.clipboard.writeText("");
+  });
   await scope.locator(".chat-tool-file").evaluateAll(select);
   await page.keyboard.press("ControlOrMeta+c");
   return await page.evaluate(async () => {
@@ -274,6 +289,7 @@ async function copyOf(page: Page, scope: Locator, select: (labels: Element[]) =>
     return {
       text: await navigator.clipboard.readText(), html, selection: getSelection()?.toString() ?? "",
       labels: [...document.querySelectorAll("[data-raw-path]")].map((label) => label.textContent ?? ""),
+      claimed: (window as unknown as { copyClaimed: boolean | null }).copyClaimed,
     };
   });
 }
@@ -319,9 +335,39 @@ async function copyChecks(page: Page, scope: Locator, form: string): Promise<voi
   for (const path of ORDER) assert.ok(cards.text.includes(path), `${form}: a copy of every card keeps ${path}: ${JSON.stringify(cards.text)}`);
   assert.ok(!cards.text.split("\n").some((line) => line.trim().startsWith("app/")), `${form}: no shortened label is copied: ${JSON.stringify(cards.text)}`);
   assert.deepEqual((await shownFiles(scope)).map((file) => file.text), before);
+  // a selection reaching past the chat: the copy goes to where it starts, outside the chat
+  const reaching: Record<string, (labels: Element[]) => void> = {
+    "Select All": () => getSelection()!.selectAllChildren(document.body),
+    "a drag from the first card past the chat": (labels) => {
+      const range = document.createRange();
+      range.setStartBefore(labels[0]!);
+      range.setEnd(document.body, document.body.childNodes.length);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+    },
+  };
+  for (const [reach, select] of Object.entries(reaching)) {
+    const copy = await copyOf(page, scope, select);
+    for (const path of ORDER) assert.ok(copy.text.includes(path), `${form}, ${reach}: the copy keeps ${path}: ${JSON.stringify(copy.text)}`);
+    assert.ok(!copy.text.split("\n").some((line) => line.trim().startsWith("app/")), `${form}, ${reach}: no shortened label is copied: ${JSON.stringify(copy.text)}`);
+    // plain text alone: no rich copy rebuilt from the whole page
+    assert.equal(copy.claimed, true, `${form}, ${reach}: the page takes the copy`);
+    assert.equal(copy.html, "", `${form}, ${reach}: no HTML is rebuilt from the page`);
+    assert.deepEqual((await shownFiles(scope)).map((file) => file.text), before);
+  }
+  // one past the chat that takes no shortened label whole stays the browser's own copy
+  const native = await copyOf(page, scope, (labels) => {
+    const range = document.createRange();
+    range.setStart(document.body, 0);
+    range.setEndBefore(labels[0]!);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+  });
+  assert.equal(native.claimed, false, `${form}: a selection past the chat with no shortened label keeps native copy`);
   await page.evaluate(() => getSelection()?.removeAllRanges());
   record("relative-tool-target", `${form}: copying a whole label, or every card, copies the paths as written; a part of a label copies that part; the selection and the labels stay as shown`, {
     whole: { text: whole.text, html: whole.html, selection: whole.selection }, dragged: dragged.text, part: part.text, cardsHasEveryRawPath: true,
+    reachingPastTheChat: Object.keys(reaching), nativeWithoutLabel: native.claimed === false,
   });
 }
 
@@ -390,7 +436,7 @@ async function demoChecks(browser: Browser, base: string): Promise<void> {
     const outside = (await shownFiles(pane))[ORDER.indexOf("/etc/hosts")]!;
     assert.equal(outside.text, "/etc/hosts");
     record("unknown-or-outside-root", "a sibling folder's file and a file outside the folder read as written", { sibling, outside });
-    for (const path of ["src/relative.ts", "C:\\work\\app\\win.ts", "\\\\server\\share\\app\\unc.ts"]) assert.equal((await shownFiles(pane))[ORDER.indexOf(path)]!.text, path);
+    for (const path of ["src/relative.ts", "C:\\work\\app\\win.ts", "\\\\server\\share\\app\\unc.ts", "//server/share/app/fwd.ts"]) assert.equal((await shownFiles(pane))[ORDER.indexOf(path)]!.text, path);
     record("unknown-or-outside-root", "a relative path, a Windows drive path and a UNC path read as written", ORDER.filter((path) => !path.startsWith("/")));
     // `..` under the folder resolves outside it: never a label that looks inside
     assert.equal((await shownFiles(pane))[ORDER.indexOf("/work/app/../etc/passwd")]!.text, "/work/app/../etc/passwd");
@@ -480,12 +526,33 @@ async function bareChecks(browser: Browser, base: string): Promise<void> {
     assert.equal(await chat.locator(".chat-tool-file button").count(), 0);
     record("unknown-or-outside-root", "with nothing to open a file in, the label is text with the whole path as its title and no button", { labels: await shownFiles(chat) });
     await copyChecks(page, chat, "the label as text");
-    for (const [machine, root] of [["remote", null], ["unknown", null], ["local", ROOT]] as const) {
+    for (const [machine, root] of [["remote", null], ["unknown", null], ["unc", null], ["local", ROOT]] as const) {
       await page.evaluate((next) => (window as unknown as { toolPathsQa: { machine: (id: string) => void } }).toolPathsQa.machine(next), machine);
       await expandCards(chat);
       assert.deepEqual(await shownFiles(chat), expected(root, false, (path) => path), `machine ${machine}`);
     }
-    record("unknown-or-outside-root", "the same pane id on another PC (folder /srv/other) and on one with no folder reads every path as written; back, the first PC's folder again", { machines: { local: ROOT, remote: "/srv/other", unknown: null } });
+    record("unknown-or-outside-root", "the same pane id on another PC (folder /srv/other), on one with no folder and on a UNC folder written //server/share/app reads every path as written; back, the first PC's folder again", { machines: { local: ROOT, remote: "/srv/other", unknown: null, unc: "//server/share/app" } });
+    // two chats mounted at once (split halves, herdr splits, a chat kept under a peek): a copy wholly
+    // inside either is that chat's own, rich HTML included, whichever chat's listener runs first
+    await page.evaluate(() => (window as unknown as { toolPathsQa: { second: (on: boolean) => void } }).toolPathsQa.second(true));
+    const second = page.locator(".tool-paths-second");
+    await expandCards(second);
+    const twoChats: Record<string, { claimed: boolean | null; hasHtml: boolean }> = {};
+    for (const [name, scope] of [["the second chat", second], ["the first chat", chat]] as const) {
+      const copy = await copyOf(page, scope, (labels) => {
+        const replies = labels[0]!.closest(".chat-view")!.querySelectorAll(".markdown");
+        const range = document.createRange();
+        range.setStartBefore(labels[0]!);
+        range.setEndAfter(replies[replies.length - 1]!);
+        getSelection()!.removeAllRanges();
+        getSelection()!.addRange(range);
+      });
+      assert.equal(copy.claimed, true, `${name}: the chat takes a copy wholly inside it`);
+      assert.ok(copy.text.includes("/work/app/docs/notes.md") && !copy.text.split("\n").some((line) => line.trim().startsWith("app/")), `${name}: the copy keeps the paths as written: ${JSON.stringify(copy.text)}`);
+      assert.ok(copy.html.includes("<p>") && copy.html.includes("Tidied"), `${name}: the copy keeps the chat's rich HTML: ${JSON.stringify(copy.html)}`);
+      twoChats[name] = { claimed: copy.claimed, hasHtml: true };
+    }
+    record("relative-tool-target", "with two chats mounted, a copy wholly inside either keeps its whole paths and its rich HTML", twoChats);
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 }

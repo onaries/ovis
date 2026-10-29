@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, webkit, type Page } from "playwright-core";
-import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES } from "../src/lib/markdown.ts";
+import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES } from "../shared/markdown.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-chat-selection-copy-"));
 const longCode = Array.from({ length: FOLD_CODE_AFTER_LINES + 1 }, (_, index) => `line ${index + 1}`).join("\n");

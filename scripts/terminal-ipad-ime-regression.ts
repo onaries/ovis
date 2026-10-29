@@ -10,7 +10,8 @@ import type { Browser } from "playwright-core";
  * insertText, a changed one is deleteContentBackward followed by insertText of the whole result.
  * There are no composition events. Recorded with scripts/terminal-ime-diagnostic.ts on 2026-10-13.
  * The iPhone's on-screen Korean keyboard (iOS 27 simulator, Safari, 2026-10-18) edits the same way,
- * with keyCode 0 on each jamo's keydown.
+ * with keyCode 0 on each jamo's keydown. So does the Ovis iOS app (iOS 27 simulator, 2026-10-29),
+ * whose WKWebView reports no "Safari" in its user agent: there each jamo reached the pane on its own.
  */
 export async function checkIpadIme(browser: Browser, origin: string, pane: string, otherPane: string): Promise<void> {
   // one context for both iPad platforms: the page, not the context, carries the platform it reports
@@ -23,17 +24,22 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
     userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1",
     viewport: { width: 1100, height: 700 },
   });
+  // the Ovis iOS app's web view, as recorded: WebKit, but no Version/ or Safari/ in its user agent
+  const iphoneApp = await browser.newContext({
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+    viewport: { width: 1100, height: 700 },
+  });
   try {
   // the platform iPadOS Safari reports by default (desktop site), the one it reports otherwise,
-  // and an iPhone's
-  for (const platform of ["MacIntel", "iPad", "iPhone"]) {
-    const page = await (platform === "iPhone" ? iphone : context).newPage();
+  // an iPhone's, and the iPhone app's
+  for (const platform of ["MacIntel", "iPad", "iPhone", "iPhone app"]) {
+    const page = await (platform === "iPhone" ? iphone : platform === "iPhone app" ? iphoneApp : context).newPage();
     await page.addInitScript(({ pane, platform }) => {
       Object.defineProperty(navigator, "platform", { get: () => platform });
       Object.defineProperty(navigator, "maxTouchPoints", { get: () => 5 });
       localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", terminalInputMode: "direct" }));
       localStorage.setItem(`ovis:view:${pane}`, "terminal");
-    }, { pane, platform });
+    }, { pane, platform: platform === "iPhone app" ? "iPhone" : platform });
     const sent: Array<{ pane_id: string; text: string }> = [];
     // key frames (a key-bar chord), with how many input frames came before each
     const keyed: Array<{ pane_id: string; keys: string[]; after: number }> = [];
@@ -133,7 +139,7 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
         box.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: jamo, keyCode, isComposing: false }));
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         return down;
-      }, { jamo, keyCode: platform === "iPhone" ? 0 : KEYCODES[jamo] ?? 65, edits, moveCaret });
+      }, { jamo, keyCode: platform.startsWith("iPhone") ? 0 : KEYCODES[jamo] ?? 65, edits, moveCaret });
     };
     const fresh = (jamo: string) => key(jamo, [["insert", jamo]]);
     const replace = (jamo: string, result: string) => key(jamo, [["delete"], ["insert", result]]);
@@ -208,8 +214,10 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
       await fresh("ㄱ"); await replace("ㅡ", "그");
       const sizes = await page.evaluate(() => {
         const row = [...document.querySelectorAll<HTMLElement>(".xterm-rows span")].find((span) => span.textContent?.includes("한"))!;
+        // the fit is drawn by a span inside the row's (terminalGlyphs.ts), which carries any enlarged size
+        const glyph = row.querySelector<HTMLElement>(".herdr-box-glyph") ?? row;
         const view = document.querySelector<HTMLElement>(".composition-view")!;
-        return { row: getComputedStyle(row).fontSize, view: getComputedStyle(view).fontSize, pending: view.classList.contains("active") ? view.textContent : null };
+        return { row: getComputedStyle(glyph).fontSize, view: getComputedStyle(view).fontSize, pending: view.classList.contains("active") ? view.textContent : null };
       });
       assert.equal(sizes.pending, "그", "a syllable is pending");
       assert(Math.abs(Number.parseFloat(sizes.view) - Number.parseFloat(sizes.row)) < 0.01,
@@ -328,7 +336,7 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
       await page.goto("about:blank").catch(() => {});
     }
   }
-  } finally { await context.close(); await iphone.close(); }
+  } finally { await context.close(); await iphone.close(); await iphoneApp.close(); }
   console.log("PASS iPad hardware-keyboard and iPhone keyboard replay: jamo keys composed in the editor, pending syllable at its row's size, commit keys, two-syllable replacement, blur, pane reset, dictation, SwiftKey and refused contexts");
 }
 

@@ -72,8 +72,12 @@ try {
   await page.locator(".markdown-math .katex").waitFor();
   await page.locator(".markdown-math-display .katex-display").waitFor();
   assert.ok(scripts.length > atStart, "the first expression fetches the KaTeX chunk");
-  assert.equal(mathAssets.filter((path) => path.endsWith(".js")).length, 1);
+  // Rollup may split KaTeX into several chunks; what matters is that it comes now, and each file once
+  const mathScripts = mathAssets.filter((path) => path.endsWith(".js"));
+  assert.ok(mathScripts.length > 0, "the first expression fetches KaTeX's JavaScript");
+  assert.equal(new Set(mathScripts).size, mathScripts.length, "each KaTeX script is fetched once");
   assert.equal(mathAssets.filter((path) => path.endsWith(".css")).length, 1);
+  const fetched = mathAssets.length;
   await page.waitForFunction(() => getComputedStyle(document.querySelector(".katex")!).fontFamily.includes("KaTeX_Main"));
   assert.match(await page.locator(".markdown-math .katex-mathml annotation").textContent() ?? "", /e\^\{i\\pi\}\+1=0/);
 
@@ -84,7 +88,7 @@ try {
   await page.getByText("Again:").waitFor();
   await page.locator(".markdown-math .katex").waitFor();
   assert.equal(scripts.length, loaded, "KaTeX is fetched once");
-  assert.equal(mathAssets.length, 2, "later expressions reuse both assets");
+  assert.equal(mathAssets.length, fetched, "later expressions fetch no more KaTeX");
   assert.equal(await page.getByText("\\(a^2+b^2=c^2\\)").count(), 0, "a later expression is typeset at once");
   assert.equal(await page.locator(".update-notice").count(), 0, "math that loads asks for no reload");
   assert.deepEqual(errors, []);
@@ -107,12 +111,14 @@ try {
   await failedChunk;
   assert.equal(await offline.locator(".katex").count(), 0);
   assert.equal(await offline.getByText("\\(x^2\\)").count(), 1, "an expression KaTeX could not reach shows its source");
+  // the first load may abort several chunks (Vite preloads KaTeX's with its loader); count them once
+  const abortedFirst = aborted;
   write("Later: \\(z^2\\)");
   await offline.evaluate(() => window.qa.refresh());
   await offline.getByText("\\(z^2\\)").waitFor();
   // a later expression does not ask again: Chrome would answer from the failed import without a
   // fetch, so the recovery is the reload line (lib/lazyChunk.ts), not a retry
-  assert.equal(aborted, 1, "later expressions reuse the failed load without retrying");
+  assert.equal(aborted, abortedFirst, "later expressions reuse the failed load without retrying");
   assert.equal(await offline.locator(".katex").count(), 0);
   // the recovery: the app's update line (useUpdates) offers the reload, and only a tap reloads
   const notice = offline.locator(".update-notice.is-warning");

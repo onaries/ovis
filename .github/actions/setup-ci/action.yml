@@ -41,6 +41,12 @@ runs:
         NEED_NODE: ${{ inputs.node }}
         NEED_HERDR: ${{ inputs.herdr }}
       run: bash scripts/ci-preinstalled-tools.sh
+    # The runner host's copy of the default branch's packages (scripts/self-hosted-runner/run.sh),
+    # read-only to jobs: bun install downloads only what this checkout's lockfile adds.
+    - name: Seed Bun cache from the runner host
+      if: runner.environment == 'self-hosted'
+      shell: bash
+      run: bash scripts/ci-seed-bun-cache.sh
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       if: runner.environment != 'self-hosted'
       with:

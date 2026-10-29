@@ -493,7 +493,8 @@ async function continuedInSession(path: string): Promise<string | null> {
   if (text === null) return null;
   let continued: string | null = null;
   for (const line of text.split("\n")) {
-    if (!line.includes('"type"')) continue;
+    // every record is read as JSON reads it, however its keys are written (#2130)
+    if (line.trim() === "") continue;
     try {
       const entry = JSON.parse(line) as { type?: unknown; continuedInSessionId?: unknown };
       if (entry.type === "user" || entry.type === "assistant") continued = null;
@@ -519,7 +520,9 @@ async function backgroundJobTranscript(path: string, configDir: string): Promise
   let pending: string | undefined;
   let id: string | undefined;
   for (const line of text.split("\n")) {
-    if (line.includes('"type":"continued-in"')) {
+    let type: unknown;
+    try { type = (JSON.parse(line) as { type?: unknown }).type; } catch { /* a torn line, or no record */ }
+    if (type === "continued-in") {
       id = pending;
       pending = undefined;
     } else {
@@ -586,7 +589,8 @@ async function branchedFrom(path: string): Promise<string | null> {
     let end = 0;
     for (let next = bytes.indexOf(10, 0); next !== -1 && next < length; end = next + 1, next = bytes.indexOf(10, end)) {
       const line = bytes.subarray(end, next).toString("utf8");
-      if (!line.includes('"type"')) continue;
+      // every record is read as JSON reads it: a key written with escapes (`"\u0074ype"`) is the same key (#2130)
+      if (line.trim() === "") continue;
       let entry: { type?: unknown; sessionId?: unknown; forkedFrom?: { sessionId?: unknown } | null };
       try { entry = JSON.parse(line); } catch { return null; }
       if (entry.type !== "user" && entry.type !== "assistant") continue;
@@ -775,17 +779,13 @@ const optionLike = (arg: string): boolean => arg.length > 1 && arg.startsWith("-
 /**
  * Whether every argument from `at` on is a debug option, or `--setting-sources` with its value: Claude
  * reads those wherever they stand, and still reads the argument before them as a job's name (#1876).
- * Any other argument there keeps the pane on its terminal.
+ * Any other argument there keeps the pane on its terminal, a debug value apart from `-d`/`--debug` too:
+ * Claude (2.1.311) takes it for an extra argument and then looks no name up (#2125).
  */
 function onlyDebugOptions(args: readonly string[], at: number): boolean {
   for (let index = at; index < args.length; index++) {
     const arg = args[index]!;
-    if (arg === "-d2e" || arg === "--debug-to-stderr" || arg.startsWith("--debug=") || arg.startsWith("--setting-sources=")) continue;
-    if (arg === "-d" || arg === "--debug") {
-      const next = args[index + 1];
-      if (next !== undefined && !optionLike(next)) index++;
-      continue;
-    }
+    if (arg === "-d" || arg === "--debug" || arg === "-d2e" || arg === "--debug-to-stderr" || arg.startsWith("--debug=") || arg.startsWith("--setting-sources=")) continue;
     if (arg === "--setting-sources" && args[index + 1] !== undefined && !optionLike(args[index + 1]!)) { index++; continue; }
     return false;
   }
@@ -1144,6 +1144,7 @@ export async function claudeTranscriptFile(
     return null;
   };
 
+  /** `from`: the file checked to be a branch, whose continuations are taken beside it first (#2130) */
   const follow = async (start: string, seen: Set<string>, from?: string): Promise<string | null> => {
     seen.add(start);
     let path = from ?? await locate(start);
@@ -1151,9 +1152,11 @@ export async function claudeTranscriptFile(
       const next = await continuedInSession(path);
       if (next === null || seen.has(next)) return path;
       seen.add(next);
-      // a continuation whose file is not there keeps the transcript that named it, unless a
+      // a branch's continuation goes on beside it: the same id in a project an earlier cwd names is another
+      // conversation (#2130). One whose file is not there keeps the transcript that named it, unless a
       // /resume of a background session names that job's own transcript
-      const nextPath = await locate(next) ?? await backgroundJobTranscript(path, configDir);
+      const beside = join(dirname(path), `${next}.jsonl`);
+      const nextPath = (from !== undefined && await isFile(beside) ? beside : await locate(next)) ?? await backgroundJobTranscript(path, configDir);
       if (nextPath === null) return path;
       path = nextPath;
     }
@@ -1182,6 +1185,14 @@ export async function claudeTranscriptFile(
   return path;
 }
 
+/** Where `claudeSessionTempDir` looks for this user's `claude-<uid>` folder. */
+const claudeTempRoots = (): string[] => [...new Set([tmpdir(), "/tmp"])];
+
+/** The `claude-<uid>` folders every session's temp folder (`claudeSessionTempDir`) lies in; none on Windows, which has no uid. */
+export function claudeTempBases(uid: number | undefined = process.getuid?.()): string[] {
+  return uid === undefined ? [] : claudeTempRoots().map((root) => join(root, `claude-${uid}`));
+}
+
 /**
  * The folder Claude Code keeps for a session's own files outside the project, such as the
  * `scratchpad/` it names in prose by a relative path: `<tmp>/claude-<uid>/<project>/<session>/`,
@@ -1191,7 +1202,7 @@ export async function claudeTranscriptFile(
  */
 export async function claudeSessionTempDir(
   transcript: string,
-  roots: readonly string[] = [...new Set([tmpdir(), "/tmp"])],
+  roots: readonly string[] = claudeTempRoots(),
   uid: number | undefined = process.getuid?.(),
 ): Promise<string | null> {
   if (uid === undefined || !transcript.endsWith(".jsonl")) return null;

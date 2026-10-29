@@ -1,16 +1,31 @@
 /**
- * What a new agent's launch may carry from the new workspace and tab dialogs (#774, #1311): a model, an
- * effort level, a first prompt on Codex's command line, and a first message the bridge queues. The
- * dialog (src/lib/agentLaunchMode.ts), the bridge's create routes (server/agent-launch.ts,
- * server/workspace-routes.ts) and the demo's transport all check them by these rules, so what the
- * dialog lets through is what the bridge takes.
+ * What a new agent's launch may carry from the new workspace and tab dialogs (#774, #1311, #2232): a
+ * model, an effort level, Claude Code's Ultracode, a first prompt on Codex's command line, and a first
+ * message the bridge queues. The dialog (src/lib/agentLaunchMode.ts) and the bridge's create routes
+ * (server/agent-launch.ts, server/workspace-routes.ts) check them by these rules, so what the dialog
+ * lets through is what the bridge takes; the demo's transport checks only the first message.
  */
 
 /**
- * Claude Code's `--effort` levels: "Options: low, medium, high, xhigh, max, or ultracode. Available
- * levels depend on the model." (code.claude.com/docs/en/cli-reference, read 2026-10-20)
+ * Claude Code's effort levels, as its `claude --help` lists them: "--effort <level>  Effort level for
+ * the current session (low, medium, high, xhigh, max)" (2.1.311). Ultracode is no level: since 2.1.284
+ * it is a setting of its own that keeps whichever level the session runs at (code.claude.com/docs/en/
+ * model-config, read 2026-10-28), so the dialog offers it as a switch (src/lib/agentLaunchMode.ts).
  */
-export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultracode"] as const;
+export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+/**
+ * What a Claude Code launch may still pass after `--effort`: the levels and `ultracode`, which 2.1.311's
+ * parser still takes as xhigh with Ultracode on (its `{ultracode: "xhigh"}` alias table) and the docs
+ * still list ("`ultracode` requests `xhigh` effort with ultracode turned on", cli-reference, read
+ * 2026-10-28). A launch an older page or another API client builds with it starts as it did.
+ */
+const CLAUDE_EFFORT_ARGS: readonly string[] = [...CLAUDE_EFFORTS, "ultracode"];
+/**
+ * `--settings` for a Claude Code session with Ultracode on: "set `"ultracode": true` in a settings
+ * file, with `--settings`" (code.claude.com/docs/en/model-config). The key "doesn't change the
+ * session's effort level" (code.claude.com/docs/en/settings-reference#ultracode, read 2026-10-28).
+ */
+export const CLAUDE_ULTRACODE_SETTINGS = '{"ultracode":true}';
 /**
  * Codex's `model_reasoning_effort` levels: "such as low, medium, high, xhigh, max, or ultra. Available
  * levels depend on the model and client." (developers.openai.com/codex/config-reference, read 2026-10-20)
@@ -75,13 +90,14 @@ const configValue = (value: string): string => {
 /**
  * What is wrong with an agent's launch arguments, in the API's words; null when they can be passed. No
  * argument may hold a control character. Claude Code's and Codex's model and effort flags take only
- * the values the dialog offers, in every spelling their CLIs accept, and Codex's prompt after `--`
- * follows a first message's rules.
+ * the values the dialog offers (and Claude Code's `--effort ultracode`), in every spelling their CLIs
+ * accept, and Codex's prompt after `--` follows a first message's rules. Any other flag is the agent's
+ * own: Ultracode's `--settings {"ultracode":true}` passes as it is.
  */
 export function launchArgsFault(kind: string, args: readonly string[]): string | null {
   if (!args.every(argumentText)) return "agent.args must not contain control characters (a tab or a line break included)";
   if (kind !== "claude" && kind !== "codex") return null;
-  const efforts: readonly string[] = kind === "claude" ? CLAUDE_EFFORTS : CODEX_EFFORTS;
+  const efforts: readonly string[] = kind === "claude" ? CLAUDE_EFFORT_ARGS : CODEX_EFFORTS;
   for (let at = 0; at < args.length; at++) {
     const arg = args[at]!;
     if (arg === "--") {

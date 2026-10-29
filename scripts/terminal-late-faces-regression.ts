@@ -42,7 +42,7 @@ const STAND_INS: Record<string, string> = {
 };
 
 const state = mkdtempSync(join(tmpdir(), "terminal-late-faces-"));
-const evidence = process.env["CHECK_BROWSER_EVIDENCE_DIR"] ?? state;
+const evidence = process.env["CHECK_BROWSER_EVIDENCE_DIR"] || state;
 mkdirSync(evidence, { recursive: true });
 const workspaces: string[] = [];
 let server: ReturnType<typeof createServer> | undefined;

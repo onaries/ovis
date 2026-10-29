@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { brotliDecompressSync } from "node:zlib";
 
-import { chatFontStack, type FontWidths, HANGUL_FAMILY, loadFontStack, measurableFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "./fontFamily.ts";
+import { chatFontStack, type FontWidths, HANGUL_FAMILY, loadFontStack, measurableFontStack, MONO_FAMILY, openingFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "./fontFamily.ts";
 
 // woff2's known table tags, by the index its table directory writes for them
 const WOFF2_TAGS = ["cmap", "head", "hhea", "hmtx", "maxp", "name", "OS/2", "post", "cvt ", "fpgm", "glyf", "loca", "prep", "CFF ", "VORG", "EBDT", "EBLC", "gasp", "hdmx", "kern", "LTSH", "PCLT", "VDMX", "vhea", "vmtx", "BASE", "GDEF", "GPOS", "GSUB"];
@@ -73,18 +73,27 @@ describe("terminal font stack", () => {
   it("puts the typed list after the icon font and in front of the text fonts, never in place of them", () => {
     const stack = terminalFontStack('D2Coding, "Cascadia Mono"');
     // the bundled icon font never sizes a cell, so it stays first and its icons draw over any font
-    expect(stack.startsWith('"Symbols Nerd Font Mono", D2Coding, "Cascadia Mono", "JetBrains Mono"')).toBe(true);
+    expect(stack.startsWith('"Symbols Nerd Font Mono", D2Coding, "Cascadia Mono", "JetBrains Mono Web", "JetBrains Mono"')).toBe(true);
     // a missing font falls through to today's order, and Malgun Gothic stays the last resort
     expect(stack.replace('D2Coding, "Cascadia Mono", ', "")).toBe(TERMINAL_FONT_STACK);
     expect(stack.endsWith('monospace, "Malgun Gothic"')).toBe(true);
   });
 
-  it("takes none of the faces the app bundles for its own text: xterm would size its cells from one", () => {
+  it("sizes its cells from the bundled code face on every device, ahead of the installed fonts, and never from the interface face", () => {
     const sheets = ["../fonts/fonts.css", "../fonts/pretendard/pretendardvariable-dynamic-subset.css"].map((file) => readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
     const bundled = new Set([...sheets.matchAll(/font-family:\s*["']([^"']+)["']/g)].map((match) => match[1]!));
-    expect([...bundled].sort()).toEqual(["JetBrains Mono Web", "Pretendard Variable"]);
+    expect([...bundled].sort()).toEqual([MONO_FAMILY, "Pretendard Variable"]);
     const named = TERMINAL_FONT_STACK.split(",").map((name) => name.trim().replace(/["']/g, ""));
-    for (const family of bundled) expect(named).not.toContain(family);
+    // the icon font, which never sizes a cell, and then the bundled face
+    expect(named.slice(0, 2)).toEqual(["Symbols Nerd Font Mono", MONO_FAMILY]);
+    expect(named).not.toContain("Pretendard Variable");
+    // both weights, from the bundled files alone: a local() copy is a font Ovis for Mac's canvas cannot measure
+    const faces = [...sheets.matchAll(/@font-face\s*\{([^}]*)\}/g)].map((match) => match[1]!).filter((face) => face.includes(`"${MONO_FAMILY}"`));
+    expect(faces.map((face) => /font-weight:\s*(\d+)/.exec(face)?.[1])).toEqual(["400", "700"]);
+    for (const face of faces) {
+      expect(face).not.toContain("local(");
+      expect(existsSync(new URL(/url\("([^"]+)"\)/.exec(face)![1]!, new URL("../fonts/", import.meta.url)))).toBe(true);
+    }
     // the chat's and the chrome's code face does take it, after the icon font
     const mono = /--font-mono:\s*([^;]+);/.exec(readFileSync(new URL("../styles.css", import.meta.url), "utf8"))![1]!;
     expect(mono.startsWith('"Symbols Nerd Font Mono", "JetBrains Mono Web", ')).toBe(true);
@@ -152,8 +161,27 @@ describe("fonts the canvas cannot measure", () => {
     expect(kept).toContain(`"${HANGUL_FAMILY}"`);
   });
 
+  it("keeps the bundled code face, which the canvas measures, even where it cannot see an installed JetBrains Mono", () => {
+    const kept = measurableFontStack(TERMINAL_FONT_STACK, page([MONO_FAMILY, ...system, ...installed], system));
+    expect(kept.startsWith(`"Symbols Nerd Font Mono", "${MONO_FAMILY}", "Fira Code"`)).toBe(true);
+  });
+
   it("measures nothing without a page", () => {
     expect(measurableFontStack(TERMINAL_FONT_STACK)).toBe(TERMINAL_FONT_STACK);
+  });
+});
+
+describe("the stack a terminal opens with", () => {
+  const fonts = (loaded: boolean) => ({ check: (font: string) => !font.includes(MONO_FAMILY) || loaded });
+
+  it("leaves the bundled face out until it has loaded, so xterm measures it when the font effect sets it", () => {
+    expect(openingFontStack(TERMINAL_FONT_STACK, fonts(false))).toBe(TERMINAL_FONT_STACK.replace(`"${MONO_FAMILY}", `, ""));
+    expect(openingFontStack(TERMINAL_FONT_STACK, fonts(true))).toBe(TERMINAL_FONT_STACK);
+  });
+
+  it("keeps the stack without a font set, and a stack that does not name the face", () => {
+    expect(openingFontStack(TERMINAL_FONT_STACK, undefined)).toBe(TERMINAL_FONT_STACK);
+    expect(openingFontStack("Menlo, monospace", fonts(false))).toBe("Menlo, monospace");
   });
 });
 
@@ -190,7 +218,7 @@ describe("waiting for a font", () => {
     withFonts(async (font) => { asked.push(font); return []; });
     await loadFontStack(terminalFontStack("D2Coding"), 13);
     expect(asked).toHaveLength(1);
-    expect(asked[0]).toStartWith('13px "Symbols Nerd Font Mono", D2Coding, "JetBrains Mono"');
+    expect(asked[0]).toStartWith('13px "Symbols Nerd Font Mono", D2Coding, "JetBrains Mono Web", "JetBrains Mono"');
     expect(asked[0]).not.toContain(HANGUL_FAMILY);
     expect(asked[0]).toEndWith("monospace, \"Malgun Gothic\"");
   });
@@ -199,7 +227,7 @@ describe("waiting for a font", () => {
     const asked: string[] = [];
     withFonts(async (font) => { asked.push(font); return []; });
     await loadFontStack(terminalFontStack("ovis hangul mono, D2Coding"), 13);
-    expect(asked[0]).toStartWith('13px "Symbols Nerd Font Mono", D2Coding, "JetBrains Mono"');
+    expect(asked[0]).toStartWith('13px "Symbols Nerd Font Mono", D2Coding, "JetBrains Mono Web", "JetBrains Mono"');
     expect(asked[0]!.toLowerCase()).not.toContain(HANGUL_FAMILY.toLowerCase());
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,6 +108,62 @@ describe.skipIf(process.platform === "win32")("prepared CI tools", () => {
   }
 });
 
+/** Runs scripts/ci-seed-bun-cache.sh with the host's cache at `seed` (when it is given) and the job's at `<dir>/w/.ci-cache/bun`. */
+function seedBunCache(prepare: (seed: string) => void = () => {}) {
+  const dir = mkdtempSync(join(tmpdir(), "ci-seed-bun-"));
+  const seed = join(dir, "host/bun/current");
+  const cache = join(dir, "w/.ci-cache/bun");
+  try {
+    prepare(seed);
+    const result = spawnSync("bash", [join(root, "scripts/ci-seed-bun-cache.sh")], {
+      encoding: "utf8", timeout: 10_000,
+      env: { PATH: process.env.PATH ?? "", CI_HOST_BUN_CACHE: seed, BUN_INSTALL_CACHE_DIR: cache },
+    });
+    expect(result.error).toBeUndefined();
+    const manifest = join(cache, "left-pad@1.3.0/package.json");
+    return { ...result, cache: existsSync(cache) ? readdirSync(cache).sort() : null, manifest: existsSync(manifest) ? readFileSync(manifest, "utf8") : null, siblings: existsSync(join(dir, "w/.ci-cache")) ? readdirSync(join(dir, "w/.ci-cache")).filter((name) => name !== "bun") : [] };
+  } finally {
+    for (const path of [seed, join(seed, "locked@1.0.0")]) if (existsSync(path)) chmodSync(path, 0o755);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// the runner image is Linux: the script uses GNU mv -T and readlink -e
+describe.skipIf(process.platform !== "linux")("Bun cache seeded from the runner host", () => {
+  it("copies the host's packages into the job's own cache", () => {
+    const result = seedBunCache((seed) => {
+      mkdirSync(join(seed, "left-pad@1.3.0"), { recursive: true });
+      writeFileSync(join(seed, "left-pad@1.3.0/package.json"), '{"name":"left-pad"}');
+    });
+    expect(result.status).toBe(0);
+    expect(result.cache).toEqual(["left-pad@1.3.0"]);
+    expect(result.manifest).toBe('{"name":"left-pad"}');
+    expect(result.siblings).toEqual([]);
+  });
+
+  it("leaves Bun to download everything when the host has no cache", () => {
+    const result = seedBunCache();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("No Bun cache from the runner host");
+    expect(result.cache).toBeNull();
+  });
+
+  // root reads a file whatever its mode, so the copy cannot be made to fail that way
+  it.skipIf(process.getuid?.() === 0)("leaves no half-copied cache behind when the copy fails", () => {
+    const result = seedBunCache((seed) => {
+      mkdirSync(join(seed, "a-first@1.0.0"), { recursive: true });
+      writeFileSync(join(seed, "a-first@1.0.0/package.json"), "{}");
+      mkdirSync(join(seed, "locked@1.0.0"));
+      writeFileSync(join(seed, "locked@1.0.0/index.js"), "");
+      chmodSync(join(seed, "locked@1.0.0"), 0o000);
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("::warning::");
+    expect(result.cache).toBeNull();
+    expect(result.siblings).toEqual([]);
+  });
+});
+
 describe("CI cache contract", () => {
   it("keeps the prepared image aligned with the workflow and lockfile", () => {
     const dockerfile = readFileSync(join(root, "scripts/self-hosted-runner/Dockerfile"), "utf8");
@@ -141,6 +197,13 @@ describe("CI cache contract", () => {
     expect(cache.with!["restore-keys"]).toStartWith("bun-workspace-v2-${{ runner.environment }}-");
     const directory = action.runs.steps.find((step) => step.name === "Select workspace-local Bun cache")!;
     expect(directory.env!.BUN_CACHE_DIR).toBe(`\${{ github.workspace }}/${cache.with!.path}`);
+  });
+
+  it("seeds the Bun cache from the runner host only on self-hosted runners, once its directory is chosen", () => {
+    const names = action.runs.steps.map((step) => step.name);
+    const seed = names.indexOf("Seed Bun cache from the runner host");
+    expect(seed).toBeGreaterThan(names.indexOf("Select workspace-local Bun cache"));
+    expect(action.runs.steps[seed]!.if).toBe("runner.environment == 'self-hosted'");
   });
 
   it("does not transfer dependency or browser caches over the prepared image", () => {
@@ -185,6 +248,15 @@ describe("CI cache contract", () => {
 });
 
 describe("action pins and checkout credentials", () => {
+  it("runs the Windows terminal QA on a pull request's merge with main, as ci.yml does", () => {
+    // the PR head of a branch cut before a QA script fix would run the old, broken script (#2243)
+    const workflow = Bun.YAML.parse(readFileSync(join(root, ".github/workflows/windows-terminal-qa.yml"), "utf8")) as {
+      jobs: Record<string, { steps: Array<{ uses?: string; with?: Record<string, string> }> }>;
+    };
+    const checkout = workflow.jobs["qa"]!.steps.find((step) => step.uses && actionName(step.uses) === "actions/checkout")!;
+    expect(checkout.with!.ref).toBe("${{ github.sha }}");
+  });
+
   it("pins every external action to a full commit SHA and keeps local actions and workflows relative", () => {
     const names = new Set<string>();
     for (const file of actionFiles) {

@@ -172,6 +172,14 @@
   color: var(--status-blocked);
 }
 
+/* Sign in again, under an expired sign-in in the popover and in Settings' account row */
+.usage-sign-in-again {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
 /* label, reset time and percent on one line, the bar under them */
 .usage-row {
   display: grid;

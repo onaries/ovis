@@ -32,11 +32,11 @@ it("leaves other agents and a plain shell alone", () => {
 
 it("names a model and an effort for the agents whose CLI documents them, and a positional prompt only where the separator makes it safe", () => {
   // Claude Code's parser runs a subcommand named by the first operand even after `--` (claude -- update ran the updater)
-  expect(launchCapabilities("claude")).toEqual({ model: true, efforts: CLAUDE_EFFORTS, positionalPrompt: false });
+  expect(launchCapabilities("claude")).toEqual({ model: true, efforts: CLAUDE_EFFORTS, ultracode: true, positionalPrompt: false });
   // clap takes everything after `--` as the PROMPT positional (codex -- logout started the TUI)
-  expect(launchCapabilities("codex")).toEqual({ model: true, efforts: CODEX_EFFORTS, positionalPrompt: true });
+  expect(launchCapabilities("codex")).toEqual({ model: true, efforts: CODEX_EFFORTS, ultracode: false, positionalPrompt: true });
   // Letta Code takes a prompt only with `-p`, its headless mode (letta-code 0.34.23, src/cli/args.ts)
-  for (const kind of ["omp", "pi", "gemini", "opencode", "letta", ""]) expect(launchCapabilities(kind)).toEqual({ model: false, efforts: [], positionalPrompt: false });
+  for (const kind of ["omp", "pi", "gemini", "opencode", "letta", ""]) expect(launchCapabilities(kind)).toEqual({ model: false, efforts: [], ultracode: false, positionalPrompt: false });
   expect(modelSuggestions("claude")).toEqual(["sonnet", "opus", "haiku"]);
   expect(modelSuggestions("codex")).toEqual([]);
 });
@@ -53,6 +53,34 @@ it("puts the model, the effort and then the prompt after the mode, each in the a
   for (const prompt of ["logout", "update", "--help", "-p x"]) expect(launchArgs("codex", plain, { prompt })).toEqual(["--", prompt]);
   // nothing chosen adds nothing
   expect(launchArgs("codex", plain, { model: "  ", effort: "", prompt: "" })).toBeUndefined();
+});
+
+it("offers Claude Code's five effort levels, with Ultracode a switch of its own rather than a level", () => {
+  expect(CLAUDE_EFFORTS).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  expect(launchCapabilities("claude").efforts).not.toContain("ultracode");
+  expect(launchChoiceFault("claude", { effort: "ultracode" })).toBe("effort");
+});
+
+it("turns Ultracode on with one inline --settings object after the effort it keeps, and adds nothing while it is off", () => {
+  const on = ["--settings", "{\"ultracode\":true}"];
+  expect(launchArgs("claude", plain, { effort: "medium", ultracode: true })).toEqual(["--effort", "medium", ...on]);
+  expect(launchArgs("claude", plain, { ultracode: true })).toEqual(on);
+  expect(launchArgs("claude", { ...plain, claudeLaunchMode: "plan" }, { model: "opus", effort: "medium", ultracode: true, prompt: "Fix it" }))
+    .toEqual(["--permission-mode", "plan", "--model", "opus", "--effort", "medium", ...on]);
+  expect(launchAgent("claude", plain, { ultracode: true })).toEqual({ kind: "claude", args: on });
+  // off is Claude Code's own setting, as an empty effort is its own level
+  expect(launchArgs("claude", plain, { effort: "high", ultracode: false })).toEqual(["--effort", "high"]);
+  expect(launchArgs("claude", plain, { ultracode: false })).toBeUndefined();
+  expect(launchChoiceFault("claude", { model: "opus", effort: "max", ultracode: true })).toBeNull();
+});
+
+it("refuses Ultracode for every agent but Claude Code, and never passes it there", () => {
+  expect(launchChoiceFault("codex", { ultracode: true })).toBe("ultracode");
+  expect(launchChoiceFault("omp", { ultracode: true })).toBe("ultracode");
+  expect(launchChoiceFault("", { ultracode: true })).toBe("ultracode");
+  expect(launchChoiceFault("codex", { ultracode: false })).toBeNull();
+  expect(launchArgs("codex", plain, { effort: "high", ultracode: true })).toEqual(["-c", "model_reasoning_effort=high"]);
+  expect(launchArgs("omp", plain, { ultracode: true })).toBeUndefined();
 });
 
 it("refuses a choice the launch does not take, and a model that would read as a flag", () => {

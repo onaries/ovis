@@ -8,8 +8,9 @@ import type { ConversationMetadata, ConversationResponse } from "../shared/proto
 type Screen = Pick<ConversationMetadata, "model" | "reasoning_effort">;
 const NOTHING: Screen = { model: null, reasoning_effort: null };
 
-const CLAUDE_FAMILY = "opus|sonnet|haiku|fable|mythos";
-const VERSION = "[1-9]\\d?";
+/** Claude's model families and a version part, as its ids and display names write them (also conversation-metadata.ts) */
+export const CLAUDE_FAMILY = "opus|sonnet|haiku|fable|mythos";
+export const VERSION = "[1-9]\\d?";
 const EFFORT = "none|minimal|low|medium|high|xhigh|max";
 
 function lastMatch(lines: string[], pattern: RegExp): RegExpExecArray | null {

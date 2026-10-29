@@ -177,7 +177,7 @@ const MANUAL_BROWSER_SCRIPTS = [
   "scripts/terminal-file-links-regression.ts",
   "scripts/update-browser-qa.ts", // a private Git remote and install (docs/app-updates.md)
   "scripts/windows-lens-browser-qa.ts",
-  "scripts/windows-terminal-browser-qa.ts", // native Windows
+  "scripts/windows-terminal-browser-qa.ts", // native Windows: .github/workflows/windows-terminal-qa.yml
 ];
 
 /**
@@ -221,6 +221,14 @@ describe("browser lane assignment", () => {
   it("runs every browser script on disk, directly or through a script it runs, unless it is manual", () => {
     const reached = laneReach(lane);
     expect(onDisk.filter((script) => !reached.has(script) && !MANUAL_BROWSER_SCRIPTS.includes(script))).toEqual([]);
+  });
+
+  // With no CHECK_DIR or CI, both runners hand every script an empty UI_EVIDENCE_DIR, and the
+  // parallel one an empty CHECK_BROWSER_EVIDENCE_DIR too. `??` keeps that empty path, so the script
+  // writes into the checkout or fails to create it (#1554).
+  it("takes an empty evidence folder as unset in every script the lane runs", () => {
+    const keepsEmpty = /(?:UI|CHECK_BROWSER)_EVIDENCE_DIR["']?\]?\s*\?\?/;
+    expect([...laneReach(lane)].filter((script) => keepsEmpty.test(readFileSync(join(import.meta.dir, "..", script), "utf8")))).toEqual([]);
   });
 
   it("keeps the manual list to scripts that exist and that CI does not run", () => {

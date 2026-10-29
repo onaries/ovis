@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Terminal } from "@xterm/xterm";
-import { fileUriPath, hyperlinkFilter, isWebLink, terminalFileLinks } from "./terminalFileLinks.ts";
+import { fileUriPath } from "../../shared/fileUri.ts";
+import { hyperlinkFilter, isWebLink, terminalFileLinks } from "./terminalFileLinks.ts";
 
 /** a plain press of the primary button, as xterm hands one to a link */
 const click = { button: 0 } as MouseEvent;

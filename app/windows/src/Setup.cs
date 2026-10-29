@@ -28,6 +28,18 @@ namespace Ovis
         VersionUnknown,
     }
 
+    /// <summary>What the Installed screen offers for the phone, from what GET /api/access told.</summary>
+    internal enum PhoneStep
+    {
+        /// <summary>Tailscale serves the app: the QR code of its address.</summary>
+        Qr,
+        MakeAddress,
+        SignInTailscale,
+        InstallTailscale,
+        /// <summary>The server asks for a token the app does not have: nothing is known of Tailscale here.</summary>
+        TokenNeeded,
+    }
+
     internal sealed class Plugin
     {
         public string Id;
@@ -47,6 +59,44 @@ namespace Ovis
     {
         /// <summary>The oldest herdr install.ps1 takes.</summary>
         public static readonly Version InstallerMinHerdr = new Version(0, 9, 0);
+
+        /// <summary>
+        /// The state dir herdr keeps for a plugin and hands it as HERDR_PLUGIN_STATE_DIR, found as herdr finds it
+        /// (scripts/plugin-state.ts): under XDG_STATE_HOME when that is set, else under %LOCALAPPDATA%.
+        /// </summary>
+        public static string HerdrPluginStateDir(string id, Func<string, string> variable)
+        {
+            var xdg = variable("XDG_STATE_HOME");
+            var root = xdg != null ? System.IO.Path.Combine(xdg, "herdr")
+                : System.IO.Path.Combine(variable("LOCALAPPDATA") ?? System.IO.Path.Combine(variable("USERPROFILE") ?? "", "AppData", "Local"), "herdr");
+            return System.IO.Path.Combine(root, "plugins", id);
+        }
+
+        /// <summary>
+        /// Windows PowerShell's arguments for a command whose output the app shows. Given as -Command, not -EncodedCommand:
+        /// started with -EncodedCommand and its output in a pipe, Windows PowerShell 5.1 writes its progress, warning and
+        /// error records to stderr as CLIXML, whatever -OutputFormat says, and the log showed that raw. Run hands the
+        /// script to cmd in an environment variable, so its | and quotes arrive as written (it refuses a double quote,
+        /// which the script never has). TLS 1.2 for Windows 10, and UTF-8 output.
+        /// </summary>
+        public static string[] PowerShellArguments(string command)
+        {
+            var script = "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; " +
+                         "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); $ProgressPreference = 'SilentlyContinue'; " + command;
+            return new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script };
+        }
+
+        /// <summary>
+        /// The phone step: the QR code while Tailscale serves the app, else what Tailscale needs. A server behind a token the
+        /// app could not read answers nothing of Tailscale, which is then not taken as missing.
+        /// </summary>
+        public static PhoneStep Phone(string phoneUrl, string tailscale, bool accessLocked)
+        {
+            if (phoneUrl != null) return PhoneStep.Qr;
+            if (accessLocked) return PhoneStep.TokenNeeded;
+            if (tailscale == "running") return PhoneStep.MakeAddress;
+            return tailscale == "stopped" ? PhoneStep.SignInTailscale : PhoneStep.InstallTailscale;
+        }
 
         /// <summary>"0.4.19", "v0.4.19" or "herdr 0.9.3-preview" as X.Y.Z; null for anything else.</summary>
         public static Version ParseVersion(string text)
@@ -140,6 +190,30 @@ namespace Ovis
             return token;
         }
 
+        /// <summary>
+        /// The token names the environment sets, as one settings layer under the plugin's files. A name it does not set
+        /// stays out: written empty, it would hide the old name, which `plugin.ts` reads then.
+        /// </summary>
+        public static string EnvironmentLayer(Func<string, string> variable)
+        {
+            return string.Join("\n", new[] { "OVIS_TOKEN", "HERDR_WEB_TOKEN" }.Select(name => new { name, value = variable(name) }).Where(set => set.value != null).Select(set => set.name + "=" + set.value));
+        }
+
+        /// <summary>`managed: false` of GET /api/updates: no update supervisor runs the server, or none has reported yet.</summary>
+        public static bool UpdatesUnmanaged(string json)
+        {
+            try
+            {
+                var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
+                object value;
+                return root != null && root.TryGetValue("managed", out value) && value is bool && !(bool)value;
+            }
+            catch (Exception exception) when (exception is ArgumentException || exception is InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
         /// <summary>`current_version` of GET /api/updates: the package.json of the build the answering server runs.</summary>
         public static string UpdatesVersion(string json)
         {
@@ -168,19 +242,61 @@ namespace Ovis
         }
 
         /// <summary>
+        /// The `(pid N)` of the status's first line: `plugin.ts status` names the process it recorded only while it lives,
+        /// and says so whether herdr answers or not (its "running" needs herdr, every release since 0.3).
+        /// </summary>
+        public static int? StatusPid(string output)
+        {
+            var first = (output ?? "").Split('\n').FirstOrDefault() ?? "";
+            var at = first.LastIndexOf("(pid ", StringComparison.Ordinal);
+            if (at < 0) return null;
+            var end = first.IndexOf(')', at);
+            int pid;
+            return end > at && int.TryParse(first.Substring(at + 5, end - at - 5), out pid) && pid > 0 ? pid : (int?)null;
+        }
+
+        /// <summary>
+        /// `plugin.ts stop` ended a server: "stopped Ovis (pid N)", or "stopped herdr web ui (pid N)" before the rename. It
+        /// prints that only after it verified the process as the plugin's own and saw it exit; "… is not running" otherwise.
+        /// </summary>
+        public static bool StoppedServer(string output)
+        {
+            return (output ?? "").Split('\n').Select(line => line.Trim()).Any(line => line.StartsWith("stopped ", StringComparison.Ordinal) && line.Contains("(pid "));
+        }
+
+        /// <summary>The bridge health's answer is the app's own: `ok: true` with an integer `bridge_protocol` (server/index.ts).</summary>
+        public static bool BridgeHealth(string json)
+        {
+            try
+            {
+                var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
+                object ok, protocol;
+                return root != null && root.TryGetValue("ok", out ok) && ok is bool && (bool)ok && root.TryGetValue("bridge_protocol", out protocol) && protocol is int;
+            }
+            catch (Exception exception) when (exception is ArgumentException || exception is InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Why the server needs an update. herdr's list is never taken for the version that runs: a stopped server known
         /// only by it is started first, as it may have updated itself, and a running one that does not say its version
         /// (a token holds /api/updates) is one whose version cannot be read. The update then installs the newest
         /// release, which no release that runs is newer than. An app without a version (a local build) asks only the
         /// old id to move; a linked checkout or a fork is never touched.
         /// </summary>
-        public static UpdateReason Reason(Plugin plugin, string runningVersion, string statusVersion, bool running, Version app)
+        public static UpdateReason Reason(Plugin plugin, string runningVersion, string statusVersion, bool running, Version app, bool unmanaged = false)
         {
             if (plugin == null || plugin.NotOurs) return UpdateReason.None;
             if (plugin.Id == Links.LegacyPluginId) return UpdateReason.LegacyId;
             if (app == null) return UpdateReason.None;
             bool exact;
             var server = ServerVersion(plugin, running, runningVersion, statusVersion, out exact);
+            // a server that runs without the update supervisor reports no version, and none is guessed for it: one the
+            // plugin's start just started answers so until its supervisor's first word, and a hand-run one is not the
+            // plugin's to reinstall
+            if (running && !exact && unmanaged) return UpdateReason.None;
             // a running server that does not say is unknown whatever herdr lists: its checkout may be newer than it
             if (running && !exact) return UpdateReason.VersionUnknown;
             if (server == null) return UpdateReason.VersionUnknown;
