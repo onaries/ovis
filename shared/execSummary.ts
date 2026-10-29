@@ -95,8 +95,10 @@ export function execToolCalls(input: string): { name: string; argumentsAt: numbe
 export function execToolSummary(input: string): string | null {
   const names = new Set(execToolCalls(input).map((call) => call.name));
   if (names.size === 0) {
-    const catalog = /^\s*const\s+([A-Za-z_$][\w$]*)\s*=\s*ALL_TOOLS\s*\.\s*filter\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*\/((?:\\.|[^/\\\n])+)\/[dgimsuvy]*\s*\.\s*test\s*\(\s*\2\.name\s*\+\s*(?:" "|' ')\s*\+\s*\2\.description\s*\)\s*\)\s*;\s*text\s*\(\s*\1\s*\)\s*;?\s*$/.exec(input);
-    return catalog ? `Search tools: ${catalog[3]}`.slice(0, 120) : null;
+    const printed = /^\s*(?:const\s+([A-Za-z_$][\w$]*)\s*=\s*([\s\S]+?)\s*;\s*text\s*\(\s*\1\s*\)|text\s*\(\s*([\s\S]+?)\s*\))\s*;?\s*$/.exec(input);
+    const expression = printed?.[2] ?? printed?.[3];
+    const catalog = expression === undefined ? null : /^ALL_TOOLS\s*\.\s*filter\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*\/((?:\\.|[^/\\\n])+)\/[dgimsuvy]*\s*\.\s*test\s*\(\s*\1\.name\s*\+\s*(?:" "|' ')\s*\+\s*\1\.description\s*\)\s*\)(?:\s*\.\s*slice\s*\(\s*\d+\s*,\s*\d+\s*\))?\s*$/.exec(expression);
+    return catalog ? `Search tools: ${catalog[2]}`.slice(0, 120) : null;
   }
   return names.size > 0 ? [...names].join(" · ").slice(0, 120) : null;
 }

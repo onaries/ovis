@@ -20,6 +20,7 @@ const dynamicInput = 'let p="*** Begin Patch\\n"; for (const f of files) { const
 const objectsInput = 'const cmds=[{cmd:"ssh example cat report.json",workdir:"/repo"}]; const rs=await Promise.allSettled(cmds.map(c=>tools.exec_command(c)));';
 const stringsInput = 'const cmds=["ssh example mount", "ssh example stat"];const r=await Promise.all(cmds.map(cmd=>tools.exec_command({cmd,yield_time_ms:10000,max_output_tokens:1000})));for(const x of r) text(x);';
 const catalogInput = 'const matches = ALL_TOOLS.filter(x => /confluence|atlassian/i.test(x.name + " " + x.description));\ntext(matches);';
+const directCatalogInput = 'text(ALL_TOOLS.filter(x => /browser|playwright|chrome|opencli/i.test(x.name + " " + x.description)).slice(0,80));';
 const boundInput = String.raw`const command="node -e '"+load("receipt")+"'\ndiff -u "+load("draft")+" "+summary.outputPath;text(await tools.exec_command({cmd:command,max_output_tokens:3500}));`;
 const records = [
   { type: "event_msg", timestamp: "2026-10-24T13:00:00Z", payload: { type: "user_message", message: "Check the repository" } },
@@ -30,6 +31,7 @@ const records = [
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "strings", name: "exec", input: stringsInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "bound", name: "exec", input: boundInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "catalog", name: "exec", input: catalogInput } },
+  { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "direct-catalog", name: "exec", input: directCatalogInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:03Z", payload: { type: "custom_tool_call", call_id: "spawn", name: "exec", input: agentInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:04Z", payload: { type: "custom_tool_call_output", call_id: "spawn", output: `Script completed\nOutput:\n${JSON.stringify({ agent_id: agentId, nickname: "Parser Scout" })}` } },
 ];
@@ -93,6 +95,11 @@ try {
       assert.equal(await catalog.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), catalogInput);
       await catalog.click();
       await images.click();
+      const directCatalog = page.locator(".work-row-head").filter({ hasText: "Search tools: browser|playwright|chrome|opencli" });
+      assert.equal((await directCatalog.innerText()).trim(), "Search tools: browser|playwright|chrome|opencli");
+      await directCatalog.click();
+      assert.equal(await directCatalog.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), directCatalogInput);
+      await directCatalog.click();
       await images.scrollIntoViewIfNeeded();
       const evidence = process.env.UI_EVIDENCE_DIR;
       if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, `codex-operations-${width}-${theme}.png`) }); }

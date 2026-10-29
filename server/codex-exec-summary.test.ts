@@ -22,6 +22,24 @@ it("names a printed tool catalog search without executing its predicate", () => 
   expect(parse(input + '\nawait tools.view_image({path:file});')).toMatchObject({ summary: "view_image" });
 });
 
+it("names a directly printed tool catalog search with a literal result limit", () => {
+  const input = 'text(ALL_TOOLS.filter(x => /browser|playwright|chrome|opencli/i.test(x.name + " " + x.description)).slice(0,80));';
+  const part = parse(input);
+  expect(part).toMatchObject({ summary: "Search tools: browser|playwright|chrome|opencli", input });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(workRowLabel(part, part.summary)).toEqual({ narration: true, verb: null });
+  expect(parse(input.replace(".slice(0,80)", ""))).toMatchObject({ summary: part.summary });
+  for (const other of [
+    `const example = ${JSON.stringify(input)};`,
+    `/* ${input} */`,
+    `// ${input}`,
+    input.replace("ALL_TOOLS", "other.ALL_TOOLS"),
+    input.replace(".slice(0,80)", ".slice(0,limit)"),
+    input.replace(".slice(0,80)", ".slice(0,resolveLimit())"),
+    input.replace('x.name + " " + x.description', 'change() + x.description'),
+  ]) expect(parse(other)).toMatchObject({ summary: "exec" });
+});
+
 it("shows nested image and terminal calls instead of an exec-only heading", () => {
   const input = 'for (const name of ["phone.png", "desktop.png"]) { const r = await tools.view_image({path:"/repo/evidence/" + name}); image(r.image_url); } text(await tools.write_stdin({session_id:51623,chars:""}));';
   const part = parse(input);
