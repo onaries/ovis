@@ -169,6 +169,15 @@ try {
       failed = false;
       await notice.waitFor({ state: "hidden" });
       const assigned = page.locator(".work-row-head").filter({ hasText: "Inspect the parser" });
+      const subagentLabel = assigned.locator(".work-row-name.is-verb");
+      assert.equal(await subagentLabel.count(), 1, "Subagent has the same standalone label as ordinary tool rows");
+      const textStyle = (element: Element) => {
+        const style = getComputedStyle(element);
+        return { family: style.fontFamily, size: style.fontSize, weight: style.fontWeight, color: style.color };
+      };
+      const commandLabel = page.locator(".work-row-head").filter({ hasText: "git status --short · bun test" }).locator(".work-row-name.is-verb");
+      assert.deepEqual(await subagentLabel.evaluate(textStyle), await commandLabel.evaluate(textStyle), "Subagent uses the ordinary row label's computed typography");
+      assert.equal(await assigned.locator(".work-row-summary").textContent(), "· Inspect the parser");
       await assigned.focus();
       await page.keyboard.press("Enter");
       const card = assigned.locator("..").locator("..").locator(".chat-task-call");

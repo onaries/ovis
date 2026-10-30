@@ -619,8 +619,9 @@ function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: Tool
   const attempt = state !== undefined;
   const whole = useWholeOutput(part.output_ref);
   const hasSubagents = !part.arguments_omitted && (part.codex_subagents?.length ?? 0) > 0;
+  const subagentSummary = part.codex_subagents?.map((call) => call.title || call.nickname || subagentAction(call.operation, t)).join(" · ").slice(0, 120) ?? "";
   const summary = part.arguments_omitted ? t("Arguments omitted (too large)") : hasSubagents
-    ? `${t("Subagent")} · ${part.codex_subagents?.map((call) => call.title || call.nickname || subagentAction(call.operation, t)).join(" · ").slice(0, 120)}`
+    ? `${t("Subagent")} · ${subagentSummary}`
     : todoCallSummary(part) ?? part.summary;
   // reads the call's input: once per call, not on every poll of the transcript
   const { verb, narration: described } = useMemo(() => workRowLabel({ name: part.name, input: part.input }, summary), [part.name, part.input, summary]);
@@ -635,10 +636,11 @@ function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: Tool
     <div className="work-row-line">
       <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)} {...focus}>
         <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
+        {hasSubagents && <span className="work-row-name is-verb">{t("Subagent")}</span>}
         {!narration && (verb !== null ? <span className="work-row-name is-verb">{t(verb)}</span> : <span className="work-row-name">{part.name}</span>)}
         {/* the spaces are for a screen reader: the row is read as words, not "Ranbun test" */}
         {!narration && part.error && verb === null && <>{" "}<span className="work-row-failed">{t("failed")}</span></>}
-        {summary.length > 0 && summary !== part.name && <>{" "}<span className="work-row-summary">{summary}</span></>}
+        {summary.length > 0 && summary !== part.name && <>{" "}<span className="work-row-summary">{hasSubagents ? `· ${subagentSummary}` : summary}</span></>}
         {/* after a verb, or the agent's own sentence, the word follows it: "Ran pnpm test failed", not "Ran failed pnpm test" */}
         {part.error && (narration || verb !== null) && <>{" "}<span className="work-row-failed">{t("failed")}</span></>}
         {stateWord !== null && <>{" "}<span className={state === "error" ? "work-row-failed" : `work-row-state is-${state}`}>{stateWord}</span></>}
