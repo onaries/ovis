@@ -1,5 +1,35 @@
 const LITERAL = '"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|`(?:[^`\\\\]|\\\\.)*`';
 
+function stringConstants(bindings: string): Map<string, string> | null {
+  if (!/^(?:\s*const\s+[A-Za-z_$][\w$]*\s*=\s*"(?:[^"\\]|\\.)*"\s*;\s*)*\s*$/.test(bindings)) return null;
+  const values = new Map<string, string>();
+  for (const declaration of bindings.matchAll(/const\s+([A-Za-z_$][\w$]*)\s*=\s*("(?:[^"\\]|\\.)*")\s*;/g)) {
+    const name = declaration[1], value = declaration[2];
+    if (name === undefined || value === undefined || values.has(name)) return null;
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed !== "string") return null;
+      values.set(name, parsed);
+    }
+    catch (error) { if (!(error instanceof SyntaxError)) throw error; return null; }
+  }
+  return values;
+}
+
+/** Resolves adjacent string constants only; template expressions are never executed. */
+export function constantTemplate(literal: string, bindings: string): string | null {
+  if (!literal.startsWith("`") || !literal.endsWith("`") || literal.includes("\\")) return null;
+  const values = stringConstants(bindings);
+  if (values === null) return null;
+  let unknown = false;
+  const text = literal.slice(1, -1).replace(/\$\{\s*([A-Za-z_$][\w$]*)\s*\}/g, (_token, name: string) => {
+    const value = values.get(name);
+    if (value === undefined) unknown = true;
+    return value ?? "";
+  });
+  return unknown || text.includes("${") ? null : text;
+}
+
 /** Never evaluates code; only literal commands or proven prefixes name a shell call. */
 export function execSummary(input: string): string | null {
   // Skip strings and comments outside calls so quoted examples never become command labels.
@@ -9,9 +39,18 @@ export function execSummary(input: string): string | null {
   const commands: string[] = [];
   for (const match of input.matchAll(calls)) {
     const literal = match[1];
-    if (literal === undefined || literal.startsWith("`") && literal.includes("${")) continue;
+    if (literal === undefined) continue;
     let command: string;
-    if (literal.startsWith('"')) {
+    if (literal.startsWith("`") && literal.includes("${")) {
+      const prefix = input.slice(0, match.index);
+      const marker = /(?:const\s+[A-Za-z_$][\w$]*\s*=\s*)?(?:text\s*\(\s*)?await\s*$/.exec(prefix);
+      const option = `(?!cmd\\s*:)[A-Za-z_$][\\w$]*\\s*:\\s*(?:${LITERAL}|-?\\d+(?:\\.\\d+)?|true|false|null)`;
+      const ending = new RegExp(`^\\s*(?:,\\s*${option})*\\s*,?\\s*\\}\\s*\\)`);
+      if (!marker || !ending.test(input.slice(match.index + match[0].length))) continue;
+      const resolved = constantTemplate(literal, prefix.slice(0, marker.index));
+      if (resolved === null) continue;
+      command = resolved;
+    } else if (literal.startsWith('"')) {
       try { command = JSON.parse(literal); }
       catch { continue; }
     } else {
@@ -52,9 +91,14 @@ export function execSummary(input: string): string | null {
   }
   if (!commands.length) {
     const string = '"(?:[^"\\\\]|\\\\.)*"';
-    const option = `(?!cmd\\s*:)[A-Za-z_$][\\w$]*\\s*:\\s*(?:${string}|-?\\d+(?:\\.\\d+)?|true|false|null)`;
-    const mappedStrings = new RegExp(`^\\s*const\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*\\[\\s*(${string}(?:\\s*,\\s*${string})*\\s*,?)\\s*\\]\\s*;\\s*(?:const\\s+[A-Za-z_$][\\w$]*\\s*=\\s*)?await\\s+Promise\\.(?:all|allSettled)\\(\\s*\\1\\.map\\(\\s*(?:async\\s+)?\\(?\\s*([A-Za-z_$][\\w$]*)\\s*\\)?\\s*=>\\s*(?:await\\s+)?tools\\.exec_command\\(\\s*\\{\\s*(?:cmd\\s*:\\s*\\3|(?=cmd\\s*[,}])\\3)(?:\\s*,\\s*${option})*\\s*,?\\s*\\}\\s*\\)\\s*\\)\\s*\\)\\s*;`).exec(input);
-    if (mappedStrings?.[2] !== undefined) {
+    const prefix = new RegExp(`^\\s*(?:const\\s+[A-Za-z_$][\\w$]*\\s*=\\s*${string}\\s*;\\s*)*`).exec(input)?.[0] ?? "";
+    const bindings = stringConstants(prefix);
+    const names = [...bindings?.keys() ?? []].map((name) => name.replaceAll("$", "\\$"));
+    const boundOption = names.length ? `|(?:${names.join("|")})(?![\\w$])` : "";
+    const option = `(?!cmd\\s*:)[A-Za-z_$][\\w$]*\\s*:\\s*(?:${string}|-?\\d+(?:\\.\\d+)?|true|false|null${boundOption})`;
+    const mappedStrings = new RegExp(`^\\s*const\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*\\[\\s*(${string}(?:\\s*,\\s*${string})*\\s*,?)\\s*\\]\\s*;\\s*(?:const\\s+[A-Za-z_$][\\w$]*\\s*=\\s*)?await\\s+Promise\\.(?:all|allSettled)\\(\\s*\\1\\.map\\(\\s*(?:async\\s+)?\\(?\\s*([A-Za-z_$][\\w$]*)\\s*\\)?\\s*=>\\s*(?:await\\s+)?tools\\.exec_command\\(\\s*\\{\\s*(?:cmd\\s*:\\s*\\3|(?=cmd\\s*[,}])\\3)(?:\\s*,\\s*${option})*\\s*,?\\s*\\}\\s*\\)\\s*\\)\\s*\\)\\s*;`).exec(input.slice(prefix.length));
+    if (mappedStrings?.[2] !== undefined && bindings !== null && !bindings.has("tools") && !bindings.has("Promise")
+      && !bindings.has(mappedStrings[1] ?? "") && !bindings.has(mappedStrings[3] ?? "")) {
       try {
         const rows: unknown = JSON.parse(`[${mappedStrings[2].replace(/,\s*$/, "")}]`);
         if (Array.isArray(rows)) {

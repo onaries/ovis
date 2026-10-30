@@ -14,6 +14,33 @@ describe("Codex patches", () => {
     expect(patchText('tools.apply_patch("not a patch")')).toBeNull();
   });
 
+  it("resolves a patch template from preceding literal path constants without executing code", () => {
+    const file = "/mnt/projects/safemotion/kidscafe-workspace/kiosk/frontend/app/(reactive)/(unauth)/parent-station/ParentStationClient.tsx";
+    const template = ["*** Begin Patch", "*** Update File: ${f}", "@@",
+      ' import { useCallback, useEffect, useMemo, useRef, useState } from "react";',
+      '+import { useRouter } from "next/navigation";',
+      ' import ParentStationLookup from "./ParentStationLookup.tsx";',
+      "@@", " }: ParentStationClientProps = {}) {",
+      "   const [screen, setScreen] = useState<Screen>(initialScreen);",
+      "+  const router = useRouter();", "*** End Patch"].join("\n");
+    const quote = String.fromCharCode(96);
+    const source = "const f = " + JSON.stringify(file) + ";\nconst p = " + quote + template + quote + ";\ntext(await tools.apply_patch(p));";
+    const expected = template.replace("${f}", file);
+    expect(patchText(source)).toBe(expected);
+    expect(patchFiles(patchText(source) ?? "")).toEqual([file]);
+    expect(patchText("const f = " + JSON.stringify(file) + ";text(await tools.apply_patch(" + quote + template + quote + "));")).toBe(expected);
+    for (const invalid of [
+      source.replace("const f", "let f"),
+      source.replace("${f}", "${missing}"),
+      source.replace("${f}", "${resolveFile()}"),
+      source.replace("tools.apply_patch(p)", "tools.apply_patch(other)"),
+      source.replace("text(await", "change();text(await"),
+      "const example = " + JSON.stringify(source) + ";",
+      "/* " + source + " */",
+    ]) expect(patchText(invalid)).toBeNull();
+  });
+
+
   it("names each file a patch touches once, in order", () => {
     expect(patchFiles(PATCH + "*** Update File: src/a.ts\n*** Delete File: old.txt\n")).toEqual(["src/a.ts", "docs/b.md", "old.txt"]);
   });

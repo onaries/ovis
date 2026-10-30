@@ -40,6 +40,46 @@ it("names a directly printed tool catalog search with a literal result limit", (
   ]) expect(parse(other)).toMatchObject({ summary: "exec" });
 });
 
+it("resolves a template command from preceding literal string constants without evaluating code", () => {
+  const base = "/mnt/projects/safemotion/kidscafe-workspace/kiosk/frontend";
+  const input = 'const base = ' + JSON.stringify(base) + ';\nconst r = await tools.exec_command({cmd: `sed -n 68,82p ${base}/src/components/operator/OperatorDashboardPage.tsx`, yield_time_ms: 20000, max_output_tokens: 1200});\ntext(r.output);';
+  const summary = ("sed -n 68,82p " + base + "/src/components/operator/OperatorDashboardPage.tsx").slice(0, 120);
+  const part = parse(input);
+  expect(part).toMatchObject({ summary, input });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(toolVerb(part, part.summary)).toBe("Ran");
+  expect(parse('const base = "/repo"; const file = "entry.ts"; text(await tools.exec_command({cmd: `cat ${base}/${file}`}));')).toMatchObject({ summary: "cat /repo/entry.ts" });
+  for (const other of [
+    input.replace("const base", "let base"),
+    input.replace("const r =", 'base = "/other"; const r ='),
+    input.replace("const r =", "change(); const r ="),
+    input.replace("${base}", "${missing}"),
+    input.replace("${base}", '${base + "/other"}'),
+    input.replace("${base}", "${resolvePath()}"),
+    input.replace("${base}", "\\${base}"),
+    input.replace("yield_time_ms: 20000", 'cmd: "other"'),
+    input.replace("yield_time_ms: 20000", '["cmd"]: "other"'),
+    input.replace("yield_time_ms: 20000", "...options"),
+    input.replace("yield_time_ms: 20000", "yield_time_ms: resolveOptions()"),
+    'const base = "/repo"; function run(base) { return tools.exec_command({cmd: `cat ${base}/entry.ts`}); }',
+  ]) expect(parse(other)).toMatchObject({ summary: "exec_command" });
+  expect(parse("const example = " + JSON.stringify(input) + ";")).toMatchObject({ summary: "exec" });
+  expect(parse("/* " + input + " */")).toMatchObject({ summary: "exec" });
+});
+
+
+it("shows an interpolated patch target as an edit while preserving its original input", () => {
+  const file = "/repo/app/(reactive)/(unauth)/parent-station/ParentStationClient.tsx";
+  const patch = '*** Begin Patch\n*** Update File: ${f}\n@@\n+import { useRouter } from "next/navigation";\n*** End Patch';
+  const input = "const f = " + JSON.stringify(file) + ";const p = " + String.fromCharCode(96) + patch + String.fromCharCode(96) + ";text(await tools.apply_patch(p));";
+  const part = parse(input);
+  expect(part).toMatchObject({ name: "exec", summary: file, input });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(toolVerb(part, part.summary)).toBe("Edited");
+  expect(workRowLabel(part, part.summary)).toEqual({ narration: false, verb: "Edited" });
+});
+
+
 it("shows nested image and terminal calls instead of an exec-only heading", () => {
   const input = 'for (const name of ["phone.png", "desktop.png"]) { const r = await tools.view_image({path:"/repo/evidence/" + name}); image(r.image_url); } text(await tools.write_stdin({session_id:51623,chars:""}));';
   const part = parse(input);
@@ -130,6 +170,37 @@ it("names literal strings mapped to the command property, including shorthand", 
     `const example=${JSON.stringify(input)};`,
   ]) expect(parse(invalid)).toMatchObject({ summary: invalid.startsWith("const example=") ? "exec" : "exec_command" });
 });
+it("names mapped query strings after literal option constants without executing them", () => {
+  const queries = [
+    'rg -n "refetchInterval|refetchOnWindowFocus|invalidateQueries|parent-dashboard/visits|today-visits|useTodayVisits|현황판|이용 중|놀이 중" app src -g \'*.ts\' -g \'*.tsx\' -g \'!*.sync-conflict-*\'',
+    'rg -n "ParentStation|parentView|OperatorDashboardPage|OperatorDashboard" app src/components/operator -g \'*.tsx\'',
+  ];
+  const input = `const cwd = "/mnt/projects/safemotion/kidscafe-workspace/kiosk/frontend";\nconst queries = ${JSON.stringify(queries, null, 2)};\nconst rs = await Promise.allSettled(queries.map(cmd => tools.exec_command({\n  cmd, workdir: cwd, yield_time_ms: 10000, max_output_tokens: 7000\n})));\nfor (const r of rs) text(r.status === "fulfilled" ? r.value.output : String(r.reason));`;
+  const summary = queries.join(" · ").slice(0, 120);
+  const part = parse(input);
+  expect(part).toMatchObject({ summary, input });
+  if (part?.kind !== "tool") throw new Error("Missing tool row");
+  expect(toolVerb(part, part.summary)).toBe("Ran");
+  expect(parse(input.replace("workdir: cwd", 'workdir: "/repo"'))).toMatchObject({ summary });
+  expect(parse(input.replace("const cwd", "const $cwd").replace("workdir: cwd", "workdir: $cwd"))).toMatchObject({ summary });
+  expect(parse(input.replace("allSettled", "all"))).toMatchObject({ summary });
+  for (const invalid of [
+    input.replace("const cwd", "let cwd"),
+    input.replace("const queries", 'cwd = "/other"; const queries'),
+    input.replace("const rs", "queries.reverse(); const rs"),
+    input.replace("workdir: cwd", "workdir: unknown"),
+    input.replace("workdir: cwd", "workdir: change(queries)"),
+    input.replace("cmd, workdir", 'cmd, cmd: "other", workdir'),
+    input.replace("cmd, workdir", "cmd, ...options, workdir"),
+    input.replace("queries.map(cmd", "queries.map(cwd").replace("cmd, workdir", "cmd: cwd, workdir"),
+    'const cwd = "/first";' + input,
+    'const tools = "/shadow";' + input,
+    'const Promise = "/shadow";' + input,
+    `const example = ${JSON.stringify(input)};`,
+    `/* ${input} */`,
+  ]) expect(parse(invalid)).toMatchObject({ summary: invalid.startsWith("const example") || invalid.startsWith("/*") ? "exec" : "exec_command" });
+});
+
 it("decodes literal commands without executing the script and preserves patch summaries", () => {
   expect(parse('await tools.exec_command({cmd:"echo ${HOME}"})')).toMatchObject({ summary: "echo ${HOME}" });
   for (const input of ["await tools.exec_command({cmd:'git status --short'})", 'await tools.exec_command({cmd:`git status --short`})']) {

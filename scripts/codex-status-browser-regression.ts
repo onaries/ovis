@@ -9,6 +9,9 @@ import { parseCodexTranscript } from "../server/codex.ts";
 
 const root = mkdtempSync(join(tmpdir(), "ovis-codex-status-"));
 const screen = "■ Selected model is at capacity. Please try a different model.\n\n› Ask Codex to do anything\n gpt-6.1-sol high · 38% context left";
+const patchFile = "/repo/app/(reactive)/(unauth)/parent-station/ParentStationClient.tsx";
+const pathPatch = '*** Begin Patch\n*** Update File: ${f}\n@@\n+import { useRouter } from "next/navigation";\n+const router = useRouter();\n*** End Patch';
+const pathPatchInput = "const f = " + JSON.stringify(patchFile) + ";const p = " + String.fromCharCode(96) + pathPatch + String.fromCharCode(96) + ";text(await tools.apply_patch(p));";
 let failed = true;
 let phase = 0;
 const agentId = "11111111-1111-4111-8111-111111111111";
@@ -19,8 +22,10 @@ const imageInput = 'for (const name of ["phone.png", "desktop.png"]) { const r =
 const dynamicInput = 'let p="*** Begin Patch\\n"; for (const f of files) { const r=await tools.exec_command({cmd:`rg ${f}`}); p+=r.output; } text(await tools.apply_patch(p));';
 const objectsInput = 'const cmds=[{cmd:"ssh example cat report.json",workdir:"/repo"}]; const rs=await Promise.allSettled(cmds.map(c=>tools.exec_command(c)));';
 const stringsInput = 'const cmds=["ssh example mount", "ssh example stat"];const r=await Promise.all(cmds.map(cmd=>tools.exec_command({cmd,yield_time_ms:10000,max_output_tokens:1000})));for(const x of r) text(x);';
+const mappedOptionsInput = 'const cwd="/repo";const queries=["rg -n refetchInterval app src","rg -n ParentStation app src"];const rs=await Promise.allSettled(queries.map(cmd=>tools.exec_command({cmd,workdir:cwd,yield_time_ms:10000,max_output_tokens:7000})));for(const r of rs) text(r.status==="fulfilled"?r.value.output:String(r.reason));';
 const catalogInput = 'const matches = ALL_TOOLS.filter(x => /confluence|atlassian/i.test(x.name + " " + x.description));\ntext(matches);';
 const directCatalogInput = 'text(ALL_TOOLS.filter(x => /browser|playwright|chrome|opencli/i.test(x.name + " " + x.description)).slice(0,80));';
+const templateInput = 'const base = "/repo/kiosk/frontend";\nconst r = await tools.exec_command({cmd: `sed -n 68,82p ${base}/src/components/operator/OperatorDashboardPage.tsx`, yield_time_ms: 20000, max_output_tokens: 1200});\ntext(r.output);';
 const boundInput = String.raw`const command="node -e '"+load("receipt")+"'\ndiff -u "+load("draft")+" "+summary.outputPath;text(await tools.exec_command({cmd:command,max_output_tokens:3500}));`;
 const records = [
   { type: "event_msg", timestamp: "2026-10-24T13:00:00Z", payload: { type: "user_message", message: "Check the repository" } },
@@ -29,9 +34,12 @@ const records = [
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "dynamic", name: "exec", input: dynamicInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "objects", name: "exec", input: objectsInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "strings", name: "exec", input: stringsInput } },
+  { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "mapped-options", name: "exec", input: mappedOptionsInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "bound", name: "exec", input: boundInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "catalog", name: "exec", input: catalogInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "direct-catalog", name: "exec", input: directCatalogInput } },
+  { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "template", name: "exec", input: templateInput } },
+  { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "path-patch", name: "exec", input: pathPatchInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:03Z", payload: { type: "custom_tool_call", call_id: "spawn", name: "exec", input: agentInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:04Z", payload: { type: "custom_tool_call_output", call_id: "spawn", output: `Script completed\nOutput:\n${JSON.stringify({ agent_id: agentId, nickname: "Parser Scout" })}` } },
 ];
@@ -84,6 +92,16 @@ try {
       await page.locator(".work-row-head").filter({ hasText: "exec_command · apply_patch" }).waitFor();
       await page.locator(".work-row-head").filter({ hasText: "ssh example cat report.json" }).waitFor();
       await page.locator(".work-row-head").filter({ hasText: "ssh example mount · ssh example stat" }).waitFor();
+      const mappedOptions = page.locator(".work-row-head").filter({ hasText: "rg -n refetchInterval app src · rg -n ParentStation app src" });
+      assert.match(await mappedOptions.innerText(), /Ran|실행함/);
+      await mappedOptions.click();
+      assert.equal(await mappedOptions.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), mappedOptionsInput);
+      await mappedOptions.scrollIntoViewIfNeeded();
+      if (process.env.UI_EVIDENCE_DIR) {
+        mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `codex-mapped-options-${width}-${theme}.png`) });
+      }
+      await mappedOptions.click();
       const bound = page.locator(".work-row-head").filter({ hasText: "node -e …" });
       await bound.click();
       assert.equal(await bound.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), boundInput);
@@ -101,10 +119,25 @@ try {
       assert.equal(await directCatalog.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), directCatalogInput);
       await directCatalog.click();
       await images.scrollIntoViewIfNeeded();
+      const template = page.locator(".work-row-head").filter({ hasText: "sed -n 68,82p /repo/kiosk/frontend" });
+      assert.ok((await template.innerText()).includes("OperatorDashboardPage.tsx"));
+      await template.click();
+      assert.equal(await template.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), templateInput);
+      await template.click();
+      await template.scrollIntoViewIfNeeded();
+      const patchRow = page.locator(".work-row-head").filter({ hasText: patchFile });
+      assert.match(await patchRow.innerText(), /Edited|편집함/);
+      await patchRow.click();
+      const patchDetails = patchRow.locator("..").locator("..").locator(".chat-tool-io").first();
+      assert.ok((await patchDetails.innerText()).includes("next/navigation"));
+      assert.ok((await patchDetails.innerText()).includes("const router = useRouter()"));
+      assert.equal(await patchDetails.locator(".chat-diff-add").count(), 2);
+      await patchRow.scrollIntoViewIfNeeded();
       const evidence = process.env.UI_EVIDENCE_DIR;
       if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, `codex-operations-${width}-${theme}.png`) }); }
       assert.equal((await images.innerText()).trim(), "view_image · write_stdin", "non-shell operations name their nested tools, without an exec or Ran prefix");
       assert.equal(await images.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), imageInput, "expanding keeps the original JavaScript");
+      await patchRow.click();
       await images.click();
       assert.equal(await page.locator(".work-block.is-live:not(.is-waiting)").count(), 0, "a failed turn must not still say Working");
       assert.match(await page.locator(".work-block-head").innerText(), /Needs you|내 응답 필요/);
