@@ -330,6 +330,44 @@ describe("WebSocket submit", () => {
     } finally { read.mockRestore(); scroll.mockRestore(); prompt.mockRestore(); socket.close(); }
   });
 
+  it("queues over a ticking background-terminal wait while its empty composer stays the same", async () => {
+    const target = codexWorking;
+    const app = createServer({ port: 0, stateDir: join(root, "ticking-wait") });
+    await app.statusReady;
+    const socket = await Socket.connect(app.port);
+    const originalRead = herdr.paneRead;
+    let tick = 0;
+    let mode = "empty";
+    const read = spyOn(herdr, "paneRead").mockImplementation(async (options, socketPath) => {
+      const result = await originalRead(options, socketPath);
+      if (options.paneId !== target.pane) return result;
+      if (mode === "question") return { ...result, text: "Would you like to run the following command?\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\nPress enter to confirm or esc to cancel\n" };
+      const placeholder = mode === "draft" ? "user draft" : options.format === "ansi" && mode !== "unstyled" ? "\x1b[2mAsk Codex to do anything\x1b[0m" : "Ask Codex to do anything";
+      return { ...result, text: `• Waiting for background terminal (9m ${tick++}s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close\n› ${placeholder}\n  GPT-6.1-Sol high · /tmp/work\n` };
+    });
+    const scroll = spyOn(herdr, "paneScrollInfo").mockImplementation(async () => ({ offset_from_bottom: mode === "scrollback" ? 1 : 0, max_offset_from_bottom: 1, viewport_rows: 24 }));
+    try {
+      await attached(socket, target.pane);
+      const from = chunks(target).length;
+      socket.send({ type: "submit", id: 9730, pane_id: target.pane, text: "next task after waiting", payload: "unused", delivery: "agent-queue" });
+      expect(await socket.result(9730)).toMatchObject({ ok: true });
+      const deadline = Date.now() + 4000;
+      while (!typed(target, from).endsWith("\t")) {
+        expect(Date.now()).toBeLessThan(deadline);
+        await Bun.sleep(20);
+      }
+      expect(typed(target, from)).toBe(`${paste("next task after waiting")}\t`);
+      let id = 9731;
+      for (const refused of ["draft", "scrollback", "unstyled", "question"]) {
+        mode = refused;
+        const mark = chunks(target).length;
+        socket.send({ type: "submit", id, pane_id: target.pane, text: "must stay unsent", payload: "unused", delivery: "agent-queue" });
+        expect(await socket.result(id++)).toMatchObject({ ok: false, code: refused === "question" ? "agent_blocked" : "input_draft" });
+        expect(chunks(target).length).toBe(mark);
+      }
+    } finally { read.mockRestore(); scroll.mockRestore(); socket.close(); app.stop(); }
+  });
+
   it("shares a Codex native transfer receipt with the restored copy and original pending ID", async () => {
     const first = await Socket.connect(), second = await Socket.connect();
     const { read, scroll } = mockClaudeInput(codexWorking.pane, codexWorkingScreen);

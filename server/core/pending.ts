@@ -26,7 +26,7 @@ import { typingGuards } from "../input-guard.ts";
 import { claudeForegroundSession } from "../claude-store.ts";
 import { HerdrError, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
 import { paneRunsCodex } from "../codex.ts";
-import { bindCommandProcess, claudeHeldIsGrey, codexInputEmpty, codexQuestionsCollapsed, codexQueueInputEmpty, viewportShowsLive, isClaudeHeld, heldCandidate, noteSubmitted, parseInteractivePrompt, prepareCommandSend, shownInputBox } from "../prompt.ts";
+import { bindCommandProcess, claudeHeldIsGrey, codexInputEmpty, codexInputFrame, codexQuestionsCollapsed, codexQueueInputEmpty, viewportShowsLive, isClaudeHeld, heldCandidate, noteSubmitted, parseInteractivePrompt, prepareCommandSend, shownInputBox } from "../prompt.ts";
 import { codexRuntimeError } from "../dialogs/codex.ts";
 import { registry } from "../dialogs/registry.ts";
 import { paneRunsOmo } from "../conversation.ts";
@@ -526,7 +526,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         const colors = (await paneRead({ paneId, source: "visible", format: "ansi" })).text;
         const scrollAfter = await paneScrollInfo(paneId);
         const live = (await paneRead({ paneId, source: "detection", format: "text" })).text;
-        if (!viewportShowsLive(scrollBefore, scrollAfter, colors, context.screen, live) || !codexQueueInputEmpty(live, colors))
+        const beforeFrame = codexInputFrame(context.screen), liveFrame = codexInputFrame(live), coloredFrame = codexInputFrame(colors);
+        if (beforeFrame === null || liveFrame === null || coloredFrame === null
+          || !viewportShowsLive(scrollBefore, scrollAfter, coloredFrame, beforeFrame, liveFrame) || !codexQueueInputEmpty(live, colors))
           throw new HerdrError("input_draft", "Check or clear Codex's terminal input before transferring this message");
       }
       authorize();

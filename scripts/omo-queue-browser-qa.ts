@@ -12,7 +12,7 @@ import type { ServerMessage } from "../shared/protocol.ts";
 
 const agent = process.argv[2] === "codex" ? "codex" : "omo";
 const queueKey = agent === "codex" ? "\t" : "\u0011";
-const screen = agent === "codex" ? "• Working (2s • esc to interrupt) · 1 background termin…\n• Queued follow-up inputs\n  ↳ First queued preview\n    wrapped detail\n  ↳ Second queued preview\n    ⇧← edit last queued message\n› \x1b[2mAsk Codex to do anything\x1b[0m\n  GPT-6.1-Sol high fast · /tmp/work\n  ← for agents · ? for shor  ⚠ 3 warnings · f2 to view\n" : "Message OmO\n";
+const screen = agent === "codex" ? "• Waiting for background terminal (9m 59s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close\n• Queued follow-up inputs\n  ↳ First queued preview\n    wrapped detail\n  ↳ Second queued preview\n    ⇧← edit last queued message\n› \x1b[2mAsk Codex to do anything\x1b[0m\n  GPT-6.1-Sol high fast · /tmp/work\n  ← for agents · ? for shor  ⚠ 3 warnings · f2 to view\n" : "Message OmO\n";
 const root = mkdtempSync(join(tmpdir(), `herdr-${agent}-queue-`));
 const evidence = process.env.UI_EVIDENCE_DIR || join(root, "evidence");
 mkdirSync(evidence, { recursive: true });
@@ -170,6 +170,9 @@ try {
       if (agent === "codex") {
         await blockedQueue.waitFor({ state: "detached" });
         await card.locator(".chat-codex-queue").waitFor({ state: "detached" });
+        const prompt = await page.evaluate(async (paneId) => (await fetch(`/api/pane/prompt?pane_id=${encodeURIComponent(paneId)}`)).json(), pane);
+        assert.equal(prompt.prompt, null, "a stale blocked status over the ordinary composer offers no Enter/Esc fallback");
+        assert.equal(await card.locator(".prompt-card").count(), 0);
       } else {
       const blockedMark = frames.length;
       const refusal = receipt((frame) => frames.indexOf(frame) >= blockedMark && frame.type === "pending-result" && frame.pane_id === pane && frame.pending_id === secondId);

@@ -76,3 +76,16 @@ it("recognizes a two-word Codex model name without accepting typed placeholder w
   expect(codexQueueInputEmpty(live, live)).toBe(false);
   expect(codexQueueInputEmpty(live.replace("Ask Codex to do anything", "unsent draft"), colors)).toBe(false);
 });
+
+it("queues while a background terminal waits or hooks run, but never over a draft", () => {
+  for (const status of [
+    "• Waiting for background terminal (9m 59s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close",
+    "• Working (1m 18s • esc to interrupt) · Running hooks",
+  ]) {
+    const live = screen("› Ask Codex to do anything").replace("• Working (2s • esc to interrupt)", status);
+    const colors = live.replace("Ask Codex to do anything", "\x1b[2mAsk Codex to do anything\x1b[0m");
+    expect(codexQueueInputEmpty(live, colors)).toBe(true);
+    expect(codexQueueInputEmpty(live, live)).toBe(false);
+    expect(codexQueueInputEmpty(live.replace("Ask Codex to do anything", "user draft"), colors)).toBe(false);
+  }
+});

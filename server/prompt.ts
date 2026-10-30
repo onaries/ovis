@@ -50,21 +50,30 @@ export function codexQueueInputEmpty(screen: string, colors: string | null = nul
   return screen.replace(ANSI_RE, "").split(/\r?\n/).some((line) => CODEX_WORKING_RE.test(line.trim())) && codexInputEmpty(screen, colors);
 }
 
-export function codexInputEmpty(screen: string, colors: string | null = null): boolean {
-  const rows = screen.split(/\r?\n/).filter((line) => line.trim()).map((line) => ({ text: line.trim(), indent: line.length - line.trimStart().length }));
+/** The bottom composer and its footer, independent of ticking loaders and tool output above. */
+export function codexInputFrame(screen: string): string | null {
+  const rows = screen.replace(ANSI_RE, "").split(/\r?\n/).filter((line) => line.trim()).map((line) => ({ text: line.trim(), indent: line.length - line.trimStart().length }));
   const lines = rows.map((row) => row.text);
   const indent = Math.min(...rows.filter((row) => /^[›»]/.test(row.text)).map((row) => row.indent));
   const composer = rows.map((row) => row.indent === indent && /^[›»]/.test(row.text)).lastIndexOf(true);
-  if (composer < 0 || codexQuestionsCollapsed(screen)) return false;
+  if (composer < 0 || codexQuestionsCollapsed(screen)) return null;
   const footer = lines.slice(composer + 1);
-  if (footer.length === 0 || footer.length > 4 || footer.some((line) => !codexFooterLine(line))) return false;
-  if (/^[›»]$/.test(lines[composer]!)) return true;
-  if (!/^[›»]\s+Ask Codex to do (?:anything|something)$/.test(lines[composer]!) || colors === null) return false;
+  if (footer.length === 0 || footer.length > 4 || footer.some((line) => !codexFooterLine(line))) return null;
+  return rows.slice(composer).map((row) => " ".repeat(row.indent) + row.text).join("\n");
+}
+
+export function codexInputEmpty(screen: string, colors: string | null = null): boolean {
+  const first = codexInputFrame(screen)?.split("\n")[0];
+  if (first === undefined) return false;
+  const line = first.trim();
+  const indent = first.length - first.trimStart().length;
+  if (/^[›»]$/.test(line)) return true;
+  if (!/^[›»]\s+Ask Codex to do (?:anything|something)$/.test(line) || colors === null) return false;
   const colored = colors.split(/\r?\n/).reverse().find((line) => {
     const plain = line.replace(ANSI_RE, "");
     return plain.length - plain.trimStart().length === indent && /^[›»]/.test(plain.trim());
   });
-  if (!colored || colored.replace(ANSI_RE, "").trim() !== lines[composer]) return false;
+  if (!colored || colored.replace(ANSI_RE, "").trim() !== line) return false;
   let marker = true;
   return sgrRuns(colored).every(([text, dim, inverse]) => [...text].every((char) => {
     if (marker) { if (char === "›" || char === "»") marker = false; return true; }
@@ -694,7 +703,7 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   // Codex's collapsed question queue reads blocked while its main prompt takes a message; a
   // model list of Claude Code's or Codex's that no reader could read is left to the terminal
   // (registry.waits)
-  if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexRuntimeError(screen) !== null)) || registry.waits(agent, screen)) {
+  if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexRuntimeError(screen) !== null || codexInputFrame(screen) !== null)) || registry.waits(agent, screen)) {
     fallbackLogged.delete(paneId);
     return { agent, status, prompt: asked(paneId, null, turns), pane, panes, snapshot, screen };
   }

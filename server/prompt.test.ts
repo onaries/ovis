@@ -5843,6 +5843,13 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     }
   });
 
+  test("offers no Enter/Esc fallback over Codex's ordinary composer after tool output", async () => {
+    const screen = '└ ## Round completion\nA round is complete when every hypothesis has evidence.\n+ 280 lines (^+ to expand)\n• Working (2s • esc to interrupt)\n› Ask Codex to do anything\n  GPT-6.1-Sol high · Context 80% left\n  ← for agents · ? for shortcuts  ⚠ 5 warnings · f2 to view\n';
+    await withPane("codex", "blocked", screen, async () => {
+      expect(await card()).toBeNull();
+    });
+  });
+
   test("offers no fallback card over a Codex list whose Enter would save a default", async () => {
     // rows this reader cannot take (something between them and their footer), under a status of
     // blocked left over from an approval: the fallback card's Enter is not offered here

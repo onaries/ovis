@@ -14,8 +14,8 @@ export const CODEX_CONTINUE_HINT_RE = /press\s+enter\s+to\s+continue/i;
 // prompt: collapsed ("? 2 questions · 8s" / "alt+↑ to answer") or open on one question
 export const CODEX_QUEUE_HEADER_RE = /^(?:•\s*)?Queued follow-up inputs$/;
 
-/** Codex appends background-terminal counts to its working row, clipped in narrow panes. */
-export const CODEX_WORKING_RE = /^[•◦].*\((?:\d+[hms]\s*)+•\s*esc to interrupt\)(?:$|\s*·\s*\d+ background\b)/;
+/** Codex appends background-terminal counts or hook activity to its working row. */
+export const CODEX_WORKING_RE = /^[•◦].*\((?:\d+[hms]\s*)+•\s*esc to interrupt\)(?:$|\s*·\s*(?:\d+ background\b|Running hooks$))/;
 
 /** Only the native error immediately before the bottom composer, never older output or prose. */
 export function codexRuntimeError(screen: string): "model_capacity" | null {
