@@ -1173,7 +1173,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   workspace list has the rest. The Agents heading stays outside its scroll area and shows its
   count only while folded. A list that is cut fades out at its lower edge. An empty or folded
   Agents list gives its space back; PC and workspace folds do not hide agent rows. In the drawer
-  (`max-width: 768px`) the list starts folded. Until the PCs are in and every connected PC's
+  (`max-width: 768px`) the list starts folded. The reader's fold is kept on this device
+  (`ovis:agents-collapsed`, like a PC's fold) and wins over that default on the next launch; a
+  filter's fold is not kept. Until the PCs are in and every connected PC's
   panes have come, an empty list says **Loading agents…**, never "No agents running".
 - A PC's header is the head of its workspaces, and the caret beside its `+` is the one fold over
   them. The roster has no label or fold of its own.
@@ -1462,10 +1464,13 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Rows use only shared theme tokens in dark and light. Touch keeps row menus and folds visible,
   with `--touch-target` controls, and draws no hover fill; reduced motion removes row transitions
   and keeps the working dot's breath (opacity only).
-- Footer holds the contextual **Install app** action and Settings, its gear alone (named
-  **Settings** to screen readers and in its tooltip), with the plan meters filling the rest of its row,
-  as rows on the same grid with no rule above.
-  It carries no product name or version: the running versions are read in Settings.
+- Footer holds Settings, its gear alone (named **Settings** to screen readers and in its tooltip),
+  with the plan meters filling the rest of its row, as a row on the same grid with no rule above.
+  It carries no product name or version: the running versions are read in Settings. Nor does it
+  offer **Install app**: the page can only tell it is installed from inside the app's own window,
+  so a footer row kept showing in every browser tab and in browsers that never prompt. Settings →
+  Phone & devices → Install offers it when the browser can install, and the steps otherwise,
+  as the Claude web app keeps getting its apps in the account menu rather than a sidebar row.
 
 ### Plan meters (`.usage*`)
 - Right of the Settings gear, one button holding as many chips as the row has room for (judged
@@ -1754,6 +1759,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   An empty store says **No earlier Codex sessions in this folder.**; a PC whose bridge answers
   404 for the route says the bridge does not offer this yet, and the workspace menu of such a PC
   has no item (the bridge is asked once, without a workspace, so nothing is listed by the probe).
+- A Pi listing refused with `session_history_busy` keeps **Reading sessions…** while it retries
+  five times using the skill picker's `file_busy` backoff and bounded `Retry-After`. Exhaustion
+  shows the reason as a status with **Retry**, never an alert or an empty-store message.
+  Closing or changing the list cancels its pending retry. This keeps the existing Codex CLI
+  and Claude Code resume-picker anatomy; the retry policy follows Ovis's own slow-folder list.
 - Claude keeps one store per `CLAUDE_CONFIG_DIR`, and two stores can hold the same session id. A
   Claude list is the store of the pane it is opened from (the pane asking; from a workspace row,
   the selected pane, else the workspace's first in tab order), and each row's Resume is bound to
@@ -2181,17 +2191,6 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the ordinary cadence without a lens switch; rejected history stays hidden meanwhile. This
   follows T3 Code's separation of [transport health and data freshness](https://github.com/pingdotgg/t3code/blob/main/docs/internals/connection-runtime.md):
   an open socket alone does not prove the conversation is current. No code or new controls are borrowed.
-  A store that writes a turn only when it ends (Letta Code's transcript) keeps its turns on screen
-  while the agent works or waits on the user, and under them a quiet `Live terminal` box
-  (`.chat-terminal-fallback.is-live`): the pane's own terminal tail, open, read every second,
-  12 rows high (8 on a phone) and following its newest line inside, so the chat around it never
-  moves. It goes in the render that adds the written turn, not when the pane's status follows.
-  Letta's own input box, the status row under it and the tip under its spinner are cut from the
-  tail by the layout Letta draws (`src/lib/lettaScreen.ts`); a screen in another shape is shown
-  as it is.
-  The Codex and Claude apps stream the running turn into the conversation; nothing written exists
-  to stream here, so this follows Zed's agent panel, which shows a running command's terminal
-  inline in the thread rather than guessing at its words.
 
 ### Work block (`.work-block`, `.work-row`)
 - One per run of work in an assistant turn, in the agent's own order as its terminal shows it:
@@ -2901,6 +2900,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   a phone (the composer's `(max-width: 640px), (pointer: coarse)`), and leaves it out where dictation
   cannot work (no HTTPS, or no key and no browser recognition). On shows it in both inputs and on a
   phone, disabled with its reason where it cannot work.
+- A mouse holds the mic to talk (release finishes) or taps it to toggle. A touch on the browser's
+  speech recognition (no key) taps to start and taps to finish, from the click: iOS starts it only
+  from a user activation, which a touch's pointerdown is not (#2343). With a key, a touch holds too.
+- Choosing On asks for the microphone at once, except in an iPhone home-screen app, where that request
+  closed or reloaded the app (#2343): there the first tap of the mic asks.
 - The recording pill shows Cancel, a **Recording** label, the level bars, a mono timer and Done.
   Amber only; `--danger` stays for errors.
 
@@ -3303,11 +3307,26 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (the keyboard glyph, `aria-pressed` while the input line is on), **Paste** (below) and, after
   them, **Show keyboard** / **Hide keyboard** (#1046), which moves the soft keyboard without changing the input mode. Its glyph
   is the panel at the screen's bottom with the way it goes next (`PanelBottomOpen` to show,
-  `PanelBottomClose` to hide), its name says the same, and its `aria-pressed` is the state
-  `lib/viewport.ts` measured (`data-keyboard`), never the hope that a focus raised a keyboard: a
-  hardware keyboard, or an occlusion the browser cannot report, leaves it at Show. Show focuses the
+  `PanelBottomClose` to hide), its name says the same, and its `aria-pressed` is its tap's word
+  (lib/keyboardControl.ts): a tap turns the control to what it will do next the moment it lands, the
+  measurement confirms that word once the keyboard, measured after the tap, has held still for the
+  quiet window (a value that already agreed before it, the last animation still in flight, is no
+  answer to it until the measurement has moved), and a tap
+  does what the control just said, never the value in flight a mid-animation keyboard reports. The
+  word is the tapping pane's own: another pane's control reads the measurement, so a pane shown
+  while a tap is in flight elsewhere says, and does, what it can do itself, and a pane left while
+  its tap is in flight gives the word up. That split of the tap's
+  word from the keyboard's value follows gmux, a web terminal client that moved keyboard presence
+  from the field's focus to the viewport (its #307); the word it keeps is this app's addition.
+  Hide's blur, which leaves no field focused anywhere, is itself the keyboard going where the
+  measurement is blind (a zoomed page, a floating keyboard): the word then stands through the hiding
+  animation the measurement still reports, and either the measurement's quiet hold or the settle
+  window ends it. Where a word is never confirmed (a focused field no keyboard answered for), the
+  settle window hands the decision back to the measurement. Show focuses the
   field of the current input mode inside the tap, as Mod+Shift+E does on a desktop (the input
-  line, else xterm's own field; the bar is not shown while the masked input is); Hide blurs this pane's
+  line, else xterm's own field; the bar is not shown while the masked input is); an already focused
+  field it blurs and refocuses inside the tap, a new input session, which is what a keyboard a
+  back gesture already put away needs to come back; Hide blurs this pane's
   field and nothing else. Neither sends a key, nor the focus report (DECSET 1004's ESC [ I / ESC [ O)
   its own focus move would make, fits or resizes the pane (the grid under a keyboard stays, #1045),
   changes the mode or acts on a sibling pane. A focus the user makes still reports, and so does a
@@ -3317,6 +3336,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   either field, or its commit is still on its way, and while Paste still reads the clipboard (the
   paste's own focus would bring a hidden keyboard back), the control is `aria-disabled` and refuses the
   tap in place: a disabled button would let the tap move the focus and end the composition.
+  Switching the Input line and direct typing is not a keyboard gesture: it leaves the keyboard as
+  the control says it is. Up (or on its way up from this pane's tap), the switch hands it to the new
+  mode's field, focus and all, so it stays up where the user had it; down, the switch focuses
+  nothing, though the old field kept the focus (Android's back gesture leaves it so), since a focus
+  would raise the keyboard the user put away. The switch trusts the measurement where it is blind:
+  a hardware keyboard, an iPad's floating keyboard or a zoomed page reads as down, so the new
+  field is not focused and, for a soft keyboard, the switch puts it away with the old field; a tap
+  on Show (or the field) brings it back. Only a switch the user made does it (a pane's remount
+  keeps its own blur).
   Unlike the keys, which a hardware keyboard already has, the control is a Tab stop (after the
   input line and its Enter button) that Enter or Space presses, and its name is also its tooltip.
   Without a field it may focus (view only, held, ended, offline) the bar has no control or a
@@ -3359,7 +3387,14 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   role, input lease or connection changed before the clipboard answered, even and back again. With
   the line put away (direct typing) it changes no mode and says "Tap Input line to paste." in the
   bar's own row (`.key-bar-note`, after the bar's fixed controls, in place of the other keys for a
-  few seconds, gone on a tap), in the row of the key it names and never over the terminal's output. No widely used coding-agent app (the
+  few seconds, gone on a tap), in the row of the key it names and never over the terminal's output.
+  An image pasted into the line (the keyboard's own Paste of a file-only clipboard, or the key bar's
+  Paste where the browser has `clipboard.read()`, text first when the clipboard holds both) is
+  uploaded beside the pane as a paste into the grid is, and its quoted path goes in at the caret
+  under the same staleness rule, "Uploading file…" meanwhile; a browser that reads only text says
+  to press and hold the line for an image rather than calling the clipboard empty (#801). The
+  terminal takes text, so the line gets the path the agent CLIs read for a dropped image, as the
+  grid's paste already does, not an attachment tile like the composer's. No widely used coding-agent app (the
   Codex and Claude apps, Paseo, T3 Code) was found to establish a precedent for a phone terminal
   draft with a separate no-Enter insert; agent-of-empires' compose sheet has Insert beside Send but
   clears its draft on a synchronous boolean, which this design rejects: the draft is cleared on the
@@ -3415,6 +3450,43 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   rule, with its repair narrowed to the faults re-subscribing mends. Dismissal follows the update
   notice's button and the PC-action notice's per-fault lifetime (`lib/machineNotice.ts`).
 
+### Setup guide (`.setup-*`)
+- Follows the Claude and Codex apps' first runs: one screen in the pane area, the sidebar left in
+  place, nothing modal. It opens by itself once, on a fresh install only (no herdr workspace, no
+  saved settings, no shared settings, no paired device); Settings opens it again. A watching device
+  never sees it.
+- The welcome is centered: the app mark, "Is this your first time using Ovis?" and two big choice rows
+  (`--radius-xl` cards on `--bg-panel`, an accent border on hover).
+- Then one screen in a 552px column, "Set up Ovis" and "Skip setup" over it, no progress bar. It first
+  shows Ovis checking the PC (GET /api/agent-catalog): every coding agent in a two-column `--bg-panel`
+  list, each line a spinner until the answer, then "Installed · v…" in `--status-done` or "Not
+  installed" dim. The check is on screen at least 300ms, so an instant one is still seen.
+- Then every coding agent as a tile, the same whatever the check found, two to a line on `--bg-panel`
+  (two on a phone too): Claude Code and Codex first, then the others the PC has, then the rest. An
+  installed one is picked by a tap (an accent ring and a check; Claude Code, else Codex, else the
+  first); a missing one is dim, with a small Install (a download icon alone on a phone, its name kept
+  for screen readers). The heading is "You're set up" under a `--status-done` check circle when one is
+  installed, else "Pick an AI coding helper" with "Nothing is installed until you tap Install."
+- Install is the one tap: the official installer runs in a terminal tab while a spinner turns on the
+  tile (a tap on it opens that tab); once the catalog lists the agent the tile is an installed one,
+  picked. Several can install at once, and Start does not wait for them: an install runs on in its
+  tab. One that never shows up stops after ten minutes with Try again. The guide has no sign-in step:
+  the agent asks for its own when it first starts. Plan usage turns on by itself for accounts already
+  signed in.
+- "Start with …" and beside it a plain "Connect your phone", which opens a `--bg-panel` box under them:
+  a QR code that opens the app on the phone with a fresh pairing code filled in, the address and the
+  code. The code is asked for when the box opens and never renewed behind the user's back (it would
+  replace one Settings shows); once a phone pairs ("Paired: …") or it runs out, New code asks again.
+  A browser in only because nothing is paired yet pairs itself first, as Settings → Phone's Pair this
+  device now does (a paired phone turns the app's sign-in on), and a line says other browsers now need
+  pairing too; one such pairing runs at a time across the guide and Settings, and none runs for a
+  browser the server already lists. Where the page has no address a phone can open (the PC's
+  loopback), or the server does not say how this browser got in, it opens Settings → Phone instead. Start opens the folder this browser used last, else the server's home, without asking.
+  Alerts are not offered here: they hang on the browser's permission and, on an iPhone, on the app
+  being on the home screen first, so they stay in Settings → Alerts. A failed check says "Couldn't
+  check this PC" with its error and Look again. On a phone Start and Connect your phone take the full
+  width.
+
 ### Token gate
 - A centered password card replaces the entire shell while authentication is required. It has a real
   label, autofocused field, primary Unlock button and linked alert text.
@@ -3460,6 +3532,12 @@ The values are the ones in `src/styles.css`.
   so a running agent does not look frozen.
 - Under reduced motion the voice pill swaps its bars for one level bar updated at 4 Hz and drops
   the ring and the morph; the **Recording** label and the timer stay.
+- Until the app's script runs, `index.html` draws one loading status in `#root` (`.boot`, #2329): a
+  28px ring stepped round once per `--dur-spin` on the saved theme's surface, centred, no visible
+  words (a visually hidden "Loading Ovis", the ring `aria-hidden`), shown only after 400ms so a fast start does not flash it, and
+  still under reduced motion. React's first frame replaces it. It follows T3 Code's `index.html`
+  boot shell, which React also replaces; Ovis draws a spinner rather than a still logo, because
+  on a slow link a still picture is what looked frozen.
 
 ## 7. Depth & Surface
 
@@ -3514,6 +3592,11 @@ The values are the ones in `src/styles.css`.
   uses, saves only after Save anyway.
   Reservations vary by browser and installed-app mode; a warning is not a guarantee of delivery.
   Bindings belong to this browser, not the remote PC or pane. Hold-to-dictate remains fixed.
+  Previous/Next tab and Previous/Next workspace follow Zed's and Warp's previous/next tab actions,
+  with no default key (their ⌘⇧[ and ⌘⇧] are the browser's own tab switch): a step goes through the
+  selected pane's tabs in the strip's order, or this PC's workspace rows as the sidebar draws them
+  (pins first, a folded group's worktrees and the rows a filter leaves out passed over), wraps around, and opens the pane a click there opens. A draft gives the key back at its edge, as
+  for the pane steps.
 - Text-field selection and IME composition keep their keys. Focus-local list/tab navigation and
   reordering are separate from global bindings; they must not intercept terminal input.
   Global actions target the selected pane, and the original handled chord must never also reach its PTY.

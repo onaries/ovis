@@ -63,7 +63,6 @@ export const CHAT_ZH: Record<string, string> = {
   "Earlier messages": "更早的消息",
   "beginning of conversation": "对话开始",
   "Conversation unavailable — show terminal output": "对话不可用。显示终端输出",
-  "Live terminal": "实时终端",
   "No conversation yet — say something below": "暂无对话。在下方说点什么吧",
   "New messages": "新消息",
   "{n} edit": "{n} 次编辑",

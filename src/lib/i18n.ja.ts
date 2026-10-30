@@ -8,6 +8,8 @@ import { WORKSPACE_JA } from "./i18n/workspace.ja.ts";
 import { FILES_JA } from "./i18n/files.ja.ts";
 import { DEVICES_JA } from "./i18n/devices.ja.ts";
 import { USAGE_JA } from "./i18n/usage.ja.ts";
+import { SETUP_JA } from "./i18n/setup.ja.ts";
+import { GUIDE_JA } from "./i18n/guide.ja.ts";
 import { UPDATES_JA } from "./i18n/updates.ja.ts";
 import { PALETTE_JA } from "./i18n/palette.ja.ts";
 
@@ -51,7 +53,6 @@ const BASE: Record<string, string> = {
   "Agent default": "エージェントの既定",
   "Phone & devices": "スマートフォンとデバイス",
   "Access token": "アクセストークン",
-  "Install app": "アプリをインストール",
 
   // ---- shortcuts (lib/shortcuts.ts labels) ----
   "Command palette": "コマンドパレット",
@@ -61,6 +62,10 @@ const BASE: Record<string, string> = {
   "New workspace": "新しいワークスペース",
   "Previous pane": "前のペイン",
   "Next pane": "次のペイン",
+  "Previous tab": "前のタブ",
+  "Next tab": "次のタブ",
+  "Previous workspace": "前のワークスペース",
+  "Next workspace": "次のワークスペース",
 
   // ---- agent status words (lib/status.ts) ----
   "READY": "待機",
@@ -149,6 +154,10 @@ const BASE: Record<string, string> = {
   // ---- new workspace ----
   "Browse": "参照",
   "Cancel": "キャンセル",
+  "Install": "インストール",
+  "Installed": "インストール済み",
+  "Not installed": "未インストール",
+  "Sign in": "ログイン",
   "Starting…": "起動しています…",
   "Start": "開始",
   // the launch's model, effort, first message and skills (lib/agentLaunchMode.ts, lib/newSession.ts)
@@ -175,6 +184,16 @@ const BASE: Record<string, string> = {
   // ---- prompt card ----
   "Submit": "送信",
   "Recommended": "推奨",
+  "Could not confirm this browser is paired. Check that cookies are enabled, then try again.": "このブラウザーがペアリング済みであることを確認できませんでした。Cookie が有効か確認して、もう一度お試しください。",
+  "New code": "新しいコード",
+  "Paired: {name}.": "ペアリングしました: {name}。",
+  "QR code that pairs a phone with code {code}": "コード {code} でスマートフォンをペアリングする QR コード",
+  "Pairing code": "ペアリングコード",
+  "Open this address on your phone": "スマートフォンでこのアドレスを開いてください",
+  "It is on this PC, but it does not start. Install it again.": "この PC にありますが、起動しません。もう一度インストールしてください。",
+  "Installing {agent}…": "{agent} をインストール中…",
+  "Install {agent}": "{agent} をインストール",
+  "{agent} is ready": "{agent} の準備ができました",
 
 
   // ---- composer ----
@@ -316,6 +335,8 @@ export const JA_PARTS: Record<string, Record<string, string>> = {
   files: FILES_JA,
   devices: DEVICES_JA,
   usage: USAGE_JA,
+  setup: SETUP_JA,
+  guide: GUIDE_JA,
   updates: UPDATES_JA,
   palette: PALETTE_JA,
 };

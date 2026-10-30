@@ -3,14 +3,14 @@ import { Check, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 
 import "./DevicesPanel.css";
 
-import { ApiError, fetchDevices, pairDevice, renameDevice, revokeAllDevices, revokeDevice, startPairing } from "../lib/api.ts";
+import { ApiError, fetchDevices, renameDevice, revokeAllDevices, revokeDevice, startPairing } from "../lib/api.ts";
 import { copyText } from "../lib/clipboard.ts";
-import { deviceLabel } from "../lib/phone.ts";
 import type { HealthAuth, PairedDevice, PairingCode } from "../../shared/protocol.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { QrCode } from "./QrCode.tsx";
 import { SettingsRow } from "./SettingsControls.tsx";
 import { currentLocale, t as tt, useT } from "../lib/i18n.ts";
+import { pairThisBrowser, UnconfirmedPairing } from "../lib/pairing.ts";
 
 const POLL_MS = 3000;
 
@@ -114,19 +114,18 @@ export function DevicesPanel({ pairUrl, auth, onPaired, onRevokedAll }: DevicesP
     setPairingSelf(true);
     setError(null);
     try {
-      const fresh = await startPairing();
-      await pairDevice(fresh.code, deviceLabel(navigator.userAgent, navigator.maxTouchPoints ?? 0));
-      const list = await fetchDevices();
-      const current = list.find((device) => device.current);
+      // one at a time with the setup guide's (lib/pairing.ts)
+      const list = await pairThisBrowser();
       setDevices(list);
       known.current = new Set(list.map((device) => device.id));
-      if (!current) {
-        setError(t("Could not confirm this browser is paired. Check that cookies are enabled, then try again."));
-        return;
-      }
-      setJustPaired(current.label);
+      setJustPaired(list.find((device) => device.current)!.label);
       onPaired?.();
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    } catch (e) {
+      if (e instanceof UnconfirmedPairing) {
+        setError(t("Could not confirm this browser is paired. Check that cookies are enabled, then try again."));
+        void fetchDevices().then((list) => { setDevices(list); known.current = new Set(list.map((device) => device.id)); }, () => undefined);
+      } else setError(e instanceof Error ? e.message : String(e));
+    }
     finally {
       pairingSelfLock.current = false;
       setPairingSelf(false);

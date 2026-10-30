@@ -26,7 +26,7 @@ import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
 import { checkFolderFilter, checkNewFolder } from "./folder-filter-regression.ts";
 import { checkPaletteKeys } from "./palette-keys-regression.ts";
 import { checkFollowHerdrFocus } from "./follow-focus-regression.ts";
-import { UsageService } from "../server/usage.ts";
+import { systemUsageContext, UsageService } from "../server/usage.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { assertCspClean, watchCsp } from "./csp-violations.ts";
 import type { CspWatch } from "./csp-violations.ts";
@@ -85,7 +85,7 @@ try {
   }
   const [paneA, paneB] = panes as [string, string];
   // no provider is asked with the test machine's own sign-ins
-  server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "push"), usage: new UsageService(undefined, []) });
+  server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "push"), usage: new UsageService({ ...systemUsageContext(), home: root, env: {} }, []) });
   const origin = `http://127.0.0.1:${server.port}`;
   browser = await chromium.launch({
     executablePath: chromePath(),

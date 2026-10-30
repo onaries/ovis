@@ -6,7 +6,7 @@ import "./UsageMeters.css";
 import type { ProviderUsage, UsageWindow } from "../../shared/protocol.ts";
 import { useT, type Translate } from "../lib/i18n.ts";
 import { useSettings, type UsageCount, type UsageGlance } from "../lib/settings.ts";
-import { canSignInAgain, formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useUsage, windowLabel } from "../lib/usage.ts";
+import { canSignInAgain, formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { UsageSignInAgain } from "./UsageLocalLogin.tsx";
 
@@ -49,8 +49,9 @@ function Chip({ usage, count, glance }: { usage: ProviderUsage; count: UsageCoun
   );
 }
 
-function Provider({ usage, now, count, onLocalLogin }: { usage: ProviderUsage; now: number; count: UsageCount; onLocalLogin: ((paneId: string) => void) | undefined }) {
+function Provider({ usage, now, count, onLocalLogin, watching }: { usage: ProviderUsage; now: number; count: UsageCount; onLocalLogin: ((paneId: string) => void) | undefined; watching: boolean }) {
   const t = useT();
+  const statusline = useStatuslineSwitch(false);
   const name = PROVIDER_NAME[usage.id];
   const offered = onLocalLogin !== undefined && canSignInAgain(usage);
   const problem = problemText(t, usage, offered);
@@ -64,6 +65,13 @@ function Provider({ usage, now, count, onLocalLogin }: { usage: ProviderUsage; n
       </header>
       {problem && <p className={`usage-note${isError(usage) ? " is-problem" : ""}`}>{problem}</p>}
       {offered && <UsageSignInAgain usage={usage} onStarted={onLocalLogin} />}
+      {/* a 403 to a token that has not expired is a refused network, not an expired sign-in: the status line can stand in */}
+      {usage.statusline_offer && !watching && <button type="button" className="btn btn-ghost usage-offer" disabled={statusline.busy} onClick={() => void statusline.set(true)}>
+        {t("Read from Claude's status line instead")}
+      </button>}
+      {statusline.error && <p className="usage-note is-problem" role="alert">{statusline.error}</p>}
+      {/* turned on here, the numbers come once Claude next draws its line: say so instead of leaving "expired" alone */}
+      {statusline.state?.installed && usage.problem === "expired" && <p className="usage-note" role="status">{t("On. Claude's limits show once Claude Code next draws its status line.")}</p>}
       {usage.windows.map((window, index) => {
         const reset = formatResetIn(window.resets_at, now);
         const value = meterPercent(window, count);
@@ -89,7 +97,8 @@ function Provider({ usage, now, count, onLocalLogin }: { usage: ProviderUsage; n
  * provider its logo and the limit chosen in Settings (week or session); the whole strip opens every limit
  * with its reset time.
  */
-export function UsageMeters({ onLocalLogin }: { /** opens a sign-in tab; a watching device has none */ readonly onLocalLogin?: (paneId: string) => void }) {
+/** `watching`: a watching device is not offered what it cannot turn on or sign in to */
+export function UsageMeters({ onLocalLogin, watching = false }: { /** opens a sign-in tab; a watching device has none */ readonly onLocalLogin?: (paneId: string) => void; readonly watching?: boolean }) {
   const t = useT();
   const { settings } = useSettings();
   const { report, loading, refresh } = useUsage(settings.showUsage);
@@ -190,7 +199,7 @@ export function UsageMeters({ onLocalLogin }: { /** opens a sign-in tab; a watch
               <RefreshCw aria-hidden="true" className={loading ? "is-spinning" : undefined} />
             </button>
           </header>
-          {shown.map((usage) => <Provider key={usage.key} usage={usage} now={now} count={count} onLocalLogin={onLocalLogin && ((paneId) => { setOpen(false); onLocalLogin(paneId); })} />)}
+          {shown.map((usage) => <Provider key={usage.key} usage={usage} now={now} count={count} watching={watching} onLocalLogin={onLocalLogin && ((paneId) => { setOpen(false); onLocalLogin(paneId); })} />)}
         </div>
       )}
     </div>

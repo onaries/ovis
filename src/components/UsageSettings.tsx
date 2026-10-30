@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Eye, EyeOff, Network, Plus } from "lucide-react
 import type { CLIProxyStatus, ProviderUsage, UsageProviderId } from "../../shared/protocol.ts";
 import { useSettings } from "../lib/settings.ts";
 import { useT } from "../lib/i18n.ts";
-import { canSignInAgain, isHubAccount, moveInOrder, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useUsage } from "../lib/usage.ts";
+import { canSignInAgain, isHubAccount, moveInOrder, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useStatuslineSwitch, useUsage } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { cliProxyRequest } from "../lib/api.ts";
 import { UsageAccountDialog } from "./UsageAccountDialog.tsx";
@@ -52,11 +52,13 @@ function ProviderAccounts({ id, providers, onLocalLogin }: { readonly id: UsageP
   </ol>;
 }
 
-export function UsageSettings({ onLocalLogin, watching = false }: { readonly onLocalLogin: (paneId: string) => void; /** a watching device signs in to nothing */ readonly watching?: boolean }) {
+/** `watching`: a watching device signs in to nothing, and sees the status-line switch without turning it (the server refuses it too). */
+export function UsageSettings({ onLocalLogin, watching = false }: { readonly onLocalLogin: (paneId: string) => void; readonly watching?: boolean }) {
   const { settings, update } = useSettings();
   const t = useT();
   // The existing switch still controls whether sign-ins are sent to usage endpoints.
   const usage = useUsage(settings.showUsage);
+  const statusline = useStatuslineSwitch(settings.showUsage);
   const [hub, setHub] = useState<CLIProxyStatus | null>(null);
   const [dialog, setDialog] = useState<"add" | "hub" | null>(null);
   const [hubError, setHubError] = useState<string | null>(null);
@@ -84,6 +86,12 @@ export function UsageSettings({ onLocalLogin, watching = false }: { readonly onL
         <SettingsRow label={t("Limit shown")} description={t("Session is the 5-hour limit. Without it, the closest limit is shown.")} wide>
           <Segmented label={t("Limit shown")} value={settings.usageGlance} onChange={(usageGlance) => update({ usageGlance })} options={[{ value: "week", label: t("Weekly") }, { value: "session", label: t("Session") }]} />
         </SettingsRow>
+        {statusline.state?.supported && <SettingsRow label={t("Read Claude's limits from its status line")}
+          description={t("For networks where Claude's usage API is refused. Wraps Claude Code's status line on this PC and keeps only the limits; turning it off puts Claude's settings back.")}>
+          <Toggle label={t("Read Claude's limits from its status line")} checked={statusline.state.installed} disabled={statusline.busy || watching}
+            onChange={(enabled) => void statusline.set(enabled)} />
+        </SettingsRow>}
+        {statusline.error && <p className="settings-hint account-error" role="alert">{statusline.error}</p>}
       </>}
     </SettingsGroup>
     <div className="usage-accounts-intro">

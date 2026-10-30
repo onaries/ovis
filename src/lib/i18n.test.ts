@@ -130,6 +130,8 @@ const PART_FILES: Record<string, string[]> = {
   usage: ["components/UsageSettings.tsx", "components/UsageAccountDialog.tsx", "components/UsageLocalLogin.tsx", "components/UsageHubConnect.tsx", "components/CLIProxyLogin.tsx", "components/UsageMeters.tsx", "lib/usage.ts"],
   updates: ["components/UpdateControls.tsx", "lib/updateProgress.ts"],
   palette: ["components/CommandPalette.tsx"],
+  setup: ["components/AgentSetupCard.tsx"],
+  guide: ["components/SetupGuide.tsx"],
 };
 
 /** Parts in src/lib/i18n/ hold the keys only one feature uses; the base dictionary holds the rest. */

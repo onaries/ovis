@@ -34,12 +34,13 @@ import { worktreeLabel } from "../lib/worktreeName.ts";
 import { lastViewedPane, rememberViewedPane } from "../lib/lastViewedPane.ts";
 import { paneMark, sidebarAgents, workspaceAgentLabels } from "../lib/sidebarAgents.ts";
 import { PANE_DRAG_TYPE, paneDragData } from "../lib/split.ts";
+import { publishWorkspaceRows, workspaceRows } from "../lib/adjacentTarget.ts";
 import { currentSidebarPins, pinnedGroupIds, pinnedWorkspaceIds, pruneWorkspacePins, reorderWorkspacePins, setSidebarPins, splitPinnedGroups, subscribeSidebarPins, toggleSidebarPin, workspacePinKey, type WorkspaceGroup } from "../lib/sidebarPins.ts";
 
 const ERROR_NOTE_MS = 5000;
 
 const worktreeCollapsedKey = (machineId: string, repoKey: string) => `ovis:worktree-group-collapsed:${machineId}:${repoKey}`;
-function storedWorktreeCollapsed(machineId: string, repoKeys: string[]): Set<string> {
+export function storedWorktreeCollapsed(machineId: string, repoKeys: string[]): Set<string> {
   const collapsed = new Set<string>();
   try {
     for (const key of repoKeys) if (localStorage.getItem(worktreeCollapsedKey(machineId, key)) === "1") collapsed.add(key);
@@ -321,6 +322,9 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
   // under a filter only the kept rows are drawn, in the same order, in the same groups and cards; pins, folds
   // and herdr's order are read from the whole roster as before, and a move waits until the filter is cleared
   const visibleGroups = useMemo(() => filtered === null ? shownGroups : { pinned: filterWorkspaceGroups(shownGroups.pinned, filtered.workspaces), rest: filterWorkspaceGroups(shownGroups.rest, filtered.workspaces) }, [shownGroups, filtered]);
+  // the rows as drawn, filter and folds included, for the previous/next workspace steps (lib/adjacentTarget.ts)
+  const drawnRows = workspaceRows([...visibleGroups.pinned, ...visibleGroups.rest], (group) => worktreesFolded(group.workspace.worktree?.repo_key ?? "", group.children), viewedWorkspaceId ?? null).join("\n");
+  useEffect(() => publishWorkspaceRows(machineId, drawnRows === "" ? [] : drawnRows.split("\n")), [machineId, drawnRows]);
   // a pinned head's worktrees remain outside the card, but cannot move away from their repository
   const fixedIds = useMemo(() => new Set([...pinnedGroupIds(worktreeGroups, pinnedIds, (workspace) => workspace.workspace_id)].filter((id) => !pinnedIds.includes(id))), [worktreeGroups, pinnedIds]);
   const movableGroups = shownGroups.rest.filter((group) => !fixedIds.has(group.workspace.workspace_id));

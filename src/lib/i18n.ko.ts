@@ -8,6 +8,8 @@ import { WORKSPACE_KO } from "./i18n/workspace.ko.ts";
 import { FILES_KO } from "./i18n/files.ko.ts";
 import { DEVICES_KO } from "./i18n/devices.ko.ts";
 import { USAGE_KO } from "./i18n/usage.ko.ts";
+import { SETUP_KO } from "./i18n/setup.ko.ts";
+import { GUIDE_KO } from "./i18n/guide.ko.ts";
 import { UPDATES_KO } from "./i18n/updates.ko.ts";
 import { PALETTE_KO } from "./i18n/palette.ko.ts";
 
@@ -49,7 +51,6 @@ const BASE: Record<string, string> = {
   "Agent default": "에이전트 기본값",
   "Phone & devices": "폰 및 기기",
   "Access token": "접속 토큰",
-  "Install app": "앱 설치",
 
   // ---- shortcuts (lib/shortcuts.ts labels) ----
   "Command palette": "명령 팔레트",
@@ -59,6 +60,10 @@ const BASE: Record<string, string> = {
   "New workspace": "새 워크스페이스",
   "Previous pane": "이전 패널",
   "Next pane": "다음 패널",
+  "Previous tab": "이전 탭",
+  "Next tab": "다음 탭",
+  "Previous workspace": "이전 워크스페이스",
+  "Next workspace": "다음 워크스페이스",
 
   // ---- agent status words (lib/status.ts) ----
   "READY": "대기",
@@ -147,6 +152,10 @@ const BASE: Record<string, string> = {
   // ---- new workspace ----
   "Browse": "찾아보기",
   "Cancel": "취소",
+  "Install": "설치",
+  "Installed": "설치됨",
+  "Not installed": "설치되지 않음",
+  "Sign in": "로그인",
   "Starting…": "시작 중…",
   "Start": "시작",
   // the launch's model, effort, first message and skills (lib/agentLaunchMode.ts, lib/newSession.ts)
@@ -173,6 +182,16 @@ const BASE: Record<string, string> = {
   // ---- prompt card ----
   "Submit": "제출",
   "Recommended": "추천",
+  "Could not confirm this browser is paired. Check that cookies are enabled, then try again.": "이 브라우저의 페어링을 확인할 수 없습니다. 쿠키가 허용되어 있는지 확인한 뒤 다시 시도하세요.",
+  "New code": "새 코드",
+  "Paired: {name}.": "페어링됨: {name}.",
+  "QR code that pairs a phone with code {code}": "코드 {code}로 폰을 페어링하는 QR 코드",
+  "Pairing code": "페어링 코드",
+  "Open this address on your phone": "폰에서 이 주소를 여세요",
+  "It is on this PC, but it does not start. Install it again.": "이 PC에 있지만 실행되지 않아요. 다시 설치해 주세요.",
+  "Installing {agent}…": "{agent} 설치 중…",
+  "Install {agent}": "{agent} 설치",
+  "{agent} is ready": "{agent} 준비 완료",
 
 
   // ---- composer ----
@@ -314,6 +333,8 @@ export const KO_PARTS: Record<string, Record<string, string>> = {
   files: FILES_KO,
   devices: DEVICES_KO,
   usage: USAGE_KO,
+  setup: SETUP_KO,
+  guide: GUIDE_KO,
   updates: UPDATES_KO,
   palette: PALETTE_KO,
 };

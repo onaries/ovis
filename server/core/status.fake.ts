@@ -13,10 +13,10 @@ import { PendingInputs } from "../pending-input.ts";
 import { connectionData, type Client } from "./connections.ts";
 
 // herdr's status events come from the test, as the collector would hand them over
-type Handlers = { onStatus: (paneId: string, status: string, agent: string, replay?: { before: string; agent: string }) => void; onBaseline: (panes: unknown[]) => void; herdrLive?: { identity: () => string | null; onChange: (identity: string | null) => void } };
+type Handlers = { onStatus: collector.StatusCollectorHandlers["onStatus"]; onBaseline: (panes: readonly unknown[]) => void; onReconciled: (panes: readonly HerdrPane[]) => void; onResync: NonNullable<collector.StatusCollectorHandlers["onResync"]>; onPaneEnded: (paneId: string) => void; herdrLive?: { identity: () => string | null; onChange: (identity: string | null) => void } };
 export let handlers: Handlers;
 export let collectorSnapshot: () => Promise<{ panes: HerdrPane[] }>;
-const originalCollector = collector.startStatusCollector;
+export const originalCollector = collector.startStatusCollector;
 mock.module("../collector.ts", () => ({
   ...collector,
   startStatusCollector: (seen: Handlers, deps: { snapshot: typeof collectorSnapshot }) => {
@@ -41,11 +41,11 @@ const store = join(root, "opencode.db");
 {
   const db = new Database(store, { create: true });
   db.exec(`CREATE TABLE session_v2 (id text PRIMARY KEY, parent_id text, time_created integer);
-    CREATE TABLE session_message (id text PRIMARY KEY, session_id text, type text, seq integer, time_created integer, data text)`);
+    CREATE TABLE session_message (id text PRIMARY KEY, session_id text, type text, seq integer, time_created integer, time_updated integer, data text)`);
   db.query("INSERT INTO session_v2 VALUES ('ses_child', 'ses_parent', ?)").run(at + 1000);
-  const row = db.query("INSERT INTO session_message VALUES (?, ?, 'user', 1, ?, ?)");
-  row.run("msg_parent", "ses_parent", at, JSON.stringify({ time: { created: at } }));
-  row.run("msg_child", "ses_child", at + 1000, JSON.stringify({ time: { created: at + 1000 } }));
+  const row = db.query("INSERT INTO session_message VALUES (?, ?, 'user', 1, ?, ?, ?)");
+  row.run("msg_parent", "ses_parent", at, at, JSON.stringify({ time: { created: at } }));
+  row.run("msg_child", "ses_child", at + 1000, at + 1000, JSON.stringify({ time: { created: at + 1000 } }));
   db.close();
 }
 const CLAUDE = "11111111-1111-4111-8111-111111111111";

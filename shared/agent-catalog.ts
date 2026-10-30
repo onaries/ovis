@@ -80,6 +80,8 @@ export interface AgentCatalogEntry {
     /** the executables that mean it is installed, in the order they are looked for */
     binaries: readonly string[];
     version_args: readonly string[];
+    /** how long its version flag may take, when longer than the detector's default (5 s) */
+    version_timeout_ms?: number;
     /** platforms where finding the binary proves nothing (another program has its name), and why */
     unreliable_on?: Readonly<Partial<Record<CatalogPlatform, string>>>;
     /**
@@ -117,7 +119,10 @@ export interface AgentInstallState {
   /** false: found only in the installer's folder (detect.install_dirs), not on PATH: a new terminal finds it */
   on_path: boolean | null;
   version: string | null;
-  /** why an installed agent has no version: its flag ran too long, printed none, or did not start */
+  /**
+   * why an installed agent has no version: its flag ran too long (timeout), succeeded without one on
+   * stdout (unreadable), or did not start or exited with an error (failed: a broken install)
+   */
   version_error: "timeout" | "unreadable" | "failed" | null;
   meets_min_version: boolean | null;
 }
@@ -127,6 +132,14 @@ export interface AgentCatalogRow extends Omit<AgentCatalogEntry, "install" | "no
   install: PlatformInstall | null;
   no_install: string | null;
   state: AgentInstallState;
+}
+
+/** What POST /api/agent-catalog/install or /sign-in answers: the tab it opened, and the exact text typed there. */
+export interface AgentTabStarted {
+  pane_id: string;
+  workspace_id: string;
+  command: string;
+  shell: InstallShell;
 }
 
 export interface AgentCatalogResponse {
@@ -139,6 +152,15 @@ export interface AgentCatalogResponse {
 export function catalogRow({ install, no_install, ...entry }: AgentCatalogEntry, platform: CatalogPlatform | null, state: AgentInstallState): AgentCatalogRow {
   if (platform === null) return { ...entry, install: null, no_install: "Ovis has no install commands for this operating system.", state };
   return { ...entry, install: install[platform], no_install: install[platform] === null ? no_install[platform] ?? null : null, state };
+}
+
+/**
+ * Whether the agent is there and runs: found, and its version flag neither failed nor hung. One whose
+ * version cannot be read still runs; one whose flag fails (a wrapper's missing target) does not, and
+ * is never offered as ready.
+ */
+export function agentRuns(state: AgentInstallState): boolean {
+  return state.installed === true && state.version_error !== "failed" && state.version_error !== "timeout";
 }
 
 /** The catalog platform of a Node `process.platform`. */
@@ -297,7 +319,8 @@ const method = (shell: InstallShell, command: string, requires: readonly Install
   ({ shell, command, requires, admin: extra.admin ?? false, known_issues: extra.known_issues ?? [], tested: extra.tested ?? [] });
 const only = (primary: InstallMethod, ...alternatives: InstallMethod[]): PlatformInstall => ({ primary, alternatives });
 
-const DEVIN_LOGIN = "Ends by starting a sign-in: with no browser it stops at \"Login canceled\" and exits 1, though Devin is installed.";
+const DEVIN_LOGIN = "Ends by starting its own sign-in (devin setup): with no browser it stops at \"Login canceled\" and exits 1, or waits until you press Ctrl+C. Devin is installed either way: sign in afterwards with devin auth login.";
+const OMP_BUN = "Stops when an older Bun (before 1.4.4) is on PATH, as Ovis's own installer may have put there: run bun upgrade first.";
 const PI_NODE = "Needs Node.js 22.19 or later: without it, it asks in the terminal whether to install it, and without a terminal it stops.";
 const PI_NODE_SUDO = "Needs Node.js 22.19 or later: without it, it asks in the terminal whether to install it (which may ask for sudo), and without a terminal it stops.";
 const CURL_BASH: readonly InstallRequirement[] = [{ tool: "curl" }, { tool: "bash" }];
@@ -674,7 +697,7 @@ const CATALOG_ENTRIES: readonly AgentCatalogEntry[] = [
     packages: ["brew:copilot-cli", "npm:@github/copilot", "winget:GitHub.Copilot"],
     sources: [source("https://github.com/github/copilot-cli/blob/84ee80ea6490ce02d6000439356a609fcefbb9ae/README.md")],
     detect: { binaries: ["copilot"], version_args: ["--version"], install_dirs: { macos: ["~/.local/bin"], linux: ["~/.local/bin"] } },
-    sign_in: { provider: "copilot", command: null, in_agent: "/login", api_keys: ["GH_TOKEN", "GITHUB_TOKEN"], required: true },
+    sign_in: { provider: "copilot", command: ["copilot", "login"], in_agent: "/login", api_keys: ["GH_TOKEN", "GITHUB_TOKEN"], required: true },
     after_install: ["Needs an active GitHub Copilot plan."],
     min_version: null,
   },
@@ -695,7 +718,10 @@ const CATALOG_ENTRIES: readonly AgentCatalogEntry[] = [
     sources: [source("https://github.com/anomalyco/opencode/blob/f023f7c36c090260a49c6e4da0ff69cbbd10c168/README.md"), source("https://opencode.ai/docs/cli/")],
     detect: { binaries: ["opencode"], version_args: ["--version"], install_dirs: { macos: ["~/.opencode/bin"], linux: ["~/.opencode/bin"] } },
     sign_in: { provider: "opencode", command: ["opencode", "auth", "login"], in_agent: null, api_keys: [], required: false },
-    after_install: ["OpenCode 1 and 2 are both run as opencode: installing 2 replaces 1."],
+    after_install: [
+      "OpenCode 1 and 2 are both run as opencode: installing 2 replaces 1.",
+      "Its installer for macOS and Linux puts ~/.opencode/bin first on PATH in your shell's startup file (~/.bashrc, ~/.zshrc): an opencode command of your own elsewhere (a wrapper in ~/.local/bin) is no longer the one that runs.",
+    ],
     min_version: { version: "2.0.0", reason: "answering its questions from Chat" },
   },
   {
@@ -765,9 +791,9 @@ const CATALOG_ENTRIES: readonly AgentCatalogEntry[] = [
     kind: "harness",
     description: "A coding agent with IDE features and built-in tools.",
     install: {
-      macos: only(method("posix", "curl -fsSL https://omp.sh/install | sh", CURL_SH)),
-      linux: only(method("posix", "curl -fsSL https://omp.sh/install | sh", CURL_SH)),
-      windows: only(method("powershell", "irm https://omp.sh/install.ps1 | iex", POWERSHELL, { known_issues: ["Stops when an older Bun (before 1.4.4) is on PATH, as Ovis's own installer may have put there: run bun upgrade first."] })),
+      macos: only(method("posix", "curl -fsSL https://omp.sh/install | sh", CURL_SH, { known_issues: [OMP_BUN] })),
+      linux: only(method("posix", "curl -fsSL https://omp.sh/install | sh", CURL_SH, { known_issues: [OMP_BUN] })),
+      windows: only(method("powershell", "irm https://omp.sh/install.ps1 | iex", POWERSHELL, { known_issues: [OMP_BUN] })),
     },
     no_install: {},
     url_prefixes: ["https://omp.sh/install"],
@@ -922,7 +948,8 @@ const CATALOG_ENTRIES: readonly AgentCatalogEntry[] = [
     url_prefixes: ["https://hermes-agent.nousresearch.com/install.sh", "https://hermes-agent.nousresearch.com/install.ps1"],
     packages: [],
     sources: [source("https://hermes-agent.nousresearch.com/docs/getting-started/installation"), source("https://hermes-agent.nousresearch.com/docs/user-guide/messaging/")],
-    detect: { binaries: ["hermes"], version_args: ["--version"], install_dirs: { macos: ["~/.local/bin"], linux: ["~/.local/bin"] } },
+    // its version flag loads the whole agent: 2.3 to 6.7 s on a busy PC
+    detect: { binaries: ["hermes"], version_args: ["--version"], version_timeout_ms: 15_000, install_dirs: { macos: ["~/.local/bin"], linux: ["~/.local/bin"] } },
     sign_in: { provider: null, command: ["hermes", "setup"], in_agent: null, api_keys: ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "GOOGLE_API_KEY"], required: true },
     after_install: [
       "A messenger needs its own bot token too (Telegram: TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USERS).",

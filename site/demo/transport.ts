@@ -1004,6 +1004,14 @@ const DEMO_BRANCH_DIFF: { file: RepoDiffFile; patch: string | null }[] = [
   ].join("\n") },
 ].sort((left, right) => (left.file.path < right.file.path ? -1 : 1));
 
+/**
+ * Settings → Subscription usage's "Read Claude's limits from its status line" on the demo: off until
+ * turned on. `?demo_usage=refused` starts Claude refused as a blocked network refuses it (a 403 to a
+ * token that has not expired), offering the status line until it is turned on.
+ */
+let demoStatusline = false;
+const USAGE_STATE = new URLSearchParams(location.search).get("demo_usage");
+
 /** Settings → Subscription usage on the demo: plans as the workstation's CLIs might report them, resets counted from now. */
 function usageReport(): UsageReport {
   const now = Date.now();
@@ -1013,11 +1021,13 @@ function usageReport(): UsageReport {
   const week = (hours: number) => ({ resets_at: at(hours), starts_at: at(hours - 168) });
   const checked = new Date(now).toISOString();
   return { providers: [
-    { id: "claude", key: "claude:demo-claude", account: "sam@example.com", plan: "max", problem: null, checked_at: checked, windows: [
-      { kind: "session", scope: null, used_percent: 38, ...session(2.4) },
-      { kind: "week", scope: null, used_percent: 61, ...week(78) },
-      { kind: "week", scope: "Sonnet", used_percent: 12, ...week(78) },
-    ] },
+    USAGE_STATE === "refused" && !demoStatusline
+      ? { id: "claude", key: "claude:demo-claude", account: "sam@example.com", plan: "max", problem: "expired", checked_at: null, windows: [], statusline_offer: true }
+      : { id: "claude", key: "claude:demo-claude", account: "sam@example.com", plan: "max", problem: null, checked_at: checked, windows: [
+        { kind: "session", scope: null, used_percent: 38, ...session(2.4) },
+        { kind: "week", scope: null, used_percent: 61, ...week(78) },
+        ...(demoStatusline ? [] : [{ kind: "week" as const, scope: "Sonnet", used_percent: 12, ...week(78) }]),
+      ] },
     { id: "codex", key: "codex:demo-codex-work", account: "sam@work.example", plan: "pro", problem: null, checked_at: checked, windows: [
       { kind: "session", scope: null, used_percent: 22, ...session(1.2) },
       { kind: "week", scope: null, used_percent: 84, ...week(97) },
@@ -1179,6 +1189,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/session") return json({ snapshot: readSnapshot(local) });
   if (path === "/api/agents") return json(agentsFixture);
   if (path === "/api/agent-catalog") return json(DEMO_AGENT_CATALOG, 200, { "cache-control": "no-store" });
+  if (path === "/api/agent-catalog/install" || path === "/api/agent-catalog/sign-in") return error("demo", "The demo installs nothing. Install agents on your own PC.", 409);
   if (path === "/api/integrations") return json({ integrations: integrationsFixture } satisfies IntegrationsResponse);
   if (path === "/api/updates") return json({ managed: false, auto_update: false, phase: "idle", current_revision: null, latest_revision: null, current_version: __APP_VERSION__, latest_version: null, available: false, checked_at: null, blocked_reason: null, error: null }, 200, { "cache-control": "no-store" });
   if (path === "/api/updates/notes") return json({ revision: null, releases: [], omitted: 0 }, 200, { "cache-control": "no-store" });
@@ -1204,6 +1215,15 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/herdr-ui") return json({ copy_on_select: true }, 200, { "cache-control": "no-store" });
   if (path === "/api/access") return json({ port: 7317, tailscale: { state: "running", dns_name: "workstation.example.ts.net", serving_url: "https://workstation.example.ts.net", serve_command: null, serve_url: null } });
   if (path === "/api/usage") return json(usageReport(), 200, { "cache-control": "no-store" });
+  if (path === "/api/usage/statusline") {
+    if (method === "POST") {
+      let raw: unknown;
+      try { raw = init?.body ? JSON.parse(String(init.body)) : undefined; } catch { return error("invalid_json", "The body is not JSON", 400); }
+      if (typeof raw !== "object" || raw === null || typeof (raw as { enabled?: unknown }).enabled !== "boolean") return error("invalid_body", "Send { \"enabled\": true } or { \"enabled\": false }", 400);
+      demoStatusline = (raw as { enabled: boolean }).enabled;
+    }
+    return json({ installed: demoStatusline, supported: true }, 200, { "cache-control": "no-store" });
+  }
   if (path === "/api/usage/login") {
     if (method === "GET") {
       if (url.searchParams.has("provider")) return json({ accounts: url.searchParams.get("provider") === "cursor" ? ["cursor@example.test"] : [] });

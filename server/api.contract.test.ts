@@ -7,6 +7,8 @@ import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import { createServer } from "./index.ts";
+import * as appModule from "./index.ts";
+import * as herdrClient from "./herdr/client.ts";
 import type { AgentKind, AgentStatus, ApiError, HealthAuth, IntegrationsResponse, LanExposure, PortalStatus, SecuritySummary, PushKey, RemoteAccess, SessionSnapshot, TabMoved, TabMovedToWorkspace, PaneFindResponse, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
 import { SUPPORTED_AGENT_KINDS } from "../shared/supported-agents.ts";
 import { HerdrUpdater } from "./herdr-update.ts";
@@ -4681,6 +4683,202 @@ describe("repository diff of a pane's folder", () => {
 });
 
 describe("GET /api/sessions/history", () => {
+  const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+
+  /** Own all setup and cleanup, including failures before a server or workspace is returned. */
+  async function withPiHistoryFixture(root: string, run: (fixture: { file: string; initial: string; url: string }) => Promise<void>, piSessionDeadlineMs?: number): Promise<void> {
+    const previous = process.env["PI_CODING_AGENT_SESSION_DIR"];
+    let created: Awaited<ReturnType<typeof workspaceCreate>> | undefined;
+    let app: ReturnType<typeof createServer> | undefined;
+    try {
+      const project = join(root, "project");
+      mkdirSync(project);
+      const cwd = realpathSync(project);
+      const store = join(root, "sessions");
+      const { piSessionFolder } = await import("./session-history.ts");
+      const folder = join(store, piSessionFolder(cwd));
+      mkdirSync(folder, { recursive: true });
+      const file = join(folder, "fixture.jsonl");
+      const initial = line({ type: "session", version: 3, id: "pi-history-fixture", cwd })
+        + line({ type: "message", message: { role: "system", content: "s".repeat(100 * 1024) } })
+        + line({ type: "message", message: { role: "user", content: [{ type: "text", text: "Late" }, { type: "text", text: "prompt" }] } })
+        + line({ type: "session_info", name: " Late name " });
+      writeFileSync(file, initial);
+      process.env["PI_CODING_AGENT_SESSION_DIR"] = store;
+      created = await workspaceCreate({ cwd, label: "ovis-test-pi-history" });
+      app = createServer({ port: 0, hostname: "127.0.0.1", stateDir: join(root, "state"), piSessionDeadlineMs });
+      const url = `http://127.0.0.1:${app.port}/api/sessions/history?workspace_id=${encodeURIComponent(created.workspace.workspace_id)}&agent=pi`;
+      await run({ file, initial, url });
+    } finally {
+      try { app?.stop(); }
+      finally {
+        if (previous === undefined) delete process.env["PI_CODING_AGENT_SESSION_DIR"]; else process.env["PI_CODING_AGENT_SESSION_DIR"] = previous;
+        try { if (created) await workspaceClose(created.workspace.workspace_id); }
+        finally { rmSync(root, { recursive: true, force: true }); }
+      }
+    }
+  }
+
+  it("streams Pi labels past the old head bound and follows appended renames/clears without changing resume IDs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-pi-history-contract-"));
+    await withPiHistoryFixture(root, async ({ file, initial, url }) => {
+      const listing = async () => {
+        const response = await fetch(url);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        return ((await response.json()) as SessionHistoryResponse).sessions;
+      };
+      expect(await listing()).toMatchObject([{ title: "Late name", firstMessage: "Late prompt", resume: { argv: ["pi", "--session", "pi-history-fixture"] } }]);
+      writeFileSync(file, initial + line({ type: "session_info", name: "Renamed" }));
+      expect((await listing())[0]?.title).toBe("Renamed");
+      writeFileSync(file, initial + line({ type: "session_info", name: " " }));
+      expect((await listing())[0]).toMatchObject({ title: null, firstMessage: "Late prompt" });
+      // A fresh streaming read has no old 16 MiB per-turn cutoff.
+      const block = line({ type: "message", message: { role: "system", content: "s".repeat(1024 * 1024) } });
+      for (let n = 0; n < 17; n++) appendFileSync(file, block);
+      appendFileSync(file, line({ type: "session_info", name: "After bounded scan" }));
+      expect((await listing())[0]).toMatchObject({ title: "After bounded scan", firstMessage: "Late prompt" });
+      // A full header queue still refuses the listing even after a real first row.
+      const older = join(dirname(file), "older.jsonl");
+      writeFileSync(older, initial.replace("pi-history-fixture", "pi-history-older"));
+      utimesSync(older, 1, 1);
+      const { PiSessionReader, PiMetadataBusy, PiMetadataDeadline } = await import("./pi-session-metadata.ts");
+      const originalRead = PiSessionReader.prototype.read;
+      let firstComplete = false;
+      const refusedRead = spyOn(PiSessionReader.prototype, "read").mockImplementationOnce(function (this: InstanceType<typeof PiSessionReader>, ...args: Parameters<typeof originalRead>) {
+        return originalRead.apply(this, args).then((label) => { firstComplete = label?.header?.id === "pi-history-fixture"; return label; });
+      }).mockRejectedValueOnce(new PiMetadataBusy("queue"));
+      try {
+        const busy = await fetch(url);
+        expect(firstComplete).toBe(true);
+        expect(refusedRead).toHaveBeenCalledTimes(2);
+        expect(busy.status).toBe(503);
+        expect(busy.headers.get("retry-after")).toBe("1");
+        expect(busy.headers.get("cache-control")).toBe("no-store");
+        const body = await busy.json();
+        expect(body).toMatchObject({ error: { code: "session_history_busy" } });
+        expect(body).not.toHaveProperty("sessions");
+      } finally { refusedRead.mockRestore(); }
+      for (const failure of [new PiMetadataDeadline(null), new PiMetadataBusy()]) {
+        const failedLabel = spyOn(PiSessionReader.prototype, "read").mockImplementation(function (this: InstanceType<typeof PiSessionReader>, ...args: Parameters<typeof originalRead>) {
+          if (args[3] !== "header" && args[2]?.path === realpathSync(older)) return Promise.reject(failure);
+          return originalRead.apply(this, args);
+        });
+        try {
+          const partial = await fetch(url);
+          expect(partial.status).toBe(200);
+          expect(partial.headers.get("cache-control")).toBe("no-store");
+          expect(partial.headers.get("retry-after")).toBeNull();
+          expect(((await partial.json()) as SessionHistoryResponse).sessions).toMatchObject([
+            { id: "pi-history-fixture", title: "After bounded scan" },
+            { id: "pi-history-older", title: null, firstMessage: null, resume: { argv: ["pi", "--session", "pi-history-older"] } },
+          ]);
+        } finally { failedLabel.mockRestore(); }
+      }
+      expect((await listing())[1]).toMatchObject({ id: "pi-history-older", title: "Late name", firstMessage: "Late prompt" });
+    }, 120_000);
+  }, 20_000);
+
+  it("lists a 202-session Pi store with 50 long transcripts through the real API", async () => {
+    // the rows, titles and a later rename are the claim, not how fast this runner reads the store: a busy
+    // CI runner hit the two-second listing deadline (503), so the deadline is set past the test's own timeout
+    const root = mkdtempSync(join(tmpdir(), "ovis-pi-large-history-contract-"));
+    await withPiHistoryFixture(root, async ({ file, url }) => {
+      const cwd = realpathSync(join(root, "project"));
+      const block = line({ type: "custom", data: "synthetic extension state ".repeat(45000) });
+      utimesSync(file, 1_790_000_000, 1_790_000_000);
+      for (let n = 1; n < 202; n++) {
+        const path = join(dirname(file), `${n}.jsonl`);
+        const body = line({ type: "session", version: 3, id: `long-${n}`, cwd })
+          + (n < 152 ? "" : block + line({ type: "message", message: { role: "user", content: `Synthetic prompt ${n}` } })
+            + line({ type: "session_info", name: `Synthetic session ${n}` }) + block.repeat(3));
+        writeFileSync(path, body);
+        utimesSync(path, 1_790_000_000 + n, 1_790_000_000 + n);
+      }
+      const listing = async () => {
+        const response = await fetch(url);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        return ((await response.json()) as SessionHistoryResponse).sessions;
+      };
+      const rows = await listing();
+      expect(rows.map((row) => row.id)).toEqual(Array.from({ length: 50 }, (_, n) => `long-${201 - n}`));
+      expect(rows.every((row, n) => row.title === `Synthetic session ${201 - n}` && row.firstMessage === `Synthetic prompt ${201 - n}`)).toBe(true);
+      // Reopening must scan again and notice a later name, not reuse the completed answer.
+      const renamed = join(dirname(file), "201.jsonl");
+      appendFileSync(renamed, line({ type: "session_info", name: "Freshly renamed" }));
+      utimesSync(renamed, 1_790_000_202, 1_790_000_202);
+      expect((await listing())[0]).toMatchObject({ id: "long-201", title: "Freshly renamed", resume: { argv: ["pi", "--session", "long-201"] } });
+    }, 120_000);
+  }, 60_000);
+
+  for (const phase of ["workspace creation", "server creation", "server stop", "workspace close"] as const) {
+    it(`cleans up the Pi history fixture when ${phase} fails`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "ovis-pi-history-failure-"));
+      const previous = process.env["PI_CODING_AGENT_SESSION_DIR"];
+      const failure = new Error(`synthetic ${phase} failure`);
+      const createWorkspace = herdrClient.workspaceCreate;
+      const createApp = appModule.createServer;
+      const closeWorkspace = herdrClient.workspaceClose;
+      const restores: Array<() => void> = [];
+      let workspaceId: string | undefined;
+      let stop: (() => void) | undefined;
+      let stopped = false;
+      let closed = false;
+      try {
+        const creating = spyOn(herdrClient, "workspaceCreate").mockImplementation(async (...args) => {
+          if (phase === "workspace creation") throw failure;
+          const created = await createWorkspace(...args);
+          workspaceId = created.workspace.workspace_id;
+          return created;
+        });
+        restores.push(() => creating.mockRestore());
+        const starting = spyOn(appModule, "createServer").mockImplementation((...args) => {
+          if (phase === "server creation") throw failure;
+          const app = createApp(...args);
+          stop = app.stop;
+          const stopping = spyOn(app, "stop").mockImplementation(() => {
+            stop!();
+            stopped = true;
+            if (phase === "server stop") throw failure;
+          });
+          restores.push(() => stopping.mockRestore());
+          return app;
+        });
+        restores.push(() => starting.mockRestore());
+        const closing = spyOn(herdrClient, "workspaceClose").mockImplementation(async (...args) => {
+          if (phase === "workspace close") throw failure;
+          await closeWorkspace(...args);
+          closed = true;
+        });
+        restores.push(() => closing.mockRestore());
+
+        await expect(withPiHistoryFixture(root, async () => {})).rejects.toBe(failure);
+        expect(process.env["PI_CODING_AGENT_SESSION_DIR"]).toBe(previous);
+        expect(existsSync(root)).toBe(false);
+        expect(starting).toHaveBeenCalledTimes(phase === "workspace creation" ? 0 : 1);
+        if (stop) expect(stopped).toBe(true);
+        if (workspaceId) {
+          expect(closing).toHaveBeenCalledWith(workspaceId);
+          expect(closed).toBe(phase !== "workspace close");
+          expect((await sessionSnapshot()).workspaces.some((workspace) => workspace.workspace_id === workspaceId)).toBe(phase === "workspace close");
+        }
+      } finally {
+        for (const restore of restores.reverse()) restore();
+        // The injected close failure deliberately leaves our own isolated workspace alive;
+        // recover it here even if a cleanup assertion above failed.
+        try { if (stop && !stopped) stop(); }
+        finally {
+          try { if (workspaceId && !closed) await closeWorkspace(workspaceId); }
+          finally {
+            if (previous === undefined) delete process.env["PI_CODING_AGENT_SESSION_DIR"]; else process.env["PI_CODING_AGENT_SESSION_DIR"] = previous;
+            rmSync(root, { recursive: true, force: true });
+          }
+        }
+      }
+    }, 20_000);
+  }
+
   it("lists a workspace folder's Codex sessions from the server's store, newest first, and none a link puts outside it", async () => {
     const root = mkdtempSync(join(tmpdir(), "ovis-session-history-contract-"));
     const project = join(root, "project");

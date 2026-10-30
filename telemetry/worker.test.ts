@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ACTIVE_LATE_DAYS, TELEMETRY_THEME_IDS, telemetrySettings, type TelemetrySettings } from "../shared/telemetry.ts";
+import { ACTIVE_LATE_DAYS, TELEMETRY_THEME_IDS, telemetrySettings, type TelemetrySettings, type TelemetryUsage } from "../shared/telemetry.ts";
 import { handle, readActive, readEvent, requestCountry, type Env } from "./worker.ts";
 
 const event = {
@@ -290,7 +290,7 @@ describe("telemetry receiver: active", () => {
 
   test("active: readActive accepts a valid message, no harnesses, and a day ACTIVE_LATE_DAYS back", () => {
     expect(readActive(active, now)).toEqual({
-      day: "2026-10-08", install_id: event.install_id, version: "0.4.2", os: "linux", arch: "x64", install_method: "plugin", harnesses: ["claude", "codex", "other"],
+      day: "2026-10-08", install_id: event.install_id, version: "0.4.2", os: "linux", arch: "x64", install_method: "plugin", harnesses: ["claude", "codex", "other"], usage: null,
     });
     expect(readActive({ ...active, harnesses: [] }, now)?.harnesses).toEqual([]);
     expect(ACTIVE_LATE_DAYS).toBe(2);
@@ -324,7 +324,7 @@ describe("telemetry receiver: active", () => {
     expect((await handle(from(postActive(JSON.stringify(active)), { country: "KR" }), env, now)).status).toBe(204);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.query).toContain("INSERT INTO active");
-    expect(rows[0]!.values).toEqual(["2026-10-08", event.install_id, "0.4.2", "linux", "x64", "plugin", "KR", JSON.stringify(["claude", "codex", "other"])]);
+    expect(rows[0]!.values).toEqual(["2026-10-08", event.install_id, "0.4.2", "linux", "x64", "plugin", "KR", JSON.stringify(["claude", "codex", "other"]), null]);
     for (const body of [
       "not json",
       JSON.stringify({ ...active, harnesses: ["cursor"] }),
@@ -339,6 +339,56 @@ describe("telemetry receiver: active", () => {
     // an active message is not an event either
     expect((await handle(post(JSON.stringify(active)), env, now)).status).toBe(400);
     expect(rows).toHaveLength(1);
+  });
+
+  const usage: TelemetryUsage = { surfaces: ["browser", "mobile-pwa"], ingress: ["local", "tailscale"], prompt_answers: 3, alerts_delivered: 2, alerts_opened: 1 };
+
+  test("active: readActive takes a message with the day's usage, and an older sender's without it", () => {
+    expect(readActive({ ...active, usage }, now)?.usage).toEqual(usage);
+    expect(readActive(active, now)?.usage).toBeNull();
+  });
+
+  test("active: readActive refuses usage with an unknown, unsorted or repeated kind, a bad count or another key", () => {
+    for (const bad of [
+      { ...usage, surfaces: ["tv"] },
+      { ...usage, surfaces: ["mobile-pwa", "browser"] },
+      { ...usage, ingress: ["local", "local"] },
+      { ...usage, prompt_answers: -1 },
+      { ...usage, alerts_delivered: 1.5 },
+      { ...usage, alerts_opened: 10_000 },
+      { ...usage, pane_id: "w1:p1" },
+      { surfaces: [], ingress: [], prompt_answers: 0, alerts_delivered: 0 },
+      null,
+      "usage",
+    ]) expect(readActive({ ...active, usage: bad }, now)).toBeNull();
+  });
+
+  test("active: the day's latest usage replaces the row's, and an older sender's message leaves it", async () => {
+    const db = new Database(":memory:");
+    db.exec(readFileSync(join(import.meta.dir, "schema.sql"), "utf8"));
+    const env: Env = { DB: { prepare: (query) => ({ bind: (...values) => ({ run: async () => db.prepare(query).run(...(values as (string | null)[])) }) }) } };
+    const send = (body: object) => handle(postActive(JSON.stringify(body)), env, now);
+    const usageOf = () => (db.query("SELECT usage FROM active").get() as { usage: string | null }).usage;
+    expect((await send(active)).status).toBe(204);
+    expect(usageOf()).toBeNull();
+    expect((await send({ ...active, usage: { ...usage, prompt_answers: 1 } })).status).toBe(204);
+    expect((await send({ ...active, usage })).status).toBe(204);
+    expect(JSON.parse(usageOf()!)).toEqual(usage);
+    expect((await send(active)).status).toBe(204);
+    expect(JSON.parse(usageOf()!)).toEqual(usage);
+  });
+
+  test("active: an existing table takes the usage only after the README's ALTER, keeping its rows", async () => {
+    const db = new Database(":memory:");
+    db.exec(readFileSync(join(import.meta.dir, "schema.sql"), "utf8").replace("  usage TEXT CHECK (usage IS NULL OR json_valid(usage)),\n", ""));
+    const env: Env = { DB: { prepare: (query) => ({ bind: (...values) => ({ run: async () => db.prepare(query).run(...(values as (string | null)[])) }) }) } };
+    db.exec("INSERT INTO active (day, install_id, version, os, arch, install_method, country, harnesses) VALUES ('2026-10-07', '11111111-2222-4333-8444-555555555555', '0.4.20', 'linux', 'x64', 'plugin', 'KR', '[\"claude\"]')");
+    await expect(handle(postActive(JSON.stringify({ ...active, usage })), env, now)).rejects.toThrow(/usage/);
+    const alter = readFileSync(join(import.meta.dir, "README.md"), "utf8").match(/"(ALTER TABLE active ADD COLUMN usage [^"]+)"/)?.[1];
+    expect(alter).toBeDefined();
+    db.exec(alter!);
+    expect((await handle(postActive(JSON.stringify({ ...active, usage })), env, now)).status).toBe(204);
+    expect(db.query("SELECT day, usage FROM active ORDER BY day").all()).toEqual([{ day: "2026-10-07", usage: null }, { day: "2026-10-08", usage: JSON.stringify(usage) }]);
   });
 
   test("active: the upsert keeps one row per install and day, with the latest set, under the visit's day", async () => {

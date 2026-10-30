@@ -184,10 +184,6 @@ jobs:
     env:
       CHECK_DIR: ${{ github.workspace }}/.ci
       UNIT_TEST_WORKERS: 4
-      # Fast takes no herdr slot, but its start still passes check.ts's admission port, which every
-      # runner on the self-hosted PC shares (scripts/self-hosted-runner/run.sh): a run that starts
-      # while another runner's run holds that port for a moment waits instead of failing.
-      CHECK_WAIT_SECONDS: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -381,8 +377,20 @@ jobs:
           BROWSER_EXCLUDE: scripts/ui-regression.ts,scripts/ui-contexts-regression.ts
           BROWSER_WORKERS: ${{ runner.environment == 'self-hosted' && '6' || '4' }}
         run: bun run check run -- bun scripts/ci-browser-parallel.ts
+      # About 2,000 screenshots of a green run cost ~50 s to upload on the job that ends a run last,
+      # so they go up only when the job failed; the report and every script's log always do.
+      - name: Preserve browser logs
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-other-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .ci/report.json
+            .ci/browser-logs/**
+          include-hidden-files: true
+          if-no-files-found: ignore
       - name: Preserve browser logs and evidence
-        if: always()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-other-${{ github.run_id }}-${{ github.run_attempt }}

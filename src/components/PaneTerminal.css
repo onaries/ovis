@@ -190,6 +190,7 @@
 /* no scrollback (PaneTerminal.tsx), so the viewport never scrolls: hide the track that would
    otherwise sit over the last columns on platforms with classic scrollbars */
 .pane-terminal .xterm-viewport {
+  background-color: var(--term-bg);
   scrollbar-width: none;
 }
 

@@ -2,14 +2,14 @@
  * The receiver of herdr web ui's anonymous install and update counts and daily active messages
  * (server/telemetry.ts). A Cloudflare Worker over two D1 tables: /v1/events fills `events`, and
  * /v1/active fills `active`, one row per install and UTC day, which a later message that day
- * replaces (the harness kinds may grow). It never reads the visitor's address or any header
+ * replaces (the harness kinds and the day's usage may grow). It never reads the visitor's address or any header
  * beyond the content type; of where a request came from it keeps the country Cloudflare names
  * and nothing finer. It keeps the day rather than the time, and stores each
  * (install, event, version) once, so a replayed event counts once. It stores only the app's
  * validated, allowlisted settings snapshot. Deploy: telemetry/README.md.
  */
 
-import { ACTIVE_LATE_DAYS, telemetryHarnesses, telemetrySettings, type TelemetryHarness, type TelemetrySettings } from "../shared/telemetry.ts";
+import { ACTIVE_LATE_DAYS, telemetryHarnesses, telemetrySettings, telemetryUsage, type TelemetryHarness, type TelemetrySettings, type TelemetryUsage } from "../shared/telemetry.ts";
 
 /** the part of Cloudflare's D1 binding this Worker uses */
 interface D1Statement { bind(...values: unknown[]): { run(): Promise<unknown> } }
@@ -37,6 +37,8 @@ export interface StoredActive {
   arch: string;
   install_method: "plugin" | "managed" | "source";
   harnesses: TelemetryHarness[];
+  /** the day's use, from senders since NOTICE_VERSION 5; null from older ones */
+  usage: TelemetryUsage | null;
 }
 
 const MAX_BODY_BYTES = 8192;
@@ -87,6 +89,8 @@ export function readEvent(body: unknown, now: Date): StoredEvent | null {
 }
 
 const ACTIVE_KEYS = ["event", "day", "install_id", "version", "os", "arch", "install_method", "harnesses"];
+/** a sender since NOTICE_VERSION 5 adds `usage`; an older one keeps sending the keys above alone */
+const ACTIVE_KEY_SETS = [ACTIVE_KEYS, [...ACTIVE_KEYS, "usage"]];
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
 
@@ -95,7 +99,8 @@ export function readActive(body: unknown, now: Date): StoredActive | null {
   if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
   const value = body as Record<string, unknown>;
   const keys = Object.keys(value);
-  if (keys.length !== ACTIVE_KEYS.length || ACTIVE_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(value, key))) return null;
+  const expected = ACTIVE_KEY_SETS.find((set) => set.length === keys.length);
+  if (!expected || expected.some((key) => !Object.prototype.hasOwnProperty.call(value, key))) return null;
   const { event, day, install_id, version, os, arch, install_method } = value;
   if (event !== "active") return null;
   if (typeof day !== "string" || !DAY.test(day)) return null;
@@ -110,7 +115,9 @@ export function readActive(body: unknown, now: Date): StoredActive | null {
   if (typeof install_method !== "string" || !METHODS.has(install_method)) return null;
   const harnesses = telemetryHarnesses(value["harnesses"]);
   if (!harnesses) return null;
-  return { day, install_id, version, os, arch, install_method: install_method as StoredActive["install_method"], harnesses };
+  const usage = expected.includes("usage") ? telemetryUsage(value["usage"]) : null;
+  if (expected.includes("usage") && usage === null) return null;
+  return { day, install_id, version, os, arch, install_method: install_method as StoredActive["install_method"], harnesses, usage };
 }
 
 /** the body as text, or null as soon as it passes MAX_BODY_BYTES (without waiting for the rest) */
@@ -151,8 +158,9 @@ export async function handle(request: Request, env: Env, now = new Date()): Prom
     const active = readActive(body, now);
     if (!active) return new Response(null, { status: 400 });
     await env.DB.prepare(
-      "INSERT INTO active (day, install_id, version, os, arch, install_method, country, harnesses) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (day, install_id) DO UPDATE SET version = excluded.version, os = excluded.os, arch = excluded.arch, install_method = excluded.install_method, country = COALESCE(excluded.country, active.country), harnesses = excluded.harnesses",
-    ).bind(active.day, active.install_id, active.version, active.os, active.arch, active.install_method, requestCountry(request), JSON.stringify(active.harnesses)).run();
+      // a later message that day replaces the usage too; one from an older sender (no usage) leaves it
+      "INSERT INTO active (day, install_id, version, os, arch, install_method, country, harnesses, usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (day, install_id) DO UPDATE SET version = excluded.version, os = excluded.os, arch = excluded.arch, install_method = excluded.install_method, country = COALESCE(excluded.country, active.country), harnesses = excluded.harnesses, usage = COALESCE(excluded.usage, active.usage)",
+    ).bind(active.day, active.install_id, active.version, active.os, active.arch, active.install_method, requestCountry(request), JSON.stringify(active.harnesses), active.usage === null ? null : JSON.stringify(active.usage)).run();
     return new Response(null, { status: 204 });
   }
   const stored = readEvent(body, now);

@@ -39,6 +39,20 @@ export interface ProviderUsage {
   readonly problem: UsageProblem | null;
   /** ISO 8601 time `windows` were read; null when they never were */
   readonly checked_at: string | null;
+  /**
+   * Claude refused a sign-in whose token has not expired (a 403, as a blocked network answers, not a
+   * real expiry), and Claude's limits are not read from its status line on this PC yet: turning that
+   * on (POST /api/usage/statusline) can stand in. Absent otherwise.
+   */
+  readonly statusline_offer?: true;
+}
+
+/** GET and POST /api/usage/statusline: whether Claude's limits are read from its status line on this PC. */
+export interface StatuslineState {
+  /** Claude Code's status line is wrapped (server/statusline-install.ts), and can be put back */
+  readonly installed: boolean;
+  /** false where the wrapper cannot run (Windows) */
+  readonly supported: boolean;
 }
 
 /** GET /api/usage: only providers a CLI on this PC is signed in to are listed, once per account. */

@@ -1547,6 +1547,43 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* index.html's loading status, drawn until React's first frame replaces it (#2329): on a slow
+   link the app's script takes seconds, and a page with nothing on it looks frozen. It shows only
+   after a moment, so a fast start does not flash it. Its hidden words take a generic family no
+   @font-face backs: the app's faces would otherwise download beside the app's script, on the link
+   the spinner is waiting for. */
+.boot {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  font-family: sans-serif;
+  animation: boot-show 0s 400ms both;
+}
+
+.boot-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border);
+  border-top-color: var(--text-dim);
+  border-radius: 50%;
+  animation: boot-spin var(--dur-spin) steps(8) infinite;
+}
+
+@keyframes boot-show {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes boot-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-spinner {
+    animation: none;
+  }
+}
+
 /* ---------- line breaking ---------- */
 
 /* The UI language is <html lang> (lib/settings.ts applyToDocument). Set on body alone so that every

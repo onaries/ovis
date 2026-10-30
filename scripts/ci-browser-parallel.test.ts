@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { failureSite, scriptTimeoutSeconds } from "./ci-browser-parallel.ts";
+import { failureSite, longestFirst, scriptTimeoutSeconds, serialBrowserScripts } from "./ci-browser-parallel.ts";
 
 /** A killed process that its parent (a subreaper, say) has not reaped yet is a zombie: not alive. */
 const alive = (pid: number): boolean => {
@@ -86,6 +86,23 @@ describe("parallel browser script deadline", () => {
     expect(scriptTimeoutSeconds("1.5")).toBe(1.5);
     expect(scriptTimeoutSeconds("2147483")).toBe(2147483);
     for (const bad of ["0", "-3", "soon", "Infinity", "2147484"]) expect(() => scriptTimeoutSeconds(bad)).toThrow("BROWSER_SCRIPT_TIMEOUT_SECONDS");
+  });
+});
+
+describe("parallel browser script order", () => {
+  it("starts the longest scripts first, counts an unlisted one as the median, and keeps the listed order on a tie", () => {
+    const timings = { "a.ts": 10, "b.ts": 300, "c.ts": 50, "d.ts": 50 };
+    expect(longestFirst(["a.ts", "new.ts", "c.ts", "b.ts", "d.ts"], timings)).toEqual(["b.ts", "new.ts", "c.ts", "d.ts", "a.ts"]);
+    expect(longestFirst(["a.ts", "b.ts"], {})).toEqual(["a.ts", "b.ts"]);
+    // an even-sized table's median is the mean of its two middle values: 155 s here, below b.ts
+    expect(longestFirst(["new.ts", "b.ts", "a.ts"], { "a.ts": 10, "b.ts": 300 })).toEqual(["b.ts", "new.ts", "a.ts"]);
+  });
+
+  it("times only scripts the serial lane runs", () => {
+    const timings = JSON.parse(readFileSync(join(import.meta.dir, "ci-browser-timings.json"), "utf8")) as Record<string, number>;
+    const listed = serialBrowserScripts();
+    expect(Object.keys(timings).filter((script) => !listed.includes(script))).toEqual([]);
+    expect(Object.values(timings).every((seconds) => Number.isFinite(seconds) && seconds >= 0)).toBe(true);
   });
 });
 

@@ -1093,6 +1093,29 @@ describe("connection-owned pending input", () => {
     expect(f.bytes()).toBe("");
   }, 30_000);
 
+  it("sends over Claude's grey suggestion while the viewport is scrolled into the history", async () => {
+    const f = await setup("grey-scrolled");
+    // the recording's width: its rules span 119 of 120 columns, and would wrap at the helper's 100
+    const from = f.socket.seen.length;
+    f.socket.send({ type: "attach", pane_id: f.pane, cols: 120, rows: 30 });
+    await f.socket.wait((frame) => frame.type === "input-ready" && frame.pane_id === f.pane && frame.ready !== false, from);
+    // recorded from Claude Code 2.1.311 after a turn: the live box shows its suggestion "do it", dim, under its own cursor
+    const recorded = readFileSync(join(import.meta.dir, "fixtures", "claude-suggestion-2.1.311-119.ansi"), "utf8");
+    const filler = Array.from({ length: 60 }, (_, index) => `  output line ${index + 1}`).join("\n");
+    await f.showScreen(`${filler}\n${recorded}`, "Restart to update");
+    await f.state("idle");
+    // the user scrolled the terminal up: herdr's viewport, shared by every client, no longer shows the box
+    const top = (await paneScrollInfo(f.pane))!.max_offset_from_bottom;
+    expect(top).toBeGreaterThan(0);
+    await herdrRpc("pane.scroll", { pane_id: f.pane, offset_from_bottom: top });
+    expect((await paneRead({ paneId: f.pane, source: "visible", format: "text" })).text).not.toContain("do it");
+    f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "next message", payload: "next message" });
+    expect(await f.socket.result(1)).toMatchObject({ ok: true });
+    // the message alone, then its Enter: nothing of the suggestion mixed in
+    await f.waitBytes(`${paste("next message")}\r`);
+    expect(f.bytes()).toBe(`${paste("next message")}\r`);
+  }, 30_000);
+
   it("answers `restored` from the live box only: an older box in a scrolled viewport is no restored copy", async () => {
     const f = await setup("restored-scrolled");
     const rule = "\u2500".repeat(60);
@@ -1727,24 +1750,34 @@ describe("a create request's first message", () => {
     expect((await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane)?.agent ?? null).toBeNull(); // control: queued with no agent named
     const device = new Socket(server.port); entry.sockets.push(device);
     await device.attach(pane);
-    // the launched agent comes up as the shell's child; when it ends, the shell runs another of the same kind
+    // the launched agent comes up under a launcher, which on SIGUSR1 starts another of the same kind and ends the
+    // first only once the second runs: with the shell alone in front between them, a read in that gap rightly
+    // finds the launched agent gone (first_message_launch_ended)
     const launchedLog = join(root, "first-launch-replaced-1.jsonl");
     const replacementLog = join(root, "first-launch-replaced-2.jsonl");
     const screenFile = join(root, "first-launch-replaced.screen");
     writeFileSync(screenFile, "");
-    const recorder = (log: string) => `'${join(root, "claude")}' '${join(root, "record.cjs")}' '${log}' '\u203a Message' '${screenFile}'`;
     const up = written(() => existsSync(launchedLog), "the launched agent did not start", 10_000);
     const before = device.seen.length;
-    await herdrRpc("pane.send_text", { pane_id: pane, text: `${recorder(launchedLog)}; exec ${recorder(replacementLog)}\n` });
+    await herdrRpc("pane.send_text", { pane_id: pane, text: `exec '${join(root, "node")}' '${join(root, "launcher", "claude")}' '${join(root, "claude")}' '${join(root, "record.cjs")}' '${launchedLog}' '\u203a Message' '${screenFile}' '${replacementLog}'\n` });
     await up;
     await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "claude", state: "working" });
     await learned(server, device, pane, "claude", before, entry.sockets);
-    const launched = (await herdrClient.paneProcessInfo(pane))?.foreground_processes?.find((entry) => entry.name === "claude");
-    if (!launched) throw new Error("the launched agent has no foreground process");
+    const foreground = (await herdrClient.paneProcessInfo(pane))?.foreground_processes ?? [];
+    const launcher = foreground.find((entry) => entry.argv?.[1] === join(root, "launcher", "claude"));
+    const launched = foreground.find((entry) => entry.argv?.[0] === join(root, "claude"));
+    if (!launcher || !launched) throw new Error(`the launch has no launcher and agent in front: ${JSON.stringify(foreground)}`);
     const replaced = written(() => existsSync(replacementLog), "the replacement did not start", 10_000);
-    globalThis.process.kill(launched.pid, "SIGKILL");
+    globalThis.process.kill(launcher.pid, "SIGUSR1");
     await replaced;
-    expect((await herdrClient.paneProcessInfo(pane))?.foreground_processes?.find((entry) => entry.name === "claude")?.pid).not.toBe(launched.pid); // control
+    // the launcher ends the first agent once the replacement runs: the replacement is complete once herdr no longer lists it
+    for (const deadline = Date.now() + 10_000; (await herdrClient.paneProcessInfo(pane))?.foreground_processes?.some((entry) => entry.pid === launched.pid);) {
+      if (Date.now() > deadline) throw new Error("the launched agent did not end");
+      await Bun.sleep(25);
+    }
+    const replacement = (await herdrClient.paneProcessInfo(pane))?.foreground_processes?.find((entry) => entry.argv?.[0] === join(root, "claude"));
+    expect(replacement).toBeDefined(); // control: the replacement is a live foreground agent
+    expect(replacement?.pid).not.toBe(launched.pid); // control: the process really changed, in the same terminal
     await page.attach(pane);
     const held = listed(page, pane, tab.first_message.id, "held");
     await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "claude", state: "idle" });

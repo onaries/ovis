@@ -719,7 +719,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   overflow-wrap: anywhere;
 }
 
-/* the footer's actions are rows on the same grid */
+/* the footer is one row on the same grid: the Settings gear and the plan meters */
 .sidebar-footer {
   position: relative;
   display: flex;
@@ -772,13 +772,6 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 }
 
 .sidebar-footer-settings svg { margin-inline: auto; }
-
-.sidebar-install-help {
-  margin: 0;
-  padding: 0 var(--space-2) var(--space-1) var(--side-box);
-  color: var(--text-dim);
-  font-size: var(--fs-xs);
-}
 
 @media (pointer: coarse) {
   .sidebar-shell {

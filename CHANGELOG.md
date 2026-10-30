@@ -7,6 +7,647 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.20] - 2026-10-29
+
+### Added
+- In New workspace and New tab, Claude Code's Ultracode switch fits on one line under Model and
+  Effort, with its minimum version visible on a phone too.
+  ([#2282](https://github.com/devswha/ovis/pull/2282) by @fivetaku)
+- The server lists every agent Ovis can install, with each vendor's own install command for the
+  PC's operating system and whether the agent is installed there, at which version
+  (`GET /api/agent-catalog`, also for remote PCs). Nothing is installed yet: the install flow
+  builds on it.
+  ([#2326](https://github.com/devswha/ovis/pull/2326))
+- Add Black, with pure black backgrounds and the Tokyo Night accent colors.
+  ([#1911](https://github.com/devswha/ovis/pull/1911) by @jjsteffen)
+- When Chat does not send a message because Claude Code's input box already holds a draft, the
+  note now has a **Send it** button beside **Clear it and send**. It sends the draft as Claude
+  Code holds it, and your Chat message stays in the box.
+  ([#2301](https://github.com/devswha/ovis/pull/2301) by @jpcarranza94)
+- Chat shows a Claude Code bash-mode command (`!`) as one card: the command, then what it
+  printed, with the output of a failed command in red. Before, Chat showed the raw
+  `<bash-input>` and `<bash-stdout>` tags in two messages.
+  ([#2176](https://github.com/devswha/ovis/pull/2176) by @jpcarranza94)
+- New workspace and New tab have an Ultracode switch for Claude Code, on one line under Model and
+  Effort, so a session can start with Ultracode on at any effort level
+  (`--settings '{"ultracode":true}'`, which a Windows PC passes as a small settings file in
+  `%LOCALAPPDATA%\ovis\claude-settings`). It needs Claude Code 2.1.284 or later, a model with xhigh
+  and dynamic workflows on. Reported by @fivetaku, whose #2282 suggested the compact line under the
+  effort level.
+  ([#2266](https://github.com/devswha/ovis/pull/2266))
+- Claude Code's `/effort` card has a Turn Ultracode on or Turn Ultracode off row where Tab, the
+  default key, flips the switch: it switches Ultracode for this session and keeps the effort level.
+  ([#2266](https://github.com/devswha/ovis/pull/2266))
+- Chat shows a Letta Code pane's conversation, read from Letta's own transcript, when herdr's Letta
+  integration reports it and Letta's own record names the same conversation; otherwise the
+  terminal's text stays.
+  ([#2312](https://github.com/devswha/ovis/pull/2312))
+  ([#2338](https://github.com/devswha/ovis/pull/2338))
+- The `ask_user` form of the `@eko24ive/pi-ask` pi package shows as a chat card and is answered
+  from the chat, one question per step, once the web UI's pi extension is installed with
+  `bun scripts/install-pi-integration.ts`. The answer goes to pi-ask through its own events,
+  never as typed keys; without the extension the form stays in Terminal (#1202). Reported by
+  @chobijaeyu.
+  ([#2218](https://github.com/devswha/ovis/pull/2218))
+- An expired Claude or Codex account in Subscription usage has a **Sign in again** button, in Settings and in the
+  usage popover: it opens the official sign-in in a terminal tab for that same account, replacing
+  its expired sign-in instead of adding a new account.
+  ([#2309](https://github.com/devswha/ovis/pull/2309))
+
+### Changed
+- A message sent from Chat shows at once as your own bubble, faded, until the agent writes it as a
+  turn, so the chat is never blank between Send and the agent's turn. A small clock joins it only
+  when the agent has not taken it after 5 seconds. A command (`/cost`, `! ls`) gets no bubble, since
+  it never comes back as that message, and a bubble whose turn has not come within a minute goes.
+  ([#2270](https://github.com/devswha/ovis/pull/2270) by @CharleoYang)
+- New workspace and New tab no longer list `ultracode` among Claude Code's effort levels; the PC
+  still accepts `--effort ultracode` from other clients.
+  ([#2266](https://github.com/devswha/ovis/pull/2266))
+- Switching tabs is faster: a tab's terminal takes input about 100 ms sooner. The bridge passes an
+  attach's screen on as soon as herdr draws its text, instead of holding every attach 100 ms.
+  The hold stays for an attach that shows no text yet, one that was resized while it started, and
+  a pane another web bridge held, so herdr's refusal is still never shown.
+  ([#2255](https://github.com/devswha/ovis/pull/2255))
+- A long OMO or GJC chat refreshes faster while its agent works: each update now parses only the
+  records the agent added since the last one, as OMP, Claude Code and Codex chats already do,
+  instead of the whole running task again. Based on
+  [#1634](https://github.com/devswha/ovis/pull/1634) by @Yoonwoo-Ha.
+  ([#2291](https://github.com/devswha/ovis/pull/2291))
+- The Beta page on ovis.sh tells Android testers, in all four of its languages, to open the
+  opt-in link in Chrome on the phone rather than inside another app, that **You are a tester**
+  means they are in, to check that the Play Store app's profile is the same account, and that
+  Google Play takes a few hours after they join the group, so an app that is not found right
+  after joining is worth trying again later.
+  ([#2076](https://github.com/devswha/ovis/pull/2076))
+- The terminal draws its Latin text in the bundled JetBrains Mono (regular and bold) on every device,
+  so Ovis for Mac, Safari (the installed app) and Chrome on the same Mac show the same font, row height
+  and number of rows. A font chosen in Settings still takes its place.
+  ([#2272](https://github.com/devswha/ovis/pull/2272))
+
+### Fixed
+- A message to Claude Code is sent at once when its own turn has ended and only background
+  agents are still working, instead of waiting for those agents to finish.
+  ([#2271](https://github.com/devswha/ovis/pull/2271) by @CharleoYang)
+- Switching Chat tabs loads a smaller page of history and keeps more tabs' pages ready, instead
+  of fetching the whole page again at each switch. Settings lets you choose the history page size.
+  ([#2274](https://github.com/devswha/ovis/pull/2274) by @CharleoYang)
+- A terminal resized while it attaches no longer shows its first screen at the old size, or takes
+  input before the program has the new size. The bridge now waits for herdr's redraw at the
+  terminal's current size, also after a resize back to the size it started at, for up to a
+  second.
+  ([#2324](https://github.com/devswha/ovis/pull/2324))
+- A folded work block no longer opens again when hidden reasoning before it joins the same run of
+  work (#2111).
+  ([#2240](https://github.com/devswha/ovis/pull/2240))
+- A chat message sent to a PC whose server cannot confirm messages and does not name its herdr
+  now stays in Recover unsent text after a reload, instead of being lost with the page (#2172).
+  ([#2240](https://github.com/devswha/ovis/pull/2240))
+- A diagonal trackpad swipe over an overflowing tab strip is left to the browser, so the strip
+  no longer moves against the swipe's sideways motion (#2103).
+  ([#2240](https://github.com/devswha/ovis/pull/2240))
+- Chat keeps following new output to the end when part of the transcript folds on its own: a turn
+  settling at the end, or a block above the view folding while the view still glides to the end.
+  Before, the list holding the rows in place read as the reader scrolling up: following stopped
+  mid-transcript and **New messages** showed.
+  ([#2117](https://github.com/devswha/ovis/pull/2117))
+- The numbers of a numbered list in the chat are no longer cut off on the left with a wide Chat font
+  such as a monospace one, or once a list reaches 10 or 100: the indent grows with the Chat font
+  and the widest number.
+  ([#2096](https://github.com/devswha/ovis/pull/2096))
+- A chat work block you folded no longer opens again when the words before its tools join it, as
+  when a later Codex record marks them commentary or a blank commentary is filled in.
+  ([#2098](https://github.com/devswha/ovis/pull/2098))
+- A chat copy that reaches past the chat, such as Select All, keeps a tool card's whole file paths
+  instead of the short labels read from the pane's folder.
+  ([#2195](https://github.com/devswha/ovis/pull/2195))
+- A pane on a UNC folder written with forward slashes (`//server/share/app`) shows its chat tool
+  card paths as written, as it already did for `\\server\share\app`.
+  ([#2195](https://github.com/devswha/ovis/pull/2195))
+- A message queued for a `claude attach` pane waits for the conversation of the job it opened, as it
+  does for any Claude Code pane, instead of going wherever the pane ends up.
+  ([#2119](https://github.com/devswha/ovis/pull/2119))
+- Chat follows a `claude attach <name>` pane whose name is followed by debug options or
+  `--setting-sources`, as Claude Code reads it.
+  ([#2119](https://github.com/devswha/ovis/pull/2119))
+- A `/resume` of a background session no longer reads that job's state without a size limit, nor
+  waits on a FIFO put in its place.
+  ([#2119](https://github.com/devswha/ovis/pull/2119))
+- A Claude Code pane whose turn has ended no longer reads as working while a background subagent it
+  started works on: Claude Code keeps its busy title spinner up for the subagent, which herdr reads
+  as work. The pane now waits on that work (BG), as it does when the subagent is quiet, so the chat
+  no longer shows "Working…" with a Stop button under the finished answer. (#2069)
+  ([#2072](https://github.com/devswha/ovis/pull/2072) by @Noobear)
+- After Claude Code's `/branch`, Chat takes a transcript as the branch only from its own first message,
+  and keeps to the branch file it checked when another project holds a file of the same id.
+  ([#2126](https://github.com/devswha/ovis/pull/2126))
+- After Claude Code's `/branch`, Chat follows the branch Claude went on in and shows its replies,
+  also when Herdr still reports the session the branch was copied from. Reported by @Hyd3-14 in
+  [#2020](https://github.com/devswha/ovis/issues/2020).
+  ([#2099](https://github.com/devswha/ovis/pull/2099))
+- A Claude skill or command sent from Chat that asks a question while Claude's fullscreen diff
+  panel is shown now waits on that question in its receipt, as it does without the panel.
+  ([#2199](https://github.com/devswha/ovis/pull/2199))
+- After `/model` or `/effort` in a Claude Code pane, the composer's model pill shows the new model
+  and effort as soon as Claude Code confirms the change, not after the next answer. A model name
+  printed in a form that does not map back to one model id keeps the old pill until that answer.
+  Thanks to @jpcarranza94 for the report and the list of forms.
+  ([#2305](https://github.com/devswha/ovis/pull/2305))
+- In a Claude Code pane, the composer's model pill and effort no longer go back to an older model
+  when many records with no answer (bash-mode commands, a long tool output) follow the answer or
+  the `/model` / `/effort` change that set them.
+  ([#2319](https://github.com/devswha/ovis/pull/2319))
+- Large files opened from Claude Code's scratch folder keep their size (and download progress)
+  when many are fetched at once, instead of some arriving without a length.
+  ([#2317](https://github.com/devswha/ovis/pull/2317))
+- Chat no longer shows an OmO tool's output as a big message from you when OmO runs Claude Code
+  through its SDK (a `Tool result (mcp__custom-tools__eval, id=…):` bubble between work blocks).
+  The output now folds into the work block as that call's result, and the call no longer counts as
+  failed while OmO runs it. A message you sent along while the tools ran still shows as yours.
+  ([#2310](https://github.com/devswha/ovis/pull/2310))
+- Chat no longer shows OmO's own notices as messages from you when OmO runs Claude Code through its
+  SDK: reminders, monitor events, recalled memory notes, goal continuations and the history a new
+  session replays stay hidden, like Claude Code's own reminders. A background task that ended shows
+  as its task card, and a team member's message as a message from another session.
+  ([#2322](https://github.com/devswha/ovis/pull/2322))
+- A message queued for a Claude Code conversation is no longer typed into another one when
+  `/clear`, `/resume` or a `claude attach` job switches the pane's session while the message is
+  being sent: the session is checked again right before the paste, and once the paste is in, an
+  Enter is pressed only while the conversation can still be told. Otherwise the message is held
+  before the paste, or left marked uncertain without its Enter.
+  ([#2318](https://github.com/devswha/ovis/pull/2318))
+- After Claude Code's `/branch`, Chat follows the branch's continuation in the branch's own project
+  instead of a file of the same id in another project, and reads a transcript's records however
+  their keys are spelled or spaced.
+  ([#2241](https://github.com/devswha/ovis/pull/2241))
+- A `claude attach <name>` pane with a debug value given apart from its option (`-d api,hooks`,
+  `--debug api`) keeps its terminal: Claude Code then looks no name up.
+  ([#2241](https://github.com/devswha/ovis/pull/2241))
+- A message queued for a Claude Code conversation is held, not sent, once the conversation in the
+  pane can no longer be told (its PID record or its job's state cannot be read).
+  ([#2241](https://github.com/devswha/ovis/pull/2241))
+- A Chat or queued message to Claude Code that ends in a backslash is now sent. Before, Claude
+  Code read the backslash and the Enter after it as a new line, and the message stayed in its
+  input box.
+  ([#2278](https://github.com/devswha/ovis/pull/2278) by @jpcarranza94)
+- Claude Code's `/effort` card now shows while Ultracode is on, at max where Claude Code offers no
+  Ultracode, and in panes narrower than 70 columns down to about 45, where the slider was left to
+  the terminal before. A pane of about 44 columns or fewer still leaves it there, as Claude Code
+  cuts the level names.
+  ([#2266](https://github.com/devswha/ovis/pull/2266))
+- Chat shows what Claude wrote right before a question card, read from the terminal, while the card
+  waits. Claude Code 2.1.311 saves those words to its session file only with the answer, so the card
+  lacked the context the terminal showed above the question. Words whose start is above the
+  terminal's screen are left to the terminal, and once Claude's own record of the turn arrives the
+  chat shows that instead. Reported by @Xelanor.
+  ([#2217](https://github.com/devswha/ovis/pull/2217))
+- The message box no longer names an older model before an agent's first message when its terminal
+  is scrolled up, or was cleared, above an earlier Codex or Claude frame: the model is read from the
+  live screen only, and none is named while the terminal is scrolled into its history.
+  ([#2163](https://github.com/devswha/ovis/pull/2163))
+- A Codex pane that resumed another folder's conversation through the picker is no longer bound to
+  it while another loaded conversation could be the one it shows: on a busy Linux PC one read of
+  the kernel's lock table could leave a loaded conversation out.
+  ([#2101](https://github.com/devswha/ovis/pull/2101))
+- Listing a pane's slash commands no longer stops the whole server while its skill and command
+  folders sit on a slow filesystem (a Windows folder mounted into a container, a network share):
+  the scan runs on the file threads, so terminals, typed input and other requests keep answering
+  while it reads. Thanks to @PayrollFuchs for the report and the measurements (#2254).
+  ([#2311](https://github.com/devswha/ovis/pull/2311))
+- Copilot Chat retries a failed process lookup once and revalidates log continuity after temporary
+  descriptor read errors, without restoring stale or revoked session evidence.
+  ([#2283](https://github.com/devswha/ovis/pull/2283) by @YuuuXie)
+- Copilot Chat keeps its messages while retrying a failed transcript page read when the same
+  conversation is still verified, instead of briefly showing the terminal fallback.
+  ([#2068](https://github.com/devswha/ovis/pull/2068) by @YuuuXie)
+- A failed read of the gap between Chat pages no longer discards the messages already displayed.
+  ([#2068](https://github.com/devswha/ovis/pull/2068) by @YuuuXie)
+- Copilot conversation ownership uses the kernel's stable process birth, so clock corrections no
+  longer reset a verified binding or make a previously denied fallback eligible again.
+  ([#2293](https://github.com/devswha/ovis/pull/2293) by @YuuuXie)
+- Find in a diff now brings the match itself into view on a wrapped line taller than the screen,
+  such as a long line on a phone, instead of the line's middle, which could leave the match below.
+  ([#2156](https://github.com/devswha/ovis/pull/2156))
+- A Codex pane's DONE dot now clears when you read the answer in Chat even if Codex recorded the
+  turn's completion after the chat first loaded the answer. Before, it stayed until the next finish.
+  ([#2136](https://github.com/devswha/ovis/pull/2136))
+- A message sent from Chat right after the page reconnects (after a server restart, or while the PC is
+  busy) no longer fails with "this PC has not said yet what it supports": the server now says what it
+  supports as soon as the connection opens, instead of only with the pane list, which can take seconds
+  to read from herdr or fail. Older servers keep the previous behaviour.
+  ([#2268](https://github.com/devswha/ovis/pull/2268))
+- Opening, previewing or looking up a file on a slow or stalled disk (a network share, a large
+  rendered page) no longer freezes every terminal and request: the file routes read the disk on a
+  few background threads, and answer 503 to try again when those are busy or the disk does not
+  answer in time.
+  ([#2256](https://github.com/devswha/ovis/pull/2256))
+- On Windows, Hermes skills show in the command menu again when `%LOCALAPPDATA%` is redirected: Ovis
+  cannot read a Windows pane's environment, and now looks in the server's `%LOCALAPPDATA%\hermes`, as
+  it already did for Hermes transcripts, instead of `<profile>\AppData\Local\hermes`.
+  ([#2316](https://github.com/devswha/ovis/pull/2316))
+- The installer no longer links the Node it installs into `~/.local/bin`, where it went before the
+  Node of your own projects. Once Ovis runs this release, running the installer again removes a link
+  it made earlier and says so: if that link was the only `node` your shells had, install your own
+  Node to keep using `node` outside Ovis.
+  Terminals that run on the Node fallback, and updates from Settings, use the right runtime even
+  when herdr's PATH starts with an older Node (reported by @wafe).
+  ([#2100](https://github.com/devswha/ovis/pull/2100))
+- Sending an `@skill` to OpenCode no longer types a second space after the skill when the pane redraws
+  blank while Ovis waits for Tab's result.
+  ([#2239](https://github.com/devswha/ovis/pull/2239))
+- On Windows, Hermes transcripts, session history and skills are found under `%LOCALAPPDATA%\hermes`,
+  where Hermes 0.21.5 keeps them (a store an earlier Hermes left in `%USERPROFILE%\.hermes` is still
+  read), and agent stores are looked up under USERPROFILE even when HOME is set for Git or Emacs.
+  ([#2239](https://github.com/devswha/ovis/pull/2239))
+- Korean typed in the terminal in the iOS app now reaches the pane as whole syllables (안녕).
+  Before, each jamo went out on its own (ㅇㅏㄴㄴㅕㅇ) because the app's web view does not say
+  "Safari" in its user agent. Safari and the Home Screen app already worked.
+  This comes with the PC update; no new iOS app build is needed.
+  ([#2307](https://github.com/devswha/ovis/pull/2307))
+- The iOS app no longer shows WebKit's form bar (the up and down arrows and the check mark) over
+  the keyboard, so only Ovis's own key bar sits above it and the page keeps that row of the
+  screen. This needs the new iOS app build; updating the PC alone does not remove the bar.
+  ([#2109](https://github.com/devswha/ovis/pull/2109))
+- A message sent to a PC whose Ovis is too old to confirm messages is no longer treated as delivered:
+  the composer, Send now on a held copy and the held queue's Send now keep its text as a
+  "Not confirmed" row to copy or discard, instead of dropping it.
+  ([#2164](https://github.com/devswha/ovis/pull/2164))
+- A terminal command sent from Chat right after a pane opens now opens the terminal view even when
+  the terminal had not loaded the pane's command list yet, and a chat shown again draws its
+  "Ran in terminal" rows at once instead of as plain messages first.
+  ([#2164](https://github.com/devswha/ovis/pull/2164))
+- Ovis for Mac takes the installer only over HTTPS from ovis.sh or herdrweb.dev, reads the phone
+  address only from this Mac's own server, and draws the QR code only for Tailscale's `.ts.net`
+  HTTPS address.
+  ([#2116](https://github.com/devswha/ovis/pull/2116))
+- Ovis for Mac makes the phone address with the Ovis release that runs now, not the one first
+  installed, and shows Tailscale's answer when it fails.
+  ([#2116](https://github.com/devswha/ovis/pull/2116))
+- Remove in Ovis for Mac stops at a step that fails (herdr's plugin list included) and shows why,
+  and takes the phone address off Tailscale even when the server is down.
+  ([#2116](https://github.com/devswha/ovis/pull/2116))
+- Start in Ovis for Mac no longer adds a login item for herdr set up from a terminal; it runs herdr
+  for this login only.
+  ([#2116](https://github.com/devswha/ovis/pull/2116))
+- Ovis for Mac moves herdr's log to `herdr-server.log.1` once it passes 10 MB, when the app opens
+  or starts herdr, and its refresh button has a VoiceOver label.
+  ([#2116](https://github.com/devswha/ovis/pull/2116))
+- The sidebar no longer goes stale for about three seconds when many agents change status at
+  once. A burst of more than five status changes closed the browser's event stream, which then
+  reconnected and read the whole roster again, and a finish in between rang no sound and showed
+  no drop-in on the page. The stream now lets a browser fall up to 4 MiB behind, beside the one
+  large roster it may be reading, before ending it, and every browser's stream together holds at
+  most 32 MiB for those that fell behind, so stalled devices can no longer fill the server's memory.
+  ([#2260](https://github.com/devswha/ovis/pull/2260))
+- A PC set up at another SSH address no longer shows or saves the roster of the address it left once
+  it moves there. When the new address's roster waits for that server to prove it is the one
+  answering, the PC's card has no panes until it does, and then shows that address's own.
+  ([#2181](https://github.com/devswha/ovis/pull/2181))
+- A command sent to a custom OmO (one whose launcher does not name omo) keeps its row in Chat after
+  the turn ends: the row follows the OmO process that holds the session, as a queued message does,
+  instead of the bundled Claude SDK process that exits with each turn.
+  ([#2186](https://github.com/devswha/ovis/pull/2186))
+- A question OmO 5.1.48 asks without waiting for the answer shows in the chat as its question card
+  with its options again, instead of a "Waiting for input" card offering only Enter and Esc.
+  ([#2090](https://github.com/devswha/ovis/pull/2090))
+- omp's tool approval card now also shows when omp's composer is not the default status band: a
+  box (`composer.shape: box`), the Claude Code, Pi, borderless, rule, field and rail shapes, any
+  status-line preset, and the ascii symbols. omp's Ask card shows under the rule, field and rail
+  shapes too.
+  ([#2245](https://github.com/devswha/ovis/pull/2245))
+- An omp card no longer shows, and an answer sends no key, while omp is stopped behind its shell
+  (Ctrl+Z, or a suspended job): herdr still names the pane omp, but the shell holds the input.
+  ([#2245](https://github.com/devswha/ovis/pull/2245))
+- An omp Ask card now shows the question and its options in the agent's own Markdown (bold, code,
+  links, lists, a fenced block), and a question omp cuts at four rows in full. The card takes the
+  text from the session's open ask call only when it matches the menu on screen; otherwise it
+  shows the screen's text as before, and the answer keys still come from the terminal's menu.
+  ([#2220](https://github.com/devswha/ovis/pull/2220))
+- Chat shows omp's pictures from its blob store on macOS and Windows too, not only on Linux: the
+  bridge opens a blob through the store directory it holds open, so a link or a directory swapped
+  in above it can never stand in for the store.
+  ([#2114](https://github.com/devswha/ovis/pull/2114))
+- An omp started from its npm package (bunx or npx run `dist/cli.js` with bun) shows its approval
+  card in Chat again; the card stayed hidden and the answer had to be given in the terminal (#2280).
+  ([#2320](https://github.com/devswha/ovis/pull/2320))
+- An omp Ask question with a Mermaid diagram, or with options that would read alike on the card,
+  shows as omp draws it, so the card never shows a diagram in place of the code or two identical
+  rows (#2233).
+  ([#2320](https://github.com/devswha/ovis/pull/2320))
+- A prompt card's typed answer no longer picks one of two rows that look alike across scripts
+  (Cyrillic `о` beside Latin `o`), and a typed row number picks its row even when its name looks
+  like another row's. Commas or spaces alone on a multiple choice are the typed text, not an empty
+  answer (#2233).
+  ([#2320](https://github.com/devswha/ovis/pull/2320))
+- Chat messages sent to a starting omp now also wait for herdr's integration when omp loads it
+  from the project's `.omp/extensions`, an `-e`/`--extension`/`--hook` file, or the agent directory
+  `PI_CODING_AGENT_DIR`, `PI_PROFILE` or `PI_CONFIG_DIR` names. An omp started with
+  `--no-extensions` or `--trusted-extension` is sent to at once instead of after 30 seconds, and a
+  wait that runs out without a report is now noted in the server log.
+  ([#2159](https://github.com/devswha/ovis/pull/2159))
+- omp's tool approval ("Allow tool: …") shows as an approval card again, with the call as its body
+  and Approve and Deny sent with the keys omp names, instead of a fallback card (omp 18.10 and
+  later; 18.13's "approve for this session" and grant rows are offered too). Reported by @Damin-Lee.
+  ([#2106](https://github.com/devswha/ovis/pull/2106))
+- An OpenCode `@skill` sent from Chat is no longer reported as not attached when the terminal is
+  resized while it is accepted, or when a narrow terminal's status row shows only the model.
+  ([#2185](https://github.com/devswha/ovis/pull/2185))
+- An OpenCode 2 pane started with `--standalone` or `--server` now offers its skills as `@skill`
+  before its first session, even when no OpenCode background service has written its service file,
+  and a Chat `@skill` send to it shows a state once Chat has listed the pane's commands.
+  ([#2315](https://github.com/devswha/ovis/pull/2315))
+- A PC whose own Ovis asks for its access token (`OVIS_TOKEN`) now shows the port it really answers
+  on and its "Open that PC's Ovis" https link on its card and in the dialog, instead of the
+  bridge's registered port and no link, once that Ovis runs this version too.
+  ([#2248](https://github.com/devswha/ovis/pull/2248))
+- The token another PC's app uses to update this PC's own Ovis now opens only the update status read
+  and the install request, each by its own method and with no query string.
+  ([#2193](https://github.com/devswha/ovis/pull/2193))
+- A pairing link is tried only once per page load, including when the sign-in screen returns.
+  If pairing succeeds but the browser does not stay signed in, the screen asks you to check
+  cookies instead of reporting that the already-used code is wrong or expired.
+  ([#2321](https://github.com/devswha/ovis/pull/2321) by @kilhyeonjun)
+- A command sent from Chat to a pi session now shows its result when the session moved to another
+  branch and `/tree` came back before the result was written, instead of ending as unknown.
+  ([#2146](https://github.com/devswha/ovis/pull/2146))
+- A message sent to Pi from Ovis Chat no longer reads as delivered when the same text, typed into
+  Pi's terminal before it, reaches Pi's transcript first.
+  ([#2323](https://github.com/devswha/ovis/pull/2323))
+- Pi sends retry a briefly incomplete conversation record before giving up transcript confirmation,
+  including when the writer paused before Ovis started reading the file.
+  ([#2231](https://github.com/devswha/ovis/pull/2231) by @philipprass-prog)
+- Two plugin starts at the same moment, such as herdr's startup hook and the Start action, no
+  longer leave `stop` saying Ovis is not running while a server keeps going: starts and stops take
+  turns, one that waits says so in the plugin's log, and a start no longer opens a second server
+  while one an earlier start left running (herdr away, say) still runs.
+  ([#2166](https://github.com/devswha/ovis/pull/2166))
+- An OmO question answered from a Chat card no longer goes to another open question when the
+  pane is too small to show the form's title: when the form left in view fits more than one open
+  question, the card is refused and nothing is sent.
+  ([#2237](https://github.com/devswha/ovis/pull/2237))
+- A Claude command sent from Chat beside the fullscreen diff panel no longer takes the question of
+  the same command typed in the terminal after an earlier send's echoes were counted without the
+  panel.
+  ([#2237](https://github.com/devswha/ovis/pull/2237))
+- A command sent to an OmO pane with two OmO processes holding sessions keeps its outcome on the
+  OmO it was sent to, also when it waited in the queue and herdr listed the other one first by
+  then, and never on a later process that got the OmO's process number.
+  ([#2237](https://github.com/devswha/ovis/pull/2237))
+- When **Turn alerts on again** cannot make a push subscription, the alerts notice and Settings now
+  say why: the browser would not make one (in Brave, its push service is off until **Use Google
+  services for push messaging** is on), the page's service worker is not running, or the PC did not
+  take it. Before, the button only flickered and the notice came back unchanged.
+  ([#2145](https://github.com/devswha/ovis/pull/2145) by @mattmarcin)
+- The alerts notice can be dismissed. It stays closed on that device for the same problem, and
+  shows again for a different one or after alerts work again. Settings still shows the problem.
+  ([#2145](https://github.com/devswha/ovis/pull/2145) by @mattmarcin)
+- A push endpoint its push service retired stays refused, however long ago that was, until its
+  owner's device is revoked or a thousand later retirements push its mark out. Before, after 30 days
+  another device that knew the endpoint could register it as its own, and so could another spelling
+  of it (a `#fragment`, an uppercase host or `:443`) at any time.
+  ([#2140](https://github.com/devswha/ovis/pull/2140))
+- A subscription its push service retired is removed even when `push-retired.json` cannot be
+  written (a full disk, a read-only state directory). Before, the failed write left it registered
+  and the next alert went to the dead endpoint again.
+  ([#2140](https://github.com/devswha/ovis/pull/2140))
+- When a crash left the saved permission to connect to the PCs saved in herdr unreadable, Settings
+  now says to choose Connect on those PCs again, instead of telling you to add them again.
+  ([#2192](https://github.com/devswha/ovis/pull/2192))
+- A file opened from a Claude Code session's scratch folder is served, described and drawn as a page
+  only from the file actually opened inside that folder: a link put in its place after it was found
+  no longer serves a file from outside the folder.
+  ([#2265](https://github.com/devswha/ovis/pull/2265))
+- Read DONE dots no longer come back after herdr restarts on a PC: a late read of the old herdr run
+  could make the server drop the new run's read finishes and stop saving new ones.
+  ([#2249](https://github.com/devswha/ovis/pull/2249))
+- The server no longer keeps or hands out the read finishes of a herdr run it knows has ended, so a
+  browser that reconnects stops writing them back into its storage, and the next change drops them
+  from `seen.json`. The records of a PC this server has not heard from since it started are kept.
+  ([#2197](https://github.com/devswha/ovis/pull/2197))
+- On a phone, a jump of several entries back through the browser's history menu from a Settings
+  opened again over a preview now goes to the pane it lands on. Settings no longer keeps the mark an
+  earlier opening from the command palette left behind, which made the jump count as closing it.
+  ([#2182](https://github.com/devswha/ovis/pull/2182))
+- Closing a sidebar filter that the command palette opened no longer leaves the focus on nothing when
+  what opened it is gone; it goes to a workspace row. Opening or clicking a row's menu no longer closes
+  that empty filter, and words typed into it right after it lost the focus are no longer cleared.
+  ([#2141](https://github.com/devswha/ovis/pull/2141))
+- The session read, the `/ws` snapshot and a PC's relayed or proxied snapshots no longer carry the
+  token values herdr's sidebar rows hide, so no browser, watch-only ones included, receives them in
+  any snapshot. Another Ovis server reading a PC still gets them, to apply its own rows.
+  ([#2171](https://github.com/devswha/ovis/pull/2171))
+- The agent rows' machine events and PC roster no longer carry the literal text and numbers of the
+  hide rules in herdr's sidebar rows, nor the token values those rules hide, so watch-only browsers
+  no longer receive them there, and a hidden value no longer shows for a moment while the page
+  loads.
+  ([#2139](https://github.com/devswha/ovis/pull/2139))
+- A vertical mouse wheel over a tab strip whose tabs do not fit scrolls it sideways, so tabs past
+  its end can be reached with a mouse.
+  ([#2095](https://github.com/devswha/ovis/pull/2095))
+- Korean lines in the terminal no longer nearly touch: Hangul is widened to its two cells
+  instead of enlarged, so it keeps its own height, and a row is made tall enough for Hangul and a
+  gap below it where the Latin font's line is shorter (Menlo, Consolas), keeping every row where it
+  is not.
+  ([#2243](https://github.com/devswha/ovis/pull/2243))
+- Korean text on a background colour (Claude Code's prompt, a highlighted or inverse line) no longer
+  shows a thin light line after each word in the terminal, in Ovis for Mac, Safari and Chrome.
+  ([#2263](https://github.com/devswha/ovis/pull/2263))
+- Powerline separators in a prompt no longer make the terminal redraw every row when the icon font
+  arrives: they are painted as boxes, not drawn from the font. A pane that prints icons still
+  redraws once their font arrives, so they are sized from it.
+  ([#2158](https://github.com/devswha/ovis/pull/2158))
+- Settings → Phone & devices keeps the "This device" badge on one line beside a device's name on a
+  phone, moving it whole to the next line when the name fills the row, instead of splitting it.
+  ([#2187](https://github.com/devswha/ovis/pull/2187))
+- When the agent's next todo update folds the update you were on into a Plan row, the keyboard focus
+  stays on that update instead of dropping to the page, and an update opened inside the Plan row
+  now shows the input it sent and the output it got back, not only the list again.
+  ([#2161](https://github.com/devswha/ovis/pull/2161))
+- An Ovis restart while a Sign in again or Add account login is still open in its terminal tab no
+  longer lets a second login start in the same credential home: the restarted server finds the tab
+  still running and answers that a sign-in is already open, until that login ends.
+  ([#2325](https://github.com/devswha/ovis/pull/2325))
+- Voice input no longer fails in a pane with many slash commands when the transcription server
+  caps a request at 32 fields (codex-lb does): only as many command hints are sent as fit.
+  ([#2235](https://github.com/devswha/ovis/pull/2235) by @vuongnmhvn)
+- A device paired to watch only can no longer read a pane's command rows (custom commands' first
+  lines and file paths) through `/api/pane/commands`, on this PC or another: they are refused as a
+  folder's commands already were, and its chat no longer keeps asking for them.
+  ([#2246](https://github.com/devswha/ovis/pull/2246))
+- A device paired to watch only can no longer list the file paths under a pane's folder through
+  `/api/pane/files`, or read a plugin action run's output through `/api/plugin/action`, on this PC
+  or another: they are refused as a folder listing already was.
+  ([#2252](https://github.com/devswha/ovis/pull/2252))
+- A device paired to watch only can no longer list a repository's checkouts (their folders and
+  branches, those not open in herdr too) through `/api/worktree/list`, on this PC or another: it is
+  refused as a folder listing already was. Its sidebar no longer asks for them and shows no branch
+  names.
+  ([#2304](https://github.com/devswha/ovis/pull/2304))
+- Ovis for Windows' Update for a server under the old id installs the newest release even when
+  the PC sets an older `OVIS_REF`, and when the installer or herdr's reinstall fails, the server
+  that ran before starts again, with or without herdr running. A running server that reports no
+  version and runs without the update supervisor, such as one just started whose supervisor has
+  not reported yet, is no longer offered Update, and the
+  version check waits once more for a server slow to answer and takes a token set only in the
+  environment.
+  ([#2113](https://github.com/devswha/ovis/pull/2113))
+- Ovis for Windows no longer offers Start for an Ovis server older than the app, or one installed
+  under the old `devswha.herdr-web-ui` id: it shows Update, which updates it in place (herdr, Bun,
+  settings and token stay), starts it, sets herdr to start at sign-in and ends at the phone's QR
+  code. It says so when it cannot read the server's version, and names a herdr that is too old.
+  The plugin's `status` now prints the version that runs, which can be newer than herdr's list.
+  ([#2091](https://github.com/devswha/ovis/pull/2091))
+- Ovis for Windows and install.ps1 now stop an Ovis server from before the rename (0.4.12 and older)
+  that kept running after herdr closed, so Update no longer fails with "the file is in use" and then
+  keeps showing the same Update screen.
+  ([#2275](https://github.com/devswha/ovis/pull/2275))
+- Try again after a failed Update in Ovis for Windows reads the PC again instead of running the old
+  server's removed files ("Module not found").
+  ([#2275](https://github.com/devswha/ovis/pull/2275))
+- Ovis for Windows shows the phone QR code for a server that asks for a token, instead of telling a
+  PC that already has Tailscale to install it.
+  ([#2275](https://github.com/devswha/ovis/pull/2275))
+- The log in Ovis for Windows shows the installer's messages as plain lines, not raw PowerShell
+  CLIXML.
+  ([#2275](https://github.com/devswha/ovis/pull/2275))
+- On native Windows without `HOME`, chat transcripts and session lists find each agent's store
+  under `USERPROFILE` too, as skill discovery already does.
+  ([#2157](https://github.com/devswha/ovis/pull/2157))
+- Windows remote PCs wait for Windows sign-in before starting herdr, so Codex can use its
+  private-desktop sandbox. Startup options offer an explicit start without sign-in for headless
+  PCs, including when Task Scheduler cannot start herdr, with the error and sandbox and desktop-tool
+  limitations shown before that one start. Existing herdr servers are reused without restarting
+  their panes. Signing out of Windows ends a desktop-started herdr and its panes; lock the PC
+  instead. SSH disconnects and bridge updates leave them running.
+  ([#2087](https://github.com/devswha/ovis/pull/2087) by @JJLiebig)
+- Slow Windows launchers keep their startup options through the launch deadline. Failed startup
+  reviews restore saved PCs' reconnection attempts; Task Scheduler failures show their own error
+  instead of a sign-in instruction and stop background retries until startup options are reviewed.
+  ([#2087](https://github.com/devswha/ovis/pull/2087) by @JJLiebig)
+- The terminal no longer shows half of an agent's new screen over half of its old one while the
+  agent streams, which happened most often with Korean text: the browser terminal is now xterm.js
+  6, which draws a frame only once it is whole (#1617). Trackpad scrolling, Option+arrow word moves
+  and Korean typing keep working as before.
+  ([#2335](https://github.com/devswha/ovis/pull/2335))
+
+### Maintenance
+- Diagrams use updated DOMPurify and KaTeX versions without their published security advisories.
+  ([#2290](https://github.com/devswha/ovis/pull/2290) by @DravenDou)
+- A stopped server also closes its OpenCode event stream and forgets the OpenCode panes it verified, as
+  it already did for Codex's app-server connections. The session list's Resume window and Hermes's
+  result readers drop their duplicate code paths.
+  ([#2200](https://github.com/devswha/ovis/pull/2200))
+- A local browser lane run (no `CHECK_DIR`, no CI) takes the empty evidence folder it hands each
+  check as none in every check: the touch-burst and terminal-autoswitch checks no longer write
+  their captures into the checkout, and with `BROWSER_PARALLEL=1` the question-wheel, CJK
+  punctuation and late-faces checks no longer fail at once creating an empty path (#1554).
+  ([#2196](https://github.com/devswha/ovis/pull/2196))
+- CI's parallel browser lane stops a script that runs past `BROWSER_SCRIPT_TIMEOUT_SECONDS`
+  (600 s by default) with every process it started, and names it with its last log lines, so a
+  hang fails fast instead of running into the job's timeout.
+  ([#2287](https://github.com/devswha/ovis/pull/2287))
+- The xterm source build compiles the exact files its cache key was made from, and the key now
+  covers xterm's package manifest, so a source edited mid-build or a changed typings entry can no
+  longer reuse an old build. A killed build's leftover staging directory is cleared by the next
+  build, and the published build is readable by other users of the checkout.
+  ([#2242](https://github.com/devswha/ovis/pull/2242))
+- The Windows-native tests wait for the desktop child's whole result file instead of parsing it
+  half written, and every Windows-only case has a 30 s budget for busy hosted runners.
+  ([#2242](https://github.com/devswha/ovis/pull/2242))
+- `bun run check` now ends a failed run with the reasons it failed, such as a source that changed
+  while it ran, and the report path, instead of only `ok` steps and an exit code.
+  ([#2135](https://github.com/devswha/ovis/pull/2135))
+- Self-hosted CI runners keep a git mirror and the default branch's Bun packages on the host, read-only
+  to jobs, so a job no longer downloads about 150-200 MB of checkout, tags and packages.
+  ([#2215](https://github.com/devswha/ovis/pull/2215))
+- The unit test run (`bun run test:unit`, CI's Fast checks) now also runs the component tests
+  named `*.test.tsx`, which it had never picked up, and the agent sidebar's test passes when it
+  runs on its own.
+  ([#2094](https://github.com/devswha/ovis/pull/2094))
+- Command discovery keeps following a linked command folder that points outside the project, as
+  Command Code's own loader does, so the menu lists the commands Command Code runs; a test now pins
+  it and the walker says why.
+  ([#2134](https://github.com/devswha/ovis/pull/2134))
+- Conversation fallbacks and recoveries now emit sanitized, rate-limited diagnostic episodes,
+  including the failed Copilot identity stage without logging session IDs or transcript paths.
+  ([#2292](https://github.com/devswha/ovis/pull/2292) by @YuuuXie)
+- The file-thread test that holds a thread inside a read can no longer hang the unit run: its
+  stand-in thread opens the FIFO it waits on before saying it is reading, and the test releases it
+  with a write that never waits, so a thread ended in between no longer blocks the test forever.
+  ([#2297](https://github.com/devswha/ovis/pull/2297))
+- The sidebar no longer walks every stored read finish on each roster update for a PC that has
+  none, and code the finish index kept for no current use is gone.
+  ([#2183](https://github.com/devswha/ovis/pull/2183))
+- The Copilot switch-back integration test now waits for the resumed transcript itself, not for the
+  moment between the log's unregistering and registering lines, when a read rightly fails closed.
+  ([#2224](https://github.com/devswha/ovis/pull/2224))
+- The integration test that holds a first message once a same-kind agent replaces its own now starts
+  the replacement before the first agent ends. Before, the shell alone was in front between the two,
+  and a read in that gap rightly found the launched agent gone, which failed the test now and then.
+  ([#2222](https://github.com/devswha/ovis/pull/2222))
+- The OpenCode Tab agent-switch integration tests now start from a closed autocomplete. The test
+  before them left the skill row selected on screen, and a send that read that old screen could not
+  tell the agent before Tab, which failed the tests now and then.
+  ([#2223](https://github.com/devswha/ovis/pull/2223))
+- `scripts/roster-bench.ts` measures what a status burst costs the server and the browser with
+  20 to 300 agent panes in an isolated herdr (#772).
+  ([#2260](https://github.com/devswha/ovis/pull/2260))
+- The Unicode case folding and confusables tables are generated only from source files whose SHA-256
+  matches the pinned one (#2233).
+  ([#2320](https://github.com/devswha/ovis/pull/2320))
+- The browser check that a focused window takes its pane back no longer times out waiting for a
+  resize after the first attach: since a new terminal attaches once its font is set, that attach
+  already carries the final grid, so the check now waits for the shell to report the grid each
+  window last asked for, by attach or by resize.
+  ([#2295](https://github.com/devswha/ovis/pull/2295))
+- The Release run now refuses while the remote PC bundle it names is only tagged: it waits until
+  that bundle's manifest and archives can be downloaded, as remote PCs download them.
+  ([#2212](https://github.com/devswha/ovis/pull/2212))
+- The self-hosted runner launcher's tests of a hung first cache refresh no longer fail on a loaded
+  host: they wait for the refresh to hang through a FIFO the stub writes to (no polling), allow
+  30 s for that and for the launcher to end instead of Bun's 5 s test timeout, and let no runner
+  start before the refresh has hung; only the stop on SIGTERM keeps a tight bound (4 s) (#2261).
+  ([#2267](https://github.com/devswha/ovis/pull/2267))
+- The terminal arrows and clicks browser check no longer fails now and then on a busy CI runner.
+  It reads each letter before pressing the arrow that follows it, waits for xterm to report the
+  mouse before clicking, and proves that nothing arrives by typing a mark instead of waiting a set
+  time. A new unit test checks that the server holds an arrow back after the typing before it.
+  ([#2219](https://github.com/devswha/ovis/pull/2219))
+- The browser lane follows synchronized output (`CSI ? 2026 h` … `l`) from a real pane to the
+  rendered rows: the bridge passes herdr's frames intact, herdr holds a pane's frame until it
+  closes, and the run counts the renders xterm 5.5 draws from half a frame (#1617).
+  ([#2331](https://github.com/devswha/ovis/pull/2331))
+- Three tests that failed on busy hosts with nothing wrong in the code now measure what the code
+  controls: the browser lane's stubbed runs get a 60 s hang guard, which ends the lane's process
+  tree and fails with what it printed, instead of a 5 s limit (#2110); the Codex matcher's
+  bounded-time cases compare the CPU time of an input with that of one as long that the code
+  reads in one pass, which leaves the work both share out of the ratio while each still fails the
+  quadratic scan it guards (#2142); and the OpenCode first-key gap is measured from the last thing that send itself
+  waited on (#2143).
+  ([#2150](https://github.com/devswha/ovis/pull/2150))
+- Native TypeScript checks use less CPU with `GOGC=400` and at most 32 Go scheduler threads,
+  retaining GC for concurrent CI runners. Caller `GOGC`, `GOMAXPROCS`, and `GOMEMLIMIT`
+  settings are preserved.
+  ([#2276](https://github.com/devswha/ovis/pull/2276))
+- The Windows plugin test that stops the server's process tree no longer fails now and then on
+  CI: it took a process whose recorded parent number Windows had handed on to a server process
+  for part of the tree, and waited for unrelated processes, its own test runner among them, to
+  exit. It now walks the tree the way `stop` does, skipping a process older than its parent.
+  ([#2202](https://github.com/devswha/ovis/pull/2202))
+- The native Windows terminal check now tests a pull request's merge with main, as the other CI
+  checks do. On a branch cut before the check's script was fixed, it ran that branch's old script
+  and timed out after the wheel pan, which made the check look flaky.
+  ([#2253](https://github.com/devswha/ovis/pull/2253))
+- The native Windows terminal check (a mirrored PowerShell pane's wheel, touch, panning and IME
+  input in Chromium) now runs in CI on a Windows runner, `windows-terminal-qa.yml`, for pull
+  requests that touch the mirror, the terminal's viewport code or the xterm patch, and weekly. It
+  now picks Original width for the pane first: since wide mirrors fold on a phone by default, its
+  panning steps could not pass.
+  ([#2211](https://github.com/devswha/ovis/pull/2211))
+- Builds running at once in one checkout, like the browser lane's parallel workers, no longer fail
+  now and then with a missing xterm export: xterm's source is built once into its own cache
+  directory and never rewritten while another build reads it.
+  ([#2138](https://github.com/devswha/ovis/pull/2138))
+
 ## [0.4.19] - 2026-10-28
 
 ### Added
@@ -6353,7 +6994,8 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/devswha/ovis/compare/v0.4.19...HEAD
+[Unreleased]: https://github.com/devswha/ovis/compare/v0.4.20...HEAD
+[0.4.20]: https://github.com/devswha/ovis/compare/v0.4.19...v0.4.20
 [0.4.19]: https://github.com/devswha/ovis/compare/v0.4.18...v0.4.19
 [0.4.18]: https://github.com/devswha/ovis/compare/v0.4.17...v0.4.18
 [0.4.17]: https://github.com/devswha/ovis/compare/v0.4.16...v0.4.17

@@ -355,7 +355,35 @@ describe("text no one wrote by hand", () => {
   });
 
   it("looks once for the end of a formula that never closes", () => {
-    const blocks = linear((lines) => "\\[\n".repeat(lines), 32_000, (text) => parseMarkdown(text));
+    const indexOf = String.prototype.indexOf;
+    // characters the closer searches read, not how many there are: one search per opener over the
+    // rest of the text is as many calls as one per line, but reads the text over and over
+    let scanned = 0;
+    let expectedMaximum = 0;
+    const closer = spyOn(String.prototype, "indexOf").mockImplementation(function (this: string, search, position) {
+      const found = indexOf.call(this, search, position);
+      if (search === "\\]") {
+        const from = Math.max(0, Math.min(this.length, Number(position ?? 0)));
+        scanned += (found === -1 ? this.length : found + search.length) - from;
+        // Fail promptly on a quadratic search instead of finishing its work.
+        expect(scanned).toBeLessThanOrEqual(expectedMaximum);
+      }
+      return found;
+    });
+    let blocks: ReturnType<typeof parseMarkdown> = [];
+    try {
+      for (const lines of [3_200, 32_000]) {
+        const text = "\\[\n".repeat(lines);
+        scanned = 0;
+        // the text read about once, with a few characters for each line's own search
+        expectedMaximum = text.length + 4 * (lines + 1);
+        blocks = parseMarkdown(text);
+        expect(scanned).toBeGreaterThan(0);
+        expect(scanned).toBeLessThanOrEqual(expectedMaximum);
+      }
+    } finally {
+      closer.mockRestore();
+    }
     expect(blocks).toHaveLength(32_000);
     expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
     // the search ends at a fence: what opens after it is looked for again
@@ -364,14 +392,55 @@ describe("text no one wrote by hand", () => {
   });
 
   it("looks once for what closes a bracket, an inline formula or an underscore", () => {
+    const exec = RegExp.prototype.exec;
+    // These searches have no variable-length backtracking inside one attempt. The token pattern
+    // is deliberately absent: a single global exec of it can search quadratically before failing.
+    const searches = new Set([
+      /[`[<*_~]|\\\(|file:\/\/\/|https?:\/\/|www\./g,
+      /\n/g, /[\n\r\u2028\u2029]/g, /\\\)/g, /[\]\n]/g, /[\s)]/g,
+      /(?<=\S)_(?![\p{L}\p{N}\p{M}_])/gu,
+      /(?<=\S)__(?![\p{L}\p{N}\p{M}_])/gu,
+      // Only the single-underscore token can succeed in the last fixture; trying the bold
+      // alternative first would rescan the whole suffix at every `__`.
+      /(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu,
+    ].map((pattern) => pattern.toString()));
+    const counted = (text: string): InlineNode[] => {
+      let scanned = 0;
+      let unbounded = 0;
+      const closer = spyOn(RegExp.prototype, "exec").mockImplementation(function (this: RegExp, input) {
+        if (input !== text) return exec.call(this, input);
+        if (!searches.has(this.toString())) {
+          unbounded += 1;
+          // Stop before running a potentially quadratic search, even on the largest fixture.
+          expect(unbounded).toBe(0);
+        }
+        const start = this.lastIndex;
+        const match = exec.call(this, input);
+        // Count the span searched, not calls: failed searches consume the remaining suffix.
+        scanned += Math.max(0, (match === null ? input.length : match.index + match[0].length) - start);
+        return match;
+      });
+      let nodes: InlineNode[];
+      try {
+        nodes = parseInline(text);
+      } finally {
+        closer.mockRestore();
+      }
+      expect(scanned).toBeGreaterThan(0);
+      // Each of the eight opener/closer searches gets one pass; tokens consume their own text.
+      expect(scanned).toBeLessThanOrEqual(9 * text.length);
+      return nodes;
+    };
     // a megabyte of each took from one minute to four: every one was searched from to the line's end
     for (const part of ["[a", "\\(", "_a ", "__a "]) {
       const line = (length: number): string => part.repeat(Math.ceil(length / part.length));
-      expect(linear(line, 200_000, (text) => parseInline(text))).toEqual([{ type: "text", value: line(200_000) }]);
+      for (const length of [20_000, 200_000]) {
+        expect(counted(line(length))).toEqual([{ type: "text", value: line(length) }]);
+      }
     }
     // a label closed with an address that is not, and a `__` that only a `_` closes
-    expect(linear((count) => "[a](b".repeat(count), 40_000, (text) => parseInline(text))).toHaveLength(1);
-    expect(linear((count) => "__a b_ ".repeat(count), 30_000, (text) => parseInline(text))).toHaveLength(60_000);
+    for (const count of [4_000, 40_000]) expect(counted("[a](b".repeat(count))).toHaveLength(1);
+    for (const count of [3_000, 30_000]) expect(counted("__a b_ ".repeat(count))).toHaveLength(count * 2);
     // the marks are the ones it found as one pattern, searching the whole line
     const asBefore = /(`[^`\n]+`|\\\(.+?\\\)|\[[^\]\n]+\]\([^\s)]+\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|(?<![\w.@/-])www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}\p{M}_])__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|(?<!\*)\*[^*\n]+\*(?!\*)|(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/gu;
     const found = (marks: Iterable<RegExpMatchArray>): string => [...marks].map((mark) => `${mark.index}:${mark[0]}`).join("\n");

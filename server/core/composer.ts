@@ -4,6 +4,7 @@
  * itself (createSubmitText), handed the state it reads. Pending delivery and the immediate send
  * share them.
  */
+import { stripVTControlCharacters } from "node:util";
 import type { HerdrPane } from "../../shared/protocol.ts";
 import { secretPrompt } from "../../shared/secret-prompt.ts";
 import { agentPrompt, HerdrError, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
@@ -14,7 +15,7 @@ import type { CommandSend } from "../outcome.ts";
 import { processStartedAt } from "../process-start.ts";
 import { isOmpProcess, ompLoadsIntegration } from "../omp.ts";
 import { processEnviron } from "../omo.ts";
-import { bindCommandProcess, CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeInputBoxContent, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, codexQuestionsCollapsed, heldCandidate, lastChatSubmitted, hermesInputDraft, noteSubmitted, parseInteractivePrompt, prepareCommandSend, viewportShowsLive } from "../prompt.ts";
+import { bindCommandProcess, CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeInputBoxContent, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, codexQuestionsCollapsed, heldCandidate, historyEndShowsLive, lastChatSubmitted, hermesInputDraft, noteSubmitted, parseInteractivePrompt, prepareCommandSend, viewportShowsLive } from "../prompt.ts";
 import { registry } from "../dialogs/registry.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "../dialogs/claude.ts";
 import { type PendingIdentity, PendingInputError } from "../pending-input.ts";
@@ -38,6 +39,12 @@ export class InputDraftError extends HerdrError {
     this.draft = draft;
   }
 }
+
+/**
+ * input_draft for a scrolled pane whose screen moved across the reads of one box check: nothing proves
+ * the box empty, so it counts as a draft. A wait for the box to empty (after clearing it) reads again.
+ */
+class ClaudeBoxMovedError extends InputDraftError {}
 
 /** between the two Esc presses that empty Claude Code's restored copy of the chat's message */
 const RESTORED_CLEAR_GAP_MS = 200;
@@ -231,6 +238,21 @@ export async function claudeBoxReads(paneId: string): Promise<[string, string | 
   if (claudeRewindOpen(before)) throw new HerdrError("rewind_dialog_open", CLAUDE_REWIND_OPEN_MESSAGE);
   if (!claudeInputDraft(before, null)) return [before, null];
   const scrollBefore = await paneScrollInfo(paneId);
+  // a viewport scrolled into the history (any client's scroll is every client's) shows no live box:
+  // the history's last rows do, colors included, so Claude's grey suggestion is still told from a draft
+  if (scrollBefore !== null && scrollBefore.offset_from_bottom > 0) {
+    const recent = async (): Promise<string> => (await paneRead({ paneId, source: "recent", format: "ansi", lines: scrollBefore.viewport_rows })).text;
+    const colors = await recent();
+    const live = (await paneRead({ paneId, source: "detection", format: "text" })).text;
+    // read again last, after the live screen: equal words do not prove equal colors (a suggestion
+    // accepted with Tab keeps its words), so any change across the reads refuses as a draft does.
+    // Anything after this read falls in the gap every send has between its last read and its write.
+    const colorsAfter = await recent();
+    if (historyEndShowsLive(colors, colorsAfter, [before, live])) return [live, colors];
+    // the screen moved across the reads (typed, a dialog, a resize): no box is proven empty, so none is sent over
+    if (claudeRewindOpen(stripVTControlCharacters(colorsAfter))) throw new HerdrError("rewind_dialog_open", CLAUDE_REWIND_OPEN_MESSAGE);
+    throw new ClaudeBoxMovedError(null, undefined, claudeInputBoxContent(live));
+  }
   const colors = (await paneRead({ paneId, source: "visible", format: "ansi" })).text;
   const scrollAfter = await paneScrollInfo(paneId);
   const live = (await paneRead({ paneId, source: "detection", format: "text" })).text;
@@ -441,7 +463,12 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
               throw error;
             }
             clearedDraft = true;
-            for (const deadline = Date.now() + DRAFT_CLEAR_WAIT_MS; await clearScreenReady(), claudeInputDraft(...reads);) {
+            // the box redraws empty after the keys: a scrolled read that saw it move reads again
+            const stillDraft = async (): Promise<boolean> => {
+              try { await clearScreenReady(); } catch (error) { if (error instanceof ClaudeBoxMovedError) return true; throw error; }
+              return claudeInputDraft(...reads);
+            };
+            for (const deadline = Date.now() + DRAFT_CLEAR_WAIT_MS; await stillDraft();) {
               if (Date.now() >= deadline) throw new InputDraftError(claudeClearableDraft(...reads));
               await Bun.sleep(DRAFT_CLEAR_POLL_MS);
             }

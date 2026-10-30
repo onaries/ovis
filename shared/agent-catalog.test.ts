@@ -43,6 +43,8 @@ describe("agent catalog", () => {
       }
       if (entry.detect.binaries.length === 0 || entry.detect.binaries.some((binary) => !/^[a-z0-9][a-z0-9._-]*$/.test(binary))) at("plain binary names");
       if (entry.detect.version_args.length === 0) at("a version flag");
+      const limit = entry.detect.version_timeout_ms;
+      if (limit !== undefined && !(Number.isInteger(limit) && limit > 5_000 && limit <= 30_000)) at(`a version-flag limit above the 5 s default and at most 30 s, not ${limit}`);
       if (entry.sign_in !== null && entry.sign_in.provider !== null && !PROVIDERS[entry.sign_in.provider]) at(`sign-in provider ${entry.sign_in.provider}`);
       if (entry.min_version !== null && (!/^\d+\.\d+(?:\.\d+)?$/.test(entry.min_version.version) || entry.min_version.reason === "")) at("a dotted minimum version and the feature that needs it");
     }

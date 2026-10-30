@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InteractivePrompt } from "../shared/protocol.ts";
 
-import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, openOmoAsks, paneIsCompacting, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, historyEndShowsLive, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, openOmoAsks, paneIsCompacting, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
 import { registry } from "./dialogs/registry.ts";
 import { gjcCustomEditorMatches } from "./dialogs/fallback.ts";
 import { parsedByPublicPrompt } from "./dialogs/shared.ts";
@@ -2458,6 +2458,25 @@ describe("Claude's suggested next prompt", () => {
     expect(viewportShowsLive(null, null, "● older output\r\n" + colors, live, live)).toBe(false);
     // the live screen changed across the colored read
     expect(viewportShowsLive(bottom, bottom, colors, live.replace("run the tests", "run the test"), live)).toBe(false);
+  });
+
+  test("the history's last rows lend their colors only when they are the unchanged live screen, colors included", () => {
+    const live = screen("❯ \u001b[2mrun the tests\u001b[0m").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+    const colors = screen("❯ \u001b[2mrun the tests\u001b[0m");
+    expect(historyEndShowsLive(colors, colors, [live, live])).toBe(true);
+    // other rows than the live screen's (a resize between the reads, an older box)
+    expect(historyEndShowsLive("● older output\r\n" + colors, "● older output\r\n" + colors, [live, live])).toBe(false);
+    // the live screen changed across the colored reads, before or after them
+    const changed = live.replace("run the tests", "run the test");
+    expect(historyEndShowsLive(colors, colors, [changed, live])).toBe(false);
+    expect(historyEndShowsLive(colors, colors, [live, changed])).toBe(false);
+    expect(historyEndShowsLive(colors, colors, [])).toBe(false);
+    // the suggestion accepted with Tab between the colored reads: the same words, typed now
+    const typed = screen("❯ run the tests");
+    expect(historyEndShowsLive(colors, typed, [live, live])).toBe(false);
+    expect(historyEndShowsLive(typed, colors, [live, live])).toBe(false);
+    // a read with no color at all (NO_COLOR): its tip and the same words typed read the same
+    expect(historyEndShowsLive(live, live, [live, live])).toBe(false);
   });
 
   test("bash mode, a box clipped by the pane, or a viewport that is not the live box hold a pending message", () => {

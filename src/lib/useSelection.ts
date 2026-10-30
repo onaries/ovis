@@ -115,7 +115,7 @@ export function useSelectionMark({ selectedMachineId, selectedPaneId }: { select
   return { selectionRef, movingPanes };
 }
 
-export function useSelectTarget({ selectedMachineId, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setDrawerOpen, setOutputStopped, setNotificationViewTarget, setTerminalPeek, pendingLink, pendingFile, setLinkLanded, selectionHint, selectionSince, rosterSeq, snapshot, selectedMachine, selectedPaneId, setHeaderNote, linkTick, movingPanes }: {
+export function useSelectTarget({ selectedMachineId, setConnected, setConnectedBefore, setSelectedMachineId, setSelectedPaneId, setAutoSelected, setDrawerOpen, setOutputStopped, setNotificationViewTarget, setTerminalPeek, pendingLink, pendingFile, setLinkLanded, selectionHint, selectionSince, rosterSeq, snapshot, selectedMachine, selectedPaneId, setHeaderNote, linkTick, movingPanes, onPick }: {
   selectedMachineId: string;
   setConnected: Dispatch<SetStateAction<boolean>>;
   setConnectedBefore: Dispatch<SetStateAction<boolean>>;
@@ -139,13 +139,17 @@ export function useSelectTarget({ selectedMachineId, setConnected, setConnectedB
   linkTick: number;
   /** panes a tab move has on its way to another workspace (paneStorageId): their selection waits for the move */
   movingPanes: RefObject<Set<string>>;
+  /** told of every pick (a row, the palette, a link, an alert, a new pane), never of the app's own fallback */
+  onPick?: () => void;
 }) {
+  const onPickRef = useRef(onPick); onPickRef.current = onPick;
   const selectedMachineRef = useRef(selectedMachineId);
   selectedMachineRef.current = selectedMachineId;
   /** how many picks were made since the tab opened: a link, an alert, the user (lib/hiddenMachines.ts reads it) */
   const picks = useRef(0);
   const selectTarget = useCallback((machineId: string, paneId: string | null, view?: PaneView) => {
     picks.current += 1;
+    onPickRef.current?.();
     // Only another PC mounts a new terminal (and socket), which reports its own state. A pane
     // on the same PC keeps the connected socket, which never reports again: resetting here
     // left the header on "reconnecting" after every pane switch.
@@ -241,7 +245,7 @@ export function useSelectTarget({ selectedMachineId, setConnected, setConnectedB
   return { selectedMachineRef, selectTarget, selectTargetRef, picks };
 }
 
-export function useSelectPane({ pendingLink, pendingFile, setLinkLanded, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, setDrawerOpen }: {
+export function useSelectPane({ pendingLink, pendingFile, setLinkLanded, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, setDrawerOpen, onPick }: {
   pendingLink: RefObject<AppLink | null>;
   pendingFile: RefObject<string | null>;
   setLinkLanded: Dispatch<SetStateAction<boolean>>;
@@ -251,8 +255,12 @@ export function useSelectPane({ pendingLink, pendingFile, setLinkLanded, selecti
   setTerminalPeek: Dispatch<SetStateAction<TerminalPeek | null>>;
   setAutoSelected: Dispatch<SetStateAction<boolean>>;
   setDrawerOpen: Dispatch<SetStateAction<boolean>>;
+  /** told of a pane the user picked (focusInput), as selectTarget's onPick is; never of the app's own fallback */
+  onPick?: () => void;
 }) {
+  const onPickRef = useRef(onPick); onPickRef.current = onPick;
   const selectPane = useCallback((paneId: string, focusInput = true) => {
+    if (focusInput) onPickRef.current?.();
     pendingLink.current = null; pendingFile.current = null; setLinkLanded(true);
     selectionHint.current = null;
     setSelectedPaneId(paneId);

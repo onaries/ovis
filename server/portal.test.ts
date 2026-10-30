@@ -105,6 +105,12 @@ async function bounded<T>(promise: Promise<T>, what: string, timeoutMs = 2_000):
   }
 }
 
+// A child process starting or stopping is waited for by its own signal (its READY line, its exit). The
+// bound only names a child that hangs: a loaded runner can take seconds to start a Bun process, so it is
+// far above a loaded runner's start time. A case that uses it sets its own timeout above it (CASE_MS).
+const CHILD_MS = 20_000;
+const CASE_MS = CHILD_MS + 10_000;
+
 async function waitFor(done: () => boolean, what: string): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (!done()) {
@@ -498,16 +504,16 @@ describe("running Portal", () => {
       // until the shell runs its script, /proc/<pid>/cmdline can still show the parent's argv or be empty mid-exec
       const reader = unrelated.stdout.getReader();
       try {
-        const ready = await bounded(reader.read(), "unrelated shell executed its script");
+        const ready = await bounded(reader.read(), "unrelated shell executed its script", CHILD_MS);
         expect(new TextDecoder().decode(ready.value)).toBe("READY\n");
       } finally { reader.releaseLock(); }
       await service.resume({ port: 7317, tokenSet: false, serveOnly: false });
       expect(alive(unrelated.pid)).toBe(true);
     } finally {
       unrelated.kill("SIGTERM");
-      await bounded(unrelated.exited, "unrelated process stopped");
+      await bounded(unrelated.exited, "unrelated process stopped", CHILD_MS);
     }
-  });
+  }, CASE_MS);
 
   it("does not treat an arbitrary interpreter as a Portal script", async () => {
     const stateDir = mkdtempSync(join(root, "state-"));
@@ -525,7 +531,7 @@ describe("running Portal", () => {
     try {
       const reader = unrelated.stdout.getReader();
       try {
-        const ready = await bounded(reader.read(), "unrelated interpreter executed its script");
+        const ready = await bounded(reader.read(), "unrelated interpreter executed its script", CHILD_MS);
         expect(new TextDecoder().decode(ready.value)).toBe("READY\n");
       } finally { reader.releaseLock(); }
       expect((await internals.processArgv(unrelated.pid))?.slice(1, 3)).toEqual([scriptPath, "expose"]);
@@ -533,9 +539,9 @@ describe("running Portal", () => {
       expect(alive(unrelated.pid)).toBe(true);
     } finally {
       if (alive(unrelated.pid)) unrelated.kill("SIGTERM");
-      await bounded(unrelated.exited, "unrelated interpreter stopped");
+      await bounded(unrelated.exited, "unrelated interpreter stopped", CHILD_MS);
     }
-  });
+  }, CASE_MS);
 
   it("rejects resume when a live saved PID has unreadable identity", async () => {
     const stateDir = mkdtempSync(join(root, "state-"));

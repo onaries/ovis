@@ -38,7 +38,7 @@ export { removedInvisible } from "./dialogs/claude.ts";
 export { INVISIBLE_CHAR_RE } from "./dialogs/claude.ts";
 export type { OmoAsk } from "./dialogs/shared.ts";
 export { parseFallbackPrompt } from "./dialogs/fallback.ts";
-export { CLAUDE_CLEAR_INPUT_KEYS, INPUT_BOX_SHOWN_CHARS, claudeClearableDraft, claudeHeldIsGrey, claudeInputBoxContent, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, isClaudeHeld, parseClaudeSuggestion, shownInputBox, viewportShowsLive } from "./claude-input.ts";
+export { CLAUDE_CLEAR_INPUT_KEYS, INPUT_BOX_SHOWN_CHARS, claudeClearableDraft, claudeHeldIsGrey, claudeInputBoxContent, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, historyEndShowsLive, isClaudeHeld, parseClaudeSuggestion, shownInputBox, viewportShowsLive } from "./claude-input.ts";
 export { hermesInputDraft } from "./hermes-input.ts";
 export { OpenCodePromptState } from "./opencode-prompt.ts";
 export { openOmoAsks, pendingOmoAsk } from "./omo-questions.ts";
@@ -1114,6 +1114,8 @@ export interface PromptRequestOptions {
   openCodeStateDir?: string;
   /** Each server owns its drafts and clears them when stopped. */
   openCodeState?: OpenCodePromptState;
+  /** an answer reached the agent (a 2xx that sent it on, not a saved step or a navigation), for the daily active message's usage */
+  onAnswered?: () => void;
 }
 
 /**
@@ -1187,6 +1189,9 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
     const form: { answered?: string } = {};
     const log = { paneId: body.pane_id, matched: false };
     answerLog = log;
+    // the answer reached the agent: OpenCode or pi-ask took it, or its keys went to the pane. A saved OpenCode
+    // step, a step back or a move between pi-ask questions reaches nothing and is no answer (onAnswered)
+    let delivered = false;
     const response = await serialize(body.pane_id, async () => {
       // given up while it waited its turn: nothing is read, opened or sent for it
       if (request.signal.aborted) return promptChanged();
@@ -1323,6 +1328,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         if (!(await stillBound())) return promptChanged();
         const replyResult = await replyOpenCodeForm(config, openCodeForm.sessionID, openCodeForm.formId, draft.answers, deadline);
         if (replyResult.ok) {
+          delivered = true;
           const sent = chatSent.get(body.pane_id)?.commands.at(-1);
           // OpenCode itself took the answer to the form the sent command opened
           if (sent?.dialogId === prompt.id) noteCommandEvidence(body.pane_id, sent.id, { kind: "native", at: Date.now() });
@@ -1355,6 +1361,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         const { response, answered } = await answerPiAskUser(body.pane_id, parsedPrompt, body, deadline);
         if (response.ok) askingEnded(body.pane_id);
         if (answered) {
+          delivered = true;
           const sent = chatSent.get(body.pane_id)?.commands.at(-1);
           // pi-ask itself took the answer to the form the sent command opened
           if (sent?.dialogId === prompt.id) noteCommandEvidence(body.pane_id, sent.id, { kind: "native", at: Date.now() });
@@ -1624,6 +1631,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           }
         }
         answered = true;
+        delivered = true;
         const sent = chatSent.get(body.pane_id)?.commands.at(-1);
         // An incidental question only unblocks the command; only its named dialog can complete it.
         // The card's Esc row (a cancel or refusal: omp's handoff Cancel, Codex's No) is not a result.
@@ -1666,6 +1674,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
     // the wait for the form's next step only reads the pane: after the pane's turn, so a message
     // queued for it meanwhile is not held up behind the polls
     if (form.answered !== undefined) await formMovedOn(body.pane_id, form.answered, options.codexHome, options.openCodeStateDir);
+    if (response.ok && delivered) options.onAnswered?.();
     await logAnswer(log, response);
     return response;
   } catch (error) {

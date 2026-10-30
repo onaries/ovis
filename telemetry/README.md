@@ -54,6 +54,14 @@ Create the `active` table on an existing database too:
 bunx wrangler d1 execute herdr-web-ui-telemetry --remote --command "CREATE TABLE IF NOT EXISTS active (day TEXT NOT NULL, install_id TEXT NOT NULL, version TEXT NOT NULL, os TEXT NOT NULL, arch TEXT NOT NULL, install_method TEXT NOT NULL CHECK (install_method IN ('plugin','managed','source')), country TEXT, harnesses TEXT NOT NULL CHECK (json_valid(harnesses)), PRIMARY KEY (day, install_id)); CREATE INDEX IF NOT EXISTS active_day ON active (day);"
 ```
 
+Then add `usage` to an `active` table that does not have it, before deploying a Worker that writes
+it (an app since notice version 5 sends the day's usage; that Worker's insert fails on a table
+without the column):
+
+```sh
+bunx wrangler d1 execute herdr-web-ui-telemetry --remote --command "ALTER TABLE active ADD COLUMN usage TEXT CHECK (usage IS NULL OR json_valid(usage))"
+```
+
 These ALTERs preserve historical rows; their newly added `settings` value remains `NULL` and is
 not inferred from old data. After the database is ready, deploy the Worker and then release the
 app version that sends snapshots:
@@ -102,6 +110,20 @@ SELECT harness.value AS harness, COUNT(DISTINCT active.install_id) AS installs
 FROM active CROSS JOIN json_each(active.harnesses) AS harness
 WHERE active.day >= date('now', '-29 days')
 GROUP BY harness.value ORDER BY installs DESC, harness;
+-- installs whose app was opened on each kind of screen in the last 30 days (rows with usage only)
+SELECT surface.value AS surface, COUNT(DISTINCT active.install_id) AS installs
+FROM active CROSS JOIN json_each(active.usage, '$.surfaces') AS surface
+WHERE active.day >= date('now', '-29 days') AND active.usage IS NOT NULL
+GROUP BY surface.value ORDER BY installs DESC, surface;
+-- installs reached each way in the last 30 days (rows with usage only)
+SELECT way.value AS ingress, COUNT(DISTINCT active.install_id) AS installs
+FROM active CROSS JOIN json_each(active.usage, '$.ingress') AS way
+WHERE active.day >= date('now', '-29 days') AND active.usage IS NOT NULL
+GROUP BY way.value ORDER BY installs DESC, ingress;
+-- prompt answers sent and pane alerts delivered and tapped per day, with the installs that reported usage
+SELECT day, COUNT(*) AS installs, SUM(json_extract(usage, '$.prompt_answers')) AS prompt_answers,
+  SUM(json_extract(usage, '$.alerts_delivered')) AS alerts_delivered, SUM(json_extract(usage, '$.alerts_opened')) AS alerts_opened
+FROM active WHERE usage IS NOT NULL GROUP BY day ORDER BY day;
 -- installs per version they last reported
 SELECT version, COUNT(*) FROM (SELECT install_id, MAX(version) AS version FROM events GROUP BY install_id) GROUP BY version ORDER BY version;
 -- OS, architecture and install method

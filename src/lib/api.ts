@@ -1,6 +1,7 @@
 import { apiFetch as fetch } from "./api-request-id.ts";
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
 import type { SeenFinish } from "../../shared/seen.ts";
+import type { AgentCatalogResponse, AgentTabStarted } from "../../shared/agent-catalog.ts";
 import { resumeConnectionTraces } from "./connectionTrace.ts";
 import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
@@ -69,7 +70,7 @@ import type {
   SwapPaneRequest,
   TabCreated,
   UpdateInstallRequest,
-  UsageReport,
+  StatuslineState, UsageReport,
   WorkspaceCreated,
   PluginActionRequest,
   PluginActionResult,
@@ -114,6 +115,16 @@ export function fetchRemoteAccess(): Promise<RemoteAccess> {
 /** The sidebar's plan meters; `refresh` asks the providers again instead of the server's recent answer. */
 export function fetchUsage(refresh = false): Promise<UsageReport> {
   return getJson<UsageReport>(refresh ? "/api/usage?refresh=1" : "/api/usage");
+}
+
+/** Settings → Subscription usage: whether Claude's limits are read from its status line on the server's PC. */
+export function fetchStatusline(): Promise<StatuslineState> {
+  return getJson<StatuslineState>("/api/usage/statusline", { cache: "no-store" });
+}
+
+/** Turns that on or off; the server decides what it installs and where, so only the switch is sent. */
+export async function setStatusline(enabled: boolean): Promise<StatuslineState> {
+  return await (await sendJson("/api/usage/statusline", "POST", { enabled })).json() as StatuslineState;
 }
 
 /** Local server's CLIProxyAPI controls; secrets are only ever sent, never read back. */
@@ -709,6 +720,22 @@ export async function fetchAgentKinds(machineId = "local"): Promise<AgentKind[]>
   return (await getJson<{ agents: AgentKind[] }>(machinePath(machineId, "agents"))).agents.filter((agent) => SUPPORTED_AGENT_KINDS.has(agent.kind) && agent.installed !== false);
 }
 
+/** GET /api/agent-catalog: every agent Ovis can install, with that PC's commands and what it has installed. */
+export async function fetchAgentCatalog(machineId = "local", signal?: AbortSignal): Promise<AgentCatalogResponse> {
+  return getJson<AgentCatalogResponse>(machinePath(machineId, "agent-catalog"), { signal, cache: "no-store" });
+}
+
+/** POST /api/agent-catalog/install: opens a tab on that PC and types the agent's official command there. */
+export async function startAgentInstall(agent: string, machineId = "local", alternative?: number): Promise<AgentTabStarted> {
+  const response = await sendJson(machinePath(machineId, "agent-catalog/install"), "POST", alternative === undefined ? { agent } : { agent, alternative });
+  return (await response.json()) as AgentTabStarted;
+}
+
+/** POST /api/agent-catalog/sign-in: opens a tab on that PC running the agent's own sign-in. */
+export async function startAgentSignIn(agent: string, machineId = "local"): Promise<AgentTabStarted> {
+  return (await (await sendJson(machinePath(machineId, "agent-catalog/sign-in"), "POST", { agent })).json()) as AgentTabStarted;
+}
+
 /** GET /api/integrations: herdr's agent integrations on that PC and whether each is installed. */
 export async function fetchIntegrations(machineId = "local"): Promise<IntegrationsResponse["integrations"]> {
   return (await getJson<IntegrationsResponse>(machinePath(machineId, "integrations"))).integrations;
@@ -842,6 +869,10 @@ export async function openWorktree(request: OpenWorktreeRequest, machineId = "lo
 /**
  * GET /api/sessions/history: the earlier sessions of `agent` in the workspace's folder, newest first;
  * never cached. `paneId` is the pane the list was asked for from: Claude's are that pane's store's.
+ * Pi reads refused by their deadline, reader limit or a changed transcript throw ApiError 503
+ * `session_history_busy` (with retryAfterMs). The dialog retries while keeping its loading state,
+ * then offers Retry, never incomplete rows. The server reuses only stat-keyed completed labels,
+ * never an unfinished scan.
  */
 export function fetchSessionHistory(workspaceId: string, agent: SessionHistoryAgent, machineId = "local", paneId: string | null = null): Promise<SessionHistoryResponse> {
   const query = new URLSearchParams({ workspace_id: workspaceId, agent, ...(paneId === null ? {} : { pane_id: paneId }) });

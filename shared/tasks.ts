@@ -1,4 +1,4 @@
-/** One OmO task, Claude Code subagent or parent-reported Codex subagent (GET /api/pane/omo-tasks). */
+/** One OmO task, Claude or Codex subagent, or OpenCode subagent or background command (GET /api/pane/omo-tasks). */
 export interface OmoTask {
   id: string;
   /** the task's summary, else its description or name */

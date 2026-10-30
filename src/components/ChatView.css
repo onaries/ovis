@@ -101,25 +101,6 @@
 .chat-terminal-fallback summary { cursor: pointer; }
 .chat-terminal-fallback pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* the turn a Letta transcript writes only when it ends: a few rows of the terminal's tail, quiet
-   under the turns, at a fixed height so the chat does not move while it scrolls inside */
-.chat-terminal-fallback.is-live summary { font-size: var(--fs-xs); }
-.chat-terminal-fallback.is-live pre {
-  --live-rows: 12;
-  height: calc(var(--live-rows) * 1.5 * var(--fs-xs));
-  line-height: 1.5;
-  overflow-y: auto;
-  margin: var(--space-1) 0 0;
-  padding: var(--space-1) var(--space-2);
-  border-left: 2px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-}
-
-@media (max-width: 480px) {
-  .chat-terminal-fallback.is-live pre { --live-rows: 8; }
-}
-
 /* a user turn opens a new exchange: space separates it from the answer above, not a rule
    (the one rule of an exchange closes its folded work) */
 .chat-turn-user {

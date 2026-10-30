@@ -8,6 +8,8 @@
  * BROWSER_SCRIPTS: comma-separated list of scripts to run (default: all from ci-browser.sh)
  * BROWSER_EXCLUDE: comma-separated list of scripts to leave out of that list
  * BROWSER_RETRY: 0 runs a failed script once only (default: a failed script runs a second time)
+ * BROWSER_ORDER: listed starts the scripts in ci-browser.sh's order (default: longest first, by
+ *   scripts/ci-browser-timings.json, so a slow script never starts last and runs on alone)
  * BROWSER_SCRIPT_TIMEOUT_SECONDS: how long one run of a script may take (default 600), so a hung
  *   script fails and names itself instead of using up the job's timeout. At the bound the script's
  *   process tree is stopped, its last log lines are printed at once, and it is not run again.
@@ -57,6 +59,32 @@ export function selectBrowserScripts(all: string[], include?: string, exclude?: 
   const unknown = [...included, ...excluded].filter((script) => !all.includes(script));
   if (unknown.length > 0) throw new Error(`Not in scripts/ci-browser.sh: ${[...new Set(unknown)].join(", ")}`);
   return [...new Set(included)].filter((script) => !excluded.includes(script));
+}
+
+/**
+ * The order the workers take the scripts in: longest first by `timings` (seconds a script took on
+ * CI), so the slow ones start while every worker is still busy and the lane ends with short ones.
+ * A script the table does not hold yet counts as its median; ties keep the listed order.
+ */
+export function longestFirst(scripts: string[], timings: Record<string, number>): string[] {
+  const known = Object.values(timings).filter((seconds) => Number.isFinite(seconds)).sort((a, b) => a - b);
+  const middle = Math.floor(known.length / 2);
+  const typical = known.length === 0 ? 0 : known.length % 2 === 1 ? known[middle]! : (known[middle - 1]! + known[middle]!) / 2;
+  const estimate = (script: string): number => Number.isFinite(timings[script]) ? timings[script]! : typical;
+  return scripts.map((script, index) => ({ script, index, seconds: estimate(script) }))
+    .sort((a, b) => b.seconds - a.seconds || a.index - b.index)
+    .map(({ script }) => script);
+}
+
+function readTimings(): Record<string, number> {
+  try {
+    const table: unknown = JSON.parse(readFileSync(join(repo, "scripts/ci-browser-timings.json"), "utf8"));
+    if (table === null || typeof table !== "object" || Array.isArray(table)) throw new Error("not an object of script seconds");
+    return table as Record<string, number>;
+  } catch (error) {
+    console.log(`[setup] No script timings (${(error as Error).message}): scripts start in ci-browser.sh's order`);
+    return {};
+  }
 }
 
 interface ScriptResult {
@@ -281,7 +309,7 @@ async function main(): Promise<void> {
 
   const retry = process.env.BROWSER_RETRY !== "0";
   const timeoutSeconds = scriptTimeoutSeconds(process.env.BROWSER_SCRIPT_TIMEOUT_SECONDS);
-  const queue = [...scripts];
+  const queue = process.env.BROWSER_ORDER === "listed" ? [...scripts] : longestFirst(scripts, readTimings());
   const results: ScriptResult[] = [];
   const lock = { active: 0 };
 

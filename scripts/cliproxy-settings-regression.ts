@@ -77,8 +77,12 @@ return (u.pathname==='/api/usage'||u.pathname==='/api/cliproxy'||u.pathname.star
   const modal = page.locator(".usage-account-dialog");
   const before = await page.locator(".usage-accounts-row").count();
 
-  // Given: Add is the next Tab stop after the meters' last option.
+  // Given: after the meters' last option come the status-line switch, then Add.
+  const statusline = page.getByRole("switch", { name: "Read Claude's limits from its status line", exact: true });
+  await statusline.waitFor();
   await page.getByRole("button", { name: "Session", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await statusline.evaluate((toggle) => toggle === document.activeElement), true);
   await page.keyboard.press("Tab");
   assert.equal(await add.evaluate((button) => button === document.activeElement), true);
   // When: Enter walks provider -> method.

@@ -605,11 +605,15 @@ function VoicePage() {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [micDenied, setMicDenied] = useState(false);
   useEffect(() => { fetchVoiceStatus().then(setVoice, () => setVoice(null)); }, []);
-  /** On asks now, so the first dictation does not stop at the browser's permission prompt */
+  /**
+   * On asks now, so the first dictation does not stop at the browser's permission prompt. Not in an
+   * iPhone home-screen app, which this request closed or reloaded (#2343): there the first tap of the mic asks.
+   */
   const chooseVoiceInput = async (voiceInput: VoiceButton) => {
     update({ voiceInput });
     setMicDenied(false);
-    if (voiceInput !== "on" || !window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return;
+    const homeScreenApp = (navigator as Navigator & { standalone?: boolean }).standalone === true;
+    if (voiceInput !== "on" || homeScreenApp || !window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return;
     try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach((track) => track.stop()); }
     catch { setMicDenied(true); }
   };

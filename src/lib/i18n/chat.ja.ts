@@ -63,7 +63,6 @@ export const CHAT_JA: Record<string, string> = {
   "Earlier messages": "以前のメッセージ",
   "beginning of conversation": "会話の始まり",
   "Conversation unavailable — show terminal output": "会話を読み取れません。ターミナルの出力を表示",
-  "Live terminal": "ライブターミナル",
   "No conversation yet — say something below": "まだ会話はありません。下から話しかけてください",
   "New messages": "新しいメッセージ",
   "{n} edit": "編集 {n} 件",

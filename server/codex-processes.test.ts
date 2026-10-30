@@ -101,6 +101,21 @@ it("native queue keys require an interactive Codex executable", async () => {
   }
 });
 
+/** A fixture's first line, whole: a busy pipe can hand "READY" and its newline over in two reads. */
+async function firstLine(stdout: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stdout.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (!text.includes("\n")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally { reader.releaseLock(); }
+  return text;
+}
+
 /** A ready, owned process with Codex's argv[0], no rollout descriptor and no timer. */
 async function runningCodex(resume = false): Promise<ReturnType<typeof Bun.spawn>> {
   const node = Bun.which("node");
@@ -110,10 +125,7 @@ async function runningCodex(resume = false): Promise<ReturnType<typeof Bun.spawn
     "fixture", join(root, "codex"), node, ...(resume ? ["resume", thread] : []),
   ], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   children.push(child);
-  const reader = child.stdout.getReader();
-  const ready = await reader.read();
-  reader.releaseLock();
-  expect(new TextDecoder().decode(ready.value)).toBe("READY\n");
+  expect(await firstLine(child.stdout)).toBe("READY\n");
   return child;
 }
 
@@ -429,10 +441,7 @@ async function loadedByExec(id: string): Promise<ReturnType<typeof Bun.spawn>> {
   // only cat, once Python has become it, echoes what it reads
   child.stdin.write("READY\n");
   await child.stdin.flush();
-  const reader = child.stdout.getReader();
-  const ready = await reader.read();
-  reader.releaseLock();
-  expect(new TextDecoder().decode(ready.value)).toBe("READY\n");
+  expect(await firstLine(child.stdout)).toBe("READY\n");
   return child;
 }
 
@@ -449,10 +458,7 @@ async function holding(ids: string[], kind: "readable" | "unreadable"): Promise<
     "sys.stdin.read()",
   ].join("\n"), kind, ...ids.map((id) => join(folder, `${id}.lock`))], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   children.push(child);
-  const reader = child.stdout.getReader();
-  const ready = await reader.read();
-  reader.releaseLock();
-  expect(new TextDecoder().decode(ready.value)).toBe("READY\n");
+  expect(await firstLine(child.stdout)).toBe("READY\n");
   return child;
 }
 

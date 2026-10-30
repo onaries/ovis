@@ -4,6 +4,7 @@ import { afterSend, afterSettled, greetingMemory, rememberGreeting } from "./gre
 import { paneLifetimes } from "./paneLifetime.ts";
 import { pendingMessages, type PendingMessageStore } from "./pendingMessages.ts";
 import { watchPageInUse } from "./presence.ts";
+import { currentSurface } from "./telemetrySurface.ts";
 import { HerdrSocket } from "./ws.ts";
 
 type Handler = (message: ServerMessage, sent: boolean) => void;
@@ -31,7 +32,7 @@ export class MachineSession {
   private closed = false;
 
   constructor(readonly machineId: string, options: MachineSessionOptions = {}) {
-    this.socket = options.socket ?? new HerdrSocket(`${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws?machine_id=${encodeURIComponent(machineId)}`);
+    this.socket = options.socket ?? new HerdrSocket(`${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws?machine_id=${encodeURIComponent(machineId)}&surface=${currentSurface()}`);
     this.store = options.pendingStore ?? pendingMessages;
     // A features frame says what the bridge takes before the snapshot only for the herdr this page already
     // proved: the herdr-lifetime fence (paneLifetimes.observe) runs on the snapshot, and a send or receipt made

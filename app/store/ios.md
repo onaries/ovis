@@ -13,12 +13,13 @@ Extension, a later build; see [Later builds](#later-builds)).
 |---|---|---|
 | Bundle ID | `sh.ovis.app` | `PRODUCT_BUNDLE_IDENTIFIER`, `app/ios/App/App.xcodeproj` |
 | Version | `1.0` | `MARKETING_VERSION`, in the project's build settings, which the app and its extension share (not a target's General tab) |
-| Build | `1` | `CURRENT_PROJECT_VERSION`, in the project's build settings too; raise it by one for every upload, TestFlight included |
+| Build | `3` | `CURRENT_PROJECT_VERSION`, in the project's build settings too; raise it by one for every upload, TestFlight included |
 | Devices | iPhone and iPad | `TARGETED_DEVICE_FAMILY = "1,2"`, so the listing needs iPad screenshots too |
 | Minimum iOS | 15.0 | `IPHONEOS_DEPLOYMENT_TARGET` |
 | Signing | Automatic, no team yet | the owner picks the team in Xcode (section 3) |
 | Camera text | "Scan the QR code your PC shows under Settings, Phone & devices." | `NSCameraUsageDescription`, `Info.plist` |
 | Microphone text | "Dictate messages and commands to your agents with voice input." | `NSMicrophoneUsageDescription`, `Info.plist` |
+| Speech recognition text | "Turn what you say into text for your agents when no OpenAI key is set." | `NSSpeechRecognitionUsageDescription`, `Info.plist` |
 | Export compliance | no non-exempt encryption (only Apple's HTTPS) | `ITSAppUsesNonExemptEncryption = false`, so uploads skip the question |
 | Privacy manifest | no tracking; product interaction, device ID and coarse location collected for analytics, linked to the PC's install ID, not tracking (the PC's usage counts, section 5); UserDefaults for the app's own settings (reason `CA92.1`) | `app/ios/App/App/PrivacyInfo.xcprivacy` |
 
@@ -37,6 +38,12 @@ Extension, a later build; see [Later builds](#later-builds)).
    needs no key.
 
 ## 3. Build and upload (the owner, on his Mac with Xcode)
+
+Build 3 is prepared for the next upload. The last documented upload is version 1.0 build 2,
+submitted on 2026-10-24 ([docs/native-app.md](../../docs/native-app.md#phase-1-first-store-release),
+recorded in commit `54fdadc1`). Check App Store Connect before uploading in case a later build
+has already been uploaded. The App and OvisNotifications targets inherit the same project-level
+build number in Debug and Release.
 
 ```bash
 git switch main && git pull

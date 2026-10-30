@@ -69,6 +69,40 @@ function client(focus = async () => {}, focused = false, url = APP) {
 }
 
 describe("notification clicks", () => {
+  it("counts a tapped pane alert with the server only while its counts are on and their notice was shown", async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    let status: Response | Error = new Error("signed out");
+    loadWorker({
+      addEventListener: (type: string, listener: (event: unknown) => void) => listeners.set(type, listener),
+      clients: { matchAll: async () => [], openWindow: async () => null },
+      fetch: async (url: string, init: RequestInit = {}) => {
+        requests.push({ url, init });
+        if ((init.method ?? "GET") !== "GET") return new Response(null, { status: 200 });
+        if (status instanceof Error) throw status;
+        return status.clone();
+      },
+    });
+    const tap = async (paneId: string | null) => {
+      requests.length = 0;
+      const waits: Promise<unknown>[] = [];
+      listeners.get("notificationclick")!({ notification: { data: { pane_id: paneId, machine_id: "local" }, close: () => {} }, waitUntil: (promise: Promise<unknown>) => waits.push(promise) });
+      await Promise.all(waits);
+      return requests.map((request) => [request.url, request.init.method ?? "GET", request.init.body ?? null, (request.init.headers as Record<string, string> | undefined)?.["x-herdr-update"] ?? null]);
+    };
+    const asked = ["/api/telemetry", "GET", null, null];
+    // signed out, off, blocked by the environment or before the notice: asked, never told
+    expect(await tap("w1:p1")).toEqual([asked]);
+    for (const counts of [{ enabled: false, blocked_by_env: false, notice_seen: true }, { enabled: true, blocked_by_env: true, notice_seen: true }, { enabled: true, blocked_by_env: false, notice_seen: false }]) {
+      status = Response.json(counts);
+      expect(await tap("w1:p1")).toEqual([asked]);
+    }
+    status = Response.json({ enabled: true, blocked_by_env: false, notice_seen: true });
+    expect(await tap("w1:p1")).toEqual([asked, ["/api/telemetry", "POST", JSON.stringify({ alert_opened: true }), "1"]]);
+    // a generic notification is not a pane alert
+    expect(await tap(null)).toEqual([]);
+  });
+
   it("tells app windows from the reader, raw file and static tabs the app also opens", () => {
     const { isAppWindow } = loadWorker({ addEventListener: () => {} });
     expect(isAppWindow(APP)).toBe(true);

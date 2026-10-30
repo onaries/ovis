@@ -15,6 +15,7 @@ import { openCodeFlagVersion, openCodeInstalledVersion } from "./opencode-servic
 import { DevinHistoryChanged } from "./devin.ts";
 import { agentRename, HerdrError, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
 import { paneContext, resolveAgent, versionSourceOf } from "./pane-context.ts";
+import { ompScreenContext } from "./omp-status.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "./dialogs/claude.ts";
 import { claudeRewindOpen } from "./prompt.ts";
@@ -277,12 +278,18 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     try {
       const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);
       conversationDiagnostics.recovered(paneId, requestIdContext.getStore()?.id);
+      // omp's transcript counts the tokens a request filled but never names the window; its own
+      // status bar does (server/omp-status.ts), so the chat's ring gets a percent from there
+      const screenContext = conversation.source === "omp-transcript" ? await ompScreenContext(paneId) : null;
+      const answer = screenContext === null ? conversation
+        : { ...conversation, metadata: { ...(conversation.metadata ?? { model: null, reasoning_effort: null }), context: screenContext } };
       // no-store keeps the browser's own cache out of it, so the chat sees the 304.
       // weak: the same answer goes out gzipped or plain (compress.ts), which are not the same bytes
-      const etag = `W/"${version}"`;
+      // the screen's figure is not in `version`, so it is named here: a changed percent is a new answer
+      const etag = `W/"${version}${screenContext === null ? "" : `-ctx${screenContext.used}:${screenContext.window}`}"`;
       const headers = { etag, "cache-control": "no-store" };
       if (request.headers.get("if-none-match")?.replace(/^W\//, "") === etag.slice(2)) return new Response(null, { status: 304, headers });
-      return jsonResponse(conversation, 200, headers);
+      return jsonResponse(answer, 200, headers);
     } catch (error) {
       if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
       if (error instanceof ConversationReadPending) {

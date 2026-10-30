@@ -274,7 +274,12 @@ describe("starts at the same moment", () => {
       const stopped = await run("stop", { HERDR_PLUGIN_ROOT: root, PORT: port });
       expect(stopped.exitCode, stopped.err).toBe(0);
       expect(stopped.out).toContain(`stopped Ovis (pid ${pid})`);
-      expect(() => process.kill(pid, 0)).toThrow();
+      // gone, or exited and not yet reaped by whatever adopted it: stop counts a zombie as gone, and
+      // signal 0 still reaches one; without /proc (macOS) signal 0 is all there is
+      if (existsSync("/proc/self/stat")) {
+        const stat = (() => { try { return readFileSync(`/proc/${pid}/stat`, "utf8"); } catch { return null; } })();
+        expect(stat === null ? "gone" : stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]).toMatch(/^(gone|Z)$/);
+      } else expect(() => process.kill(pid, 0)).toThrow();
     } finally {
       for (const { pid } of servers) try { process.kill(-pid, "SIGKILL"); } catch { /* stopped */ }
       listener.stop(true);

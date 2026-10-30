@@ -63,7 +63,6 @@ export const CHAT_KO: Record<string, string> = {
   "Earlier messages": "이전 메시지",
   "beginning of conversation": "대화의 시작",
   "Conversation unavailable — show terminal output": "대화를 읽을 수 없습니다. 터미널 출력 보기",
-  "Live terminal": "실시간 터미널",
   "No conversation yet — say something below": "아직 대화가 없습니다. 아래에 말을 걸어 보세요",
   "New messages": "새 메시지",
   "{n} edit": "편집 {n}개",
