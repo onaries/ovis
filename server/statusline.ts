@@ -1,5 +1,6 @@
 import { closeSync, openSync, readSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { CONTEXT_STALE_MS, contextDirectorySafe, contextFilename, contextProfile, readContextFile } from "./statusline-context.ts";
 
 /**
  * The limits Claude Code hands its status line, kept by the wrapper that
@@ -33,7 +34,7 @@ export interface StatuslineWindow {
  * A payload older than this is not a reading: the five-hour window has turned over, so its number
  * describes a window that is gone. The file survives a sleeping laptop, so its age is checked.
  */
-export const STALE_MS = 6 * 60 * 60_000;
+export const STALE_MS = CONTEXT_STALE_MS;
 
 export const statuslinePath = (home: string): string => join(home, ".herdr", "statusline-last.json");
 
@@ -41,15 +42,15 @@ export const statuslinePath = (home: string): string => join(home, ".herdr", "st
 const MAX_CAPTURE_BYTES = 64 * 1024;
 
 /** The file's text, or null where it is not a regular file of at most MAX_CAPTURE_BYTES. */
-function readCapture(path: string): string | null {
+function readCapture(path: string, maxBytes = MAX_CAPTURE_BYTES): string | null {
   // stat first: opening a FIFO left at this path would wait for a writer
   if (!statSync(path).isFile()) return null;
   const fd = openSync(path, "r");
   try {
-    const buffer = Buffer.alloc(MAX_CAPTURE_BYTES + 1);
+    const buffer = Buffer.alloc(maxBytes + 1);
     let read = 0;
     for (let got = 1; got > 0 && read < buffer.length; read += got) got = readSync(fd, buffer, read, buffer.length - read, read);
-    return read > MAX_CAPTURE_BYTES ? null : buffer.subarray(0, read).toString("utf8");
+    return read > maxBytes ? null : buffer.subarray(0, read).toString("utf8");
   } finally {
     closeSync(fd);
   }
@@ -96,4 +97,22 @@ export function readStatusline(home: string, now: number = Date.now()): Statusli
   } catch {
     return null;
   }
+}
+
+/** The exact context limit for one Claude session and model, even below 200k tokens.
+ * Usage remains the transcript's input/cache total. No subscription or account is required. */
+export function readStatuslineContext(home: string, sessionId: string, model: string | null, transcriptPath: string, now = Date.now()): number | null {
+  if (!/^[a-zA-Z0-9-]{1,128}$/.test(sessionId) || model === null) return null;
+  try {
+    const directory = join(home, ".herdr", "statusline-context");
+    if (!contextDirectorySafe(directory)) return null;
+    // Discovery keeps the config-dir spelling; only that directory is canonicalized, not projects.
+    const profile = contextProfile(dirname(dirname(dirname(transcriptPath))));
+    const capture = readContextFile(join(directory, contextFilename(profile, sessionId)), profile);
+    if (capture === null || now - capture.mtimeMs > STALE_MS || capture.mtimeMs - now > 60_000) return null;
+    const body = record(capture.body);
+    const capacity = body["window"];
+    return body["session_id"] === sessionId && body["model"] === model
+      && typeof capacity === "number" && Number.isSafeInteger(capacity) && capacity > 0 ? capacity : null;
+  } catch { return null; }
 }

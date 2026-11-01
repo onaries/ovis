@@ -56,7 +56,8 @@
   transform-origin: 0 0;
 }
 
-.mermaid-lightbox-canvas svg {
+.mermaid-lightbox-canvas svg,
+.mermaid-lightbox-canvas img {
   display: block;
   width: 100%;
   height: 100%;
@@ -74,4 +75,9 @@
   .mermaid-lightbox-bar {
     top: calc(var(--space-3) + env(titlebar-area-y, 0px) + env(titlebar-area-height, 0px));
   }
+}
+
+/* a ```svg figure (lib/svgFigure.ts) is an image: contain keeps its aspect ratio, as svg does */
+.mermaid-lightbox-canvas img {
+  object-fit: contain;
 }

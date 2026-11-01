@@ -9,6 +9,7 @@
  * calls one made after it gets a same-named wrapper (`end`, `holdPending`, `authorizeSocket`, …). The server
  * listens once this returns, and calls `start` after that.
  */
+import type { WebSocketHandler } from "bun";
 import type { SessionSnapshot } from "../../shared/protocol.ts";
 import type { DeviceStore } from "../devices.ts";
 import { ping } from "../herdr/client.ts";
@@ -17,7 +18,7 @@ import { attachableIdentity, sidecarAvailable } from "../pty/sidecar.ts";
 import type { UsageLoginService } from "../usage-login.ts";
 import type { UsageService } from "../usage.ts";
 import { createSubmitText } from "./composer.ts";
-import { type Client, createConnections } from "./connections.ts";
+import { type Client, createConnections, type SocketData } from "./connections.ts";
 import { createInputLane } from "./input.ts";
 import { createPendingDelivery } from "./pending.ts";
 import { createSocket } from "./socket.ts";
@@ -80,7 +81,7 @@ export function createCore({ options, devices, preferences, usage, usageLogin, b
 
   const { mayType, authorizeSocket, admit, setRole, watchPane, unwatchPane, killWatches, end } = createConnections({ clients, present, pending: { close: closeConnection }, devices, detachClaimed, dropClaims });
   const { push, omo, gjc, claudeAgents, opencodeAgents, codexTasks, plans, clientSnapshot, currentHerdrLifetime, queueHeld, countVisit, machines, broadcastAll, logPushError, collector, waitTimer } = createStatusHub({ options, devices, preferences, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin });
-  const websocket = createSocket({
+  const socketHandlers = createSocket({
     clients, present, stopped: () => stopped, admit, setRole, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, herdrLifetime: currentHerdrLifetime, browserSnapshot, countVisit, drainOutput,
     // each frame type by name, with the handler of the module that owns it: anything else on a frame object never
     // becomes a frame a client can send, and a type named twice fails the build instead of replacing a handler
@@ -100,10 +101,19 @@ export function createCore({ options, devices, preferences, usage, usageLogin, b
       "pending-action": pendingFrames["pending-action"],
     },
   });
+  const websocket: WebSocketHandler<SocketData> = {
+    ...socketHandlers,
+    open: (ws) => socketHandlers.open(ws),
+    message: (ws, message) => socketHandlers.message(ws, message),
+    close: (ws, code, reason) => socketHandlers.close(ws, code, reason),
+    drain: (ws) => socketHandlers.drain(ws),
+  };
   let outputTimer: ReturnType<typeof setInterval> | undefined;
 
   return {
     sidecar, serialize, push, logPushError, omo, claudeAgents, opencodeAgents, codexTasks, plans, clientSnapshot, machines, broadcastAll, collector, websocket, queueFirstMessage,
+    // The relay uses these same handlers with a SocketLike; websocket above remains Bun's boundary.
+    socketHandlers,
     /** once the server listens */
     start(): void {
       // ACKs can stop arriving entirely (a suspended tab). Bound the pause even then.

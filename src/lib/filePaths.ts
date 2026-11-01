@@ -35,7 +35,7 @@ const CODE_PATH = new RegExp(`^(?:${ROOT}(?:${SPACED}\\/)*${SPACED_NAME}|${SEGME
  * so is anything else with an extension, as a list of extensions always misses some.
  */
 const CODE_NAME = /^(?:process\.(?:env|argv|cwd|exit|platform|stdout|stderr|stdin)(?:\.\w+)?|Math\.(?:random|floor|ceil|round|max|min|abs|pow|sqrt|trunc|sign)|JSON\.(?:parse|stringify)|console\.(?:log|error|warn|info|debug)|Object\.(?:keys|values|entries|assign|freeze)|Array\.(?:from|isArray)|Promise\.(?:all|race|any|allSettled|resolve|reject)|Number\.(?:isFinite|isInteger|parseInt|parseFloat)|tool\.(?:monitor|read|bash|grep|write|edit)|os\.(?:path|environ|getcwd|getenv)|sys\.(?:argv|path|exit|stdout|stderr)|window\.(?:location|history|open)|document\.(?:body|title|cookie))$/;
-function isCodeName(name: string): boolean {
+export function isCodeName(name: string): boolean {
   return !name.includes("/") && CODE_NAME.test(name);
 }
 

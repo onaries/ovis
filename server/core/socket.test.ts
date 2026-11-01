@@ -10,7 +10,7 @@ function socket(stopped: boolean) {
     end: (_client, reason) => { ended.push(reason); }, holdPending() {}, attachments: new Map(),
     clientSnapshot: async () => ({}) as SessionSnapshot, herdrLifetime: () => undefined, browserSnapshot: (snapshot) => snapshot, countVisit() {}, drainOutput() {}, frames: {} as never,
   });
-  const client = { data: connectionData({ deviceId: undefined, readOnly: false }) } as Client;
+  const client: Client = { data: connectionData({ deviceId: undefined, readOnly: false }), readyState: WebSocket.OPEN, getBufferedAmount: () => 0, send: () => 1, close: () => {} };
   return { handler, client, ended };
 }
 
@@ -25,7 +25,7 @@ it("tells a new connection its features before its snapshot, which waits on herd
       clientSnapshot: () => held, herdrLifetime: () => outcome === "read" ? "herdr-a" : undefined, browserSnapshot: (snapshot) => snapshot, countVisit() {}, drainOutput() {}, frames: {} as never,
     });
     const frames: { type: string; features?: string[]; code?: string; connection?: string; herdr_lifetime?: string }[] = [];
-    const client = { data: connectionData({ deviceId: undefined, readOnly: false }), getBufferedAmount: () => 0, send: (raw: string) => { frames.push(JSON.parse(raw)); return raw.length; } } as unknown as Client;
+    const client: Client = { data: connectionData({ deviceId: undefined, readOnly: false }), readyState: WebSocket.OPEN, getBufferedAmount: () => 0, send: (raw: string) => { frames.push(JSON.parse(raw)); return raw.length; }, close: () => {} };
     const opened = handler.open!(client);
     expect(frames.map((frame) => frame.type)).toEqual(["features"]);
     expect(frames[0]!.features).toEqual(expect.arrayContaining(["submit", "pending-input", "terminal-insert"]));

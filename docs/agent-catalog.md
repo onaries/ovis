@@ -54,7 +54,8 @@ Vendors change their install commands. When one changes, or every few releases:
 ## Detection
 
 The server looks for an agent's binary on its own `PATH`, then on the `PATH` its user's login shell
-sets (read at most once a minute; not on Windows). Most installers put agents in `~/.local/bin` or
+sets (read at most once a minute, and again for an agent an install just put in its installer's
+folder, at most every 30 s while that PATH still misses it; not on Windows). Most installers put agents in `~/.local/bin` or
 the like, which a login shell adds and a server run as a service often lacks: without the second
 look, an agent that was just installed would read as not installed. It runs the binary's version
 flag with no input and a 5 s limit (longer where the entry sets `detect.version_timeout_ms`), and reads the first dotted version it prints. A version is kept until the executable file changes (path, size or

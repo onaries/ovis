@@ -18,6 +18,8 @@ export interface ComposerSendsDeps {
   agentStatus: AgentStatus | undefined;
   answerPanePrompt: (answer: { pane_id: string; prompt_id: string }) => Promise<unknown>;
   answering: InteractivePrompt | null;
+  /** the card's answer went out, but its next screen read has not answered yet */
+  answerPending: boolean;
   draftHeldForRef: MutableRefObject<string | null>;
   ended: boolean;
   heldByOpenQueue: boolean;
@@ -49,13 +51,13 @@ export interface ComposerSendsDeps {
   stillOpenNote: (open: { pane: string; agent: string; command: string; named: boolean; history: string | undefined }) => string;
   stillOpenNotedRef: MutableRefObject<boolean>;
   stillOpenRef: MutableRefObject<{ pane: string; agent: string; command: string; named: boolean; history: string | undefined } | null>;
-  submitComposerMessage: (text: string, delivery: SubmitDelivery, clearDraft?: string, sendAnyway?: boolean, pendingId?: string, resendGeneration?: number) => Promise<SubmitResult> | null;
+  submitComposerMessage: (text: string, delivery: SubmitDelivery, clearDraft?: string, sendAnyway?: boolean, pendingId?: string, resendGeneration?: number, agentOnly?: boolean) => Promise<SubmitResult> | null;
   submitRetention: PaneSubmitRetention | null;
   t: Translate;
 }
 
 export function useComposerSends(deps: ComposerSendsDeps) {
-  const { agent, agentStatus, answerPanePrompt, answering, chatNavigation, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputAtRest, inputRowNow, knownOutcomes, observeRef, paneId, paneRef, pendingAnswer, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, sessionRef, setChatLocalSend, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t } = deps;
+  const { agent, agentStatus, answerPanePrompt, answering, answerPending, chatNavigation, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputAtRest, inputRowNow, knownOutcomes, observeRef, paneId, paneRef, pendingAnswer, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, sessionRef, setChatLocalSend, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t } = deps;
 
   /** An answer from the message box, not the card: its failure is the box's note. */
   const sendAnswer = useCallback((pane: string, prompt: InteractivePrompt, choice: TypedAnswer): Promise<boolean | string> => {
@@ -75,17 +77,19 @@ export function useComposerSends(deps: ComposerSendsDeps) {
    * box confirms it and Escape cancels it, as the card's two buttons do. null: none waits for this prompt.
    */
   const waitingAnswer = useMemo(() => {
-    if (paneId === null || answering === null || pendingAnswer === null || pendingAnswer.pane !== paneId || pendingAnswer.promptId !== answering.id) return null;
+    if (answerPending || paneId === null || answering === null || pendingAnswer === null || pendingAnswer.pane !== paneId || pendingAnswer.promptId !== answering.id) return null;
     const pane = paneId, choice = pendingAnswer.answer;
     return {
       confirm: (): Promise<boolean | string> => sendAnswer(pane, answering, choice),
       cancel: (): void => setPendingAnswer(null),
     };
-  }, [answering, paneId, pendingAnswer, sendAnswer, setPendingAnswer]);
+  }, [answering, answerPending, paneId, pendingAnswer, sendAnswer, setPendingAnswer]);
 
   const composerSend = useCallback(
-    (text: string, clearDraft?: string, sendAnyway = false): boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal> => {
+    (text: string, clearDraft?: string, sendAnyway = false, agentOnly = false): boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal> => {
       const pane = paneRef.current;
+      // A refused send keeps the draft; no second choice goes to the card waiting on its read.
+      if (pane !== null && answerPending) return false;
       // Codex's queue open in the terminal holds the input: a message would become the answer
       if (pane !== null && heldByOpenQueue) {
         return t("Codex has a question open in the terminal: answer it above, or close it there (alt+↓) to message Codex.");
@@ -134,7 +138,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       const socket = socketRef.current, session = sessionRef.current;
       const sentAt = Date.now();
       const sentAfter = pane === null ? null : waitingBaseline(waitingKey(machineId, pane));
-      const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway);
+      const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway, undefined, undefined, agentOnly);
       return result === null ? false : result.then((answer) => {
         // Neither a dropped connection nor a cleared old draft proves this message was typed.
         // Without a receipt, leave the retryable composer text and report the uncertainty.
@@ -152,7 +156,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
         return true;
       });
     },
-    [agent, agentStatus, answering, heldByOpenQueue, sendAnswer, submitComposerMessage, queueStore, machineId, settings.autoSendQueued, showSentCommand, inputAtRest, inputRowNow, stillOpenNote],
+    [agent, agentStatus, answering, answerPending, heldByOpenQueue, sendAnswer, submitComposerMessage, queueStore, machineId, settings.autoSendQueued, showSentCommand, inputAtRest, inputRowNow, stillOpenNote],
   );
 
   const actOnPending = useCallback(async (id: string, action: "steer" | "discard" | "agent-queue" | "edit"): Promise<void> => {
@@ -197,7 +201,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
             // before pending-result arrives. A concurrent delivery never restores text.
             if (action === "edit" && !edited && frame.removed?.some((item) => item.id === id && item.outcome === "discarded")) {
               edited = true;
-              composerDrafts.restorePending(`ovis:composer-draft:${owner}`, message.text);
+              composerDrafts.restorePending(`ovis:composer-draft:${owner}`, message.text, message.agent_only === true);
             }
           });
           try {
@@ -227,9 +231,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
           }
           const known = knownOutcomes(pane);
           const seen = inputRowNow() === "ready";
-          const result = action === "agent-queue"
-            ? submitComposerMessage(message.text, "agent-queue", undefined, false, id, message.resendGeneration ?? 0)
-            : submitComposerMessage(message.text, "immediate", undefined, false, id, message.resendGeneration ?? 0);
+          const result = submitComposerMessage(message.text, action === "agent-queue" ? "agent-queue" : "immediate", undefined, false, id, message.resendGeneration ?? 0, message.agent_only === true);
           if (!result) {
             pendingMessages.fail(owner, id, { code: "not_transmitted", message: "the connection dropped before this message was sent" }, false);
             return;

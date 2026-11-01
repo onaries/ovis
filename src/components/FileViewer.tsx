@@ -31,6 +31,8 @@ import { useSheetSwipe } from "../lib/sheets.ts";
 import { readFilePreviewText, SOURCE_PREVIEW_LINES, type FilePreviewText } from "../lib/filePreviewText.ts";
 import { readerHref } from "../lib/fileReader.ts";
 import type { FilePresentation } from "../lib/filePresentation.ts";
+import { getTransport } from "../lib/transport.ts";
+import { useResourceUrl } from "../lib/useResourceUrl.ts";
 
 type Preview = { status: "none" | "pending" | "failed" } | { status: "ready"; blocks: MarkdownBlock[] };
 
@@ -223,7 +225,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen, keyboardActiv
       const started = Date.now();
       deadline = setTimeout(() => abort.abort(), budget.timeoutMs);
       try {
-        const response = await fetch(fileUrl(next.path, paneId), { signal: abort.signal, headers: { range: `bytes=0-${budget.bytes - 1}` } });
+        const response = await getTransport().fetch(fileUrl(next.path, paneId), { signal: abort.signal, headers: { range: `bytes=0-${budget.bytes - 1}` } });
         clearTimeout(deadline);
         const timeoutMs = Math.max(1, budget.timeoutMs - (Date.now() - started));
         const body = await readFilePreviewText(response, budget.bytes, { signal: abort.signal, maxLines: budget.lines, timeoutMs, partialOnTimeout: true });
@@ -328,6 +330,9 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen, keyboardActiv
   // whose bridge predates `render` answers with the source, which the frame shows as text
   const htmlPage = info !== null && info.kind === "text" && info.mime === "text/html";
   const pageUrl = `${url}&render=1`;
+  const urlSrc = useResourceUrl(url);
+  const pageSrc = useResourceUrl(pageUrl);
+  const imageSrc = useResourceUrl(info?.kind === "image" ? `${url}&revision=${encodeURIComponent(`${info.modified}:${info.size}`)}` : null);
   // Page | Source: over the HTML file in a dialog, in the docked panel's toolbar
   const modes = <div className="segmented file-viewer-modes" role="group" aria-label={t("Show the HTML file as")}>
     <button type="button" aria-pressed={!source} onClick={() => setSource(false)}>{t("Page")}</button>
@@ -408,17 +413,17 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen, keyboardActiv
       case "image":
         return info.size > MAX_INLINE_IMAGE_BYTES
           ? <p className="file-viewer-note">{t("This image is {size}; download it to view.", { size: formatBytes(info.size) })}</p>
-          : <img className="file-viewer-media" src={`${url}&revision=${encodeURIComponent(`${info.modified}:${info.size}`)}`} alt={info.name} />;
+          : <img className="file-viewer-media" src={imageSrc ?? undefined} alt={info.name} />;
       case "video":
-        return <video ref={(node) => { mediaRef.current = node; }} className="file-viewer-media" src={url} controls playsInline preload="metadata" />;
+        return <video ref={(node) => { mediaRef.current = node; }} className="file-viewer-media" src={urlSrc ?? undefined} controls playsInline preload="metadata" />;
       case "audio":
-        return <audio ref={(node) => { mediaRef.current = node; }} className="file-viewer-audio" src={url} controls preload="metadata" />;
+        return <audio ref={(node) => { mediaRef.current = node; }} className="file-viewer-audio" src={urlSrc ?? undefined} controls preload="metadata" />;
       case "pdf":
-        return <iframe className="file-viewer-pdf" src={url} title={info.name} />;
+        return <iframe className="file-viewer-pdf" src={urlSrc ?? undefined} title={info.name} />;
       case "text":
         if (htmlPage && !source) return <>
           {!docked && modes}
-          <iframe className="file-viewer-page" src={pageUrl} sandbox="allow-scripts" title={info.name} />
+          <iframe className="file-viewer-page" src={pageSrc ?? undefined} sandbox="allow-scripts" title={info.name} />
         </>;
         return <>
           {htmlPage && !docked && modes}
@@ -457,25 +462,26 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen, keyboardActiv
   </p>;
   // the file itself: a Markdown tab is the reader; raw and download keep the original bytes
   const newTabHref = htmlPage && !source ? pageUrl : markdown ? previewUrl : url;
-  const downloadHref = fileUrl(shownPath, paneId, true);
+  const newTabSrc = useResourceUrl(newTabHref);
+  const downloadHref = useResourceUrl(fileUrl(shownPath, paneId, true));
   const fileActions = <>
     {!page && onTogglePresentation && <button type="button" className="icon-button file-viewer-action" aria-label={docked ? t("Show as a popup") : t("Show beside the pane")} title={docked ? t("Show as a popup") : t("Show beside the pane")} onClick={onTogglePresentation}>
       {docked ? <Maximize2 aria-hidden="true" /> : <PanelRight aria-hidden="true" />}
     </button>}
     {/* new tab, raw and download: buttons in the row, and on a phone in the More menu after Copy */}
     {/* in the installed app's window a new tab would be another app window: Copy link takes their place */}
-    {!page && !appWindow && <a className="icon-button file-viewer-action file-viewer-wide" href={newTabHref} target="_blank" rel="noopener" aria-label={t("Open in a new tab")} title={t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>}
-    {(page || markdown) && !appWindow && <a className="icon-button file-viewer-action file-viewer-wide" href={url} target="_blank" rel="noopener" aria-label={t("Open raw file")} title={t("Open raw file")}><Code aria-hidden="true" /></a>}
+    {!page && !appWindow && <a className="icon-button file-viewer-action file-viewer-wide" href={newTabSrc ?? undefined} target="_blank" rel="noopener" aria-label={t("Open in a new tab")} title={t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>}
+    {(page || markdown) && !appWindow && <a className="icon-button file-viewer-action file-viewer-wide" href={urlSrc ?? undefined} target="_blank" rel="noopener" aria-label={t("Open raw file")} title={t("Open raw file")}><Code aria-hidden="true" /></a>}
     {!page && appWindow && <CopyLinkButton href={newTabHref} />}
-    <a className="icon-button file-viewer-action file-viewer-wide" href={downloadHref} download={info?.name ?? true} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
+    <a className="icon-button file-viewer-action file-viewer-wide" href={downloadHref ?? undefined} download={info?.name ?? true} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
     {copyable && <CopyFileButton text={loaded.text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}
     {!docked && <div className="file-viewer-more" ref={moreRef}>
       <button type="button" className="icon-button file-viewer-action" aria-label={t("More")} title={t("More")} aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><Ellipsis aria-hidden="true" /></button>
       {moreOpen && <div className="file-viewer-more-menu" role="menu" aria-label={t("More")} onKeyDown={moveInMore}>
-        {!page && !appWindow && <a role="menuitem" className="file-viewer-more-item" href={newTabHref} target="_blank" rel="noopener" onClick={() => closeMore(true)}><ExternalLink aria-hidden="true" />{t("Open in a new tab")}</a>}
-        {(page || markdown) && !appWindow && <a role="menuitem" className="file-viewer-more-item" href={url} target="_blank" rel="noopener" onClick={() => closeMore(true)}><Code aria-hidden="true" />{t("Open raw file")}</a>}
+        {!page && !appWindow && <a role="menuitem" className="file-viewer-more-item" href={newTabSrc ?? undefined} target="_blank" rel="noopener" onClick={() => closeMore(true)}><ExternalLink aria-hidden="true" />{t("Open in a new tab")}</a>}
+        {(page || markdown) && !appWindow && <a role="menuitem" className="file-viewer-more-item" href={urlSrc ?? undefined} target="_blank" rel="noopener" onClick={() => closeMore(true)}><Code aria-hidden="true" />{t("Open raw file")}</a>}
         {!page && appWindow && <CopyLinkButton href={newTabHref} menuItem onDone={() => closeMore(true)} />}
-        <a role="menuitem" className="file-viewer-more-item" href={downloadHref} download={info?.name ?? true} onClick={() => closeMore(true)}><Download aria-hidden="true" />{t("Download")}</a>
+        <a role="menuitem" className="file-viewer-more-item" href={downloadHref ?? undefined} download={info?.name ?? true} onClick={() => closeMore(true)}><Download aria-hidden="true" />{t("Download")}</a>
       </div>}
     </div>}
   </>;

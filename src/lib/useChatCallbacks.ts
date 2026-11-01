@@ -62,7 +62,7 @@ export function useChatCallbacks(deps: ChatCallbacksDeps) {
   const [greetingRoom, setGreetingRoom] = useState(true);
   const greetingRef = useRef<HTMLDivElement | null>(null);
   // The prompt the chat shows: while it waits, a message from the composer answers it.
-  const [chatPrompt, setChatPrompt] = useState<{ pane: string; value: InteractivePrompt } | null>(null);
+  const [chatPrompt, setChatPrompt] = useState<{ pane: string; value: InteractivePrompt; answered: boolean } | null>(null);
   const [promptRefresh, setPromptRefresh] = useState(0);
   // what the agent suggests typing next (Claude's grey input text), for the composer's placeholder
   const [chatSuggestion, setChatSuggestion] = useState<{ pane: string; value: string } | null>(null);
@@ -94,8 +94,8 @@ export function useChatCallbacks(deps: ChatCallbacksDeps) {
   const clearPendingAnswer = useCallback((pane: string, promptId?: string) => {
     setPendingAnswer((current) => current?.pane === pane && (promptId === undefined || current.promptId === promptId) ? null : current);
   }, []);
-  const onChatPrompt = useCallback((pane: string, value: InteractivePrompt | null) => {
-    setChatPrompt((current) => value !== null ? { pane, value } : current?.pane === pane ? null : current);
+  const onChatPrompt = useCallback((pane: string, value: InteractivePrompt | null, answered = false) => {
+    setChatPrompt((current) => value !== null ? { pane, value, answered } : current?.pane === pane ? null : current);
     // a typed pick belongs to the prompt it was typed for: once that prompt changes or goes
     // away (a tap in the card, an answer in the terminal), the same question asked again
     // later opens clean, not with the old pick waiting one tap from Confirm

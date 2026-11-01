@@ -49,6 +49,8 @@ export interface UsageContext {
   keychain(service: string, account?: string): Promise<KeychainRead>;
   /** a command's trimmed stdout, or null when it is missing, fails or hangs */
   run(argv: string[], timeoutMs?: number): Promise<string | null>;
+  /** whether a command is installed on this server's PATH */
+  has(command: string): boolean;
   now(): number;
 }
 
@@ -106,6 +108,8 @@ export interface UsageProvider {
   readLocal?(ctx: UsageContext, signIn: SignIn): Reading | null;
   /** null: signed in, but to an account without this plan */
   read(ctx: UsageContext, signIn: SignIn): Promise<Reading | null>;
+  /** the command a sign-in may be kept behind that this PC lacks, so `signIns` could not look there; null when none */
+  missingCommand?(ctx: UsageContext): string | null;
 }
 
 /** an answer past MAX_READ_BYTES */
@@ -687,6 +691,8 @@ const antigravity: UsageProvider = {
       : await fromKeychain(ctx, "gemini", ["antigravity"], antigravitySignIn);
     return keychainOrFile(keychain, file, "keychain");
   },
+  // Linux: the CLI keeps its sign-in in the Secret Service keyring, read here only through secret-tool
+  missingCommand: (ctx) => ctx.platform === "linux" && !ctx.has("secret-tool") ? "secret-tool" : null,
   async read(ctx, signIn) {
     const init: RequestInit = {
       method: "POST",
@@ -952,6 +958,7 @@ export function systemUsageContext(): UsageContext {
     fetch: (url, init) => fetch(url, init),
     keychain: readKeychain,
     run: runCommand,
+    has: (command) => Bun.which(command) !== null,
     now: Date.now,
   };
 }
@@ -1029,7 +1036,8 @@ export class UsageService {
 
   private async collect(refresh: boolean): Promise<UsageReport> {
     const now = this.ctx.now();
-    const usages = await Promise.all(this.providers.map((provider) => this.collectProvider(provider, now, refresh)));
+    const missing = new Map(this.providers.flatMap((provider) => { const command = provider.missingCommand?.(this.ctx) ?? null; return command === null ? [] : [[provider.id, command] as const]; }));
+    const usages = await Promise.all(this.providers.map((provider) => this.collectProvider(provider, now, refresh, missing.has(provider.id))));
     // one account found in two places is listed once: the reading without a problem, else the first
     const byKey = new Map<string, ProviderUsage>();
     for (const usage of usages.flat()) {
@@ -1043,15 +1051,18 @@ export class UsageService {
       if (group.length < 2) continue;
       group.sort((a, b) => a.key.localeCompare(b.key)).forEach((usage, i) => byKey.set(usage.key, { ...usage, account: `#${i + 1}` }));
     }
-    return { providers: [...byKey.values(), ...await this.additional(refresh)] };
+    // a provider with an account found here needs nothing more; one with none names what it could not look with (a hub's accounts are not this PC's)
+    const missingCommands = [...missing].filter(([id]) => !usages.flat().some((usage) => usage.id === id)).map(([provider, command]) => ({ provider, command }));
+    return { providers: [...byKey.values(), ...await this.additional(refresh)], ...(missingCommands.length > 0 ? { missing_commands: missingCommands } : {}) };
   }
 
-  private async collectProvider(provider: UsageProvider, now: number, refresh: boolean): Promise<ProviderUsage[]> {
+  /** `incomplete`: a command it looks with is missing, so the search is not kept: the next report looks again, finding a sign-in once it is installed */
+  private async collectProvider(provider: UsageProvider, now: number, refresh: boolean, incomplete: boolean): Promise<ProviderUsage[]> {
     const search = this.searches.get(provider.id);
     // an account's readAt is never later than its provider's, so a forced search may ask each again
     const forced = refresh && search !== undefined && now - search.readAt >= MIN_REFRESH_MS;
     const usages = (sources: readonly string[]) => sources.map((source) => this.entries.get(source)?.usage ?? null).filter((usage): usage is ProviderUsage => usage !== null);
-    if (search && now < search.nextAt && !forced) return usages(search.sources);
+    if (search && now < search.nextAt && !forced && !incomplete) return usages(search.sources);
 
     let found: Found[];
     try { found = await provider.signIns(this.ctx); } catch { found = []; }
@@ -1067,7 +1078,7 @@ export class UsageService {
     for (const source of search?.sources ?? []) if (!read.some(([found]) => found === source)) this.entries.delete(source);
     for (const [source, entry] of read) this.entries.set(source, entry);
     const sources = read.map(([source]) => source);
-    this.searches.set(provider.id, { readAt: now, nextAt: Math.min(now + FRESH_MS, ...read.map(([, entry]) => entry.nextAt)), sources });
+    this.searches.set(provider.id, { readAt: now, nextAt: incomplete ? now : Math.min(now + FRESH_MS, ...read.map(([, entry]) => entry.nextAt)), sources });
     return usages(sources);
   }
 

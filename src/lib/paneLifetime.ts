@@ -17,7 +17,8 @@ import { restoreDraft } from "./draft.ts";
  * state another tab already gave to a herdr this page has not seen yet.
  */
 export type UnsentKind = "message" | "line" | "held" | "pending";
-export interface UnsentText { id: string; machine_id: string; pane_id: string; pane_title?: string; kind: UnsentKind; text: string; at: number }
+/** `agent_only`: a message box's draft that was for an agent alone (#511), which goes back into a box as one */
+export interface UnsentText { id: string; machine_id: string; pane_id: string; pane_title?: string; kind: UnsentKind; text: string; at: number; agent_only?: true }
 
 const KINDS: readonly (readonly [string, UnsentKind])[] = [
   ["ovis:composer-draft:", "message"], ["ovis:terminal-line:", "line"], ["ovis:terminal-draft:", "held"],
@@ -26,6 +27,10 @@ const KINDS: readonly (readonly [string, UnsentKind])[] = [
 ];
 const LEASE_PREFIX = "ovis:composer-sending:";
 const VIEW_PREFIX = "ovis:view:";
+/** comments on a pane's replies (lib/replyComments.ts): no text of the user's own to recover, they go with the herdr whose replies they quote */
+export const REPLY_COMMENTS_PREFIX = "ovis:reply-comments:";
+/** a message box's agent-only mark (lib/composerDraft.ts), which goes with its draft */
+const AGENT_ONLY_PREFIX = "ovis:composer-agent-only:";
 const RECORD_PREFIX = "ovis:pane-lifetime:";
 /** each PC's lifetimes the record held before: a snapshot naming one of them is older than the record */
 const RETIRED_PREFIX = "ovis:pane-lifetimes-retired:";
@@ -38,7 +43,7 @@ export function paneStateKey(key: string): { machineId: string; paneId: string; 
   const lease = key.startsWith(LEASE_PREFIX);
   const rest = lease ? key.slice(LEASE_PREFIX.length) : key;
   const draft = KINDS.find(([prefix]) => rest.startsWith(prefix));
-  const prefix = draft?.[0] ?? (!lease && rest.startsWith(VIEW_PREFIX) ? VIEW_PREFIX : null);
+  const prefix = draft?.[0] ?? (lease ? null : [VIEW_PREFIX, REPLY_COMMENTS_PREFIX, AGENT_ONLY_PREFIX].find((other) => rest.startsWith(other)) ?? null);
   if (prefix === null) return null;
   const owner = rest.slice(prefix.length);
   const kind = lease || !draft ? null : draft[1];
@@ -49,27 +54,40 @@ export function paneStateKey(key: string): { machineId: string; paneId: string; 
   try { return { machineId: decodeURIComponent(parts[1]!), paneId: decodeURIComponent(parts[2]!), kind }; } catch { return null; }
 }
 
+/** The agent-only mark's key for a message box's draft key, or null for any other key. */
+function agentOnlyMark(key: string): string | null {
+  const prefix = KINDS[0]![0];
+  return key.startsWith(prefix) ? AGENT_ONLY_PREFIX + key.slice(prefix.length) : null;
+}
+
 function parseUnsent(id: string, raw: string | null): UnsentText | null {
   try {
     const value: unknown = JSON.parse(raw ?? "null");
     if (typeof value !== "object" || value === null) return null;
-    const { machine_id, pane_id, pane_title, kind, text, at } = value as Partial<UnsentText>;
+    const { machine_id, pane_id, pane_title, kind, text, at, agent_only } = value as Partial<UnsentText>;
     if (typeof machine_id !== "string" || typeof pane_id !== "string" || typeof text !== "string" || typeof at !== "number"
       || (kind !== "message" && kind !== "line" && kind !== "held" && kind !== "pending")) return null;
-    return { id, machine_id, pane_id, ...(typeof pane_title === "string" && pane_title ? { pane_title } : {}), kind, text, at };
+    return { id, machine_id, pane_id, ...(typeof pane_title === "string" && pane_title ? { pane_title } : {}), kind, text, at, ...(agent_only === true ? { agent_only } : {}) };
   } catch { return null; }
 }
 
-/** The text a stored pane-state value holds: held input keeps only its printable text, a message list each message's. */
-function texts(kind: UnsentKind, value: string | null, now: number): string[] {
-  if (kind === "held") return [restoreDraft(value, now).text];
-  if (kind !== "pending") return [value ?? ""];
+/** A text to keep, and whether it was for an agent alone (#511). */
+interface Unsent { text: string; agentOnly: boolean }
+
+/**
+ * The text a stored pane-state value holds: held input keeps only its printable text, a message list each
+ * message's. `marked`: a message box's draft that carried its agent-only mark; a listed message carries its own.
+ */
+function texts(kind: UnsentKind, value: string | null, now: number, marked = false): Unsent[] {
+  if (kind === "held") return [{ text: restoreDraft(value, now).text, agentOnly: false }];
+  if (kind !== "pending") return [{ text: value ?? "", agentOnly: marked }];
   try {
     const data: unknown = JSON.parse(value ?? "null");
     const messages = typeof data === "object" && data !== null && "messages" in data && Array.isArray(data.messages) ? data.messages as unknown[] : null;
-    if (messages === null) return [value ?? ""];
-    return messages.flatMap((message) => typeof message === "object" && message !== null && "text" in message && typeof message.text === "string" ? [message.text] : []);
-  } catch { return [value ?? ""]; }
+    if (messages === null) return [{ text: value ?? "", agentOnly: false }];
+    return messages.flatMap((message) => typeof message === "object" && message !== null && "text" in message && typeof message.text === "string"
+      ? [{ text: message.text, agentOnly: "agent_only" in message && message.agent_only === true }] : []);
+  } catch { return [{ text: value ?? "", agentOnly: false }]; }
 }
 
 export class PaneLifetimes {
@@ -201,7 +219,8 @@ export class PaneLifetimes {
       const pane = paneStateKey(key);
       if (pane?.machineId !== machineId) continue;
       if (keepLenses && key.startsWith(VIEW_PREFIX)) continue;
-      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, storage.getItem(key), this.now()), titles);
+      const mark = agentOnlyMark(key);
+      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, storage.getItem(key), this.now(), mark !== null && keys.includes(mark)), titles);
       storage.removeItem(key);
     }
   }
@@ -209,11 +228,13 @@ export class PaneLifetimes {
   private retireMemory(machineId: string, titles: ReadonlyMap<string, string>): void {
     let storage: Storage | null = null;
     try { storage = this.storage(); } catch { /* no storage: the text is kept in this page */ }
+    const held = new Set(this.memory.keys());
     for (const [key, value] of [...this.memory]) {
       const pane = paneStateKey(key);
       if (pane?.machineId !== machineId) continue;
       this.memory.delete(key);
-      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, value, this.now()), titles);
+      const mark = agentOnlyMark(key);
+      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, value, this.now(), mark !== null && held.has(mark)), titles);
     }
   }
 
@@ -226,17 +247,19 @@ export class PaneLifetimes {
   private storeMemory(machineId: string, titles: ReadonlyMap<string, string>): void {
     let storage: Storage | null = null;
     try { storage = this.storage(); } catch { /* no storage: the text is kept in this page */ }
+    const held = new Set(this.memory.keys());
     for (const [key, value] of [...this.memory]) {
       const pane = paneStateKey(key);
       if (pane?.machineId !== machineId) continue;
       this.memory.delete(key);
+      const mark = agentOnlyMark(key);
       try {
         const stored = storage?.getItem(key) ?? null;
         if (stored === value) continue;
         if (stored === null && storage) { storage.setItem(key, value); continue; }
       } catch { /* storage refused it: recovery below */ }
       // another tab's text for the pane, or storage refused this one: neither is lost
-      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, value, this.now()), titles);
+      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, value, this.now(), mark !== null && held.has(mark)), titles);
     }
   }
 
@@ -247,24 +270,24 @@ export class PaneLifetimes {
    * `own`: a record of its own, never one already kept for the same words, so whoever discards it
    * takes no other tab's or earlier page's copy with it.
    */
-  keep(machineId: string, paneId: string, kind: UnsentKind, text: string, own = false): string | null {
+  keep(machineId: string, paneId: string, kind: UnsentKind, text: string, own = false, agentOnly = false): string | null {
     let storage: Storage | null = null;
     try { storage = this.storage(); } catch { /* no storage: the text is kept in this page */ }
-    const [id] = this.archive(storage, machineId, paneId, kind, [text], this.titles.get(machineId) ?? new Map(), own);
+    const [id] = this.archive(storage, machineId, paneId, kind, [{ text, agentOnly }], this.titles.get(machineId) ?? new Map(), own);
     this.notify();
     return id ?? null;
   }
 
   /** the IDs of the records holding the texts, an earlier one for a text already kept */
-  private archive(storage: Storage | null, machineId: string, paneId: string, kind: UnsentKind, values: readonly string[], titles: ReadonlyMap<string, string>, own = false): string[] {
+  private archive(storage: Storage | null, machineId: string, paneId: string, kind: UnsentKind, values: readonly Unsent[], titles: ReadonlyMap<string, string>, own = false): string[] {
     const title = titles.get(paneId);
     const ids: string[] = [];
-    for (const text of values) {
+    for (const { text, agentOnly } of values) {
       if (text.trim() === "") continue;
       // the same text of the same pane is kept once (two tabs, or a store and storage, can both hand it over)
-      const same = own ? undefined : this.unsent().find((item) => item.machine_id === machineId && item.pane_id === paneId && item.kind === kind && item.text === text);
+      const same = own ? undefined : this.unsent().find((item) => item.machine_id === machineId && item.pane_id === paneId && item.kind === kind && item.text === text && (item.agent_only === true) === agentOnly);
       if (same !== undefined) { ids.push(same.id); continue; }
-      const record: UnsentText = { id: this.newId(), machine_id: machineId, pane_id: paneId, ...(title && title !== paneId ? { pane_title: title } : {}), kind, text, at: this.now() };
+      const record: UnsentText = { id: this.newId(), machine_id: machineId, pane_id: paneId, ...(title && title !== paneId ? { pane_title: title } : {}), kind, text, at: this.now(), ...(agentOnly ? { agent_only: true as const } : {}) };
       const { id, ...stored } = record;
       try {
         if (storage === null) throw new Error("no storage");

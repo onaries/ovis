@@ -216,6 +216,46 @@ async function setup(label: string, agent = "claude", screen = "› Message\n", 
   return { screenFile, pane, port: server.port, server, socket, bytes, waitBytes, state, showScreen, queue, removed, another, replacementLog };
 }
 
+describe("resumable follow-up receipts (#2421)", () => {
+  it.each(["sent", "discarded"] as const)("replays a Codex follow-up's exact %s receipt to its returning browser without typing again", async (outcome) => {
+    const f = await setup(`codex-resume-${outcome}`, "codex");
+    const token = crypto.randomUUID(), from = f.socket.seen.length;
+    f.socket.send({ type: "attach", pane_id: f.pane, cols: 100, rows: 30, receipt_resume_id: token });
+    await f.socket.wait((frame) => frame.type === "input-ready" && frame.pane_id === f.pane, from);
+    const row = await f.queue(980, "follow-up");
+    if (outcome === "sent") { await f.state("idle"); await f.waitBytes(`${paste(row.text)}\r`); }
+    else {
+      f.socket.send({ type: "pending-action", id: 981, pane_id: f.pane, pending_id: row.id, action: "discard" });
+      expect((await f.socket.action(981)).ok).toBe(true);
+    }
+    await f.removed(row.id, outcome);
+    const bytes = f.bytes();
+    await f.socket.disconnect();
+    const resumed = await f.another(false);
+    await resumed.attach(f.pane, false, token);
+    const replay = await f.removed(row.id, outcome, resumed);
+    expect(replay.removed).toContainEqual({ id: row.id, outcome, resumed: true });
+    expect(f.bytes()).toBe(bytes);
+  }, 20_000);
+
+  it("gives no receipt to a browser that attaches with another resume id", async () => {
+    const f = await setup("codex-resume-other", "codex");
+    const from = f.socket.seen.length;
+    f.socket.send({ type: "attach", pane_id: f.pane, cols: 100, rows: 30, receipt_resume_id: crypto.randomUUID() });
+    await f.socket.wait((frame) => frame.type === "input-ready" && frame.pane_id === f.pane, from);
+    const row = await f.queue(983, "follow-up");
+    await f.state("idle"); await f.waitBytes(`${paste(row.text)}\r`);
+    await f.removed(row.id, "sent");
+    await f.socket.disconnect();
+    const other = await f.another(false);
+    await other.attach(f.pane, false, crypto.randomUUID());
+    // frames arrive in order: a receipt sent on this attach would come before the pong
+    other.send({ type: "ping", id: 984 });
+    await other.wait((frame) => frame.type === "pong" && frame.id === 984);
+    expect(other.seen.some((frame) => frame.type === "pending-messages" && frame.removed?.some((item: { id: string }) => item.id === row.id))).toBe(false);
+  }, 20_000);
+});
+
 describe("Ovis-origin Pi transcript receipts", () => {
   const piLine = (id: string, parentId: string | null, role: string, text: string, stamp = Date.now()) => JSON.stringify({
     type: "message", id, parentId, timestamp: new Date().toISOString(), message: { role, content: [{ type: "text", text }], timestamp: stamp },
@@ -466,7 +506,7 @@ describe("Ovis-origin Pi transcript receipts", () => {
     await f.socket.wait((frame) => frame.type === "pending-messages" && frame.removed?.some((item: any) => item.id === receipt.id && item.outcome === "consumed"));
   }, 20_000);
 
-  it("tracks a maximum-length message with the space closing its file mention", async () => {
+  it("tracks a maximum-length message whose closing space Pi trims off its file mention", async () => {
     const transcript = piFile("pi-best-effort");
     const f = await setup("pi-best-effort", "pi", "› Message\n", {}, false, transcript);
     f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
@@ -478,11 +518,11 @@ describe("Ovis-origin Pi transcript receipts", () => {
     const receipt = sent.messages.find((item) => item.request_id === 914)!;
     expect(receipt.text).toBe(`${text} `);
     const consumed = f.socket.event((frame) => frame.removed?.some((item) => item.id === receipt.id && item.outcome === "consumed") === true);
-    appendFileSync(transcript, piLine("u1", "a0", "user", `${text} `));
+    appendFileSync(transcript, piLine("u1", "a0", "user", text));
     await consumed;
   }, 20_000);
 
-  it("matches the exact Pi-facing text after closing a trailing file mention", async () => {
+  it("matches Pi's trimmed record after closing a trailing file mention (#2454)", async () => {
     const transcript = piFile("pi-facing-text");
     const f = await setup("pi-facing-text", "pi", "› Message\n", {}, false, transcript);
     f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
@@ -491,8 +531,31 @@ describe("Ovis-origin Pi transcript receipts", () => {
     const sent = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.request_id === 915));
     const receipt = sent.messages.find((item: PendingMessage) => item.request_id === 915);
     expect(receipt.text).toBe("inspect @file ");
-    appendFileSync(transcript, piLine("u1", "a0", "user", "inspect @file "));
+    appendFileSync(transcript, piLine("u1", "a0", "user", "inspect @file"));
     await f.socket.wait((frame) => frame.type === "pending-messages" && frame.removed?.some((item: any) => item.id === receipt.id && item.outcome === "consumed"));
+  }, 20_000);
+
+  it("confirms a message Pi records trimmed, and the send queued behind it (#2454)", async () => {
+    const transcript = piFile("pi-trimmed");
+    const f = await setup("pi-trimmed", "pi", "› Message\n", {}, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    // Pi's editor expands a pasted tab to four spaces, and it trims what it records
+    const padded = " \tdictated\tmessage \t";
+    f.socket.send({ type: "submit", id: 916, pane_id: f.pane, text: padded, payload: padded, delivery: "immediate" });
+    expect((await f.socket.result(916)).ok).toBe(true);
+    f.socket.send({ type: "submit", id: 917, pane_id: f.pane, text: "next", payload: "next", delivery: "immediate" });
+    expect((await f.socket.result(917)).ok).toBe(true);
+    const sent = await f.socket.wait((frame) => frame.type === "pending-messages" && [916, 917].every((id) => frame.messages.some((item: PendingMessage) => item.request_id === id)));
+    expect(sent.messages.find((item: PendingMessage) => item.request_id === 916).text).toBe(padded);
+    const ids = [916, 917].map((id) => sent.messages.find((item: PendingMessage) => item.request_id === id).id);
+    const consumed = new Set<string>();
+    const both = f.socket.event((frame) => {
+      for (const item of frame.removed ?? []) if (item.outcome === "consumed") consumed.add(item.id);
+      return ids.every((id) => consumed.has(id));
+    });
+    appendFileSync(transcript, piLine("u1", "a0", "user", "dictated    message"));
+    appendFileSync(transcript, piLine("u2", "u1", "user", "next"));
+    await both;
   }, 20_000);
 });
 
@@ -856,6 +919,48 @@ describe("connection-owned pending input", () => {
     await f.waitBytes(`${paste("late hold")}\r`);
     expect(f.bytes()).toBe(`barrier\r${paste("late hold")}\r`);
   }, 30_000);
+
+  // #511: Send now types a held message only as the immediate path would: never past Codex's collapsed queue for an agent alone
+  it("refuses Send now of a held agent-only message while Codex's collapsed queue blocks it, typing nothing", async () => {
+    const queueScreen = "• WAITING\n• Queued follow-up inputs\n  ? 2 questions · 8s\n    alt+↑ to answer\n› Ask Codex to do anything\n  gpt-6.1 default · /workspace\n";
+    for (const agentOnly of [true, false]) {
+      const f = await setup(`hold-collapsed-${agentOnly}`, "codex");
+      f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "> backup.txt\nkeep it", payload: "unused\r", delivery: "hold", ...(agentOnly ? { agent_only: true } : {}) });
+      const answer = await f.socket.result(1);
+      expect(answer).toMatchObject({ ok: true, pending: { request_id: 1, state: "held" } });
+      await f.showScreen(queueScreen); await f.state("blocked");
+      f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: answer.pending.id, action: "steer" });
+      if (agentOnly) {
+        expect(await f.socket.action(10)).toMatchObject({ ok: false, code: "agent_blocked" });
+        expect(f.bytes()).toBe("");
+      } else {
+        // control: an ordinary held message is typed into Codex's main prompt past the collapsed queue
+        await f.socket.action(10);
+        expect(f.bytes().startsWith(paste("> backup.txt\nkeep it"))).toBe(true);
+      }
+    }
+  }, 60_000);
+
+  // #511: a queued message for an agent alone waits through a turn that ends behind Codex's collapsed queue, and a
+  // resend of its saved copy that names no flag is still for an agent alone (the server's record says so)
+  it("keeps a queued agent-only message out of a collapsed Codex queue, its resend agent-only too", async () => {
+    const queueScreen = "• WAITING\n• Queued follow-up inputs\n  ? 2 questions · 8s\n    alt+↑ to answer\n› Ask Codex to do anything\n  gpt-6.1 default · /workspace\n";
+    const f = await setup("queue-collapsed", "codex");
+    await f.showScreen(queueScreen);
+    f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "> backup.txt\nkeep it", payload: "unused\r", delivery: "queue", agent_only: true });
+    const answer = await f.socket.result(1);
+    expect(answer).toMatchObject({ ok: true, pending: { request_id: 1, state: "queued" } });
+    await f.state("idle");
+    // the turn's end tried it and typed nothing: a message typed after it is the first thing the pane gets
+    f.socket.send({ type: "submit", id: 2, pane_id: f.pane, text: "barrier", payload: "barrier", typed: true });
+    expect(await f.socket.result(2)).toMatchObject({ ok: true }); await f.waitBytes("barrier\r");
+    expect(f.bytes()).toBe("barrier\r");
+    // blocked behind the collapsed queue, agent.prompt refuses; an unflagged message would be typed past it
+    await f.state("blocked");
+    f.socket.send({ type: "submit", id: 3, pane_id: f.pane, text: "> backup.txt\nkeep it", payload: paste("> backup.txt\rkeep it"), resend_id: answer.pending.id, resend_generation: 0 });
+    expect(await f.socket.result(3)).toMatchObject({ ok: false, code: "agent_blocked" });
+    expect(f.bytes()).toBe("barrier\r");
+  }, 60_000);
 
   it("closes a trailing @file mention with a space before its Enter", async () => {
     const f = await setup("mention");

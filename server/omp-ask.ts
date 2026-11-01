@@ -97,8 +97,9 @@ function cardBlock(block: MarkdownBlock): string {
   switch (block.type) {
     case "paragraph": return block.lines.map((line) => cardInline(line, true)).join("\n");
     case "heading": return `${block.level > 2 ? `${"#".repeat(block.level)} ` : ""}${cardInline(block.content, true)}`;
-    // the chat draws a ```mermaid fence as a diagram (src/components/Markdown.tsx), not the code omp shows (#2233)
-    case "code": return block.language === "mermaid" ? undrawn() : block.value;
+    // the chat draws a ```mermaid fence as a diagram, a ```svg one as a figure and a ```math one as a formula
+    // (src/components/Markdown.tsx), not the code omp shows (#2233)
+    case "code": return block.language === "mermaid" || block.language === "math" || block.language.toLowerCase() === "svg" ? undrawn() : block.value;
     case "list": return block.items.map((item, index) => item.checked !== undefined ? undrawn()
       : `${block.ordered ? `${(block.start ?? 1) + index}. ` : "- "}${cardInline(item.content, true)}\n${(item.blocks ?? []).map(cardBlock).join("\n")}`).join("\n");
     default: return undrawn();

@@ -40,6 +40,10 @@ describe("preferences sync real send path", () => {
   /** every PUT body in the order it was sent, refused or not */
   let bodies: PreferencesChange[];
   let answerListeners: Set<() => void>;
+  /** the page's own events (pagehide, visibilitychange) */
+  let pageEvents: EventTarget;
+  /** whether each PUT asked to outlive the page */
+  let keepalives: boolean[];
   /** the bodies the PUTs carried, in order */
   let sent: PreferencesChange[];
   /** an older server: no theme sides, and no mute list in what it keeps or answers */
@@ -67,6 +71,8 @@ describe("preferences sync real send path", () => {
     records = new Map();
     waits = new Map();
     syncEnabled = true;
+    pageEvents = new EventTarget();
+    keepalives = [];
     Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { languages: ["en-US"] } });
     Object.defineProperty(globalThis, "window", { configurable: true, value: {
@@ -77,11 +83,15 @@ describe("preferences sync real send path", () => {
         return id;
       },
       clearTimeout: (id: number) => { waits.delete(id); globalThis.clearTimeout(id); },
-      addEventListener() {}, removeEventListener() {},
+      addEventListener: pageEvents.addEventListener.bind(pageEvents),
+      removeEventListener: pageEvents.removeEventListener.bind(pageEvents),
     } });
     Object.defineProperty(globalThis, "document", { configurable: true, value: {
       documentElement: { dataset: {}, style: { setProperty() {}, removeProperty() {} } },
       querySelector: () => null,
+      visibilityState: "visible",
+      addEventListener: pageEvents.addEventListener.bind(pageEvents),
+      removeEventListener: pageEvents.removeEventListener.bind(pageEvents),
     } });
     // the stylesheet is loaded: its theme blocks own the page surface (applyToDocument)
     Object.defineProperty(globalThis, "getComputedStyle", { configurable: true, value: () => ({ getPropertyValue: (name: string) => (name === "--bg" ? "#12100e" : "") }) });
@@ -108,6 +118,7 @@ describe("preferences sync real send path", () => {
     const fetchPreferences = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       if (init?.method !== "PUT") return Response.json(oldServer ? dropNewKeys(store.get()) : store.get());
       bodies.push(JSON.parse(String(init.body)));
+      keepalives.push(init.keepalive === true);
       if (refuse !== null || refusing !== null) {
         const answer = refuse;
         refuse = null;
@@ -248,6 +259,73 @@ describe("preferences sync real send path", () => {
     expect(client.settings.darkTheme).toBe(palette);
     expect(JSON.parse(records.get("ovis:themes") ?? "{}").darkTheme).toBe(palette);
     expect(revisions).toEqual([1, 2]);
+  });
+
+  it.each(["pagehide", "visibilitychange"])("sends a change at once, to outlive the page, on %s", async (type) => {
+    // Given a change made here, still inside the send delay.
+    const client = await open();
+    await act(async () => { client.update({ showUsage: !DEFAULT_SETTINGS.showUsage }); });
+
+    // When the page closes, or is hidden (a phone may kill it then).
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    await act(async () => { pageEvents.dispatchEvent(new Event(type)); });
+
+    // Then the change went out without waiting, in a request that survives the page.
+    expect(keepalives).toEqual([true]);
+    expect(store.get().settings.showUsage).toBe(!DEFAULT_SETTINGS.showUsage);
+    await windows(3);
+    expect(bodies).toHaveLength(1);
+  });
+
+  it("sends an edit made while a save is on its way when the page goes", async () => {
+    // Given a save on its way, and a second edit made before its answer.
+    const gate = Promise.withResolvers<void>();
+    releaseAnswer = () => gate.promise;
+    const client = await open();
+    await act(async () => { client.update({ showUsage: !DEFAULT_SETTINGS.showUsage }); });
+    await windows();
+    await act(async () => { client.update({ showThinking: !DEFAULT_SETTINGS.showThinking }); });
+
+    // When the page goes before that answer.
+    await act(async () => { pageEvents.dispatchEvent(new Event("pagehide")); });
+
+    // Then both edits go out at once in a request that outlives the page.
+    expect(keepalives).toEqual([false, true]);
+    expect(bodies[1]?.settings).toMatchObject({ showUsage: !DEFAULT_SETTINGS.showUsage, showThinking: !DEFAULT_SETTINGS.showThinking });
+    await act(async () => { gate.resolve(); });
+    releaseAnswer = undefined;
+  });
+
+  it("sends a change once when the page is hidden and then goes, and nothing when it shows again", async () => {
+    // Given a change made here, still inside the send delay.
+    const gate = Promise.withResolvers<void>();
+    releaseAnswer = () => gate.promise;
+    const client = await open();
+    await act(async () => { client.update({ showUsage: !DEFAULT_SETTINGS.showUsage }); });
+
+    // When the page is hidden, then goes, before the answer (a reload fires both).
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    await act(async () => { pageEvents.dispatchEvent(new Event("visibilitychange")); pageEvents.dispatchEvent(new Event("pagehide")); });
+
+    // Then one request went out.
+    expect(keepalives).toEqual([true]);
+    const answered = nextAnswer();
+    await act(async () => { gate.resolve(); await answered; });
+    releaseAnswer = undefined;
+
+    // And a page shown again sends nothing more.
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    await act(async () => { pageEvents.dispatchEvent(new Event("visibilitychange")); });
+    await windows(3);
+    expect(keepalives).toEqual([true]);
+  });
+
+  it("sends nothing on its way out when nothing changed", async () => {
+    await open();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    await act(async () => { pageEvents.dispatchEvent(new Event("pagehide")); pageEvents.dispatchEvent(new Event("visibilitychange")); });
+    await windows(3);
+    expect(bodies).toEqual([]);
   });
 
   it("sends a new dark choice once and another client takes it (i)", async () => {

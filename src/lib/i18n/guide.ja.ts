@@ -3,21 +3,16 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const GUIDE_JA: Record<string, string> = {
-  "Setup guide": "セットアップガイド",
   "Welcome to Ovis": "Ovis へようこそ",
   "Is this your first time using Ovis?": "Ovis を使うのは初めてですか?",
   "I'm new to Ovis": "初めてです",
   "I've used Ovis before": "使ったことがあります",
   "Skip the setup and go straight in": "セットアップを飛ばしてすぐに始める",
-  "You can open this again any time from Settings → Setup guide.": "設定 → セットアップガイド からいつでも開き直せます。",
+  "You can open this again any time from Settings → Agents.": "設定 → エージェント からいつでも開き直せます。",
   "Skip setup": "セットアップをスキップ",
   "Already installed one?": "もうインストールしましたか?",
   "Look again": "もう一度確認",
   "This browser is paired first: other browsers now need pairing too.": "このブラウザーを先にペアリングしました。ほかのブラウザーもペアリングが必要になります。",
-  "Installing {agent}… Open terminal": "{agent} をインストール中… ターミナルを開く",
-  "Try installing {agent} again": "{agent} をもう一度インストール",
-  "It took too long. Try again.": "時間がかかりすぎています。もう一度お試しください。",
-  "{agent} did not install. {reason}": "{agent} のインストールが終わりませんでした。{reason}",
   "You're set up": "準備ができました",
   "Ovis found these on this PC. Start opens your first project with the one picked.": "この PC で見つかりました。開始すると、選んだもので最初のプロジェクトが開きます。",
   "Pick an AI coding helper": "AI コーディングアシスタントを選んでください",
@@ -39,4 +34,5 @@ export const GUIDE_JA: Record<string, string> = {
   "Back to setup": "セットアップに戻る",
   "The workspace opened, but {agent} did not start. Open it to see why in its terminal.": "ワークスペースは開きましたが、{agent} が起動しませんでした。開いてターミナルで理由を確認してください。",
   "Open the workspace": "ワークスペースを開く",
+  "{agent} is not signed in yet.": "{agent} はまだログインしていません。",
 };

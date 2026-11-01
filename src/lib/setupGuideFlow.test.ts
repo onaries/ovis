@@ -4,7 +4,7 @@ import { AGENT_CATALOG, catalogRow, type AgentCatalogRow, type AgentInstallState
 import type { HealthAuth } from "../../shared/protocol.ts";
 import type { ProviderUsage } from "../../shared/usage.ts";
 import { onSetupGuideRequest, openSetupGuide } from "./setupGuide.ts";
-import { agentRows, autoOpen, CHECK_SETTLE_MS, checkList, checkStatus, foundAgents, guideStep, INSTALL_GIVE_UP_MS, installedHere, openInFolder, phoneBoxMode, preferredAgent, readGuide, readSignedIn, REOPENED, saveGuide, settleDelay, setupView, signedInAgents, tileState, WELCOME, type FreshFacts, type PcCheck } from "./setupGuideFlow.ts";
+import { agentRows, autoOpen, CHECK_SETTLE_MS, checkList, checkStatus, foundAgents, guideStep, INSTALL_GIVE_UP_MS, installedHere, openInFolder, phoneBoxMode, preferredAgent, readGuide, readSignedIn, REOPENED, saveGuide, settleDelay, setupView, signedInAgents, tileState, turnsUsageOn, WELCOME, type FreshFacts, type PcCheck } from "./setupGuideFlow.ts";
 
 const FRESH: FreshFacts = { workspaces: 0, savedSettings: false, sharedRevision: 0, pairingGate: "open", watching: false };
 
@@ -37,7 +37,8 @@ describe("autoOpen", () => {
 describe("guideStep", () => {
   it("goes from the welcome to the one setup screen, and Settings opens that screen", () => {
     expect(guideStep(WELCOME, { type: "begin" })).toEqual({ step: "setup" });
-    expect(REOPENED).toEqual({ step: "setup" });
+    // the same screen, marked as opened again: it changes no setting by itself
+    expect(REOPENED).toEqual({ step: "setup", reopened: true });
     const setup = guideStep(WELCOME, { type: "begin" });
     expect(guideStep(setup, { type: "begin" })).toBe(setup);
   });
@@ -274,5 +275,18 @@ describe("phoneBoxMode", () => {
   it("leaves it to Settings with no address a phone can open, or an access the server does not name", () => {
     expect(phoneBoxMode(null, auth("tailscale"))).toBe("settings");
     expect(phoneBoxMode("http://100.1.2.3:7317", auth(undefined))).toBe("settings");
+  });
+});
+
+describe("a reopened guide", () => {
+  it("never turns plan usage on by itself: only a first run does", () => {
+    expect(turnsUsageOn(guideStep(WELCOME, { type: "begin" }))).toBe(true);
+    expect(turnsUsageOn(REOPENED)).toBe(false);
+  });
+
+  it("is still a reopened one after a reload", () => {
+    const saved = new Map<string, string>();
+    saveGuide({ setItem: (key, value) => { saved.set(key, value); } }, REOPENED);
+    expect(readGuide({ getItem: (key) => saved.get(key) ?? null })).toEqual({ status: "open", state: REOPENED });
   });
 });

@@ -387,3 +387,21 @@ describe("pane state per herdr lifetime", () => {
     expect(lifetimes.unsent()).toEqual([]);
   });
 });
+
+// #511: a herdr restart keeps a message for an agent alone for recovery as one, edited or queued
+it("keeps the agent-only flag of a retired draft and of each retired queued message", () => {
+  const storage = new MemoryStorage();
+  const lifetimes = page(storage);
+  lifetimes.observe([pc("local", "herdr-a")], title);
+  lifetimes.paneStorage.setItem(DRAFT, "rm backup.txt");
+  lifetimes.paneStorage.setItem("ovis:composer-agent-only:w1:p1", "1");
+  lifetimes.paneStorage.setItem("ovis:pending:w1:p1", JSON.stringify({ version: 1, messages: [
+    { id: "1", text: "queued for the agent", agent_only: true, state: "held", request_id: 1, created_at: "now" },
+    { id: "2", text: "queued plainly", state: "held", request_id: 2, created_at: "now" },
+  ] }));
+  lifetimes.observe([pc("local", "herdr-b")], title);
+  const flag = (text: string) => lifetimes.unsent().find((item) => item.text === text)?.agent_only;
+  expect(flag("rm backup.txt")).toBe(true);
+  expect(flag("queued for the agent")).toBe(true);
+  expect(flag("queued plainly")).toBeUndefined();
+});

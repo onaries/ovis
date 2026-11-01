@@ -2,7 +2,7 @@
  * Japanese for the keys only the chat files use:
  * components/ChatView.tsx, components/Markdown.tsx, components/MermaidLightbox.tsx,
  * components/ChatMinimap.tsx, components/ImageLightbox.tsx, components/BackgroundTasks.tsx,
- * components/BackgroundAgentDetail.tsx, components/MarkdownLinkMenu.tsx,
+ * components/BackgroundAgentDetail.tsx, components/Artifacts.tsx, components/MarkdownLinkMenu.tsx,
  * lib/workBlocks.ts (with CATEGORY_LABEL), lib/toolVerbs.ts (with VERB_LABEL), lib/outcomeChip.ts,
  * lib/chatTimestamp.ts, lib/chatReadDeadline.ts.
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
@@ -166,6 +166,9 @@ export const CHAT_JA: Record<string, string> = {
   "{n} tool calls": "ツール呼び出し {n} 回",
   "{n} tokens": "{n} トークン",
   "Background tasks": "バックグラウンドタスク",
+  "Artifacts": "アーティファクト",
+  "{n} artifact": "アーティファクト {n} 件",
+  "{n} artifacts": "アーティファクト {n} 件",
   "Couldn't load the background tasks": "バックグラウンドタスクを読み込めませんでした",
   "No background tasks to show yet": "表示できるバックグラウンドタスクはまだありません",
   "Running": "実行中",

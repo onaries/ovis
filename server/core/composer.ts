@@ -7,6 +7,7 @@
 import { stripVTControlCharacters } from "node:util";
 import type { HerdrPane } from "../../shared/protocol.ts";
 import { secretPrompt } from "../../shared/secret-prompt.ts";
+import { NO_AGENT_MESSAGE } from "../../shared/submit-outcome.ts";
 import { agentPrompt, HerdrError, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
 import { mirrorInput } from "../mirror-input.ts";
 import { paneAgentOf, resolveAgent, typingRoots } from "../pane-context.ts";
@@ -146,13 +147,15 @@ async function ompProcess(paneId: string): Promise<{ pid: number; integrated: bo
 
 /** Is this pane's agent Codex, blocked only by questions waiting collapsed in its queue (codexQuestionsCollapsed)? */
 export async function blockedOnlyByCodexQueue(paneId: string): Promise<boolean> {
-  const pane = await paneGet(paneId).catch((error: unknown) => {
+  const codex = async (): Promise<boolean> => paneIs(await paneGet(paneId).catch((error: unknown) => {
     if (error instanceof HerdrError && error.code === "pane_not_found") return undefined;
     throw error;
-  });
-  if (!(await paneIs(pane, "codex"))) return false;
+  }), "codex");
+  if (!(await codex())) return false;
   // A collapsed queue in scrollback must not bypass an approval on the live screen.
-  return codexQuestionsCollapsed((await paneRead({ paneId, source: "detection", format: "text" })).text);
+  if (!codexQuestionsCollapsed((await paneRead({ paneId, source: "detection", format: "text" })).text)) return false;
+  // the screen was Codex's only if Codex still runs once it is read: one that exited meanwhile left a shell to type into
+  return await codex();
 }
 
 /** Is this pane's agent `kind`? The omo probe is spent only where the label already says so. */
@@ -328,7 +331,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
    * the box still shows what they saw or reads empty. Never typed instead of agent.prompt.
    */
   async function submitText(paneId: string, text: string, payload: string, arrivedAt: number, fromTerminal = false, authorize: () => void = () => {},
-    clearDraft?: string, confirmation?: { draft: string | null; identity: PendingIdentity; box?: string | null }, sendAnyway = false): Promise<void> {
+    clearDraft?: string, confirmation?: { draft: string | null; identity: PendingIdentity; box?: string | null }, sendAnyway = false, agentOnly = false): Promise<void> {
     // before anything reads the pane, types or clears: closeMention and mirrorInput trust this framing
     ({ text, payload } = submitFraming(text, payload, fromTerminal));
     let clearedDraft = false;
@@ -525,7 +528,10 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
         let skills: string[] = [];
         if (pane) ({ sent: command, skills } = await openCodeSkillsToType(pane, command, text, beforeScreen, options.openCodeStateDir));
         inTime();
-        if (pane && command && skills.length > 0) {
+        // a message for an agent alone goes whole through agent.prompt (#511): typing it key by key checks the agent
+        // between writes, never with them, so its @skills stay text, as its send says
+        if (agentOnly && command) command = skillsNotAttached(command, skills);
+        if (pane && command && skills.length > 0 && !agentOnly) {
           const expected = pendingIdentity(pane);
           let current = pane;
           // the lookup awaited the service: the pane, its session and its state are read again before every key
@@ -590,7 +596,10 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           if (refused !== undefined) throw refused;
           if (!(error instanceof HerdrError)) throw error;
           if (clearDraft !== undefined || sendAnyway) throw error;
-          const queuedOnly = error.code === "agent_blocked" && await blockedOnlyByCodexQueue(paneId);
+          // a message for an agent alone (#511) is never typed into what is there once the agent has gone
+          if (agentOnly && (error.code === "agent_not_found" || error.code === "agent_not_ready")) throw new HerdrError("agent_not_ready", NO_AGENT_MESSAGE);
+          // nor typed past a collapsed queue: herdr cannot type only if the agent still runs, and Codex may exit first
+          const queuedOnly = !agentOnly && error.code === "agent_blocked" && await blockedOnlyByCodexQueue(paneId);
           if (error.code !== "agent_not_found" && error.code !== "agent_not_ready" && !queuedOnly) throw error;
         }
       }

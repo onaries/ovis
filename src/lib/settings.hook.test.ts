@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { DEFAULT_SETTINGS, SettingsProvider, useSettings, type Settings } from "./settings.ts";
+import { COMPOSER_ARTIFACTS_STORAGE_KEY, DEFAULT_SETTINGS, SettingsProvider, useSettings, type Settings } from "./settings.ts";
 import { SETTINGS_STORAGE_KEY } from "./themeBoot.ts";
 
-describe("shortcut overrides across tabs", () => {
+describe("settings across tabs", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   let records: Map<string, string>;
   let events: EventTarget;
   let renderer: ReactTestRenderer | undefined;
   let settings: Settings;
+  let update: (patch: Partial<Settings>) => void;
   let writes: number;
+  let full: boolean;
 
   beforeEach(() => {
     for (const key of ["window", "document", "navigator", "getComputedStyle", "IS_REACT_ACT_ENVIRONMENT"]) {
@@ -20,12 +22,13 @@ describe("shortcut overrides across tabs", () => {
     events = new EventTarget();
     settings = DEFAULT_SETTINGS;
     writes = 0;
+    full = false;
     Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { languages: ["en-US"] } });
     Object.defineProperty(globalThis, "window", { configurable: true, value: {
       localStorage: {
         getItem: (key: string) => records.get(key) ?? null,
-        setItem: (key: string, value: string) => { writes++; records.set(key, value); },
+        setItem: (key: string, value: string) => { if (full) throw new Error("QuotaExceededError"); writes++; records.set(key, value); },
       },
       addEventListener: events.addEventListener.bind(events),
       removeEventListener: events.removeEventListener.bind(events),
@@ -49,7 +52,7 @@ describe("shortcut overrides across tabs", () => {
 
   async function open(): Promise<void> {
     function Probe() {
-      settings = useSettings().settings;
+      ({ settings, update } = useSettings());
       return null;
     }
     await act(async () => { renderer = create(createElement(SettingsProvider, null, createElement(Probe))); });
@@ -90,6 +93,50 @@ describe("shortcut overrides across tabs", () => {
 
     // Then the mounted consumer returns to the default shortcuts.
     expect(settings.shortcutOverrides).toEqual({});
+  });
+
+  it("keeps another tab's change when this tab saves an unrelated setting", async () => {
+    // Given a tab opened before another tab chose a wide chat and the Artifacts chip.
+    await open();
+    records.set(SETTINGS_STORAGE_KEY, JSON.stringify({ language: "en", chatWidth: "wide" }));
+    records.set(COMPOSER_ARTIFACTS_STORAGE_KEY, "true");
+
+    // When this tab changes its terminal font size.
+    await act(async () => { update({ terminalFontSize: 20 }); });
+
+    // Then the stored settings hold both tabs' changes.
+    const stored = JSON.parse(records.get(SETTINGS_STORAGE_KEY) ?? "{}") as Partial<Settings>;
+    expect([stored.chatWidth, stored.language, stored.terminalFontSize]).toEqual(["wide", "en", 20]);
+    expect(records.get(COMPOSER_ARTIFACTS_STORAGE_KEY)).toBe("true");
+    expect(settings.terminalFontSize).toBe(20);
+  });
+
+  it("leaves another tab's change when this tab is handed a value it already holds", async () => {
+    // Given an open tab, and another tab that chose Korean since.
+    await open();
+    records.set(SETTINGS_STORAGE_KEY, JSON.stringify({ language: "ko" }));
+
+    // When this tab is handed the language it already shows, and another setting.
+    await act(async () => { update({ language: DEFAULT_SETTINGS.language, terminalFontSize: 20 }); });
+
+    // Then the other tab's language stays stored.
+    const stored = JSON.parse(records.get(SETTINGS_STORAGE_KEY) ?? "{}") as Partial<Settings>;
+    expect([stored.language, stored.terminalFontSize]).toEqual(["ko", 20]);
+  });
+
+  it("stores a change whose save failed with this tab's next save", async () => {
+    // Given a tab whose font size change found storage full.
+    await open();
+    full = true;
+    await act(async () => { update({ terminalFontSize: 20 }); });
+    full = false;
+
+    // When it saves another setting once storage has room.
+    await act(async () => { update({ chatWidth: "wide" }); });
+
+    // Then both changes are stored.
+    const stored = JSON.parse(records.get(SETTINGS_STORAGE_KEY) ?? "{}") as Partial<Settings>;
+    expect([stored.terminalFontSize, stored.chatWidth]).toEqual([20, "wide"]);
   });
 
   it("ignores storage events for unrelated keys", async () => {

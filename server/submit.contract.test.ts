@@ -932,6 +932,84 @@ describe("WebSocket submit", () => {
     }
   }, 30_000);
 
+  // #511: a message carrying comments on a reply starts with `> quote` lines, which a shell reads as a redirect
+  it("refuses a message only an agent may take in a pane without an agent, and types nothing of it", async () => {
+    const socket = await Socket.connect();
+    try {
+      const from = chunks(shell).length;
+      socket.send({ type: "submit", id: 1201, pane_id: shell.pane, text: "> quote\ncomment", payload: paste("> quote\rcomment"), agent_only: true });
+      expect(await socket.result(1201)).toMatchObject({ ok: false, code: "agent_not_ready" });
+      // the next ordinary message arrives alone: nothing of the refused one was typed before it
+      socket.send({ type: "submit", id: 1202, pane_id: shell.pane, text: "after", payload: paste("after") });
+      expect(await socket.result(1202)).toMatchObject({ ok: true });
+      expect((await received(shell, from, 1)).map((chunk) => chunk.data).join("")).toBe(`${paste("after")}\r`);
+    } finally {
+      socket.close();
+    }
+  }, 30_000);
+
+  it("hands an agent a message only an agent may take, as any other", async () => {
+    const socket = await Socket.connect();
+    try {
+      const from = chunks(agent).length;
+      socket.send({ type: "submit", id: 1203, pane_id: agent.pane, text: "> quote\ncomment", payload: paste("> quote\rcomment"), agent_only: true });
+      expect(await socket.result(1203)).toMatchObject({ ok: true });
+      const read = await received(agent, from, 1);
+      expect(read.map((chunk) => chunk.data).join("")).toBe(`${paste("> quote\ncomment")}\r`);
+    } finally {
+      socket.close();
+    }
+  }, 30_000);
+
+  it("types nothing of a message only an agent may take when the agent leaves as herdr is asked to prompt it", async () => {
+    const socket = await Socket.connect();
+    const prompt = spyOn(herdr, "agentPrompt").mockRejectedValue(new herdr.HerdrError("agent_not_found", "the agent exited"));
+    try {
+      const from = chunks(agent).length;
+      socket.send({ type: "submit", id: 1209, pane_id: agent.pane, text: "> quote\ncomment", payload: paste("> quote\rcomment"), agent_only: true });
+      expect(await socket.result(1209)).toMatchObject({ ok: false, code: "agent_not_ready" });
+      expect(prompt).toHaveBeenCalled();
+      prompt.mockRestore();
+      // control: the next ordinary message arrives alone, so nothing of the refused one was typed
+      socket.send({ type: "submit", id: 1210, pane_id: agent.pane, text: "after", payload: paste("after") });
+      expect(await socket.result(1210)).toMatchObject({ ok: true });
+      expect((await received(agent, from, 1)).map((chunk) => chunk.data).join("")).toBe(`${paste("after")}\r`);
+    } finally {
+      prompt.mockRestore();
+      socket.close();
+    }
+  }, 30_000);
+
+  it("refuses to queue or hold a message only an agent may take in a pane without an agent", async () => {
+    const socket = await Socket.connect();
+    try {
+      await attached(socket, shell.pane);
+      const from = chunks(shell).length;
+      for (const [id, delivery] of [[1206, "hold"], [1207, "queue"]] as const) {
+        socket.send({ type: "submit", id, pane_id: shell.pane, text: "> quote\ncomment", payload: "unused", delivery, agent_only: true });
+        expect(await socket.result(id)).toMatchObject({ ok: false, code: "agent_not_ready" });
+      }
+      expect(socket.seen.filter((frame) => frame.type === "pending-messages" && frame.pane_id === shell.pane && frame.messages.length > 0)).toEqual([]);
+      socket.send({ type: "submit", id: 1208, pane_id: shell.pane, text: "after", payload: paste("after") });
+      expect(await socket.result(1208)).toMatchObject({ ok: true });
+      expect((await received(shell, from, 1)).map((chunk) => chunk.data).join("")).toBe(`${paste("after")}\r`);
+    } finally {
+      socket.close();
+    }
+  }, 30_000);
+
+  it("refuses agent_only on anything but true, and on a terminal line", async () => {
+    const socket = await Socket.connect();
+    try {
+      socket.send({ type: "submit", id: 1204, pane_id: shell.pane, text: "x", payload: paste("x"), agent_only: false });
+      expect(await socket.result(1204)).toMatchObject({ ok: false, code: "invalid_delivery" });
+      socket.send({ type: "submit", id: 1205, pane_id: shell.pane, text: "x", payload: "x", typed: true, agent_only: true });
+      expect(await socket.result(1205)).toMatchObject({ ok: false, code: "invalid_delivery" });
+    } finally {
+      socket.close();
+    }
+  }, 30_000);
+
   it("sends omp a bare /model as /switch, whose picker is the session's alone, and anything else as written", async () => {
     const socket = await Socket.connect();
     try {

@@ -1,4 +1,98 @@
 {
+  "0.4.21": {
+    "en": {
+      "new": [
+        "A setup guide on a fresh install finds or installs your coding agent.",
+        "Add another coding agent from the New tab and New workspace pickers.",
+        "Comment on part of an agent's reply and send it with your next message.",
+        "List a Claude Code session's Artifact pages, once turned on in Settings.",
+        "Sign Claude Code or Codex in from the browser, without a terminal."
+      ],
+      "improved": [
+        "Cmd+click (Ctrl+click) a bare file name in the terminal to open it.",
+        "Turn on reading Claude's limits from its status line where its API is blocked.",
+        "Pi's Earlier sessions shows names from deep in long sessions.",
+        "A loading spinner shows while the app downloads on a slow link.",
+        "Settings → Agents shows each agent's version, accounts and limits on one page."
+      ],
+      "fixed": [
+        "Light themes no longer show a black frame around the terminal.",
+        "Ctrl with a trackpad wheel scrolls apps at normal speed again.",
+        "iPhone dictation starts from a tap instead of saying permission was denied.",
+        "A Codex pane's chat never shows another session's conversation.",
+        "Chat sends to Claude Code while its terminal is scrolled up."
+      ]
+    },
+    "ko": {
+      "new": [
+        "새로 설치하면 설정 안내가 코딩 에이전트를 찾거나 설치해 줍니다.",
+        "새 탭·새 워크스페이스 선택 화면에서 다른 코딩 에이전트를 추가합니다.",
+        "에이전트 답변의 일부에 코멘트를 달아 다음 메시지와 함께 보냅니다.",
+        "설정에서 켜면 Claude Code 세션이 Artifact로 게시한 페이지 목록이 보입니다.",
+        "터미널 없이 브라우저에서 Claude Code나 Codex에 로그인합니다."
+      ],
+      "improved": [
+        "터미널의 파일 이름만 Cmd+클릭(Ctrl+클릭)해도 파일이 열립니다.",
+        "사용량 API가 막힌 곳에서는 설정에서 켜면 Claude 한도를 상태 줄에서 읽습니다.",
+        "Pi의 이전 세션 목록에 긴 세션 깊숙이 있는 이름도 보입니다.",
+        "느린 연결에서는 앱을 내려받는 동안 로딩 표시가 나옵니다.",
+        "설정 → Agents 한 페이지에서 agent마다 버전, 계정, 한도를 봅니다."
+      ],
+      "fixed": [
+        "밝은 테마에서 터미널 둘레에 검은 테두리가 보이지 않습니다.",
+        "Ctrl을 누른 트랙패드 휠이 다시 보통 속도로 앱을 스크롤합니다.",
+        "iPhone 음성 입력이 권한 거부 대신 탭으로 시작됩니다.",
+        "Codex 패인의 Chat에 다른 세션의 대화가 더는 보이지 않습니다.",
+        "터미널을 위로 스크롤한 Claude Code에도 Chat 메시지가 전송됩니다."
+      ]
+    },
+    "ja": {
+      "new": [
+        "新しくインストールすると、セットアップガイドがコーディングエージェントを探すかインストールします。",
+        "新しいタブ・ワークスペースの選択画面から、別のコーディングエージェントを追加できます。",
+        "エージェントの返信の一部にコメントを付け、次のメッセージと一緒に送れます。",
+        "設定でオンにすると、Claude Code のセッションが Artifact として公開したページの一覧が表示されます。",
+        "ターミナルを使わずに、ブラウザから Claude Code や Codex にサインインできます。"
+      ],
+      "improved": [
+        "ターミナルのファイル名だけでも Cmd+クリック(Ctrl+クリック)で開けます。",
+        "使用量 API が使えない環境では、設定でオンにすると Claude の上限をステータスラインから読み取ります。",
+        "Pi の過去のセッション一覧に、長いセッションの奥にある名前も表示されます。",
+        "遅い回線では、アプリのダウンロード中に読み込み表示が出ます。",
+        "設定 → Agents の 1 ページで、エージェントごとのバージョン、アカウント、上限を確認できます。"
+      ],
+      "fixed": [
+        "ライトテーマでターミナルの周りに黒い枠が出なくなりました。",
+        "Ctrl を押したトラックパッドのホイールで、アプリが再び通常の速さでスクロールします。",
+        "iPhone の音声入力が、権限の拒否ではなくタップで始まります。",
+        "Codex のペインのチャットに、別のセッションの会話が表示されなくなりました。",
+        "ターミナルを上にスクロールした Claude Code にもチャットのメッセージが送られます。"
+      ]
+    },
+    "zh": {
+      "new": [
+        "全新安装时，设置向导会查找或安装编程代理。",
+        "可以在新建标签页和新建工作区的选择界面中添加其他编程代理。",
+        "可以对代理回复的一部分添加评论，并随下一条消息发送。",
+        "在设置中开启后，可列出 Claude Code 会话通过 Artifact 发布的页面。",
+        "无需终端，直接在浏览器中登录 Claude Code 或 Codex。"
+      ],
+      "improved": [
+        "在终端中按住 Cmd(Ctrl)点击单独的文件名即可打开文件。",
+        "在用量 API 被拦截的网络中，可在设置中开启从状态栏读取 Claude 的额度。",
+        "Pi 的历史会话列表能显示长会话深处的名称。",
+        "网络较慢时，下载应用期间会显示加载指示。",
+        "在设置 → Agents 一个页面中查看每个代理的版本、账户和额度。"
+      ],
+      "fixed": [
+        "浅色主题下终端周围不再出现黑色边框。",
+        "按住 Ctrl 滚动触控板时，应用的滚动速度恢复正常。",
+        "iPhone 语音输入通过点按开始，不再提示权限被拒绝。",
+        "Codex 窗格的聊天不再显示其他会话的对话。",
+        "终端向上滚动时，聊天消息也能发送给 Claude Code。"
+      ]
+    }
+  },
   "0.4.20": {
     "en": {
       "new": [

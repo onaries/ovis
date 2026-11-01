@@ -15,7 +15,6 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Background tasks running: {count}": "実行中のバックグラウンドタスク: {count}",
   "Loading agents…": "エージェントを読み込み中…",
   "Herdr workspaces": "herdr ワークスペース",
-  "Agents": "エージェント",
   "No agents running": "実行中のエージェントはありません",
   "Expand worktrees of {name}": "{name} のワークツリーを展開",
   "Collapse worktrees of {name}": "{name} のワークツリーを折りたたむ",

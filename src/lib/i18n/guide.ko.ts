@@ -3,21 +3,16 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const GUIDE_KO: Record<string, string> = {
-  "Setup guide": "설정 안내",
   "Welcome to Ovis": "Ovis에 오신 것을 환영해요",
   "Is this your first time using Ovis?": "Ovis를 처음 쓰시나요?",
   "I'm new to Ovis": "처음이에요",
   "I've used Ovis before": "써 본 적 있어요",
   "Skip the setup and go straight in": "안내 없이 바로 시작해요",
-  "You can open this again any time from Settings → Setup guide.": "설정 → 설정 안내에서 언제든 다시 열 수 있어요.",
+  "You can open this again any time from Settings → Agents.": "설정 → 에이전트에서 언제든 다시 열 수 있어요.",
   "Skip setup": "안내 건너뛰기",
   "Already installed one?": "이미 설치하셨나요?",
   "Look again": "다시 확인",
   "This browser is paired first: other browsers now need pairing too.": "이 브라우저를 먼저 연결했어요. 이제 다른 브라우저도 연결이 필요해요.",
-  "Installing {agent}… Open terminal": "{agent} 설치 중… 터미널 열기",
-  "Try installing {agent} again": "{agent} 다시 설치하기",
-  "It took too long. Try again.": "너무 오래 걸려요. 다시 시도해 주세요.",
-  "{agent} did not install. {reason}": "{agent} 설치를 마치지 못했어요. {reason}",
   "You're set up": "준비됐어요",
   "Ovis found these on this PC. Start opens your first project with the one picked.": "이 PC에서 찾았어요. 시작하면 고른 에이전트로 첫 프로젝트가 열려요.",
   "Pick an AI coding helper": "AI 코딩 도우미를 고르세요",
@@ -39,4 +34,5 @@ export const GUIDE_KO: Record<string, string> = {
   "Back to setup": "설정 안내로 돌아가기",
   "The workspace opened, but {agent} did not start. Open it to see why in its terminal.": "워크스페이스는 열었지만 {agent}가 시작되지 않았어요. 열어서 터미널에서 이유를 확인하세요.",
   "Open the workspace": "워크스페이스 열기",
+  "{agent} is not signed in yet.": "{agent}에 아직 로그인하지 않았습니다.",
 };

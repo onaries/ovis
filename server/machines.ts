@@ -254,6 +254,7 @@ export class MachineManager {
   private localBusy = false;
   private localRefreshQueued = false;
   private localRevision = 0;
+  private localTimeouts = 0;
   /** each local pane's agent as herdr last named it to the status collector */
   private heardAgents = new AgentNews();
   private localTimer: ReturnType<typeof setInterval>;
@@ -504,6 +505,7 @@ export class MachineManager {
         try {
           const snapshot = await this.readLocal();
           if (this.stopped) break;
+          this.localTimeouts = 0;
           // A newer event already patched the roster. Never publish this older load.
           if (revision !== this.localRevision) { this.localRefreshQueued = true; continue; }
           this.localDiagnostics.recovered(LOCAL_MACHINE, { operation: "snapshot", elapsed_ms: performance.now() - started });
@@ -521,7 +523,12 @@ export class MachineManager {
           if (revision !== this.localRevision) { this.localRefreshQueued = true; continue; }
           const code = e instanceof HerdrError ? transportFailureCode(e.code) : null;
           this.localDiagnostics.failed(LOCAL_MACHINE, code ?? "refresh_failed", { operation: "snapshot", elapsed_ms: performance.now() - started });
-          this.local.state = "error"; this.local.error = String(e instanceof Error ? e.message : e);
+          this.localTimeouts = e instanceof HerdrError && e.code === "timeout" ? this.localTimeouts + 1 : 0;
+          // One slow read is not proof that a previously connected herdr is gone. Keep the
+          // last roster for one timeout, but report startup and definite transport failures now.
+          if (this.local.state !== "connected" || this.local.snapshot === null || this.localTimeouts !== 1) {
+            this.local.state = "error"; this.local.error = String(e instanceof Error ? e.message : e);
+          }
         }
         this.emit();
       } while (this.localRefreshQueued && !this.stopped);
@@ -794,8 +801,11 @@ export class MachineManager {
     const moving = !!job && !sameSshSession(target, runtime.machine.target!);
     // only this try, at this address, tells whose server the PC runs: a cancelled or superseded one (another
     // connection, or its dialog moving the PC to another address, since it looked) writes nothing
-    const learnServer = (seen: BridgeDescriptor) => {
+    const learnServer = (seen: Pick<BridgeDescriptor, "managed_remote">, verified = false) => {
       if (runtime.generation !== generation || job?.abort.signal.aborted || this.stopped) return;
+      // A descriptor is a hint, not a transfer of an independent server's ownership.
+      // Keep that server's retry guard until a managed successor actually answers.
+      if (seen.managed_remote && !verified) return;
       const own = seen.managed_remote ? null : { ...target };
       if (moving) runtime.move!.ownOvisAt = own;
       else if (own) runtime.ownOvisAt = own; else delete runtime.ownOvisAt;
@@ -848,6 +858,17 @@ export class MachineManager {
         throw error;
       }
       update = false;
+    }
+    // Automatic updates can install the bundle before the later stop/replacement
+    // verification. A managed descriptor cannot grant those writes over a remembered
+    // independent server: verify the live successor first, without discarding its guard.
+    if (runtime.ownOvisAt && sameSshSession(runtime.ownOvisAt, target) && descriptor?.managed_remote
+      && (update || descriptor.bridge_protocol !== BRIDGE_PROTOCOL || descriptor.bundle_version !== REMOTE_BUNDLE_VERSION)) {
+      const owner = await this.verify(ssh, descriptor, expectedSocket, true);
+      if (runtime.generation !== generation || this.stopped || job?.abort.signal.aborted) throw new Error("Setup cancelled");
+      if (owner.identity.managed_remote === false) throw new MachineActionRequired(independentBridge(owner.identity.bundle_version), "setup", newerBundle(owner.identity.bundle_version));
+      if (owner.identity.managed_remote !== true || owner.identity.pid !== descriptor.pid) throw new Error("Bridge process verification failed; no update was authorized");
+      if (newerBundle(owner.identity.bundle_version)) throw new MachineActionRequired(newerBridge(owner.identity.bundle_version), "bridge_conflict", true);
     }
     // an independently managed web server is not this app's to update or to wait for: it keeps
     // its own message below, which names the side that is behind
@@ -1006,6 +1027,8 @@ export class MachineManager {
       throw error;
     }
     if (runtime.generation !== generation || this.stopped || job?.abort.signal.aborted) throw new Error("Setup cancelled");
+    if (verified.identity.pid !== descriptor.pid) throw new Error("Bridge process verification failed; ownership was not changed");
+    learnServer(verified.identity, true);
     runtime.endpoint = verified.endpoint;
     if (moving) runtime.move!.herdr = verified.identity.herdr; else runtime.machine.herdr = verified.identity.herdr;
   }

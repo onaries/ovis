@@ -91,7 +91,7 @@ try {
   assert.equal(bytes.size, 7, "the page should address every picture: the prompt's and the six the tools returned");
 
   browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
-  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 }, locale: "en-US" });
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/pane/conversation?*", (route) => route.fulfill({ json: conversation }));
@@ -189,7 +189,7 @@ try {
 
   // a picture the endpoint cannot answer leaves the line and the count, and the one before it moves up
   bytes.delete("pi:call-2:3");
-  const reloaded = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  const reloaded = await browser.newPage({ viewport: { width: 1200, height: 800 }, locale: "en-US" });
   await reloaded.route("**/api/pane/conversation?*", (route) => route.fulfill({ json: conversation }));
   await reloaded.goto(`http://127.0.0.1:${server.port}/`);
   const reloadedLine = reloaded.locator(".work-block-line .work-images");
@@ -201,7 +201,7 @@ try {
   console.log("PASS a picture that fails to load leaves the line, and the line fills from the ones before it");
 
   // beside a finger each thumbnail is a --touch-target square, three to the line
-  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
   const small = await phone.newPage();
   await small.route("**/api/pane/conversation?*", (route) => route.fulfill({ json: conversation }));
   await small.goto(`http://127.0.0.1:${server.port}/`);

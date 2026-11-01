@@ -36,15 +36,15 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { readStatuslineContext } from "./statusline.ts";
 import nodePath, { basename, dirname, relative, sep, type PlatformPath } from "node:path";
+import { isDshProcess, resolveDshTranscript, dshConversation, dshToolOutput, type DshTranscript } from "./dsh.ts";
 import { authorizedTranscript } from "./transcript-store.ts";
-
-import { dshConversation, DshHistoryChanged, dshSessionFromPids, dshToolOutput } from "./dsh.ts";
 
 import type { ConversationMetadata, ConversationTurn, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc, paneProcessInfo, paneRead, paneScrollInfo, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
 import { resolveAgent } from "./pane-context.ts";
-import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
+import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHomePlaced, parseCodexTranscript, readRange } from "./codex.ts";
 import { CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF, codexOutputPicture, codexTranscriptImage, DataUrlPictureScan, finish, finishAsync, forgetOmpBlobTypes, InlinePictureScan, MAX_IMAGE_BYTES, ompBlobAnchor, ompBlobDigest, ompBlobPictureSteps, type Steps } from "./codex-images.ts";
 import { type Held, heldOpenPlatform, openHeldDirectory } from "./held-open.ts";
 import { AmbiguousClaudeStore, claudeAttachSession, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
@@ -56,7 +56,7 @@ import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_IMAGE_REF, opencodeCo
 import { piTranscriptPath, unwrittenSession } from "./pi.ts";
 import { cmdTranscriptPath } from "./cmd.ts";
 import { defaultDevinDbPath, DevinHistoryUnavailable, devinConversation, forgetDevinState } from "./devin.ts";
-import { forgetGrokState, grokProjection, grokToolOutput, parseGrokTranscript, GrokUnavailable } from "./grok.ts";
+import { forgetGrokState, GROK_IMAGE_REF, grokImage, grokProjection, grokToolOutput, parseGrokTranscript, GrokUnavailable } from "./grok.ts";
 import { resolveGrokStore } from "./grok-store.ts";
 import { AgyUnavailable, agyCatalog, agyToolOutput, forgetAgyState, parseAgyTranscript, withAgyHistory, type AgyProjection } from "./agy.ts";
 import { resolveAgyStore, sameAgyStore, type AgyStore } from "./agy-store.ts";
@@ -66,7 +66,7 @@ import { LettaUnavailable, lettaToolOutput, parseLettaTranscript } from "./letta
 import { resolveLettaTranscript } from "./letta-store.ts";
 import { withinRetentionBudget } from "./retention-budget.ts";
 import { forgetAllPiIndexes, forgetPiIndex, piAbandonedTurns, piBranchRecords, piBranchSegments } from "./pi-tree.ts";
-import { copilotOffsetOutput, copilotOutput, copilotRootRecord, parseCopilotTranscript } from "./copilot.ts";
+import { COPILOT_IMAGE_REF, copilotImage, copilotOffsetOutput, copilotOutput, copilotRootRecord, parseCopilotTranscript } from "./copilot.ts";
 import { copilotExplicitResume, copilotHandoffSession, copilotProcessSession, copilotTranscriptFile, copilotUnwrittenSession, openCopilotFile } from "./copilot-store.ts";
 import { claudeSetting, parseConversationMetadata } from "./conversation-metadata.ts";
 import { answerVersion, ConversationNotStarted, ConversationReadPending, ConversationUnavailable, type ConversationPage, HistoryChanged, type RecognizedConversation, type StreamSource, TRANSCRIPT_WINDOW_BYTES } from "./conversation-shared.ts";
@@ -80,8 +80,10 @@ import { launchedAgents } from "./launched-agents.ts";
 import { readsStartScreen, startScreenMetadata } from "./start-screen.ts";
 import { commandTranscriptRecords, PI_EVIDENCE_TYPES, type CommandTranscriptRecord } from "./outcome.ts";
 import { type ClaudeBranch, claudeForks, followClaudeBranch, type PromptChain, turnStarts } from "./transcript-turns.ts";
+import { copilotSetAside } from "./copilot.ts";
 import { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
 import { userHome } from "./user-home.ts";
+import { kiroCodexProcess } from "./kiro-terminal.ts";
 
 export { isOmoProcess } from "./omo.ts";
 export { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
@@ -101,6 +103,12 @@ export const DEFAULT_PAGE_PROMPTS = MAX_PAGE_PROMPTS;
 
 /** A single turn longer than a window still gets a page of its own, up to this. */
 const MAX_PAGE_BYTES = 16 * 1024 * 1024;
+/**
+ * How far back a Copilot page reaches for the start of its turn: Copilot interns every picture of a
+ * turn in it as base64 (`session.binary_asset`), so one turn with a few pictures passes a window
+ * (#2478). Its pages widen to the turn's start, the newest one too, up to this.
+ */
+const COPILOT_PAGE_BYTES = 4 * MAX_PAGE_BYTES;
 
 /** The prompts a page keeps for this read: the reader's choice, inside the server's own bounds. */
 function pagePrompts(page: ConversationPage): number {
@@ -435,22 +443,36 @@ function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, sour
  * line that opens a turn, at `floor` (a held start) or at the very beginning. An
  * older page is read once, so for a turn longer than a window it reaches further
  * back, a new chunk at a time, up to MAX_PAGE_BYTES. The newest page is read on
- * every append, so it never does: with no turn start in its window it starts
- * mid-turn, at a whole line.
+ * every append, so it never does, but for Copilot's (COPILOT_PAGE_BYTES): with no turn
+ * start in its window it starts mid-turn, at a whole line.
  */
 function pageBefore(stream: TranscriptStream, source: StreamSource, to: number, { floor = stream.floor, widen, prompts }: { floor?: number; widen: boolean; prompts: number }): { start: number; bytes: Buffer } {
   let from = Math.max(floor, to - TRANSCRIPT_WINDOW_BYTES);
-  let bytes = readStream(stream, from, to);
+  const bytes = readStream(stream, from, to);
+  // the bytes searched for turn starts: the window, then each chunk widening adds before it
+  let searched = bytes;
   for (;;) {
-    const starts = stream.promptStarts ? stream.promptStarts.filter((at) => at >= from && at < to).map((at) => at - from) : turnStarts(bytes, source, undefined, turnBlobs(stream, source));
+    const starts = stream.promptStarts ? stream.promptStarts.filter((at) => at >= from && at < from + searched.length).map((at) => at - from) : turnStarts(searched, source, undefined, turnBlobs(stream, source));
     const keep = starts.length > prompts ? starts[starts.length - prompts] : from === floor ? 0 : starts[0];
-    if (keep !== undefined) return { start: from + keep, bytes: bytes.subarray(keep) };
-    if (!widen || to - from >= MAX_PAGE_BYTES) {
+    // a start found while widening is read from once, not built up a chunk at a time
+    if (keep !== undefined) return searched === bytes ? { start: from + keep, bytes: bytes.subarray(keep) } : { start: from + keep, bytes: readStream(stream, from + keep, to) };
+    if (!widen || to - from >= (source === "copilot-transcript" ? COPILOT_PAGE_BYTES : MAX_PAGE_BYTES)) {
       const firstLine = bytes.indexOf(0x0a) + 1;
-      return { start: from + firstLine, bytes: bytes.subarray(firstLine) };
+      return { start: to - bytes.length + firstLine, bytes: bytes.subarray(firstLine) };
     }
+    // no start in what was searched: only the new chunk can hold one, and the line it cuts ends past it
     const next = Math.max(floor, from - TRANSCRIPT_WINDOW_BYTES);
-    bytes = Buffer.concat([readStream(stream, next, from), bytes]);
+    const pieces = [readStream(stream, next, from)];
+    for (let at = from; at < to;) {
+      const piece = readStream(stream, at, Math.min(to, at + IMAGE_SEARCH_WINDOW));
+      // a file cut short since its size was taken reads nothing more: what was read is searched
+      if (piece.length === 0) break;
+      const lineEnd = piece.indexOf(0x0a);
+      pieces.push(lineEnd === -1 ? piece : piece.subarray(0, lineEnd + 1));
+      if (lineEnd !== -1) break;
+      at += piece.length;
+    }
+    searched = Buffer.concat(pieces);
     from = next;
   }
 }
@@ -583,6 +605,61 @@ function newestPage(path: string, stream: TranscriptStream, source: StreamSource
   const starts = pending.length > 0 ? [...scan.starts, ...pending] : scan.starts;
   const start = starts.length > prompts ? starts[starts.length - prompts] : from === stream.floor ? stream.floor : starts[0];
   return start === undefined ? null : { start, starts };
+}
+
+/**
+ * The newest Copilot turn that has outgrown its window (#2478), kept between polls: where it starts,
+ * how far it was read and the bytes just before that, and its complete lines, a picture record as its
+ * length only (copilotSetAside). A poll reads only what was appended since; another history, a file
+ * whose bytes before the read point changed, a new prompt, or a turn grown a window past the cap is
+ * read afresh. Like liveScans it trusts Copilot to append: an earlier line rewritten in place, with
+ * the bytes before the read point kept and the file grown, is not noticed.
+ */
+interface CopilotTurnScan { id: string; start: number; scanned: number; tail: string; lines: { at: number; line: string }[]; bytes: number }
+const copilotTurnScans = new Map<string, CopilotTurnScan>();
+/** What every kept turn's lines may come to together: one turn as far as a page reaches before it is found afresh. */
+const COPILOT_TURN_SCAN_BYTES = COPILOT_PAGE_BYTES + TRANSCRIPT_WINDOW_BYTES;
+
+function forgetCopilotTurns(path: string): void {
+  for (const key of copilotTurnScans.keys()) if (key.startsWith(`${path}\0`)) copilotTurnScans.delete(key);
+}
+
+/** The newest Copilot page that begins before its window: its start, its complete lines and the last line still being written. */
+function copilotNewestTurn(path: string, stream: TranscriptStream, prompts: number): { start: number; lines: CopilotTurnScan["lines"]; partial: string } {
+  const key = `${path}\0${prompts}`;
+  let scan = copilotTurnScans.get(key);
+  let bytes: Buffer | null = null;
+  // a turn grown a window past the cap is found afresh, so a page still ends up at most about the cap
+  if (scan && scan.id === stream.id && scan.scanned <= stream.length && stream.length - scan.start <= COPILOT_PAGE_BYTES + TRANSCRIPT_WINDOW_BYTES
+    && bytesBefore(stream, scan.scanned) === scan.tail) {
+    bytes = readStream(stream, scan.scanned, stream.length);
+    // a prompt appended since starts a newer turn: the page is found afresh from it
+    if (turnStarts(bytes.subarray(0, bytes.lastIndexOf(0x0a) + 1), "copilot-transcript", undefined, null).length > 0) bytes = null;
+  }
+  if (scan === undefined || bytes === null) {
+    const whole = pageBefore(stream, "copilot-transcript", stream.length, { widen: true, prompts });
+    scan = { id: stream.id, start: whole.start, scanned: whole.start, tail: "", lines: [], bytes: 0 };
+    bytes = whole.bytes;
+  }
+  let at = 0;
+  for (let newline = bytes.indexOf(0x0a); newline !== -1; newline = bytes.indexOf(0x0a, at)) {
+    const line = copilotSetAside(bytes.subarray(at, newline).toString("utf8"));
+    scan.lines.push({ at: scan.scanned + at, line });
+    scan.bytes += Buffer.byteLength(line);
+    at = newline + 1;
+  }
+  scan.scanned += at;
+  scan.tail = bytesBefore(stream, scan.scanned);
+  remember(copilotTurnScans, key, scan, 4);
+  // kept by bytes too, least recently read first out, and never a turn past the whole budget
+  let kept = 0;
+  for (const entry of copilotTurnScans.values()) kept += entry.bytes;
+  for (const [other, entry] of copilotTurnScans) {
+    if (kept <= COPILOT_TURN_SCAN_BYTES) break;
+    copilotTurnScans.delete(other);
+    kept -= entry.bytes;
+  }
+  return { start: scan.start, lines: scan.lines, partial: bytes.subarray(at).toString("utf8") };
 }
 
 /** Only native notification records name metadata files; quoted tool output names none. */
@@ -845,6 +922,7 @@ export function forgetTranscriptState(): void {
   forgetOpencodeState();
   forgetOmpBlobTypes();
   liveScans.clear();
+  copilotTurnScans.clear();
   settledTurns.clear();
   liveTranscriptTurns.clear();
   transcriptRevisions.clear();
@@ -886,6 +964,7 @@ export function forgetPaneTranscriptState(paneId: string): void {
     transcriptRevisions.delete(path);
     commandTranscripts.delete(path);
     liveScans.delete(path);
+    forgetCopilotTurns(path);
     for (const key of [...settledTurns.keys()]) if (key.startsWith(`${path}\0`)) settledTurns.delete(key);
     liveTranscriptTurns.delete(path);
     clearScans.delete(path);
@@ -1328,11 +1407,12 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
 /** Where a pane's conversation is: a transcript file, or a session in OpenCode's database. */
 type ResolvedTranscript =
   | ({ path: string; codexHome?: string; agy?: AgyStore; piAgentDir?: string | null; ompBlobs?: string | null } & (
-    | { source: Exclude<StreamSource, "copilot-transcript"> | "dsh-transcript" }
+    | { source: Exclude<StreamSource, "copilot-transcript"> }
     | { source: "copilot-transcript"; binding: string; peerClaims: ReadonlySet<string> }
   ))
   | { source: "opencode-transcript"; path: string; session: string }
-  | { source: "hermes-transcript"; path: string; sessionId: string };
+  | { source: "hermes-transcript"; path: string; sessionId: string }
+  | ({ source: "dsh-transcript" } & DshTranscript);
 
 /** A native file or database session, resolved without parsing conversation turns. */
 export type NativeTranscript =
@@ -1358,10 +1438,19 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
     const info = known !== undefined ? { process_info: known ?? undefined } : await herdrRpc<{ process_info?: { shell_pid?: number; foreground_processes?: { argv?: unknown }[] } }>(
       "pane.process_info", { pane_id: paneId },
     ).catch(() => null);
-    const running = (info?.process_info?.foreground_processes ?? []).some((process) =>
+    const foreground = info?.process_info?.foreground_processes ?? [];
+    const running = foreground.some((process) =>
       isGjcProcess(Array.isArray(process.argv) ? process.argv.map(String) : []),
     );
+    // Preserve GJC's route even when it runs a dsh child in the same foreground group.
     if (running || await gjcPidUnderShell(info?.process_info?.shell_pid)) agent = "gjc";
+    // a dsh TUI that does not report to herdr (dsh-tui-pi): its launcher in front, read from this same
+    // probe, which the dsh binding then reuses; the lock that process holds still picks the session
+    else if (foreground.some((process) => Array.isArray(process.argv) && isDshProcess(process.argv))) {
+      agent = "dsh";
+      if (known === undefined) known = (info?.process_info as KnownProcesses) ?? null;
+    }
+    else if (await kiroCodexProcess(info?.process_info as ProcessInfo | undefined) !== null) agent = "codex";
   }
   if (agent === "omo" || agent === "pi" || agent === "claude") {
     // Herdr may retain Pi's identity after the same pane starts agy.
@@ -1370,8 +1459,8 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
     ).catch(() => null);
     if (info?.process_info?.foreground_processes?.some((process) => process.name === "agy" || process.name === "agy-native")) agent = "agy";
   }
-  // a Muse or Letta pane's processes are asked for once, for omo and for its own binding
-  if ((agent === "muse" || agent === "letta") && known === undefined) known = (await paneProcessInfo(paneId).catch(() => undefined)) ?? null;
+  // a Muse, Letta or dsh pane's processes are asked for once, for omo and for its own binding
+  if ((agent === "muse" || agent === "letta" || agent === "dsh" || agent === "dsh-tui") && known === undefined) known = (await paneProcessInfo(paneId).catch(() => undefined)) ?? null;
   if (await paneRunsOmo(paneId, known)) {
     return { source: "omo-transcript", path: await omoTranscriptPath(paneId, cwd, panes) };
   }
@@ -1379,14 +1468,8 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
   // session headers name the one they run in
   const sessionCwd = typeof pane.foreground_cwd === "string" && pane.foreground_cwd.length > 0 ? pane.foreground_cwd : cwd;
   try {
-    if (agent === "dsh-tui") {
-      // dsh's current injection listener follows attachment; parked transcripts stay open.
-      const info = known !== undefined ? { process_info: known ?? undefined } : await herdrRpc<{ process_info?: { foreground_processes?: { pid?: unknown }[] } }>("pane.process_info", { pane_id: paneId });
-      const pids = (info.process_info?.foreground_processes ?? []).map((process) => Number(process.pid)).filter((pid) => Number.isInteger(pid));
-      const path = dshSessionFromPids(pids);
-      if (path === null) throw new ConversationUnavailable("no_session_path");
-      return { source: "dsh-transcript", path };
-    }
+    // dsh-tui reports itself to herdr as `dsh-tui`; the other dsh TUIs are found by their process above
+    if (agent === "dsh" || agent === "dsh-tui") return { source: "dsh-transcript", ...await resolveDshTranscript(known) };
     if (agent === "copilot") return { source: "copilot-transcript", ...await copilotTranscriptPath(pane, panes ?? [pane]) };
     if (agent === "grok") {
       const found = await resolveGrokStore(pane, grokHome);
@@ -1424,8 +1507,9 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
     }
     if (agent === "codex") {
       // the pane's own store: the rollout, its history and its images are all read from there
-      const home = await paneCodexHome(paneId, codexHome);
-      const path = await codexTranscriptPath(paneId, cwd, home, panes);
+      const { home, placed } = await paneCodexHomePlaced(paneId, codexHome);
+      // a store chosen while no Codex process of the pane was seen is checked against the one the lookup proves
+      const path = await codexTranscriptPath(paneId, cwd, home, panes, !placed);
       if (!path) throw new ConversationUnavailable("no_session_path");
       return { source: "codex-transcript", path, codexHome: home };
     }
@@ -1607,6 +1691,10 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     if (page.before !== undefined || page.since !== undefined || page.from !== undefined) throw new HistoryChanged();
     return await notBegun(launch.source, launch.historyId);
   }
+  if (resolved.source === "dsh-transcript") {
+    rememberPaneRead(paneId, resolved.path);
+    return await dshConversation(resolved, page);
+  }
   if (resolved.source === "devin-transcript") {
     try {
       const answer = devinConversation(resolved.session, resolved.cwd, page, resolved.path);
@@ -1686,6 +1774,15 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
   }
   if (resolved.agy && !sameAgyStore(resolved.agy, await resolveAgyStore(snapshot.panes.find((pane) => pane.pane_id === paneId)!))) throw new ConversationUnavailable("no_session_path");
   if (identity !== null) { writtenSessions.add(`${resolved.source}\0${identity}`); rememberPaneSession(paneId, `${resolved.source}\0${identity}`); }
+  if (resolved.source === "claude-transcript" && identity !== null && answer.metadata.context) {
+    const window = readStatuslineContext(userHome(), identity, answer.metadata.model, resolved.path);
+    if (window !== null) return {
+      ...answer,
+      metadata: { ...answer.metadata, context: { ...answer.metadata.context, window } },
+      // A statusline capture can change without a transcript append.
+      version: answerVersion(answer.version, String(window)),
+    };
+  }
   if (resolved.source === "cmd-transcript") {
     // The pane's current model can change without a transcript append. Enrich a response,
     // never the shared transcript page, and include the live model in its ETag.
@@ -1890,14 +1987,7 @@ function runsOnFromCut(leaf: string, path: readonly CommandTranscriptRecord[], f
  * One page of a resolved transcript (paneConversation's `page`). `piAgentDir` is the pane's pi
  * agent directory, whose catalogs state a pi model's context window (parseConversationMetadata).
  */
-export function transcriptPage(source: StreamSource | "dsh-transcript", path: string, page: ConversationPage = {}, codexHome?: string, piAgentDir?: string | null): RecognizedConversation {
-  if (source === "dsh-transcript") {
-    try { return dshConversation(path, page); }
-    catch (error) {
-      if (error instanceof DshHistoryChanged) throw new HistoryChanged();
-      throw new ConversationUnavailable("transcript_unreadable");
-    }
-  }
+export function transcriptPage(source: StreamSource, path: string, page: ConversationPage = {}, codexHome?: string, piAgentDir?: string | null): RecognizedConversation {
   if (source === "copilot-transcript") {
     let fd: number;
     try { fd = openCopilotFile(path); }
@@ -1974,14 +2064,23 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
       // page has moved past it, the chat gets the newest page and fetches the turns
       // in between with `before` + `since`: no poll reads more than a page.
       if (newest !== null) {
+        // a turn the window holds the start of again: a later one outgrowing it is found afresh
+        if (source === "copilot-transcript") forgetCopilotTurns(path);
         start = held !== null && held >= newest.start ? held : newest.start;
         live = liveTurns(path, stream, source, start, newest.starts, piAgentDir);
         text = "";
       } else {
-        // no turn starts in the window: the page begins mid-turn, read whole as before
-        const whole = pageBefore(stream, source, stream.length, { widen: false, prompts });
-        start = held !== null && held >= whole.start ? held : whole.start;
-        text = whole.bytes.subarray(start - whole.start).toString("utf8");
+        // no turn starts in the window: the page begins mid-turn, read whole as before; a Copilot
+        // page reaches back to its turn's start (COPILOT_PAGE_BYTES) and reads only what was appended since
+        if (source === "copilot-transcript") {
+          const turn = copilotNewestTurn(path, stream, prompts);
+          start = held !== null && held >= turn.start ? held : turn.start;
+          text = turn.lines.filter(({ at }) => at >= start).map(({ line }) => `${line}\n`).join("") + turn.partial;
+        } else {
+          const whole = pageBefore(stream, source, stream.length, { widen: false, prompts: prompts });
+          start = held !== null && held >= whole.start ? held : whole.start;
+          text = whole.bytes.subarray(start - whole.start).toString("utf8");
+        }
       }
     }
     if (live === null && page.before === undefined && start > stream.floor) head = metadataHead(path, stream, source, start);
@@ -2015,13 +2114,13 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
  * picture a tool returned by its call (`codex-tool:<call id>:<nth picture>`); omp names its pictures
  * as pi does.
  */
-export async function conversationImage(paneId: string, ref: string, codexHome?: string, opencodeDb?: string): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
-  if (!CLAUDE_IMAGE_REF.test(ref) && !CODEX_IMAGE_REF.test(ref) && !CODEX_TOOL_IMAGE_REF.test(ref) && !PI_IMAGE_REF.test(ref) && !PI_PROMPT_IMAGE_REF.test(ref) && !OPENCODE_IMAGE_REF.test(ref)) return null;
+export async function conversationImage(paneId: string, ref: string, codexHome?: string, opencodeDb?: string, grokHome?: string): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
+  if (!CLAUDE_IMAGE_REF.test(ref) && !CODEX_IMAGE_REF.test(ref) && !CODEX_TOOL_IMAGE_REF.test(ref) && !PI_IMAGE_REF.test(ref) && !PI_PROMPT_IMAGE_REF.test(ref) && !OPENCODE_IMAGE_REF.test(ref) && !GROK_IMAGE_REF.test(ref) && !COPILOT_IMAGE_REF.test(ref)) return null;
   const snapshot = await sessionSnapshot();
   const pane = snapshot.panes.find((candidate) => candidate.pane_id === paneId);
   if (pane === undefined || typeof pane.cwd !== "string" || pane.cwd.length === 0) return null;
   let resolved: ResolvedTranscript;
-  try { resolved = await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes, opencodeDb); }
+  try { resolved = await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes, opencodeDb, undefined, grokHome); }
   catch (error) { if (error instanceof ConversationUnavailable) return null; throw error; }
   // OpenCode's store is read per request and keeps nothing for the pane to release
   if (resolved.source === "opencode-transcript") return opencodeImage(resolved.path, resolved.session, ref);
@@ -2031,6 +2130,10 @@ export async function conversationImage(paneId: string, ref: string, codexHome?:
     return codexTranscriptImage(codexHistorySegments(resolved.path, resolved.codexHome ?? codexHome), ref, pane.cwd);
   }
   if (resolved.source === "pi-transcript" || resolved.source === "cmd-transcript") return piTranscriptImage(resolved.path, ref);
+  // the update log the pane's own Grok holds (resolveGrokStore), read only over its active history
+  if (resolved.source === "grok-transcript") return grokImage(resolved.path, ref);
+  // the session file the pane's own process holds (copilotTranscriptPath), opened pinned as the page reads it
+  if (resolved.source === "copilot-transcript") return copilotImage(resolved.path, ref);
   // the store is held to the identity it had where the transcript was authorized (ompAuthorizedTranscript):
   // a path above it swapped since cannot move the read elsewhere
   if (resolved.source === "omp-transcript") return ompTranscriptImage(resolved.path, ref, resolved.ompBlobs ?? null);
@@ -2356,6 +2459,7 @@ export async function toolOutput(paneId: string, ref: string, codexHome?: string
     return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
   }
   rememberPaneRead(paneId, resolved.path);
+  if (resolved.source === "dsh-transcript") return await dshToolOutput(resolved, ref);
   if (resolved.source === "hermes-transcript") return hermesToolOutput(resolved.sessionId, resolved.path, ref, TOOL_OUTPUT_MAX);
   let nativeRef = ref;
   if (resolved.source === "copilot-transcript") {
@@ -2379,9 +2483,8 @@ export async function toolOutput(paneId: string, ref: string, codexHome?: string
 }
 
 /** The output a transcript file holds for one tool call id, whole (up to TOOL_OUTPUT_MAX). */
-export function transcriptToolOutput(source: StreamSource | "dsh-transcript", path: string, ref: string, codexHome?: string): string | null {
+export function transcriptToolOutput(source: StreamSource, path: string, ref: string, codexHome?: string): string | null {
   if (!TOOL_REF.test(ref) && !(source === "copilot-transcript" && /^[A-Za-z0-9_:.-]{1,128}@[0-9a-z]+@[0-9a-z]+@[0-9a-f]{32}$/.test(ref))) return null;
-  if (source === "dsh-transcript") return dshToolOutput(path, ref);
   if (source === "codex-transcript") {
     let segments: ReturnType<typeof codexHistorySegments>;
     try { segments = codexHistorySegments(path, codexHome); } catch { return null; }

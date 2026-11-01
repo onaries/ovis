@@ -3,21 +3,16 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const GUIDE_ZH: Record<string, string> = {
-  "Setup guide": "设置向导",
   "Welcome to Ovis": "欢迎使用 Ovis",
   "Is this your first time using Ovis?": "这是你第一次使用 Ovis 吗?",
   "I'm new to Ovis": "我是新用户",
   "I've used Ovis before": "我用过 Ovis",
   "Skip the setup and go straight in": "跳过设置,直接开始",
-  "You can open this again any time from Settings → Setup guide.": "随时可以从 设置 → 设置向导 再次打开。",
+  "You can open this again any time from Settings → Agents.": "随时可以从 设置 → 代理 再次打开。",
   "Skip setup": "跳过设置",
   "Already installed one?": "已经装好了一个?",
   "Look again": "重新检查",
   "This browser is paired first: other browsers now need pairing too.": "已先配对此浏览器：其他浏览器现在也需要配对。",
-  "Installing {agent}… Open terminal": "正在安装 {agent}… 打开终端",
-  "Try installing {agent} again": "重新安装 {agent}",
-  "It took too long. Try again.": "时间太长了。请重试。",
-  "{agent} did not install. {reason}": "{agent} 未能完成安装。{reason}",
   "You're set up": "已准备就绪",
   "Ovis found these on this PC. Start opens your first project with the one picked.": "Ovis 在本机找到了这些。点开始会用选中的那个打开你的第一个项目。",
   "Pick an AI coding helper": "选择一个 AI 编程助手",
@@ -39,4 +34,5 @@ export const GUIDE_ZH: Record<string, string> = {
   "Back to setup": "返回设置向导",
   "The workspace opened, but {agent} did not start. Open it to see why in its terminal.": "工作区已打开,但 {agent} 没有启动。打开它,在终端里查看原因。",
   "Open the workspace": "打开工作区",
+  "{agent} is not signed in yet.": "{agent} 尚未登录。",
 };

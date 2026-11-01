@@ -419,6 +419,21 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   .workspace-select:focus-visible { outline: none; }
 }
 
+/* forced colors (Windows high contrast) repaint fills as Canvas, which would erase the selection: there it keeps a
+   leading border in the system's Highlight, pulled into the gutter so the row's content stays put, and as
+   wide as the ring plus the bar while keyboard focus draws its ring over that edge (#1618) */
+@media (forced-colors: active) {
+  .workspace-group.is-selected > .workspace-header {
+    margin-inline-start: calc(-2 * var(--hairline));
+    border-inline-start: calc(2 * var(--hairline)) solid Highlight;
+  }
+
+  .workspace-group.is-selected > .workspace-header:has(> .workspace-select:focus-visible) {
+    margin-inline-start: calc(-1 * (var(--ring-offset) + 2 * var(--hairline)));
+    border-inline-start-width: calc(var(--ring-offset) + 2 * var(--hairline));
+  }
+}
+
 .workspace-copy {
   display: flex;
   align-items: baseline;

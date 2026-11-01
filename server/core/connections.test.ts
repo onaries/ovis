@@ -20,10 +20,11 @@ function harness({ deviceId, readOnly = false, relay, revokedAlready = false, st
   const pending = { close: () => log.push("pending closed") } as unknown as PendingInputs<Client, never>;
   const client = {
     data: connectionData({ deviceId, readOnly, ...(relay ? { relay } : {}) }),
-    close: (code: number, reason: string) => log.push(`closed ${code} ${reason}`),
+    readyState: WebSocket.OPEN,
+    close: (code?: number, reason?: string) => log.push(`closed ${code} ${reason}`),
     getBufferedAmount: () => 0,
     send: () => 1,
-  } as unknown as Client;
+  };
   const clients = new Set<Client>([client]);
   const present = new Set<Client>([client]);
   const connections = createConnections({

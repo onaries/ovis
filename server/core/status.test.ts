@@ -860,7 +860,7 @@ describe("queued input while a busy signal holds a Claude pane's queue (#2072)",
   /** A pane shown at rest again after a herdr working signal whose turn was never written: its queue is held. */
   async function heldPane(queued = false) {
     const writes: string[] = [];
-    const client = { data: connectionData({ readOnly: false, deviceId: undefined }), getBufferedAmount: () => 0, send: () => 1 } as unknown as Client;
+    const client: Client = { data: connectionData({ readOnly: false, deviceId: undefined }), readyState: WebSocket.OPEN, getBufferedAmount: () => 0, send: () => 1, close: () => {} };
     let lane: Promise<unknown> = Promise.resolve();
     const serialize = <T>(_paneId: string, task: () => T | Promise<T>): Promise<T> => { const next = lane.catch(() => undefined).then(task); lane = next; return next; };
     let h!: Awaited<ReturnType<typeof workingClaude<Client, unknown>>>;

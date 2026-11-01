@@ -7,33 +7,34 @@
 import { constantTemplate, execToolCalls } from "./execSummary.ts";
 
 const BEGIN = "*** Begin Patch";
+const WHOLE_PATCH = /^\*\*\* Begin Patch\r?\n(?:[\s\S]*\r?\n)?\*\*\* End Patch\s*$/;
 
 /** The patch an edit call carries, or null when the input is not one. */
 export function patchText(input: string): string | null {
   const trimmed = input.trimStart();
-  if (trimmed.startsWith(BEGIN)) return trimmed;
-  const call = /tools\.apply_patch\(\s*("(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`)/s.exec(input);
-  let literal = call?.[1];
+  if (trimmed.startsWith(BEGIN)) return WHOLE_PATCH.test(trimmed) ? trimmed : null;
+  let literal: string | undefined;
   let bindings: string | undefined;
-  if (call) {
-    const marker = /(?:text\s*\(\s*)?await\s*$/.exec(input.slice(0, call.index));
-    if (marker) bindings = input.slice(0, marker.index);
-  }
-  if (literal === undefined) {
-    for (const tool of execToolCalls(input)) {
-      if (tool.name !== "apply_patch") continue;
-      const argument = /^\s*([A-Za-z_$][\w$]*)\s*\)/.exec(input.slice(tool.argumentsAt));
-      if (!argument) continue;
-      const tokens = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*|\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*("(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`)\s*;/g;
-      const declarations = [...input.slice(0, tool.argumentsAt).matchAll(tokens)].filter((match) => match[1] === argument[1]);
-      const declaration = declarations.length === 1 ? declarations[0] : undefined;
-      if (declaration !== undefined) {
-        literal = declaration[2];
-        const between = input.slice(declaration.index + declaration[0].length, tool.argumentsAt);
-        if (/^\s*(?:const\s+[A-Za-z_$][\w$]*\s*=\s*)?(?:text\s*\(\s*)?await\s+tools\s*\.\s*apply_patch\s*\(\s*$/.test(between)) bindings = input.slice(0, declaration.index);
-      }
-      if (literal !== undefined) break;
+  for (const tool of execToolCalls(input)) {
+    if (tool.name !== "apply_patch") continue;
+    const direct = /^\s*("(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`)\s*,?\s*\)/s.exec(input.slice(tool.argumentsAt));
+    if (direct) {
+      literal = direct[1];
+      const marker = /(?:text\s*\(\s*)?await\s+tools\s*\.\s*apply_patch\s*\(\s*$/.exec(input.slice(0, tool.argumentsAt));
+      if (marker) bindings = input.slice(0, marker.index);
+      break;
     }
+    const argument = /^\s*([A-Za-z_$][\w$]*)\s*,?\s*\)/.exec(input.slice(tool.argumentsAt));
+    if (!argument) continue;
+    const tokens = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*|\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*("(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`)\s*;/g;
+    const declarations = [...input.slice(0, tool.argumentsAt).matchAll(tokens)].filter((match) => match[1] === argument[1]);
+    const declaration = declarations.length === 1 ? declarations[0] : undefined;
+    if (declaration !== undefined) {
+      literal = declaration[2];
+      const between = input.slice(declaration.index + declaration[0].length, tool.argumentsAt);
+      if (/^\s*(?:const\s+[A-Za-z_$][\w$]*\s*=\s*)?(?:text\s*\(\s*)?await\s+tools\s*\.\s*apply_patch\s*\(\s*$/.test(between)) bindings = input.slice(0, declaration.index);
+    }
+    if (literal !== undefined) break;
   }
   if (literal === undefined) return null;
   let text: string;
@@ -47,7 +48,7 @@ export function patchText(input: string): string | null {
   else {
     try { text = JSON.parse(literal) as string; } catch { return null; }
   }
-  return text.trimStart().startsWith(BEGIN) ? text.trimStart() : null;
+  return WHOLE_PATCH.test(text.trimStart()) ? text.trimStart() : null;
 }
 
 /** The files a patch adds, updates or deletes, in the order it names them. */

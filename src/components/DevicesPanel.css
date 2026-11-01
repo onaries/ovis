@@ -122,3 +122,8 @@
 .devices-link a {
   color: var(--accent);
 }
+
+/* a wallet address or an email is one long word */
+.devices-portal {
+  overflow-wrap: anywhere;
+}

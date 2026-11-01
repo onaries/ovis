@@ -5,7 +5,7 @@ import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InteractivePrompt } from "../../shared/protocol.ts";
-import { handlePromptRequest, promptWaitEnded } from "../prompt.ts";
+import { handlePromptRequest, type PromptRequestOptions, promptWaitEnded } from "../prompt.ts";
 import { socketAddress } from "../herdr/client.ts";
 import fixtures from "../fixtures/pi-ask-2.13.9.json";
 import navigation from "../fixtures/pi-ask-navigation.json";
@@ -17,7 +17,7 @@ async function withPane(initial: string, run: (pane: {
   screen: string; status: string; sent: string[]; visible?: string; scroll: number; onSent?: (key: string) => void;
   bind(questions: OmoAsk["questions"]): void;
   card(): Promise<InteractivePrompt>; read(): Promise<InteractivePrompt | null>;
-  answer(id: string, choice: object, signal?: AbortSignal): Promise<number>;
+  answer(id: string, choice: object, signal?: AbortSignal, options?: PromptRequestOptions): Promise<number>;
 }) => Promise<void>) {
   const root = mkdtempSync(join(tmpdir(), "ovis-pi-ask-"));
   const endpoint = socketAddress(join(root, "herdr.sock"));
@@ -43,11 +43,11 @@ async function withPane(initial: string, run: (pane: {
       expect(prompt).not.toBeNull();
       return prompt!;
     },
-    answer: async (prompt: string, choice: object, signal?: AbortSignal) => {
+    answer: async (prompt: string, choice: object, signal?: AbortSignal, options?: PromptRequestOptions) => {
       const url = new URL("http://127.0.0.1/api/pane/prompt/answer");
       const response = (await handlePromptRequest(new Request(url, {
         method: "POST", signal, body: JSON.stringify({ pane_id: id, prompt_id: prompt, ...choice }),
-      }), url))!;
+      }), url, options))!;
       return response.status;
     },
   };
@@ -201,6 +201,17 @@ test("Pi ask answer route goes back without sending Enter and permits answering 
     expect(await pane.answer(card.id, { step_back: true })).toBe(409);
     pane.onSent = key => { if (key === "enter") pane.screen = navigation.second; };
     expect(await pane.answer(returned.id, { option_index: 0 })).toBe(200);
+  });
+});
+
+test("Pi ask tab moves are held to the request's deadline: a look before the key that outlasts it sends nothing", async () => {
+  await withPane(navigation.first, async pane => {
+    const card = await pane.card();
+    pane.onSent = key => { if (key === "right") pane.screen = navigation["second-unanswered"]; };
+    // the look before the key (pi-ask's) never comes back: the deadline ends it, 300 ms here, 4 s in the server
+    const beforeKey = (): Promise<void> => new Promise<void>(() => undefined);
+    expect(await pane.answer(card.id, { step_index: 1 }, undefined, { answerDeadlineMs: 300, beforeKey })).toBe(409);
+    expect(pane.sent).toEqual([]);
   });
 });
 

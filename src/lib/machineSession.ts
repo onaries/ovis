@@ -1,4 +1,4 @@
-import type { PendingMessage, ServerMessage } from "../../shared/protocol.ts";
+import type { PendingMessage, PendingRemoval, ServerMessage } from "../../shared/protocol.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { afterSend, afterSettled, greetingMemory, rememberGreeting } from "./greeting.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
@@ -24,6 +24,8 @@ export class MachineSession {
   private currentScope: string | null = null;
   private currentConnection: string | null = null;
   private currentEpoch = 0;
+  private announcedLifetime: string | undefined;
+  private resumedReceipts: Array<{ paneId: string; lifetime: string; removal: PendingRemoval }> = [];
   private role: RoleAck | null = null;
   private readonly handlers = new Set<Handler>();
   private readonly offMessage: () => void;
@@ -41,6 +43,7 @@ export class MachineSession {
     // Installed before view subscribers, and kept even while this PC has no mounted pane.
     this.offMessage = this.socket.on((message) => {
       if (this.closed) return;
+      if (message.type === "features") this.announcedLifetime = message.herdr_lifetime;
       // a connection that came back to a replaced herdr, or to one it cannot prove, can say so before
       // the roster does: the earlier herdr's drafts and lenses leave the reused pane IDs before any
       // pane hears of it
@@ -50,6 +53,22 @@ export class MachineSession {
       const told = message.type === "snapshot" || (message.type === "features" && this.knownHerdr(message.herdr_lifetime));
       if (told && this.currentScope === null) this.currentScope = `${this.identity}:${this.currentEpoch}`;
       if (told && message.connection !== undefined) this.currentConnection = message.connection;
+      if (message.type === "pending-messages" && this.currentScope === null && this.announcedLifetime !== undefined) {
+        // Open replays attaches before the first snapshot. Keep only exact resumed receipts,
+        // tagged with this connection's announced herdr, never its live queue or ordinary removals.
+        for (const removal of message.removed ?? []) if (removal.resumed === true) {
+          this.resumedReceipts.push({ paneId: message.pane_id, lifetime: this.announcedLifetime, removal });
+          if (this.resumedReceipts.length > 128) this.resumedReceipts.shift();
+        }
+      }
+      if (message.type === "snapshot" && this.currentScope !== null) {
+        for (const receipt of this.resumedReceipts) {
+          if (receipt.lifetime === message.snapshot.herdr_lifetime && this.knownHerdr(receipt.lifetime)) {
+            this.store.publish(paneStorageId(this.machineId, receipt.paneId), [], [receipt.removal], this.currentScope);
+          }
+        }
+        this.resumedReceipts = [];
+      }
       if (message.type === "role-ack") this.role = message;
       let sent = false;
       if (message.type === "pending-messages" && this.currentScope !== null) {
@@ -81,6 +100,8 @@ export class MachineSession {
   private disconnected(): void {
     if (this.currentScope !== null) this.store.suspendScope(this.currentScope);
     this.currentScope = null;
+    this.announcedLifetime = undefined;
+    this.resumedReceipts = [];
     this.currentConnection = null;
     this.currentEpoch++;
     this.role = null;

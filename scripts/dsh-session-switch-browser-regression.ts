@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, watch, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
@@ -26,18 +26,19 @@ const paths = ids.map((id, index) => {
   const path = join(directory, "session.v4.jsonl.zstd");
   const records = [
     { type: "session", version: 4, id, cwd: root },
-    { type: "user/message", seq: 1, time: 1, data: { source: { kind: "user" }, content: [{ type: "text", text: `Question ${index + 1}` }] } },
-    { type: "assistant/message", seq: 2, time: 2, data: { message: { content: [{ type: "text", text: answers[index] }] } } },
+    { type: "user/message", seq: 0, time: 1, data: { role: "user", source: { kind: "user" }, content: [{ type: "text", text: `Question ${index + 1}` }] } },
+    { type: "assistant/message", seq: 1, time: 2, data: { message: { role: "assistant", content: [{ type: "text", text: answers[index] }] } } },
   ];
   writeFileSync(path, Bun.zstdCompressSync(Buffer.from(records.map((record) => JSON.stringify(record)).join("\n") + "\n")));
   return path;
 });
-const launcher = join(root, "dsh-tui.mjs");
+const launcher = join(root, "node_modules", "@deepseek-harness-tui", "dsh-tui", "lib", "host-entry.js");
+mkdirSync(dirname(launcher), { recursive: true });
 const readyFile = join(root, "ready");
 const control = join(root, "control.sock");
 writeFileSync(launcher, `import { openSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-for (const path of ${JSON.stringify(paths)}) openSync(path, 'r');
+for (const path of ${JSON.stringify(paths)}) { openSync(path, 'r'); openSync(path.replace(/session\\.v4\\.jsonl\\.zstd$/, 'session.lock'), 'w'); }
 let listener;
 async function attach(id) {
   if (listener) await new Promise((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
@@ -74,7 +75,7 @@ try {
       const deadline = setTimeout(() => reject(new Error("dsh fixture did not start")), 15_000);
       watcher.on("change", (_event, name) => { if (name === "ready") { clearTimeout(deadline); resolve(); } });
     });
-    await herdrRpc("pane.send_text", { pane_id: paneId, text: `exec ${quote(Bun.which("node") ?? "node")} ${quote(launcher)}\n` });
+    await herdrRpc("pane.send_text", { pane_id: paneId, text: `exec env HOME=${quote(root)} DSH_HOME=${quote(store)} ${quote(Bun.which("node") ?? "node")} ${quote(launcher)}\n` });
     await ready;
   } finally { watcher.close(); }
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "dsh-tui", state: "idle" });

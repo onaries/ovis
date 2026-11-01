@@ -398,6 +398,17 @@ describe("OpenCode answer ordering", () => {
     });
   });
 
+  it("never submits for a Next, with or without an answer in the same body", async () => {
+    await fixture(async (f) => {
+      f.forms[0]!.fields.length = 1;
+      const card = await f.read();
+      expect((await f.answer(card, { step_next: true, custom_text: "first" })).status).toBe(400);
+      expect((await f.answer(card, { step_next: true })).status).toBe(400);
+      expect(f.replies).toEqual([]);
+      expect(f.counted.answers).toBe(0);
+    });
+  });
+
   it("saves unsent edits on backward navigation", async () => {
     await fixture(async (f) => {
       expect((await f.answer(await f.read(), { custom_text: "first" })).status).toBe(200);

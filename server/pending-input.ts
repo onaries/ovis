@@ -51,6 +51,9 @@ export class PendingInputError extends Error {
 }
 
 /** One authoritative record per message. Both automatic sends and explicit steering claim it here. */
+/** A message held behind one whose paste was left in the terminal's input line (#511): nothing of it was typed. */
+const BEHIND_PASTE = { code: "pending_held", message: "An earlier message is in the terminal's input line; send this one after it is cleared or sent" };
+
 export class PendingInputs<Owner, Lease> {
   private readonly records = new Map<string, PendingRecord<Owner, Lease>>();
   private readonly statuses = new Map<string, AgentStatus>();
@@ -146,7 +149,8 @@ export class PendingInputs<Owner, Lease> {
   }
 
   /** `held`: the message waits for an explicit send; `next` never offers it to automatic delivery. */
-  enqueue(owner: Owner, paneId: string, requestId: number, text: string, lease: Lease, identity: PendingIdentity, held = false): PendingRecord<Owner, Lease> {
+  /** `agentOnly`: for an agent alone (shared/protocol.ts submit `agent_only`); the caller has seen an agent in `identity` */
+  enqueue(owner: Owner, paneId: string, requestId: number, text: string, lease: Lease, identity: PendingIdentity, held = false, agentOnly = false): PendingRecord<Owner, Lease> {
     const previous = [...this.records.values()].find((item) => item.owner === owner && item.message.request_id === requestId);
     if (previous) {
       if (previous.paneId !== paneId || previous.message.text !== text) throw new PendingInputError("invalid_submit_id", "This submit id already belongs to another message");
@@ -171,7 +175,7 @@ export class PendingInputs<Owner, Lease> {
     if ([...this.records.values()].some((item) => item.paneId === paneId && item.message.state === "uncertain")) throw new PendingInputError("pending_uncertain", "Check the terminal before sending more pending messages");
     const item: PendingRecord<Owner, Lease> = {
       owner, paneId, lease, identity, inFlight: false,
-      message: { id: this.newId(), request_id: requestId, text, state: held ? "held" : "queued", created_at: new Date(this.now()).toISOString() },
+      message: { id: this.newId(), request_id: requestId, text, state: held ? "held" : "queued", created_at: new Date(this.now()).toISOString(), ...(agentOnly ? { agent_only: true as const } : {}) },
     };
     this.records.set(item.message.id, item);
     this.publish(owner, paneId);
@@ -184,6 +188,9 @@ export class PendingInputs<Owner, Lease> {
   }
 
   retains(owner: Owner, id: string): boolean { return this.records.get(id)?.owner === owner; }
+
+  /** The pending message `id`, still held here, was accepted for an agent alone: a saved copy's resend keeps that whatever it says. */
+  agentOnly(paneId: string, id: string): boolean { const item = this.records.get(id); return item?.paneId === paneId && item.message.agent_only === true; }
 
   next(paneId: string): PendingRecord<Owner, Lease> | null {
     if (!ready(this.statuses.get(paneId)) || this.gates.has(paneId)
@@ -226,7 +233,8 @@ export class PendingInputs<Owner, Lease> {
     if (retryWhenReady && !uncertain) delete item.message.error; else item.message.error = fault;
     const gate = this.gates.get(item.paneId);
     if (uncertain || gate?.by === item.message.id || gate?.completed) this.gates.delete(item.paneId);
-    if (uncertain) this.holdPane(item.paneId, fault);
+    // the pane's other messages wait behind it, each for its own reason: a paste left in the input line is that message's alone (#511)
+    if (uncertain) this.holdPane(item.paneId, fault.code === "pasted_not_sent" ? BEHIND_PASTE : fault);
     this.publish(item.owner, item.paneId);
   }
 

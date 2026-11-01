@@ -6,9 +6,11 @@
 import type { HerdrPane, ServerMessage } from "../../shared/protocol.ts";
 import { AttachOutputTail, AttachStartupProbes, isTakeoverExit } from "../attach-output.ts";
 import { HerdrError, herdrSocketPath, paneRead, paneSendText, sessionSnapshot } from "../herdr/client.ts";
+import { CoreAttachSession } from "../herdr-core/attach-session.ts";
+import { coreConnection, hcBin, runtime } from "../herdr-core/runtime.ts";
 import { MirrorSession } from "../mirror.ts";
 import { ReplayBuffer } from "../output-window.ts";
-import { PtySession } from "../pty/session.ts";
+import { PtySession, type PtySessionOptions } from "../pty/session.ts";
 import { type Client, connectionOf } from "./connections.ts";
 
 const MAX_REPLAY_BYTES = 128 * 1024;
@@ -192,7 +194,7 @@ interface AttachmentState {
 export interface PtyAttachment extends AttachmentState {
   readonly kind: "pty";
   /** the attach the latest start made: each retry, take-over or handoff's new terminal replaces it */
-  process: PtySession;
+  process: PtySession | CoreAttachSession;
   /** a held terminal's next try takes the slot from the other bridge for this client (`take-over`) */
   takeOver?: (client: Client) => void;
   /** how many times the pty took a new grid: an attach tells from it that it was resized since it started */
@@ -354,7 +356,8 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
     /** One budget persists across consecutive exits during recovery. Starting an attach never renews it. */
     let recoveryDeadline: number | null = null;
     let recoveryRetries = 0;
-    const start = (): PtySession => {
+    const start = (): PtySession | CoreAttachSession => {
+      const onCore = runtime() === "herdr-core";
       let takingOver = mayTakeOver(takeover) ? takeover : null;
       takeover = null;
       trying = true;
@@ -367,7 +370,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       let heldSince = 0;
       let holding = false;
       let holdTimer: ReturnType<typeof setTimeout> | undefined;
-      const probes = new AttachStartupProbes();
+      const probes = onCore ? null : new AttachStartupProbes();
       const outputTail = new AttachOutputTail();
       let tailTimer: ReturnType<typeof setTimeout> | undefined;
       const flushTail = (taken = false): void => {
@@ -410,7 +413,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         clearTimeout(holdTimer);
         if (held === null) return;
         // a read that ended inside what could have been a probe is output after all
-        const data = held + probes.flush();
+        const data = held + (probes?.flush() ?? "");
         held = null;
         // the look for a resize's redraw is over: an update it kept open is not kept for the session
         update = null;
@@ -593,11 +596,14 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         if (firstRecovery) relookup();
         else retryLookup();
       };
-      const command = process.env["OVIS_HERDR_BIN"] || "herdr";
+      // herdr-core shares a terminal among its viewers: `hc attach` has no slot to take over
+      const command = onCore ? hcBin() : process.env["OVIS_HERDR_BIN"] || "herdr";
       // node-pty reports a command it cannot exec only as a silent exit 1, which reads as an
       // ended attach (#925): look it up on the PATH and from the home directory the sidecar uses.
       if (!Bun.which(command, { PATH: process.env["PATH"] ?? "", cwd: process.env["HOME"] ?? "/" })) {
-        throw new HerdrError("attach_failed", `herdr could not be started: ${command} is not an executable on the server's PATH (set OVIS_HERDR_BIN to herdr's full path)`);
+        throw new HerdrError("attach_failed", onCore
+          ? `hc could not be started: ${command} is not an executable on the server's PATH (set OVIS_HC_BIN to hc's full path)`
+          : `herdr could not be started: ${command} is not an executable on the server's PATH (set OVIS_HERDR_BIN to herdr's full path)`);
       }
       // A resize since this attach started, even one back to its first grid, makes herdr's screens
       // until its redraw for the pty's current grid the wrong size (#2289). Only an update that began
@@ -658,7 +664,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         }
         took();
       };
-      const session = new PtySession({
+      const options: PtySessionOptions = {
         command,
         // --takeover goes after the id: before it, herdr reads the id as an unknown option
         args: ["terminal", "attach", attachedTerminal, ...(takingOver ? ["--takeover"] : [])],
@@ -670,13 +676,22 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         rows: attachment.rows,
         onData: (data) => {
           if (retired || attachments.get(paneId) !== attachment) return;
+          if (onCore) {
+            // hc has no herdr preamble, startup queries or exclusive-attach diagnostics.
+            if (!attachment.ready) {
+              held = null;
+              took();
+            }
+            forward(data);
+            return;
+          }
           // herdr's startup queries are the bridge's to answer: never readiness, broadcast or replay
-          if (!holding && held !== null) {
+          if (probes && !holding && held !== null) {
             const before = held;
             const taken = probes.take(data, (text) => ATTACH_PREAMBLE_RE.test(before + text));
             if (taken.replies) session.write(taken.replies);
             data = taken.output;
-          } else data = probes.flush() + data;
+          } else data = (probes?.flush() ?? "") + data;
           if (!data) return;
           output = (output + data).slice(-1024);
           if (held === null) return guard(data);
@@ -708,7 +723,11 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
           }
         },
         onExit: ended,
-      });
+      };
+      // on herdr-core the stream is a channel on the server's own hc connection: no `hc attach`, no PTY host
+      const session: PtySession | CoreAttachSession = onCore
+        ? new CoreAttachSession({ hc: coreConnection(), terminal: attachedTerminal, cols: options.cols, rows: options.rows, onData: options.onData, onExit: ended })
+        : new PtySession(options);
       return session;
     };
     attachment.takeOver = (client) => {

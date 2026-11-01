@@ -27,8 +27,11 @@ const catalogInput = 'const matches = ALL_TOOLS.filter(x => /confluence|atlassia
 const directCatalogInput = 'text(ALL_TOOLS.filter(x => /browser|playwright|chrome|opencli/i.test(x.name + " " + x.description)).slice(0,80));';
 const templateInput = 'const base = "/repo/kiosk/frontend";\nconst r = await tools.exec_command({cmd: `sed -n 68,82p ${base}/src/components/operator/OperatorDashboardPage.tsx`, yield_time_ms: 20000, max_output_tokens: 1200});\ntext(r.output);';
 const boundInput = String.raw`const command="node -e '"+load("receipt")+"'\ndiff -u "+load("draft")+" "+summary.outputPath;text(await tools.exec_command({cmd:command,max_output_tokens:3500}));`;
+const storedRoutineInput = 'store("applicationRoutine", `async (id) => { await tools.apply_patch("*** Begin Patch\\n*** Add File: " + file + "\\n+content\\n*** End Patch"); }`);text({routineReady:true});';
 const records = [
   { type: "event_msg", timestamp: "2026-10-24T13:00:00Z", payload: { type: "user_message", message: "Check the repository" } },
+  { type: "response_item", timestamp: "2026-10-24T13:00:01Z", payload: { type: "custom_tool_call", call_id: "stored-routine", name: "exec", input: storedRoutineInput } },
+  { type: "response_item", timestamp: "2026-10-24T13:00:01Z", payload: { type: "custom_tool_call_output", call_id: "stored-routine", output: 'Script completed\nOutput:\n{"routineReady":true}' } },
   { type: "response_item", timestamp: "2026-10-24T13:00:01Z", payload: { type: "custom_tool_call", call_id: "one", name: "exec", input } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "images", name: "exec", input: imageInput } },
   { type: "response_item", timestamp: "2026-10-24T13:00:02Z", payload: { type: "custom_tool_call", call_id: "dynamic", name: "exec", input: dynamicInput } },
@@ -103,6 +106,12 @@ try {
       }
       await mappedOptions.click();
       const bound = page.locator(".work-row-head").filter({ hasText: "node -e …" });
+      const routine = page.locator(".work-row-head").filter({ hasText: /^\s*exec\s*$/ });
+      await routine.click();
+      assert.equal(await routine.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), storedRoutineInput, "stored patch routines retain their whole original code");
+      await routine.scrollIntoViewIfNeeded();
+      if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `codex-stored-routine-${width}-${theme}.png`) });
+      await routine.click();
       await bound.click();
       assert.equal(await bound.locator("..").locator("..").locator(".chat-tool-io").first().textContent(), boundInput);
       await bound.click();
@@ -178,6 +187,7 @@ try {
       const commandLabel = page.locator(".work-row-head").filter({ hasText: "git status --short · bun test" }).locator(".work-row-name.is-verb");
       assert.deepEqual(await subagentLabel.evaluate(textStyle), await commandLabel.evaluate(textStyle), "Subagent uses the ordinary row label's computed typography");
       assert.equal(await assigned.locator(".work-row-summary").textContent(), "· Inspect the parser");
+      assert.deepEqual(await assigned.locator(".work-row-summary").evaluate(textStyle), await commandLabel.evaluate(textStyle), "Subagent descriptions use the ordinary row label's computed typography");
       await assigned.focus();
       await page.keyboard.press("Enter");
       const card = assigned.locator("..").locator("..").locator(".chat-task-call");
@@ -196,6 +206,7 @@ try {
       phase = 1;
       const waiting = page.locator(".work-row-head").filter({ hasText: /Wait for agent|에이전트 응답 대기/ });
       await waiting.waitFor();
+      assert.deepEqual(await waiting.locator(".work-row-summary").evaluate(textStyle), await commandLabel.evaluate(textStyle), "Wait for agent uses the ordinary row label's computed typography");
       await waiting.click();
       const waitingCard = waiting.locator("..").locator("..").locator(".chat-task-call");
       assert.match(await waitingCard.innerText(), /Reported status: running|보고된 상태: 실행 중/);

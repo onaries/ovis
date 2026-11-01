@@ -2,6 +2,7 @@ import type { ClientMessage, ClientRole, PendingMessage, ServerFeature, ServerMe
 import { receiptResumeId } from "./receiptResume.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
 import { ConnectionTrace } from "./connectionTrace.ts";
+import { getTransport, type WebSocketLike } from "./transport.ts";
 
 type Handler = (message: ServerMessage) => void;
 
@@ -56,6 +57,8 @@ const IDLE_CHECK_MS = 5_000;
  * the page works through the output it held back.
  */
 const SHOWN_GRACE_MS = 5_000;
+const SOCKET_CONNECTING = 0;
+const SOCKET_OPEN = 1;
 const SOCKET_CLOSING = 2;
 const SOCKET_CLOSED = 3;
 const DISCONNECTED: SubmitResult = { ok: false, code: "disconnected", message: "the connection dropped before the pane confirmed this message" };
@@ -107,7 +110,7 @@ function defaultUrl(): string {
  *   user reviews instead. Control frames (attach/resize/role) replay as before.
  */
 export class HerdrSocket {
-  private socket: WebSocket | null = null;
+  private socket: WebSocketLike | null = null;
   private readonly url: string;
   private readonly handlers = new Set<Handler>();
   private readonly disconnectHandlers = new Set<() => void>();
@@ -135,7 +138,7 @@ export class HerdrSocket {
   /** attempts given up at their deadline since the last one that opened */
   private connectTimeouts = 0;
   /** sockets wake() or a probe ended before their close event ran: that event can still say the output stopped */
-  private endedEarly = new WeakSet<WebSocket>();
+  private endedEarly = new WeakSet<WebSocketLike>();
   private disposed = false;
   private wakeListening = false;
   private connectionState: ConnectionState = "idle";
@@ -244,7 +247,7 @@ export class HerdrSocket {
   }
 
   get connected(): boolean {
-    return this.socket?.readyState === WebSocket.OPEN;
+    return this.socket?.readyState === SOCKET_OPEN;
   }
 
   /**
@@ -281,7 +284,7 @@ export class HerdrSocket {
   connect(): void {
     if (this.disposed || this.left) return;
     this.listenForWake();
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+    if (this.socket && (this.socket.readyState === SOCKET_OPEN || this.socket.readyState === SOCKET_CONNECTING)) {
       return;
     }
     // A socket still CLOSING (or CLOSED before its close event ran) is replaced: end it first, so its
@@ -295,7 +298,7 @@ export class HerdrSocket {
     // a backoff retry still waiting would only open a second attempt later, past whatever ends this one
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    const socket = new WebSocket(this.url);
+    const socket = getTransport().openSocket(this.url);
     const epoch = ++this.connectionEpoch;
     const started = Date.now();
     this.socket = socket;
@@ -309,7 +312,7 @@ export class HerdrSocket {
     this.clearConnectTimer();
     this.connectTimer = window.setTimeout(() => {
       this.connectTimer = null;
-      if (this.socket !== socket || socket.readyState !== WebSocket.CONNECTING) return;
+      if (this.socket !== socket || socket.readyState !== SOCKET_CONNECTING) return;
       this.trace.record("connect_timeout", { elapsed_ms: Date.now() - started, attempt: this.connectTimeouts }, true);
       this.connectTimeouts += 1;
       socket.close();
@@ -461,7 +464,7 @@ export class HerdrSocket {
   }
 
   /** The end of this connection, from its close event or a connect deadline; a stale socket's is ignored. */
-  private closed(socket: WebSocket, code: number): void {
+  private closed(socket: WebSocketLike, code: number): void {
     if (this.socket !== socket) return;
     this.endConnection();
     if (code === OUTPUT_STALLED_CLOSE_CODE) {
@@ -504,7 +507,7 @@ export class HerdrSocket {
    */
   private probe(): void {
     const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN || !this.pingKnown || this.probeTimer !== null) return;
+    if (!socket || socket.readyState !== SOCKET_OPEN || !this.pingKnown || this.probeTimer !== null) return;
     this.connectionState = "probing";
     this.probeRefusalRecorded = false;
     // a paused probe goes on with a fresh ping: whoever waits on it keeps waiting
@@ -528,7 +531,7 @@ export class HerdrSocket {
   }
 
   /** Sends one of the probe's pings and arms its deadline; `attempt` 2 is the last before a drop. */
-  private ping(socket: WebSocket, attempt: 1 | 2): void {
+  private ping(socket: WebSocketLike, attempt: 1 | 2): void {
     const deadline = Math.min(PROBE_TIMEOUT_MAX_MS, PROBE_TIMEOUT_MS * 2 ** this.probeDrops);
     const armedAt = Date.now();
     this.probeTimer = window.setTimeout(() => {
@@ -566,7 +569,7 @@ export class HerdrSocket {
   }
 
   /** Waits out a probe in flight on `socket`; true when it is still this connection afterwards. */
-  private async probeSettled(socket: WebSocket): Promise<boolean> {
+  private async probeSettled(socket: WebSocketLike): Promise<boolean> {
     while (this.probing && this.socket === socket) await this.probeDone;
     return this.connected && this.socket === socket;
   }
@@ -577,7 +580,7 @@ export class HerdrSocket {
    * and a new socket connects now and replays the role and attaches. The old socket's late events
    * are ignored (it is no longer this.socket).
    */
-  private drop(socket: WebSocket): void {
+  private drop(socket: WebSocketLike): void {
     this.trace.record("probe_drop", { pending: this.submits.size }, true);
     this.probeDrops += 1;
     this.endConnection();
@@ -590,7 +593,7 @@ export class HerdrSocket {
     this.connect();
   }
 
-  private watchIdle(socket: WebSocket): void {
+  private watchIdle(socket: WebSocketLike): void {
     if (this.idleTimer !== null) window.clearInterval(this.idleTimer);
     this.idleTimer = window.setInterval(() => {
       if (this.socket !== socket) return;
@@ -643,7 +646,7 @@ export class HerdrSocket {
     if (this.disposed || this.stopped) return;
     const socket = this.socket;
     // an open socket may be half-open after a sleep or a network change: ask it (a bridge without "ping" is trusted)
-    if (socket?.readyState === WebSocket.OPEN) {
+    if (socket?.readyState === SOCKET_OPEN) {
       this.probe();
       return;
     }
@@ -651,7 +654,7 @@ export class HerdrSocket {
       this.retries = 0;
       return;
     }
-    if (socket?.readyState === WebSocket.CONNECTING && this.connectTimeouts > 0) {
+    if (socket?.readyState === SOCKET_CONNECTING && this.connectTimeouts > 0) {
       // never opened, so its close event can carry no output-stalled code: end it like its deadline would
       socket.close();
       this.closed(socket, 1006);
@@ -903,7 +906,7 @@ export class HerdrSocket {
   /** `typed`: from the terminal's input line, typed into the pane like the keyboard (see ClientMessage).
    * `clearDraft`: an immediate send over the draft an input_draft refusal named (ClientMessage `clear_draft`)
    * `sendAnyway`: an immediate send after a refusal that showed the box (ClientMessage `send_anyway`) */
-  submit(paneId: string, text: string, payload: string, typed = false, delivery: SubmitDelivery = "immediate", clearDraft?: string, sendAnyway = false, resendId?: string, generation?: number, capacityRetry = false): Promise<SubmitResult> | null {
+  submit(paneId: string, text: string, payload: string, typed = false, delivery: SubmitDelivery = "immediate", clearDraft?: string, sendAnyway = false, resendId?: string, generation?: number, agentOnly = false, capacityRetry = false): Promise<SubmitResult> | null {
     const socket = this.socket;
     if (!this.connected || socket === null || this.mode === "observe") return null;
     if (resendId !== undefined && sendAnyway) return Promise.resolve({ ok: false, code: "invalid_delivery", message: "Use a held-copy resend id only for an immediate chat message" });
@@ -922,6 +925,8 @@ export class HerdrSocket {
       // hold is decided once the bridge said what it supports: one too old to hold queues it as before
       if (delivery === "hold" && !this.canHoldMessages()) delivery = "queue";
       if (delivery === "queue" && !this.canQueueMessages()) return { ok: false, code: "pending_input_unsupported", message: "Update this PC to queue messages." };
+      // an older bridge ignores agent_only and would type the message into whatever is in front, a shell too
+      if (agentOnly && !this.features.has("agent-only")) return { ok: false, code: "agent_only_unsupported", message: "Update this PC to send comments on a reply. Nothing was sent." };
       if (!this.features.has("submit")) {
         if (clearDraft !== undefined || sendAnyway) return { ok: false, code: "unsupported", message: "Update this PC to clear a terminal draft before sending. Nothing was sent." };
         this.rawSend({ type: "input", pane_id: paneId, text: `${payload}\r` });
@@ -930,7 +935,7 @@ export class HerdrSocket {
       const id = this.nextSubmit++;
       return this.submitRequest({ type: "submit", id, pane_id: paneId, text, payload, ...(typed ? { typed: true } : {}), ...(delivery !== "immediate" ? { delivery } : {}),
         ...(capacityRetry ? { capacity_retry: true as const } : {}),
-        ...(clearDraft !== undefined ? { clear_draft: clearDraft } : {}), ...(sendAnyway ? { send_anyway: true as const } : {}), ...(resendId !== undefined ? { resend_id: resendId, resend_generation: generation ?? 0 } : {}) });
+        ...(clearDraft !== undefined ? { clear_draft: clearDraft } : {}), ...(sendAnyway ? { send_anyway: true as const } : {}), ...(resendId !== undefined ? { resend_id: resendId, resend_generation: generation ?? 0 } : {}), ...(agentOnly ? { agent_only: true as const } : {}) });
     })();
   }
 

@@ -61,6 +61,9 @@ run_script scripts/lan-exposure-notice-regression.ts
 run_script scripts/terminal-dispose-browser-qa.ts
 run_script scripts/herdr-restart-regression.ts
 run_script scripts/sticky-modifiers-regression.ts
+run_script scripts/terminal-switch-regression.ts
+run_script scripts/terminal-switch-resize-regression.ts
+run_script scripts/terminal-view-replay-demo-regression.ts
 run_script scripts/pane-lifetime-regression.ts
 run_script scripts/terminal-arrows-clicks-regression.ts
 run_script scripts/terminal-viewport-regression.ts
@@ -79,6 +82,8 @@ run_script scripts/link-menu-demo-regression.ts
 run_script scripts/key-bar-customization-demo-regression.ts
 run_script scripts/key-bar-hold-repeat-regression.ts
 run_script scripts/settings-pages-demo-regression.ts
+run_script scripts/agent-entry-points-demo-regression.ts
+run_script scripts/agents-sign-in-demo-regression.ts
 run_script scripts/interface-font-demo-regression.ts
 run_script scripts/theme-first-paint-demo-regression.ts
 run_script scripts/boot-loading-demo-regression.ts
@@ -114,9 +119,13 @@ run_script scripts/agy-chat-browser-qa.ts
 run_script scripts/gjc-status-browser-regression.ts
 run_script scripts/math-browser-qa.ts
 run_script scripts/claude-image-browser-qa.ts
+run_script scripts/chat-markdown-images-browser-qa.ts
 run_script scripts/pi-image-browser-qa.ts
 run_script scripts/omp-codex-image-browser-qa.ts
+run_script scripts/grok-image-browser-qa.ts
+run_script scripts/copilot-image-browser-qa.ts
 run_script scripts/file-viewer-regression.ts
+run_script scripts/web-panel-mobile-regression.ts
 run_script scripts/pwa-update-browser-qa.ts
 run_script scripts/install-state-demo-regression.ts
 run_script scripts/revision-bound-update-demo-regression.ts
@@ -132,8 +141,12 @@ run_script scripts/phone-glass-header-demo-regression.ts
 run_script scripts/chat-greeting-demo-regression.ts
 run_script scripts/restored-draft-demo-regression.ts
 run_script scripts/chat-local-send-follow-demo-regression.ts
+run_script scripts/reply-comments-demo-regression.ts
+run_script scripts/diff-line-notes-demo-regression.ts
 run_script scripts/chat-tool-paths-demo-regression.ts
 run_script scripts/chat-list-markers-demo-regression.ts
+run_script scripts/chat-svg-figures-demo-regression.ts
+run_script scripts/chat-math-demo-regression.ts
 run_script scripts/terminal-paste-insert-demo-regression.ts
 run_script scripts/composer-fit-demo-regression.ts
 run_script scripts/held-rows-demo-regression.ts
@@ -147,6 +160,7 @@ run_script scripts/sidebar-declutter-demo-regression.ts
 run_script scripts/sidebar-spacing-demo-regression.ts
 run_script scripts/sidebar-machine-layout-demo-regression.ts
 run_script scripts/sidebar-machine-removal-demo-regression.ts
+run_script scripts/sidebar-selection-contrast-demo-regression.ts
 run_script scripts/hide-pc-demo-regression.ts
 run_script scripts/sidebar-branch-line-demo-regression.ts
 run_script scripts/sidebar-tokens-demo-regression.ts
@@ -159,6 +173,7 @@ run_script scripts/files-prompt-regression.ts
 run_script scripts/plugin-actions-demo-regression.ts
 run_script scripts/background-agent-detail-demo-regression.ts
 run_script scripts/codex-background-browser-qa.ts
+run_script scripts/artifacts-browser-regression.ts
 run_script scripts/palette-machines-demo-regression.ts
 run_script scripts/health-flap-demo-regression.ts
 run_script scripts/narrow-pane-demo-regression.ts

@@ -45,6 +45,28 @@ describe("Codex patches", () => {
     expect(patchFiles(PATCH + "*** Update File: src/a.ts\n*** Delete File: old.txt\n")).toEqual(["src/a.ts", "docs/b.md", "old.txt"]);
   });
 
+  it("keeps quoted patch routines and comments as code instead of extracting their patch text", () => {
+    const call = `await tools.apply_patch(${JSON.stringify(PATCH)});`;
+    for (const input of [
+      `store("routine", \`${call}\`); text({routineReady:true});`,
+      `// ${call}`,
+      `/* ${call} */`,
+      `const example = /${call.replaceAll("/", "\\/")}/;`,
+      `other.${call.replace("await ", "")}`,
+    ]) expect(patchText(input)).toBeNull();
+    expect(patchText(`store("routine", \`${call}\`); ${call}`)).toBe(PATCH);
+  });
+
+  it("keeps incomplete and concatenated patch arguments as code without hiding their remainder", () => {
+    const prefix = "*** Begin Patch\n*** Add File: ";
+    for (const input of [
+      prefix,
+      `await tools.apply_patch(${JSON.stringify(prefix)});`,
+      `await tools.apply_patch(${JSON.stringify(prefix)} + file + "\\n+content\\n*** End Patch");`,
+      `await tools.apply_patch(${JSON.stringify(PATCH)} + suffix);`,
+    ]) expect(patchText(input)).toBeNull();
+  });
+
   it("finds an exec patch stored in a constant without evaluating code", () => {
     const source = `const patch = ${JSON.stringify(PATCH)}; text(await tools.apply_patch(patch));`;
     expect(patchText(source)).toBe(PATCH);

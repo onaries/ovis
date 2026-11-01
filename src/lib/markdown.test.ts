@@ -64,6 +64,48 @@ describe("parseMarkdown", () => {
     expect(parseMarkdown("\\[unfinished")).toEqual([{ type: "paragraph", lines: [[{ type: "text", value: "\\[unfinished" }]] }]);
   });
 
+  it("recognizes $$ display math and a math fence", () => {
+    expect(parseMarkdown("$$\n\\int_0^1 x\\,dx\n$$")).toEqual([{ type: "math", value: "\\int_0^1 x\\,dx", dollar: true }]);
+    expect(parseMarkdown("before\n$$x^2$$\nafter").map((block) => block.type)).toEqual(["paragraph", "math", "paragraph"]);
+    expect(parseMarkdown("$$unfinished\n\n# Still a heading").map((block) => block.type)).toEqual(["paragraph", "heading"]);
+    expect(parseMarkdown("$$ a\n$$ b\n```\ncode\n```\n$$ c $$").map((block) => block.type)).toEqual(["paragraph", "paragraph", "code", "math"]);
+    // a formula left open does not hide one a later line opens and closes, with either delimiter
+    expect(parseMarkdown("$$oops\n\n# Heading\n\n$$x^2$$").map((block) => block.type)).toEqual(["paragraph", "heading", "math"]);
+    expect(parseMarkdown("\\[oops\n\n# Heading\n\n\\[x^2\\]").map((block) => block.type)).toEqual(["paragraph", "heading", "math"]);
+    // a blank line ends the search for a close (display math holds none), so a later formula on several lines is drawn
+    expect(parseMarkdown("$$ is the shell PID.\n\nLater:\n\n$$\na^2+b^2\n$$").map((block) => block.type)).toEqual(["paragraph", "paragraph", "math"]);
+    expect(parseMarkdown("\\[oops\n\n# Heading\n\n\\[\nx\n\\]").map((block) => block.type)).toEqual(["paragraph", "heading", "math"]);
+    // nor does it reach past a line that opens a formula with the other delimiter
+    expect(parseMarkdown("$$oops\n\\[\nx\n\\]\n$$").map((block) => block.type)).toEqual(["paragraph", "math", "paragraph"]);
+    expect(parseMarkdown("\\[oops\n$$\nx\n$$\n\\]").map((block) => block.type)).toEqual(["paragraph", "math", "paragraph"]);
+    // a line that closes its formula and goes on in prose is prose, and takes nothing after it
+    expect(parseMarkdown("$$E=mc^2$$ where E is energy\n\n## Units\n\n- joules\n\n$$\nE\n$$").map((block) => block.type)).toEqual(["paragraph", "heading", "list", "math"]);
+    expect(parseMarkdown("```math\nx^2\n```")).toEqual([{ type: "code", language: "math", value: "x^2" }]);
+  });
+
+  it("draws $…$, $$…$$ and a math fence with KaTeX, and leaves prices as text", async () => {
+    await loadKatex();
+    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    try {
+      const draw = (source: string): string => renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(Markdown, { children: source }) }));
+      expect(draw("$x^2$ costs $5 and $10")).toMatch(/^(?:(?!katex).)*class="katex"(?:(?!class="katex").)*\$5 and \$10/s);
+      // one KaTeX cannot draw shows as written: a $$ formula on its own lines, a math fence as its code
+      expect(draw("$$\na \\unknowncommand\nb\n$$")).toContain('<span class="markdown-math-source">$$\na \\unknowncommand\nb\n$$</span>');
+      expect(draw("$$\\unknowncommand$$")).toContain('<span class="markdown-math-source">$$\\unknowncommand$$</span>');
+      expect(draw("$$\n\\unknowncommand\n$$")).toContain('<span class="markdown-math-source">$$\n\\unknowncommand\n$$</span>');
+      expect(draw("```math\n\\unknowncommand\n```")).toContain("<pre");
+      for (const source of ["$$\nx^2\n$$", "```math\nx^2\n```"]) {
+        const html = draw(source);
+        expect(html).toContain("katex-display");
+        expect(html).not.toContain("<pre");
+      }
+    } finally {
+      if (languages) Object.defineProperty(navigator, "languages", languages);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
+  });
+
   it("keeps later markdown and code intact after an unclosed display formula", () => {
     for (const code of ["raw code", "\\]"]) {
       expect(parseMarkdown(`\\[unfinished\n\n# Still a heading\n\n\`\`\`tex\n${code}\n\`\`\`\n\n- still a list`).map((block) => block.type)).toEqual([
@@ -150,6 +192,32 @@ describe("inline markdown", () => {
       { type: "code", value: "\\(raw\\)" },
     ]);
     expect(parseInline("\\(unfinished")).toEqual([{ type: "text", value: "\\(unfinished" }]);
+  });
+
+  it("reads $…$ as math only where a price cannot be", () => {
+    const text = (value: string): InlineNode[] => [{ type: "text", value }];
+    for (const prose of [
+      "costs $5 and $10 today", "$5 or $10", "from $5 to $10.", "I paid $5 for X$ and", "$20, $30 and $40",
+      "a$b$c", "$x$5", "$ x$", "$x $", "\\$x$", "$$x$$ inline", "echo $HOME and $PATH", "Run $HOME/${PATH} now", "cd $HOME/$(whoami)", "echo $A$#", "$5 or six$", "${HOME} and ${PATH}", "$x$y",
+    ]) expect(parseInline(prose)).toEqual(text(prose));
+    expect(parseInline("$x^2$ and $\\alpha$.")).toEqual([
+      { type: "math", value: "x^2", dollar: true }, { type: "text", value: " and " }, { type: "math", value: "\\alpha", dollar: true }, { type: "text", value: "." },
+    ]);
+    expect(parseInline("solve $2x+1 = 0$")).toEqual([{ type: "text", value: "solve " }, { type: "math", value: "2x+1 = 0", dollar: true }]);
+    expect(parseInline("($E=mc^2$)")).toEqual([{ type: "text", value: "(" }, { type: "math", value: "E=mc^2", dollar: true }, { type: "text", value: ")" }]);
+    expect(parseInline("$2 + 2 = 4$")).toEqual([{ type: "math", value: "2 + 2 = 4", dollar: true }]);
+    // a formula touching Korean, Japanese or Chinese text (a particle) is still one
+    expect(parseInline("$x$는 실수이다")).toEqual([{ type: "math", value: "x", dollar: true }, { type: "text", value: "는 실수이다" }]);
+    expect(parseInline("함수 $f(x)$를 보자").map((node) => node.type)).toEqual(["text", "math", "text"]);
+    expect(parseInline("값은$x$이다").map((node) => node.type)).toEqual(["text", "math", "text"]);
+    // sentence punctuation after a formula ends the sentence, not the formula
+    for (const end of ["?", "!", ".", ","]) expect(parseInline(`What is $x$${end}`).map((node) => node.type)).toEqual(["text", "math", "text"]);
+    expect(parseInline("$3$ apples")).toEqual([{ type: "math", value: "3", dollar: true }, { type: "text", value: " apples" }]);
+    expect(parseInline("`$x$`")).toEqual([{ type: "code", value: "$x$" }]);
+    // a code span after a dollar stays a code span: its backtick never joins a formula
+    expect(parseInline("$x `y$` z")).toEqual([{ type: "text", value: "$x " }, { type: "code", value: "y$" }, { type: "text", value: " z" }]);
+    expect(parseInline("Set $FOO `bar$`")).toEqual([{ type: "text", value: "Set $FOO " }, { type: "code", value: "bar$" }]);
+    expect(parseInline("$a`$ b")).toEqual([{ type: "text", value: "$a`$ b" }]);
   });
 
   it("preserves underscores in identifiers while retaining standalone emphasis", () => {
@@ -396,8 +464,8 @@ describe("text no one wrote by hand", () => {
     // These searches have no variable-length backtracking inside one attempt. The token pattern
     // is deliberately absent: a single global exec of it can search quadratically before failing.
     const searches = new Set([
-      /[`[<*_~]|\\\(|file:\/\/\/|https?:\/\/|www\./g,
-      /\n/g, /[\n\r\u2028\u2029]/g, /\\\)/g, /[\]\n]/g, /[\s)]/g,
+      /[`[<*_~$]|\\\(|file:\/\/\/|https?:\/\/|www\./g,
+      /\n/g, /[\n\r\u2028\u2029]/g, /\\\)/g, /\$/g, /[\]\n]/g, /[\s)]/g,
       /(?<=\S)_(?![\p{L}\p{N}\p{M}_])/gu,
       /(?<=\S)__(?![\p{L}\p{N}\p{M}_])/gu,
       // Only the single-underscore token can succeed in the last fixture; trying the bold
@@ -432,7 +500,7 @@ describe("text no one wrote by hand", () => {
       return nodes;
     };
     // a megabyte of each took from one minute to four: every one was searched from to the line's end
-    for (const part of ["[a", "\\(", "_a ", "__a "]) {
+    for (const part of ["[a", "\\(", "_a ", "__a ", "a$"]) {
       const line = (length: number): string => part.repeat(Math.ceil(length / part.length));
       for (const length of [20_000, 200_000]) {
         expect(counted(line(length))).toEqual([{ type: "text", value: line(length) }]);
@@ -453,6 +521,10 @@ describe("text no one wrote by hand", () => {
       if (marks !== "") marked += 1;
     }
     expect(marked).toBeGreaterThan(1000);
+  });
+
+  it("reads a line of dollars that never closes in linear time", () => {
+    for (const part of ["$a ", "$5 ", "$a\\$", " $a$b"]) linear((size) => part.repeat(size / part.length), 200_000, (line) => parseInline(line));
   });
 
   it("adds an item's lines to it without copying the item at every line", () => {

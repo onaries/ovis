@@ -128,6 +128,50 @@ it.each(["delivery first", "withdrawal first", "ambiguous delivery first", "ambi
   }
 });
 
+it.each(["same browser", "no device", "wrong browser", "wrong device", "read-only", "revoked", "no resume id", "expired", "uncertain",
+  "settled after reattach", "late wrong browser", "late wrong device", "late read-only", "late revoked"] as const)(
+  "replays a follow-up's exact receipt only to the browser that sent it (#2421): %s", (name) => {
+    // "late": the reload attaches before the Enter's reply settles the send, so the receipt is pushed to it
+    const late = name === "settled after reattach" || name.startsWith("late ");
+    const scenario = name.replace(/^late /, "");
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const token = crypto.randomUUID(), frames = new Map<Client, ServerMessage[]>(), clients = new Set<Client>(), revoked = new Set<Client>();
+      const client = (deviceId: string | undefined, receiptResumeId: string | undefined, readOnly = false): Client => {
+        const output: ServerMessage[] = [];
+        const owner = { data: connectionData({ deviceId, readOnly }), getBufferedAmount: () => 0,
+          send: (value: string) => { output.push(JSON.parse(value)); return 1; } } as Client;
+        owner.data.attached.set("p", { keepSize: false, receiptResumeId });
+        clients.add(owner); frames.set(owner, output); return owner;
+      };
+      const device = scenario === "no device" ? undefined : "device";
+      const first = client(device, scenario === "no resume id" ? undefined : token);
+      const delivery = createPendingDelivery({
+        options: {}, clients, attachments: new Map(), serialize: async (_pane, task) => task(), lastTyped: new Map(),
+        sight: () => { throw new Error("a receipt replay takes no input lease"); },
+        submitText: async () => { throw new Error("a receipt replay never types"); },
+        authorizeSocket: (owner) => { if (revoked.has(owner)) throw new Error("revoked"); },
+        clientSnapshot: async () => ({ panes: [] }) as unknown as SessionSnapshot,
+        omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
+      });
+      const item = delivery.pending.enqueue(first, "p", 1, "follow-up", null, { agent: "codex", terminalId: "p", session: null });
+      expect(delivery.pending.claim(item, false)).toBe(true);
+      // an Enter nobody confirmed leaves an uncertain copy, which only ever ages out as dismissed
+      if (scenario === "uncertain") delivery.pending.settle(item, { code: "submit_changed", message: "Enter was not confirmed" }, true);
+      else if (!late) delivery.pending.settle(item);
+      clients.delete(first); delivery.closeConnection(first);
+      if (scenario === "uncertain") { now += 60_001; delivery.pending.expire(); }
+      if (scenario === "expired") now += 10 * 60 * 1000 + 1;
+      const resumed = client(scenario === "wrong device" ? "other" : device, scenario === "wrong browser" ? crypto.randomUUID() : token, scenario === "read-only");
+      if (scenario === "revoked") revoked.add(resumed);
+      delivery.attached(resumed, "p");
+      if (late) delivery.pending.settle(item);
+      const removed = frames.get(resumed)!.flatMap((frame) => frame.type === "pending-messages" ? frame.removed ?? [] : []);
+      expect(removed).toEqual(["same browser", "no device", "settled after reattach"].includes(scenario) ? [{ id: item.message.id, outcome: "sent", resumed: true }] : []);
+    } finally { clock.mockRestore(); }
+  });
+
 it.each(["before close", "after close", "overlapping reload", "same live browser", "no device", "read-only", "detach", "wrong browser", "wrong device", "revoked", "expired", "pending cap", "completed cap", "confirmation budget"] as const)(
   "resumes only exact, authorized Pi presentation receipts: %s", async (when) => {
     const root = mkdtempSync(join(tmpdir(), "ovis-pi-resume-")); roots.push(root);

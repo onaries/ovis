@@ -93,7 +93,7 @@ export interface AgentCatalogEntry {
   };
   /** null: it needs no sign-in */
   sign_in: {
-    /** the account sign-in Ovis already runs (Settings → Subscription usage), when it has one for this agent */
+    /** the account sign-in Ovis already runs (Settings → Agents), when it has one for this agent */
     provider: UsageProviderId | null;
     /** the agent's own sign-in command, outside its TUI */
     command: readonly string[] | null;

@@ -11,17 +11,24 @@ import type { ProviderUsage } from "../../shared/usage.ts";
 
 export interface GuideState {
   step: "welcome" | "setup";
+  /** opened again from Settings: it changes no setting by itself (turnsUsageOn) */
+  reopened?: true;
 }
 
 /** I'm new to Ovis */
 export type GuideEvent = { type: "begin" };
 
 export const WELCOME: GuideState = { step: "welcome" };
-/** Settings → Setup guide opens the setup screen itself */
-export const REOPENED: GuideState = { step: "setup" };
+/** Settings → Agents' Open setup guide opens the setup screen itself */
+export const REOPENED: GuideState = { step: "setup", reopened: true };
 
 export function guideStep(state: GuideState, event: GuideEvent): GuideState {
-  return event.type === "begin" && state.step === "welcome" ? REOPENED : state;
+  return event.type === "begin" && state.step === "welcome" ? { step: "setup" } : state;
+}
+
+/** Plan usage turns on by itself for a signed-in account on a first run only: a reopened guide leaves the user's choice alone. */
+export function turnsUsageOn(state: GuideState): boolean {
+  return state.reopened !== true;
 }
 
 /** The setup screen's look at the PC: GET /api/agent-catalog, as far as it got. */
@@ -194,7 +201,9 @@ const isObject = (value: unknown): value is Record<string, unknown> => typeof va
 function readState(value: unknown): GuideState | null {
   if (!isObject(value)) return null;
   // the old multi-step guide's record (its outcomes, plan and agent) is no guide to show, even at its welcome
-  if (Object.keys(value).length !== 1) return null;
+  const keys = Object.keys(value);
+  if (keys.length === 2 && value["step"] === "setup" && value["reopened"] === true) return REOPENED;
+  if (keys.length !== 1) return null;
   return value["step"] === "welcome" || value["step"] === "setup" ? { step: value["step"] } : null;
 }
 

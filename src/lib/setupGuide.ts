@@ -1,5 +1,5 @@
 /**
- * The first-run setup guide's opener: the guide (onboarding PR 3) listens, and Settings → Setup guide
+ * The first-run setup guide's opener: the guide (onboarding PR 3) listens, and Settings → Agents' Setup guide
  * (PR 4) asks. A request is a window event, so the page that opens it needs no handle on the
  * component that draws it.
  */

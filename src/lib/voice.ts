@@ -9,6 +9,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchVoiceStatus } from "./api.ts";
+import { getTransport } from "./transport.ts";
 import { LOCALE_TAGS, type Language, type LanguageSetting } from "./i18n.ts";
 import { useSettings, type DictationLanguage } from "./settings.ts";
 import {
@@ -692,7 +693,7 @@ export function createVoiceEngine(io: EngineIO) {
     const language = io.language();
     form.append(VOICE_FORM.language, transcribeLanguage(language.locale, language.ui));
     try {
-      const response = await fetch("/api/voice/transcribe", { method: "POST", body: form, credentials: "same-origin", signal });
+      const response = await getTransport().fetch("/api/voice/transcribe", { method: "POST", body: form, credentials: "same-origin", signal });
       if (!response.ok || !response.body) {
         const body = (await response.json().catch(() => null)) as { error?: { code?: unknown } } | null;
         const code = typeof body?.error?.code === "string" ? body.error.code : null;

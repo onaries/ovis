@@ -1,12 +1,13 @@
-import type { IBuffer, ILink, ILinkProvider } from "@xterm/xterm";
+import type { IBuffer, ILink, ILinkDecorations, ILinkProvider } from "@xterm/xterm";
 import { fileUriPath } from "../../shared/fileUri.ts";
+import { isCodeName } from "./filePaths.ts";
 
 /** what a name is made of: letters, digits and the marks that complete them (a decomposed `é` is two) */
 const NAME = "\\p{L}\\p{N}\\p{M}_";
 /**
  * A path, optionally followed by an agent's line/column or #L reference, kept for the viewer.
- * Only a path with a folder in
- * it becomes a link (see below): a terminal is full of bare names (`ls`, `git status`, a
+ * A path with a folder in it opens on a plain click. A bare name (`README.md`) opens only on
+ * Cmd+click, Ctrl+click off a Mac (`bareNameLinks`): a terminal is full of them (`ls`, `git status`, a
  * compiler's output), a tap or a click to focus the pane lands on one, and the file viewer
  * would open over the terminal for it. A chat's plain text is read the same way (BARE_PATH in
  * filePaths.ts).
@@ -65,6 +66,48 @@ export function hyperlinkFilter(): { handler: (payload: string) => boolean; rese
   };
 }
 
+/**
+ * The links of bare file names (`design.md`, no folder), which only Cmd+click (Ctrl+click off a
+ * Mac) follows, as in VS Code's terminal, and which are drawn as links (underline, pointer) only
+ * while that key is held. `update` hears the key go down and up (and the mouse's keys as it moves:
+ * the key may have gone down in another window). xterm reads a link's decorations as the pointer
+ * reaches it, then swaps them for its own object, whose setters redraw the link it hovers now,
+ * whichever link's object is written: so only the hovered bare name's are written, never one the
+ * pointer has left for a path with a folder, which stays drawn. A link hovered again on the same
+ * row is read from that object, which still holds how it was drawn when the pointer left: its
+ * hover draws it for the key as it is now.
+ */
+export function bareNameLinks(mac: boolean) {
+  let held = false;
+  let hovered: ILink | null = null;
+  const show = (next: boolean): void => {
+    if (next === held) return;
+    held = next;
+    if (!hovered?.decorations) return;
+    hovered.decorations.pointerCursor = held;
+    hovered.decorations.underline = held;
+  };
+  return {
+    /** the key that follows a bare name: Cmd on a Mac, Ctrl elsewhere */
+    pressed: (event: { metaKey: boolean; ctrlKey: boolean }): boolean => mac ? event.metaKey : event.ctrlKey,
+    // read when xterm first hovers the link; the hover's own write lands on nothing until xterm swaps them
+    decorations: (): ILinkDecorations => ({
+      get pointerCursor() { return held; }, set pointerCursor(_: boolean) {},
+      get underline() { return held; }, set underline(_: boolean) {},
+    }),
+    hover: (link: ILink): void => {
+      hovered = link;
+      if (!link.decorations) return;
+      link.decorations.pointerCursor = held;
+      link.decorations.underline = held;
+    },
+    leave: (link: ILink): void => { if (hovered === link) hovered = null; },
+    update: (event: { metaKey: boolean; ctrlKey: boolean }): void => show(mac ? event.metaKey : event.ctrlKey),
+    reset: (): void => show(false),
+  };
+}
+export type BareNameLinks = ReturnType<typeof bareNameLinks>;
+
 interface LogicalLine {
   text: string;
   /** the cell each UTF-16 unit of `text` sits in (1-based, as xterm's link ranges are) and its width */
@@ -112,7 +155,8 @@ function addresses(text: string): [number, number][] {
 
 type FileLink = Omit<ILink, "activate"> & { activate: (event: MouseEvent) => void };
 
-export function terminalFileLinks(buffer: IBuffer, lineNumber: number, open: (path: string, event: MouseEvent) => void): FileLink[] {
+/** With `bare`, bare names are links too, followed only with its key; without it only paths with a folder are. */
+export function terminalFileLinks(buffer: IBuffer, lineNumber: number, open: (path: string, event: MouseEvent) => void, bare?: BareNameLinks): FileLink[] {
   const line = logicalLine(buffer, lineNumber);
   if (line === null) return [];
   const { text, positions } = line;
@@ -120,23 +164,30 @@ export function terminalFileLinks(buffer: IBuffer, lineNumber: number, open: (pa
   const firstGap = text.search(/\s/);
   const lead = !line.clipped ? 0 : firstGap === -1 ? text.length : firstGap;
   const links: FileLink[] = [];
-  const link = (index: number, shown: string, path: string): void => {
+  const link = (index: number, shown: string, path: string, keyed?: BareNameLinks): void => {
     const start = positions[index];
     const last = positions[index + shown.length - 1];
     if (!start || !last || index < lead || lineNumber < start.y || lineNumber > last.y) return;
-    links.push({
+    const found: FileLink = {
       // a wide character's last cell is the link's end, not its first
       range: { start: { x: start.x, y: start.y }, end: { x: last.x + last.width - 1, y: last.y } },
       text: shown,
       // xterm keeps a row's links until the pointer leaves the row: the row is read again at the
       // click, and it opens only if the same whole link is still there (`foo.ts` grown to `foo.tsx` is not)
       activate: (event) => {
-        const same = terminalFileLinks(buffer, lineNumber, () => {}).some((now) => now.text === shown
+        if (keyed && !keyed.pressed(event)) return;
+        const same = terminalFileLinks(buffer, lineNumber, () => {}, bare).some((now) => now.text === shown
           && now.range.start.x === start.x && now.range.start.y === start.y
           && now.range.end.x === last.x + last.width - 1 && now.range.end.y === last.y);
         if (same) open(path, event);
       },
-    });
+    };
+    if (keyed) {
+      found.decorations = keyed.decorations();
+      found.hover = () => keyed.hover(found);
+      found.leave = () => keyed.leave(found);
+    }
+    links.push(found);
   };
   for (const match of text.matchAll(FILE_URI)) {
     const uri = match[0].replace(/[),.;:!?']+$/, "");
@@ -148,17 +199,18 @@ export function terminalFileLinks(buffer: IBuffer, lineNumber: number, open: (pa
   let span = 0;
   for (const match of text.matchAll(FILE_PATH)) {
     const path = match[1];
-    if (!path || !path.includes("/") || !/\p{L}/u.test(path.replace(/\.[A-Za-z0-9]{1,8}$/, ""))) continue;
-    if (/^v?\d+(?:\.\d+)+$/.test(path)) continue;
+    const folder = path?.includes("/") === true;
+    if (!path || (!folder && !bare) || !/\p{L}/u.test(path.replace(/\.[A-Za-z0-9]{1,8}$/, ""))) continue;
+    if (/^v?\d+(?:\.\d+)+$/.test(path) || (!folder && isCodeName(path))) continue;
     CALL.lastIndex = match.index + match[0].length;
     if (CALL.test(text)) continue;
     while (span < spans.length && spans[span]![1] <= match.index) span++;
     if (span < spans.length && spans[span]![0] <= match.index) continue;
-    link(match.index, match[0], match[0]);
+    link(match.index, match[0], match[0], folder ? undefined : bare);
   }
   return links;
 }
 
-export function terminalFileLinkProvider(buffer: () => IBuffer, open: (path: string, event: MouseEvent) => void): ILinkProvider {
-  return { provideLinks: (line, callback) => callback(terminalFileLinks(buffer(), line, open)) };
+export function terminalFileLinkProvider(buffer: () => IBuffer, open: (path: string, event: MouseEvent) => void, bare?: BareNameLinks): ILinkProvider {
+  return { provideLinks: (line, callback) => callback(terminalFileLinks(buffer(), line, open, bare)) };
 }

@@ -37,7 +37,16 @@ export const MACHINE_EVENTS_STALL_MS = 30_000;
  */
 export const MACHINE_EVENTS_CEILING_BYTES = 64 * 1024 * 1024;
 /** When a browser last took from its queue is read from this; tests move it on instead of waiting. */
-export const machineEventsClock = { now: (): number => performance.now() };
+export const machineEventsClock = {
+  now: (): number => performance.now(),
+  heartbeat: (send: () => void): ReturnType<typeof setInterval> => setInterval(send, 15_000),
+};
+
+/** Relay source queues share the channel's bounded payload budget, without the large-roster exception. */
+export interface EventStreamBudget {
+  reserve(bytes: number): boolean;
+  release(bytes: number): void;
+}
 
 /**
  * `told`: what the stream held when it was last written to; a queue only shrinks between writes, so it
@@ -77,7 +86,7 @@ export const slowMachinePath = (path: string): boolean => path === "worktree/cre
  * forwards, so such a path must be no route at all rather than "some other route".
  */
 export const nonCanonicalPath = (pathname: string): boolean => pathname.includes("//") || (pathname.length > 1 && pathname.endsWith("/")) || /%2f|%5c/i.test(pathname);
-export const MACHINE_PROXY_PATH = /^(?:session|sessions\/(?:history|resume)|agents|agent-catalog(?:\/(?:install|sign-in))?|integrations|usage\/statusline|pane\/(?:read|scroll|find|selection|conversation(?:\/image|\/tool-output)?|commands|files|omo-tasks|background-agent|plan|prompt|prompt\/answer|input|keys|close|rename|image|split|zoom|swap|resize|clear|focus)|workspace\/(?:create|rename|move|close|directories|diff\/files|diff\/file|diff\/repositories|diff\/refs)|worktree\/(?:create|list|open|remove)|tab\/(?:create|rename|close|move|move-to-workspace)|layout\/ratio|agent\/(?:rename|commands)|plugins\/actions|plugin\/action|fs\/(?:stat|file|favicon))$/;
+export const MACHINE_PROXY_PATH = /^(?:session|sessions\/(?:history|resume)|agents|agent-catalog(?:\/(?:install|sign-in))?|integrations|usage\/statusline|pane\/(?:read|scroll|find|selection|conversation(?:\/image|\/tool-output)?|commands|files|omo-tasks|background-agent|plan|artifacts|prompt|prompt\/answer|input|keys|close|rename|image|split|zoom|swap|resize|clear|focus)|workspace\/(?:create|rename|move|close|directories|diff\/files|diff\/file|diff\/repositories|diff\/refs)|worktree\/(?:create|list|open|remove)|tab\/(?:create|rename|close|move|move-to-workspace)|layout\/ratio|agent\/(?:rename|commands)|plugins\/actions|plugin\/action|fs\/(?:stat|file|favicon))$/;
 
 
 /**
@@ -109,7 +118,8 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
   herdrSidebar?: { get(): AgentRowTokens | null; subscribe(listener: (agents: AgentRowTokens | null) => void): () => void },
   seen?: { list(): SeenFinish[]; subscribe(listener: (finish: SeenFinish) => void): () => void },
   /** durable device enrollments (server/devices.ts), already without the ones this stream's own device made */
-  pairings?: { subscribe(listener: (event: DevicePairedEvent) => void): () => void }): Promise<Response> {
+  pairings?: { subscribe(listener: (event: DevicePairedEvent) => void): () => void },
+  relayBudget?: EventStreamBudget): Promise<Response> {
   const url = new URL(request.url);
   // A PC's file opens as this PC's /api/fs/file does, from any navigation: reading it changes
   // nothing, and Chrome on Android shows a PDF in the viewer's frame as an "Open" button whose
@@ -153,12 +163,16 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       let close = () => {};
       let drop = () => {};
       let queue: EventsQueue | undefined;
+      let charged = 0;
+      let accountTaken = () => {};
       // the browser went away: what still waits for it is dropped, not kept for a reader that is gone
       const aborted = () => drop();
       const cleanup = () => {
         stop?.(); stopPreferences?.(); stopSidebar?.(); stopSeen?.(); stopPairings?.(); unwatchDevice?.(); clearInterval(heartbeat);
         request.signal.removeEventListener("abort", aborted);
         if (queue) forgetQueue(queue);
+        relayBudget?.release(charged);
+        charged = 0;
       };
       const encoder = new TextEncoder();
       const stream = new ReadableStream<Uint8Array>({
@@ -171,6 +185,12 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
           unwatchDevice = onRevoke?.(() => { if ((queue?.queued() ?? 0) > 0) drop(); else close(); });
           if (closed) return;
           const queued = () => MACHINE_EVENTS_QUEUE_BYTES - (controller.desiredSize ?? MACHINE_EVENTS_QUEUE_BYTES);
+          accountTaken = () => {
+            if (!relayBudget || closed) return;
+            const remaining = Math.max(0, queued());
+            relayBudget.release(charged - remaining);
+            charged = remaining;
+          };
           // frames larger than the bound, by where they end in the stream: each counts only until it has left the queue
           let written = 0;
           const large: { end: number; bytes: number }[] = [];
@@ -186,6 +206,12 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
           const stalled = (other: EventsQueue, now: number): boolean => other.told > 0 && now - other.movedAt >= MACHINE_EVENTS_STALL_MS;
           const send = (text: string) => {
             if (closed) return;
+            accountTaken();
+            if (relayBudget) {
+              const size = Buffer.byteLength(text);
+              if (!relayBudget.reserve(size)) { drop(); return; }
+              charged += size;
+            }
             const bytes = encoder.encode(text);
             const now = machineEventsClock.now();
             retell();
@@ -261,10 +287,11 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
           // a device paired after this stream opened: the one event, as it happens (nothing is replayed on reconnect)
           stopPairings = pairings?.subscribe((event) => send(`data: ${JSON.stringify(event satisfies MachineEvent)}\n\n`));
           if (closed) { cleanup(); return; }
-          heartbeat = setInterval(() => send(": heartbeat\n\n"), 15_000);
+          heartbeat = machineEventsClock.heartbeat(() => send(": heartbeat\n\n"));
           request.signal.addEventListener("abort", aborted, { once: true });
           if (request.signal.aborted) aborted();
         },
+        pull() { accountTaken(); },
         cancel() { close(); },
       }, new ByteLengthQueuingStrategy({ highWaterMark: MACHINE_EVENTS_QUEUE_BYTES }));
       return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-store", "x-accel-buffering": "no" } });

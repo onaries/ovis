@@ -1,7 +1,7 @@
 /** Arrows and clicks reach a full-screen program: browser → WS → herdr → a raw-mode PTY that logs its stdin (#621). */
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
@@ -278,7 +278,8 @@ try {
 
   // 3. A click reaches a program that reads the mouse; a drag and a modifier-click still select.
   {
-    const s = await open(browser, attached, "mouse", "\\033[?1049h\\033[?1000h\\033[?1006hhttps://example.test/621\\r\\n");
+    const s = await open(browser, attached, "mouse", "\\033[?1049h\\033[?1000h\\033[?1006hhttps://example.test/621 notes.md\\r\\n");
+    writeFileSync(join(root, "mouse", "notes.md"), "# Notes\n");
     const at = await s.point(100, 70);
     await mouseReporting(s);
     let got = "";
@@ -305,6 +306,41 @@ try {
     assert.doesNotMatch((await mark(s, "a link click")).read, /\x1b\[<0;/, "a click on a link sends the program no button");
     // in a new tab, as a chat link: window.open with a features string ("noopener" too) opens a popup window
     assert.deepEqual(await s.page.evaluate(() => (window as unknown as { opened: unknown[] }).opened), [["link", "https://example.test/621", "_blank", "noopener noreferrer"]], "and opens the link once, in a new tab with no opener or referrer");
+
+    // A bare file name follows the same rule, for its own click only (#1168). herdr's attach reports
+    // the mouse for every pane, so nothing tells a program that wants Cmd/Ctrl+click from a shell:
+    // a plain click on the name is the program's, as on any text, and Cmd+click (Ctrl+click off a
+    // Mac), the key that draws the name as a link, opens it and sends the program no button.
+    const name = await s.page.evaluate(() => {
+      const row = document.querySelector(".xterm-rows > div")!;
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const at = (node as Text).data.indexOf("notes.md");
+        if (at === -1) continue;
+        const range = document.createRange();
+        range.setStart(node, at + 2);
+        range.setEnd(node, at + 3);
+        const rect = range.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      }
+      throw new Error("notes.md is not on the first row");
+    });
+    await s.page.mouse.move(name.x, name.y);
+    await until(async () => (await s.page.locator(".xterm-screen.xterm-cursor-pointer").count()) === 0, "a bare name is no link without the key");
+    got = "";
+    await s.page.mouse.click(name.x, name.y);
+    await until(() => click.test(got += s.received()), "a plain click on a bare name received by the program");
+    assert.equal(await s.page.locator(".file-viewer").count(), 0, "a plain click on a bare name opens nothing");
+    const key = process.platform === "darwin" ? "Meta" : "Control";
+    await s.page.keyboard.down(key);
+    await until(async () => (await s.page.locator(".xterm-screen.xterm-cursor-pointer").count()) === 1, "the bare name is a link with the key held");
+    await s.page.mouse.click(name.x, name.y);
+    await s.page.keyboard.up(key);
+    await s.page.locator(".modal.file-viewer").waitFor();
+    await s.page.waitForFunction(() => document.querySelector(".file-viewer-header")?.textContent?.includes("notes.md"));
+    await s.page.locator(".file-viewer-header button").last().click();
+    await s.page.locator(".file-viewer").waitFor({ state: "hidden" });
+    assert.doesNotMatch((await mark(s, "a key-click on a bare name")).read, /\x1b\[<\d+;/, "a key-click on a bare name sends the program no button");
 
     // the keys held with a click go with it: Ctrl adds 16 to the button
     await s.page.keyboard.down("Control");

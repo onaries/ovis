@@ -118,6 +118,24 @@
 
 .agent-item.is-selected { background: var(--side-selected); }
 
+/* as a workspace row's in forced colors (Sidebar.css): a Highlight leading bar instead of the erased fill,
+   drawn inside the row, since the list scrolls and would clip anything pulled into its edge; beside the focus
+   ring, which the row's button draws over its leading edge, rather than under it */
+@media (forced-colors: active) {
+  .agent-item.is-selected::before {
+    position: absolute;
+    inset: 0;
+    border-inline-start: calc(2 * var(--hairline)) solid Highlight;
+    border-radius: inherit;
+    content: "";
+    pointer-events: none;
+  }
+
+  .agent-item.is-selected:has(> .agent-row:focus-visible)::before {
+    inset-inline-start: var(--ring-offset);
+  }
+}
+
 /* As a workspace row's: the ⋯ takes no room until the row is hovered, focused, selected or its
    menu is open, and stays in the focus order, since the menu hands the focus back to it. */
 .agent-actions {

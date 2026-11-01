@@ -1,365 +1,361 @@
-/**
- * dsh-tui (DeepSeek Harness) writes one zstd-compressed JSONL session per directory:
- * `<DSH_HOME>/sessions/<cwd-slug>/<session-uuid>/session.v*.jsonl.zstd`, records shaped
- * `{ type, seq, time, data }`. Parked sessions stay open, but the TUI rebinds its
- * injection socket to the attached session. Only the pane's own socket descriptors
- * identify that session; file mtimes and the cross-process resume marker cannot.
- */
+import { constants } from "node:fs";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { readdir, readFile, readlink, realpath, open, stat, lstat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { ConversationPart, ConversationTurn } from "../shared/protocol.ts";
+import { answerVersion, ConversationNotStarted, ConversationUnavailable, HistoryChanged, TRANSCRIPT_WINDOW_BYTES, type ConversationPage, type RecognizedConversation } from "./conversation-shared.ts";
+import { ompProcessMemory, processStartTicks } from "./omp-process.ts";
+import { processAlive } from "./process-start.ts";
+import { trimOutput } from "./tool-output.ts";
 
-import type { ConversationMetadata, ConversationPart, ConversationTurn } from "../shared/protocol.ts";
+type Processes = { foreground_processes?: { pid?: number; argv?: unknown }[] };
+const unavailable = (): never => { throw new ConversationUnavailable("dsh_transcript_unavailable"); };
+const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
-const SESSION_FILE = /^session\.v\d+\.jsonl\.zstd$/;
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_BYTES = 64 * 1024 * 1024;
-const PAGE_PROMPTS = 20;
-const OUTPUT_MAX = 24_000;
-const TOOL_OUTPUT_MAX = 2_000_000;
-
-export function dshHome(env: NodeJS.ProcessEnv = process.env): string {
-  return env["DSH_HOME"]?.trim() || join(homedir(), ".dsh");
-}
-
+const boundProcesses = new Set<string>();
 /**
- * The current injection listener follows dsh's channel binding, unlike parked file handles.
- * Older TUIs without that listener are usable only when their descriptors name one session.
+ * This server's own start, in the same clock ticks as a process's: a TUI idle long enough releases its lock, so
+ * a lock-free dsh that started before this server, or in the same clock tick, may have held one before we looked
+ * and is no proven new chat.
  */
-export function dshSessionFromPids(pids: readonly number[], home = dshHome(), injectDir = join(process.env["HOME"] || homedir(), ".dsh-tui", "inject")): string | null {
-  const root = join(home, "sessions");
-  const paths = new Set<string>();
-  for (const pid of pids) {
-    if (!Number.isInteger(pid) || pid <= 0) continue;
-    const sockets = new Set<string>();
-    let fds: string[];
-    try {
-      fds = readdirSync(`/proc/${pid}/fd`);
-    } catch {
-      continue;
-    }
-    for (const fd of fds) {
-      let target: string;
-      try {
-        target = readlinkSync(`/proc/${pid}/fd/${fd}`);
-      } catch {
-        continue;
-      }
-      const socket = /^socket:\[(\d+)\]$/.exec(target);
-      if (socket?.[1]) sockets.add(socket[1]);
-      // /proc appends " (deleted)" to an unlinked target; that is not a live session.
-      if (!/\/session\.(lock|v\d+\.jsonl\.zstd)$/.test(target)) continue;
-      const directory = dirname(target);
-      if (!directory.startsWith(`${root}/`)) continue;
-      let names: string[];
-      try {
-        names = readdirSync(directory);
-      } catch {
-        continue;
-      }
-      const file = names.filter((name) => SESSION_FILE.test(name)).sort().at(-1);
-      if (!file) continue;
-      try {
-        if (statSync(join(directory, file)).isFile()) paths.add(join(directory, file));
-      } catch {
-        continue;
-      }
-    }
-    const attached = new Set<string>();
-    try {
-      for (const line of readFileSync(`/proc/${pid}/net/unix`, "utf8").split("\n").slice(1)) {
-        const entry = /^\S+\s+\S+\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+)$/.exec(line.trim());
-        if (!entry || entry[1] !== "00010000" || entry[2] !== "0001" || entry[3] !== "01" || !entry[4] || !sockets.has(entry[4])) continue;
-        const socketPath = entry[5];
-        if (!socketPath) continue;
-        const sessionId = basename(socketPath, ".sock");
-        if (dirname(socketPath) === injectDir && socketPath.endsWith(".sock") && SESSION_ID.test(sessionId)) attached.add(sessionId);
-      }
-    } catch {
-      // No socket evidence: only an unambiguous legacy file binding is safe.
-    }
-    if (attached.size > 1) return null;
-    const sessionId = attached.values().next().value;
-    if (sessionId) return dshTranscriptPath(sessionId, home);
+const serverStartTicks = processStartTicks(process.pid);
+const SERVER_START = serverStartTicks === null ? null : BigInt(serverStartTicks);
+
+export type DshTranscript = { path: string; root: string; identity: string };
+
+/** dsh-home-paths resolves DSH_HOME before ~/.dsh. Relative homes cannot be pinned after chdir. */
+export function dshSessionsDirectory(environ: readonly string[]): string | null {
+  const home = environ.find(word => word.startsWith("HOME="))?.slice(5);
+  const override = environ.find(word => word.startsWith("DSH_HOME="))?.slice(9);
+  let base = override !== undefined && override.trim() !== "" ? override : undefined;
+  if (base === undefined || base === "~" || base.startsWith("~/") || base.startsWith("~\\")) {
+    if (!home || !isAbsolute(home)) return null;
+    base = base === undefined ? join(home, ".dsh") : join(home, base.slice(2));
   }
-  return paths.size === 1 ? paths.values().next().value ?? null : null;
+  return isAbsolute(base) ? join(resolve(base), "sessions") : null;
 }
 
-export function dshTranscriptPath(id: string, home = dshHome()): string | null {
-  if (!SESSION_ID.test(id)) return null;
-  const store = join(home, "sessions");
-  let slugs: string[];
+/** Authorize both physical encodings inside the canonical store before opening their bytes. */
+export async function authorizeDshTranscript(path: string, sessions: string): Promise<DshTranscript | null> {
   try {
-    slugs = readdirSync(store);
-  } catch {
-    return null;
-  }
-  for (const slug of slugs) {
-    const directory = join(store, slug, id);
-    let names: string[];
+    const root = await realpath(sessions);
+    const canonical = await realpath(path);
+    const inside = relative(root, canonical);
+    if (!inside || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)
+      || !/^session\.v4\.jsonl(?:\.zstd)?$/.test(basename(canonical))) return null;
+    const file = await open(canonical, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
     try {
-      names = readdirSync(directory);
-    } catch {
-      continue;
-    }
-    const file = names.filter((name) => SESSION_FILE.test(name)).sort().at(-1);
-    if (!file) continue;
-    try {
-      if (statSync(join(directory, file)).isFile()) return join(directory, file);
-    } catch {
-      continue;
-    }
-  }
-  return null;
+      const stat = await file.stat({ bigint: true });
+      if (!stat.isFile() || (process.getuid !== undefined && stat.uid !== BigInt(process.getuid()))) return null;
+      return { path: canonical, root, identity: `${stat.dev}:${stat.ino}` };
+    } finally { await file.close(); }
+  } catch { return null; }
 }
 
-interface SessionRecord {
-  seq: number;
-  type: string;
-  time: number | null;
-  /** The header record carries its session id at the top level, every other record under `data`. */
-  id: string | null;
-  data: Record<string, unknown>;
-  raw: string;
-}
-
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-const asString = (value: unknown): string | null => (typeof value === "string" ? value : null);
-const asNumber = (value: unknown): number | null =>
-  typeof value === "number" && Number.isFinite(value) ? value : null;
-const iso = (ms: number | null): string | null => {
-  if (ms === null) return null;
-  const date = new Date(ms);
-  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
-};
-
-/** The assistant's prose and reasoning; tool-call blocks are read by the caller. */
-function textBlocks(content: unknown): { text: string[]; thinking: string[] } {
-  const text: string[] = [];
-  const thinking: string[] = [];
-  if (!Array.isArray(content)) return { text, thinking };
-  for (const block of content) {
-    if (!isObject(block)) continue;
-    const value = asString(block["text"]);
-    if (!value) continue;
-    if (block["type"] === "text") text.push(value);
-    else if (block["type"] === "reasoning") thinking.push(value);
-  }
-  return { text, thinking };
-}
-
-type ToolPart = Extract<ConversationPart, { kind: "tool" }>;
-
-function toolPart(name: string, input: string): ToolPart {
-  return { kind: "tool", name, summary: input.slice(0, 160), input, output: "" };
-}
-
-export class DshHistoryChanged extends Error {}
+const NODE = /(?:^|\/)node$/;
+/** The npm bin link (`…/bin/dsh`) or the package entry it points at (`…/@deepseek-ai/dsh/lib/bin.js`); a file merely named dsh is not one. */
+const DSH_LAUNCHER = /\/bin\/dsh$|\/@deepseek-ai\/dsh\/lib\/bin\.js$/;
+/** dsh-tui's host process, which `dsh-tui` starts behind its two launcher shims and which holds the session lock. */
+const DSH_TUI_HOST = /\/@deepseek-harness-tui\/dsh-tui\/lib\/(?:[\w.-]+\/)*host-entry\.js$/;
+/** Shipped profiles that serve a browser or a protocol client, not a chat in this terminal. */
+const SERVICE_PROFILES = new Set(["web", "sdk", "sdk-minimal", "acp"]);
+/** Launcher modes that print or install and exit without booting a session. */
+const NOT_A_SESSION = new Set(["--dump-config", "--dump-default-config", "--dump-config-schema", "--help", "-h", "--version", "-V"]);
 
 /**
- * The ref a truncated card hands out. A dsh call id carries a `|` that the tool-output route's
- * own ref guard rejects, so the card names the call by digest and the reader matches it back.
+ * The dsh launcher booting a chat profile, exactly as herdr reports it: `node <…/bin/dsh | …/@deepseek-ai/dsh/lib/bin.js>`,
+ * then `--profile <name>`, `--profile=<name>` or the profile name; or dsh-tui's host process
+ * (`node …/@deepseek-harness-tui/dsh-tui/lib/…/host-entry.js`). Another program that only
+ * mentions dsh, plugin management, a config dump and the web/SDK/ACP service profiles do not match.
  */
-export function dshOutputRef(callId: string): string {
-  return createHash("sha256").update(callId).digest("hex").slice(0, 32);
+export function isDshProcess(argv: readonly unknown[]): boolean {
+  if (!argv.every((word) => typeof word === "string")) return false;
+  const words = argv as readonly string[];
+  // the npm launcher is a node script: herdr reports node in front of it, never the script alone
+  if (!NODE.test(words[0] ?? "")) return false;
+  if (DSH_TUI_HOST.test(words[1] ?? "")) return true;
+  if (!DSH_LAUNCHER.test(words[1] ?? "")) return false;
+  const rest = words.slice(2);
+  if (rest.some((word) => NOT_A_SESSION.has(word))) return false;
+  const profile = rest[0] === "--profile" ? rest[1] : rest[0]?.startsWith("--profile=") ? rest[0].slice(10) : rest[0];
+  return profile !== undefined && profile !== "plugin" && /^[A-Za-z0-9][\w.-]*$/.test(profile) && !SERVICE_PROFILES.has(profile);
 }
 
-export interface DshTurn extends ConversationTurn {
-  /** Where the turn starts in the record stream; a page boundary is one of these. */
-  startSeq: number;
+/**
+ * A launch that names the session it continues: the TUIs' `--resume`/`--fork`, headless `--session-id`, or
+ * dsh-tui's launcher, which hands `dsh-tui --resume` over in DSH_TUI_RESUME_SESSION. Such a process is never
+ * shown as a new empty chat before its lock is seen.
+ */
+function explicitResume(argv: readonly unknown[], environ: readonly string[]): boolean {
+  return argv.some((word) => typeof word === "string" && /^(?:--resume|--fork|--session|--session-id|-r)(?:=|$)/.test(word))
+    || environ.some((word) => /^DSH_TUI_RESUME_SESSION=\S/.test(word));
 }
 
-export function parseDshRecords(records: SessionRecord[]): { turns: DshTurn[]; contextUsed: number | null } {
-  const turns: DshTurn[] = [];
-  const tools = new Map<string, ToolPart>();
-  let contextUsed: number | null = null;
+/** Reset process history between independent fixture sessions. */
+export function forgetDshProcesses(): void { boundProcesses.clear(); }
 
-  const assistantTurn = (record: SessionRecord): DshTurn => {
-    const previous = turns.at(-1);
-    if (previous?.role === "assistant") return previous;
-    const turn: DshTurn = { role: "assistant", ts: iso(record.time), parts: [], startSeq: record.seq };
-    turns.push(turn);
-    return turn;
-  };
-
-  for (const record of records) {
-    const ts = iso(record.time);
-    switch (record.type) {
-      case "user/message": {
-        // Runtime context and other injections sit in the user's seat without anyone typing them.
-        const source = isObject(record.data["source"]) ? record.data["source"] : {};
-        if (asString(source["kind"]) !== "user") continue;
-        const body = textBlocks(record.data["content"]).text.join("\n").trim();
-        if (!body) continue;
-        turns.push({ role: "user", ts, parts: [{ kind: "text", text: body }], startSeq: record.seq });
-        continue;
-      }
-      case "assistant/message": {
-        const message = isObject(record.data["message"]) ? record.data["message"] : {};
-        const content = Array.isArray(message["content"]) ? message["content"] : [];
-        const { thinking } = textBlocks(content);
-        const parts: ConversationPart[] = thinking.map((value) => ({ kind: "thinking" as const, text: value }));
-        for (const block of content) {
-          if (!isObject(block)) continue;
-          if (block["type"] === "text") {
-            const value = asString(block["text"]);
-            if (value) parts.push({ kind: "text", text: value });
-          } else if (block["type"] === "tool-call") {
-            const id = asString(block["id"]);
-            const part = toolPart(asString(block["name"]) ?? "tool", asString(block["arguments"]) ?? "");
-            parts.push(part);
-            if (id) tools.set(id, part);
-          }
+/** A held lock binds the process; dsh-tui's own injection listener selects among its parked locks. */
+/** `serverStart`: this server's start tick, or unknown; a lock-free dsh counts as new only when it started strictly after it. */
+export async function resolveDshTranscript(info: Processes | null | undefined, serverStart: bigint | null = SERVER_START): Promise<DshTranscript> {
+  if (process.platform !== "linux") return unavailable();
+  const found = new Map<string, DshTranscript>();
+  /** Every selected lock, readable or not: more than one is no binding. */
+  const lockedSessions = new Set<string>();
+  const fresh: string[] = [];
+  let inspected = 0;
+  for (const proc of info?.foreground_processes ?? []) {
+    if (!Array.isArray(proc.argv) || !isDshProcess(proc.argv)) continue;
+    if (!Number.isSafeInteger(proc.pid) || !proc.pid || proc.pid <= 0) return unavailable();
+    const start = processStartTicks(proc.pid);
+    if (!start) {
+      if (!processAlive(proc.pid)) continue;
+      return unavailable();
+    }
+    try {
+      if ((await stat(`/proc/${proc.pid}`)).uid !== process.getuid?.()) return unavailable();
+      const memory = await ompProcessMemory(proc.pid, false);
+      if (memory === null) return unavailable();
+      const sessions = dshSessionsDirectory(memory.environ);
+      if (sessions === null) return unavailable();
+      const candidates: DshTranscript[] = [];
+      const processLocks = new Set<string>();
+      const sockets = new Set<string>();
+      let held = false;
+      const descriptors = await readdir(`/proc/${proc.pid}/fd`);
+      if (descriptors.length > 4096) return unavailable();
+      for (const fd of descriptors) {
+        const target = await readlink(`/proc/${proc.pid}/fd/${fd}`).catch((error: NodeJS.ErrnoException) => {
+          // readdir itself can leave a closed descriptor in our own process's listing.
+          if (error.code === "ENOENT") return "";
+          throw error;
+        });
+        const socket = /^socket:\[(\d+)\]$/.exec(target);
+        if (socket?.[1]) sockets.add(socket[1]);
+        if (basename(target) !== "session.lock" || !/^(?:session-)?[0-9a-f-]{36}$/i.test(basename(dirname(target)))) continue;
+        held = true;
+        const folder = dirname(await realpath(target));
+        processLocks.add(folder);
+        for (const name of ["session.v4.jsonl.zstd", "session.v4.jsonl"]) {
+          const path = join(folder, name);
+          // Only an absent encoding permits trying the older one, never an unreadable or linked log.
+          const present = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return null;
+            throw error;
+          });
+          if (present === null) continue;
+          const authorized = await authorizeDshTranscript(path, sessions);
+          // the log must be the locked session's own, not a link into another session of the store
+          if (authorized === null || dirname(authorized.path) !== folder) return unavailable();
+          candidates.push(authorized);
+          break;
         }
-        if (!parts.length) continue;
-        const turn = assistantTurn(record);
-        turn.parts.push(...parts);
-        if (ts) turn.end_ts = ts;
-        const usage = isObject(record.data["usage"]) ? record.data["usage"] : null;
-        const total = usage ? asNumber(usage["totalTokens"]) : null;
-        if (total !== null) contextUsed = total;
-        continue;
       }
-      case "tool/call": {
-        // The call the assistant message already declared; only one it omitted starts its own card.
-        const id = asString(record.data["callId"]);
-        if (id && tools.has(id)) continue;
-        const part = toolPart(asString(record.data["name"]) ?? "tool", asString(record.data["arguments"]) ?? "");
-        assistantTurn(record).parts.push(part);
-        if (id) tools.set(id, part);
-        continue;
-      }
-      case "tool/result": {
-        const message = isObject(record.data["message"]) ? record.data["message"] : {};
-        const id = asString(message["toolCallId"]);
-        let part = id ? tools.get(id) : undefined;
-        if (!part) {
-          part = toolPart("tool", "");
-          assistantTurn(record).parts.push(part);
-          if (id) tools.set(id, part);
+      if (DSH_TUI_HOST.test(proc.argv[1] ?? "")) {
+        const home = memory.environ.find(word => word.startsWith("HOME="))?.slice(5);
+        if (!home || !isAbsolute(home)) return unavailable();
+        const injectDir = join(resolve(home), ".dsh-tui", "inject");
+        const attached = new Set<string>();
+        for (const line of (await readFile(`/proc/${proc.pid}/net/unix`, "utf8")).split("\n").slice(1)) {
+          const entry = /^\S+\s+\S+\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+)$/.exec(line.trim());
+          if (!entry) continue;
+          const [, flags, type, state, inode, path] = entry;
+          if (flags !== "00010000" || type !== "0001" || state !== "01" || !inode || !path || !sockets.has(inode)) continue;
+          const session = basename(path, ".sock");
+          if (dirname(path) === injectDir && path.endsWith(".sock") && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(session)) attached.add(session);
         }
-        const output = textBlocks(message["content"]).text.join("\n");
-        part.output = output.slice(0, OUTPUT_MAX);
-        if (id && output.length > OUTPUT_MAX) {
-          part.output_ref = dshOutputRef(id);
-          part.output_size = output.length;
+        if (attached.size > 1) return unavailable();
+        const session = attached.values().next().value;
+        if (session !== undefined) {
+          // /bg keeps parked locks open; a listener may select only this process's own locked session.
+          for (const folder of processLocks) if (basename(folder) !== session) processLocks.delete(folder);
+          if (processLocks.size !== 1) return unavailable();
         }
-        if (message["isError"] === true) part.error = true;
-        const turn = assistantTurn(record);
-        if (ts) turn.end_ts = ts;
-        continue;
       }
-      default:
-        // session/title, request/*, system/message, turn|step boundaries and the policy records
-        // describe the run rather than the conversation, so they add no turn and no part.
-        continue;
+      const currentStart = processStartTicks(proc.pid);
+      if (currentStart === null) return unavailable();
+      if (currentStart === start) {
+        inspected++;
+        for (const folder of processLocks) lockedSessions.add(folder);
+        const identity = `${proc.pid}:${start}`;
+        if (held) {
+          if (boundProcesses.size >= 256) boundProcesses.delete(boundProcesses.values().next().value!);
+          boundProcesses.add(identity);
+        }
+        for (const transcript of candidates) if (processLocks.has(dirname(transcript.path))) found.set(transcript.path, transcript);
+        if (!held && !boundProcesses.has(identity) && serverStart !== null && BigInt(start) > serverStart && !explicitResume(proc.argv, memory.environ)) fresh.push(identity);
+      }
+    } catch {
+      // An unread recognized process still vetoes selection unless it demonstrably exited or was replaced.
+      const currentStart = processStartTicks(proc.pid);
+      if (!processAlive(proc.pid) || (currentStart !== null && currentStart !== start)) continue;
+      return unavailable();
     }
   }
-  return { turns: turns.filter((turn) => turn.parts.length > 0), contextUsed };
+  if (found.size === 0 && inspected === 1 && fresh.length === 1) throw new ConversationNotStarted(fresh[0]!, "dsh-transcript", fresh[0]!);
+  if (found.size !== 1 || lockedSessions.size !== 1) return unavailable();
+  return [...found.values()][0]!;
 }
 
-function pageOf(records: SessionRecord[], page: { before?: string; since?: string; from?: string }, path: string) {
-  const header = records.find((record) => record.type === "session");
-  const sessionId = header?.id ?? asString(header?.data["id"]);
-  if (!sessionId) throw new Error("missing dsh session header");
-  const stat = statSync(path);
-  const history_id = `dsh:${sessionId}:${stat.dev}:${stat.ino}`;
-  const indexOf = (value: string | undefined): number | undefined => {
-    if (value === undefined) return undefined;
-    const suffix = value.slice(history_id.length + 1);
-    if (!value.startsWith(`${history_id}:`) || !/^\d+$/.test(suffix)) throw new DshHistoryChanged();
-    const index = Number(suffix);
-    if (!Number.isSafeInteger(index)) throw new DshHistoryChanged();
+/** Ignore an unfinished final append, but reject malformed complete frames. */
+export function completeDshFrames(bytes: Buffer): number {
+  let end = 0;
+  while (end < bytes.length) {
+    let at = end;
+    if (bytes.length - at < 5) return end;
+    if (bytes.readUInt32LE(at) !== 0xfd2fb528) return unavailable();
+    const descriptor = bytes[at + 4]!;
+    if (descriptor & 24) return unavailable();
+    const flag = descriptor >>> 6;
+    const single = !!(descriptor & 32);
+    at += 5 + (single ? 0 : 1) + [0, 1, 2, 4][descriptor & 3]! + (flag ? 1 << flag : single ? 1 : 0);
+    if (at > bytes.length) return end;
+    for (;;) {
+      if (bytes.length - at < 3) return end;
+      const block = bytes.readUIntLE(at, 3); at += 3;
+      const type = (block >>> 1) & 3;
+      if (type === 3) return unavailable();
+      at += type === 1 ? 1 : block >>> 3;
+      if (at > bytes.length) return end;
+      if (block & 1) break;
+    }
+    if (descriptor & 4) at += 4;
+    if (at > bytes.length) return end;
+    end = at;
+  }
+  return end;
+}
+
+async function readDsh(binding: DshTranscript): Promise<{ text: string; identity: string }> {
+  const authorized = await authorizeDshTranscript(binding.path, binding.root);
+  if (authorized === null || authorized.path !== binding.path || authorized.identity !== binding.identity) return unavailable();
+  const path = authorized.path;
+  const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0)).catch(() => unavailable());
+  try {
+    const identity = await file.stat({ bigint: true });
+    if (`${identity.dev}:${identity.ino}` !== binding.identity) return unavailable();
+    const s = await file.stat();
+    if (!s.isFile() || (process.getuid !== undefined && s.uid !== process.getuid()) || s.size > TRANSCRIPT_WINDOW_BYTES) return unavailable();
+    const bytes = Buffer.alloc(s.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await file.read(bytes, offset, bytes.length - offset, offset);
+      if (!bytesRead) return unavailable();
+      offset += bytesRead;
+    }
+    let text: string;
+    if (path.endsWith(".zstd")) {
+      const complete = completeDshFrames(bytes);
+      if (!complete) return unavailable();
+      const reader = new Blob([bytes.subarray(0, complete)]).stream().pipeThrough(new DecompressionStream("zstd" as CompressionFormat)).getReader();
+      const chunks: Uint8Array[] = []; let size = 0;
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          size += value.length;
+          if (size > TRANSCRIPT_WINDOW_BYTES) { await reader.cancel(); return unavailable(); }
+          chunks.push(value);
+        }
+      } finally { reader.releaseLock(); }
+      text = Buffer.concat(chunks).toString("utf8");
+    } else text = bytes.toString("utf8");
+    return { text: text.slice(0, text.lastIndexOf("\n") + 1), identity: binding.identity };
+  } catch { return unavailable(); } finally { await file.close(); }
+}
+
+type Row = { type: string; seq?: number; time?: number; [key: string]: any };
+type Tool = Extract<ConversationPart, { kind: "tool" }>;
+export function projectDsh(text: string, identity: string, expectedSession?: string) {
+  let rows: Row[];
+  try { rows = text.trimEnd().split("\n").map((line) => JSON.parse(line)); } catch { return unavailable(); }
+  const header = rows.shift();
+  if (header?.type !== "session" || header.version !== 4 || typeof header.id !== "string" || (expectedSession && header.id !== expectedSession) || header.delegationDepth > 0) return unavailable();
+  const history = digest(`${identity}\0${header.id}`);
+  const turns: ConversationTurn[] = [];
+  const tools = new Map<string, Tool>();
+  const outputs = new Map<string, string>();
+  let assistant: ConversationTurn | undefined;
+  let model: string | null = null;
+  let reasoning: string | null = null;
+  const time = (row: Row) => typeof row.time === "number" && Number.isFinite(row.time) && Math.abs(row.time) <= 8.64e15 ? new Date(row.time).toISOString() : null;
+  const ensureAssistant = (row: Row) => assistant ??= (turns.push({ role: "assistant", ts: time(row), parts: [] }), turns.at(-1)!);
+  const blocks = (content: any): ConversationPart[] => {
+    if (!Array.isArray(content)) return unavailable();
+    return content.flatMap((block): ConversationPart[] => {
+      if (block === null || typeof block !== "object") return unavailable();
+      if (block.type === "text" && typeof block.text === "string") return [{ kind: "text", text: block.text }];
+      if (block.type === "reasoning" && typeof block.text === "string") return block.text ? [{ kind: "thinking", text: block.text }] : [];
+      if (block.type === "image" || block.type === "file") return [{ kind: "notice", text: `${block.type} attachment (view in terminal)` }];
+      if (block.type === "tool-call") return [];
+      return unavailable();
+    });
+  };
+  let seq = -1;
+  for (const row of rows) {
+    if (row === null || typeof row !== "object") return unavailable();
+    if (row.seq !== ++seq || typeof row.type !== "string") return unavailable();
+    const data = row.data;
+    if (row.type === "request/header") {
+      const config = data?.header?.config;
+      if (typeof config?.model === "string") model = config.model;
+      if (typeof config?.reasoningEffort === "string") reasoning = config.reasoningEffort;
+    } else if (row.type === "user/message") {
+      if (data?.source?.kind === "user") {
+        turns.push({ role: "user", ts: time(row), parts: blocks(data.content) }); assistant = undefined;
+      } else if (data?.source?.kind === "compact-checkpoint") {
+        ensureAssistant(row).parts.push({ kind: "compact", text: blocks(data.content).filter((p) => p.kind === "text").map((p) => p.text).join("\n") });
+      }
+    } else if (row.type === "assistant/message") {
+      if (data?.message?.role !== "assistant") return unavailable();
+      ensureAssistant(row).parts.push(...blocks(data.message.content));
+    } else if (row.type === "tool/call") {
+      if (typeof data?.callId !== "string" || typeof data.name !== "string" || typeof data.arguments !== "string" || tools.has(data.callId)) return unavailable();
+      const tool: Tool = { kind: "tool", name: data.name, summary: data.name, input: data.arguments, output: "", call_id: data.callId, state: "pending" };
+      tools.set(data.callId, tool); ensureAssistant(row).parts.push(tool);
+    } else if (row.type === "tool/result") {
+      const message = data?.message;
+      const tool = tools.get(message?.toolCallId);
+      if (!tool) return unavailable();
+      const output = blocks(message.content).map((part) => part.kind === "text" ? part.text : "[attachment]").join("\n");
+      const ref = digest(`${history}\0${message.toolCallId}`);
+      outputs.set(ref, output); trimOutput(tool, output, ref);
+      tool.error = message.isError === true; tool.state = tool.error ? "error" : "ok";
+    } else if (row.type === "turn/end") {
+      // a turn that failed before any reply (a provider error) still says so
+      if (!assistant && data?.reason?.kind !== "completed" && turns.at(-1)?.role === "user") ensureAssistant(row);
+      if (assistant) {
+        const ts = time(row); if (ts) assistant.end_ts = ts;
+        if (data?.reason?.kind === "completed") {
+          const part = [...assistant.parts].reverse().find((p) => p.kind === "text"); if (part?.kind === "text") part.phase = "final_answer";
+        } else assistant.parts.push({ kind: "notice", text: `Turn ended: ${typeof data?.reason?.kind === "string" ? data.reason.kind : "unknown"}` });
+      }
+      assistant = undefined;
+    } else if (row.surfaceOp !== undefined && row.type !== "system/message" && row.type !== "developer/message") {
+      return unavailable();
+    }
+  }
+  return { turns, history, outputs, metadata: { model, reasoning_effort: reasoning } };
+}
+
+export async function dshConversation(binding: DshTranscript, page: ConversationPage = {}): Promise<RecognizedConversation> {
+  const { text, identity } = await readDsh(binding);
+  const projection = projectDsh(text, identity, basename(dirname(binding.path)));
+  const { turns, history } = projection;
+  const cursor = (index: number) => `${history}:${index}:${digest(JSON.stringify(turns.slice(0, index))).slice(0, 16)}`;
+  const parse = (value: string | undefined, fallback: number) => {
+    if (value === undefined) return fallback;
+    const index = Number(value.split(":")[1]);
+    if (!Number.isSafeInteger(index) || index < 0 || index > turns.length || value !== cursor(index)) throw new HistoryChanged();
     return index;
   };
-
-  const { turns, contextUsed } = parseDshRecords(records);
-  const prompts = turns.filter((turn) => turn.role === "user").map((turn) => turn.startSeq);
-  const before = indexOf(page.before);
-  const since = indexOf(page.since);
-  const from = indexOf(page.from);
-  for (const index of [before, since, from]) {
-    if (index !== undefined && !prompts.includes(index)) throw new DshHistoryChanged();
-  }
-  const eligible = prompts.filter((index) => (before === undefined || index < before) && (since === undefined || index >= since));
-  const start = before !== undefined ? eligible[Math.max(0, eligible.length - PAGE_PROMPTS)]
-    : from ?? (since !== undefined ? eligible[0] : prompts[Math.max(0, prompts.length - PAGE_PROMPTS)]);
-  const lo = start ?? 0;
-  const hi = before ?? Number.MAX_SAFE_INTEGER;
-
-  const context = [...records].reverse().find((record) => record.type === "request/context")?.data;
-  const metadata: ConversationMetadata = {
-    model: context ? asString(context["model"]) : null,
-    reasoning_effort: null,
-    ...(contextUsed === null ? {} : { context: { used: contextUsed, window: context ? asNumber(context["contextWindow"]) : null } }),
-  };
-
-  const hash = createHash("sha256").update(history_id).update(JSON.stringify(metadata));
-  for (const record of records) if (record.seq >= lo && record.seq < hi) hash.update(record.raw);
-
-  return {
-    source: "dsh-transcript" as const,
-    turns: turns.filter((turn) => turn.startSeq >= lo && turn.startSeq < hi)
-      .map(({ startSeq: _startSeq, ...turn }) => turn),
-    metadata,
-    cursor: lo > (prompts[0] ?? 0) ? `${history_id}:${lo}` : null,
-    history_id,
-    version: `"${hash.digest("hex")}"`,
-  };
+  const end = parse(page.before, turns.length);
+  const since = parse(page.since, 0);
+  const from = parse(page.from, Math.max(since, end - 50));
+  const start = Math.max(since, Math.min(from, end));
+  return { source: "dsh-transcript", turns: turns.slice(start, end), metadata: projection.metadata, cursor: start > 0 ? cursor(start) : null, history_id: history, version: answerVersion(history, `${digest(text)}\0${start}\0${end}`) };
 }
 
-export function readDshSession(path: string): SessionRecord[] {
-  let bytes: Uint8Array;
-  try {
-    bytes = readFileSync(path);
-  } catch {
-    throw new Error("dsh session missing");
-  }
-  let text: string;
-  try {
-    text = Buffer.from(Bun.zstdDecompressSync(bytes)).toString("utf8");
-  } catch {
-    throw new Error("dsh session is not readable zstd");
-  }
-  if (text.length > MAX_BYTES) throw new Error("dsh session too large");
-  const records: SessionRecord[] = [];
-  for (const raw of text.split("\n")) {
-    if (!raw) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      // A torn tail line is not a record, and never becomes text of its own.
-      continue;
-    }
-    if (!isObject(parsed)) continue;
-    const type = asString(parsed["type"]);
-    if (!type) continue;
-    records.push({
-      seq: asNumber(parsed["seq"]) ?? -1,
-      type,
-      time: asNumber(parsed["time"]),
-      id: asString(parsed["id"]),
-      data: isObject(parsed["data"]) ? parsed["data"] : {},
-      raw,
-    });
-  }
-  return records;
-}
-
-export function dshConversation(path: string, page: { before?: string; since?: string; from?: string } = {}) {
-  return pageOf(readDshSession(path), page, path);
-}
-
-export function dshToolOutput(path: string, ref: string): string | null {
-  for (const record of readDshSession(path)) {
-    if (record.type !== "tool/result") continue;
-    const message = isObject(record.data["message"]) ? record.data["message"] : {};
-    const id = asString(message["toolCallId"]);
-    if (!id || dshOutputRef(id) !== ref) continue;
-    return textBlocks(message["content"]).text.join("\n").slice(0, TOOL_OUTPUT_MAX);
-  }
-  return null;
+export async function dshToolOutput(binding: DshTranscript, ref: string): Promise<string | null> {
+  const { text, identity } = await readDsh(binding);
+  return projectDsh(text, identity, basename(dirname(binding.path))).outputs.get(ref)?.slice(0, 1_000_000) ?? null;
 }

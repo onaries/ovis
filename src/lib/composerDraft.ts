@@ -11,10 +11,16 @@ interface InFlight { sent: string; at: number }
  */
 export const SEND_LEASE_MS = 120_000;
 const SENDING_PREFIX = "ovis:composer-sending:";
+const DRAFT_PREFIX = "ovis:composer-draft:";
+/** a draft that holds an agent-only message put back by Edit (#511): it is sent `agent_only` until the box is emptied */
+export const AGENT_ONLY_PREFIX = "ovis:composer-agent-only:";
+const agentOnlyKey = (key: string): string => AGENT_ONLY_PREFIX + (key.startsWith(DRAFT_PREFIX) ? key.slice(DRAFT_PREFIX.length) : key);
 export class ComposerDraftStore {
   private drafts = new Map<string, Draft>();
   private saved = new Map<string, string | null>();
   private unsaved = new Set<string>();
+  /** drafts this page put back as agent-only messages (#511): kept here even when storage refuses the mark */
+  private agentOnly = new Set<string>();
   /** the text each pending send carries, and whether the draft stopped extending it meanwhile */
   private pending = new Map<string, { sent: string; edited: boolean }>();
   private listeners = new Set<() => void>();
@@ -42,6 +48,7 @@ export class ComposerDraftStore {
       let text: string | null = null;
       try { text = this.storage().getItem(key); } catch { /* private mode */ }
       this.saved.set(key, text);
+      if (text) this.adoptMark(key, text);
       draft = { text: text ?? "", sending: false };
       this.drafts.set(key, draft);
     }
@@ -72,6 +79,7 @@ export class ComposerDraftStore {
     }
     let text: string | null = null;
     try { text = this.storage().getItem(key); } catch { return; }
+    this.adoptMark(key, text);
     if (text === this.saved.get(key) && sending === draft.sending) return;
     if (text !== this.saved.get(key)) {
       // another tab changed it while a send was on its way: the same rule as a local edit
@@ -90,9 +98,13 @@ export class ComposerDraftStore {
     const pending = this.pending.get(key);
     if (pending && !text.startsWith(pending.sent)) pending.edited = true;
     this.drafts.set(key, { ...draft, text });
+    if (!text) this.agentOnly.delete(key);
     try {
-      if (text) this.storage().setItem(key, text);
-      else this.storage().removeItem(key);
+      if (text) {
+        // an agent-only draft is stored only with its mark: another tab or a reload never reads it unmarked
+        if (this.agentOnly.has(key)) this.storage().setItem(agentOnlyKey(key), "1");
+        this.storage().setItem(key, text);
+      } else { this.storage().removeItem(key); this.storage().removeItem(agentOnlyKey(key)); }
       this.saved.set(key, text || null);
       this.unsaved.delete(key);
     } catch { this.unsaved.add(key); }
@@ -100,9 +112,27 @@ export class ComposerDraftStore {
   }
   /** A withdrawn queue row joins the latest draft without replacing attachment mentions or
    * concurrent typing. Never truncate recovered input: an oversized draft can be edited down. */
-  restorePending(key: string, text: string): void {
+  restorePending(key: string, text: string, agentOnly = false): void {
+    // its `> quote` lines must never reach a shell: the box stays agent-only until it is emptied, in this
+    // page whatever storage does, and marked before the text is there to send (set stores the mark first)
     this.refresh(key);
+    if (agentOnly) this.markAgentOnly(key);
     this.set(key, (draft) => draft ? `${draft}\n\n${text}` : text);
+  }
+  /** The draft's next text is a message for an agent alone (#511): set stores it only with the mark. */
+  markAgentOnly(key: string): void {
+    this.agentOnly.add(key);
+  }
+  /** A marked draft read from storage stays agent-only in this page, also if another tab clears it meanwhile and
+   * this one edits it before hearing so; one read empty is no longer. */
+  private adoptMark(key: string, text: string | null): void {
+    if (!text) { this.agentOnly.delete(key); return; }
+    try { if (this.storage().getItem(agentOnlyKey(key)) !== null) this.agentOnly.add(key); } catch { /* private mode */ }
+  }
+  /** The draft holds a message for an agent alone, put back by Edit (here or in another tab). */
+  isAgentOnly(key: string): boolean {
+    if (this.agentOnly.has(key)) return true;
+    try { return this.storage().getItem(agentOnlyKey(key)) !== null; } catch { return false; }
   }
   /** `sent`: the draft text this send carries, settled once it is acknowledged */
   begin(key: string, sent?: string): boolean {
@@ -140,6 +170,7 @@ export class ComposerDraftStore {
   move(from: string, to: string): void {
     const text = this.read(from).text;
     if (text === "" || this.own.has(from) || this.inFlight(from) !== null || this.read(to).text !== "") return;
+    if (this.isAgentOnly(from)) this.markAgentOnly(to);
     this.set(to, text);
     this.set(from, "");
   }
@@ -157,10 +188,11 @@ export class ComposerDraftStore {
       const pane = paneStateKey(key);
       if (pane?.machineId !== machineId) continue;
       // an edit storage refused lives only here: it goes to recovery, not away
-      if (this.unsaved.has(key)) lifetimes.keep(machineId, pane.paneId, "message", draft.text);
+      if (this.unsaved.has(key)) lifetimes.keep(machineId, pane.paneId, "message", draft.text, false, this.isAgentOnly(key));
       this.drafts.delete(key);
       this.saved.delete(key);
       this.unsaved.delete(key);
+      this.agentOnly.delete(key);
     }
     this.notify();
   }

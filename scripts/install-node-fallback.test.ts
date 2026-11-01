@@ -243,7 +243,8 @@ describe("node_link", () => {
     const userPath = join(root, "user-path");
     mkdirSync(userPath);
     if (user !== undefined) writeFileSync(join(userPath, "node"), `#!/bin/sh\necho ${user}\n`, { mode: 0o755 });
-    const env: Record<string, string> = { NODE_DIR: join(root, "share/ovis/node"), LEGACY_NODE_DIR: join(root, "share/herdr-web-ui/node"), BIN_DIR: join(root, "bin"), CODE: join(root, "code"), installed_here: "", original_path: `${userPath}:/usr/bin:/bin` };
+    // node_link probes only Node on original_path: do not let the real PC's /usr/bin/node fill an absent fixture.
+    const env: Record<string, string> = { NODE_DIR: join(root, "share/ovis/node"), LEGACY_NODE_DIR: join(root, "share/herdr-web-ui/node"), BIN_DIR: join(root, "bin"), CODE: join(root, "code"), installed_here: "", original_path: userPath };
     mkdirSync(join(env["CODE"]!, "server/pty"), { recursive: true });
     // as the release's server/pty/sidecar.ts names the app's Node, or before it did
     writeFileSync(join(env["CODE"]!, "server/pty/sidecar.ts"), finds ? 'const APP_NODE_DIRS = [".local/share/ovis/node"];' : 'Bun.which("node")');

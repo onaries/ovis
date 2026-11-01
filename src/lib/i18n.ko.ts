@@ -31,6 +31,7 @@ const BASE: Record<string, string> = {
   "Files edited in this turn": "이 턴에서 편집한 파일",
   "Open working-tree diff for {path}": "{path}의 작업 트리 변경 사항 열기",
   "This file is outside the pane's repository.": "이 파일은 패널의 저장소 밖에 있습니다.",
+  "Save": "저장",
   "Goal": "목표",
   "Waiting for your answer": "답변을 기다리는 중",
   "Back": "뒤로",
@@ -182,15 +183,15 @@ const BASE: Record<string, string> = {
   // ---- prompt card ----
   "Submit": "제출",
   "Recommended": "추천",
+  "Agents": "에이전트",
+  "Check again": "다시 확인",
+  "Setup guide": "설정 안내",
   "Could not confirm this browser is paired. Check that cookies are enabled, then try again.": "이 브라우저의 페어링을 확인할 수 없습니다. 쿠키가 허용되어 있는지 확인한 뒤 다시 시도하세요.",
   "New code": "새 코드",
   "Paired: {name}.": "페어링됨: {name}.",
   "QR code that pairs a phone with code {code}": "코드 {code}로 폰을 페어링하는 QR 코드",
   "Pairing code": "페어링 코드",
   "Open this address on your phone": "폰에서 이 주소를 여세요",
-  "It is on this PC, but it does not start. Install it again.": "이 PC에 있지만 실행되지 않아요. 다시 설치해 주세요.",
-  "Installing {agent}…": "{agent} 설치 중…",
-  "Install {agent}": "{agent} 설치",
   "{agent} is ready": "{agent} 준비 완료",
 
 
@@ -318,6 +319,21 @@ const BASE: Record<string, string> = {
   "Terminal line": "터미널 입력 줄",
   "Held message": "보관한 메시지",
   "Held input": "보관한 입력",
+  "Other accounts": "다른 계정",
+  "Plan limits": "요금제 한도",
+  "Auto": "자동",
+  "Hub request failed": "허브 요청에 실패했어요",
+  "On this PC": "이 PC",
+  "Hub": "허브",
+  "Add account": "계정 추가",
+  "Check the hub connection": "허브 연결을 확인하세요",
+  "Meters show": "미터 표시",
+  "Limit shown": "표시할 한도",
+  "Show plan limits": "요금제 한도 표시",
+  "Session": "세션",
+  "Weekly": "주간",
+  "Open terminal": "터미널 열기",
+  "Sign in to {agent}": "{agent}에 로그인",
 };
 
 /** The parts KO is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */

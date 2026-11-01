@@ -163,8 +163,11 @@ describe("omp Ask cards in the agent's own Markdown (#1644)", () => {
     // omp draws a ```mermaid fence's code; the chat's Markdown would draw a diagram in its place
     const multi = card(screen("18.13.2", "multi", 120));
     expect(ompMarkdownPrompt(multi, open("18.13.2"))?.text_format).toBe("markdown");
-    const diagram = withArgs(open("18.13.2"), (args) => { args.questions[1]!.question = args.questions[1]!.question.replace("```sh", "```mermaid"); });
-    expect(ompMarkdownPrompt(multi, diagram)).toBe(multi);
+    // and a ```svg fence's, which the chat draws as a figure, and a ```math one's, drawn as a formula
+    for (const language of ["mermaid", "svg", "math"]) {
+      const diagram = withArgs(open("18.13.2"), (args) => { args.questions[1]!.question = args.questions[1]!.question.replace("```sh", `\`\`\`${language}`); });
+      expect(ompMarkdownPrompt(multi, diagram)).toBe(multi);
+    }
 
     // two options omp draws as different characters (or with different link addresses) that the card shows alike
     const version = "18.12.6";

@@ -4,11 +4,14 @@ import { readFileSync } from "node:fs";
 export interface ProcessMemory { argv: string[]; environ: string[] }
 const MAX_OUTPUT = 1024 * 1024;
 const MAX_CACHED = 64;
+/** The most of a process environment the helper reads; Linux allows a few MiB, real ones are KiB. */
+const ENVIRON_MAX = 1024 * 1024;
 /**
- * The variables omp's store and terminal lookups read (omp.ts ompStoreLayout, gjcTerminal): the
+ * The variables the agent store and terminal lookups read (omp.ts, gjcTerminal, dsh.ts; dsh-tui's resume
+ * handoff is a session id, not a secret): the
  * rest of the environment may hold secrets, so nothing else leaves the read.
  */
-const ROUTING = /^(?:HOME|OMP_PROFILE|PI_PROFILE|PI_CONFIG_DIR|PI_CODING_AGENT_DIR|PI_CODING_AGENT_SESSION_DIR|XDG_DATA_HOME|XDG_STATE_HOME|TMUX|TMUX_PANE)=/;
+const ROUTING = /^(?:HOME|OMP_PROFILE|PI_PROFILE|PI_CONFIG_DIR|PI_CODING_AGENT_DIR|PI_CODING_AGENT_SESSION_DIR|DSH_HOME|DSH_TUI_RESUME_SESSION|XDG_DATA_HOME|XDG_STATE_HOME|TMUX|TMUX_PANE)=/;
 
 /**
  * The routing words of a process's environment, or null when it could not be read. An environment
@@ -31,7 +34,16 @@ try {
     if (words.at(-1) === "") words.pop();
     return words;
   };
-  const raw = read("environ");
+  // read at most ENVIRON_MAX bytes: a larger environment is no answer rather than an unbounded read
+  const fd = fs.openSync("/proc/" + pid + "/environ", "r");
+  const buffer = Buffer.alloc(${ENVIRON_MAX} + 1);
+  let size = 0;
+  try {
+    for (let n; size < buffer.length && (n = fs.readSync(fd, buffer, size, buffer.length - size, null)) > 0;) size += n;
+  } finally { fs.closeSync(fd); }
+  if (size > ${ENVIRON_MAX}) process.exit(1);
+  const raw = buffer.subarray(0, size).toString("utf8").split("\\0");
+  if (raw.at(-1) === "") raw.pop();
   if (!raw.some(word => word !== "")) process.exit(1);
   const environ = raw.filter(word => ${ROUTING}.test(word));
   console.log(JSON.stringify({ start: fields[19], argv: process.argv[2] === "1" ? read("cmdline") : [], environ }));

@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Dr
 import { ArchiveRestore, Columns2, Ellipsis, Eraser, Maximize2, MoveHorizontal, Pencil, Rows2, ArrowLeftRight, TextWrap, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { HerdrPane, PaneLayoutSnapshot, SessionSnapshot } from "../../shared/protocol.ts";
-import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
+import { useAppLayout, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { PANE_DRAG_TYPE, paneDragData, type SplitSide } from "../lib/split.ts";
 import { PaneSubmitRetention } from "../lib/paneSubmitRetention.ts";
-import { PaneCachedContext, PanePresentedContext, PaneShownContext, PaneSubmitContext } from "../lib/paneSubmitContext.ts";
+import { PaneCachedContext, PanePresentedContext, PaneShownContext, PaneSubmitContext, PaneWatchedContext } from "../lib/paneSubmitContext.ts";
 import { cachedPaneCells, visitPaneTab } from "../lib/paneTabCache.ts";
 import { routeMissing } from "../lib/api.ts";
 import { layoutCells, zoomMode } from "../lib/layoutMap.ts";
@@ -70,6 +70,8 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   // attached panes drawn here at a grid this device does not size, wider than the screen (watched, or held under the keyboard)
   const wideGrid = useSyncExternalStore(wideGrids.subscribe, wideGrids.snapshot, wideGrids.snapshot);
   const machineId = useMachineId();
+  // the Herdr app's window owns this PC's splits (lib/machineContext.tsx): its panes are not named, swapped, split, zoomed or resized here
+  const appLayout = useAppLayout();
   const apple = /Mac|iPhone|iPad/.test(navigator.platform);
   const coarse = useMediaQuery("(pointer: coarse)");
   const narrow = useMediaQuery(SOLO_PANE_QUERY);
@@ -165,7 +167,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     else run(() => api.closePane(target.pane_id));
   };
   const target = menu ? snapshot?.panes.find((item) => item.pane_id === menu.paneId) : null;
-  const itemsFor = (target: HerdrPane): RowMenuItem[] => [
+  const layoutItems = (target: HerdrPane): RowMenuItem[] => appLayout ? [] : [
     { id: "rename", label: t("Rename pane"), icon: Pencil, run: () => setRenaming(target) },
     ...(target.label ? [{ id: "clear-name", label: t("Clear pane name"), icon: Eraser, run: () => run(() => api.renamePane(target.pane_id, "")) }] : []),
     ...(pane && target.pane_id !== pane.pane_id ? [{ id: "swap-focused", label: t("Swap with focused pane"), icon: ArrowLeftRight,
@@ -179,6 +181,9 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
         await api.zoomPane(target.pane_id, layout ? zoomMode(layout, target.pane_id) : "on");
         if (alive.current && latest.current.tabId === tabId && latest.current.selection === selection) onSelect(target.pane_id);
       }) },
+  ];
+  const itemsFor = (target: HerdrPane): RowMenuItem[] => [
+    ...layoutItems(target),
     // a mirror, or a pane watched at another device's grid, wider than the screen is folded to it
     // (lib/terminalFold.ts); a full-screen program reads better at its own width, panned sideways.
     // This device's choice, for every such pane
@@ -238,6 +243,9 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   const shownIds = new Set(cells.map((cell) => cell.paneId));
   visitedTabs.current = visitPaneTab(visitedTabs.current, presented?.tab_id ?? null,
     new Set(snapshot?.panes.map((item) => item.tab_id) ?? []));
+  // every recent tab keeps its screen; a phone watches only the one before the current tab, a view
+  // costing its battery, and the older ones show their last screen until the user is back
+  const watchedTabs = new Set(visitedTabs.current.slice(0, narrowScreen ? 2 : 4));
   const cachedCells = cachedPaneCells(visitedTabs.current, presented?.tab_id ?? null, snapshot?.panes ?? [], lastCells.current, shownIds);
   const cachedIds = new Set(cachedCells.map((cell) => cell.paneId));
   // Every frame stays under the same keyed array, including a frame returning before its ACK.
@@ -325,10 +333,10 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
           <button type="button" className="icon-button pane-frame-menu" aria-label={t("Pane actions for {name}", { name: displayPaneTitle(item) })}
             onClick={(event) => showMenu(item, event.currentTarget)}><Ellipsis aria-hidden="true" /></button>
         </div>
-        <div className="pane-frame-body"><PaneCachedContext.Provider value={cell.cached && !cell.retained}><PanePresentedContext.Provider value={!offTab}><PaneShownContext.Provider value={!hidden}>{renderPane(item, active, alone === null && cells.length > 1)}</PaneShownContext.Provider></PanePresentedContext.Provider></PaneCachedContext.Provider></div>
+        <div className="pane-frame-body"><PaneCachedContext.Provider value={cell.cached && !cell.retained}><PaneWatchedContext.Provider value={cell.cached && !cell.retained && watchedTabs.has(item.tab_id)}><PanePresentedContext.Provider value={!offTab}><PaneShownContext.Provider value={!hidden}>{renderPane(item, active, alone === null && cells.length > 1)}</PaneShownContext.Provider></PanePresentedContext.Provider></PaneWatchedContext.Provider></PaneCachedContext.Provider></div>
       </section>;
     })}
-    {alone === null && layout?.splits.map((item) => {
+    {alone === null && !appLayout && layout?.splits.map((item) => {
       const vertical = item.direction === "right";
       const path = splitPath(item.id);
       if (path === null) return null;

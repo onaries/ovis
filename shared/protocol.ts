@@ -114,14 +114,30 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         Tailscale on this PC already serves, or the command to run), no-store
  *  GET    /api/portal                    -> PortalStatus (an optional public HTTPS address through
  *         Portal, server/portal.ts), no-store
- *  POST   /api/portal/start              -> 202 { accepted: true }; body { relay }; 400 invalid_relay,
- *         409 token_required / serve_only / portal_busy / portal_state_in_use / portal_unsupported
+ *  POST   /api/portal/start              -> 202 { accepted: true }; body { relay, auth? } (PortalAuth: who may
+ *         open the address; unset, only the app's own token or a paired device); 400 invalid_relay /
+ *         invalid_portal_auth, 409 token_required / serve_only / portal_busy / portal_state_in_use /
+ *         portal_unsupported
  *  POST   /api/portal/stop               -> 202 { accepted: true }; 409 portal_unsupported
+ *  POST   /api/portal/invite             -> PortalInvite, no-store; body { name, days }: a private link for `name`
+ *         that lasts 1, 7, 30 or 90 days, issued while Portal runs with the private-link sign-in. 400
+ *         invalid_invite / invite_name_not_listed, 409 portal_not_credential, 502 portal_invite_failed
  *         Portal POSTs require X-Herdr-Update: 1 and same-origin, like the update POSTs:
- *         403 invalid_portal_request (or invalid_origin from the outer origin gate).
+ *         403 invalid_portal_request (or invalid_origin from the outer origin gate), and 403 owner_only to a
+ *         visitor Portal's own sign-in let in (see Access).
  *         Unsupported methods/actions get 405 method_not_allowed; a watch-only device gets
  *         403 read_only. Startup holds HTTP/WS requests until leftover Portal cleanup completes;
  *         unreadable saved state or unverifiable cleanup fails closed with 500 internal_error.
+ *  GET    /api/relay                     -> RelayStatus, no-store; also included in authenticated
+ *         /api/health and /api/access answers.
+ *  POST   /api/relay/start               -> RelayStatus; closes an ungated tokenless device gate first
+ *  POST   /api/relay/stop                -> RelayStatus; closes sessions with shutdown and WS 1001
+ *  POST   /api/relay/offer               -> { url, expires_at }; an offer carrying the active one-time pairing code
+ *         (the one Devices shows, else a new one); 409 relay_off while off, relay_offline in error
+ *  POST   /api/relay/reset-identity      -> RelayStatus; revokes relay devices and reconnects if enabled
+ *         Relay mutations require drive role, same origin and X-Herdr-Update: 1, and a direct connection
+ *         (403 local_required over the relay); a Portal visitor gets 403 owner_only (see Access).
+ *         Serve-only installs refuse relay start.
  *  GET    /api/updates                   -> UpdateStatus (shared/update.ts), no-store; to the bridge
  *         token (which cannot read /api/access) also `port` and `serving_url`, where it answers
  *  POST   /api/updates/check             -> 202 { accepted: true }
@@ -272,6 +288,9 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         pane's OmO session started, or a Claude Code pane's subagents (no workflows): running ones, then
  *         those that ended in the last day; empty for any other pane or one whose session is not
  *         known yet. server_time: that PC's clock, which the times are on)
+ *  GET    /api/pane/artifacts?pane_id= -> { artifacts: ClaudeArtifact[] } (the pages a Claude Code
+ *         pane's session published with its Artifact tool, newest first; empty for any other pane or
+ *         one whose session is not known yet)
  *  GET    /api/pane/plan?pane_id=       -> PanePlan (the plan the pane's Claude Code, Codex or OmO session
  *         keeps: its task list or checklist, read from the transcript; null when it keeps none)
  *  GET    /api/pane/files?pane_id=&q=&limit=  -> { files: string[] } (paths relative to the pane
@@ -378,8 +397,13 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *  the PC's own Tailscale login, as `tailscale serve` states it — or, where
  *  OVIS_TAILSCALE_SERVE_ONLY=1 declares serve the only ingress on a tailnet one login
  *  owns with no tagged node, a serve request that states no login; a paired device's cookie;
- *  the shared token (OVIS_TOKEN) as cookie or `Authorization: Bearer <token>`. With a
- *  token configured, only the last two count, this PC and its Tailscale login included. Without one, and while no
+ *  the shared token (OVIS_TOKEN) as cookie or `Authorization: Bearer <token>`; or, where Portal runs
+ *  with a sign-in of its own, a visitor it vouches for: X-Portal-User and X-Portal-Auth, believed only
+ *  beside the X-Portal-Proof of the Portal this server started, so with no token asked. With a
+ *  token configured, this PC and its Tailscale login stop counting: only the token, a paired device
+ *  and that visitor do. That visitor drives like a paired device but leaves no standing access behind: the
+ *  changes under /api/devices/ (a code redeemed at /api/devices/pair apart), POST /api/push/subscribe,
+ *  POST /api/portal/* and POST /api/relay/* answer it 403 owner_only. Without a token, and while no
  *  device is paired, anything that reaches the server is let in as before (the startup
  *  warning says so). Refusals answer 401 `unauthorized` (403 `other_user` for another Tailscale
  *  login, when no token is configured); the upgrade is refused. Static files are always public.
@@ -390,11 +414,13 @@ export interface ApiError {
 
 export type { PaneFindMatch, PaneFindRequest, PaneFindResponse } from "./find.ts";
 
-export type { UsageProviderId, UsageWindow, UsageProblem, ProviderUsage, UsageReport, StatuslineState } from "./usage.ts";
+export type { UsageProviderId, UsageWindow, UsageProblem, ProviderUsage, UsageReport, MissingCommand, StatuslineState } from "./usage.ts";
 
 export type { CLIProxyStatus, CLIProxyProvider, CLIProxyLogin, CLIProxyLoginStatus } from "./cliproxy.ts";
 
-export type { AccessVia, AccessRefusal, DeviceRole, HealthAuth, LanExposure, BindScope, ObservedIngress, SecuritySummary, PairedDevice, PairingCode, RemoteAccess, TailscaleAccess } from "./access.ts";
+export type { AccessVia, AccessRefusal, DeviceRole, HealthAuth, LanExposure, BindScope, ObservedIngress, SecuritySummary, PairedDevice, PairingCode, PortalLogin, TailscaleAccess } from "./access.ts";
+/** Older servers and the Tailscale-only builder omit relay state. */
+export type RemoteAccess = import("./access.ts").RemoteAccess & { readonly relay?: RelayStatus };
 
 /**
  * Browser stream keys: how the server tells one browser from another without a credential, so a
@@ -422,7 +448,17 @@ export type { AccessVia, AccessRefusal, DeviceRole, HealthAuth, LanExposure, Bin
  */
 export const STREAM_COOKIE_PREFIX = "ovis_stream_";
 
-export type { PortalStatus } from "./portal.ts";
+export type { PortalAuth, PortalAuthMethod, PortalInvite, PortalSignIn, PortalStatus } from "./portal.ts";
+
+/** GET /api/relay; relay and app are configured secure origins, never pairing credentials. */
+export interface RelayStatus {
+  readonly phase: "off" | "connecting" | "online" | "error";
+  readonly relay: string;
+  readonly app: string;
+  readonly sessions: number;
+  readonly blocked: null | "serve_only" | "identity_unreadable";
+  readonly error: string | null;
+}
 
 /**
  * POST /api/devices/revoke-all: every paired device lost its pairing access in one durable write,
@@ -538,6 +574,13 @@ export type { OmoTask, OmoRunNode, OmoRun, OmoActivity, PaneBackgroundAgentDetai
 
 export type { PlanStep, PanePlan } from "./plans.ts";
 
+/** One page a Claude Code session published with its Artifact tool: its claude.ai URL, the title of its latest publish (else the published file's name) and when that was. */
+export interface ClaudeArtifact {
+  url: string;
+  title: string | null;
+  at: string | null;
+}
+
 /** How far a pane's plan has got, for the sidebar: `current` names the step in progress. */
 export interface PlanSummary {
   done: number;
@@ -554,7 +597,7 @@ export interface ConversationResponse {
   activity?: "thinking" | "working" | "idle";
   /** Stable across appends; changes on transcript replacement or native context clear. */
   history_id?: string;
-  source: "copilot-transcript" | "grok-transcript" | "agy-transcript" | "muse-transcript" | "letta-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "dsh-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript" | "scrollback";
+  source: "dsh-transcript" | "copilot-transcript" | "grok-transcript" | "agy-transcript" | "muse-transcript" | "letta-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript" | "scrollback";
   turns: ConversationTurn[];
   metadata?: ConversationMetadata;
   /**
@@ -746,6 +789,9 @@ export interface InteractivePrompt {
   answers?: InteractivePromptAnswer[];
   /** whether the prompt can step back to a previous question in a multi-step form */
   can_step_back?: boolean;
+  /** whether the prompt can go on to the next question without answering this one, as the agent's own
+   * key does (omo's Tab, Codex's →, Hermes's Tab): answered with `step_next` */
+  can_step_next?: boolean;
   /** previously selected option index for a single-select step, if any */
   default_option_index?: number | null;
   /** previously selected option indices for a multi-select step, if any */
@@ -818,6 +864,8 @@ export interface PromptAnswer {
   option_indices?: number[];
   custom_text?: string;
   step_back?: boolean;
+  /** to the next question, this one left unanswered (`can_step_next`) */
+  step_next?: boolean;
   step_index?: number;
   /** Unsent edits for the current OpenCode step, saved only when navigating back. */
   draft?: { option_indices: number[]; custom_text: string };
@@ -857,6 +905,10 @@ export interface PromptAnswer {
 /** A connection's authority over the shared ptys: `interact` types and resizes, `observe` only watches. */
 export type ClientRole = "interact" | "observe";
 
+/** A pending message's outcome. `resumed`: replayed after a reconnect, only to the device and browser
+ * (`receipt_resume_id`) that sent it, for its exact id; it settles a saved copy and never sends input. */
+export interface PendingRemoval { id: string; outcome: "sent" | "discarded" | "consumed" | "dismissed"; resumed?: true }
+
 /** A follow-up accepted by this bridge, scoped to the connection that submitted it. */
 export interface PendingMessage {
   id: string;
@@ -865,6 +917,8 @@ export interface PendingMessage {
   state: "queued" | "sending" | "held" | "uncertain";
   created_at: string;
   error?: { code: string; message: string };
+  /** its submit was `agent_only`: a resend of a saved copy says so again */
+  agent_only?: true;
 }
 
 export type ClientMessage =
@@ -919,8 +973,9 @@ export type ClientMessage =
    * `pending_uncertain`, including other generations of the same stable ID.
    * Not with `send_anyway`:
    * that combination returns invalid_delivery before reserving or replaying an ID. No `clear_draft`.
-   * Older peers ignore it. */
-  | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; delivery?: "immediate" | "queue" | "hold" | "agent-queue"; clear_draft?: string; send_anyway?: true; resend_id?: string; resend_generation?: number; capacity_retry?: true }
+   * Older peers ignore it.
+   * `agent_only` (feature "agent-only") keeps a chat message carrying reply comments from being typed into a shell. */
+  | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; delivery?: "immediate" | "queue" | "hold" | "agent-queue"; clear_draft?: string; send_anyway?: true; resend_id?: string; resend_generation?: number; capacity_retry?: true; agent_only?: true }
   /** `agent-queue` requires "pending-agent-queue": transfers this same bridge ID with
    * paste + Ctrl+Q (OmO) or Tab (working Codex, "codex-agent-queue"). Success removes it as sent without opening a turn gate; a failure keeps it
    * held, or uncertain if input may have reached the terminal. The receipt proves key delivery. */
@@ -992,7 +1047,7 @@ export interface ClientConnectionTrace {
 }
 
 /** What a server supports beyond the base protocol, listed in its `features` frame and its first snapshot; older bridges list nothing. */
-export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "agent-queue" | "pending-agent-queue" | "codex-agent-queue" | "codex-capacity-retry" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping" | "terminal-insert";
+export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "agent-queue" | "pending-agent-queue" | "codex-agent-queue" | "codex-capacity-retry" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping" | "terminal-insert" | "agent-only";
 
 export type ServerMessage =
   /** the first frame of a connection, before the snapshot that can wait seconds on herdr: what this server
@@ -1036,7 +1091,7 @@ export type ServerMessage =
   /** Owner-only receipt and state; only an explicit removed outcome permits deleting a retained client message.
    * `dismissed` removes an uncertain copy, never proves withdrawal or delivery. Existing clients
    * remove owned IDs for any explicit outcome; Edit restores only `discarded`. */
-  | { type: "pending-messages"; pane_id: string; messages: PendingMessage[]; removed?: Array<{ id: string; outcome: "sent" | "discarded" | "consumed" | "dismissed" }> }
+  | { type: "pending-messages"; pane_id: string; messages: PendingMessage[]; removed?: PendingRemoval[] }
   | { type: "secret-result"; id: number; pane_id: string; ok: boolean; code?: string }
   /** agent-status push for ANY pane, attached or not (server-side status collector) */
   | { type: "pane-status"; pane_id: string; agent_status: AgentStatus; finish_id?: number; finish_epoch?: string; /** a pane's running background tasks (OmO's, or a Claude Code pane's subagents and commands), when the frame is about them: it changes no status */ background_tasks?: number; /** every frame says it: absent, the pane does not wait on its turn's background work */ background_wait?: true; /** a pane's plan, when the frame is about it (null: it keeps none now); it changes no status */ plan?: PlanSummary | null }

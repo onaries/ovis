@@ -33,6 +33,7 @@ const BASE: Record<string, string> = {
   "Files edited in this turn": "このターンで編集したファイル",
   "Open working-tree diff for {path}": "{path} の作業ツリーの差分を開く",
   "This file is outside the pane's repository.": "このファイルはペインのリポジトリ外にあります。",
+  "Save": "保存",
   "Goal": "目標",
   "Waiting for your answer": "回答待ち",
   "Back": "戻る",
@@ -184,15 +185,15 @@ const BASE: Record<string, string> = {
   // ---- prompt card ----
   "Submit": "送信",
   "Recommended": "推奨",
+  "Agents": "エージェント",
+  "Check again": "再確認",
+  "Setup guide": "セットアップガイド",
   "Could not confirm this browser is paired. Check that cookies are enabled, then try again.": "このブラウザーがペアリング済みであることを確認できませんでした。Cookie が有効か確認して、もう一度お試しください。",
   "New code": "新しいコード",
   "Paired: {name}.": "ペアリングしました: {name}。",
   "QR code that pairs a phone with code {code}": "コード {code} でスマートフォンをペアリングする QR コード",
   "Pairing code": "ペアリングコード",
   "Open this address on your phone": "スマートフォンでこのアドレスを開いてください",
-  "It is on this PC, but it does not start. Install it again.": "この PC にありますが、起動しません。もう一度インストールしてください。",
-  "Installing {agent}…": "{agent} をインストール中…",
-  "Install {agent}": "{agent} をインストール",
   "{agent} is ready": "{agent} の準備ができました",
 
 
@@ -320,6 +321,21 @@ const BASE: Record<string, string> = {
   "Terminal line": "ターミナルの入力行",
   "Held message": "保留中のメッセージ",
   "Held input": "保持した入力",
+  "Other accounts": "その他のアカウント",
+  "Plan limits": "プランの上限",
+  "Auto": "自動",
+  "Hub request failed": "ハブのリクエストに失敗しました",
+  "On this PC": "このPC",
+  "Hub": "ハブ",
+  "Add account": "アカウントを追加",
+  "Check the hub connection": "ハブの接続を確認してください",
+  "Meters show": "メーターの表示",
+  "Limit shown": "表示する上限",
+  "Show plan limits": "プランの上限を表示",
+  "Session": "セッション",
+  "Weekly": "週次",
+  "Open terminal": "ターミナルを開く",
+  "Sign in to {agent}": "{agent} にサインイン",
 };
 
 /** The parts JA is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */

@@ -35,6 +35,7 @@ const BASE: Record<string, string> = {
   "Files edited in this turn": "本轮编辑的文件",
   "Open working-tree diff for {path}": "打开 {path} 的工作树差异",
   "This file is outside the pane's repository.": "此文件位于窗格的仓库之外。",
+  "Save": "保存",
   "Goal": "目标",
   "Waiting for your answer": "等待你的回答",
   "Back": "返回",
@@ -186,15 +187,15 @@ const BASE: Record<string, string> = {
   // ---- prompt card ----
   "Submit": "提交",
   "Recommended": "推荐",
+  "Agents": "代理",
+  "Check again": "重新检查",
+  "Setup guide": "设置向导",
   "Could not confirm this browser is paired. Check that cookies are enabled, then try again.": "无法确认此浏览器已配对。请检查是否允许 Cookie，然后重试。",
   "New code": "新代码",
   "Paired: {name}.": "已配对：{name}。",
   "QR code that pairs a phone with code {code}": "使用代码 {code} 配对手机的二维码",
   "Pairing code": "配对码",
   "Open this address on your phone": "在手机上打开此地址",
-  "It is on this PC, but it does not start. Install it again.": "它在这台电脑上，但无法启动。请重新安装。",
-  "Installing {agent}…": "正在安装 {agent}…",
-  "Install {agent}": "安装 {agent}",
   "{agent} is ready": "{agent} 已就绪",
 
 
@@ -322,6 +323,21 @@ const BASE: Record<string, string> = {
   "Terminal line": "终端输入行",
   "Held message": "保留的消息",
   "Held input": "保留的输入",
+  "Other accounts": "其他账号",
+  "Plan limits": "套餐限额",
+  "Auto": "自动",
+  "Hub request failed": "中心请求失败",
+  "On this PC": "本机",
+  "Hub": "中心",
+  "Add account": "添加账号",
+  "Check the hub connection": "请检查中心连接",
+  "Meters show": "计量显示",
+  "Limit shown": "显示的限额",
+  "Show plan limits": "显示套餐限额",
+  "Session": "会话",
+  "Weekly": "每周",
+  "Open terminal": "打开终端",
+  "Sign in to {agent}": "登录 {agent}",
 };
 
 /** The parts ZH is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */

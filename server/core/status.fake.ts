@@ -83,7 +83,7 @@ export function hub<Owner = unknown, Lease = unknown>(path = transcript, queued?
     spyOn(conversation, "claudePanePid").mockResolvedValue(null as never),
   );
   const frames: { type: string; agent_status?: string; background_tasks?: number; background_wait?: boolean }[] = [];
-  const client = { data: connectionData({ deviceId: undefined, readOnly: false }), getBufferedAmount: () => 0, send: (encoded: string) => { frames.push(JSON.parse(encoded)); return 1; } } as unknown as Client;
+  const client: Client = { data: connectionData({ deviceId: undefined, readOnly: false }), readyState: WebSocket.OPEN, getBufferedAmount: () => 0, send: (encoded: string) => { frames.push(JSON.parse(encoded)); return 1; }, close: () => {} };
   const pending = queued ?? new PendingInputs<Owner, Lease>(() => {});
   const status = createStatusHub({
     options: { stateDir: join(root, `state${++hubs}`), opencodeDb: store, machines: false, ...(herdrIdentity ? { herdrIdentity } : {}) },

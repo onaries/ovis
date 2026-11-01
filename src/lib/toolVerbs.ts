@@ -42,8 +42,7 @@ export function toolVerbKind(name: string, input = ""): ToolVerbKind | null {
   if (!Object.hasOwn(VERB_OF, key)) return null;
   const kind = VERB_OF[key]!;
   // Codex applies a patch from inside an exec script: the row names the files, so it is an edit.
-  // The patch is found by its text, so a `tools.apply_patch("…")` the script only quotes or
-  // comments out reads as an edit too, as it already does in the row's file list and diff.
+  // Quoted examples and unresolved patch fragments keep the original code and tool kind.
   return kind === "run" && patchText(input) !== null ? "edit" : kind;
 }
 

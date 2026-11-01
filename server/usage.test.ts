@@ -24,6 +24,8 @@ let requests: Array<{ url: string; init: RequestInit }>;
 let keychain: Map<string, KeychainRead>;
 let commands: Map<string, string>;
 let commandCalls: string[][];
+/** commands this PC does not have installed */
+let absent: Set<string>;
 
 function context(platform: NodeJS.Platform = "linux"): UsageContext {
   return {
@@ -41,6 +43,7 @@ function context(platform: NodeJS.Platform = "linux"): UsageContext {
       commandCalls.push(argv);
       return commands.get(argv.join(" ")) ?? null;
     },
+    has: (command) => !absent.has(command),
   };
 }
 
@@ -84,6 +87,7 @@ beforeEach(() => {
   keychain = new Map();
   commands = new Map();
   commandCalls = [];
+  absent = new Set();
 });
 
 afterEach(() => rmSync(home, { recursive: true, force: true }));
@@ -720,8 +724,52 @@ describe("providers", () => {
   it.each(["missing", "failing"] as const)("does not show Antigravity when Linux secret-tool is %s", async (result) => {
     if (result === "failing") commands.set("secret-tool lookup service gemini username antigravity", "");
     const report = await new UsageService(context("linux"), only("antigravity")).report();
-    expect(report.providers).toEqual([]);
+    expect(report).toEqual({ providers: [] });
     expect(commandCalls).toEqual([["secret-tool", "lookup", "service", "gemini", "username", "antigravity"]]);
+  });
+
+  it("names secret-tool when Linux lacks it and no Antigravity sign-in was found, and looks again on the next report", async () => {
+    absent.add("secret-tool");
+    const service = new UsageService(context("linux"), only("antigravity"));
+    expect(await service.report()).toEqual({ providers: [], missing_commands: [{ provider: "antigravity", command: "secret-tool" }] });
+    // installed since: the next plain report finds the keyring item, without waiting for FRESH_MS
+    absent.delete("secret-tool");
+    commands.set("secret-tool lookup service gemini username antigravity", JSON.stringify({
+      token: { access_token: "ya29-keyring", expiry: new Date(NOW + HOUR).toISOString() },
+      id_token: jwt({ email: "keyring@example.com", sub: "keyring-sub" }),
+    }));
+    replies.set("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", { body: { response: { groups: [] } } });
+    now += 1000;
+    const report = await service.report();
+    expect(report.missing_commands).toBeUndefined();
+    expect(report.providers).toMatchObject([{ id: "antigravity", key: "antigravity:keyring-sub" }]);
+  });
+
+  it("looks in the keyring again once secret-tool, removed after a search was kept, is back", async () => {
+    const service = new UsageService(context("linux"), only("antigravity"));
+    expect(await service.report()).toEqual({ providers: [] });
+    absent.add("secret-tool");
+    now += 1000;
+    expect((await service.report()).missing_commands).toEqual([{ provider: "antigravity", command: "secret-tool" }]);
+    absent.delete("secret-tool");
+    commands.set("secret-tool lookup service gemini username antigravity", JSON.stringify({ token: { access_token: "ya29-keyring", expiry: new Date(NOW + HOUR).toISOString() } }));
+    replies.set("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", { body: { response: { groups: [] } } });
+    now += 1000;
+    expect((await service.report()).providers).toHaveLength(1);
+  });
+
+  it("names no missing secret-tool once Antigravity's token file gives its account", async () => {
+    absent.add("secret-tool");
+    write(join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"), { token: { access_token: "ya29-file", expiry: new Date(NOW + HOUR).toISOString() } });
+    replies.set("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", { body: { response: { groups: [] } } });
+    const report = await new UsageService(context("linux"), only("antigravity")).report();
+    expect(report.missing_commands).toBeUndefined();
+    expect(report.providers).toHaveLength(1);
+  });
+
+  it("never names secret-tool off Linux", async () => {
+    absent.add("secret-tool");
+    expect(await new UsageService(context("darwin"), only("antigravity")).report()).toEqual({ providers: [] });
   });
 
   it.each([

@@ -98,6 +98,19 @@ export function workStartsOpen(live: boolean, parts: ConversationPart[]): boolea
   return parts.slice(after).some((part) => part.kind === "text" && part.text.trim().length > 0);
 }
 
+/**
+ * Whether one block of a turn starts open, until the reader opens or closes it. `live` and `waiting`
+ * are the block's own (only the turn's head runs or waits); `last`: no part of the turn comes after
+ * its run. By default that is `workStartsOpen`: the running block open, a settled turn's last block
+ * open for words said after its answer. With Collapse work on (Settings → Chat) every block starts
+ * folded to its head line, the running one included, as the Codex and Claude apps keep one working
+ * line (#2228); the block that waits on the user still opens, since it may hold what they answer.
+ */
+export function workBlockStartsOpen(block: { live: boolean; waiting: boolean; last: boolean }, parts: ConversationPart[], foldWork: boolean): boolean {
+  if (foldWork) return block.waiting;
+  return block.live || (block.last && workStartsOpen(false, parts));
+}
+
 type WorkCategory = "edit" | "read" | "command" | "other";
 
 /** "{n} edit" / "{n} edits": both forms are translated, Korean uses one */

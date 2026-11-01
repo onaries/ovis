@@ -58,4 +58,15 @@ export interface StatuslineState {
 /** GET /api/usage: only providers a CLI on this PC is signed in to are listed, once per account. */
 export interface UsageReport {
   readonly providers: readonly ProviderUsage[];
+  /**
+   * Providers with no account found on this PC (a hub's accounts may still be listed) whose sign-in may be kept where this PC cannot look: the
+   * command that reads it is not installed (Antigravity's Linux keyring item needs `secret-tool`).
+   * Absent when there are none.
+   */
+  readonly missing_commands?: readonly MissingCommand[];
+}
+
+export interface MissingCommand {
+  readonly provider: UsageProviderId;
+  readonly command: string;
 }

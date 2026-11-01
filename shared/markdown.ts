@@ -4,7 +4,8 @@ import { parseHtmlBlock, startsHtml } from "./markdownHtml.ts";
 export type InlineNode =
   | { type: "text"; value: string }
   | { type: "code"; value: string }
-  | { type: "math"; value: string }
+  /** `dollar`: written as `$…$`, which a surface that cannot draw it shows again */
+  | { type: "math"; value: string; dollar?: true }
   | { type: "strong" | "em" | "del"; children: InlineNode[] }
   | { type: "link"; href: string; children: InlineNode[] }
   /** `![alt](src)`; `fallback` is what a surface that draws no images shows after the `!` */
@@ -29,7 +30,8 @@ export interface ListBlock {
 }
 
 export type MarkdownBlock =
-  | { type: "math"; value: string }
+  /** `dollar`: written between `$$` rather than `\[` and `\]`; `oneLine`: opened and closed on one line */
+  | { type: "math"; value: string; dollar?: true; oneLine?: true }
   /** `align`: centered by the HTML a README wrote it in (markdownHtml.ts) */
   | { type: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6; content: InlineNode[]; align?: "center" }
   | { type: "paragraph"; lines: InlineNode[][]; align?: "center" }
@@ -141,11 +143,11 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   // rendering exactly as it appears in the terminal and native transcript.
   // a bare or <angle> http(s) URL is a link too; it stops at the first non-ASCII character,
   // so `…/pull/36에서` links the address and leaves the Korean after it as text
-  const marker = /(`[^`\n]+`|\\\(.+?\\\)|\[[^\]\n]+\]\([^\s)]+\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|(?<![\w.@/-])www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}\p{M}_])__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|(?<!\*)\*[^*\n]+\*(?!\*)|(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/yu;
+  const marker = /(`[^`\n]+`|\\\(.+?\\\)|(?<![A-Za-z0-9\\$])\$(?:[^\s$\\`]|[^\s$`][^\n\r\u2028\u2029$`]*[^\s$\\`])\$(?![A-Za-z0-9_${#@*(`])|\[[^\]\n]+\]\([^\s)]+\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|(?<![\w.@/-])www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}\p{M}_])__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|(?<!\*)\*[^*\n]+\*(?!\*)|(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/yu;
   // its last part alone, for a `__` that nothing closes as bold: one `_` may still close it
   const emphasis = /(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu;
   // what any part of `marker` starts with
-  const opener = /[`[<*_~]|\\\(|file:\/\/\/|https?:\/\/|www\./g;
+  const opener = /[`[<*_~$]|\\\(|file:\/\/\/|https?:\/\/|www\./g;
   /** Where `pattern` is next found from `from` on. Asked with a `from` that only rises, so a place found serves every `from` before it. */
   const next = (pattern: RegExp): ((from: number) => number) => {
     let found = -1;
@@ -161,6 +163,7 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   // `.` stops at these, and a formula is `.+?`
   const mathBreak = next(/[\n\r\u2028\u2029]/g);
   const mathClose = next(/\\\)/g);
+  const dollarClose = next(/\$/g);
   const labelEnd = next(/[\]\n]/g);
   const targetEnd = next(/[\s)]/g);
   const emphasisClose = next(/(?<=\S)_(?![\p{L}\p{N}\p{M}_])/gu);
@@ -175,6 +178,10 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
     const char = source[start];
     if (char === "\\") {
       if (!(mathClose(start + 3) < mathBreak(start + 2))) pattern = null;
+    } else if (char === "$") {
+      // a formula's `$` follows no Latin letter, digit, backslash or `$` (Korean, Japanese and
+      // Chinese text runs into a formula with no space: `값은$x$이다`), and its closer is on this line
+      if (/[A-Za-z0-9\\$]/.test(source[start - 1] ?? "") || !(dollarClose(start + 2) < mathBreak(start + 1))) pattern = null;
     } else if (char === "[") {
       const label = labelEnd(start + 1);
       const target = label + 2;
@@ -192,6 +199,8 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
     pattern.lastIndex = start;
     const match = pattern.exec(source);
     if (match === null) continue;
+    // a price, not a formula: `$5 for the $` (a number, a space, then a word) stays text
+    if (char === "$" && /^\$\d[\d.,]*\s+\p{L}/u.test(match[0])) continue;
     from = start + match[0].length;
     yield match;
   }
@@ -227,6 +236,8 @@ export function parseInline(source: string, links = true, depth = 0): InlineNode
       nodes.push({ type: "code", value: token.slice(1, -1) });
     } else if (token.startsWith("\\(")) {
       nodes.push({ type: "math", value: token.slice(2, -2) });
+    } else if (token.startsWith("$")) {
+      nodes.push({ type: "math", value: token.slice(1, -1), dollar: true });
     } else if (token.startsWith("[")) {
       const split = token.lastIndexOf("](");
       const label = token.slice(1, split);
@@ -294,7 +305,7 @@ function parseTable(lines: string[], start: number, within = 0): { block: Markdo
 
 function startsBlock(lines: string[], index: number, html = false): boolean {
   const line = lines[index] ?? "";
-  return (html && startsHtml(line)) || /^\s*\\\[/.test(line) || /^\s{0,3}```/.test(line) || /^#{1,6}\s+/.test(line) || /^\s*>/.test(line) || /^(?:\s*[-*_]){3,}\s*$/.test(line) || listLine.test(line)
+  return (html && startsHtml(line)) || /^\s*(?:\\\[|\$\$)/.test(line) || /^\s{0,3}```/.test(line) || /^#{1,6}\s+/.test(line) || /^\s*>/.test(line) || /^(?:\s*[-*_]){3,}\s*$/.test(line) || listLine.test(line)
     || startsTable(lines, index);
 }
 
@@ -387,6 +398,14 @@ export function mathNestsTooDeep(value: string): boolean {
   return false;
 }
 
+/** Whether `line` opens a display formula (`\[` or `$$`) and closes it, with nothing after the close. */
+function wholeFormula(line: string): boolean {
+  const open = /^\s*(\\\[|\$\$)/.exec(line);
+  if (open === null) return false;
+  const close = line.indexOf(open[1] === "$$" ? "$$" : "\\]", open[0].length);
+  return close !== -1 && line.slice(close + 2).trim() === "";
+}
+
 /** Code blocks longer than this open folded to their first FOLDED_CODE_LINES lines. */
 export const FOLD_CODE_AFTER_LINES = 30;
 export const FOLDED_CODE_LINES = 20;
@@ -406,8 +425,9 @@ export function parseMarkdown(source: string, depth = 0, html = false): Markdown
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: MarkdownBlock[] = [];
   let index = 0;
-  // no formula opened before this line closes: the search that found so is not made again
-  let unclosedMath = 0;
+  // no formula opened before this line closes: the search that found so is not made again (one
+  // line per delimiter, `\[` and `$$`)
+  const unclosedMath = { "\\[": 0, "$$": 0 };
   while (index < lines.length) {
     const line = lineAt(lines, index);
     if (line.trim() === "") { index += 1; continue; }
@@ -427,30 +447,39 @@ export function parseMarkdown(source: string, depth = 0, html = false): Markdown
       continue;
     }
 
-    const display = index < unclosedMath ? null : /^\s*\\\[(.*)$/.exec(line);
-    if (display !== null) {
+    const display = /^\s*(\\\[|\$\$)(.*)$/.exec(line);
+    const open = display?.[1] as keyof typeof unclosedMath | undefined;
+    if (display !== null && open !== undefined && index >= unclosedMath[open]) {
+      const close = open === "$$" ? "$$" : "\\]";
       const body: string[] = [];
       let next = index;
-      let part = display[1] ?? "";
+      let part = display[2] ?? "";
       let complete = false;
       while (true) {
-        const close = part.indexOf("\\]");
-        if (close !== -1 && part.slice(close + 2).trim() === "") {
-          body.push(part.slice(0, close));
-          blocks.push({ type: "math", value: body.join("\n").trim() });
+        const at = part.indexOf(close);
+        // the opening line closes its formula and goes on in prose: it is prose
+        if (at !== -1 && next === index && part.slice(at + 2).trim() !== "") break;
+        if (at !== -1 && part.slice(at + 2).trim() === "") {
+          body.push(part.slice(0, at));
+          const value = body.join("\n").trim();
+          blocks.push(open === "$$" ? { type: "math", value, dollar: true, ...(next === index ? { oneLine: true as const } : {}) } : { type: "math", value });
           index = next + 1;
           complete = true;
           break;
         }
         body.push(part);
         next += 1;
-        if (next >= lines.length || /^\s{0,3}```/.test(lineAt(lines, next))) break;
+        // a blank line (display math holds none) or a fence ends the search, and so does a line
+        // that is a whole formula of its own, or one opening a formula with the other delimiter: it
+        // is drawn as one, rather than closing this one or being hidden by it
+        if (next >= lines.length || lineAt(lines, next).trim() === "" || /^\s{0,3}```/.test(lineAt(lines, next)) || wholeFormula(lineAt(lines, next))
+          || (open === "$$" ? /^\s*\\\[/ : /^\s*\$\$/).test(lineAt(lines, next))) break;
         part = lineAt(lines, next);
       }
       // An incomplete formula stays prose; later headings and fences still parse normally.
       if (complete) continue;
       // every `\[` up to where the search ended (the end, or a fence) would search the same lines
-      unclosedMath = next;
+      unclosedMath[open] = next;
     }
 
     if (html && startsHtml(line)) {

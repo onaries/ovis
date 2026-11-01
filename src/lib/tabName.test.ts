@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { customTabLabel, tabLabel } from "./tabName.ts";
+import { autoTabLabel, customTabLabel, tabLabel } from "./tabName.ts";
 
 const t = (key: string, vars?: Record<string, string | number>): string => key.replace("{n}", String(vars?.["n"]));
 
@@ -32,5 +32,24 @@ describe("tab names", () => {
   it("treats an empty label as herdr's automatic name", () => {
     expect(customTabLabel({ label: "", number: 3 }, 2)).toBeNull();
     expect(tabLabel({ label: "", number: 3 }, t, 2)).toBe("Tab 2");
+  });
+
+  describe("a label from the first message (#2019)", () => {
+    const panes = [{ pane_id: "w1:p2", terminal_id: "term_b" }];
+    const labels = { "w1:p2|term_b": "Fix the login redirect…" };
+
+    it("names a tab herdr names by its number", () => {
+      for (const label of ["2", ""]) expect(autoTabLabel({ label, number: 2 }, panes, "local", labels)).toBe("Fix the login redirect…");
+    });
+
+    it("never covers a name someone gave the tab, an agent's name included", () => {
+      for (const label of ["build", "claude", "claude-2", "3"]) expect(autoTabLabel({ label, number: 2 }, panes, "local", labels)).toBeNull();
+    });
+
+    it("reads the label of this PC's pane on its terminal only", () => {
+      expect(autoTabLabel({ label: "2", number: 2 }, panes, "pc-2", labels)).toBeNull();
+      expect(autoTabLabel({ label: "2", number: 2 }, [{ pane_id: "w1:p2", terminal_id: "term_new" }], "local", labels)).toBeNull();
+      expect(autoTabLabel({ label: "2", number: 2 }, panes, "pc-2", { "remote:pc-2:w1%3Ap2|term_b": "Ship it" })).toBe("Ship it");
+    });
   });
 });

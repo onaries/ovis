@@ -1,4 +1,4 @@
-import { apiFetch as fetch } from "./api-request-id.ts";
+import { apiFetch } from "./api-request-id.ts";
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
 import type { SeenFinish } from "../../shared/seen.ts";
 import type { AgentCatalogResponse, AgentTabStarted } from "../../shared/agent-catalog.ts";
@@ -28,6 +28,7 @@ import type {
   TabMoved,
   TabMovedToWorkspace,
   OmoActivity,
+  ClaudeArtifact,
   PaneBackgroundAgentDetail,
   OpenWorktreeRequest,
   PairedDevice,
@@ -53,6 +54,8 @@ import type {
   ProjectFavicon,
   PromptAnswer,
   PushKey,
+  PortalAuth,
+  PortalInvite,
   PushSubscriptionStatus,
   PortalStatus,
   RemoteAccess,
@@ -91,7 +94,7 @@ import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
 import { t } from "./i18n.ts";
 import { chatReadDeadlineMs, withChatReadDeadline } from "./chatReadDeadline.ts";
 import { movingHerdrFocus } from "./followFocus.ts";
-import type { UsageLoginAccounts, UsageLoginProvider, UsageLoginRequest, UsageLoginStarted } from "../../shared/usage-login.ts";
+import type { UsageLoginAccounts, UsageLoginCode, UsageLoginFollowed, UsageLoginPrompt, UsageLoginProvider, UsageLoginRequest, UsageLoginStarted } from "../../shared/usage-login.ts";
 
 export function fetchUsageLoginProviders(signal: AbortSignal): Promise<{ providers: readonly UsageLoginProvider[] }> {
   return getJson("/api/usage/login", { signal });
@@ -101,9 +104,39 @@ export function fetchUsageLoginAccounts(provider: string, signal: AbortSignal): 
   return getJson(`/api/usage/login?provider=${encodeURIComponent(provider)}`, { signal });
 }
 
-export function startUsageLogin(request: UsageLoginRequest): Promise<UsageLoginStarted> {
+/** Starts a Claude Code or Codex sign-in the browser follows: it runs in the server's own PTY, reached by its id. */
+export function followUsageLogin(request: Extract<UsageLoginRequest, { provider: "claude" | "codex" }>, signal: AbortSignal): Promise<UsageLoginFollowed> {
+  return getJson<UsageLoginFollowed>("/api/usage/login", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...request, follow: true }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+  });
+}
+
+/** What a followed sign-in asks of its user now: the page to open, the code to enter, a code box. */
+export function fetchUsageLoginPrompt(login: string, signal: AbortSignal): Promise<UsageLoginPrompt> {
+  return getJson(`/api/usage/login/prompt?login=${encodeURIComponent(login)}`, { signal, cache: "no-store" });
+}
+
+/** Types the code a sign-in page showed into that sign-in's CLI, then Enter. */
+export async function sendUsageLoginCode(request: UsageLoginCode): Promise<void> {
+  await sendJson("/api/usage/login/code", "POST", request);
+}
+
+/**
+ * Stops a followed sign-in's CLI; settles once the server has stopped it and freed its home. Sent as the page
+ * may be leaving, so it outlives the page. A handoff must see a failure rather than start beside it.
+ */
+export async function cancelUsageLogin(login: string): Promise<void> {
+  const url = "/api/usage/login/cancel";
+  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-machine": "1" }, body: JSON.stringify({ login }), keepalive: true });
+  if (!response.ok) throw await errorFrom(url, response);
+}
+
+export function startUsageLogin(request: UsageLoginRequest, signal?: AbortSignal): Promise<UsageLoginStarted> {
+  // a request the asker gave up on opens no tab (the server checks before it does)
+  const timeout = AbortSignal.timeout(30_000);
   return getJson<UsageLoginStarted>("/api/usage/login", {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request), signal: AbortSignal.timeout(30_000),
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request), signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
 }
 
@@ -117,7 +150,7 @@ export function fetchUsage(refresh = false): Promise<UsageReport> {
   return getJson<UsageReport>(refresh ? "/api/usage?refresh=1" : "/api/usage");
 }
 
-/** Settings → Subscription usage: whether Claude's limits are read from its status line on the server's PC. */
+/** Settings → Agents' plan limits: whether Claude's limits are read from its status line on the server's PC. */
 export function fetchStatusline(): Promise<StatuslineState> {
   return getJson<StatuslineState>("/api/usage/statusline", { cache: "no-store" });
 }
@@ -149,7 +182,7 @@ export async function fetchInstalledNotes(): Promise<InstalledNotes> {
 /** A check goes without a body; an install names the release the person was offered. */
 export async function requestUpdate(request: UpdateRequest): Promise<void> {
   const url = `/api/updates/${request.command}`;
-  const response = await fetch(url, request.command === "install"
+  const response = await apiFetch(url, request.command === "install"
     ? { method: "POST", headers: { "x-herdr-update": "1", "content-type": "application/json" }, body: JSON.stringify({ expected_revision: request.expected_revision } satisfies UpdateInstallRequest) }
     : { method: "POST", headers: { "x-herdr-update": "1" } });
   if (!response.ok) throw await errorFrom(url, response);
@@ -162,7 +195,7 @@ export function fetchHerdrUpdate(): Promise<HerdrUpdateStatus> {
 
 export async function requestHerdrUpdate(): Promise<void> {
   const url = "/api/herdr/update";
-  const response = await fetch(url, { method: "POST", headers: { "x-herdr-update": "1" } });
+  const response = await apiFetch(url, { method: "POST", headers: { "x-herdr-update": "1" } });
   if (!response.ok) throw await errorFrom(url, response);
 }
 
@@ -171,10 +204,18 @@ export function fetchPortal(): Promise<PortalStatus> {
   return getJson<PortalStatus>("/api/portal");
 }
 
-export async function requestPortal(action: "start" | "stop", relay?: string): Promise<void> {
+export async function requestPortal(action: "start" | "stop", relay?: string, auth?: PortalAuth): Promise<void> {
   const url = `/api/portal/${action}`;
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify(relay === undefined ? {} : { relay }) });
+  const response = await apiFetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify(relay === undefined ? {} : { relay, auth }) });
   if (!response.ok) throw await errorFrom(url, response);
+}
+
+/** A private link for `name`, good for `days`: a bearer secret the server keeps nowhere, so this is the one time it is read. */
+export async function issuePortalInvite(name: string, days: number): Promise<PortalInvite> {
+  const url = "/api/portal/invite";
+  const response = await apiFetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify({ name, days }) });
+  if (!response.ok) throw await errorFrom(url, response);
+  return (await response.json()) as PortalInvite;
 }
 
 /** Anonymous install and update counts; null from a server that sends none (404). */
@@ -184,9 +225,10 @@ export async function fetchPreferences(): Promise<SharedPreferences | null> {
   catch (error) { if (error instanceof ApiError && error.status === 404) return null; throw error; }
 }
 
-export async function savePreferences(body: PreferencesChange): Promise<SharedPreferences> {
+/** `keepalive` lets the request finish after the page is gone (a reload, a closed tab) */
+export async function savePreferences(body: PreferencesChange, keepalive = false): Promise<SharedPreferences> {
   const url = "/api/preferences";
-  const response = await fetch(url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const response = await apiFetch(url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body), keepalive });
   if (!response.ok) throw await errorFrom(url, response);
   return (await response.json()) as SharedPreferences;
 }
@@ -197,7 +239,7 @@ export async function savePreferences(body: PreferencesChange): Promise<SharedPr
  */
 export async function shareSeen(finish: SeenFinish): Promise<void> {
   const url = "/api/seen";
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(finish) });
+  const response = await apiFetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(finish) });
   if (response.ok || response.status === 404 || response.status === 403) return;
   throw await errorFrom(url, response);
 }
@@ -209,7 +251,7 @@ export async function fetchTelemetry(): Promise<TelemetryStatus | null> {
 
 export async function changeTelemetry(change: TelemetryChange): Promise<TelemetryStatus> {
   const url = "/api/telemetry";
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify(change) });
+  const response = await apiFetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify(change) });
   if (!response.ok) throw await errorFrom(url, response);
   return (await response.json()) as TelemetryStatus;
 }
@@ -271,7 +313,7 @@ async function errorFrom(url: string, response: Response): Promise<ApiError> {
 }
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await apiFetch(url, init);
   if (!response.ok) throw await errorFrom(url, response);
   return (await response.json()) as T;
 }
@@ -439,7 +481,7 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
   const known = polled ? conversationAnswers.get(url) : undefined;
   const requestUrl = page.history_id === undefined ? url : `${url}&history_id=${encodeURIComponent(page.history_id)}`;
   const { response, body } = await withChatReadDeadline(async (signal) => {
-    const response = await fetch(requestUrl, { cache: "no-store", signal, ...(known && !page.fresh ? { headers: { "if-none-match": known.etag } } : {}) });
+    const response = await apiFetch(requestUrl, { cache: "no-store", signal, ...(known && !page.fresh ? { headers: { "if-none-match": known.etag } } : {}) });
     if (response.status === 304 && known) return { response, body: known.body };
     if (!response.ok) throw await errorFrom(url, response);
     return { response, body: (await response.json()) as ConversationResponse };
@@ -492,7 +534,7 @@ export async function fetchHealth(): Promise<HealthInfo> {
  * a mismatch.
  */
 export async function authenticate(token: string): Promise<void> {
-  const response = await fetch("/api/auth", {
+  const response = await apiFetch("/api/auth", {
     method: "POST",
     headers: { "content-type": "application/json", "x-herdr-machine": "1" },
     body: JSON.stringify({ token }),
@@ -503,7 +545,7 @@ export async function authenticate(token: string): Promise<void> {
 
 /** POST /api/devices/pair: the code shown on the PC, once; the server answers with this device's own HttpOnly cookie. */
 export async function pairDevice(code: string, label: string): Promise<void> {
-  const response = await fetch("/api/devices/pair", { method: "POST", headers: { "content-type": "application/json", "x-herdr-machine": "1" }, body: JSON.stringify({ code, label }) });
+  const response = await apiFetch("/api/devices/pair", { method: "POST", headers: { "content-type": "application/json", "x-herdr-machine": "1" }, body: JSON.stringify({ code, label }) });
   if (!response.ok) throw await errorFrom("/api/devices/pair", response);
   resumeConnectionTraces();
 }
@@ -535,8 +577,15 @@ export async function revokeAllDevices(): Promise<DevicesRevokedAll> {
 
 /** DELETE /api/auth: clears the session and device cookies, so the next health check reports the gate again. */
 export async function signOut(): Promise<void> {
-  const response = await fetch("/api/auth", { method: "DELETE" });
+  const response = await apiFetch("/api/auth", { method: "DELETE" });
   if (!response.ok) throw await errorFrom("/api/auth", response);
+}
+
+/** Portal's own sign-out, answered by its gateway and never by this server: a same-origin POST that clears Portal's session cookie for this address. */
+export async function signOutOfPortal(): Promise<void> {
+  const url = "/_portal/auth/logout";
+  const response = await apiFetch(url, { method: "POST" });
+  if (!response.ok) throw await errorFrom(url, response);
 }
 
 /** Chunked btoa: the naive one-liner blows the stack on multi-MB screenshots. */
@@ -579,7 +628,7 @@ export function assertAttachable(file: Blob): void {
 export async function uploadPaneImage(paneId: string, image: Blob, machineId = "local"): Promise<string> {
   assertAttachable(image);
   const data_base64 = base64FromBytes(new Uint8Array(await image.arrayBuffer()));
-  const response = await fetch(machinePath(machineId, "pane/image"), {
+  const response = await apiFetch(machinePath(machineId, "pane/image"), {
     method: "POST",
     headers: { "content-type": "application/json", "x-herdr-machine": "1" },
     body: JSON.stringify({ pane_id: paneId, content_type: image.type, data_base64, ...(image instanceof File ? { name: image.name } : {}) }),
@@ -589,7 +638,7 @@ export async function uploadPaneImage(paneId: string, image: Blob, machineId = "
 }
 
 async function sendJson(url: string, method: "POST" | "PATCH" | "DELETE", body: unknown): Promise<Response> {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method,
     headers: { "content-type": "application/json", "x-herdr-machine": "1" },
     body: JSON.stringify(body),
@@ -763,7 +812,7 @@ function fileQuery(path: string, paneId: string | null): string {
  */
 export async function fetchFileInfo(path: string, paneId: string | null, machineId = "local"): Promise<FileInfo | { candidates: string[] }> {
   const url = machinePath(machineId, `fs/stat?${fileQuery(path, paneId)}`);
-  const response = await fetch(url);
+  const response = await apiFetch(url);
   if (response.status === 409) {
     const body = (await response.json().catch(() => null)) as { error?: { candidates?: unknown } } | null;
     if (Array.isArray(body?.error?.candidates)) return { candidates: body.error.candidates.map(String) };
@@ -984,6 +1033,11 @@ export async function fetchPaneBackgroundAgent(paneId: string, agentId: string, 
   return await getJson<PaneBackgroundAgentDetail>(machinePath(machineId, `pane/background-agent?${query.toString()}`));
 }
 
+/** GET /api/pane/artifacts: the pages the pane's Claude Code session published, newest first. */
+export async function fetchPaneArtifacts(paneId: string, machineId = "local"): Promise<ClaudeArtifact[]> {
+  return (await getJson<{ artifacts: ClaudeArtifact[] }>(machinePath(machineId, `pane/artifacts?pane_id=${encodeURIComponent(paneId)}`))).artifacts;
+}
+
 /** GET /api/pane/plan: the plan the pane's Claude Code or Codex session keeps, and that PC's clock. */
 export async function fetchPanePlan(paneId: string, machineId = "local"): Promise<{ steps: PlanStep[] | null; serverTime: string | null }> {
   const answer = await getJson<Partial<PanePlan>>(machinePath(machineId, `pane/plan?pane_id=${encodeURIComponent(paneId)}`));
@@ -1056,7 +1110,7 @@ export async function fetchPushSubscriptionStatus(subscription: PushSubscription
 
 export function fetchBridgeHealth(): Promise<BridgeHealth> { return getJson("/api/health?scope=bridge"); }
 export async function fetchMachines(signal?: AbortSignal): Promise<Machine[]> {
-  const response = await fetch("/api/machines", { signal });
+  const response = await apiFetch("/api/machines", { signal });
   if (!response.ok) throw await errorFrom("/api/machines", response);
   return ((await response.json()) as { machines: Machine[] }).machines;
 }
@@ -1075,7 +1129,7 @@ export async function verifySourceBoot(machineId: string, signal: AbortSignal): 
   if (signal.aborted) end();
   else signal.addEventListener("abort", end, { once: true });
   try {
-    const response = await fetch(path, { signal: bounded.signal, cache: "no-store" });
+    const response = await apiFetch(path, { signal: bounded.signal, cache: "no-store" });
     if (!response.ok) return null;
     const body = (await response.json()) as MachineRoster;
     const proof = body.verified_source_boot;
@@ -1086,7 +1140,7 @@ export async function verifySourceBoot(machineId: string, signal: AbortSignal): 
   }
 }
 export async function machineRequest<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const response = await fetch(`/api/machines${path}`, { method, headers: { "content-type": "application/json", "x-herdr-machine": "1" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const response = await apiFetch(`/api/machines${path}`, { method, headers: { "content-type": "application/json", "x-herdr-machine": "1" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   if (!response.ok) throw await errorFrom("/api/machines", response);
   return response.json();
 }
@@ -1096,14 +1150,14 @@ export const answerMachineSetup = (id: string, action: SetupAction) => machineRe
 
 /** GET /api/voice: whether the server holds a key; the key itself never comes back. */
 export async function fetchVoiceStatus(): Promise<VoiceStatus> {
-  const response = await fetch("/api/voice", { cache: "no-store" });
+  const response = await apiFetch("/api/voice", { cache: "no-store" });
   if (!response.ok) throw await errorFrom("/api/voice", response);
   return (await response.json()) as VoiceStatus;
 }
 
 /** PUT /api/voice/config: ApiError 409 `key_from_env` when the key comes from OVIS_OPENAI_API_KEY. */
 export async function saveVoiceConfig(update: VoiceConfigUpdate): Promise<VoiceStatus> {
-  const response = await fetch("/api/voice/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update) });
+  const response = await apiFetch("/api/voice/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update) });
   if (!response.ok) throw await errorFrom("/api/voice/config", response);
   return (await response.json()) as VoiceStatus;
 }

@@ -5,6 +5,7 @@ import { basename, delimiter, join } from "node:path";
 
 import { AGENT_CATALOG, type AgentCatalogEntry } from "../shared/agent-catalog.ts";
 import { AgentDetector, catalogLocator, LOGIN_PATH_KEPT_MS, runVersion, TIMEOUT_KEPT_MS, versionSpawn } from "./agent-catalog-detect.ts";
+import type { LoginPathResult } from "./shell-agent.ts";
 
 const entry = (id: string): AgentCatalogEntry => AGENT_CATALOG.find((candidate) => candidate.id === id)!;
 
@@ -289,5 +290,19 @@ describe.skipIf(process.platform !== "win32")("runVersion on Windows", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("catalogLocator.refresh", () => {
+  it("lets refreshes asked for while one waits to start join it: one login shell for them all", async () => {
+    const first = Promise.withResolvers<LoginPathResult>();
+    let runs = 0;
+    const locate = catalogLocator({ probe: async () => { runs += 1; return runs === 1 ? first.promise : { path: "/usr/bin" }; }, servicePath: () => "" });
+    const reading = locate("claude");
+    const refreshes = [locate.refresh!(), locate.refresh!(), locate.refresh!()];
+    first.resolve({ path: null, reason: "the first read" });
+    await reading;
+    await Promise.all(refreshes);
+    expect(runs).toBe(2);
   });
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ArrowLeft, Bell, Check, ChevronRight, Gauge, Info, Keyboard, MessageSquare, Mic, Monitor, Palette, Plug, Plus, Search, Smartphone, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bell, Bot, ChevronRight, Info, Keyboard, MessageSquare, Mic, Monitor, Palette, Plus, Search, Smartphone, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
 
@@ -11,7 +11,6 @@ import { MENU_SHORTCUT_KEYS, recordShortcut, shortcutMatchesQuery } from "../lib
 import { exactChordRisk, isReservedShortcutKey, parseExactChord } from "../lib/shortcutBindings.ts";
 import { WEB_LINK_TARGETS } from "../lib/webPanel.ts";
 import { FILE_OPEN_TARGETS } from "../lib/filePresentation.ts";
-import { CLAUDE_LAUNCH_MODES, CODEX_LAUNCH_MODES, type ClaudeLaunchMode, type CodexLaunchMode } from "../lib/agentLaunchMode.ts";
 import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, HISTORY_PROMPTS, DEFAULT_SETTINGS, DIFF_STYLES, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, DICTATION_LANGUAGES, VOICE_BUTTONS, useSettings, forgetPaneViews, uiFontSize, type DictationLanguage, type VoiceButton } from "../lib/settings.ts";
 import { pickTheme, rowFor, THEME_IDS, type Mode, type ThemeId } from "../lib/themes.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useLocale, useT } from "../lib/i18n.ts";
@@ -29,27 +28,27 @@ import { canHideMachine, isMachineShown, setHiddenMachines, useHiddenMachines, w
 import { fetchRemoteAccess, fetchVoiceStatus, machineRequest, saveVoiceConfig } from "../lib/api.ts";
 import { isLoopbackHost, phonePlan } from "../lib/phone.ts";
 import type { PushActionResult } from "../lib/pushHealth.ts";
-import type { AgentIntegration, HealthAuth, PluginActions, RemoteAccess } from "../../shared/protocol.ts";
+import type { HealthAuth, PluginActions, RemoteAccess } from "../../shared/protocol.ts";
 import type { SecurityFacts } from "../lib/useAccess.ts";
-import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
-import { loadIntegrations, outcomeFor, type IntegrationsResult } from "../lib/integrations.ts";
+import { useMachineApi } from "../lib/machineContext.tsx";
 import type { VoiceStatus } from "../../shared/voice.ts";
 import { dictationLocale, VOICE_CONFIG_EVENT } from "../lib/voice.ts";
 import { DevicesPanel } from "./DevicesPanel.tsx";
-import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { PhonePanel } from "./PhonePanel.tsx";
 import { PortalPanel } from "./PortalPanel.tsx";
-import { copyText } from "../lib/clipboard.ts";
+import { SignOutRow } from "./SignOutRow.tsx";
 import { PushTestControls } from "./PushTestControls.tsx";
 import { previewAlertSound, unlockAlertSound } from "../lib/alertSound.ts";
 import { HerdrUpdateControls, UpdateControls } from "./UpdateControls.tsx";
 import { TelemetryControls } from "./TelemetryControls.tsx";
-import { UsageSettings } from "./UsageSettings.tsx";
+import { AgentsSettings } from "./AgentsSettings.tsx";
 import { useSheetSwipe } from "../lib/sheets.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
+import { FILE_PANEL_DOCK_QUERY } from "../lib/filePanelWidth.ts";
 import { CrashProbe, RegionCrash } from "./AppCrash.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { requestedSettingsPage, requestSettingsPage, type SettingsPageId } from "../lib/paletteSettings.ts";
+import { currentSettingsPage } from "../lib/deepLink.ts";
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -64,6 +63,8 @@ export interface SettingsDialogProps {
   onClose: () => void;
   /** Account login runs on this server's PC, even while another PC is selected. */
   onUsageLogin: (paneId: string) => void;
+  /** shows a pane of `machineId` in its terminal: an agent's install or sign-in tab, from Agent integrations */
+  onOpenPane: (machineId: string, paneId: string) => void;
   actions: AppActions;
   updates: UpdatesModel;
   /** how this browser got in, from the last health check */
@@ -229,11 +230,10 @@ export const PAGES: readonly { id: SettingsPage; icon: LucideIcon }[] = [
   { id: "terminal", icon: SquareTerminal },
   { id: "alerts", icon: Bell },
   { id: "voice", icon: Mic },
-  { id: "usage", icon: Gauge },
+  { id: "agents", icon: Bot },
   { id: "shortcuts", icon: Keyboard },
   { id: "devices", icon: Smartphone },
   { id: "remote", icon: Monitor },
-  { id: "integrations", icon: Plug },
   { id: "about", icon: Info },
 ];
 
@@ -256,7 +256,7 @@ function useNarrow(): boolean {
 /** What a Settings entry of the history shows, when it names a page this version has. */
 function shownBy(entry: SettingsLevel | null): { page: SettingsPage | null; keyBar: boolean } | null {
   if (entry === null) return null;
-  const page = PAGES.find(({ id }) => id === entry.page)?.id ?? null;
+  const page = PAGES.find(({ id }) => id === (entry.page === null ? null : currentSettingsPage(entry.page)))?.id ?? null;
   return page === null && entry.page !== null ? null : { page, keyBar: entry.keyBar && page === "terminal" };
 }
 
@@ -372,6 +372,9 @@ function AppearancePage() {
       <SettingsRow label={t("Sidebar filter")} description={t("Show the Filter field above the sidebar's lists on this device. When off, Filter workspaces and agents in the command palette opens it.")}>
         <Toggle label={t("Sidebar filter")} checked={settings.sidebarFilter} onChange={(sidebarFilter) => update({ sidebarFilter })} />
       </SettingsRow>
+      <SettingsRow label={t("Name tabs from the first message")} description={t("A tab still named by its number shows a few words of the first message sent to it, in every browser. A name you gave a tab is kept, and herdr's own tab names do not change. Only those words are kept, on this server, until the tab closes; turning this off deletes them.")}>
+        <Toggle label={t("Name tabs from the first message")} checked={settings.autoTabNames} onChange={(autoTabNames) => update({ autoTabNames })} />
+      </SettingsRow>
       <SettingsRow label={t("Agents order")} description={t("Activity keeps a waiting agent on top, then the one that changed last; herdr's own order is not changed")} wide>
         <Segmented label={t("Agents order")} value={settings.agentOrder} onChange={(agentOrder) => update({ agentOrder })} options={[{ value: "workspace", label: t("Workspaces") }, { value: "activity", label: t("Activity") }]} />
       </SettingsRow>
@@ -397,6 +400,7 @@ function ChatPage() {
   const { settings, update } = useSettings();
   const t = useT();
   const touch = useMediaQuery("(pointer: coarse)");
+  const filePanelAvailable = useMediaQuery(FILE_PANEL_DOCK_QUERY);
   // the same query Composer.tsx hides the New tab button by
   const compactComposer = useMediaQuery("(max-width: 640px), (pointer: coarse)");
   return (
@@ -412,6 +416,15 @@ function ChatPage() {
         </SettingsRow>
         <SettingsRow label={t("Show thinking")} description={t("Include the agent's reasoning blocks")}>
           <Toggle label={t("Show thinking")} checked={settings.showThinking} onChange={(showThinking) => update({ showThinking })} />
+        </SettingsRow>
+        {/* reasoning the chat does not show has no fold to start in */}
+        {settings.showThinking && (
+          <SettingsRow label={t("Expand thinking")} description={t("Reasoning starts open instead of folded. One you open or fold stays that way for its message")}>
+            <Toggle label={t("Expand thinking")} checked={settings.expandThinking} onChange={(expandThinking) => update({ expandThinking })} />
+          </SettingsRow>
+        )}
+        <SettingsRow label={t("Collapse work")} description={t("A turn's work starts folded to one line, also while the agent works, unless it needs you. One you open or fold stays that way for its message")}>
+          <Toggle label={t("Collapse work")} checked={settings.foldWork} onChange={(foldWork) => update({ foldWork })} />
         </SettingsRow>
         <SettingsRow label={t("Chat width")} description={t("How wide the conversation and the message box run on a large screen")} wide>
           <Segmented label={t("Chat width")} value={settings.chatWidth} onChange={(chatWidth) => update({ chatWidth })} options={CHAT_WIDTHS.map((chatWidth) => ({ value: chatWidth, label: t(chatWidth === "narrow" ? "Narrow" : chatWidth === "wide" ? "Wide" : chatWidth === "full" ? "Full" : "Default") }))} />
@@ -440,6 +453,9 @@ function ChatPage() {
             <Toggle label={t("New tab button")} checked={settings.composerNewTabButton} onChange={(composerNewTabButton) => update({ composerNewTabButton })} />
           </SettingsRow>
         )}
+        <SettingsRow label={t("Artifacts chip")} description={t("A chip in a Claude Code pane's message box lists the pages its session published with the Artifact tool.")}>
+          <Toggle label={t("Artifacts chip")} checked={settings.composerArtifacts} onChange={(composerArtifacts) => update({ composerArtifacts })} />
+        </SettingsRow>
         {touch && (
           <SettingsRow label={t("Suggestion chip")} description={t("A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.")}>
             <Toggle label={t("Suggestion chip")} checked={settings.suggestionChip} onChange={(suggestionChip) => update({ suggestionChip })} />
@@ -501,8 +517,8 @@ function ChatPage() {
         <SettingsRow label={t("Open files")} description={t("On a wide window, text and code can open beside the pane. Media, PDFs and folders always open in a popup, and the viewer's header button moves the file open now.")}>
           <Segmented label={t("Open files")} value={settings.fileOpen} onChange={(fileOpen) => update({ fileOpen })} options={FILE_OPEN_TARGETS.map((fileOpen) => ({ value: fileOpen, label: fileOpen === "panel" ? t("Beside the pane") : t("In a popup") }))} />
         </SettingsRow>
-        <SettingsRow label={t("Web links")} description={t("Only a page this PC serves, such as a dev server on localhost, opens beside the pane. Shift-click opens it the other way.")}>
-          <Segmented label={t("Web links")} value={settings.webLinks} onChange={(webLinks) => update({ webLinks })} options={WEB_LINK_TARGETS.map((webLinks) => ({ value: webLinks, label: webLinks === "panel" ? t("Beside the pane") : t("In a new tab") }))} />
+        <SettingsRow label={t("Web links")} description={t(filePanelAvailable ? "Only a page this PC serves, such as a dev server on localhost, opens beside the pane. Shift-click opens it the other way." : "Pages this PC serves, such as Tailscale reports, can open in the app. Shift-click opens the other way.")}>
+          <Segmented label={t("Web links")} value={settings.webLinks} onChange={(webLinks) => update({ webLinks })} options={WEB_LINK_TARGETS.map((webLinks) => ({ value: webLinks, label: webLinks === "panel" ? t(filePanelAvailable ? "Beside the pane" : "In the app") : t("In a new tab") }))} />
         </SettingsRow>
       </SettingsGroup>
     </>
@@ -691,110 +707,6 @@ function VoicePage() {
   );
 }
 
-/**
- * herdr's own integrations (`integration.list`), read only: installing one writes into an agent's
- * hooks or settings, which this app leaves to the user, so a row shows the command to run instead.
- */
-function IntegrationsPage() {
-  return (
-    <>
-      <LaunchModesGroup />
-      <IntegrationsList />
-    </>
-  );
-}
-
-function claudeModeName(mode: ClaudeLaunchMode, t: ReturnType<typeof useT>): string {
-  return mode === "acceptEdits" ? t("Accept edits") : mode === "auto" ? t("Auto") : mode === "plan" ? t("Plan")
-    : mode === "dontAsk" ? t("Don't ask") : mode === "bypassPermissions" ? t("Bypass permissions") : t("Agent default");
-}
-function codexModeName(mode: CodexLaunchMode, t: ReturnType<typeof useT>): string {
-  return mode === "readOnly" ? t("Read only") : mode === "auto" ? t("Auto") : mode === "fullAccess" ? t("Full access") : t("Agent default");
-}
-
-/** The mode the new workspace, tab and worktree dialogs start Claude Code and Codex in (lib/agentLaunchMode.ts). */
-function LaunchModesGroup() {
-  const { settings, update } = useSettings();
-  const t = useT();
-  return (
-    <SettingsGroup title={t("New agents")} section="launch-modes" note={t("Applies to agents started from New workspace, New tab and New worktree. Agent default adds no flag, so the agent's own configuration decides.")}>
-      <SettingsRow label="Claude Code" description={t("Permission mode")} htmlFor="settings-claude-launch-mode">
-        <SettingsSelect id="settings-claude-launch-mode" value={settings.claudeLaunchMode} onChange={(event) => update({ claudeLaunchMode: event.target.value as ClaudeLaunchMode })}>
-          {CLAUDE_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{claudeModeName(mode, t)}</option>)}
-        </SettingsSelect>
-      </SettingsRow>
-      <SettingsRow label="Codex" description={t("Sandbox and approvals")} htmlFor="settings-codex-launch-mode">
-        <SettingsSelect id="settings-codex-launch-mode" value={settings.codexLaunchMode} onChange={(event) => update({ codexLaunchMode: event.target.value as CodexLaunchMode })}>
-          {CODEX_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{codexModeName(mode, t)}</option>)}
-        </SettingsSelect>
-      </SettingsRow>
-    </SettingsGroup>
-  );
-}
-
-function IntegrationsList() {
-  const t = useT();
-  const api = useMachineApi();
-  const machineId = useMachineId();
-  const [result, setResult] = useState<IntegrationsResult | null>(null);
-  useEffect(() => {
-    let live = true;
-    void loadIntegrations(api.fetchIntegrations).then((outcome) => { if (live) setResult({ machineId, outcome }); });
-    return () => { live = false; };
-  }, [api, machineId]);
-  const outcome = outcomeFor(result, machineId);
-  const note = t("herdr's integrations let it resume each agent's session after a restart. This page only reads them: run a command in a terminal on the PC herdr runs on, then reopen this page.");
-  if (outcome === null) return <SettingsGroup note={note}><p className="settings-item settings-hint" role="status">{t("Loading…")}</p></SettingsGroup>;
-  if (outcome.kind === "unsupported") return <SettingsGroup><p className="settings-item settings-hint" role="status">{t("This PC's bridge does not offer agent integrations yet. It will after its next runtime update.")}</p></SettingsGroup>;
-  if (outcome.kind === "error") return <SettingsGroup note={note}><p className="settings-item settings-hint" role="alert">{outcome.message}</p></SettingsGroup>;
-  const { integrations } = outcome;
-  // agents on the PC's PATH first, in herdr's order: the rest can wait until one is installed
-  const groups = [
-    { title: undefined, rows: integrations.filter((integration) => integration.available) },
-    { title: t("Not found on this PC"), rows: integrations.filter((integration) => !integration.available) },
-  ].filter((group) => group.rows.length > 0);
-  return (
-    <>
-      {groups.map((group, index) => (
-        <SettingsGroup key={group.title ?? "found"} title={group.title} note={index === 0 ? note : undefined}>
-          {group.rows.map((integration) => <IntegrationRow key={integration.target} integration={integration} />)}
-        </SettingsGroup>
-      ))}
-    </>
-  );
-}
-
-function IntegrationRow({ integration }: { integration: AgentIntegration }) {
-  const t = useT();
-  const commandRef = useRef<HTMLElement>(null);
-  const [copied, setCopied] = useState(false);
-  // the latest Copy owns the label: an earlier press's timer must not clear it early
-  const copiedTimer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
-  const name = integration.label;
-  if (integration.state === "current") {
-    return (
-      <SettingsRow label={name} description={t("Installed")}>
-        <Check className="settings-integration-check" aria-hidden="true" />
-      </SettingsRow>
-    );
-  }
-  // the label is the name `herdr integration install` takes (antigravity_cli is antigravity-cli)
-  const command = `herdr integration install ${name}`;
-  const copy = async (): Promise<void> => {
-    if (!(await copyText(command, commandRef.current))) return;
-    setCopied(true);
-    window.clearTimeout(copiedTimer.current);
-    copiedTimer.current = window.setTimeout(() => setCopied(false), 1600);
-  };
-  const state = integration.state === "outdated" ? t("Installed, but older than this herdr: run this to update it") : t("Not installed");
-  return (
-    <SettingsRow label={name} description={<>{state}<code ref={commandRef} className="settings-integration-command">{command}</code></>}>
-      <button type="button" className="btn" aria-label={t("Copy the command for {name}", { name })} onClick={() => void copy()}>{t(copied ? "Copied" : "Copy")}</button>
-    </SettingsRow>
-  );
-}
-
 function ShortcutsPage() {
   const { settings, update } = useSettings();
   const t = useT();
@@ -975,7 +887,6 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll }: { auth: Health
   const plan = phonePlan({ protocol: window.location.protocol, hostname: window.location.hostname, origin: window.location.origin, secure: window.isSecureContext }, access ?? null);
   // where a phone can open this app now, for the pairing QR code: the served address, else this one when it is not loopback
   const pairUrl = plan.kind === "here" || plan.kind === "served" ? plan.url : isLoopbackHost(window.location.hostname) ? null : window.location.origin;
-  const [confirmSignOut, setConfirmSignOut] = useState(false);
   // what keeps the switch from working here, only while it does (lib/wakeLock.ts asks for the same two)
   const wakeLockProblem = !window.isSecureContext ? t("Needs HTTPS or localhost.") : !("wakeLock" in navigator) ? t("This browser can't keep the screen on.") : null;
   return (
@@ -995,20 +906,11 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll }: { auth: Health
         </SettingsRow>
       </SettingsGroup>
 
-      <PortalPanel readOnly={auth?.role === "watch"} />
+      <PortalPanel readOnly={auth?.role === "watch" || auth?.via === "portal"} />
 
       <SettingsGroup title={t("Devices")} section="devices">
         <div className="settings-item"><DevicesPanel pairUrl={pairUrl} auth={auth} onRevokedAll={onRevokedAll} /></div>
-        {onSignOut && (
-          <SettingsRow label={t("Sign out")} description={t("Forget this browser's sign-in. Getting back in takes the access token or a pairing code.")}>
-            <button type="button" className="btn" onClick={() => setConfirmSignOut(true)}>{t("Sign out")}</button>
-          </SettingsRow>
-        )}
-        {onSignOut && confirmSignOut && (
-          <ConfirmDialog title={t("Sign out of this browser?")}
-            body={t("Getting back in takes the access token, or a pairing code from the PC: Settings → Phone & devices there, or the pair command in its terminal.")}
-            confirmLabel={t("Sign out")} onClose={() => setConfirmSignOut(false)} onConfirm={onSignOut} />
-        )}
+        {onSignOut && <SignOutRow viaPortal={auth?.via === "portal"} oidc={auth?.portal?.method === "oidc"} onSignOut={onSignOut} />}
       </SettingsGroup>
 
       <AccessFacts facts={security} />
@@ -1177,14 +1079,14 @@ function SaveFailure({ error, paused, retrying, onRetry }: { error: UserError; p
   </div>;
 }
 
-function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [] }: SettingsDialogProps) {
+function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, onOpenPane, actions, updates, auth, herdrVersion, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [] }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
   // opened by Forward, the dialog shows what that entry of the history showed
   const [restored] = useState(() => shownBy(settingsEntry(window.history.state)));
   // a phone opens on the list of pages; a wider dialog shows the list beside the first page. A
   // button that points at Updates opens on About whatever an entry still landing would restore
-  const linked = PAGES.find((candidate) => candidate.id === linkPage)?.id ?? null;
+  const linked = PAGES.find((candidate) => candidate.id === currentSettingsPage(linkPage))?.id ?? null;
   // a page the command palette named opens first, on the group it named; the request is read, not
   // taken, so a remount in development finds it again
   const [asked] = useState(requestedSettingsPage);
@@ -1214,7 +1116,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
   // the group a landing named, followed into view until the reader moves the page
   const following = useRef<{ group: HTMLElement; page: SettingsPage | null } | null>(null);
   const label = (id: SettingsPage): string => t(id === "appearance" ? "Appearance" : id === "chat" ? "Chat" : id === "terminal" ? "Terminal" : id === "alerts" ? "Alerts" : id === "voice" ? "Voice input"
-    : id === "usage" ? "Subscription usage" : id === "shortcuts" ? "Shortcuts" : id === "devices" ? "Phone & devices" : id === "remote" ? "Remote PCs" : id === "integrations" ? "Agent integrations" : "About");
+    : id === "agents" ? "Agents" : id === "shortcuts" ? "Shortcuts" : id === "devices" ? "Phone & devices" : id === "remote" ? "Remote PCs" : "About");
   const openPage = (id: SettingsPage): void => { setKeyBarOpen(false); setChosen(id); };
   const openKeyBar = (): void => {
     settingsScrollRef.current = settingsBodyRef.current?.scrollTop ?? 0;
@@ -1310,12 +1212,11 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       case "terminal": return <TerminalPage keyBarButtonRef={keyBarButtonRef} onEditKeyBar={openKeyBar} />;
       case "alerts": return <AlertsPage onEnableNotifications={onEnableNotifications} />;
       case "voice": return <VoicePage />;
-      case "usage": return <UsageSettings onLocalLogin={onUsageLogin} watching={auth?.role === "watch"} />;
+      case "agents": return <AgentsSettings watching={auth?.role === "watch"} onLocalLogin={onUsageLogin} onOpenPane={onOpenPane} onOpenGuide={onClose} />;
       case "shortcuts": return <ShortcutsPage />;
       // after every device went, its own pairing included, a browser asks the server where it stands: the roster answers, or the gate does
       case "devices": return <DevicesPage auth={auth} security={security} onSignOut={actions.lock} onRevokedAll={actions.refresh} />;
       case "remote": return <RemotePcsPage actions={actions} machines={machines} pcSettings={pcSettings} pcSettingsError={pcSettingsError} onPcSettings={(patch) => void updatePcSettings(patch)} />;
-      case "integrations": return <IntegrationsPage />;
       case "about": return <AboutPage updates={updates} herdrVersion={herdrVersion} bridgesFollow={pcSettings?.auto_update_bridges === true} />;
       default: return null;
     }

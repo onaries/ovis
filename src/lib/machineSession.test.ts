@@ -61,6 +61,69 @@ function withStorage(run: () => void): void {
 }
 
 describe("PC connection ownership", () => {
+  it.each(["sent", "discarded"] as const)("settles a reloaded copy after the snapshot proves an early resumed %s receipt's lifetime", (outcome) => {
+    const { session, socket, store } = setup(`reload-receipt-${outcome}`);
+    const owner = paneStorageId(session.machineId, "w1:p1");
+    store.accept(owner, message("saved"), null);
+    session.connect();
+    socket.receive({ type: "features", features: ["pending-input"], connection: "reload", herdr_lifetime: "reload-herdr" });
+    expect(session.scope).toBeNull();
+    // Open's attach replay can finish while the server still awaits clientSnapshot().
+    socket.receive({ type: "pending-messages", pane_id: "w1:p1", messages: [], removed: [{ id: "saved", outcome, resumed: true }] });
+    expect(store.read(owner)).toHaveLength(1);
+    socket.receive(named("reload-herdr"));
+    expect(store.read(owner)).toEqual([]);
+    session.close();
+  });
+  it("settles durable reload state only after the lifetime fence exposes that herdr's storage", () => {
+    withStorage(() => {
+      const { session, socket } = setup("durable-reload", pendingMessages);
+      const owner = paneStorageId(session.machineId, "w1:p1");
+      window.localStorage.setItem(`ovis:pane-lifetime:${session.machineId}`, "durable-herdr");
+      window.localStorage.setItem(`ovis:pending:${owner}`, JSON.stringify({ version: 1, messages: [message("saved")] }));
+      session.connect();
+      socket.receive({ type: "features", features: ["pending-input"], connection: "reload", herdr_lifetime: "durable-herdr" });
+      socket.receive({ type: "pending-messages", pane_id: "w1:p1", messages: [], removed: [{ id: "saved", outcome: "sent", resumed: true }] });
+      expect(window.localStorage.getItem(`ovis:pending:${owner}`)).not.toBeNull();
+      socket.receive(named("durable-herdr"));
+      expect(pendingMessages.read(owner)).toEqual([]);
+      expect(window.localStorage.getItem(`ovis:pending:${owner}`)).toBeNull();
+      session.close();
+    });
+  });
+  it.each(["different lifetime", "no lifetime", "disconnected", "ordinary receipt"] as const)("does not settle an early receipt with %s", (scenario) => {
+    const { session, socket, store } = setup(`reload-reject-${scenario}`);
+    const owner = paneStorageId(session.machineId, "w1:p1");
+    store.accept(owner, message("saved"), null);
+    session.connect();
+    socket.receive({ type: "features", features: ["pending-input"], connection: "reload", herdr_lifetime: "early-herdr" });
+    socket.receive({ type: "pending-messages", pane_id: "w1:p1", messages: [], removed: [{
+      id: "saved", outcome: "sent", ...(scenario === "ordinary receipt" ? {} : { resumed: true }),
+    }] });
+    if (scenario === "disconnected") { socket.disconnect(); session.connect(); }
+    socket.receive(scenario === "no lifetime" ? snapshot : named(scenario === "different lifetime" ? "other-herdr" : "early-herdr"));
+    expect(store.read(owner)).toMatchObject([{ id: "saved", serverOwned: false }]);
+    // A later matching snapshot cannot resurrect a rejected receipt.
+    socket.receive(named("early-herdr"));
+    expect(store.read(owner)).toHaveLength(1);
+    session.close();
+  });
+  it("bounds early resumed receipts and keeps only resumed removals from a mixed frame", () => {
+    const { session, socket, store } = setup("reload-bounded");
+    const owner = paneStorageId(session.machineId, "w1:p1");
+    store.accept(owner, message("oldest"), null);
+    store.accept(owner, message("latest"), null);
+    store.accept(owner, message("ordinary"), null);
+    session.connect();
+    socket.receive({ type: "features", features: ["pending-input"], connection: "reload", herdr_lifetime: "bounded-herdr" });
+    for (let i = 0; i < 129; i++) socket.receive({
+      type: "pending-messages", pane_id: "w1:p1", messages: [message("live")],
+      removed: [{ id: i === 0 ? "oldest" : "latest", outcome: "sent", resumed: true }, { id: "ordinary", outcome: "sent" }],
+    });
+    socket.receive(named("bounded-herdr"));
+    expect(store.read(owner).map(({ id }) => id)).toEqual(["oldest", "ordinary"]);
+    session.close();
+  });
   it("knows the PC's id for the open connection from its snapshot, and none once it drops", () => {
     const { session, socket } = setup();
     expect(session.connection).toBeNull();

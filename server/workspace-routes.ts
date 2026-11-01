@@ -3,7 +3,7 @@
  * workspaces, tabs and worktrees herdr makes, renames, moves and closes. They answer from herdr
  * and the disk; the dispatcher in index.ts runs the access gate first.
  */
-import type { Server } from "bun";
+import type { ServerContext } from "./dispatch.ts";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
@@ -36,7 +36,7 @@ const notQueued = (error: unknown): { error: { code: string; message: string } }
 } });
 
 /** The answer for a workspace route, or null when the path is not one. */
-export async function handleWorkspaceRequest(request: Request, url: URL, pathname: string, bunServer: Pick<Server<unknown>, "timeout">, broadcastAll: (message: ServerMessage) => void,
+export async function handleWorkspaceRequest(request: Request, url: URL, pathname: string, bunServer: Pick<ServerContext, "timeout">, broadcastAll: (message: ServerMessage) => void,
   queueFirstMessage: (paneId: string, text: string, kind: string, requester: string | null, launchedPid: number | null) => Promise<PendingMessage>,
   /** a move herdr confirmed: its receipt in this server's order (server/order-sequence.ts), taken at once */
   workspaceMoved: () => MoveReceipt, shellAgents?: ShellAgentLocator): Promise<Response | null> {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, runNames, splitTurn, todoGroups, turnSegments, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
+import { formatWorkDuration, runNames, splitTurn, todoGroups, turnSegments, visibleWorkParts, workBlockStartsOpen, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -138,6 +138,33 @@ describe("workStartsOpen", () => {
     expect(workStartsOpen(false, [])).toBe(false);
     expect(workStartsOpen(false, [thinking("hm")])).toBe(false);
     expect(workStartsOpen(false, [tool("bash"), text("  ")])).toBe(false);
+  });
+});
+
+describe("workBlockStartsOpen", () => {
+  const commentary = (value: string) => ({ ...text(value), phase: "commentary" as const });
+  const running = { live: true, waiting: false, last: true };
+  const settled = { live: false, waiting: false, last: true };
+  const endsInWords = [tool("exec_command"), commentary("Still investigating")];
+
+  it("starts as it always has while Collapse work is off", () => {
+    expect(workBlockStartsOpen(running, [tool("bash")], false)).toBe(true);
+    expect(workBlockStartsOpen({ ...running, waiting: true }, [tool("bash")], false)).toBe(true);
+    expect(workBlockStartsOpen(settled, [tool("read"), text("done")], false)).toBe(false);
+    expect(workBlockStartsOpen(settled, endsInWords, false)).toBe(true);
+    // a run before the turn's last part: what follows it is still to read
+    expect(workBlockStartsOpen({ ...settled, last: false }, endsInWords, false)).toBe(false);
+    expect(workBlockStartsOpen({ ...running, live: false, last: false }, [tool("bash")], false)).toBe(false);
+  });
+
+  it("folds every block with Collapse work on, the running one and one ending in the agent's words included (#2228)", () => {
+    expect(workBlockStartsOpen(running, [tool("bash")], true)).toBe(false);
+    expect(workBlockStartsOpen(settled, endsInWords, true)).toBe(false);
+    expect(workBlockStartsOpen(settled, [tool("read"), text("done")], true)).toBe(false);
+  });
+
+  it("keeps the block that waits on the user open with Collapse work on: it may hold what they answer", () => {
+    expect(workBlockStartsOpen({ ...running, waiting: true }, [tool("bash")], true)).toBe(true);
   });
 });
 

@@ -14,7 +14,9 @@ import type { OmoTask } from "../shared/protocol.ts";
 import type { OpencodeSubagentStatus } from "./opencode-subagents.ts";
 
 /** The core's own trackers: the route reads them and never makes its own. */
-export type TaskTrackers = { omo: Pick<OmoStatus, "sessionOf">; claudeAgents: Pick<ClaudeSubagentStatus, "sessionOf" | "ensure">;
+export type TaskTrackers = {
+  omo: Pick<OmoStatus, "sessionOf"> & Partial<Pick<OmoStatus, "jobsOf">>;
+  claudeAgents: Pick<ClaudeSubagentStatus, "sessionOf" | "ensure">;
   opencodeAgents: Pick<OpencodeSubagentStatus, "sessionOf" | "ensure" | "tasksOf" | "beginRead">;
   codexTasks?: Pick<CodexBackgroundTasks, "poll" | "tasksWithUsage">; plans?: Pick<SessionPlans, "ensure" | "codexPathOf"> };
 
@@ -56,7 +58,12 @@ export async function handleTasksRequest(request: Request, url: URL, pathname: s
     // OmO or Claude Code meanwhile: what it runs is told again after the read, and a list is given only for that
     for (let tries = 0; tries < 3; tries++) {
       const session = omo.sessionOf(paneId);
-      if (session !== null) return jsonResponse({ tasks: omoTasks(session.cwd, session.sessionId, processAlive), runs: omoRuns(session.cwd, session.sessionId), server_time });
+      if (session !== null) {
+        // OmO's task children first, then the commands, monitors and cells its transcript tells of
+        const tasks = [...omoTasks(session.cwd, session.sessionId, processAlive), ...(omo.jobsOf?.(paneId) ?? [])];
+        const running = tasks.filter((task) => task.status === "running");
+        return jsonResponse({ tasks: [...running, ...tasks.filter((task) => task.status !== "running")], runs: omoRuns(session.cwd, session.sessionId), server_time });
+      }
       // an OpenCode pane's subagents are its child sessions; of a pane that ran both, the one it runs now
       const opencode = opencodeAgents.sessionOf(paneId);
       if (opencode === null || (!opencode.live && claudeAgents.sessionOf(paneId)?.live === true)) {

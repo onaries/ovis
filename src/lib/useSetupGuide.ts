@@ -21,7 +21,7 @@ export interface SetupGuideFacts {
 
 /**
  * The setup guide's place in the app: shown by itself once on a fresh install (lib/setupGuideFlow.ts),
- * resumed where a reload left it, and opened again by Settings → Setup guide (lib/setupGuide.ts).
+ * resumed where a reload left it, and opened again by Settings → Agents' Setup guide (lib/setupGuide.ts).
  * `stepAside` is told of every pane picked (lib/useSelection.ts onPick: a row, the palette, a new
  * workspace, an alert, the tab the guide opened): the guide steps aside, still mounted, for it. The
  * app's own fallback pick of a first pane is no pick, and leaves it in front.

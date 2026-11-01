@@ -27,7 +27,7 @@ export const TIMEOUT_KEPT_MS = 60_000;
  * has one: the PATH it looks on, the login shell's included once read, which its version flag is
  * run with too (a script's interpreter, nvm's node, may be on that PATH only).
  */
-export type Locate = ((binary: string) => Promise<string | null>) & { searchPath?: () => string };
+export type Locate = ((binary: string) => Promise<string | null>) & { searchPath?: () => string; refresh?: () => Promise<void> };
 
 /** How long the login shell's PATH is kept before a lookup that misses reads it again. */
 export const LOGIN_PATH_KEPT_MS = 60_000;
@@ -53,12 +53,15 @@ export function catalogLocator(options: { probe: LoginPathProbe | null; serviceP
   let kept: { path: string | null; at: number } | null = null;
   let reading: Promise<string | null> | null = null;
   const loginPath = (probe: LoginPathProbe): Promise<string | null> => {
+    // a read already out (a refresh after an install) is newer than what is kept
+    if (reading !== null) return reading;
     if (kept !== null && now() - kept.at < LOGIN_PATH_KEPT_MS) return Promise.resolve(kept.path);
-    reading ??= probe(signal)
+    const run: Promise<string | null> = probe(signal)
       .then((result) => result.path, () => null)
       .then((path) => { kept = { path, at: now() }; return path; })
-      .finally(() => { reading = null; });
-    return reading;
+      .finally(() => { if (reading === run) reading = null; });
+    reading = run;
+    return run;
   };
   // a plain GET runs what it finds: only absolute PATH entries count, never `.`, an empty or a relative
   // one, which would make whatever is in the server's working folder an agent
@@ -74,7 +77,22 @@ export function catalogLocator(options: { probe: LoginPathProbe | null; serviceP
     const path = await loginPath(options.probe);
     return path === null ? null : find(binary, path);
   };
-  return Object.assign(locate, { searchPath: () => [servicePath(), kept?.path ?? ""].filter((part) => part !== "").join(delimiter) });
+  // reads the login PATH again after any read already out (it may predate an install); refreshes asked
+  // for while that one waits to start join it: one login shell for them all
+  let queued: Promise<string | null> | null = null;
+  const refresh = (): Promise<void> => {
+    if (options.probe === null) return Promise.resolve();
+    if (queued !== null) return queued.then(() => undefined);
+    const probe = options.probe;
+    const run: Promise<string | null> = (reading ?? Promise.resolve(null))
+      .then(() => { if (queued === run) queued = null; return probe(signal).then((result) => result.path, () => null); })
+      .then((path) => { kept = { path, at: now() }; return path; })
+      .finally(() => { if (reading === run) reading = null; });
+    queued = run;
+    reading = run;
+    return run.then(() => undefined);
+  };
+  return Object.assign(locate, { searchPath: () => [servicePath(), kept?.path ?? ""].filter((part) => part !== "").join(delimiter), refresh });
 }
 
 /** The login-shell PATH probe of the real entrypoints: none on Windows, nor where the user has no login shell. */
@@ -270,6 +288,21 @@ export class AgentDetector {
   }
 
   /** The executable `binary` would be started as on this PC: PATH first, then the installer's own folders; null where none is. */
+  /** `binary` on this server's PATH or the login shell's, as kept; no installer folder. */
+  onPath(binary: string): Promise<string | null> {
+    return this.#locate(binary);
+  }
+
+  /** `binary` in one of its installer's folders, or null (`inInstallDirs`, for GET /api/agents). */
+  inInstallFolder(binary: string, dirs: readonly string[], platform: CatalogPlatform): string | null {
+    return this.#inInstallDirs(binary, dirs, platform);
+  }
+
+  /** Reads the login shell's PATH again (an install may have changed it). */
+  refreshPath(): Promise<void> {
+    return this.#locate.refresh?.() ?? Promise.resolve();
+  }
+
   async executable(binary: string, dirs: readonly string[], platform: CatalogPlatform | null): Promise<string | null> {
     return (await this.#locate(binary)) ?? (platform === null ? null : this.#inInstallDirs(binary, dirs, platform));
   }

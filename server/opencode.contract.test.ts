@@ -548,6 +548,40 @@ process.stdin.on("data", (chunk) => {
       expect(await completed).toBe("@effect\t\u001b[200~apply it\u001b[201~\r");
     } finally { ws.close(); }
   });
+  // #511: a queued message for an agent alone is one guarded paste, never typed key by key through the autocomplete
+  it("pastes a queued agent-only message whole when the pane is ready, its @effect left as text", async () => {
+    const { ws, frame } = await socket();
+    const before = typed().length;
+    try {
+      ws.send(JSON.stringify({ type: "attach", pane_id: nativePane, cols: 80, rows: 24 }));
+      await frame((message) => message.type === "pty-data" && message.pane_id === nativePane);
+      await reportState("working");
+      await untilStatus("working");
+      await browserCatalog();
+      const completed = typedSince(before);
+      ws.send(JSON.stringify({ type: "submit", id: 5, pane_id: nativePane, text: "@effect apply it", payload: "@effect apply it", delivery: "queue", agent_only: true }));
+      expect(await frame((message) => message.type === "submit-result" && message.id === 5)).toMatchObject({ ok: true, pending: { state: "queued" } });
+      await reportState("idle");
+      await frame((message) => message.type === "pending-messages" && Array.isArray(message.removed) && message.removed.length > 0);
+      expect(await completed).toBe("\u001b[200~@effect apply it\u001b[201~\r");
+    } finally { ws.close(); }
+  });
+  it("pastes an agent-only message queued while the pane is ready at once, its @effect left as text", async () => {
+    const { ws, frame } = await socket();
+    const before = typed().length;
+    try {
+      ws.send(JSON.stringify({ type: "attach", pane_id: nativePane, cols: 80, rows: 24 }));
+      await frame((message) => message.type === "pty-data" && message.pane_id === nativePane);
+      await reportState("idle");
+      // after an earlier turn herdr reads an idle report as done: either is a pane at rest
+      await untilStatus("idle", "done");
+      await browserCatalog();
+      const completed = typedSince(before);
+      ws.send(JSON.stringify({ type: "submit", id: 6, pane_id: nativePane, text: "@effect apply it", payload: "@effect apply it", delivery: "queue", agent_only: true }));
+      expect(await frame((message) => message.type === "submit-result" && message.id === 6)).toMatchObject({ ok: true });
+      expect(await completed).toBe("\u001b[200~@effect apply it\u001b[201~\r");
+    } finally { ws.close(); }
+  });
 /** A socket recording every frame; `frame` resolves on the first one (already seen or next) matching. */
   async function socket() {
     const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
@@ -564,9 +598,9 @@ process.stdin.on("data", (chunk) => {
     return { ws, frames, frame };
   }
   const reportState = (state: string) => herdrRpc("pane.report_agent", { pane_id: nativePane, source: "herdr:opencode", agent: "opencode", agent_session_id: NATIVE_SESSION, state });
-  const untilStatus = async (status: string) => {
-    for (const deadline = Date.now() + 5_000; (await sessionSnapshot()).panes.find((pane) => pane.pane_id === nativePane)?.agent_status !== status;) {
-      if (Date.now() > deadline) throw new Error(`the pane did not report ${status}`);
+  const untilStatus = async (status: string, ...or: string[]) => {
+    for (const deadline = Date.now() + 5_000; ![status, ...or].includes((await sessionSnapshot()).panes.find((pane) => pane.pane_id === nativePane)?.agent_status ?? "");) {
+      if (Date.now() > deadline) throw new Error(`the pane did not report ${[status, ...or].join(" or ")}`);
       await Bun.sleep(50);
     }
   };

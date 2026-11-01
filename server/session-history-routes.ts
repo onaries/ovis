@@ -15,7 +15,8 @@
  * the environment a new tab inherits exports none either (claude-store.ts herdrLaunchSource).
  */
 import type { SessionHistoryResponse, SessionResumeResponse, SessionSnapshot } from "../shared/protocol.ts";
-import { claudeRecordOnlyIn, claudeStoreOf, herdrLaunchSource, isClaudeProcess, paneClaudeSource, type ClaudeSource, type PaneProcess } from "./claude-store.ts";
+import { claudeRecordOnlyIn, claudeStoreOf, herdrLaunchSource, isClaudeProcess, paneClaudeSource, processLaunchSource, type ClaudeSource, type PaneProcess } from "./claude-store.ts";
+import { coreConnection, servingCore } from "./herdr-core/runtime.ts";
 import { agentLaunch } from "./agent-launch.ts";
 import { recentProcessTable } from "./gjc-runtime.ts";
 import { herdrSocketPath, paneProcessInfo, sessionSnapshot, tabClose, tabCreate } from "./herdr/client.ts";
@@ -57,7 +58,15 @@ const herdrPaneProcesses = (paneId: string): Promise<PaneProcesses | undefined> 
 
 /** Whether a source with none exported would be started with none exported in a new tab. */
 const launchKeepsAbsence = async (options: StoreOptions): Promise<boolean> =>
-  (await (options.launchSource ?? (() => herdrLaunchSource(herdrSocketPath())))()).state === "absent";
+  (await (options.launchSource ?? defaultLaunchSource)()).state === "absent";
+
+/** herdr's server hands a new tab its environment; on herdr-core the core process does, not this server. */
+async function defaultLaunchSource(): Promise<ClaudeSource> {
+  if (!servingCore()) return herdrLaunchSource(herdrSocketPath());
+  // hc not answering: no proof of what a new terminal gets, so no resume offered from it
+  const status = await coreConnection().call<{ pid?: unknown }>("server.status", {}).catch(() => null);
+  return typeof status?.pid === "number" ? processLaunchSource(status.pid) : { state: "unreadable" };
+}
 
 /**
  * A workspace's folder: its worktree checkout when herdr names one, else the folder of its

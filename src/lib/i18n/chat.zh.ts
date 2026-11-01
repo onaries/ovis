@@ -2,7 +2,7 @@
  * Simplified Chinese for the keys only the chat files use:
  * components/ChatView.tsx, components/Markdown.tsx, components/MermaidLightbox.tsx,
  * components/ChatMinimap.tsx, components/ImageLightbox.tsx, components/BackgroundTasks.tsx,
- * components/BackgroundAgentDetail.tsx, components/MarkdownLinkMenu.tsx,
+ * components/BackgroundAgentDetail.tsx, components/Artifacts.tsx, components/MarkdownLinkMenu.tsx,
  * lib/workBlocks.ts (with CATEGORY_LABEL), lib/toolVerbs.ts (with VERB_LABEL), lib/outcomeChip.ts,
  * lib/chatTimestamp.ts, lib/chatReadDeadline.ts.
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
@@ -166,6 +166,9 @@ export const CHAT_ZH: Record<string, string> = {
   "{n} tool calls": "{n} 次工具调用",
   "{n} tokens": "{n} 个 token",
   "Background tasks": "后台任务",
+  "Artifacts": "Artifact",
+  "{n} artifact": "{n} 个 Artifact",
+  "{n} artifacts": "{n} 个 Artifact",
   "Couldn't load the background tasks": "无法加载后台任务",
   "No background tasks to show yet": "暂时没有可显示的后台任务",
   "Running": "运行中",
