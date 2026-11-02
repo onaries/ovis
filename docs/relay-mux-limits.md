@@ -59,6 +59,14 @@ streams fit (11.75 MiB), and another HTTP stream is refused before dispatch.
 Reservations remain charged during asynchronous cleanup. A WS rejection changes
 its 1 MiB reservation to the smaller HTTP reservation.
 
+The shell queues up to 64 HTTP requests when local stream admission is full.
+Requests resume in order after a stream retires and releases its reservation.
+Waiting longer than 30 seconds, exceeding the queue bound, losing the carrier,
+or closing the transport fails the request explicitly; caller cancellation removes
+it immediately. Queued requests never cross a reconnect. Pane attachments share
+one WS per visited PC, not one per pane, but media-heavy Markdown can still exhaust
+the remaining HTTP slots.
+
 Inbound DATA above granted credit is `SESSION_ERROR flow_control_error` followed
 by carrier close 4000 on both client and server. Excess admissions use RESET
 `refused`; outgoing producer/metadata overruns retain `resource_exhausted`.

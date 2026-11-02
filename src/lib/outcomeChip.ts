@@ -140,6 +140,25 @@ export function outcomeResultText(outcome: CommandOutcome, dismissed: boolean): 
   return outcome.result_text || null;
 }
 
+/** A command that moves the pane to another conversation (server/prompt.ts `sessionChange`). */
+const SESSION_CHANGE = /^\/(?:clear|new|reset|resume)(?:\s|$)/iu;
+
+/**
+ * The outcomes of a conversation the chat moved to, without the sends to the one it left. `held` is the
+ * list the chat held when it saw the move, `first` the first other list after it (the caller keeps it).
+ * The newest /clear, /new, /reset or /resume in the held list, or in `first` once the list changed, made
+ * the move: a later one did not move the chat. Every send before it, by the server's send times, is the
+ * old conversation's, also one a later poll lists first. With no such command (a /clear typed in the
+ * terminal), the held list is all the old conversation's, and a later list stands: it tells no old send
+ * from a new one.
+ */
+export function afterMove(outcomes: readonly CommandOutcome[], held: readonly CommandOutcome[], first = outcomes): readonly CommandOutcome[] {
+  const moves = (outcomes === held ? held : first).filter((outcome) => SESSION_CHANGE.test(outcome.text.trim()));
+  if (moves.length === 0) return outcomes === held ? [] : outcomes;
+  const move = Math.max(...moves.map((outcome) => Date.parse(outcome.created_at)));
+  return outcomes.filter((outcome) => Date.parse(outcome.created_at) >= move);
+}
+
 /** Calls `invalidate` for each outcome that changed the agent's command list, once: `noted` keeps the ids already acted on. */
 export function noteCatalogChanges(outcomes: readonly CommandOutcome[], noted: Set<string>, invalidate: () => void): void {
   for (const outcome of outcomes) {

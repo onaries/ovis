@@ -32,7 +32,6 @@
   padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
   background: var(--bg-input);
   border: var(--hairline) solid var(--border);
-  border-left: var(--rail-w) solid var(--accent);
   border-radius: var(--radius-md);
 }
 
@@ -59,5 +58,12 @@
 @media (max-width: 640px) {
   .phone-address {
     flex-direction: column;
+  }
+
+  /* a phone has no room to scroll a hidden line: the whole command shows, wrapped where it must */
+  .phone-command code {
+    overflow-x: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }

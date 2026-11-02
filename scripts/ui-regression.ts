@@ -26,6 +26,7 @@ import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
 import { checkFolderFilter, checkNewFolder } from "./folder-filter-regression.ts";
 import { checkPaletteKeys } from "./palette-keys-regression.ts";
 import { checkFollowHerdrFocus } from "./follow-focus-regression.ts";
+import { checkRelayPanel } from "./relay-panel-regression.ts";
 import { systemUsageContext, UsageService } from "../server/usage.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { assertCspClean, watchCsp } from "./csp-violations.ts";
@@ -2505,6 +2506,8 @@ try {
   await securedContext.close();
   assertCspClean(csp, "the token gate loads with no CSP violation");
   console.log("PASS Settings sign out: cancel preserves access, failure permits retry, token and paired-device sign out return to the access gate");
+
+  await checkRelayPanel(browser);
 } catch (error) {
   for (const evidence of evidenceSessions) {
     if (evidence.isOpen()) await evidence.captureFailure(error);

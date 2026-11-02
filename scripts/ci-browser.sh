@@ -4,6 +4,8 @@
 # BROWSER_WORKERS: worker count for parallel mode (default: min(cores/2, 6))
 set -euo pipefail
 
+# The relay scripts drive the hosted shell, a build of its own (dist-shell/).
+bun run build:shell
 if [ "${BROWSER_PARALLEL:-}" = "1" ]; then
   exec bun scripts/ci-browser-parallel.ts
 fi
@@ -48,6 +50,9 @@ if [ -n "${CI:-}${CHECK_DIR:-}" ]; then
 fi
 CHROME_PATH="$(bash scripts/ci-chromium.sh)"
 export CHROME_PATH
+# the relay media run encodes its test video with the pinned ffmpeg
+FFMPEG="${FFMPEG:-$(bash scripts/ci-ffmpeg.sh)}"
+export FFMPEG
 # The demo scripts below all show the same client: it is built once here and each copies it
 # (scripts/demo-build.ts), instead of each building it again.
 HERDR_DEMO_BUILD="$(mktemp -d)"
@@ -64,6 +69,7 @@ run_script scripts/sticky-modifiers-regression.ts
 run_script scripts/terminal-switch-regression.ts
 run_script scripts/terminal-switch-resize-regression.ts
 run_script scripts/terminal-view-replay-demo-regression.ts
+run_script scripts/terminal-release-no-watch-demo-regression.ts
 run_script scripts/pane-lifetime-regression.ts
 run_script scripts/terminal-arrows-clicks-regression.ts
 run_script scripts/terminal-viewport-regression.ts
@@ -87,6 +93,7 @@ run_script scripts/agents-sign-in-demo-regression.ts
 run_script scripts/interface-font-demo-regression.ts
 run_script scripts/theme-first-paint-demo-regression.ts
 run_script scripts/boot-loading-demo-regression.ts
+run_script scripts/old-safari-demo-regression.ts
 run_script scripts/security-summary-demo-regression.ts
 run_script scripts/push-health-demo-regression.ts
 run_script scripts/device-security-demo-regression.ts
@@ -142,6 +149,8 @@ run_script scripts/chat-greeting-demo-regression.ts
 run_script scripts/restored-draft-demo-regression.ts
 run_script scripts/chat-local-send-follow-demo-regression.ts
 run_script scripts/reply-comments-demo-regression.ts
+run_script scripts/chat-select-quote-demo-regression.ts
+run_script scripts/chat-quote-selection-end-regression.ts
 run_script scripts/diff-line-notes-demo-regression.ts
 run_script scripts/chat-tool-paths-demo-regression.ts
 run_script scripts/chat-list-markers-demo-regression.ts
@@ -150,6 +159,7 @@ run_script scripts/chat-math-demo-regression.ts
 run_script scripts/terminal-paste-insert-demo-regression.ts
 run_script scripts/composer-fit-demo-regression.ts
 run_script scripts/held-rows-demo-regression.ts
+run_script scripts/chat-working-line-demo-regression.ts
 run_script scripts/replay-clipboard-demo-regression.ts
 run_script scripts/todo-snapshots-demo-regression.ts
 run_script scripts/command-outcome-demo-regression.ts
@@ -167,6 +177,7 @@ run_script scripts/sidebar-tokens-demo-regression.ts
 run_script scripts/pane-mute-demo-regression.ts
 run_script scripts/workspace-touch-reorder-demo-regression.ts
 run_script scripts/prompt-dock-demo-regression.ts
+run_script scripts/prompt-card-timing-demo-regression.ts
 run_script scripts/opencode-prompt-regression.ts
 run_script scripts/pi-questionnaire-browser-regression.ts
 run_script scripts/files-prompt-regression.ts
@@ -188,3 +199,5 @@ run_script scripts/machine-dialog-regression.ts
 run_script scripts/machine-conflict-regression.ts
 run_script scripts/machine-own-ovis-regression.ts
 run_script scripts/herdr-profiles-browser-qa.ts
+# runs relay-shell-browser-qa.ts and relay-media-browser-qa.ts too
+run_script scripts/relay-e2e-regression.ts

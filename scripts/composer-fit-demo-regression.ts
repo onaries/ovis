@@ -931,8 +931,17 @@ try {
         await page.mouse.move(0, 0);
         await page.mouse.up();
         assert.equal(await box.inputValue(), "a draft that stays", "nothing was sent");
+        // Stop too: once the turn stops it is a disabled Send in the same node, and a focused node that
+        // is disabled drops focus to the page, where the next keys typed go nowhere
+        await box.fill("");
+        const stop = (await page.getByRole("button", { name: "Stop agent", exact: true }).boundingBox())!;
+        await page.mouse.move(stop.x + stop.width / 2, stop.y + stop.height / 2);
+        await page.mouse.down();
+        assert.equal(await box.evaluate((node) => node === document.activeElement), true, `${width}px: pressing Stop keeps the message box focused`);
+        await page.mouse.move(0, 0);
+        await page.mouse.up();
       });
-      console.log("PASS pressing Send keeps focus in the message box");
+      console.log("PASS pressing Send or Stop keeps focus in the message box");
 
       // With focus kept, the tap does not end a composition (Gboard composes every word, a Korean
       // keyboard the open syllable): Send finishes the word itself and sends the box as shown.

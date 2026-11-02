@@ -210,18 +210,22 @@ try {
     assert.deepEqual(piRows, ["I read this as: bring the test server up to date.", "work Worked \u00b7 3 commands", "The test server runs the latest main."], "words before the tool calls stay above their one work block");
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "pi-words-before-tools.png") });
     source = "claude-transcript";
-    turns = parseClaudeTranscript(jsonl(
+    // the turn, ended (Claude's end_turn makes its last words the final answer) or still at work on them
+    const catalog = (stop: "end_turn" | null): ConversationTurn[] => parseClaudeTranscript(jsonl(
       { type: "user", message: { content: "Check the catalog." } },
       { type: "assistant", message: { content: [{ type: "text", text: "Checking the catalog first." }, { type: "tool_use", id: "a", name: "Bash", input: { command: "ls" } }], stop_reason: "tool_use" } },
       { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "a", content: "books" }] } },
       { type: "assistant", message: { content: [{ type: "text", text: "Three books. Now the loans." }, { type: "tool_use", id: "b", name: "Bash", input: { command: "cat loans" } }], stop_reason: "tool_use" } },
       { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "b", content: "none" }] } },
-      { type: "assistant", message: { content: [{ type: "text", text: "No book is on loan." }], stop_reason: "end_turn" } },
+      { type: "assistant", message: { content: [{ type: "text", text: "No book is on loan." }], stop_reason: stop } },
     ));
+    turns = catalog("end_turn");
     await page.evaluate(() => { window.chatFallbackQA.agent("claude"); window.chatFallbackQA.refresh(); });
     await page.getByText("No book is on loan.", { exact: true }).waitFor();
     assert.deepEqual(await rows(), ["Checking the catalog first.", "work Worked \u00b7 1 command", "Three books. Now the loans.", "work Worked \u00b7 1 command", "No book is on loan."], "each run of work stays between the words around it");
-    await page.evaluate(() => window.chatFallbackQA.status("working"));
+    // the turn still at work: one that ended on its final answer stays finished while the agent works again
+    turns = catalog(null);
+    await page.evaluate(() => { window.chatFallbackQA.status("working"); window.chatFallbackQA.refresh(); });
     const live = page.locator(".chat-turn-agent").last().locator(".work-block.is-live");
     await live.waitFor();
     assert.deepEqual(await rows(), ["Checking the catalog first.", "work Worked \u00b7 1 command", "Three books. Now the loans.", "work Working\u2026 \u00b7 1 command", "No book is on loan."], "while the turn runs, only its last run of work reads Working");

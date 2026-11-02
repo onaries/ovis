@@ -220,6 +220,15 @@ it("keeps an approval-blocked assistant turn live, including with a last-activit
   expect(isLiveWorkTurn({ ...turn, role: "user" }, true, "blocked")).toBe(false);
 });
 
+it("does not title a turn that ended on its final answer as running when the agent begins another by itself", async () => {
+  const { isLiveWorkTurn } = await import("./workBlocks.ts");
+  const answered = { role: "assistant" as const, ts: null, parts: [tool("Glob"), { kind: "text" as const, text: "The subagent is still running.", phase: "final_answer" as const }] };
+  // a background task ended: herdr says working, the new turn has no row yet, and nothing was sent from here
+  expect(isLiveWorkTurn(answered, true, "working")).toBe(false);
+  // words that are no final answer yet are the running turn's own
+  expect(isLiveWorkTurn({ ...answered, parts: [answered.parts[0]!, { kind: "text" as const, text: "Let me look." }] }, true, "working")).toBe(true);
+});
+
 it("does not title a finished turn as running after a message was sent over it", async () => {
   const { isLiveWorkTurn } = await import("./workBlocks.ts");
   const finished = { role: "assistant" as const, ts: "2026-09-29T00:00:00Z", parts: [], end_ts: "2026-09-29T00:00:06Z" };

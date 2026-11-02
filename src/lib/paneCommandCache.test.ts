@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 
 import type { SlashCommand } from "../../shared/protocol.ts";
 import { cachedPaneCommands, invalidatePaneCommands, onPaneCommandsInvalidated, paneCommandsNow } from "./paneCommandCache.ts";
@@ -64,25 +64,43 @@ describe("cachedPaneCommands", () => {
     expect(resolvers.length).toBe(2);
   });
 
-  test("paneCommandsNow gives a read still on its way the answer another read already has", async () => {
+  test("the components of a pane that mount together share one read, and a call after an invalidation starts a fresh one", async () => {
     const resolvers: ((commands: SlashCommand[]) => void)[] = [];
     const fetchCommands = (): Promise<SlashCommand[]> => new Promise((resolve) => { resolvers.push(resolve); });
-    const box = cachedPaneCommands("w4:p1", "local", "claude", fetchCommands);
-    const terminal = cachedPaneCommands("w4:p1", "local", "claude", fetchCommands);
-    expect(paneCommandsNow("w4:p1", "local", "claude")).toBeNull();
-    const rows: SlashCommand[] = [{ name: "config", description: "", source: "builtin", visibility: "terminal" }];
-    resolvers[0]!(rows);
-    expect(await box).toBe(rows);
-    // the terminal's own read, begun later, has not answered: the box's answer is there for it at once
-    expect(paneCommandsNow("w4:p1", "local", "claude")).toBe(rows);
-    expect(paneCommandsNow("w4:p1", "local", "pi")).toBeNull();
-    expect(paneCommandsNow("w4:p1", "studio", "claude")).toBeNull();
-    // the later read's answer replaces it
-    const later: SlashCommand[] = [{ name: "cost", description: "", source: "builtin" }];
-    resolvers[1]!(later);
-    expect(await terminal).toBe(later);
-    expect(paneCommandsNow("w4:p1", "local", "claude")).toBe(later);
+    // the terminal, the chat, its skill chips and the composer
+    const mounted = [1, 2, 3, 4].map(() => cachedPaneCommands("w4:p1", "local", "claude", fetchCommands));
+    expect(resolvers.length).toBe(1);
     invalidatePaneCommands("w4:p1", "local");
-    expect(paneCommandsNow("w4:p1", "local", "claude")).toBeNull();
+    const fresh = [1, 2].map(() => cachedPaneCommands("w4:p1", "local", "claude", fetchCommands));
+    expect(resolvers.length).toBe(2);
+    const freshRows: SlashCommand[] = [{ name: "fresh", description: "", source: "builtin" }];
+    resolvers[1]!(freshRows);
+    for (const read of fresh) expect(await read).toBe(freshRows);
+    const staleRows: SlashCommand[] = [{ name: "stale", description: "", source: "builtin" }];
+    resolvers[0]!(staleRows);
+    for (const read of mounted) expect(await read).toBe(staleRows);
+    expect(paneCommandsNow("w4:p1", "local", "claude")).toBe(freshRows);
+  });
+
+  test("paneCommandsNow serves the last list at any age while a new read is on its way, until an invalidation", async () => {
+    const rows: SlashCommand[] = [{ name: "review", description: "", source: "skill" }];
+    try {
+      await cachedPaneCommands("w5:p1", "local", "claude", async () => rows);
+      expect(paneCommandsNow("w5:p1", "local", "pi")).toBeNull();
+      expect(paneCommandsNow("w5:p1", "studio", "claude")).toBeNull();
+      setSystemTime(new Date(Date.now() + 61_000));
+      // a chat opened again a minute later draws its skill chips with the list it has, while it asks again
+      let answer!: (commands: SlashCommand[]) => void;
+      const fresh = cachedPaneCommands("w5:p1", "local", "claude", () => new Promise((resolve) => { answer = resolve; }));
+      expect(paneCommandsNow("w5:p1", "local", "claude")).toBe(rows);
+      const freshRows: SlashCommand[] = [{ name: "deploy", description: "", source: "skill" }];
+      answer(freshRows);
+      expect(await fresh).toBe(freshRows);
+      expect(paneCommandsNow("w5:p1", "local", "claude")).toBe(freshRows);
+      invalidatePaneCommands("w5:p1", "local");
+      expect(paneCommandsNow("w5:p1", "local", "claude")).toBeNull();
+    } finally {
+      setSystemTime();
+    }
   });
 });

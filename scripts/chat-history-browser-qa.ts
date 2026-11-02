@@ -52,11 +52,15 @@ try {
   page.on("pageerror", (error) => { errors.push(error.message); console.error(error.stack); });
   let epoch = "one", newest = "old newest", before: string | null = null;
   let holdOlder = false;
+  /** a notice Claude Code wrote before the turn at work (server/claude-transcript.ts noticeAt) */
+  let notice = false;
   /** the cursor an older page answers with: null ends the history there */
   let olderNext: string | null = null;
   let product = false;
   let compacting = false;
   await page.route("**/api/**/prompt?*", route => route.fulfill({ json: { prompt: null, suggestion: null, compacting } }));
+  /** the session herdr has the "local/switch" pane on: its history and the turn it shows */
+  let switchSession = "A";
   let unavailable = false, terminalFails = false;
   let readPending = false, gapPending = false;
   let holdTerminal = false;
@@ -77,7 +81,9 @@ try {
     if (product) {
       const pane = url.searchParams.get("pane_id") ?? url.searchParams.get("pane") ?? "";
       const key = `${/\/api\/machines\/([^/]+)\//.exec(url.pathname)?.[1] ?? "local"}/${pane}`;
-      const answer = (status: number) => status === 200
+      const answer = (status: number) => status === 200 && key === "local/switch"
+        ? route.fulfill({ json: { source: "claude-transcript", history_id: `switch-${switchSession}`, cursor: null, turns: [user(`session ${switchSession}`)] }, headers: { etag: `"switch-${switchSession}"` } })
+        : status === 200
         ? route.fulfill({ json: key === "local/agy" ? { source: "agy-transcript", history_id: "synthetic-agy-session", cursor: null, turns: parseAgyTranscript([
           { step_index: 0, type: "USER_INPUT", status: "DONE", content: "Summarize the last three fictional commits." },
           { step_index: 1, type: "PLANNER_RESPONSE", status: "DONE", tool_calls: [{ name: "run_command", args: { CommandLine: "git log -3 --oneline" } }] },
@@ -128,8 +134,10 @@ try {
       if (holdOlder) await new Promise<void>((resolve) => releases.push(resolve));
       await route.fulfill({ json: { source: "omp-transcript", history_id: captured, cursor: olderNext ?? url.searchParams.get("since"), turns: [user("old earlier")] } });
     } else {
-      const tool = { role: "assistant", ts: "reused", parts: [{ kind: "tool", name: "Read", summary: "same", input: "{}", output: "preview", output_ref: "reused", output_size: 9000 }] };
-      await route.fulfill({ json: { source: "omp-transcript", history_id: epoch, cursor: before, turns: newest ? [user(newest), tool] : [] } });
+      // with the notice, the tool's result changes too: what names the turn's row stays the same
+      const tool = { role: "assistant", ts: "reused", parts: [{ kind: "tool", name: "Read", summary: "same", input: "{}", output: notice ? "preview, read again" : "preview", output_ref: "reused", output_size: 9000 }] };
+      const held = { role: "user", ts: "held", parts: [{ kind: "notice", text: "Message held", source: "informational" }] };
+      await route.fulfill({ json: { source: "omp-transcript", history_id: epoch, cursor: before, turns: newest ? [user(newest), ...(notice ? [held] : []), tool] : [] } });
     }
   });
   await page.goto(`http://127.0.0.1:${server.port}/`);
@@ -254,6 +262,21 @@ try {
   await page.evaluate((i) => window.qa.requests[i].reject(), remoteIndex);
   await page.getByText(newest, { exact: true }).waitFor();
   assert.equal(await page.getByText("Couldn't load the whole output — retry", { exact: true }).count(), 0);
+  // A notice written before the last turn takes a row of its own: that turn keeps its row, and
+  // what the reader opened in it stays open.
+  epoch = "notice"; newest = "before a notice"; before = null;
+  await page.evaluate(() => window.qa.chat("notice"));
+  await page.getByText(newest, { exact: true }).waitFor();
+  await page.locator(".work-block-head").click();
+  await page.locator(".work-row-head").click();
+  const openedWork = await page.locator(".work-block-head").elementHandle();
+  notice = true;
+  await refresh();
+  await page.locator(".chat-notice").waitFor();
+  assert.equal(await openedWork!.evaluate((node) => node.isConnected), true, "a notice before the last turn keeps that turn mounted");
+  assert.equal(await page.locator(".work-row-head").getAttribute("aria-expanded"), "true", "a notice before the last turn keeps its opened tool details");
+  notice = false;
+  console.log("PASS a notice written before the last turn keeps that turn's row and what the reader opened");
   // Already loaded older history must be discarded when a held cursor gets 409.
   epoch = "four"; newest = "loaded history newest"; before = "four:100"; holdOlder = false;
   await page.evaluate(() => window.qa.chat("b"));
@@ -261,8 +284,20 @@ try {
   await page.locator(".chat-older").click();
   await page.getByText("old earlier", { exact: true }).waitFor();
   epoch = "five"; newest = "after held cursor reset"; before = null;
-  await refresh();
-  await page.getByText(newest, { exact: true }).waitFor();
+  // every commit until the new history shows: the old turns stay until it replaces them (a /clear)
+  const between = await page.evaluate((text) => new Promise<string[]>((resolve) => {
+    const seen: string[] = [];
+    const observer = new MutationObserver(() => {
+      const shown = document.body.textContent ?? "";
+      if (shown.includes("Loading conversation…")) seen.push("Loading conversation…");
+      else if (document.querySelectorAll(".chat-turn").length === 0) seen.push("no turns");
+      if (shown.includes(text)) { observer.disconnect(); resolve(seen); }
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+    setTimeout(() => resolve([...seen, "timeout"]), 10_000);
+    window.qa.refresh();
+  }), newest);
+  assert.deepEqual(between, [], "a held cursor's 409 shows no empty or loading chat before the new history");
   assert.equal(await page.getByText("old earlier", { exact: true }).count(), 0);
   assert.equal(await page.locator(".chat-older").count(), 0);
 
@@ -426,6 +461,32 @@ try {
   await page.getByText("Fictional commit log", { exact: true }).waitFor();
   assert.equal(await page.getByText("Synthetic Claude prompt", { exact: true }).count(), 0);
   console.log("PASS Agy native parser output renders user/assistant text and independent expandable tool results");
+  // A press reads a chat before its pick renders (#2562). herdr moves the pane to another session after
+  // that read answered and before the click lands: the chat opened shows the new session, never the old one.
+  await page.evaluate(() => { window.qa.session("switch", "a"); window.qa.press("switch"); });
+  await page.waitForFunction(() => window.qa.answered.includes("local/switch"));
+  switchSession = "B";
+  await page.evaluate(() => window.qa.session("switch", "b"));
+  await select("switch", "local", "claude");
+  await page.getByText("session B", { exact: true }).waitFor();
+  assert.ok((await page.evaluate(() => window.qa.commits)).every((turns) => !turns.some((turn) => turn.includes("session A"))), "a chat opened on session B never drew the press read of session A");
+  console.log("PASS a press read of the session herdr left is neither drawn nor taken by the chat it opens");
+  // The usual timing: the roster naming the new session comes after the click, so the chat opened on the
+  // press read of the old one; once the roster names the new one, the chat reads it without waiting for a push.
+  await select("a", "local");
+  await page.getByText("history local/a", { exact: true }).waitFor();
+  switchSession = "C";
+  await page.evaluate(() => { window.qa.session("switch", "c"); window.qa.press("switch"); });
+  await page.waitForFunction(() => window.qa.answered.filter((key) => key === "local/switch").length >= 3);
+  await select("switch", "local", "claude");
+  await page.getByText("session C", { exact: true }).waitFor();
+  // right after one of the chat's 2 s polls, so only the read the roster change starts can show D in time
+  const polled = await page.evaluate(() => window.qa.answered.filter((key) => key === "local/switch").length);
+  await page.waitForFunction((count) => window.qa.answered.filter((key) => key === "local/switch").length > count, polled);
+  switchSession = "D";
+  await page.evaluate(() => window.qa.session("switch", "d"));
+  await page.getByText("session D", { exact: true }).waitFor({ timeout: 1_000 });
+  console.log("PASS a chat open when the roster names its pane's next session reads that session at once");
   assert.deepEqual(errors, []);
   console.log("PASS synthetic Devin bubbles and tools render; switching to Claude clears Devin history");
   console.log("PASS product pane commits across A→B→A, another PC, and late or failed answers");

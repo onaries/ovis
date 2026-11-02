@@ -268,18 +268,20 @@ export async function claudeBoxReads(paneId: string): Promise<[string, string | 
  * right after it is cancelled. That copy, while the agent is not working, two Esc presses empty
  * again — never Ctrl+C, which would arm "press Ctrl-C again to exit" — then the box is read once
  * more before the send. Every other draft, and a box still not empty after them, refuses as before.
+ * An `automatic` send (a queued message, whether the drain or its own request types it) refuses over that copy too: the user stopped
+ * that send, and the composer gets it back only from its next prompt read, seconds after the drain.
  * `authorize` throws once the sender may no longer send: it is asked before each Esc, and again
  * right before herdr is written to. A send with less than RESTORED_CLEAR_RESERVE_MS left before its
  * `deadline` clears nothing: it would erase the copy, then time out without sending.
  */
-export async function freeClaudeBox(paneId: string, working: boolean, authorize: () => void, deadline: number): Promise<void> {
+export async function freeClaudeBox(paneId: string, working: boolean, authorize: () => void, deadline: number, automatic = false): Promise<void> {
   let refused: unknown;
   const allowed = (): boolean => { try { authorize(); return true; } catch (error) { refused = error; return false; } };
   // an Esc the guard stopped fails with the sender's own refusal (read_only, device_revoked), not herdr's `cancelled`
   const refusal = (error: unknown): never => { throw refused ?? error; };
   const [live, colors] = await claudeBoxReads(paneId);
   if (!claudeInputDraft(live, colors)) return;
-  if (working || claudeRestoredDraft(live, colors, lastChatSubmitted(paneId)) === null) {
+  if (working || automatic || claudeRestoredDraft(live, colors, lastChatSubmitted(paneId)) === null) {
     throw new InputDraftError(claudeClearableDraft(live, colors), undefined, claudeInputBoxContent(live));
   }
   if (deadline - Date.now() < RESTORED_CLEAR_RESERVE_MS) throw new HerdrError("submit_timeout", "Too little time was left to clear Claude Code's input box and send; nothing was typed");

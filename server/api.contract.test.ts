@@ -38,6 +38,8 @@ import type { MachineEvent, MachineSettings } from "../shared/machines.ts";
 import { MAX_MUTED_PANES, type SharedPreferences } from "../shared/preferences.ts";
 import { OmoStatus } from "./omo-status.ts";
 import { omoJobTasks } from "./omo-jobs.ts";
+import { ClaudeSubagentStatus } from "./claude-subagents.ts";
+import { setFilePoolOptions } from "./file-pool.ts";
 
 /**
  * Contract test for Ovis's HTTP + WS surface.
@@ -2221,6 +2223,28 @@ describe("workspace and discovery endpoints", () => {
 });
 
 describe("GET /api/pane/omo-tasks", () => {
+  it("answers a busy Claude task-list scan with retryable 503 while bridge health stays available", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-claude-task-busy-"));
+    const path = join(root, "synthetic.jsonl");
+    writeFileSync(path, "");
+    const original = ClaudeSubagentStatus.prototype.sessionOf;
+    const session = spyOn(ClaudeSubagentStatus.prototype, "sessionOf").mockImplementation(function(this: ClaudeSubagentStatus, paneId) {
+      return paneId === "busy-claude-pane" ? { path, live: true, startedAt: null, read: 1 } : original.call(this, paneId);
+    });
+    setFilePoolOptions({ workers: 0, waiting: 0 });
+    try {
+      const response = await fetch(`${base()}/api/pane/omo-tasks?pane_id=busy-claude-pane`);
+      expect(response.status).toBe(503);
+      expect(response.headers.get("retry-after")).toBe("1");
+      expect(await response.json()).toMatchObject({ error: { code: "file_busy" } });
+      expect((await fetch(`${base()}/api/health?scope=bridge`)).status).toBe(200);
+    } finally {
+      session.mockRestore();
+      setFilePoolOptions();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("merges running bash, monitor and eval jobs ahead of ended tasks and jobs", async () => {
     // Given task records and the core tracker's transcript jobs for the same session.
     const cwd = mkdtempSync(join(tmpdir(), "ovis-omo-merged-tasks-"));

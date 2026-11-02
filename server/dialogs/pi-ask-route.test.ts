@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { InteractivePrompt } from "../../shared/protocol.ts";
 import { handlePromptRequest, type PromptRequestOptions, promptWaitEnded } from "../prompt.ts";
 import { socketAddress } from "../herdr/client.ts";
+import * as client from "../herdr/client.ts";
 import fixtures from "../fixtures/pi-ask-2.13.9.json";
 import navigation from "../fixtures/pi-ask-navigation.json";
 import system from "../fixtures/pi-ask-system-theme.json";
@@ -229,6 +230,40 @@ test("Pi ask answer route switches to unanswered tabs and returns from review", 
     expect(await pane.answer(card.id, { step_index: 0 })).toBe(200);
     expect(pane.sent).toEqual(["right", "left", "left"]);
     expect((await pane.card()).title).toBe("单元格内容");
+  });
+});
+
+test("Pi ask Next reaches an unanswered question using only Right", async () => {
+  await withPane(navigation.first, async pane => {
+    const first = await pane.card();
+    expect(first.can_step_next).toBe(true);
+    expect(await pane.answer(first.id, { step_next: true, step_back: true })).toBe(400);
+    expect(await pane.answer(first.id, { step_next: true, option_index: 0 })).toBe(400);
+    expect(await pane.answer(first.id, { step_next: true, draft: { option_indices: [], custom_text: "unsent" } })).toBe(400);
+    pane.onSent = key => { if (key === "right") pane.screen = navigation["second-unanswered"]; };
+    expect(await pane.answer(first.id, { step_next: true })).toBe(200);
+    expect(pane.sent).toEqual(["right"]);
+    const second = await pane.card();
+    expect(second.steps?.map(step => step.answered)).toEqual([false, false, false]);
+    expect(second.steps?.findIndex(step => step.current)).toBe(1);
+    expect(second.can_step_next ?? false).toBe(false);
+  });
+});
+
+test("Pi ask Next cancelled just before herdr writes sends no key", async () => {
+  await withPane(navigation.first, async pane => {
+    const card = await pane.card();
+    const abort = new AbortController();
+    const original = client.paneSendKeys;
+    const send = spyOn(client, "paneSendKeys").mockImplementation(async (...args) => {
+      abort.abort();
+      await original(...args);
+    });
+    try {
+      expect(await pane.answer(card.id, { step_next: true }, abort.signal)).toBe(409);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(pane.sent).toEqual([]);
+    } finally { send.mockRestore(); }
   });
 });
 

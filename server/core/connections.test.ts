@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
 import { DeviceStore } from "../devices.ts";
 import type { MachineRelay } from "../machine-relay.ts";
+import { OUTPUT_HARD_BYTES } from "../output-window.ts";
 import type { PendingInputs } from "../pending-input.ts";
-import { type Client, connectionData, connectionOf, createConnections, send } from "./connections.ts";
+import { backlog, type Client, connectionData, connectionOf, createConnections, send } from "./connections.ts";
 
 function harness({ deviceId, readOnly = false, relay, revokedAlready = false, store }: { deviceId?: string; readOnly?: boolean; relay?: MachineRelay; revokedAlready?: boolean; store?: DeviceStore } = {}) {
   const log: string[] = [];
@@ -45,6 +46,50 @@ it("a stall ends the connection once and leaves its presence to the socket's clo
   expect(send(client, { type: "session-changed" })).toBe(0);
   end(client, "closed");
   expect(present.has(client)).toBe(false);
+});
+
+it("sends one frame larger than the transport budget and keeps the client while it drains, but not a backlog past the budget (#2566)", () => {
+  const { client, log } = harness();
+  // the socket queues what it is given and drains from the front only when the test says so
+  let buffered = 0;
+  const sent: number[] = [];
+  Object.assign(client, { getBufferedAmount: () => buffered, send: (raw: string) => { sent.push(raw.length); buffered += Buffer.byteLength(raw); return -1; } });
+  const frame = (bytes: number) => ({ type: "error", code: "x", message: "x".repeat(bytes) }) as const;
+  const big = frame(OUTPUT_HARD_BYTES);
+  const bigBytes = Buffer.byteLength(JSON.stringify(big));
+  const half = frame(600 * 1024);
+  const halfBytes = Buffer.byteLength(JSON.stringify(half));
+  expect(send(client, big)).toBe(-1);
+  expect(backlog(client)).toBe(0);
+  // what follows the large frame is still sent while it drains, and counts in full
+  expect(send(client, half)).toBe(-1);
+  expect(backlog(client)).toBe(halfBytes);
+  // all but the large frame's last 10 bytes drained: what queued behind it is still a backlog
+  buffered -= bigBytes - 10;
+  expect(backlog(client)).toBe(halfBytes);
+  expect(send(client, half)).toBe(0);
+  expect(log).toEqual([`closed ${OUTPUT_STALLED_CLOSE_CODE} terminal output transport stalled`]);
+  expect(sent).toHaveLength(2);
+});
+
+it("excuses one large frame at a time, and the next once the last has drained", () => {
+  const { client, log } = harness();
+  let buffered = 0;
+  Object.assign(client, { getBufferedAmount: () => buffered, send: (raw: string) => { buffered += Buffer.byteLength(raw); return -1; } });
+  const big = { type: "error", code: "x", message: "x".repeat(OUTPUT_HARD_BYTES) } as const;
+  expect(send(client, big)).toBe(-1);
+  buffered = 0;
+  expect(send(client, big)).toBe(-1);
+  // a second large frame while one is queued counts in full
+  expect(send(client, big)).toBe(0);
+  expect(log).toEqual([`closed ${OUTPUT_STALLED_CLOSE_CODE} terminal output transport stalled`]);
+});
+
+it("closes a client whose backlog of ordinary frames would pass the transport budget", () => {
+  const { client, log } = harness();
+  Object.assign(client, { getBufferedAmount: () => OUTPUT_HARD_BYTES - 10 });
+  expect(send(client, { type: "error", code: "x", message: "x".repeat(20) })).toBe(0);
+  expect(log).toEqual([`closed ${OUTPUT_STALLED_CLOSE_CODE} terminal output transport stalled`]);
 });
 
 it("a revoke ends the connection with 1008 and leaves its pending input to the socket's close", () => {

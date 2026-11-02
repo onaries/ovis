@@ -68,9 +68,18 @@ export function agentStatusOf(status: HcStatus | null | undefined): AgentStatus 
   }
 }
 
-/** The agent a status names; a terminal whose program never reported one runs none herdr would see. */
+/** herdr-core's names for agents herdr names otherwise: the rest of the server knows herdr's (`claude`). */
+const HERDR_AGENT_NAMES: Record<string, string> = { "claude-code": "claude" };
+
+/** The agent a status names, by herdr's name; a program that never reported one runs none herdr would see. */
+export function agentOfStatus(status: HcStatus | null | undefined): string | null {
+  const app = status?.app;
+  if (!app) return null;
+  return Object.hasOwn(HERDR_AGENT_NAMES, app) ? HERDR_AGENT_NAMES[app]! : app;
+}
+
 export function agentOf(terminal: HcTerminal): string | null {
-  return terminal.status?.app || null;
+  return agentOfStatus(terminal.status);
 }
 
 const STATUS_RANK: Record<string, number> = { blocked: 4, working: 3, done: 2, idle: 1 };

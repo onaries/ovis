@@ -8,7 +8,7 @@ import { RECEIPT_RESUME_ID } from "../../shared/receipt-resume.ts";
 import { ConversationMonitor } from "../conversation-monitor.ts";
 import { type SightingFacts, sightingFacts } from "../input-guard.ts";
 import { OUTPUT_HARD_BYTES, OUTPUT_HIGH_BYTES, OUTPUT_STALL_MS, OutputWindow, wireBytes } from "../output-window.ts";
-import { type Client, connectionOf, send } from "./connections.ts";
+import { backlog, type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE, createSpawnAttachment, type PaneAttachment } from "./terminal-process.ts";
 
 /** joins this close together share one repaint: a reconnect brings every tab back at once */
@@ -103,7 +103,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
     let paused = false;
     for (const client of attachment.clients) {
       const window = client.data.output.get(paneId);
-      const buffered = client.getBufferedAmount();
+      const buffered = backlog(client);
       if (window) {
         // an ACK client: measured by its ACK progress, and a joiner draining its replay never pauses the pty
         const verdict = window.check(buffered);
@@ -133,7 +133,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
   function sendOutput(client: Client, paneId: string, data: string, replay = false): void {
     const window = client.data.output.get(paneId);
     const bytes = Buffer.byteLength(data);
-    if ((window && window.pending + bytes > OUTPUT_HARD_BYTES) || client.getBufferedAmount() >= OUTPUT_HARD_BYTES) {
+    if ((window && window.pending + bytes > OUTPUT_HARD_BYTES) || backlog(client) >= OUTPUT_HARD_BYTES) {
       end(client, "stalled");
       return;
     }
@@ -361,7 +361,8 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
       // the attach-complete barrier queued input waits on
       if (!alreadyAttached && attachment.recovering) send(client, { type: "output-recovering", pane_id: message.pane_id });
       if (!alreadyAttached && replay) {
-        client.data.output.get(message.pane_id)?.join(replay, client.getBufferedAmount());
+        const ahead = backlog(client);
+        client.data.output.get(message.pane_id)?.join(replay, ahead, Date.now(), client.getBufferedAmount() - ahead);
         // marked as the screen from before: the client draws it but takes no new clipboard write from it
         sendOutput(client, message.pane_id, replay, true);
         // a tail that lost the stream's start may miss what was drawn once: herdr draws it again

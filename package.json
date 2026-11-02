@@ -1,7 +1,7 @@
 {
   "name": "ovis",
   "private": true,
-  "version": "0.4.21",
+  "version": "0.4.22",
   "type": "module",
   "description": "Ovis, the browser and phone client for herdr - live herdr workspaces, panes and agents in a web UI",
   "license": "MIT",
@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "bun --bun vite",
     "build": "bun --bun vite build",
+    "build:shell": "bun --bun vite build --mode shell",
     "server": "bun run server/index.ts",
     "start": "bun run build && bun run server/managed.ts",
     "typecheck": "bun scripts/typecheck.ts",

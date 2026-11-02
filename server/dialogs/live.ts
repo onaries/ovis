@@ -168,7 +168,9 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   if (prompt.responder === "cmd-question") return cmdFooterStart(shown) >= 0;
   // its footer ends the screen, wrapped or not (dialogs/opencode.ts)
   if (prompt.responder === "opencode-v1-question") return openCodeV1QuestionActive(screen);
-  return ends(/ctrl\+g to edit|shift\+tab to approve with this feedback/i);
+  // Claude's plan. A narrow pane wraps its footer, `ctrl+g to edit in VS Code · ~/.claude/plans/x.md`, so the
+  // path or its tail ends the screen alone. Anchored on `.md`: output under an old footer never ends it.
+  return ends(/ctrl\+g to edit|shift\+tab to approve with this feedback/i) || ends(/ctrl\+g to edit in [^·]+· [^·]+\.md$/i);
 }
 /**
  * The same two hints told from the end of the window. A phone leaves pi a pane barely wide enough

@@ -62,9 +62,11 @@ export class OutputWindow {
    * frame as serialized (`wireBytes`) instead, and is never a reason to pause the pty the other
    * clients share. `ahead` is what the socket already has queued in front of the frame (on a
    * reconnect every attached pane's replay goes out back to back): it crosses the link first.
+   * `large` is a frame past the transport budget queued in front as well, a large session's
+   * snapshot (#2566): its crossing time is added beyond the cap.
    */
-  join(replay: string, ahead = 0, now = Date.now()): void {
-    this.joinUntil = now + Math.min(OUTPUT_JOIN_MAX_MS, OUTPUT_STALL_MS + crossingMs(ahead + wireBytes(replay)));
+  join(replay: string, ahead = 0, now = Date.now(), large = 0): void {
+    this.joinUntil = now + Math.min(OUTPUT_JOIN_MAX_MS, OUTPUT_STALL_MS + crossingMs(ahead + wireBytes(replay))) + crossingMs(large);
   }
 
   acknowledge(id: string, offset: number): boolean {

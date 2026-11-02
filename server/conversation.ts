@@ -63,7 +63,7 @@ import { resolveAgyStore, sameAgyStore, type AgyStore } from "./agy-store.ts";
 import { museSession, museToolOutput, MuseUnavailable, parseMuseTranscript } from "./muse.ts";
 import { resolveMuseSession } from "./muse-store.ts";
 import { LettaUnavailable, lettaToolOutput, parseLettaTranscript } from "./letta.ts";
-import { resolveLettaTranscript } from "./letta-store.ts";
+import { lettaLocalSettings, resolveLettaTranscript } from "./letta-store.ts";
 import { withinRetentionBudget } from "./retention-budget.ts";
 import { forgetAllPiIndexes, forgetPiIndex, piAbandonedTurns, piBranchRecords, piBranchSegments } from "./pi-tree.ts";
 import { COPILOT_IMAGE_REF, copilotImage, copilotOffsetOutput, copilotOutput, copilotRootRecord, parseCopilotTranscript } from "./copilot.ts";
@@ -1406,7 +1406,7 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
 
 /** Where a pane's conversation is: a transcript file, or a session in OpenCode's database. */
 type ResolvedTranscript =
-  | ({ path: string; codexHome?: string; agy?: AgyStore; piAgentDir?: string | null; ompBlobs?: string | null } & (
+  | ({ path: string; codexHome?: string; agy?: AgyStore; piAgentDir?: string | null; ompBlobs?: string | null; letta?: { store: string; agent: string; conversation: string } } & (
     | { source: Exclude<StreamSource, "copilot-transcript"> }
     | { source: "copilot-transcript"; binding: string; peerClaims: ReadonlySet<string> }
   ))
@@ -1486,7 +1486,7 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
       // no file yet is no proof the conversation has no turns (one begun elsewhere): Terminal stands in
       const found = await resolveLettaTranscript(pane, panes ?? [pane], known);
       if (found === null) throw new ConversationUnavailable("no_session_path");
-      return { source: "letta-transcript", path: found.path };
+      return { source: "letta-transcript", path: found.path, letta: { store: found.store, agent: found.agent, conversation: found.conversation } };
     }
     if (agent === "agy") {
       const found = await resolveAgyStore(pane);
@@ -1792,6 +1792,18 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
       ...answer,
       metadata: { ...answer.metadata, model },
       version: answerVersion(answer.version, model),
+    };
+  }
+  if (resolved.source === "letta-transcript" && resolved.letta) {
+    // Letta's transcript names no model, and /model writes no turn: its local store holds the
+    // setting (lettaLocalSettings). Enrich a response, never the shared transcript page, and include
+    // the setting in its ETag.
+    const { store, agent, conversation } = resolved.letta;
+    const settings = lettaLocalSettings(store, agent, conversation);
+    if (settings !== null && (settings.model !== null || settings.reasoning_effort !== null)) return {
+      ...answer,
+      metadata: { ...answer.metadata, ...settings },
+      version: answerVersion(answer.version, `${settings.model}\0${settings.reasoning_effort}`),
     };
   }
   if (resolved.source === "grok-transcript") {

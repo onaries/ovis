@@ -44,6 +44,8 @@ export function useMachineApi() {
     fetchPanePlan: (pane: string) => api.fetchPanePlan(pane, id),
     fetchPaneArtifacts: (pane: string) => api.fetchPaneArtifacts(pane, id),
     closePane: (pane: string) => api.closePane(pane, id),
+    prepareCodexRestart: (pane: string) => api.prepareCodexRestart(pane, id),
+    restartCodex: (target: Parameters<typeof api.restartCodex>[0]) => api.restartCodex(target, id),
     focusPane: (pane: string) => api.focusPane(pane, id),
     closeWorkspace: (workspace: string, closeGroup = false) => api.closeWorkspace(workspace, id, closeGroup),
     createWorktree: (request: CreateWorktreeRequest) => api.createWorktree(request, id),

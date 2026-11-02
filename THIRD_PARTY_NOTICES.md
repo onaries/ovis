@@ -10,7 +10,20 @@ Ovis includes material from the projects below, under their own licenses.
 Copyright (c) 2025-present Mohamed Boudra. The full upstream license is included
 at `shared/vendor/paseo-e2ee/LICENSE`; the Apache-2.0 text below also applies.
 The Noise fixture retains its rweather/noise-c source URLs. Its vector assertions
-are ported to `shared/relay-e2ee.spike.test.ts`.
+are ported to `shared/relay-e2ee.spike.test.ts`. The vendored sources and LICENSE are unchanged;
+only `tsconfig.json` is adapted to the flattened layout, as that directory's README says.
+
+The relay code also bundles the MIT-licensed packages those files and `shared/relay-mux.ts` import.
+The MIT license text below applies, with these copyright notices:
+
+- `@noble/ciphers` 2.4.0: `Copyright (c) 2022 Paul Miller (https://paulmillr.com)` and
+  `Copyright (c) 2016 Thomas Pornin <pornin@bolet.org>`
+- `@noble/curves` 2.4.0 and `@noble/hashes` 2.4.0: `Copyright (c) 2022 Paul Miller (https://paulmillr.com)`
+- `base64-js` 1.5.1: `Copyright (c) 2014 Jameson Little`
+- `jsonc-parser` 3.3.1: `Copyright (c) Microsoft`
+
+It also bundles `tweetnacl` 1.0.3, which its authors released into the public domain (the
+Unlicense).
 
 ## QR Code generator
 

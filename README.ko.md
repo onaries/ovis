@@ -68,9 +68,9 @@ Ovis는 내 컴퓨터의 코딩 에이전트를 채팅으로 보여 주고, 아�
 
 [전체 기능 →](docs/guide.md#features)
 
-**한계:** Ovis는 [herdr](https://github.com/herdrdev/herdr)와 켜져 있는 내 컴퓨터가 필요하고, 폰에서 그 컴퓨터에 닿아야 합니다(Tailscale, VPN, SSH 터널).
+**한계:** Ovis는 [herdr](https://github.com/herdrdev/herdr)와 켜져 있는 내 컴퓨터가 필요하고, 폰에서 그 컴퓨터에 닿아야 합니다(Tailscale, VPN, SSH 터널, Ovis 릴레이).
 
-**개인정보:** 세션은 각 에이전트를 실행하는 컴퓨터에 남고, Ovis에는 자체 계정이나 호스팅 릴레이가 없습니다. 익명 사용 집계는 기본적으로 켜져 있으며, **Settings → About → Anonymous usage counts**에서 보내는 내용을 확인하고 끌 수 있습니다. `OVIS_TELEMETRY=0`으로도 끌 수 있습니다. [보내는 내용 →](docs/guide.md#anonymous-usage-counts)
+**개인정보:** 세션은 각 에이전트를 실행하는 컴퓨터에 남고, Ovis에는 계정이 없습니다. 직접 켜기 전까지 꺼져 있는 Ovis 릴레이는 어느 폰이 어느 PC에 어떤 주소에서 언제, 얼마나 주고받는지는 볼 수 있지만 내용은 읽지 못합니다([신뢰 모델](docs/relay.md#trust-model)). 익명 사용 집계는 기본적으로 켜져 있으며, **Settings → About → Anonymous usage counts**에서 보내는 내용을 확인하고 끌 수 있습니다. `OVIS_TELEMETRY=0`으로도 끌 수 있습니다. [보내는 내용 →](docs/guide.md#anonymous-usage-counts)
 
 <a id="docs"></a>
 

@@ -3,6 +3,7 @@ import { connectionData, type createCore, type SocketData } from "./core/index.t
 import type { ClientConnectionLog } from "./client-connection-log.ts";
 import type { RequestLog } from "./request-log.ts";
 import { handlePaneRequest } from "./pane-routes.ts";
+import { CODEX_RESTART_PATH, handleCodexRestartRequest } from "./codex-restart.ts";
 import { handleIntegrationsRequest } from "./integrations-routes.ts";
 import type { OrderSequence } from "./order-sequence.ts";
 import type { DevicePairedEvent, HealthAuth, SecuritySummary, SessionSnapshot } from "../shared/protocol.ts";
@@ -221,7 +222,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   // a repository's checkouts are its folders' paths and branches, those not open in herdr too; the worktree
   // dialog that lists them is a drive feature, and the sidebar names a branch only for a driving device (#2250)
   const worktreeList = /^\/api\/(?:machines\/[^/]+\/)?worktree\/list$/.test(pathname);
-  if (readOnly && (fileRead || directoryListing || repositoryDiff || sessionHistory || commandRows || paneFiles || pluginRun || worktreeList || mutating && !ownPreferences)) {
+  if (readOnly && (fileRead || directoryListing || repositoryDiff || sessionHistory || commandRows || paneFiles || pluginRun || worktreeList || pathname.endsWith("/pane/codex-restart") || mutating && !ownPreferences)) {
     setRequestRoute("watch-refusal");
     return jsonResponse({ error: { code: "read_only", message: "this device can only watch" } }, 403);
   }
@@ -474,6 +475,11 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
 
   const pluginResponse = await handlePluginRequest(request, url, pathname, options);
   if (pluginResponse) return pluginResponse;
+
+  if (pathname === CODEX_RESTART_PATH) {
+    ctx.timeout(request, 160);
+    return handleCodexRestartRequest(request, url, options.codexHome);
+  }
 
   const paneResponse = await handlePaneRequest(request, url, pathname, options);
   if (paneResponse) return paneResponse;

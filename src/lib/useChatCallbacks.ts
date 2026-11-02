@@ -36,6 +36,8 @@ export function useChatCallbacks(deps: ChatCallbacksDeps) {
   }, []);
   // bumped as a composer message goes out: the chat must not title the turn before it as running
   const [chatSent, setChatSent] = useState(0);
+  // bumped as such a message is refused with nothing typed
+  const [chatUnsent, setChatUnsent] = useState(0);
   // What each pane's chat last read, and whether a message went out since: kept per pane here,
   // not in the chat, so a message sent ends the greeting at once and neither another lens, another
   // pane nor a failed read brings it back before the conversation shows a turn or a new history.
@@ -114,5 +116,5 @@ export function useChatCallbacks(deps: ChatCallbacksDeps) {
       && previous.value?.context?.window === value?.context?.window ? previous : { pane, value, source });
   }, []);
 
-  return { conversationPushes, setConversationPushes, onConversationWatch, chatOutputRef, onTerminalOutput, chatSent, setChatSent, redrawGreeting, onChatRead, greetingRoom, setGreetingRoom, greetingRef, chatPrompt, promptRefresh, setPromptRefresh, chatSuggestion, chatRestored, pendingAnswer, setPendingAnswer, promptDock, setPromptDock, onPromptAnswered, clearPendingAnswer, onChatPrompt, onChatMetadata, onChatSuggestion, onChatRestored };
+  return { conversationPushes, setConversationPushes, onConversationWatch, chatOutputRef, onTerminalOutput, chatSent, setChatSent, chatUnsent, setChatUnsent, redrawGreeting, onChatRead, greetingRoom, setGreetingRoom, greetingRef, chatPrompt, promptRefresh, setPromptRefresh, chatSuggestion, chatRestored, pendingAnswer, setPendingAnswer, promptDock, setPromptDock, onPromptAnswered, clearPendingAnswer, onChatPrompt, onChatMetadata, onChatSuggestion, onChatRestored };
 }

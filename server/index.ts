@@ -259,9 +259,11 @@ export function createServer(
   };
   const herdrKinds = new InstalledLookup({ onPath: (binary) => agentDetector.onPath(binary), inInstallFolder: installFolder, refresh: () => agentDetector.refreshPath() });
   const shellKinds = new InstalledLookup({ onPath: (kind) => shellAgents.executable(kind), inInstallFolder: installFolder, refresh: () => shellAgents.refresh() });
-  const agentOffered = (kind: string): Promise<boolean> => {
-    if (kind in SHELL_AGENTS) return shellKinds.has(kind);
+  const agentOffered = async (kind: string): Promise<boolean> => {
     const entry = AGENT_CATALOG.find((candidate) => candidate.id === kind);
+    // a program it needs to run (DeepSeek Harness's dsh behind dsh-tui) missing: not offered, as the catalog says
+    for (const needed of entry?.detect.needs ?? []) if (!(await herdrKinds.has(needed))) return false;
+    if (kind in SHELL_AGENTS) return shellKinds.has(kind);
     return herdrKinds.has(entry?.detect.binaries[0] ?? kind);
   };
   const agentInstaller = new AgentInstaller(agentDetector);

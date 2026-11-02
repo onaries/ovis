@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Bell, BellOff, ChevronDown, ChevronRight, Ellipsis, Pin, PinOff, Terminal } from "lucide-react";
 
 import type { Machine } from "../../shared/machines.ts";
@@ -18,6 +18,7 @@ import { useSidebarFilter } from "../lib/sidebarFilterContext.ts";
 import { useHiddenMachines } from "../lib/hiddenMachines.ts";
 import { currentSidebarPins, pruneSidebarPins, setSidebarPins, sidebarPinKey, subscribeSidebarPins, toggleSidebarPin } from "../lib/sidebarPins.ts";
 import { PANE_DRAG_TYPE, paneDragData } from "../lib/split.ts";
+import { PanePressContext } from "../lib/paneSubmitContext.ts";
 import { AgentMark, hasAgentMark } from "./AgentMark.tsx";
 import { RowMenu } from "./RowMenu.tsx";
 import { BackgroundBadge, displayPaneTitle, onRowContextMenu, PlanBadge, StatusBadge } from "./Sidebar.tsx";
@@ -119,6 +120,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   const listId = useId();
   const [collapsed, setCollapsed] = useState(initialFold);
   const { settings } = useSettings();
+  const pressPane = useContext(PanePressContext);
   // shared with the other browsers of this server (lib/preferencesSync.ts)
   const pinned = useSyncExternalStore(subscribeSidebarPins, currentSidebarPins, currentSidebarPins);
   // the panes whose alerts are off, shared the same way; null on a server that keeps no such list, which then offers no mute
@@ -218,6 +220,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
       onMouseDownCapture={(event) => { if (event.button === 2 || (event.button === 0 && event.ctrlKey)) event.preventDefault(); }}
       onContextMenu={(event) => onRowContextMenu(event, toggleMenu)}>
       <button type="button" className="agent-select agent-row" disabled={!online} aria-current={selected ? "true" : undefined} title={tooltip} onClick={() => onSelect(machine.id, pane.pane_id)}
+        onPointerDown={(event) => { if (event.button === 0 && !event.ctrlKey && online && !selected && pane.agent != null) pressPane?.(machine.id, pane.pane_id); }}
         draggable={online}
         // dropped on the pane area, the row opens its pane in half of it (lib/split.ts)
         onDragStart={(event) => {

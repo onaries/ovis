@@ -175,10 +175,21 @@ export function formatWorkDuration(startTs: string | null, endTs: string | null)
  * `working` before the transcript holds the new user message, so until it does, that finished turn
  * is still the last one and must not be titled as if it were the one running. The turn itself, not
  * its time: a turn may have no `ts`, and the browser's clock and the transcript's need not agree.
+ *
+ * A turn that ended on its final answer is over as well, with no send from here to say so: an agent
+ * at work again is in a turn the transcript does not hold yet (one it began by itself when a
+ * background task ended, or a message from the terminal or another device).
  */
 export function isLiveWorkTurn(turn: ConversationTurn, last: boolean, status?: string, sentOver?: ConversationTurn | null): boolean {
   if (turn === sentOver) return false;
+  if (status === "working" && endedOnAnswer(turn)) return false;
   return last && turn.role === "assistant" && (status === "working" || status === "blocked");
+}
+
+/** The turn's last part is its final answer: the agent ended the turn there. */
+export function endedOnAnswer(turn: ConversationTurn): boolean {
+  const end = turn.parts.at(-1);
+  return end?.kind === "text" && end.phase === "final_answer";
 }
 
 /**

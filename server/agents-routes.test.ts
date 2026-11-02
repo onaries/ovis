@@ -16,9 +16,9 @@ describe("GET /api/agents", () => {
   // installers' folders are looked up under this home, never the user's
   let emptyHome: string;
   const savedPath = process.env["PATH"];
-  // the shell-started agents this server finds: gjc here, omo not
+  // the shell-started agents this server finds: gjc and DeepSeek Harness's dsh-tui here, omo not
   const located: string[] = [];
-  const shellAgents = { executable: async (kind: string) => { located.push(kind); return kind === "gjc" ? "/opt/gjc/bin/gjc" : null; }, stop: async () => undefined } as unknown as ShellAgentLocator;
+  const shellAgents = { executable: async (kind: string) => { located.push(kind); return kind === "gjc" || kind === "dsh-tui" ? `/opt/${kind}/bin/${kind}` : null; }, stop: async () => undefined } as unknown as ShellAgentLocator;
   const manifests = spyOn(herdr, "agentManifests").mockImplementation(async () => ({ manifests: [{ agent: "codex" }, { agent: "pi" }, { agent: "someagent" }, { agent: "cmd" }, { agent: "copilot" }, { agent: "letta" }] }) as unknown as Awaited<ReturnType<typeof herdr.agentManifests>>);
   const url = (path: string) => `http://127.0.0.1:${server.port}${path}`;
 
@@ -61,7 +61,21 @@ describe("GET /api/agents", () => {
         { kind: "someagent", label: "someagent", installed: false },
       ],
     });
+    // dsh-tui is on the locator's PATH, but dsh, which it needs to run, is nowhere: not offered, and not looked for
     expect(located.sort()).toEqual(["gjc", "omo"]);
+  });
+
+  it("offers DeepSeek Harness as dsh-tui, by its label, once dsh, which it needs, is found too", async () => {
+    const found = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "", machines: false, sidecar: false, shellAgents,
+      agentDetector: new AgentDetector({ home: emptyHome, locate: async (binary) => binary === "dsh" ? "/home/someone/.local/bin/dsh" : null }) });
+    try {
+      process.env["PATH"] = bin;
+      const response = await fetch(`http://127.0.0.1:${found.port}/api/agents`);
+      const { agents } = await response.json() as { agents: { kind: string; label: string; installed: boolean }[] };
+      expect(agents.find((agent) => agent.kind === "dsh-tui")).toEqual({ kind: "dsh-tui", label: "DeepSeek Harness", installed: true });
+    } finally {
+      found.stop();
+    }
   });
 
   it("counts an agent the catalog finds on the login shell's PATH as installed, as the catalog does", async () => {

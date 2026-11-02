@@ -1939,6 +1939,12 @@ button {
   white-space: nowrap;
 }
 
+.context-title .sidebar-status,
+.pane-frame-title .sidebar-status,
+.pane-slot-bar > .sidebar-status {
+  --side-box: var(--space-4);
+}
+
 .context-sub {
   display: flex;
   align-items: center;
@@ -2995,7 +3001,9 @@ button {
   }
 
   .badge-working::before,
-  .conn-reconnecting .conn-dot {
+  .conn-reconnecting .conn-dot,
+  :is(.context-title, .pane-frame-title, .pane-slot-bar) .sidebar-status[data-status="working"] .sidebar-status-dot,
+  :is(.context-title, .pane-frame-title, .pane-slot-bar) .sidebar-status[data-status="working"] .sidebar-status-glyph {
     animation: none;
   }
 }

@@ -9,7 +9,7 @@
  * That menu also carries the open pane's actions, so a lone pane shows no ellipsis of its own.
  * A strip whose tabs do not fit scrolls sideways by touch, a trackpad or a mouse wheel.
  */
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Bot, Ellipsis, Folder, FolderInput, Pencil, Plus, Terminal, X } from "lucide-react";
 
 import "./TabStrip.css";
@@ -28,6 +28,7 @@ import { PANE_TABPANEL_ID, paneTabPanelLabel } from "../lib/paneRegion.ts";
 import { CRAMPED_QUERY, loneTabHidden, SOLO_PANE_QUERY } from "../lib/paneCanvas.ts";
 import { rosterPanes } from "../lib/dagPane.ts";
 import { useAppLayout, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
+import { PanePressContext } from "../lib/paneSubmitContext.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { useTabReorder } from "../lib/useTabReorder.ts";
 import { indicatorGlyph, paneStatus, rollupStatus, STATUS_WORD } from "../lib/status.ts";
@@ -69,6 +70,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
   const t = useT();
   const { settings } = useSettings();
   const machineId = useMachineId();
+  const pressPane = useContext(PanePressContext);
   const { closeTab, renameTab, moveTab } = useMachineApi();
   // the Herdr app's window owns this PC's tabs (lib/machineContext.tsx): no rename, no move, no other workspace
   const appLayout = useAppLayout();
@@ -473,7 +475,12 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
                   aria-controls={panePanel}
                   tabIndex={active ? 0 : -1}
                   title={own.length === 1 && own[0] ? displayPaneTitle(own[0]) : t("{n} panes", { n: own.length })}
-                  onPointerDown={(event) => reorder.onPointerDown(event, tab.tab_id)}
+                  onPointerDown={(event) => {
+                    reorder.onPointerDown(event, tab.tab_id);
+                    // the chat of the tab pressed starts reading before the click picks it
+                    const pane = event.button === 0 && !event.ctrlKey && !active ? paneFor(tab) : undefined;
+                    if (pane?.agent != null) pressPane?.(machineId, pane.pane_id);
+                  }}
                   onPointerMove={reorder.onPointerMove}
                   onPointerUp={reorder.onPointerUp}
                   onPointerCancel={reorder.cancelDrag}

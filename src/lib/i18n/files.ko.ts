@@ -7,10 +7,12 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const FILES_KO: Record<string, string> = {
+  "Preview": "미리보기",
   "No Git repositories found in this folder.": "이 폴더에서 Git 저장소를 찾지 못했습니다.",
   "Repository search was incomplete. Try a smaller folder or depth.": "일부 폴더의 저장소를 찾지 못했습니다. 더 작은 폴더나 얕은 깊이로 다시 시도하세요.",
   "Refresh repositories": "저장소 다시 찾기",
   "Repository": "저장소",
+  "Too large to open on the phone - download on the PC": "휴대폰에서 열기에는 너무 큽니다. PC에서 다운로드하세요.",
   "Show source": "소스 보기",
   "Resize file panel": "파일 패널 너비 조절",
   "Show beside the pane": "창 옆에 표시",

@@ -153,6 +153,8 @@ export type ParsedPrompt = InteractivePrompt & {
   piQuestionnaireInputRows?: string[];
   /** omp says it cut the question (server/omp-ask.ts): it fills the panel's four rows and the footer offers to expand it */
   ompQuestionCut?: true;
+  /** omp: the pane's one open ask call this card was read under (session and call id, omp-ask.ts), checked again before each key */
+  ompCall?: string;
   /** Claude's /effort: the state its Ultracode switch shows, null without one; checked before `s`, never sent */
   claudeUltracode?: boolean | null;
   menuLabels: string[];

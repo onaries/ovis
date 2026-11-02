@@ -24,10 +24,11 @@ export function useResourceUrlState(path: string | null, retry = 0): ResourceUrl
     const path = target.path;
     if (direct || path === null) return;
     let live = true;
+    const abort = new AbortController();
     let owned: string | null = null;
     const load = async (): Promise<void> => {
       try {
-        const url = await serverResourceUrl(path, target.transport);
+        const url = await serverResourceUrl(path, target.transport, abort.signal);
         if (url.startsWith("blob:")) {
           if (!live) { URL.revokeObjectURL(url); return; }
           owned = url;
@@ -39,7 +40,7 @@ export function useResourceUrlState(path: string | null, retry = 0): ResourceUrl
     };
     // Start effects, not render-time requests: StrictMode may discard a render or replay an effect.
     void load();
-    return () => { live = false; if (owned) URL.revokeObjectURL(owned); };
+    return () => { live = false; abort.abort(); if (owned) URL.revokeObjectURL(owned); };
   }, [target, direct]);
   if (direct) return { url: path, error: null };
   return resolved?.target === target ? resolved.state : { url: null, error: null };

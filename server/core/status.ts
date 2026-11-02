@@ -244,7 +244,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     omoPath: (paneId) => omo.pathOf(paneId),
     codexPath: async (pane) => {
       const home = await paneCodexHome(pane.pane_id, options.codexHome);
-      return await codexOpenRollout(pane.pane_id, pane.cwd, home) ?? (pane.cwd ? codexTranscriptPath(pane.pane_id, pane.cwd, home, undefined, false) : null);
+      return await codexOpenRollout(pane.pane_id, pane.cwd, home) ?? (pane.cwd ? codexTranscriptPath(pane.pane_id, pane.cwd, home, undefined, false, false) : null);
     },
     onChange: (paneId, summary) => planChanged(paneId, summary),
     onCodexTranscript: (paneId, path) => codexTasks.poll(paneId, path),

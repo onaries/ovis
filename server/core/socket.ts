@@ -6,7 +6,7 @@
 import type { WebSocketHandler } from "bun";
 import type { ClientMessage, ClientRole, ServerFeature, SessionSnapshot } from "../../shared/protocol.ts";
 import { ConnectionDiagnostics } from "../connection-diagnostics.ts";
-import { HerdrError } from "../herdr/client.ts";
+import { HerdrError, LARGE_REPLY_BYTES } from "../herdr/client.ts";
 import { OUTPUT_HARD_BYTES } from "../output-window.ts";
 import { type Client, connectionOf, presenceOf, send, type SocketData } from "./connections.ts";
 import { type AttachmentView, validGeometry } from "./terminals.ts";
@@ -29,12 +29,17 @@ export type SocketHandler = Omit<WebSocketHandler<SocketData>, "open" | "message
 /** The frames of the connection itself: its liveness, its watches and its role. */
 type ConnectionFrame = "ping" | "watch" | "unwatch" | "role";
 
-export function createSocket({ clients, present, stopped, admit, setRole, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, herdrLifetime, browserSnapshot, countVisit, drainOutput, frames }: {
+export function createSocket({ clients, present, stopped, admit, setRole, watchable, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, herdrLifetime, browserSnapshot, countVisit, drainOutput, frames }: {
   clients: Set<Client>;
   present: Set<Client>;
   stopped: () => boolean;
   admit: (client: Client) => boolean;
   setRole: (client: Client, mode: ClientRole) => void;
+  /**
+   * whether a watch can be drawn here: herdr-core has no view drawn for a viewer's grid (`hc attach
+   * --observe` streams a terminal at its own size, which a release hands to the Herdr app's window)
+   */
+  watchable: () => boolean;
   watchPane: (client: Client, paneId: string, geometry: { cols: number; rows: number }) => void;
   unwatchPane: (client: Client, paneId: string) => void;
   end: (client: Client, reason: "closed") => void;
@@ -69,6 +74,11 @@ export function createSocket({ clients, present, stopped, admit, setRole, watchP
         send(client, { type: "error", code: "invalid_geometry", message: "cols and rows must be integers in 1..1000" });
         return;
       }
+      // a pane the view cannot start for ends at once, before anything is spawned for it
+      if (!watchable()) {
+        send(client, { type: "watch-end", pane_id: message.pane_id });
+        return;
+      }
       watchPane(client, message.pane_id, geometry);
       return;
     },
@@ -100,8 +110,10 @@ export function createSocket({ clients, present, stopped, admit, setRole, watchP
   const handlers: FrameHandlers = { ...connectionFrames, ...frames };
 
   return {
-    // This transport cap also covers clients that predate application ACKs.
-    backpressureLimit: OUTPUT_HARD_BYTES,
+    // Only a last guard: send() holds each client to OUTPUT_HARD_BYTES itself, past which Bun would drop
+    // the next frame, and the queue may also hold one larger frame (connections.ts `backlog`): a snapshot,
+    // as large as herdr's largest reply (#2566).
+    backpressureLimit: OUTPUT_HARD_BYTES + LARGE_REPLY_BYTES,
     closeOnBackpressureLimit: true,
     drain(client) {
       drainOutput(client);
@@ -114,12 +126,14 @@ export function createSocket({ clients, present, stopped, admit, setRole, watchP
       // read fails): a client sends nothing until it knows what this server takes, and that needs no herdr.
       // The herdr it names lets a page that already knows that herdr send before the snapshot proves it
       const lifetime = herdrLifetime();
-      send(client, { type: "features", features: SERVER_FEATURES, connection: client.data.connectionId, ...(lifetime === undefined ? {} : { herdr_lifetime: lifetime }) });
+      // without "watch" a tab out of use stays attached or pauses, and a reconnect attaches at once
+      const features = watchable() ? SERVER_FEATURES : SERVER_FEATURES.filter((feature) => feature !== "watch");
+      send(client, { type: "features", features, connection: client.data.connectionId, ...(lifetime === undefined ? {} : { herdr_lifetime: lifetime }) });
       const snapshot = clientSnapshot();
       countVisit(snapshot, { surface: client.data.surface, ingress: client.data.ingress });
       try {
         const read = await snapshot;
-        send(client, { type: "snapshot", snapshot: client.data.bridge ? read : browserSnapshot(read), features: SERVER_FEATURES, connection: client.data.connectionId });
+        send(client, { type: "snapshot", snapshot: client.data.bridge ? read : browserSnapshot(read), features, connection: client.data.connectionId });
       } catch (error) {
         const code = error instanceof HerdrError ? error.code : "snapshot_failed";
         send(client, { type: "error", code, message: error instanceof Error ? error.message : String(error) });

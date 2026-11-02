@@ -144,6 +144,19 @@ describe("evidence-only command outcomes", () => {
     expect(outcome(send("/compact", "codex", [row("compact")]), { transcript: entry("compacted") }).state).toBe("accepted");
     expect(outcome(send("/context", "codex"), { transcript: local("/context") }).state).toBe("accepted");
   });
+  it("calls Claude's /compact done only once the compaction is recorded, not when its line is written at the start", () => {
+    const line = (entry: object, ms: number) => JSON.stringify({ ...entry, timestamp: new Date(at + ms).toISOString() });
+    // Claude Code 2.1: `/compact` as a user line when it starts; the boundary, the summary, its echo and output when it ends
+    const started = line({ type: "user", message: { role: "user", content: "/compact" } }, 10);
+    const ended = [started,
+      line({ type: "system", subtype: "compact_boundary", content: "Conversation compacted" }, 40_000),
+      line({ type: "user", isCompactSummary: true, message: { role: "user", content: "This session is being continued from a previous conversation." } }, 40_000),
+      line({ type: "user", message: { role: "user", content: "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>" } }, 10),
+      line({ type: "user", message: { role: "user", content: "<local-command-stdout>Compacted</local-command-stdout>" } }, 40_001)].join("\n");
+    const sent = send("/compact", "claude", [row("compact")]);
+    expect(outcome(sent, { now: at + 2_000, transcript: started }).state).toBe("accepted");
+    expect(outcome(sent, { now: at + 41_000, transcript: ended })).toMatchObject({ state: "result-observed", evidence: [{ kind: "transcript", at: new Date(at + 40_000).toISOString() }] });
+  });
 });
 
 it("serves bounded outcomes, strips observer previews, and records only a successful card commit", async () => {

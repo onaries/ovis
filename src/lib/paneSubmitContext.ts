@@ -13,3 +13,5 @@ export const PaneShownContext = createContext(true);
 /** true in the split half that is not active while both halves draw one tab: the active half sizes the
  *  pty, and this half draws its screen at that grid instead of taking it (lib/split.ts) */
 export const PaneFollowContext = createContext(false);
+/** App's chat prefetch for a press on an agent pane's tab or sidebar row (usePaneLens pressPane); null outside App */
+export const PanePressContext = createContext<((machineId: string, paneId: string) => void) | null>(null);

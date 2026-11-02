@@ -216,6 +216,11 @@ function transcriptEvidence(sent: CommandSend, records: readonly CommandTranscri
     const message = object(entry.message);
     const evidence = { offset, at: time };
     if (sent.agent === "claude") {
+      // Claude Code writes /compact as a user line when it starts; the fold it made, the boundary, is its result
+      if (/^\/compact(?:\s|$)/u.test(normalize(sent.text))) {
+        if (entry.type === "system" && entry.subtype === "compact_boundary" && !used.has(offset)) return evidence;
+        continue;
+      }
       const local = entry.type === "system" && entry.subtype === "local_command";
       if ((entry.type === "user" && !entry.isMeta) || local) {
         const content = local ? entry.content : message.content;

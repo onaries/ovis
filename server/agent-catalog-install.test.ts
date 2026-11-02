@@ -247,6 +247,16 @@ describe("POST /api/agent-catalog/install and /sign-in", () => {
     expect([missing!.status, ((await missing!.json()) as { error: { code: string } }).error.code]).toEqual([409, "not_installed"]);
   });
 
+  it("signs in to DeepSeek Harness by starting dsh-tui itself, and only once dsh, which it needs, is there too", async () => {
+    const response = await new AgentInstaller(found, "linux").handle(post("/api/agent-catalog/sign-in", { agent: "dsh-tui" }), "/api/agent-catalog/sign-in");
+    expect(await response!.json()).toMatchObject({ command: "'/opt/agents/dsh-tui'" });
+    const tuiOnly = new AgentDetector({ locate: async (binary) => binary === "dsh-tui" ? "/opt/agents/dsh-tui" : null, home: "/nonexistent", env: {} });
+    tab.mockClear();
+    const missing = await new AgentInstaller(tuiOnly, "linux").handle(post("/api/agent-catalog/sign-in", { agent: "dsh-tui" }), "/api/agent-catalog/sign-in");
+    expect([missing!.status, ((await missing!.json()) as { error: { code: string } }).error.code]).toEqual([409, "not_installed"]);
+    expect(tab).not.toHaveBeenCalled();
+  });
+
   describe("through the server", () => {
     let server: ReturnType<typeof createServer>;
     let root: string;

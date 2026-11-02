@@ -40,7 +40,7 @@ export interface Transport {
   openSocket(url: string): WebSocketLike;
   openEventSource(url: string): EventSourceLike;
   /** The address the browser loads a server path from (an <img>, a <video>, a download link). */
-  resourceUrl(path: string): string | Promise<string>;
+  resourceUrl(path: string, signal?: AbortSignal): string | Promise<string>;
 }
 
 export const nativeTransport: Transport = {
@@ -63,6 +63,6 @@ export function setTransport(transport: Transport): void {
 }
 
 /** A server path (`/api/…`) as the transport loads it; data:, blob: and other addresses stay as they are. */
-export function serverResourceUrl(path: string, transport: Transport = current): string | Promise<string> {
-  return path.startsWith("/api/") ? transport.resourceUrl(path) : path;
+export function serverResourceUrl(path: string, transport: Transport = current, signal?: AbortSignal): string | Promise<string> {
+  return path.startsWith("/api/") ? transport.resourceUrl(path, signal) : path;
 }

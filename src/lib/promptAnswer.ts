@@ -10,8 +10,8 @@ import { CONFUSABLES_DATA } from "./confusables.generated.ts";
 import { t } from "./i18n.ts";
 import { optionName, promptWords } from "./promptText.ts";
 
-/** The agents whose own keys move between a form's questions (pi's tabs, Claude Code's question tabs, omo's Tab, Codex's ←/→, Hermes's Tab): a move carries none of the card's edits. */
-const KEYED_STEPS = new Set(["pi", "claude", "omo", "codex", "hermes"]);
+/** The agents whose own keys move between a form's questions (pi's tabs, Claude Code's question tabs, omo's Tab, omp's Tab, Codex's ←/→, Hermes's Tab): a move carries none of the card's edits. */
+const KEYED_STEPS = new Set(["pi", "claude", "omo", "omp", "codex", "hermes"]);
 
 export type TypedAnswer = Pick<PromptAnswer, "option_index" | "option_indices" | "custom_text">;
 

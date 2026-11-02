@@ -1,9 +1,9 @@
 /**
  * Simplified Chinese for the keys only the devices files use:
- * components/DevicesPanel.tsx (with VIA), components/PhonePanel.tsx, components/PortalPanel.tsx,
- * components/PortalAuth.tsx, components/PortalInvite.tsx, components/PushTestControls.tsx,
- * components/AccessGate.tsx, components/LanExposureNotice.tsx, lib/install.ts, lib/portalAuth.ts,
- * and shared/portal.ts (PORTAL_AUTH_PROBLEMS).
+ * components/DevicesPanel.tsx (with VIA), components/ConnectPhoneDialog.tsx, components/PhonePanel.tsx, components/PortalPanel.tsx,
+ * components/PortalAuth.tsx, components/PortalInvite.tsx, components/RelayPanel.tsx,
+ * components/PushTestControls.tsx, components/AccessGate.tsx, components/LanExposureNotice.tsx,
+ * lib/install.ts, lib/portalAuth.ts, and shared/portal.ts (PORTAL_AUTH_PROBLEMS).
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const DEVICES_ZH: Record<string, string> = {
@@ -153,4 +153,36 @@ export const DEVICES_ZH: Record<string, string> = {
   "Allow notifications to test alerts on this device.": "请允许通知，以便在此设备上测试提醒。",
   "Could not send the test notification. Try again.": "无法发送测试通知。请重试。",
   "The last alert did not reach this device; the next one is tried as usual. Send a test to check.": "上一条提醒未能送达此设备；下一条会照常发送。请发送测试以确认。",
+  "Use Ovis from your phone anywhere, without Tailscale. Traffic is end-to-end encrypted; the relay sees only when and how much.": "无需 Tailscale，随时随地在手机上使用 Ovis。流量端到端加密；中继只能看到何时传输以及传输了多少。",
+  "Ovis relay": "Ovis 中继",
+  "Only the PC's owner can control the relay, using a direct connection. Open Ovis on the PC or at its direct address.": "只有 PC 所有者通过直接连接才能控制中继。请在 PC 上打开 Ovis，或访问 PC 的直接地址。",
+  "Reset relay identity": "重置中继身份",
+  "Reset": "重置",
+  "Reset the relay identity?": "要重置中继身份吗？",
+  "Phones paired through the relay will need to scan a new code.": "通过中继配对的手机需要重新扫描新代码。",
+  "Blocked: OVIS_TAILSCALE_SERVE_ONLY says tailscale serve is the only way in. Unset it on this PC and restart the app.": "已阻止：OVIS_TAILSCALE_SERVE_ONLY 规定 tailscale serve 是唯一的访问途径。请在此 PC 上取消它并重启应用。",
+  "Blocked: this PC's relay identity cannot be read. Reset it in Connect a phone to use the relay again.": "已阻止：无法读取此电脑的中继身份。在“连接手机”中重置后即可再次使用中继。",
+  "Off. Nothing goes through the relay.": "已关闭。没有流量经过中继。",
+  "Online. No phone connected.": "在线。没有已连接的手机。",
+  "Online. 1 phone connected.": "在线。已连接 1 部手机。",
+  "Online. {n} phones connected.": "在线。已连接 {n} 部手机。",
+  "Error: {message}": "错误：{message}",
+  "Could not reach the relay.": "无法连接中继。",
+  "The relay did not start: {message}": "中继未能启动：{message}",
+  "QR code that pairs a phone through the relay": "通过中继配对手机的二维码",
+  "Scan it with the phone's camera": "用手机相机扫描",
+  "It opens Ovis on the phone and pairs it with this PC.": "手机上会打开 Ovis 并与此 PC 配对。",
+  "This code expired.": "此代码已过期。",
+  "Getting a code…": "正在获取代码…",
+  "This is a paired device, reaching the PC through the Ovis relay.": "这是通过 Ovis 中继访问 PC 的已配对设备。",
+  "via relay": "经由中继",
+  "How the phone connects": "手机的连接方式",
+  "How it works": "工作原理",
+  "From anywhere. Nothing to install.": "随处可用，无需安装。",
+  "With the Tailscale app on the phone.": "通过手机上的 Tailscale 应用连接。",
+  "At this page's HTTPS address.": "通过本页的 HTTPS 地址连接。",
+  "On the same Wi-Fi, or through a tunnel.": "在同一 Wi-Fi 下，或通过隧道连接。",
+  "Turning on the relay closes the device gate: a new browser then needs a pairing code or the access token.": "开启中继后将关闭设备门槛：此后新的浏览器需要配对码或访问令牌。",
+  "For a phone that can already open this address: on the same Wi-Fi, or through a tunnel or proxy.": "适用于已能打开此地址的手机：在同一 Wi-Fi 下，或经由隧道或代理。",
+  "Get a pairing code": "获取配对码",
 };

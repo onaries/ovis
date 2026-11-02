@@ -55,7 +55,8 @@ export function draftKept(prompt: ParsedPrompt, draft: PromptAnswer["draft"]): b
  */
 export async function navigateNativeSteps(initial: ParsedPrompt, target: number, io: {
   read(): Promise<ParsedPrompt | null>;
-  send(key: string): Promise<void>;
+  /** sends the key once the read right before it still shows `from`, the stop it moves from */
+  send(key: string, from: (shown: ParsedPrompt) => boolean): Promise<void>;
   active(): boolean;
   deadline: number;
 }): Promise<ParsedPrompt | null> {
@@ -68,7 +69,10 @@ export async function navigateNativeSteps(initial: ParsedPrompt, target: number,
     if (!before || before.nativeSteps?.identity !== form.identity || before.nativeSteps.index !== index
       || before.id !== previous.id || !io.active()) return null;
     const direction = target > index ? 1 : -1;
-    await io.send(direction === 1 ? form.next : form.previous);
+    const at = index;
+    const from = previous;
+    await io.send(direction === 1 ? form.next : form.previous,
+      (shown) => shown.nativeSteps?.identity === form.identity && shown.nativeSteps.index === at && shown.id === from.id && io.active());
     const expected = index + direction;
     let moved = false;
     while (io.active() && Date.now() < io.deadline) {
@@ -82,6 +86,9 @@ export async function navigateNativeSteps(initial: ParsedPrompt, target: number,
       }
       // the stop it left, still drawn, waits; another form or another stop ends the move
       if (shown && steps !== undefined && (steps.identity !== form.identity || steps.index !== index || shown.id !== previous.id)) return null;
+      // omp's strip unbound by what cannot be a frame half drawn: another call bound, or other labels on the strip
+      if (shown && steps === undefined && shown.agent === "omp" && ((shown.ompCall !== undefined && shown.ompCall !== initial.ompCall)
+        || (shown.steps !== undefined && JSON.stringify(shown.steps.map(step => step.label)) !== JSON.stringify(initial.steps?.map(step => step.label))))) return null;
       await Bun.sleep(Math.min(50, Math.max(0, io.deadline - Date.now())));
     }
     if (!moved) return null;

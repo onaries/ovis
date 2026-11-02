@@ -47,6 +47,11 @@ export const BUFFER_FRAMES = 200;
 export const BUFFER_BYTES = 1024 * 1024;
 /** a client the PC has not answered (its data socket sent nothing yet) is closed this long after the PC could have */
 export const HANDSHAKE_MS = 15_000;
+/**
+ * a client waiting while no PC is connected is closed this long after it arrived or the PC left,
+ * keepalives or not; the app itself gives up after 15 s (src/lib/relay/channel.ts PC_ANSWER_MS)
+ */
+export const OFFLINE_WAIT_MS = 30_000;
 /** a socket that sends nothing (keepalive pings included) for this long is closed */
 export const IDLE_MS = 120_000;
 /**
@@ -68,7 +73,7 @@ export const CLOSE = {
   TOO_BIG: 1009,
   /** the PC's data socket went away (to its client), or the relay lost frames it held */
   RESTART: 1012,
-  /** a limit: too many clients, too many waiting, too much held before the PC attached, or no answer from the PC in time */
+  /** a limit: too many clients, too many waiting, too much held before the PC attached, no answer from the PC in time, or no PC connected in time */
   TRY_AGAIN: 1013,
   /** a PC socket without a valid answer to its challenge: no key, a key that is not this server_id's, a wrong or late answer */
   SERVER_PROOF: SERVER_PROOF_CLOSE,
@@ -87,7 +92,7 @@ export interface SocketInfo {
   buffered: boolean;
   /** a client the PC has answered (its data socket sent a frame): it holds one of MAX_CLIENTS */
   answered?: true;
-  /** a client not answered yet: when it is closed unless the PC answers first (none while no PC is connected) */
+  /** a client not answered yet: when it is closed unless the PC answers first (or, while no PC is connected, unless one connects) */
   deadline?: number;
   /** a client: when it arrived, so the oldest one not answered gives way to a newcomer */
   arrived?: number;
@@ -281,8 +286,8 @@ export class Room<S extends object> {
     const info: SocketInfo = { role: "client", connection_id: connectionId, seen: now, buffered: false, arrived: now };
     this.host.setInfo(socket, info);
     this.lastSeen.set(socket, now);
-    // with a PC connected, the client must be answered in time; without one it waits for the PC
-    if (peers.some((peer) => peer.info.role === "control")) this.setDeadline(socket, info, now + HANDSHAKE_MS);
+    // with a PC connected, the client must be answered in time; without one it waits a while for the PC
+    this.setDeadline(socket, info, now + (peers.some((peer) => peer.info.role === "control") ? HANDSHAKE_MS : OFFLINE_WAIT_MS));
     this.host.send(socket, JSON.stringify({ type: "assigned", connection_id: connectionId }));
     this.tellControls({ type: "connected", connection_id: connectionId });
   }
@@ -378,15 +383,15 @@ export class Room<S extends object> {
     if (client) this.end(client.socket, CLOSE.RESTART, "server gone");
   }
 
-  /** No PC is connected any more: clients waiting for a data socket wait for the PC again, without a deadline. */
+  /** No PC is connected any more: clients waiting for a data socket wait OFFLINE_WAIT_MS for the PC to come back. */
   private pauseWaiting(): void {
     const peers = this.peers();
     if (peers.some((peer) => peer.info.role === "control")) return;
+    const at = this.host.now() + OFFLINE_WAIT_MS;
     for (const peer of peers) {
-      if (peer.info.role !== "client" || peer.info.deadline === undefined) continue;
+      if (peer.info.role !== "client" || peer.info.answered) continue;
       if (peers.some((other) => other.info.role === "data" && other.info.connection_id === peer.info.connection_id)) continue;
-      const { deadline: _deadline, ...rest } = peer.info;
-      this.host.setInfo(peer.socket, rest);
+      this.setDeadline(peer.socket, peer.info, at);
     }
   }
 
@@ -400,7 +405,7 @@ export class Room<S extends object> {
       const due = peer.info.proof?.expires ?? peer.info.deadline;
       if (due !== undefined && now >= due) {
         if (peer.info.proof) this.end(peer.socket, CLOSE.SERVER_PROOF, "server proof timed out");
-        else this.end(peer.socket, CLOSE.TRY_AGAIN, "the server did not answer in time");
+        else this.end(peer.socket, CLOSE.TRY_AGAIN, this.peers().some((other) => other.info.role === "control") ? "the server did not answer in time" : "the server is not connected");
         continue;
       }
       // without this instance's exact time (a Durable Object evicted since), the saved one may lag

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { DevicePairedEvent, Machine, MachineEvent } from "../../shared/machines.ts";
-import { ApiError, authenticate, fetchMachines, verifySourceBoot } from "./api.ts";
+import { ApiError, authenticate, fetchMachines, observePaneSessions, paneSessionEvents, paneSessionsMoving, verifySourceBoot } from "./api.ts";
 import { passingFolder, recentDirectories } from "./recent-directories.ts";
 import { keepEventStream } from "./eventStream.ts";
 import { receiveSeen } from "./seenFinishes.ts";
@@ -88,10 +88,14 @@ export function useRosterLoader({ rosterIn, setMachines, setMachineRosterLoaded,
   const [reorderCoordinator] = useState(() => new ReorderCoordinator({ verify: verifySourceBoot, onSettled: () => void loadRef.current() }));
   const load = useCallback(async () => {
     const started = reorderCoordinator.loadStarted();
+    // the PC events this read starts after: a roster read later names its panes' sessions as they are now
+    const readAfter = paneSessionEvents();
     try {
       await snapshotRequests.current.read(fetchMachines, (next) => {
         // a PC whose herdr was replaced leaves its panes' drafts and lenses before they are drawn
         paneLifetimes.observe(next, displayPaneTitle);
+        // a pane's conversation answers stand for the session it was on: the chats read this roster's
+        observePaneSessions(next, readAfter);
         reorderCoordinator.roster(next, { kind: "load", started });
         setMachines((previous) => sameData(previous, next) ? previous : next);
         rosterIn();
@@ -199,6 +203,7 @@ export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequest
       snapshotRequests.current.invalidate();
       if (payload.type === "machines") {
         paneLifetimes.observe(payload.machines, displayPaneTitle);
+        observePaneSessions(payload.machines);
         onRoster(payload.machines);
         reorderCoordinator.roster(payload.machines, { kind: "event" });
         setMachines((previous) => sameData(previous, payload.machines) ? previous : payload.machines);
@@ -240,7 +245,11 @@ export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequest
         setNotificationViewTarget(null); setTerminalPeek(null);
         setAutoSelected(true);
       }
-      if (message.type === "session-changed" || message.type === "pane-exited") scheduleRefetch();
+      if (message.type === "session-changed" || message.type === "pane-exited") {
+        // until the roster after it comes, the panes' sessions are not known: no press read of the old one is taken
+        paneSessionsMoving(machine.id);
+        scheduleRefetch();
+      }
     };
     return keepEventStream("/api/machines/events", {
       // opened or reopened: a shared-settings save paused by failures gets a new round

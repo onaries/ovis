@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import { SERVER_PROOF_CLOSE, SERVER_PROOF_MS } from "../shared/relay-server-proof.ts";
-import { CLOSE, HANDSHAKE_MS, IDLE_MS, KEEPALIVE_PING, KEEPALIVE_PONG, MAX_CLIENTS, MAX_PENDING, MAX_PROVING, type Frame } from "./core.ts";
+import { CLOSE, HANDSHAKE_MS, IDLE_MS, KEEPALIVE_PING, KEEPALIVE_PONG, MAX_CLIENTS, MAX_PENDING, MAX_PROVING, OFFLINE_WAIT_MS, type Frame } from "./core.ts";
 import { answerChallenge, newServer, type TestServer } from "./relay-test-client.ts";
 import { RelayRoom, handle, type Env, type HibernatableSocket, type RelayState } from "./worker.ts";
 
@@ -186,6 +186,30 @@ describe("relay Durable Object", () => {
     expect(two.client.closedWith?.code).toBe(CLOSE.RESTART);
   });
 
+  for (const target of ["client", "data"] as const) {
+    test(`a failed send to ${target} ends the pair without a runtime close event`, async () => {
+      const fake = fakeState();
+      const room = new RelayRoom(fake.state);
+      const control = await connectServer(room, fake);
+      const pair = await connectPair(room, fake);
+      const other = await connectPair(room, fake);
+      pair[target].send = () => { throw new Error("transport unavailable"); };
+      room.webSocketMessage(pair[target === "client" ? "data" : "client"], "ciphertext");
+      await Promise.resolve();
+      expect(pair[target].closedWith?.code).toBe(CLOSE.RESTART);
+      expect(pair[target === "client" ? "data" : "client"].closedWith?.code)
+        .toBe(target === "client" ? CLOSE.GOING_AWAY : CLOSE.RESTART);
+      expect(control.json(control.sent.length - 1)).toEqual({ type: "disconnected", connection_id: pair.connection_id });
+      const notifications = control.sent.length;
+      room.webSocketClose(pair.client);
+      room.webSocketError(pair.data);
+      expect(control.sent).toHaveLength(notifications);
+      room.webSocketMessage(other.client, "still connected");
+      expect(other.data.sent.at(-1)).toBe("still connected");
+      expect(control.closedWith).toBeNull();
+    });
+  }
+
   test("an alarm closes sockets idle for 120 s; a PC kept alive by the runtime's keepalive stays", async () => {
     const start = new Date("2026-10-29T12:00:00Z");
     setSystemTime(start);
@@ -353,25 +377,44 @@ describe("relay admission", () => {
     expect(phone.client.closedWith).toBeNull();
   });
 
-  test("slots: a waiting client's deadline pauses while the PC is gone and starts again in full when it is back", async () => {
+  test(`slots: while the PC is gone a waiting client waits up to ${OFFLINE_WAIT_MS / 1000} s, and a PC back in time gives it the full ${HANDSHAKE_MS / 1000} s again`, async () => {
     setSystemTime(new Date(1_000_000));
     const fake = fakeState();
     let room = new RelayRoom(fake.state);
     const control = await connectServer(room, fake);
     const waiting = await connect(room, fake, "role=client");
     closeFromFar(room, control);
-    // evicted while the PC is away: the pause is kept with the socket
+    // evicted while the PC is away: the offline deadline is kept with the socket
     room = new RelayRoom(fake.state);
-    setSystemTime(new Date(1_000_000 + 2 * HANDSHAKE_MS));
+    setSystemTime(new Date(1_000_000 + OFFLINE_WAIT_MS - 1));
     await room.alarm();
     expect(waiting.closedWith).toBeNull();
     await connectServer(room, fake);
-    setSystemTime(new Date(1_000_000 + 3 * HANDSHAKE_MS - 1));
+    const back = 1_000_000 + OFFLINE_WAIT_MS - 1;
+    setSystemTime(new Date(back + HANDSHAKE_MS - 1));
     await room.alarm();
     expect(waiting.closedWith).toBeNull();
-    setSystemTime(new Date(1_000_000 + 3 * HANDSHAKE_MS));
+    setSystemTime(new Date(back + HANDSHAKE_MS));
     await room.alarm();
     expect(waiting.closedWith?.code).toBe(CLOSE.TRY_AGAIN);
+  });
+
+  test(`slots: a client waiting for a PC that is not connected is closed 1013 after ${OFFLINE_WAIT_MS / 1000} s, keepalives or not`, async () => {
+    setSystemTime(new Date(1_000_000));
+    const fake = fakeState();
+    let room = new RelayRoom(fake.state);
+    const waiting = await connect(room, fake, "role=client");
+    expect(fake.state.alarm).toBe(1_000_000 + OFFLINE_WAIT_MS);
+    setSystemTime(new Date(1_000_000 + OFFLINE_WAIT_MS - 1));
+    room.webSocketMessage(waiting, KEEPALIVE_PING);
+    fake.keepalive.set(waiting, new Date());
+    // an eviction keeps the deadline with the socket
+    room = new RelayRoom(fake.state);
+    await room.alarm();
+    expect(waiting.closedWith).toBeNull();
+    setSystemTime(new Date(1_000_000 + OFFLINE_WAIT_MS));
+    await room.alarm();
+    expect(waiting.closedWith).toEqual({ code: CLOSE.TRY_AGAIN, reason: "the server is not connected" });
   });
 
   test(`at most ${MAX_PROVING} PC sockets wait on their challenge; the oldest gives way, and the PC still proves after a burst`, async () => {
@@ -394,13 +437,17 @@ describe("relay admission", () => {
     const fake = fakeState();
     const room = new RelayRoom(fake.state);
     const waiting = await connect(room, fake, "role=client");
-    setSystemTime(new Date(1_000_000 + 2 * HANDSHAKE_MS));
+    setSystemTime(new Date(1_000_000 + OFFLINE_WAIT_MS - 1));
     await room.alarm();
     expect(waiting.closedWith).toBeNull();
     await connectServer(room, fake);
-    setSystemTime(new Date(1_000_000 + 3 * HANDSHAKE_MS));
+    // the PC's arrival replaces the offline deadline with its own, which runs past it
+    setSystemTime(new Date(1_000_000 + OFFLINE_WAIT_MS));
     await room.alarm();
-    expect(waiting.closedWith?.code).toBe(CLOSE.TRY_AGAIN);
+    expect(waiting.closedWith).toBeNull();
+    setSystemTime(new Date(1_000_000 + OFFLINE_WAIT_MS - 1 + HANDSHAKE_MS));
+    await room.alarm();
+    expect(waiting.closedWith).toEqual({ code: CLOSE.TRY_AGAIN, reason: "the server did not answer in time" });
   });
 
   test("a client whose held frames an evicted instance took is closed 1012 on its next frame, and the loss is counted", async () => {

@@ -61,25 +61,21 @@ describe("usePaneCommands after a failed read", () => {
     expect(seen).toEqual([]);
   });
 
-  it("keeps the newer list when a retry and a refresh answer out of order", async () => {
-    const oldList: SlashCommand[] = [{ ...config, name: "old-list" }];
+  it("lets a retry join the refresh read already on its way, and keeps that read's list", async () => {
     const newList: SlashCommand[] = [{ ...config, name: "new-list" }];
     down = true;
     await act(async () => { renderer = create(createElement(Probe, { pane: "w-retry:p3" })); });
     await settle(() => fetchSpy.mock.calls.length >= 1);
-    // the failed read's retry is pending; a catalog change starts a read, then the retry starts another
+    // the failed read's retry is pending; a catalog change starts a read, then the retry joins it
     down = false; held = [];
     const answers = held;
     await act(async () => { invalidatePaneCommands("w-retry:p3", "local"); });
     await settle(() => answers.length >= 1);
     await act(async () => { jest.advanceTimersByTime(2_000); });
-    await settle(() => answers.length >= 2);
-    expect(answers).toHaveLength(2);
-    // the later read answers first with the newer list, the earlier one after it with the older list
-    answers[1]!(newList);
-    await settle(() => seen[0]?.name === "new-list");
-    answers[0]!(oldList);
     await settle(() => false);
+    expect(answers).toHaveLength(1);
+    answers[0]!(newList);
+    await settle(() => seen[0]?.name === "new-list");
     held = null;
     await act(async () => { renderer?.unmount(); });
     const calls = fetchSpy.mock.calls.length;

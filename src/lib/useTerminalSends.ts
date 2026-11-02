@@ -50,6 +50,7 @@ export interface TerminalSendsDeps {
   sessionRef: RefObject<MachineSession | null>;
   setChatRefresh: Dispatch<SetStateAction<number>>;
   setChatSent: Dispatch<SetStateAction<number>>;
+  setChatUnsent: Dispatch<SetStateAction<number>>;
   setDraft: (value: InputDraft | ((previous: InputDraft) => InputDraft)) => void;
   showSentCommand: (pane: string, text: string, known: readonly string[] | null, seen: boolean) => void;
   socketRef: RefObject<HerdrSocket | null>;
@@ -62,7 +63,7 @@ export interface TerminalSendsDeps {
 }
 
 export function useTerminalSends(deps: TerminalSendsDeps) {
-  const { activeRef, agent, cancelTouchRef, chatView, coarse, composingRef, directTyping, draft, draftHeldForRef, heldRef, hostRef, inputLine, inputRowNow, keyboardOwnerRef, keyboardToggleFocusRef, knownOutcomes, lineComposingRef, lineFocus, machineId, modifiersRef, onChatSuggestion, paneId, paneRef, pendingEpochRef, pendingSubmissionsRef, reassertIfStaleRef, redrawGreeting, releaseRef, secretRef, sessionRef, setChatRefresh, setChatSent, setDraft, showSentCommand, socketRef, stillOpenNote, stillOpenRef, submitRetention, tRef, termRef, updateSettings } = deps;
+  const { activeRef, agent, cancelTouchRef, chatView, coarse, composingRef, directTyping, draft, draftHeldForRef, heldRef, hostRef, inputLine, inputRowNow, keyboardOwnerRef, keyboardToggleFocusRef, knownOutcomes, lineComposingRef, lineFocus, machineId, modifiersRef, onChatSuggestion, paneId, paneRef, pendingEpochRef, pendingSubmissionsRef, reassertIfStaleRef, redrawGreeting, releaseRef, secretRef, sessionRef, setChatRefresh, setChatSent, setChatUnsent, setDraft, showSentCommand, socketRef, stillOpenNote, stillOpenRef, submitRetention, tRef, termRef, updateSettings } = deps;
   const sendDraft = useCallback(() => {
     const socket = socketRef.current;
     const pane = paneRef.current;
@@ -109,6 +110,8 @@ export function useTerminalSends(deps: TerminalSendsDeps) {
       const typed = result.ok ? result.pending === undefined : !submitNotTyped(result.code);
       if (delivery === "immediate") {
         rememberGreeting(owner, afterSettled(greetingMemory(owner), typed, history)); redrawGreeting();
+        // its setChatSent above had the chat hide a stopped turn as sent over: nothing was
+        if (!typed && paneRef.current === pane) setChatUnsent((current) => current + 1);
       } else if (typed) {
         rememberGreeting(owner, afterSettled(afterSend(greetingMemory(owner)), true, history)); redrawGreeting();
       }

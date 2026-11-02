@@ -1,5 +1,24 @@
 # Ovis Design System
 
+## Pane title activity
+
+The selected pane header and split pane titles reuse the sidebar's compact status indicator,
+with the same colours, status setting and accessible name. Working breathes; reduced motion
+keeps the title indicator still. Long titles shorten before the indicator, and a shell without
+an agent gets no status badge. This follows [Zed's parallel agent title indicators](https://zed.dev/docs/ai/parallel-agents)
+and [Paseo's shared activity dot](https://github.com/getpaseo/paseo/blob/main/docs/terminal-activity.md),
+using Ovis's existing component rather than a second status vocabulary.
+
+## Codex restart
+
+The pane menu offers **Restart Codex** for a driving device's Codex pane, including the phone's
+tab menu. It uses the existing confirmation dialog, Cancel first, and disables confirmation
+while the bridge identifies the current process and conversation. Errors stay in that dialog.
+The warning names interrupted work and unsent terminal input; no prompt is submitted on restart.
+This follows [Paseo's lifecycle](https://github.com/getpaseo/paseo/blob/main/docs/agent-lifecycle.md):
+release the old runtime before reopening the durable conversation. Ovis keeps the original pane,
+terminal and Chat view, and refuses an uncertain identity instead of choosing another session.
+
 Agent rows use the existing workspace/header title policy: a user label first, then the live
 terminal title, with roster titles retained when no live title exists. This follows the Codex
 TUI's current thread name; no additional naming surface is drawn. A roster title echoed as the
@@ -8,7 +27,7 @@ agent's display label is not repeated as a kind, while distinct plugin informati
 ## Codex capacity and code-mode command feedback
 
 Codex's queued follow-ups follow its TUI's own queue preview, placed at the end of chat and
-labelled as a preview. Only the live screen is read, so text clipped by the TUI remains clipped;
+labelled only "Queued messages". Only the live screen is read, so text clipped by the TUI remains clipped;
 the list disappears when that screen no longer confirms it. Ovis-held messages keep their own
 composer controls, and the preview has no actions that might change the native queue.
 
@@ -818,7 +837,7 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--mark-size` | `22px` | — | Brand mark |
 | `--avatar-size` | `32px` | `26px` | Command-palette mark box |
 | `--dot-size` | `7px` | — | Connection dot |
-| `--rail-w` | `3px` | — | Device and quoted-content rails |
+| `--rail-w` | `3px` | — | Quoted-content rails |
 | `--hairline` | `1px` | — | Borders |
 | `--content-w` | `820px` | — | Settings and dialog content |
 | `--pending-max-h` | `min(20dvh, 12rem)` | — | Pending-message stack ceiling |
@@ -1761,7 +1780,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   watches the three hidden ones; a phone (a coarse pointer or a viewport up to 768px) only the tab
   before the current one, to save its battery, and its older tabs show their last screen until the
   attach, as before. It cannot take input, focus or the clipboard (OSC 52).
-  Leaving the window or eviction stops the view, and coming back to the window starts it again;
+  Leaving the window, hiding the page or eviction stops the view, and coming back starts it again;
+  a hidden page attaches afresh instead of parsing a view queued while it could not draw.
   **Use alongside herdr's own window** stops it at the next of those. A reconnect resumes the views
   the connection had, never a hidden attach. This follows Zed's multiple
   terminal tabs (https://zed.dev/docs/terminal), with a bounded browser cache rather than
@@ -2307,7 +2327,14 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   row again: `--text-dim`, `--fs-sm`. A run before the head has the agent's words after it, so it
   is settled while the turn still runs, and its narration is quiet already.
 - Only the running turn's head block is open (working or blocked); the runs before it fold as a
-  settled turn's do. A settled turn folds to its header
+  settled turn's do. A turn that ended on its final answer stays settled while the agent works
+  again: a turn the agent began by itself (a background task ended) or from the terminal has no
+  row yet, and the pending `Working…` head under the rows stands for it, as after a send. That
+  head waits 800 ms first: at a turn's end herdr's status trails the answer by 100–400 ms, and a
+  head under each answer would flash. While it waits it keeps its place unseen, so showing it moves
+  nothing a reader is selecting or reading. The Codex app never reopens a finished turn either. Before
+  the chat's first read, `Loading conversation…` is the only line: the rows read may hold the
+  running turn's own head. A settled turn folds to its header
   with a hairline under it, and the header reads as a footnote: `--text-dim`, regular weight (the
   live one keeps medium weight and its state color). The answer is outside the fold. A settled
   turn stays open when its work holds text the answer does not end on: text with no answer at all
@@ -2597,7 +2624,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   greeting and the composer is back at the bottom at once: it snaps, with no animation. Held
   messages keep the composer docked. Once a message went out, the greeting stays away for that
   pane until the conversation shows a turn or becomes another history: another lens, another
-  pane or a failed read does not bring it back. A stack too short for the composer and the
+  pane or a failed read does not bring it back. Nor does the chat's own empty line take its place
+  while that message is on its way or waits for its turn: the Codex and Claude apps never call a
+  thread empty once its first message is sent. A stack too short for the composer and the
   greeting leaves the greeting out (`.is-out`, hidden and `aria-hidden`) and the chat shows its
   own empty line. While the composer is lifted, the completion menu's height is capped to the
   room over the input card, where it scrolls. On a coarse pointer the greeting takes no touch:
@@ -2979,13 +3008,20 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   catalog follows dsh-tui 0.16.1's DSH-kernel local commands; dynamic registry and skill discovery
   are not inferred from unrelated agent catalogs.
 ### Comments on a reply (`.reply-comment*`, `.reply-comments*`)
-- Selecting text inside the words of one agent reply offers **Comment** (lucide `MessageSquarePlus`), a
-  pill on `--bg-elevated` with `--shadow-pop`, drawn on a layer over the transcript (`.reply-comment-layer`,
+- Selecting text inside the words of one agent reply offers **Quote** first (lucide `Quote`, labelled)
+  and **Comment** second (lucide `MessageSquarePlus`, icon only, `--text-dim`, after a hairline divider;
+  `--touch-target` square on a coarse pointer), one pill on `--bg-elevated` with `--shadow-pop`, drawn on a layer over the transcript (`.reply-comment-layer`,
   `--z-popover`), never in the flow: a selection in progress moves nothing (the composer row #1845 had
   shook the chat, #1922). With a mouse it stands under the point where the button was released; on a touch
   screen `28px` under the selection, clear of its handles, while the system's own menu stays above it.
   A selection reaching a user message, a work block, a skill or goal line or the copy row offers nothing;
   a watching device and an ended pane offer nothing either.
+- Quote puts the words in the pane's draft as `> ` quote lines and a blank line, after what the draft
+  holds (kept as typed), and the message box takes the keyboard with its caret at the end; nothing is
+  sent, and quotes stack. The draft is then `agent_only`, as a message carrying comments is. A quote that
+  would pass the composer's limit is refused (Quote disabled, saying why), never cut; under a secret
+  prompt, which stands in the message box's place, the pill offers Comment alone. Precedent: Antigravity's
+  chat, where a selection is quoted into the input; Quote is the main action and Comment the secondary one.
 - Comment opens a small form at the same place (`360px` at most, `--radius-xl`): the quote, three lines
   at most behind a `2px` `--accent` rule, a field, Cancel and Save. Mod+Enter saves, Escape closes it
   while it is empty. Narrower than `560px` it docks along the chat's bottom edge, over the message box,
@@ -3118,9 +3154,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   **Quick replies**; then **File viewer**: wrap long lines, Markdown width, Diff layout), **Terminal** (font size, font family, wheel
   speed, input mode, Key bar, Clipboard from a pane, Use alongside herdr's own window, Follow
   herdr's focus), **Alerts**, **Voice input**, **Agents**,
-  **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (the phone address,
-  Keep screen on, Install; then Portal, where the server offers it; then paired devices; then
-  Access),
+  **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (Connect a phone,
+  Keep screen on, Install; then Portal, where the server offers it; then paired devices; then Access),
   **Remote PCs** (Add PC, Update PC bridges automatically; then **Show in sidebar**), **About** (Updates, herdr, the repository links). A button that points at
   Updates opens the dialog on About.
 - Every page is built from the same parts (`components/SettingsControls.tsx`). A group is an
@@ -3168,10 +3203,63 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Remote PCs: an **Add PC** row (label, one-line description, button) opens the PC
   setup dialog and closes Settings behind it; when that dialog closes, focus lands on the header's
   workspace-list toggle. Under the row, once the server has answered, the bridge auto-update switch.
+- Connect a phone (`components/ConnectPhoneDialog.tsx`) is the Phone group's first row: its
+  sentence says where a phone stands in a few words, and names the relay as well as Tailscale
+  wherever the relay is offered, so a user on a tailnet still learns a phone needs no Tailscale
+  (ready through the Ovis relay; ready at the Tailscale address, or the relay with no Tailscale;
+  the relay from anywhere, or Tailscale; Tailscale or a pairing code where no relay is offered),
+  and its one primary **Connect** button opens a `.modal`
+  (a bottom sheet on a phone) titled **Connect a phone**. The settings page itself shows no QR
+  code; every QR code is in this dialog. The ways are choice cards at the top
+  (`.connect-phone-choices`: a grid, one column on a phone), each a pressed/unpressed button with
+  its name and a one-line hint read as its description, the chosen one in the accent: **Ovis
+  relay** ("From anywhere. Nothing to install."; where the server has the route and this is not the
+  hosted shell), **Tailscale** and **Pairing code** (not for a Portal visitor). A tab row hid the
+  relay: an owner who saw Tailscale first took it for the only way. No reference app offers more
+  than one way to reach its host (Paseo's pairing flow has one), so there is no precedent for the
+  choice itself; cards that say in one line what each way needs are the plainest way to show all
+  three at once. It opens on the relay whenever
+  the relay is offered, except with the relay off and Tailscale already serving this PC (or the page
+  on its HTTPS address): then on Tailscale. Until a card is picked the dialog follows that default
+  as the relay's and Tailscale's answers arrive, so one opened before they did does not stay on its
+  guess; using the relay's switch picks the relay. The relay's card carries the relay's one switch
+  in its corner, for the PC's owner where nothing blocks the relay (the gate condition under the
+  cards while it is off): turned on, the dialog moves to the relay's details. With no relay offered
+  the dialog opens on Tailscale. The relay route is the relay's state sentence (Blocked says why),
+  a start that failed with its reason and **Try again**, the pairing offer once it is online, and
+  last, quiet under a hairline, **Reset relay identity** (a ghost button, confirmed in the shared
+  `ConfirmDialog`; Escape there closes the confirmation, not the dialog; a serve-only install is
+  offered none, since the server refuses it, and an unreadable identity keeps it, since the reset
+  mends it). A watching device or Portal visitor gets no switch and no reset, and the relay route
+  says only the PC's owner can control the relay, through a direct connection. The Tailscale route is the address and QR code, or the command to run (plain, in
+  `.phone-command`, with no accent rail: a rail read as a focus ring there) with **Check again**;
+  the pairing code route is one sentence (a phone that can already open this address: the same
+  Wi-Fi, a tunnel, a proxy) and **Get a pairing code**, then the code, its QR code when the
+  address is known, the link with Copy, the countdown and **New code**. All three stay mounted
+  while the dialog is up and only the chosen one shows, so the relay's offer and the pairing code
+  follow each other's New code. The explanations (what the relay sees, who Tailscale lets in, the
+  README links) wait behind one accent **How it works** under a hairline.
+  Devices' **Pair a device** opens the dialog on the pairing code with a code started, as the
+  button always did, and the dialog closes by itself once the Devices group sees the device the
+  code let in, its "Paired" line then in the list. The relay's offer announces its code as well,
+  the first one the server made included, so a phone paired through the relay closes it too. The
+  relay has no group of its own on the page: the row's second line is its state (**Ovis relay:**
+  Off, Connecting…, Online with how many phones, Error, Blocked with the reason), and every relay
+  control is in this dialog, so nothing is said twice. What pairing grants is said once, in
+  Devices. The precedent is Paseo's desktop Settings, where the host's **Pair a device** opens the
+  pairing flow, with Enable relay and the QR code there rather than inline
+  ([docs](https://paseo.sh/docs/connectivity)); this differs in offering Tailscale and a pairing
+  code beside the relay in the same dialog.
 - Install (a row of the Phone group) reflects installed, promptable or browser-instructions state;
   About links the repository.
+- In the hosted relay shell (app.ovis.sh, `<meta name="ovis-shell">`, lib/shellMode.ts) the Phone
+  group opens with two rows the native build never shows: **Change PC** (a neutral button to the
+  shell's front page, which lists every paired PC, the same row the iOS app gets for its own list)
+  and **Forget this PC** (a neutral button that asks once in a `ConfirmDialog`, **Forget**, then
+  deletes this phone's key for the PC and leaves for the front page). Neither is destructive on the
+  PC, which keeps listing the phone until it is revoked there, so neither is a `.btn-danger`.
 - Portal, a group of its own between Phone and Devices where the server offers it: while it runs,
-  the address and QR code as the Phone group draws them over a Relay row with Stop; otherwise one
+  the address and QR code as Connect a phone's Tailscale route draws them over a Relay row with Stop; otherwise one
   hint for what blocks it (no token, serve-only, no `portal` or an old one, with a link to get it)
   or a wide Relay row whose text field and Start stack on a phone. Starting and stopping are one
   dim status line, at body size (`--fs-md`, `--fs-lg` under a finger) since it is what Portal is
@@ -3204,6 +3292,27 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   ([`Restart=on-failure`](https://github.com/cloudflare/cloudflared/blob/733bfb93/cmd/cloudflared/linux_service.go)),
   without limit. This differs on purpose: one restart, in the existing status row with no new
   control or setting, so a tunnel that keeps failing says so instead of looping.
+- The Ovis relay's state and pairing offer (`components/RelayPanel.tsx`: `statusText`,
+  `RelayPairing`; `lib/useRelay.ts`), shown where the server answers `/api/relay`: the state in
+  words is one step above a row's sentence (`--fs-sm`) and never above its label. While the relay
+  is online the pairing offer is a QR code beside its words in Connect a phone's relay route
+  (`.relay-pairing`, stacked on a phone), with a countdown and **New code**. The server keeps one
+  pending pairing code, which this offer and the dialog's pairing code both carry, so the offer is
+  asked for when the dialog opens with the relay online, when the pairing code route starts a
+  code (`PAIRING_CODE_EVENT`, lib/useRelay.ts: both then show the same code), when its countdown
+  runs out, and on **New code**, which starts a new code first and tells the pairing code route;
+  never on a timer or a render. An offer that arrives already expired (the PC's clock and this one
+  apart) says so and waits for **New code** rather than asking again and again. Portal watch
+  visitors get `403 read_only` first; even a saved drive invitation gets `403 owner_only` (the
+  watch guard precedes the owner guard in `server/dispatch.ts:223-243`). The hosted shell (a page
+  carrying `<meta name="ovis-shell" content="relay">`) offers no relay at all, since every relay
+  mutation requires a direct connection (`403 local_required` over the relay).
+  In Devices, a device paired through the relay wears
+  the **via relay** pill, the `this device` pill in neutral tones (`.devices-via-relay`: a
+  category, not this device's own mark). The precedent is Paseo's relay pairing (the daemon's
+  key and relay in a QR `#offer=` fragment the phone confirms, shown while the relay is up); this
+  differs in keeping the state a sentence in the switch's row rather than a status badge, and in
+  sharing one pending code with the pairing code route instead of a code of its own.
 - Access, the last group of Phone & devices, is read-only: one row per fact the server reports
   (`security` on `/api/health`), each a label, its dim sentence and the value in place of a
   control (`.settings-fact`: `--fs-md`, `--fw-medium`, `--text-strong`, end-aligned, at most 45%
@@ -3666,6 +3775,48 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - A centered password card replaces the entire shell while authentication is required. It has a real
   label, autofocused field, primary Unlock button and linked alert text.
 - Success mounts the shell; Lock unsubscribes push, deletes auth and returns to the gate.
+
+### Relay shell (`.relay-shell*`)
+- The hosted shell's screens before the app (components/RelayShell.tsx, lib/relay/shell.tsx): the
+  token gate's card, one sidebar wide on `--bg`, the sheep mark, a `--fs-lg` title that says what
+  is happening and one `--text-dim` sentence that says what to do, then the actions stacked full
+  width (`.btn`, the one primary action `.btn-primary`). No entrance motion; the connecting
+  state's `.boot-spinner` is the only thing that moves. Every screen names itself in
+  `data-relay-state` on the `<main>` (`list`, `empty`, `confirm`, `connecting`, `pc-offline`,
+  `pc-unresponsive`, `relay-unreachable`, `needs-update`, `revoked`, `identity-changed`,
+  `forgotten`, `code-expired`, `bad-offer`) for the browser scripts. Which of the three silences a stalled
+  connection is comes from the channel's phase (lib/relay/channel.ts): the relay that never
+  assigned the connection (10 s) is unreachable, the PC that never answered once it had (15 s) is
+  offline, and the PC that answered but never finished admitting the phone (10 s) is unresponsive;
+  the last offers Try again and names restarting Ovis on the PC, never "start Ovis".
+- Brief. Primary action: on a pairing link **Pair** (a new PC is confirmed first, "Pair with
+  {name}?", as paseo confirms a new host); after a failure **Try again**, or **Forget this PC**
+  (`.btn-danger`, since it discards a key) when the PC's identity changed. Forget only forgets:
+  the link whose key failed the check is never paired with, and the `forgotten` screen says to
+  scan a new QR code on the PC itself (otherwise the same bad link would be pinned in two taps). A
+  link whose key is not the one its PC's id is derived from is forged: it gets the same
+  `identity-changed` warning in its own words, every time it is opened, with only **Back** (no
+  key of its was saved, so there is nothing to forget); on the front page the
+  saved PCs themselves, one `--touch-target` row each with a chevron, the whole row the link to
+  the PC's own scope (`/s/<server_id>/`). Priorities: the PC's name, what is happening, what to do
+  next. Left out on purpose: a status badge, a stat tile, an illustration, a subtitle under the
+  title, the relay's address, and any Retry on a screen a retry cannot change (a used code, a
+  revoked phone, a damaged link offer only **Back**). Required content: the PC's name on every
+  scoped screen, the sentence per state, **Back** to the front page on a PC's page and nowhere
+  else, the iPhone browser tab's line "Add to Home Screen to stay paired" (a `--fs-sm` dim line
+  over a hairline at the card's foot, only there: the installed app's storage is not cleared).
+- Layout: `centred card`; the document is the one scroller; the saved-PC list is a plain column
+  inside the card, never a scroller of its own.
+- Precedent: paseo's hosted web app (confirm a new host, remember hosts, one list to pick from)
+  for the flow; the states and their words are this app's, in the token gate's own frame, so a
+  phone that pairs through the relay and one that pairs with a code see the same room. Neither
+  the Codex nor the Claude app has a hosted relay shell to follow.
+- Relay files keep the existing file viewer and its Paseo-style file bar, rather than adding a
+  separate remote-files screen. A client without a resource-capable service worker shows the
+  usual file note as an alert when the 64 MiB limit is exceeded. Copy link and new-tab actions
+  name the paired PC's reader, which opens its own channel; active file content is never a
+  navigated blob. Rendered HTML uses the opaque sandbox's own render host and policy, so its
+  inline scripts work without access to the shell's origin or device keys.
 
 ### Role (no control surface)
 - `interact` types and resizes; `observe` does neither. The server enforces both and the WS protocol

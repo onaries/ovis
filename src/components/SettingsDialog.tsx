@@ -6,6 +6,9 @@ import "./SettingsDialog.css";
 import type { AppActions } from "../lib/actions.ts";
 import { useInstallPrompt } from "../lib/install.ts";
 import { changePc, inNativeApp } from "../lib/nativeApp.ts";
+import { loadRelayShell } from "../lib/relay.ts";
+import { useRelay } from "../lib/useRelay.ts";
+import { serverIdOfPath, shellMode } from "../lib/shellMode.ts";
 import { SHORTCUTS, bindingDisplayKeys, formatKeys, isMacPlatform, setShortcutRecording, shortcutDisplayKeys, shortcutKeys, shortcutConflict, type ShortcutId } from "../lib/shortcuts.ts";
 import { MENU_SHORTCUT_KEYS, recordShortcut, shortcutMatchesQuery } from "../lib/shortcutRecorder.ts";
 import { exactChordRisk, isReservedShortcutKey, parseExactChord } from "../lib/shortcutBindings.ts";
@@ -34,9 +37,11 @@ import { useMachineApi } from "../lib/machineContext.tsx";
 import type { VoiceStatus } from "../../shared/voice.ts";
 import { dictationLocale, VOICE_CONFIG_EVENT } from "../lib/voice.ts";
 import { DevicesPanel } from "./DevicesPanel.tsx";
-import { PhonePanel } from "./PhonePanel.tsx";
+import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { PortalPanel } from "./PortalPanel.tsx";
 import { SignOutRow } from "./SignOutRow.tsx";
+import { statusText } from "./RelayPanel.tsx";
+import { ConnectPhoneDialog, defaultRoute, relayOffered, type ConnectRoute } from "./ConnectPhoneDialog.tsx";
 import { PushTestControls } from "./PushTestControls.tsx";
 import { previewAlertSound, unlockAlertSound } from "../lib/alertSound.ts";
 import { HerdrUpdateControls, UpdateControls } from "./UpdateControls.tsx";
@@ -861,8 +866,9 @@ function AccessFacts({ facts }: { facts: SecurityFacts }) {
       {fact(t("Listens on"), bind === "loopback" ? t("Loopback") : bind === "tailnet" ? t("Tailscale address") : t("Other address"),
         bind === "other" ? t("A network address, every interface or a host name: other devices on that network may reach it.")
           : t("The address the server listens on. A proxy on this PC can still forward other traffic to it."))}
-      {fact(t("This connection"), ingress === "direct" ? t("No proxy seen") : ingress === "proxy" ? t("Through a proxy") : ingress === "tailscale" ? t("Through Tailscale") : ingress === "funnel" ? t("Through Tailscale Funnel") : t("Unknown"),
+      {fact(t("This connection"), ingress === "direct" ? t("No proxy seen") : ingress === "proxy" ? t("Through a proxy") : ingress === "tailscale" ? t("Through Tailscale") : ingress === "funnel" ? t("Through Tailscale Funnel") : ingress === "relay" ? t("Through the Ovis relay") : t("Unknown"),
         ingress === "direct" ? t("No proxy said it forwarded this browser's request. One that adds nothing, such as an SSH tunnel, looks the same.")
+          : ingress === "relay" ? t("This browser's request came from a phone paired through the Ovis relay, end-to-end encrypted: the relay could not read it.")
           : t("How this browser's request arrived, not how every device reaches the server."))}
       {fact(t("Public internet"), summary.public_exposure === "observed" ? t("Reachable") : t("Unknown"),
         summary.public_exposure === "observed" ? t("This request came through Tailscale Funnel, which is open to the public internet.")
@@ -877,6 +883,10 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll }: { auth: Health
   const installPrompt = useInstallPrompt();
   // the iOS app (app/) holds this page: its way back to the app's list of PCs
   const nativeApp = inNativeApp();
+  // the hosted shell (app.ovis.sh) shows one PC per page: its front page lists the others, and the
+  // phone's key for this PC can be forgotten here (lib/relay/shell.tsx)
+  const relayPc = shellMode() === "relay" ? serverIdOfPath(window.location.pathname) : null;
+  const [confirmForget, setConfirmForget] = useState(false);
   // the server says what Tailscale on its PC already serves
   const [access, setAccess] = useState<RemoteAccess | null | undefined>(undefined);
   const loadAccess = useCallback(() => {
@@ -889,6 +899,19 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll }: { auth: Health
   const pairUrl = plan.kind === "here" || plan.kind === "served" ? plan.url : isLoopbackHost(window.location.hostname) ? null : window.location.origin;
   // what keeps the switch from working here, only while it does (lib/wakeLock.ts asks for the same two)
   const wakeLockProblem = !window.isSecureContext ? t("Needs HTTPS or localhost.") : !("wakeLock" in navigator) ? t("This browser can't keep the screen on.") : null;
+  // one relay state for the Connect a phone row and its dialog, so the row shows the dialog's change at once
+  const relay = useRelay();
+  const relayReadOnly = auth?.role === "watch" || auth?.via === "portal";
+  const closesGate = security.state === "known" && security.summary.pairing_gate === "open" && !security.summary.token_configured;
+  // the dialog with the ways a phone connects, and the way it opens on; null while it is closed
+  const [connecting, setConnecting] = useState<{ route: ConnectRoute; startCode: boolean } | null>(null);
+  const closeConnect = useCallback(() => setConnecting(null), []);
+  // a relay this PC can turn on: offered here and nothing blocking it (a serve-only install, an unreadable identity)
+  const relayUsable = relayOffered(relay) && relay.status?.blocked === null;
+  const connectSummary = relayOffered(relay) && relay.status?.phase === "online" ? t("Ready through the Ovis relay.")
+    : plan.kind === "here" || plan.kind === "served" ? (relayUsable ? t("Ready at {url}. Or use the Ovis relay, no Tailscale needed.", { url: plan.url }) : t("Ready at {url}.", { url: plan.url }))
+    : relayUsable ? t("The Ovis relay works from anywhere with nothing to install, or use Tailscale.")
+    : t("Use Tailscale or a pairing code.");
   return (
     <>
       <SettingsGroup title={t("Phone")} section="phone">
@@ -897,7 +920,29 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll }: { auth: Health
             <button type="button" className="btn" onClick={() => void changePc()}>{t("Change PC")}</button>
           </SettingsRow>
         )}
-        <div className="settings-item"><PhonePanel plan={plan} loading={access === undefined} onRefresh={loadAccess} /></div>
+        {relayPc !== null && (
+          <>
+            <SettingsRow label={t("Change PC")} description={t("This page shows one PC. The front page lists every PC this phone is paired with.")}>
+              <button type="button" className="btn" onClick={() => window.location.assign("/")}>{t("Change PC")}</button>
+            </SettingsRow>
+            <SettingsRow label={t("Forget this PC")} description={t("Deletes this phone's key for this PC. Pairing again takes a new QR code from the PC.")}>
+              <button type="button" className="btn" onClick={() => setConfirmForget(true)}>{t("Forget this PC")}</button>
+            </SettingsRow>
+            {confirmForget && (
+              <ConfirmDialog title={t("Forget this PC?")}
+                body={t("This phone's key for it is deleted here, and the PC keeps listing this phone until it is revoked there. Pairing again takes a new QR code from the PC.")}
+                confirmLabel={t("Forget")} onClose={() => setConfirmForget(false)}
+                onConfirm={async () => { await (await loadRelayShell()).forgetSavedPc(relayPc); window.location.assign("/"); }} />
+            )}
+          </>
+        )}
+        {/* the relay's state lives here; its switch, reset and failures are in the Connect a phone dialog */}
+        <SettingsRow label={t("Connect a phone")} description={<>
+          <span className="connect-phone-summary">{connectSummary}</span>
+          {relayOffered(relay) && relay.status !== null && <span className="relay-status">{t("Ovis relay: {state}", { state: statusText(t, relay.status) })}</span>}
+        </>}>
+          <button type="button" className="btn btn-primary" onClick={() => setConnecting({ route: defaultRoute(plan, relay), startCode: false })}>{t("Connect")}</button>
+        </SettingsRow>
         <SettingsRow label={t("Keep screen on")} description={<>{t("While a terminal or chat pane is open.")}{wakeLockProblem !== null && <span className="settings-condition">{wakeLockProblem}</span>}</>}>
           <Toggle label={t("Keep screen on")} checked={settings.keepScreenOn} onChange={(keepScreenOn) => update({ keepScreenOn })} />
         </SettingsRow>
@@ -909,11 +954,16 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll }: { auth: Health
       <PortalPanel readOnly={auth?.role === "watch" || auth?.via === "portal"} />
 
       <SettingsGroup title={t("Devices")} section="devices">
-        <div className="settings-item"><DevicesPanel pairUrl={pairUrl} auth={auth} onRevokedAll={onRevokedAll} /></div>
+        <div className="settings-item"><DevicesPanel onPair={() => setConnecting({ route: "code", startCode: true })} onDevicePaired={closeConnect} auth={auth} onRevokedAll={onRevokedAll} /></div>
         {onSignOut && <SignOutRow viaPortal={auth?.via === "portal"} oidc={auth?.portal?.method === "oidc"} onSignOut={onSignOut} />}
       </SettingsGroup>
 
       <AccessFacts facts={security} />
+
+      {connecting !== null && (
+        <ConnectPhoneDialog route={connecting.route} startCode={connecting.startCode} plan={plan} loading={access === undefined} onRefresh={loadAccess} pairUrl={pairUrl}
+          relay={relay} readOnly={relayReadOnly} closesGate={closesGate} canPair={auth?.via !== "portal"} onClose={closeConnect} />
+      )}
     </>
   );
 }

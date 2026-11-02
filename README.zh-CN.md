@@ -68,9 +68,9 @@ Ovis 把你电脑上的编程智能体显示成聊天，在任意浏览器、Mac
 
 [全部功能 →](docs/guide.md#features)
 
-**限制：** Ovis 需要 [herdr](https://github.com/herdrdev/herdr) 和你自己开着的电脑，手机也要能访问这台电脑（Tailscale、VPN 或 SSH 隧道）。
+**限制：** Ovis 需要 [herdr](https://github.com/herdrdev/herdr) 和你自己开着的电脑，手机也要能访问这台电脑（Tailscale、VPN、SSH 隧道或 Ovis 中继）。
 
-**隐私：** 会话保留在运行各个智能体的电脑上，Ovis 没有自己的账号或托管中继。匿名使用计数默认启用，可在 **Settings → About → Anonymous usage counts** 中查看发送内容并关闭，也可设置 `OVIS_TELEMETRY=0` 关闭。[发送哪些内容 →](docs/guide.md#anonymous-usage-counts)
+**隐私：** 会话保留在运行各个智能体的电脑上，Ovis 没有账号。可选的 Ovis 中继默认关闭；开启后，它能看到哪部手机从哪个地址连接哪台电脑、何时传输、传了多少，但无法读取内容（[信任模型](docs/relay.md#trust-model)）。匿名使用计数默认启用，可在 **Settings → About → Anonymous usage counts** 中查看发送内容并关闭，也可设置 `OVIS_TELEMETRY=0` 关闭。[发送哪些内容 →](docs/guide.md#anonymous-usage-counts)
 
 <a id="docs"></a>
 

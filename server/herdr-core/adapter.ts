@@ -5,7 +5,7 @@ import { AGENT_LABELS } from "../agents-routes.ts";
 import { LINE_BYTES, makeLineReader } from "../herdr/client.ts";
 import { SHELL_AGENTS, shellCommandLine } from "../shell-agent.ts";
 import { type HcConnection, HcError } from "./connection.ts";
-import { agentInfoOf, agentStatusOf, buildSnapshot, type HcTerminal, hcKeyName, HERDR_PROTOCOL, isRecord, keyBytes, LAYOUT_DOC, OTHER_WORKSPACE_ID, processInfoOf, SPACE_LABEL, TAB_LABEL, TAB_NAME_LABEL, WORKSPACE_NAME_LABEL } from "./snapshot.ts";
+import { agentInfoOf, agentOfStatus, agentStatusOf, buildSnapshot, type HcTerminal, hcKeyName, HERDR_PROTOCOL, isRecord, keyBytes, LAYOUT_DOC, OTHER_WORKSPACE_ID, processInfoOf, SPACE_LABEL, TAB_LABEL, TAB_NAME_LABEL, WORKSPACE_NAME_LABEL } from "./snapshot.ts";
 import type { SessionSnapshot } from "../../shared/herdr-api.generated.ts";
 
 /**
@@ -513,7 +513,7 @@ async function subscribe(hc: HcConnection, socket: Socket<ConnectionState>, requ
         const status = isRecord(reported) && typeof reported["state"] === "string"
           ? { state: reported["state"], ...(typeof reported["app"] === "string" ? { app: reported["app"] } : {}) }
           : null;
-        emit(STATUS_EVENT, { pane_id: paneId, agent_status: agentStatusOf(status), agent: status?.app || null });
+        emit(STATUS_EVENT, { pane_id: paneId, agent_status: agentStatusOf(status), agent: agentOfStatus(status) });
         return;
       }
       case "created":

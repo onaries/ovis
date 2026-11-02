@@ -747,6 +747,65 @@ describe("Codex rollout resolution", () => {
     expect(matchCodexTranscript("Done", [{ path: "short", text: jsonl(message("assistant", "Done")) }])).toBeNull();
   });
 
+  it("matches a complete rendered Markdown answer without discarding operators or accepting another rendered copy", () => {
+    const raw = "The **migration** now rewrites `legacy_records` in place and preserves every configured operator.\n\n- **Result:** `a != b` remains different from `a = b`, and feature-one remains different from feature_one.\n- Read [the plan](docs/plan.md) before applying the migration.";
+    const shown = "• The migration now rewrites legacy_records in place and preserves every configured operator.\n\n  • Result: a != b remains different from a = b, and feature-one remains different from feature_one.\n  • Read the plan (docs/plan.md) before applying the migration.";
+    const complete = (text: string) => jsonl(message("assistant", text), event({ type: "task_complete", turn_id: "turn", last_agent_message: text }));
+    const own = { path: "own", text: complete(raw) };
+    const screen = (text: string) => `› Summarize the migration + 2 lines (^r to expand)\n\n${text}\n\n  Worked for 4s • 7:05 PM\n\n› Ask Codex to do anything\n  gpt-6.1-sol high · /repo`;
+    expect(matchCodexTranscript(screen(shown), [own])).toBe("own");
+    expect(matchCodexTranscript(screen(shown), [own], new Set(), new Map(), false, new Set(["another-folder"]))).toBeNull();
+    expect(matchCodexTranscript(screen(shown), [own], new Set(["own"]))).toBeNull();
+    expect(matchCodexTranscript(screen(shown), [own], new Set(), new Map(), true)).toBeNull();
+    expect(matchCodexTranscript(screen(shown.replace("a != b", "a == b")), [own])).toBeNull();
+    expect(matchCodexTranscript(screen(shown.replace("feature-one", "feature+one")), [own])).toBeNull();
+    expect(matchCodexTranscript(screen(shown.replace("a != b", "a ≠ b")), [own])).toBeNull();
+    expect(matchCodexTranscript(screen(shown.replace("feature-one", "feature²-one")), [{ path: "squared", text: complete(raw.replace("feature-one", "feature2-one")) }])).toBeNull();
+    expect(matchCodexTranscript(screen(shown), [own, { path: "copy", text: complete(raw.replace("**migration**", "migration")) }])).toBeNull();
+    expect(matchCodexTranscript(screen(shown.split("\n").slice(2).join("\n")), [own])).toBeNull();
+    for (const broken of [
+      screen(shown).replace("7:05 PM", "27:65 PM"),
+      screen(shown).replace("› Ask Codex to do anything", "› another prompt"),
+      screen(shown).replace("  gpt-6.1-sol high · /repo", ""),
+      screen(shown).replace("• The migration", "• Ran The migration"),
+      screen(shown).replace("• The migration", "› The migration"),
+      screen(shown).replace("before applying the migration.", "before applying the migration. Extra words."),
+    ]) expect(matchCodexTranscript(broken, [own])).toBeNull();
+    expect(matchCodexTranscript(screen(shown), [{ path: "unfinished", text: jsonl(message("assistant", raw)) }])).toBeNull();
+    expect(matchCodexTranscript(screen(shown), [own, { path: "fake-footer", text: complete(`${raw}\nWorked for 4s • 7:05 PM`) }])).toBeNull();
+  });
+
+  it("binds a rendered completed reply before trailing native hook failure diagnostics", () => {
+    const raw = "The **migration** now preserves every configured operator while rewriting legacy records and keeping the original project settings available for the next session.";
+    const shown = raw.replaceAll("**", "");
+    const complete = (text: string) => jsonl(message("assistant", text), event({ type: "task_complete", turn_id: "turn", last_agent_message: text }));
+    const warning = "• Hook failed\n  └ PreToolUse hook exited with status 1";
+    const frame = (body: string) => `› Update the migration + 2 lines (^r to expand)\n\n${body}\n\n  Worked for 5m 2s • 8:38 PM\n\n› Ask Codex to do anything\n  GPT-6.1-Sol high · Context 20% left\n  ← for agents · ? for shor  ⚠ 2 warnings · f2 to view`;
+    const own = { path: "own", text: complete(raw) };
+    const screen = frame(`• ${shown}\n\n${warning}\n\n${warning}`);
+    expect(matchCodexTranscript(screen, [own])).toBe("own");
+    expect(matchCodexTranscript(screen, [own, { path: "copy", text: complete(shown) }])).toBeNull();
+    expect(matchCodexTranscript(screen, [own], new Set(), new Map(), false, new Set(["another-folder"]))).toBeNull();
+    expect(matchCodexTranscript(frame(`• ${shown}\n\n• Hook failed\n  unrecognised warning format`), [own])).toBeNull();
+    expect(matchCodexTranscript(frame(`• Ran command\n  └ ${shown}\n\n${warning}`), [own])).toBeNull();
+  });
+
+  it("recognises a cropped native completed reply with code and background-terminal status, without confusing a shared suffix", () => {
+    const ending = "The verified output keeps a != b distinct from a == b, and preserves feature-one independently of feature_one while recording the exact migration result.";
+    const raw = `The **migration** is complete.\n\n\`\`\`sh\nnode verify-records.js --strict\n\`\`\`\n\n${ending}`;
+    const complete = (text: string) => jsonl(message("assistant", text), event({ type: "task_complete", turn_id: "turn", last_agent_message: text }));
+    const own = { path: "own", text: complete(raw) };
+    const frame = (body: string) => `› Summarize + 4 lines (^r to expand)\n\n${body}\n\n  Worked for 1m 4s • 19:05\n\n  1 background terminal running · /ps to view · /stop to close\n\n›\n  gpt-6.1 sol high · /repo\n  ? for shor`;
+    expect(matchCodexTranscript(frame(`• The migration is complete.\n\n  node verify-records.js --strict\n\n  ${ending}`), [own])).toBe("own");
+    const cropped = frame(`  ${ending}`);
+    expect(matchCodexTranscript(cropped, [own])).toBe("own");
+    expect(matchCodexTranscript(cropped.replace("a != b", "a <= b"), [own])).toBeNull();
+    expect(matchCodexTranscript(cropped, [own, { path: "same-tail", text: complete(`A completely different earlier paragraph.\n\n${ending}`) }])).toBeNull();
+    expect(matchCodexTranscript(frame("  A short fragment."), [own])).toBeNull();
+    expect(matchCodexTranscript(frame(`  └ ${ending}`), [own])).toBeNull();
+    expect(matchCodexTranscript(frame(`  ↳ ${ending}`), [own])).toBeNull();
+  });
+
   // a finished turn as herdr read Codex 0.163.0 on macOS: the answer, then Codex's "Worked for" footer and the composer
   const recordedScreen = "\r\n  >_ OpenAI Codex (v0.163.0)\r\n     /private/tmp/kiro2420-qa/proj\r\n\r\n\r\n› Write one paragraph of about 90 words about a ferryman named Oskar on the Elbe who counts swans at noon, with three\r\n  invented dates.\r\n\r\n\r\n• At noon, Oskar the ferryman rested his oars beside the Elbe and counted the swans as they drifted past: one, two,\r\n  then seven, whenever a ripple made him lose his place. He kept a little calendar in his coat, marked with three dates\r\n  nobody else had heard of: 31 Frostwake, 8 Swanrise, and 46 Lanternfall. Each was a day he swore the river had changed\r\n  its tune. When the last white neck slipped beneath the bridge, Oskar smiled, shut the calendar, and rowed toward the\r\n  far bank, carrying his strange year with him.\r\n\r\n  Worked for 4s • 7:05 PM                                                                                              \r\n\r\n\r\n\r\n› Ask Codex to do anything\r\n\r\n  GPT-6-Luna low · /private/tmp/kiro2420-qa/proj · Write Oskar’s Elbe paragraph\r\n  ← for agents · ? for shortcuts";
   const recordedAnswer = "At noon, Oskar the ferryman rested his oars beside the Elbe and counted the swans as they drifted past: one, two, then seven, whenever a ripple made him lose his place. He kept a little calendar in his coat, marked with three dates nobody else had heard of: 31 Frostwake, 8 Swanrise, and 46 Lanternfall. Each was a day he swore the river had changed its tune. When the last white neck slipped beneath the bridge, Oskar smiled, shut the calendar, and rowed toward the far bank, carrying his strange year with him.";

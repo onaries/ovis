@@ -233,6 +233,8 @@ export class AgentInstaller {
     const dirs = entry.detect.install_dirs?.[platform] ?? [];
     const executable = await this.detector.executable(binary!, dirs, platform);
     if (executable === null) return conflictResponse("not_installed", `${entry.name} is not installed on this PC`);
+    // without a program it needs (DeepSeek Harness's dsh) its sign-in cannot start either
+    for (const needed of entry.detect.needs ?? []) if ((await this.detector.executable(needed, dirs, platform)) === null) return conflictResponse("not_installed", `${entry.name} is not installed on this PC`);
     const { paneId, tabId, workspaceId } = await openTab(`Sign in to ${entry.name}`, this.home);
     return this.#inNewTab(tabId, async () => {
       const shell = await shellOf(paneId, platform, this.options.shellWaitMs ?? SHELL_WAIT_MS, this.#clock);

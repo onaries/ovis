@@ -339,4 +339,18 @@ export const SETTINGS_KO: Record<string, string> = {
   "agents hooks claude codex install": "에이전트 훅 claude codex 설치",
   "onboarding first run getting started welcome": "온보딩 처음 실행 시작하기 환영",
   "Agent integrations": "에이전트 통합",
+  // the hosted relay shell's rows (lib/relay/shell.tsx)
+  "This page shows one PC. The front page lists every PC this phone is paired with.": "이 페이지는 PC 한 대를 보여줍니다. 첫 페이지에 이 폰과 페어링된 모든 PC가 나옵니다.",
+  "Deletes this phone's key for this PC. Pairing again takes a new QR code from the PC.": "이 PC에 대한 이 폰의 키를 삭제합니다. 다시 페어링하려면 PC의 새 QR 코드가 필요합니다.",
+  "Forget this PC?": "이 PC를 잊을까요?",
+  "This phone's key for it is deleted here, and the PC keeps listing this phone until it is revoked there. Pairing again takes a new QR code from the PC.": "이 폰에서 해당 키를 삭제합니다. PC에서는 폐기하기 전까지 이 폰이 목록에 남습니다. 다시 페어링하려면 PC의 새 QR 코드가 필요합니다.",
+  "Forget": "잊기",
+  "Through the Ovis relay": "Ovis 릴레이 경유",
+  "This browser's request came from a phone paired through the Ovis relay, end-to-end encrypted: the relay could not read it.": "이 브라우저의 요청은 Ovis 릴레이로 페어링된 폰에서 종단 간 암호화되어 왔습니다. 릴레이는 내용을 읽을 수 없습니다.",
+  "Ready through the Ovis relay.": "Ovis 릴레이로 연결할 수 있습니다.",
+  "Ready at {url}.": "{url}에서 열 수 있습니다.",
+  "Ready at {url}. Or use the Ovis relay, no Tailscale needed.": "{url}에서 열 수 있습니다. Tailscale 없이 Ovis 릴레이로도 연결할 수 있습니다.",
+  "The Ovis relay works from anywhere with nothing to install, or use Tailscale.": "Ovis 릴레이는 어디서나 되고 설치할 것이 없습니다. Tailscale도 쓸 수 있습니다.",
+  "Use Tailscale or a pairing code.": "Tailscale 또는 페어링 코드로 연결합니다.",
+  "Ovis relay: {state}": "Ovis 릴레이: {state}",
 };

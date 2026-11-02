@@ -339,4 +339,18 @@ export const SETTINGS_ZH: Record<string, string> = {
   "agents hooks claude codex install": "Agent 钩子 claude codex 安装",
   "onboarding first run getting started welcome": "入门 首次运行 开始使用 欢迎",
   "Agent integrations": "代理集成",
+  // the hosted relay shell's rows (lib/relay/shell.tsx)
+  "This page shows one PC. The front page lists every PC this phone is paired with.": "此页面只显示一台电脑。首页列出与此手机配对的所有电脑。",
+  "Deletes this phone's key for this PC. Pairing again takes a new QR code from the PC.": "删除此手机对应这台电脑的密钥。重新配对需要电脑上新的二维码。",
+  "Forget this PC?": "忘记这台电脑？",
+  "This phone's key for it is deleted here, and the PC keeps listing this phone until it is revoked there. Pairing again takes a new QR code from the PC.": "此手机上的对应密钥将被删除；在电脑上撤销之前，它仍会列出这部手机。重新配对需要电脑上新的二维码。",
+  "Forget": "忘记",
+  "Through the Ovis relay": "经由 Ovis 中继",
+  "This browser's request came from a phone paired through the Ovis relay, end-to-end encrypted: the relay could not read it.": "此浏览器的请求来自通过 Ovis 中继配对的手机，端到端加密：中继无法读取内容。",
+  "Ready through the Ovis relay.": "可通过 Ovis 中继连接。",
+  "Ready at {url}.": "可在 {url} 打开。",
+  "Ready at {url}. Or use the Ovis relay, no Tailscale needed.": "可在 {url} 打开。也可以使用 Ovis 中继，无需 Tailscale。",
+  "The Ovis relay works from anywhere with nothing to install, or use Tailscale.": "Ovis 中继随处可用，无需安装；也可以使用 Tailscale。",
+  "Use Tailscale or a pairing code.": "使用 Tailscale 或配对码连接。",
+  "Ovis relay: {state}": "Ovis 中继：{state}",
 };

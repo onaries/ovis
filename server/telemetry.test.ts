@@ -411,7 +411,7 @@ describe("daily active message", () => {
 
   test("(h) every supported agent kind is a telemetry harness, or other until the Worker lists it", () => {
     // the deployed Worker refuses a harness it does not list, so these count as other until a deploy adds them
-    const undeployed = new Set(["letta", "copilot"]);
+    const undeployed = new Set(["letta", "copilot", "dsh-tui"]);
     for (const kind of undeployed) expect(harnessOf(kind)).toBe("other");
     const missing = [...SUPPORTED_AGENT_KINDS].filter((kind) => !undeployed.has(kind) && !(TELEMETRY_HARNESSES as readonly string[]).includes(kind));
     if (missing.length > 0) throw new Error(`${missing.join(", ")}: add it to TELEMETRY_HARNESSES and deploy the Worker`);

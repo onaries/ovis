@@ -339,4 +339,18 @@ export const SETTINGS_JA: Record<string, string> = {
   "agents hooks claude codex install": "エージェント フック claude codex インストール",
   "onboarding first run getting started welcome": "オンボーディング 初回 はじめに ようこそ",
   "Agent integrations": "エージェント連携",
+  // the hosted relay shell's rows (lib/relay/shell.tsx)
+  "This page shows one PC. The front page lists every PC this phone is paired with.": "このページは1台のPCを表示します。トップページにこのスマホとペアリング済みのすべてのPCが並びます。",
+  "Deletes this phone's key for this PC. Pairing again takes a new QR code from the PC.": "このPC用のこのスマホのキーを削除します。再度ペアリングするにはPCの新しいQRコードが必要です。",
+  "Forget this PC?": "このPCを削除しますか？",
+  "This phone's key for it is deleted here, and the PC keeps listing this phone until it is revoked there. Pairing again takes a new QR code from the PC.": "このスマホ側のキーを削除します。PC側ではそこで取り消すまでこのスマホが一覧に残ります。再度ペアリングするにはPCの新しいQRコードが必要です。",
+  "Forget": "削除",
+  "Through the Ovis relay": "Ovis リレー経由",
+  "This browser's request came from a phone paired through the Ovis relay, end-to-end encrypted: the relay could not read it.": "このブラウザーのリクエストは、Ovis リレー経由でペアリングしたスマートフォンから端末間暗号化で届きました。リレーは内容を読めません。",
+  "Ready through the Ovis relay.": "Ovis リレー経由で接続できます。",
+  "Ready at {url}.": "{url} で開けます。",
+  "Ready at {url}. Or use the Ovis relay, no Tailscale needed.": "{url} で開けます。Tailscale なしで Ovis リレーも使えます。",
+  "The Ovis relay works from anywhere with nothing to install, or use Tailscale.": "Ovis リレーならどこからでも、インストール不要で使えます。Tailscale も使えます。",
+  "Use Tailscale or a pairing code.": "Tailscale またはペアリングコードで接続します。",
+  "Ovis relay: {state}": "Ovis リレー: {state}",
 };

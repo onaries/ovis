@@ -1,5 +1,6 @@
 import { LOCAL_MACHINE, type Machine } from "../../shared/machines.ts";
 import type { HerdrPane } from "../../shared/protocol.ts";
+import { looksLikeKey } from "../../shared/secret-prompt.ts";
 import { restoreDraft } from "./draft.ts";
 
 /**
@@ -284,6 +285,8 @@ export class PaneLifetimes {
     const ids: string[] = [];
     for (const { text, agentOnly } of values) {
       if (text.trim() === "") continue;
+      // the input line's key is never written down, by an earlier release's storage either (#2523)
+      if (kind === "line" && looksLikeKey(text)) continue;
       // the same text of the same pane is kept once (two tabs, or a store and storage, can both hand it over)
       const same = own ? undefined : this.unsent().find((item) => item.machine_id === machineId && item.pane_id === paneId && item.kind === kind && item.text === text && (item.agent_only === true) === agentOnly);
       if (same !== undefined) { ids.push(same.id); continue; }
@@ -297,6 +300,24 @@ export class PaneLifetimes {
       ids.push(record.id);
     }
     return ids;
+  }
+
+  /** Input-line keys an earlier release kept (#2523): out of storage, recovery records too. */
+  forgetLineKeys(): void {
+    try {
+      const storage = this.storage();
+      const keys: string[] = [];
+      for (let index = 0; index < storage.length; index++) {
+        const key = storage.key(index);
+        if (key !== null) keys.push(key);
+      }
+      for (const key of keys) {
+        const value = storage.getItem(key) ?? "";
+        const line = key.startsWith(UNSENT_PREFIX) ? parseUnsent(key.slice(UNSENT_PREFIX.length), value) : null;
+        if (line ? line.kind === "line" && looksLikeKey(line.text) : paneStateKey(key)?.kind === "line" && looksLikeKey(value)) storage.removeItem(key);
+      }
+    } catch { /* storage refused: it holds nothing to forget */ }
+    this.notify();
   }
 
   /** The text earlier herdrs' panes left, newest first. */

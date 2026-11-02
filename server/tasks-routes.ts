@@ -3,7 +3,8 @@
  * OpenCode pane's subagents, read through the trackers the server core owns. The dispatcher in index.ts runs the
  * access gate first.
  */
-import { claudeSubagents, type ClaudeSubagentStatus, within } from "./claude-subagents.ts";
+import { type ClaudeSubagentStatus, within } from "./claude-subagents.ts";
+import { scanClaudeTasks } from "./claude-task-scan.ts";
 import { paneGet } from "./herdr/client.ts";
 import { badRequest, jsonResponse, setRequestRoute } from "./http.ts";
 import { processAlive, type OmoStatus } from "./omo-status.ts";
@@ -54,7 +55,7 @@ export async function handleTasksRequest(request: Request, url: URL, pathname: s
       if (codex) return jsonResponse({ tasks: found, runs: [], server_time });
       if (codexTasks && plans && !checked) return jsonResponse({ tasks: [], runs: [], server_time });
     }
-    // An OpenCode pane's list is read while the event loop goes on, and the pane may come to run another session,
+    // A pane's list is read while the event loop goes on, and the pane may come to run another session,
     // OmO or Claude Code meanwhile: what it runs is told again after the read, and a list is given only for that
     for (let tries = 0; tries < 3; tries++) {
       const session = omo.sessionOf(paneId);
@@ -68,7 +69,16 @@ export async function handleTasksRequest(request: Request, url: URL, pathname: s
       const opencode = opencodeAgents.sessionOf(paneId);
       if (opencode === null || (!opencode.live && claudeAgents.sessionOf(paneId)?.live === true)) {
         const claude = claudeAgents.sessionOf(paneId);
-        return jsonResponse({ tasks: claude === null ? [] : claudeSubagents(claude.path, claude.live, Date.now(), claude.startedAt), runs: [], server_time });
+        if (claude === null) return jsonResponse({ tasks: [], runs: [], server_time });
+        const tasks = await scanClaudeTasks(claude, request.signal);
+        const current = claudeAgents.sessionOf(paneId);
+        const codeNow = opencodeAgents.sessionOf(paneId);
+        const same = current !== null && current.path === claude.path && current.live === claude.live
+          && current.startedAt === claude.startedAt && current.read === claude.read;
+        if (same && omo.sessionOf(paneId) === null && (codeNow === null || (!codeNow.live && current.live))) {
+          return jsonResponse({ tasks, runs: [], server_time });
+        }
+        continue;
       }
       const read = await opencodeAgents.tasksOf(paneId);
       // the session the list is of (the one asked about, when there is no list to give)

@@ -60,7 +60,7 @@ const codexRunning = async (paneId: string, not?: string): Promise<string> => {
 };
 
 const pane = async (label: string, command: string, cwd = root, owned = workspaces): Promise<string> => {
-  const created = await workspaceCreate({ cwd, label: `ovis-test-codex-binding-${label}` });
+  const created = await workspaceCreate({ cwd, label: `ovis-test-codex-binding-${label}`, env: { CODEX_HOME: codexHome } });
   owned.push(created.workspace.workspace_id);
   const paneId = created.root_pane.pane_id;
   await herdrRpc("pane.send_text", { pane_id: paneId, text: `${command}\n` });
@@ -224,6 +224,60 @@ it("shows composer subagents when only the chat's short-exchange ownership proof
     for (const workspace of workspaces.splice(opened)) await workspaceClose(workspace);
   }
 });
+
+it("binds rendered and cropped completed replies after a cold start, beside a newer thread, and retains the binding during tools", async () => {
+  const cwd = join(root, "rendered-completion");
+  mkdirSync(cwd);
+  const id = "01a0c7a1-56d9-7e20-9f08-f7a2d973bd51";
+  const peer = "01a0c7a1-56d9-7e20-9f08-f7a2d973bd52";
+  const ending = "The verified output keeps a != b distinct from a == b and preserves feature-one independently of feature_one while recording the exact migration result.";
+  const answer = `The **migration** is complete.\n\n\`\`\`sh\nnode verify-records.js --strict\n\`\`\`\n\n${ending}`;
+  const renderedEnding = ending.replace(/(.{1,65})\s+/g, "$1\n  ");
+  const db = new Database(join(codexHome, "state_5.sqlite"));
+  for (const [thread, text, created] of [[id, answer, 1], [peer, answers.other, Math.floor(Date.now() / 1000) - 2]] as const) {
+    const path = join(codexHome, "sessions", `rollout-2026-11-01T00-00-00-${thread}.jsonl`);
+    writeFileSync(path, [
+      { type: "session_meta", payload: { id: thread, cwd } },
+      { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Summarize the full migration request." }] } },
+      { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text }] } },
+      { type: "event_msg", payload: { type: "task_complete", turn_id: "finished", last_agent_message: text } },
+    ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+    db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, ?, ?, 'cli', ?)").run(thread, path, cwd, created, created, "Summarize the full migration request.");
+  }
+  db.close();
+  const screen = join(cwd, "screen.txt");
+  try {
+    for (const body of [
+      `• The migration is complete.\n\n  node verify-records.js --strict\n\n  ${renderedEnding}`,
+      `  ${renderedEnding}`,
+      `• The migration is complete.\n\n  node verify-records.js --strict\n\n  ${renderedEnding}\n\n• Hook failed\n  └ PreToolUse hook exited with status 1\n\n• Hook failed\n  └ PostToolUse hook exited with status 1`,
+    ]) {
+      const owned: string[] = [];
+      try {
+        writeFileSync(screen, `OpenAI Codex (v0.166.0)\n\n› Summarize + 4 lines (^r to expand)\n\n${body}\n\n  Worked for 1m 4s • 19:05\n\n  1 background terminal running · /ps to view · /stop to close\n\n›\n  gpt-6.1 sol high · /repo\n  ? for shor\n`);
+        const paneId = await pane("rendered-completion", `SCREEN_FILE=${screen} FLOOD_ON_ENTER=1 ${join(root, "bin", "codex")}`, cwd, owned);
+        await onScreen(paneId, ending);
+        const conversation = await read(paneId);
+        expect(conversation.source, (await paneRead({ paneId, source: "recent", lines: 80, stripAnsi: true })).text).toBe("codex-transcript");
+        expect(lastAnswer(conversation)).toBe(answer);
+        expect(conversation.history_id).toBeTruthy();
+        const prepare = await fetch(`http://127.0.0.1:${server.port}/api/pane/codex-restart?pane_id=${encodeURIComponent(paneId)}`);
+        expect([prepare.status, (await prepare.json()).session_id]).toEqual([200, id]);
+        await flood(paneId);
+        await floodedAway(paneId, ending);
+        const afterTools = await read(paneId);
+        expect(lastAnswer(afterTools)).toBe(answer);
+        expect(afterTools.history_id).toBe(conversation.history_id);
+      } finally {
+        for (const workspace of owned) await workspaceClose(workspace);
+      }
+    }
+  } finally {
+    const db = new Database(join(codexHome, "state_5.sqlite"));
+    for (const thread of [id, peer]) db.query("DELETE FROM threads WHERE id = ?").run(thread);
+    db.close();
+  }
+}, 30_000);
 
 it("reads a literal short first answer through the conversation endpoint (regression)", async () => {
   const cwd = join(root, "short-first");

@@ -309,12 +309,16 @@ export class AgentDetector {
 
   /**
    * Whether `entry` is on this PC: the first of its binaries found, and that one's version. Where
-   * another program has the binary's name (detect.unreliable_on), nothing is looked up or run.
+   * another program has the binary's name (detect.unreliable_on), nothing is looked up or run; while
+   * a program it needs (detect.needs) is missing, it is not installed and nothing is run either.
    */
   async state(entry: AgentCatalogEntry, platform: CatalogPlatform | null): Promise<AgentInstallState> {
+    const missing: AgentInstallState = { installed: false, binary: null, on_path: null, version: null, version_error: null, meets_min_version: null };
     if (platform !== null && entry.detect.unreliable_on?.[platform] !== undefined) {
       return { installed: null, binary: null, on_path: null, version: null, version_error: null, meets_min_version: null };
     }
+    const dirs = platform === null ? [] : entry.detect.install_dirs?.[platform] ?? [];
+    for (const needed of entry.detect.needs ?? []) if ((await this.executable(needed, dirs, platform)) === null) return missing;
     for (const binary of entry.detect.binaries) {
       const onPath = await this.#locate(binary);
       const executable = onPath ?? (platform === null ? null : this.#inInstallDirs(binary, entry.detect.install_dirs?.[platform] ?? [], platform));
@@ -333,6 +337,6 @@ export class AgentDetector {
         meets_min_version: entry.min_version === null || version === null ? null : meetsMinVersion(version, entry.min_version.version),
       };
     }
-    return { installed: false, binary: null, on_path: null, version: null, version_error: null, meets_min_version: null };
+    return missing;
   }
 }

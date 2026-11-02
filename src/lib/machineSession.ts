@@ -3,6 +3,7 @@ import { paneStorageId } from "../../shared/machines.ts";
 import { afterSend, afterSettled, greetingMemory, rememberGreeting } from "./greeting.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 import { pendingMessages, type PendingMessageStore } from "./pendingMessages.ts";
+import { rememberWaitingSend, waitingBaseline, waitingKey, type WaitingBaseline } from "./sentWaiting.ts";
 import { watchPageInUse } from "./presence.ts";
 import { currentSurface } from "./telemetrySurface.ts";
 import { HerdrSocket } from "./ws.ts";
@@ -26,6 +27,9 @@ export class MachineSession {
   private currentEpoch = 0;
   private announcedLifetime: string | undefined;
   private resumedReceipts: Array<{ paneId: string; lifetime: string; removal: PendingRemoval }> = [];
+  /** rows seen going out (`sending`), each with when and what its pane's chat held then (lib/sentWaiting.ts); a row
+   * back as queued or held leaves it, so the next attempt (Send now) is timed from itself */
+  private readonly going = new Map<string, { at: number; after: WaitingBaseline | null }>();
   private role: RoleAck | null = null;
   private readonly handlers = new Set<Handler>();
   private readonly offMessage: () => void;
@@ -74,12 +78,31 @@ export class MachineSession {
       if (message.type === "pending-messages" && this.currentScope !== null) {
         const owner = paneStorageId(this.machineId, message.pane_id);
         const scope = this.currentScope;
-        sent = message.removed?.some((item) => item.outcome === "sent" && this.store.isOwned(owner, item.id, scope)) ?? false;
+        const key = waitingKey(this.machineId, message.pane_id);
+        // taken before the row's Enter, as a composer send's are before it is submitted. A row back in
+        // the queue or held was not typed: its next try takes its own
+        for (const item of message.messages) {
+          if (item.state === "sending" && !this.going.has(item.id)) this.going.set(item.id, { at: Date.now(), after: waitingBaseline(key) });
+          else if (item.state === "queued" || item.state === "held") this.going.delete(item.id);
+        }
+        const typed = message.removed?.filter((item) => item.outcome === "sent" && this.store.isOwned(owner, item.id, scope)) ?? [];
+        sent = typed.length > 0;
+        // the rows' words, read before the publish lets them go
+        const rows = this.store.read(owner);
         this.store.publish(owner, message.messages, message.removed ?? [], scope);
         if (sent) {
           const memory = greetingMemory(owner);
           rememberGreeting(owner, afterSettled(afterSend(memory), true, memory.history));
         }
+        // a typed row stays in the chat as the user's waiting message until its turn is read, as a
+        // composer send does (#2258): the turn end's drain and Send now leave no gap between the two.
+        // Only a row this connection saw going out: one sent through another, its turn perhaps read
+        // already, has no time before its Enter that the turn could settle
+        for (const item of typed) {
+          const text = rows.find((row) => row.id === item.id)?.text, went = this.going.get(item.id);
+          if (text !== undefined && went !== undefined) rememberWaitingSend(key, text, went.at, went.after);
+        }
+        for (const item of message.removed ?? []) this.going.delete(item.id);
       }
       for (const handler of this.handlers) handler(message, sent);
     });
@@ -102,6 +125,7 @@ export class MachineSession {
     this.currentScope = null;
     this.announcedLifetime = undefined;
     this.resumedReceipts = [];
+    this.going.clear();
     this.currentConnection = null;
     this.currentEpoch++;
     this.role = null;

@@ -5,15 +5,17 @@
  */
 import type { ServerWebSocket } from "bun";
 import { MAX_MESSAGE_BYTES, Room, admit, type Limiters, type SocketInfo, type SocketRequest } from "./core.ts";
+import { memoryLimiters, relayLimits, relayLimitsFromArgs, type BunRelayLimits } from "./bun-limits.ts";
 
-interface SocketData { request: SocketRequest; info: SocketInfo | null }
+interface SocketData { request: SocketRequest; info: SocketInfo | null; address: string }
 type Socket = ServerWebSocket<SocketData>;
 
 export interface BunRelayOptions {
   port?: number;
   hostname?: string;
-  /** rate limiters as on Cloudflare; none by default */
+  /** Overrides only rate limiting, not the hard room/socket caps. */
   limiters?: Limiters;
+  limits?: Partial<BunRelayLimits>;
 }
 
 export interface BunRelay {
@@ -25,7 +27,17 @@ export interface BunRelay {
 const SWEEP_MS = 10_000;
 
 export function startBunRelay(options: BunRelayOptions = {}): BunRelay {
-  const rooms = new Map<string, { room: Room<Socket>; sockets: Set<Socket> }>();
+  const limits = relayLimits(options.limits);
+  const limiters = options.limiters ?? memoryLimiters(limits);
+  const rooms = new Map<string, { room: Room<Socket>; sockets: Set<Socket>; pending: number }>();
+  let socketCount = 0;
+  /** open and upgrading sockets per connecting address; an address with none is forgotten */
+  const byAddress = new Map<string, number>();
+  const release = (address: string) => {
+    const left = (byAddress.get(address) ?? 1) - 1;
+    if (left > 0) byAddress.set(address, left);
+    else byAddress.delete(address);
+  };
   const roomOf = (serverId: string) => {
     let entry = rooms.get(serverId);
     if (!entry) {
@@ -38,7 +50,7 @@ export function startBunRelay(options: BunRelayOptions = {}): BunRelay {
         close: (socket, code, reason) => { socket.close(code, reason); },
         now: () => Date.now(),
       });
-      entry = { room, sockets };
+      entry = { room, sockets, pending: 0 };
       rooms.set(serverId, entry);
     }
     return entry;
@@ -48,9 +60,26 @@ export function startBunRelay(options: BunRelayOptions = {}): BunRelay {
     port: options.port ?? 0,
     hostname: options.hostname ?? "127.0.0.1",
     async fetch(request, bunServer) {
-      const admitted = await admit(request, bunServer.requestIP(request)?.address ?? "", options.limiters);
+      const address = bunServer.requestIP(request)?.address ?? "";
+      const admitted = await admit(request, address, limiters);
       if (admitted instanceof Response) return admitted;
-      if (bunServer.upgrade(request, { data: { request: admitted, info: null } })) return undefined;
+      // refused, never evicted: a socket already open (a signed-in phone, its PC) keeps its place
+      if ((byAddress.get(address) ?? 0) >= limits.maxSocketsPerAddress) {
+        return new Response("too many open connections from this address", { status: 429, headers: { "retry-after": "60", "cache-control": "no-store" } });
+      }
+      if (socketCount >= limits.maxSockets || (!rooms.has(admitted.server_id) && rooms.size >= limits.maxRooms)) {
+        return new Response("relay capacity reached", { status: 503, headers: { "retry-after": "60", "cache-control": "no-store" } });
+      }
+      // Reserve synchronously before upgrading: concurrent fetches cannot oversubscribe either cap.
+      const entry = roomOf(admitted.server_id);
+      entry.pending++;
+      socketCount++;
+      byAddress.set(address, (byAddress.get(address) ?? 0) + 1);
+      if (bunServer.upgrade(request, { data: { request: admitted, info: null, address } })) return undefined;
+      entry.pending--;
+      socketCount--;
+      release(address);
+      if (entry.pending === 0 && entry.sockets.size === 0) rooms.delete(admitted.server_id);
       return new Response("expected a WebSocket upgrade", { status: 426 });
     },
     websocket: {
@@ -63,6 +92,7 @@ export function startBunRelay(options: BunRelayOptions = {}): BunRelay {
       idleTimeout: 0,
       open(socket) {
         const entry = roomOf(socket.data.request.server_id);
+        entry.pending--;
         entry.sockets.add(socket);
         entry.room.open(socket, socket.data.request);
       },
@@ -75,7 +105,9 @@ export function startBunRelay(options: BunRelayOptions = {}): BunRelay {
         if (!entry) return;
         entry.room.closed(socket);
         entry.sockets.delete(socket);
-        if (entry.sockets.size === 0) rooms.delete(serverId);
+        socketCount--;
+        release(socket.data.address);
+        if (entry.pending === 0 && entry.sockets.size === 0) rooms.delete(serverId);
       },
     },
   });
@@ -99,7 +131,7 @@ if (import.meta.main) {
   const port = Number(option("port") ?? process.env["PORT"] ?? 8787);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Usage: bun relay/bun.ts [--port N] [--hostname H]");
   const hostname = option("hostname") ?? "127.0.0.1";
-  const relay = startBunRelay({ port, hostname });
+  const relay = startBunRelay({ port, hostname, limits: relayLimitsFromArgs(args, process.env) });
   console.log(`Ovis relay listening on http://${hostname}:${relay.port}`);
   const stop = () => { void relay.stop().then(() => process.exit(0)); };
   process.on("SIGINT", stop);

@@ -170,7 +170,7 @@ export const MarkdownImageRetryContext = createContext(0);
  * An image that holds its box until it decodes (lib/imageBox.ts). With `slot`, the wrapper is the
  * box while the bytes arrive and after a failure, where a note stands in for the picture, so the
  * row around it moves at most once, when the natural size is in; ChatView.css draws a standalone
- * Markdown image's 16:9 frame and a chat thumbnail's fixed box. Decoded, the wrapper gives its box
+ * Markdown image's 16:9 frame and a chat picture's lane-wide 16:9 slot. Decoded, the wrapper gives its box
  * up (`display: contents`) and the one image renders bare, nothing remounted: its box, hit area
  * and alignment are its own. Without `slot` (a badge in a sentence) nothing is held and a failure
  * shows `fallback`. `src` is null while an address is still being resolved: the slot stands from

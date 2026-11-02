@@ -25,7 +25,7 @@ export const FOOTER = /^(?:\S+\s+(?:default|minimal|none|low|medium|high|xhigh|m
  * entry over indented rows and cuts a long one with a "…" row, so the entry is compared without
  * whitespace, and as the start of `text` when it was cut.
  */
-export function codexSteeringPending(screen: string, text: string): boolean {
+export function codexSteeringPending(screen: string, text?: string): boolean {
   // the indent is kept beside the trimmed text: Codex tells an entry from its continuation rows by it
   const rows = stripVTControlCharacters(screen).split(/\r?\n/).map((raw) => {
     const line = raw.replace(/^│/, "").replace(/\s*│\s*$/, "").trimEnd();
@@ -52,6 +52,7 @@ export function codexSteeringPending(screen: string, text: string): boolean {
   // Codex cuts a long entry with a "…" row of its own; an ellipsis ending a text row is the message's
   const cut = entry.length > 1 && entry[entry.length - 1]!.text === "…";
   const shown = compact((cut ? entry.slice(0, -1) : entry).map((row) => row.text).join("").replace(/^↳/, ""));
+  if (text === undefined) return shown.length > 0;
   const sent = compact(text);
   if (!sent || !shown) return false;
   return cut ? sent.startsWith(shown) : shown === sent;

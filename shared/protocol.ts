@@ -157,8 +157,11 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         { enabled?, notice_seen?: true, notice_version?, settings? }. A notice acknowledgement
  *         requires the current NOTICE_VERSION. X-Herdr-Update: 1 and same-origin.
  *         404 from a server that sends no telemetry.
+ *  GET    /api/pane/codex-restart?pane_id  -> CodexRestartTarget (current terminal, process birth and session)
+ *  POST   /api/pane/codex-restart         CodexRestartTarget -> CodexRestartResponse; same-pane Codex restart.
+ *         Drive only; stale identity, queued input, unknown store or another owner refuses before stopping.
  *  GET    /api/agents                    -> { agents: AgentKind[] } (herdr's agent manifests: the
- *         kinds `agent.start` accepts, plus omo and gjc when they are on this server's PATH,
+ *         kinds `agent.start` accepts, plus omo, gjc and dsh-tui when they are on this server's PATH,
  *         each with `installed`: whether its command is on this server's PATH; for the
  *         new-session dialog)
  *  GET    /api/agent-catalog             -> AgentCatalogResponse (shared/agent-catalog.ts: every agent
@@ -333,7 +336,7 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         -> { ok: true } | 409 prompt_changed (the screen no longer shows that prompt)
  *  POST   /api/workspace/create { cwd?, label?, agent?: { kind, name?, args? } }
  *         -> WorkspaceCreated (workspace.create, then agent.start in the root pane when `agent` is given;
- *         omo and gjc, which herdr cannot start, are typed into the root pane's shell)
+ *         omo, gjc and dsh-tui, which herdr cannot start, are typed into the root pane's shell)
  *  POST   /api/tab/create { workspace_id, cwd?, label?, agent?: { kind, name?, args? }, first_message?, first_message_connection? }
  *         -> TabCreated (tab.create in that workspace, then the same agent launch in the tab's root
  *         pane; without cwd herdr uses the workspace's folder, without label the tab's number)
@@ -1081,8 +1084,12 @@ export type ServerMessage =
    * input box (plain rows, cut at 200 characters; empty when no whole box could be read). Present
    * only when a send with `send_anyway` may follow; an older server never sends it.
    * `submit_partial`: the explicitly confirmed terminal draft was cleared, but the send's
-   * deadline then expired before the message was sent; never a nothing-typed receipt. */
-  | { type: "submit-result"; id: number; pane_id: string; ok: boolean; pending?: PendingMessage; code?: string; message?: string; draft?: string; box?: string }
+   * deadline then expired before the message was sent; never a nothing-typed receipt.
+   * `typed_now`: on a queued send, this request typed the message at once (the turn had ended
+   * before it arrived); on a held copy's resend (`resend_id`), this request typed it. A replayed id, a
+   * row sent or discarded since, or a copy another connection sent answers ok without it; an older
+   * server never sends it. */
+  | { type: "submit-result"; id: number; pane_id: string; ok: boolean; pending?: PendingMessage; typed_now?: true; code?: string; message?: string; draft?: string; box?: string }
   | { type: "pending-result"; id: number; pane_id: string; pending_id: string; ok: boolean; code?: string; message?: string }
   /** ok once herdr accepted the inserted bytes (`pane.send_text` answered), never that the program
    * took or ran them; a refusal names why and nothing was typed, except `insert_failed`, whose bytes
@@ -1115,6 +1122,7 @@ export type ServerMessage =
   | { type: "error"; code: string; message: string; pane_id?: string };
 
 export type { SessionHistoryAgent, SessionResumeSource, SessionHistoryRow, SessionResumeRequest, SessionResumeResponse, SessionHistoryResponse } from "./session-history.ts";
+export type { CodexRestartTarget, CodexRestartResponse } from "./codex-restart.ts";
 
 /** herdr's default socket, under XDG_CONFIG_HOME when set, as herdr itself resolves it. */
 export const HERDR_SOCKET_PATH = `${process.env["XDG_CONFIG_HOME"] || `${process.env["HOME"] ?? ""}/.config`}/herdr/herdr.sock`;

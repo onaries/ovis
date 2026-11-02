@@ -75,6 +75,18 @@ describe.skipIf(process.platform === "win32")("AgentDetector", () => {
     expect(runsOf("omp") - before).toBe(1);
   });
 
+  it("reports an agent as not installed while a program it needs to run is missing, without running its version flag", async () => {
+    // shaped like DeepSeek Harness: the TUI a pane starts (dsh-tui), and the launcher it needs (dsh)
+    const harness: AgentCatalogEntry = { ...entry("codex"), id: "needs-test", detect: { binaries: ["needs-tui"], needs: ["needs-launcher"], version_args: ["--version"] }, min_version: null };
+    stub("needs-tui", "echo 'needs-tui 0.17.0 (launcher)'");
+    const detector = new AgentDetector({ home: emptyHome, locate });
+    expect(await detector.state(harness, "linux")).toEqual({ installed: false, binary: null, on_path: null, version: null, version_error: null, meets_min_version: null });
+    expect(runsOf("needs-tui")).toBe(0);
+    stub("needs-launcher", "echo '0.2.1-rc.5'");
+    expect(await detector.state(harness, "linux")).toEqual({ installed: true, binary: "needs-tui", on_path: true, version: "0.17.0", version_error: null, meets_min_version: null });
+    expect(runsOf("needs-launcher")).toBe(0);
+  });
+
   it("says when a version is older than Ovis's feature needs, or cannot be read", async () => {
     const detector = new AgentDetector({ home: emptyHome, locate });
     expect(await detector.state(entry("codex"), "linux")).toEqual({ installed: true, binary: "codex", on_path: true, version: "0.150.0", version_error: null, meets_min_version: false });

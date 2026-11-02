@@ -368,9 +368,9 @@ describe("focusFollowsAnswer", () => {
 });
 
 describe("moving between questions with the agent's own keys", () => {
-  it("waits for the card's unsent edits on omo, Codex and Hermes, whose keys carry none of them over", () => {
+  it("waits for the card's unsent edits on omo, omp, Codex and Hermes, whose keys carry none of them over", () => {
     const steps = [{ label: "One", answered: false, current: true }, { label: "Two", answered: false, current: false, can_navigate: true }];
-    for (const agent of ["omo", "hermes"]) {
+    for (const agent of ["omo", "omp", "hermes"]) {
       const card = { ...prompt(["A", "B"], 2), agent, steps };
       expect(blocksStepNavigation(card, new Set(), "typed")).toBe(true);
       expect(blocksStepNavigation(card, new Set(), "")).toBe(false);

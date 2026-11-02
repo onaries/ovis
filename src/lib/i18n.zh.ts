@@ -12,6 +12,7 @@ import { SETUP_ZH } from "./i18n/setup.zh.ts";
 import { GUIDE_ZH } from "./i18n/guide.zh.ts";
 import { UPDATES_ZH } from "./i18n/updates.zh.ts";
 import { PALETTE_ZH } from "./i18n/palette.zh.ts";
+import { RELAY_ZH } from "./i18n/relay.zh.ts";
 
 /**
  * Simplified Chinese for every `t("…")` in src/ that no part in lib/i18n/ holds: keys more than
@@ -27,7 +28,10 @@ import { PALETTE_ZH } from "./i18n/palette.zh.ts";
  * Placeholders in braces keep their English names.
  */
 const BASE: Record<string, string> = {
-  "Preview": "预览",
+  "Restart Codex": "重启 Codex",
+  "Restart Codex?": "重启 Codex？",
+  "Checking the current Codex conversation…": "正在确认当前 Codex 对话…",
+  "Codex will close and reopen the same conversation in this pane. Running work may be interrupted, and text left in the terminal input may be lost.": "将关闭 Codex 并在此面板中重新打开同一对话。正在运行的任务可能会中断，终端输入框中尚未发送的文字可能会丢失。",
   "Working tree": "工作区",
   "Changes": "更改",
   "Agent {status}": "Agent 状态：{status}",
@@ -194,6 +198,7 @@ const BASE: Record<string, string> = {
   "New code": "新代码",
   "Paired: {name}.": "已配对：{name}。",
   "QR code that pairs a phone with code {code}": "使用代码 {code} 配对手机的二维码",
+  "Connect a phone": "连接手机",
   "Pairing code": "配对码",
   "Open this address on your phone": "在手机上打开此地址",
   "{agent} is ready": "{agent} 已就绪",
@@ -313,6 +318,7 @@ const BASE: Record<string, string> = {
   // t3code ports (a)
   // t3code ports (d)
   "Change PC": "切换电脑",
+  "Forget this PC": "忘记这台电脑",
   "Selected": "已选择",
   // Recover unsent text (components/UnsentText.tsx)
   "Unsent text": "未发送的文本",
@@ -357,6 +363,7 @@ export const ZH_PARTS: Record<string, Record<string, string>> = {
   guide: GUIDE_ZH,
   updates: UPDATES_ZH,
   palette: PALETTE_ZH,
+  relay: RELAY_ZH,
 };
 
 export const ZH: Record<string, string> = Object.assign({}, ...Object.values(ZH_PARTS));

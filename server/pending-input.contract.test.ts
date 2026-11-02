@@ -831,7 +831,10 @@ describe("connection-owned pending input", () => {
     const original = () => f.socket.send({ type: "pending-action", id: 3, pane_id: f.pane, pending_id: answer.pending.id, action: "steer" });
     if (copyFirst) { copy(); expect(await other.result(2)).toMatchObject({ ok: true }); original(); }
     else { original(); expect(await f.socket.action(3)).toMatchObject({ ok: true }); copy(); }
-    expect(await other.result(2)).toMatchObject({ ok: true });
+    const copied = await other.result(2);
+    expect(copied).toMatchObject({ ok: true });
+    // only the send that typed it is typed now: a copy answered for the row's own Send now typed nothing
+    expect(copied.typed_now).toBe(copyFirst ? true : undefined);
     expect(await f.socket.action(3)).toMatchObject({ ok: true });
     other.send({ type: "submit", id: 4, pane_id: f.pane, text: "barrier", payload: "barrier", typed: true });
     expect(await other.result(4)).toMatchObject({ ok: true });
@@ -1176,6 +1179,76 @@ describe("connection-owned pending input", () => {
     expect(await f.socket.action(10)).toMatchObject({ ok: true });
     await f.removed(message.id);
     await f.waitBytes(`${paste("queued message")}\r`);
+  }, 30_000);
+
+  it("holds a queued message rather than clearing the stopped chat message Claude put back in its box", async () => {
+    const f = await setup("restored");
+    const rule = "\u2500".repeat(60);
+    const footer = "[Haiku 4.5] \u2502 project";
+    // the chat's own message, typed at a turn's end: what a copy in Claude's box is compared against
+    const sent = await f.queue(1, "write a story about a gardener");
+    await f.state("idle"); await f.removed(sent.id);
+    await f.waitBytes(`${paste("write a story about a gardener")}\r`);
+    await f.state("working");
+    const message = await f.queue(2, "then reply PONG");
+    // Stop before Claude answered: Claude drops that turn and puts the message back in its box, typed
+    await f.showScreen(`  \u273b Cooked for 1s\n${rule}\n\u276f write a story about a gardener\n${rule}\n  ${footer}\n`, footer);
+    const before = f.bytes();
+    await f.state("idle");
+    const held = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.pane_id === f.pane
+      && frame.messages.some((item: PendingMessage) => item.id === message.id && item.state === "held"));
+    expect(held.messages.find((item: PendingMessage) => item.id === message.id).error.code).toBe("input_draft");
+    // no Esc cleared the copy: the composer takes it back from its next prompt read
+    expect(f.bytes()).toBe(before);
+  }, 30_000);
+
+  it("refuses a queued message arriving once Claude is idle rather than clearing the stopped message in its box", async () => {
+    const f = await setup("restored-idle");
+    const rule = "\u2500".repeat(60);
+    const footer = "[Haiku 4.5] \u2502 project";
+    const sent = await f.queue(1, "write a story about a gardener");
+    await f.state("idle"); await f.removed(sent.id);
+    await f.waitBytes(`${paste("write a story about a gardener")}\r`);
+    await f.state("working");
+    // Stopped: Claude puts the message back in its box, and the page still thinks the agent works
+    await f.showScreen(`  \u273b Cooked for 1s\n${rule}\n\u276f write a story about a gardener\n${rule}\n  ${footer}\n`, footer);
+    await f.state("idle");
+    const before = f.bytes();
+    f.socket.send({ type: "submit", id: 2, pane_id: f.pane, text: "then reply PONG", payload: "unused\r", delivery: "queue" });
+    // it names the copy as an immediate send's refusal does, for the composer's Clear it / Send it
+    expect(await f.socket.result(2)).toMatchObject({ ok: false, code: "input_draft", draft: "write a story about a gardener" });
+    // no Esc (nor anything else) was typed over the stopped copy
+    expect(f.bytes()).toBe(before);
+  }, 30_000);
+
+  it("marks a queued send typed at once as typed now, and never its replay or a discarded row's", async () => {
+    const f = await setup("typed-now");
+    await f.state("idle");
+    f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "typed at once", payload: "unused\r", delivery: "queue" });
+    const fresh = await f.socket.result(1);
+    expect(fresh).toMatchObject({ ok: true, typed_now: true });
+    expect(fresh.pending).toBeUndefined();
+    await f.waitBytes(`${paste("typed at once")}\r`);
+    // the same id again: its answer is replayed and nothing is typed twice
+    const bytes = f.bytes(), from = f.socket.seen.length;
+    f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "typed at once", payload: "unused\r", delivery: "queue" });
+    const replay = await f.socket.wait((frame) => frame.type === "submit-result" && frame.id === 1, from);
+    expect(replay.ok).toBe(true);
+    expect(replay.typed_now).toBeUndefined();
+    expect(f.bytes()).toBe(bytes);
+    // queued while the agent works, then discarded: its replay answers ok with no row, and was never typed
+    await f.state("working");
+    const row = await f.queue(2, "discarded follow-up");
+    f.socket.send({ type: "pending-action", id: 3, pane_id: f.pane, pending_id: row.id, action: "discard" });
+    expect((await f.socket.action(3)).ok).toBe(true);
+    await f.removed(row.id, "discarded");
+    const again = f.socket.seen.length;
+    f.socket.send({ type: "submit", id: 2, pane_id: f.pane, text: "discarded follow-up", payload: "unused\r", delivery: "queue" });
+    const discarded = await f.socket.wait((frame) => frame.type === "submit-result" && frame.id === 2, again);
+    expect(discarded.ok).toBe(true);
+    expect(discarded.pending).toBeUndefined();
+    expect(discarded.typed_now).toBeUndefined();
+    expect(f.bytes()).toBe(bytes);
   }, 30_000);
 
   it("takes no colors from a scrolled viewport: an older grey box with the typed words holds the message", async () => {

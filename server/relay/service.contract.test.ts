@@ -1,5 +1,5 @@
 import { afterEach, expect, it, spyOn } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startBunRelay } from "../../relay/bun.ts";
@@ -415,13 +415,31 @@ it("fails closed on corrupt saved state and on an unreadable identity", async ()
   loadRelayIdentity(f.stateDir);
   writeFileSync(join(f.stateDir, "relay", "state.json"), "{bad");
   await f.restart();
-  expect(f.service.status().phase).toBe("error");
+  // nothing goes through the relay: off, with the reason
+  expect(f.service.status()).toMatchObject({ phase: "off", error: "Could not start the relay." });
   expect(f.attempts).toBe(0);
   writeFileSync(relayIdentityPath(f.stateDir), "{bad");
   expect((await f.request("/start", "POST")).status).toBe(409);
   expect(f.service.status().blocked).toBe("identity_unreadable");
   expect(readFileSync(relayIdentityPath(f.stateDir), "utf8")).toBe("{bad");
   expect(f.attempts).toBe(0);
+});
+
+it("reads a start that failed before any link existed as off, with the reason, and a later start retries", async () => {
+  const f = await fixture();
+  loadRelayIdentity(f.stateDir);
+  // the saved choice cannot be written: a directory stands where state.json goes
+  const state = join(f.stateDir, "relay", "state.json");
+  mkdirSync(state);
+  const failed = await f.request("/start", "POST");
+  expect(failed.status).toBe(500);
+  expect(await failed.json()).toMatchObject({ phase: "off", blocked: null, error: "Could not start the relay." });
+  expect(f.service.linked).toBe(false);
+  expect(f.attempts).toBe(0);
+  rmSync(state, { recursive: true });
+  const retried = await f.request("/start", "POST");
+  expect(retried.status).toBe(200);
+  expect(await retried.json()).toMatchObject({ phase: "connecting", error: null });
 });
 
 it("cancels a connecting link before restart can resume it", async () => {

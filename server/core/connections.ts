@@ -45,6 +45,12 @@ interface ConnectionState {
   watches: Map<string, PaneWatch>;
   unwatchDevice?: () => void;
   recheck?: ReturnType<typeof setTimeout>;
+  /**
+   * One frame larger than the whole budget, not counted as a backlog while it drains (#2566): `ahead` is what
+   * is still queued up to its end, `frame` its size in the queue, `last` the queue as last seen. Whatever is
+   * sent after it queues behind it, and the queue drains in order.
+   */
+  excused?: { ahead: number; frame: number; last: number };
 }
 
 /** Keyed by the very `data` object the upgrade passed, which Bun hands to every handler of the connection. */
@@ -90,19 +96,51 @@ export interface SocketLike {
 
 export type Client = SocketLike;
 
+/**
+ * The bytes queued for the client that count against its budget (OUTPUT_HARD_BYTES): all of them
+ * but what may be left of one frame larger than the budget, such as a large session's snapshot,
+ * which a client that keeps up still needs time to read (#2566).
+ */
+export function backlog(client: Client): number {
+  const state = stateOf(client);
+  const buffered = client.getBufferedAmount();
+  const excused = state.excused;
+  if (!excused) return buffered;
+  // what drained since it was last seen left from the front, up to that frame's end first
+  excused.ahead = Math.max(0, excused.ahead - Math.max(0, excused.last - buffered));
+  excused.last = buffered;
+  if (excused.ahead === 0) {
+    state.excused = undefined;
+    return buffered;
+  }
+  return buffered - Math.min(excused.frame, excused.ahead);
+}
+
 export function send(client: Client, message: ServerMessage): number {
-  if (stateOf(client).closing) return 0;
+  const state = stateOf(client);
+  if (state.closing) return 0;
   try {
     const encoded = JSON.stringify(message);
+    const bytes = Buffer.byteLength(encoded);
+    // A frame larger than the whole budget is sent while the backlog is within it, and excused
+    // while it drains; only one at a time, so a client holds at most one such frame past it.
+    const queued = backlog(client);
+    const oversized = bytes > OUTPUT_HARD_BYTES && queued <= OUTPUT_HARD_BYTES && !state.excused;
     // Include JSON escaping in the transport budget, before Bun could drop a
     // frame at its own cap. An overload close is explicit and never auto-replayed.
-    if (client.getBufferedAmount() + Buffer.byteLength(encoded) > OUTPUT_HARD_BYTES) {
+    if (queued + (oversized ? 0 : bytes) > OUTPUT_HARD_BYTES) {
       client.close(OUTPUT_STALLED_CLOSE_CODE, "terminal output transport stalled");
       return 0;
     }
     // -1 means ALREADY queued. Never retry that frame, or terminal bytes repeat.
     const result = client.send(encoded);
     if (result === 0) client.close(OUTPUT_STALLED_CLOSE_CODE, "output delivery failed");
+    else {
+      const after = client.getBufferedAmount();
+      // a frame sent after the excused one queues behind it: only its own bytes are new
+      if (oversized) state.excused = after > 0 ? { ahead: after, frame: Math.min(bytes, after), last: after } : undefined;
+      else if (state.excused) state.excused.last = after;
+    }
     return result;
   } catch {
     /* client vanished mid-send */

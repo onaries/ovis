@@ -27,6 +27,7 @@ export const AGENT_LABELS: Record<string, string> = {
   devin: "Devin",
   cmd: "Command Code",
   letta: "Letta Code",
+  "dsh-tui": "DeepSeek Harness",
 };
 
 /**

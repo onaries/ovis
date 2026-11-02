@@ -206,6 +206,7 @@ try {
             animations: composer.getAnimations().length,
             gap: Math.abs(composer.getBoundingClientRect().bottom - document.querySelector(".pane-frame.is-current .terminal-stack")!.getBoundingClientRect().bottom),
             turns: document.querySelectorAll(".pane-frame.is-current .chat-turn").length,
+            empty: document.querySelectorAll(".pane-frame.is-current .chat-empty").length,
             status: document.querySelector(".pane-frame.is-current .composer-status")!.getAttribute("data-status"),
           };
         });
@@ -213,6 +214,7 @@ try {
         assert.equal(sent.turns, 0);
         assert.notEqual(sent.status, "working");
         assert.equal(sent.greetings, 0, `the greeting goes with the send itself: ${JSON.stringify(sent)}`);
+        assert.equal(sent.empty, 0, `"No conversation yet" does not stand in for the greeting while the message is on its way: ${JSON.stringify(sent)}`);
         assert.equal(sent.transform, "none");
         assert.equal(sent.animations, 0, "the composer snaps: nothing animates");
         assert.ok(sent.gap <= 1, `composer docked in the frame of the first send: ${JSON.stringify(sent)}`);
@@ -225,9 +227,11 @@ try {
         await page.locator(".pane-frame.is-current .terminal-stack:not(.is-chat)").waitFor();
         await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
         await page.locator(".pane-frame.is-current .terminal-stack.is-chat").waitFor();
-        await page.locator(".pane-frame.is-current .chat-empty").waitFor();
+        // the conversation was read again and is presented
+        await page.locator(".pane-frame.is-current .chat-frame[data-pane-content]").waitFor({ state: "attached" });
         assert.equal(await page.locator(".pane-frame.is-current .chat-turn").count(), 0);
         assert.equal(await page.locator(".pane-frame.is-current .composer-greeting").count(), 0, "the greeting does not return after a send");
+        assert.equal(await page.locator(".pane-frame.is-current .chat-empty").count(), 0, "nor does the empty line stand in for it");
         assert.equal((await geometryOf(page)).transform, "none");
         console.log("PASS the greeting does not return when the chat is left and shown again after a send");
 

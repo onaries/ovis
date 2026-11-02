@@ -544,6 +544,8 @@ export class WsStream extends MuxStream {
 
 export class MuxEngine {
   readonly limits: LimitsV1;
+  /** Local admission can resume only after retirement releases the receive reservation. */
+  onStreamAvailable: (() => void) | undefined;
   generation = 0;
   private state: "active" | "failing" | "closed" = "active";
   private deviceId: string | undefined;
@@ -1180,6 +1182,7 @@ export class MuxEngine {
     stream.metadataBytes = 0;
     this.reserved -= stream.reservation;
     stream.reservation = 0;
+    queueMicrotask(() => { if (this.active) this.onStreamAvailable?.(); });
   }
   goAway(code: "shutdown" | "id_exhausted" = "shutdown", drainMs = 5000): void {
     if (!this.active) return;

@@ -904,6 +904,136 @@ it("watches a pane it let go of only on a server that can, again after a reconne
   client.close();
 });
 
+/** Answers every ping the client sent and the fake server has not answered yet, as the bridge does in order. */
+const answerPings = (socket: FakeSocket, answered: Set<unknown>) => {
+  for (const frame of socket.sent) if (frame.type === "ping" && !answered.has(frame.id)) {
+    answered.add(frame.id);
+    socket.receive({ type: "pong", id: frame.id });
+  }
+};
+
+const watchClient = (features = ["watch", "ping"]) => {
+  const client = new HerdrSocket("ws://test/ws");
+  const ended: string[] = [];
+  client.on((message) => { if (message.type === "watch-end") ended.push(message.pane_id); });
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot(features));
+  const frames = () => socket.sent.filter((m) => m.type === "watch" || m.type === "unwatch");
+  return { client, ended, socket, frames };
+};
+
+it("keeps a new watch when the unwatched view's end arrives after it, so the next unwatch still goes out", () => {
+  const { client, ended, socket, frames } = watchClient();
+  const answered = new Set<unknown>();
+  client.watch("w1:p1", 100, 30);
+  client.unwatch("w1:p1");
+  client.watch("w1:p1", 100, 30);
+  // the first view's end, sent before the server read the unwatch
+  socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  expect(ended).toEqual([]);
+  client.unwatch("w1:p1");
+  expect(frames().map((m) => m.type)).toEqual(["watch", "unwatch", "watch", "watch", "unwatch"]);
+  // once the server answered past every superseded view, a view that ends is ended for the page
+  client.watch("w1:p1", 100, 30);
+  answerPings(socket, answered);
+  socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  expect(ended).toEqual(["w1:p1"]);
+  client.unwatch("w1:p1");
+  expect(frames().at(-1)).toEqual({ type: "watch", pane_id: "w1:p1", cols: 100, rows: 30 });
+  client.close();
+});
+
+it("absorbs the late ends of two superseded views, so the newest unwatch still goes out", () => {
+  const { client, ended, socket, frames } = watchClient();
+  client.watch("w1:p1", 100, 30);
+  client.unwatch("w1:p1");
+  client.watch("w1:p1", 100, 30);
+  client.unwatch("w1:p1");
+  client.watch("w1:p1", 100, 30);
+  // both earlier views ended before the server read their unwatch
+  socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  expect(ended).toEqual([]);
+  const sent = frames().length;
+  client.unwatch("w1:p1");
+  expect(frames().slice(sent)).toEqual([{ type: "unwatch", pane_id: "w1:p1" }]);
+  client.close();
+});
+
+it("honours a view's own end after an unwatch once the server has read that unwatch", () => {
+  const { client, ended, socket, frames } = watchClient();
+  const answered = new Set<unknown>();
+  client.watch("w1:p1", 100, 30);
+  client.unwatch("w1:p1");
+  // the pong of a ping sent after the unwatch: the unwatched view can no longer end on a new one
+  answerPings(socket, answered);
+  client.watch("w1:p1", 100, 30);
+  const sent = frames().length;
+  socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  expect(ended).toEqual(["w1:p1"]);
+  // the view is over: it is not started again, and there is nothing left to unwatch
+  client.unwatch("w1:p1");
+  expect(frames().slice(sent)).toEqual([]);
+  client.close();
+});
+
+it("re-sends a replacement watch the server cannot start at most once, then lets its end reach the page", () => {
+  const { client, ended, socket, frames } = watchClient();
+  client.watch("w1:p1", 100, 30);
+  const start = socket.sent.length;
+  // a resize replaces the running view; the server cannot start the new one, so it ends it at once,
+  // answering each frame in order (its end comes before the pong of the ping sent after the watch)
+  client.watch("w1:p1", 120, 40);
+  for (let i = start; i < socket.sent.length && i < start + 100; i += 1) {
+    const frame = socket.sent[i]!;
+    if (frame.type === "watch") socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+    if (frame.type === "ping") socket.receive({ type: "pong", id: frame.id });
+  }
+  expect(frames().length - 1).toBeLessThanOrEqual(2);
+  expect(ended).toEqual(["w1:p1"]);
+  client.close();
+});
+
+// A bridge without "ping" cannot fence a superseded view's end, so the client tracks none: every end
+// reaches the page and nothing is re-sent or kept, and the page's next watch and unwatch both go out.
+const expectUntrackedEnds = ({ client, ended, socket, frames }: ReturnType<typeof watchClient>, ends: number) => {
+  const sent = frames().length;
+  for (let i = 0; i < ends; i += 1) socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  expect(ended).toEqual(Array.from({ length: ends }, () => "w1:p1"));
+  expect(frames().slice(sent)).toEqual([]);
+  expect(socket.sent.some((m) => m.type === "ping")).toBe(false);
+  client.watch("w1:p1", 100, 30);
+  client.unwatch("w1:p1");
+  expect(frames().slice(sent)).toEqual([{ type: "watch", pane_id: "w1:p1", cols: 100, rows: 30 }, { type: "unwatch", pane_id: "w1:p1" }]);
+  client.close();
+};
+
+it("tracks no superseded end on a bridge without ping: two late ends after two unwatches each reach the page", () => {
+  const watching = watchClient(["watch"]);
+  watching.client.watch("w1:p1", 100, 30);
+  watching.client.unwatch("w1:p1");
+  watching.client.watch("w1:p1", 100, 30);
+  watching.client.unwatch("w1:p1");
+  watching.client.watch("w1:p1", 100, 30);
+  expectUntrackedEnds(watching, 2);
+});
+
+it("tracks no superseded end on a bridge without ping: a replaced view's late end reaches the page", () => {
+  const replaced = watchClient(["watch"]);
+  replaced.client.watch("w1:p1", 100, 30);
+  replaced.client.watch("w1:p1", 120, 40);
+  expectUntrackedEnds(replaced, 1);
+
+  const both = watchClient(["watch"]);
+  both.client.watch("w1:p1", 100, 30);
+  both.client.unwatch("w1:p1");
+  both.client.watch("w1:p1", 100, 30);
+  both.client.watch("w1:p1", 120, 40);
+  expectUntrackedEnds(both, 2);
+});
+
 it("restores watches and chat interest once per connection: on the features frame, not again on the snapshot", () => {
   const client = new HerdrSocket("ws://test/ws");
   client.trustFeatures(() => true);

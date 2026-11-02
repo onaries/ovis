@@ -21,6 +21,8 @@ let wholeReads = 0;
 let newestStart = 0;
 let beginsAtOrigin = false;
 let slideReads = 0;
+/** The long chat's read: the test answers it once the chat has drawn a frame without it, as a PC's read comes. */
+let longRead = { asked: Promise.withResolvers<void>(), answer: Promise.withResolvers<void>() };
 const WHOLE_OUTPUT = `FULL TOOL OUTPUT\n${"detail ".repeat(250)}\nFULL OUTPUT END`;
 const olderEvents = new EventTarget();
 const olderReleases: Array<() => void> = [];
@@ -33,6 +35,20 @@ function turn(index: number, machine: string): ConversationTurn {
     ts: index % 3 === 0 ? null : "2026-10-12T00:00:00.000Z",
     parts,
   };
+}
+/** A long chat: a 400-line answer near its start, an 80-row table and a 24-paragraph answer at its end. */
+function longChat(): ConversationTurn[] {
+  const say = (role: ConversationTurn["role"], text: string): ConversationTurn => ({ role, ts: "2026-10-12T00:00:00.000Z", parts: [{ kind: "text", text }] });
+  const table = `| n | squared | cubed |\n|---|---|---|\n${Array.from({ length: 80 }, (_, n) => `| ${n + 1} | ${(n + 1) ** 2} | ${(n + 1) ** 3} |`).join("\n")}`;
+  return [
+    say("user", "Print the numbers from 1 to 400."),
+    say("assistant", Array.from({ length: 400 }, (_, n) => String(n + 1)).join("\n")),
+    ...Array.from({ length: 11 }, (_, n) => say(n % 2 ? "assistant" : "user", `Turn ${n + 2}. ${"A short line of text. ".repeat(n % 2 ? 3 : 1)}`)),
+    say("assistant", `The table has 80 rows.\n\n${table}`),
+    say("user", "Print the 24 Greek letter names."),
+    say("user", "Now end with the marker."),
+    say("assistant", `${Array.from({ length: 24 }, (_, n) => `Letter ${n + 1}`).join("\n\n")}\n\nLONG-CHAT-END`),
+  ];
 }
 async function metrics(page: Page) {
   return page.locator(".chat-view").evaluate((element) => {
@@ -126,6 +142,11 @@ try {
     if (url.pathname.endsWith("/pane/conversation/tool-output")) { wholeReads++; return new Response(WHOLE_OUTPUT); }
     // the chat asks for the pane's slash commands to mark skill names in an answer: this pane has none
     if (url.pathname.endsWith("/pane/commands")) return Response.json({ commands: [] });
+    if (url.pathname.endsWith("/pane/conversation") && url.pathname.includes("/machines/long/")) {
+      longRead.asked.resolve();
+      await longRead.answer.promise;
+      return Response.json({ source: "claude-transcript", history_id: "long:1", cursor: null, turns: longChat() });
+    }
     if (url.pathname.endsWith("/pane/conversation")) {
       const machine = url.pathname.includes("/machines/remote/") ? "remote" : "local";
       const older = url.searchParams.has("before");
@@ -155,6 +176,56 @@ try {
     return new Response(Bun.file(join(root, url.pathname.slice(1))));
   } });
   browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
+  // A long chat whose agent is idle (no glide) opens at its newest message, in a desktop pane as
+  // narrow as a split one and on a phone: every frame from the first that shows its rows until the
+  // list settles shows it. Rows far taller than their estimate grow while the list goes to the end:
+  // its last move there can stop short at the old height, and nothing grows after it to be followed.
+  for (const width of [1440, 390]) {
+    longRead = { asked: Promise.withResolvers<void>(), answer: Promise.withResolvers<void>() };
+    const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, locale: "en-US" });
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: "dark" })));
+    const page = await context.newPage();
+    activePage = page;
+    page.setDefaultTimeout(15_000);
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await page.getByText("REVISION-0", { exact: true }).waitFor();
+    await page.evaluate((narrow) => window.chatQa.resize(543, narrow ? 478 : undefined), width > 478);
+    await page.evaluate(() => { window.chatQa.status("idle"); window.chatQa.machine("long"); });
+    const unasked = setTimeout(() => longRead.asked.reject(new Error("the long chat never asked for its conversation")), 15_000);
+    await longRead.asked.promise;
+    clearTimeout(unasked);
+    await page.evaluate(async () => {
+      const frames: { gap: number; newestInView: boolean }[] = [];
+      Object.assign(window, { longLanding: new Promise((resolve) => {
+        // settled: the view and the transcript's height unchanged for 20 frames once the rows show;
+        // 600 frames at most, rows or not
+        let last = "", same = 0, ticks = 0;
+        const sample = () => {
+          ticks++;
+          const node = document.querySelector<HTMLElement>(".chat-view");
+          const end = [...node?.querySelectorAll("p") ?? []].find((p) => p.textContent === "LONG-CHAT-END");
+          if (node && node.querySelector("[data-chat-row]")) {
+            const view = node.getBoundingClientRect(), box = end?.getBoundingClientRect();
+            frames.push({ gap: Math.round(node.scrollHeight - node.clientHeight - node.scrollTop), newestInView: box !== undefined && box.top >= view.top - 1 && box.bottom <= view.bottom + 1 });
+            const now = `${node.scrollTop}:${node.scrollHeight}`;
+            same = now === last ? same + 1 : 0;
+            last = now;
+          }
+          if (same >= 20 || ticks >= 600) resolve(frames);
+          else requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      }) });
+      // the chat draws its frames without the answer, as it does while a PC reads it
+      for (let frame = 0; frame < 3; frame++) await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    longRead.answer.resolve();
+    const landing = await page.evaluate(() => (window as unknown as { longLanding: Promise<{ gap: number; newestInView: boolean }[]> }).longLanding);
+    const short = landing.filter((frame) => frame.gap > 1 || !frame.newestInView);
+    assert.ok(landing.length > 0 && short.length === 0, `a long chat's first open shows its newest message in every frame until it settles: ${short.length} of ${landing.length} frames short, last ${JSON.stringify(landing.at(-1))}`);
+    console.log(`PASS ${width}: a long chat's first open shows its newest message in all ${landing.length} frames until it settles`);
+    await context.close();
+  }
   for (const [width, theme] of [[1440, "dark"], [1440, "light"], [390, "dark"], [390, "light"]] as const) {
     revision = 0; epoch = 1; holdOlder = false; olderReads = 0; wholeReads = 0;
     newestStart = 0; beginsAtOrigin = false; slideReads = 0;

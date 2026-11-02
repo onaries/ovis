@@ -20,6 +20,7 @@ import { agentGet, HerdrError, paneGet, paneProcessInfo, paneRead, sessionSnapsh
 import { kiroCodexProcess, kiroNested, kiroWrapper } from "./kiro-terminal.ts";
 import { resolveAgent } from "./pane-context.ts";
 import { FOOTER } from "./codex-steering.ts";
+import { codexMarkdownDisplays, completedCodexAnswer } from "./codex-display.ts";
 import { codexStartScreenUnused } from "./start-screen.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -507,7 +508,7 @@ async function psEnvironmentLine(pid: number): Promise<string | null> {
  * spells CODEX_HOME= or HOME= itself, which `ps -E` cannot tell from the environment. Never this
  * server's own home: the pane's Codex may run with another HOME.
  */
-async function certainProcessCodexHome(pid: number, argv: readonly string[]): Promise<string | null> {
+export async function certainProcessCodexHome(pid: number, argv: readonly string[]): Promise<string | null> {
   let named: string | null = null;
   let home: string | null = null;
   try {
@@ -1070,6 +1071,24 @@ function answerAnchor(text: string): Anchor | null {
   return null;
 }
 
+function answerDisplayPattern(text: string, tail = 0): RegExp | null {
+  let pieces = cutAtLinkTargets(text).map((piece) => {
+    const open = piece.target === "" ? -1 : piece.text.lastIndexOf("[");
+    return open < 0 ? piece.text : piece.text.slice(0, open) + piece.text.slice(open + 1);
+  });
+  if (tail) {
+    let start = pieces.length - 1;
+    while (start >= 0 && normalizeDisplay(pieces[start]!).length < 64) start--;
+    if (start < 0) return null;
+    pieces = pieces.slice(start);
+    const marked = pieces[0]!.replace(/\s+/g, "");
+    let at = marked.length;
+    for (let left = tail; at > 0 && left > 0;) if (/[\p{L}\p{N}]/u.test(marked[--at]!)) left--;
+    pieces[0] = marked.slice(at);
+  }
+  return new RegExp(`${tail ? "" : "^"}${pieces.map((piece) => piece.replace(/\s+/g, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\(.*\\)")}$`, "u");
+}
+
 /** A time of day as Codex writes one in that footer: "7:05 PM" (%-I:%M %p) or "19:05" (%H:%M), never an impossible one. */
 const FOOTER_CLOCK = "(?:(?:1[0-2]|[1-9]):[0-5]\\d [AP]M|(?:[01]\\d|2[0-3]):[0-5]\\d)";
 /**
@@ -1218,6 +1237,30 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   const answersOf = (turns: ConversationTurn[]) => turns.filter((turn) => turn.role === "assistant")
     .flatMap((turn) => turn.parts).filter((part) => part.kind === "text").map((part) => part.text);
   const parsed = candidates.map((candidate) => parseCodexTranscript(candidate.text, Infinity));
+  const completion = blocks ? null : completedCodexAnswer(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))), CODEX_TURN_FOOTER);
+  if (completion !== null && !candidates.some(({ text }) => finishedAnswerTexts(text).some(endsInTurnFooter))) {
+    const foot = completion;
+    const tailLetters = Math.min(160, normalizeDisplay(foot.text).length);
+    const completed = candidates.flatMap((candidate) => {
+      const last = lastFinishedTurn(candidate.text);
+      if (last === null) return [];
+      const visible = withoutMemoryCitations(last.answer);
+      const variants = [visible, ...codexMarkdownDisplays(visible, foot.cropped)];
+      const matches = variants.filter((shown) => {
+        const letters = normalizeDisplay(cutAtLinkTargets(shown).map((piece) => piece.text).join(""));
+        if (letters.length < 64 || new Set(letters).size < 12) return false;
+        const display = foot.text.replace(/\s+/g, "");
+        return answerDisplayPattern(shown)?.test(display)
+          || (foot.cropped && tailLetters >= 64 && answerDisplayPattern(shown, tailLetters)?.test(display));
+      });
+      return matches.length === 0 ? [] : [{ path: candidate.path, rendered: matches.some((shown) => shown !== last.answer), asked: last.asked }];
+    });
+    if (completed.length > 1) return null;
+    const only = completed[0];
+    if (only && (footerOwners === null || footerOwners.has(only.path)) && !scrutinized.has(only.path)
+      && (only.rendered || foot.cropped || (only.asked !== null && foot.prompt !== null && foot.prompt.startsWith(collapsed(only.asked))
+      && /\+ \d+ (?:more )?lines? \(\^r to expand\)$/.test(foot.prompt)))) return only.path;
+  }
   // The answer Codex finished last with its footer below (footedAnswer) counts for one conversation only:
   // the one candidate whose last finished turn was asked the prompt shown and ended on exactly that answer.
   // None does while a candidate's answer ends in a footer-shaped line of its own, as nothing tells that line
@@ -2347,7 +2390,7 @@ export async function paneCodexProcess(paneId: string): Promise<{ pid: number; a
   return (await codexProcessesOf(paneId)).list[0] ?? null;
 }
 
-async function codexProcessesOf(paneId: string): Promise<{ list: { pid: number; argv?: string[] }[]; key: string }> {
+export async function codexProcessesOf(paneId: string): Promise<{ list: { pid: number; argv?: string[] }[]; key: string }> {
   const processInfo = await paneProcessInfo(paneId);
   // herdr's schema allows `argv: null`; this reader has always read argv as absent or a list
   // (the cast is the inline result type herdrRpc was given before the typed seam)

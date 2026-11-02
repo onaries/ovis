@@ -58,17 +58,19 @@ describe("buildSnapshot", () => {
 
   // an error says nothing about the turn having finished: no badge, never done
   it("takes each pane's agent and status from what its program reported, and rolls the most pressing up", () => {
-    const layout = { spaces: [{ id: "s1", name: "a", tabs: [{ id: "s1t1", name: "", root: { type: "row", id: "r", children: [block("t1"), block("t2"), block("t3"), block("t4")] } }] }] };
+    const layout = { spaces: [{ id: "s1", name: "a", tabs: [{ id: "s1t1", name: "", root: { type: "row", id: "r", children: [block("t1"), block("t2"), block("t3"), block("t4"), block("t5")] } }] }] };
     const snapshot = buildSnapshot([
       terminal("t1", { status: { app: "claude", state: "working" } }),
       terminal("t2", { status: { app: "codex", state: "blocked" } }),
       terminal("t3", { status: { app: "omp", state: "error" } }),
       terminal("t4"),
+      // herdr-core names Claude Code `claude-code`; the rest of the server knows it as herdr's `claude`
+      terminal("t5", { status: { app: "claude-code", state: "idle" } }),
     ], layout, "0.1.14");
-    expect(snapshot.panes.map((p) => [p.agent, p.agent_status])).toEqual([["claude", "working"], ["codex", "blocked"], ["omp", "unknown"], [null, "unknown"]]);
+    expect(snapshot.panes.map((p) => [p.agent, p.agent_status])).toEqual([["claude", "working"], ["codex", "blocked"], ["omp", "unknown"], [null, "unknown"], ["claude", "idle"]]);
     expect(snapshot.tabs[0]!.agent_status).toBe("blocked");
     expect(snapshot.workspaces[0]!.agent_status).toBe("blocked");
-    expect(snapshot.agents.map((a) => a.pane_id)).toEqual(["t1", "t2", "t3"]);
+    expect(snapshot.agents.map((a) => [a.pane_id, a.agent])).toEqual([["t1", "claude"], ["t2", "codex"], ["t3", "omp"], ["t5", "claude"]]);
   });
 
   it("gives each pane its terminal's own grid at its place in the tab's splits, so no two panes overlap", () => {

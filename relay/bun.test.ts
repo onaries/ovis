@@ -8,7 +8,8 @@ let relay: BunRelay;
 let base: string;
 let http: string;
 beforeAll(() => {
-  relay = startBunRelay({ port: 0 });
+  // This suite deliberately opens more than a minute's default budget in one run.
+  relay = startBunRelay({ port: 0, limits: { perAddressPerMinute: 10_000, globalPerMinute: 10_000 } });
   base = `ws://127.0.0.1:${relay.port}`;
   http = `http://127.0.0.1:${relay.port}`;
 });

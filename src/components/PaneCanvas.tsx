@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type DragEvent, type MouseEvent, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
-import { ArchiveRestore, Columns2, Ellipsis, Eraser, Maximize2, MoveHorizontal, Pencil, Rows2, ArrowLeftRight, TextWrap, X } from "lucide-react";
+import { ArchiveRestore, Columns2, Ellipsis, Eraser, Maximize2, MoveHorizontal, Pencil, RotateCw, Rows2, ArrowLeftRight, TextWrap, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { HerdrPane, PaneLayoutSnapshot, SessionSnapshot } from "../../shared/protocol.ts";
 import { useAppLayout, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
@@ -18,9 +18,11 @@ import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { paneLifetimes } from "../lib/paneLifetime.ts";
-import { displayPaneTitle } from "./Sidebar.tsx";
+import { displayPaneTitle, StatusBadge } from "./Sidebar.tsx";
+import { paneStatus } from "../lib/status.ts";
 import { RowMenu, type RowMenuItem } from "./RowMenu.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
+import { CodexRestartDialog } from "./CodexRestartDialog.tsx";
 import "./PaneCanvas.css";
 
 type PaneLayoutSplit = PaneLayoutSnapshot["splits"][number];
@@ -38,6 +40,7 @@ interface Props {
   onOpenInHalf?: (paneId: string, side: SplitSide) => void;
   /** the PC's panes are mirrored (no terminal attach there): their grid can be wider than this screen */
   mirrored?: boolean;
+  watching?: boolean;
   /** opens Recover unsent text for the pane, offered while earlier herdrs' panes left some (UnsentText) */
   onRecoverUnsent?: (target: HerdrPane) => void;
 }
@@ -62,7 +65,7 @@ interface Drag {
 }
 
 /** The active tab, drawn from herdr's rectangles. No browser-owned layout or PTY state. */
-export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged, renderPane, actionsRef, onOpenInHalf, mirrored = false, onRecoverUnsent }: Props) {
+export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged, renderPane, actionsRef, onOpenInHalf, mirrored = false, watching = false, onRecoverUnsent }: Props) {
   const t = useT();
   const { settings, update: updateSettings } = useSettings();
   const narrowScreen = useMediaQuery(MIRROR_WRAP_QUERY);
@@ -89,6 +92,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   const [menu, setMenu] = useState<Menu | null>(null);
   const [renaming, setRenaming] = useState<HerdrPane | null>(null);
   const [closing, setClosing] = useState<HerdrPane | null>(null);
+  const [restarting, setRestarting] = useState<string | null>(null);
   const [error, setError] = useState<UserError | null>(null);
   // A new pane can be selected before its snapshot arrives, and a selected pane can close
   // before App confirms its replacement. Keep the prior tab's surviving mounts (and their
@@ -184,6 +188,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   ];
   const itemsFor = (target: HerdrPane): RowMenuItem[] => [
     ...layoutItems(target),
+    ...(!watching && (target.agent ?? target.agent_session?.agent) === "codex" ? [{ id: "restart-codex", label: t("Restart Codex"), icon: RotateCw, danger: true, run: () => setRestarting(target.pane_id) }] : []),
     // a mirror, or a pane watched at another device's grid, wider than the screen is folded to it
     // (lib/terminalFold.ts); a full-screen program reads better at its own width, panned sideways.
     // This device's choice, for every such pane
@@ -329,7 +334,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData(PANE_DRAG_TYPE, paneDragData({ machineId, paneId: item.pane_id }));
           }}>
-          <span className="pane-frame-title">{displayPaneTitle(item)}</span>
+          <span className="pane-frame-title"><span className="pane-frame-title-text">{displayPaneTitle(item)}</span>{item.agent && <StatusBadge compact status={paneStatus(item)} />}</span>
           <button type="button" className="icon-button pane-frame-menu" aria-label={t("Pane actions for {name}", { name: displayPaneTitle(item) })}
             onClick={(event) => showMenu(item, event.currentTarget)}><Ellipsis aria-hidden="true" /></button>
         </div>
@@ -360,6 +365,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     {error && <div className="pane-canvas-error" role="alert">{error.message}{error.detail !== null && <><br /><code>{error.detail}</code></>}<button className="icon-button" aria-label={t("Dismiss")} onClick={() => setError(null)}><X /></button></div>}
     {menu && target && <RowMenu anchor={menu.anchor} point={menu.point} restoreFocusTo={menu.previousFocus} title={t("Pane actions for {name}", { name: displayPaneTitle(target) })} items={items} onClose={closeMenu} />}
     {renaming && <PaneRename pane={renaming} onClose={() => setRenaming(null)} onSave={async (label) => { await api.renamePane(renaming.pane_id, label); onChanged(); }} />}
+    {restarting && <CodexRestartDialog key={restarting} paneId={restarting} onClose={() => setRestarting(null)} onRestarted={onChanged} />}
     {closing && <ConfirmDialog title={t("Close pane {name}?", { name: displayPaneTitle(closing) })}
       body={t("The pane's running processes will stop. Closing its last pane also closes the workspace.")}
       confirmLabel={t("Close pane")} onClose={() => setClosing(null)} onConfirm={async () => { await api.closePane(closing.pane_id); setClosing(null); onChanged(); }} />}

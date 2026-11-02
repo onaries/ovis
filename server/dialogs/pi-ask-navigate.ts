@@ -15,7 +15,8 @@ const questionOf = (prompt: ParsedPrompt): string => JSON.stringify([prompt.kind
  */
 export async function navigatePiAsk(initial: ParsedPrompt, target: number, io: {
   read(): Promise<ParsedPrompt | null>;
-  send(key: string): Promise<void>;
+  /** sends the key once the read right before it still shows `from`, the tab it moves from */
+  send(key: string, from: (shown: ParsedPrompt) => boolean): Promise<void>;
   active(): boolean;
   deadline: number;
 }, tabsOf: (prompt: ParsedPrompt) => Tabs | undefined = (prompt) => prompt.piAskForm): Promise<ParsedPrompt | null> {
@@ -39,7 +40,10 @@ export async function navigatePiAsk(initial: ParsedPrompt, target: number, io: {
       || previous === initial && before.id !== initial.id || !io.active()) return null;
     previous = before; // what the arrow leaves: the wait below tells a move from this frame
     const direction = target > index ? 1 : -1;
-    await io.send(direction === 1 ? KEY.right : KEY.left);
+    const at = index;
+    const left = previous;
+    await io.send(direction === 1 ? KEY.right : KEY.left,
+      (shown) => tabsOf(shown)?.identity === form.identity && tabsOf(shown)!.index === at && shown.id === left.id && io.active());
     const expected = index + direction;
     let moved = false;
     let litOverOld: number | undefined;

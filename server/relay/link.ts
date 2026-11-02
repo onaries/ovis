@@ -29,6 +29,8 @@ export interface RelayLinkOptions {
   readonly connect?: (url: string) => WebSocket;
   readonly clock?: MuxClock;
   readonly random?: () => number;
+  /** The version WELCOME tells the shell (src/lib/relay/skew.ts); package.json's by default. */
+  readonly serverVersion?: string;
   readonly onState: (phase: "connecting" | "online" | "error", error: string | null) => void;
 }
 
@@ -223,7 +225,7 @@ export class RelayLink {
       const handlers = this.options.services.core.socketHandlers;
       entry.session = new RelaySession({
         channel, services: this.options.services, port: this.options.port, serverId: this.options.identity.server_id,
-        serverVersion: version, minSupportedClient: "0.4.20",
+        serverVersion: this.options.serverVersion ?? version, minSupportedClient: "0.4.20",
         routingOverhead: 0, maxWireMessageBytes: 64 * 1024,
         onAuthenticated: (deviceId) => this.authenticated(id, entry, deviceId),
         websocket: {

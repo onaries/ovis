@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactN
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
 import { ChatRowMemoryContext, type ChatRowMemory } from "../lib/chatRowState.tsx";
+import { dropPendingListScroll } from "../lib/followScroll.ts";
 import { chatSelectionClipboardPayload } from "../lib/markdownClipboard.ts";
 // ChatTimeline.css is imported by ChatView: the frame and the loading state need it before this chunk
 
@@ -144,6 +145,24 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     return () => { clearTimeout(quiet); node.removeEventListener("scroll", scrolled); };
   }, [scroller, listRef, following, manualLayout, smoothFollow]);
 
+  // The footer (a sent message's bubble, the Working line) is no row: no item size change reports
+  // its growth, and a scroll to the end asked for before the list measured it stops short of it,
+  // under the composer. A reader following the end is put there before the grown footer is
+  // painted, and that short aim is dropped.
+  const footerRef = useCallback((box: HTMLDivElement) => {
+    let height = box.offsetHeight;
+    const observer = new ResizeObserver(() => {
+      const grew = box.offsetHeight > height;
+      height = box.offsetHeight;
+      const node = scroller.current;
+      if (!grew || node === null || !following.current || manualLayout.current) return;
+      dropPendingListScroll(listRef.current);
+      node.scrollTop = node.scrollHeight;
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [scroller, listRef, following, manualLayout]);
+
   useLayoutEffect(() => {
     const transcript = scroller.current?.querySelector<HTMLElement>(".chat-transcript");
     if (transcript) {
@@ -185,7 +204,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     maintainVisibleContentPosition
     alwaysRender={{ keys: pinned }}
     ListHeaderComponent={<div className="chat-virtual-header">{header}</div>}
-    ListFooterComponent={<div className="chat-virtual-footer">{footer}</div>}
+    ListFooterComponent={<div ref={footerRef} className="chat-virtual-footer">{footer}</div>}
     onScroll={onScroll}
     onLoad={() => { if (following.current) listRef.current?.scrollToEnd({ animated: false }); }}
     onItemSizeChanged={() => {

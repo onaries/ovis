@@ -12,6 +12,8 @@ interface InFlight { sent: string; at: number }
 export const SEND_LEASE_MS = 120_000;
 const SENDING_PREFIX = "ovis:composer-sending:";
 const DRAFT_PREFIX = "ovis:composer-draft:";
+/** the draft of the pane `paneKey` (its `paneStorageId`) */
+export const composerDraftKey = (paneKey: string): string => DRAFT_PREFIX + paneKey;
 /** a draft that holds an agent-only message put back by Edit (#511): it is sent `agent_only` until the box is emptied */
 export const AGENT_ONLY_PREFIX = "ovis:composer-agent-only:";
 const agentOnlyKey = (key: string): string => AGENT_ONLY_PREFIX + (key.startsWith(DRAFT_PREFIX) ? key.slice(DRAFT_PREFIX.length) : key);

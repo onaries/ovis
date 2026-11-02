@@ -40,6 +40,12 @@ and a revoked device keeps it) is not enough to take the PC's place. At most 16 
 `server_id` wait to answer at once; a 17th closes the oldest `1013`, so pushing the PC's own socket
 out takes 16 arrivals within its one round trip.
 
+The PC retries transient refusals, including `4401` with `server proof timed out` or the
+ambiguous `invalid or expired server proof`, with its normal backoff. Only a control-socket
+`4401` with `server key does not match server_id` or `invalid server key` stops retries and
+reports the reason in relay status. An invalid or out-of-order first challenge is closed by
+the PC with `4000` and retried. Refusing a data socket does not stop the control link.
+
 - A client's first frame is `{"type":"assigned","connection_id":"<32 hex>"}`, its random 128-bit id.
 - The control socket hears `{"type":"sync","connection_ids":[...]}` when it opens (the clients
   still waiting for a data socket), `{"type":"connected","connection_id":"..."}` when a client
@@ -49,8 +55,9 @@ out takes 16 arrivals within its one round trip.
 - A client holds one of the PC's slots once the PC has answered it, that is once its data socket
   has sent a frame. Until then it is waiting: with the PC connected, it is closed `1013` 15 s after
   the PC could have answered (from its data socket attaching, or from the client or the PC
-  arriving, whichever is later), keepalives or not. While no PC is connected it waits for one, and
-  a PC that comes back gets the full 15 s again. A client past the waiting limit pushes the oldest
+  arriving, whichever is later), keepalives or not. While no PC is connected it waits 30 s for one
+  (from its arrival, or from the PC leaving), then closes `1013`, keepalives or not; a PC that
+  comes back in time gives it the full 15 s again. A client past the waiting limit pushes the oldest
   waiting one out, so holding the waiting places takes 4 arrivals within one phone's handshake.
 - From then on, every frame from the client goes to its data socket and back, text as text and
   binary as binary, byte for byte. Frames a client sends before its data socket attaches are held
@@ -68,11 +75,16 @@ out takes 16 arrivals within its one round trip.
 | clients the PC has answered, per `server_id` | 8 | the new client closes `1013` |
 | clients the PC has not answered yet, per `server_id` | 4 | the oldest of them closes `1013` |
 | a client the PC has not answered, with the PC connected | 15 s | the client closes `1013` |
+| a client waiting while no PC is connected | 30 s | the client closes `1013` |
 | a PC socket answering its challenge | 10 s, 16 at once per `server_id` | `4401`; past 16 the oldest closes `1013` |
 | frames held for a waiting client | 200 frames or 1 MiB, whichever comes first | the client closes `1013` |
 | idle | 120 s without a frame or keepalive | the socket closes `1001` |
-| connections per address (Cloudflare) | 30 a minute | `429`, `Retry-After: 60` |
-| connections from all addresses (Cloudflare) | 600 a minute | `429`, `Retry-After: 60` |
+| connections per address | Cloudflare Worker: 30 a minute; Bun: 120 a minute | `429`, `Retry-After: 60` |
+| connections from all addresses | 600 a minute | `429`, `Retry-After: 60` |
+| total sockets (Bun, including pending upgrades/proofs) | 1024 | `503`, `Retry-After: 60` |
+| rooms (Bun, including pending upgrades) | 256 | `503`, `Retry-After: 60` |
+| open sockets per address (Bun, waiting, connected or upgrading) | 64 | `429`, `Retry-After: 60`; open sockets are never closed for it |
+| address buckets (Bun) | 4096 | a new address gets `429` until an idle bucket expires |
 
 | Code | Meaning |
 |---|---|
@@ -151,9 +163,37 @@ bun relay/bun.ts --port 8787 --hostname 127.0.0.1
 ```
 
 It listens on plain HTTP, so put it behind a TLS proxy (Caddy, nginx, `tailscale serve`) and give
-the PC and devices the `wss://` address. The Bun server applies no rate limit of its own
-(`startBunRelay({ limiters })` takes the same limiter shape as Cloudflare's); the per-socket
-limits above hold everywhere.
+the PC and devices the `wss://` address. Bun enables in-memory token buckets by default,
+with a 120/address/minute and 600/global/minute budget. They start full and
+refill continuously (bursts of 120 and 600 respectively); they are process-local, whereas
+Cloudflare's approximate counters are per location. An address refusal does not spend global
+tokens. Idle address buckets expire after a minute; active buckets are never evicted to admit
+new addresses. Restarting the process clears the budgets.
+
+The address is the TCP peer, never an untrusted forwarding header. Behind a local TLS proxy,
+all users share that proxy's address bucket and its open-socket cap, so size both for the whole
+deployment. Set
+its budget for that deployment and also limit
+real client addresses at the trusted proxy; do not simply trust `X-Forwarded-For` from callers.
+The global cap remains a backstop.
+
+| Flag | Environment | Default |
+|---|---|---|
+| `--per-address-per-minute` | `RELAY_PER_ADDRESS_PER_MINUTE` | 120 |
+| `--global-per-minute` | `RELAY_GLOBAL_PER_MINUTE` | 600 |
+| `--max-sockets` | `RELAY_MAX_SOCKETS` | 1024 |
+| `--max-rooms` | `RELAY_MAX_ROOMS` | 256 |
+| `--max-addresses` | `RELAY_MAX_ADDRESSES` | 4096 |
+| `--max-sockets-per-address` | `RELAY_MAX_SOCKETS_PER_ADDRESS` | 64 |
+
+Flags override environment. Values must be positive safe integers; zero, infinity, fractions
+and missing flag values fail startup. `startBunRelay({ limits: { maxSockets: 2048, ... } })`
+accepts the same budgets as camel-case options (`perAddressPerMinute`, `globalPerMinute`,
+`maxSockets`, `maxRooms`, `maxAddresses`, `maxSocketsPerAddress`). Programmatic options do not read environment.
+`startBunRelay({ limiters })` can replace just the rate limiters; room/socket caps still hold.
+Admission reserves both caps synchronously before upgrade, rolls back failed upgrades and
+reclaims a room when its last pending/open socket leaves. `/health` remains available at capacity.
+All per-room and per-frame limits apply on both adapters.
 
 ## Tests
 
@@ -167,4 +207,5 @@ frames, the idle alarm and the limiters. In CI they run with the unit tests in F
 `bun relay/load-smoke.ts --pcs 200 --clients 4` starts the Bun relay, connects 200 PCs with 4
 clients each, sends 50 random frames each way per client and prints frames sent and received;
 it exits 1 unless every frame arrived intact and in order. `--url ws://host:port` points it at a
-running relay instead.
+running relay instead. The local load smoke sizes its budgets to the requested load rather than
+disabling production limits; provision matching budgets when using `--url`.

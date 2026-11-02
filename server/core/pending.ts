@@ -36,6 +36,7 @@ import { NO_AGENT_MESSAGE, PASTED_NOT_SENT_MESSAGE } from "../../shared/submit-o
 import { processStartedAtAsync } from "../process-start.ts";
 import { agentProcessInFront } from "../agent-process.ts";
 import { agentProcesses } from "../conversation.ts";
+import { isShellAgentKind, SHELL_AGENTS } from "../shell-agent.ts";
 import { capturePiDeliveryAnchorRetrying, matchPiDeliveries, PiReceiptCapacity, type PiDeliveryAnchor, type PiReceiptReservation } from "../pi-delivery.ts";
 import { isPiProcess, piTranscriptPath, piUnwrittenHeaderId } from "../pi.ts";
 import { PendingRequestBook } from "../pending-requests.ts";
@@ -54,7 +55,8 @@ export type PendingOwner = Client | FirstMessageOwner;
 const isClient = (owner: PendingOwner): owner is Client => owner !== FIRST_MESSAGE_OWNER;
 /** a first message's lease is the delivering connection's, taken at each attempt: none is kept on the record */
 type PendingItem = PendingRecord<PendingOwner, PendingLease | null>;
-type SubmitReply = { ok: boolean; pending?: PendingMessage; code?: string; message?: string };
+/** `refusal`: a queued request's own input_draft refusal, kept for its submit-result's draft actions; never sent as is */
+type SubmitReply = { ok: boolean; pending?: PendingMessage; code?: string; message?: string; refusal?: { draft: string | null; box: string | null; identity: PendingIdentity } };
 type PiTypedReceipt = { owner: Client; resumeKey?: string; message: PendingMessage; match: string; identity: PendingIdentity; anchor: PiDeliveryAnchor | null };
 /** a first message refused before anything was typed because its connection could not type it yet stays queued for its next attach or turn */
 const FIRST_MESSAGE_RETRY_CODES = new Set(["input_not_ready", "pending_lease_lost", "disconnected", "read_only"]);
@@ -67,13 +69,26 @@ const AGENT_NOT_READY = { code: "agent_not_ready", message: NO_AGENT_MESSAGE };
  * has exited, and a shell, the pane's own or one started since, is no agent for a message whose `> quote` lines it
  * would run as redirects.
  */
-/** `entry` runs `agent`'s own program: its binary or a runtime running it, Claude's native build, or Pi's npm entry. */
+/** `entry` runs `agent`'s own program: its binary or a runtime running it, Claude's native build, Pi's npm entry, or a shell-started agent's own process (SHELL_AGENTS). */
 function runsAgentProgram(entry: { name?: string | null; argv0?: string | null; argv?: readonly string[] | null }, agent: string | null): boolean {
   if (agent === null) return false;
   if (agentProcesses([entry], agent).length > 0) return true;
+  // a shell-started agent is known by its own test (DeepSeek Harness's dsh-tui runs as node …/host-entry.js)
+  if (isShellAgentKind(agent) && SHELL_AGENTS[agent]!(entry.argv ?? [])) return true;
   // Claude's native build titles itself `Claude`, or by its version on macOS (claude-store.ts)
   if (agent === "claude") return isClaudeProcess({ name: entry.name ?? undefined, argv0: entry.argv0 ?? undefined, argv: entry.argv ?? undefined });
   return agent === "pi" && isPiProcess(entry.argv ?? []);
+}
+/**
+ * `entry` is known to run another program than `agent`'s: its argv (or argv0) shows one, or its name is a program's
+ * (a child such as git, gh or security) rather than a runtime's. A listing with no argv and only a runtime's name, or
+ * none, does not say what it runs.
+ */
+function runsOtherProgram(entry: { name?: string | null; argv0?: string | null; argv?: readonly string[] | null }, agent: string | null): boolean {
+  if (runsAgentProgram(entry, agent)) return false;
+  if ((entry.argv?.length ?? 0) > 0 || entry.argv0) return true;
+  const name = entry.name?.trim() ?? "";
+  return name !== "" && !["node", "bun", "python", "python3"].includes(name);
 }
 const agentRuns = (identity: PendingIdentity, recognized: boolean): boolean => identity.agent !== null && identity.processPid !== null && recognized;
 /** a first message whose pane runs something other than the agent launched for it, found at a pane's event */
@@ -401,7 +416,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
    * runs now: the reads are made again from what is, so a replacement that came meanwhile is never checked against
    * the old process's birth. While the foreground keeps changing, the latest process with no birth.
    */
-  async function currentIdentity(paneId: string, bound: number | null = null): Promise<{ pane: HerdrPane; identity: PendingIdentity; shellPid: number | null; processes: ProcessInfo | undefined;
+  async function currentIdentity(paneId: string, bound: number | null = null, kind: string | null = null): Promise<{ pane: HerdrPane; identity: PendingIdentity; shellPid: number | null; processes: ProcessInfo | undefined;
     /** the process, as the last read shows it, is the agent's own program (runsAgentProgram); a holder record alone is no proof */
     recognized: boolean;
     /** the process is the OmO holding a session, under the start its holder record was checked against */
@@ -414,7 +429,13 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     const pick = async (info: ProcessInfo | undefined): Promise<{ pid: number | null; held: { pid: number; started: number | null } | null }> => {
       // the bound process first while it holds one: two holders listed in another order keep the bound one (#2190)
       const held = base.agent === "omo" ? await heldOmoProcess(pane, info?.foreground_processes ?? [], undefined, bound) : null;
-      return { pid: agentProcessInFront(info, base.agent, bound, held?.pid)?.pid ?? info?.foreground_processes?.[0]?.pid ?? null, held };
+      // the kind launched there stands for herdr's name until herdr gives one; a process that runs the agent's program
+      // is picked wherever it is listed, before the first in front: a child it runs as it starts may be listed first (#2525)
+      const agent = base.agent ?? kind;
+      const foreground = info?.foreground_processes ?? [];
+      return { pid: agentProcessInFront(info, agent, bound, held?.pid)?.pid
+        ?? foreground.find((entry) => entry.pid !== info?.shell_pid && runsAgentProgram(entry, agent))?.pid
+        ?? foreground[0]?.pid ?? null, held };
     };
     const inFront = (info: ProcessInfo | undefined, pid: number | null): boolean =>
       pid === null ? (info?.foreground_processes ?? []).length === 0 : (info?.foreground_processes ?? []).some((entry) => entry.pid === pid);
@@ -600,7 +621,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     }
   }
   async function dispatchPendingText(owner: Client, paneId: string, text: string, lease: PendingLease, identity: PendingIdentity,
-    automatic: boolean, arrivedAt: number, committing: (working: boolean, restarting?: boolean) => void = () => {}, requestId = 0, capacityRetry = false, agentOnly = false): Promise<SubmitReply> {
+    automatic: boolean, arrivedAt: number, committing: (working: boolean, restarting?: boolean) => void = () => {}, requestId = 0, capacityRetry = false, agentOnly = false, queued = false): Promise<SubmitReply> {
     let wrote = false;
     // a message for an agent alone pasted and then refused its Enter (#511): its text may sit in the input line, so it is
     // held for the user and never pasted again automatically
@@ -629,7 +650,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // a draft typed in the terminal is the user's: the paste would join it and the Enter send both (#609).
       // The box is the live screen's; only the viewport read tells Claude's grey text from a draft. The live
       // read comes after the colors, so text typed between the two is in the box and holds the message.
-      if (context.identity.agent === "claude") await freeClaudeBox(paneId, context.working, () => authorizePending(owner, paneId, lease), arrivedAt + (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS));
+      if (context.identity.agent === "claude") await freeClaudeBox(paneId, context.working, () => authorizePending(owner, paneId, lease), arrivedAt + (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS), automatic || queued)
+        .catch((error: unknown) => { throw error instanceof InputDraftError ? new InputDraftError(error.draft, context.identity, error.box) : error; });
       else if (context.identity.agent === "hermes") context.screen = await freeHermesInput(paneId, context.identity);
       // OpenCode v2 attaches a skill only through its autocomplete, never from a paste. A first message
       // goes before any Chat read the pane's catalog: the cold send's catalog (bounded reads, within the
@@ -746,6 +768,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       const fault = error instanceof HerdrError && error.code === "submit_changed" ? pendingFault(error)
         : wrote ? { code: "submit_changed", message: "Pending-message delivery could not be confirmed. Check the terminal before sending again." } : pendingFault(error);
       if (automatic && !wrote && fault.code === "agent_blocked") pending.observe(paneId, "blocked", mark);
+      // a queued request typed at once is refused as an immediate send is: with the draft (or box) its actions need
+      if (queued && !wrote && error instanceof InputDraftError && error.identity) return { ok: false, ...fault, refusal: { draft: error.draft, box: error.box, identity: error.identity } };
       return { ok: false, ...fault };
     } finally { piCapacity.release(piReservation); }
   }
@@ -824,14 +848,16 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     const page = requester === null ? undefined : [...clients].find((client) => client.data.connectionId === requester && present(client));
     const message = await serialize(paneId, async () => {
       // bound to the terminal and the kind launched there, and to the process the launch left in front when
-      // it is not the shell: a replacement of the same kind is not what the message was sent to. Right after
-      // a launch herdr may name no agent yet; that binding is completed when it does (bindLaunched)
-      const { pane, identity, shellPid, processes } = await currentIdentity(paneId, launchedPid);
+      // it runs that kind's program: a replacement of the same kind is not what the message was sent to. Right
+      // after a launch herdr may name no agent yet, and what is in front may be a child the agent runs as it
+      // starts (Claude Code's git and gh); that binding is completed when herdr names it (learn, bindLaunched)
+      const { pane, identity, shellPid, processes, held } = await currentIdentity(paneId, launchedPid, kind);
       // The launch's own word wins: a shell-started agent's launch says which process it came up as, which
       // may have ended already, and then an agent the user starts later is not the one launched
       const launchedProcess = launchedPid !== null
         ? { processPid: launchedPid, processBirth: identity.processPid === launchedPid ? identity.processBirth : await processStartedAtAsync(launchedPid) }
         : identity.processPid !== null && identity.processPid !== undefined && identity.processPid !== shellPid
+          && runsAgentProgram(processes?.foreground_processes?.find((entry) => entry.pid === identity.processPid) ?? {}, kind)
           ? { processPid: identity.processPid, processBirth: identity.processBirth } : {};
       // and to the sessions herdr, OmO or Claude's own record already name for that agent: a /resume
       // before the message went is another session
@@ -841,7 +867,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         { agent: kind, terminalId: pane.terminal_id, ...sessions, ...launchedProcess });
       launchBound.add(item);
       // this read learns as an event's would: an agent it sees in front under its kind is named before it can leave
-      learn(item, identity, shellPid, processes);
+      learn(item, identity, shellPid, processes, held);
       // no page to type it, or one that closed meanwhile: held before any drain could see it queued
       if (page === undefined || !present(page)) pending.holdItem(item, FIRST_MESSAGE_UNATTENDED);
       else {
@@ -860,13 +886,21 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
    * never replaced, so a later session or process of the same kind is another; pendingContext holds the
    * message for it with pending_target_changed.
    */
-  function learn(item: PendingItem, identity: PendingIdentity, shellPid: number | null, processes: ProcessInfo | undefined): void {
+  function learn(item: PendingItem, identity: PendingIdentity, shellPid: number | null, processes: ProcessInfo | undefined, held: { pid: number } | null = null): void {
     if (identity.terminalId !== item.identity.terminalId || identity.agent !== item.identity.agent || !samePendingIdentity(item.identity, identity)) return;
     item.identity.session ??= identity.session;
     // the shell itself is never the launched process: with it still in front, the launch is not known yet
     if (identity.processPid !== shellPid) {
-      item.identity.processPid ??= identity.processPid;
-      item.identity.processBirth ??= identity.processBirth;
+      // nor is a process known to run another program while something else is in front too: a child the agent runs as
+      // it starts (#2525), learned at a later event once the agent's own program is seen or it is alone in front. The
+      // process picked for the agent herdr names is trusted when its listing does not say what it runs (no argv)
+      const foreground = (processes?.foreground_processes ?? []).filter((entry) => entry.pid !== shellPid);
+      const entry = foreground.find((candidate) => candidate.pid === identity.processPid);
+      if (identity.processPid == null || held?.pid === identity.processPid
+        || (entry !== undefined && (foreground.length === 1 || !runsOtherProgram(entry, item.identity.agent)))) {
+        item.identity.processPid ??= identity.processPid;
+        item.identity.processBirth ??= identity.processBirth;
+      }
       // bound here or at its queueing, the launched process is named as it runs under its kind (an exec renames it)
       const name = identity.processPid === item.identity.processPid ? processName(processes, identity.processPid) : undefined;
       if (name) launchedNames.set(item, name);
@@ -880,12 +914,12 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     if (items.length === 0) return;
     // read for each message's own bound process (a pane holds one first message, so one read in practice)
     for (const item of items) {
-      const { identity, shellPid, processes } = await currentIdentity(paneId, item.identity.processPid ?? null);
+      const { identity, shellPid, processes, held } = await currentIdentity(paneId, item.identity.processPid ?? null);
       // its agent came up and left, or what herdr names there is not what was launched for it: held at once, as
       // pendingContext would hold it at a send, which a pane that is not at rest never gets to
       if (launchGone(item, identity, shellPid, processes)) holdFor(item, LAUNCH_GONE);
       else if (targetChanged(item, identity)) holdFor(item, TARGET_CHANGED);
-      else learn(item, identity, shellPid, processes);
+      else learn(item, identity, shellPid, processes, held);
     }
   }
   /**
@@ -897,10 +931,10 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
    */
   async function bindLaunched(item: PendingItem): Promise<"bound" | "wait" | "ended"> {
     if (!launchBound.has(item)) return "bound";
-    const { identity, shellPid, processes } = await currentIdentity(item.paneId, item.identity.processPid ?? null);
+    const { identity, shellPid, processes, held } = await currentIdentity(item.paneId, item.identity.processPid ?? null);
     if (launchGone(item, identity, shellPid, processes)) return "ended";
     if (identity.terminalId === item.identity.terminalId && identity.agent === null) return "wait";
-    learn(item, identity, shellPid, processes);
+    learn(item, identity, shellPid, processes, held);
     return "bound";
   }
   /** Whether what runs in a first message's pane is not what was launched for it: another terminal, or an agent herdr names that disagrees. */
@@ -1027,8 +1061,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
   const pendingFrames = {
     async submit(client: Client, message: Frame<"submit">): Promise<void> {
       // every submit is answered: the composer keeps its text until it hears back
-      const result = (ok: boolean, code?: string, text?: string, accepted?: PendingMessage, draft?: string | null, box?: string | null) => send(client, {
-        type: "submit-result", id: message.id, pane_id: message.pane_id, ok, ...(accepted ? { pending: accepted } : {}), ...(code ? { code, message: text } : {}),
+      const result = (ok: boolean, code?: string, text?: string, accepted?: PendingMessage, draft?: string | null, box?: string | null, typedNow = false) => send(client, {
+        type: "submit-result", id: message.id, pane_id: message.pane_id, ok, ...(accepted ? { pending: accepted } : {}), ...(typedNow ? { typed_now: true as const } : {}), ...(code ? { code, message: text } : {}),
         ...(draft ? { draft } : {}), ...(!draft && typeof box === "string" ? { box } : {}),
       });
       if (!Number.isSafeInteger(message.id) || typeof message.pane_id !== "string" || !message.pane_id
@@ -1122,7 +1156,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
               // paste + Enter; agent.prompt commits its key inside herdr. With a message
               // already waiting its turn here, this one takes its place behind it instead.
               // A held message is never typed by arriving after the turn: it waits for Send now.
-              if (message.delivery === "queue" && !pending.waiting(message.pane_id)) return dispatchPendingText(client, message.pane_id, text, lease!, context.identity, false, arrivedAt, undefined, message.id, false, agentOnly);
+              // Queued, it never clears a stopped send Claude put back in its box, as the drain does not (#2546).
+              if (message.delivery === "queue" && !pending.waiting(message.pane_id)) return dispatchPendingText(client, message.pane_id, text, lease!, context.identity, false, arrivedAt, undefined, message.id, false, agentOnly, true);
             }
             pending.observe(message.pane_id, held && !context.working ? "working" : context.pane.agent_status, mark);
             // hold: kept for the owner's Send now, never sent by the turn's end
@@ -1132,7 +1167,16 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
           const answer = await reply;
           const accepted = answer.pending ? pending.get(client, message.pane_id, answer.pending.id)?.message : undefined;
           if (answer.pending && !accepted) replayPendingOutcome(client, message.pane_id, answer.pending.id);
-          result(answer.ok, answer.code, answer.message, accepted);
+          // refused over a draft as the immediate path is: confirmed for Clear it and send, or Send anyway
+          const refusal = answer.refusal;
+          if (refusal && (refusal.draft || refusal.box !== null)) {
+            let confirmations = draftConfirmations.get(client);
+            if (!confirmations) { confirmations = new Map(); draftConfirmations.set(client, confirmations); }
+            confirmations.set(message.pane_id, refusal);
+          }
+          // typed by this very request: a replayed id, or a row gone since (sent or discarded), answers without it
+          result(answer.ok, answer.code, answer.message, accepted, refusal?.draft ?? null, refusal && refusal.box !== null ? shownInputBox(refusal.box) : null,
+            !previous && answer.ok && answer.pending === undefined);
           if (!native) drainPending(message.pane_id);
           return;
         }
@@ -1164,12 +1208,14 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         };
         if (message.resend_id !== undefined) {
           authorizeSocket(client);
+          // typed by this request: a replayed id, or a copy another connection sent, runs no dispatch here
+          let typedNow = false;
           const answer = await serialize(message.pane_id, () => pending.resend(message.pane_id, message.resend_id!,
             new Bun.CryptoHasher("sha256").update(framed.text).digest("hex"), async () => {
-              try { await dispatch(); return { ok: true }; }
+              try { await dispatch(); typedNow = true; return { ok: true }; }
               catch (error) { return { ok: false, ...pendingFault(error) }; }
             }, message.resend_generation));
-          result(answer.ok, answer.code, answer.message);
+          result(answer.ok, answer.code, answer.message, undefined, undefined, undefined, answer.ok && typedNow);
           return;
         }
         await serialize(message.pane_id, dispatch);

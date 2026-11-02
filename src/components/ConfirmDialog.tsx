@@ -21,6 +21,8 @@ interface Props {
   title: string;
   body: string;
   confirmLabel: string;
+  confirmDisabled?: boolean;
+  errorMessage?: string;
   /** resolves once the deed is done; the owner then takes the dialog down */
   onConfirm: () => Promise<void>;
   /** when the deed is refused with this error code, the action becomes this one */
@@ -28,7 +30,7 @@ interface Props {
   onClose: () => void;
 }
 
-export function ConfirmDialog({ title, body, confirmLabel, onConfirm, escalation, onClose }: Props) {
+export function ConfirmDialog({ title, body, confirmLabel, confirmDisabled = false, errorMessage, onConfirm, escalation, onClose }: Props) {
   const t = useT();
   const id = useId();
   const cancel = useRef<HTMLButtonElement>(null);
@@ -76,11 +78,11 @@ export function ConfirmDialog({ title, body, confirmLabel, onConfirm, escalation
         <header className="modal-header"><h2 className="modal-title" id={`${id}-title`}>{title}</h2></header>
         <div className="modal-body">
           <p className="confirm-body" id={`${id}-body`}>{body}</p>
-          {error && <p className="confirm-error" role="alert">{error}</p>}
+          {(error || errorMessage) && <p className="confirm-error" role="alert">{error || errorMessage}</p>}
         </div>
         <footer className="modal-footer">
           <button ref={cancel} type="button" className="btn" disabled={pending} onClick={onClose}>{t("Cancel")}</button>
-          <button ref={action} type="button" className="btn btn-danger" disabled={pending} onClick={() => void confirm()}>{escalated && escalation ? escalation.label : confirmLabel}</button>
+          <button ref={action} type="button" className="btn btn-danger" disabled={pending || confirmDisabled} onClick={() => void confirm()}>{escalated && escalation ? escalation.label : confirmLabel}</button>
         </footer>
       </div>
     </div>,

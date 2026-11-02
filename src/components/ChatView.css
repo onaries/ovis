@@ -119,6 +119,8 @@
   flex-direction: column;
   /* an answer sits close under its prompt; the larger space falls between exchanges */
   gap: var(--space-3);
+  /* the tallest a picture in the chat is drawn: a tall screenshot never takes several screens */
+  --chat-image-max-h: 70vh;
 }
 
 .chat-turn {
@@ -388,9 +390,13 @@
   margin-bottom: var(--space-3);
 }
 
+/* as wide as the lane at most and never past its own size; a tall screenshot stops at --chat-image-max-h,
+   its aspect kept (contain covers an authored width) */
 .markdown-image {
   max-width: 100%;
+  max-height: var(--chat-image-max-h);
   height: auto;
+  object-fit: contain;
 }
 
 /* A Markdown picture keeps its prose size and opens the chat's image viewer. */
@@ -479,7 +485,7 @@
 .markdown-mermaid svg,
 .markdown-mermaid img {
   max-width: 100%;
-  max-height: 24rem;
+  max-height: var(--chat-image-max-h, 24rem);
   height: auto;
 }
 
@@ -1090,6 +1096,7 @@ ol.markdown-list {
 .chat-tool-images {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
@@ -1244,6 +1251,9 @@ ol.markdown-list {
 
 .chat-activity-line svg { width: 1em; height: 1em; flex: none; }
 
+/* the Working head while herdr's status may still trail an answer: its place is kept, unseen */
+.chat-activity-reserved { visibility: hidden; }
+
 /* a pending block's head opens nothing until its rows are drawn */
 .work-block.is-pending .work-block-head,
 .work-block.is-pending .work-block-head:hover {
@@ -1351,6 +1361,7 @@ ol.markdown-list {
 @media (max-width: 480px) {
   .chat-view { padding-inline: var(--space-3); }
   .chat-bubble { max-width: 92%; }
+  .chat-transcript { --chat-image-max-h: 60vh; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1604,11 +1615,15 @@ ol.markdown-list {
   }
 }
 
-/* images the user sent: thumbnails above their bubble, opened full size on a tap */
+/* images the user sent: above their bubble, opened in the viewer on a tap */
 .chat-user-images {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
+  /* pictures of different heights each keep their own box, never stretched to the tallest */
+  align-items: flex-end;
+  /* as wide as the lane, not its pictures: a slot still loading has no width of its own to give */
+  align-self: stretch;
   gap: var(--space-2);
   margin-bottom: var(--space-2);
 }
@@ -1621,19 +1636,36 @@ ol.markdown-list {
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   cursor: zoom-in;
+  max-width: 100%;
+  min-width: 0;
 }
 
-/* a fixed box: a lazy thumbnail must not grow the bubble (and shift the scroll) when it loads, and
-   its slot is the same box while it loads or after it failed (Markdown.tsx ReservedImage) */
-.chat-user-image img,
+/* shown whole, as a desktop chat app (the Claude and ChatGPT apps) shows a picture: up to the lane's
+   width and --chat-image-max-h, never past its own size, so an icon stays an icon. While it loads
+   or after it failed its slot is a lane-wide 16:9 box no taller than a picture may be (Markdown.tsx
+   ReservedImage), half the lane when the message holds more than one, and the list keeps the view
+   still when the picture lands at its own size (ChatTimeline.tsx maintainVisibleContentPosition) */
+.chat-user-image img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: var(--chat-image-max-h);
+}
+
 .chat-user-image .image-slot.is-loading,
 .chat-user-image .image-slot.is-failed {
   display: block;
-  width: min(9rem, 38vw);
-  height: 7rem;
+  width: 100%;
+  max-height: var(--chat-image-max-h);
+  aspect-ratio: 16 / 9;
 }
 
-.chat-user-image img { object-fit: cover; }
+.chat-user-image:has(> .image-slot.is-loading, > .image-slot.is-failed) { width: 100%; }
+
+:is(.chat-user-images, .chat-tool-images):has(> :nth-child(2)) > .chat-user-image:has(> .image-slot.is-loading, > .image-slot.is-failed) {
+  width: calc((100% - var(--space-2)) / 2);
+}
 
 /* where a compaction folded the conversation: a quiet divider, its summary on request */
 .chat-compact {

@@ -68,9 +68,9 @@ Ovis は、自分のコンピューターで動くコーディングエージェ
 
 [すべての機能 →](docs/guide.md#features)
 
-**制約：** Ovis には [herdr](https://github.com/herdrdev/herdr) と電源の入った自分のコンピューターが必要で、スマートフォンからそのコンピューターに届く必要があります（Tailscale、VPN、SSH トンネル）。
+**制約：** Ovis には [herdr](https://github.com/herdrdev/herdr) と電源の入った自分のコンピューターが必要で、スマートフォンからそのコンピューターに届く必要があります（Tailscale、VPN、SSH トンネル、Ovis リレー）。
 
-**プライバシー：** セッションは各エージェントを動かすコンピューターに残り、Ovis 自身のアカウントやホスト型リレーはありません。匿名の使用状況の集計はデフォルトで有効で、**Settings → About → Anonymous usage counts** で送信内容を確認してオフにできます。`OVIS_TELEMETRY=0` でもオフになります。[送信される内容 →](docs/guide.md#anonymous-usage-counts)
+**プライバシー：** セッションは各エージェントを動かすコンピューターに残り、Ovis にアカウントはありません。自分でオンにするまで動かない Ovis リレーは、どのスマートフォンがどの PC に、どのアドレスから、いつどれだけ送ったかは分かりますが、内容は読めません（[信頼モデル](docs/relay.md#trust-model)）。匿名の使用状況の集計はデフォルトで有効で、**Settings → About → Anonymous usage counts** で送信内容を確認してオフにできます。`OVIS_TELEMETRY=0` でもオフになります。[送信される内容 →](docs/guide.md#anonymous-usage-counts)
 
 <a id="docs"></a>
 

@@ -9,7 +9,7 @@
  * Pure logic, DOM-free, so the policy is unit-testable (see compose.test.ts).
  */
 
-import type { AgentStatus, CommandForm, SlashCommand } from "../../shared/protocol.ts";
+import type { AgentStatus, CommandForm, ConversationTurn, SlashCommand } from "../../shared/protocol.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { knownStatus, STATUS_WORD } from "./status.ts";
 import { t, type Vars } from "./i18n.ts";
@@ -106,6 +106,29 @@ export function draftSendNote(result: string | DraftRefusal, draft: string): str
 export function sameMessage(a: string, b: string): boolean {
   const bare = (text: string): string => text.replace(/[\s\u00a0]+/gu, "");
   return bare(a) !== "" && bare(a) === bare(b);
+}
+
+/** A user turn told apart from a later one with the same words: when it was written, and what it said. */
+export type TurnIdentity = { ts: string | null; text: string };
+
+const userText = (turn: ConversationTurn): string => turn.parts
+  .filter((part): part is Extract<ConversationTurn["parts"][number], { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n");
+
+/**
+ * The trailing user turn of a send the agent put back in its input box (`restored`, from a prompt
+ * read): the chat keeps it out of view while it is the last turn. null: none.
+ */
+export function stoppedTurn(turns: readonly ConversationTurn[], restored: string | null): TurnIdentity | null {
+  const last = turns.at(-1);
+  if (restored === null || last?.role !== "user") return null;
+  const text = userText(last);
+  return sameMessage(text, restored) ? { ts: last.ts, text } : null;
+}
+
+/** Whether the last turn is still `turn` itself, however the turns before it changed: a newer turn is not. */
+export function endsWithTurn(turns: readonly ConversationTurn[], turn: TurnIdentity | null): boolean {
+  const last = turns.at(-1);
+  return turn !== null && last?.role === "user" && last.ts === turn.ts && userText(last) === turn.text;
 }
 
 /** Agent names in this server refusal are JSON strings, so custom names cannot confuse the fields. */

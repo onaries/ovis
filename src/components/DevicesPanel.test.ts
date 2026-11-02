@@ -11,7 +11,7 @@ function render(auth: HealthAuth): string {
   const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
   Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
   try {
-    return renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(DevicesPanel, { pairUrl: null, auth }) }));
+    return renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(DevicesPanel, { auth }) }));
   } finally {
     if (languages) Object.defineProperty(navigator, "languages", languages);
     else Reflect.deleteProperty(navigator, "languages");

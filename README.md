@@ -53,7 +53,7 @@ Each one adds herdr and Bun if they are missing; Node is not needed. Other ways 
 - **Android:** the Google Play beta, from [ovis.sh/beta](https://ovis.sh/beta/).
 - **Browser:** no app needed; add the page to the home screen.
 
-With Tailscale on in both, scan the QR code your computer shows to connect.
+With Tailscale on in both, scan the QR code your computer shows to connect. No Tailscale? Turn on the end-to-end encrypted **Ovis relay** under **Settings → Phone & devices** and scan its QR code with the phone's camera: it opens Ovis in the phone's browser. [How it works →](docs/guide.md#through-the-ovis-relay)
 
 ## what you get
 
@@ -66,13 +66,13 @@ With Tailscale on in both, scan the QR code your computer shows to connect.
 
 [All features →](docs/guide.md#features)
 
-**Limits:** Ovis needs [herdr](https://github.com/herdrdev/herdr) and your own computer, switched on, and your phone has to reach it (Tailscale, a VPN or an SSH tunnel).
+**Limits:** Ovis needs [herdr](https://github.com/herdrdev/herdr) and your own computer, switched on, and your phone has to reach it (Tailscale, a VPN, an SSH tunnel or the Ovis relay).
 
-**Privacy:** sessions stay on the computer that runs each agent, and Ovis has no account or hosted relay of its own. Anonymous usage counts are on by default; **Settings → About → Anonymous usage counts** shows what is sent and turns them off, as does `OVIS_TELEMETRY=0`. [What is sent →](docs/guide.md#anonymous-usage-counts)
+**Privacy:** sessions stay on the computer that runs each agent, and Ovis has no account. Its optional relay, off until you turn it on, sees which phone connects to which PC, from which address, when and how much, but can't read what is sent ([trust model](docs/relay.md#trust-model)). Anonymous usage counts are on by default; **Settings → About → Anonymous usage counts** shows what is sent and turns them off, as does `OVIS_TELEMETRY=0`. [What is sent →](docs/guide.md#anonymous-usage-counts)
 
 ## docs
 
-- **[User guide](docs/guide.md):** [quick start](docs/guide.md#quick-start) · [supported agents](docs/guide.md#supported-agents) · [features](docs/guide.md#features) · [phone](docs/guide.md#on-your-phone) · [remote PCs](docs/remote-pcs.md) · [access and safety](docs/guide.md#access-and-safety) · [configuration](docs/guide.md#configuration) · [keyboard shortcuts](docs/guide.md#keyboard-shortcuts)
+- **[User guide](docs/guide.md):** [quick start](docs/guide.md#quick-start) · [supported agents](docs/guide.md#supported-agents) · [features](docs/guide.md#features) · [phone](docs/guide.md#on-your-phone) · [remote PCs](docs/remote-pcs.md) · [Ovis relay](docs/relay.md) · [access and safety](docs/guide.md#access-and-safety) · [configuration](docs/guide.md#configuration) · [keyboard shortcuts](docs/guide.md#keyboard-shortcuts)
 - **[FAQ](docs/guide.md#faq):** herdr's own TUI, Tailscale, what leaves your machine, and how Ovis compares with collie, Happy, Paseo and others.
 - **[INSTALL.md](INSTALL.md):** every way to install, step by step, and what to do when a step fails.
 - **[Demo](https://ovis.sh/demo/):** the real app on a made-up session, in your browser.

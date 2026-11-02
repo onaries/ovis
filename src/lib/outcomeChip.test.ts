@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { CommandOutcome, ConversationTurn } from "../../shared/protocol.ts";
 import { translate } from "./i18n.ts";
-import { noteCatalogChanges, outcomeChip, outcomeCommand, outcomeLabel, outcomeNote, outcomeResultText, outcomeRows } from "./outcomeChip.ts";
+import { afterMove, noteCatalogChanges, outcomeChip, outcomeCommand, outcomeLabel, outcomeNote, outcomeResultText, outcomeRows } from "./outcomeChip.ts";
 
 const en = (key: string, vars?: Record<string, string | number>): string => translate("en", key, vars);
 
@@ -77,6 +77,36 @@ describe("noteCatalogChanges", () => {
     expect(calls).toBe(1);
     noteCatalogChanges([{ ...changed, id: "c" }], noted, () => { calls += 1; });
     expect(calls).toBe(2);
+  });
+});
+
+describe("afterMove", () => {
+  const sent = (id: string, text: string, second: number) => outcome({ id, text, created_at: `2026-10-20T10:00:${String(second).padStart(2, "0")}.000Z` });
+  const compact = sent("compact", "/compact", 1), clear = sent("clear", "/clear", 3), after = sent("after", "/context", 4);
+  const ids = (outcomes: readonly CommandOutcome[]) => outcomes.map((shown) => shown.id);
+
+  test("in the list held at the move, leaves out the sends before its newest /clear, /new or /resume, and all of them with none", () => {
+    const held = [after, clear, compact];
+    expect(ids(afterMove(held, held))).toEqual(["after", "clear"]);
+    const twice = [compact, sent("new", "/new", 2), clear];
+    expect(ids(afterMove(twice, twice))).toEqual(["clear"]);
+    // /clearly is another command
+    const none = [compact, sent("clearly", "/clearly", 2)];
+    expect(afterMove(none, none)).toEqual([]);
+  });
+
+  test("in a later list, leaves out the sends before the move also when that list brings them first", () => {
+    const first = [compact, clear];
+    expect(ids(afterMove(first, [], first))).toEqual(["clear"]);
+    // a /resume sent after the move did not move the chat: the sends before it stay
+    expect(ids(afterMove([clear, after, sent("resume", "/resume", 6)], [], first))).toEqual(["clear", "after", "resume"]);
+  });
+
+  test("with no move listed (a /clear typed in the terminal), keeps a later list whole: a send to the new conversation shows", () => {
+    const held = [after];
+    expect(afterMove(held, held)).toEqual([]);
+    const later = [{ ...after, state: "result-observed" as const }];
+    expect(afterMove(later, held, later)).toEqual(later);
   });
 });
 

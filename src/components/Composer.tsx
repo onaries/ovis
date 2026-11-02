@@ -19,7 +19,8 @@ import "./Composer.css";
 import type { AgentStatus, ClientRole, ConversationMetadata, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
-import { composerDrafts } from "../lib/composerDraft.ts";
+import { composerDraftKey, composerDrafts } from "../lib/composerDraft.ts";
+import { onQuoted } from "../lib/chatQuote.ts";
 import { commentsWait, holdsQuoteLine, messageWithComments, replyComments, replyCommentsKey, type ReplyComment } from "../lib/replyComments.ts";
 import { ReplyCommentsChip, useReplyComments } from "./ReplyComments.tsx";
 import { paneStorageId } from "../../shared/machines.ts";
@@ -295,7 +296,7 @@ export function Composer({
   const attachmentsRef = useRef<Attachment[]>([]);
   const removedAttachments = useRef(new Set<number>());
   const fileRequest = useRef(0);
-  const draftKey = `ovis:composer-draft:${paneStorageId(machineId, paneId)}`;
+  const draftKey = composerDraftKey(paneStorageId(machineId, paneId));
   const { text, sending } = useSyncExternalStore(composerDrafts.subscribe, () => composerDrafts.read(draftKey));
   const setText = useCallback((value: string | ((previous: string) => string)) => composerDrafts.set(draftKey, value), [draftKey]);
   // comments on the agent's replies (#511) go first in the next message, unless it is a slash command or an answer
@@ -631,6 +632,16 @@ export function Composer({
     element.selectionStart = element.selectionEnd = clampedCaret;
     if (activeRef.current) element.focus();
   }, []);
+
+  // a quote taken from the chat (lib/chatQuote.ts) is in the draft already: the caret goes after it, the keyboard here
+  useEffect(() => onQuoted(paneStorageId(machineId, paneId), () => {
+    const element = textareaRef.current;
+    // focused first without scrolling the page: setTextAndCaret's own focus then finds it focused
+    element?.focus({ preventScroll: true });
+    const quoted = composerDrafts.read(draftKey).text;
+    setTextAndCaret(quoted, quoted.length);
+    if (element) element.scrollTop = element.scrollHeight;
+  }), [draftKey, machineId, paneId, setTextAndCaret]);
 
   // an upload finishes while the user may be typing: its mention goes to the start (insertLeadingMention),
   // and the caret and selection only move along with the text they sit in, without taking focus
@@ -1477,6 +1488,9 @@ export function Composer({
               aria-label={t("Stop agent")}
               title={t("Stop agent")}
               disabled={!connected}
+              // focus stays in the text box, as for Send: this button turns into a disabled Send in
+              // the same node when the turn stops, and a focused node that is disabled drops focus
+              onPointerDown={(event) => event.preventDefault()}
               onClick={onAbort}
             >
               <Square aria-hidden="true" />
