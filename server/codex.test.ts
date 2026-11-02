@@ -790,6 +790,63 @@ describe("Codex rollout resolution", () => {
     expect(matchCodexTranscript(frame(`• Ran command\n  └ ${shown}\n\n${warning}`), [own])).toBeNull();
   });
 
+  it("matches a whole rendered progress paragraph during tools without accepting quotes or changed operators", () => {
+    const raw = "The **migration** preserves `legacy_records` and every configured operator while checking that `a != b` remains different from `a = b` before the next operation.";
+    const shown = raw.replaceAll("**", "").replaceAll("`", "");
+    const own = { path: "own", text: jsonl(message("assistant", raw, "commentary")) };
+    const frame = (body: string) => `${body}\n\n• Working (12s • esc to interrupt)\n\n› Ask Codex to do anything\n  gpt-6.1-sol high · /repo`;
+    expect(matchCodexTranscript(frame(`• ${shown}`), [own])).toBe("own");
+    expect(matchCodexTranscript(frame(`• ${shown.replaceAll(" ", "\n  ")}`), [own])).toBe("own");
+    expect(matchCodexTranscript(frame(`• ${shown}`), [own, { path: "copy", text: jsonl(message("assistant", shown)) }])).toBeNull();
+    expect(matchCodexTranscript(frame(`• ${shown.replace("a != b", "a == b")}`), [own])).toBeNull();
+    expect(matchCodexTranscript(frame(`• Prefix ${shown}`), [own])).toBeNull();
+    expect(matchCodexTranscript(frame(`• ${shown} Extra words.`), [own])).toBeNull();
+    expect(matchCodexTranscript(frame(`› ${shown}`), [own])).toBeNull();
+    expect(matchCodexTranscript(frame(`• Ran command\n  └ ${shown}`), [own])).toBeNull();
+    expect(matchCodexTranscript(frame(`  ↳ ${shown}`), [own])).toBeNull();
+    expect(matchCodexTranscript(frame(`• ${shown}`), [own], new Set(["own"]), new Map(), true)).toBeNull();
+    const short = "지금은 `기존 설정`을 보존하며 나머지 작업을 확인하고 있습니다.";
+    expect(matchCodexTranscript(frame(`• ${short.replaceAll("`", "")}`), [{ path: "short", text: jsonl(message("assistant", short, "commentary")) }])).toBeNull();
+  });
+
+  it("binds substantial Korean completed replies at narrow terminal widths, including a cropped table tail", () => {
+    const answer = "다음 작업은 필요한 항목부터 순서대로 진행하고 결과를 기록합니다.";
+    const complete = (text: string) => jsonl(event({ type: "item_completed", turn_id: "turn", item: { type: "UserMessage", content: [{ type: "text", text: "Summarize" }] } }), message("assistant", text), event({ type: "task_complete", turn_id: "turn", last_agent_message: text }));
+    const frame = (body: string) => `› Summarize + 4 lines (^r to expand)\n\n${body}\n\n  Worked for 4s • 11:14 AM\n\n› Ask Codex to do anything\n  GPT-6.1 Sol high · /repo\n  ← for agents · ? for shortcuts`;
+    for (const mode of ["plain", "cropped", "table"] as const) {
+      const cropped = mode === "cropped";
+      const raw = mode === "plain" ? answer : `The migration is complete.\n\n| Resource | State |\n| --- | --- |\n| VM | preserved |\n\n${answer}`;
+      const own = { path: "own", text: complete(raw) };
+      const screen = frame(mode === "table" ? `• The migration is complete.\n\n  Resource  State\n  ━━━━━━━━  ━━━━━\n  VM        preserved\n  ───────────────\n\n  ${answer}` : `${cropped ? "  " : "• "}${answer}`);
+      expect(matchCodexTranscript(screen, [own])).toBe("own");
+      if (!cropped) expect(matchCodexTranscript(screen.slice(screen.indexOf("• ")), [own])).toBe("own");
+      expect(matchCodexTranscript(screen, [own, { path: "copy", text: complete(answer) }])).toBeNull();
+      expect(matchCodexTranscript(screen, [own], new Set(), new Map(), false, new Set(["other-folder"]))).toBeNull();
+      expect(matchCodexTranscript(screen.replace("항목", "자료"), [own])).toBeNull();
+      expect(matchCodexTranscript(frame(`• Ran command\n  └ ${answer}`), [own])).toBeNull();
+    }
+    expect(matchCodexTranscript(frame("• 네 완료했습니다"), [{ path: "short", text: complete("네 완료했습니다") }])).toBeNull();
+    const working = `• ${answer}\n\n• Working (4s • esc to interrupt)\n\n› Ask Codex to do anything\n  GPT-6.1-Sol high · /repo`;
+    const commentary = { path: "own", text: jsonl(message("assistant", answer, "commentary")) };
+    expect(matchCodexTranscript(working, [commentary])).toBeNull();
+    expect(matchCodexTranscript(working, [commentary, { ...commentary, path: "copy" }])).toBeNull();
+  });
+
+  it("binds a completed rendered reply while native queued follow-ups remain below its footer", () => {
+    const raw = "The **migration** now preserves every configured operator while rewriting legacy records and keeping the original project settings available for the next session.";
+    const shown = raw.replaceAll("**", "");
+    const complete = (text: string) => jsonl(message("assistant", text), event({ type: "task_complete", turn_id: "turn", last_agent_message: text }));
+    const frame = (body: string, queue: string) => `› Update the migration\n\n${body}\n\n  Worked for 4s • 11:14 AM\n\n${queue}\n\n› Ask Codex to do anything\n  GPT-6.1-Sol high · /repo\n  ? for shortcuts`;
+    const queue = "  ↳ Verify the remaining migration details\n           and keep all existing settings.";
+    const own = { path: "own", text: complete(raw) };
+    for (const queued of [queue, `  1 background terminal running · /ps to view · /stop to close\n\n${queue}`]) {
+      expect(matchCodexTranscript(frame(`• ${shown}`, queued), [own])).toBe("own");
+    }
+    expect(matchCodexTranscript(frame(`• ${shown}`, queue), [own, { path: "copy", text: complete(shown) }])).toBeNull();
+    expect(matchCodexTranscript(frame("• Different real reply", `  ↳ ${shown}`), [own])).toBeNull();
+    expect(matchCodexTranscript(frame(`• ${shown}`, "  ↳ Pending message\n  unrecognised output"), [own])).toBeNull();
+  });
+
   it("recognises a cropped native completed reply with code and background-terminal status, without confusing a shared suffix", () => {
     const ending = "The verified output keeps a != b distinct from a == b, and preserves feature-one independently of feature_one while recording the exact migration result.";
     const raw = `The **migration** is complete.\n\n\`\`\`sh\nnode verify-records.js --strict\n\`\`\`\n\n${ending}`;

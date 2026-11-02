@@ -1007,6 +1007,7 @@ export function codexHistoryTail(path: string, budget: number, home = defaultCod
 }
 
 const normalizeDisplay = (text: string): string => text.normalize("NFKC").replace(/[^\p{L}\p{N}]/gu, "");
+const anchorLength = (letters: string): number => Buffer.byteLength(letters, "utf8");
 
 /**
  * A prompt as compared with the one an answer answered: without Codex's "›" marker and the spaces
@@ -1078,7 +1079,7 @@ function answerDisplayPattern(text: string, tail = 0): RegExp | null {
   });
   if (tail) {
     let start = pieces.length - 1;
-    while (start >= 0 && normalizeDisplay(pieces[start]!).length < 64) start--;
+    while (start >= 0 && anchorLength(normalizeDisplay(pieces[start]!)) < 64) start--;
     if (start < 0) return null;
     pieces = pieces.slice(start);
     const marked = pieces[0]!.replace(/\s+/g, "");
@@ -1234,6 +1235,7 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   const displays = texts.map(normalizeDisplay);
   // an answer counts only shown whole, both ends, in one block: one more character either side is another answer
   const wholeBlocks = answerParts.flatMap(shownBlocks);
+  const renderedProgress = !blocks && screen.split("\n").some((line) => STATUS_ROW.test(line.trimEnd()));
   const answersOf = (turns: ConversationTurn[]) => turns.filter((turn) => turn.role === "assistant")
     .flatMap((turn) => turn.parts).filter((part) => part.kind === "text").map((part) => part.text);
   const parsed = candidates.map((candidate) => parseCodexTranscript(candidate.text, Infinity));
@@ -1248,17 +1250,17 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
       const variants = [visible, ...codexMarkdownDisplays(visible, foot.cropped)];
       const matches = variants.filter((shown) => {
         const letters = normalizeDisplay(cutAtLinkTargets(shown).map((piece) => piece.text).join(""));
-        if (letters.length < 64 || new Set(letters).size < 12) return false;
+        if (anchorLength(letters) < 64 || new Set(letters).size < 12) return false;
         const display = foot.text.replace(/\s+/g, "");
         return answerDisplayPattern(shown)?.test(display)
-          || (foot.cropped && tailLetters >= 64 && answerDisplayPattern(shown, tailLetters)?.test(display));
+          || (foot.cropped && anchorLength(normalizeDisplay(foot.text)) >= 64 && answerDisplayPattern(shown, tailLetters)?.test(display));
       });
       return matches.length === 0 ? [] : [{ path: candidate.path, rendered: matches.some((shown) => shown !== last.answer), asked: last.asked }];
     });
     if (completed.length > 1) return null;
     const only = completed[0];
     if (only && (footerOwners === null || footerOwners.has(only.path)) && !scrutinized.has(only.path)
-      && (only.rendered || foot.cropped || (only.asked !== null && foot.prompt !== null && foot.prompt.startsWith(collapsed(only.asked))
+      && (only.rendered || foot.cropped || foot.prompt === null || (only.asked !== null && foot.prompt !== null && foot.prompt.startsWith(collapsed(only.asked))
       && /\+ \d+ (?:more )?lines? \(\^r to expand\)$/.test(foot.prompt)))) return only.path;
   }
   // The answer Codex finished last with its footer below (footedAnswer) counts for one conversation only:
@@ -1287,12 +1289,13 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   const matching = new Set<string>();
   let open = false;
   for (const [index, candidate] of candidates.entries()) {
-    const anchors = answersOf(parsed[index]!.slice(-100)).slice(-8).flatMap((text) => {
-      const found = answerAnchor(text);
-      return found !== null && displays.some((display) => display.includes(found.anchor))
-        && (wholeBlocks.some((block) => found.whole.test(block))
-          || (candidate.path === footedOwner && collapsed(text) === footed!.text)) ? [found] : [];
-    });
+    const anchors = answersOf(parsed[index]!.slice(-100)).slice(-8).flatMap((text) =>
+      (renderedProgress ? [text, ...codexMarkdownDisplays(text)] : [text]).flatMap((variant) => {
+        const found = answerAnchor(variant);
+        return found !== null && displays.some((display) => display.includes(found.anchor))
+          && (wholeBlocks.some((block) => found.whole.test(block))
+            || (candidate.path === footedOwner && collapsed(text) === footed!.text)) ? [found] : [];
+      }));
     if (anchors.length === 0) continue;
     if (!scrutinized.has(candidate.path) || anchors.some((anchor) => !givenElsewhere(index, anchor))) matching.add(candidate.path);
     else open = true;

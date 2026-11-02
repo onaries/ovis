@@ -1,5 +1,6 @@
 import { parseMarkdown, type InlineNode, type MarkdownBlock } from "../shared/markdown.ts";
 import { FOOTER } from "./codex-steering.ts";
+import { findLastIndex } from "./dialogs/shared.ts";
 
 /** A native completed-turn frame, including a reply clipped by the terminal's top edge. */
 export function completedCodexAnswer(screen: string, footer: RegExp): { text: string; prompt: string | null; cropped: boolean } | null {
@@ -17,6 +18,10 @@ export function completedCodexAnswer(screen: string, footer: RegExp): { text: st
   })) return null;
   let finished = composer - 1;
   while (finished >= 0 && /^\s*\d+ background terminals? running\b/.test(rows[finished]!.line)) finished--;
+  const beforeQueue = findLastIndex(rows.slice(0, finished + 1).map(({ line }) => line), (line) => footer.test(line));
+  const queue = rows.slice(beforeQueue + 1, finished + 1).filter(({ line }) => !/^\s*\d+ background terminals? running\b/.test(line));
+  if (beforeQueue >= 0 && queue.length > 0 && /^ {2}↳\s+\S/.test(queue[0]!.line)
+    && queue.every(({ line }) => /^ {2}↳\s+\S|^ {3,}\S/.test(line))) finished = beforeQueue;
   const end = rows[finished];
   if (end === undefined || !footer.test(end.line) || lines[end.at - 1]?.trim() !== "") return null;
   let last = end.at - 1;
@@ -43,11 +48,15 @@ export function completedCodexAnswer(screen: string, footer: RegExp): { text: st
     }
     if (first >= last || lines.slice(first, last).some((line) => line.trim() !== "" && !/^\s/.test(line))) return null;
   }
-  const body = lines.slice(first, last).join("\n");
+  const bodyLines = lines.slice(first, last);
+  const body = bodyLines.join("\n");
   if (/^\s*(?:›|↳|└|• (?:Ran|You ran|Called|Explored|Searched|Waited|Running|Calling|Exploring|Searching|Waiting|Working)\b)/m.test(body)) return null;
+  const rule = findLastIndex(bodyLines, (line) => /^\s*[─━][─━ ]{2,}\s*$/.test(line));
+  const tail = findLastIndex(bodyLines, (line) => line.trim() === "") + 1;
+  const tableTail = rule >= 0 && tail > rule && tail < bodyLines.length;
   let prompt = first - 1;
   while (prompt >= 0 && !lines[prompt]!.startsWith("›")) prompt--;
-  return { text: complete ? body.slice(2) : body, prompt: prompt < 0 ? null : lines[prompt]!.slice(1).trim(), cropped: !complete };
+  return { text: tableTail ? bodyLines.slice(tail).join("\n") : complete ? body.slice(2) : body, prompt: prompt < 0 ? null : lines[prompt]!.slice(1).trim(), cropped: !complete || tableTail };
 }
 
 function inline(nodes: readonly InlineNode[]): string | null {

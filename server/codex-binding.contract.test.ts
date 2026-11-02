@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "./index.ts";
-import { herdrRpc, paneRead, workspaceClose, workspaceCreate } from "./herdr/client.ts";
-import type { ConversationResponse } from "../shared/protocol.ts";
+import { herdrRpc, paneRead, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
+import type { ConversationResponse, SessionSnapshot } from "../shared/protocol.ts";
 import rolloutHeaders from "./fixtures/codex-rollout-headers.json";
 
 // Real herdr panes running a stand-in `codex` process: which rollout the chat reads
@@ -66,7 +66,11 @@ const pane = async (label: string, command: string, cwd = root, owned = workspac
   await herdrRpc("pane.send_text", { pane_id: paneId, text: `${command}\n` });
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "working" });
   await codexRunning(paneId);
-  return paneId;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if ((await sessionSnapshot()).panes.some((pane) => pane.pane_id === paneId && pane.agent === "codex" && pane.cwd === cwd)) return paneId;
+    await Bun.sleep(100);
+  }
+  throw new Error(`codex pane ${paneId} was not detected in its workspace`);
 };
 
 const read = async (paneId: string): Promise<ConversationResponse> => {
@@ -246,27 +250,45 @@ it("binds rendered and cropped completed replies after a cold start, beside a ne
   }
   db.close();
   const screen = join(cwd, "screen.txt");
+  const korean = "변경된 설정을 모두 저장했고 기존 작업 내용을 유지했습니다. 이제 화면을 다시 열어 결과를 확인해 주세요.";
+  const table = `The migration is complete.\n\n| Resource | State |\n| --- | --- |\n| VM | preserved |\n\n${korean}`;
+  const recorded = join(codexHome, "sessions", `rollout-2026-11-01T00-00-00-${id}.jsonl`);
   try {
-    for (const body of [
+    for (const fixture of [
       `• The migration is complete.\n\n  node verify-records.js --strict\n\n  ${renderedEnding}`,
       `  ${renderedEnding}`,
       `• The migration is complete.\n\n  node verify-records.js --strict\n\n  ${renderedEnding}\n\n• Hook failed\n  └ PreToolUse hook exited with status 1\n\n• Hook failed\n  └ PostToolUse hook exited with status 1`,
-    ]) {
+    ].map((body) => ({ body, answer, ending, queued: "", prompt: "› Summarize + 4 lines (^r to expand)", working: false })).concat([
+      { body: `• ${korean}`, answer: korean, ending: korean, queued: "", prompt: "", working: false },
+      { body: `• The migration is complete.\n\n  Resource  State\n  ━━━━━━━━  ━━━━━\n  VM        preserved\n  ───────────────\n\n  ${korean}`, answer: table, ending: korean, queued: "", prompt: "› Summarize + 4 lines (^r to expand)", working: false },
+      { body: `  ${renderedEnding}`, answer, ending, queued: "  ↳ Verify the remaining details\n           and preserve existing settings.", prompt: "› Summarize + 4 lines (^r to expand)", working: false },
+      { body: `• ${renderedEnding}`, answer: ending.replace("verified", "**verified**").replace("a != b", "`a != b`"), ending: renderedEnding, queued: "", prompt: "", working: true },
+    ])) {
       const owned: string[] = [];
       try {
-        writeFileSync(screen, `OpenAI Codex (v0.166.0)\n\n› Summarize + 4 lines (^r to expand)\n\n${body}\n\n  Worked for 1m 4s • 19:05\n\n  1 background terminal running · /ps to view · /stop to close\n\n›\n  gpt-6.1 sol high · /repo\n  ? for shor\n`);
+        const records = readFileSync(recorded, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+        for (const record of records) {
+          if (record.type === "response_item" && record.payload.role === "assistant") {
+            record.payload.content[0].text = fixture.answer;
+            record.payload.phase = fixture.working ? "commentary" : "final_answer";
+          }
+          if (record.payload.type === "task_complete") record.payload.last_agent_message = fixture.answer;
+        }
+        writeFileSync(recorded, records.filter((record) => !fixture.working || record.payload.type !== "task_complete").map((record) => JSON.stringify(record)).join("\n") + "\n");
+        const footer = fixture.working ? "• Working (12s • esc to interrupt)" : "  Worked for 1m 4s • 19:05";
+        writeFileSync(screen, `OpenAI Codex (v0.166.0)\n\n${fixture.prompt}\n\n${fixture.body}\n\n${footer}\n\n  1 background terminal running · /ps to view · /stop to close\n\n${fixture.queued}\n\n›\n  gpt-6.1 sol high · /repo\n  ? for shor\n`);
         const paneId = await pane("rendered-completion", `SCREEN_FILE=${screen} FLOOD_ON_ENTER=1 ${join(root, "bin", "codex")}`, cwd, owned);
-        await onScreen(paneId, ending);
+        await onScreen(paneId, fixture.ending);
         const conversation = await read(paneId);
         expect(conversation.source, (await paneRead({ paneId, source: "recent", lines: 80, stripAnsi: true })).text).toBe("codex-transcript");
-        expect(lastAnswer(conversation)).toBe(answer);
+        expect(lastAnswer(conversation)).toBe(fixture.answer);
         expect(conversation.history_id).toBeTruthy();
         const prepare = await fetch(`http://127.0.0.1:${server.port}/api/pane/codex-restart?pane_id=${encodeURIComponent(paneId)}`);
         expect([prepare.status, (await prepare.json()).session_id]).toEqual([200, id]);
         await flood(paneId);
-        await floodedAway(paneId, ending);
+        await floodedAway(paneId, fixture.ending);
         const afterTools = await read(paneId);
-        expect(lastAnswer(afterTools)).toBe(answer);
+        expect(lastAnswer(afterTools)).toBe(fixture.answer);
         expect(afterTools.history_id).toBe(conversation.history_id);
       } finally {
         for (const workspace of owned) await workspaceClose(workspace);
@@ -277,7 +299,7 @@ it("binds rendered and cropped completed replies after a cold start, beside a ne
     for (const thread of [id, peer]) db.query("DELETE FROM threads WHERE id = ?").run(thread);
     db.close();
   }
-}, 30_000);
+}, 60_000);
 
 it("reads a literal short first answer through the conversation endpoint (regression)", async () => {
   const cwd = join(root, "short-first");
@@ -490,13 +512,22 @@ it("keeps a matched rollout when the newer thread shows in another Codex pane, w
   expect(lastAnswer(await read(paneId))).toBe(answers.matched);
   await flood(paneId);
   await floodedAway(paneId, answers.matched);
-  const remove = newerThread("cli", threads.other, rollout("other"), "question for other");
+  const otherPath = rollout("other");
+  appendFileSync(otherPath, `\n${JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "update_plan", call_id: "quote-plan", arguments: JSON.stringify({ plan: [{ step: "Verify quote ownership", status: "in_progress" }] }) } })}\n`);
+  const remove = newerThread("cli", threads.other, otherPath, "question for other");
   try {
     // no other Codex pane here shows that thread: this pane cannot tell it from its own /new
     expect((await read(paneId)).source).toBe("scrollback");
     // one that only shows its answer, pasted without the question typed there, does not claim it
     const quoting = await pane("quoting", `${join(root, "bin", "codex")} --quote other`);
     await onScreen(quoting, answers.other);
+    let planObserved = false;
+    for (let attempt = 0; attempt < 100 && !planObserved; attempt++) {
+      const { snapshot } = await (await fetch(`http://127.0.0.1:${server.port}/api/session`)).json() as { snapshot: SessionSnapshot };
+      planObserved = snapshot.panes.some((pane) => pane.pane_id === quoting && pane.plan?.current === "Verify quote ownership");
+      if (!planObserved) await Bun.sleep(100);
+    }
+    expect(planObserved).toBe(true);
     expect((await read(paneId)).source).toBe("scrollback");
     // a second Codex in the same repo shows its answer, and nobody opens its chat
     const otherPane = await pane("theirs", `${join(root, "bin", "codex")} --say other`);
