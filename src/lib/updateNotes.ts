@@ -16,13 +16,16 @@ import { ApiError } from "./api.ts";
 export type ReloadReason = "updated" | "restart" | "incomplete";
 export function reloadReason(
   appRevision: string | null,
-  status: Pick<UpdateStatus, "current_revision" | "served_revision"> | null,
+  status: Pick<UpdateStatus, "current_revision" | "served_revision" | "available_client_revision"> | null,
   busy: boolean,
   chunkFailed: boolean,
 ): ReloadReason | null {
   if (busy) return null;
   if (appRevision && status?.current_revision && appRevision !== status.current_revision) {
-    if (appRevision !== status.served_revision) return "updated";
+    if (appRevision !== status.served_revision) {
+      if (status.available_client_revision === appRevision) return chunkFailed ? "incomplete" : null;
+      return "updated";
+    }
     return chunkFailed ? "incomplete" : "restart";
   }
   return chunkFailed ? "incomplete" : null;

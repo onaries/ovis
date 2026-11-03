@@ -212,6 +212,13 @@ describe("what the last update brought", () => {
 
 describe("the reload a tab is offered", () => {
   const app = "a".repeat(40);
+  it("does not offer an endless reload when the tab already has the only browser build the restarted server serves", () => {
+    const status = { current_revision: "b".repeat(40), served_revision: null, available_client_revision: app };
+    expect(reloadReason(app, status, false, false)).toBeNull();
+    expect(reloadReason(app, status, false, true)).toBe("incomplete");
+    expect(reloadReason(app, { ...status, available_client_revision: "c".repeat(40) }, false, false)).toBe("updated");
+    expect(reloadReason(app, { ...status, served_revision: app }, false, false)).toBe("restart");
+  });
   it("names the update when the server runs another commit", () => {
     expect(reloadReason(app, { current_revision: "b".repeat(40) }, false, false)).toBe("updated");
     expect(reloadReason(app, { current_revision: "b".repeat(40) }, false, true)).toBe("updated");

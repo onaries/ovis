@@ -3365,6 +3365,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   for update consent is established here: this keeps Ovis's existing controls and their places and
   applies Agent of Empires' rule that consent covers one immutable offer, not a coding-agent-app
   pattern.
+- Reload notices keep these existing Ovis controls: a restarted server that can serve only the
+  browser build already in the tab offers no repeated reload. A newer available browser build
+  still offers Reload app, a checkout rebuilt under a running server still asks for a restart,
+  and a failed lazy chunk still offers its reload. No visual layout or app precedent changes.
 - Agents (`AgentsSettings`) took the place of Subscription usage and Agent integrations, after the
   owner-approved mockup (Codex app's settings list one row per connected thing, shut until opened,
   as Zed's agent settings list each agent): **Open setup guide** (this PC, not a watching device),

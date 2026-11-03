@@ -60,6 +60,20 @@ const answer = async (response: Response | Promise<Response>) => {
   return { status: resolved.status, code: ((await resolved.json()) as { error?: { code?: string } }).error?.code ?? null };
 };
 
+it("reports the browser build available after a restart even when its file predates the server", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "herdr-available-client-"));
+  directories.push(directory);
+  mkdirSync(join(directory, "dist"));
+  writeFileSync(join(directory, "dist", "build.json"), JSON.stringify({ revision: offered }));
+  const updates = {
+    ...service(() => offer()),
+    servedRevision: servedRevision(directory, Date.now() + 60_000),
+    availableClientRevision: servedRevision(directory, 0),
+  };
+  const response = await handleUpdateRequest(new Request("http://127.0.0.1/api/updates"), "/api/updates", updates);
+  expect(await response.json()).toMatchObject({ served_revision: null, available_client_revision: offered });
+});
+
 describe("a manual install", () => {
   it("rejects unbound manual installs", async () => {
     const updates = service(() => offer());

@@ -26,6 +26,7 @@ export interface UpdateStatus {
    * only a restart reports it. Read by the bridge when a tab asks. Absent from an older server.
    */
   served_revision?: string | null;
+  available_client_revision?: string | null;
   /**
    * A stable name for `error` where the client words it itself: `update_offer_changed` when a
    * manual install found a different release on offer than the one it was asked for, and so

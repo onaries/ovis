@@ -203,6 +203,22 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     await page.locator(".conn-live").waitFor();
     await page.getByText(updated, { exact: true }).waitFor({ state: "hidden" });
     assert.equal(await page.getByText(restart, { exact: true }).count(), 0, "a restarted server ends the restart line");
+    status = { ...status, current_revision: "d".repeat(40), served_revision: null, available_client_revision: tabRevision };
+    for (let reload = 0; reload < 2; reload++) {
+      const readStatus = page.waitForResponse(response => new URL(response.url()).pathname === "/api/updates");
+      await page.reload();
+      await readStatus;
+      await page.locator(".conn-live").waitFor();
+      await page.keyboard.press("ControlOrMeta+Shift+Comma");
+      await openSettingsPage(page, "About");
+      assert.ok(status.current_revision);
+      await page.getByText(new RegExp(status.current_revision.slice(0, 12))).first().waitFor();
+      await page.getByText(updated, { exact: true }).waitFor({ state: "hidden" });
+      assert.equal(await reloadButton.count(), 0, "the available browser build cannot reload onto a different one");
+      assert.equal(await page.getByText(restart, { exact: true }).count(), 0, "an old browser build does not ask to restart again");
+      await page.getByRole("button", { name: "Close settings", exact: true }).click();
+    }
+    await shot("8-restarted-server-old-build");
     assert.deepEqual(errors, []);
     console.log("PASS a replaced checkout asks for a restart on the line and in Settings, and a reload does not clear it");
   } finally {

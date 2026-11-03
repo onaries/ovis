@@ -11,6 +11,7 @@ export interface UpdateService {
   request(request: UpdateRequest): void;
   /** The commit the client build in the served `dist/` was made from (see `servedRevision`); absent when unmanaged. */
   servedRevision?(): Promise<string | null>;
+  availableClientRevision?(): Promise<string | null>;
 }
 
 /**
@@ -71,7 +72,7 @@ export function connectUpdater(channel?: SupervisorChannel): UpdateService {
       ? { type: "update-install-revision", expected_revision: request.expected_revision }
       : { type: "update-command", command: "check" }),
     // the supervisor starts the bridge in the directory it serves: the release's, or the source checkout
-    ...(managed ? { servedRevision: servedRevision(process.cwd()) } : {}),
+    ...(managed ? { servedRevision: servedRevision(process.cwd()), availableClientRevision: servedRevision(process.cwd(), 0) } : {}),
   };
 }
 
@@ -95,8 +96,9 @@ export function updateRequestAllowed(request: Request): boolean {
  */
 async function withServed(status: UpdateStatus, service?: UpdateService): Promise<UpdateStatus> {
   if (!status.managed || !status.current_revision || !service?.servedRevision) return status;
-  const served = await service.servedRevision();
-  return { ...status, served_revision: served !== null && served !== status.current_revision ? served : null };
+  const [served, available] = await Promise.all([service.servedRevision(), service.availableClientRevision?.() ?? null]);
+  return { ...status, served_revision: served !== null && served !== status.current_revision ? served : null,
+    ...(service.availableClientRevision ? { available_client_revision: available } : {}) };
 }
 
 /** An install's body is one revision: more than this is not one. */
