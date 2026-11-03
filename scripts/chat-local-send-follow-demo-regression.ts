@@ -90,11 +90,14 @@ const wheelUp = async (page: Page, by = 900): Promise<void> => {
   assert.ok(view !== null);
   await page.mouse.move(view.x + view.width / 2, view.y + view.height / 2);
   for (let moved = 0; moved < by; moved += 120) {
-    const before = (await geometry(page)).scrollTop;
+    // Measured as the distance from the end: rows above the view that the list measures meanwhile
+    // raise scrollTop by their growth to keep the reader's rows in place, which can undo a notch's
+    // move in scrollTop but never in that distance.
+    const before = (await geometry(page)).gap;
     await page.mouse.wheel(0, -120);
-    await page.waitForFunction((top) => {
+    await page.waitForFunction((gap) => {
       const node = document.querySelector<HTMLElement>(".chat-view");
-      return node !== null && node.scrollTop < top - 20;
+      return node !== null && node.scrollHeight - node.clientHeight - node.scrollTop > gap + 20;
     }, before, WAIT);
   }
   await frames(page);

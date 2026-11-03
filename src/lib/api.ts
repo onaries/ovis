@@ -3,7 +3,7 @@ import type { PreferencesChange, SharedPreferences } from "../../shared/preferen
 import type { SeenFinish } from "../../shared/seen.ts";
 import type { AgentCatalogResponse, AgentTabStarted } from "../../shared/agent-catalog.ts";
 import { resumeConnectionTraces } from "./connectionTrace.ts";
-import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
+import { machinePath, type BridgeHealth, type HerdrCoreFacts, type HerdrIdentity, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
   WorkspaceMoved,
   HerdrPane,
@@ -742,6 +742,8 @@ export interface HealthInfo {
   lan_exposure?: LanExposure;
   /** authenticated only; absent from an older server, which the summary shows as unavailable */
   security?: SecuritySummary;
+  /** authenticated only; absent from an older server and until the server's first look for hc has ended */
+  herdr_core?: HerdrCoreFacts;
 }
 
 export async function fetchHealth(): Promise<HealthInfo> {

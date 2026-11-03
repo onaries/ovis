@@ -6,6 +6,7 @@ import type { UsageProviderId } from "../shared/protocol.ts";
 import type { UsageLoginFollowed, UsageLoginPrompt, UsageLoginStarted } from "../shared/usage-login.ts";
 import { paneClose, paneProcessInfo, paneSendKeys, paneSendText, sessionSnapshot, tabCreate, workspaceCreate } from "./herdr/client.ts";
 import { loginPrompt, screenText, type PromptProvider } from "./usage-login-prompt.ts";
+import { homeBefore, loginAccount, type LoginAccount, type LoginTarget } from "./usage-login-account.ts";
 import { isSecureRequest, parseCookies } from "./auth.ts";
 import { badRequest, conflictResponse, errorResponse, isJsonObject, jsonResponse } from "./http.ts";
 import { psQuote } from "./powershell.ts";
@@ -75,6 +76,12 @@ type Holder = LoginHolder | Launch | PrivateHolder;
 /** A sign-in the browser follows: the CLI in the server's own PTY, never a herdr pane another device could read. */
 interface PrivateLogin {
   readonly provider: PromptProvider;
+  /** the home its CLI writes, and the digests of the tokens there before it started (homeBefore) */
+  readonly target: LoginTarget;
+  readonly before: readonly string[] | undefined;
+  exitCode: number | null;
+  /** set once it has ended: the account its CLI signed in, in its own home; null when it did not */
+  signedIn: LoginAccount | null;
   readonly owner: string;
   /**
    * The secret of the browser that started it, sent back only in its HttpOnly cookie: two browsers can share an
@@ -83,6 +90,8 @@ interface PrivateLogin {
   readonly secret: string;
   /** the browser stopped it: a home it made stays for that account's terminal sign-in, whatever the CLI wrote */
   cancelled: boolean;
+  /** its lease or deadline stopped it: whatever its CLI wrote, it did not sign in */
+  expired: boolean;
   /** its lock id in the shared file (PrivateHolder.launch) */
   readonly lock: string;
   /** settles once the CLI has exited and its home is free */
@@ -222,7 +231,7 @@ export class UsageLoginService {
         if (request.method !== "GET") return badRequest("method_not_allowed", "Use GET");
         const login = this.owned(searchParams.get("login") ?? "", request, owner);
         if (login === undefined) return gone();
-        if (login.ended) return jsonResponse({ provider: login.provider, url: null, user_code: null, wants_code: false, ended: true } satisfies UsageLoginPrompt);
+        if (login.ended) return jsonResponse({ provider: login.provider, url: null, user_code: null, wants_code: false, ended: true, succeeded: login.signedIn !== null, account: login.signedIn?.label ?? null } satisfies UsageLoginPrompt);
         login.read = true;
         return jsonResponse({ provider: login.provider, ...loginPrompt(login.provider, screenText(login.output)), ended: false } satisfies UsageLoginPrompt);
       }
@@ -265,10 +274,17 @@ export class UsageLoginService {
     const done = (async () => {
       const login = this.privates.get(id);
       if (login === undefined || login.ended) return;
-      login.ended = true;
       login.output = "";
+      let account: LoginAccount | null = null;
+      try {
+        if (login.exitCode === 0 && !login.cancelled && !login.expired) account = await loginAccount(this.context, login.target, login.before);
+      } catch {
+        // Credential readers may fail; never put their contents in an error or leave the login held.
+        console.warn("Could not identify the account after its sign-in");
+      }
+      // stopped (by its browser, its lease or its deadline) while that read ran: it ended without signing in
+      login.signedIn = login.cancelled || login.expired ? null : account;
       liveLocks.delete(login.lock);
-      login.changed.resolve();
       // a CLI may have written credentials there: only an empty home goes, as for a tab that never ran its login
       if (login.madeHome !== null) {
         try { rmdirSync(login.madeHome); }
@@ -281,6 +297,8 @@ export class UsageLoginService {
       }
       for (const [home, holder] of this.logins) if (isPrivate(holder) && holder.launch === login.lock) this.release(home, holder);
       for (const listener of this.endedListeners) listener();
+      login.ended = true;
+      login.changed.resolve();
       const ended = [...this.privates].filter(([, entry]) => entry.ended);
       for (const [old] of ended.slice(0, Math.max(0, ended.length - PRIVATE_LOGINS_MAX))) { this.privates.delete(old); this.settling.delete(old); }
     })();
@@ -539,6 +557,11 @@ export class UsageLoginService {
         if (againHome !== null) procEnv[homeVariable] = resolve(againHome);
         // the CLI's own home: the variable a parent shell may have set is removed, as the tab's `env -u` does
         if ((place || asDefault) && againHome === null) delete procEnv[homeVariable];
+        // where this CLI writes its sign-in, and what is there now: only a sign-in it wrote there is its own
+        const homeDir = procEnv[homeVariable];
+        const target: LoginTarget = { provider: id === "claude" ? "claude" : "codex", home: homeDir ? { kind: "dir", dir: homeDir } : { kind: "default" } };
+        const before = await homeBefore(this.context, target);
+        if (request.signal.aborted || this.stopped) return conflictResponse("request_cancelled", "The sign-in request was cancelled");
         const loginId = randomUUID();
         const lock = randomUUID();
         const { birth } = newOwnerRecord();
@@ -572,7 +595,10 @@ export class UsageLoginService {
                 login.changed = Promise.withResolvers<void>();
               }
             },
-            onExit: () => {},
+            onExit: (code) => {
+              const login = this.privates.get(loginId);
+              if (login !== undefined) login.exitCode = code;
+            },
           });
         } catch (error) {
           liveLocks.delete(lock);
@@ -581,12 +607,17 @@ export class UsageLoginService {
         }
         const done = proc.exited.then(() => this.settle(loginId));
         const secret = randomUUID();
-        this.privates.set(loginId, { provider: id === "claude" ? "claude" : "codex", owner, secret, cancelled: false, lock, done, changed: Promise.withResolvers<void>(), read: false, madeHome: unusedCredentialHome, proc, output: "", ended: false });
+        this.privates.set(loginId, {
+          provider: target.provider, target, before,
+          exitCode: null, signedIn: null, owner, secret, cancelled: false, expired: false, lock, done,
+          changed: Promise.withResolvers<void>(), read: false, madeHome: unusedCredentialHome, proc, output: "", ended: false,
+        });
         unusedCredentialHome = null;
         reserved = null;
         // a start whose answer never reached its browser (the dialog closed meanwhile) leaves no one to end it
-        const lease = setTimeout(() => { const login = this.privates.get(loginId); if (login !== undefined && !login.read && !login.ended) proc.kill(); }, this.timing.leaseMs);
-        const deadline = setTimeout(() => proc.kill(), this.timing.maxMs);
+        const expire = () => { const login = this.privates.get(loginId); if (login !== undefined && !login.ended) login.expired = true; proc.kill(); };
+        const lease = setTimeout(() => { const login = this.privates.get(loginId); if (login !== undefined && !login.read && !login.ended) expire(); }, this.timing.leaseMs);
+        const deadline = setTimeout(expire, this.timing.maxMs);
         void done.then(() => { clearTimeout(lease); clearTimeout(deadline); });
         // the browser that asked has gone: it would never see or end this sign-in
         if (request.signal.aborted) { proc.kill(); return conflictResponse("request_cancelled", "The sign-in request was cancelled"); }

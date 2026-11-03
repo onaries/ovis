@@ -18,7 +18,7 @@
 
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { closeSync, mkdtempSync, openSync, readdirSync, readSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -291,16 +291,26 @@ function claudeAccount(path: string): Account | null {
  * pointed at (CLAUDE_CONFIG_DIR, and ~/.claude-* for the usual second account). For such a
  * directory it names the keychain item after the directory's hash, and keeps .claude.json in it.
  */
-function claudeHomes(ctx: UsageContext): Array<{ source: string; service: string; dir: string; config: string; home: CredentialHome }> {
-  const homes: Array<{ source: string; service: string; dir: string; config: string; home: CredentialHome }> = [
-    { source: "default", service: "Claude Code-credentials", dir: join(ctx.home, ".claude"), config: join(ctx.home, ".claude.json"), home: { kind: "default" } },
-  ];
+function claudeHomes(ctx: UsageContext): ClaudeHome[] {
   const dirs = [ctx.env["CLAUDE_CONFIG_DIR"], ...siblingDirs(ctx.home, ".claude-")].filter((dir): dir is string => Boolean(dir));
-  for (const dir of new Set(dirs)) {
-    const hash = createHash("sha256").update(dir).digest("hex").slice(0, 8);
-    homes.push({ source: dir, service: `Claude Code-credentials-${hash}`, dir, config: join(dir, ".claude.json"), home: { kind: "dir", dir } });
-  }
-  return homes;
+  return [claudeHome(ctx, { kind: "default" }), ...[...new Set(dirs)].map((dir) => claudeHome(ctx, { kind: "dir", dir }))];
+}
+
+interface ClaudeHome { source: string; service: string; dir: string; config: string; home: CredentialHome }
+
+function claudeHome(ctx: UsageContext, home: CredentialHome): ClaudeHome {
+  if (home.kind === "default") return { source: "default", service: "Claude Code-credentials", dir: join(ctx.home, ".claude"), config: join(ctx.home, ".claude.json"), home };
+  const hash = createHash("sha256").update(home.dir).digest("hex").slice(0, 8);
+  return { source: home.dir, service: `Claude Code-credentials-${hash}`, dir: home.dir, config: join(home.dir, ".claude.json"), home };
+}
+
+/** the sign-in one Claude home holds: its keychain item or its credentials file, whichever is later */
+async function claudeFound(ctx: UsageContext, home: ClaudeHome): Promise<Found[]> {
+  const user = ctx.env["USER"];
+  const account = claudeAccount(home.config);
+  const keychain = await fromKeychain(ctx, home.service, user ? [user, undefined] : [undefined], claudeSignIn);
+  const file = claudeSignIn(readText(join(home.dir, ".credentials.json")));
+  return keychainOrFile(keychain, file, home.source, account).map((found) => ({ ...found, home: home.home }));
 }
 
 function claudeSignIn(source: string | null): SignIn | null {
@@ -332,14 +342,7 @@ function claudeStatuslineWindows(payload: StatuslinePayload): UsageWindow[] {
 const claude: UsageProvider = {
   id: "claude",
   async signIns(ctx) {
-    const user = ctx.env["USER"];
-    const found = await Promise.all(claudeHomes(ctx).map(async (home) => {
-      const account = claudeAccount(home.config);
-      const keychain = await fromKeychain(ctx, home.service, user ? [user, undefined] : [undefined], claudeSignIn);
-      const file = claudeSignIn(readText(join(home.dir, ".credentials.json")));
-      return keychainOrFile(keychain, file, home.source, account).map((found) => ({ ...found, home: home.home }));
-    }));
-    return found.flat();
+    return (await Promise.all(claudeHomes(ctx).map((home) => claudeFound(ctx, home)))).flat();
   },
   readLocal(ctx, signIn) {
     const local = readStatusline(ctx.home, ctx.now());
@@ -394,18 +397,25 @@ function codexWindow(value: unknown, now: number): UsageWindow | null {
   return { kind: kindOf(seconds, "session"), scope: null, used_percent: percent(used), resets_at: resetsAt, starts_at: startOf(resetsAt, seconds) };
 }
 
+/** the sign-in a Codex home's auth.json holds, listed as that directory */
+function codexFileFound(home: string): Found[] {
+  const signIn = codexSignIn(readText(join(home, "auth.json")));
+  return signIn ? [{ ...signIn, source: home, home: { kind: "dir", dir: home } }] : [];
+}
+
+/** the `Codex Auth` keychain item, which Codex's default home may keep its sign-in in instead of a file */
+async function codexKeychainFound(ctx: UsageContext): Promise<Found[]> {
+  return keychainFound(await fromKeychain(ctx, "Codex Auth", [undefined], codexSignIn), "keychain")
+    .map((found): Found => ({ ...found, home: { kind: "default" } }));
+}
+
 const codex: UsageProvider = {
   id: "codex",
   async signIns(ctx) {
     // CODEX_HOME points Codex elsewhere; ~/.codex-* is where a second account usually lives
     const homes = [ctx.env["CODEX_HOME"], join(ctx.home, ".config", "codex"), join(ctx.home, ".codex"), ...siblingDirs(ctx.home, ".codex-")];
-    const found: Found[] = [];
-    for (const home of new Set(homes.filter((home): home is string => Boolean(home)))) {
-      const signIn = codexSignIn(readText(join(home, "auth.json")));
-      if (signIn) found.push({ ...signIn, source: home, home: { kind: "dir", dir: home } });
-    }
-    return found.length ? found : keychainFound(await fromKeychain(ctx, "Codex Auth", [undefined], codexSignIn), "keychain")
-      .map((found): Found => ({ ...found, home: { kind: "default" } }));
+    const found = [...new Set(homes.filter((home): home is string => Boolean(home)))].flatMap(codexFileFound);
+    return found.length ? found : codexKeychainFound(ctx);
   },
   async read(ctx, signIn) {
     const body = await requestJson(ctx, "https://chatgpt.com/backend-api/wham/usage", {
@@ -1171,6 +1181,97 @@ export async function localSignInPlace(ctx: UsageContext, key: string): Promise<
     if (places[0]?.home) return { provider: id, home: places[0].home };
   }
   return null;
+}
+
+/** Whether a credential's text is JSON at all: one that is not cannot be told from a sign-in. */
+function isJson(text: string): boolean {
+  try { JSON.parse(text); return true; } catch { return false; }
+}
+
+/**
+ * A credential file's sign-in; none when there is no file or it holds no sign-in (a Codex API key, a Claude
+ * file with only MCP sign-ins); "unknown" when it will not read, is too large or is not JSON.
+ */
+function credentialFile(path: string, parse: (source: string | null) => SignIn | null): SignIn | "unknown" | null {
+  try { statSync(path); }
+  catch (error) { return error instanceof Error && "code" in error && error.code === "ENOENT" ? null : "unknown"; }
+  const text = readText(path);
+  return text === null || !isJson(text) ? "unknown" : parse(text);
+}
+
+/**
+ * A keychain service's sign-ins, read under each account name the CLI may use: `inUse` the first that holds
+ * one (as fromKeychain takes it), `all` every one found, whichever is in use; "unknown" when any item is
+ * locked or is not JSON, even if another one reads.
+ */
+async function keychainState(ctx: UsageContext, service: string, accounts: Array<string | undefined>, parse: (value: string) => SignIn | null): Promise<{ inUse: SignIn | null; all: SignIn[] } | "unknown"> {
+  const all: SignIn[] = [];
+  if (ctx.platform !== "darwin") return { inUse: null, all };
+  for (const account of accounts) {
+    const found = await ctx.keychain(service, account);
+    if (found.status === "locked") return "unknown";
+    if (found.status !== "found") continue;
+    if (!isJson(found.value)) return "unknown";
+    const signIn = parse(found.value);
+    if (signIn !== null) all.push(signIn);
+  }
+  return { inUse: all[0] ?? null, all };
+}
+
+const tokenDigest = (token: string): string => createHash("sha256").update(token).digest("hex");
+
+/** A followed sign-in's home as its CLI left it: the account as the list keys and names it, never a token or a path. */
+export interface HomeSignIn {
+  readonly key: string;
+  readonly label: string | null;
+  /** a digest of the token in use: a sign-in the CLI wrote has a token of its own, one it left keeps one from before */
+  readonly digest: string;
+  /** the digests of every token the home's sources hold (its file and its keychain item), the one in use among them */
+  readonly digests: readonly string[];
+  readonly expiresAt: number | null;
+}
+
+/**
+ * The sign-in a Claude or Codex CLI keeps in `home`, read from there alone as that CLI writes it, never
+ * refreshed: Claude's default home or directory, each with its keychain item; Codex's default home
+ * (~/.codex, or its keychain item when that has no auth.json) or directory. Null when it holds none;
+ * "unknown" when any of its sources cannot be read (a keychain item locked or not JSON, a credential file
+ * that will not read, is too large or is not JSON), even when another source reads: then it can be told
+ * from neither none nor another sign-in. A source that reads but holds no sign-in holds none.
+ * Other homes are not looked at: their sign-ins are no login's into this one.
+ */
+export async function homeSignIn(ctx: UsageContext, provider: "claude" | "codex", home: CredentialHome): Promise<HomeSignIn | "unknown" | null> {
+  // every source of the home is read on its own: one that cannot be read leaves the home unknown, whatever
+  // another gives, and only then are they weighed as the list weighs them
+  let signIn: (SignIn & { source: string }) | undefined;
+  // every token a source holds, whichever one is in use: a token only moved between sources is not new
+  const held: SignIn[] = [];
+  if (provider === "claude") {
+    const claudeAt = claudeHome(ctx, home);
+    const user = ctx.env["USER"];
+    const keychain = await keychainState(ctx, claudeAt.service, user ? [user, undefined] : [undefined], claudeSignIn);
+    const file = credentialFile(join(claudeAt.dir, ".credentials.json"), claudeSignIn);
+    if (keychain === "unknown" || file === "unknown") return "unknown";
+    held.push(...keychain.all, ...(file === null ? [] : [file]));
+    signIn = keychainOrFile(keychain.inUse, file, claudeAt.source, claudeAccount(claudeAt.config)).find((entry): entry is Found & SignIn => !("locked" in entry));
+  } else {
+    const dir = home.kind === "dir" ? home.dir : join(ctx.home, ".codex");
+    const file = credentialFile(join(dir, "auth.json"), codexSignIn);
+    // the default home's keychain item is read too, file or not: a file in use does not make it readable
+    const keychain = home.kind === "default" ? await keychainState(ctx, "Codex Auth", [undefined], codexSignIn) : { inUse: null, all: [] };
+    if (file === "unknown" || keychain === "unknown") return "unknown";
+    held.push(...(file === null ? [] : [file]), ...keychain.all);
+    if (file !== null) signIn = { ...file, source: dir };
+    else if (keychain.inUse !== null) signIn = { ...keychain.inUse, source: "keychain" };
+  }
+  if (signIn === undefined) return null;
+  return {
+    key: accountKey(provider, signIn.account, signIn.source),
+    label: signIn.account?.label ?? signIn.account?.id ?? null,
+    digest: tokenDigest(signIn.token),
+    digests: held.map((entry) => tokenDigest(entry.token)),
+    expiresAt: signIn.expiresAt,
+  };
 }
 
 export async function handleUsageRequest(request: Request, url: URL, service: UsageService): Promise<Response> {

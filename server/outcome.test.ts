@@ -372,6 +372,8 @@ it("correlates Pi's thinking card and session-only commit with bare /thinking, n
   const pane = {
     pane_id: "fixture", workspace_id: "w", tab_id: "t", terminal_id: "fixture-terminal",
     focused: false, revision: 0, agent: "pi", agent_status: "idle", status: "idle", screen: "Ready",
+    // pi holds the pane's input: its cards answer only then
+    pid: 2147483646, argv: ["pi"],
   };
   await withFakeHerdr(pane, async (paneId, keys) => {
     const catalog = ["thinking", "model"].map((name) => ({ ...row(name), forms: piSource.forms?.[name] }));

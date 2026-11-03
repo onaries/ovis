@@ -353,4 +353,13 @@ export const SETTINGS_ZH: Record<string, string> = {
   "The Ovis relay works from anywhere with nothing to install, or use Tailscale.": "Ovis 中继随处可用，无需安装；也可以使用 Tailscale。",
   "Use Tailscale or a pairing code.": "使用 Tailscale 或配对码连接。",
   "Ovis relay: {state}": "Ovis 中继：{state}",
+  "Terminals": "终端",
+  "This PC serves": "这台电脑提供",
+  "Herdr app": "Herdr 应用",
+  "herdr TUI": "herdr（TUI）",
+  "Version {version}.": "版本 {version}。",
+  "herdr-core {version}, session {session}.": "herdr-core {version}，会话 {session}。",
+  "herdr-core {version}.": "herdr-core {version}。",
+  "The Herdr app's core (hc {version}) runs on this PC too. To show its terminals here instead, set {setting} and restart Ovis: in the .env file in the folder {command} prints when herdr's plugin starts Ovis, or in the environment of whatever else starts it.": "这台电脑上也在运行 Herdr 应用的核心 (hc {version})。要改为在这里显示它的终端，请设置 {setting} 并重启 Ovis：由 herdr 插件启动 Ovis 时，写在 {command} 输出的文件夹中的 .env 文件里；用其他方式启动时，写在其启动环境中。",
+  "The Herdr app's core (hc {version}) is installed on this PC too. To show its terminals here instead, set {setting} and restart Ovis: in the .env file in the folder {command} prints when herdr's plugin starts Ovis, or in the environment of whatever else starts it.": "这台电脑上也安装了 Herdr 应用的核心 (hc {version})。要改为在这里显示它的终端，请设置 {setting} 并重启 Ovis：由 herdr 插件启动 Ovis 时，写在 {command} 输出的文件夹中的 .env 文件里；用其他方式启动时，写在其启动环境中。",
 };

@@ -576,7 +576,9 @@ export async function relayMediaQa(tree: RelayServerTree): Promise<void> {
         if (!copied()) await new Promise<void>((resolve) => addEventListener("copied-link", () => resolve(), { once: true }));
         return copied();
       });
-      const [href] = await bounded(Promise.all([copied, copy.click({ force: true })]), "copied-link clipboard event");
+      // the click goes to the button itself: a forced click is aimed at where the button was, and the
+      // viewer still settling under a frozen clock can move it from there, so the copy never ran
+      const [href] = await bounded(Promise.all([copied, copy.dispatchEvent("click")]), "copied-link clipboard event");
       assert.equal(href, origin + readerHref("local", join(first.dir, "page.html"), `/s/${first.id}/`, "relay"));
       await closePage(page);
       const opened = await mediaPage(ctx);

@@ -762,8 +762,24 @@ Portal tells the app who signed in with `X-Portal-User` and `X-Portal-Auth` (`--
 
 The [Herdr desktop app](https://herdr.dev/download/) runs its terminals on herdr-core (`hc`), a
 runtime apart from herdr's TUI server. Start Ovis with `OVIS_RUNTIME=herdr-core` to show those
-terminals instead of the TUI's: this PC's panes are then the app's. An `hc` speaking protocol
-generation 1 (checked with 0.1.14) must be on the `PATH`, or named by `OVIS_HC_BIN`.
+terminals instead of the TUI's: this PC's panes are then the app's. Ovis needs an `hc` speaking
+protocol generation 1 (checked with 0.1.14 and 0.1.17), and finds it the way the Herdr app does:
+`OVIS_HC_BIN`, then the `PATH`, then your login shell's `PATH`, then the usual install places
+(`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, mise, Nix and cargo), taking `herdr-core`
+before `hc` in each. A candidate counts only when `--version` says `hc …`, since some window
+managers ship an unrelated `hc`. Looking runs nothing but `--version`: every other hc command
+starts a core when none runs. When no candidate answers, Ovis does not start and says where it
+looked, rather than run an `hc` that may not be herdr-core's.
+
+**Settings → About → Terminals** says which runtime this PC serves. On herdr's TUI, when it finds
+the Herdr app's core on the same PC, it says so and how to switch: set `OVIS_RUNTIME=herdr-core` and restart
+Ovis. When herdr's plugin starts Ovis, that goes in the `.env` file in the folder
+`herdr plugin config-dir devswha.ovis` prints; started another way (`bun run start`, a service),
+it goes in that environment. Only a device that drives this PC is told this, never a watching one or a stranger
+on an open install; and the look behind it skips the login shell, whose profile could run any
+command, so it never starts a core on a PC that did not choose herdr-core. Whether the core runs is read from its socket file (`HC_SOCKET`, `socket` in hc's
+`config.toml`, else `<session>.sock` under `$XDG_RUNTIME_DIR/herdr-core/`; `HC_SESSION` names the
+session, `default` otherwise); nothing connects to it.
 
 `OVIS_RUNTIME=herdr-core` is Linux/macOS only: there is no Windows named pipe support yet.
 Ovis refuses to start with this runtime on Windows; use the default `herdr` runtime there.
@@ -823,7 +839,7 @@ Each `OVIS_*` variable was called `HERDR_WEB_*` before Ovis took its name (`OVIS
 | `OVIS_BUNDLE_MANIFEST` | unset | Remote-PC bundle manifest (path or URL) that overrides local and published bundles |
 | `OVIS_HERDR_BIN` | `herdr` | herdr executable used for terminal attach |
 | `OVIS_RUNTIME` | `herdr` | `herdr-core` shows the terminals of [herdr-core](https://herdr.dev/core) (`hc`), the core the Herdr desktop app runs on, instead of herdr's TUI server: see [Herdr app terminals](#herdr-app-terminals) |
-| `OVIS_HC_BIN` | `hc` | hc executable used with `OVIS_RUNTIME=herdr-core`: the server runs it as its one `hc connect`, which also carries the live terminals. `HC_SESSION` and `HC_SOCKET` pick the core as for any hc command |
+| `OVIS_HC_BIN` | found | hc executable used with `OVIS_RUNTIME=herdr-core`, looked at first: the server runs it as its one `hc connect`, which also carries the live terminals. One whose `--version` does not say `hc …` is passed over for the next one found (see [Herdr app terminals](#herdr-app-terminals)). `HC_SESSION` and `HC_SOCKET` pick the core as for any hc command |
 | `OVIS_SSH` | `ssh` (Git for Windows' on Windows) | OpenSSH client for [remote PCs](#remote-pcs-over-ssh); the `sftp` and `ssh-keygen` beside it are used too |
 | `OVIS_APP_NAME` | unset (`Ovis`) | The name the installed app has on a phone or computer, for example the PC's name. Each PC installs as an app of its own, and without it they are all called `Ovis`. An app already installed takes the new name when the browser next updates it, usually within a day or two, without a reinstall. Keep it short: a home screen cuts a long label |
 | `OVIS_PASTE_DIR` | `<pane cwd>/.ovis` | Where pasted and attached files are saved: an absolute path or `~/…`. Set it to keep them out of your projects; an agent may then ask before reading one. It covers the panes of this server's PC; a remote PC keeps the default |

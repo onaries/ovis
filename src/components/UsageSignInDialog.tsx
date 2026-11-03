@@ -13,7 +13,7 @@ import type { UsageLoginPrompt, UsageLoginRequest } from "../../shared/usage-log
 import { ApiError, cancelUsageLogin, fetchUsageLoginAccounts, fetchUsageLoginPrompt, followUsageLogin, sendUsageLoginCode, startUsageLogin } from "../lib/api.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { useT } from "../lib/i18n.ts";
-import { signInOutcome, type SignInOutcome } from "../lib/signInOutcome.ts";
+import { followedOutcome, type SignInOutcome } from "../lib/signInOutcome.ts";
 import { PROVIDER_NAME } from "../lib/usage.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import "./UsageAccountDialog.css";
@@ -104,9 +104,10 @@ export function UsageSignInDialog({ request, onOpenTerminal, onSignedIn, onClose
         else if (answered.current && sentRef.current) { sentRef.current = false; setSent(false); setCodeError(t("The sign-in asked for the code again. Paste it once more.")); }
         setPrompt(next);
         if (next.ended) {
-          const after = (await fetchUsageLoginAccounts(provider, controller.signal)).accounts;
+          // the account the server found in this login's own home; the lists before and after only for a server too old to say
+          const after = next.succeeded === undefined ? (await fetchUsageLoginAccounts(provider, controller.signal)).accounts : [];
           window.dispatchEvent(new Event("herdr-usage-changed"));
-          const outcome = signInOutcome(before.current ?? [], after, again);
+          const outcome = followedOutcome(next, before.current ?? [], after, again);
           following.current = null;
           setPhase({ kind: "ended", outcome });
           if (outcome.kind === "signed-in") signedInRef.current?.();

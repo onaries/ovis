@@ -1316,7 +1316,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     login.reads += 1;
     const ended = login.provider === "claude" ? login.code : login.reads > 3;
     if (ended) signInDemo.signedIn.add(login.provider);
-    if (ended) return json({ provider: login.provider, url: null, user_code: null, wants_code: false, ended: true }, 200, { "cache-control": "no-store" });
+    if (ended) return json({ provider: login.provider, url: null, user_code: null, wants_code: false, ended: true, succeeded: true, account: login.provider === "claude" ? "me@example.test" : "codex@example.test" }, 200, { "cache-control": "no-store" });
     return json(login.provider === "claude"
       ? { provider: "claude", url: CLAUDE_SIGN_IN_URL, user_code: null, wants_code: true, ended: false }
       : { provider: "codex", url: "https://auth.openai.com/codex/device", user_code: "PDLB-SLDUA", wants_code: false, ended: false }, 200, { "cache-control": "no-store" });

@@ -101,6 +101,8 @@ export function ConnectPhoneDialog({ route: initial, plan, loading, onRefresh, p
   usePhoneSheetBack(() => { onClose(); }, true, true);
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
+      // gone from the page (a pairing closed it): its listener goes a moment later, and the key is Settings'
+      if (surface.current === null) return;
       if (event.key !== "Escape" || event.isComposing || nativeModalOver(surface.current)) return;
       // the relay identity's confirmation, opened over this dialog, takes its own Escape
       if (document.querySelector('[role="alertdialog"]') !== null) return;

@@ -90,6 +90,18 @@ export interface HerdrIdentity {
    */
   runtime?: "herdr-core";
 }
+/**
+ * What this PC has of herdr-core, the Herdr app's runtime, whichever runtime the server serves
+ * (GET /api/health, authenticated only). `version`: the hc the server found and would run
+ * (server/herdr-core/discovery.ts), null when none answers as hc. `running`: the core's socket file
+ * is there for `session`; nothing connects to it, since any hc command but `--version` starts a core.
+ * `session` is null when HC_SESSION is not a plain name (hc refuses such names), so no path is told.
+ */
+export interface HerdrCoreFacts {
+  version: string | null;
+  session: string | null;
+  running: boolean;
+}
 export type MachineAction = "connect" | "update_bridge" | "setup" | "bridge_conflict" | "windows_login" | "windows_start_failed";
 /** `ovis`: the PC's own Ovis updates itself (Machine.remote_ovis); absent for a bridge this app installs */
 export interface MachineUpdate { job_id: string; step: string; progress: SetupProgress | null; ovis?: boolean }

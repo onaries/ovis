@@ -37,11 +37,12 @@ interface Submit { text: string; agent_only?: true }
 const frames = (page: Page): Promise<void> => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 const submits = (page: Page): Promise<Submit[]> => page.evaluate(() => (window as unknown as { quoteLab: { submits: Submit[] } }).quoteLab.submits);
 
-/** Selects `phrase` in the last agent reply as a reader does: a mouse drag on a desktop; on a touch screen the range the handles leave. */
+/** Selects `phrase` in the last agent reply that holds it, as a reader does: a mouse drag on a desktop; on a touch screen the range the handles leave. */
 async function select(page: Page, phrase: string, mouse: boolean): Promise<void> {
   const box = await page.evaluate((words) => {
-    const rows = [...document.querySelectorAll(".chat-turn-agent")];
-    const turn = rows[rows.length - 1]!;
+    const rows = [...document.querySelectorAll(".chat-turn-agent")].filter((row) => (row.textContent ?? "").includes(words));
+    const turn = rows[rows.length - 1];
+    if (!turn) throw new Error(`not in a reply: ${words}`);
     const walker = document.createTreeWalker(turn, NodeFilter.SHOW_TEXT);
     const nodes: Text[] = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node as Text);
@@ -60,9 +61,12 @@ async function select(page: Page, phrase: string, mouse: boolean): Promise<void>
     await page.mouse.move((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2, { steps: 4 });
     await page.mouse.move(box.x1, box.y1, { steps: 4 });
     await page.mouse.up();
+    // the drag took the words, or the page moved under it: say which, at once
+    const taken = await page.evaluate(() => getSelection()?.toString() ?? "");
+    assert.ok(taken.includes(phrase), `the drag selected "${phrase}", not "${taken}"`);
   } else {
     await page.evaluate((words) => {
-      const rows = [...document.querySelectorAll(".chat-turn-agent")];
+      const rows = [...document.querySelectorAll(".chat-turn-agent")].filter((row) => (row.textContent ?? "").includes(words));
       const turn = rows[rows.length - 1]!;
       const walker = document.createTreeWalker(turn, NodeFilter.SHOW_TEXT);
       const nodes: Text[] = [];
@@ -90,7 +94,7 @@ try {
   // submit frame the client sends is recorded (window.quoteLab). Everything else is the demo's.
   const gates = `<script>(() => {
     const demo = window.fetch;
-    const lab = window.quoteLab = { submits: [] };
+    const lab = window.quoteLab = { submits: [], answers: 0 };
     const DemoSocket = window.WebSocket;
     const Socket = function (...args) {
       const socket = new DemoSocket(...args);
@@ -107,6 +111,8 @@ try {
       return Promise.resolve(demo(input, init)).then(async (response) => {
         if (!response.ok) return response;
         const body = await response.json();
+        // the demo's answers to a sent message, as the chat reads them: drawn or not, the page has them
+        if (Array.isArray(body.turns)) lab.answers = body.turns.filter((turn) => turn.role === "assistant" && JSON.stringify(turn.parts).includes("This is the demo, so nothing ran")).length;
         if (Array.isArray(body.turns)) body.turns = [...body.turns,
           { role: "user", ts: "2026-10-29T00:00:00.000Z", parts: [{ kind: "text", text: ${JSON.stringify(ASK)} }] },
           { role: "assistant", ts: "2026-10-29T00:00:01.000Z", end_ts: "2026-10-29T00:00:20.000Z", parts: [{ kind: "text", phase: "final_answer", text: ${JSON.stringify(PLAN)} }] }];
@@ -149,6 +155,12 @@ try {
           page.setDefaultTimeout(WAIT.timeout);
           await page.goto(url);
           await page.getByText("Show a conflict banner", { exact: false }).waitFor(WAIT);
+          // the demo's Claude pane is mid-turn when it opens, and ends that turn a few seconds later
+          // (site/demo/transport.ts): the earlier reply gets its last words and the Working line goes,
+          // and the chat, following its end, moves the reply quoted from. A drag made meanwhile ends
+          // on other words, so the selections start once that turn has ended
+          await page.getByText("6 tests pass.", { exact: false }).waitFor(WAIT);
+          await page.locator(".chat-virtual-footer", { hasText: "Working" }).waitFor({ state: "detached", ...WAIT });
           await page.locator(".chat-frame[data-pane-content]").waitFor({ state: "attached", ...WAIT });
           await appFaces(page);
           await frames(page);
@@ -200,11 +212,18 @@ try {
           // the message goes as written, for an agent alone: a shell would read its `>` lines as redirects
           await composer.press("End");
           await composer.pressSequentially("Go ahead.");
+          const answers = await page.evaluate(() => (window as unknown as { quoteLab: { answers: number } }).quoteLab.answers);
           await page.getByRole("button", { name: "Send message", exact: true }).click();
           await page.waitForFunction((count) => (window as unknown as { quoteLab: { submits: Submit[] } }).quoteLab.submits.length > count, sent, WAIT);
           const message = (await submits(page)).at(-1)!;
           assert.equal(message.text, `${stacked}Go ahead.`, `${label}: the message the agent gets`);
           assert.equal(message.agent_only, true, `${label}: for an agent alone`);
+          // the demo answers the message: once its answer is in and the Working line gone, the chat stops moving under the next drag
+          await page.waitForFunction((count) => (window as unknown as { quoteLab: { answers: number } }).quoteLab.answers > count, answers, WAIT);
+          // read is not drawn: the answer's row is in the page (the list keeps the rows near the end it shows), then the Working line is gone
+          await page.locator(".chat-turn-agent", { hasText: "This is the demo, so nothing ran" }).last().waitFor({ state: "attached", ...WAIT });
+          await page.locator(".chat-virtual-footer", { hasText: "Working" }).waitFor({ state: "detached", ...WAIT });
+          await frames(page);
 
           // a quote past the composer's limit is refused, saying why in words, and the draft is never cut
           const full = "x".repeat(19_990);

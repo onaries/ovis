@@ -34,7 +34,7 @@ import { testShellEnv } from "../scripts/test-shell.ts";
 import { PendingInputError, PendingInputs } from "./pending-input.ts";
 import { loginPathProbe, ShellAgentLocator, type LoginPathProbe } from "./shell-agent.ts";
 import { DeviceStore } from "./devices.ts";
-import type { MachineEvent, MachineSettings } from "../shared/machines.ts";
+import type { HerdrCoreFacts, MachineEvent, MachineSettings } from "../shared/machines.ts";
 import { MAX_MUTED_PANES, type SharedPreferences } from "../shared/preferences.ts";
 import { OmoStatus } from "./omo-status.ts";
 import { omoJobTasks } from "./omo-jobs.ts";
@@ -5667,14 +5667,15 @@ describe("shared preferences API", () => {
 });
 
 describe("access facts on /api/health", () => {
-  type Body = { auth: HealthAuth; lan_exposure?: LanExposure; security?: SecuritySummary };
+  type Body = { auth: HealthAuth; lan_exposure?: LanExposure; security?: SecuritySummary; herdr_core?: HerdrCoreFacts };
   const SECRET = "fictional-t0k3n-value";
   const guard = { "content-type": "application/json", "x-herdr-machine": "1" };
   /** a server of its own: a temp state dir, an empty token unless one is given, nothing from the runner's environment */
+  const CORE_FACTS: HerdrCoreFacts = { version: "0.1.17", session: "default", running: false };
   const serve = (options: { hostname?: string; token?: string; serveOnly?: boolean; owner?: string | null; seed?: (stateDir: string) => void } = {}) => {
     const stateDir = mkdtempSync(join(tmpdir(), "herdr-security-summary-"));
     options.seed?.(stateDir);
-    const instance = createServer({ port: 0, hostname: options.hostname ?? "127.0.0.1", token: options.token ?? "", stateDir, tailscaleOwner: options.owner ?? null, tailscaleServeOnly: options.serveOnly ?? false });
+    const instance = createServer({ port: 0, hostname: options.hostname ?? "127.0.0.1", token: options.token ?? "", stateDir, tailscaleOwner: options.owner ?? null, tailscaleServeOnly: options.serveOnly ?? false, herdrCoreFacts: () => CORE_FACTS });
     const read = async (headers: Record<string, string> = {}, scope = "") => {
       const response = await fetch(`http://127.0.0.1:${instance.port}/api/health${scope}`, { headers });
       const text = await response.text();
@@ -5725,6 +5726,42 @@ describe("access facts on /api/health", () => {
         }
       }
     } finally { secured.stop(); }
+  });
+
+  it("tells herdr-core's facts to a signed-in client only, and not on a bridge poll", async () => {
+    const secured = serve({ token: SECRET, hostname: "0.0.0.0" });
+    try {
+      const bearer = { authorization: `Bearer ${SECRET}` };
+      const signedIn = await secured.read(bearer);
+      expect(signedIn.body.auth.authenticated).toBe(true);
+      expect(signedIn.body.herdr_core).toEqual(CORE_FACTS);
+      expect((await secured.read(bearer, "?scope=bridge")).body.herdr_core).toBeUndefined();
+      const anonymous = await secured.read({});
+      expect(anonymous.body.auth.authenticated).toBe(false);
+      expect(anonymous.body.herdr_core).toBeUndefined();
+    } finally { secured.stop(); }
+  });
+
+  it("tells herdr-core's facts to a driving owner only: not a watching device, nor a caller on an open install", async () => {
+    let token = "";
+    const secured = serve({ token: SECRET, seed: (stateDir) => {
+      const store = new DeviceStore(stateDir);
+      token = store.pair(store.startPairing().code, "Watch", "watch")!.token;
+      store.match(token);
+    } });
+    try {
+      const watching = await secured.read({ cookie: `ovis_device=${token}`, "x-forwarded-for": "192.168.0.20" });
+      expect(watching.body.auth).toMatchObject({ authenticated: true, role: "watch" });
+      expect(watching.body.herdr_core).toBeUndefined();
+      expect((await secured.read({ authorization: `Bearer ${SECRET}` })).body.herdr_core).toEqual(CORE_FACTS);
+    } finally { secured.stop(); }
+    const open = serve({ hostname: "0.0.0.0" });
+    try {
+      const stranger = await open.read({ "x-forwarded-for": "192.168.0.20" });
+      expect(stranger.body.auth).toMatchObject({ authenticated: true, via: "open" });
+      expect(stranger.body.herdr_core).toBeUndefined();
+      expect((await open.read({})).body.herdr_core).toEqual(CORE_FACTS);
+    } finally { open.stop(); }
   });
 
   it("watch can read but not change access", async () => {

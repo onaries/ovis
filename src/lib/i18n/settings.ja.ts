@@ -353,4 +353,13 @@ export const SETTINGS_JA: Record<string, string> = {
   "The Ovis relay works from anywhere with nothing to install, or use Tailscale.": "Ovis リレーならどこからでも、インストール不要で使えます。Tailscale も使えます。",
   "Use Tailscale or a pairing code.": "Tailscale またはペアリングコードで接続します。",
   "Ovis relay: {state}": "Ovis リレー: {state}",
+  "Terminals": "ターミナル",
+  "This PC serves": "この PC が表示するもの",
+  "Herdr app": "Herdr アプリ",
+  "herdr TUI": "herdr (TUI)",
+  "Version {version}.": "バージョン {version}。",
+  "herdr-core {version}, session {session}.": "herdr-core {version}、セッション {session}。",
+  "herdr-core {version}.": "herdr-core {version}。",
+  "The Herdr app's core (hc {version}) runs on this PC too. To show its terminals here instead, set {setting} and restart Ovis: in the .env file in the folder {command} prints when herdr's plugin starts Ovis, or in the environment of whatever else starts it.": "この PC では Herdr アプリのコア (hc {version}) も動いています。代わりにそのターミナルをここに表示するには、{setting} を設定して Ovis を再起動してください。herdr のプラグインが Ovis を起動する場合は {command} が示すフォルダの .env ファイルに、それ以外の方法で起動する場合はその起動環境に設定します。",
+  "The Herdr app's core (hc {version}) is installed on this PC too. To show its terminals here instead, set {setting} and restart Ovis: in the .env file in the folder {command} prints when herdr's plugin starts Ovis, or in the environment of whatever else starts it.": "この PC には Herdr アプリのコア (hc {version}) もインストールされています。代わりにそのターミナルをここに表示するには、{setting} を設定して Ovis を再起動してください。herdr のプラグインが Ovis を起動する場合は {command} が示すフォルダの .env ファイルに、それ以外の方法で起動する場合はその起動環境に設定します。",
 };

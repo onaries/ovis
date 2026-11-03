@@ -26,7 +26,7 @@ import { UI_FONT_MAX, UI_FONT_MIN, UI_FONT_PRESET_FAMILY, uiFontPreset, type UiF
 import { canListInstalledFonts, filterFamilies, isMonospaceFamily, queryInstalledFonts } from "../lib/installedFonts.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
 import type { UserError } from "../lib/userError.ts";
-import type { Machine, MachineSettings } from "../../shared/machines.ts";
+import type { HerdrCoreFacts, Machine, MachineSettings } from "../../shared/machines.ts";
 import { canHideMachine, isMachineShown, setHiddenMachines, useHiddenMachines, withMachineHidden } from "../lib/hiddenMachines.ts";
 import { fetchRemoteAccess, fetchVoiceStatus, machineRequest, saveVoiceConfig } from "../lib/api.ts";
 import { isLoopbackHost, phonePlan } from "../lib/phone.ts";
@@ -76,6 +76,10 @@ export interface SettingsDialogProps {
   auth: HealthAuth | null;
   /** the herdr this app's server talks to, from the last health check */
   herdrVersion: string | null;
+  /** which runtime that is (herdr's TUI server, or herdr-core: the Herdr app's), from the same check; null before one answered */
+  herdrRuntime?: "herdr" | "herdr-core" | null;
+  /** what the server's PC has of herdr-core, from the same check; null when it did not say */
+  herdrCore?: HerdrCoreFacts | null;
   /** what protects this server, from the last bridge health check: never an earlier answer once one fails */
   security: SecurityFacts;
   onEnableNotifications: () => Promise<PushActionResult>;
@@ -1048,11 +1052,38 @@ function PluginsGroup() {
   );
 }
 
-function AboutPage({ updates, herdrVersion, bridgesFollow }: { updates: UpdatesModel; herdrVersion: string | null; bridgesFollow: boolean }) {
+/**
+ * Read-only: which runtime this PC's terminals come from. On herdr's TUI, a Herdr app core found
+ * on the same PC gets one quiet line on how to show its terminals instead; nothing switches here.
+ */
+function RuntimeFacts({ version, runtime, core }: { version: string | null; runtime: "herdr" | "herdr-core" | null; core: HerdrCoreFacts | null }) {
+  const t = useT();
+  if (runtime === null || version === null) return null;
+  const onCore = runtime === "herdr-core";
+  const vars = { version: core?.version ?? "", setting: "OVIS_RUNTIME=herdr-core", command: "herdr plugin config-dir devswha.ovis" };
+  const detail = !onCore ? t("Version {version}.", { version })
+    : core?.session ? t("herdr-core {version}, session {session}.", { version, session: core.session })
+    : t("herdr-core {version}.", { version });
+  // under the fact, not beside it: the fact keeps its one line on a phone
+  const hint = onCore || !core?.version ? null
+    : core.running ? t("The Herdr app's core (hc {version}) runs on this PC too. To show its terminals here instead, set {setting} and restart Ovis: in the .env file in the folder {command} prints when herdr's plugin starts Ovis, or in the environment of whatever else starts it.", vars)
+    : t("The Herdr app's core (hc {version}) is installed on this PC too. To show its terminals here instead, set {setting} and restart Ovis: in the .env file in the folder {command} prints when herdr's plugin starts Ovis, or in the environment of whatever else starts it.", vars);
+  return (
+    <SettingsGroup title={t("Terminals")} section="runtime">
+      <SettingsRow label={t("This PC serves")} description={detail}>
+        <span className="settings-fact">{onCore ? t("Herdr app") : t("herdr TUI")}</span>
+      </SettingsRow>
+      {hint && <p className="settings-item settings-hint">{hint}</p>}
+    </SettingsGroup>
+  );
+}
+
+function AboutPage({ updates, herdrVersion, herdrRuntime, herdrCore, bridgesFollow }: { updates: UpdatesModel; herdrVersion: string | null; herdrRuntime: "herdr" | "herdr-core" | null; herdrCore: HerdrCoreFacts | null; bridgesFollow: boolean }) {
   const t = useT();
   return (
     <>
       <UpdateControls updates={updates} bridgesFollow={bridgesFollow} />
+      <RuntimeFacts version={herdrVersion} runtime={herdrRuntime} core={herdrCore} />
       <HerdrUpdateControls enabled herdrVersion={herdrVersion} />
       <PluginsGroup />
       <TelemetryControls />
@@ -1129,7 +1160,7 @@ function SaveFailure({ error, paused, retrying, onRetry }: { error: UserError; p
   </div>;
 }
 
-function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, onOpenPane, actions, updates, auth, herdrVersion, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [] }: SettingsDialogProps) {
+function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, onOpenPane, actions, updates, auth, herdrVersion, herdrRuntime = null, herdrCore = null, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [] }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
   // opened by Forward, the dialog shows what that entry of the history showed
@@ -1267,7 +1298,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       // after every device went, its own pairing included, a browser asks the server where it stands: the roster answers, or the gate does
       case "devices": return <DevicesPage auth={auth} security={security} onSignOut={actions.lock} onRevokedAll={actions.refresh} />;
       case "remote": return <RemotePcsPage actions={actions} machines={machines} pcSettings={pcSettings} pcSettingsError={pcSettingsError} onPcSettings={(patch) => void updatePcSettings(patch)} />;
-      case "about": return <AboutPage updates={updates} herdrVersion={herdrVersion} bridgesFollow={pcSettings?.auto_update_bridges === true} />;
+      case "about": return <AboutPage updates={updates} herdrVersion={herdrVersion} herdrRuntime={herdrRuntime} herdrCore={herdrCore} bridgesFollow={pcSettings?.auto_update_bridges === true} />;
       default: return null;
     }
   };

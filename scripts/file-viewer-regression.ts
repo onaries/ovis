@@ -549,7 +549,8 @@ try {
   await setFileOpen("panel");
   console.log("PASS by default a text file opens in the popup on a wide window");
   const beforePlacement = await page.evaluate(() => history.state);
-  await videoLink.click();
+  // setFileOpen reloaded the page: its follow to the end can take the link from under a pointer
+  await activateInTranscript(page, videoLink);
   await page.locator(".modal.file-viewer video").waitFor();
   assert.equal(await panel.count(), 0, "video starts in the popup at 1280px");
   const videoHistoryLength = await page.evaluate(() => history.length);
@@ -644,7 +645,9 @@ try {
     const framed = page.frameLocator(".file-viewer-page");
     await framed.getByText("contents ran", { exact: true }).waitFor();
     const opened = await page.evaluate(() => history.length);
-    await framed.locator("#toc").click();
+    // the frame's own navigation is under test, not where the panel lays the frame out: a pointer
+    // aimed at the link while the panel settles can miss it, and no entry is made
+    await framed.locator("#toc").dispatchEvent("click");
     await page.waitForFunction((length) => history.length === length + 1, opened);
     if (close === "Escape") { await panel.locator(".file-panel-resizer").focus(); await page.keyboard.press("Escape"); }
     else await panel.getByRole("button", { name: "Close file", exact: true }).click();
@@ -671,7 +674,11 @@ try {
 
   for (const [label, content] of [["extensionless", "Extensionless text"], ["unknown text", "Unknown extension text"]] as const) {
     const link = page.getByRole("button", { name: label, exact: true });
-    await link.click();
+    // the panel just closed: the chat takes its width back and its rows move under a pointer. The
+    // link that opens the file holds the focus, as a click leaves it, for the return checked below
+    await transcriptSettled(page);
+    await link.focus();
+    await link.dispatchEvent("click");
     await panel.getByText(content, { exact: true }).waitFor();
     assert.equal(await page.locator(".modal.file-viewer").count(), 0, "real text metadata corrects an unknown-extension popup guess");
     await panel.getByRole("button", { name: "Close file", exact: true }).click();
@@ -891,7 +898,8 @@ try {
   await page.goBack();
   await notes.waitFor({ state: "hidden" });
   await videoLink.waitFor();
-  await videoLink.click();
+  // reloaded and gone back: the chat's follow to its end can take the link from under a pointer
+  await videoLink.dispatchEvent("click");
   await preview.waitFor();
   await preview.getByRole("button", { name: "Close file", exact: true }).click();
   await preview.waitFor({ state: "hidden" });
@@ -1060,7 +1068,8 @@ try {
   });
   await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
   await page.locator(".conn-live").waitFor();
-  await page.getByRole("button", { name: "big code", exact: true }).click();
+  // the reloaded chat's follow to its end can take the link from under a pointer
+  await activateInTranscript(page, page.getByRole("button", { name: "big code", exact: true }));
   const bigCode = page.getByRole("dialog", { name: "big.ts", exact: true });
   await page.waitForFunction(() => (document.querySelector("diffs-container")?.shadowRoot?.querySelectorAll("[data-line]").length ?? 0) > 0);
   assert.equal(await bigCode.locator(".file-viewer-meta .file-viewer-notice").getAttribute("title"), "Too long to highlight");

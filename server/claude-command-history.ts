@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { closeSync, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { commandTerminals } from "./claude-subagents.ts";
-import { finishAsync, type Steps } from "./codex-images.ts";
+import { TranscriptBusyError, transcriptReader, type TranscriptFile } from "./transcript-reader.ts";
 
 /** Terminal metadata only: historical reads never replay prompt/turn evidence. */
 export interface CommandEnd { id: string; at: number; status: "completed" | "failed" | "cancelled"; /** the Bash call the notice names (`<tool-use-id>`), when it names one */ call: string | null }
@@ -51,14 +51,24 @@ interface Entry {
   failures: number;
   retryAt: number;
   timer: ReturnType<typeof setTimeout> | null;
+  /** turns its slices took inside held leases: a slice that takes them is reading, not stuck */
+  turns: number;
+  /** times it started over (restart): a request can start it over while a slice waits for the disk */
+  restarts: number;
 }
 
 const MAX_SESSIONS = 16;
 const MAX_ENDS = 5000;
 /** A read takes at most this much of a file at once, so a record longer than it is passed over. */
 const CHUNK = 1024 * 1024;
-/** The event loop gets its turn after about this much work (finishAsync). */
+/** A session lets the next one have its turn after about this much work (the event loop gets one at every read too). */
 const SLICE_MS = 4;
+/**
+ * A read that has not answered in this long is given up for now (TranscriptBusyError) and tried
+ * again a second later. A busy reader is no failure of the transcript, so one whose reads keep
+ * running out of time is tried every second for as long as it is watched, with no longer backoff.
+ */
+const READ_MS = 10_000;
 /** A transcript that changed after a check is checked again this long after, at the soonest, unless a request waits for it. */
 const CHECK_INTERVAL_MS = 5000;
 /**
@@ -77,8 +87,15 @@ const MARKERS = ["<task-notification>", '"task_id"', '"shell_id"'].map((marker) 
 const entries = new Map<string, Entry>();
 const queue: Entry[] = [];
 let draining = false;
+/** Slices under way, at most the reader's capacity, and the transcripts they read: one slice a transcript. */
+let slices = 0;
+const running = new Set<string>();
+/** Called once no drain and no slice runs (commandHistorySettled). */
+const idle = new Set<() => void>();
 /** Moved on by every reset: a request waiting from before it gives up. */
 let generation = 0;
+/** Aborted by every reset: the reads of slices begun before it give up, and no drain waits for them. */
+let cancel = new AbortController();
 let holders = 0;
 let buffer: Buffer | null = null;
 
@@ -115,7 +132,7 @@ export function commandHistory(path: string, limit: number, schedule = true, nee
     }
     entry = {
       path, session: basename(path, ".jsonl"), version, limit, offset: 0, skipping: false, cutAt: null, spans: [], checked: null, checkedThrough: 0, checkedFrom: -Infinity, checkedTick: -Infinity, check: null,
-      checkedAt: -Infinity, checks: 0, wanted: 0, waiters: 0, ends: [], queued: false, listeners: new Set(), failures: 0, retryAt: 0, timer: null,
+      checkedAt: -Infinity, checks: 0, wanted: 0, waiters: 0, ends: [], queued: false, listeners: new Set(), failures: 0, retryAt: 0, timer: null, turns: 0, restarts: 0,
     };
   }
   entries.set(path, entry);
@@ -320,60 +337,187 @@ function later(entry: Entry, at: number): void {
   entry.timer.unref?.();
 }
 
+/**
+ * A slice that has neither ended nor taken a turn in this long while another session waits is taken
+ * as stuck on its disk. A healthy lease's open and its checks on remote storage, several round
+ * trips, can outlast it too, and the next slice then starts beside it.
+ */
+const STALL_MS = 50;
+
+/** A session waiting whose transcript no slice reads: it can have a slice now. */
+const runnable = (entry: Entry): boolean => !running.has(entry.path);
+
 function pump(): void {
-  if (draining || queue.length === 0) return;
+  if (draining || slices >= transcriptReader.capacity || !queue.some(runnable)) return;
   draining = true;
   // the first slice waits for the event loop too: whoever asked (a status poll) never runs one
-  setImmediate(() => void finishAsync(drain()).finally(() => { draining = false; pump(); }));
+  setImmediate(() => void drain().finally(() => { draining = false; pump(); settle(); }));
 }
 
-/** One slice of one session at a time, each behind every other session waiting. */
-function* drain(): Steps<void> {
-  for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) {
-    entry.queued = false;
-    step(entry);
-    yield;
+function settle(): void {
+  if (draining || slices > 0) return;
+  for (const resolve of idle) resolve();
+  idle.clear();
+}
+
+/**
+ * The first session waiting that can have a slice, taken off the queue. Only the drain takes one:
+ * a session taken off it before its slice starts would answer its waiter at once.
+ */
+function next(): Entry | undefined {
+  if (slices >= transcriptReader.capacity) return undefined;
+  const index = queue.findIndex(runnable);
+  if (index < 0) return undefined;
+  const [entry] = queue.splice(index, 1);
+  entry!.queued = false;
+  return entry;
+}
+
+/**
+ * One slice of one session at a time, each behind every other session waiting. A slice that has
+ * taken no turn for STALL_MS while another session waits is left to end by itself, and the next
+ * slice starts beside it, up to the reader's capacity: a transcript stuck on its disk holds up
+ * only its own history. One that takes turns lets go by itself at the end of the next.
+ */
+async function drain(): Promise<void> {
+  for (let entry = next(); entry !== undefined; entry = next()) {
+    const path = entry.path;
+    running.add(path);
+    slices++;
+    let done = false;
+    const slice = step(entry).finally(() => { done = true; running.delete(path); slices--; pump(); settle(); });
+    for (let seen = entry.turns; !done; seen = entry.turns) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([slice, new Promise<void>((resolve) => { timer = setTimeout(resolve, STALL_MS); })]);
+      clearTimeout(timer);
+      if (!done && entry.turns === seen && slices < transcriptReader.capacity && queue.some(runnable)) break;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }
 
-function step(entry: Entry): void {
+/** One slice: the transcript's bytes are read without holding the event loop while they come. */
+async function step(entry: Entry): Promise<void> {
   if (entries.get(entry.path) !== entry) return;
-  const stop = performance.now() + SLICE_MS;
   const before = entry.ends.length;
   let restarted = false;
-  let fd: number | null = null;
+  // the transcript as known when the stat now on its way was asked for
+  let known = entry.version;
+  const deadline = Date.now() + READ_MS;
+  // the transcript is let go of well inside the read's deadline, however long the read waited to begin
+  const held = deadline - READ_MS / 2;
+  const signal = cancel.signal;
+  // a slice on the event loop counts from here, as main's does: its open and checks hold the loop too
+  const began = performance.now();
   try {
-    fd = openSync(entry.path, "r");
-    for (;;) {
-      const stat = fstatSync(fd);
-      const now: HistoryVersion = { id: `${stat.dev}:${stat.ino}`, size: stat.size, mtimeMs: stat.mtimeMs };
-      if (!sameHistory(entry.version, now)) { discard(entry); return; }
-      entry.version = now;
-      const work = due(entry, Date.now());
-      if (work === "scan") {
-        if (entry.offset === 0 && entry.spans.length === 0) { entry.checked = now; entry.checkedThrough = 0; entry.checkedFrom = Date.now(); entry.checkedTick = performance.now(); }
-        const extends_ = entry.checked !== null && sameVersion(entry.checked, now) && entry.checkedThrough === entry.offset;
-        scan(entry, fd, stop);
-        const after = fstatSync(fd);
-        // nothing was written while it read: what it read is as checked as what came before
-        if (extends_ && `${after.dev}:${after.ino}` === now.id && after.size === now.size && after.mtimeMs === now.mtimeMs) entry.checkedThrough = entry.offset;
-      } else if (work === "check") {
-        if (!check(entry, fd, now, stop)) { restart(entry); restarted = true; }
-      } else break;
-      if (performance.now() >= stop) break;
-    }
+    await transcriptReader.read(entry.path, async (file) => {
+      let stop = (file.waited() ? performance.now() : began) + SLICE_MS;
+      // the whole lines of the last window that a slice ended before taking in, and the stat taken after they were read
+      let rest: { from: number; to: number; bytes: Buffer; version: HistoryVersion } | null = null;
+      for (let now = file.initial; ;) {
+        // let go of (discarded) while it waited for the disk: nothing more is read for it
+        if (entries.get(entry.path) !== entry) return;
+        if (!seen(entry, known, now)) return;
+        const work = due(entry, Date.now());
+        let after: HistoryVersion | null = null;
+        if (work === "scan") {
+          const restarts = entry.restarts;
+          if (entry.offset === 0 && entry.spans.length === 0) { entry.checked = now; entry.checkedThrough = 0; entry.checkedFrom = Date.now(); entry.checkedTick = performance.now(); }
+          const extends_ = entry.checked !== null && sameVersion(entry.checked, now) && entry.checkedThrough === entry.offset;
+          // a record cut at the limit is read whole: past the limit, as far as the transcript goes
+          const end = Math.max(entry.limit, entry.version.size);
+          let bytes: Buffer;
+          if (rest !== null && rest.version === now && entry.offset > rest.from && entry.offset < rest.to) {
+            // read already, and no stat since the one after them: neither a read nor a stat is needed
+            bytes = rest.bytes.subarray(entry.offset - rest.from, rest.to - rest.from);
+            after = now;
+          } else {
+            const position = entry.offset;
+            bytes = await file.window(position, Math.min(CHUNK, end - position));
+            known = entry.version;
+            // the next window, from the last whole line of this one, is read while the stat is on its
+            // way and this one is taken in. Not when nobody listens: the read ends with this slice, and
+            // a read ahead left over holds up its close. Nor when this window reached the end
+            // already: there is nothing past it to read yet
+            const last = bytes.lastIndexOf(10);
+            const linesEnd = position + last + 1;
+            if (last >= 0 && position + bytes.length < end && entry.listeners.size > 0) file.ahead(linesEnd, Math.min(CHUNK, end - linesEnd));
+            after = await file.stat();
+            if (entries.get(entry.path) !== entry) return;
+            rest = last >= 0 ? { from: position, to: linesEnd, bytes, version: after } : null;
+          }
+          // taken in only now, all at once: a request in between sees the read as it was, never
+          // bytes read but not yet known unchanged; bytes that came within the turn are taken in
+          // until it ends, and bytes that came after it (slow storage) get a turn of their own. Not
+          // bytes read on the event loop: the loop had no turn while they were read
+          const arrived = performance.now();
+          if (entry.restarts !== restarts) {
+            // started over while it read (a request found a line it read rewritten, evidence): the
+            // window is from where the read was, not from where it starts again
+            rest = null;
+          } else {
+            scan(entry, bytes, arrived < stop || !file.waited() ? stop : arrived + SLICE_MS);
+            // nothing was written while it read: what it read is as checked as what came before
+            if (extends_ && sameVersion(after, now)) entry.checkedThrough = entry.offset;
+          }
+        } else if (work === "check") {
+          // a check reads into the window those lines were in
+          rest = null;
+          if (!await check(entry, file, now, stop)) { restart(entry); restarted = true; }
+        } else break;
+        if (performance.now() >= stop) {
+          // the turn ends the read when nobody wants it read on, another session that can have a slice
+          // or another reader waits, it started over, or a watcher has an end to hear
+          if (Date.now() >= held || entry.listeners.size === 0 || queue.some((other) => other !== entry && runnable(other))
+            || transcriptReader.size().waiting > 0 || restarted || (entry.ends.length !== before && entry.listeners.size > entry.waiters)) break;
+          // nobody else waits: the event loop has its turn, and the read goes on with the transcript
+          // still open (an open and its check cost several round trips on remote storage). Two
+          // immediates: one set while an I/O callback runs comes before the timers already due, so
+          // with one, a slice that needs no read (the rest of a window) could follow this one first
+          entry.turns++;
+          await new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
+          stop = performance.now() + SLICE_MS;
+        }
+        // the stat after a read is as new as one taken now: one disk round trip fewer
+        if (after === null) { known = entry.version; after = await file.stat(); }
+        now = after;
+      }
+    }, { deadline, signal });
+    if (entries.get(entry.path) !== entry) return;
     entry.failures = 0;
     entry.retryAt = 0;
-  } catch {
-    entry.failures++;
-    entry.retryAt = Date.now() + Math.min(RETRY_MAX_MS, 1000 * 2 ** (entry.failures - 1));
-  } finally { if (fd !== null) closeSync(fd); }
+  } catch (error) {
+    if (entries.get(entry.path) !== entry) return;
+    // replaced before the read was let in (the reader refuses a path that names another file):
+    // read anew, as a stat that found it would
+    const named = historyVersion(entry.path);
+    if (named !== null && !sameHistory(entry.version, named)) { discard(entry); return; }
+    // the reader busy or a read too slow: no failure of this transcript, so it is never given up for it
+    if (!(error instanceof TranscriptBusyError)) entry.failures++;
+    entry.retryAt = Date.now() + Math.min(RETRY_MAX_MS, 1000 * 2 ** (Math.max(1, entry.failures) - 1));
+  }
   if (entries.get(entry.path) !== entry) return;
   const work = due(entry, Date.now());
-  if ((work === "scan" || work === "check") && entry.listeners.size > 0) { entry.queued = true; queue.push(entry); }
-  else if (typeof work === "number") later(entry, work);
+  // asked for again while it read (enqueue): it waits in the queue already
+  if (!entry.queued && (work === "scan" || work === "check") && entry.listeners.size > 0) { entry.queued = true; queue.push(entry); }
+  else if (!entry.queued && typeof work === "number") later(entry, work);
   // a waiter hears when the read stops; a watcher when it learns an end or starts over too
   if (restarted || entry.ends.length !== before || !entry.queued) notify(entry);
+}
+
+/**
+ * Takes in `now`, a stat of the transcript asked for when it was known as `known`: false when it
+ * was changed other than by growing, and the read is let go of. A status poll may have seen the
+ * transcript newer while the stat was on its way: that stat is no news, though not a shrink of what
+ * was known when it was asked for.
+ */
+function seen(entry: Entry, known: HistoryVersion, now: HistoryVersion): boolean {
+  if (sameHistory(known, now) && (sameHistory(entry.version, now) || sameHistory(now, entry.version))) {
+    if (sameHistory(entry.version, now)) entry.version = now;
+    return true;
+  }
+  discard(entry);
+  return false;
 }
 
 function notify(entry: Entry): void {
@@ -393,15 +537,12 @@ function restart(entry: Entry): void {
   entry.checkedTick = -Infinity;
   entry.check = null;
   entry.ends = [];
+  entry.restarts++;
 }
 
-/** Reads on from `entry.offset`, a chunk at most, and keeps the ends of the whole lines it read. */
-function scan(entry: Entry, fd: number, stop: number): void {
-  buffer ??= Buffer.allocUnsafe(CHUNK);
+/** Takes in `bytes`, read from `entry.offset` (a chunk at most), and keeps the ends of the whole lines in them. */
+function scan(entry: Entry, bytes: Buffer, stop: number): void {
   entry.cutAt = null;
-  // a record cut at the limit is read whole: past the limit, as far as the transcript goes
-  const end = Math.max(entry.limit, entry.version.size);
-  const bytes = buffer.subarray(0, readSync(fd, buffer, 0, Math.min(CHUNK, end - entry.offset), entry.offset));
   let from = 0;
   if (entry.skipping) {
     const newline = bytes.indexOf(10);
@@ -447,15 +588,19 @@ function terminals(entry: Entry, bytes: Buffer, from: number, to: number, stop: 
 }
 
 /** Checks the spans read against their digests, as far as the slice lasts; false when one changed. */
-function check(entry: Entry, fd: number, now: HistoryVersion, stop: number): boolean {
-  buffer ??= Buffer.allocUnsafe(CHUNK);
+async function check(entry: Entry, file: TranscriptFile, now: HistoryVersion, stop: number): Promise<boolean> {
   if (entry.check === null) { entry.checkedAt = Date.now(); entry.check = { next: 0, version: now, at: entry.checkedAt, tick: performance.now() }; entry.checks++; }
   const pass = entry.check;
   while (pass.next < entry.spans.length) {
     const start = pass.next === 0 ? 0 : entry.spans[pass.next - 1]!.end;
     const span = entry.spans[pass.next]!;
-    const got = readSync(fd, buffer, 0, span.end - start, start);
-    if (got !== span.end - start || BigInt(Bun.hash.xxHash3(buffer.subarray(0, got))) !== span.digest) return false;
+    const bytes = await file.window(start, span.end - start);
+    // started over while it read (evidence): the spans it checks are gone, and so is the check
+    if (entry.check !== pass) return true;
+    // the next span is read while this one's digest is taken
+    const following = entry.spans[pass.next + 1];
+    if (following !== undefined && entry.listeners.size > 0) file.ahead(span.end, following.end - span.end);
+    if (bytes.length !== span.end - start || BigInt(Bun.hash.xxHash3(bytes)) !== span.digest) return false;
     pass.next++;
     if (performance.now() >= stop) break;
   }
@@ -471,6 +616,8 @@ function check(entry: Entry, fd: number, now: HistoryVersion, stop: number): boo
 
 export function resetCommandHistory(): void {
   generation++;
+  cancel.abort();
+  cancel = new AbortController();
   for (const entry of [...entries.values()]) discard(entry);
   queue.length = 0;
 }
@@ -480,5 +627,9 @@ export function holdCommandHistory(): () => void {
   return () => { if (!released) { released = true; if (--holders === 0) resetCommandHistory(); } };
 }
 export function commandHistorySize(): { waiting: number; sessions: number; draining: boolean; timers: number } {
-  return { waiting: queue.length, sessions: entries.size, draining, timers: [...entries.values()].filter((entry) => entry.timer !== null).length };
+  return { waiting: queue.length, sessions: entries.size, draining: draining || slices > 0, timers: [...entries.values()].filter((entry) => entry.timer !== null).length };
+}
+/** Resolves once no slice runs and none waits to start. */
+export function commandHistorySettled(): Promise<void> {
+  return draining || slices > 0 ? new Promise((resolve) => idle.add(resolve)) : Promise.resolve();
 }

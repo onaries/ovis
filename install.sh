@@ -203,13 +203,19 @@ bounded() {
   (
     waited=0
     while [ "$waited" -lt "$bounded_limit" ]; do sleep 1; kill -0 "$bounded_pid" 2>/dev/null || exit 0; waited=$((waited + 1)); done
+    # past the bound: the kill of the tree is not cut short by the stop below, and says it timed out, so a
+    # command that still exits 0 meanwhile (a host waiting on the child killed first) is not taken as finished
+    trap '' TERM
     kill_tree "$bounded_pid"
+    exit 124
   ) >/dev/null 2>&1 &
   bounded_watch=$!
   bounded_status=0
   wait "$bounded_pid" || bounded_status=$?
   kill "$bounded_watch" 2>/dev/null || true
-  wait "$bounded_watch" 2>/dev/null || true
+  bounded_watched=0
+  wait "$bounded_watch" 2>/dev/null || bounded_watched=$?
+  [ "$bounded_watched" = 124 ] && bounded_status=124
   return "$bounded_status"
 }
 

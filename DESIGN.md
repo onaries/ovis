@@ -3996,6 +3996,11 @@ The bridge serializes attempts per pane and enforces the interval across browser
 
 ## Local Markdown images in Chat
 
+User attachment galleries keep the existing Codex-style image presentation. Composer uploads
+insert an unquoted absolute `@path`; recognize spaces in that path so an iCloud workspace has
+the same thumbnails and image viewer as any other folder. Stop path recognition at a line
+break or the next mention, and keep the owning PC and pane in the file URL.
+
 Chat follows the Codex app's inline image presentation reported by the user: a local
 `![alt](path)` in an answer displays the image in place. It reuses the file viewer's Markdown
 image component and machine-scoped stat/file endpoints, with the pane ID retained. Absolute

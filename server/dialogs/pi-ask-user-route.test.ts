@@ -111,7 +111,7 @@ async function withBridgedPane(run: (pane: {
         return reply({ read: { text: pane.screen ?? fixture.screen } });
       }
       if (request.method === "pane.get") return reply({ pane: { pane_id: id, scroll: { offset_from_bottom: 0 } } });
-      if (request.method === "pane.process_info") return reply({ process_info: { foreground_processes: (pane.foregroundList ?? [pane.foreground, ...others.keys()]).map((pid) => ({ pid, argv: pane.argv ?? ["fictional-shell"] })) } });
+      if (request.method === "pane.process_info") return reply({ process_info: { foreground_processes: (pane.foregroundList ?? [pane.foreground, ...others.keys()]).map((pid) => ({ pid, argv: pane.argv ?? ["pi"] })) } });
       if (request.method === "pane.send_keys" || request.method === "pane.send_text") {
         pane.keys.push(...(request.params?.keys ?? [`text:${request.params?.text}`]));
         return reply({});

@@ -2,6 +2,8 @@ import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { startHerdrCoreAdapter, type HerdrCoreAdapter } from "./adapter.ts";
 import { HcConnection, spawnHcConnect } from "./connection.ts";
+import { existsSync } from "node:fs";
+import { discoverHc, findHc, lastFoundHc, type FoundHc } from "./discovery.ts";
 
 /**
  * Which runtime this PC's terminals run on. `OVIS_RUNTIME=herdr-core` serves the terminals of
@@ -17,9 +19,21 @@ export function runtime(): Runtime {
   throw new Error(`OVIS_RUNTIME=${value} is not a runtime Ovis knows: use herdr (the default) or herdr-core`);
 }
 
-/** The `hc` to run: OVIS_HC_BIN, else `hc` on the PATH. */
+/** the hc startRuntime found (server/herdr-core/discovery.ts); null before it ran */
+let found: string | null = null;
+
+/**
+ * The `hc` to run: the one startRuntime found as the Herdr app finds it; before that, OVIS_HC_BIN,
+ * else `hc` on the PATH. When an update moved the one found, the next look's answer takes its place
+ * (a look starts here, and the call after it ends runs the new one).
+ */
 export function hcBin(): string {
-  return process.env["OVIS_HC_BIN"] || "hc";
+  if (found !== null && !existsSync(found)) {
+    const latest = lastFoundHc();
+    if (latest !== null && latest !== found) found = latest;
+    else void discoverHc();
+  }
+  return found ?? (process.env["OVIS_HC_BIN"] || "hc");
 }
 
 let connection: HcConnection | null = null;
@@ -39,13 +53,20 @@ export function coreConnection(): HcConnection {
 /**
  * On herdr-core, the adapter that answers herdr's API from hc (server/herdr-core/adapter.ts),
  * listening in the state folder, and HERDR_SOCKET pointed at it before anything reads it; on
- * herdr, nothing. Another Ovis still serving the same state folder is an error: nothing is started.
+ * herdr, nothing. Another Ovis still serving the same state folder is an error, and so is a PC
+ * where no hc answers as herdr-core's: nothing is started, and nothing else is run as hc.
  */
-export async function startRuntime(stateDir: string): Promise<HerdrCoreAdapter | null> {
+export async function startRuntime(stateDir: string, find: () => Promise<FoundHc | null> = () => findHc()): Promise<HerdrCoreAdapter | null> {
   if (runtime() !== "herdr-core") return null;
   if (process.platform !== "linux" && process.platform !== "darwin") {
     throw new Error("OVIS_RUNTIME=herdr-core is Linux/macOS only: no Windows named pipe support yet");
   }
+  // before the first `hc connect`: the plugin's or a service's PATH may not hold hc, or hold another one
+  const core = await find();
+  if (core === null) {
+    throw new Error("no herdr-core found: no OVIS_HC_BIN, nor herdr-core or hc on the PATH, the login shell's PATH, ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, mise, Nix or cargo, answered `--version` with `hc …`. Install herdr-core (https://herdr.dev/core) or set OVIS_HC_BIN to its full path");
+  }
+  found = core.bin;
   // the state folder is otherwise created on first write: the socket goes there first
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   if (statSync(stateDir).uid !== process.geteuid?.()) throw new Error("the herdr-core state directory is not owned by this user");
@@ -62,6 +83,7 @@ export async function startRuntime(stateDir: string): Promise<HerdrCoreAdapter |
       hc.close();
       connection = null;
       serving = false;
+      found = null;
     },
   };
 }

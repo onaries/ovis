@@ -105,7 +105,9 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *                                          Windows herdr and on a bridge that cannot run the PTY sidecar; terminal_mirror: its
  *                                          terminal lens is the pane's screen, repainted; /api/bridge tells the same herdr), auth: HealthAuth,
  *                                          web_ui: { boot_id: string, revision: string | null },
- *                                          security?: SecuritySummary (authenticated only, no-store) } (boot_id: this server
+ *                                          security?: SecuritySummary (authenticated only, no-store),
+ *                                          herdr_core?: HerdrCoreFacts (shared/machines.ts; authenticated only, absent until
+ *                                          the server's first look for hc has ended) } (boot_id: this server
  *                                          lifetime's id, the supervisor's when managed; older servers sent null unmanaged)
  *  GET    /api/session                   -> { snapshot: SessionSnapshot }
  *  GET    /api/herdr-ui                  -> HerdrUiConfig (this server PC's herdr [ui] copy_on_select,

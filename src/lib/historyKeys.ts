@@ -22,4 +22,11 @@ export function withoutWebPanel(state: Record<string, unknown>): Record<string, 
  * later, and no Back of the user's. sheetHistory answers it and settingsHistory asks: the answer
  * holds whichever of the two hears the event first (in the app sheetHistory loads, and listens, first).
  */
-export const sheetStep: { lands: (event: Event) => boolean } = { lands: () => false };
+export const sheetStep: {
+  lands: (event: Event) => boolean;
+  /**
+   * Takes over the step back of a closed sheet whose entry `state` is, when that step has not run
+   * yet: whoever goes back from there steps over the sheet's entry too. sheetHistory answers it.
+   */
+  takeLeaving: (state: unknown) => boolean;
+} = { lands: () => false, takeLeaving: () => false };

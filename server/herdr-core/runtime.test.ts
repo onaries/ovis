@@ -1,12 +1,18 @@
 import { afterEach, expect, it, mock, spyOn } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startRuntime } from "./runtime.ts";
+import { discoverHc, findHc } from "./discovery.ts";
+import { hcBin, startRuntime } from "./runtime.ts";
+
+/** an hc stand-in found, so no test looks at the developer's own PATH, shell or hc */
+const standIn = async () => ({ bin: "/nonexistent/hc", version: "0.1.17" });
 
 const platform = process.platform;
 const previousRuntime = process.env["OVIS_RUNTIME"];
 const previousSocket = process.env["HERDR_SOCKET"];
+const previousPath = process.env["PATH"];
+const previousHcBin = process.env["OVIS_HC_BIN"];
 let cleanup = () => {};
 afterEach(() => {
   cleanup();
@@ -17,6 +23,63 @@ afterEach(() => {
   else process.env["OVIS_RUNTIME"] = previousRuntime;
   if (previousSocket === undefined) delete process.env["HERDR_SOCKET"];
   else process.env["HERDR_SOCKET"] = previousSocket;
+  process.env["PATH"] = previousPath;
+  if (previousHcBin === undefined) delete process.env["OVIS_HC_BIN"];
+  else process.env["OVIS_HC_BIN"] = previousHcBin;
+});
+
+it.skipIf(platform === "win32")("runs the hc it found, not an unrelated one named first", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-hc-found-"));
+  cleanup = () => rmSync(dir, { recursive: true, force: true });
+  const script = (name: string, output: string) => {
+    mkdirSync(join(dir, "bin"), { recursive: true });
+    writeFileSync(join(dir, "bin", name), `#!/bin/sh\nprintf '%s\\n' '${output}'\n`, { mode: 0o755 });
+    return join(dir, "bin", name);
+  };
+  process.env["OVIS_RUNTIME"] = "herdr-core";
+  process.env["OVIS_HC_BIN"] = script("hc", "herbstclient 0.9.5");
+  const core = script("herdr-core", "hc 0.1.17");
+  process.env["PATH"] = join(dir, "bin");
+  const adapter = await startRuntime(join(dir, "state"), () => findHc({ env: process.env, home: dir, loginShellPath: async () => null, usualDirs: [] }));
+  if (!adapter) throw new Error("runtime did not start");
+  try {
+    expect(hcBin()).toBe(core);
+  } finally {
+    adapter.stop();
+  }
+});
+
+it.skipIf(platform === "win32")("finds hc again when the one it runs was moved, as an update can", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-hc-moved-"));
+  cleanup = () => rmSync(dir, { recursive: true, force: true });
+  const write = (folder: string) => {
+    mkdirSync(join(dir, folder), { recursive: true });
+    writeFileSync(join(dir, folder, "herdr-core"), "#!/bin/sh\nprintf 'hc 0.1.18\\n'\n", { mode: 0o755 });
+    return join(dir, folder, "herdr-core");
+  };
+  const old = write("old");
+  process.env["OVIS_RUNTIME"] = "herdr-core";
+  delete process.env["OVIS_HC_BIN"];
+  const adapter = await startRuntime(join(dir, "state"), async () => ({ bin: old, version: "0.1.17" }));
+  if (!adapter) throw new Error("runtime did not start");
+  try {
+    rmSync(old);
+    const moved = write("new");
+    process.env["PATH"] = join(dir, "new");
+    hcBin();
+    await discoverHc();
+    expect(hcBin()).toBe(moved);
+  } finally {
+    adapter.stop();
+  }
+});
+
+it.skipIf(platform === "win32")("starts nothing, and runs no other hc, when none answers as herdr-core's", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-hc-none-"));
+  cleanup = () => rmSync(dir, { recursive: true, force: true });
+  process.env["OVIS_RUNTIME"] = "herdr-core";
+  await expect(startRuntime(join(dir, "state"), async () => null)).rejects.toThrow(/no herdr-core found/);
+  expect(existsSync(join(dir, "state"))).toBe(false);
 });
 
 it.skipIf(platform === "win32")("tightens an existing state directory and socket on every start", async () => {
@@ -25,7 +88,7 @@ it.skipIf(platform === "win32")("tightens an existing state directory and socket
   process.env["OVIS_RUNTIME"] = "herdr-core";
   for (let start = 0; start < 2; start++) {
     chmodSync(dir, 0o755);
-    const adapter = await startRuntime(dir);
+    const adapter = await startRuntime(dir, standIn);
     if (!adapter) throw new Error("runtime did not start");
     try {
       expect(statSync(dir).mode & 0o777).toBe(0o700);
@@ -43,7 +106,7 @@ it.skipIf(platform === "win32")("refuses another user's state directory before c
   chmodSync(dir, 0o755);
   process.env["OVIS_RUNTIME"] = "herdr-core";
   spyOn(process, "geteuid").mockReturnValue(statSync(dir).uid + 1);
-  await expect(startRuntime(dir)).rejects.toThrow();
+  await expect(startRuntime(dir, standIn)).rejects.toThrow();
   expect(statSync(dir).mode & 0o777).toBe(0o755);
   expect(existsSync(join(dir, "herdr-core.sock"))).toBe(false);
 });
@@ -54,7 +117,7 @@ it("rejects herdr-core on Windows before creating state", async () => {
   const state = join(dir, "state");
   process.env["OVIS_RUNTIME"] = "herdr-core";
   Object.defineProperty(process, "platform", { value: "win32" });
-  await expect(startRuntime(state)).rejects.toThrow();
+  await expect(startRuntime(state, standIn)).rejects.toThrow();
   expect(existsSync(state)).toBe(false);
 });
 
@@ -65,7 +128,7 @@ it("leaves the default runtime's state and socket unchanged even on Windows", as
   delete process.env["OVIS_RUNTIME"];
   process.env["HERDR_SOCKET"] = "default-socket";
   Object.defineProperty(process, "platform", { value: "win32" });
-  expect(await startRuntime(state)).toBeNull();
+  expect(await startRuntime(state, standIn)).toBeNull();
   expect(existsSync(state)).toBe(false);
   expect(process.env["HERDR_SOCKET"]).toBe("default-socket");
 });

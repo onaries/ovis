@@ -7,6 +7,7 @@ import * as herdr from "./herdr/client.ts";
 import * as ptyHost from "./pty/host.ts";
 import * as ptySidecar from "./pty/sidecar.ts";
 import { readProcessBirth } from "./process-owner.ts";
+import * as usage from "./usage.ts";
 import { UsageLoginService } from "./usage-login.ts";
 
 /**
@@ -22,7 +23,13 @@ const spies: { mockRestore(): void }[] = [];
 const services = new Set<UsageLoginService>();
 let names = 0;
 
+// The server PC's own sign-ins stay out of these tests: a Mac signed in to Claude Code keeps one in its
+// keychain, which no test home shows, and a default-home sign-in would then ask to replace it.
+let keychain: { mockRestore(): void } | null = null;
+
 beforeAll(() => {
+  const system = usage.systemUsageContext();
+  keychain = spyOn(usage, "systemUsageContext").mockReturnValue({ ...system, keychain: async () => ({ status: "missing" }) });
   mkdirSync(bin);
   // --help answers what the real ones list; a login prints its recorded screen, then waits as the real one does
   writeFileSync(join(bin, "claude"), `#!/bin/sh
@@ -40,7 +47,10 @@ exec sleep 600
 `, { mode: 0o755 });
   writeFileSync(join(bin, "grok"), "#!/bin/sh\necho --device-auth\n", { mode: 0o755 });
 });
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+afterAll(() => {
+  keychain?.mockRestore();
+  rmSync(root, { recursive: true, force: true });
+});
 afterEach(async () => {
   await Promise.all([...services].map((service) => service.stopAll()));
   services.clear();
@@ -91,7 +101,10 @@ async function within<T>(promise: Promise<T>): Promise<T> {
 async function promptWhen(service: UsageLoginService, login: string, until: (prompt: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
   for (;;) {
     const changed = service.changed(login);
-    const prompt = (await (await read(service, login)).json()) as Record<string, unknown>;
+    const response = await read(service, login);
+    const prompt = (await response.json()) as Record<string, unknown>;
+    // a refused read answers at once and never changes: waiting on it again would spin without yielding to a timer
+    if (!response.ok) throw new Error(`reading sign-in ${login} answered ${response.status}: ${JSON.stringify(prompt)}`);
     if (until(prompt)) return prompt;
     if (prompt["ended"]) throw new Error("login ended before the expected prompt");
     await within(changed);
