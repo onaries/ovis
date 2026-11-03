@@ -53,7 +53,6 @@ export const CHAT_ZH: Record<string, string> = {
   "thinking": "思考",
   "Working…": "正在工作…",
   "Worked": "已工作",
-  "Rewind in terminal": "在终端中回退",
   "Copy as markdown": "复制为 Markdown",
   "Copy as plain text": "复制为纯文本",
   "Plain text": "纯文本",
@@ -227,6 +226,5 @@ export const CHAT_ZH: Record<string, string> = {
   "Go to turn {n}": "跳到第 {n} 轮",
   "Show full message": "显示完整消息",
   "Open link": "打开链接",
-  "Share link": "分享链接",
   "Sent · waiting for the agent's next turn": "已发送 · 等待 agent 的下一轮",
 };

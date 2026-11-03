@@ -24,6 +24,16 @@ describe("cachedPaneCommands", () => {
     expect(fetched).toEqual(["w1:p1", "w1:p1", "w1:p1", "w1:p2"]);
   });
 
+  test("a pane with no agent named lists no commands, and asks nothing (a new tab's chat mounts before the roster names its agent)", async () => {
+    let asked = 0;
+    const fetchCommands = async (): Promise<SlashCommand[]> => { asked += 1; return [{ name: "help", description: "", source: "builtin" }]; };
+    expect(await cachedPaneCommands("w0:p1", "local", null, fetchCommands)).toEqual([]);
+    expect(await cachedPaneCommands("w0:p1", "local", undefined, fetchCommands)).toEqual([]);
+    expect(asked).toBe(0);
+    expect(await cachedPaneCommands("w0:p1", "local", "claude", fetchCommands)).toHaveLength(1);
+    expect(asked).toBe(1);
+  });
+
   test("an invalidated pane asks again for every agent, tells its listeners, and leaves other panes cached", async () => {
     const fetched: string[] = [];
     const fetchCommands = async (pane: string): Promise<SlashCommand[]> => {

@@ -144,7 +144,13 @@ export async function relayShellQa(tree: RelayServerTree): Promise<void> {
   const shellDir = mkdtempSync(join(tmpdir(), "ovis-relay-shell-qa-site-"));
   const built = Bun.spawnSync([process.execPath, "--bun", join(repo, "node_modules/.bin/vite"), "build", "--mode", "shell", "--outDir", shellDir, "--emptyOutDir", "--logLevel", "warn"], { cwd: repo, stdout: "inherit", stderr: "inherit" });
   if (built.exitCode !== 0) throw new Error(`the shell build failed with exit code ${built.exitCode}`);
-  const site = servePagesSite(shellDir, 0);
+  /** Every request that reached the shell host, path and query as its logs would hold them. */
+  const hostRequests: string[] = [];
+  const site = servePagesSite(shellDir, 0, "127.0.0.1", (request) => {
+    const url = new URL(request.url);
+    const referer = request.headers.get("referer");
+    hostRequests.push(`${request.method} ${url.pathname}${url.search}${referer ? ` referer=${referer}` : ""}`);
+  });
   const origin = `http://127.0.0.1:${site.port}`;
 
   /** A fresh pairing offer from the PC, re-based onto the shell host and named for the screens. */
@@ -461,6 +467,68 @@ export async function relayShellQa(tree: RelayServerTree): Promise<void> {
         if (paired?.device_id) devices.revoke(paired.device_id);
         await context.close();
         await workspaceClose(workspace.workspace.workspace_id);
+      }
+    }
+
+    // A PC's files, folders and names stay on the phone (#2599): a file opened in the app, in a tab
+    // of its own and as a raw file, a link followed in that tab, and a reload of each, while the
+    // shell host hears of nothing but the PC's id in the path. Only the page's fragment, which no
+    // request carries, says what is open.
+    {
+      const folder = mkdtempSync(join(tmpdir(), "ovis-relay-private-folder-"));
+      writeFileSync(join(folder, "private-notes.md"), "# Private notes\n\nSee [the other notes](other-notes.md).\n");
+      writeFileSync(join(folder, "other-notes.md"), "# Other notes\n");
+      const workspace = await workspaceCreate({ cwd: folder, label: "Private Plans" });
+      const pane = workspace.root_pane.pane_id;
+      const { context, page } = await open({ width: 1440, height: 900 });
+      const from = hostRequests.length;
+      try {
+        await pairFrom(page, await serverOffer());
+        await inApp(page);
+        await page.locator(`.workspace-group[data-workspace=${JSON.stringify(workspace.workspace.workspace_id)}] .pane-select`).first().click();
+        await page.locator(".header-files-button").click();
+        await page.locator(".dir-browser-item.is-file", { hasText: "private-notes.md" }).click();
+        await page.getByRole("heading", { name: "Private notes", exact: true }).waitFor();
+        const raw = await page.getByRole("link", { name: "Open raw file", exact: true }).first().getAttribute("href");
+        assert.ok(raw);
+        const opened = context.waitForEvent("page");
+        await page.getByRole("link", { name: "Open in a new tab", exact: true }).first().click();
+        const reader = await opened;
+        await reader.locator(".file-reader").waitFor();
+        await reader.getByRole("heading", { name: "Private notes", exact: true }).waitFor();
+        await shot(reader, "file-reader");
+        await reader.getByRole("button", { name: /the other notes/ }).click();
+        await reader.getByRole("heading", { name: "Other notes", exact: true }).waitFor();
+        await reader.reload();
+        await reader.getByRole("heading", { name: "Other notes", exact: true }).waitFor();
+        const rawTab = await context.newPage();
+        await rawTab.goto(new URL(raw, scope).href);
+        await rawTab.locator(".file-reader").waitFor();
+        await rawTab.waitForFunction(() => document.title.startsWith("private-notes.md"));
+        await page.reload();
+        await inApp(page);
+        await page.getByRole("heading", { name: "Private notes", exact: true }).waitFor();
+        const addresses = [page.url(), reader.url(), rawTab.url()];
+        const seen = hostRequests.slice(from);
+        const named = [folder, "private-notes", "other-notes", "private-plans", "Private Plans", pane];
+        const leaked = seen.filter((line) => {
+          const url = new URL(line.split(" ")[1] ?? "/", origin);
+          const referer = /referer=(\S+)/.exec(line)?.[1];
+          if (referer && new URL(referer).search !== "") return true;
+          let decoded = line;
+          try { decoded = decodeURIComponent(line.replace(/\+/g, " ")); } catch { /* left as it came */ }
+          return named.some((part) => decoded.includes(part)) || ["read", "file", "machine", "ws", "pane", "cwd", "name"].some((key) => url.searchParams.has(key));
+        });
+        keep("task-16-file-paths.txt", `# requests the shell host received while a PC file was opened in the app, in its own tab, as a raw file, and reloaded (${seen.length})\n# folder: ${folder}\n# page addresses after: ${addresses.join("  ")}\n# leaked: ${leaked.length}\n${seen.join("\n")}\n`);
+        assert.deepEqual(leaked, [], "no request to the shell host names the PC's file, folder, workspace or pane");
+        for (const address of addresses) assert.equal(new URL(address).search, "", `the page's query names nothing: ${address}`);
+        note(`file paths: app viewer, its own tab, a followed link, a raw tab and reloads -> ${seen.length} shell-host requests, none naming the file, folder, workspace or pane; addresses keep it in the fragment`);
+      } finally {
+        const paired = await saved(page, ID);
+        if (paired?.device_id) devices.revoke(paired.device_id);
+        await context.close();
+        await workspaceClose(workspace.workspace.workspace_id);
+        rmSync(folder, { recursive: true, force: true });
       }
     }
 

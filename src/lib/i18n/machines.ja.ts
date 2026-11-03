@@ -112,7 +112,6 @@ export const MACHINES_JA: Record<string, string> = {
   "It is older than this app and runs on its own, so it cannot be updated from here.": "このアプリより古いバージョンが単独で動いているため、ここからは更新できません。",
   "Open that PC's Ovis": "その PC の Ovis を開く",
   "Open it on that PC or through its own tailnet address:": "その PC 上で、またはその PC の tailnet アドレスで開いてください:",
-  "Copy address": "アドレスをコピー",
   "{name}'s own Ovis needs an update to reconnect{others}.": "{name} の Ovis を更新すると再接続できます{others}。",
   "{name}'s own Ovis needs an update on that PC{others}.": "{name} の Ovis はその PC での更新が必要です{others}。",
   "Updating {name}'s own Ovis failed{others}.": "{name} の Ovis を更新できませんでした{others}。",

@@ -39,7 +39,6 @@ export const TERMINAL_ZH: Record<string, string> = {
   "Control": "控制键",
   "Press {key}": "按下 {key}",
   "Not sent: the agent started working since. Check the terminal, then send again.": "未发送：此后代理已开始工作。请先查看终端，再重新发送。",
-  "Run /rewind here to choose the message to go back to. The chat follows.": "在此运行 /rewind 选择要回退到的消息，聊天会随之更新。",
   "What should {agent} do in {folder}?": "要让 {agent} 在 {folder} 做什么？",
   "Codex has a question open in the terminal: answer it above, or close it there (alt+↓) to message Codex.": "Codex 在终端中有一个未关闭的问题。请在上方回答，或在终端中关闭它 (alt+↓) 后再给 Codex 发消息。",
   "herdr could not restore this pane": "herdr 无法恢复此窗格",

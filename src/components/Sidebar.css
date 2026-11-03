@@ -804,6 +804,20 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
     margin-inline: calc((var(--side-box) - var(--touch-target)) / 2);
   }
 
+  /* The gear stays its --side-box column and takes a finger's --touch-target width through an
+     invisible expander that grows into the footer's gutter at its inline start, never toward the
+     plan meters after it. */
+  .sidebar-footer-row > .sidebar-footer-settings {
+    position: relative;
+  }
+
+  .sidebar-footer-row > .sidebar-footer-settings::before {
+    content: "";
+    position: absolute;
+    inset-block: min(0px, calc((100% - var(--touch-target)) / 2));
+    inset-inline: min(0px, calc(100% - var(--touch-target))) 0;
+  }
+
   /* Row menus stay visible on touch. */
   .workspace-actions {
     width: auto;

@@ -147,3 +147,16 @@
 .connect-phone-how .settings-details-toggle::before {
   content: none;
 }
+
+/* on a phone: this phone's own one-tap relay pairing, then the link for another device under a hairline */
+.connect-phone-self,
+.relay-pairing-phone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.relay-pairing-phone {
+  padding-top: var(--space-3);
+  border-top: var(--hairline) solid var(--border);
+}

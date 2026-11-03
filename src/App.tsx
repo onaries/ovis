@@ -31,6 +31,7 @@ import { useSettingsDialog } from "./lib/useSettingsDialog.ts";
 import { usePhoneSheetBack } from "./lib/sheetHistory.ts";
 import { peekFor, type PeekRequest } from "./lib/terminalPeek.ts";
 import { linksSomewhere, readLink } from "./lib/deepLink.ts";
+import { pageSearch } from "./lib/pageQuery.ts";
 import { copyText } from "./lib/clipboard.ts";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { AppLayoutContext, appLayoutOf, MachineContext } from "./lib/machineContext.tsx";
@@ -85,6 +86,7 @@ import { useFilePanels } from "./lib/useFilePanels.ts";
 import { usePaneCoverage } from "./lib/usePaneCoverage.ts";
 import { useT } from "./lib/i18n.ts";
 import { useConnectionChip, useServerMessageHandler } from "./lib/useConnectionChip.ts";
+import { useHeaderConnection } from "./lib/headerConnection.ts";
 import { selectionStill } from "./lib/selectionMark.ts";
 import { carryPaneState } from "./lib/paneMove.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
@@ -142,10 +144,11 @@ function ConnectingNote() {
 /** The header's connection chip. It speaks only while the bridge is not live; live, it stays in the document
     for a screen reader (and the browser scripts that wait on it), drawn by nothing (styles.css). Its word lands
     a frame after the chip (lib/useAnnouncedText.ts), as every status line's does. */
-function ConnectionChip({ connected, word, title }: { connected: boolean; word: string; title: string | undefined }) {
+function ConnectionChip({ connected, word, title, quiet }: { connected: boolean; word: string; title: string | undefined; quiet: boolean }) {
   const shown = useAnnouncedText(word);
   return (
-    <span className={`conn ${connected ? "conn-live" : "conn-reconnecting"}`} role="status" title={title}>
+    // quiet: the title area says it in words (lib/headerConnection.ts), so the chip keeps only its dot
+    <span className={`conn ${connected ? "conn-live" : "conn-reconnecting"}${quiet ? " conn-quiet" : ""}`} role="status" title={title}>
       <span className="conn-dot" aria-hidden="true" />
       <span className="conn-text">{shown}</span>
     </span>
@@ -172,8 +175,8 @@ export function App() {
   // the place the address names, read once at load: a link wins over this window's last selection
   const [initialLink] = useState(() => {
     // a link's lens is drawn over its pane's own, as a tapped notification's is (notificationViewTarget below)
-    if (!linksSomewhere(window.location.search)) return null;
-    const link = readLink(window.location.search);
+    if (!linksSomewhere(pageSearch())) return null;
+    const link = readLink(pageSearch());
     // a load onto an entry Settings left (a reload) steps out of it (lib/settingsHistory.ts): the
     // dialog its address names, on that entry or on the one stepped back to, is the one it closed
     return loadedOnSettingsEntry() ? { ...link, settings: null, section: null } : link;
@@ -212,7 +215,7 @@ export function App() {
   const diffPaneObserving = usePaneObserving(diffViewing?.paneId ? paneStorageId(diffViewing.machineId, diffViewing.paneId) : null);
   const { settingsOpen, setSettingsOpen, settingsLinkPage, setSettingsLinkPage, settingsLinkSection, settingsPage, settingsSection, setSettingsSection, closeSettings, onSettingsPage } = useSettingsDialog(initialLink);
   const { newSessionOpen, setNewSessionOpen, newPrefill, setNewPrefill, newFields, setNewFields, pendingCreate, newTab, setNewTab, sessionHistory, setSessionHistory } = useNewSessionState({ initialLink });
-  const { connected, setConnected, connectedBefore, setConnectedBefore, paneLost, outputStopped, setOutputStopped } = useConnectionChip();
+  const { connected, setConnected, connectedBefore, setConnectedBefore, paneLost, outputStopped, setOutputStopped, reportedBy, setReportedBy } = useConnectionChip();
   const { notifications, setNotifications, pushOn, setPushOn, pushOnRef } = useNotificationState();
   // the shared settings and pins, the same in every browser of this server, once the app is in
   const { receive: receivePreferences, saveError: settingsSaveError, paused: settingsSavePaused, retrying: settingsSaveRetrying, retry: retrySettingsSave, resubscribed: preferencesResubscribed, disconnected: preferencesDisconnected, closed: preferencesClosed } = usePreferencesSync(locked === false);
@@ -378,6 +381,8 @@ export function App() {
 
   const { bell, bellVisible, alertsOffDot } = alertsBell({ t, settings, alertsOn, notifications, pushOn, enableNotifications, disableNotifications });
   const connWord = t(connected ? "live" : outputStopped ? "disconnected" : connectedBefore ? "reconnecting" : "connecting");
+  // each split half has sockets of its own, even on one PC: the line is about the active half's
+  const headerConnection = useHeaderConnection({ scope: `${split ? split.active : soloSlot}:${selectedMachineId}`, reportedBy, connected, connectedBefore, outputStopped });
   const crumb = selectedPane && selectedTitle !== null
     ? headerCrumb({ machine: selectedMachine?.name ?? selectedMachineId, machineCount: machines.length, workspace: selectedWorkspace?.label ?? selectedPane.workspace_id, title: selectedTitle, cwd: selectedPane.cwd })
     : null;
@@ -663,22 +668,25 @@ export function App() {
         </div>
         <HeaderNote note={note} />
         {note !== null ? null : selectedPane && crumb ? (
-          <div className="context" title={crumb.tooltip}>
+          <div className={`context${headerConnection === null ? "" : " has-connection"}`} title={crumb.tooltip}>
             <div className="context-title">
               {selectedAgent && <AgentMark agent={selectedAgent} size={18} />}
               <span className="context-title-text">{selectedTitle}</span>
               {selectedAgent && <StatusBadge compact status={paneStatus(selectedPane)} />}
             </div>
-            <div className="context-sub">
-              {/* one PC needs no name: the sidebar leaves it out too, and More still says it */}
-              {crumb.showMachine && <><span className="machine-context-name">{crumb.machine}</span><span className="context-sep" aria-hidden="true">›</span></>}
-              <span>{crumb.workspace}</span>
-              {crumb.folder !== null && (
-                <>
-                  <span className="context-sep" aria-hidden="true">›</span>
-                  <span>{crumb.folder}</span>
-                </>
-              )}
+            {/* lost and back, the connection takes the crumb's place in words, in the same box: nothing moves */}
+            <div className={`context-sub${headerConnection === null ? "" : ` context-connection is-${headerConnection}`}`}>
+              {headerConnection !== null ? <span>{t(headerConnection === "connected" ? "Connected" : "Reconnecting…")}</span> : <>
+                {/* one PC needs no name: the sidebar leaves it out too, and More still says it */}
+                {crumb.showMachine && <><span className="machine-context-name">{crumb.machine}</span><span className="context-sep" aria-hidden="true">›</span></>}
+                <span>{crumb.workspace}</span>
+                {crumb.folder !== null && (
+                  <>
+                    <span className="context-sep" aria-hidden="true">›</span>
+                    <span>{crumb.folder}</span>
+                  </>
+                )}
+              </>}
             </div>
           </div>
         ) : (
@@ -711,6 +719,7 @@ export function App() {
           {!guideShown && <ConnectionChip
             connected={connected}
             word={connWord}
+            quiet={headerConnection === "reconnecting" && note === null && crumb !== null}
             title={[connected ? null : connWord, shownHerdr ? t("herdr {version} · protocol {protocol}", { version: shownHerdr.version, protocol: shownHerdr.protocol }) : null].filter((part) => part !== null).join(" · ") || undefined}
           />}
           {/* the Host's herdr is away: the step to take is on that PC (the sidebar's state line says the same) */}
@@ -937,7 +946,7 @@ export function App() {
                         terminalFontFamily={settings.terminalFontFamily}
                         theme={resolvedEntry.mode}
                         palette={resolvedEntry.id}
-                        onConnectionChange={active && itemActive ? (next, before) => { setConnected(next); setConnectedBefore(before); if (next) setOutputStopped(false); } : undefined}
+                        onConnectionChange={active && itemActive ? (next, before) => { setConnected(next); setConnectedBefore(before); setReportedBy(`${slot}:${machineId}`); if (next) setOutputStopped(false); } : undefined}
                         onServerMessage={active && itemActive ? handleServerMessage : undefined}
                       />
                     </OpenFileContext.Provider>} />

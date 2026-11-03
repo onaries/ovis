@@ -520,7 +520,11 @@ async function subscribe(hc: HcConnection, socket: Socket<ConnectionState>, requ
         lifecycle("pane.created", "pane_created", paneId);
         return;
       case "finished":
-        lifecycle("pane.exited", "pane_exited", paneId);
+        // herdr says pane_exited only for a program that ended by itself; a pane someone closed is
+        // pane_closed alone, so it raises no "terminal ended" alert. hc's `killed` is a
+        // terminal.kill (the Herdr app closing a tab, Ovis's pane.close, `hc kill`); a signal sent
+        // from anywhere else finishes as `exited`
+        if (event.data?.["reason"] !== "killed") lifecycle("pane.exited", "pane_exited", paneId);
         lifecycle("pane.closed", "pane_closed", paneId);
         return;
       case "removed":

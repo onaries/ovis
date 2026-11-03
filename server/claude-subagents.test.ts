@@ -7,6 +7,8 @@ import { basename, dirname, join } from "node:path";
 import type { HerdrPane, OmoTask } from "../shared/protocol.ts";
 import { BackgroundWait, WAIT_LIMIT_MS } from "./background-wait.ts";
 import { ClaudeSubagentStatus, DETAIL_LIMITS, backgroundAgentDetail, backgroundCommand, claudeSubagentState, detailIo, claudeSubagents, forgetSubagents, lineNotifications, readLines, remember, subagentDetails, taskNotification, validDetailId, wholeClaudeSubagents, within } from "./claude-subagents.ts";
+import { scanClaudeTasks } from "./claude-task-scan.ts";
+import { commandHistory, commandHistorySize, holdCommandHistory, waitCommandHistory, watchCommandHistory } from "./claude-command-history.ts";
 import { runFileTask } from "./file-tasks.ts";
 
 const roots: string[] = [];
@@ -1598,6 +1600,322 @@ describe("claudeSubagents, background commands", () => {
 
 describe("claudeSubagents, before the files are read through", () => {
   const body = (id: string, minute: number, stop: string | null) => json({ type: "assistant", timestamp: at(minute), message: { id, model: "claude-haiku-4-5", stop_reason: stop, usage: { output_tokens: 7 }, content: [{ type: "text", text: "x" }], pad: "p".repeat(1000) } });
+  const pastParentWindow = (path: string) => {
+    // Many ordinary records, each below the line limit: the old notice is before the 16 MiB cold window.
+    const filler = json({ type: "user", timestamp: at(5), message: { role: "user", content: "x".repeat(1024) } }).repeat(1024);
+    for (let mib = 0; mib < 17; mib++) appendFileSync(path, filler);
+  };
+
+  it.each(["completed", "failed", "cancelled"])("keeps an old subagent command %s after its parent notice falls outside a cold window (#2601)", async (status) => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("suite", 2, { file });
+    s.notify("suite", 3, { status, summary: "Background command finished", carriers: ["queue"] });
+    const ended = { id: "suite", status, ended_at: at(3) };
+    expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "suite")).toMatchObject(ended);
+    pastParentWindow(s.path);
+    expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "suite")).toMatchObject(ended);
+    forgetSubagents();
+    // Real workers use their own wall clock; keep their fixture inside the recent-task window.
+    const shift = Date.now() - NOW;
+    for (const path of [s.path, file]) writeFileSync(path, fs.readFileSync(path, "utf8").replace(/"timestamp":"([^"]+)"/g, (_match, timestamp: string) => `"timestamp":"${new Date(Date.parse(timestamp) + shift).toISOString()}"`));
+    const recentEnd = { ...ended, ended_at: new Date(Date.parse(at(3)) + shift).toISOString() };
+    expect((await scanClaudeTasks({ path: s.path, live: true, startedAt: null })).find((task) => task.id === "suite")).toMatchObject(recentEnd);
+    expect((await scanClaudeTasks({ path: s.path, live: false, startedAt: null })).find((task) => task.id === "suite")).toMatchObject(recentEnd);
+  });
+
+  it("keeps a genuinely unfinished old subagent command after a cold parent window (#2601)", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("watch", 2, { file, command: "watch-tests" });
+    const running = { id: "watch", status: "running", ended_at: null };
+    expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "watch")).toMatchObject(running);
+    pastParentWindow(s.path);
+    forgetSubagents();
+    const history = await waitCommandHistory(s.path, statSync(s.path).size);
+    expect(wholeClaudeSubagents(s.path, true, NOW, null, Infinity, Date.now, history).find((task) => task.id === "watch")).toMatchObject(running);
+  });
+
+  it("does not count an ended subagent command after a cold parent window in pane status, and holds no queue for it (#2601)", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("suite", 2, { file });
+    s.notify("suite", 3, { summary: "Background command finished", carriers: ["queue"] });
+    s.notify("review", 4);
+    expect(claudeSubagentState(s.path, true, NOW).running).toBe(0);
+    pastParentWindow(s.path);
+    forgetSubagents();
+    const pane = { pane_id: "p1", agent: "claude", cwd: "/work", agent_status: "idle", focused: false, revision: 1 } as HerdrPane;
+    const status = new ClaudeSubagentStatus({
+      resolve: async () => ({ path: s.path, startedAt: Date.parse(at(0)) }),
+      onChange: () => {},
+      now: () => NOW,
+    });
+    try {
+      await status.refresh([pane]);
+      // a history still being read holds nothing: the pane is as it would be without it
+      expect(status.holdsQueue("p1")).toBe(false);
+      await waitCommandHistory(s.path, statSync(s.path).size);
+      status.poll();
+      expect(status.countOf("p1")).toBe(0);
+      expect(status.holdsQueue("p1")).toBe(false);
+    } finally { status.stop(); }
+  });
+
+  it("counts an ended command once its history is read despite a skipped record, holding no queue meanwhile", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("suite", 2, { file });
+    s.notify("suite", 3, { summary: "Background command finished", carriers: ["queue"] });
+    s.notify("review", 4);
+    s.parent({ type: "progress", value: "x".repeat(2 * 1024 * 1024) });
+    pastParentWindow(s.path);
+    forgetSubagents();
+    const pane = { pane_id: "p1", agent: "claude", cwd: "/work", agent_status: "idle", focused: false, revision: 1 } as HerdrPane;
+    const status = new ClaudeSubagentStatus({ resolve: async () => ({ path: s.path, startedAt: null }), onChange: () => {}, now: () => NOW });
+    try {
+      await status.refresh([pane]);
+      expect(status.holdsQueue("p1")).toBe(false);
+      expect(await waitCommandHistory(s.path, statSync(s.path).size)).toMatchObject({ complete: true });
+      status.poll();
+      expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ historyPending: false, running: 0 });
+      expect(status.holdsQueue("p1")).toBe(false);
+    } finally { status.stop(); }
+  });
+
+  it("leaves a pane's queue and rest as without history when a still-running command's history has an unreadable record (#2069)", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("watch", 2, { file });
+    s.parent({ type: "progress", value: "x".repeat(2 * 1024 * 1024) });
+    appendFileSync(s.path, "not json\n");
+    pastParentWindow(s.path);
+    s.prompt(50);
+    s.parent({ type: "assistant", timestamp: at(51), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "OK" }] } });
+    s.parent({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: at(51) });
+    forgetSubagents();
+    const pane = { pane_id: "p1", agent: "claude", cwd: "/work", agent_status: "working", focused: false, revision: 1 } as HerdrPane;
+    const status = new ClaudeSubagentStatus({ resolve: async () => ({ path: s.path, startedAt: null }), onChange: () => {}, now: () => NOW });
+    try {
+      await status.refresh([pane]);
+      expect(status.holdsQueue("p1")).toBe(false);
+      expect(status.restsOn("p1")).toBe(true);
+      expect(await waitCommandHistory(s.path, statSync(s.path).size)).toMatchObject({ complete: true, ends: [] });
+      status.poll();
+      // the command still runs: it is counted, and the session's own turn still rests
+      expect(status.countOf("p1")).toBe(1);
+      expect(status.holdsQueue("p1")).toBe(false);
+      expect(status.restsOn("p1")).toBe(true);
+    } finally { status.stop(); }
+  });
+
+  it("never ends a command with an end older than its launch: an id used again is a new command", async () => {
+    const s = session();
+    s.bash("bash_1", 1);
+    s.notify("bash_1", 2, { summary: "Background command finished", carriers: ["queue"] });
+    pastParentWindow(s.path);
+    s.bash("bash_1", 50);
+    forgetSubagents();
+    const history = await waitCommandHistory(s.path, statSync(s.path).size);
+    expect(history!.ends.map((end) => end.id)).toContain("bash_1");
+    expect(wholeClaudeSubagents(s.path, true, NOW, null, Infinity, Date.now, history).find((task) => task.id === "bash_1")).toMatchObject({ status: "running", started_at: at(50), ended_at: null });
+    // its own later end does end it
+    s.notify("bash_1", 55, { summary: "Background command finished", carriers: ["queue"] });
+    expect(wholeClaudeSubagents(s.path, true, NOW, null, Infinity, Date.now, history).find((task) => task.id === "bash_1")).toMatchObject({ status: "completed", started_at: at(50), ended_at: at(55) });
+  });
+
+  it("ends each use of a reused id at its own end inside the window", () => {
+    const s = session();
+    s.bash("bash_1", 1);
+    s.notify("bash_1", 2, { summary: "Background command finished", carriers: ["queue"] });
+    s.bash("bash_1", 10);
+    expect(claudeSubagentState(s.path, true, NOW).tasks.find((task) => task.id === "bash_1")).toMatchObject({ status: "running", started_at: at(10), ended_at: null });
+    s.notify("bash_1", 12, { status: "failed", summary: "Background command failed", carriers: ["queue"] });
+    expect(claudeSubagentState(s.path, true, NOW).tasks.find((task) => task.id === "bash_1")).toMatchObject({ status: "failed", started_at: at(10), ended_at: at(12) });
+  });
+
+  it("takes no historical end from a row naming another session", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("same", 2, { file });
+    s.bash("mine", 2, { file });
+    const block = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Background command finished</summary>\n</task-notification>`;
+    s.parent({ type: "queue-operation", operation: "enqueue", sessionId: "22222222-2222-4222-8222-222222222222", timestamp: at(3), content: block("same") });
+    s.parent({ type: "queue-operation", operation: "enqueue", sessionId: "11111111-1111-4111-8111-111111111111", timestamp: at(3), content: block("mine") });
+    pastParentWindow(s.path);
+    forgetSubagents();
+    const history = await waitCommandHistory(s.path, statSync(s.path).size);
+    const tasks = wholeClaudeSubagents(s.path, true, NOW, null, Infinity, Date.now, history);
+    expect(tasks.find((task) => task.id === "same")).toMatchObject({ status: "running" });
+    expect(tasks.find((task) => task.id === "mine")).toMatchObject({ status: "completed", ended_at: at(3) });
+  });
+
+  it("takes no historical end back before the bytes it came from are checked again after a rewrite that grew the transcript", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("suite", 2, { file });
+    const before = statSync(s.path).size;
+    s.notify("suite", 3, { summary: "Background command finished", carriers: ["queue"] });
+    const notice = fs.readFileSync(s.path).subarray(before);
+    pastParentWindow(s.path);
+    forgetSubagents();
+    await waitCommandHistory(s.path, statSync(s.path).size);
+    expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "suite")).toMatchObject({ status: "completed" });
+    // the notice is rewritten in place (another command's, of the same length) and the transcript grows
+    const rewritten = Buffer.from(notice.toString("utf8").replaceAll("suite", "other"));
+    const fd = fs.openSync(s.path, "r+");
+    fs.writeSync(fd, rewritten, 0, rewritten.length, before);
+    fs.closeSync(fd);
+    s.prompt(60);
+    const state = claudeSubagentState(s.path, true, NOW);
+    expect(state.tasks.find((task) => task.id === "suite")).toMatchObject({ status: "running", ended_at: null });
+    expect(state.historyPending).toBe(true);
+  });
+
+  it("takes no end from history evidence handed over before a rewrite that grew the transcript", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("suite", 2, { file });
+    const before = statSync(s.path).size;
+    s.notify("suite", 3, { summary: "Background command finished", carriers: ["queue"] });
+    const notice = fs.readFileSync(s.path).subarray(before);
+    pastParentWindow(s.path);
+    forgetSubagents();
+    const history = await waitCommandHistory(s.path, statSync(s.path).size);
+    expect(history!.ends.map((end) => end.id)).toEqual(["suite"]);
+    // rewritten and grown after the evidence was read, before the task list's read takes it
+    const rewritten = Buffer.from(notice.toString("utf8").replaceAll("suite", "other"));
+    const fd = fs.openSync(s.path, "r+");
+    fs.writeSync(fd, rewritten, 0, rewritten.length, before);
+    fs.closeSync(fd);
+    s.prompt(60);
+    expect(wholeClaudeSubagents(s.path, true, NOW, null, Infinity, Date.now, history).find((task) => task.id === "suite")).toMatchObject({ status: "running", ended_at: null });
+  });
+
+  it("leaves a command running when an end in another transcript has its launch's very millisecond", () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("same", 2, { file });
+    // an earlier use's notice, with no call to tie it to any launch
+    s.parent({ type: "queue-operation", operation: "enqueue", timestamp: at(2), content: "<task-notification>\n<task-id>same</task-id>\n<status>completed</status>\n<summary>Background command finished</summary>\n</task-notification>" });
+    expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "same")).toMatchObject({ status: "running", ended_at: null });
+    // its own call's notice in that millisecond ends it: the command finished at once
+    s.notify("same", 2, { summary: "Background command finished", carriers: ["queue"] });
+    expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "same")).toMatchObject({ status: "completed", ended_at: at(2) });
+  });
+
+  it("ends a command stopped in its launch's very millisecond, written after it in the same transcript", () => {
+    const s = session();
+    s.bash("same", 2);
+    // TaskStop's answer names no Bash call: the transcript's order says it came after the launch
+    s.parent({ type: "user", timestamp: at(2), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_stop" }] }, toolUseResult: { task_id: "same", task_type: "local_bash" } });
+    expect(wholeClaudeSubagents(s.path, true, NOW).find((task) => task.id === "same")).toMatchObject({ status: "cancelled", ended_at: at(2) });
+  });
+
+  it("never ends a launch with a historical end told of another call", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("same", 2, { file });
+    s.notify("same", 3, { toolUseId: "toolu_earlier", summary: "Background command finished", carriers: ["queue"] });
+    s.bash("mine", 2, { file });
+    s.notify("mine", 3, { summary: "Background command finished", carriers: ["queue"] });
+    pastParentWindow(s.path);
+    forgetSubagents();
+    const history = await waitCommandHistory(s.path, statSync(s.path).size);
+    expect(history!.ends.map((end) => end.id)).toEqual(["same", "mine"]);
+    const tasks = wholeClaudeSubagents(s.path, true, NOW, null, Infinity, Date.now, history);
+    expect(tasks.find((task) => task.id === "same")).toMatchObject({ status: "running", ended_at: null });
+    expect(tasks.find((task) => task.id === "mine")).toMatchObject({ status: "completed", ended_at: at(3) });
+  });
+
+  it("starts no history read for a watcher heard after the tracker stopped and the last server let go", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("watch", 2, { file });
+    pastParentWindow(s.path);
+    forgetSubagents();
+    const hold = holdCommandHistory();
+    const pane = { pane_id: "p1", agent: "claude", cwd: "/work", agent_status: "idle", focused: false, revision: 1 } as HerdrPane;
+    const status = new ClaudeSubagentStatus({ resolve: async () => ({ path: s.path, startedAt: null }), onChange: () => {}, now: () => NOW });
+    try {
+      await status.refresh([pane]);
+      expect(commandHistorySize().sessions).toBe(1);
+      // a replaced transcript tells the tracker's watch, in a microtask still to run
+      const copy = `${s.path}.copy`;
+      fs.copyFileSync(s.path, copy);
+      fs.renameSync(copy, s.path);
+      commandHistory(s.path, statSync(s.path).size, false);
+      status.stop();
+      hold();
+      expect(commandHistorySize()).toMatchObject({ sessions: 0, waiting: 0 });
+      // a poll after the stop (a lookup answered late) reads nothing either
+      status.poll();
+      // every microtask queued so far has run once a macrotask comes round
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(commandHistorySize()).toMatchObject({ sessions: 0, waiting: 0, draining: false, timers: 0 });
+    } finally { status.stop(); }
+  });
+
+  it("retries a history watch refused by cache capacity and then drains chunks without more polling", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("suite", 2, { file });
+    const filler = json({ type: "progress", value: "x".repeat(1024) }).repeat(2048);
+    appendFileSync(s.path, filler);
+    s.notify("suite", 3, { summary: "Background command finished", carriers: ["queue"] });
+    pastParentWindow(s.path);
+    forgetSubagents();
+    const owners: (() => void)[] = [];
+    const pane = { pane_id: "p1", agent: "claude", cwd: "/work", agent_status: "idle", focused: false, revision: 1 } as HerdrPane;
+    let counted: (running: number) => void = () => {};
+    const status = new ClaudeSubagentStatus({ resolve: async () => ({ path: s.path, startedAt: null }), onChange: (_pane, running) => counted(running), now: () => NOW });
+    try {
+      // Already-owned cursors fill the cache before the tracker first requests its history.
+      for (let index = 0; index < 16; index++) {
+        const path = join(dirname(s.path), `owned-${index}.jsonl`);
+        writeFileSync(path, "{}\n");
+        expect(commandHistory(path, 0, false)).not.toBeNull();
+        const release = watchCommandHistory(path, () => {});
+        expect(release).not.toBeNull();
+        owners.push(release!);
+      }
+      await status.refresh([pane]);
+      expect(commandHistorySize()).toMatchObject({ sessions: 16 });
+      expect(commandHistory(s.path, statSync(s.path).size, false)).toBeNull();
+      expect(watchCommandHistory(s.path, () => {})).toBeNull();
+      expect(await waitCommandHistory(s.path, statSync(s.path).size, 20)).toBeNull();
+      expect(status.countOf("p1")).toBe(1);
+      const drained = new Promise<void>((resolve) => { counted = (running) => { if (running === 0) resolve(); }; });
+      owners.shift()!();
+      status.poll(); // Retry admission once; subsequent chunks must advance via the real watch.
+      await drained;
+      const history = commandHistory(s.path, statSync(s.path).size, false);
+      expect(history!.through).toBeGreaterThan(2 * 1024 * 1024);
+      expect(history!.ends.map((end) => end.id)).toContain("suite");
+      expect(status.countOf("p1")).toBe(0);
+    } finally { status.stop(); for (const release of owners) release(); }
+  });
+
+  it("releases a cold-window history wait after a partial final record is completed", async () => {
+    const s = session();
+    const file = s.agent("review", { steps: [[1, 1]] });
+    s.bash("watch", 2, { file });
+    pastParentWindow(s.path);
+    const partial = '{"type":"progress","value":"unfinished';
+    appendFileSync(s.path, partial);
+    forgetSubagents();
+    wholeClaudeSubagents(s.path, true, NOW);
+    const boundary = statSync(s.path).size;
+    // answered as soon as the read waits for the record, not at its deadline (the test's timeout)
+    expect(await waitCommandHistory(s.path, boundary, 60_000)).toMatchObject({ complete: false, through: boundary - Buffer.byteLength(partial) });
+    expect(claudeSubagentState(s.path, true, NOW).historyPending).toBe(true);
+    appendFileSync(s.path, '"}\n');
+    const history = await waitCommandHistory(s.path, boundary);
+    expect(history).toMatchObject({ complete: true });
+    const state = claudeSubagentState(s.path, true, NOW);
+    expect(state.historyPending).toBe(false);
+    expect(state.tasks.find((task) => task.id === "watch")).toMatchObject({ status: "running" });
+  }, 5000);
 
   it("reads a whole list on through a transcript appended past what a call reads (#2511)", () => {
     const s = session();

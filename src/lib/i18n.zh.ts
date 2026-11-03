@@ -114,6 +114,8 @@ const BASE: Record<string, string> = {
   "The other PC's answer could not be read": "无法读取另一台电脑的响应",
   "Browse files": "浏览文件",
   "Copy link": "复制链接",
+  "Share link": "分享链接",
+  "Copy address": "复制地址",
   "Link copied": "已复制链接",
   "That agent has closed: its workspace is open": "该代理已关闭，已改为打开其工作区",
   "That link's workspace is closed": "该链接的工作区已关闭",

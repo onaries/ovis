@@ -141,6 +141,33 @@ describe("Claude task-list scans", () => {
     await Promise.all([first, second]);
   });
 
+  it("starts a fresh scan when a new client arrives after the last waiter cancelled", async () => {
+    const s = session();
+    const hold = holdScans();
+    const abort = new AbortController();
+    const first = scanClaudeTasks({ path: s.path, live: true, startedAt: null }, abort.signal);
+    const rejected = first.catch((error: unknown) => error);
+    await hold.ran();
+    abort.abort();
+    const second = scanClaudeTasks({ path: s.path, live: true, startedAt: null });
+    expect(await rejected).toBeInstanceOf(pool.FileBusyError);
+    expect(hold.tasks).toHaveLength(2);
+    hold.release();
+    expect(await second).toMatchObject([{ id: "a1", status: "running" }]);
+  });
+
+  it("removes the initial queued file scan when its last client cancels", async () => {
+    const s = session();
+    pool.setFilePoolOptions({ workers: 0, waiting: 2 });
+    const abort = new AbortController();
+    const first = scanClaudeTasks({ path: s.path, live: true, startedAt: null }, abort.signal);
+    const rejected = first.catch((error: unknown) => error);
+    expect(pool.filePoolSize().waiting).toBe(1);
+    abort.abort();
+    expect(await rejected).toBeInstanceOf(pool.FileBusyError);
+    expect(pool.filePoolSize().waiting).toBe(0);
+  });
+
   it("refuses a scan when the pool is full and retries fresh once capacity returns", async () => {
     const s = session();
     pool.setFilePoolOptions({ workers: 0, waiting: 0 });

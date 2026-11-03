@@ -131,6 +131,28 @@ export function trimUrl(url: string): string {
 /** Emphasis nests by one call each: past this many levels, what is inside is read as plain text. */
 const MAX_INLINE_DEPTH = 16;
 
+/** A Codex artifact directive names a local file; other or incomplete directives stay text. */
+function codexFileCitation(token: string): { path: string; label: string } | null {
+  // the spaces a directive may leave before its `}` are no attribute
+  const body = token.slice(21, -1).replace(/[ \t]+$/, "");
+  const attribute = /\s*([a-z_]+)="((?:[^"\\]|\\.)*)"/gy;
+  const values = new Map<string, string>();
+  let at = 0;
+  while (at < body.length) {
+    attribute.lastIndex = at;
+    const match = attribute.exec(body);
+    if (match === null || values.has(match[1]!)) return null;
+    try { values.set(match[1]!, JSON.parse(`"${match[2]}"`) as string); } catch { return null; }
+    at = attribute.lastIndex;
+  }
+  const path = values.get("path");
+  // as a file:/// link (fileUri.ts): an absolute local path, never a network share however its separators are written
+  if (!path || !(/^(?:\/|[A-Za-z]:[\\/])/.test(path)) || /^[\\/]{2}/.test(path) || /[\x00-\x1f\x7f]/.test(path)
+    || !["source", "output"].includes(values.get("purpose") ?? "") || values.has("mode")) return null;
+  const label = path.split(/[\\/]/).pop();
+  return label ? { path, label } : null;
+}
+
 /**
  * The marks in a line, left to right, as one search of the line for the pattern found them. That
  * search looks from every `[`, `\(` and `_` to the end of the line for what closes it, so a long
@@ -143,11 +165,11 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   // rendering exactly as it appears in the terminal and native transcript.
   // a bare or <angle> http(s) URL is a link too; it stops at the first non-ASCII character,
   // so `…/pull/36에서` links the address and leaves the Korean after it as text
-  const marker = /(`[^`\n]+`|\\\(.+?\\\)|(?<![A-Za-z0-9\\$])\$(?:[^\s$\\`]|[^\s$`][^\n\r\u2028\u2029$`]*[^\s$\\`])\$(?![A-Za-z0-9_${#@*(`])|\[[^\]\n]+\]\([^\s)]+\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|(?<![\w.@/-])www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}\p{M}_])__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|(?<!\*)\*[^*\n]+\*(?!\*)|(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/yu;
+  const marker = /(`[^`\n]+`|:codex-file-citation\{(?:[ \t]*[a-z_]+="[^"\\\n]*(?:\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4})[^"\\\n]*)*")+[ \t]*\}|\\\(.+?\\\)|(?<![A-Za-z0-9\\$])\$(?:[^\s$\\`]|[^\s$`][^\n\r\u2028\u2029$`]*[^\s$\\`])\$(?![A-Za-z0-9_${#@*(`])|\[[^\]\n]+\]\([^\s)]+\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|(?<![\w.@/-])www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}\p{M}_])__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|(?<!\*)\*[^*\n]+\*(?!\*)|(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/yu;
   // its last part alone, for a `__` that nothing closes as bold: one `_` may still close it
   const emphasis = /(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu;
   // what any part of `marker` starts with
-  const opener = /[`[<*_~$]|\\\(|file:\/\/\/|https?:\/\/|www\./g;
+  const opener = /[`[<*_~$]|:codex-file-citation\{|\\\(|file:\/\/\/|https?:\/\/|www\./g;
   /** Where `pattern` is next found from `from` on. Asked with a `from` that only rises, so a place found serves every `from` before it. */
   const next = (pattern: RegExp): ((from: number) => number) => {
     let found = -1;
@@ -160,6 +182,7 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
     };
   };
   const lineEnd = next(/\n/g);
+  const citationEnd = next(/}/g);
   // `.` stops at these, and a formula is `.+?`
   const mathBreak = next(/[\n\r\u2028\u2029]/g);
   const mathClose = next(/\\\)/g);
@@ -176,7 +199,9 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
     from = start + 1;
     let pattern: RegExp | null = marker;
     const char = source[start];
-    if (char === "\\") {
+    if (char === ":") {
+      if (!(citationEnd(start + 21) < lineEnd(start + 21))) pattern = null;
+    } else if (char === "\\") {
       if (!(mathClose(start + 3) < mathBreak(start + 2))) pattern = null;
     } else if (char === "$") {
       // a formula's `$` follows no Latin letter, digit, backslash or `$` (Korean, Japanese and
@@ -220,7 +245,11 @@ export function parseInline(source: string, links = true, depth = 0): InlineNode
     if (textEnd > offset) nodes.push({ type: "text", value: source.slice(offset, textEnd) });
     // like an http address it stops at the first non-ASCII character (`file:///tmp/a.md에서`); a
     // name with other letters in it is percent-encoded in a URI
-    if (token.startsWith("file:///")) {
+    if (token.startsWith(":codex-file-citation{")) {
+      const citation = links ? codexFileCitation(token) : null;
+      nodes.push(citation === null ? { type: "text", value: token }
+        : { type: "file", path: citation.path, children: [{ type: "text", value: citation.label }] });
+    } else if (token.startsWith("file:///")) {
       token = trimUrl(token);
       const path = fileUriPath(token);
       nodes.push(links && path !== null ? { type: "file", path, children: [{ type: "text", value: token }] } : { type: "text", value: token });

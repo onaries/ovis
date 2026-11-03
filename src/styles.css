@@ -1962,6 +1962,51 @@ button {
   overflow: visible;
 }
 
+/* the connection said in the crumb's place (App.tsx, lib/headerConnection.ts): it shares the title's
+   line instead of wrapping out of sight, the title giving it room, so a phone reads it too and the
+   header keeps its height. A word swapped in place, never animated. */
+.context.has-connection {
+  flex-wrap: nowrap;
+}
+
+/* a larger text size or a narrow window may not fit the word: it shortens, it is never cut off unseen */
+.context-connection {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.context-connection > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-connection.is-reconnecting {
+  color: var(--status-working);
+}
+
+.context-connection.is-connected {
+  color: var(--status-done);
+}
+
+/* a phone has no room for both on one line: the word goes under the title, as a messenger's header
+   says it under a chat's name, both lines inside the header's height */
+@media (max-width: 768px) {
+  .context.has-connection {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    row-gap: 0;
+    max-height: none;
+  }
+
+  .context.has-connection .context-title {
+    min-height: 0;
+  }
+}
+
 /* the switch keeps its size; the pane title (.context) is the header's one flexible item */
 .view-switch {
   flex: 0 0 auto;
@@ -2045,6 +2090,21 @@ button {
 .conn-reconnecting .conn-dot {
   background: var(--status-working);
   animation: pulse var(--dur-pulse) var(--ease-pulse) infinite;
+}
+
+/* The title area says the word (.context-connection): the chip keeps its pulsing dot, and the word
+   stays for a screen reader and in the chip's title, as on a narrow window below. */
+.conn-quiet {
+  gap: 0;
+}
+
+.conn-quiet .conn-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 /* A narrow window: the chip keeps its pulsing dot and gives its word's room to the pane title.

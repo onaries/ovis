@@ -17,6 +17,9 @@ const listeners = new Set<(paneId: string, machineId: string) => void>();
  * since it began; a failed read is forgotten, so the next call asks again.
  */
 export async function cachedPaneCommands(paneId: string, machineId: string, agent: string | null | undefined, fetchCommands: (pane: string) => Promise<SlashCommand[]>): Promise<SlashCommand[]> {
+  // no agent named: the server lists no commands for a shell. A new tab's chat mounts before the roster names its
+  // agent, and that read only added herdr calls beside the roster's own; the named agent's read follows
+  if (!agent) return [];
   const pane = paneStorageId(machineId, paneId);
   const key = `${pane}:${agent ?? ""}`;
   const cached = cache.get(key);

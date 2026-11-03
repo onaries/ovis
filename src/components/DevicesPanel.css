@@ -133,3 +133,14 @@
 .devices-portal {
   overflow-wrap: anywhere;
 }
+
+/* on the phone itself the code is what the other device types: as large as the screen allows, read at a glance */
+.devices-pairing-phone {
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.devices-code-large {
+  margin: 0;
+  font-size: calc(var(--fs-pairing) * 1.25);
+}

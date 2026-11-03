@@ -52,6 +52,7 @@ try {
   page.on("pageerror", (error) => { errors.push(error.message); console.error(error.stack); });
   let epoch = "one", newest = "old newest", before: string | null = null;
   let holdOlder = false;
+  let holdResume = false, resumeRevision = 0;
   /** a notice Claude Code wrote before the turn at work (server/claude-transcript.ts noticeAt) */
   let notice = false;
   /** the cursor an older page answers with: null ends the history there */
@@ -78,6 +79,17 @@ try {
   });
   await page.route("**/api/**/conversation?*", async (route) => {
     const url = new URL(route.request().url());
+    if (url.searchParams.get("pane_id") === "resume") {
+      const answer = { source: "claude-transcript", history_id: "resume-history", cursor: null, turns: [user(`resume revision ${resumeRevision}`)] };
+      if (holdResume) {
+        holdResume = false;
+        await new Promise<void>((resolve) => {
+          releases.push(() => { void route.fulfill({ json: answer }).catch(() => {}).finally(resolve); });
+          routeEvents.dispatchEvent(new Event("resume-held"));
+        });
+      } else await route.fulfill({ json: answer });
+      return;
+    }
     if (product) {
       const pane = url.searchParams.get("pane_id") ?? url.searchParams.get("pane") ?? "";
       const key = `${/\/api\/machines\/([^/]+)\//.exec(url.pathname)?.[1] ?? "local"}/${pane}`;
@@ -367,6 +379,43 @@ try {
     assert.equal(await page.getByText("old earlier", { exact: true }).count(), 0);
   }
   console.log("PASS refusal clears latest/older history and late whole output, including failed terminal fallback; recovery reloads");
+
+  // The same mounted ChatView survives hidden→visible. Its prior held request must not
+  // hold the serialized reader until the local/remote 15/30 s transport deadline.
+  const priorViewport = page.viewportSize()!;
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    resumeRevision += 1;
+    await page.evaluate(() => { window.qa.chat("resume"); window.qa.refresh(); });
+    await page.getByText(`resume revision ${resumeRevision}`, { exact: true }).waitFor();
+    holdResume = true;
+    const started = nextRoute("resume-held");
+    await page.evaluate(() => window.qa.refresh());
+    await started;
+    const cancelled = page.waitForEvent("requestfailed", { predicate: (request) => new URL(request.url()).searchParams.get("pane_id") === "resume", timeout: 2_000 });
+    await page.evaluate(() => window.qa.visible(false));
+    await cancelled;
+    resumeRevision += 1;
+    const shownAt = Date.now();
+    await page.evaluate(() => window.qa.visible(true));
+    await page.waitForFunction((text) => [...document.querySelectorAll<HTMLElement>("[data-chat-row]")].some((row) => {
+      if (!row.textContent?.includes(text)) return false;
+      const rect = row.getBoundingClientRect(), view = row.closest<HTMLElement>(".chat-view")?.getBoundingClientRect();
+      if (!view || rect.height <= 0 || rect.bottom <= view.top || rect.top >= view.bottom) return false;
+      for (let node: HTMLElement | null = row; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (style.opacity === "0" || style.visibility !== "visible" || style.display === "none") return false;
+      }
+      return true;
+    }), `resume revision ${resumeRevision}`, { timeout: 2_000 });
+    const elapsed = Date.now() - shownAt;
+    releases.splice(0).forEach((release) => release());
+    console.log(JSON.stringify({ check: "same mounted chat visible return", width, freshVisibleMs: elapsed, oldRequestCancelled: true }));
+  }
+  await page.setViewportSize(priorViewport);
+  await page.evaluate(() => window.qa.chat("b"));
+  await page.getByText(newest, { exact: true }).waitFor();
+  console.log("PASS hidden chat cancels its held read; visible return paints a fresh answer before the abandoned read is released");
 
   // Keep the existing scrollback change detector: clearing the signature on every fallback
   // poll would suppress the New messages chip while the reader is scrolled up.

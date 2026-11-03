@@ -367,10 +367,10 @@ const wrappedOnly = new Set<string>();
  * rejoins the rows the terminal soft-wrapped, so a line reflows to the chat's
  * width instead of breaking where the pty's columns ended.
  */
-export async function fetchPaneTranscript(paneId: string, lines: number, machineId = "local"): Promise<PaneReadResult> {
+export async function fetchPaneTranscript(paneId: string, lines: number, machineId = "local", signal?: AbortSignal): Promise<PaneReadResult> {
   const read = async (source: "recent" | "recent_unwrapped"): Promise<PaneReadResult> => {
     const query = new URLSearchParams({ pane_id: paneId, source, format: "text", lines: String(lines) });
-    return (await withChatReadDeadline((signal) => getJson<{ read: PaneReadResult }>(machinePath(machineId, `pane/read?${query.toString()}`), { signal }), chatReadDeadlineMs(machineId))).read;
+    return (await withChatReadDeadline((bounded) => getJson<{ read: PaneReadResult }>(machinePath(machineId, `pane/read?${query.toString()}`), { signal: bounded }), chatReadDeadlineMs(machineId), signal)).read;
   };
   if (wrappedOnly.has(machineId)) return read("recent");
   try {
@@ -391,6 +391,8 @@ export type ConversationPageQuery = {
   prompts?: number;
   /** Revalidate a new finish without borrowing another key's 304. */
   fresh?: boolean;
+  /** The requesting screen lifetime; transport-only, never part of the URL or cache key. */
+  signal?: AbortSignal;
 };
 
 /**
@@ -591,7 +593,7 @@ export function peekPaneConversation(paneId: string, machineId = "local", page: 
 }
 
 /** A newest-page read a press started, the pane's session it was read for, and its answer once it came. */
-interface PressRead { at: number; pane: string; session: string | undefined; read: Promise<ConversationResponse>; answer?: ConversationResponse }
+interface PressRead { at: number; pane: string; session: string | undefined; controller: AbortController; read: Promise<ConversationResponse>; answer?: ConversationResponse }
 /**
  * Newest-page reads a press started (prefetchPaneConversation), by page URL without the history:
  * the chat the press opens takes its mount read from here instead of asking again. Each one is
@@ -623,7 +625,8 @@ export function prefetchPaneConversation(paneId: string, machineId: string, prom
   // the mount read names the history of the cached answer it drew (ChatView's peek)
   const cached = currentAnswer(url, pane)?.body;
   const historyId = cached?.source === "scrollback" ? undefined : cached?.history_id;
-  const pressed: PressRead = { at: performance.now(), pane, session: sessionNow(pane), read: fetchPaneConversation(paneId, machineId, { prompts, history_id: historyId, fresh: true }) };
+  const controller = new AbortController();
+  const pressed: PressRead = { controller, at: performance.now(), pane, session: sessionNow(pane), read: fetchPaneConversation(paneId, machineId, { prompts, history_id: historyId, fresh: true, signal: controller.signal }) };
   // a press that was a scroll leaves it untaken; a read that takes it still gets its failure
   pressed.read.then((answer) => { pressed.answer = answer; }, () => undefined);
   pressReads.set(url, pressed);
@@ -637,6 +640,7 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
 
 /** fetchPaneConversation; `retried`: this is the one read again for a session the pane moved to, which is not read a third time. */
 async function readPaneConversation(paneId: string, machineId: string, page: ConversationPageQuery, retried: boolean): Promise<ConversationResponse> {
+  if (page.signal?.aborted) throw page.signal.reason ?? new DOMException("The read was cancelled.", "AbortError");
   const url = conversationUrl(paneId, machineId, page);
   const pane = paneKey(paneId, machineId);
   const session = sessionNow(pane);
@@ -647,7 +651,18 @@ async function readPaneConversation(paneId: string, machineId: string, page: Con
     // a press held past its answer: the pick drew that answer from the cache and names its history.
     // A copy is this read's own: the chat counts its presentation read, and it can prove a finish.
     // A pane herdr moved to another session since the press asks again: that answer is the old session's
-    if (performance.now() - pressed.at < PRESS_READ_MS && pressed.session === session && namesSession(session)) return pressed.answer === undefined ? pressed.read : { ...pressed.answer };
+    if (performance.now() - pressed.at < PRESS_READ_MS && pressed.session === session && namesSession(session)) {
+      if (pressed.answer !== undefined) return { ...pressed.answer };
+      // The press read is taken once: its adopting screen now owns the pending transport too.
+      const abort = () => pressed.controller.abort(page.signal?.reason);
+      page.signal?.addEventListener("abort", abort, { once: true });
+      try {
+        const answer = await pressed.read;
+        if (page.signal?.aborted) throw page.signal.reason ?? new DOMException("The read was cancelled.", "AbortError");
+        return answer;
+      }
+      finally { page.signal?.removeEventListener("abort", abort); }
+    }
   }
   // the plain page a held read also writes (below): a plain read that starts after it owns that page
   const plain = polled && page.from !== undefined ? conversationUrl(paneId, machineId, page.prompts === undefined ? {} : { prompts: page.prompts }) : undefined;
@@ -661,7 +676,7 @@ async function readPaneConversation(paneId: string, machineId: string, page: Con
     if (response.status === 304 && known) return { response, body: known.body };
     if (!response.ok) throw await errorFrom(url, response);
     return { response, body: (await response.json()) as ConversationResponse };
-  }, chatReadDeadlineMs(machineId)).catch((cause: unknown) => {
+  }, chatReadDeadlineMs(machineId), page.signal).catch((cause: unknown) => {
     // a failed read gives up what it held of the pages' order: a later read is the newest again
     if (polled && lastNewestRead.get(url) === read) lastNewestRead.delete(url);
     if (plain !== undefined && lastNewestRead.get(plain) === read) lastNewestRead.delete(plain);
@@ -678,11 +693,12 @@ async function readPaneConversation(paneId: string, machineId: string, page: Con
   if (ownsPlain) lastNewestRead.delete(plain);
   const ownsUrl = polled && lastNewestRead.get(url) === read;
   if (ownsUrl) lastNewestRead.delete(url);
+  if (page.signal?.aborted) throw page.signal.reason ?? new DOMException("The read was cancelled.", "AbortError");
   // the pane went to another session while this read was out: its answer is the session left behind,
   // so the newest page is read again for the session the pane is on now, whether or not a newer read
   // owns the cache; it is never the cache's. Once only: a PC whose panes keep changing is caught up by the chat's
   // next read (a push, the backstop, the roster naming the session), not by a chain of reads
-  if (sessionNow(pane) !== session) return polled && !retried ? readPaneConversation(paneId, machineId, { prompts: page.prompts, fresh: true }, true) : body;
+  if (sessionNow(pane) !== session) return polled && !retried ? readPaneConversation(paneId, machineId, { prompts: page.prompts, fresh: true, signal: page.signal }, true) : body;
   if (polled && !ownsUrl) return body;
   if (response.status === 304 && known) {
     conversationAnswers.delete(url);

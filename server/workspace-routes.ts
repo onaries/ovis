@@ -144,7 +144,11 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
         ? await tabCreate({ ...options, workspaceId: payload.workspace_id as string })
         : await workspaceCreate(options);
       const workspaceId = created.tab.workspace_id;
+      // the page selects the pane on this answer but draws it only once the roster lists it: the roster is read as
+      // the answer goes, not after the collector's debounced pane.created (500 ms). Not before the launch either:
+      // herdr answers calls made at once up to 250 ms late, and the launch makes its own.
       if (!payload.agent) {
+        broadcastAll({ type: "session-changed" });
         return jsonResponse({ workspace_id: workspaceId, pane_id: created.root_pane.pane_id, agent_started: false });
       }
       // the process the launch brought up, when it says: the first message is bound to it
@@ -159,6 +163,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
           return notQueued(error);
         })
         : null;
+      broadcastAll({ type: "session-changed" });
       return jsonResponse({ workspace_id: workspaceId, pane_id: created.root_pane.pane_id, ...launched, ...(typeof payload.first_message === "string" ? { first_message: firstMessage } : {}) });
     } catch (error) {
       return errorResponse(error);
@@ -254,13 +259,16 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
         if (!parent || parent === asked) throw error;
         return from(parent);
       });
+      const launched = agent ? await agentLaunch(opened.root_pane.pane_id, agent, undefined, shellAgents) : {};
+      // as for a new tab: the roster is read as the answer goes
+      broadcastAll({ type: "session-changed" });
       return jsonResponse({
         workspace_id: opened.workspace.workspace_id,
         pane_id: opened.root_pane.pane_id,
         already_open: opened.already_open === true,
         path: opened.worktree.path,
         branch: opened.worktree.branch,
-        ...(agent ? await agentLaunch(opened.root_pane.pane_id, agent, undefined, shellAgents) : {}),
+        ...launched,
       });
     } catch (error) {
       // git's own words for a branch that has no commit yet (a folder just `git init`ed): with no

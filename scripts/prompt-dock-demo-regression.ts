@@ -262,10 +262,14 @@ try {
         });
         await context.addInitScript(([owner, messages, settings]) => {
           localStorage.setItem("ovis:settings", settings!);
+          // Enter sends, chosen, also on a phone (whose Return breaks the line by default): these cases answer
+          // with the send key. A choice is kept in a key of its own (ENTER_SENDS_STORAGE_KEY in src/lib/settings.ts)
+          const enterSends: unknown = JSON.parse(settings!).enterSends;
+          if (typeof enterSends === "boolean") localStorage.setItem("ovis:enter-sends", String(enterSends));
           // held under the demo's herdr (site/demo/transport.ts), not an earlier release's (lib/paneLifetime.ts)
           localStorage.setItem("ovis:pane-lifetime:local", "demo-local");
           if (messages !== "") localStorage.setItem(`ovis:queue:${owner}`, messages!);
-        }, [panes.web, held.length === 0 ? "" : JSON.stringify({ version: 1, messages: held.map((text, at) => ({ id: `m${at}`, text })) }), JSON.stringify({ language, theme, ...settings })] as const);
+        }, [panes.web, held.length === 0 ? "" : JSON.stringify({ version: 1, messages: held.map((text, at) => ({ id: `m${at}`, text })) }), JSON.stringify({ language, theme, enterSends: true, ...settings })] as const);
         // a soft keyboard the script can raise: lib/viewport.ts reads navigator.virtualKeyboard
         if (touch) await context.addInitScript(() => {
           const keyboard = Object.assign(new EventTarget(), { height: 0 });

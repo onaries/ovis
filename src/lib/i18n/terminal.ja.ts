@@ -39,7 +39,6 @@ export const TERMINAL_JA: Record<string, string> = {
   "Control": "コントロール",
   "Press {key}": "{key} を押す",
   "Not sent: the agent started working since. Check the terminal, then send again.": "未送信: その間にエージェントが作業を始めました。ターミナルを確認してから、もう一度送信してください。",
-  "Run /rewind here to choose the message to go back to. The chat follows.": "ここで /rewind を実行して、戻るメッセージを選んでください。チャットも追従します。",
   "What should {agent} do in {folder}?": "{folder} で {agent} に何を頼みますか？",
   "Codex has a question open in the terminal: answer it above, or close it there (alt+↓) to message Codex.": "Codex がターミナルで質問を表示しています。上で回答するか、ターミナルで閉じる (alt+↓) と Codex にメッセージを送れます。",
   "herdr could not restore this pane": "herdr はこのペインを復元できませんでした",

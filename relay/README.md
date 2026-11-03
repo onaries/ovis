@@ -95,6 +95,13 @@ the PC with `4000` and retried. Refusing a data socket does not stop the control
 | `1013` | a limit above; try again later |
 | `4401` | to a PC socket: proof missing, a key that does not derive the `server_id`, or a wrong or late answer |
 
+A socket that closes itself has its close answered at once, with its own code when that is `1000`
+or `3000`-`4999` (`1000` otherwise, such as for `1001` or `1005`), and its partner is closed as above. On Cloudflare the
+runtime does not answer the close of a socket taken with `acceptWebSocket` (hibernation) by itself,
+whatever `web_socket_auto_reply_to_close` says for other sockets. Measured with the compatibility
+date in `wrangler.toml`, on relay.ovis.sh and on workerd 2026-10-23, a relay that left it to the
+runtime sent no Close frame, and the connection dropped about 10 s later. So the room answers it.
+
 The newest proven control socket wins rather than the first, because an older one may be half-open after
 the PC's network moved; the PC reconnects within its backoff either way. The rate limits are
 Cloudflare's Rate Limiting bindings (`wrangler.toml`), counted per Cloudflare location and

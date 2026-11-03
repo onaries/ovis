@@ -129,8 +129,13 @@ export class RelayRoom {
     this.room.message(socket, message);
   }
 
-  webSocketClose(socket: HibernatableSocket): void {
+  webSocketClose(socket: HibernatableSocket, code?: number, reason?: string, _wasClean?: boolean): void {
     this.room.closed(socket);
+    // A hibernatable socket's close is not answered by the runtime: without this the peer waits in
+    // CLOSING until its own timeout (a phone showed itself connected for 17 s) and counts the drop
+    // as 1006. The code is echoed when it is 1000 or 3000-4999; any other is answered 1000.
+    const echo = code !== undefined && (code === 1000 || (code >= 3000 && code <= 4999));
+    try { socket.close(echo ? code : 1000, echo ? reason ?? "" : ""); } catch { /* already closed */ }
   }
 
   webSocketError(socket: HibernatableSocket): void {

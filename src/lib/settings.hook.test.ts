@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { COMPOSER_ARTIFACTS_STORAGE_KEY, DEFAULT_SETTINGS, SettingsProvider, useSettings, type Settings } from "./settings.ts";
+import { COMPOSER_ARTIFACTS_STORAGE_KEY, DEFAULT_SETTINGS, ENTER_SENDS_STORAGE_KEY, enterSendsOn, SettingsProvider, useSettings, type Settings } from "./settings.ts";
 import { SETTINGS_STORAGE_KEY } from "./themeBoot.ts";
 
 describe("settings across tabs", () => {
@@ -137,6 +137,73 @@ describe("settings across tabs", () => {
     // Then both changes are stored.
     const stored = JSON.parse(records.get(SETTINGS_STORAGE_KEY) ?? "{}") as Partial<Settings>;
     expect([stored.terminalFontSize, stored.chatWidth]).toEqual([20, "wide"]);
+  });
+
+  it("breaks the line on Return on a touch screen until this device chooses, and Enter still sends on a desk", async () => {
+    // Given a record an older version saved whole after an unrelated change: its enterSends: true was never chosen.
+    records.set(SETTINGS_STORAGE_KEY, JSON.stringify({ enterSends: true, terminalFontSize: 20 }));
+
+    // When the tab opens.
+    await open();
+
+    // Then nothing is chosen: a touch screen's Return breaks the line, a desk's Enter sends.
+    expect(settings.enterSends).toBeNull();
+    expect([enterSendsOn(settings, true), enterSendsOn(settings, false)]).toEqual([false, true]);
+
+    // And an unrelated save stores no choice for it, and leaves the record the boolean an older tab reads.
+    await act(async () => { update({ chatWidth: "wide" }); });
+    expect(records.get(ENTER_SENDS_STORAGE_KEY)).toBe("null");
+    expect((JSON.parse(records.get(SETTINGS_STORAGE_KEY) ?? "{}") as Partial<Settings>).enterSends).toBe(true);
+  });
+
+  it("keeps this device's choice when an older tab rewrites the record it loaded before", async () => {
+    // Given an older tab that loaded the unchosen record (enterSends: true).
+    records.set(SETTINGS_STORAGE_KEY, JSON.stringify({ enterSends: true }));
+    const stale = records.get(SETTINGS_STORAGE_KEY)!;
+
+    // When this version chooses Return breaks the line, and the older tab then saves an unrelated setting whole.
+    await open();
+    await act(async () => { update({ enterSends: false }); });
+    records.set(SETTINGS_STORAGE_KEY, JSON.stringify({ ...JSON.parse(stale), terminalFontSize: 18 }));
+    await act(async () => { renderer?.unmount(); });
+    await open();
+
+    // Then the choice holds after the reload.
+    expect(settings.enterSends).toBe(false);
+    expect(settings.terminalFontSize).toBe(18);
+  });
+
+  it("keeps a choice made before: the old record's false, and this key's own true or false", async () => {
+    // Given Return set to break the line under the old version, which could only be chosen.
+    records.set(SETTINGS_STORAGE_KEY, JSON.stringify({ enterSends: false }));
+    await open();
+
+    // Then it holds on a touch screen and a desk alike.
+    expect([enterSendsOn(settings, true), enterSendsOn(settings, false)]).toEqual([false, false]);
+
+    // When this device turns Enter sends back on.
+    await act(async () => { update({ enterSends: true }); });
+
+    // Then the choice is stored in its own key and survives the next load, a touch screen's included.
+    expect(records.get(ENTER_SENDS_STORAGE_KEY)).toBe("true");
+    await act(async () => { renderer?.unmount(); });
+    await open();
+    expect(settings.enterSends).toBe(true);
+    expect(enterSendsOn(settings, true)).toBe(true);
+  });
+
+  it("follows Return's choice made in another tab", async () => {
+    // Given an open tab with nothing chosen.
+    await open();
+    expect(settings.enterSends).toBeNull();
+
+    // When another tab chooses Return breaks the line.
+    records.set(ENTER_SENDS_STORAGE_KEY, "false");
+    await storage(ENTER_SENDS_STORAGE_KEY);
+
+    // Then this tab's composer follows it without writing anything.
+    expect(settings.enterSends).toBe(false);
+    expect(writes).toBe(0);
   });
 
   it("ignores storage events for unrelated keys", async () => {

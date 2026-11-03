@@ -941,3 +941,28 @@ describe("the herdr a features frame names (#2257)", () => {
     expect(h.status.currentHerdrLifetime()).not.toBe(named);
   });
 });
+
+describe("a pane closed, not ended by itself", () => {
+  it("turns away what a closed pane held (a launch's first message) and sends no 'terminal ended' alert", async () => {
+    // Given: a pane whose first message waits for its agent
+    const h = hub();
+    h.herdrSays(claude);
+    handlers.onBaseline([claude]);
+    await h.snapshot();
+    // When: it is closed (herdr's pane.close, hc's terminal.kill) before the message goes
+    handlers.onPaneClosed(claude.pane_id);
+    // Then: what it held is turned away as for an ended pane, and nobody is told it ended
+    expect(h.held).toEqual([{ paneId: claude.pane_id, code: "pane_not_found" }]);
+    expect(h.ended()).toEqual({ push: [], frames: 0 });
+  });
+
+  it("still alerts for a pane that ended by itself, with the same cleanup", async () => {
+    const h = hub();
+    h.herdrSays(claude);
+    handlers.onBaseline([claude]);
+    await h.snapshot();
+    handlers.onPaneEnded(claude.pane_id);
+    expect(h.held).toEqual([{ paneId: claude.pane_id, code: "pane_not_found" }]);
+    expect(h.ended()).toEqual({ push: [claude.pane_id], frames: 1 });
+  });
+});

@@ -334,19 +334,36 @@ try {
             return conversation.turns.some((turn: { role: string; parts: { kind: string; text?: string }[] }) => turn.role === "user" && turn.parts.some((part) => part.kind === "text" && part.text === text));
           }, { paneId: panes.api, text }, { timeout: 5_000 });
         };
-        await box.fill("Default Return sends");
-        await box.press("Enter");
-        await sent("Default Return sends");
+        const phone = width === 390;
+        if (phone) {
+          // a touch screen's Return breaks the line until this device chooses otherwise; Send sends
+          await box.fill("First line");
+          await box.press("Enter");
+          await box.pressSequentially("second line");
+          assert.equal(await box.inputValue(), "First line\nsecond line", "a touch screen's Return inserts a newline by default");
+          const send = page.getByRole("button", { name: "Send message", exact: true });
+          assert.ok(await send.isVisible(), "Send is drawn beside the draft");
+          await send.click();
+          await sent("First line\nsecond line");
+          // a hardware keyboard on the phone still sends with Mod+Enter
+          await box.fill("Phone hardware keyboard sends");
+          await box.press("ControlOrMeta+Enter");
+          await sent("Phone hardware keyboard sends");
+        } else {
+          await box.fill("Default Return sends");
+          await box.press("Enter");
+          await sent("Default Return sends");
+        }
         await settings();
-        const label = width === 390 ? "Return inserts a new line" : "Enter sends";
+        const label = phone ? "Return inserts a new line" : "Enter sends";
         const toggle = page.getByRole("switch", { name: label, exact: true });
-        assert.equal(await toggle.getAttribute("aria-checked"), width === 390 ? "false" : "true", "the default still sends Return");
+        assert.equal(await toggle.getAttribute("aria-checked"), "true", phone ? "a touch screen's Return inserts a new line by default" : "a desk's Enter sends by default");
         await toggle.click();
         await close();
         await page.reload();
         await box.waitFor();
         await settings();
-        assert.equal(await toggle.getAttribute("aria-checked"), width === 390 ? "true" : "false", "the choice survives reload on this device");
+        assert.equal(await toggle.getAttribute("aria-checked"), "false", "the choice survives reload on this device");
         if (width === 390 && process.env.UI_EVIDENCE_DIR) {
           const evidence = process.env.UI_EVIDENCE_DIR;
           mkdirSync(evidence, { recursive: true });
@@ -366,6 +383,13 @@ try {
           }
         }
         await close();
+        if (phone) {
+          // chosen: Return sends on this phone
+          await box.fill("Return sends once chosen");
+          await box.press("Enter");
+          await sent("Return sends once chosen");
+          return;
+        }
         const pasted = "# Reply\n\n- first\n- second\n\n```ts\n  run();\n```";
         await page.evaluate((text) => navigator.clipboard.writeText(text), pasted);
         await box.focus();
@@ -379,7 +403,7 @@ try {
         await box.press("ControlOrMeta+Enter");
         await sent("Hardware keyboard sends");
       });
-      console.log("PASS phone Return choice persists, desktop Mod+Enter stays, and native multiline paste reaches chat through Send");
+      console.log("PASS a phone's Return inserts a new line by default with Send and Mod+Enter sending, a chosen Return sends after reload, desktop Enter and Mod+Enter stay, and native multiline paste reaches chat through Send");
 
       // An immediate message's paste framing: a whole paste marker in the text is dropped before it is sent, so the
       // message arrives as written; any other escape byte is refused by the bridge (here the demo's answer), and the
@@ -757,9 +781,10 @@ try {
         await box.fill("see @src");
         await page.getByRole("listbox", { name: "Files", exact: true }).waitFor();
         await box.fill("look at /tmp");
-        await box.press("Enter");
+        // the send key: a phone's Return breaks the line by default, its hardware Mod+Enter sends
+        await box.press(width <= 480 ? "ControlOrMeta+Enter" : "Enter");
         await page.getByText("look at /tmp", { exact: true }).waitFor();
-        assert.equal(await box.inputValue(), "", "Enter sends a path verbatim instead of accepting a fuzzy skill");
+        assert.equal(await box.inputValue(), "", "the send key sends a path verbatim instead of accepting a fuzzy skill");
         console.log(`PASS skill completion at word boundaries (${agent}, ${width}px)`);
       });
       // One primary control across agents: Stop with an empty working draft, Send with text.

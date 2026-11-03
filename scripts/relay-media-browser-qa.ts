@@ -272,7 +272,11 @@ export async function relayMediaQa(tree: RelayServerTree): Promise<void> {
   }
   async function read(page: Page, p: typeof pcs[number], name: string, machine = "local"): Promise<void> {
     const path = machine === "local" ? join(p.dir, name) : `/remote/${name}`;
-    await navigate(page, origin + readerHref(machine, path, `/s/${p.id}/`));
+    // each file is a load of its own, as a tab opened on its link is: the reader's address differs
+    // from the page's only in its fragment (lib/pageQuery.ts), and a reader already up would take
+    // a file of the same PC in place, leaving the last file's elements for a moment
+    await page.goto("about:blank");
+    await navigate(page, origin + readerHref(machine, path, `/s/${p.id}/`, "relay"));
     await page.locator(".file-reader").waitFor();
   }
   async function image(page: Page): Promise<void> {
@@ -573,7 +577,7 @@ export async function relayMediaQa(tree: RelayServerTree): Promise<void> {
         return copied();
       });
       const [href] = await bounded(Promise.all([copied, copy.click({ force: true })]), "copied-link clipboard event");
-      assert.equal(href, origin + readerHref("local", join(first.dir, "page.html"), `/s/${first.id}/`));
+      assert.equal(href, origin + readerHref("local", join(first.dir, "page.html"), `/s/${first.id}/`, "relay"));
       await closePage(page);
       const opened = await mediaPage(ctx);
       assert.ok(href);

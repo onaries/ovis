@@ -121,6 +121,65 @@ describe("parseMarkdown", () => {
 });
 
 describe("inline markdown", () => {
+  it("turns Codex local file citations into file links, including source metadata and Unicode paths", () => {
+    const path = "/Users/u/My Documents/보고서.pdf";
+    const output = `:codex-file-citation{path=${JSON.stringify(path)} purpose="output"}`;
+    const source = `:codex-file-citation{purpose="source" page_number="4" path=${JSON.stringify(path)}}`;
+    const file: InlineNode = { type: "file", path, children: [{ type: "text", value: "보고서.pdf" }] };
+    expect(parseInline(output)).toEqual([file]);
+    expect(parseInline(`See ${source}.`)).toEqual([{ type: "text", value: "See " }, file, { type: "text", value: "." }]);
+    const windows = "C:\\Users\\u\\My Docs\\report.docx";
+    expect(parseInline(`:codex-file-citation{path=${JSON.stringify(windows)} purpose="output"}`)).toMatchObject([{ type: "file", path: windows }]);
+    expect(parseInline(output, false)).toEqual([{ type: "text", value: output }]);
+  });
+
+  it("leaves incomplete, invalid and non-local Codex citations as written", () => {
+    for (const citation of [
+      ':codex-file-citation{path="/tmp/report.pdf" purpose="output"',
+      ':codex-file-citation{path="https://example.com/x" purpose="output"}',
+      ':codex-file-citation{path="/tmp/x" purpose="output" path="/tmp/y"}',
+      ':codex-file-citation{path="/tmp/x" purpose="output" mode="live"}',
+      ':codex-file-citation{path="/tmp/x" purpose="unknown"}',
+      ':codex-file-citation{path="/tmp/x" purpose="output" broken}',
+    ]) expect(parseInline(citation).some((node) => node.type === "file")).toBe(false);
+    const citation = ':codex-file-citation{path="/tmp/report.pdf" purpose="output"}';
+    expect(parseInline(`\`${citation}\``)).toEqual([{ type: "code", value: citation }]);
+    expect(parseMarkdown(`\`\`\`text\n${citation}\n\`\`\``)).toEqual([{ type: "code", language: "text", value: citation }]);
+  });
+
+  it("opens a Codex citation only where a file:/// link could: no network share, no control character", () => {
+    for (const path of ["//server/share/a.txt", "\\\\server\\share\\a.txt", "/tmp/a\u007fb"]) {
+      expect(parseInline(`:codex-file-citation{path=${JSON.stringify(path)} purpose="output"}`).some((node) => node.type === "file")).toBe(false);
+    }
+    // the same share, its slashes written as JSON escapes
+    expect(parseInline(':codex-file-citation{path="\\u002f\\u002fserver/share/a.txt" purpose="output"}').some((node) => node.type === "file")).toBe(false);
+  });
+
+  it("leaves the markdown after an unfinished Codex citation as markdown, and reads a brace inside a quoted path", () => {
+    const nodes = parseInline(':codex-file-citation{unfinished **urgent** and `code` } then :codex-file-citation{path="/tmp/a.pdf" purpose="output"}');
+    expect(nodes.map((node) => node.type)).toEqual(["text", "strong", "text", "code", "text", "file"]);
+    expect(parseInline(':codex-file-citation{path="/tmp/a}b.pdf" purpose="output"}')).toEqual([{ type: "file", path: "/tmp/a}b.pdf", children: [{ type: "text", value: "a}b.pdf" }] }]);
+    expect(parseInline(':codex-file-citation{path="/tmp/a.pdf" purpose="output" }')).toMatchObject([{ type: "file", path: "/tmp/a.pdf" }]);
+    // an escape JSON has no reading for is no directive: the markdown inside it stays markdown
+    expect(parseInline(':codex-file-citation{path="/tmp/\\q **urgent**" purpose="output"}').some((node) => node.type === "strong")).toBe(true);
+  });
+
+  it("renders a Codex citation through the existing file opener", () => {
+    const citation = ':codex-file-citation{path="/tmp/My report.pdf" purpose="output"}';
+    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    try {
+      const html = renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(OpenFileContext.Provider, {
+        value: () => {}, children: createElement(Markdown, { children: citation }),
+      }) }));
+      expect(html).toContain('<button type="button" class="markdown-file" title="Open /tmp/My report.pdf"><span>My report.pdf</span></button>');
+      expect(html).not.toContain("codex-file-citation");
+    } finally {
+      if (languages) Object.defineProperty(navigator, "languages", languages);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
+  });
+
   it("parses links and rejects unsafe protocols", () => {
     expect(safeMarkdownHref("https://example.com")).toBe("https://example.com");
     expect(safeMarkdownHref("mailto:a@example.com")).toBe("mailto:a@example.com");
@@ -464,8 +523,8 @@ describe("text no one wrote by hand", () => {
     // These searches have no variable-length backtracking inside one attempt. The token pattern
     // is deliberately absent: a single global exec of it can search quadratically before failing.
     const searches = new Set([
-      /[`[<*_~$]|\\\(|file:\/\/\/|https?:\/\/|www\./g,
-      /\n/g, /[\n\r\u2028\u2029]/g, /\\\)/g, /\$/g, /[\]\n]/g, /[\s)]/g,
+      /[`[<*_~$]|:codex-file-citation\{|\\\(|file:\/\/\/|https?:\/\/|www\./g,
+      /\n/g, /}/g, /[\n\r\u2028\u2029]/g, /\\\)/g, /\$/g, /[\]\n]/g, /[\s)]/g,
       /(?<=\S)_(?![\p{L}\p{N}\p{M}_])/gu,
       /(?<=\S)__(?![\p{L}\p{N}\p{M}_])/gu,
       // Only the single-underscore token can succeed in the last fixture; trying the bold
@@ -495,12 +554,12 @@ describe("text no one wrote by hand", () => {
         closer.mockRestore();
       }
       expect(scanned).toBeGreaterThan(0);
-      // Each of the eight opener/closer searches gets one pass; tokens consume their own text.
-      expect(scanned).toBeLessThanOrEqual(9 * text.length);
+      // Each opener/closer search gets one pass; tokens consume their own text.
+      expect(scanned).toBeLessThanOrEqual(10 * text.length);
       return nodes;
     };
     // a megabyte of each took from one minute to four: every one was searched from to the line's end
-    for (const part of ["[a", "\\(", "_a ", "__a ", "a$"]) {
+    for (const part of ["[a", "\\(", "_a ", "__a ", "a$", ":codex-file-citation{"]) {
       const line = (length: number): string => part.repeat(Math.ceil(length / part.length));
       for (const length of [20_000, 200_000]) {
         expect(counted(line(length))).toEqual([{ type: "text", value: line(length) }]);

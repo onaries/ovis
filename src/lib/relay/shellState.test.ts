@@ -150,10 +150,13 @@ describe("the offer fragment", () => {
   const page = (href: string) => {
     const url = new URL(href);
     const replaced: string[] = [];
+    const listeners = new Map<string, () => void>();
     return {
       replaced,
+      listeners,
+      addEventListener: (type: string, listener: () => void) => { listeners.set(type, listener); },
       location: { href, pathname: url.pathname, search: url.search, hash: url.hash },
-      history: { replaceState: (_data: unknown, _unused: string, to: string) => replaced.push(to) },
+      history: { state: null as unknown, replaceState: (_data: unknown, _unused: string, to: string) => replaced.push(to) },
     };
   };
 
@@ -162,9 +165,22 @@ describe("the offer fragment", () => {
     const with_ = page(offer);
     expect(takeEntryUrl(with_)).toBe(offer);
     expect(with_.replaced).toEqual([`/s/${"12".repeat(16)}/`]);
-    const without = page(`${APP}/s/${"12".repeat(16)}/?pane=p1`);
-    expect(takeEntryUrl(without)).toBe(`${APP}/s/${"12".repeat(16)}/?pane=p1`);
-    expect(without.replaced).toEqual([]);
+    const linked = page(`${APP}/s/${"12".repeat(16)}/#pane=p1`);
+    expect(takeEntryUrl(linked)).toBe(`${APP}/s/${"12".repeat(16)}/#pane=p1`);
+    expect(linked.replaced).toEqual([]);
+  });
+
+  it("moves a query from before the fragment carried it into the fragment, off the next request", () => {
+    const old = page(`${APP}/s/${"12".repeat(16)}/?file=%2Fhome%2Fme%2Fa.md`);
+    expect(takeEntryUrl(old)).toBe(`${APP}/s/${"12".repeat(16)}/?file=%2Fhome%2Fme%2Fa.md`);
+    expect(old.replaced).toEqual([`/s/${"12".repeat(16)}/#file=%2Fhome%2Fme%2Fa.md`]);
+    const offer = encodeOffer(testOffer(), APP);
+    const both = page(`${APP}/s/${"12".repeat(16)}/?pane=p1&view=terminal${offer.slice(offer.indexOf("#"))}`);
+    takeEntryUrl(both);
+    expect(both.replaced).toEqual([`/s/${"12".repeat(16)}/#pane=p1&view=terminal`]);
+    const anchored = page(`${APP}/s/${"12".repeat(16)}/?read=%2Fa.md#auth=x`);
+    takeEntryUrl(anchored);
+    expect(anchored.replaced).toEqual([`/s/${"12".repeat(16)}/#read=%2Fa.md`]);
   });
 
   it("is taken off before boot loads, requests or opens anything, and the shell gets it whole", async () => {
@@ -193,6 +209,10 @@ describe("the offer fragment", () => {
       expect(loaded.replaced).toEqual([`/s/${"12".repeat(16)}/`]);
       expect(await mounted.promise).toBe(offer);
       expect(order).toEqual(["address", "load"]);
+      // And Back onto an older entry that still holds a query moves it into the fragment too.
+      loaded.location.search = "?file=%2Fa.md";
+      loaded.listeners.get("popstate")?.();
+      expect(loaded.replaced.at(-1)).toBe(`/s/${"12".repeat(16)}/#file=%2Fa.md`);
     } finally {
       Object.assign(globalThis, saved);
       // Bun has no window of its own: leave none behind

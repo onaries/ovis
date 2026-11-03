@@ -42,6 +42,9 @@ export class RelayAdmissionTimeoutError extends Error {
   }
 }
 
+/** WebSocket.OPEN, so an injected socket need not be a WebSocket */
+const OPEN = 1;
+
 /** How long the relay may take to assign the connection: past it the relay is unreachable. */
 export const ASSIGNMENT_MS = 10_000;
 /** How long the PC may take to answer once the relay has assigned the connection: past it the PC is offline. */
@@ -51,6 +54,8 @@ export const ADMISSION_MS = 10_000;
 
 export interface RelaySocket {
   binaryType: BinaryType;
+  /** a WebSocket's: 1 while open; 2 once it is closing, before any close event */
+  readonly readyState: number;
   send(data: string | ArrayBuffer): void;
   close(code?: number, reason?: string): void;
   onmessage: ((event: MessageEvent) => void) | null;
@@ -72,6 +77,11 @@ export interface RelayChannel {
   readonly role: "drive" | "watch";
   /** what the PC's WELCOME said of itself, for the version policy (skew.ts) */
   readonly server: RelayServerInfo;
+  /**
+   * False once the relay socket has left OPEN, possibly with no close event yet: a socket closed
+   * under the page waits for the relay's answer to its close, and a browser drops what is sent meanwhile.
+   */
+  readonly carrierOpen: boolean;
   close(): void;
 }
 export interface RelayServerInfo {
@@ -128,7 +138,11 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
     };
     options.signal?.addEventListener("abort", aborted, { once: true });
     const transport: Transport = {
-      send: (data) => socket.send(data),
+      // a closing socket would drop the frame without an error: fail it, so the mux and its streams end
+      send: (data) => {
+        if (socket.readyState !== OPEN) throw new MuxProtocolError("internal_error", "Relay socket is not open");
+        socket.send(data);
+      },
       close: (code = 4000, reason = "") => socket.close(code, reason),
       onmessage: null, onclose: null, onerror: null,
     };
@@ -193,6 +207,7 @@ export async function openRelayChannel(offer: RelayOffer, options: RelayChannelO
       phase = "ready";
       clearTimeout(deadline);
       resolve({ mux, device: admitted, connectionId, sessionId: frame.payload.session_id, role: frame.payload.role, server,
+        get carrierOpen() { return phase === "ready" && socket.readyState === OPEN; },
         close: () => stop(new MuxProtocolError("internal_error", "Relay channel closed")) });
     };
     const failed = (error: unknown): void => stop(error instanceof Error ? error : new Error(String(error)));

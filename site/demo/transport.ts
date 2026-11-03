@@ -26,6 +26,7 @@ import { insertTextProblem } from "../../shared/terminal-insert.ts";
 import { encodeOffer } from "../../shared/relay-offer.ts";
 import { neighborPane } from "../../src/lib/layoutMap.ts";
 import { closeLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "../../src/lib/layoutTree.ts";
+import { deviceLabel } from "../../src/lib/phone.ts";
 import { rollupStatus } from "../../src/lib/status.ts";
 import { movedTabOrder } from "../../src/lib/tabOrder.ts";
 import { agentSkillRows, CHATS, DEMO_AGENT_CATALOG, DEMO_PUSH, PROMPT, resumedSession, SESSION_HISTORY_AGENTS, sessionHistoryRows, SPECS, type DemoSpec } from "./fixtures.ts";
@@ -1087,6 +1088,20 @@ function usageReport(): UsageReport {
 const DEVICE_STATE = new URLSearchParams(location.search).get("demo_devices");
 const CONNECTION_DROPS = new URLSearchParams(location.search).get("demo_connection") === "drops";
 let connectionLost = false;
+/** `?demo_connection=switch`: the page loses the bridge connection with `herdrDemoLoseConnection()` and lets it
+ *  back with `herdrDemoRestoreConnection()`, so a capture of the header while it reconnects never races a timer
+ *  (scripts/reconnect-header-demo-regression.ts) */
+if (new URLSearchParams(location.search).get("demo_connection") === "switch") Object.assign(globalThis, {
+  herdrDemoLoseConnection: () => {
+    connectionLost = true;
+    for (const socket of [...sockets]) socket.close(1006, "demo: the connection was lost");
+  },
+  // an attempt made during the outage never opens: it fails now, so the client's next retry finds the bridge back
+  herdrDemoRestoreConnection: () => {
+    connectionLost = false;
+    for (const socket of [...sockets]) if (socket.readyState === 0) socket.close(1006, "demo: the attempt failed");
+  },
+});
 const DEVICE_PAIRS_AFTER_MS = 1800;
 /** `held`: each pairing started waits here until the page releases it; no timer decides it */
 const PAIRING_HELD = new URLSearchParams(location.search).get("demo_pairing") === "held";
@@ -1102,6 +1117,8 @@ const demoDevices: PairedDevice[] = DEVICE_STATE === "empty" ? [] : [
   { id: "6f1c2a9d4b7e8503", label: "Pixel 9", role: "drive", created_at: ago(41 * 24 * 60), last_seen_at: ago(3), current: DEVICE_STATE === "watch" },
   { id: "0b8e7d6c5a493f21", label: "iPad", role: "drive", created_at: ago(12 * 24 * 60), last_seen_at: ago(26 * 60), current: false },
   { id: "c3d9e1f24a5b6078", label: "Kitchen laptop, the old one with the broken hinge", role: "drive", created_at: ago(3 * 24 * 60), last_seen_at: null, current: false },
+  // `relay`: a device paired through the relay under this browser's own name, as Connect a phone's same-name hint reads it
+  ...(DEVICE_STATE === "relay" ? [{ id: "9a7e5c3b1d2f4068", label: deviceLabel(navigator.userAgent, navigator.maxTouchPoints ?? 0), role: "drive" as const, created_at: ago(5 * 24 * 60), last_seen_at: ago(40), current: false, via_relay: true as const }] : []),
 ];
 const demoAuth: HealthAuth = DEVICE_STATE === "watch" ? { required: false, authenticated: true, via: "device", role: "watch" } : { required: false, authenticated: true };
 let demoPairings = 0;
@@ -1153,7 +1170,8 @@ const DEMO_RELAY = "wss://relay.ovis.sh";
 const DEMO_RELAY_APP = "https://app.ovis.sh";
 /** 32 made-up key bytes, in the canonical base64 the offer's validator accepts */
 const DEMO_RELAY_PUBLIC_KEY = btoa(String.fromCharCode(...Array.from({ length: 32 }, (_, index) => (index * 37 + 11) & 0xff)));
-let demoRelayOnline = false;
+/** `?demo_relay=on` opens the demo with the relay already online, as a PC that turned it on before */
+let demoRelayOnline = new URLSearchParams(location.search).get("demo_relay") === "on";
 let demoRelayIdentities = 1;
 const demoRelayServerId = (): string => `${demoRelayIdentities.toString(16).padStart(4, "0")}5e1f1d0ff3ab1e0ff3ab1e5e1f1d`;
 const demoRelayStatus = (): RelayStatus => ({ phase: demoRelayOnline ? "online" : "off", relay: DEMO_RELAY, app: DEMO_RELAY_APP, sessions: 0, blocked: null, error: null });

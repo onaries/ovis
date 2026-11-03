@@ -24,6 +24,7 @@ function notifications(
   windows: WindowClient[],
   matchAll = async () => windows,
   openWindow: (url: string) => Promise<WindowClient | null> = async () => null,
+  scope?: string,
 ) {
   const listeners = new Map<string, (event: unknown) => void>();
   const opened: string[] = [];
@@ -32,7 +33,7 @@ function notifications(
   const self = {
     addEventListener: (type: string, listener: (event: unknown) => void) => listeners.set(type, listener),
     clients: { matchAll, openWindow: async (url: string) => { opened.push(url); return openWindow(url); } },
-    registration: { showNotification: async (title: string, options: { data: unknown }) => { shown.push({ title, options }); } },
+    registration: { scope, showNotification: async (title: string, options: { data: unknown }) => { shown.push({ title, options }); } },
   };
   loadWorker(self);
   const push = (payload: unknown): Promise<void> => {
@@ -145,6 +146,19 @@ describe("notification clicks", () => {
     expect(lone.selected).toEqual([]);
     expect(raw.selected).toEqual([]);
     expect(cold.opened).toEqual(["/?machine=pc2&pane=pane-b&view=chat"]);
+  });
+
+  it("keeps a PC's pane out of the hosted shell's request: a cold start names it in the fragment, and a reader there is no app window", async () => {
+    const shell = "https://app.example";
+    const scope = `/s/${"ab".repeat(16)}/`;
+    const reader = client(undefined, true, `${shell}${scope}#read=notes.md&machine=local`);
+    const cold = notifications([reader], undefined, undefined, `${shell}${scope}`);
+    await cold.click("w1:p9", "pc2", "w1");
+    expect(reader.selected).toEqual([]);
+    expect(cold.opened).toEqual([`${scope}#machine=pc2&ws=w1&pane=w1%3Ap9&view=chat`]);
+    const { isAppWindow } = loadWorker({ addEventListener: () => {}, registration: { scope: `${shell}${scope}` } });
+    expect(isAppWindow(`${shell}${scope}#read=notes.md&machine=local`)).toBe(false);
+    expect(isAppWindow(`${shell}${scope}#machine=pc2&pane=w1%3Ap9`)).toBe(true);
   });
 
   it("names the workspace an alert's pane was last seen in, to an open window and a cold start", async () => {

@@ -77,6 +77,7 @@ run_script scripts/terminal-touch-burst-regression.ts
 run_script scripts/omo-question-wheel-regression.ts
 run_script scripts/mirror-scroll-demo-regression.ts
 run_script scripts/mirror-fold-demo-regression.ts
+run_script scripts/chat-no-rewind-demo-regression.ts
 run_script scripts/terminal-cjk-punctuation-regression.ts
 run_script scripts/terminal-late-faces-regression.ts
 run_script scripts/terminal-hangul-seam-regression.ts
@@ -116,10 +117,12 @@ run_script scripts/chat-selection-copy-regression.ts
 run_script scripts/codex-status-browser-regression.ts
 run_script scripts/chat-fallback-browser-qa.ts
 run_script scripts/grok-chat-browser-qa.ts
+run_script scripts/devin-chat-browser-regression.ts
 run_script scripts/copilot-chat-browser-qa.ts
 run_script scripts/omo-chat-browser-qa.ts
 run_script scripts/omo-plan-browser-regression.ts
 run_script scripts/plan-chip-demo-regression.ts
+run_script scripts/tap-targets-demo-regression.ts
 run_script scripts/agent-skill-menu-demo-regression.ts
 run_script scripts/terminal-autoswitch-demo-regression.ts
 run_script scripts/agy-chat-browser-qa.ts
@@ -145,6 +148,7 @@ run_script scripts/file-viewer-mobile-regression.ts
 run_script scripts/file-viewer-table-scroll-regression.ts
 run_script scripts/droplet-demo-regression.ts
 run_script scripts/phone-glass-header-demo-regression.ts
+run_script scripts/reconnect-header-demo-regression.ts
 run_script scripts/chat-greeting-demo-regression.ts
 run_script scripts/restored-draft-demo-regression.ts
 run_script scripts/chat-local-send-follow-demo-regression.ts

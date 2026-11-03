@@ -355,7 +355,8 @@ self.addEventListener("push", (event) => {
 
 /**
  * A window that runs the app and so takes a "select-pane": the shell's own paths only. Not a
- * markdown reader tab (`?read=`, src/lib/fileReader.ts renders FileReader there instead of App),
+ * markdown reader tab (`?read=`, or `#read=` in the hosted shell, which keeps a page's query in its
+ * fragment: src/lib/pageQuery.ts; src/lib/fileReader.ts renders FileReader there instead of App),
  * nor a raw file or HTML page the file viewer opened in a tab of its own (those are /api/
  * responses), nor any shipped file (an icon, /social-preview.png, a notice): a path whose last
  * part has an extension is a file, except the shell's own index.html.
@@ -367,7 +368,9 @@ function isAppWindow(url) {
   if (path.startsWith("/api/") || path === "/ws") return false;
   const last = path.slice(path.lastIndexOf("/") + 1);
   if (last.includes(".") && last !== "index.html") return false;
-  return (parsed.searchParams.get("read") ?? "").trim() === "";
+  // as src/lib/pageQuery.ts pageSearch reads it: a query left from an older build first
+  const query = shellServerId() !== null && parsed.search.length <= 1 && parsed.hash.length > 1 ? new URLSearchParams(parsed.hash.slice(1)) : parsed.searchParams;
+  return (query.get("read") ?? "").trim() === "";
 }
 
 // Tap: bring the app forward on that pane - an open window is told which pane
@@ -407,9 +410,10 @@ self.addEventListener("notificationclick", (event) => {
       const windows = (await self.clients.matchAll({ type: "window", includeUncontrolled: true }))
         .filter((client) => isAppWindow(client.url) && ofThisPc(client.url));
       if (click !== latestNotificationClick) return;
-      // the app's own path: the PC's scope in the hosted shell
+      // the app's own path: the PC's scope in the hosted shell, whose host never hears which pane:
+      // there the pane rides in the fragment (src/lib/pageQuery.ts)
       const home = shellServerId() === null ? "/" : `/s/${shellServerId()}/`;
-      const url = paneId ? `${home}?machine=${encodeURIComponent(machineId)}${workspaceId ? `&ws=${encodeURIComponent(workspaceId)}` : ""}&pane=${encodeURIComponent(paneId)}&view=chat` : home;
+      const url = paneId ? `${home}${shellServerId() === null ? "?" : "#"}machine=${encodeURIComponent(machineId)}${workspaceId ? `&ws=${encodeURIComponent(workspaceId)}` : ""}&pane=${encodeURIComponent(paneId)}&view=chat` : home;
       const selectLatest = (client) => { if (client && latestNotificationSelection) client.postMessage(latestNotificationSelection); };
       const open = async () => {
         // An opening can also finish after a newer tap. Repair that returned

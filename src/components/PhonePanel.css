@@ -67,3 +67,36 @@
     overflow-wrap: anywhere;
   }
 }
+
+/* on a phone the address is read, copied or shared, one line under the other; its QR code waits behind a toggle */
+.phone-address-phone {
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.phone-address-phone .phone-url {
+  margin: 0;
+  font-size: var(--fs-md);
+}
+
+.phone-share {
+  flex-wrap: wrap;
+}
+
+.qr-reveal {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.qr-reveal-toggle {
+  padding-inline: 0;
+}
+
+.qr-reveal-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}

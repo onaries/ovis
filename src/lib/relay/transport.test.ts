@@ -27,6 +27,8 @@ async function fixture(options: Partial<RelaySessionOptions> = {}) {
   const device = await relayDevice(app);
   const clock = new TestClock();
   const connections: Awaited<ReturnType<typeof relayConnection>>[] = [];
+  /** each channel's relay socket: `open` false is one closing with no close event yet */
+  const carriers: { open: boolean }[] = [];
   const callbacks: NonNullable<RelayChannelOptions["onClose"]>[] = [];
   const attempts = { count: 0, failures: 0, refusal: null as Error | null };
   const fatal: Error[] = [];
@@ -45,7 +47,10 @@ async function fixture(options: Partial<RelaySessionOptions> = {}) {
       const notify = config.onClose ?? (() => {});
       callbacks.push(notify);
       void connection.closed.then(() => notify(new TypeError("Carrier dropped")));
+      const carrier = { open: true };
+      carriers.push(carrier);
       return {
+        get carrierOpen() { return carrier.open; },
         mux: connection.mux, role: "drive", connectionId: "ef".repeat(16), sessionId: "ab".repeat(16), server: { version: "0.4.20", relayProtocol: 1 },
         device: { server_id: offer.server_id, device_id: device.id, private_key: device.keys.privateKey,
           public_spki: device.publicKey, label: "Test", server_public_key: "", relay: offer.relay },
@@ -55,7 +60,7 @@ async function fixture(options: Partial<RelaySessionOptions> = {}) {
   });
   cleanups.push(() => transport.close());
   return {
-    transport, app, clock, connections, callbacks, attempts, fatal,
+    transport, app, clock, connections, carriers, callbacks, attempts, fatal,
     async drop() {
       const current = connections.at(-1);
       if (!current) throw new Error("No connection");
@@ -339,6 +344,49 @@ it("preserves server initiated 4008 and listener removal without reopening the v
   expect(await close).toMatchObject({ code: 4008, reason: "output stalled", wasClean: false });
   expect(socket.readyState).toBe(socket.CLOSED);
   expect(f.connections).toHaveLength(1);
+});
+
+it("keeps a relay WS closing once its carrier is gone, even while a new carrier is current", async () => {
+  // Given an open relay WS whose carrier the transport loses while that carrier's stream is still open.
+  const f = await fixture({ onWs: (stream) => { stream.accept(); } });
+  const socket = f.transport.openSocket("/ws");
+  await opened(socket);
+  f.callbacks.at(-1)!(new TypeError("Carrier dropped"));
+  // Then it never reads open again: not with no carrier,
+  expect(socket.readyState).toBe(socket.CLOSING);
+  // nor once a new carrier connects on the transport's retry, one second later on the injected clock.
+  expect([...f.clock.tasks.values()].map((task) => task.at - f.clock.now())).toEqual([1000]);
+  f.clock.advance(1000);
+  await f.transport.connect();
+  expect(f.connections).toHaveLength(2);
+  expect(socket.readyState).toBe(socket.CLOSING);
+});
+
+it("reads a relay WS as closing once its carrier is, sends nothing into it, and ends that carrier for a new one", async () => {
+  // Given an open relay WS on an admitted carrier.
+  const received: string[] = [];
+  const f = await fixture({ onWs: (stream) => { stream.accept(); stream.onMessage = (data) => { received.push(String(data)); }; } });
+  const socket = f.transport.openSocket("/ws");
+  await opened(socket);
+  const close = closed(socket);
+  // When the carrier's socket starts closing and no close event comes (closed under the page, the relay not answering).
+  f.carriers.at(-1)!.open = false;
+  // Then the WS reads as closing at once (the app keeps typing as a draft), and a send in that state goes nowhere,
+  expect(socket.readyState).toBe(socket.CLOSING);
+  socket.send("typed while closing");
+  // the carrier is ended without waiting for the browser to give up on its close,
+  expect((await bounded(close, 2000)).code).toBe(1006);
+  expect(received).toEqual([]);
+  // and a new carrier connects on the transport's own retry, while the old WS never reads open again.
+  await bounded(f.connections.at(-1)!.closed);
+  expect([...f.clock.tasks.values()].map((task) => task.at - f.clock.now())).toEqual([1000]);
+  f.clock.advance(1000);
+  await f.transport.connect();
+  expect(f.connections).toHaveLength(2);
+  expect(socket.readyState).toBe(socket.CLOSED);
+  const next = f.transport.openSocket("/ws");
+  await opened(next);
+  expect(next.readyState).toBe(next.OPEN);
 });
 
 for (const initial of ["connecting", "open"]) {

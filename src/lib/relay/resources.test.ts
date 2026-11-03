@@ -42,7 +42,7 @@ describe("resource builders round trip through the per-PC scope", () => {
   });
 
   it("makes a stable reader link rather than an active-content blob link", () => {
-    expect(readerHref("remote pc", "/a/evil.svg", scope)).toBe(`${scope}?read=%2Fa%2Fevil.svg&machine=remote+pc`);
+    expect(readerHref("remote pc", "/a/evil.svg", scope, "relay")).toBe(`${scope}#read=%2Fa%2Fevil.svg&machine=remote+pc`);
   });
 });
 

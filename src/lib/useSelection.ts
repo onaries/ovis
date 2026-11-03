@@ -3,6 +3,7 @@ import { paneStorageId, type Machine } from "../../shared/machines.ts";
 import { fetchSession } from "./api.ts";
 import { fileFromLink, resolveLink, type AppLink, type LinkNote } from "./deepLink.ts";
 import { machineGone, notificationLanding, notificationTargetFromSearch, sameLink, onNotificationTarget, type NotificationTarget } from "./notificationTarget.ts";
+import { pageSearch } from "./pageQuery.ts";
 import type { TerminalPeek } from "./terminalPeek.ts";
 import { markSelection, type SelectionMark } from "./selectionMark.ts";
 import type { PaneView } from "./actions.ts";
@@ -35,7 +36,7 @@ export function useSelectionState({ initialLink }: { initialLink: AppLink | null
     return storedSelection()?.pane_id ?? null;
   });
   const [notificationViewTarget, setNotificationViewTarget] = useState<NotificationTarget | null>(
-    () => notificationTargetFromSearch(window.location.search),
+    () => notificationTargetFromSearch(pageSearch()),
   );
   // a terminal command's peek (lib/terminalPeek.ts): the selected pane's terminal over its chat, this
   // browser's alone and never stored. Whatever clears the lens drawn over the pane's own clears it too

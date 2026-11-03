@@ -11,9 +11,9 @@ import { observePaneSessions, paneSessionKey, prefetchPaneConversation } from ".
 import { UpdateNotice } from "../src/components/UpdateControls.tsx";
 import "../src/styles.css";
 
-declare global { interface Window { qa: { requests: { url: string; signal: AbortSignal; resolve: (text: string) => void; reject: () => void }[]; commits: string[][]; answered: string[]; target: (url: string, scope: string) => void; chat: (pane: string, machine?: string) => void; view: (chat: boolean) => void; agent: (agent: string | null) => void; select: (pane: string, machine: string, agent?: string) => void; refresh: () => void; historyPrompts: (prompts: number) => void; session: (pane: string, value: string) => void; press: (pane: string) => void } } }
+declare global { interface Window { qa: { requests: { url: string; signal: AbortSignal; resolve: (text: string) => void; reject: () => void }[]; commits: string[][]; answered: string[]; target: (url: string, scope: string) => void; chat: (pane: string, machine?: string) => void; view: (chat: boolean) => void; agent: (agent: string | null) => void; select: (pane: string, machine: string, agent?: string) => void; refresh: () => void; historyPrompts: (prompts: number) => void; session: (pane: string, value: string) => void; press: (pane: string) => void; visible: (visible: boolean) => void } } }
 const nativeFetch = window.fetch;
-window.qa = { requests: [], commits: [], answered: [], target: () => {}, chat: () => {}, view: () => {}, agent: () => {}, select: () => {}, refresh: () => {}, historyPrompts: () => {}, session: () => {}, press: () => {} };
+window.qa = { requests: [], commits: [], answered: [], target: () => {}, chat: () => {}, view: () => {}, agent: () => {}, select: () => {}, refresh: () => {}, historyPrompts: () => {}, session: () => {}, press: () => {}, visible: () => {} };
 /** the session the roster last named per pane, as App hands it to PaneTerminal */
 const rosterSessions = new Map<string, string>();
 let rosterChanged = () => {};
@@ -53,6 +53,7 @@ function Fixture() {
   const [refresh, setRefresh] = useState(0);
   const [agent, setAgent] = useState<string | null>("omo");
   window.qa.agent = setAgent;
+  const [visible, setVisible] = useState(true);
   const output = useWholeOutput(target.url, target.scope);
   const { update } = useSettings();
   // Settings, Chat, History page size: changed while the chat stays mounted
@@ -60,9 +61,10 @@ function Fixture() {
   window.qa.target = (url, scope) => setTarget({ url, scope });
   window.qa.chat = (pane, machine = "local") => { setPane(pane); setMachine(machine); };
   window.qa.refresh = () => setRefresh((value) => value + 1);
+  window.qa.visible = setVisible;
   return <><UpdatesLine /><button id="fetch-output" onClick={() => { output.load(); output.load(); }}>Load output</button><output id="output">{output.state}:{output.text}</output>
     {/* A visible split sibling must read and measure its chat without owning keyboard shortcuts. */}
-    <div style={{ position: "relative", height: 600 }}><MachineContext.Provider value={machine}><ChatView key={machine} paneId={pane} active={false} refreshKey={refresh} connected={true} ended={false} agent={agent} agentStatus={null} /></MachineContext.Provider></div></>;
+    <div style={{ position: "relative", height: 600 }}><MachineContext.Provider value={machine}><ChatView key={machine} paneId={pane} active={false} refreshKey={refresh} visible={visible} connected={true} ended={false} agent={agent} agentStatus={null} /></MachineContext.Provider></div></>;
 }
 function Product({ pane, machine, agent }: { pane: string; machine: string; agent: string }) {
   const { settings } = useSettings();

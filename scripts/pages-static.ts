@@ -120,10 +120,10 @@ export async function pagesResponse(site: PagesSite, request: Request): Promise<
   return response;
 }
 
-/** The site on loopback; `port` 0 picks a free one. */
-export function servePagesSite(dir: string, port = 0, hostname = "127.0.0.1"): ReturnType<typeof Bun.serve> {
+/** The site on loopback; `port` 0 picks a free one. `seen` is told every request that reaches the host, as the host itself would log it. */
+export function servePagesSite(dir: string, port = 0, hostname = "127.0.0.1", seen?: (request: Request) => void): ReturnType<typeof Bun.serve> {
   const site = loadPagesSite(dir);
-  return Bun.serve({ hostname, port, fetch: (request) => pagesResponse(site, request) });
+  return Bun.serve({ hostname, port, fetch: (request) => { seen?.(request); return pagesResponse(site, request); } });
 }
 
 if (import.meta.main) {

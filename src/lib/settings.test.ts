@@ -74,6 +74,21 @@ describe("saved theme migration", () => {
     expect(loadSettings().terminalFontSize).toBe(18);
   });
 
+  it("keeps Return's default unchosen, and a choice, through an old tab's whole-record save", () => {
+    // unchosen: the old tab reads the boolean it knows and writes it back, which is still no choice
+    saveSettings(sanitizeSettings({}));
+    expect(oldSanitizeSettings(readOld()).enterSends).toBe(true);
+    oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
+    expect(loadSettings().enterSends).toBeNull();
+    expect(loadSettings().terminalFontSize).toBe(18);
+    // chosen either way: the old tab's unrelated save keeps it
+    for (const enterSends of [true, false]) {
+      saveSettings({ ...loadSettings(), enterSends });
+      oldSaveSettings({ ...readOld(), terminalFontSize: 20 });
+      expect(loadSettings().enterSends).toBe(enterSends);
+    }
+  });
+
   it("keeps the interface font in its own key, out of an old tab's whole-record save", () => {
     saveSettings(sanitizeSettings({ uiFontFamily: "system-ui" }));
     expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("uiFontFamily");

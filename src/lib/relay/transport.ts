@@ -119,6 +119,8 @@ export class RelayTransport implements Transport {
   private readonly stopResources: () => void;
   private readonly wake = (): void => {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    // a carrier left closing while nothing used it is ended now, and its onClose reconnects
+    if (!this.stopped && this.channel && !this.channel.carrierOpen) { this.channel.close(); return; }
     if (this.stopped || this.channel || this.opening) return;
     this.cancelRetry?.();
     this.cancelRetry = undefined;
@@ -185,6 +187,21 @@ export class RelayTransport implements Transport {
       void this.connect().catch((error: unknown) => this.failed(error));
     }, this.delay);
     this.delay = Math.min(30_000, this.delay * 2);
+  }
+
+  /**
+   * Whether `channel`, the carrier a socket opened on, is still this transport's and still open. One found closing with no close event yet (closed
+   * under the page while the relay has not answered) is ended now: its streams fail and a new one
+   * connects, rather than the app reading itself live until the browser gives up on the close.
+   */
+  private carrierUp(channel: RelayChannel | undefined): boolean {
+    // not open on a carrier yet: the stream's own events decide
+    if (!channel) return true;
+    // a carrier that was ended or replaced never reads as up again, whatever its successor does
+    if (this.channel === channel && channel.carrierOpen) return true;
+    // ended outside the caller, which may be a render reading the socket's state
+    if (this.channel === channel) queueMicrotask(() => { if (this.channel === channel) channel.close(); });
+    return false;
   }
 
   private mux() {
@@ -299,7 +316,15 @@ export class RelayTransport implements Transport {
     }
   }
 
-  openSocket(url: string): RelayWebSocket { return new RelayWebSocket(() => this.mux().openWs({ target: target(url), headers: [], protocols: [] })); }
+  openSocket(url: string): RelayWebSocket {
+    // the carrier the stream opened on: the socket is live only while that one is
+    let opened: RelayChannel | undefined;
+    return new RelayWebSocket(() => {
+      const stream = this.mux().openWs({ target: target(url), headers: [], protocols: [] });
+      opened = this.channel;
+      return stream;
+    }, () => this.carrierUp(opened));
+  }
   openEventSource(url: string): RelayEventSource { return new RelayEventSource(this, url); }
   resourceUrl(path: string, signal?: AbortSignal): Promise<string> { return relayResourceUrl(this, this.offer.server_id, path, signal); }
 
@@ -335,7 +360,13 @@ export class RelayWebSocket extends EventTarget implements WebSocketLike {
   readonly OPEN = 1;
   readonly CLOSING = 2;
   readonly CLOSED = 3;
-  readyState: number = this.CONNECTING;
+  private state: number = this.CONNECTING;
+  /**
+   * CLOSING as soon as the relay carrier is no longer open, before its close reaches this stream:
+   * HerdrSocket reads it as disconnected, so typing stays a draft instead of going into a socket
+   * that drops it.
+   */
+  get readyState(): number { return this.state === this.OPEN && !this.carrier() ? this.CLOSING : this.state; }
   binaryType: BinaryType = "blob";
   declare onopen: WebSocketLike["onopen"];
   declare onmessage: WebSocketLike["onmessage"];
@@ -348,22 +379,22 @@ export class RelayWebSocket extends EventTarget implements WebSocketLike {
   private events = Promise.resolve();
   get bufferedAmount(): number { return this.pendingBytes + (this.stream?.getBufferedAmount() ?? 0); }
 
-  constructor(private readonly open: () => WsStream) {
+  constructor(private readonly open: () => WsStream, private readonly carrier: () => boolean = () => true) {
     super();
     eventProperties(this, ["open", "message", "close", "error"]);
     // Browser socket events are asynchronous even when a test carrier answers synchronously.
     queueMicrotask(() => {
-      if (this.readyState !== this.CONNECTING) return;
+      if (this.state !== this.CONNECTING) return;
       try {
         const stream = this.open();
         this.stream = stream;
         stream.onAccept = () => { void this.enqueue(() => {
-          if (this.readyState !== this.CONNECTING) return;
-          this.readyState = this.OPEN;
+          if (this.state !== this.CONNECTING) return;
+          this.state = this.OPEN;
           this.emit(new Event("open"));
         }); };
         stream.onMessage = (data) => this.enqueue(() => {
-          if (this.readyState !== this.OPEN && this.readyState !== this.CLOSING) return;
+          if (this.state !== this.OPEN && this.state !== this.CLOSING) return;
           this.emit(new MessageEvent("message", { data: typeof data === "string" ? data
             : this.binaryType === "blob" ? new Blob([data.slice().buffer]) : data.slice().buffer }));
         });
@@ -385,15 +416,15 @@ export class RelayWebSocket extends EventTarget implements WebSocketLike {
   }
 
   private finish(code: number, reason: string, clean: boolean): void {
-    if (this.readyState === this.CLOSED) return;
-    this.readyState = this.CLOSED;
+    if (this.state === this.CLOSED) return;
+    this.state = this.CLOSED;
     // Discarded sends still count after close, even though their payloads are never queued.
     if (code === 1006) this.emit(new Event("error"));
     this.emit(new CloseEvent("close", { code, reason, wasClean: clean }));
   }
 
   send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
-    if (this.readyState === this.CONNECTING) throw new DOMException("Socket is connecting", "InvalidStateError");
+    if (this.state === this.CONNECTING) throw new DOMException("Socket is connecting", "InvalidStateError");
     const size = typeof data === "string" ? utf8Length(data) : data instanceof Blob ? data.size : data.byteLength;
     if (this.readyState !== this.OPEN) { this.pendingBytes += size; return; }
     const stream = this.stream;
@@ -402,7 +433,7 @@ export class RelayWebSocket extends EventTarget implements WebSocketLike {
     if (this.pendingBytes > WS_SEND_QUEUE_LIMIT || this.waiting >= WS_SEND_QUEUE_MESSAGES) {
       // As a browser's socket whose send buffer is full: it fails, nothing still waiting is sent,
       // and what the mux had not sent yet stays counted once the reset discards it.
-      this.readyState = this.CLOSING;
+      this.state = this.CLOSING;
       this.pendingBytes += stream.getBufferedAmount();
       this.stream = undefined;
       stream.reset("resource_exhausted");
@@ -415,7 +446,7 @@ export class RelayWebSocket extends EventTarget implements WebSocketLike {
       ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice() : new Uint8Array(data).slice();
     this.outgoing = this.outgoing.then(async () => {
       const bytes = message instanceof Blob ? new Uint8Array(await message.arrayBuffer()) : message;
-      if (stream.live && this.readyState !== this.CLOSED) {
+      if (stream.live && this.state !== this.CLOSED) {
         this.pendingBytes -= size;
         stream.send(bytes);
       }
@@ -425,9 +456,9 @@ export class RelayWebSocket extends EventTarget implements WebSocketLike {
   close(code?: number, reason = ""): void {
     if (code !== undefined && code !== 1000 && (code < 3000 || code > 4999)) throw new DOMException("Invalid close code", "InvalidAccessError");
     if (new TextEncoder().encode(reason).length > 123) throw new DOMException("Close reason is too long", "SyntaxError");
-    if (this.readyState === this.CLOSED || this.readyState === this.CLOSING) return;
-    const connecting = this.readyState === this.CONNECTING;
-    this.readyState = this.CLOSING;
+    if (this.state === this.CLOSED || this.state === this.CLOSING) return;
+    const connecting = this.state === this.CONNECTING;
+    this.state = this.CLOSING;
     if (connecting) {
       this.stream?.reset();
       void this.enqueue(() => this.finish(1006, "", false));

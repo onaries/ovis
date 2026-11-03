@@ -81,7 +81,16 @@ What keeps that in check:
   for rendered pages ([Files](#files)).
 - The host sees requests for static files: the phone's address, and the PC's relay ID in the path
   (`/s/<server_id>/`). It never gets the pairing link's `#offer=` part, which browsers don't send, or
-  any of the traffic, which goes to the relay.
+  any of the traffic, which goes to the relay. What a page shows is in the fragment too: the file a
+  tab of its own or a raw file opens, the workspace, pane and file the app's address names, the pane
+  a tapped alert opens (`/s/<server_id>/#read=…`, `#ws=…&pane=…&file=…`; a PC's own server keeps
+  them in the query, [`src/lib/pageQuery.ts`](../src/lib/pageQuery.ts)). An address from an older
+  build with them in the query still reaches the host with that page's load (in its request, and as
+  the referrer of the files the page loads before the app starts); the app then moves them into
+  the fragment, for that entry and any older one Back lands on. A PC's file the app shows is
+  answered inside the phone by the app's service worker (`/s/<server_id>/~/api/…`), so its path
+  never leaves the phone either, unless such a file address is copied out and opened in a browser
+  without the app.
 
 To take `app.ovis.sh` out of the picture, [host the app yourself](guide.md#running-your-own-relay).
 
@@ -337,7 +346,7 @@ scope, `/s/<server_id>/~/api/…`, which that PC's service worker answers
   through the relay ([`server/file-routes.ts`](../server/file-routes.ts)), so it doesn't play.
 - **Links.** In the hosted app, **Open in a new tab**, and **Copy link** in an installed app's
   window, give an address that opens the file in the app's reader for that PC
-  (`/s/<server_id>/?read=…`), which connects through the relay by itself. **Open raw file** opens
+  (`/s/<server_id>/#read=…`, in the fragment, so the host never sees the file), which connects through the relay by itself. **Open raw file** opens
   that reader at the file's first line. The app never opens a `blob:` copy of a file as a page,
   which would run with the app's own origin.
 

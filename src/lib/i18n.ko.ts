@@ -110,6 +110,8 @@ const BASE: Record<string, string> = {
   "The other PC's answer could not be read": "다른 PC의 응답을 읽을 수 없습니다",
   "Browse files": "파일 찾아보기",
   "Copy link": "링크 복사",
+  "Share link": "링크 공유",
+  "Copy address": "주소 복사",
   "Link copied": "링크를 복사했습니다",
   "That agent has closed: its workspace is open": "그 에이전트는 닫혔습니다. 대신 워크스페이스를 열었습니다",
   "That link's workspace is closed": "그 링크의 워크스페이스는 닫혔습니다",

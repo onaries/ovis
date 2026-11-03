@@ -60,7 +60,7 @@ import { modelLabel } from "../lib/modelName.ts";
 import { useFacesArrived } from "../lib/fontFaces.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "../lib/mentions.ts";
 import { resolveComposerMenuActiveItemId } from "../lib/composerMenuHighlight.ts";
-import { quickReplyButtons, useSettings } from "../lib/settings.ts";
+import { enterSendsOn, quickReplyButtons, useSettings } from "../lib/settings.ts";
 import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, providerForAgent, statusWindows, usageName, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { Artifacts } from "./Artifacts.tsx";
@@ -272,6 +272,8 @@ export function Composer({
   const { fetchPaneFiles } = useMachineApi();
   const { settings, resolvedLanguage } = useSettings();
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
+  // a touch screen's Return breaks the line until this device chooses otherwise; Send (or Mod+Enter) sends
+  const enterSends = enterSendsOn(settings, useMediaQuery("(pointer: coarse)"));
   const usageEnabled = settings.showUsage && !mobile && machineId === "local" && providerForAgent(agent) !== null;
   const { report: usageReport } = useUsage(usageEnabled);
   const usage = usageEnabled && usageReport !== null ? composerUsage(usageReport.providers, agent, settings.usageOrder, settings.usageHidden) : undefined;
@@ -1018,7 +1020,7 @@ export function Composer({
         setTextAndCaret(offered, offered.length);
         return;
       }
-      const shouldSend = event.key === "Enter" && (settings.enterSends
+      const shouldSend = event.key === "Enter" && (enterSends
         ? !event.shiftKey && !event.metaKey && !event.ctrlKey
         : (event.metaKey || event.ctrlKey) && !event.shiftKey);
       // a typed pick waits in the card above: the empty box's Enter is its Confirm and Escape its
@@ -1040,7 +1042,7 @@ export function Composer({
       event.preventDefault();
       send();
     },
-    [agentStatus, carried.length, choices, connected, menuDismissed, menuOpen, offered, onAbort, selectCompletion, selectedIndex, send, sendBeside, setTextAndCaret, settings.enterSends, trigger, waitingAnswer],
+    [agentStatus, carried.length, choices, connected, menuDismissed, menuOpen, offered, onAbort, selectCompletion, selectedIndex, send, sendBeside, setTextAndCaret, enterSends, trigger, waitingAnswer],
   );
 
   const onPaste = useCallback(

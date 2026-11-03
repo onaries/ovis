@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DeviceStore } from "../../../server/devices.ts";
+import { bounded } from "../../../server/relay/test-helpers.ts";
 import { exportPublicKey, generateKeyPair, openDaemonSecureChannel } from "../../../shared/relay-e2ee.ts";
 import type { SecureChannel, Transport } from "../../../shared/relay-e2ee.ts";
 import { decodeFrame, encodeFrame, FrameType, LIMITS_V1, MuxProtocolError } from "../../../shared/relay-mux.ts";
@@ -23,9 +24,14 @@ class FakeSocket implements RelaySocket {
   onclose: RelaySocket["onclose"] = null;
   onerror: RelaySocket["onerror"] = null;
   closed = false;
+  /** closing with no close event yet, as a browser socket the page closed while the relay has not answered */
+  closing = false;
+  get readyState(): number { return this.closed ? 3 : this.closing ? 2 : 1; }
   constructor(readonly daemon: Transport) {}
   send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
     if (this.closed) throw new Error("Socket closed");
+    // a browser socket in CLOSING drops what it is given, without an error
+    if (this.closing) return;
     if (typeof data !== "string" && !(data instanceof ArrayBuffer)) throw new Error("Unexpected carrier type");
     this.daemon.onmessage?.({ data, isBinary: typeof data !== "string" });
   }
@@ -40,7 +46,7 @@ class FakeSocket implements RelaySocket {
   }
 }
 
-async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" | "auth-ok" | "features" | "assigned" | "receipt" | "silence" | "protocol") {
+async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" | "auth-ok" | "features" | "assigned" | "receipt" | "silence" | "protocol", onClose?: (error: Error) => void) {
   const dir = mkdtempSync(join(tmpdir(), "relay-channel-"));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const registry = new DeviceStore(dir);
@@ -152,7 +158,7 @@ async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" |
     await server.flush();
     server.authenticate(deviceId);
   };
-  const opening = openRelayChannel(offer, { store, socket: (url) => {
+  const opening = openRelayChannel(offer, { store, ...(onClose ? { onClose } : {}), socket: (url) => {
     expect(url).toBe(`${offer.relay}/v1/ws?server_id=${offer.server_id}&role=client&v=1`);
     queueMicrotask(() => socket.deliver(JSON.stringify(attack === "assigned" ? { type: "wrong" } : { type: "assigned", connection_id: "ef".repeat(16) })));
     return socket;
@@ -182,6 +188,22 @@ for (const pairing of [false, true]) {
   });
 }
 
+it("ends an admitted channel whose socket is closing, rather than sending into it", async () => {
+  // Given an admitted channel.
+  const lost = Promise.withResolvers<Error>();
+  const f = await fixture(false, undefined, (error) => lost.resolve(error));
+  f.allowAuth.resolve();
+  const channel = await f.opening;
+  expect(channel.carrierOpen).toBe(true);
+  // When its socket starts closing and no close event comes (the page closed it, the relay has not answered).
+  f.socket.closing = true;
+  // Then the channel reads its carrier as gone, and the next frame ends the channel instead of vanishing.
+  expect(channel.carrierOpen).toBe(false);
+  channel.mux.openHttp({ method: "GET", target: "/api/lost", headers: [], body: "none" });
+  expect(await bounded(lost.promise, 2000)).toBeInstanceOf(MuxProtocolError);
+  expect(f.socket.closed).toBe(true);
+});
+
 /**
  * A relay-shaped socket that delivers nothing on its own: the test says what arrives and when.
  * `sent` resolves at the client's first frame, the start of its handshake.
@@ -193,6 +215,7 @@ class SilentSocket implements RelaySocket {
   onerror: RelaySocket["onerror"] = null;
   closed: number | null = null;
   readonly sent = Promise.withResolvers<void>();
+  get readyState(): number { return this.closed === null ? 1 : 3; }
   send(): void { this.sent.resolve(); }
   deliver(data: string | ArrayBuffer): void { if (this.closed === null) this.onmessage?.(new MessageEvent("message", { data })); }
   close(code = 1000): void { if (this.closed === null) this.closed = code; }

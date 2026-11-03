@@ -439,7 +439,7 @@ describe("a PC's worker in the hosted shell", () => {
     const worker = scoped([]);
     await worker.click("w1:p1");
     await worker.click(null);
-    expect(worker.opened).toEqual([`/s/${ID}/?machine=local&pane=w1%3Ap1&view=chat`, `/s/${ID}/`]);
+    expect(worker.opened).toEqual([`/s/${ID}/#machine=local&pane=w1%3Ap1&view=chat`, `/s/${ID}/`]);
   });
 
   it("never hands a tap to another PC's window on the same origin", async () => {
@@ -449,7 +449,7 @@ describe("a PC's worker in the hosted shell", () => {
     await worker.click("w1:p1");
     expect(other.told).toEqual([]);
     expect(front.told).toEqual([]);
-    expect(worker.opened).toEqual([`/s/${ID}/?machine=local&pane=w1%3Ap1&view=chat`]);
+    expect(worker.opened).toEqual([`/s/${ID}/#machine=local&pane=w1%3Ap1&view=chat`]);
 
     const own = windowAt(`/s/${ID}/`);
     const open = scoped([other, own]);

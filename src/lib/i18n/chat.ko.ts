@@ -53,7 +53,6 @@ export const CHAT_KO: Record<string, string> = {
   "thinking": "생각",
   "Working…": "작업 중…",
   "Worked": "작업함",
-  "Rewind in terminal": "터미널에서 되감기",
   "Copy as markdown": "마크다운으로 복사",
   "Copy as plain text": "일반 텍스트로 복사",
   "Plain text": "일반 텍스트",
@@ -227,6 +226,5 @@ export const CHAT_KO: Record<string, string> = {
   "Go to turn {n}": "{n}번째 턴으로 이동",
   "Show full message": "전체 메시지 보기",
   "Open link": "링크 열기",
-  "Share link": "링크 공유",
   "Sent · waiting for the agent's next turn": "전송됨 · 에이전트의 다음 턴을 기다리는 중",
 };

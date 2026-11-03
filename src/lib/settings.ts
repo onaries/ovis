@@ -128,8 +128,10 @@ export interface Settings {
   /** how wide the chat lane may run on a large screen, keyed as data-chat-width in src/styles.css; default follows the pane
    *  (chatLaneWidth, written by lib/chatLane.ts); a narrower pane is never affected */
   chatWidth: ChatWidth;
-  /** true: Enter sends in the composer, Shift+Enter breaks the line; false: Ctrl/Cmd+Enter sends */
-  enterSends: boolean;
+  /** true: Enter sends in the composer, Shift+Enter breaks the line; false: Ctrl/Cmd+Enter sends. Chosen in
+   *  Settings for this device; null until then: Return breaks the line on a touch screen, as in the ChatGPT and
+   *  Claude apps, and Enter sends elsewhere (enterSendsOn). Kept in a key of its own (ENTER_SENDS_STORAGE_KEY) */
+  enterSends: boolean | null;
   /** true: a message sent while the agent works goes by itself when the turn ends; false: it waits for Send now */
   autoSendQueued: boolean;
   /** true: a tab herdr still names by its number shows a few words of its first message (lib/tabLabels.ts); false keeps tabs as they are */
@@ -244,7 +246,7 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
     chatFontSize: settings.chatFontSize,
     uiFontSize: settings.uiFontSize,
     chatWidth: settings.chatWidth,
-    enterSends: settings.enterSends,
+    enterSends: enterSendsOn(settings, coarsePointer()),
     autoSendQueued: settings.autoSendQueued,
     suggestionChip: settings.suggestionChip,
     showThinking: settings.showThinking,
@@ -352,7 +354,7 @@ export const DEFAULT_SETTINGS: Settings = {
   uiFontSize: null,
   uiFontFamily: "",
   chatWidth: "default",
-  enterSends: true,
+  enterSends: null,
   autoSendQueued: true,
   autoTabNames: true,
   composerNewTabButton: false,
@@ -542,7 +544,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     followHerdrFocus: typeof record["followHerdrFocus"] === "boolean" ? record["followHerdrFocus"] : DEFAULT_SETTINGS.followHerdrFocus,
     chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
-    enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
+    enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : null,
     autoSendQueued: typeof record["autoSendQueued"] === "boolean" ? record["autoSendQueued"] : DEFAULT_SETTINGS.autoSendQueued,
     autoTabNames: typeof record["autoTabNames"] === "boolean" ? record["autoTabNames"] : DEFAULT_SETTINGS.autoTabNames,
     composerNewTabButton: typeof record["composerNewTabButton"] === "boolean" ? record["composerNewTabButton"] : DEFAULT_SETTINGS.composerNewTabButton,
@@ -666,12 +668,43 @@ function readChatFold(key: string, fallback: boolean): boolean {
   }
 }
 
+/**
+ * Settings > Chat > Enter sends (Return inserts a new line on a touch screen): whether it was chosen is kept in a
+ * key of its own. Settings are saved whole, so `enterSends: true` in ovis:settings was written by any change at all,
+ * not chosen; only its `false` was a choice (the old default was true), and it counts while this key holds none.
+ * The record keeps the boolean an older tab reads and writes (true until chosen), but once this key holds a choice
+ * the record never overrides it: a tab still on an older version rewrites the record whole with whatever it loaded,
+ * so a value there may be stale, and a choice must not flip back after an unrelated save.
+ */
+export const ENTER_SENDS_STORAGE_KEY = "ovis:enter-sends";
+
+function readEnterSends(record: boolean | null): boolean | null {
+  try {
+    const raw = window.localStorage.getItem(ENTER_SENDS_STORAGE_KEY);
+    const value: unknown = raw === null ? null : JSON.parse(raw);
+    if (typeof value === "boolean") return value;
+  } catch {
+    /* unreadable: the record's choice, if any */
+  }
+  return record === false ? false : null;
+}
+
+/** Whether this device's primary pointer is a finger: a phone or a tablet, with or without a hardware keyboard. */
+function coarsePointer(): boolean {
+  return typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
+}
+
+/** Whether Enter (Return) sends from the composer: the device's choice, else not on a touch screen. */
+export function enterSendsOn(settings: Pick<Settings, "enterSends">, touch: boolean): boolean {
+  return settings.enterSends ?? !touch;
+}
+
 export function loadSettings(): Settings {
   // read as the page's boot script reads them (themeBoot.ts), so React starts on the row the first frame showed
   const stored = readStoredAppearance(() => window.localStorage);
   const settings = stored.main === null ? DEFAULT_SETTINGS : sanitizeSettings(stored.main.value);
   const merged = stored.themes === null ? settings : sanitizeSettings({ ...settings, ...stored.themes });
-  return { ...merged, uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap(), sidebarFilter: readSidebarFilter(), historyPrompts: readHistoryPrompts(), composerArtifacts: readComposerArtifacts(),
+  return { ...merged, enterSends: readEnterSends(merged.enterSends), uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap(), sidebarFilter: readSidebarFilter(), historyPrompts: readHistoryPrompts(), composerArtifacts: readComposerArtifacts(),
     expandThinking: readChatFold(EXPAND_THINKING_STORAGE_KEY, DEFAULT_SETTINGS.expandThinking), foldWork: readChatFold(FOLD_WORK_STORAGE_KEY, DEFAULT_SETTINGS.foldWork) };
 }
 
@@ -691,7 +724,8 @@ export function saveSettings(settings: Settings): boolean {
     window.localStorage.setItem(COMPOSER_ARTIFACTS_STORAGE_KEY, JSON.stringify(composerArtifacts));
     window.localStorage.setItem(EXPAND_THINKING_STORAGE_KEY, JSON.stringify(expandThinking));
     window.localStorage.setItem(FOLD_WORK_STORAGE_KEY, JSON.stringify(foldWork));
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(main));
+    window.localStorage.setItem(ENTER_SENDS_STORAGE_KEY, JSON.stringify(mirrored.enterSends));
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ ...main, enterSends: main.enterSends ?? true }));
     return true;
   } catch {
     /* private mode: preferences last for the session */
@@ -759,10 +793,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onStorage = (event: StorageEvent): void => {
-      if (event.storageArea !== window.localStorage || (event.key !== SETTINGS_STORAGE_KEY && event.key !== null)) return;
-      const { shortcutOverrides } = loadSettings();
-      stored.current = { ...stored.current, shortcutOverrides };
-      setSettings((current) => ({ ...current, shortcutOverrides }));
+      if (event.storageArea !== window.localStorage || (event.key !== SETTINGS_STORAGE_KEY && event.key !== ENTER_SENDS_STORAGE_KEY && event.key !== null)) return;
+      const { shortcutOverrides, enterSends } = loadSettings();
+      stored.current = { ...stored.current, shortcutOverrides, enterSends };
+      setSettings((current) => ({ ...current, shortcutOverrides, enterSends }));
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);

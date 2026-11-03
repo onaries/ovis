@@ -186,6 +186,23 @@ describe("relay Durable Object", () => {
     expect(two.client.closedWith?.code).toBe(CLOSE.RESTART);
   });
 
+  test("answers a close the peer sent, so its socket does not hang in CLOSING until it times out", async () => {
+    const fake = fakeState();
+    const room = new RelayRoom(fake.state);
+    const control = await connectServer(room, fake);
+    const one = await connectPair(room, fake);
+    // the phone closed its socket: the runtime reports the close and leaves the answer to the room
+    room.webSocketClose(one.client, 4000, "qa drop", true);
+    expect(one.client.closedWith).toEqual({ code: 4000, reason: "qa drop" });
+    expect(one.data.closedWith?.code).toBe(CLOSE.GOING_AWAY);
+    expect(control.json(control.sent.length - 1)).toEqual({ type: "disconnected", connection_id: one.connection_id });
+    // a close without a status code (1005) cannot be echoed: it is answered 1000
+    const two = await connectPair(room, fake);
+    room.webSocketClose(two.data, 1005, "", true);
+    expect(two.data.closedWith).toEqual({ code: 1000, reason: "" });
+    expect(two.client.closedWith?.code).toBe(CLOSE.RESTART);
+  });
+
   for (const target of ["client", "data"] as const) {
     test(`a failed send to ${target} ends the pair without a runtime close event`, async () => {
       const fake = fakeState();

@@ -2,6 +2,7 @@ import { constants, fstatSync, openSync, readSync, realpathSync } from "node:fs"
 import { sep } from "node:path";
 
 import type { FileInfo, OmoTask, SlashCommand } from "../shared/protocol.ts";
+import type { HistoryEvidence } from "./claude-command-history.ts";
 import { wholeClaudeSubagents } from "./claude-subagents.ts";
 import { paneCommands } from "./commands.ts";
 import type { ProcessRoots } from "./skills/index.ts";
@@ -26,7 +27,7 @@ export type FileTask =
   | { op: "describe"; path: string; folder: string; opened?: Int32Array<SharedArrayBuffer> }
   | { op: "walk"; cwd: string }
   /** A Claude agent session's background-task list, read whole with the thread's own parser caches (`wholeClaudeSubagents`). */
-  | { op: "claude-tasks"; path: string; live: boolean; since: number | null }
+  | { op: "claude-tasks"; path: string; live: boolean; since: number | null; history?: HistoryEvidence | null }
   /**
    * The commands `agent` offers in `cwd`: its skill and command folders scanned (`paneCommands`,
    * #2254), each a call to a disk that may be slow. `home` and `serverEnv` are the server's own, as a
@@ -71,7 +72,7 @@ export function runFileTask(task: FileTask): FileTaskResult {
     case "within": return within(task.paths, task.folder);
     case "describe": return describeWithin(task.path, task.folder, task.opened);
     case "walk": return walkFiles(task.cwd);
-    case "claude-tasks": return wholeClaudeSubagents(task.path, task.live, Date.now(), task.since, Date.now() + CLAUDE_TASKS_READ_MS);
+    case "claude-tasks": return wholeClaudeSubagents(task.path, task.live, Date.now(), task.since, Date.now() + CLAUDE_TASKS_READ_MS, Date.now, task.history ?? null);
     case "commands": return paneCommands(task.agent, task.cwd, task.home, task.roots, task.version, task.serverEnv);
     case "render": return render(task.path, task.media, task.within ?? null);
     case "open": return open(task.path, task.get, task.opened, task.fastDiskMs ?? FAST_DISK_MS, task.within ?? null);

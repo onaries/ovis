@@ -1517,6 +1517,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   and keeps the working dot's breath (opacity only).
 - Footer holds Settings, its gear alone (named **Settings** to screen readers and in its tooltip),
   with the plan meters filling the rest of its row, as a row on the same grid with no rule above.
+  On a coarse pointer the gear stays its `--side-box` column and takes a `--touch-target` width
+  through an invisible `::before` expander that grows into the footer's gutter on its left only:
+  the plan meters start `--space-1` after it, so the two never share a tap. In the compact density
+  it reaches a pixel past the `12px` gutter, off the screen's edge.
   It carries no product name or version: the running versions are read in Settings. Nor does it
   offer **Install app**: the page can only tell it is installed from inside the app's own window,
   so a footer row kept showing in every browser tab and in browsers that never prompt. Settings →
@@ -2077,6 +2081,17 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   after a drop, disconnected once output stopped. Below `900px` it keeps only its dot; the word stays as
   its accessible text and in its tooltip. While live the chip takes no room and stays in the
   document as a `role="status"` a screen reader can read (`.conn-live`; never `display: none`).
+- A connection this page had and lost is also said in words in the title area, in the crumb's place
+  (`.context-connection`, `lib/headerConnection.ts`): **Reconnecting…** in `--status-working` while
+  it is lost, **Connected** in `--status-done` for two seconds once it is back, then the crumb again,
+  as WhatsApp and Telegram say it under a chat's name. It follows the messengers rather than a
+  coding-agent app because their case is Ovis's on a phone: one conversation's header, whose link to
+  the other end comes and goes with the network. From `769px` it sits on the title's line; at
+  `<=768px` it goes under the title, both lines inside the header's height. It swaps in place and
+  is never animated, and while it speaks the chip keeps only its dot (`.conn-quiet`). It is about
+  the PC and split half the header shows, by the half that reported it: a recovery on one PC or half
+  is not said once another is shown, and a pane's first connection is not a reconnect. A stalled
+  output, which retries nothing, gets no line: the chip says disconnected. The return sends nothing: a draft stays a draft.
 
 ### Chat turn (`.chat-turn`)
 - Native conversation rows use LegendList 3.3.5, with the chat view as the single
@@ -2134,13 +2149,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   first copy drops its own left inset so its glyph stays on the prose edge (an overhang past the
   transcript's edge cannot be tapped). With a mouse the copy and format buttons keep their `--chip-h`
   look and take a `--pointer-target` hit area through an invisible `::before` expander.
-- A user turn of Claude Code, grok or agy carries one more glyph button beside its copy, the same
-  `.chat-copy` look (`.chat-rewind`, lucide Undo2): **Rewind in terminal** sends nothing and
-  opens the pane's terminal with a dismissible, one-line `.terminal-banner-rewind` hint to run
-  the agent's own `/rewind`. Drafts stay intact. Chat follows the native transcript's active
-  branch once the agent records it; it never guesses a restore from a dialog's wording. The
-  hover placement follows the message actions of the Claude and Codex apps; the terminal handoff
-  deliberately differs from their native rewind controls because this bridge does not own them.
+- A message carries no rewind action: an agent's own `/rewind` (Claude Code, grok, Antigravity) is run in the pane's terminal, and
+  Chat follows the native transcript's active branch once the agent records it; it never guesses a restore from a dialog's wording.
 - A terminal-only command sent from Chat is one quiet right-aligned row, not a bubble:
   `SquareTerminal`, the command in mono `--fs-sm`, **Ran in terminal** in `--text-dim`,
   and one **Open Terminal** text button, which opens a terminal peek over the chat (see the
@@ -2880,8 +2890,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   pointer, or `768px` and under) the key bar takes the composer's place and the composer is
   `display: none`, still mounted with its draft: the message box is blurred on the accepted
   receipt, so a phone's keyboard drops, and the grid is not focused.
-- The peek's head stands in the terminal banner column and takes no grid row, in the rewind
-  hint's anatomy (neutral elevated surface, hairline, `--radius-md`, `--fs-xs`, `--space-2`
+- The peek's head stands in the terminal banner column and takes no grid row, in the held-input
+  row's anatomy (neutral elevated surface, hairline, `--radius-md`, `--fs-xs`, `--space-2`
   gaps, existing button targets): **/command ran** (truncated, whole in its title), under it
   **Chat may come back when you close it** when the return is armed (a possibility, never a
   promise: Claude may record no close, and a screen may close onto text), then **Back to Chat** and
@@ -3001,7 +3011,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   draft and returns focus to the text box. If Send must finish a composition, blur is an editing
   boundary even when a mobile keyboard omits compositionend; refocus follows in the next task,
   without stealing focus from another control. A disconnect withdraws any waiting Send.
-- Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. On touch screens the same device setting is shown inverted as **Return inserts a new line**, with Send and hardware Mod+Enter explained below it. IME Enter is ignored. Stop sends Escape. While the agent works and a draft shows Send in Stop's place, Escape in the box is Stop; an open completion menu takes the first Escape, and its X in the top corner (`.composer-menu-close`, Close suggestions, sticky over the rows it scrolls; the first row leaves it room) does the same for a pointer or a phone, which has no Escape, keeping the text and the focus in the box. T3 Code's command menu closes on Escape alone. Working Send schedules a pending message; its Send now action submits that same message now.
+- With a mouse, Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. On touch screens the same device setting is shown inverted as **Return inserts a new line**, with Send and hardware Mod+Enter explained below it, and is on until the device chooses, as in the ChatGPT and Claude phone apps: a soft keyboard's Return breaks the line and the Send button sends. The choice is kept in its own key (`ovis:enter-sends`); an older record's `enterSends: false` counts as chosen, its `true` (written by any save) does not. On a touch screen the text scrolls inside under a third of the visible height, so a long draft never pushes the row with Send under the keyboard. IME Enter is ignored. Stop sends Escape. While the agent works and a draft shows Send in Stop's place, Escape in the box is Stop; an open completion menu takes the first Escape, and its X in the top corner (`.composer-menu-close`, Close suggestions, sticky over the rows it scrolls; the first row leaves it room) does the same for a pointer or a phone, which has no Escape, keeping the text and the focus in the box. T3 Code's command menu closes on Escape alone. Working Send schedules a pending message; its Send now action submits that same message now.
 
 - dsh-tui uses the existing T3 Code-style composer command menu for its local slash commands:
   filtering, keyboard selection and touch insertion keep execution behind explicit Send. The
@@ -3067,6 +3077,17 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   closed or reloaded the app (#2343): there the first tap of the mic asks.
 - The recording pill shows Cancel, a **Recording** label, the level bars, a mono timer and Done.
   Amber only; `--danger` stays for errors.
+- On a coarse pointer the composer's mic (a `--control-h` circle) and the pill's Cancel and Done keep
+  their drawn size and take a `--touch-target` square through an invisible `::before` expander,
+  sized from the button's own box, so the terminal line's mic, already a `--touch-target` circle,
+  grows by nothing. The composer's add button, the mic and the plan chip are drawn `8px` apart;
+  with the mic's expander `3px` stay clear on each side (`2px` in the compact density), and the
+  plan chip's expander reaches only up and down, so no two share a tap. As iOS does with a bar's small glyph buttons (UIKit takes
+  taps beyond the drawn edge to `44pt`), the look stays and only the hit area grows; the Codex and
+  Claude phone apps draw their composer buttons at the target size, which here would crowd the
+  model label off the row. `scripts/tap-targets-demo-regression.ts` measures each hit area by
+  `elementFromPoint` at `390px` and `412px` (and `390px` compact), and that a mouse at `1280px`
+  gets the drawn box only.
 
 ### Command palette
 - At `<=480px` the header has no palette button: the More menu's first item, **Search panes and

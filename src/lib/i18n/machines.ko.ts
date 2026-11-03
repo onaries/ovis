@@ -112,7 +112,6 @@ export const MACHINES_KO: Record<string, string> = {
   "It is older than this app and runs on its own, so it cannot be updated from here.": "이 앱보다 오래된 버전이 따로 돌고 있어서 여기서는 업데이트할 수 없습니다.",
   "Open that PC's Ovis": "그 PC의 Ovis 열기",
   "Open it on that PC or through its own tailnet address:": "그 PC에서 열거나, 그 PC의 tailnet 주소로 여세요:",
-  "Copy address": "주소 복사",
   "{name}'s own Ovis needs an update to reconnect{others}.": "{name}{others}에 다시 연결하려면 그 PC의 Ovis 업데이트가 필요합니다.",
   "{name}'s own Ovis needs an update on that PC{others}.": "{name}{others}의 Ovis는 그 PC에서 업데이트해야 합니다.",
   "Updating {name}'s own Ovis failed{others}.": "{name}{others}의 Ovis 업데이트에 실패했습니다.",

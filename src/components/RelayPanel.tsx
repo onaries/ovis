@@ -5,9 +5,11 @@ import "./RelayPanel.css";
 
 import { ApiError, requestRelayOffer, startPairing, type RelayOffer } from "../lib/api.ts";
 import { useT } from "../lib/i18n.ts";
+import { callNative, hasNativePlugin } from "../lib/nativeApp.ts";
 import { announcePairingCode, PAIRING_CODE_EVENT } from "../lib/useRelay.ts";
 import type { RelayStatus } from "../../shared/protocol.ts";
 import { decodeOffer } from "../../shared/relay-offer.ts";
+import { QrReveal, ShareLink } from "./PhonePanel.tsx";
 import { QrCode } from "./QrCode.tsx";
 
 export const failureText = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
@@ -25,12 +27,29 @@ export function statusText(t: ReturnType<typeof useT>, status: RelayStatus): str
 }
 
 /**
+ * Pairs the phone this page runs on through the relay: its own offer opens here, as its QR code
+ * would on a phone that scanned it. In the app it opens as one more PC of the app's list
+ * (HerdrShell.open, labelled with the offer's name); in a browser this tab goes to the hosted
+ * shell, which pairs the phone and keeps its key there.
+ */
+export async function openOwnOffer(url: string): Promise<void> {
+  if (hasNativePlugin("HerdrShell")) {
+    const offer = decodeOffer(url);
+    if (offer === null) throw new Error("The relay's offer carries no pairing.");
+    const scope = url.slice(0, url.indexOf("#"));
+    await callNative("HerdrShell", "open", { url, scope, ...(offer.name === undefined ? {} : { name: offer.name }) });
+    return;
+  }
+  window.location.assign(url);
+}
+
+/**
  * The QR code of the pending pairing offer, counted down to its expiry. An offer is asked for when
  * this opens with the relay online, when the Devices group starts a new code (the server keeps one
  * pending code, so both show the same), when the code ran out, and on New code, which starts a
  * new code first; never on a timer or a render.
  */
-export function RelayPairing() {
+export function RelayPairing({ phone = false }: { phone?: boolean }) {
   const t = useT();
   const [offer, setOffer] = useState<RelayOffer | null>(null);
   const [left, setLeft] = useState("");
@@ -105,6 +124,25 @@ export function RelayPairing() {
     }
   };
 
+  const countdown = (
+    <>
+      {state === "live" && t("Expires in {time}.", { time: left })}
+      {state === "expired" && t("This code expired.")}
+      {state === "minting" && t("Getting a code…")}
+    </>
+  );
+  const newCode = <button type="button" className="btn" disabled={state === "minting"} onClick={() => void renew()}><RefreshCw aria-hidden="true" />{t("New code")}</button>;
+  // on the phone itself: the link to send to the other device, and its QR code only once asked for
+  if (phone) return (
+    <div className="relay-pairing-phone" role="status">
+      <p className="settings-label">{t("Connect another device")}</p>
+      <p className="settings-description">{t("Send it this link, or show it the QR code. It opens Ovis there and pairs it with this PC.")} {countdown}</p>
+      {state === "failed" && failure !== null && <p className="settings-hint relay-error" role="alert">{failure}</p>}
+      {offer !== null && <ShareLink url={offer.url} copyLabel={t("Copy link")}>{newCode}</ShareLink>}
+      {offer === null && <div className="phone-actions">{newCode}</div>}
+      {offer !== null && <QrReveal value={offer.url} label={t("QR code that pairs a phone through the relay")} hint={t("Scan it with the other device's camera.")} />}
+    </div>
+  );
   return (
     <div className="settings-item relay-pairing" role="status">
       {offer !== null && <QrCode value={offer.url} label={t("QR code that pairs a phone through the relay")} />}

@@ -499,6 +499,27 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   // cover the process read too. Never turn an unknown handover snapshot into an agent exit.
   const shellSnapshots = new WeakSet<HerdrPane>();
   const snapshotVerifications = new WeakMap<HerdrPane, number>();
+  // what a pane that is gone held, whether it ended by itself or was closed; safe to run twice
+  // (a program that ended and whose pane then closed)
+  function paneGone(paneId: string): void {
+    omo.ended(paneId);
+    gjc.ended(paneId);
+    options.openCodeState?.forget(paneId);
+    releaseOpenCodePane(paneId);
+    finishes.ended(paneId);
+    if (usageLogin.ended(paneId)) usage.invalidate();
+    holdPendingPane(paneId, { code: "pane_not_found", message: "The pane ended; its pending messages were not sent" });
+    pending.forget(paneId);
+    waits.forget(paneId);
+    completions.forget(paneId);
+    heard.delete(paneId);
+    agentNow.delete(paneId);
+    agentRead.set(paneId, opencodeAgents.beginRead());
+    eventAgent.delete(paneId);
+    // the terminal is gone, so is whatever its chat parsed (server/conversation.ts)
+    forgetPaneTranscriptState(paneId);
+    bridgeAgents?.ended(paneId);
+  }
   const collector = startStatusCollector({
     onStatus,
     // the herdr this server's lifecycle subscription was answered by, while that subscription is open
@@ -550,26 +571,12 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       push.resync(panes.map((pane) => ({ ...pane, agent_status: alertStatus(settled(pane), waits.waiting(pane.pane_id)) })), newer);
     },
     onPaneEnded: (paneId) => {
-      omo.ended(paneId);
-      gjc.ended(paneId);
-      options.openCodeState?.forget(paneId);
-      releaseOpenCodePane(paneId);
-      finishes.ended(paneId);
-      if (usageLogin.ended(paneId)) usage.invalidate();
-      holdPendingPane(paneId, { code: "pane_not_found", message: "The pane ended; its pending messages were not sent" });
-      pending.forget(paneId);
-      waits.forget(paneId);
-      completions.forget(paneId);
-      heard.delete(paneId);
-      agentNow.delete(paneId);
-      agentRead.set(paneId, opencodeAgents.beginRead());
-      eventAgent.delete(paneId);
-      // the terminal is gone, so is whatever its chat parsed (server/conversation.ts)
-      forgetPaneTranscriptState(paneId);
-      bridgeAgents?.ended(paneId);
+      paneGone(paneId);
       broadcastAll({ type: "pane-exited", pane_id: paneId });
       push.onEnded(paneId).catch(logPushError);
     },
+    // closed, not ended by itself: the same cleanup with no "terminal ended" alert
+    onPaneClosed: (paneId) => paneGone(paneId),
     onStructureChange: () => broadcastAll({ type: "session-changed" }),
   }, { snapshot: async () => {
     const checkpoint = openCodeVerificationCheckpoint();
@@ -598,7 +605,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   waitTimer.unref?.();
   plans.start();
 
-  // a verified OpenCode pane is tracked like a usage-login pane: closing it reaches onPaneEnded above
+  // a verified OpenCode pane is tracked like a usage-login pane: its end or close reaches paneGone above
   const untrackOpenCode = trackVerifiedOpenCodePanes((paneId) => collector.trackPane(paneId));
   const tracked = { ...collector, stop() { untrackOpenCode(); stopMutes(); stopSubmitted(); collector.stop(); } };
 
