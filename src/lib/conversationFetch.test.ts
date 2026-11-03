@@ -183,6 +183,25 @@ describe("conversation read started by a press", () => {
     return sent;
   }
 
+  it("starts a fresh press read when the pane changes session before an earlier press is adopted", async () => {
+    let history = "session-a";
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(
+      async () => Response.json({ source: "claude-transcript", history_id: history, cursor: null, turns: [] }, { headers: { etag: `"${history}"` } }),
+      { preconnect: globalThis.fetch.preconnect },
+    ));
+    try {
+      named("local", { "press:changing": "a" });
+      prefetchPaneConversation("press:changing", "local", 10);
+      await heldPast("press:changing");
+      expect(peekPaneConversation("press:changing", "local", 10)?.history_id).toBe("session-a");
+      history = "session-b";
+      named("local", { "press:changing": "b" });
+      prefetchPaneConversation("press:changing", "local", 10);
+      await heldPast("press:changing");
+      expect(peekPaneConversation("press:changing", "local", 10)?.history_id).toBe("session-b");
+    } finally { fetch.mockRestore(); }
+  });
+
   it("starts at the press, and the mount read of the chat it opens takes it instead of asking again", async () => {
     const sent = answering();
     prefetchPaneConversation("press:p1", "local", 10);

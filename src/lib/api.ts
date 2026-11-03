@@ -621,7 +621,12 @@ export function prefetchPaneConversation(paneId: string, machineId: string, prom
   const pane = paneKey(paneId, machineId);
   if (pinnedConversations.has(pane) || !namesSession(sessionNow(pane))) return;
   const url = conversationUrl(paneId, machineId, { prompts });
-  if (pressReads.has(url)) return;
+  const previous = pressReads.get(url);
+  if (previous !== undefined) {
+    if (previous.session === sessionNow(pane)) return;
+    pressReads.delete(url);
+    previous.controller.abort();
+  }
   // the mount read names the history of the cached answer it drew (ChatView's peek)
   const cached = currentAnswer(url, pane)?.body;
   const historyId = cached?.source === "scrollback" ? undefined : cached?.history_id;
