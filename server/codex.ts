@@ -21,6 +21,8 @@ import { kiroCodexProcess, kiroNested, kiroWrapper } from "./kiro-terminal.ts";
 import { resolveAgent } from "./pane-context.ts";
 import { FOOTER } from "./codex-steering.ts";
 import { codexMarkdownDisplays, completedCodexAnswer } from "./codex-display.ts";
+import { codexRestartArgs } from "./codex-restart-args.ts";
+import { readConfigText } from "./skills/walk.ts";
 import { codexStartScreenUnused } from "./start-screen.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -1733,6 +1735,77 @@ function titledCandidate(agent: Pick<AgentInfo, "terminal_title" | "terminal_tit
   return rows.length === 1 ? codexRolloutPath(rows[0]!.rollout_path, home) : null;
 }
 
+function threadTitleConfigured(home: string, cwd: string, argv: readonly string[]): boolean {
+  if (codexRestartArgs(argv, "identity-probe") === null
+    || argv.some((arg) => arg.startsWith("-p") || arg === "--profile" || arg.startsWith("--profile="))) return false;
+  const files = new Set([join(home, "config.toml")]);
+  for (let folder = nodePath.resolve(cwd); ; folder = nodePath.dirname(folder)) {
+    files.add(join(folder, ".codex", "config.toml"));
+    if (nodePath.dirname(folder) === folder) break;
+  }
+  let configured = false;
+  const accept = (config: unknown): boolean => {
+    if (typeof record(config).profile === "string") return false;
+    const tui = record(record(config).tui);
+    if (!("terminal_title" in tui)) return true;
+    const title = tui.terminal_title;
+    if (!Array.isArray(title) || title.length !== 1 || !["thread-id", "session-id"].includes(title[0])) return false;
+    configured = true;
+    return true;
+  };
+  try {
+    for (const file of files) {
+      if (!existsSync(file)) continue;
+      const config = Bun.TOML.parse(readConfigText(file));
+      if (!accept(config)) return false;
+    }
+    for (let at = 0; at < argv.length; at++) {
+      const arg = argv[at];
+      const override = arg === "-c" || arg === "--config" ? argv[++at]
+        : arg?.startsWith("--config=") ? arg.slice(9)
+        : arg?.startsWith("-c") && arg.length > 2 ? arg.slice(2) : undefined;
+      const key = override?.split("=", 1)[0]?.trim();
+      if (override !== undefined && (key === "tui" || key === "tui.terminal_title" || key === "profile")
+        && !accept(Bun.TOML.parse(override))) return false;
+    }
+    return configured;
+  } catch {
+    // An unreadable or invalid configuration cannot establish what this TUI renders.
+    return false;
+  }
+}
+
+/** undefined preserves legacy detection; null refuses uncertain metadata in the opted-in protocol. */
+async function threadTitleRollout(paneId: string, cwd: string | null | undefined, home: string, processes: readonly { pid: number; argv?: string[] }[]): Promise<string | null | undefined> {
+  const [process] = processes;
+  if (!process || processes.length !== 1 || !cwd) return undefined;
+  const birth = processStartedAt(process.pid);
+  if (birth === null || !threadTitleConfigured(home, cwd, process.argv ?? [])) return undefined;
+  let opened: ReturnType<typeof openCodexStore> | undefined;
+  try {
+    const pane = await paneGet(paneId);
+    const title = pane.terminal_title_stripped ?? pane.terminal_title;
+    if (!pane.terminal_id || typeof title !== "string" || !TITLE_ID.test(title.trim())) return null;
+    opened = openCodexStore(home);
+    const path = titledCandidate(pane, processes, opened.db, home);
+    opened.settled();
+    if (path === null) return null;
+    const id = titledThread(title);
+    const storedId = rolloutHeader(path)?.id;
+    if (id === null || typeof storedId !== "string" || !UUID.test(storedId) || !storedId.toLowerCase().startsWith(id)) return null;
+    const after = await paneGet(paneId);
+    const current = await codexProcessesOf(paneId);
+    // Titles are unauthenticated terminal metadata; a changed occupant must never inherit a binding.
+    if (after.terminal_id !== pane.terminal_id || (after.terminal_title_stripped ?? after.terminal_title) !== title
+      || current.list.length !== 1 || current.list[0]?.pid !== process.pid
+      || JSON.stringify(current.list[0]?.argv) !== JSON.stringify(process.argv) || processStartedAt(process.pid) !== birth) return null;
+    return path;
+  } catch {
+    // Missing panes, changing stores and unreadable metadata leave the terminal as the fallback.
+    return null;
+  } finally { opened?.db.close(); }
+}
+
 /**
  * The history id of the conversation a Codex started in a terminal has not begun, or null unless
  * every fact says it has begun none (#1191). This server did not start it (launched-agents.ts),
@@ -2876,6 +2949,8 @@ async function openRollouts(paneId: string, home: string): Promise<{ codexProces
 export async function codexOpenRollout(paneId: string, cwd: string | null | undefined, home = defaultCodexHome()): Promise<string | null> {
   const agent = await codexAgentInfo(paneId);
   const { codexProcesses, processes, open } = await openRollouts(paneId, home);
+  const titled = await threadTitleRollout(paneId, cwd, home, codexProcesses);
+  if (titled !== undefined) return titled;
   if (open.size === 1) return [...open][0]!;
   const reported = cwd ? reportedRollout(agent.agent_session, home) : null;
   // a nested pane's peers may carry no label either, so freshReportedThread cannot rule them out
@@ -2936,6 +3011,8 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   // must be known to write there (its environment says so), or what this store holds is not proof
   const first = codexProcesses[0];
   if (homeUnplaced && first !== undefined && await processCodexHome(first.pid, first.argv) !== home) return null;
+  const titled = await threadTitleRollout(paneId, cwd, home, codexProcesses);
+  if (titled !== undefined) return titled;
   if (open.size === 1) return [...open][0]!;
   const resumed = resumedThread(codexProcesses.map((process) => process.argv ?? []));
 

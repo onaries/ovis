@@ -27,6 +27,7 @@ let listener: ReturnType<typeof Bun.listen>;
 let socketBefore: string | undefined;
 /** The terminal title herdr reports for the pane (Codex's [tui].terminal_title), null for none. */
 let title: string | null;
+let replaceTerminal: boolean;
 let unlabelled: boolean;
 /** The pane's folders herdr reports. */
 let agentFolders: { cwd?: string; foreground_cwd?: string };
@@ -53,6 +54,7 @@ beforeEach(() => {
   db.close();
   screen = "";
   title = null;
+  replaceTerminal = false;
   unlabelled = false;
   agentFolders = {};
   reportedSession = null;
@@ -82,7 +84,7 @@ beforeEach(() => {
           return;
         }
         const own = request.method === "pane.process_info" && request.params?.pane_id === root && processReads.length > 0 ? processReads.shift() : undefined;
-        const result = request.method === "pane.get" ? { pane: { pane_id: root, cwd: root } }
+        const result = request.method === "pane.get" ? { pane: { pane_id: root, terminal_id: replaceTerminal ? crypto.randomUUID() : "fixture-terminal", cwd: root, terminal_title: title } }
           : request.method === "agent.get" ? { agent: { ...agentFolders, ...(title === null ? {} : { terminal_title: title, terminal_title_stripped: title }), ...(reportedSession === null ? {} : { agent_session: reportedSession }) } }
           : request.method === "pane.process_info" ? (own === null ? {} : { process_info: { ...(shellPid === undefined || request.params?.pane_id !== root ? {} : { shell_pid: shellPid }), foreground_processes: own ?? foregrounds.get(request.params?.pane_id ?? "") ?? foreground } })
           : request.method === "pane.read" ? { read: { text: peerScreen ?? screen } }
@@ -552,6 +554,91 @@ function otherFolderThread(messages: { type: string; message: string }[] = [{ ty
 /** The title Codex 0.163.0 sets with its thread-id item: the id shortened to 29 characters. */
 const shortened = `Use the other folder | elsewhere | ${other.slice(0, 29)}...`;
 const picker = [{ pid: 2147483647, argv: ["codex", "resume", "--all"] }];
+
+function idOnlyTitle() {
+  const config = join(home, "config.toml");
+  writeFileSync(config, '[tui]\nterminal_title = ["thread-id"]\n');
+  utimesSync(config, 1, 1);
+  foreground = [{ pid: process.pid, argv: ["codex"] }];
+  title = thread.slice(0, 29) + "...";
+}
+
+it("reads an explicitly configured thread-id title without a visible answer or remembered binding", async () => {
+  idOnlyTitle();
+  expect(await codexTranscriptPath(root, root, home)).toBe(path);
+  expect(await codexOpenRollout(root, root, home)).toBe(path);
+});
+
+it("follows ID-only titles through A-B-A and clears the old conversation when the title disappears", async () => {
+  idOnlyTitle();
+  const elsewhere = otherFolderThread();
+  for (const [id, expected] of [[thread, path], [other, elsewhere], [thread, path]] as const) {
+    title = `${id.slice(0, 29)}...`;
+    expect(await codexTranscriptPath(root, root, home)).toBe(expected);
+  }
+  title = null;
+  screen = answer;
+  expect(await codexTranscriptPath(root, root, home)).toBeNull();
+  expect(await codexOpenRollout(root, root, home)).toBeNull();
+});
+
+it("rejects a duplicate shortened thread-id even when the screen offers a matching old answer", async () => {
+  idOnlyTitle();
+  const db = new Database(join(home, "state_5.sqlite"));
+  db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, 1, 1, 'cli')").run(thread.slice(0, -1) + "2", path, root);
+  db.close();
+  screen = answer;
+  expect(await codexTranscriptPath(root, root, home)).toBeNull();
+});
+
+it("rejects a thread-id whose store row points to another thread's valid rollout", async () => {
+  idOnlyTitle();
+  const elsewhere = otherFolderThread();
+  const db = new Database(join(home, "state_5.sqlite"));
+  db.query("UPDATE threads SET rollout_path = ? WHERE id = ?").run(elsewhere, thread);
+  db.close();
+  expect(await codexTranscriptPath(root, root, home)).toBeNull();
+});
+
+it("rejects a title when its terminal changes during the read", async () => {
+  idOnlyTitle();
+  replaceTerminal = true;
+  expect(await codexTranscriptPath(root, root, home)).toBeNull();
+});
+
+it("rejects a title when the same PID was replaced during the read", async () => {
+  idOnlyTitle();
+  const birth = processStartedAt(process.pid);
+  const starts = spyOn(processStart, "processStartedAt").mockReturnValueOnce(birth).mockReturnValue((birth ?? 0) + 1000);
+  try { expect(await codexTranscriptPath(root, root, home)).toBeNull(); }
+  finally { starts.mockRestore(); }
+});
+
+it("keeps ID-only title detection when Codex rewrites unrelated startup preferences", async () => {
+  idOnlyTitle();
+  appendFileSync(join(home, "config.toml"), 'show_tooltips = false\n');
+  expect(await codexTranscriptPath(root, root, home)).toBe(path);
+});
+
+it("keeps ID-only title detection with the composer's native bare-word reasoning override", async () => {
+  idOnlyTitle();
+  foreground = [{ pid: process.pid, argv: ["codex", "-c", "model_reasoning_effort=high"] }];
+  expect(await codexTranscriptPath(root, root, home)).toBe(path);
+});
+
+for (const scenario of ["project-override", "argv-override", "profile", "headless"] as const) {
+  it(`does not trust an ID-only title with ${scenario}`, async () => {
+    idOnlyTitle();
+    if (scenario === "project-override") {
+      mkdirSync(join(root, ".codex"));
+      writeFileSync(join(root, ".codex", "config.toml"), '[tui]\nterminal_title = ["project-name"]\n');
+    }
+    if (scenario === "argv-override") foreground = [{ pid: process.pid, argv: ["codex", "-c", 'tui.terminal_title=["thread-name"]'] }];
+    if (scenario === "profile") foreground = [{ pid: process.pid, argv: ["codex", "-pother"] }];
+    if (scenario === "headless") foreground = [{ pid: process.pid, argv: ["codex", "app-server"] }];
+    expect(await codexTranscriptPath(root, root, home)).toBeNull();
+  });
+}
 
 it("cleans title text as Codex 0.163.0 does (tui/src/terminal_title.rs, its own test cases)", () => {
   expect(asCodexTitle("  Project\t|\nWorking\x1b\x07\u009D\u009C |  Thread  ")).toBe("Project | Working | Thread");
