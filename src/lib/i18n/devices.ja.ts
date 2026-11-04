@@ -200,4 +200,5 @@ export const DEVICES_JA: Record<string, string> = {
   "Pairs this phone through the relay, so Ovis keeps working away from home.": "このスマートフォンをリレー経由でペアリングし、外出先でも Ovis を使えるようにします。",
   "A device with this phone's name ({name}) is already paired through the relay.": "このスマートフォンと同じ名前のデバイス（{name}）がすでにリレー経由でペアリングされています。",
   "Use the relay on this phone": "このスマートフォンでリレーを使う",
+  "This PC's ID": "このPCのID",
 };

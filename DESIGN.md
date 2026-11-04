@@ -498,7 +498,9 @@ blocks of `src/styles.css`.
   size in the header's meta line becomes `256 KB of 1.3 MB`, always beside a warning icon so the
   color is not the only sign. It is a warning yellow, at least 4.5:1 on
   `--bg`, `--bg-panel` and `--bg-elevated` (see `--notice` in the generated table). Charcoal and Catppuccin
-  (its yellow) set theirs in their blocks of `src/styles.css`.
+  (its yellow) set theirs in their blocks of `src/styles.css`. Tokyo Night Day, Gruvbox Light, One Light, both Solarized,
+  Kanagawa Lotus and Rosé Pine Dawn keep their palette yellow's hue and move only its lightness to
+  get there (`scripts/herdr-theme-overrides.ts`); `src/lib/themes.contrast.test.ts` holds every theme to it.
 - The header's meta line (size, folder) is `--fs-xs`. A file that cannot be previewed says so in
   one sentence ("This file can't be previewed here. Download it to open it.") over its type and
   size as a dim mono `--fs-xs` line; "Opening…" is a `role="status"` note that is in the document from
@@ -2777,8 +2779,21 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Accepted pending messages clear only the draft prefix acknowledged by the bridge. For agents
   other than Pi, actual Enter delivery removes the pending row and refreshes the transcript. For
   a message submitted from Ovis Chat to Pi, Enter changes it to a read-only **Sent to Pi ·
-  waiting for transcript** user bubble. Only a matching durable user record appended beyond the byte
-  boundary captured on that exact Pi file/session and extending its captured leaf removes it, and
+  waiting for transcript** user bubble. What Pi runs itself gets no bubble, as Pi's submit handler
+  reads the trimmed text: a builtin such as `/model` (with an argument only where Pi takes one), a
+  prompt template the pane's catalog lists, and `!command`. Pi records no user line with its text, so
+  nothing could confirm it. An unknown `/name`, `/new please` or a lone `!` is a message to Pi and
+  keeps one. A `/skill:name` send matches the record Pi writes with the whole SKILL.md before its
+  request, read back as typed, its request trimmed as Pi trims it. Known gaps: an extension's command
+  is in no catalog, a template sent while the catalog is not cached (after a bridge restart, before
+  the menu is read) is taken as a message, and chained skills are not read back; their bubbles wait
+  for good, and so do the ones behind them.
+  Templates from Pi's settings or packages are not in the catalog either, so theirs wait the same way.
+  A Pi started with `--no-prompt-templates`, or a template added after Pi loaded, makes a `/template`
+  message lose its bubble; the message is still sent.
+  A SKILL.md whose body holds `\n</skill>\n\n` is not read back (Pi's own parser has the same limit).
+  Only a matching durable user record appended beyond the
+  byte boundary captured on that exact Pi file/session and extending its captured leaf removes it, and
   only a record Pi stamped no earlier than that capture: Pi stamps a message when it is submitted,
   so an earlier stamp is the same text typed into Pi before Ovis's Enter, or a wall clock set back
   in between. When only such a record has the text, the receipt becomes **transcript confirmation

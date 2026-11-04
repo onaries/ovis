@@ -6,6 +6,7 @@ import { open, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import nodePath, { isAbsolute, join, type PlatformPath } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseMarkdown, shownText, type InlineNode } from "../shared/markdown.ts";
 import type { ConversationPart, ConversationTurn, HerdrPane } from "../shared/protocol.ts";
 import { patchFiles, patchText } from "../shared/patch.ts";
 import { execSummary, execToolSummary } from "../shared/execSummary.ts";
@@ -1109,6 +1110,81 @@ const alnum = (text: string): string => text.normalize("NFKC").toLowerCase().rep
 /** A text with each run of whitespace one space, every other character as written (no Unicode folding): how the footer path compares. */
 const collapsed = (text: string): string => text.replace(/\s+/g, " ").trim();
 
+/** A terminal soft wrap may split a word; spaces inside a rendered row still count. */
+function completedRowsMatch(answer: string, screen: string): boolean {
+  const expected = collapsed(answer);
+  let offsets = new Set([0]);
+  for (const row of screen.split("\n").map(collapsed).filter(Boolean)) {
+    const next = new Set<number>();
+    for (const at of offsets) {
+      for (const start of at > 0 && expected[at] === " " ? [at, at + 1] : [at]) {
+        if (expected.startsWith(row, start)) next.add(start + row.length);
+      }
+    }
+    if (next.size === 0) return false;
+    offsets = next;
+  }
+  return offsets.has(expected.length);
+}
+
+/** Codex repeats a bare URL's destination even when its label is already that URL. */
+function codexShownText(nodes: InlineNode[]): string | null {
+  const rendered = (node: InlineNode): InlineNode => {
+    if (node.type === "link" || node.type === "file") {
+      const label = shownText(node.children);
+      const target = node.type === "link" ? node.href : node.path;
+      if (label === target) return { type: "text", value: `${label} (${target})` };
+    }
+    if (node.type === "strong" || node.type === "em" || node.type === "del") return { ...node, children: node.children.map(rendered) };
+    return node;
+  };
+  return shownText(nodes.map(rendered), true);
+}
+
+/** Compare whole rendered paragraphs, tables and flat ordered lists, preserving punctuation and order. */
+function completedAnswerMatches(answer: string, screen: string): boolean {
+  if (completedRowsMatch(answer, screen)) return true;
+  const words: string[] = [];
+  let table = false;
+  for (const block of parseMarkdown(answer)) {
+    if (block.type === "paragraph") {
+      for (const line of block.lines) {
+        const text = codexShownText(line);
+        if (text === null) return false;
+        words.push(text);
+      }
+    } else if (block.type === "table") {
+      table = true;
+      for (const row of [block.header, ...block.rows]) {
+        const cells = row.map(codexShownText);
+        if (cells.some((cell) => cell === null)) return false;
+        words.push(cells.join(" "));
+      }
+    } else if (block.type === "list" && block.ordered) {
+      for (const [index, item] of block.items.entries()) {
+        if (item.checked !== undefined || item.blocks?.length) return false;
+        const text = codexShownText(item.content);
+        if (text === null) return false;
+        words.push(`${(block.start ?? 1) + index}. ${text}`);
+      }
+    } else return false;
+  }
+  const shown = table ? screen.split("\n").filter((line) => !/^[ \t─━]+$/.test(line)).join("\n") : screen;
+  return completedRowsMatch(words.join(" "), shown);
+}
+
+// Codex wraps notices at the pane width, including in the middle of a word. Match only the complete notice.
+const CODEX_LIMIT_NOTICE_COMPACT = /^⚠weeklylimit:(?:100|\d{1,2})%left(?:·resetsat(?:1[0-2]|[1-9]):[0-5]\d[AP]Mon\d{1,2}[A-Z][a-z]{2})?·\/status$/;
+const CODEX_LIMIT_HEADS_UP_COMPACT = /^⚠Headsup,youhavelessthan(?:100|\d{1,2})%ofyourweeklylimitleft\.Run\/statusforabreakdown\.$/;
+
+function noticeStart(rows: readonly { line: string }[], end: number, kind: "limit" | "heads-up"): number {
+  for (let start = end; start >= Math.max(0, end - 4); start--) {
+    const joined = rows.slice(start, end + 1).map(({ line }) => line.trim()).join("").replace(/\s/g, "");
+    if (kind === "limit" ? CODEX_LIMIT_NOTICE_COMPACT.test(joined) : CODEX_LIMIT_HEADS_UP_COMPACT.test(joined)) return start;
+  }
+  return end + 1;
+}
+
 /**
  * The answer a screen shows Codex finished last, with the prompt of its turn, both whitespace-collapsed: an
  * answer block (its "\u2022" line and the indented lines it wraps onto) with Codex's completed-turn footer
@@ -1125,7 +1201,21 @@ function footedAnswer(screen: string): { text: string; prompt: string } | null {
   if (composer >= rows.length || !/^\u203a(?:\s+Ask Codex to do anything)?$/.test(rows[composer]!.line.trim())) return null;
   const status = rows.slice(composer + 1);
   if (status.length === 0 || status.length > 4 || !status.every(({ line }) => FOOTER.test(line.trim()))) return null;
-  const footer = rows[composer - 1];
+  let before = composer - 1;
+  const notices = new Set<string>();
+  for (let count = 0; count < 3; count++) {
+    let removed = false;
+    for (const kind of ["limit", "heads-up"] as const) {
+      const start = notices.has(kind) ? before + 1 : noticeStart(rows, before, kind);
+      if (start <= before) { notices.add(kind); before = start - 1; removed = true; break; }
+    }
+    if (removed) continue;
+    if (!notices.has("background") && /^\s*[1-9]\d* background terminals? running · \/ps to view · \/stop to close\s*$/.test(rows[before]?.line ?? "")) {
+      notices.add("background"); before--; continue;
+    }
+    break;
+  }
+  const footer = rows[before];
   if (footer === undefined || !CODEX_TURN_FOOTER.test(footer.line)) return null;
   const index = footer.at;
   if (index < 2 || lines[index - 1]!.trim() !== "" || lines[index - 2]!.trim() === "") return null;
@@ -1137,7 +1227,7 @@ function footedAnswer(screen: string): { text: string; prompt: string } | null {
   if (prompt < 0) return null;
   let end = prompt + 1;
   while (end < start && /^\s+\S/.test(lines[end]!)) end++;
-  return { text: collapsed(lines.slice(start, index - 1).join("\n").slice(2)), prompt: collapsed(lines.slice(prompt, end).join("\n").slice(1)) };
+  return { text: lines.slice(start, index - 1).join("\n").slice(2).trim(), prompt: collapsed(lines.slice(prompt, end).join("\n").slice(1)) };
 }
 
 /** The answers a conversation's rollout records its turns finished on (task_complete), as written. */
@@ -1156,6 +1246,38 @@ function finishedAnswerTexts(rollout: string): string[] {
  * was asked (null when the read holds no message of it: cut by the tail read, or an older Codex). Null when
  * it records no finished turn.
  */
+/** Every prompt a rollout records as asked (its UserMessage items, finished turn or not), as written. */
+function askedPrompts(rollout: string): string[] {
+  const asked = new Map<string, string>();
+  for (const line of rollout.split("\n")) {
+    if (!line.includes('"item_completed"')) continue;
+    try {
+      const payload = (JSON.parse(line) as { payload?: Record<string, unknown> }).payload ?? {};
+      const turn = payload["turn_id"];
+      const item = payload["item"] as { type?: unknown; content?: unknown } | undefined;
+      if (typeof turn !== "string" || payload["type"] !== "item_completed" || item?.type !== "UserMessage" || !Array.isArray(item.content)) continue;
+      asked.set(turn, (asked.get(turn) ?? "") + item.content.map((part: { text?: unknown }) => typeof part?.text === "string" ? part.text : "").join(""));
+    } catch { /* a record cut by the tail read */ }
+  }
+  return [...asked.values()];
+}
+
+/** Whether a rollout's read ends on an answer no task_complete followed: its turn still open, or its finish cut from the read. */
+function endsOnUnfinishedAnswer(rollout: string): boolean {
+  let open = false;
+  for (const line of rollout.split("\n")) {
+    if (!line.includes('"assistant"') && !line.includes('"agent_message"') && !line.includes('"task_complete"')) continue;
+    try {
+      const entry = JSON.parse(line) as { type?: unknown; payload?: Record<string, unknown> };
+      const payload = entry.payload ?? {};
+      if (payload["type"] === "task_complete") open = false;
+      else if (entry.type === "event_msg" && payload["type"] === "agent_message"
+        || entry.type === "response_item" && payload["type"] === "message" && payload["role"] === "assistant" && payload["channel"] !== "analysis") open = true;
+    } catch { /* a record cut by the tail read */ }
+  }
+  return open;
+}
+
 function lastFinishedTurn(rollout: string): { asked: string | null; answer: string } | null {
   const asked = new Map<string, string>();
   let last: { asked: string | null; answer: string } | null = null;
@@ -1241,6 +1363,34 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   const answersOf = (turns: ConversationTurn[]) => turns.filter((turn) => turn.role === "assistant")
     .flatMap((turn) => turn.parts).filter((part) => part.kind === "text").map((part) => part.text);
   const parsed = candidates.map((candidate) => parseCodexTranscript(candidate.text, Infinity));
+  // The footed answer, the same text or read through its rendering (markup, a table, a link Codex shows
+  // relative to the folder), counts only while no other candidate was asked the prompt shown, in any turn:
+  // another conversation may have recorded the answer another way that Codex renders as this text, and its
+  // turn may be unfinished or its finish cut from the read and still be the one on screen. Telling such
+  // renderings apart is not attempted: a same-prompt screen is left to the guarded matches below.
+  // `unread`: a read that shows no prompt at all counts as asked too, as it may have cut the one asked
+  const askedElsewhere = (owner: string, foot: { prompt: string | null; text: string }, unread: boolean): boolean => {
+    const prompt = foot.prompt;
+    if (prompt === null) return false;
+    return candidates.some((candidate, index) => {
+      if (candidate.path === owner) return false;
+      const shownPrompt = alnum(prompt);
+      const last = lastFinishedTurn(candidate.text);
+      if (last !== null && (last.asked === null || alnum(last.asked).endsWith(shownPrompt))) return true;
+      const prompts = askedPrompts(candidate.text);
+      const users = parsed[index]!.filter((turn) => turn.role === "user").map((turn) => alnum(turn.parts.filter((part) => part.kind === "text")
+        .map((part) => part.text).join("\n")));
+      // and, read whole, one whose read may have cut its prompt while its turn is unfinished and its last answer
+      // may be the one shown (rendered the same, too short to tell, or its anchor on screen as answerAnchor reads it)
+      if (prompts.length === 0 && users.length === 0) return unread || endsOnUnfinishedAnswer(candidate.text) && [answersOf(parsed[index]!).at(-1)].some((answer) => {
+        if (answer === undefined) return false;
+        const found = answerAnchor(answer);
+        return found === null || displays.some((display) => display.includes(found.anchor)) || completedAnswerMatches(answer, foot.text);
+      });
+      // a prompt sent as several messages reads as its parts' run
+      return prompts.some((asked) => alnum(asked).endsWith(shownPrompt)) || users.some((_, at) => users.slice(0, at + 1).join("").endsWith(shownPrompt));
+    });
+  };
   const completion = blocks ? null : completedCodexAnswer(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))), CODEX_TURN_FOOTER);
   if (completion !== null && !candidates.some(({ text }) => finishedAnswerTexts(text).some(endsInTurnFooter))) {
     const foot = completion;
@@ -1261,7 +1411,7 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
     });
     if (completed.length > 1) return null;
     const only = completed[0];
-    if (only && (footerOwners === null || footerOwners.has(only.path)) && !scrutinized.has(only.path)
+    if (only && (footerOwners === null || footerOwners.has(only.path)) && !scrutinized.has(only.path) && !askedElsewhere(only.path, foot, only.rendered || foot.cropped)
       && (only.rendered || foot.cropped || foot.prompt === null || (only.asked !== null && foot.prompt !== null && foot.prompt.startsWith(collapsed(only.asked))
       && /\+ \d+ (?:more )?lines? \(\^r to expand\)$/.test(foot.prompt)))) return only.path;
   }
@@ -1282,7 +1432,9 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   // candidate (one herdr reported, or a title named, of another folder) can only keep it from owning one
   const owner = maybe?.length === 1 && (footerOwners === null || footerOwners.has(maybe[0]!.path)) ? maybe[0]! : null;
   const ownerLast = owner === null ? null : lastFinishedTurn(owner.text);
-  const footedOwner = owner !== null && ownerLast?.asked != null && collapsed(ownerLast.asked) === footed!.prompt && collapsed(ownerLast.answer) === footed!.text ? owner.path : null;
+  // the same text binds while no other candidate records the prompt shown; a rendering only while no other's read may have cut it either
+  const footedOwner = owner !== null && footed !== null && ownerLast?.asked != null && collapsed(ownerLast.asked) === footed.prompt && !askedElsewhere(owner.path, footed, false)
+    && (collapsed(ownerLast.answer) === collapsed(footed.text) || !askedElsewhere(owner.path, footed, true) && completedAnswerMatches(ownerLast.answer, footed.text)) ? owner.path : null;
   // every answer each candidate gave, as answerAnchor reads one (cut at link targets), read once
   let shown: Said[] | undefined;
   const givenElsewhere = (index: number, { anchor, words }: Anchor) => (shown ??= parsed.map((turns, at) =>
@@ -1291,12 +1443,18 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   const matching = new Set<string>();
   let open = false;
   for (const [index, candidate] of candidates.entries()) {
+    // A linked reply may have no single 64-character anchor. Its complete finished reply still
+    // proves ownership under the same prompt, uniqueness and competing-prompt checks above.
+    if (candidate.path === footedOwner && answersOf(parsed[index]!).some((text) => {
+      const substantial = normalizeDisplay(text);
+      return substantial.length >= 64 && new Set(substantial).size >= 12 && completedAnswerMatches(text, footed!.text);
+    })) matching.add(candidate.path);
     const anchors = answersOf(parsed[index]!.slice(-100)).slice(-8).flatMap((text) =>
       (renderedProgress ? [text, ...codexMarkdownDisplays(text)] : [text]).flatMap((variant) => {
         const found = answerAnchor(variant);
         return found !== null && displays.some((display) => display.includes(found.anchor))
           && (wholeBlocks.some((block) => found.whole.test(block))
-            || (candidate.path === footedOwner && collapsed(text) === footed!.text)) ? [found] : [];
+            || (candidate.path === footedOwner && completedAnswerMatches(text, footed!.text))) ? [found] : [];
       }));
     if (anchors.length === 0) continue;
     if (!scrutinized.has(candidate.path) || anchors.some((anchor) => !givenElsewhere(index, anchor))) matching.add(candidate.path);

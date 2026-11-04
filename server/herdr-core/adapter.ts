@@ -176,6 +176,71 @@ const plainShell = (argv: readonly string[]): boolean => SHELL.test(argv[0] ?? "
 /** How long a typed agent start may take to show in front of its shell. */
 const AGENT_START_MS = 10_000;
 
+/** What hc sends right after the screen in a first paint: the win32-input-mode state (herdr-core viewers.rs `first_paint`). */
+const PAINT_END = "\u001b[?9001";
+/** How long a watch-only attach may take to bring its first paint: within the 1.5s a prompt poll gives its colored read. */
+const PAINT_MS = 1_000;
+/** Any escape sequence: CSI, OSC, a DCS/SOS/PM/APC string, or a short escape (HTS, a charset designation). */
+const ESCAPE_RE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[PX^_][^\u001b]*\u001b\\|[ -/]*[0-~])/g;
+const SGR_RE = /^\u001b\[[0-9;:]*m$/;
+
+/**
+ * What hc's text read of the screen (`terminal.read`, no history) shows, with its colors, from the
+ * first paint of an attach that asked for `rows` lines of history: one line per row with its SGR
+ * attributes and no other escape (cursor moves, modes, tab stops, title). hc's read trims the
+ * spaces at the end of each row (a U+00A0 stays), drops the screen's blank rows at the bottom and
+ * takes as many history lines in at the top, so this does too, but for a space drawn in a color:
+ * that one tells input from padding (OpenCode's Tab space), and a text compare trims it anyway. hc paints after a
+ * clear (`CSI H CSI 2J`): the history, pushed up by an SGR reset, a line break and one more per
+ * screen row, then a second clear and the screen, which ends where the win32-input-mode state
+ * follows (herdr-core ghostty-vt `paint`, viewers.rs `first_paint`). null for a paint not shaped
+ * so. A row the terminal soft-wrapped stays a line of its own, as on the screen, where hc's text
+ * read joins it with the next.
+ */
+export function paintedScreen(paint: string, rows: number): string | null {
+  const end = paint.indexOf(PAINT_END);
+  const parts = paint.slice(0, Math.max(end, 0)).split("\u001b[H\u001b[2J");
+  if (end === -1 || parts.length < 2 || parts.length > 3) return null;
+  const text = (part: string): string => part.replace(ESCAPE_RE, (sequence) => (SGR_RE.test(sequence) ? sequence : ""))
+    .replace(/\r\n/g, "\n").replace(/\r/g, "");
+  const pushed = "\n".repeat(rows + 1);
+  const history = parts.length === 3 ? text(parts[1]!) : "";
+  if (history !== "" && !history.endsWith(pushed)) return null;
+  const lines = [...(history === "" ? [] : history.slice(0, -pushed.length).split("\n")), ...text(parts.at(-1)!).split("\n")]
+    .map(withoutPlainTrailingSpaces);
+  while (lines.length > 0 && lines.at(-1)!.replace(/\u001b\[[0-9;:]*m/g, "") === "") lines.pop();
+  return lines.slice(-rows).join("\n");
+}
+
+/** A line with the spaces at its end taken out, but for those drawn in a foreground or background color; its SGR codes stay. */
+function withoutPlainTrailingSpaces(line: string): string {
+  const pieces = line.split(/(\u001b\[[0-9;:]*m)/);
+  let fg = false;
+  let bg = false;
+  const colored = pieces.map((piece) => {
+    if (!piece.startsWith("\u001b")) return fg || bg;
+    const codes = piece.slice(2, -1).split(/[;:]/).map((code) => Number(code || 0));
+    for (let index = 0; index < codes.length; index++) {
+      const code = codes[index]!;
+      if (code === 0) { fg = false; bg = false; }
+      else if (code === 39) fg = false;
+      else if (code === 49) bg = false;
+      else if (code === 38 || code === 48) { if (code === 38) fg = true; else bg = true; index += codes[index + 1] === 5 ? 2 : codes[index + 1] === 2 ? 4 : 0; }
+      else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) fg = true;
+      else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) bg = true;
+    }
+    return false;
+  });
+  for (let index = pieces.length - 1; index >= 0; index--) {
+    if (pieces[index]!.startsWith("\u001b")) continue;
+    if (colored[index]) break;
+    const kept = pieces[index]!.replace(/ +$/, "");
+    pieces[index] = kept;
+    if (kept !== "") break;
+  }
+  return pieces.join("");
+}
+
 function paneIdOf(params: Record<string, unknown>, field = "pane_id"): string {
   const value = params[field];
   if (typeof value !== "string" || value === "") throw new AdapterError("invalid_params", `${field} is required`);
@@ -200,18 +265,17 @@ function herdrCode(error: HcError, missing: string): string {
 
 function createAnswers(hc: HcConnection): (request: Request) => Promise<Reply> {
   const terminal = async (address: string, missing = "pane_not_found"): Promise<HcTerminal> => {
-    const record = await hc.call<{ terminal: HcTerminal } | HcTerminal>("terminal.get", { terminal: address }).catch((error: unknown) => {
+    const found = await hc.call("terminal.get", { terminal: address }).catch((error: unknown) => {
       throw error instanceof HcError ? new AdapterError(herdrCode(error, missing), error.message) : error;
     });
-    const found = "terminal" in record ? record.terminal : record;
     if (found.state !== "live") throw new AdapterError(missing, `terminal ${address} has finished`);
     return found;
   };
 
   const snapshot = async (): Promise<SessionSnapshot> => {
     const [list, doc, hello] = await Promise.all([
-      hc.call<{ terminals: HcTerminal[] }>("terminal.list", {}),
-      hc.call<{ value: unknown }>("doc.get", { name: LAYOUT_DOC }),
+      hc.call("terminal.list", {}),
+      hc.call("doc.get", { name: LAYOUT_DOC }),
       hc.hello(),
     ]);
     return buildSnapshot(list.terminals, doc.value, hello.version);
@@ -230,12 +294,46 @@ function createAnswers(hc: HcConnection): (request: Request) => Promise<Reply> {
    */
   const type = async (paneId: string, bytes: string): Promise<void> => {
     const record = await terminal(paneId);
-    const { result, channel } = await hc.open<{ channel: number; terminal?: HcTerminal }>("terminal.attach", { terminal: paneId, cols: record.cols, rows: record.rows }, { onData: () => {}, onClose: () => {} });
+    const { result, channel } = await hc.open("terminal.attach", { terminal: paneId, cols: record.cols, rows: record.rows }, { onData: () => {}, onClose: () => {} });
     // resized since it was looked up: type at the size it has now
     const now = result.terminal;
     if (now && (now.cols !== record.cols || now.rows !== record.rows)) channel.resize(now.cols, now.rows);
     channel.write(bytes);
     await channel.close();
+  };
+
+  /**
+   * hc's text read of the screen with its colors (paintedScreen): hc reads text only, so this is the
+   * first paint of an attach that only watches, which never types or resizes, closed once the screen
+   * is in. No paint within PAINT_MS, a stream that ends first, or a paint of another shape answers
+   * the plain text, as a read without colors.
+   */
+  const coloredScreen = async (paneId: string): Promise<string> => {
+    const record = await terminal(paneId);
+    const decoder = new TextDecoder();
+    let paint = "";
+    const { promise, resolve } = Promise.withResolvers<string | null>();
+    const timer = setTimeout(() => resolve(null), PAINT_MS);
+    const { result, channel } = await hc.open("terminal.attach", { terminal: paneId, cols: record.cols, rows: record.rows, history: record.rows, observe: true }, {
+      onData: (payload) => {
+        paint += decoder.decode(payload, { stream: true });
+        if (paint.includes(PAINT_END)) resolve(paint);
+      },
+      onClose: () => resolve(null),
+    }).catch((error: unknown) => {
+      clearTimeout(timer);
+      throw error;
+    });
+    let screen: string | null;
+    try {
+      const painted = await promise;
+      // resized since it was looked up: the paint has the rows it has now
+      screen = painted === null ? null : paintedScreen(painted, result.terminal?.rows ?? record.rows);
+    } finally {
+      clearTimeout(timer);
+      await channel.close();
+    }
+    return screen ?? (await hc.call("terminal.read", { terminal: paneId, lines: 0 })).text;
   };
 
   /** Input to one pane in the order it was asked for: each attach and its bytes finish before the next. */
@@ -254,7 +352,7 @@ function createAnswers(hc: HcConnection): (request: Request) => Promise<Reply> {
    */
   const startShell = async (params: Record<string, unknown>, labels: Record<string, string>) => {
     const env = isRecord(params["env"]) ? Object.fromEntries(Object.entries(params["env"]).filter((entry): entry is [string, string] => typeof entry[1] === "string")) : undefined;
-    const record = await hc.call<HcTerminal>("terminal.run", { keep: true, labels, ...(typeof params["cwd"] === "string" ? { cwd: params["cwd"] } : {}), ...(env ? { env } : {}) });
+    const record = await hc.call("terminal.run", { keep: true, labels, ...(typeof params["cwd"] === "string" ? { cwd: params["cwd"] } : {}), ...(env ? { env } : {}) });
     const shown = await snapshot();
     const root_pane = shown.panes.find((pane) => pane.pane_id === record.address);
     const tab = root_pane && shown.tabs.find((candidate) => candidate.tab_id === root_pane.tab_id);
@@ -302,8 +400,11 @@ function createAnswers(hc: HcConnection): (request: Request) => Promise<Reply> {
       const format = typeof params["format"] === "string" ? params["format"] : "text";
       const recent = source === "recent" || source === "recent_unwrapped";
       const wanted = typeof params["lines"] === "number" && params["lines"] > 0 ? Math.floor(params["lines"]) : null;
+      if (format === "ansi" && source === "visible" && params["strip_ansi"] !== true) {
+        return { read: { pane_id: paneId, workspace_id: pane.workspace_id, tab_id: pane.tab_id, source, format, text: await coloredScreen(paneId), revision: pane.revision, truncated: false } };
+      }
       // hc reads the screen plus `lines` of history above it; herdr's recent read is the last `lines` lines
-      const read = await hc.call<{ text: string; complete: boolean }>("terminal.read", { terminal: paneId, lines: recent ? wanted ?? 1000 : 0 });
+      const read = await hc.call("terminal.read", { terminal: paneId, lines: recent ? wanted ?? 1000 : 0 });
       let text = read.text;
       if (recent && wanted !== null) {
         const rows = text.split("\n");

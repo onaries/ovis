@@ -3,6 +3,8 @@ import "./RelayShell.css";
 import { ChevronRight } from "lucide-react";
 
 import { useT } from "../lib/i18n.ts";
+import type { KeyMismatch } from "../lib/relay/shellState.ts";
+import { KeyId } from "./KeyId.tsx";
 import { describeUpdate } from "../lib/updateProgress.ts";
 import type { RelayShellState } from "../lib/relay/shellState.ts";
 import { serverScopePath } from "../lib/shellMode.ts";
@@ -20,6 +22,32 @@ export interface RelayShellProps {
   onForget: () => void;
   /** a PC below the shell's minimum version with a managed install: install its latest release */
   onUpdate: () => void;
+}
+
+/**
+ * The id named and the id of the key that is not it, groups that differ marked, each labelled by
+ * where it came from. Neither is called the PC's: a link names any id it likes, and only the PC's
+ * own screen (Phone & devices) says which id is the PC's.
+ */
+function KeyIds({ mismatch, named }: { mismatch: KeyMismatch; named: "link" | "paired" }) {
+  const t = useT();
+  const expected = named === "link" ? t("ID this link names") : t("ID this phone paired with");
+  const received = mismatch.from === "link" ? t("ID of the key this link carries") : t("ID of the key this phone saved");
+  return (
+    <>
+    <dl className="relay-shell-keys">
+      <dt>{expected}</dt>
+      <dd><KeyId id={mismatch.expected} label={expected} /></dd>
+      <dt>{received}</dt>
+      <dd>
+        {mismatch.received === null
+          ? <span className="relay-shell-copy">{t("Not a valid key")}</span>
+          : <KeyId id={mismatch.received} against={mismatch.expected} label={received} />}
+      </dd>
+    </dl>
+    <p className="relay-shell-detail">{t("Only the PC itself shows its ID, under Settings → Phone & devices. Marked groups differ.")}</p>
+    </>
+  );
 }
 
 /** How a PC whose Ovis does not update itself is brought up to date: the installer, or herdr's plugin. */
@@ -171,6 +199,7 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
           <>
             <h1 className="relay-shell-title">{t("{name} has a new identity", { name: pc })}</h1>
             <p className="relay-shell-copy">{t("The PC's relay key is not the one this phone paired with, so the saved pairing cannot be trusted. Forget it, then pair again from a new QR code on the PC.")}</p>
+            {state.mismatch && <KeyIds mismatch={state.mismatch} named="paired" />}
             <div className="relay-shell-actions">
               <button type="button" className="btn btn-danger" onClick={onForget}>{t("Forget this PC")}</button>
               {back}
@@ -181,6 +210,7 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
           <>
             <h1 className="relay-shell-title">{t("This link is not {name}'s", { name: pc })}</h1>
             <p className="relay-shell-copy">{t("It carries a key that is not this PC's, so this phone will not pair with it. To pair, scan a new QR code on the PC itself.")}</p>
+            {state.mismatch && <KeyIds mismatch={state.mismatch} named="link" />}
             {back && <div className="relay-shell-actions">{back}</div>}
           </>
         )}

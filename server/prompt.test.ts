@@ -3,9 +3,10 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFile
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { InteractivePrompt } from "../shared/protocol.ts";
+import type { HerdrPane, InteractivePrompt } from "../shared/protocol.ts";
 
-import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, historyEndShowsLive, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, openOmoAsks, paneIsCompacting, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, historyEndShowsLive, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, openOmoAsks, paneIsCompacting, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted, piRunsCommand } from "./prompt.ts";
+import { rememberPaneCommands } from "./commands.ts";
 import { registry } from "./dialogs/registry.ts";
 import { gjcCustomEditorMatches } from "./dialogs/fallback.ts";
 import { ANSI_RE, parsedByPublicPrompt } from "./dialogs/shared.ts";
@@ -7387,5 +7388,56 @@ describe("omp's model picker", () => {
     expect(parseInteractivePrompt("omp", wide.replace("use for this session", "use for Task subagents"))).toBeNull();
     // another agent's pane draws no such picker
     expect(parseInteractivePrompt("pi", wide)).toBeNull();
+  });
+});
+
+describe("piRunsCommand", () => {
+  test("takes a builtin as Pi matches it, and an unknown or later /name as a message", () => {
+    const pane = { pane_id: "pi-runs-builtin", agent: "pi", cwd: "/work" } as HerdrPane;
+    expect(piRunsCommand(pane, "/model")).toBe(true);
+    expect(piRunsCommand(pane, "  /thinking high")).toBe(true);
+    expect(piRunsCommand(pane, "/Model")).toBe(false);
+    expect(piRunsCommand(pane, "/not-a-pi-command")).toBe(false);
+    expect(piRunsCommand(pane, "/home/me/file.png what is this")).toBe(false);
+    expect(piRunsCommand(pane, "switch with /model")).toBe(false);
+    // builtins Pi's menu hides still run when typed exactly
+    expect(piRunsCommand(pane, "/debug")).toBe(true);
+    expect(piRunsCommand(pane, "/arminsayshi")).toBe(true);
+    expect(piRunsCommand(pane, "/dementedelves")).toBe(true);
+    expect(piRunsCommand(pane, "/debug this")).toBe(false);
+  });
+
+  test("takes a builtin's argument only where Pi takes one, as Pi's submit handler reads it", () => {
+    const pane = { pane_id: "pi-runs-arguments", agent: "pi", cwd: "/work" } as HerdrPane;
+    expect(piRunsCommand(pane, "/compact focus on the parser")).toBe(true);
+    expect(piRunsCommand(pane, "/model sonnet ")).toBe(true);
+    // Pi's editor pastes a tab as four spaces
+    expect(piRunsCommand(pane, "/model\tsonnet")).toBe(true);
+    expect(piRunsCommand(pane, "/new please")).toBe(false);
+    expect(piRunsCommand(pane, "/settings foo")).toBe(false);
+    expect(piRunsCommand(pane, "/model\nwhich one is best?")).toBe(false);
+  });
+
+  test("takes a shell command, but not a lone ! or !!", () => {
+    const pane = { pane_id: "pi-runs-shell", agent: "pi", cwd: "/work" } as HerdrPane;
+    expect(piRunsCommand(pane, "!git status")).toBe(true);
+    expect(piRunsCommand(pane, " !! ls")).toBe(true);
+    expect(piRunsCommand(pane, "!")).toBe(false);
+    expect(piRunsCommand(pane, "!!")).toBe(false);
+    expect(piRunsCommand(pane, "wow!")).toBe(false);
+  });
+
+  test("takes the pane's prompt templates, which Pi records only expanded, but not its skills, which are read back", () => {
+    const pane = { pane_id: "pi-runs-catalog", agent: "pi", cwd: "/work" } as HerdrPane;
+    expect(piRunsCommand(pane, "/review")).toBe(false);
+    rememberPaneCommands(pane, "pi", [
+      { name: "skill:commit", description: "Commit", source: "skill" },
+      { name: "review", description: "Review", source: "user" },
+    ]);
+    expect(piRunsCommand(pane, "/skill:commit and push")).toBe(false);
+    expect(piRunsCommand(pane, "/review")).toBe(true);
+    // a template's name ends at any white space, its arguments follow on the next line too
+    expect(piRunsCommand(pane, "/review\nthe parser")).toBe(true);
+    expect(piRunsCommand(pane, "/commit")).toBe(false);
   });
 });

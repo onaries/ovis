@@ -1,4 +1,5 @@
 import type { AgentInfo, AgentStatus, PaneInfo, PaneLayoutSnapshot, PaneProcessInfo, SessionSnapshot, TabInfo, WorkspaceInfo } from "../../shared/herdr-api.generated.ts";
+import type { Foreground, Status, Terminal } from "./hc-api.generated.ts";
 
 /**
  * How herdr-core's terminals look to the rest of the server: herdr's session snapshot, built from
@@ -26,25 +27,13 @@ export const WORKSPACE_NAME_LABEL = "ovis.workspace";
 export const TAB_NAME_LABEL = "ovis.tab";
 
 /** One OSC 7501 report (hc's `Status`): the program's own words. */
-export interface HcStatus { app?: string; state: string; title?: string; msg?: string }
-export interface HcForeground { pid: number; name: string; argv?: string[]; cwd?: string }
+export type HcStatus = Pick<Status, "state"> & Partial<Pick<Status, "app" | "title" | "msg">>;
+export type HcForeground = Pick<Foreground, "pid" | "name"> & Partial<Pick<Foreground, "argv" | "cwd">>;
 
-/** The fields of hc's `Terminal` record this side reads. */
-export interface HcTerminal {
-  address: string;
-  argv?: string[];
-  cols: number;
-  rows: number;
-  cwd: string;
-  pid?: number | null;
-  name?: string | null;
-  title?: string | null;
-  state: string;
-  status?: HcStatus | null;
-  foreground?: HcForeground | null;
-  labels?: Record<string, string>;
-  turn?: number;
-}
+/** The fields of hc's `Terminal` record this side reads, by hc's own schema. */
+export type HcTerminal = Pick<Terminal, "address" | "cols" | "rows" | "cwd" | "state"> &
+  Partial<Pick<Terminal, "argv" | "pid" | "name" | "title" | "labels" | "turn">> &
+  { status?: HcStatus | null; foreground?: HcForeground | null };
 
 /** The one object guard of server/herdr-core/: hc's records and the app's document come from outside. */
 export function isRecord(value: unknown): value is Record<string, unknown> {

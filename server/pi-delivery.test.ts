@@ -4,7 +4,7 @@ import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { capturePiDeliveryAnchor, capturePiDeliveryAnchorAttempt, capturePiDeliveryAnchorRetrying, matchPiDeliveries, PiReceiptCapacity, type PiDeliveryAnchor, type PiDeliveryCandidate } from "./pi-delivery.ts";
+import { capturePiDeliveryAnchor, capturePiDeliveryAnchorAttempt, capturePiDeliveryAnchorRetrying, matchPiDeliveries, PiReceiptCapacity, piRecordText, type PiDeliveryAnchor, type PiDeliveryCandidate } from "./pi-delivery.ts";
 
 const roots: string[] = [];
 const dir = () => { const root = mkdtempSync(join(tmpdir(), "ovis-pi-delivery-")); roots.push(root); return root; };
@@ -66,6 +66,105 @@ describe("Pi delivery transcript matching", () => {
       expect(matchPiDeliveries(path, receipts, consumed)).toEqual({ consumed: [], changed: [], unavailable: ["one", "two"], retry: false });
       expect(consumed.size).toBe(0);
     }
+  });
+
+  it("reads a skill Pi recorded as its whole SKILL.md back as typed, so the receipts behind it confirm too", () => {
+    const path = join(dir(), "skill.jsonl");
+    writeFileSync(path, header() + entry("base", null, "assistant", "working"));
+    const anchor = capturePiDeliveryAnchor(path)!;
+    // as pi 1.4 records `/skill:commit and push`, then `/skill:commit`
+    const skill = (request: string) => `<skill name="commit" location="/home/me/.agents/skills/committing/SKILL.md">\nReferences are relative to /home/me/.agents/skills/committing.\n\nCommit the changes.\n</skill>${request ? `\n\n${request}` : ""}`;
+    appendFileSync(path, entry("s1", "base", "user", skill("and push")) + entry("a1", "s1", "assistant", "done")
+      + entry("s2", "a1", "user", skill("")) + entry("a2", "s2", "assistant", "done") + entry("u3", "a2", "user", "plain"));
+    const receipts = [candidate("one", "/skill:commit and push", anchor), candidate("two", "/skill:commit", anchor), candidate("three", "plain", anchor)];
+    expect(matchPiDeliveries(path, receipts).consumed).toEqual(["one", "two", "three"]);
+  });
+
+  it("matches a skill sent with extra white space as Pi trims its request", () => {
+    const path = join(dir(), "skill-spaces.jsonl");
+    writeFileSync(path, header() + entry("base", null, "assistant", "working"));
+    const anchor = capturePiDeliveryAnchor(path)!;
+    appendFileSync(path, entry("s1", "base", "user", `<skill name="commit" location="/s/SKILL.md">\nReferences are relative to /s.\n\nCommit.\n</skill>\n\nand push`));
+    // Pi pastes the tab as four spaces, then trims the request after the first one
+    appendFileSync(path, entry("s2", "s1", "user", `<skill name="commit" location="/s/SKILL.md">\nReferences are relative to /s.\n\nCommit.\n</skill>\n\nand push`));
+    expect(matchPiDeliveries(path, [candidate("one", piRecordText("/skill:commit  and push "), anchor),
+      candidate("two", piRecordText("/skill:commit\tand push"), anchor)]).consumed).toEqual(["one", "two"]);
+  });
+
+  it("matches a /skill: text Pi sends as typed, where it knows no such skill or the name runs past a line", () => {
+    const path = join(dir(), "skill-verbatim.jsonl");
+    writeFileSync(path, header() + entry("base", null, "assistant", "working"));
+    const anchor = capturePiDeliveryAnchor(path)!;
+    appendFileSync(path, entry("u1", "base", "user", "/skill:nope  x") + entry("u2", "u1", "user", "/skill:commit\nand  push"));
+    expect(matchPiDeliveries(path, [candidate("one", piRecordText("/skill:nope  x"), anchor),
+      candidate("two", piRecordText("/skill:commit\nand  push"), anchor)]).consumed).toEqual(["one", "two"]);
+  });
+
+  it("never lets a literal record confirm a different /skill: send", () => {
+    const path = join(dir(), "skill-literal.jsonl");
+    writeFileSync(path, header() + entry("base", null, "assistant", "working"));
+    const anchor = capturePiDeliveryAnchor(path)!;
+    // Pi knows no `missing` skill, so it records each text as sent: this record is another message
+    appendFileSync(path, entry("u1", "base", "user", "/skill:missing hello"));
+    expect(matchPiDeliveries(path, [candidate("one", piRecordText("/skill:missing  hello"), anchor)]).consumed).toEqual([]);
+  });
+
+  it.each([
+    ["without Pi's references line", `<skill name="commit" location="/s/commit/SKILL.md">\nCommit.\n</skill>\n\nhello`],
+    ["naming another directory than its file's", `<skill name="commit" location="/s/commit/SKILL.md">\nReferences are relative to /elsewhere.\n\nCommit.\n</skill>\n\nhello`],
+    ["of another skill", `<skill name="review" location="/s/review/SKILL.md">\nReferences are relative to /s/review.\n\nReview.\n</skill>\n\nhello`],
+  ])("does not take a message shaped like a skill block %s as Pi's expansion", (_, text) => {
+    const path = join(dir(), "skill-shaped.jsonl");
+    writeFileSync(path, header() + entry("base", null, "assistant", "working"));
+    const anchor = capturePiDeliveryAnchor(path)!;
+    appendFileSync(path, entry("u1", "base", "user", text));
+    expect(matchPiDeliveries(path, [candidate("one", "/skill:commit hello", anchor)]).consumed).toEqual([]);
+  });
+
+  it.each([
+    ["no request", "", "/skill:commit hello\n</skill>"],
+    ["a request", "\n\nmore", "/skill:commit hello\n</skill>\n\nmore"],
+  ])("does not confirm another request from a skill whose body closes its tag early, with %s", (_, request, other) => {
+    const path = join(dir(), "skill-body-tag.jsonl");
+    writeFileSync(path, header() + entry("base", null, "assistant", "working"));
+    const anchor = capturePiDeliveryAnchor(path)!;
+    // a SKILL.md body of `Example:\n</skill>\n\nhello`: where the block ends is not provable from the record
+    appendFileSync(path, entry("s1", "base", "user", `<skill name="commit" location="/s/commit/SKILL.md">\nReferences are relative to /s/commit.\n\nExample:\n</skill>\n\nhello\n</skill>${request}`));
+    expect(matchPiDeliveries(path, [candidate("one", other, anchor)]).consumed).toEqual([]);
+    expect(matchPiDeliveries(path, [candidate("two", `/skill:commit${request ? " more" : ""}`, anchor)]).consumed).toEqual([]);
+  });
+
+  it.each([
+    ["a Unix root", "/SKILL.md", "/"],
+    ["a Windows drive root", "C:\\SKILL.md", "C:\\"],
+    ["a nested Windows directory", "C:\\skills\\commit\\SKILL.md", "C:\\skills\\commit"],
+    ["a nested Unix directory", "/home/me/skills/commit/SKILL.md", "/home/me/skills/commit"],
+  ])("reads back a skill whose file is in %s", (_, location, baseDir) => {
+    const path = join(dir(), "skill-root.jsonl");
+    writeFileSync(path, header() + entry("base", null, "assistant", "working"));
+    const anchor = capturePiDeliveryAnchor(path)!;
+    appendFileSync(path, entry("s1", "base", "user", `<skill name="commit" location="${location}">\nReferences are relative to ${baseDir}.\n\nCommit.\n</skill>\n\nhello`));
+    expect(matchPiDeliveries(path, [candidate("one", "/skill:commit hello", anchor)]).consumed).toEqual(["one"]);
+  });
+
+  it("confirms one of two identical skill sends against one expanded record", () => {
+    const path = join(dir(), "skill-twice.jsonl");
+    writeFileSync(path, header() + entry("base", null, "assistant", "working"));
+    const anchor = capturePiDeliveryAnchor(path)!;
+    appendFileSync(path, entry("s1", "base", "user", `<skill name="commit" location="/s/commit/SKILL.md">\nReferences are relative to /s/commit.\n\nCommit.\n</skill>\n\nhello`));
+    const consumed = new Set<string>();
+    const receipts = [candidate("one", "/skill:commit hello", anchor), candidate("two", "/skill:commit hello", anchor)];
+    expect(matchPiDeliveries(path, receipts, consumed).consumed).toEqual(["one"]);
+    expect(matchPiDeliveries(path, receipts.slice(1), consumed).consumed).toEqual([]);
+  });
+
+  it("confirms a message that only looks like a skill's record by its own text", () => {
+    const path = join(dir(), "skill-lookalike.jsonl");
+    writeFileSync(path, header() + entry("base", null, "assistant", "working"));
+    const anchor = capturePiDeliveryAnchor(path)!;
+    const text = `<skill name="x" location="/x.md">\nwhat does this block do?\n</skill>`;
+    appendFileSync(path, entry("u1", "base", "user", text) + entry("u2", "u1", "user", "next"));
+    expect(matchPiDeliveries(path, [candidate("one", piRecordText(text), anchor), candidate("two", "next", anchor)]).consumed).toEqual(["one", "two"]);
   });
 
   it("retries a transient read failure and later confirms the same receipt", () => {

@@ -10,6 +10,7 @@ import { announcePairingCode, PAIRING_CODE_EVENT } from "../lib/useRelay.ts";
 import type { RelayStatus } from "../../shared/protocol.ts";
 import { decodeOffer } from "../../shared/relay-offer.ts";
 import { QrReveal, ShareLink } from "./PhonePanel.tsx";
+import { KeyId } from "./KeyId.tsx";
 import { QrCode } from "./QrCode.tsx";
 
 export const failureText = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
@@ -131,6 +132,14 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
       {state === "minting" && t("Getting a code…")}
     </>
   );
+  // the id a phone shows when a link carries another key: compared here, on the PC itself
+  const serverId = offer !== null ? decodeOffer(offer.url)?.server_id ?? null : null;
+  const pcId = serverId !== null && (
+    <div className="relay-pairing-id">
+      <p className="settings-description">{t("This PC's ID")}</p>
+      <KeyId id={serverId} label={t("This PC's ID")} />
+    </div>
+  );
   const newCode = <button type="button" className="btn" disabled={state === "minting"} onClick={() => void renew()}><RefreshCw aria-hidden="true" />{t("New code")}</button>;
   // on the phone itself: the link to send to the other device, and its QR code only once asked for
   if (phone) return (
@@ -141,6 +150,7 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
       {offer !== null && <ShareLink url={offer.url} copyLabel={t("Copy link")}>{newCode}</ShareLink>}
       {offer === null && <div className="phone-actions">{newCode}</div>}
       {offer !== null && <QrReveal value={offer.url} label={t("QR code that pairs a phone through the relay")} hint={t("Scan it with the other device's camera.")} />}
+      {pcId}
     </div>
   );
   return (
@@ -158,6 +168,7 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
         <div className="phone-actions">
           <button type="button" className="btn" disabled={state === "minting"} onClick={() => void renew()}><RefreshCw aria-hidden="true" />{t("New code")}</button>
         </div>
+        {pcId}
       </div>
     </div>
   );

@@ -806,8 +806,9 @@ Ovis refuses to start with this runtime on Windows; use the default `herdr` runt
   not kept current behind your back. A recent tab you switch away from keeps its last screen until
   you are back, **Use alongside herdr's own window** lets go of a pane only when you leave the
   window, and after a reconnect a tab attaches again at once.
-- **Chat:** screen reads carry no colors, so a grey suggestion Claude Code or Hermes leaves in an
-  empty input box reads as typed text, and a send waits for you to confirm it.
+- **Chat:** while a line the terminal wrapped is on screen, its colors cannot be matched to the
+  screen's text, so a grey suggestion Claude Code or Hermes leaves in an empty input box then reads
+  as typed text, and a send waits for you to confirm it.
 - **Not on herdr-core:** renaming, moving or reordering workspaces, tabs and panes, and
   splitting, swapping, zooming or resizing panes, which belong to the app's window; Ovis hides
   those actions on such a PC. Search and scrollback selection in a pane, plugins and worktrees

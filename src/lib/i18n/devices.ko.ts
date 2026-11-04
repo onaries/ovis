@@ -200,4 +200,5 @@ export const DEVICES_KO: Record<string, string> = {
   "Pairs this phone through the relay, so Ovis keeps working away from home.": "이 폰을 릴레이로 페어링해 집 밖에서도 Ovis를 쓸 수 있게 합니다.",
   "A device with this phone's name ({name}) is already paired through the relay.": "이 폰과 이름이 같은 기기({name})가 이미 릴레이로 페어링되어 있습니다.",
   "Use the relay on this phone": "이 폰에서 릴레이 사용",
+  "This PC's ID": "이 PC의 ID",
 };

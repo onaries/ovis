@@ -26,7 +26,7 @@ import { typingGuards } from "../input-guard.ts";
 import { claudeForegroundSession, isClaudeProcess } from "../claude-store.ts";
 import { HerdrError, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
 import { paneRunsCodex } from "../codex.ts";
-import { bindCommandProcess, claudeHeldIsGrey, codexInputEmpty, codexInputFrame, codexQuestionsCollapsed, codexQueueInputEmpty, viewportShowsLive, isClaudeHeld, heldCandidate, noteSubmitted, parseInteractivePrompt, prepareCommandSend, shownInputBox } from "../prompt.ts";
+import { bindCommandProcess, claudeHeldIsGrey, codexInputEmpty, codexInputFrame, codexQuestionsCollapsed, codexQueueInputEmpty, viewportShowsLive, isClaudeHeld, heldCandidate, noteSubmitted, parseInteractivePrompt, piRunsCommand, prepareCommandSend, shownInputBox } from "../prompt.ts";
 import { codexRuntimeError } from "../dialogs/codex.ts";
 import { registry } from "../dialogs/registry.ts";
 import { paneRunsOmo } from "../conversation.ts";
@@ -37,7 +37,7 @@ import { processStartedAtAsync } from "../process-start.ts";
 import { agentProcessInFront } from "../agent-process.ts";
 import { agentProcesses } from "../conversation.ts";
 import { isShellAgentKind, SHELL_AGENTS } from "../shell-agent.ts";
-import { capturePiDeliveryAnchorRetrying, matchPiDeliveries, PiReceiptCapacity, type PiDeliveryAnchor, type PiReceiptReservation } from "../pi-delivery.ts";
+import { capturePiDeliveryAnchorRetrying, matchPiDeliveries, PiReceiptCapacity, piRecordText, type PiDeliveryAnchor, type PiReceiptReservation } from "../pi-delivery.ts";
 import { isPiProcess, piTranscriptPath, piUnwrittenHeaderId } from "../pi.ts";
 import { PendingRequestBook } from "../pending-requests.ts";
 import type { OmoStatus } from "../omo-status.ts";
@@ -258,7 +258,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       owner, resumeKey: resumeKey(owner, paneId), identity: { ...identity }, anchor,
       // Pi expands pasted tabs and trims its record, including closeMention's space (#2454).
       // Keep that matching value separate from the saved copy of the text sent.
-      match: text.replace(/\t/g, "    ").trim(),
+      match: piRecordText(text),
       message: { id: `pi:${crypto.randomUUID()}`, request_id: requestId, text, state: "uncertain", created_at: new Date().toISOString(),
         error: anchor === null
           ? { code: "transcript_unconfirmed", message: "Pi's exact transcript could not be resolved before Enter" }
@@ -641,8 +641,10 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (agentOnly && !context.agentInFront) throw new HerdrError(AGENT_NOT_READY.code, AGENT_NOT_READY.message);
       if (agentOnly && context.collapsed) throw new HerdrError("agent_blocked", "The agent is waiting for an answer in the terminal");
       const sent = closeBackslash(context.identity.agent, modelSwitchText(context.identity.agent, text));
-      piReservation = reservePiReceipt(owner, context.identity);
-      const receiptText = piReceiptText(context.identity, text);
+      // a command Pi runs is never recorded as sent, so it gets no receipt that could only fail
+      const piTracked = context.identity.agent !== "pi" || !piRunsCommand(context.pane, text);
+      piReservation = piTracked ? reservePiReceipt(owner, context.identity) : null;
+      const receiptText = piTracked ? piReceiptText(context.identity, text) : undefined;
       if (automatic && (context.working || queueHeld(paneId))) {
         pending.observe(paneId, "working", mark);
         throw new HerdrError("pending_wait", "The agent is working again; this message still waits for its next turn");
@@ -738,7 +740,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // Capture Pi's exact active transcript position before Enter. Status is deliberately not
       // evidence: Pi can report idle/done while its TUI is staging an automatic-compaction input.
       const beforeCapturePid = beforeEnter.identity.processPid;
-      const piAnchor = await preparePiReceipt(paneId, beforeEnter.identity).catch(() => null);
+      const piAnchor = piTracked ? await preparePiReceipt(paneId, beforeEnter.identity).catch(() => null) : undefined;
       if (piAnchor !== undefined) {
         beforeEnter = await pendingContext(owner, paneId, lease, identity, true, agentOnly, capacityRetry).catch(enterRefused);
         if (automatic && (beforeEnter.working || queueHeld(paneId))) enterRefused(new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed"));
@@ -1193,8 +1195,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
           // A terminal-line send is not an Ovis Chat receipt. For Chat, capture Pi independently of
           // status so an idle/done report during automatic compaction cannot make the bubble vanish.
           const current = message.typed === true ? null : await currentIdentity(message.pane_id);
-          const identity = current?.identity ?? null;
           if (agentOnly && (current === null || !agentRuns(current.identity, current.recognized))) throw new HerdrError(AGENT_NOT_READY.code, AGENT_NOT_READY.message);
+          // a command Pi runs is never recorded as sent, so it gets no receipt that could only fail
+          const identity = current === null || (current.identity.agent === "pi" && piRunsCommand(current.pane, framed.text)) ? null : current.identity;
           const reservation = identity === null ? null : reservePiReceipt(client, identity);
           try {
             const receiptText = identity === null ? undefined : piReceiptText(identity, framed.text);

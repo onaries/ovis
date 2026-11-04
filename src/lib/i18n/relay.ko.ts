@@ -44,4 +44,10 @@ export const RELAY_KO: Record<string, string> = {
   "Asking the PC to update…": "PC에 업데이트를 요청하는 중…",
   "Waiting for {name} to restart…": "{name}이(가) 다시 시작되기를 기다리는 중…",
   "The update did not finish.": "업데이트가 끝나지 않았습니다.",
+  "Not a valid key": "올바른 키가 아닙니다",
+  "ID this link names": "이 링크가 가리키는 ID",
+  "ID this phone paired with": "이 폰이 페어링한 ID",
+  "ID of the key this link carries": "이 링크가 가진 키의 ID",
+  "ID of the key this phone saved": "이 폰에 저장된 키의 ID",
+  "Only the PC itself shows its ID, under Settings → Phone & devices. Marked groups differ.": "PC의 ID는 PC 자신의 설정 → 폰 및 기기에서만 확인할 수 있습니다. 표시된 묶음이 다른 부분입니다.",
 };

@@ -118,6 +118,9 @@ try {
   await head(true, "Worked for 7s").waitFor();
   assert.equal(await toolRow.evaluate((node) => node === document.activeElement), true, "the row the reader opened keeps focus when the turn settles");
   await log.getByText("git status", { exact: true }).last().waitFor();
+  // the answer landed while the pane still worked: the head held for the next turn (seen or not)
+  // stays until the idle status arrives, and it is a work-block head too
+  await log.locator(".chat-activity, .chat-activity-reserved").waitFor({ state: "detached" });
   await work.click();
   await head(false, "Worked for 7s").waitFor();
   // the agent works again with no new row yet (a turn it began by itself): the turn that ended on its

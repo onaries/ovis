@@ -200,4 +200,5 @@ export const DEVICES_ZH: Record<string, string> = {
   "Pairs this phone through the relay, so Ovis keeps working away from home.": "通过中继配对这部手机，离家在外也能使用 Ovis。",
   "A device with this phone's name ({name}) is already paired through the relay.": "已有一台与这部手机同名的设备（{name}）通过中继配对。",
   "Use the relay on this phone": "在这部手机上使用中继",
+  "This PC's ID": "此电脑的 ID",
 };

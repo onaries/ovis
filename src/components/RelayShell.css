@@ -139,3 +139,21 @@
   line-height: var(--lh-base);
   color: var(--text-dim);
 }
+
+/* a key that is not the PC's: the two ids, one above the other, the PC's first */
+.relay-shell-keys {
+  margin: var(--space-4) 0 0;
+  padding: var(--space-3);
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.relay-shell-keys dt {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.relay-shell-keys dd {
+  margin: var(--space-1) 0 var(--space-3);
+}

@@ -9,7 +9,14 @@
  * `[channel u32 LE][kind u8][len u32 LE][payload]`. Channel 0 carries JSON-RPC both ways and its
  * calls run side by side; `terminal.attach` and `events.subscribe` answer with a channel of their
  * own, which carries the stream (raw terminal bytes, or one JSON-RPC notification per line).
+ *
+ * Calls are typed by hc's own schema (hc-api.generated.ts, `bun run generate:types`).
  */
+
+import type { HcMethod, HcMethods } from "./hc-api.generated.ts";
+
+/** The calls that answer with a stream of their own. */
+export type HcStreamMethod = "terminal.attach" | "events.subscribe";
 
 export const HC_GENERATION = 1;
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -190,18 +197,19 @@ export class HcConnection {
     return this.current().hello;
   }
 
-  call<T = unknown>(method: string, params: Record<string, unknown>, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
-    return this.request<T>(method, params, timeoutMs);
+  call<M extends HcMethod>(method: M, params: HcMethods[M]["params"], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<HcMethods[M]["result"]> {
+    return this.request<HcMethods[M]["result"]>(method, { ...params }, timeoutMs);
   }
 
   /**
    * A call that answers with a channel (`terminal.attach`, `events.subscribe`): `handlers` hear
    * the stream from its first frame on, and the returned channel writes to it.
    */
-  async open<T extends { channel: number }>(method: string, params: Record<string, unknown>, handlers: ChannelHandlers, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<{ result: T; channel: Channel }> {
+  async open<M extends HcStreamMethod>(method: M, params: HcMethods[M]["params"], handlers: ChannelHandlers, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<{ result: HcMethods[M]["result"]; channel: Channel }> {
     const line = this.current();
-    const result = await this.request<T>(method, params, timeoutMs, handlers, line);
-    const id = result.channel;
+    const result = await this.request<HcMethods[M]["result"]>(method, { ...params }, timeoutMs, handlers, line);
+    // framed mode always answers with a channel (only plain mode's subscribe has none)
+    const id = result.channel as number;
     const live = () => !line.dead && line.channels.get(id)?.closing === undefined;
     return {
       result,

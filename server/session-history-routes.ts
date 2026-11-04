@@ -64,7 +64,7 @@ const launchKeepsAbsence = async (options: StoreOptions): Promise<boolean> =>
 async function defaultLaunchSource(): Promise<ClaudeSource> {
   if (!servingCore()) return herdrLaunchSource(herdrSocketPath());
   // hc not answering: no proof of what a new terminal gets, so no resume offered from it
-  const status = await coreConnection().call<{ pid?: unknown }>("server.status", {}).catch(() => null);
+  const status = await coreConnection().call("server.status", {}).catch(() => null);
   return typeof status?.pid === "number" ? processLaunchSource(status.pid) : { state: "unreadable" };
 }
 

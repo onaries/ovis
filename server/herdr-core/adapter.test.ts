@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, jest } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HerdrError, herdrRpc, paneGet, paneSendKeys, paneSendText, sessionSnapshot, subscribeEvents, type EventFrame, paneClose, tabClose, tabCreate, workspaceClose, workspaceCreate, agentManifests, agentStart, ping } from "../herdr/client.ts";
-import { startHerdrCoreAdapter } from "./adapter.ts";
+import { HerdrError, herdrRpc, paneGet, paneRead, paneSendKeys, paneSendText, sessionSnapshot, subscribeEvents, type EventFrame, paneClose, tabClose, tabCreate, workspaceClose, workspaceCreate, agentManifests, agentStart, ping } from "../herdr/client.ts";
+import { claudeInputDraft, viewportShowsLive } from "../claude-input.ts";
+import { paintedScreen, startHerdrCoreAdapter } from "./adapter.ts";
 import { encodeFrame, FRAME_CLOSE, FRAME_DATA, HcConnection, HcError, type HcTransport, makeFrameReader } from "./connection.ts";
 import type { HcTerminal } from "./snapshot.ts";
 
@@ -95,23 +96,25 @@ afterEach(() => {
   cleanups = [];
 });
 
+const EMPTY_LIST = { terminals: [], hidden_finished: 0, machines: [] };
+
 for (const method of ["call", "open"] as const) {
   it(`times out ${method} while hc never answers hello and reconnects on the next call`, async () => {
     const cores: FakeCore[] = [];
     const hc = new HcConnection(() => {
-      const core = new FakeCore({ ping: () => ({ ok: true }) }, cores.length > 0);
+      const core = new FakeCore({ "terminal.list": () => EMPTY_LIST }, cores.length > 0);
       cores.push(core);
       return core;
     });
     jest.useFakeTimers();
     try {
-      const pending = method === "call" ? hc.call("ping", {}, 50)
+      const pending = method === "call" ? hc.call("terminal.list", {}, 50)
         : hc.open("events.subscribe", {}, { onData() {}, onClose() {} }, 50);
       const failure = pending.then(() => "resolved", (error: unknown) => error instanceof HcError ? error.kind : "unexpected");
       jest.advanceTimersByTime(50);
       expect(cores[0]?.killed).toBe(true);
       expect(await failure).toBe("timeout");
-      expect(await hc.call<{ ok: boolean }>("ping", {}, 50)).toEqual({ ok: true });
+      expect(await hc.call("terminal.list", {}, 50)).toEqual(EMPTY_LIST);
       expect(cores).toHaveLength(2);
     } finally {
       hc.close();
@@ -129,7 +132,7 @@ async function setup(terminals: HcTerminal[], extra: Record<string, Handler> = {
     "terminal.get": (params) => {
       const found = terminals.find((entry) => entry.address === params["terminal"]);
       if (!found) throw new Error(`no terminal ${String(params["terminal"])}`);
-      return { terminal: found };
+      return found;
     },
     "terminal.attach": () => ({ channel: cores.at(-1)!.channel(), terminal: terminals[0] }),
     "terminal.keys": () => ({ turn: 0 }),
@@ -175,6 +178,59 @@ describe("herdr-core adapter", () => {
     expect(core.calls.find((call) => call.method === "terminal.attach")?.params).toEqual({ terminal: "t1", cols: 90, rows: 20 });
     expect(core.typed).toEqual([{ channel: 1, text: "héllo 한글" }]);
     expect(core.closed).toEqual([1]);
+  });
+
+  it("reads the screen's colors from a watch-only first paint, so Claude's grey suggestion is no draft (#2609)", async () => {
+    const rule = "\u2500".repeat(20);
+    // as hc 0.1.17 paints a 4-row terminal with history: the history pushed up, a second clear, the
+    // screen (Claude's suggestion dim under its own inverse cursor, the cursor row blank), then the
+    // win32-input-mode state and the status report
+    const paint = `\u0018\u001b[!p\u001b[?2026l\u001b[H\u001b[2Jolder 1\r\nolder 2\u001b[0m\r\n${"\n".repeat(4)}\u001b[H\u001b[2J`
+      + `\u001b[?25l\u001b[3g\u001b[9G\u001bH\u001b[H\u001b[0m\u001b[38;2;136;136;136m${rule}\u001b[0m\r\n\u276f\u00a0\u001b[0m\u001b[7md\u001b[0m\u001b[2mo it\u001b[0m\r\n${rule}  \r\n`
+      + "\u001b[4;1H\u001b[0m\u001b]2;claude\u001b\\\u001b[?9001l\u001b]7501;state=idle:app=claude-code\u001b\\";
+    // hc's text read: each row's trailing spaces trimmed, the blank row dropped, a history line taken in
+    const text = `older 2\n${rule}\n\u276f\u00a0do it\n${rule}`;
+    const { socket, cores } = await setup([terminal("t1", { rows: 4 })], {
+      "terminal.read": () => ({ text, complete: true, how: "screen" }),
+      "terminal.attach": () => {
+        const core = cores.at(-1)!;
+        const channel = core.channel();
+        core.replyTail = encodeFrame(channel, FRAME_DATA, paint);
+        return { channel, terminal: terminal("t1", { rows: 4 }) };
+      },
+    });
+    const live = (await paneRead({ paneId: "t1", source: "detection", format: "text" }, socket)).text;
+    const colors = (await paneRead({ paneId: "t1", source: "visible", format: "ansi" }, socket)).text;
+    expect(colors).toBe(`older 2\u001b[0m\n\u001b[0m\u001b[38;2;136;136;136m${rule}\u001b[0m\n\u276f\u00a0\u001b[0m\u001b[7md\u001b[0m\u001b[2mo it\u001b[0m\n${rule}`);
+    const core = cores[0]!;
+    expect(core.calls.find((call) => call.method === "terminal.attach")?.params).toEqual({ terminal: "t1", cols: 100, rows: 4, history: 4, observe: true });
+    expect(core.closed).toEqual([1]);
+    // the chat's box check: herdr-core reports no scroll, so the colors count once their text is the live screen's
+    expect(viewportShowsLive(null, null, colors, live, live)).toBe(true);
+    expect(claudeInputDraft(live, colors)).toBe(false);
+  });
+
+  it("answers a colored read with hc's plain text when the watch-only attach brings no screen", async () => {
+    for (const ends of [true, false]) {
+      const { socket, cores } = await setup([terminal("t1", { rows: 4 })], {
+        "terminal.read": () => ({ text: "\u276f do it", complete: true, how: "screen" }),
+        "terminal.attach": () => {
+          const core = cores.at(-1)!;
+          const channel = core.channel();
+          // the terminal ended before painting, or hc sends nothing at all
+          if (ends) core.replyTail = encodeFrame(channel, FRAME_CLOSE, JSON.stringify({ reason: "exited" }));
+          return { channel, terminal: terminal("t1", { rows: 4 }) };
+        },
+      });
+      expect((await paneRead({ paneId: "t1", source: "visible", format: "ansi" }, socket)).text).toBe("\u276f do it");
+      // a stream hc ended is gone already; one still open is closed
+      expect(cores[0]!.closed).toEqual(ends ? [] : [1]);
+    }
+  });
+
+  it("keeps a trailing space drawn in a color, as OpenCode draws the space Tab typed after a skill", () => {
+    const paint = "\u001b[H\u001b[2J@effect\u001b[38;5;4m \u001b[48;5;0m  \u001b[0m\r\ntyped \u001b[0m\u001b[7m \u001b[0m\r\n\u001b[?9001l";
+    expect(paintedScreen(paint, 3)).toBe("@effect\u001b[38;5;4m \u001b[48;5;0m  \u001b[0m\ntyped\u001b[0m\u001b[7m\u001b[0m");
   });
 
   it("presses keys in order: typed runs together, runs of mode-dependent keys through hc's encoder", async () => {
@@ -423,7 +479,7 @@ describe("herdr-core adapter, agents", () => {
     const record = terminal("t1", { cols: 90, rows: 20, pid: 10, argv: ["/bin/bash"], foreground: shell });
     const { socket, cores } = await setup([record], {
       // hc's foreground: the shell until the line was typed, then the agent
-      "terminal.get": () => ({ terminal: { ...record, foreground: cores[0]!.typed.length > 0 ? agent : shell } }),
+      "terminal.get": () => ({ ...record, foreground: cores[0]!.typed.length > 0 ? agent : shell }),
     });
     await agentStart({ name: "claude-1", kind: "claude", paneId: "t1", args: ["--model", "it's big"] }, socket);
     const core = cores[0]!;
@@ -441,7 +497,7 @@ describe("herdr-core adapter, agents", () => {
       const record = terminal("t1", { pid: 10, argv: ["/bin/bash"], foreground: shell });
       const holder: { cores: FakeCore[] } = { cores: [] };
       let seen = 0;
-      const get = () => ({ terminal: { ...record, foreground: holder.cores[0]?.typed.length ? after[Math.min(seen++, after.length - 1)] : shell } });
+      const get = () => ({ ...record, foreground: holder.cores[0]?.typed.length ? after[Math.min(seen++, after.length - 1)] : shell });
       return { record, holder, get };
     };
     const node = sequence([{ pid: 11, name: "node", argv: ["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"] }]);
@@ -458,7 +514,7 @@ describe("herdr-core adapter, agents", () => {
     const shell = { pid: 10, name: "bash" };
     const record = terminal("t1", { pid: 10, argv: ["/bin/bash"], foreground: shell });
     const holder: { cores: FakeCore[]; agentUp: boolean } = { cores: [], agentUp: false };
-    const ready = await setup([record], { "terminal.get": () => ({ terminal: { ...record, foreground: holder.agentUp ? { pid: 11, name: "claude" } : shell } }) });
+    const ready = await setup([record], { "terminal.get": () => ({ ...record, foreground: holder.agentUp ? { pid: 11, name: "claude" } : shell }) });
     holder.cores = ready.cores;
     const starting = agentStart({ name: "claude-1", kind: "claude", paneId: "t1" }, ready.socket);
     let started = false;
@@ -475,7 +531,7 @@ describe("herdr-core adapter, agents", () => {
     const shell = { pid: 10, name: "bash" };
     const record = terminal("t1", { pid: 10, argv: ["/bin/bash"], foreground: shell });
     const holder: { cores: FakeCore[] } = { cores: [] };
-    const ready = await setup([record], { "terminal.get": () => ({ terminal: { ...record, foreground: holder.cores[0]?.typed.length ? { pid: 11, name: "cursor-agent" } : shell } }) });
+    const ready = await setup([record], { "terminal.get": () => ({ ...record, foreground: holder.cores[0]?.typed.length ? { pid: 11, name: "cursor-agent" } : shell }) });
     holder.cores = ready.cores;
     await agentStart({ name: "cursor-1", kind: "cursor", paneId: "t1" }, ready.socket);
     expect(ready.cores[0]!.typed.map((write) => write.text).join("")).toBe("\u0015'cursor-agent'\r");
@@ -524,7 +580,7 @@ describe("herdr-core adapter, agents", () => {
     const login = { pid: 10, name: "zsh", argv: ["-zsh", "-l"] };
     const record = terminal("t1", { pid: 10, argv: ["-zsh", "-l"], foreground: login });
     const holder: { cores: FakeCore[] } = { cores: [] };
-    const ready = await setup([record], { "terminal.get": () => ({ terminal: { ...record, foreground: holder.cores[0]?.typed.length ? { pid: 11, name: "claude" } : login } }) });
+    const ready = await setup([record], { "terminal.get": () => ({ ...record, foreground: holder.cores[0]?.typed.length ? { pid: 11, name: "claude" } : login }) });
     holder.cores = ready.cores;
     await agentStart({ name: "y", kind: "claude", paneId: "t1" }, ready.socket);
     expect(ready.cores[0]!.typed.map((write) => write.text).join("")).toBe("\u0015'claude'\r");

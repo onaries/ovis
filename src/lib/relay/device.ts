@@ -3,7 +3,8 @@ import type { PendingPush, PendingPushStore } from "../push.ts";
 
 export class ServerIdentityChangedError extends Error {
   readonly code = "server_identity_changed";
-  constructor(readonly serverId: string) {
+  /** `saved` and `offered`: the two keys that disagree, one of which is not the key `serverId` names */
+  constructor(readonly serverId: string, readonly saved?: string, readonly offered?: string) {
     super("This PC's identity changed");
     this.name = "ServerIdentityChangedError";
   }
@@ -139,7 +140,7 @@ export function base64url(bytes: Uint8Array): string {
 }
 
 function checkPin(device: RelayDevice, offer: RelayOffer): RelayDevice {
-  if (device.server_public_key !== offer.server_public_key) throw new ServerIdentityChangedError(offer.server_id);
+  if (device.server_public_key !== offer.server_public_key) throw new ServerIdentityChangedError(offer.server_id, device.server_public_key, offer.server_public_key);
   return device;
 }
 

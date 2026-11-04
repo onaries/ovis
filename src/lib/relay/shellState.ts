@@ -16,6 +16,32 @@ import { RelayAdmissionTimeoutError, RelayUnreachableError, UnsafeRelayDestinati
 import { ServerIdentityChangedError } from "./device.ts";
 import type { RelayDevice } from "./device.ts";
 
+/** Where a relay key the phone holds came from: the link it opened, or the pairing it saved. */
+export type KeySource = "link" | "saved";
+
+/**
+ * A key that is not the one a PC id names, as the phone can show it: the id named (a PC's id is a
+ * SHA-256 of its real key, server/relay/identity.ts), the id the other key would have (null for a
+ * key that does not even parse) and where that key came from. Neither is vouched for here: a link
+ * names any id it likes, so the person compares them with the id the PC itself shows. Both come
+ * from what the phone holds already, so telling them apart sends nothing to the relay or the PC.
+ */
+export interface KeyMismatch { expected: string; received: string | null; from: KeySource }
+
+/** The id a relay key would have, or null for a key that does not parse. */
+export function keyIdOf(publicKey: string): string | null {
+  try { return deriveServerId(importPublicKey(publicKey)); } catch { return null; }
+}
+
+/** The first of `keys` that is not the key `serverId` names; null when every one is. */
+export function keyMismatch(serverId: string, keys: readonly { key: string; from: KeySource }[]): KeyMismatch | null {
+  for (const { key, from } of keys) {
+    const received = keyIdOf(key);
+    if (received !== serverId) return { expected: serverId, received, from };
+  }
+  return null;
+}
+
 /** Why a connection did not come up; each is a screen with its own `data-relay-state`. */
 export type RelayFailure = "pc-offline" | "pc-unresponsive" | "relay-unreachable" | "needs-update" | "revoked" | "identity-changed" | "code-expired" | "bad-offer";
 
@@ -41,8 +67,9 @@ export type RelayShellState =
   /** the phone's key for a PC whose identity changed is gone; only a new QR code from the PC pairs it again */
   | { kind: "forgotten"; name: string | null }
   /** a link with another key under a PC's id (forgedOffer): refused every time, and no saved key is touched */
-  | { kind: "forged"; name: string | null }
-  | { kind: "failed"; failure: RelayFailure; name: string | null; detail: string | null };
+  | { kind: "forged"; name: string | null; mismatch: KeyMismatch | null }
+  /** `mismatch`: on identity-changed, the key that is not the PC's, when the phone can name it */
+  | { kind: "failed"; failure: RelayFailure; name: string | null; detail: string | null; mismatch?: KeyMismatch | null };
 
 /** The page a shell load is: the PC its path names and the offer its fragment carried, if any. */
 export interface ShellEntry {
@@ -68,7 +95,7 @@ export function shellEntry(url: string): ShellEntry {
  * opened. A PC's own QR code always passes, so only a pairing from the PC itself gets through.
  */
 export function forgedOffer(offer: RelayOffer): boolean {
-  try { return deriveServerId(importPublicKey(offer.server_public_key)) !== offer.server_id; } catch { return true; }
+  return keyIdOf(offer.server_public_key) !== offer.server_id;
 }
 
 /** The offer a saved PC connects with again: what the pairing offer said, less its one-time code. */
