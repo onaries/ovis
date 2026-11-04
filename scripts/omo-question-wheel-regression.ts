@@ -183,9 +183,9 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
       const rowHeight = mobile.height / mobileScroll.viewport_rows;
       const travel = rowHeight * 3 * 2;
       await page.screenshot({ path: join(evidence, "mobile-before-touch.png") });
-      // touch follows the finger: two three-line steps, never multiplied by the wheel speed
-      const touched = scrollResponse(6);
-      console.log("touch expects", 6, { mobile, rowHeight, travel });
+      // The same two-step swipe at speed two moves twelve history lines.
+      const touched = scrollResponse(12);
+      console.log("touch expects", 12, { mobile, rowHeight, travel });
       await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
       await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + travel }] });
       await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
@@ -245,6 +245,24 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
       const ctrlSent = ctrlReports() - fastBefore;
       assert.ok(ctrlSent >= 6 && ctrlSent <= 7, `12 Ctrl-held steps of 0.55 rows report one wheel per row, 6 or 7, not ${ctrlSent}`);
       console.log("PASS Ctrl-held wheels report at the normal speed");
+      const cdp = await context.newCDPSession(page);
+      const x = bounds.x + bounds.width / 2;
+      const y = bounds.y + bounds.height / 2;
+      for (const direction of [1, -1]) {
+        const button = direction > 0 ? 64 : 65;
+        const count = () => (readFileSync(log, "utf8").match(new RegExp(`\\x1b\\[<${button};`, "g")) ?? []).length;
+        const beforeTouch = count();
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + direction * rowPx * 6 }] });
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        for (const deadline = Date.now() + 10_000; count() - beforeTouch !== 4;) {
+          if (Date.now() > deadline) throw new Error(`speed-two touch sent ${count() - beforeTouch} reports, not 4`);
+          await Bun.sleep(25);
+        }
+        assert.equal(count() - beforeTouch, 4);
+      }
+      await cdp.detach();
+      console.log("PASS speed-two touch sends four reports for six rows in either direction");
     }
   }
   assert.deepEqual(errors, []);

@@ -138,7 +138,7 @@ export interface PaneTerminalProps {
   terminalFontSize: number;
   /** one of several panes drawn side by side: under 80 columns its font shrinks to reach them */
   split?: boolean;
-  /** mouse reports sent per wheel event (settings): 1 is xterm's own one report */
+  /** terminal wheel and touch travel multiplier (settings) */
   terminalWheelSpeed: number;
   /** fonts tried before the built-in stack (settings); "" keeps the built-in one */
   terminalFontFamily: string;

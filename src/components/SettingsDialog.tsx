@@ -545,8 +545,8 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
       <SettingsRow label={t("Terminal font")} description={t("Comma-separated, tried in order. A font this device does not have falls back to the default.")} wide>
         <FontFamilyInput value={settings.terminalFontFamily} label={t("Terminal font")} fixedWidthFor="terminal" onCommit={(terminalFontFamily) => update({ terminalFontFamily })} />
       </SettingsRow>
-      <SettingsRow label={t("Wheel scroll speed")} description={t("How far one turn of the wheel scrolls the terminal")}>
-        <Stepper label={t("Wheel scroll speed")} value={settings.terminalWheelSpeed} text={`${settings.terminalWheelSpeed}×`} min={TERMINAL_WHEEL_SPEED_MIN} max={TERMINAL_WHEEL_SPEED_MAX} decreaseLabel={t("Slower wheel scrolling")} increaseLabel={t("Faster wheel scrolling")} onChange={(terminalWheelSpeed) => update({ terminalWheelSpeed })} />
+      <SettingsRow label={t("Terminal scroll speed")} description={t("How far a wheel turn or touch swipe scrolls the terminal")}>
+        <Stepper label={t("Terminal scroll speed")} value={settings.terminalWheelSpeed} text={`${settings.terminalWheelSpeed}×`} min={TERMINAL_WHEEL_SPEED_MIN} max={TERMINAL_WHEEL_SPEED_MAX} decreaseLabel={t("Slower terminal scrolling")} increaseLabel={t("Faster terminal scrolling")} onChange={(terminalWheelSpeed) => update({ terminalWheelSpeed })} />
       </SettingsRow>
       <SettingsRow label={t("Terminal input mode")} htmlFor="terminal-input-mode">
         {/* "auto", the stored default, types straight into the grid on every device: it reads as Direct typing */}

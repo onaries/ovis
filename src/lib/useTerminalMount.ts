@@ -1695,7 +1695,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       // translate a single-finger drag on the terminal into wheel events, so the
       // normal buffer scrolls its own viewport and the alternate buffer (with mouse
       // reporting on) forwards the gesture to herdr, exactly like a mouse wheel.
-      // The text follows the finger, as everywhere on a phone: dragging down brings
+      // At 1x the text follows the finger, as everywhere on a phone: dragging down brings
       // older lines in. Each event carries the finger's position, since xterm reports
       // a wheel at the cell under it (without one, every report said row 1, column 1).
       // Observers pan the adopted grid locally. Interactive mirrors scroll herdr's history
@@ -1860,8 +1860,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         if (scrollableMirror() && !fold.active && across !== 0) host.scrollBy(across, 0);
         // xterm sends herdr one report per wheel event however far it went, and herdr scrolls a
         // few lines per report: one line-mode wheel per that many rows of finger travel keeps a
-        // swipe as far as a slow drag, and the text under the finger
-        const { steps, rest } = wheelSteps(touchPixels + delta, cellHeight() * HERDR_MOUSE_SCROLL_LINES);
+        // swipe as far as a slow drag, scaled by the selected scroll speed
+        const { steps, rest } = wheelSteps(touchPixels + delta * wheelStateRef.current.speed, cellHeight() * HERDR_MOUSE_SCROLL_LINES);
         touchPixels = rest;
         sendTouchWheels(steps);
       };

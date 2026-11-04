@@ -91,7 +91,7 @@ export interface Settings {
   lightTheme: ThemeId;
   /** xterm font size in px */
   terminalFontSize: number;
-  /** mouse reports sent to herdr per wheel event in the terminal: 1 is what xterm sends by itself */
+  /** terminal wheel and touch travel multiplier; 1 keeps the original distance */
   terminalWheelSpeed: number;
   /** fonts tried before the built-in terminal stack, as a CSS font-family list; "" keeps the built-in one */
   terminalFontFamily: string;

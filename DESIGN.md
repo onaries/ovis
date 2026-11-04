@@ -717,6 +717,11 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   Cancellation restores the starting size. The badge is hidden from assistive tech; a polite live
   region says "Terminal text size {px} px" once, when a pinch ends at a new size, and says nothing
   for a cancelled pinch.
+- Terminal scroll speed multiplies wheel and touch-swipe travel from 1x to 10x (default 1x),
+  retaining the stored `terminalWheelSpeed` key. As in native terminal scroll sensitivity,
+  the same gesture travels farther at higher values. Touch travel is scaled before whole-step
+  accumulation and lift rounding, so the existing bounded report queue applies it only once.
+  Local panning of an observer's larger grid and two-finger font pinches keep their own geometry.
 - A split pane that would have fewer than 80 columns at that size draws in the largest smaller
   whole-pixel size that gives it 80, never below `10px`. A pane alone in its tab or zoomed, a pane that `10px` cannot bring
   to 80 columns, and a pane this browser only watches or mirrors keep the user's size. The saved
