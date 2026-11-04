@@ -132,8 +132,8 @@ export function execSummary(input: string): string | null {
 }
 
 export function execToolCalls(input: string): { name: string; argumentsAt: number }[] {
-  const calls = new RegExp(`${LITERAL}|/\\*[\\s\\S]*?\\*/|//[^\\n]*|/(?:\\\\.|[^/\\\\\\n])+/[dgimsuvy]*(?=\\s*(?:[;,.()\\]}]|$))|(?<![\\w$.])tools\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\(`, "g");
-  return [...input.matchAll(calls)].flatMap((match) => match[1] === undefined ? [] : [{ name: match[1], argumentsAt: match.index + match[0].length }]);
+  const calls = new RegExp(`${LITERAL}|/\\*[\\s\\S]*?\\*/|//[^\\n]*|/(?:\\\\.|[^/\\\\\\n])+/[dgimsuvy]*(?=\\s*(?:[;,.()\\]}]|$))|tools\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\(`, "g");
+  return [...input.matchAll(calls)].flatMap((match) => match[1] === undefined || /[\w$.]/.test(input.charAt(match.index - 1)) ? [] : [{ name: match[1], argumentsAt: match.index + match[0].length }]);
 }
 
 export function execToolSummary(input: string): string | null {
