@@ -12,7 +12,7 @@ const pane = (id: string, label?: string): HerdrPane =>
   ({ pane_id: id, workspace_id: "w1", tab_id: "t1", terminal_id: `${id}:term`, revision: 1, focused: id === "p1", agent_status: "idle", label }) as HerdrPane;
 // one tab, split in two side by side: a divider stands between p1 and p2
 const snapshot: SessionSnapshot = {
-  protocol: 22, version: "test", agents: [],
+  protocol: 22, version: "test", agents: [{ agent: "claude", name: "reviewer", pane_id: "p1", terminal_id: "p1:term", workspace_id: "w1", tab_id: "t1", revision: 1, focused: true, agent_status: "idle" }],
   workspaces: [{ workspace_id: "w1", label: "w1", active_tab_id: "t1", number: 1, tab_count: 1, pane_count: 2, focused: true, agent_status: "idle", worktree: null }],
   tabs: [{ tab_id: "t1", workspace_id: "w1", label: "", number: 1, pane_count: 2, focused: true, agent_status: "idle" }],
   panes: [pane("p1", "named"), pane("p2")],
@@ -52,11 +52,11 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
     }
   });
 
-  async function draw(appLayout: boolean): Promise<(target: HerdrPane) => string[]> {
+  async function draw(appLayout: boolean, watching = false): Promise<(target: HerdrPane) => string[]> {
     const actionsRef: { current: ((target: HerdrPane) => RowMenuItem[]) | null } = { current: null };
     await act(async () => {
       renderer = create(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: appLayout },
-        createElement(PaneCanvas, { snapshot, pane: snapshot.panes[0] as HerdrPane, selectedPaneId: "p1", onSelect: () => {}, onChanged: () => {}, renderPane: () => null, actionsRef }))));
+        createElement(PaneCanvas, { snapshot, pane: snapshot.panes[0] as HerdrPane, selectedPaneId: "p1", onSelect: () => {}, onChanged: () => {}, renderPane: () => null, actionsRef, watching }))));
     });
     return (target) => actionsRef.current!(target).map((item) => item.id);
   }
@@ -64,7 +64,7 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
 
   it("offers a TUI PC's panes their name, swap, split and zoom items, and a divider to drag", async () => {
     const itemsOf = await draw(false);
-    expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["rename", "clear-name", "split-right", "split-down", "zoom", "close"]);
+    expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["rename", "clear-name", "rename-agent", "split-right", "split-down", "zoom", "close"]);
     expect(itemsOf(snapshot.panes[1] as HerdrPane)).toEqual(["rename", "swap-focused", "split-right", "split-down", "zoom", "close"]);
     expect(dividers()).toBe(1);
   });
@@ -74,5 +74,15 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
     expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["close"]);
     expect(itemsOf(snapshot.panes[1] as HerdrPane)).toEqual(["close"]);
     expect(dividers()).toBe(0);
+  });
+
+  it("does not offer call-name changes to a watching device", async () => {
+    const itemsOf = await draw(false, true);
+    expect(itemsOf(pane("p1", "named"))).not.toContain("rename-agent");
+  });
+
+  it("does not offer the previous terminal's agent name on a replacement pane", async () => {
+    const itemsOf = await draw(false);
+    expect(itemsOf({ ...pane("p1"), terminal_id: "replacement" })).not.toContain("rename-agent");
   });
 });

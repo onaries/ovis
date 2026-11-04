@@ -1727,6 +1727,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   focused pane when another is selected, Split right, Split down, Zoom/Unzoom pane, Recover
   unsent text while there is some (Unsent text, below), Close pane. It appears at the pointer, clamped to the window. Up/Down
   stop at the ends, hover selects, Enter acts, Escape and an outside click dismiss.
+- A live agent's pane menu also offers **Change agent call name**, separate from its display
+  label, following Paseo's agent/tab renaming pattern ([PR #531](https://github.com/getpaseo/paseo/pull/531)).
+  It reuses the name dialog with Herdr's 32-character lowercase-name rules. Empty clears the
+  call name; a duplicate keeps the input and explains how to retry. Names come from the matching
+  pane and terminal in `snapshot.agents`, and disappear when the agent exits or is replaced.
+  Watching devices and PCs whose layout the Herdr app owns do not offer this action.
 - Split selects the new pane (`focus:true`), like the TUI. Swap exchanges the right-clicked
   pane with the previously selected pane and retains the browser's selection. On a desktop,
   dragging a pane's title onto another pane's title in the same tab on the same PC exchanges

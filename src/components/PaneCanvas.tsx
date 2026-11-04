@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type DragEvent, type MouseEvent, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type MouseEvent, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
 import { ArchiveRestore, Columns2, Ellipsis, Eraser, Maximize2, MoveHorizontal, Pencil, RotateCw, Rows2, ArrowLeftRight, TextWrap, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { HerdrPane, PaneLayoutSnapshot, SessionSnapshot } from "../../shared/protocol.ts";
+import { AGENT_NAME_MAX_LENGTH, isAgentName } from "../../shared/agent-name.ts";
 import { useAppLayout, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { PANE_DRAG_TYPE, paneDragData, type SplitSide } from "../lib/split.ts";
 import { PaneSubmitRetention } from "../lib/paneSubmitRetention.ts";
 import { PaneCachedContext, PanePresentedContext, PaneShownContext, PaneSubmitContext, PaneWatchedContext } from "../lib/paneSubmitContext.ts";
 import { cachedPaneCells, visitPaneTab } from "../lib/paneTabCache.ts";
-import { routeMissing } from "../lib/api.ts";
+import { ApiError, routeMissing } from "../lib/api.ts";
 import { layoutCells, zoomMode } from "../lib/layoutMap.ts";
 import { layoutTopology, paneContextPress, paneFieldTarget, SOLO_PANE_QUERY, soloPane, splitPath, splitRatioAt } from "../lib/paneCanvas.ts";
 import { useT } from "../lib/i18n.ts";
@@ -45,6 +46,7 @@ interface Props {
   onRecoverUnsent?: (target: HerdrPane) => void;
 }
 type Menu = { paneId: string; anchor: HTMLElement; point?: { x: number; y: number }; previousFocus: HTMLElement | null };
+type RenameTarget = { kind: "pane"; pane: HerdrPane } | { kind: "agent"; pane: HerdrPane; name: string | null };
 interface Drag {
   split: PaneLayoutSplit;
   layout: PaneLayoutSnapshot;
@@ -90,7 +92,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     for (const id of lastCells.current.keys()) if (!live.has(id)) lastCells.current.delete(id);
   }, [snapshot, submits]);
   const [menu, setMenu] = useState<Menu | null>(null);
-  const [renaming, setRenaming] = useState<HerdrPane | null>(null);
+  const [renaming, setRenaming] = useState<RenameTarget | null>(null);
   const [closing, setClosing] = useState<HerdrPane | null>(null);
   const [restarting, setRestarting] = useState<string | null>(null);
   const [error, setError] = useState<UserError | null>(null);
@@ -171,21 +173,27 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     else run(() => api.closePane(target.pane_id));
   };
   const target = menu ? snapshot?.panes.find((item) => item.pane_id === menu.paneId) : null;
-  const layoutItems = (target: HerdrPane): RowMenuItem[] => appLayout ? [] : [
-    { id: "rename", label: t("Rename pane"), icon: Pencil, run: () => setRenaming(target) },
-    ...(target.label ? [{ id: "clear-name", label: t("Clear pane name"), icon: Eraser, run: () => run(() => api.renamePane(target.pane_id, "")) }] : []),
-    ...(pane && target.pane_id !== pane.pane_id ? [{ id: "swap-focused", label: t("Swap with focused pane"), icon: ArrowLeftRight,
-      run: () => run(() => api.swapPaneWith(pane.pane_id, target.pane_id)) }] : []),
-    { id: "split-right", label: t("Split right"), icon: Columns2, run: () => run(() => split(target, "right")) },
-    { id: "split-down", label: t("Split down"), icon: Rows2, run: () => run(() => split(target, "down")) },
-    { id: "zoom", label: t(layout && zoomMode(layout, target.pane_id) === "off" ? "Unzoom pane" : "Zoom pane"), icon: Maximize2,
-      run: () => run(async () => {
-        const tabId = latest.current.tabId;
-        const selection = latest.current.selection;
-        await api.zoomPane(target.pane_id, layout ? zoomMode(layout, target.pane_id) : "on");
-        if (alive.current && latest.current.tabId === tabId && latest.current.selection === selection) onSelect(target.pane_id);
-      }) },
-  ];
+  const layoutItems = (target: HerdrPane): RowMenuItem[] => {
+    if (appLayout) return [];
+    const agent = snapshot?.agents.find((entry) => entry.pane_id === target.pane_id && entry.terminal_id === target.terminal_id);
+    return [
+      { id: "rename", label: t("Rename pane"), icon: Pencil, run: () => setRenaming({ kind: "pane", pane: target }) },
+      ...(target.label ? [{ id: "clear-name", label: t("Clear pane name"), icon: Eraser, run: () => run(() => api.renamePane(target.pane_id, "")) }] : []),
+      ...(!watching && agent ? [{ id: "rename-agent", label: t("Change agent call name"), icon: Pencil,
+        run: () => setRenaming({ kind: "agent", pane: target, name: agent.name ?? null }) }] : []),
+      ...(pane && target.pane_id !== pane.pane_id ? [{ id: "swap-focused", label: t("Swap with focused pane"), icon: ArrowLeftRight,
+        run: () => run(() => api.swapPaneWith(pane.pane_id, target.pane_id)) }] : []),
+      { id: "split-right", label: t("Split right"), icon: Columns2, run: () => run(() => split(target, "right")) },
+      { id: "split-down", label: t("Split down"), icon: Rows2, run: () => run(() => split(target, "down")) },
+      { id: "zoom", label: t(layout && zoomMode(layout, target.pane_id) === "off" ? "Unzoom pane" : "Zoom pane"), icon: Maximize2,
+        run: () => run(async () => {
+          const tabId = latest.current.tabId;
+          const selection = latest.current.selection;
+          await api.zoomPane(target.pane_id, layout ? zoomMode(layout, target.pane_id) : "on");
+          if (alive.current && latest.current.tabId === tabId && latest.current.selection === selection) onSelect(target.pane_id);
+        }) },
+    ];
+  };
   const itemsFor = (target: HerdrPane): RowMenuItem[] => [
     ...layoutItems(target),
     ...(!watching && (target.agent ?? target.agent_session?.agent) === "codex" ? [{ id: "restart-codex", label: t("Restart Codex"), icon: RotateCw, danger: true, run: () => setRestarting(target.pane_id) }] : []),
@@ -364,7 +372,11 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     })}
     {error && <div className="pane-canvas-error" role="alert">{error.message}{error.detail !== null && <><br /><code>{error.detail}</code></>}<button className="icon-button" aria-label={t("Dismiss")} onClick={() => setError(null)}><X /></button></div>}
     {menu && target && <RowMenu anchor={menu.anchor} point={menu.point} restoreFocusTo={menu.previousFocus} title={t("Pane actions for {name}", { name: displayPaneTitle(target) })} items={items} onClose={closeMenu} />}
-    {renaming && <PaneRename pane={renaming} onClose={() => setRenaming(null)} onSave={async (label) => { await api.renamePane(renaming.pane_id, label); onChanged(); }} />}
+    {renaming && <PaneRename key={`${renaming.kind}:${renaming.pane.pane_id}`} target={renaming} onClose={() => setRenaming(null)} onSave={async (name) => {
+      if (renaming.kind === "agent") await api.renameAgent(renaming.pane.pane_id, name || null);
+      else await api.renamePane(renaming.pane.pane_id, name);
+      onChanged();
+    }} />}
     {restarting && <CodexRestartDialog key={restarting} paneId={restarting} onClose={() => setRestarting(null)} onRestarted={onChanged} />}
     {closing && <ConfirmDialog title={t("Close pane {name}?", { name: displayPaneTitle(closing) })}
       body={t("The pane's running processes will stop. Closing its last pane also closes the workspace.")}
@@ -372,11 +384,15 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   </div></PaneSubmitContext.Provider>;
 }
 
-function PaneRename({ pane, onClose, onSave }: { pane: HerdrPane; onClose: () => void; onSave: (label: string) => Promise<void> }) {
+function PaneRename({ target, onClose, onSave }: { target: RenameTarget; onClose: () => void; onSave: (name: string) => Promise<void> }) {
   const t = useT();
+  const callName = target.kind === "agent";
+  const title = callName ? t("Change agent call name") : t("Rename pane");
+  const hintId = useId();
   const input = useRef<HTMLInputElement>(null);
   const surface = useFocusTrap<HTMLDivElement>(true, { initialFocus: input });
-  const [value, setValue] = useState(pane.label ?? "");
+  const [value, setValue] = useState(target.kind === "agent" ? target.name ?? "" : target.pane.label ?? "");
+  const valid = !callName || value.trim() === "" || isAgentName(value.trim());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<UserError | null>(null);
   usePhoneSheetBack(() => { if (busy) return false; onClose(); });
@@ -386,11 +402,29 @@ function PaneRename({ pane, onClose, onSave }: { pane: HerdrPane; onClose: () =>
     return () => window.removeEventListener("keydown", key, true);
   }, [busy, onClose]);
   return createPortal(<div className="modal-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <div ref={surface} className="modal" role="dialog" aria-modal="true" aria-label={t("Rename pane")}>
-      <form className="pane-rename-form" onSubmit={(event) => { event.preventDefault(); if (busy) return; setBusy(true); void onSave(value.trim()).then(onClose, (reason) => { setError(userErrorMessage(reason)); setBusy(false); }); }}>
-        <header className="modal-header"><h2 className="modal-title">{t("Rename pane")}</h2></header>
-        <div className="modal-body"><label>{t("Pane name")}<input ref={input} className="input" value={value} disabled={busy} maxLength={80} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setValue(event.target.value)} /></label>{error && <p role="alert">{error.message}{error.detail !== null && <><br /><code>{error.detail}</code></>}</p>}</div>
-        <footer className="modal-footer"><button type="button" className="btn" disabled={busy} onClick={onClose}>{t("Cancel")}</button><button className="btn btn-primary" disabled={busy}>{t("Save")}</button></footer>
+    <div ref={surface} className="modal" role="dialog" aria-modal="true" aria-label={title}>
+      <form className="pane-rename-form" onSubmit={(event) => {
+        event.preventDefault();
+        if (busy || !valid) return;
+        setBusy(true);
+        setError(null);
+        void onSave(value.trim()).then(onClose, (reason: unknown) => {
+          setError(callName && reason instanceof ApiError && reason.code === "agent_name_taken"
+            ? { message: t("That call name is already in use. Choose another."), detail: null }
+            : userErrorMessage(reason));
+          setBusy(false);
+        });
+      }}>
+        <header className="modal-header"><h2 className="modal-title">{title}</h2></header>
+        <div className="modal-body">
+          <label>{callName ? t("Agent call name") : t("Pane name")}<input ref={input} className="input" value={value} disabled={busy} maxLength={callName ? AGENT_NAME_MAX_LENGTH : 80}
+            autoCapitalize={callName ? "none" : undefined} autoCorrect={callName ? "off" : undefined} spellCheck={callName ? false : undefined}
+            aria-invalid={callName && !valid ? true : undefined} aria-describedby={callName ? hintId : undefined}
+            onFocus={(event) => event.currentTarget.select()} onChange={(event) => setValue(event.target.value)} /></label>
+          {callName && <p className="field-hint" id={hintId}>{t("Use 1-32 lowercase letters, digits, _ or -, starting with a letter. Leave empty to clear.")}<br />{t("Other agents can use this name. It is cleared when the agent exits or is replaced.")}</p>}
+          {error && <p role="alert">{error.message}{error.detail !== null && <><br /><code>{error.detail}</code></>}</p>}
+        </div>
+        <footer className="modal-footer"><button type="button" className="btn" disabled={busy} onClick={onClose}>{t("Cancel")}</button><button className="btn btn-primary" disabled={busy || !valid}>{t("Save")}</button></footer>
       </form>
     </div>
   </div>, document.body);
