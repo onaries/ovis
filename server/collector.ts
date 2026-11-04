@@ -91,6 +91,11 @@ export interface StatusCollectorHandlers {
    * program that ended and whose pane then closed.
    */
   onPaneClosed?: (paneId: string) => void;
+  /**
+   * herdr moved a pane under a new ID (`pane_moved` to another workspace, from anywhere): told before the
+   * structure change it is part of, so what is kept under the old ID can follow it first.
+   */
+  onPaneMoved?: (previousPaneId: string, paneId: string) => void;
   onStructureChange: () => void;
   /**
    * Which herdr answers on the lifecycle subscription while it is open: `onChange` gets herdr's identity
@@ -564,6 +569,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
           // restore that baseline nor prune the one just carried to the new ID.
           actedOn.set(previousPaneId, ++statusEvents);
           lastEventOf.set(paneId, statusEvents);
+          handlers.onPaneMoved?.(previousPaneId, paneId);
         }
         // closed with no exit frame: a snapshot on its way that still holds the pane is no news of it either
         if (parsed.closed !== undefined) {

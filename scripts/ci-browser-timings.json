@@ -96,6 +96,7 @@
   "scripts/sidebar-tokens-demo-regression.ts": 8,
   "scripts/plugin-actions-demo-regression.ts": 8,
   "scripts/mirror-scroll-demo-regression.ts": 7,
+  "scripts/core-history-scroll-demo-regression.ts": 7,
   "scripts/sidebar-branch-line-demo-regression.ts": 7,
   "scripts/omo-question-wheel-regression.ts": 6,
   "scripts/claude-image-browser-qa.ts": 6,

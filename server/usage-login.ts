@@ -172,11 +172,11 @@ export class UsageLoginService {
     const secret = Buffer.from(login.secret);
     return sent.length === secret.length && timingSafeEqual(sent, secret) ? login : undefined;
   }
-  private readonly endedListeners: (() => void)[] = [];
+  private readonly endedListeners: ((account: string | null) => void)[] = [];
   private stopped = false;
 
-  /** Called once a followed sign-in's CLI exits: the usage it may have changed is read again. */
-  onLoginEnded(listener: () => void): void { this.endedListeners.push(listener); }
+  /** Called once a followed sign-in's CLI exits, with the key of the account it signed in (null when none): the usage it may have changed is read again. */
+  onLoginEnded(listener: (account: string | null) => void): void { this.endedListeners.push(listener); }
   /**
    * One login at a time per credential home, Add account and Sign in again alike: two CLIs writing
    * one home race each other's tokens. By home, the login or launch of this server holding it.
@@ -296,7 +296,7 @@ export class UsageLoginService {
         }
       }
       for (const [home, holder] of this.logins) if (isPrivate(holder) && holder.launch === login.lock) this.release(home, holder);
-      for (const listener of this.endedListeners) listener();
+      for (const listener of this.endedListeners) listener(login.signedIn?.key ?? null);
       login.ended = true;
       login.changed.resolve();
       const ended = [...this.privates].filter(([, entry]) => entry.ended);

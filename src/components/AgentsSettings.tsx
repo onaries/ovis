@@ -32,6 +32,7 @@ import { Segmented, SettingsGroup, SettingsRow, SettingsSelect, Toggle } from ".
 import { UsageAccountDialog } from "./UsageAccountDialog.tsx";
 import { UsageSignInAgain } from "./UsageLocalLogin.tsx";
 import { UsageSignInDialog } from "./UsageSignInDialog.tsx";
+import { UsageRemoveAccount, UsageRemovedAccounts } from "./UsageRemoveAccount.tsx";
 import "./UsageSettings.css";
 import "./AgentsSettings.css";
 
@@ -115,7 +116,7 @@ function IntegrationRow({ integration, label }: { integration: AgentIntegration;
 }
 
 /** One provider's accounts: whose, where from, its plan limit, its state; moved, hidden, or signed in again. */
-function ProviderAccounts({ id, providers, onLocalLogin, onFollow }: { readonly id: UsageProviderId; readonly providers: readonly ProviderUsage[]; readonly onLocalLogin: ((paneId: string) => void) | undefined; readonly onFollow: (request: FollowedSignIn) => void }) {
+function ProviderAccounts({ id, providers, removed, onLocalLogin, onFollow }: { readonly id: UsageProviderId; readonly providers: readonly ProviderUsage[]; /** every provider's accounts removed from Ovis */ readonly removed: readonly ProviderUsage[]; readonly onLocalLogin: ((paneId: string) => void) | undefined; readonly onFollow: (request: FollowedSignIn) => void }) {
   const { settings, update } = useSettings();
   const t = useT();
   const all = orderProviders(providers, settings.usageOrder);
@@ -126,7 +127,8 @@ function ProviderAccounts({ id, providers, onLocalLogin, onFollow }: { readonly 
     const keys = all.map((usage) => usage.id === id ? group[index++] ?? usage.key : usage.key);
     update({ usageOrder: [...keys, ...settings.usageOrder.filter((known) => !keys.includes(known))] });
   };
-  return ordered.length === 0 ? <p className="settings-item settings-hint">{t("No accounts signed in")}</p> : <ol className="agents-accounts" aria-label={PROVIDER_NAME[id]}>
+  const restorable = onLocalLogin ? removed.filter((usage) => usage.id === id) : [];
+  return <>{ordered.length === 0 ? <p className="settings-item settings-hint">{t("No accounts signed in")}</p> : <ol className="agents-accounts" aria-label={PROVIDER_NAME[id]}>
     {ordered.map((usage, index) => {
       const name = usageName(usage);
       const hidden = settings.usageHidden.includes(usage.key);
@@ -150,10 +152,13 @@ function ProviderAccounts({ id, providers, onLocalLogin, onFollow }: { readonly 
             onClick={() => update({ usageHidden: hidden ? settings.usageHidden.filter((key) => key !== usage.key) : [...settings.usageHidden, usage.key] })}>
             {hidden ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
           </button>
+          {onLocalLogin && !isHubAccount(usage) && <UsageRemoveAccount usage={usage} />}
         </span>
       </li>;
     })}
-  </ol>;
+  </ol>}
+  <UsageRemovedAccounts removed={restorable} />
+  </>;
 }
 
 /** The line under an agent's name: its sign-in as the accounts show it, or only that it is there. */
@@ -169,12 +174,14 @@ function stateLine(entry: AgentsPageRow, read: boolean, t: Translate): { text: s
   }
 }
 
-function AgentItem({ entry, open, onToggle, allProviders, read, limitsOn, local, watching, integrationsRead, onLocalLogin, onAddAccount, onFollow }: {
+function AgentItem({ entry, open, onToggle, allProviders, removed, read, limitsOn, local, watching, integrationsRead, onLocalLogin, onAddAccount, onFollow }: {
   entry: AgentsPageRow;
   open: boolean;
   onToggle: () => void;
   /** every provider's accounts: a move within this row keeps the others' places in the saved order */
   allProviders: readonly ProviderUsage[];
+  /** the accounts removed from Ovis, for Restore */
+  removed: readonly ProviderUsage[];
   /** plan limits are on and a usage report arrived: the accounts were read */
   read: boolean;
   /** plan limits are on: a report is coming */
@@ -223,7 +230,7 @@ function AgentItem({ entry, open, onToggle, allProviders, read, limitsOn, local,
             {!watching && <button type="button" className="btn btn-ghost" onClick={() => onAddAccount(provider)}><Plus aria-hidden="true" />{t("Add account")}</button>}
           </div>
           {/* with the sign-in unreadable, "No accounts signed in" would be the guess the note replaces */}
-          {(entry.missing === null || accounts.length > 0) && <ProviderAccounts id={provider} providers={allProviders} onLocalLogin={watching ? undefined : onLocalLogin} onFollow={onFollow} />}
+          {(entry.missing === null || accounts.length > 0) && <ProviderAccounts id={provider} providers={allProviders} removed={removed} onLocalLogin={watching ? undefined : onLocalLogin} onFollow={onFollow} />}
         </> : <p className="agents-detail-note" role="status">{limitsOn ? t("Loading…") : t("Turn on plan limits to see accounts.")}</p>)}
         {provider === null && signIn !== null && (local && signIn.provider === null
           ? <p className="agents-detail-note">{signIn.in_agent !== null ? t("{agent} signs in inside the agent ({how}). Ovis cannot read that sign-in, so it shows none here.", { agent: agent.name, how: signIn.in_agent }) : t("Ovis cannot read {agent}'s sign-in, so it shows none here.", { agent: agent.name })}</p>
@@ -336,7 +343,10 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
   const agents = catalog !== null && catalog.machineId === machineId ? catalog.agents : null;
   const providers = settings.showUsage ? usage.report?.providers ?? [] : [];
   const page = agents === null && catalogError === null ? null : agentsPage({ agents: agents ?? [], providers, missing: settings.showUsage ? usage.report?.missing_commands ?? [] : [], integrations: integrationOutcome?.kind === "list" ? integrationOutcome.integrations : [], accountsHere: local });
-  const otherProviders = page?.otherProviders ?? [...new Set(providers.map((entry) => entry.id))];
+  const removed = settings.showUsage ? usage.report?.removed ?? [] : [];
+  // a provider whose every account was removed keeps its group, for Restore
+  const otherProviders = [...new Set([...(page?.otherProviders ?? providers.map((entry) => entry.id)),
+    ...removed.map((entry) => entry.id).filter((id) => !page?.rows.some((row) => row.provider === id))])];
   const failed = Object.values(failures);
   const installNote = t("Install runs the maker's own installer in a terminal tab on this PC, where you can watch it.");
   const integrationNote = integrationOutcome === null ? null
@@ -363,7 +373,7 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
             : page.rows.length === 0 ? <div className="settings-card"><p className="settings-item settings-hint">{t("None on this PC yet.")}</p></div>
               : <ul className="settings-card agents-card">
                 {page.rows.map((entry) => <AgentItem key={entry.agent.id} entry={entry} open={open.has(entry.agent.id)} onToggle={() => toggle(entry.agent.id)}
-                  allProviders={providers} read={settings.showUsage && usage.report !== null} limitsOn={settings.showUsage} local={local} watching={watching} integrationsRead={integrationOutcome?.kind === "list"}
+                  allProviders={providers} removed={removed} read={settings.showUsage && usage.report !== null} limitsOn={settings.showUsage} local={local} watching={watching} integrationsRead={integrationOutcome?.kind === "list"}
                   onLocalLogin={onLocalLogin} onAddAccount={(provider) => setDialog({ kind: "add", provider })} onFollow={setSigningIn} />)}
               </ul>}
         {integrationNote}
@@ -388,7 +398,7 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
             <AgentMark agent={PROVIDER_MARK[id]} size={20} /><span>{PROVIDER_NAME[id]}</span>
             <span className="usage-account-count">{providers.filter((entry) => entry.id === id).length}</span>
           </div>
-          <ProviderAccounts id={id} providers={providers} onLocalLogin={watching ? undefined : onLocalLogin} onFollow={setSigningIn} />
+          <ProviderAccounts id={id} providers={providers} removed={removed} onLocalLogin={watching ? undefined : onLocalLogin} onFollow={setSigningIn} />
         </SettingsGroup>)}
         {settings.showUsage && providers.length === 0 && <p className="settings-note settings-hint">{usage.loading ? t("Loading…") : t("No accounts yet.")}</p>}
         {hubError && <p className="settings-hint account-error" role="alert">{hubError}</p>}

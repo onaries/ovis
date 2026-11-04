@@ -40,6 +40,9 @@ jobs:
   validate:
     needs: preflight
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      actions: read
   # the Rust PTY host for Linux and macOS, attached when the release is created: installs read it by tag
   pty-sidecar:
     needs: preflight

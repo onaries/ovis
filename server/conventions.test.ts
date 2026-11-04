@@ -218,7 +218,8 @@ describe("herdr socket", () => {
     // server/herdr-core/adapter.ts is the other end: it answers herdr's events.subscribe (the
     // collector's own, reaching it through HERDR_SOCKET) from hc's event stream of the same name;
     // hc's generated types, their generator and the hc connection only name that hc method as a type
-    const HC_STREAM_TYPES = ["server/herdr-core/adapter.ts", "server/herdr-core/hc-api.generated.ts", "scripts/hc-types.ts", "server/herdr-core/connection.ts"];
+    // server/herdr-core/pin-label.ts reads hc's own `labels` events for pins, never a pane's status
+    const HC_STREAM_TYPES = ["server/herdr-core/adapter.ts", "server/herdr-core/hc-api.generated.ts", "scripts/hc-types.ts", "server/herdr-core/connection.ts", "server/herdr-core/pin-label.ts"];
     const raw = matches(files("{server,src,shared,scripts}/**/*.{ts,tsx,mjs,js}").filter((file) => !file.endsWith(".test.ts")), /["']events\.subscribe["']/).filter((match) => match.file !== "server/herdr/client.ts" && !HC_STREAM_TYPES.includes(match.file));
     fail([...subscribers, ...raw].map((match) => match.at),
       "server/collector.ts is the only status subscription (startStatusCollector), and `events.subscribe` is sent only by subscribeEvents in server/herdr/client.ts: take pane status from the collector's callbacks (onStatus, onPaneEnded, onBaseline) in server/index.ts instead of subscribing again.");

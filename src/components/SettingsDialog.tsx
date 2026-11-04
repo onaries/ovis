@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import { ArrowLeft, Bell, Bot, ChevronRight, Info, Keyboard, MessageSquare, Mic, Monitor, Palette, Plus, Search, Smartphone, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
@@ -18,6 +18,8 @@ import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, HISTORY_PROMPT
 import { pickTheme, rowFor, THEME_IDS, type Mode, type ThemeId } from "../lib/themes.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useLocale, useT } from "../lib/i18n.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
+import { awaitRestart, restartState, subscribeRestart } from "../lib/runtimeSwitch.ts";
+import { paneLifetimes } from "../lib/paneLifetime.ts";
 import { KeyBarSettings } from "./KeyBarSettings.tsx";
 import { onSettingsHistory, recordSettings, settingsEntry, settingsLevels, type SettingsLevel } from "../lib/settingsHistory.ts";
 import { Segmented, SettingsGroup, SettingsRow, SettingsSelect, Stepper, Toggle } from "./SettingsControls.tsx";
@@ -26,9 +28,9 @@ import { UI_FONT_MAX, UI_FONT_MIN, UI_FONT_PRESET_FAMILY, uiFontPreset, type UiF
 import { canListInstalledFonts, filterFamilies, isMonospaceFamily, queryInstalledFonts } from "../lib/installedFonts.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
 import type { UserError } from "../lib/userError.ts";
-import type { HerdrCoreFacts, Machine, MachineSettings } from "../../shared/machines.ts";
+import { LOCAL_MACHINE, type HerdrCoreFacts, type HerdrRuntimeFacts, type Machine, type MachineSettings } from "../../shared/machines.ts";
 import { canHideMachine, isMachineShown, setHiddenMachines, useHiddenMachines, withMachineHidden } from "../lib/hiddenMachines.ts";
-import { fetchRemoteAccess, fetchVoiceStatus, machineRequest, saveVoiceConfig } from "../lib/api.ts";
+import { fetchRemoteAccess, fetchVoiceStatus, machineRequest, saveVoiceConfig, switchRuntime, fetchBridgeHealth } from "../lib/api.ts";
 import { isLoopbackHost, phonePlan } from "../lib/phone.ts";
 import type { PushActionResult } from "../lib/pushHealth.ts";
 import type { HealthAuth, PluginActions, RemoteAccess } from "../../shared/protocol.ts";
@@ -80,6 +82,12 @@ export interface SettingsDialogProps {
   herdrRuntime?: "herdr" | "herdr-core" | null;
   /** what the server's PC has of herdr-core, from the same check; null when it did not say */
   herdrCore?: HerdrCoreFacts | null;
+  /** which runtime the server serves and what Settings may switch it to, from the same check */
+  herdrRuntimeFacts?: HerdrRuntimeFacts | null;
+  /** the server's boot id from the same check: a new one after a switch is the restarted server */
+  bootId?: string | null;
+  /** a runtime switch's restarted server answers: the app reads its facts and terminals again */
+  onServerRestarted?: () => void;
   /** what protects this server, from the last bridge health check: never an earlier answer once one fails */
   security: SecurityFacts;
   onEnableNotifications: () => Promise<PushActionResult>;
@@ -1053,38 +1061,105 @@ function PluginsGroup() {
 }
 
 /**
- * Read-only: which runtime this PC's terminals come from. On herdr's TUI, a Herdr app core found
- * on the same PC gets one quiet line on how to show its terminals instead; nothing switches here.
+ * Which runtime this PC's terminals come from, and the switch between herdr's TUI and the Herdr
+ * app when this PC has both and nothing else decides it. A switch asks first, saves the choice and
+ * restarts Ovis on it; once a new server answers, the app reads it again in place (no reload). Where the switch cannot run,
+ * one quiet line says why, or how to switch by hand.
  */
-function RuntimeFacts({ version, runtime, core }: { version: string | null; runtime: "herdr" | "herdr-core" | null; core: HerdrCoreFacts | null }) {
+function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onServerRestarted }: { version: string | null; runtime: "herdr" | "herdr-core" | null; core: HerdrCoreFacts | null; facts: HerdrRuntimeFacts | null; bootId: string | null; onServerRestarted?: () => void }) {
   const t = useT();
-  if (runtime === null || version === null) return null;
-  const onCore = runtime === "herdr-core";
+  const [confirming, setConfirming] = useState(false);
+  // the wait for the restarted server outlives this page of Settings (lib/runtimeSwitch.ts)
+  const restarting = useSyncExternalStore(subscribeRestart, restartState);
+  // the bridge's own answer needs no herdr: with herdr's TUI stopped it still says what to switch back to
+  const [bridgeFacts, setBridgeFacts] = useState<HerdrRuntimeFacts | null>(null);
+  useEffect(() => {
+    if (restarting !== null) return;
+    let live = true;
+    // unanswered: the whole health answer's facts stand, as they did before this read. Read again while
+    // About is open: the server's first look for hc may end later, and with herdr stopped nothing else tells
+    const read = () => fetchBridgeHealth().then((health) => { if (live) setBridgeFacts(health.herdr_runtime ?? null); }, () => {});
+    void read();
+    const timer = setInterval(() => void read(), 10_000);
+    return () => { live = false; clearInterval(timer); };
+  }, [restarting, bootId]);
+  if (restarting !== null) {
+    return (
+      <SettingsGroup title={t("Terminals")} section="runtime">
+        <p className="settings-item settings-hint" role="status">{restarting.lost ? t("Ovis has not answered since the restart. Reload this page in a moment; if it stays away, start Ovis again on this PC.")
+          : restarting.to === "herdr-core" ? t("Restarting Ovis on the Herdr app…") : t("Restarting Ovis on herdr TUI…")}</p>
+      </SettingsGroup>
+    );
+  }
+  const facts = bridgeFacts ?? healthFacts;
+  // the runtime the bridge serves now; the last health answer's version only when it was about that runtime
+  const served = facts?.serving ?? runtime;
+  const known = served === runtime ? version : null;
+  if (served === null || (known === null && facts === null)) return null;
+  const onCore = served === "herdr-core";
   const vars = { version: core?.version ?? "", setting: "OVIS_RUNTIME=herdr-core", command: "herdr plugin config-dir devswha.ovis" };
-  const detail = !onCore ? t("Version {version}.", { version })
-    : core?.session ? t("herdr-core {version}, session {session}.", { version, session: core.session })
-    : t("herdr-core {version}.", { version });
+  const coreVersion = known ?? core?.version ?? "";
+  const detail = !onCore ? (known !== null ? t("Version {version}.", { version: known }) : t("herdr's TUI server is not running."))
+    : core?.session ? t("herdr-core {version}, session {session}.", { version: coreVersion, session: core.session })
+    : t("herdr-core {version}.", { version: coreVersion });
+  const target = facts?.switch_to ?? null;
   // under the fact, not beside it: the fact keeps its one line on a phone
-  const hint = onCore || !core?.version ? null
+  const hint = facts?.fallback === "no_herdr_core" ? t("The Herdr app was chosen here, but no herdr-core answered, so herdr TUI is shown.")
+    : facts?.locked === "env" ? t("OVIS_RUNTIME in Ovis's environment decides which terminals this PC shows; change it there to switch.")
+    // where the OS does not serve herdr-core, setting OVIS_RUNTIME=herdr-core would stop Ovis: no how-to
+    : target !== null || onCore || !core?.version || facts?.locked === "platform" ? null
     : core.running ? t("The Herdr app's core (hc {version}) runs on this PC too. To show its terminals here instead, set {setting} and restart Ovis: in the .env file in the folder {command} prints when herdr's plugin starts Ovis, or in the environment of whatever else starts it.", vars)
     : t("The Herdr app's core (hc {version}) is installed on this PC too. To show its terminals here instead, set {setting} and restart Ovis: in the .env file in the folder {command} prints when herdr's plugin starts Ovis, or in the environment of whatever else starts it.", vars);
+  const toCore = target === "herdr-core";
   return (
     <SettingsGroup title={t("Terminals")} section="runtime">
       <SettingsRow label={t("This PC serves")} description={detail}>
         <span className="settings-fact">{onCore ? t("Herdr app") : t("herdr TUI")}</span>
       </SettingsRow>
+      {target !== null && (
+        <SettingsRow label={toCore ? t("Show the Herdr app's terminals") : t("Show herdr TUI's terminals")}
+          description={toCore ? t("Ovis restarts on the Herdr app's core (hc {version}).", { version: core?.version ?? "" })
+            : facts?.tui.running ? t("Ovis restarts on herdr's TUI server.") : t("Ovis restarts on herdr's TUI server, which is not running: start herdr after the switch.")}>
+          <button type="button" className="btn" onClick={() => setConfirming(true)}>{t("Switch")}</button>
+        </SettingsRow>
+      )}
       {hint && <p className="settings-item settings-hint">{hint}</p>}
+      {confirming && target !== null && (
+        <ConfirmDialog
+          title={toCore ? t("Show the Herdr app's terminals?") : t("Show herdr TUI's terminals?")}
+          body={toCore
+            ? t("Ovis restarts and shows the Herdr app's terminals instead of herdr TUI's; this page reconnects by itself. herdr's panes keep running.")
+            : t("Ovis restarts and shows herdr TUI's terminals instead of the Herdr app's; this page reconnects by itself. The app's terminals keep running.")}
+          confirmLabel={t("Switch and restart")}
+          onConfirm={async () => {
+            // the bridge answering now (its boot id needs no herdr): any other one after the switch is the restarted server
+            const from = await fetchBridgeHealth().then((health) => health.web_ui?.boot_id ?? bootId, () => bootId);
+            await switchRuntime(target);
+            // this PC's panes come from the other runtime next, which may be one the page drew before
+            paneLifetimes.runtimeSwitched(LOCAL_MACHINE);
+            setConfirming(false);
+            awaitRestart(target, {
+              from,
+              // the bridge's own answer needs no herdr, and says whether the launcher took it as its own
+              boot: () => fetchBridgeHealth().then((health) => health.web_ui ? { id: health.web_ui.boot_id, accepted: health.accepted === true } : null),
+              onBack: () => { paneLifetimes.runtimeSwitched(LOCAL_MACHINE); onServerRestarted?.(); },
+            });
+          }}
+          onClose={() => setConfirming(false)}
+        />
+      )}
     </SettingsGroup>
   );
 }
 
-function AboutPage({ updates, herdrVersion, herdrRuntime, herdrCore, bridgesFollow }: { updates: UpdatesModel; herdrVersion: string | null; herdrRuntime: "herdr" | "herdr-core" | null; herdrCore: HerdrCoreFacts | null; bridgesFollow: boolean }) {
+function AboutPage({ updates, herdrVersion, herdrRuntime, herdrCore, herdrRuntimeFacts, bootId, onServerRestarted, bridgesFollow }: { updates: UpdatesModel; herdrVersion: string | null; herdrRuntime: "herdr" | "herdr-core" | null; herdrCore: HerdrCoreFacts | null; herdrRuntimeFacts: HerdrRuntimeFacts | null; bootId: string | null; onServerRestarted?: () => void; bridgesFollow: boolean }) {
   const t = useT();
   return (
     <>
       <UpdateControls updates={updates} bridgesFollow={bridgesFollow} />
-      <RuntimeFacts version={herdrVersion} runtime={herdrRuntime} core={herdrCore} />
-      <HerdrUpdateControls enabled herdrVersion={herdrVersion} />
+      <RuntimeFacts version={herdrVersion} runtime={herdrRuntime} core={herdrCore} facts={herdrRuntimeFacts} bootId={bootId} onServerRestarted={onServerRestarted} />
+      {/* herdr's own version and update: on herdr-core there is no herdr TUI here, and Terminals names the core */}
+      {herdrRuntime !== "herdr-core" && <HerdrUpdateControls enabled herdrVersion={herdrVersion} />}
       <PluginsGroup />
       <TelemetryControls />
       <SettingsGroup title={t("About")} className="settings-about" section="about">
@@ -1160,7 +1235,7 @@ function SaveFailure({ error, paused, retrying, onRetry }: { error: UserError; p
   </div>;
 }
 
-function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, onOpenPane, actions, updates, auth, herdrVersion, herdrRuntime = null, herdrCore = null, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [] }: SettingsDialogProps) {
+function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, onOpenPane, actions, updates, auth, herdrVersion, herdrRuntime = null, herdrCore = null, herdrRuntimeFacts = null, bootId = null, onServerRestarted, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [] }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
   // opened by Forward, the dialog shows what that entry of the history showed
@@ -1298,7 +1373,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       // after every device went, its own pairing included, a browser asks the server where it stands: the roster answers, or the gate does
       case "devices": return <DevicesPage auth={auth} security={security} onSignOut={actions.lock} onRevokedAll={actions.refresh} />;
       case "remote": return <RemotePcsPage actions={actions} machines={machines} pcSettings={pcSettings} pcSettingsError={pcSettingsError} onPcSettings={(patch) => void updatePcSettings(patch)} />;
-      case "about": return <AboutPage updates={updates} herdrVersion={herdrVersion} herdrRuntime={herdrRuntime} herdrCore={herdrCore} bridgesFollow={pcSettings?.auto_update_bridges === true} />;
+      case "about": return <AboutPage updates={updates} herdrVersion={herdrVersion} herdrRuntime={herdrRuntime} herdrCore={herdrCore} herdrRuntimeFacts={herdrRuntimeFacts} bootId={bootId} onServerRestarted={onServerRestarted} bridgesFollow={pcSettings?.auto_update_bridges === true} />;
       default: return null;
     }
   };

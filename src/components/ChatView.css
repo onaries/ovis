@@ -465,6 +465,15 @@
   border-radius: var(--radius-lg);
 }
 
+/* an image that decoded before (a reopened chat, a row scrolled back in) holds the box
+   .markdown-image will take: its own width at most, narrower where the height bound stops it, its ratio */
+.markdown .image-slot.is-loading.is-sized {
+  /* no bound outside .chat-transcript, as for .markdown-image */
+  width: min(100%, var(--image-width), calc(var(--chat-image-max-h, 100000px) * var(--image-aspect)));
+  aspect-ratio: var(--image-ratio);
+  max-height: var(--chat-image-max-h);
+}
+
 /* a README's centered logo and badges (shared/markdownHtml.ts) */
 .markdown .markdown-center {
   text-align: center;

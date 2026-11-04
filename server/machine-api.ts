@@ -1,4 +1,5 @@
-import type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, SetupAction, SetupRequest } from "../shared/machines.ts";
+import { subscribeMachineEvents } from "./machine-events.ts";
+import type { DevicePairedEvent, MachineRoster, SetupAction, SetupRequest } from "../shared/machines.ts";
 import type { AgentRowTokens } from "../shared/pane-tokens.ts";
 import type { SharedPreferences } from "../shared/preferences.ts";
 import type { PanePromptResponse, SessionSnapshot } from "../shared/protocol.ts";
@@ -7,7 +8,7 @@ import { MachineManager } from "./machines.ts";
 import { canSendSecret, sameOrigin } from "./machine-security.ts";
 import { isJsonObject, jsonResponse, setRequestRoute } from "./http.ts";
 import { crossSiteFileRead } from "./file-view.ts";
-import { decidedRowTokens, reportedTokenValues, snapshotWithoutHiddenTokens, withoutHiddenTokens } from "./herdr-sidebar.ts";
+import { snapshotWithoutHiddenTokens, withoutHiddenTokens } from "./herdr-sidebar.ts";
 import { parseJson, readCapped, REMOTE_LIMITS, RemoteResponseInvalid, RemoteResponseTooLarge } from "./remote-json.ts";
 
 const fail = (code: string, message: string, status: number) => jsonResponse({ error: { code, message } }, status);
@@ -154,10 +155,6 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
     if (parts[0] === "events" && parts.length === 1 && request.method === "GET") {
       setRequestRoute("/api/machines/events");
       let stop: (() => void) | undefined;
-      let stopPreferences: (() => void) | undefined;
-      let stopSidebar: (() => void) | undefined;
-      let stopSeen: (() => void) | undefined;
-      let stopPairings: (() => void) | undefined;
       let unwatchDevice: (() => void) | undefined;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let close = () => {};
@@ -168,7 +165,7 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       // the browser went away: what still waits for it is dropped, not kept for a reader that is gone
       const aborted = () => drop();
       const cleanup = () => {
-        stop?.(); stopPreferences?.(); stopSidebar?.(); stopSeen?.(); stopPairings?.(); unwatchDevice?.(); clearInterval(heartbeat);
+        stop?.(); unwatchDevice?.(); clearInterval(heartbeat);
         request.signal.removeEventListener("abort", aborted);
         if (queue) forgetQueue(queue);
         relayBudget?.release(charged);
@@ -240,52 +237,8 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
             if (bytes.byteLength > MACHINE_EVENTS_QUEUE_BYTES) large.push({ end: written, bytes: bytes.byteLength });
             retell();
           };
-          // herdr's sidebar rows are this PC's config, as herdr's own sidebar takes the client's for every PC.
-          // A roster leaves without the values their hide rules hide (withoutHiddenTokens), so no browser holds one;
-          // the rules' decisions (decidedRowTokens) go first, in the same write, showing the values of this roster and
-          // of the one the browser holds until it lands, and hiding any other where a rule hides, as a value kept from
-          // a roster told under other rows. New rows are told with the roster again under them.
-          // Read before listening: a change this read finds is told to the browsers already listening, and to this one once.
-          let rows = herdrSidebar?.get() ?? null;
-          let reported = new Map<string, Set<string>>();
-          let roster: Machine[] | undefined;
-          let toldSidebar: string | undefined;
-          const sidebarFrame = (...values: Map<string, Set<string>>[]): string => {
-            if (!herdrSidebar) return "";
-            const told = JSON.stringify({ type: "herdr-sidebar", agents: decidedRowTokens(rows, ...values) } satisfies MachineEvent);
-            if (told === toldSidebar) return "";
-            toldSidebar = told;
-            return `data: ${told}\n\n`;
-          };
-          const sendSidebar = () => { const frame = sidebarFrame(reported); if (frame) send(frame); };
-          const sendRoster = (machines: Machine[]) => {
-            roster = machines;
-            const shown = withoutHiddenTokens(rows, machines);
-            const incoming = reportedTokenValues(shown);
-            const frame = sidebarFrame(reported, incoming);
-            reported = incoming;
-            send(`${frame}data: ${JSON.stringify({ type: "machines", machines: shown } satisfies MachineEvent)}\n\n`);
-          };
-          stop = manager.subscribe((event) => {
-            if (event.type === "machines") { sendRoster(event.machines); return; }
-            // a PC's own snapshot, relayed as it came: told as the roster is, without what the rows hide
-            const told = event.type === "machine-message" && event.message.type === "snapshot"
-              ? { ...event, message: { ...event.message, snapshot: snapshotWithoutHiddenTokens(rows, event.message.snapshot) } }
-              : event;
-            send(`data: ${JSON.stringify(told)}\n\n`);
-          });
-          // the shared preferences ride the same stream, one connection per browser; the document
-          // opens it, so a page that reconnects (or whose GET lost a race) holds the latest
-          const sendPreferences = (shared: SharedPreferences) => send(`data: ${JSON.stringify({ type: "preferences", preferences: shared } satisfies MachineEvent)}\n\n`);
-          stopPreferences = preferences?.subscribe(sendPreferences);
-          if (preferences) sendPreferences(preferences.get());
-          sendSidebar();
-          stopSidebar = herdrSidebar?.subscribe((next) => { rows = next; if (roster) sendRoster(roster); else sendSidebar(); });
-          const sendSeen = (finishes: SeenFinish[]) => send(`data: ${JSON.stringify({ type: "seen", finishes } satisfies MachineEvent)}\n\n`);
-          if (seen) sendSeen(seen.list());
-          stopSeen = seen?.subscribe((finish) => sendSeen([finish]));
-          // a device paired after this stream opened: the one event, as it happens (nothing is replayed on reconnect)
-          stopPairings = pairings?.subscribe((event) => send(`data: ${JSON.stringify(event satisfies MachineEvent)}\n\n`));
+          stop = subscribeMachineEvents({ manager, preferences, herdrSidebar, seen, pairings },
+            (event) => send(`data: ${JSON.stringify(event)}\n\n`));
           if (closed) { cleanup(); return; }
           heartbeat = machineEventsClock.heartbeat(() => send(": heartbeat\n\n"));
           request.signal.addEventListener("abort", aborted, { once: true });

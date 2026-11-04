@@ -706,6 +706,31 @@ it("flushes the last-seen update before it replaces the registry", () => {
   expect(new DeviceStore(root).list(null)[0]?.last_seen_at).toBe(new Date(confirmedAt + 61_000).toISOString());
 });
 
+it("notes when a relay device was last seen, at most once a minute on disk", async () => {
+  const root = mkdtempSync(join(dir, "relay-last-seen-"));
+  const store = new DeviceStore(root);
+  const keys = await relayKeys();
+  const pairedAt = Date.now() - 120_000;
+  const paired = store.pairRelay(store.startPairing().code, "Phone", keys.publicKeySpki, pairedAt)!;
+  expect(new DeviceStore(root).list(null)[0]?.last_seen_at).toBe(new Date(pairedAt).toISOString());
+  const auth = async (now: number) => {
+    const nonce = crypto.getRandomValues(new Uint8Array(32));
+    return store.matchRelay(paired.device.id, nonce, await relaySignature(keys.privateKey, nonce), "server-a", now);
+  };
+  const seenAt = Date.now();
+  expect(await auth(seenAt)).toEqual(paired.device);
+  expect(new DeviceStore(root).list(null)[0]?.last_seen_at).toBe(new Date(seenAt).toISOString());
+  expect(await auth(seenAt + 30_000)).toEqual(paired.device);
+  expect(new DeviceStore(root).list(null)[0]?.last_seen_at).toBe(new Date(seenAt).toISOString());
+  expect(await auth(seenAt + 61_000)).toEqual(paired.device);
+  expect(new DeviceStore(root).list(null)[0]?.last_seen_at).toBe(new Date(seenAt + 61_000).toISOString());
+  const before = readFileSync(join(root, "devices.json"), "utf8");
+  const blocked = new DeviceStore(root, "Sibling registry unreadable");
+  const nonce = crypto.getRandomValues(new Uint8Array(32));
+  expect(await blocked.matchRelay(paired.device.id, nonce, await relaySignature(keys.privateKey, nonce), "server-a", seenAt + 200_000)).toEqual(paired.device);
+  expect(readFileSync(join(root, "devices.json"), "utf8")).toBe(before);
+});
+
 it("keeps the previous registry intact and the credential valid when a last-seen write fails before rename", () => {
   const root = mkdtempSync(join(dir, "last-seen-failure-"));
   const store = new DeviceStore(root);

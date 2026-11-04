@@ -25,11 +25,14 @@ const app = mkdtempSync(join(tmpdir(), "herdr-old-safari-"));
 /**
  * What each browser lacks of the built-ins the app calls. iOS 16 (the last on an iPhone 8) lacks
  * the two that came in Safari 17.4; on a plain-http address, which is no secure context, any
- * browser also lacks crypto.randomUUID.
+ * browser also lacks crypto.randomUUID. Before 16.4 (`lookbehind`) Safari cannot parse a
+ * lookbehind either (#2534): the build hands every regular expression with one to `RegExp`, which
+ * then throws as Safari does.
  */
 const BROWSERS = [
-  { name: "ios-16", gone: ["Promise.withResolvers", "AbortSignal.any"] },
-  { name: "ios-16-plain-http", gone: ["Promise.withResolvers", "AbortSignal.any", "Crypto.prototype.randomUUID"] },
+  { name: "ios-16", gone: ["Promise.withResolvers", "AbortSignal.any"], lookbehind: true },
+  { name: "ios-16-plain-http", gone: ["Promise.withResolvers", "AbortSignal.any", "Crypto.prototype.randomUUID"], lookbehind: true },
+  { name: "ios-16.0", gone: ["Promise.withResolvers", "AbortSignal.any"], lookbehind: false },
 ];
 const PANES = [
   { name: "chat", pane: panes.omp, drawn: ".pane-frame.is-current .chat-turn" },
@@ -46,9 +49,20 @@ try {
   // app: a file of the page's own, as the Content-Security-Policy allows no inline script
   writeFileSync(join(app, "old-browser.js"), `{
     const owners = { Promise, AbortSignal, "Crypto.prototype": Crypto.prototype };
-    for (const path of window.oldBrowserLacks) {
+    for (const path of window.oldBrowserLacks.gone) {
       const dot = path.lastIndexOf(".");
       delete owners[path.slice(0, dot)][path.slice(dot + 1)];
+    }
+    if (!window.oldBrowserLacks.lookbehind) {
+      const lookbehind = /(?:^|[^\\\\])(?:\\\\\\\\)*\\(\\?<[=!]/;
+      const parse = (args) => {
+        if (typeof args[0] === "string" && lookbehind.test(args[0])) throw new SyntaxError("Invalid regular expression: invalid group specifier name");
+        return args;
+      };
+      window.RegExp = new Proxy(RegExp, {
+        construct: (target, args, newTarget) => Reflect.construct(target, parse(args), newTarget),
+        apply: (target, self, args) => Reflect.apply(target, self, parse(args)),
+      });
     }
   }\n`);
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>\n    <script src="./old-browser.js"></script>\n    <script type="module"`));
@@ -70,10 +84,10 @@ try {
     const label = `${old.name} ${item.name}`;
     const context = await browser.newContext({ ...devices["iPhone 14"], locale: "en-US", serviceWorkers: "block" });
     try {
-      await context.addInitScript((gone) => {
+      await context.addInitScript((lacks) => {
         localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
-        (window as unknown as { oldBrowserLacks: string[] }).oldBrowserLacks = gone;
-      }, old.gone);
+        (window as unknown as { oldBrowserLacks: typeof lacks }).oldBrowserLacks = lacks;
+      }, { gone: old.gone, lookbehind: old.lookbehind });
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
@@ -90,7 +104,7 @@ try {
       }
       if (outcome !== "drawn") failures.push(`${label}: ${outcome}`);
       else if (errors.length > 0) failures.push(`${label}: uncaught errors ${JSON.stringify(errors)}`);
-      else console.log(`old safari: the ${item.name} pane draws without what ${old.name} lacks (${old.gone.join(", ")})`);
+      else console.log(`old safari: the ${item.name} pane draws without what ${old.name} lacks (${[...old.gone, ...(old.lookbehind ? [] : ["lookbehind"])].join(", ")})`);
     } finally { await context.close(); }
   }
   assert.deepEqual(failures, [], "panes on older browsers");

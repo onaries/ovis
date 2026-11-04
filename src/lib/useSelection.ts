@@ -329,7 +329,7 @@ export function useSelectedLayout({ selectedPane, snapshot, drawerOpen, selected
   const selectedLayout = snapshot?.layouts.find((layout) => layout.tab_id === selectedPane?.tab_id);
   // Selection can precede rendering: in a zoomed tab the layout effect below redirects it,
   // but the sidebar's passive effect can still see that first selection. Only the selected
-  // pane the canvas actually draws counts; paneInFront checks coverage at acknowledgement time.
+  // pane the canvas actually draws counts; panePresence checks coverage at acknowledgement time.
   const presentedPaneId = !drawerOpen && selectedPane && !selectedPane.restore_error
     && (!selectedLayout?.panes.length || selectedLayout.panes.some((pane) => pane.pane_id === selectedPane.pane_id))
     && (!selectedLayout?.zoomed || selectedLayout.focused_pane_id === selectedPane.pane_id)

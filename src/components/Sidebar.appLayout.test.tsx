@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, jest, spyOn } from "bun:test";
 import { act, createElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 
@@ -128,6 +128,66 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
       await draw(roster([workspace("a"), workspace("b")]), true, true);
       expect(requested.filter((url) => url.includes("/api/worktree/list?"))).toEqual([]);
     } finally {
+      fetch.mockRestore();
+    }
+  });
+
+  it("keeps asking about a checkout after herdr dropped one poll's connection (#2726)", async () => {
+    let dropped = false;
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request) => {
+      requested.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (dropped) return Response.json({ error: { code: "closed", message: "herdr closed the connection" } }, { status: 404 });
+      return Response.json({ source: { repo_key: "r", source_checkout_path: "/test-project" }, worktrees: [{ path: "/test-project", branch: "main", is_detached: false, open_workspace_id: "a" }] });
+    }, { preconnect: globalThis.fetch.preconnect }));
+    jest.useFakeTimers();
+    const asked = () => requested.filter((url) => url === "/api/worktree/list?workspace_id=a").length;
+    const settle = async () => { for (let turn = 0; turn < 50; turn++) await act(async () => { await Promise.resolve(); }); };
+    try {
+      await draw(roster([workspace("a")]), false, true);
+      await settle();
+      expect(asked()).toBe(2);
+      dropped = true;
+      await act(async () => { jest.advanceTimersByTime(30_000); });
+      await settle();
+      expect(asked()).toBe(3);
+      dropped = false;
+      await act(async () => { jest.advanceTimersByTime(30_000); });
+      await settle();
+      expect(asked()).toBe(4);
+    } finally {
+      jest.useRealTimers();
+      fetch.mockRestore();
+    }
+  });
+
+  it("stops asking about a row whose folder stopped being a checkout (#2726)", async () => {
+    let checkout = true;
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request) => {
+      requested.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (!checkout) return Response.json({ error: { code: "not_git_worktree", message: "not a git worktree" } }, { status: 404 });
+      return Response.json({ source: { repo_key: "r", source_checkout_path: "/test-project" }, worktrees: [{ path: "/test-project", branch: "main", is_detached: false, open_workspace_id: "a" }] });
+    }, { preconnect: globalThis.fetch.preconnect }));
+    jest.useFakeTimers();
+    const asked = () => requested.filter((url) => url === "/api/worktree/list?workspace_id=a").length;
+    const settle = async () => { for (let turn = 0; turn < 50; turn++) await act(async () => { await Promise.resolve(); }); };
+    try {
+      await draw(roster([workspace("a")]), false, true);
+      await settle();
+      // asked once whether it is a repository, then once by the branch poll
+      expect(asked()).toBe(2);
+      checkout = false;
+      await act(async () => { jest.advanceTimersByTime(30_000); });
+      await settle();
+      // the next poll is refused
+      const afterRefusal = asked();
+      expect(afterRefusal).toBe(3);
+      for (let poll = 0; poll < 3; poll++) {
+        await act(async () => { jest.advanceTimersByTime(30_000); });
+        await settle();
+      }
+      expect(asked()).toBe(afterRefusal);
+    } finally {
+      jest.useRealTimers();
       fetch.mockRestore();
     }
   });

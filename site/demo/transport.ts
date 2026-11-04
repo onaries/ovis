@@ -1016,6 +1016,7 @@ const DEMO_BRANCH_DIFF: { file: RepoDiffFile; patch: string | null }[] = [
  * token that has not expired), offering the status line until it is turned on.
  */
 let demoStatusline = false;
+const removedUsageAccounts = new Set<string>();
 const USAGE_STATE = new URLSearchParams(location.search).get("demo_usage");
 
 /** Settings → Agents' accounts on the demo: plans as the workstation's CLIs might report them, resets counted from now. */
@@ -1026,7 +1027,7 @@ const USAGE_STATE = new URLSearchParams(location.search).get("demo_usage");
  * and code, and signs in after a few reads. Without the switch the demo runs no login.
  */
 const SIGN_IN_DEMO = new URLSearchParams(location.search).get("demo_sign_in") === "1";
-const signInDemo = { panes: new Map<string, { provider: "claude" | "codex"; reads: number; code: boolean }>(), signedIn: new Set<string>(), next: 1 };
+const signInDemo = { panes: new Map<string, { provider: "claude" | "codex"; account: string; reads: number; code: boolean }>(), signedIn: new Set<string>(), next: 1 };
 const CLAUDE_SIGN_IN_URL = "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&code_challenge=demo&code_challenge_method=S256&state=demo";
 
 function usageReport(): UsageReport {
@@ -1300,7 +1301,23 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/portal/start" || path === "/api/portal/stop" || path === "/api/portal/invite") return error("portal_unsupported", "The demo opens no public address.", 409);
   if (path === "/api/herdr-ui") return json({ copy_on_select: true }, 200, { "cache-control": "no-store" });
   if (path === "/api/access") return json({ port: 7317, relay: demoRelayStatus(), tailscale: { state: "running", dns_name: "workstation.example.ts.net", serving_url: "https://workstation.example.ts.net", serve_command: null, serve_url: null } });
-  if (path === "/api/usage") return json(usageReport(), 200, { "cache-control": "no-store" });
+  if (path === "/api/usage") {
+    const report = usageReport();
+    const removed = report.providers.filter((account) => removedUsageAccounts.has(account.key));
+    return json({ ...report, providers: report.providers.filter((account) => !removedUsageAccounts.has(account.key)), ...(removed.length > 0 ? { removed } : {}) }, 200, { "cache-control": "no-store" });
+  }
+  if (path === "/api/usage/accounts") {
+    if (method !== "DELETE" && method !== "POST") return error("method_not_allowed", "Use DELETE or POST /api/usage/accounts", 405);
+    if (demoAuth.role === "watch") return error("read_only", "this device can only watch", 403);
+    let body: unknown;
+    try { body = JSON.parse(String(init?.body ?? "{}")); } catch { return error("invalid_json", "The body is not JSON", 400); }
+    if (typeof body !== "object" || body === null || !("account" in body) || typeof body.account !== "string" || body.account === "") return error("invalid_account", "Name one listed account", 400);
+    const key = body.account;
+    if (method === "POST") { removedUsageAccounts.delete(key); return new Response(null, { status: 204 }); }
+    if (!usageReport().providers.some((account) => account.key === key)) return error("account_not_found", "This PC no longer lists that account", 404);
+    removedUsageAccounts.add(key);
+    return new Response(null, { status: 204 });
+  }
   if (path === "/api/usage/statusline") {
     if (method === "POST") {
       let raw: unknown;
@@ -1315,7 +1332,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     if (login === undefined) return error("login_not_found", "No sign-in this server started runs in that pane", 404);
     login.reads += 1;
     const ended = login.provider === "claude" ? login.code : login.reads > 3;
-    if (ended) signInDemo.signedIn.add(login.provider);
+    if (ended) { signInDemo.signedIn.add(login.provider); removedUsageAccounts.delete(login.account); }
     if (ended) return json({ provider: login.provider, url: null, user_code: null, wants_code: false, ended: true, succeeded: true, account: login.provider === "claude" ? "me@example.test" : "codex@example.test" }, 200, { "cache-control": "no-store" });
     return json(login.provider === "claude"
       ? { provider: "claude", url: CLAUDE_SIGN_IN_URL, user_code: null, wants_code: true, ended: false }
@@ -1336,10 +1353,11 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   }
   if (path === "/api/usage/login") {
     if (SIGN_IN_DEMO && method === "POST") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { provider?: string; follow?: boolean };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { provider?: string; follow?: boolean; account?: string };
       if (!body.follow || (body.provider !== "claude" && body.provider !== "codex")) return error("demo", "This demo follows Claude Code and Codex only.", 409);
+      if (body.account !== undefined && !body.account.startsWith(`${body.provider}:`)) return error("account_not_found", "This PC no longer lists that account. Refresh and try again.", 404);
       const login = `demo-login-${signInDemo.next++}`;
-      signInDemo.panes.set(login, { provider: body.provider, reads: 0, code: false });
+      signInDemo.panes.set(login, { provider: body.provider, account: body.account ?? (body.provider === "claude" ? "claude:demo-claude" : "codex:demo-codex-home"), reads: 0, code: false });
       return json({ login_id: login, device_auth: body.provider === "codex" });
     }
     if (method === "GET") {
@@ -2277,6 +2295,9 @@ class DemoSocket extends EventTarget {
       if (this.requests.size > 128) this.requests.delete(this.requests.keys().next().value!);
     }
     switch (message.type) {
+      case "machine-events":
+        // Not advertised by the demo: its machine document still arrives through its SSE stand-in.
+        break;
       case "role":
         this.mode = message.mode === "observe" ? "observe" : "interact";
         if (this.mode === "observe") this.holdPending(undefined, "read_only", "This connection now only watches. Pending messages will not be sent automatically.");

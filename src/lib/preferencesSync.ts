@@ -21,8 +21,8 @@ import { ApiError, fetchPreferences, savePreferences } from "./api.ts";
 import { DEFAULT_THEME } from "./themes.ts";
 import { sanitizeSettings, sharedSettings, useSettings, type Settings } from "./settings.ts";
 import { currentPaneMutes, setPaneMutes, subscribePaneMutes } from "./paneMutes.ts";
-import { currentSidebarPins, setSidebarPins, subscribeSidebarPins } from "./sidebarPins.ts";
-import { currentTabLabels, setTabLabels, subscribeTabLabels } from "./tabLabels.ts";
+import { currentSidebarPins, loadSharedPins, saveSharedPins, setSidebarPins, subscribeSidebarPins } from "./sidebarPins.ts";
+import { attachmentTabLabel, currentTabLabels, setTabLabels, subscribeTabLabels } from "./tabLabels.ts";
 import { userErrorMessage, type UserError } from "./userError.ts";
 
 const SEND_AFTER_MS = 600;
@@ -34,6 +34,27 @@ const PAUSE_AFTER = 3;
 const PAUSED_RETRY_MS = 60_000;
 /** each refusal after the pause doubles the wait, up to this */
 const PAUSED_RETRY_MAX_MS = 5 * 60_000;
+/**
+ * Where a page that goes with a change unsent leaves it for the page that comes back in the same tab (a reload):
+ * the browser may drop the request sent on the way out, and the change would be lost (#2374).
+ */
+const CARRIED_KEY = "ovis:preferences-unsent";
+interface Carried { revision: number; settings: Shared }
+
+function takeCarried(): Carried | null {
+  try {
+    const raw = window.sessionStorage.getItem(CARRIED_KEY);
+    window.sessionStorage.removeItem(CARRIED_KEY);
+    return raw === null ? null : JSON.parse(raw) as Carried;
+  } catch {
+    return null;
+  }
+}
+
+function carry(carried: Carried): void {
+  try { window.sessionStorage.setItem(CARRIED_KEY, JSON.stringify(carried)); } catch { /* storage blocked: the request on the way out is all there is */ }
+}
+
 /** how long a paused change waits before it goes once more, after `failures` failed saves in a row */
 const pausedWait = (failures: number): number => Math.min(PAUSED_RETRY_MS * 2 ** Math.max(0, failures - PAUSE_AFTER), PAUSED_RETRY_MAX_MS);
 
@@ -68,8 +89,10 @@ export function preferencesChange(base: Baseline, local: Local): PreferencesChan
   const heldLabels = base.tabLabels ?? {};
   const labelsHere = local.tabLabels ?? {};
   // while the setting is off the server keeps none: nothing learned is sent, so nothing is refused again and again
-  const added: Record<string, string> = base.tabLabels === null || local.settings.autoTabNames === false ? {} : Object.fromEntries(Object.entries(labelsHere).filter(([key]) => !(key in heldLabels)));
-  const removed = base.tabLabels === null ? [] : Object.keys(heldLabels).filter((key) => !(key in labelsHere));
+  // a label an earlier version learned from an attachment's path is replaced by the one learned again (#2637)
+  const replaced = (key: string): boolean => key in labelsHere && key in heldLabels && attachmentTabLabel(heldLabels[key]!) && labelsHere[key] !== heldLabels[key];
+  const added: Record<string, string> = base.tabLabels === null || local.settings.autoTabNames === false ? {} : Object.fromEntries(Object.entries(labelsHere).filter(([key]) => !(key in heldLabels) || replaced(key)));
+  const removed = base.tabLabels === null ? [] : Object.keys(heldLabels).filter((key) => !(key in labelsHere) || (key in added && replaced(key)));
   // a label dropped because its pane was seen gone is no one's action: the drop waits for a change someone made,
   // so reading or watching a page never writes the shared preferences
   const othersChanged = Object.keys(settings).length > 0 || pinsChanged || mutedChanged || Object.keys(added).length > 0;
@@ -129,8 +152,11 @@ export function takePreferences(base: Baseline, local: Local, remote: SharedPref
     if (!(key in incoming)) continue;
     const value = incoming[key];
     if (!same(sanitizeSettings({ [key]: value })[key], value)) continue;
-    const sent = inFlight !== null && key in inFlight.settings && same(inFlight.settings[key], local.settings[key]);
-    const edited = !same(local.settings[key], base.settings[key]) && !sent;
+    const flown = inFlight !== null && key in inFlight.settings;
+    const sent = flown && same(inFlight.settings[key], local.settings[key]);
+    // measured against the change on its way, as the muted panes are: a value set back while it was
+    // on its way is an edit, though it matches what the server held before
+    const edited = !same(local.settings[key], flown ? inFlight.settings[key] : base.settings[key]) && !sent;
     const overtaken = refused !== null && key in refused.settings && same(local.settings[key], refused.settings[key]) && !same(value, base.settings[key]);
     settings[key] = value;
     if (force || !edited || overtaken) patch[key] = value;
@@ -143,7 +169,7 @@ export function takePreferences(base: Baseline, local: Local, remote: SharedPref
     if (base.pins === null && !force) pins = [...remote.pins, ...local.pins.filter((pin) => !remote.pins!.includes(pin))];
     else {
       const sent = inFlight?.pins !== undefined && same(inFlight.pins, local.pins);
-      const edited = !same(local.pins, base.pins) && !sent;
+      const edited = !same(local.pins, inFlight?.pins ?? base.pins) && !sent;
       const overtaken = refused?.pins !== undefined && same(local.pins, refused.pins) && !same(remote.pins, base.pins);
       if (force || !edited || overtaken) pins = [...remote.pins];
     }
@@ -180,7 +206,8 @@ export function takePreferences(base: Baseline, local: Local, remote: SharedPref
     if (force || remote.settings.autoTabNames === false) tabLabels = { ...remoteLabels };
     else {
       const merged: Record<string, string> = {};
-      for (const [key, label] of Object.entries(remoteLabels)) if (key in now || !(key in reference)) merged[key] = label;
+      // a label learned here again over an attachment's (#2637) stays, to replace it as preferencesChange does (#2682)
+      for (const [key, label] of Object.entries(remoteLabels)) if (key in now || !(key in reference)) merged[key] = key in now && attachmentTabLabel(label) && now[key] !== label ? now[key]! : label;
       for (const [key, label] of Object.entries(now)) if (!(key in reference) && !(key in merged)) merged[key] = label;
       tabLabels = merged;
     }
@@ -226,7 +253,8 @@ export function usePreferencesSync(enabled: boolean): PreferencesSync {
   const latest = useRef<Local>({ settings, pins, muted, tabLabels });
   latest.current = { settings, pins, muted, tabLabels };
   // what this browser last knew the server to hold; until a document arrives, what it holds itself
-  const base = useRef<Baseline>({ settings: sharedSettings(settings), pins: null, muted: null, tabLabels: {} });
+  const stored = useRef(loadSharedPins());
+  const base = useRef<Baseline>({ settings: sharedSettings(settings), pins: stored.current?.pins ?? null, muted: null, tabLabels: {} });
   const revision = useRef(0);
   // a document has arrived (the GET, or the event stream's opening): sending begins then
   const loadedRef = useRef(false);
@@ -271,12 +299,35 @@ export function usePreferencesSync(enabled: boolean): PreferencesSync {
   const outlives = useRef<string | null>(null);
   // the baseline is a ref: a document that changes nothing here still moves what is pending
   const [, setTaken] = useState(0);
+  // what the page this tab showed before went with unsent, read once
+  const carried = useRef<Carried | null | undefined>(undefined);
+  if (carried.current === undefined) carried.current = takeCarried();
 
   const absorb = useCallback((remote: SharedPreferences) => {
     if (off.current || (loadedRef.current && remote.revision <= revision.current)) return;
+    // a change the page before this one sent on its way out, where the server holds nothing newer than that page
+    // knew: the request may have been lost, so each value still here as it went is this page's edit and goes again
+    const before = carried.current;
+    carried.current = null;
+    if (before && !loadedRef.current && remote.revision <= before.revision) {
+      for (const [key, value] of Object.entries(before.settings)) {
+        if (same(latest.current.settings[key as SharedSettingKey], value)) delete base.current.settings[key as SharedSettingKey];
+      }
+    }
     revision.current = Math.max(revision.current, remote.revision);
+    // the page's first document from a server that started over (a fresh state folder: another folder's
+    // id, or, from a server that names none, revisions that went back): the pins this browser kept
+    // knowing are not its, and its own join the server's as on a first share
+    const kept = stored.current;
+    const startedOver = kept !== null && (remote.revision < kept.revision || (kept.stateId !== undefined && remote.state_id !== undefined && remote.state_id !== kept.stateId));
+    if (!loadedRef.current && startedOver) base.current = { ...base.current, pins: null };
     const taken = takePreferences(base.current, latest.current, remote, inFlight.current, readOnly.current, refused.current);
-    base.current = taken.base;
+    // the page's first document without pins comes from a server that holds none (a fresh state
+    // folder): the pins this browser kept knowing are not its, and its own go with its next change
+    base.current = !loadedRef.current && remote.pins === undefined ? { ...taken.base, pins: null } : taken.base;
+    // the id goes with the baseline it came with: a document without one (a release that names no folder)
+    // leaves none, and the next page goes by the revision, since that baseline may be another folder's
+    saveSharedPins(base.current.pins === null ? null : { pins: [...base.current.pins], revision: remote.revision, ...(remote.state_id === undefined ? {} : { stateId: remote.state_id }) });
     // a second document in the same tick compares against what this one set, not the last render
     latest.current = { settings: sanitizeSettings({ ...latest.current.settings, ...taken.patch }), pins: taken.pins ?? latest.current.pins, muted: taken.muted === undefined ? latest.current.muted : taken.muted, tabLabels: taken.tabLabels ?? latest.current.tabLabels };
     if (Object.keys(taken.patch).length > 0) update(taken.patch);
@@ -392,10 +443,13 @@ export function usePreferencesSync(enabled: boolean): PreferencesSync {
         // a page that is hidden and then goes sends once: what already went out to outlive it stays as it is
         if (outlives.current === pending) return;
         outlives.current = pending;
-        savePreferences(JSON.parse(pending) as PreferencesChange, true).catch(() => undefined);
+        const body = JSON.parse(pending) as PreferencesChange;
+        carry({ revision: revision.current, settings: body.settings });
+        savePreferences(body, true).catch(() => undefined);
         return;
       }
       window.clearTimeout(timer);
+      carry({ revision: revision.current, settings: (JSON.parse(pending) as PreferencesChange).settings });
       sendNow(true);
     };
     const listen = (): (() => void) => {

@@ -1116,6 +1116,14 @@ process.stdin.on("data", (chunk) => {
     const sleeper = join(lifecycleRoot, "bin", "opencode");
     writeFileSync(sleeper, "#!/bin/sh\nsleep 600\n");
     chmodSync(sleeper, 0o755);
+    // An OpenCode that leaves when the test says so. A ctrl+c typed into its pane is not sure to end it:
+    // in a loaded CI run herdr never saw the stand-in go, and the pane stayed OpenCode until it closed.
+    mkdirSync(join(lifecycleRoot, "leaving"), { recursive: true });
+    const leaver = join(lifecycleRoot, "leaving", "opencode");
+    const leave = join(lifecycleRoot, "leave.fifo");
+    expect(await Bun.spawn(["mkfifo", leave]).exited).toBe(0);
+    writeFileSync(leaver, `#!/bin/sh\nread _ < '${leave}'\n`);
+    chmodSync(leaver, 0o755);
     let opened = Promise.withResolvers<void>();
     let closed = Promise.withResolvers<void>();
     const sessions = new Set(["ses_lifecycleEnd", "ses_lifecycleAgent", "ses_lifecycleHandover"]);
@@ -1141,10 +1149,12 @@ process.stdin.on("data", (chunk) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       return Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} did not happen (native ${JSON.stringify(openCodeNativeState())})`)), 15_000); })]).finally(() => clearTimeout(timer));
     };
-    const startPane = async (session: string): Promise<{ paneId: string; workspaceId: string }> => {
+    const startPane = async (session: string, program = sleeper): Promise<{ paneId: string; workspaceId: string }> => {
       const created = await workspaceCreate({ cwd: lifecycleRoot, label: `ovis-test-opencode-${session}` });
+      // closed at the end even when its start fails: a stand-in waiting on the FIFO never ends by itself
+      started.push(created.workspace.workspace_id);
       const paneId = created.root_pane.pane_id;
-      await herdrRpc("pane.send_text", { pane_id: paneId, text: `${sleeper}\n` });
+      await herdrRpc("pane.send_text", { pane_id: paneId, text: `${program}\n` });
       for (const deadline = Date.now() + 10_000; (await sessionSnapshot()).panes.find((pane) => pane.pane_id === paneId)?.agent !== "opencode";) {
         if (Date.now() > deadline) throw new Error("stand-in opencode not detected");
         await Bun.sleep(50);
@@ -1160,26 +1170,26 @@ process.stdin.on("data", (chunk) => {
     closeOpenCodeNative();
     forgetOpenCodeService();
     openCodeServiceOptions.stateDir = lifecycleRoot;
-    let ending: { paneId: string; workspaceId: string } | undefined;
-    let changing: { paneId: string; workspaceId: string } | undefined;
+    const started: string[] = [];
+    let leaving: ReturnType<typeof Bun.spawn> | undefined;
     try {
       // pane end: herdr's pane.ended reaches the collector's onPaneEnded
-      ending = await startPane("ses_lifecycleEnd");
+      const ending = await startPane("ses_lifecycleEnd");
       await verify(ending.paneId);
       await within(opened.promise, "the stream opening for the first pane");
       expect(openCodeNativeState()).toEqual({ stream: true, panes: [ending.paneId] });
       await workspaceClose(ending.workspaceId);
-      ending = undefined;
       await within(closed.promise, "the stream closing after the last verified pane ended");
       expect(openCodeNativeState()).toEqual({ stream: false, panes: [] });
 
       // agent change: OpenCode leaves the pane, so its status names no opencode agent any more
       opened = Promise.withResolvers<void>();
       closed = Promise.withResolvers<void>();
-      changing = await startPane("ses_lifecycleAgent");
+      const changing = await startPane("ses_lifecycleAgent", leaver);
       await verify(changing.paneId);
       await within(opened.promise, "the stream opening for the second pane");
-      await herdrRpc("pane.send_keys", { pane_id: changing.paneId, keys: ["ctrl+c"] });
+      leaving = Bun.spawn(["sh", "-c", `printf '\\n' > '${leave}'`]);
+      await within(leaving.exited, "the stand-in OpenCode being told to leave");
       await within(closed.promise, "the stream closing after the last verified pane stopped being OpenCode");
       expect(openCodeNativeState()).toEqual({ stream: false, panes: [] });
 
@@ -1187,21 +1197,22 @@ process.stdin.on("data", (chunk) => {
       // its collector learns the pane verified before it started, and ends it
       opened = Promise.withResolvers<void>();
       closed = Promise.withResolvers<void>();
-      ending = await startPane("ses_lifecycleHandover");
-      await verify(ending.paneId);
+      const handed = await startPane("ses_lifecycleHandover");
+      await verify(handed.paneId);
       await within(opened.promise, "the stream opening for the handed-over pane");
       const replaced = server;
       server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), opencodeDb: database });
       await server.statusReady;
       replaced.stop();
-      expect(openCodeNativeState()).toEqual({ stream: true, panes: [ending.paneId] });
-      await workspaceClose(ending.workspaceId);
-      ending = undefined;
+      expect(openCodeNativeState()).toEqual({ stream: true, panes: [handed.paneId] });
+      await workspaceClose(handed.workspaceId);
       await within(closed.promise, "the stream closing after the replacement collector saw the pane close");
       expect(openCodeNativeState()).toEqual({ stream: false, panes: [] });
     } finally {
-      if (ending) await workspaceClose(ending.workspaceId).catch(() => {});
-      if (changing) await workspaceClose(changing.workspaceId).catch(() => {});
+      // the ones the test closed already answer with an error
+      for (const workspaceId of started) await workspaceClose(workspaceId).catch(() => {});
+      leaving?.kill();
+      rmSync(leave, { force: true });
       closeOpenCodeNative();
       second.stop(true);
       openCodeServiceOptions.stateDir = nativeRoot;

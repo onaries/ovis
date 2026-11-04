@@ -4,10 +4,13 @@
  * a tap, a missing one has its Install (the user's tap is the consent: the official installer runs in
  * a terminal tab while a ring turns on the tile), and Start opens the first workspace with the one
  * picked; the agent asks for its own sign-in when it first starts. Plan usage is turned on for
- * accounts already signed in; Connect your phone beside Start shows a QR code and the address right
- * there (a browser in only because nothing is paired yet pairs itself first, as Settings → Phone's
- * Pair this device now does; Settings → Phone where the page has no phone-reachable address). It
- * adds no server route. Its layout follows the Claude and Codex apps' first runs: one screen in the main
+ * accounts already signed in; Connect your phone beside Start leads with the Ovis relay where it can
+ * (lib/setupGuideFlow.ts phoneWay): a tap turns it on, then its pairing QR code shows right there, and
+ * a browser in only because nothing is paired yet pairs itself first, as turning the relay on closes
+ * the device gate. Use Tailscale or Wi-Fi instead, or a page where the relay cannot lead, shows the
+ * page's own QR code and address (that browser pairs itself first too, as Settings → Phone's Pair this
+ * device now does; Settings → Phone where the page has no phone-reachable address). It adds no server
+ * route. Its layout follows the Claude and Codex apps' first runs: one screen in the main
  * area, the app's sidebar left in place.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -15,6 +18,7 @@ import { ArrowRight, Check, ChevronRight, Gauge, Info, KeyRound, LoaderCircle, P
 
 import type { AgentCatalogEntry, AgentCatalogRow } from "../../shared/agent-catalog.ts";
 import type { HealthAuth, PairingCode, RemoteAccess } from "../../shared/protocol.ts";
+import type { SecurityFacts } from "../lib/useAccess.ts";
 import { ApiError, createWorkspace, fetchAgentCatalog, fetchDevices, fetchRemoteAccess, fetchUsage, startPairing } from "../lib/api.ts";
 import { useT, type Translate } from "../lib/i18n.ts";
 import { useMachineId } from "../lib/machineContext.tsx";
@@ -23,13 +27,15 @@ import { pairThisBrowser, UnconfirmedPairing } from "../lib/pairing.ts";
 import { isLoopbackHost, phonePlan } from "../lib/phone.ts";
 import { recentDirectories } from "../lib/recent-directories.ts";
 import { useSettings } from "../lib/settings.ts";
-import { agentRows, checkList, foundAgents, installedHere, phoneBoxMode, openInFolder, preferredAgent, settleDelay, setupView, signedInAgents, turnsUsageOn, type CheckStatus, type GuideEvent, type GuideState, type PcCheck } from "../lib/setupGuideFlow.ts";
+import { agentRows, checkList, foundAgents, installedHere, phoneBoxMode, phoneWay, openInFolder, preferredAgent, relayStep, settleDelay, setupView, signedInAgents, turnsUsageOn, type CheckStatus, type GuideEvent, type GuideState, type PcCheck } from "../lib/setupGuideFlow.ts";
+import { inRelayShell, useRelay, type RelayState } from "../lib/useRelay.ts";
 import { useSignedInUsage } from "../lib/useSetupGuide.ts";
 import { userErrorMessage } from "../lib/userError.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { AgentTile } from "./AgentTile.tsx";
 import { UsageSignInDialog } from "./UsageSignInDialog.tsx";
 import { QrCode } from "./QrCode.tsx";
+import { failureText, RelayPairing, statusText } from "./RelayPanel.tsx";
 import "./SetupGuide.css";
 
 /** the catalog's agents, named in the check's lines before the PC answers */
@@ -50,6 +56,8 @@ export interface SetupGuideProps {
   onOpenSettings: (page: "devices") => void;
   /** how this browser got in: one in only because nothing is paired yet pairs itself first (Connect your phone) */
   auth: HealthAuth | null;
+  /** the server's access facts: whether turning the relay on closes the open device gate (Connect your phone) */
+  security: SecurityFacts;
   /** this browser paired itself (Connect your phone): the app reads its access again */
   onPaired: () => void;
   /** Start pressed: a tab the guide asked to show before it is not shown over what Start opens */
@@ -136,7 +144,7 @@ export function SetupGuide(props: SetupGuideProps) {
         </div>
         <p className="visually-hidden" role="status">{announced}</p>
         {view === "checking" && <Checking known={known} catalog={catalog} />}
-        {view === "agents" && catalog !== null && <AgentsScreen catalog={catalog} ready={ready} machineId={machineId} onInstalled={agentInstalled} onLookAgain={loadCatalog} onOpenTerminal={props.onOpenTerminal} onOpened={props.onOpened} onOpenSettings={props.onOpenSettings} auth={props.auth} onStarting={props.onStarting} onPaired={props.onPaired} usageOn={turnsUsageOn(props.state)} />}
+        {view === "agents" && catalog !== null && <AgentsScreen catalog={catalog} ready={ready} machineId={machineId} onInstalled={agentInstalled} onLookAgain={loadCatalog} onOpenTerminal={props.onOpenTerminal} onOpened={props.onOpened} onOpenSettings={props.onOpenSettings} auth={props.auth} security={props.security} onStarting={props.onStarting} onPaired={props.onPaired} usageOn={turnsUsageOn(props.state)} />}
         {view === "failed" && <CheckFailed error={catalogError} onLookAgain={loadCatalog} />}
       </div>
     </div>
@@ -213,7 +221,7 @@ function CheckFailed({ error, onLookAgain }: { error: string | null; onLookAgain
   );
 }
 
-interface AgentsScreenProps extends Pick<SetupGuideProps, "onOpenTerminal" | "onOpened" | "onOpenSettings" | "auth" | "onStarting" | "onPaired"> {
+interface AgentsScreenProps extends Pick<SetupGuideProps, "onOpenTerminal" | "onOpened" | "onOpenSettings" | "auth" | "security" | "onStarting" | "onPaired"> {
   /** a first run turns plan usage on for a signed-in account; a reopened guide leaves the setting alone */
   usageOn: boolean;
   catalog: readonly AgentCatalogRow[];
@@ -224,7 +232,7 @@ interface AgentsScreenProps extends Pick<SetupGuideProps, "onOpenTerminal" | "on
   onLookAgain: () => void;
 }
 
-function AgentsScreen({ catalog, ready, machineId, onInstalled, onLookAgain, onOpenTerminal, onOpened, onOpenSettings, auth, onStarting, onPaired, usageOn }: AgentsScreenProps) {
+function AgentsScreen({ catalog, ready, machineId, onInstalled, onLookAgain, onOpenTerminal, onOpened, onOpenSettings, auth, security, onStarting, onPaired, usageOn }: AgentsScreenProps) {
   const t = useT();
   const { settings, update } = useSettings();
   const agents = agentRows(catalog, ready);
@@ -290,7 +298,7 @@ function AgentsScreen({ catalog, ready, machineId, onInstalled, onLookAgain, onO
   };
 
   const locked = opening || madeWithout !== null;
-  // Connect your phone: the QR code and the address, right here
+  // Connect your phone: the relay's QR code, or the page's own and its address, right here
   const [phone, setPhone] = useState(false);
   return (
     <section className="setup-step" aria-labelledby="setup-step-title">
@@ -329,7 +337,7 @@ function AgentsScreen({ catalog, ready, machineId, onInstalled, onLookAgain, onO
         </button>
         <button type="button" className="btn" disabled={opening} aria-expanded={phone} onClick={() => setPhone((show) => !show)}><Smartphone aria-hidden="true" />{t("Connect your phone")}</button>
       </div>
-      {phone && <PhoneQr auth={auth} onOpenSettings={() => { setPhone(false); onOpenSettings("devices"); }} onPaired={onPaired} />}
+      {phone && <PhoneBox auth={auth} security={security} onOpenSettings={() => { setPhone(false); onOpenSettings("devices"); }} onPaired={onPaired} />}
       {!busy && !locked && (
         <p className="setup-muted setup-again">{t("Already installed one?")} <button type="button" className="setup-link" onClick={onLookAgain}>{t("Look again")}</button></p>
       )}
@@ -347,6 +355,136 @@ let pairedHere = false;
 // sending a second one (each new code replaces the server's pending one)
 let pairingOut: Promise<PairingCode> | null = null;
 const guidePairingCode = (): Promise<PairingCode> => pairingOut ??= startPairing().finally(() => { pairingOut = null; });
+
+interface PhoneBoxProps {
+  auth: HealthAuth | null;
+  security: SecurityFacts;
+  onOpenSettings: () => void;
+  onPaired: () => void;
+}
+
+/**
+ * Connect your phone: the Ovis relay first where it can lead here (phoneWay), with a quiet way to the
+ * page's own QR code and address (PhoneQr), which is all the box shows where the relay cannot lead.
+ * The relay is asked about only while the box is open.
+ */
+function PhoneBox({ auth, security, onOpenSettings, onPaired }: PhoneBoxProps) {
+  const t = useT();
+  const relay = useRelay();
+  // Use Tailscale or Wi-Fi instead: the other ways, until the box is closed
+  const [other, setOther] = useState(false);
+  const way = other ? "other" : phoneWay(relay, inRelayShell(), auth);
+  // the relay's first answer may never come (it keeps failing): the other ways stay one tap away meanwhile
+  if (way === "wait") return (
+    <div className="setup-phone-relay">
+      <p className="setup-muted"><LoaderCircle aria-hidden="true" className="setup-spin" /></p>
+      <button type="button" className="setup-link setup-phone-other" onClick={() => setOther(true)}>{t("Use Tailscale or Wi-Fi instead")}</button>
+    </div>
+  );
+  if (way === "other") return <PhoneQr auth={auth} onOpenSettings={onOpenSettings} onPaired={onPaired} />;
+  // as Settings → Phone works it out: the relay closes a gate still open with no token set (server/relay/service.ts)
+  const closesGate = security.state === "known" && security.summary.pairing_gate === "open" && !security.summary.token_configured;
+  return <RelayBox relay={relay} auth={auth} closesGate={closesGate} onPaired={onPaired} onOther={() => setOther(true)} />;
+}
+
+/**
+ * The relay's part of Connect your phone: one line on what it does and the button that turns it on (the
+ * user's tap is the consent), its state while it connects, a start that failed with Try again, and its
+ * pairing QR code once it is online (RelayPairing, as Settings shows it). Turning it on closes a device
+ * gate still open, which would shut out a browser in only because nothing is paired yet (auth via
+ * "open": a LAN or tailnet address, never the PC's loopback), so that browser pairs itself first.
+ */
+function RelayBox({ relay, auth, closesGate, onPaired, onOther }: { relay: RelayState; auth: HealthAuth | null; closesGate: boolean; onPaired: () => void; onOther: () => void }) {
+  const t = useT();
+  const { status, pending, request } = relay;
+  const [turning, setTurning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pairedSelf, setPairedSelf] = useState(false);
+  if (status === null) return null;
+  const step = relayStep(status);
+  const busy = pending || turning;
+  const start = async (): Promise<void> => {
+    if (busy) return;
+    setTurning(true);
+    setError(null);
+    try {
+      if (auth?.via === "open" && !pairedHere) {
+        await pairThisBrowser();
+        pairedHere = true;
+        setPairedSelf(true);
+        onPaired();
+      }
+      await request("start");
+    } catch (reason: unknown) {
+      setError(reason instanceof UnconfirmedPairing ? t("Could not confirm this browser is paired. Check that cookies are enabled, then try again.") : failureText(reason));
+    } finally { setTurning(false); }
+  };
+  return (
+    <div className="setup-phone-relay">
+      {step === "off" && (
+        <>
+          <p className="setup-phone-relay-lead">{t("Your phone's camera scans a QR code and reaches this PC from anywhere. End-to-end encrypted, nothing to install.")}</p>
+          {closesGate && <p className="setup-muted">{t("Turning on the relay closes the device gate: a new browser then needs a pairing code or the access token.")}</p>}
+          <div className="setup-actions">
+            <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void start()}><Smartphone aria-hidden="true" />{t("Turn on the Ovis relay")}</button>
+          </div>
+        </>
+      )}
+      {step === "starting" && <p className="setup-muted setup-phone-relay-state" role="status">{status.phase === "connecting" && <LoaderCircle aria-hidden="true" className="setup-spin" />}{statusText(t, status)}</p>}
+      {step === "not-started" && (
+        <>
+          <p className="setup-error" role="alert">{t("The relay did not start: {message}", { message: status.error ?? "" })}</p>
+          <div className="setup-actions">
+            <button type="button" className="btn" disabled={busy} onClick={() => void start()}><RotateCw aria-hidden="true" />{t("Try again")}</button>
+          </div>
+        </>
+      )}
+      {step === "online" && <RelayQr />}
+      {pairedSelf && <span className="setup-paired" role="status"><Check aria-hidden="true" />{t("This browser is paired first: other browsers now need pairing too.")}</span>}
+      {/* a failed start's reason shows once, in its own line, when the relay says it did not start; any other failure (a retry's own pairing) shows here */}
+      {error !== null && (step !== "not-started" || error !== status.error) && <p className="setup-error" role="alert">{error}</p>}
+      {/* not while the relay starts: its start closes the gate, which would spend the other way's pairing code */}
+      <button type="button" className="setup-link setup-phone-other" disabled={busy} onClick={onOther}>{t("Use Tailscale or Wi-Fi instead")}</button>
+    </div>
+  );
+}
+
+/**
+ * The relay's pairing QR code in the guide (RelayPairing, as Settings shows it), and the phone that
+ * used it: its code is single-use, so once a new device is listed the QR gives way to Paired and New
+ * code, as the address QR does (PhoneQr). Devices listed when it opened are the ones before it.
+ */
+function RelayQr() {
+  const t = useT();
+  const [paired, setPaired] = useState<string | null>(null);
+  const [round, setRound] = useState(0);
+  useEffect(() => {
+    if (paired !== null) return;
+    let live = true;
+    let asked = false;
+    let known: ReadonlySet<string> | null = null;
+    const look = (): void => {
+      if (asked) return;
+      asked = true;
+      void fetchDevices().then((devices) => {
+        if (!live) return;
+        if (known === null) { known = new Set(devices.map((device) => device.id)); return; }
+        const fresh = devices.find((device) => !known!.has(device.id));
+        if (fresh !== undefined) setPaired(fresh.label);
+      }, () => { /* asked again on the next turn */ }).finally(() => { asked = false; });
+    };
+    look();
+    const poll = window.setInterval(look, PAIRING_POLL_MS);
+    return () => { live = false; window.clearInterval(poll); };
+  }, [paired]);
+  if (paired !== null) return (
+    <p className="setup-phone-relay-state">
+      <span className="setup-paired" role="status"><Check aria-hidden="true" />{t("Paired: {name}.", { name: paired })}</span>{" "}
+      <button type="button" className="setup-link" onClick={() => { setPaired(null); setRound((count) => count + 1); }}>{t("New code")}</button>
+    </p>
+  );
+  return <RelayPairing key={round} />;
+}
 
 /**
  * Connect your phone, right in the guide: a QR code that opens this app on the phone with a fresh

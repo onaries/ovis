@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 
 import { AGENT_CATALOG, catalogRow, type AgentCatalogRow, type AgentInstallState } from "../../shared/agent-catalog.ts";
-import type { HealthAuth } from "../../shared/protocol.ts";
+import type { HealthAuth, RelayStatus } from "../../shared/protocol.ts";
 import type { ProviderUsage } from "../../shared/usage.ts";
 import { onSetupGuideRequest, openSetupGuide } from "./setupGuide.ts";
-import { agentRows, autoOpen, CHECK_SETTLE_MS, checkList, checkStatus, foundAgents, guideStep, INSTALL_GIVE_UP_MS, installedHere, openInFolder, phoneBoxMode, preferredAgent, readGuide, readSignedIn, REOPENED, saveGuide, settleDelay, setupView, signedInAgents, tileState, turnsUsageOn, WELCOME, type FreshFacts, type PcCheck } from "./setupGuideFlow.ts";
+import { agentRows, autoOpen, CHECK_SETTLE_MS, checkList, checkStatus, foundAgents, guideStep, INSTALL_GIVE_UP_MS, installedHere, openInFolder, phoneBoxMode, phoneWay, preferredAgent, readGuide, readSignedIn, relayStep, REOPENED, saveGuide, settleDelay, setupView, signedInAgents, tileState, turnsUsageOn, WELCOME, type FreshFacts, type PcCheck } from "./setupGuideFlow.ts";
 
 const FRESH: FreshFacts = { workspaces: 0, savedSettings: false, sharedRevision: 0, pairingGate: "open", watching: false };
 
@@ -275,6 +275,46 @@ describe("phoneBoxMode", () => {
   it("leaves it to Settings with no address a phone can open, or an access the server does not name", () => {
     expect(phoneBoxMode(null, auth("tailscale"))).toBe("settings");
     expect(phoneBoxMode("http://100.1.2.3:7317", auth(undefined))).toBe("settings");
+  });
+});
+
+describe("phoneWay", () => {
+  const auth = (via: HealthAuth["via"], role: HealthAuth["role"] = "drive"): HealthAuth => ({ required: false, authenticated: true, via, role });
+  const relay = (blocked: RelayStatus["blocked"] | "loading" | "unsupported") => ({
+    unsupported: blocked === "unsupported",
+    status: blocked === "loading" || blocked === "unsupported" ? null : { blocked },
+  });
+  it("leads with the relay where it is offered, this browser may control it and nothing blocks it", () => {
+    expect(phoneWay(relay(null), false, auth("local"))).toBe("relay");
+    expect(phoneWay(relay(null), false, auth("open"))).toBe("relay");
+    expect(phoneWay(relay(null), false, auth("device"))).toBe("relay");
+  });
+
+  it("waits for the relay's first answer and this browser's access, so a loopback page is not sent to Settings first", () => {
+    expect(phoneWay(relay("loading"), false, auth("local"))).toBe("wait");
+    expect(phoneWay(relay(null), false, null)).toBe("wait");
+  });
+
+  it("keeps the other ways where the relay cannot lead: an older server, the hosted shell, a block, a read-only browser", () => {
+    expect(phoneWay(relay("unsupported"), false, auth("local"))).toBe("other");
+    expect(phoneWay(relay(null), true, auth("relay"))).toBe("other");
+    expect(phoneWay(relay("serve_only"), false, auth("local"))).toBe("other");
+    expect(phoneWay(relay("identity_unreadable"), false, auth("local"))).toBe("other");
+    expect(phoneWay(relay(null), false, auth("device", "watch"))).toBe("other");
+    expect(phoneWay(relay(null), false, auth("portal"))).toBe("other");
+  });
+});
+
+describe("relayStep", () => {
+  it("turns it on while off, follows it while it connects or retries, and shows its QR once online", () => {
+    expect(relayStep({ phase: "off", error: null })).toBe("off");
+    expect(relayStep({ phase: "connecting", error: null })).toBe("starting");
+    expect(relayStep({ phase: "error", error: "Could not reach the relay." })).toBe("starting");
+    expect(relayStep({ phase: "online", error: null })).toBe("online");
+  });
+
+  it("offers Try again for a start that failed before its link existed", () => {
+    expect(relayStep({ phase: "off", error: "Could not start the relay." })).toBe("not-started");
   });
 });
 

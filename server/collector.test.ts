@@ -390,6 +390,32 @@ describe("lifecycle invalidations", () => {
     } finally { collector.stop(); }
   });
 
+  it("tells a move to a new pane ID before the structure change, and no move that keeps the ID (#1503)", async () => {
+    const herdr = fakeHerdr([paneOf("w1:p1", "idle")]);
+    const { log, handlers } = recorder();
+    const moves: string[] = [];
+    handlers.onPaneMoved = (from, to) => moves.push(`${from}->${to} after ${log.structure} structure changes`);
+    const changed = Promise.withResolvers<void>();
+    handlers.onStructureChange = () => { log.structure += 1; changed.resolve(); };
+    const subscribe = herdr.deps.subscribe;
+    if (!subscribe) throw new Error("fake subscribe missing");
+    const collector = startStatusCollector(handlers, {
+      ...herdr.deps,
+      subscribe: (subs, callbacks) => {
+        const connection = subscribe(subs, callbacks);
+        queueMicrotask(() => callbacks.onStarted?.());
+        return connection;
+      },
+    });
+    try {
+      await collector.ready;
+      herdr.lifecycle().emit({ data: { type: "pane_moved", previous_pane_id: "w1:p1", pane: { pane_id: "w1:p1", agent_status: "idle" } } });
+      herdr.lifecycle().emit({ data: { type: "pane_moved", previous_pane_id: "w1:p1", pane: { pane_id: "w2:p1", agent_status: "idle" } } });
+      expect(moves).toEqual(["w1:p1->w2:p1 after 0 structure changes"]);
+      await changed.promise;
+    } finally { collector.stop(); }
+  });
+
   for (const status of ["working", "blocked"] as const) it(`replays a completion when a ${status} move overtakes the old-ID status event`, async () => {
     const herdr = fakeHerdr([paneOf("w1:p1", "idle")]);
     const { log, handlers } = recorder();

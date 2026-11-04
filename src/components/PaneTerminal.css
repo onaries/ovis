@@ -187,8 +187,8 @@
   visibility: hidden;
 }
 
-/* no scrollback (PaneTerminal.tsx), so the viewport never scrolls: hide the track that would
-   otherwise sit over the last columns on platforms with classic scrollbars */
+/* the native viewport never scrolls (xterm draws its own scrollbar for a herdr-core pane's history):
+   hide the track that would otherwise sit over the last columns on platforms with classic scrollbars */
 .pane-terminal .xterm-viewport {
   background-color: var(--term-bg);
   scrollbar-width: none;

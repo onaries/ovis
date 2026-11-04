@@ -93,12 +93,14 @@ function alignBreath(event: AnimationEvent<HTMLSpanElement>) {
   for (const animation of event.currentTarget.getAnimations()) animation.startTime = 0;
 }
 
-export function StatusBadge({ status, compact = false }: { status?: AgentStatus; compact?: boolean }) {
+/** `detail`: what the agent itself said of the state (a blocked agent's reason), after the state's words */
+export function StatusBadge({ status, compact = false, detail = null }: { status?: AgentStatus; compact?: boolean; detail?: string | null }) {
   const t = useT();
   const { settings } = useSettings();
   const value = knownStatus(status);
   const label = t(STATUS_WORD[value]);
-  const description = value === "waiting" ? t("Agent waiting on background work") : t("Agent {status}", { status: label });
+  const stateWords = value === "waiting" ? t("Agent waiting on background work") : t("Agent {status}", { status: label });
+  const description = detail ? `${stateWords} — ${detail}` : stateWords;
   // classic (the default): a compact cell draws only the states that ask for a look: a red question
   // mark while the agent waits for an answer, a green dot once it has finished and was not looked
   // at, a working-coloured dot that breathes while it runs, a working-coloured ring held still while
@@ -233,7 +235,17 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     ))).then(publish);
     return () => { live = false; };
   }, [listWorktrees, unmarked, online, watching, appLayout]);
-  const { branches, rememberOpened } = useWorktreeBranches(snapshot, online, true, repositoryWorkspaces, watching);
+  // a repository's folder that stops being a checkout is refused on a later poll: that refusal is an answer too (#2726)
+  const notCheckout = useCallback((id: string) => {
+    repositoryAnswers.current.set(id, false);
+    setRepositoryWorkspaces((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+  const { branches, rememberOpened } = useWorktreeBranches(snapshot, online, true, repositoryWorkspaces, watching, notCheckout);
   // the sidebar's filter (lib/sidebarFilter.ts): which rows stay, which are context; it learns the branch
   // each row says from here, since the inventory is this roster's. What it last said outlives a fold of the
   // PC (which unmounts this roster), so a branch stays findable on a PC drawn folded

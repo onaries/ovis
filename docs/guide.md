@@ -420,9 +420,11 @@ Turn it on in **Settings → Voice input**, then tap the mic beside Attach (chat
 
 A phone reaches the app on this PC in one of two ways. The **Ovis relay** needs nothing set up on the phone or your network: turn it on and scan a QR code. **Tailscale** keeps everything inside your own network, with an HTTPS address for this PC. Either way the app installs on the phone's home screen and gets push alerts.
 
+On an iPhone or iPad the app needs iOS 16 or later (Safari 16 or later on a Mac), and push alerts need iOS 16.4 or later.
+
 ### Through the Ovis relay
 
-The Ovis relay lets your phone reach this PC from anywhere, with no Tailscale, no account and nothing to set up on the phone. It's off until you turn it on. While it's on, the PC and the phone each connect out to a relay that Ovis runs at `relay.ovis.sh`, which passes their traffic between them. Everything they send is end-to-end encrypted between the phone and the PC, so the relay can't read it. To turn it on, open **Settings → Phone & devices** on the PC, switch on **Ovis relay**, then point the phone's camera at the QR code that shows up.
+The Ovis relay lets your phone reach this PC from anywhere, with no Tailscale, no account and nothing to set up on the phone. It's off until you turn it on. While it's on, the PC and the phone each connect out to a relay that Ovis runs at `relay.ovis.sh`, which passes their traffic between them. Everything they send is end-to-end encrypted between the phone and the PC, so the relay can't read it. To turn it on, open **Settings → Phone & devices** on the PC, switch on **Ovis relay**, then point the phone's camera at the QR code that shows up. On a fresh install, the setup guide's **Connect your phone** offers it first: choose **Turn on the Ovis relay** and its QR code shows right there. **Use Tailscale or Wi-Fi instead**, under it, shows this page's own address and pairing QR code, or sends you to **Settings → Phone & devices** when the page is open on the PC itself.
 
 Step by step:
 
@@ -589,7 +591,7 @@ Then there is one app to update: each release is downloaded and built once, the 
 Anyone who can reach the server can type into your terminals, so what matters is who gets in. It listens on `127.0.0.1` by default, which means only this computer. From anywhere else, a request gets in in one of four ways:
 
 - **It is you, says Tailscale.** `tailscale serve` states the requesting device's Tailscale login in a header it strips from anything incoming. A login that matches this PC's own gets in; another login is refused, and a tagged device (one with no person's login) needs pairing. If you set `OVIS_TAILSCALE_SERVE_ONLY=1` to say `tailscale serve` is the only way in, and `tailscale status` on this PC lists one login on every node it sees and no tagged node, a serve request that states no login is the owner as well: no one else is among those nodes to be mistaken for (a node an ACL hides from this PC is not seen, and cannot reach serve either), so your own phone opens the address and lands in the app with no code. Nothing to set up, unless this PC's own Tailscale node is tagged: it then has no login of its own, so every device pairs, yours included, or you name your login in `OVIS_TAILSCALE_OWNER`.
-- **It is a paired device.** **Settings → Phone & devices**, on the PC (or on a device already paired), shows a six-digit code that lives ten minutes and a QR code that carries it. On a headless PC, the `pair` command prints the same in its terminal (see [In a terminal](#in-a-terminal)); Devices also shows the pairing link as text, to send to the other device. The other device enters it once and keeps its own credential in an HttpOnly cookie; the list shows it, and **Revoke** immediately closes its terminal connections and roster stream and refuses subsequent requests.
+- **It is a paired device.** **Settings → Phone & devices**, on the PC (or on a device already paired), shows a six-digit code that lives ten minutes and a QR code that carries it. On a headless PC, the `pair` command prints the same in its terminal (see [In a terminal](#in-a-terminal)); Devices also shows the pairing link as text, to send to the other device. The other device enters it once and keeps its own credential in an HttpOnly cookie; the list shows it, and **Revoke** immediately closes its terminal connections and roster stream and refuses subsequent requests. A script or CLI pairs with `POST /api/devices/pair` and `{"code": "<code>", "label": "<name>"}` (with `X-Herdr-Machine: 1` and `Content-Type: application/json`), sending `Accept: application/json` to get its credential back as `{"token": "..."}`. It then sends `Authorization: Device <token>` with every request instead of a cookie, under the same role, last-seen time and **Revoke** as any paired device. Unlike the shared token, each such script can be revoked by itself.
 - **It holds the token.** `OVIS_TOKEN`, for scripts and proxies, as a cookie after sign-in or as `Authorization: Bearer <token>`. When a token is set, everything else needs it, this computer and your own Tailscale login included: enter it once on each device, and that browser stays signed in for a year. A paired device, or a visitor Portal's own sign-in let in, still gets in without it.
 - **It passed Portal's own sign-in.** Only where the app started its own Portal with one (a private link, an Ethereum wallet or an OIDC account: [Who may open the address](#who-may-open-the-address)). Portal tells the app who signed in, and that visitor may watch by default, like a paired watch device, but cannot type, read files, pair or revoke devices, subscribe to push alerts or control Portal. The same headers from anything else are ignored.
 - **It comes through the Ovis relay from a phone paired there.** The relay is off by default ([Through the Ovis relay](#through-the-ovis-relay)). A phone pairs once by scanning the relay's QR code under **Settings → Phone & devices**, which gives it a key of its own for this PC, and proves itself with that key on every connection. Through the relay only that key counts, never the token, a device cookie or a Tailscale login. **Revoke** closes its connections at once, as for any paired device.
@@ -606,7 +608,7 @@ Anyone who can reach the server can type into your terminals, so what matters is
 
 The relay needs no token where a public proxy does, because it has no open address. A proxy puts the app itself on the internet: anyone who finds the address reaches it, and until a device pairs, an install with no token lets them in. Through the relay, a request reaches this PC only inside an encrypted connection that a phone opens with the PC's public key from the QR code, and the PC then admits it only with a valid pairing code or the key of a phone it paired before. Turning the relay on also closes the device gate when it was still open.
 
-Until the first device is paired, and with no token set, a LAN or proxied address is open to anyone who reaches it, as it always was: the server warns on startup. The exception is a proxy on this PC while its Tailscale login is known, as with `tailscale serve`: a request that carries no login there needs pairing from the start, unless `OVIS_TAILSCALE_SERVE_ONLY=1` is set and that tailnet has one login and no tagged node, where such a request is the owner's own device. With that setting off, which is the default, every such request pairs. The first pairing closes access only after the browser returns its new device cookie. If the cookie is blocked or the pairing response is lost, the unconfirmed pairing does not restrict access; retry after checking browser and proxy cookie settings. Once confirmed, the gate stays closed: revoking every device does not reopen it. This app-level restriction also applies behind a proxy with its own authentication; other browsers need their own pairing or the app's token. Without a token, this computer itself stays in whatever happens, so you can never lock yourself out: revoke everything and pair again from `http://localhost:7317`. With a token set, this computer signs in with the token.
+Until the first device is paired, and with no token set, a LAN or proxied address is open to anyone who reaches it, as it always was: the server warns on startup. The exception is a proxy on this PC while its Tailscale login is known, as with `tailscale serve`: a request that carries no login there needs pairing from the start, unless `OVIS_TAILSCALE_SERVE_ONLY=1` is set and that tailnet has one login and no tagged node, where such a request is the owner's own device. With that setting off, which is the default, every such request pairs. The first pairing closes access only after the browser returns its new device cookie. If the cookie is blocked or the pairing response is lost, the unconfirmed pairing does not restrict access; retry after checking browser and proxy cookie settings. A script that pairs for its token in JSON closes access at once, since it may store the token and use it later. Once confirmed, the gate stays closed: revoking every device does not reopen it. This app-level restriction also applies behind a proxy with its own authentication; other browsers need their own pairing or the app's token. Without a token, this computer itself stays in whatever happens, so you can never lock yourself out: revoke everything and pair again from `http://localhost:7317`. With a token set, this computer signs in with the token.
 
 A token is a credential on the wire as much as a cookie is: on plain `http://`, anyone on the network path reads it, and then every keystroke after it. Reach this PC over Tailscale, put it behind a TLS-terminating proxy, or keep it on loopback and tunnel in; the server says so on startup when it is bound to another address over http.
 
@@ -761,8 +763,17 @@ Portal tells the app who signed in with `X-Portal-User` and `X-Portal-Auth` (`--
 ## Herdr app terminals
 
 The [Herdr desktop app](https://herdr.dev/download/) runs its terminals on herdr-core (`hc`), a
-runtime apart from herdr's TUI server. Start Ovis with `OVIS_RUNTIME=herdr-core` to show those
-terminals instead of the TUI's: this PC's panes are then the app's. Ovis needs an `hc` speaking
+runtime apart from herdr's TUI server. Ovis can show those terminals instead of the TUI's: this
+PC's panes are then the app's. One server serves one runtime, chosen as it starts:
+
+1. `OVIS_RUNTIME` (`herdr` or `herdr-core`) in the server's environment, when it is set;
+2. else the choice made in **Settings → About → Terminals** (saved as `runtime-<port>.json` in the state folder);
+3. else what the PC has. Any trace of herdr's TUI (a `herdr` on the `PATH` or in `~/.local/bin`,
+   `~/.config/herdr/config.toml`, or its socket) keeps herdr, and nothing is run to decide it.
+   Only a PC with none looks for herdr-core, and picks it when an `hc` answers `--version` and the
+   Herdr app is installed or its core runs.
+
+Ovis needs an `hc` speaking
 protocol generation 1 (checked with 0.1.14 and 0.1.17), and finds it the way the Herdr app does:
 `OVIS_HC_BIN`, then the `PATH`, then your login shell's `PATH`, then the usual install places
 (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, mise, Nix and cargo), taking `herdr-core`
@@ -771,22 +782,42 @@ managers ship an unrelated `hc`. Looking runs nothing but `--version`: every oth
 starts a core when none runs. When no candidate answers, Ovis does not start and says where it
 looked, rather than run an `hc` that may not be herdr-core's.
 
-**Settings → About → Terminals** says which runtime this PC serves. On herdr's TUI, when it finds
-the Herdr app's core on the same PC, it says so and how to switch: set `OVIS_RUNTIME=herdr-core` and restart
-Ovis. When herdr's plugin starts Ovis, that goes in the `.env` file in the folder
-`herdr plugin config-dir devswha.ovis` prints; started another way (`bun run start`, a service),
-it goes in that environment. Only a device that drives this PC is told this, never a watching one or a stranger
-on an open install; and the look behind it skips the login shell, whose profile could run any
-command, so it never starts a core on a PC that did not choose herdr-core. Whether the core runs is read from its socket file (`HC_SOCKET`, `socket` in hc's
+**Settings → About → Terminals** says which runtime this PC serves and, when the PC has the
+other one too, offers to switch: **Switch** asks first, saves the choice and restarts Ovis on it,
+on the same port and state folder, and Settings shows the new runtime once the restarted server
+answers. Text left unsent in one runtime's panes waits in **Recover unsent text** once the other's
+are shown; pins and muted alerts are kept for the panes shown, so the other runtime's may be cleared.
+A start that fails on the chosen runtime goes back to the previous one, and a saved Herdr app
+whose core is gone starts herdr instead and says so there. Only a device that drives this PC can
+switch, never a watching one or a stranger on an open install, and the switch needs Ovis's own
+launcher (the herdr plugin or `bun run start`), which restarts the server. When `OVIS_RUNTIME`
+is set in the environment, it decides, and Settings says to change it there. On a server
+started directly (`bun server/index.ts`), Settings says how to switch by hand: set
+`OVIS_RUNTIME=herdr-core` and restart Ovis (for herdr's plugin, in the `.env` file in the folder
+`herdr plugin config-dir devswha.ovis` prints). The look for hc behind these facts skips the
+login shell, whose profile could run any command, so it never starts a core on a PC that did not
+choose herdr-core; the start on herdr-core looks there too, and so does finding hc again after an
+update moved it, each candidate asked `--version` afresh. While Ovis serves herdr-core, herdr's
+own version and **Update herdr** are not shown: herdr-core's version is on the Terminals line.
+Whether the core runs is read from its socket file (`HC_SOCKET`, `socket` in hc's
 `config.toml`, else `<session>.sock` under `$XDG_RUNTIME_DIR/herdr-core/`; `HC_SESSION` names the
 session, `default` otherwise); nothing connects to it.
 
 `OVIS_RUNTIME=herdr-core` is Linux/macOS only: there is no Windows named pipe support yet.
 Ovis refuses to start with this runtime on Windows; use the default `herdr` runtime there.
 
+On a Linux or macOS PC with herdr-core and no herdr, the one-line installer
+(`curl -fsSL https://ovis.sh/install.sh | sh`) sets this up by itself: no herdr and no plugin, Ovis
+in `~/.local/share/ovis/app`, `OVIS_RUNTIME=herdr-core` in `~/.config/ovis/env`, and a user service
+that starts it at login (`systemctl --user status ovis` on Linux, the `sh.ovis.server` LaunchAgent on
+macOS). See [INSTALL.md](../INSTALL.md#2-choose-the-install-method).
+
 - **Sidebar:** each of the app's spaces is a workspace and each of its tabs a tab, in the app's
-  order and names; every terminal block in a tab is a pane. A terminal no tab holds (a worker an
-  agent started, one from `hc run`) has a tab of its own under **Other terminals**.
+  order and names; every terminal block in a tab is a pane. A terminal no tab holds that another
+  one started (a helper an agent started with `hc run`) has a tab of its own right after the tab
+  of the terminal that started it, and its row in **Agents** is one line indented under that
+  agent's, its place in the row's tooltip (closing that workspace ends it too, as ending the agent would). Any other terminal no tab
+  holds has a tab of its own under **Other terminals**.
 - **New and Close:** **New workspace**, **New tab**, a new terminal and **New tab with agent**
   start a shell that herdr-core keeps, labeled so the Herdr app takes it into that space and tab;
   it shows there even before the app does. Ovis never writes the app's own names, so a name you
@@ -798,10 +829,31 @@ Ovis refuses to start with this runtime on Windows; use the default `herdr` runt
   cannot take one.
 - **Status and alerts:** an agent's status is what it reports to herdr-core (OSC 7501), so an
   agent that reports none shows no status. A turn is done only when the program itself reports
-  its turn finished (`done`, or `working` then `idle`); `error` shows no status.
+  its turn finished (`done`, or `working` then `idle`); `error` shows no status. When a blocked
+  agent says why (a permission, a question or a sign-in), its row in **Agents** says so in a few
+  words after its name, and the row's and the state's tooltips give its message in its own words;
+  a progress it reports (0 to 100) while it works or waits is a percent after the name. Nothing
+  is shown that it did not report.
+- **Pinned agents:** an agent pinned in Ovis is pinned in the Herdr app, and one pinned or
+  unpinned in the app is pinned or unpinned in Ovis, through herdr-core's `herdr.pinned`
+  terminal label; a pin made in the app joins the end of the pinned list. When the two first
+  meet, a pin on either side is kept; after that, a pin or unpin made on one side while Ovis was
+  stopped or herdr-core away is kept too. Pinned workspaces stay Ovis's own. A pin made in the app
+  joins Ovis only while its list has room (500 pins); until then it stays the app's alone.
+- **Read finishes:** Ovis and the Herdr app agree on which finishes someone has looked at,
+  through herdr-core's `herdr.seen` terminal label. A finish you read in Ovis is no longer
+  **done** in the Herdr app, and one you looked at in the app is no longer **done** in Ovis; one
+  marked unread elsewhere is **done** again (Ovis does not read it for you again while it stays on
+  your screen; coming back to it later does). A terminal no client has labeled yet shows a turn that ended since Ovis started as
+  **done**, until someone reads it. A remote PC's finishes are not shared this way.
 - **Terminal:** the live view streams over the server's own connection to herdr-core, input and
   the key bar work as on herdr, and the terminal takes the size of the viewer that last typed in
-  it or resized it: the app's window, or your phone once you type or open it there.
+  it or resized it: the app's window, or your phone once you type or open it there. herdr-core
+  keeps no view of its own to scroll, so the browser keeps the scrollback, as a desktop terminal
+  does: each attach starts with the terminal's last 2,000 lines of history, and the wheel, a
+  swipe or the scrollbar scrolls back through them while the program does not read the mouse. A
+  full-screen program (an editor, `htop`) has no history; its wheel goes to the program as on
+  herdr.
 - **Tabs out of use:** herdr-core draws no read-only view at another size, so a tab you leave is
   not kept current behind your back. A recent tab you switch away from keeps its last screen until
   you are back, **Use alongside herdr's own window** lets go of a pane only when you leave the
@@ -811,8 +863,8 @@ Ovis refuses to start with this runtime on Windows; use the default `herdr` runt
   as typed text, and a send waits for you to confirm it.
 - **Not on herdr-core:** renaming, moving or reordering workspaces, tabs and panes, and
   splitting, swapping, zooming or resizing panes, which belong to the app's window; Ovis hides
-  those actions on such a PC. Search and scrollback selection in a pane, plugins and worktrees
-  are not available either. Remote PCs keep running herdr's TUI server.
+  those actions on such a PC. Search in a pane, scrolling or selecting the history through the
+  scroll buttons beside it, plugins and worktrees are not available either. Remote PCs keep running herdr's TUI server.
 
 ## Configuration
 
@@ -839,7 +891,7 @@ Each `OVIS_*` variable was called `HERDR_WEB_*` before Ovis took its name (`OVIS
 | `OVIS_PUSH_SUBJECT` | this repository's URL | VAPID contact URL or `mailto:` address |
 | `OVIS_BUNDLE_MANIFEST` | unset | Remote-PC bundle manifest (path or URL) that overrides local and published bundles |
 | `OVIS_HERDR_BIN` | `herdr` | herdr executable used for terminal attach |
-| `OVIS_RUNTIME` | `herdr` | `herdr-core` shows the terminals of [herdr-core](https://herdr.dev/core) (`hc`), the core the Herdr desktop app runs on, instead of herdr's TUI server: see [Herdr app terminals](#herdr-app-terminals) |
+| `OVIS_RUNTIME` | chosen | `herdr-core` shows the terminals of [herdr-core](https://herdr.dev/core) (`hc`), the core the Herdr desktop app runs on, instead of herdr's TUI server. Unset, the runtime chosen in Settings, else what the PC has, decides; set, it wins and Settings cannot switch: see [Herdr app terminals](#herdr-app-terminals) |
 | `OVIS_HC_BIN` | found | hc executable used with `OVIS_RUNTIME=herdr-core`, looked at first: the server runs it as its one `hc connect`, which also carries the live terminals. One whose `--version` does not say `hc …` is passed over for the next one found (see [Herdr app terminals](#herdr-app-terminals)). `HC_SESSION` and `HC_SOCKET` pick the core as for any hc command |
 | `OVIS_SSH` | `ssh` (Git for Windows' on Windows) | OpenSSH client for [remote PCs](#remote-pcs-over-ssh); the `sftp` and `ssh-keygen` beside it are used too |
 | `OVIS_APP_NAME` | unset (`Ovis`) | The name the installed app has on a phone or computer, for example the PC's name. Each PC installs as an app of its own, and without it they are all called `Ovis`. An app already installed takes the new name when the browser next updates it, usually within a day or two, without a reinstall. Keep it short: a home screen cuts a long label |

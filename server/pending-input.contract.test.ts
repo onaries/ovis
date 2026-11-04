@@ -1926,7 +1926,8 @@ describe("a create request's first message", () => {
     expect(res.status).toBe(200);
     const tab = await res.json() as { pane_id: string; agent_started: boolean; first_message: { id: string } | null };
     expect(tab.agent_started).toBeTrue();
-    expect(tab.first_message).not.toBeNull();
+    // queued for the page that asked: nothing says held
+    expect(tab.first_message).toEqual({ id: expect.any(String) });
     expect(launches.at(-1)).toBe("claude");
     const pane = tab.pane_id;
     // the case's own control: the route queued it while herdr named no agent in the pane
@@ -1951,6 +1952,27 @@ describe("a create request's first message", () => {
     await sent;
     await written(() => f.bytes().endsWith(`${paste("FIRST-first-launched")}\r`), "input timeout", 8_000);
     expect(f.bytes()).toBe(`${paste("FIRST-first-launched")}\r`);
+  }, 30_000);
+
+  it("asked for with no page connection, the create route's answer says it is held (#2743)", async () => {
+    const created = await herdrRpc<{ workspace: { workspace_id: string } }>("workspace.create", { label: "ovis-test-pending-first-unattended-answer", cwd: root, focus: false });
+    const entry: (typeof active)[number] = { stop: () => {}, sockets: [], workspace: created.workspace.workspace_id }; active.push(entry);
+    const server = createServer({ port: 0, stateDir: join(root, "state-first-unattended-answer") });
+    entry.stop = server.stop;
+    standInLaunch = true;
+    const res = await fetch(`http://localhost:${server.port}/api/tab/create`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspace_id: created.workspace.workspace_id, cwd: root, agent: { kind: "claude" }, first_message: "FIRST-NO-PAGE" }),
+    }).finally(() => { standInLaunch = false; });
+    expect(res.status).toBe(200);
+    const tab = await res.json() as { pane_id: string; agent_started: boolean; first_message: { id: string; held?: string } };
+    expect(tab.agent_started).toBeTrue();
+    expect(tab.first_message).toEqual({ id: expect.any(String), held: "first_message_unattended" });
+    // what the answer says is what the pane's list says
+    const socket = new Socket(server.port); entry.sockets.push(socket);
+    await socket.attach(tab.pane_id);
+    const held = await listed(socket, tab.pane_id, tab.first_message.id, "held");
+    expect(held.messages.find((item: PendingMessage) => item.id === tab.first_message.id).error.code).toBe("first_message_unattended");
   }, 30_000);
 
   it("queued for one launched agent, is held, not typed, when another agent comes up in its terminal", async () => {

@@ -1,4 +1,5 @@
 import type { AgentInfo, AgentStatus, PaneInfo, PaneLayoutSnapshot, PaneProcessInfo, SessionSnapshot, TabInfo, WorkspaceInfo } from "../../shared/herdr-api.generated.ts";
+import type { HerdrPane } from "../../shared/protocol.ts";
 import type { Foreground, Status, Terminal } from "./hc-api.generated.ts";
 
 /**
@@ -8,8 +9,9 @@ import type { Foreground, Status, Terminal } from "./hc-api.generated.ts";
  * hc has no workspaces, tabs or panes. The Herdr desktop app keeps its own (spaces, tabs and split
  * trees) in the core's `herdr-app` document, and labels each terminal it starts with its space and
  * tab (`herdr.space`, `herdr.tab`). A space reads as a workspace, a tab as a tab and each terminal
- * block in the tab's tree as a pane, in the app's order. A live terminal no tab holds (a worker
- * another agent started, a terminal from `hc run`) gets a tab of its own in one more workspace.
+ * block in the tab's tree as a pane, in the app's order. A live terminal no tab holds and no label
+ * places gets a tab of its own: right after the tab of the terminal that started it (hc's `parent`:
+ * an agent's helper), when that one is shown, and otherwise in one more workspace.
  *
  * A pane's id is its terminal's address (`t7`): it lasts as long as the terminal does, as a herdr
  * pane id does, and a tab that gets a new terminal in the same block gets a new pane.
@@ -25,14 +27,24 @@ export const TAB_LABEL = "herdr.tab";
 /** The names a person gave a workspace or tab Ovis made: names live in the app's document, which Ovis never writes. */
 export const WORKSPACE_NAME_LABEL = "ovis.workspace";
 export const TAB_NAME_LABEL = "ovis.tab";
+/**
+ * The last turn a person looked at, shared by every Herdr client (herdr-app docs/labels.md): an
+ * agent at rest whose turn is past it is done, one at or below it idle. Missing, the program's own
+ * word stands, as it did before.
+ */
+export const SEEN_LABEL = "herdr.seen";
 
-/** One OSC 7501 report (hc's `Status`): the program's own words. */
-export type HcStatus = Pick<Status, "state"> & Partial<Pick<Status, "app" | "title" | "msg">>;
+/**
+ * One OSC 7501 report (hc's `Status`): the program's own words. `kind` (permission, question, auth)
+ * comes with `blocked` only, `progress` (0 to 100) with `working` or `blocked`, each only when the
+ * program said.
+ */
+export type HcStatus = Pick<Status, "state"> & Partial<Pick<Status, "app" | "title" | "msg" | "kind" | "progress">>;
 export type HcForeground = Pick<Foreground, "pid" | "name"> & Partial<Pick<Foreground, "argv" | "cwd">>;
 
-/** The fields of hc's `Terminal` record this side reads, by hc's own schema. */
+/** The fields of hc's `Terminal` record this side reads, by hc's own schema; `parent` is the terminal that started it (`t3`), set once at its start. */
 export type HcTerminal = Pick<Terminal, "address" | "cols" | "rows" | "cwd" | "state"> &
-  Partial<Pick<Terminal, "argv" | "pid" | "name" | "title" | "labels" | "turn">> &
+  Partial<Pick<Terminal, "argv" | "pid" | "name" | "title" | "labels" | "turn" | "parent">> &
   { status?: HcStatus | null; foreground?: HcForeground | null };
 
 /** The one object guard of server/herdr-core/: hc's records and the app's document come from outside. */
@@ -61,6 +73,28 @@ export function agentStatusOf(status: HcStatus | null | undefined): AgentStatus 
 const HERDR_AGENT_NAMES: Record<string, string> = { "claude-code": "claude", antigravity: "agy" };
 
 /** The agent a status names, by herdr's name; a program that never reported one runs none herdr would see. */
+/** The turn a terminal's `herdr.seen` names; null when it has none, or none a client wrote as a turn. */
+export function seenTurnOf(labels: Readonly<Record<string, string>> | undefined): number | null {
+  const value = labels?.[SEEN_LABEL];
+  if (value === undefined || !/^\d{1,15}$/.test(value)) return null;
+  return Number(value);
+}
+
+/**
+ * The status a terminal shows: its program's word, except that an agent at rest (`idle`, `done`)
+ * whose terminal carries `herdr.seen` is done while a turn ended after the one last looked at, and
+ * idle once someone looked, on whichever client. Without the label, Ovis's own rule: a turn that
+ * ended since this server first saw the terminal (`firstTurn`) is done, as the program's word is
+ * otherwise.
+ */
+export function shownStatusOf(status: HcStatus | null | undefined, turn: number | undefined, labels: Readonly<Record<string, string>> | undefined, firstTurn?: number): AgentStatus {
+  const word = agentStatusOf(status);
+  if (word !== "idle" && word !== "done") return word;
+  const seen = seenTurnOf(labels);
+  if (seen !== null) return (turn ?? 0) > seen ? "done" : "idle";
+  return firstTurn !== undefined && (turn ?? 0) > firstTurn ? "done" : word;
+}
+
 export function agentOfStatus(status: HcStatus | null | undefined): string | null {
   const app = status?.app;
   if (!app) return null;
@@ -197,6 +231,54 @@ function groups(terminals: readonly HcTerminal[], layout: unknown): Group[] {
       group.tabs.push({ id: tabId, label: where?.[1] || terminal.labels?.[TAB_NAME_LABEL] || String(group.tabs.length + 1), placed: [{ terminal, x: 0, y: 0 }] });
     }
   }
+  // a terminal another one started (an agent's helper, `hc run` from a shell) that nothing above
+  // placed: a tab of its own right after its parent's tab and the helpers already there, so it
+  // reads under that tab. A parent placed only here goes first, so a helper's helper follows it.
+  // With no parent, or one not shown, it stays with the other terminals.
+  const tabOf = new Map<string, { group: Group; tab: Group["tabs"][number] }>();
+  for (const group of result) for (const tab of group.tabs) for (const { terminal } of tab.placed) tabOf.set(terminal.address, { group, tab });
+  const under = new Map<Group["tabs"][number], Group["tabs"][number]>();
+  const below = (tab: Group["tabs"][number], ancestor: Group["tabs"][number]): boolean => {
+    for (let at = under.get(tab); at; at = under.get(at)) if (at === ancestor) return true;
+    return false;
+  };
+  let waiting = rest;
+  for (let moved = true; moved;) {
+    moved = false;
+    const still: HcTerminal[] = [];
+    for (const terminal of waiting) {
+      const home = terminal.parent ? tabOf.get(terminal.parent) : undefined;
+      if (!home) { still.push(terminal); continue; }
+      let tabId = `${home.group.id}:${terminal.address}`;
+      for (let n = 2; ids.has(tabId); n++) tabId = `${home.group.id}:${terminal.address}:${n}`;
+      ids.add(tabId);
+      const tab = { id: tabId, label: terminal.labels?.[TAB_NAME_LABEL] || terminal.name || terminal.address, placed: [{ terminal, x: 0, y: 0 }] };
+      let at = home.group.tabs.indexOf(home.tab) + 1;
+      while (at < home.group.tabs.length && below(home.group.tabs[at]!, home.tab)) at++;
+      home.group.tabs.splice(at, 0, tab);
+      under.set(tab, home.tab);
+      tabOf.set(terminal.address, { group: home.group, tab });
+      moved = true;
+    }
+    waiting = still;
+  }
+  // what is left keeps its order, with a helper whose parent is here too right after that parent
+  rest.length = 0;
+  const left = new Set(waiting.map((terminal) => terminal.address));
+  const helpersOf = new Map<string, HcTerminal[]>();
+  for (const terminal of waiting) {
+    if (terminal.parent && terminal.parent !== terminal.address && left.has(terminal.parent)) helpersOf.set(terminal.parent, [...(helpersOf.get(terminal.parent) ?? []), terminal]);
+  }
+  const added = new Set<string>();
+  const add = (terminal: HcTerminal): void => {
+    if (added.has(terminal.address)) return;
+    added.add(terminal.address);
+    rest.push(terminal);
+    for (const helper of helpersOf.get(terminal.address) ?? []) add(helper);
+  };
+  for (const terminal of waiting) if (!terminal.parent || !left.has(terminal.parent)) add(terminal);
+  // parents that started each other: their own order
+  for (const terminal of waiting) add(terminal);
   // a space or tab of the app's with nothing live in it shows nothing
   const shown = result.map((group) => ({ ...group, tabs: group.tabs.filter((tab) => tab.placed.length > 0) })).filter((group) => group.tabs.length > 0);
   if (rest.length > 0) {
@@ -209,15 +291,35 @@ function groups(terminals: readonly HcTerminal[], layout: unknown): Group[] {
   return shown;
 }
 
-function paneOf(terminal: HcTerminal, workspaceId: string, tabId: string): PaneInfo {
+/** The turn a terminal had when this server first saw it (adapter.ts): without `herdr.seen`, what ended since is done. */
+export type FirstTurn = (terminal: Pick<HcTerminal, "address" | "turn">) => number;
+
+/**
+ * What the program itself reported beyond its state, each only when it did and only while it means
+ * something: what a blocked agent waits for and its message as written, and the progress of one
+ * that works or is blocked, a whole percentage.
+ */
+export function reportedFacts(status: HcStatus | null | undefined): Pick<HerdrPane, "agent_kind" | "agent_message" | "agent_progress"> {
+  if (!status) return {};
+  const { kind, msg, progress } = status;
+  return {
+    ...(status.state === "blocked" && typeof kind === "string" && kind !== "" ? { agent_kind: kind } : {}),
+    ...(status.state === "blocked" && typeof msg === "string" && msg.trim() !== "" ? { agent_message: msg } : {}),
+    ...((status.state === "working" || status.state === "blocked") && typeof progress === "number" && Number.isInteger(progress) && progress >= 0 && progress <= 100 ? { agent_progress: progress } : {}),
+  };
+}
+
+function paneOf(terminal: HcTerminal, workspaceId: string, tabId: string, shown: ReadonlySet<string>, firstTurn?: FirstTurn): HerdrPane {
   const cwd = terminal.foreground?.cwd ?? terminal.cwd;
   return {
+    ...(terminal.parent && terminal.parent !== terminal.address && shown.has(terminal.parent) ? { parent_pane_id: terminal.parent } : {}),
+    ...reportedFacts(terminal.status),
     pane_id: terminal.address,
     terminal_id: terminal.address,
     workspace_id: workspaceId,
     tab_id: tabId,
     agent: agentOf(terminal),
-    agent_status: agentStatusOf(terminal.status),
+    agent_status: shownStatusOf(terminal.status, terminal.turn, terminal.labels, firstTurn?.(terminal)),
     cwd,
     foreground_cwd: cwd,
     title: terminal.title ?? null,
@@ -250,15 +352,17 @@ export function agentInfoOf(pane: PaneInfo): AgentInfo {
  * window, and no pane is in front of anyone the way a herdr TUI's is. Each pane's layout rect is
  * its terminal's own grid, the size an observer attaches at, at its place in the tab's splits.
  */
-export function buildSnapshot(terminals: readonly HcTerminal[], layout: unknown, version: string): SessionSnapshot {
+export function buildSnapshot(terminals: readonly HcTerminal[], layout: unknown, version: string, firstTurn?: FirstTurn): SessionSnapshot {
   const workspaces: WorkspaceInfo[] = [];
   const tabs: TabInfo[] = [];
   const panes: PaneInfo[] = [];
   const layouts: PaneLayoutSnapshot[] = [];
-  for (const [index, group] of groups(terminals, layout).entries()) {
+  const placed = groups(terminals, layout);
+  const shown = new Set(placed.flatMap((group) => group.tabs.flatMap((tab) => tab.placed.map(({ terminal }) => terminal.address))));
+  for (const [index, group] of placed.entries()) {
     const groupPanes: PaneInfo[] = [];
     for (const [tabIndex, tab] of group.tabs.entries()) {
-      const tabPanes = tab.placed.map(({ terminal }) => paneOf(terminal, group.id, tab.id));
+      const tabPanes = tab.placed.map(({ terminal }) => paneOf(terminal, group.id, tab.id, shown, firstTurn));
       groupPanes.push(...tabPanes);
       tabs.push({ tab_id: tab.id, workspace_id: group.id, label: tab.label, number: tabIndex + 1, agent_status: rollUp(tabPanes.map((pane) => pane.agent_status)), focused: false, pane_count: tabPanes.length });
       layouts.push({

@@ -442,7 +442,9 @@ export function commandsForTrigger(commands: readonly SlashCommand[], agent: str
 export function briefDescription(description: string): string {
   const text = description.trim();
   const end = /[.!?](?=\s+[\p{Lu}\p{Lo}"'(])|\u3002/u.exec(text);
-  return (end ? text.slice(0, end.index) : text).replace(/(?<!\.)[.\u3002]$/u, "");
+  const brief = end ? text.slice(0, end.index) : text;
+  // a last full stop goes, not an ellipsis's (no lookbehind: shared/lookbehind.ts)
+  return /[.\u3002]$/.test(brief) && brief[brief.length - 2] !== "." ? brief.slice(0, -1) : brief;
 }
 
 /**

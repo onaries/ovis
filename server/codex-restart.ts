@@ -98,7 +98,7 @@ async function restart(expected: CodexRestartTarget, configured?: string): Promi
     if (Object.keys(current.target).some((key) => Reflect.get(current.target, key) !== Reflect.get(expected, key))) throw new RestartError("codex_restart_stale", "The pane or conversation changed. Cancel and open Restart Codex again.");
     const live = await paneGet(expected.pane_id);
     const liveCwd = live.foreground_cwd ?? live.cwd;
-    const livePath = liveCwd ? await codexTranscriptPath(expected.pane_id, liveCwd, current.home, undefined, false, false) : null;
+    const livePath = liveCwd ? await codexTranscriptPath(expected.pane_id, liveCwd, current.home, undefined, false, false, false) : null;
     if (live.terminal_id !== expected.terminal_id || livePath === null || sessionId(livePath) !== expected.session_id) throw new RestartError("codex_restart_stale", "The conversation changed before Codex could be restarted.");
     if (processStartedAt(expected.process_id) !== expected.process_started_at) throw new RestartError("codex_restart_stale", "The Codex process changed before it could be restarted.");
     process.kill(expected.process_id, "SIGTERM");

@@ -350,6 +350,21 @@ export async function herdrRpc(
   }
 }
 
+/**
+ * Whether herdr may be listening on its socket; sends no request. Only proof says it is stopped: no
+ * socket, or one that refuses the connect (the file a killed herdr leaves behind, #2670). Anything
+ * else, a connect that does not settle within a second too, counts as listening.
+ */
+export function herdrMayListen(socketPath: string = herdrSocketPath()): Promise<boolean> {
+  return new Promise((resolve) => {
+    const settle = (listening: boolean) => { clearTimeout(timer); resolve(listening); };
+    const timer = setTimeout(() => settle(true), 1000);
+    const failed = (error: Error) => settle(!new Set(["ECONNREFUSED", "ENOENT"]).has((error as NodeJS.ErrnoException).code ?? ""));
+    Bun.connect({ unix: socketAddress(socketPath), socket: { open(socket) { socket.end(); settle(true); }, data() {}, connectError(_socket, error) { failed(error); } } })
+      .catch(failed);
+  });
+}
+
 export async function ping(socketPath?: string): Promise<HerdrIdentity> {
   const result = await herdrRpc<{ version: string; protocol: number; capabilities?: Record<string, unknown> }>("ping", {}, socketPath);
   const attach = terminalAttachSupported(result.capabilities);

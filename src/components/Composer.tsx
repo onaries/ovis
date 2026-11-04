@@ -19,7 +19,7 @@ import "./Composer.css";
 import type { AgentStatus, ClientRole, ConversationMetadata, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
-import { composerDraftKey, composerDrafts } from "../lib/composerDraft.ts";
+import { composerDraftKey, composerDrafts, underSendLock } from "../lib/composerDraft.ts";
 import { onQuoted } from "../lib/chatQuote.ts";
 import { commentsWait, holdsQuoteLine, messageWithComments, replyComments, replyCommentsKey, type ReplyComment } from "../lib/replyComments.ts";
 import { ReplyCommentsChip, useReplyComments } from "./ReplyComments.tsx";
@@ -122,6 +122,8 @@ export interface ComposerProps {
    * note offers to send again with `clearDraft`, which clears that draft from the terminal first, or,
    * where it named none, with `sendAnyway`; a promise settles to any of them */
   onSend: (text: string, clearDraft?: string, sendAnyway?: boolean, agentOnly?: boolean) => boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal>;
+  /** a Send pressed waits for its claim (the pane's cross-tab lock, granted in a later task): +1 at the press, -1 once the claim ran, sent or not */
+  onClaim?: (delta: 1 | -1) => void;
   onAbort: () => void;
   onUploadImage: (file: File) => Promise<string>;
 }
@@ -262,6 +264,7 @@ export function Composer({
   branch = null,
   worktreeRepo = null,
   onSend,
+  onClaim,
   onAbort,
   onUploadImage,
 }: ComposerProps) {
@@ -300,6 +303,12 @@ export function Composer({
   const fileRequest = useRef(0);
   const draftKey = composerDraftKey(paneStorageId(machineId, paneId));
   const { text, sending } = useSyncExternalStore(composerDrafts.subscribe, () => composerDrafts.read(draftKey));
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
+  // each time the terminal disconnects: a send that waited for the lock goes only on the connection it was pressed on (#2369)
+  const drops = useRef(0);
+  const wasConnected = useRef(connected);
+  if (wasConnected.current !== connected) { if (!connected) drops.current++; wasConnected.current = connected; }
   const setText = useCallback((value: string | ((previous: string) => string)) => composerDrafts.set(draftKey, value), [draftKey]);
   // comments on the agent's replies (#511) go first in the next message, unless it is a slash command or an answer
   const commentsKey = replyCommentsKey(paneStorageId(machineId, paneId));
@@ -310,6 +319,8 @@ export function Composer({
   const free = useMemo(() => replyComments.unreserved(comments), [comments, reservation]);
   const carried: readonly ReplyComment[] = commentsHeld ? [] : free;
   const mounted = useRef(true);
+  /** each pressed Send's claim still waiting for its lock: a composer that goes ends them, as the claim would send nothing */
+  const openClaims = useRef(new Set<() => void>());
   const [caret, setCaret] = useState(text.length);
   const textRef = useRef(text);
   const caretRef = useRef(caret);
@@ -409,6 +420,7 @@ export function Composer({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      for (const release of [...openClaims.current]) release();
       // files not yet sent and paths not yet placed go with the pane
       uploadQueue.current = [];
       waitingMentions.current = [];
@@ -859,25 +871,44 @@ export function Composer({
       for (const attachment of sentAttachments) { URL.revokeObjectURL(attachment.previewUrl); placedMentions.current.delete(attachment.id); }
       setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
     };
-    if (!composerDrafts.begin(draftKey, sent)) return false;
-    sendId = composerDrafts.sendOf(draftKey);
-    // the comments it carries are reserved for it until it settles, wherever a pane move takes them (#511)
-    replyComments.reserve(sentComments);
     const ended = (): void => { composerDrafts.end(draftKey, sendId); replyComments.release(sentComments); };
-    // a polish landing before the acknowledgement would count as an edit and keep the sent message here
-    dictation.forget();
-    try {
-      // a message with comments goes only to an agent: a shell would read `> quote` as a redirect
-      const agentOnly = sentComments.length > 0 || composerDrafts.isAgentOnly(draftKey);
-      const result = agentOnly ? onSend(message, clearDraft, sendAnyway, true) : onSend(message, clearDraft, sendAnyway);
-      if (!(result instanceof Promise)) { settle(result); ended(); return true; }
-      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(ended);
-    } catch {
-      ended();
-      if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
-    }
-    return true;
-  }, [attachments, carried, commentsKey, connected, dictation.forget, draftKey, onOpenHistory, onSend, role, roomless, sending, t, terminalTyped, text, uploading]);
+    const pressedOn = drops.current;
+    // what goes is read again inside the pane's cross-tab lock: another tab may have sent this draft or
+    // its comments since this one drew them (#2369)
+    const claim = (): boolean => {
+      // a claim that waited for the lock goes only where and while it was pressed
+      if (!mounted.current || !connectedRef.current || drops.current !== pressedOn || draftKeyRef.current !== draftKey) return false;
+      const waiting = new Set(replyComments.read(commentsKey).map((item) => item.id));
+      if (!sentComments.every((item) => waiting.has(item.id)) || !composerDrafts.claim(draftKey, sent)) return false;
+      sendId = composerDrafts.sendOf(draftKey);
+      // the comments it carries are reserved for it until it settles, wherever a pane move takes them (#511)
+      replyComments.reserve(sentComments);
+      // a polish landing before the acknowledgement would count as an edit and keep the sent message here
+      dictation.forget();
+      try {
+        // a message with comments goes only to an agent: a shell would read `> quote` as a redirect
+        const agentOnly = sentComments.length > 0 || composerDrafts.isAgentOnly(draftKey);
+        const result = agentOnly ? onSend(message, clearDraft, sendAnyway, true) : onSend(message, clearDraft, sendAnyway);
+        if (!(result instanceof Promise)) { settle(result); ended(); return true; }
+        // settled outside the lock: it clears the draft before it ends the lease, which a claim reads first
+        void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(ended);
+      } catch {
+        ended();
+        if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
+      }
+      return true;
+    };
+    // the press is the send as the user sees it: an empty chat's greeting goes in its frame, not the grant's
+    onClaim?.(1);
+    const release = (): void => {
+      if (!openClaims.current.delete(release)) return;
+      onClaim?.(-1);
+    };
+    openClaims.current.add(release);
+    return underSendLock(draftKey, () => {
+      try { return claim(); } finally { release(); }
+    });
+  }, [attachments, carried, commentsKey, connected, dictation.forget, draftKey, onClaim, onOpenHistory, onSend, role, roomless, sending, t, terminalTyped, text, uploading]);
   const sendRef = useRef(send);
   sendRef.current = send;
   const connectedRef = useRef(connected);
@@ -962,16 +993,21 @@ export function Composer({
       const note = t("Not confirmed. Check the terminal before sending again.");
       if (mounted.current) setNote(draft === undefined ? note : draftSendNote(note, draft));
     };
-    if (!composerDrafts.begin(draftKey)) return;
-    const sendId = composerDrafts.sendOf(draftKey);
-    try {
-      const result = deliver();
-      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey, sendId); return; }
-      void result.then(settle).catch(unconfirmed).finally(() => composerDrafts.end(draftKey, sendId));
-    } catch {
-      composerDrafts.end(draftKey, sendId);
-      unconfirmed();
-    }
+    // its lease is claimed in the pane's cross-tab lock, as Send's is, and only where and while it was pressed (#2369)
+    const pressedOn = drops.current;
+    underSendLock(draftKey, () => {
+      if (!mounted.current || !connectedRef.current || drops.current !== pressedOn || draftKeyRef.current !== draftKey) return;
+      if (!composerDrafts.begin(draftKey)) return;
+      const sendId = composerDrafts.sendOf(draftKey);
+      try {
+        const result = deliver();
+        if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey, sendId); return; }
+        void result.then(settle).catch(unconfirmed).finally(() => composerDrafts.end(draftKey, sendId));
+      } catch {
+        composerDrafts.end(draftKey, sendId);
+        unconfirmed();
+      }
+    });
   }, [connected, draftKey, sending]);
   const sendQuick = useCallback((reply: string) => sendBeside(() => onSend(reply)), [onSend, sendBeside]);
   /** Send it: the terminal draft a DraftRefusal named goes as it is, as Clear it and send with the draft for the message. */

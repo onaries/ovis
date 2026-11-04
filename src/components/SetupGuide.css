@@ -361,6 +361,41 @@
   letter-spacing: 0.1em;
 }
 
+/* Connect your phone through the Ovis relay: its line and button, its state, then its QR code */
+.setup-phone-relay {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+
+.setup-phone-relay > .setup-actions,
+.setup-phone-relay > .setup-error {
+  align-self: stretch;
+}
+
+.setup-phone-relay-lead {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+
+.setup-phone-relay-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.setup-phone-relay-state svg {
+  width: 14px;
+  height: 14px;
+}
+
 .setup-paired {
   display: inline-flex;
   align-items: center;

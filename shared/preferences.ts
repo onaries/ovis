@@ -17,6 +17,12 @@ export type SharedSettingKey = (typeof SHARED_SETTING_KEYS)[number];
 export interface SharedPreferences {
   /** 0 until a browser first writes; each write adds one */
   revision: number;
+  /**
+   * The server's state folder, made at its first save and kept beside the document: a browser tells a
+   * server that started over with a fresh folder by it, whatever revision that one has reached since.
+   * Absent until the first save, and from a server too old to keep it. A change cannot set it.
+   */
+  state_id?: string;
   /** only the settings some browser has shared: one nobody changed is absent, and stays each device's own */
   settings: Partial<Record<SharedSettingKey, unknown>>;
   /** sidebar pin keys (`machine:pane` for an agent, `machine:workspace:id` for a workspace), in their order; absent until a browser first shares its pins */

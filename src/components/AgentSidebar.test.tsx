@@ -113,6 +113,20 @@ describe("AgentSidebar phone sheet live row", () => {
     expect(mounted.root.findByProps({ className: "row-sheet-detail" }).children).toEqual(["40%"]);
   });
 
+  it("says a blocked agent's whole reason in the open sheet, which has no tooltip", async () => {
+    const { mounted, update } = await open();
+    // When herdr-core reports the agent blocked on a permission, with its message.
+    await update(roster().map((machine) => ({
+      ...machine,
+      snapshot: machine.snapshot === null ? null : {
+        ...machine.snapshot,
+        panes: machine.snapshot.panes.map((pane) => pane.pane_id === paneId ? { ...pane, agent_status: "blocked" as const, agent_kind: "permission", agent_message: "Allow bash?" } : pane),
+      },
+    })));
+    // Then the sheet gives the reason in full before the plugin values.
+    expect(mounted.root.findByProps({ className: "row-sheet-detail" }).children).toEqual(["Needs permission: Allow bash? \u00b7 95%"]);
+  });
+
   it("removes the sheet detail when a token is deleted", async () => {
     const { mounted, update } = await open();
     // When the pane no longer reports any tokens.

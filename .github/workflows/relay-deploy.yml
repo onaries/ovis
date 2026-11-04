@@ -21,6 +21,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
+      actions: read
   deploy:
     needs: validate
     if: github.ref == 'refs/heads/main'

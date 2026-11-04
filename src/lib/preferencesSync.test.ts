@@ -16,6 +16,10 @@ describe("preferences sync", () => {
     expect(preferencesChange(known, { ...local(DEFAULT_SETTINGS, [], []), tabLabels: {} })).toBeNull();
     expect(preferencesChange(known, { ...local(light, [], []), tabLabels: {} })).toEqual({ settings: { theme: "light" }, tab_labels_removed: ["w1:p1|t1"] });
     expect(preferencesChange(known, { ...local(DEFAULT_SETTINGS, [], []), tabLabels: { "w1:p1|t1": "Server" } })).toBeNull();
+    // a label an earlier version learned from an attachment's path is replaced by the one learned again (#2637)
+    const stale: Baseline = { ...known, tabLabels: { "w1:p1|t1": "@/Users/example/Library/\u2026" } };
+    expect(preferencesChange(stale, { ...local(DEFAULT_SETTINGS, [], []), tabLabels: { "w1:p1|t1": "Fix footer" } })).toEqual({ settings: {}, tab_labels: { "w1:p1|t1": "Fix footer" }, tab_labels_removed: ["w1:p1|t1"] });
+    expect(preferencesChange(stale, { ...local(DEFAULT_SETTINGS, [], []), tabLabels: {} })).toBeNull();
   });
 
   it("lays the tab labels learned and dropped here over another browser's, label by label", () => {
@@ -28,6 +32,15 @@ describe("preferences sync", () => {
     expect(preferencesChange(taken.base, { ...mine, tabLabels: taken.tabLabels! })).toEqual({ settings: {}, tab_labels: { "w1:p3|t3": "Three" }, tab_labels_removed: ["w1:p1|t1"] });
     // nothing changed here: the server's map stands, a document without one holding none (the setting turned off elsewhere)
     expect(takePreferences(known, { ...mine, tabLabels: known.tabLabels! }, { revision: 3, settings: {}, pins: [], muted_panes: [] }, null).tabLabels).toEqual({});
+  });
+
+  it("keeps a label learned again over an attachment's one another browser's save brings back (#2682)", () => {
+    const stale = "See @/Users/example/Library/\u2026";
+    const known: Baseline = { ...base(DEFAULT_SETTINGS, [], []), tabLabels: { "w1:p1|t1": stale } };
+    const mine: Local = { ...local(DEFAULT_SETTINGS, [], []), tabLabels: { "w1:p1|t1": "Fix footer" } };
+    const taken = takePreferences(known, mine, { revision: 2, settings: {}, pins: [], muted_panes: [], tab_labels: { "w1:p1|t1": stale, "w1:p2|t2": "Two" } }, null);
+    expect(taken.tabLabels).toEqual({ "w1:p1|t1": "Fix footer", "w1:p2|t2": "Two" });
+    expect(preferencesChange(taken.base, { ...mine, tabLabels: taken.tabLabels! })).toEqual({ settings: {}, tab_labels: { "w1:p1|t1": "Fix footer" }, tab_labels_removed: ["w1:p1|t1"] });
   });
 
   it("sends no learned label while the setting is off, and takes the server's empty map", () => {
@@ -87,6 +100,18 @@ describe("preferences sync", () => {
     const overtaken = takePreferences(base(DEFAULT_SETTINGS, []), local(light, []), { revision: 3, settings: { theme: "dark" }, pins: [] }, inFlight);
     expect(overtaken.patch).toEqual({ theme: "dark" });
     expect(preferencesChange(overtaken.base, local({ ...light, theme: "dark" }, []))).toBeNull();
+  });
+
+  it("keeps a setting or the pins changed back while the change was on its way, and sends them next", () => {
+    // the switch went on and its change is on its way; the user turns it off again before the server's answer, which carries on
+    const on = !DEFAULT_SETTINGS.showUsage;
+    const taken = takePreferences(base(DEFAULT_SETTINGS, []), local(DEFAULT_SETTINGS, []), { revision: 1, settings: { showUsage: on }, pins: [] }, { settings: { showUsage: on } });
+    expect(taken.patch).toEqual({});
+    expect(preferencesChange(taken.base, local(DEFAULT_SETTINGS, []))).toEqual({ settings: { showUsage: DEFAULT_SETTINGS.showUsage } });
+    // a pin made and taken back the same way
+    const unpinned = takePreferences(base(DEFAULT_SETTINGS, []), local(DEFAULT_SETTINGS, []), { revision: 1, settings: {}, pins: ["local:w1:p1"] }, { settings: {}, pins: ["local:w1:p1"] });
+    expect(unpinned.pins).toBeNull();
+    expect(preferencesChange(unpinned.base, local(DEFAULT_SETTINGS, []))).toEqual({ settings: {}, pins: [] });
   });
 
   it("a refused change gives way where another browser saved the same setting or the pins since, and stays elsewhere", () => {

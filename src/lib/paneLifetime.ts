@@ -98,6 +98,8 @@ export class PaneLifetimes {
   private readonly proven = new Map<string, string>();
   /** lifetimes this page drew a PC under and then left: a replaced herdr never comes back */
   private readonly outlived = new Map<string, Set<string>>();
+  /** each PC's latest snapshot taken for a stale read: a runtime switch back may prove it the herdr to follow */
+  private readonly skipped = new Map<string, { machine: Pick<Machine, "id" | "snapshot">; title?: (pane: HerdrPane) => string }>();
   /** each PC's pane titles in its latest snapshot, for the text it leaves to recovery */
   private readonly titles = new Map<string, Map<string, string>>();
   /** the pane state of PCs this page keeps out of storage */
@@ -136,11 +138,44 @@ export class PaneLifetimes {
     removeItem: (key) => { if (this.routed(key)) this.storage().removeItem(key); else this.memory.delete(key); },
   };
 
+  /**
+   * This page switched the PC's runtime (Settings, lib/runtimeSwitch.ts): the herdr it left may come
+   * back with a switch back, so none it outlived is a stale read any more. What each runtime's panes
+   * held goes to recovery as the next snapshot names the other, as for any herdr that replaced one.
+   */
+  runtimeSwitched(machineId: string): void {
+    try { this.storage().removeItem(RETIRED_PREFIX + machineId); } catch { /* storage refused: a herdr it lists stays in this page */ }
+    this.release(machineId);
+  }
+
+  /** No herdr the PC left is a stale read any more; one already taken for it is observed again. */
+  private release(machineId: string): void {
+    this.outlived.delete(machineId);
+    // a snapshot of the runtime switched back to may already have come, and been taken for a stale read
+    const skipped = this.skipped.get(machineId);
+    if (skipped) {
+      this.skipped.delete(machineId);
+      this.observe([skipped.machine], skipped.title);
+    }
+  }
+
+  /** The PC serves another runtime than this page last read (a switch made on another device too): the herdr it left may come back. */
+  runtimeChanged(machineId: string): void { this.runtimeSwitched(machineId); }
+
   /** Called with a PC once its generation changed: the stores drop what they read for it. */
   onRetire(forget: (machineId: string) => void): () => void { this.retired.add(forget); return () => { this.retired.delete(forget); }; }
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private notify(): void { this.unsentCache = null; for (const listener of this.listeners) listener(); }
-  storageChanged(key: string | null): void { if (key === null || key.startsWith(UNSENT_PREFIX)) this.notify(); }
+  storageChanged(key: string | null): void {
+    // another page switched this PC's runtime (runtimeSwitched): the herdr it left may come back here too
+    if (key === null) for (const machineId of [...this.outlived.keys()]) this.release(machineId);
+    else if (key.startsWith(RETIRED_PREFIX)) {
+      let gone = false;
+      try { gone = this.storage().getItem(key) === null; } catch { /* unreadable: the history stands */ }
+      if (gone) this.release(key.slice(RETIRED_PREFIX.length));
+    }
+    if (key === null || key.startsWith(UNSENT_PREFIX)) this.notify();
+  }
 
   /**
    * Each roster before it is drawn (useMachineRoster): a PC whose snapshot names another herdr than
@@ -160,7 +195,11 @@ export class PaneLifetimes {
       const titles = this.titles.get(machine.id) ?? new Map<string, string>();
       const named = machine.snapshot.herdr_lifetime;
       // a read from before the herdr this page already moved to (a roster the connection overtook)
-      if (named !== undefined && this.outlived.get(machine.id)?.has(named)) continue;
+      if (named !== undefined && this.outlived.get(machine.id)?.has(named)) {
+        this.skipped.set(machine.id, { machine, ...(title ? { title } : {}) });
+        continue;
+      }
+      this.skipped.delete(machine.id);
       const next = named ?? null;
       const proven = this.proven.get(machine.id);
       if (!this.generations.has(machine.id) || this.generations.get(machine.id) !== next) {

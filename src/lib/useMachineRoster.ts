@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject
 import type { DevicePairedEvent, Machine, MachineEvent } from "../../shared/machines.ts";
 import { ApiError, authenticate, fetchMachines, observePaneSessions, paneSessionEvents, paneSessionsMoving, verifySourceBoot } from "./api.ts";
 import { passingFolder, recentDirectories } from "./recent-directories.ts";
-import { keepEventStream } from "./eventStream.ts";
+import { keepMachineEvents } from "./machineEventStream.ts";
+import { MachineSessionRegistry } from "./machineSession.ts";
 import { receiveSeen } from "./seenFinishes.ts";
 import { withPairedNotice } from "./pairedNotices.ts";
 import { takeAuthTokenFromUrl } from "./authLink.ts";
@@ -34,9 +35,19 @@ export function sameData(a: unknown, b: unknown): boolean {
 const REFETCH_DEBOUNCE_MS = 500;
 
 export function useRosterState() {
+  const [machineSessions] = useState(() => new MachineSessionRegistry());
+  useEffect(() => () => machineSessions.closeAll(), [machineSessions]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [machineRosterLoaded, setMachineRosterLoaded] = useState(false);
-  return { machines, setMachines, machineRosterLoaded, setMachineRosterLoaded };
+  return { machineSessions, machines, setMachines, machineRosterLoaded, setMachineRosterLoaded };
+}
+
+/**
+ * Signing out closes every socket, as unmounting the sessions provider did: one kept open would
+ * carry its old authority behind the sign-in gate and be reused by the next sign-in.
+ */
+export function useCloseSessionsWhenLocked(machineSessions: Pick<MachineSessionRegistry, "closeAll">, locked: boolean | null): void {
+  useEffect(() => { if (locked) machineSessions.closeAll(); }, [machineSessions, locked]);
 }
 
 export function useRecentFolderMemory({ machines }: { machines: Machine[] }) {
@@ -156,7 +167,8 @@ export function useRosterLoader({ rosterIn, setMachines, setMachineRosterLoaded,
   return { snapshotRequests, reorderCoordinator, load, scheduleRefetch };
 }
 
-export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequests, onRoster, reorderCoordinator, setMachines, rosterIn, setMachineRosterLoaded, machinesRef, onPaneStatus, onPaneExited, followFocusRef, selectionRef, splitShownRef, splitRef, pendingLink, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, scheduleRefetch, preferencesResubscribedRef, preferencesDisconnectedRef, preferencesClosedRef, dropIn, chime, setPairedNotices, getTakeNotificationTargetRef }: {
+export function useRosterEvents({ onPaneMoved, machineSessions, locked, receivePreferencesRef, snapshotRequests, onRoster, reorderCoordinator, setMachines, rosterIn, setMachineRosterLoaded, machinesRef, onPaneStatus, onPaneExited, followFocusRef, selectionRef, splitShownRef, splitRef, pendingLink, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, scheduleRefetch, preferencesResubscribedRef, preferencesDisconnectedRef, preferencesClosedRef, dropIn, chime, setPairedNotices, getTakeNotificationTargetRef }: {
+  machineSessions: MachineSessionRegistry;
   locked: boolean | null;
   receivePreferencesRef: RefObject<ReturnType<typeof usePreferencesSync>["receive"]>;
   snapshotRequests: RefObject<SnapshotRequests>;
@@ -168,6 +180,8 @@ export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequest
   machinesRef: RefObject<Machine[]>;
   onPaneStatus: ReturnType<typeof useAlertSignals>["onPaneStatus"];
   onPaneExited: ReturnType<typeof useAlertSignals>["onPaneExited"];
+  /** herdr moved a pane of a PC under a new ID (the server's pane-moved, #1503) */
+  onPaneMoved: (machineId: string, from: string, to: string) => void;
   followFocusRef: RefObject<boolean>;
   selectionRef: RefObject<SelectionMark>;
   splitShownRef: RefObject<boolean>;
@@ -187,13 +201,12 @@ export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequest
   setPairedNotices: Dispatch<SetStateAction<readonly DevicePairedEvent[]>>;
   getTakeNotificationTargetRef: () => RefObject<(target: NotificationTarget) => void>;
 }) {
-  // One SSE subscription watches every PC, even when no terminal is selected.
+  useCloseSessionsWhenLocked(machineSessions, locked);
+  // The local socket watches every PC, even when no terminal is selected; older servers use SSE.
   useEffect(() => {
     if (locked !== false) return;
-    const onMessage = (event: MessageEvent<string>) => {
+    const onMessage = (payload: MachineEvent) => {
       const takeNotificationTargetRef = getTakeNotificationTargetRef();
-      let payload: MachineEvent;
-      try { payload = JSON.parse(event.data); } catch { return; }
       if (payload.type === "preferences") { receivePreferencesRef.current(payload.preferences); return; }
       if (payload.type === "herdr-sidebar") { setAgentRowTokens(payload.agents); return; }
       if (payload.type === "seen") { receiveSeen(payload.finishes); return; }
@@ -245,13 +258,15 @@ export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequest
         setNotificationViewTarget(null); setTerminalPeek(null);
         setAutoSelected(true);
       }
+      // told before the structure change of the move: the pane's state and view go to the new ID first
+      if (message.type === "pane-moved") onPaneMoved(machine.id, message.from, message.to);
       if (message.type === "session-changed" || message.type === "pane-exited") {
         // until the roster after it comes, the panes' sessions are not known: no press read of the old one is taken
         paneSessionsMoving(machine.id);
         scheduleRefetch();
       }
     };
-    return keepEventStream("/api/machines/events", {
+    return keepMachineEvents(machineSessions.get("local").socket, {
       // opened or reopened: a shared-settings save paused by failures gets a new round
       opened: () => preferencesResubscribedRef.current(),
       // lost (the browser reconnects by itself): a shared-settings save waits for that instead of retrying
@@ -262,5 +277,5 @@ export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequest
       closed: () => preferencesClosedRef.current(),
       message: onMessage,
     });
-  }, [locked, scheduleRefetch, dropIn, chime, reorderCoordinator]);
+  }, [machineSessions, locked, scheduleRefetch, dropIn, chime, reorderCoordinator]);
 }

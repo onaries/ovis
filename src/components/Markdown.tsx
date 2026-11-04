@@ -158,8 +158,17 @@ function SvgFigure({ value }: { value: string }) {
   );
 }
 
-/** Stats an image before it can load; null context keeps image references as links. */
-type MarkdownImageResolver = (src: string) => Promise<MarkdownImagePreview | null>;
+/** An image's natural size, once it decoded. */
+export type ImageSize = { width: number; height: number };
+/**
+ * Stats an image before it can load; null context keeps image references as links. `size` gives
+ * the size an image of this source decoded at before, and `remember` keeps it, so a reopened image
+ * holds that box, not 16:9, while it is stat'ed and loaded again. Nothing else is reused: its
+ * bytes wait for the new stat.
+ */
+export type MarkdownImageResolver = ((src: string) => Promise<MarkdownImagePreview | null>) & {
+  size?: (src: string) => ImageSize | undefined; remember?: (src: string, size: ImageSize) => void;
+};
 export const MarkdownImageContext = createContext<MarkdownImageResolver | null>(null);
 /** Chat holds its viewer above virtualized rows; file previews keep their own image behavior. */
 export const MarkdownImageOpenContext = createContext<((image: GalleryImage) => void) | null>(null);
@@ -174,11 +183,12 @@ export const MarkdownImageRetryContext = createContext(0);
  * up (`display: contents`) and the one image renders bare, nothing remounted: its box, hit area
  * and alignment are its own. Without `slot` (a badge in a sentence) nothing is held and a failure
  * shows `fallback`. `src` is null while an address is still being resolved: the slot stands from
- * the first paint.
+ * the first paint. With `size` (what this image decoded at before), the loading slot is the box
+ * `.markdown-image` will take, not 16:9; `onDecoded` reports the natural size to keep.
  */
-export function ReservedImage({ src: address, alt, width, className, slot, slotStyle, fallback, onError, retry = 0, renderImage }: {
+export function ReservedImage({ src: address, alt, width, className, slot, slotStyle, fallback, onError, retry = 0, renderImage, size, onDecoded }: {
   src: string | null; alt: string; width?: number; className?: string; slot: boolean; slotStyle?: CSSProperties; fallback?: ReactNode; onError?: () => void; retry?: number;
-  renderImage?: (image: ReactNode) => ReactNode;
+  renderImage?: (image: ReactNode) => ReactNode; size?: ImageSize; onDecoded?: (size: ImageSize) => void;
 }) {
   const t = useT();
   const resource = useResourceUrlState(address, retry);
@@ -190,19 +200,35 @@ export function ReservedImage({ src: address, alt, width, className, slot, slotS
   // an address the transport refused fails like an image that would not decode
   const phase = resource.error !== null ? "failed" : src !== null && settled?.src === src && (!settled.failed || settled.attempt === retry) ? (settled.failed ? "failed" : "decoded") : "loading";
   // a cached image is complete before `onLoad` can fire
+  const element = useRef<HTMLImageElement | null>(null);
+  const decoded = useRef(onDecoded);
+  decoded.current = onDecoded;
+  const report = (image: HTMLImageElement | null) => {
+    if (image !== null && image.naturalWidth > 0 && image.naturalHeight > 0) decoded.current?.({ width: image.naturalWidth, height: image.naturalHeight });
+  };
   const complete = useCallback((image: HTMLImageElement | null) => {
-    if (image !== null && src !== null && image.complete && image.naturalWidth > 0) setSettled({ src, failed: false });
+    element.current = image;
+    if (image === null || src === null || !image.complete || image.naturalWidth <= 0) return;
+    report(image);
+    setSettled({ src, failed: false });
   }, [src]);
   if (phase === "failed" && !slot) return <>{fallback}</>;
   const image = src === null ? null : <img ref={complete} className={className} src={src} alt={alt} width={width} loading="lazy"
-    onLoad={() => setSettled({ src, failed: false })} onError={() => { setSettled({ src, failed: true, attempt: retry }); onError?.(); }} />;
+    onLoad={() => { report(element.current); setSettled({ src, failed: false }); }}
+    onError={() => { setSettled({ src, failed: true, attempt: retry }); onError?.(); }} />;
+  // the decoded image is as wide as its authored or natural width allows, its height from its ratio
+  const sized = size === undefined ? slotStyle : {
+    "--image-width": `${width !== undefined && Number.isFinite(width) && width > 0 ? Math.round(width) : size.width}px`,
+    "--image-ratio": `${size.width} / ${size.height}`,
+    "--image-aspect": String(size.width / size.height),
+  } as CSSProperties;
   // Only the image or its reserved slot can be wrapped in a viewer control, never the fallback.
   const content = !slot ? image : phase === "failed"
     ? <span className="image-slot is-failed" style={slotStyle}>
       <span className="image-slot-note"><ImageOff aria-hidden="true" /><span>{t("Image unavailable")}</span>{alt !== "" && <span>{alt}</span>}</span>
     </span>
     : phase === "loading"
-      ? <span className="image-slot is-loading" style={slotStyle} role="status" aria-label={t("Loading image")}>{image}</span>
+      ? <span className={`image-slot is-loading${size === undefined ? "" : " is-sized"}`} style={sized} role="status" aria-label={t("Loading image")}>{image}</span>
       : <span className="image-slot">{image}</span>;
   return content !== null && renderImage ? renderImage(content) : content;
 }
@@ -254,7 +280,7 @@ function MarkdownImage({ src, alt, width, fallback, resolve, interactive, standa
   if (preview === undefined && !standalone) return <span>{alt}</span>;
   if (!standalone && preview?.url === failedUrl) return <>{fallback}</>;
   // A failed byte load retries only after the new stat has passed the same size/type checks.
-  return <ReservedImage src={preview?.url ?? null} alt={alt} width={width} className="markdown-image" slot={standalone} slotStyle={standalone ? imageSlotStyle(width) : undefined} fallback={fallback} retry={loaded?.retry ?? 0} renderImage={preview === undefined || !interactive || openImage === null ? undefined : (image) =>
+  return <ReservedImage src={preview?.url ?? null} alt={alt} width={width} className="markdown-image" slot={standalone} size={standalone ? resolve.size?.(src) : undefined} onDecoded={standalone ? (size) => resolve.remember?.(src, size) : undefined} slotStyle={standalone ? imageSlotStyle(width) : undefined} fallback={fallback} retry={loaded?.retry ?? 0} renderImage={preview === undefined || !interactive || openImage === null ? undefined : (image) =>
     <button type="button" className={`markdown-image-open${standalone ? " is-standalone" : ""}`} aria-label={alt || preview.name} title={t("Open image")} onClick={(event) => {
       event.currentTarget.focus({ preventScroll: true });
       openImage({ src: preview.url, name: alt || preview.name, file: preview.name });

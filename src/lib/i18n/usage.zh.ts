@@ -6,6 +6,11 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const USAGE_ZH: Record<string, string> = {
+  "Remove {name}?": "移除 {name}？",
+  "Remove this account from Ovis? Its CLI sign-in and credentials stay on this PC, and Restore under Removed from Ovis brings it back.": "要从 Ovis 移除此账号吗？CLI 登录状态和凭据会保留在这台电脑上，可在“已从 Ovis 移除”中点击“恢复”找回。",
+  "Removed from Ovis": "已从 Ovis 移除",
+  "Restore": "恢复",
+  "Restore {name}": "恢复 {name}",
   "Could not load sign-in options": "无法加载登录方式",
   "On the server PC": "在服务器 PC 上登录",
   "Install {cli} on the server PC first.": "请先在服务器 PC 上安装 {cli}。",

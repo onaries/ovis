@@ -34,7 +34,8 @@ import { testShellEnv } from "../scripts/test-shell.ts";
 import { PendingInputError, PendingInputs } from "./pending-input.ts";
 import { loginPathProbe, ShellAgentLocator, type LoginPathProbe } from "./shell-agent.ts";
 import { DeviceStore } from "./devices.ts";
-import type { HerdrCoreFacts, MachineEvent, MachineSettings } from "../shared/machines.ts";
+import type { HerdrCoreFacts, HerdrRuntimeFacts, MachineEvent, MachineSettings } from "../shared/machines.ts";
+import type { RuntimeService, SwitchAnswer } from "./herdr-core/runtime-choice.ts";
 import { MAX_MUTED_PANES, type SharedPreferences } from "../shared/preferences.ts";
 import { OmoStatus } from "./omo-status.ts";
 import { omoJobTasks } from "./omo-jobs.ts";
@@ -4210,6 +4211,40 @@ describe("pairing and identity", () => {
     }
   });
 
+  it("regression: lets the owner's login in as soon as Tailscale finishes starting, not five minutes after a boot", async () => {
+    const state = mkdtempSync(join(tmpdir(), "herdr-boot-identity-"));
+    const savedOwner = process.env["OVIS_TAILSCALE_OWNER"];
+    delete process.env["OVIS_TAILSCALE_OWNER"];
+    // a PC that paired a device before: the gate is closed to strangers
+    writeFileSync(join(state, "devices.json"), JSON.stringify({ gate_closed_at: new Date().toISOString(), devices: [] }));
+    // at boot the server asks before tailscaled has logged in: no user yet; every later read is Running
+    const starting = JSON.stringify({ BackendState: "NoState", Self: { DNSName: "" } });
+    const running = JSON.stringify({ BackendState: "Running", Self: { DNSName: "pc.example.ts.net.", UserID: 7, TailscaleIPs: ["100.101.102.103"] }, User: { "7": { LoginName: OWNER } } });
+    let reads = 0;
+    const tailnet = new TailnetIdentitySource(async () => reads++ === 0 ? starting : running);
+    await tailnet.freshIdentity(null);
+    const booted = createServer({ port: 0, stateDir: state, tailnet });
+    const at = async (headers: Record<string, string>) => ((await (await fetch(`http://127.0.0.1:${booted.port}/api/health?scope=bridge`, { headers })).json()) as { auth: HealthAuth }).auth;
+    // the owner's phone asks a few seconds after the boot read, once tailscaled is up
+    const start = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => start + 3_000);
+    try {
+      expect(await at(proxied(OWNER))).toMatchObject({ authenticated: true, via: "tailscale" });
+      // once the login is known it is kept for the cache's life: later polls read nothing
+      const settled = reads;
+      expect(await at(proxied(OWNER))).toMatchObject({ authenticated: true, via: "tailscale" });
+      expect(reads).toBe(settled);
+      // a stranger still pairs
+      expect(await at(proxied("someone@example.com"))).toMatchObject({ authenticated: false, reason: "other_user" });
+      expect(await at(proxied())).toMatchObject({ authenticated: false, reason: "pairing_required" });
+    } finally {
+      clock.mockRestore();
+      booted.stop();
+      if (savedOwner === undefined) delete process.env["OVIS_TAILSCALE_OWNER"]; else process.env["OVIS_TAILSCALE_OWNER"] = savedOwner;
+      rmSync(state, { recursive: true, force: true });
+    }
+  });
+
   it("takes the login named in OVIS_TAILSCALE_OWNER for the PC's own, as a tagged node needs", async () => {
     const state = mkdtempSync(join(tmpdir(), "herdr-named-owner-"));
     const before = process.env["OVIS_TAILSCALE_OWNER"];
@@ -5529,6 +5564,9 @@ setInterval(() => {}, 1 << 30);
 // The shared preferences (shared/preferences.ts) over HTTP and the event stream: the muted panes
 // are always in the document, the first mute is a change of the empty list, a watching device
 // reads and cannot write, and two tabs' changes land as two revisions with both kept.
+/** a preferences document saved at least once, which names its state folder */
+const namedPreferences = <T extends object>(doc: T) => ({ ...doc, state_id: expect.stringMatching(/^[0-9a-f]{32}$/) });
+
 describe("shared preferences API", () => {
   const guard = { "x-herdr-machine": "1", "content-type": "application/json" };
   /** the event stream as a page reads it: each `preferences` document, and a bounded wait for the next one that matches */
@@ -5578,8 +5616,8 @@ describe("shared preferences API", () => {
       // the first mute: saved, answered whole, and told to every stream
       const first = await put({ settings: {}, muted_panes: ["w1:p1"] });
       expect(first.status).toBe(200);
-      expect(await first.json()).toEqual({ revision: 1, settings: {}, muted_panes: ["w1:p1"] });
-      expect(await events.next("the first mute", (document) => document.revision === 1)).toEqual({ revision: 1, settings: {}, muted_panes: ["w1:p1"] });
+      expect(await first.json()).toEqual(namedPreferences({ revision: 1, settings: {}, muted_panes: ["w1:p1"] }));
+      expect(await events.next("the first mute", (document) => document.revision === 1)).toEqual(namedPreferences({ revision: 1, settings: {}, muted_panes: ["w1:p1"] }));
       // malformed and oversized lists: refused unread into the document, which keeps its revision
       for (const muted of ["w1:p1", [1], [""], [null], ["x".repeat(301)], Array.from({ length: MAX_MUTED_PANES + 1 }, (_, i) => `w1:p${i}`)]) {
         const refused = await put({ settings: {}, muted_panes: muted });
@@ -5587,10 +5625,10 @@ describe("shared preferences API", () => {
       }
       const huge = await put({ settings: {}, muted_panes: Array.from({ length: 300 }, (_, i) => `${"k".repeat(290)}${i}`) });
       expect([huge.status, ((await huge.json()) as ApiError).error.code]).toEqual([413, "too_large"]);
-      expect(await (await fetch(`${base}/api/preferences`, { headers })).json()).toEqual({ revision: 1, settings: {}, muted_panes: ["w1:p1"] });
+      expect(await (await fetch(`${base}/api/preferences`, { headers })).json()).toEqual(namedPreferences({ revision: 1, settings: {}, muted_panes: ["w1:p1"] }));
       // a change that names no list leaves it; an empty list clears it
-      expect(await (await put({ settings: { theme: "light" } })).json()).toEqual({ revision: 2, settings: { theme: "light" }, muted_panes: ["w1:p1"] });
-      expect(await (await put({ settings: {}, muted_panes: [] })).json()).toEqual({ revision: 3, settings: { theme: "light" }, muted_panes: [] });
+      expect(await (await put({ settings: { theme: "light" } })).json()).toEqual(namedPreferences({ revision: 2, settings: { theme: "light" }, muted_panes: ["w1:p1"] }));
+      expect(await (await put({ settings: {}, muted_panes: [] })).json()).toEqual(namedPreferences({ revision: 3, settings: { theme: "light" }, muted_panes: [] }));
       await events.next("the cleared list", (document) => document.revision === 3);
       expect(events.documents.map((document) => document.revision)).toEqual([0, 1, 2, 3]);
     } finally {
@@ -5614,7 +5652,7 @@ describe("shared preferences API", () => {
       const events = await openEvents(base, headers, abort);
       expect(await events.next("the opening document", (document) => document.revision === 4)).toEqual({ ...stored, muted_panes: [] });
       const first = await fetch(`${base}/api/preferences`, { method: "PUT", headers, body: JSON.stringify({ settings: {}, muted_panes: ["w1:p1"] }) });
-      expect(await first.json()).toEqual({ revision: 5, settings: { theme: "dark" }, pins: ["local:w1:p1"], muted_panes: ["w1:p1"] });
+      expect(await first.json()).toEqual(namedPreferences({ revision: 5, settings: { theme: "dark" }, pins: ["local:w1:p1"], muted_panes: ["w1:p1"] }));
       // the list has a document of its own, which an older release's whole rewrite of preferences.json cannot erase
       expect(JSON.parse(readFileSync(join(root, "preferences.json"), "utf8"))).toEqual({ revision: 5, settings: { theme: "dark" }, pins: ["local:w1:p1"] });
       expect(JSON.parse(readFileSync(join(root, "muted-panes.json"), "utf8"))).toEqual({ muted_panes: ["w1:p1"] });
@@ -5647,14 +5685,14 @@ describe("shared preferences API", () => {
       const revisions = [((await a.json()) as SharedPreferences).revision, ((await b.json()) as SharedPreferences).revision].sort();
       expect(revisions).toEqual([1, 2]);
       const merged = await events.next("both changes", (document) => document.revision === 2);
-      expect(merged).toEqual({ revision: 2, settings: { theme: "light" }, muted_panes: ["w1:p1"] });
+      expect(merged).toEqual(namedPreferences({ revision: 2, settings: { theme: "light" }, muted_panes: ["w1:p1"] }));
       // tab B then clears the list tab A set: the last write wins, as for every field
       const cleared = await fetch(`${base}/api/preferences`, { method: "PUT", headers: driving, body: JSON.stringify({ settings: {}, muted_panes: [] }) });
-      expect(await cleared.json()).toEqual({ revision: 3, settings: { theme: "light" }, muted_panes: [] });
+      expect(await cleared.json()).toEqual(namedPreferences({ revision: 3, settings: { theme: "light" }, muted_panes: [] }));
       // the watching device heard every document, and cannot write one: the revision stays
       await events.next("the cleared list", (document) => document.revision === 3);
       expect(events.documents.map((document) => document.revision)).toEqual([0, 1, 2, 3]);
-      expect(await (await fetch(`${base}/api/preferences`, { headers: watching })).json()).toEqual({ revision: 3, settings: { theme: "light" }, muted_panes: [] });
+      expect(await (await fetch(`${base}/api/preferences`, { headers: watching })).json()).toEqual(namedPreferences({ revision: 3, settings: { theme: "light" }, muted_panes: [] }));
       const refused = await fetch(`${base}/api/preferences`, { method: "PUT", headers: watching, body: JSON.stringify({ settings: {}, muted_panes: ["w1:p1"] }) });
       expect([refused.status, ((await refused.json()) as ApiError).error.code]).toEqual([403, "read_only"]);
       expect(await (await fetch(`${base}/api/preferences`, { headers: driving })).json()).toMatchObject({ revision: 3, muted_panes: [] });
@@ -5667,15 +5705,15 @@ describe("shared preferences API", () => {
 });
 
 describe("access facts on /api/health", () => {
-  type Body = { auth: HealthAuth; lan_exposure?: LanExposure; security?: SecuritySummary; herdr_core?: HerdrCoreFacts };
+  type Body = { auth: HealthAuth; lan_exposure?: LanExposure; security?: SecuritySummary; herdr_core?: HerdrCoreFacts; herdr_runtime?: HerdrRuntimeFacts };
   const SECRET = "fictional-t0k3n-value";
   const guard = { "content-type": "application/json", "x-herdr-machine": "1" };
   /** a server of its own: a temp state dir, an empty token unless one is given, nothing from the runner's environment */
   const CORE_FACTS: HerdrCoreFacts = { version: "0.1.17", session: "default", running: false };
-  const serve = (options: { hostname?: string; token?: string; serveOnly?: boolean; owner?: string | null; seed?: (stateDir: string) => void } = {}) => {
+  const serve = (options: { hostname?: string; token?: string; serveOnly?: boolean; owner?: string | null; seed?: (stateDir: string) => void; runtime?: RuntimeService; accepted?: () => boolean } = {}) => {
     const stateDir = mkdtempSync(join(tmpdir(), "herdr-security-summary-"));
     options.seed?.(stateDir);
-    const instance = createServer({ port: 0, hostname: options.hostname ?? "127.0.0.1", token: options.token ?? "", stateDir, tailscaleOwner: options.owner ?? null, tailscaleServeOnly: options.serveOnly ?? false, herdrCoreFacts: () => CORE_FACTS });
+    const instance = createServer({ port: 0, hostname: options.hostname ?? "127.0.0.1", token: options.token ?? "", stateDir, tailscaleOwner: options.owner ?? null, tailscaleServeOnly: options.serveOnly ?? false, herdrCoreFacts: () => CORE_FACTS, ...(options.runtime ? { runtimeService: options.runtime } : {}), ...(options.accepted ? { launchAccepted: options.accepted } : {}) });
     const read = async (headers: Record<string, string> = {}, scope = "") => {
       const response = await fetch(`http://127.0.0.1:${instance.port}/api/health${scope}`, { headers });
       const text = await response.text();
@@ -5761,6 +5799,65 @@ describe("access facts on /api/health", () => {
       expect(stranger.body.auth).toMatchObject({ authenticated: true, via: "open" });
       expect(stranger.body.herdr_core).toBeUndefined();
       expect((await open.read({})).body.herdr_core).toEqual(CORE_FACTS);
+    } finally { open.stop(); }
+  });
+
+  it("says in the bridge's own answer which runtime it serves and whether its launcher took it", async () => {
+    let taken = false;
+    const server = serve({ accepted: () => taken });
+    try {
+      const first = (await server.read({}, "?scope=bridge")).body as unknown as { runtime?: string; accepted?: boolean; web_ui?: { boot_id?: string } };
+      expect([first.runtime, first.accepted, typeof first.web_ui?.boot_id]).toEqual(["herdr", false, "string"]);
+      taken = true;
+      expect(((await server.read({}, "?scope=bridge")).body as unknown as { accepted?: boolean }).accepted).toBe(true);
+    } finally { server.stop(); }
+  });
+
+  it("tells the runtime facts to a driving owner only, and takes a switch from that owner's own page only", async () => {
+    const facts: HerdrRuntimeFacts = { serving: "herdr", source: "detected", tui: { installed: true, running: true }, app_installed: true, switch_to: "herdr-core", locked: null };
+    const asked: unknown[] = [];
+    let answer: SwitchAnswer = { ok: true };
+    const runtime: RuntimeService = { facts: () => facts, request: (target) => { asked.push(target); return answer; } };
+    let token = "";
+    const secured = serve({ token: SECRET, runtime, seed: (stateDir) => {
+      const store = new DeviceStore(stateDir);
+      token = store.pair(store.startPairing().code, "Watch", "watch")!.token;
+      store.match(token);
+    } });
+    const bearer = { authorization: `Bearer ${SECRET}` };
+    const post = (headers: Record<string, string>, body: unknown = { runtime: "herdr-core" }) =>
+      fetch(`http://127.0.0.1:${secured.port}/api/runtime`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+    try {
+      expect((await secured.read(bearer)).body.herdr_runtime).toEqual(facts);
+      expect((await secured.read({ cookie: `ovis_device=${token}`, "x-forwarded-for": "192.168.0.20" })).body.herdr_runtime).toBeUndefined();
+      expect((await secured.read({})).body.herdr_runtime).toBeUndefined();
+      // the bridge's own answer, which needs no herdr, tells the same owner the same, so a stopped TUI keeps the way back
+      expect((await secured.read(bearer, "?scope=bridge")).body.herdr_runtime).toEqual(facts);
+      expect((await secured.read({ cookie: `ovis_device=${token}`, "x-forwarded-for": "192.168.0.20" }, "?scope=bridge")).body.herdr_runtime).toBeUndefined();
+      expect((await secured.read({}, "?scope=bridge")).body.herdr_runtime).toBeUndefined();
+      // nobody but a driving owner, and only through the app's own request header
+      expect((await post({})).status).toBe(401);
+      expect((await post({ cookie: `ovis_device=${token}`, "x-forwarded-for": "192.168.0.20", "x-herdr-update": "1" })).status).toBe(403);
+      expect((await post(bearer)).status).toBe(403);
+      expect(asked).toEqual([]);
+      const accepted = await post({ ...bearer, "x-herdr-update": "1" });
+      expect([accepted.status, await accepted.json()]).toEqual([202, { accepted: true }]);
+      expect(asked).toEqual(["herdr-core"]);
+      // the service's refusal reaches the page as it is
+      answer = { ok: false, status: 409, code: "runtime_locked", message: "OVIS_RUNTIME decides" };
+      const refused = await post({ ...bearer, "x-herdr-update": "1" }, { runtime: "herdr" });
+      expect([refused.status, ((await refused.json()) as { error: { code: string } }).error.code]).toEqual([409, "runtime_locked"]);
+      expect((await fetch(`http://127.0.0.1:${secured.port}/api/runtime`, { headers: bearer })).status).toBe(400);
+    } finally { secured.stop(); }
+    // an open install lets a stranger on the network in as a driver: still no switch for them
+    asked.length = 0;
+    answer = { ok: true };
+    const open = serve({ hostname: "0.0.0.0", runtime });
+    try {
+      const stranger = await fetch(`http://127.0.0.1:${open.port}/api/runtime`, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1", "x-forwarded-for": "192.168.0.20" }, body: JSON.stringify({ runtime: "herdr-core" }) });
+      expect(stranger.status).toBe(403);
+      expect((await open.read({ "x-forwarded-for": "192.168.0.20" })).body.herdr_runtime).toBeUndefined();
+      expect(asked).toEqual([]);
     } finally { open.stop(); }
   });
 

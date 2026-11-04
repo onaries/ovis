@@ -25,6 +25,11 @@ export interface UsageLoginAccounts {
   readonly accounts: readonly (string | null)[];
 }
 
+/** DELETE /api/usage/accounts removes a listed account from Ovis, POST restores a removed one: never revokes or deletes CLI credentials. */
+export interface UsageAccountRemoval {
+  readonly account: string;
+}
+
 /** What a login pane asks of its user, read from its screen: never a token, only what the CLI shows to type or open. */
 export interface UsageLoginPromptText {
   /** the sign-in page to open, on the provider's own host; null until the CLI prints it */

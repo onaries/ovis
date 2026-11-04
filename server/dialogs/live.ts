@@ -168,9 +168,27 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   if (prompt.responder === "cmd-question") return cmdFooterStart(shown) >= 0;
   // its footer ends the screen, wrapped or not (dialogs/opencode.ts)
   if (prompt.responder === "opencode-v1-question") return openCodeV1QuestionActive(screen);
-  // Claude's plan. A narrow pane wraps its footer, `ctrl+g to edit in VS Code · ~/.claude/plans/x.md`, so the
-  // path or its tail ends the screen alone. Anchored on `.md`: output under an old footer never ends it.
-  return ends(/ctrl\+g to edit|shift\+tab to approve with this feedback/i) || ends(/ctrl\+g to edit in [^·]+· [^·]+\.md$/i);
+  // Claude's plan: its footer, wrapped or not, ends the screen
+  return ends(/ctrl\+g to edit|shift\+tab to approve with this feedback/i) || claudePlanFooterEnds(shown);
+}
+
+const CLAUDE_PLAN_FOOTER_RE = /^ctrl\+g to edit in [^·]+?[ \n]·[ \n]([^]+)$/i;
+
+/**
+ * Whether Claude's plan footer, `ctrl+g to edit in VS Code · ~/.claude/plans/x.md`, ends the screen. A narrow pane
+ * wraps it with nothing marking the breaks: at a space before the path, or anywhere inside the path, even
+ * between `.m` and `d`, and over as many lines as the path needs. So the path's lines are joined as one
+ * word, and `.md` may show only at its very end: output under an answered plan (`⏺ Updated README.md`, a bare
+ * `README.md`, even one written on the footer's last row) comes after a path already complete, so it never
+ * extends it; a plan folder with `.md` in its name goes unread instead. The folder may hold a `·`
+ * (`CLAUDE_CONFIG_DIR`), so only the first `·` after the editor's name separates the path.
+ */
+function claudePlanFooterEnds(shown: string[]): boolean {
+  const at = findLastIndex(shown, (line) => /^ctrl\+g to edit\b/i.test(line));
+  const path = at < 0 ? undefined : CLAUDE_PLAN_FOOTER_RE.exec(shown.slice(at).join("\n"))?.[1];
+  if (path === undefined) return false;
+  const joined = path.replaceAll("\n", "");
+  return joined.indexOf(".md") === joined.length - 3;
 }
 /**
  * The same two hints told from the end of the window. A phone leaves pi a pane barely wide enough

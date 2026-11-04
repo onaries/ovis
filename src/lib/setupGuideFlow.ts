@@ -1,11 +1,13 @@
 /**
  * Where the first-run setup guide stands (components/SetupGuide.tsx): the welcome, then one setup
  * screen that checks the PC for coding agents and either starts the first workspace with one it found
- * or installs one. It opens by itself only on a fresh install, and once: the record in this browser
- * says it was closed, or that it was left open.
+ * or installs one, with Connect your phone beside Start: the Ovis relay's QR code first where the relay
+ * can lead (phoneWay), else the page's own address or Settings → Phone (phoneBoxMode). It opens by
+ * itself only on a fresh install, and once: the record in this browser says it was closed, or that it
+ * was left open.
  */
 import type { AgentCatalogEntry, AgentCatalogRow } from "../../shared/agent-catalog.ts";
-import type { HealthAuth } from "../../shared/protocol.ts";
+import type { HealthAuth, RelayStatus } from "../../shared/protocol.ts";
 import type { SetupStep } from "./agentSetup.ts";
 import type { ProviderUsage } from "../../shared/usage.ts";
 
@@ -78,6 +80,32 @@ export function agentRows(catalog: readonly AgentCatalogRow[] | null, ready: rea
   const first = FIRST.flatMap((id) => harness.filter((row) => row.id === id));
   const rest = harness.filter((row) => !FIRST.includes(row.id));
   return [...first, ...rest.filter((row) => installedHere(row, ready)), ...rest.filter((row) => !installedHere(row, ready))];
+}
+
+/**
+ * Which way the guide's Connect your phone box leads with: the Ovis relay where it is offered here (a
+ * server with the route, a direct page, not the hosted shell), this browser may control it (not a
+ * watching device, not a Portal visitor: the server refuses both) and nothing blocks it (a serve-only
+ * install, an unreadable identity); else the other ways (phoneBoxMode). It waits for the relay's first
+ * answer, so a page on the PC's loopback is not sent to Settings before the relay could lead.
+ */
+export function phoneWay(relay: { unsupported: boolean; status: Pick<RelayStatus, "blocked"> | null }, shell: boolean, auth: HealthAuth | null): "wait" | "relay" | "other" {
+  if (shell || relay.unsupported) return "other";
+  if (auth === null) return "wait";
+  if (auth.role === "watch" || auth.via === "portal") return "other";
+  if (relay.status === null) return "wait";
+  return relay.status.blocked === null ? "relay" : "other";
+}
+
+/**
+ * What the relay part of the box shows: the button that turns it on; its state while it connects (or
+ * retries); a start that failed before its link existed (the relay is off and nothing retries it,
+ * server/relay/service.ts), with Try again; the pairing QR code once it is online.
+ */
+export function relayStep(status: Pick<RelayStatus, "phase" | "error">): "off" | "not-started" | "starting" | "online" {
+  if (status.phase === "online") return "online";
+  if (status.phase === "off") return status.error === null ? "off" : "not-started";
+  return "starting";
 }
 
 /**

@@ -34,7 +34,7 @@ import qrcode from "qrcode-generator";
 import { DEFAULT_PORT } from "../shared/protocol.ts";
 import { decodeOffer } from "../shared/relay-offer.ts";
 import type { RemoteAccess } from "../shared/protocol.ts";
-import { canBind, FALLBACK_PORTS, freePort, savedPort } from "./plugin-port.ts";
+import { canServe, FALLBACK_PORTS, freePort, savedPort } from "./plugin-port.ts";
 import { activePluginScript } from "./plugin-runtime.ts";
 import { herdrStateDir } from "./plugin-state.ts";
 import { HTTPS_PORT_VARIABLE, HTTPS_PORTS, httpsPorts, parseTailscale, parseTailscaleIp, parseTailscaleOwner, readTailscale, tailscaleBinary } from "../server/tailscale.ts";
@@ -173,6 +173,7 @@ const PORT_FILE = join(APP_STATE_DIR, "plugin-port");
 const portSet = (env["PORT"] ?? "") !== "";
 let port = portSet ? Number(env["PORT"]) : savedPort(PORT_FILE) ?? DEFAULT_PORT;
 const host = env["HOST"] ?? "127.0.0.1";
+const ipv6Loopback = env["OVIS_IPV6_LOOPBACK"] === "1";
 const originOf = (value: number): string => `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${value}`;
 let origin = originOf(port);
 
@@ -412,7 +413,7 @@ function keepPreviousLog(): void {
  * was held by a server of ours that came up meanwhile.
  */
 async function settlePort(): Promise<"ready" | "running" | "failed"> {
-  if (await canBind(host, port)) return "ready";
+  if (await canServe(host, port, ipv6Loopback)) return "ready";
   // a start still coming up holds the port: wait for it rather than open a second server beside it
   const deadline = Date.now() + READY_TIMEOUT_MS;
   while (recordedPid() !== null && Date.now() < deadline) {
@@ -442,7 +443,7 @@ async function settlePort(): Promise<"ready" | "running" | "failed"> {
     failStart(`${blocked} Set another PORT in ${settings}`);
     return "failed";
   }
-  const free = await freePort(port, DEFAULT_PORT, (candidate) => canBind(host, candidate));
+  const free = await freePort(port, DEFAULT_PORT, (candidate) => canServe(host, candidate, ipv6Loopback));
   if (free === null) {
     failStart(`${blocked} Neither can ${[DEFAULT_PORT, ...FALLBACK_PORTS].filter((candidate) => candidate !== port).join(", ")}. Put PORT=<a free port> in ${settings}`);
     return "failed";

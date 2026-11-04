@@ -15,6 +15,8 @@ describe("usePaneCommands after a failed read", () => {
   let refused = false;
   /** while set, each read waits for the test to answer it, in the order the test chooses */
   let held: ((rows: SlashCommand[]) => void)[] | null = null;
+  /** while set, a read never answers, whatever its signal says (a connection that went quiet) */
+  let stalled = false;
   let seen: readonly SlashCommand[] = [];
   let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
   function Probe({ pane }: { pane: string }) { seen = usePaneCommands(pane, "claude"); return null; }
@@ -24,9 +26,10 @@ describe("usePaneCommands after a failed read", () => {
   beforeAll(() => { Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true }); });
   beforeEach(() => {
     jest.useFakeTimers();
-    down = false; refused = false; seen = []; held = null;
+    down = false; refused = false; stalled = false; seen = []; held = null;
     fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => {
       if (down) throw new TypeError("network down");
+      if (stalled) return new Promise<Response>(() => undefined);
       if (refused) return Response.json({ error: { code: "read_only", message: "this device can only watch" } }, { status: 403 });
       if (held !== null) { const queue = held; return Response.json({ commands: await new Promise<SlashCommand[]>((resolve) => { queue.push(resolve); }) }); }
       return Response.json({ commands: [config] });
@@ -48,6 +51,20 @@ describe("usePaneCommands after a failed read", () => {
     await act(async () => { jest.advanceTimersByTime(2_000); });
     await settle(() => seen.length > 0);
     expect(seen.map((command) => command.name)).toEqual(["config"]);
+  });
+
+  it("asks again after a read that never answers, instead of joining it for good (#2593)", async () => {
+    stalled = true;
+    await act(async () => { renderer = create(createElement(Probe, { pane: "w-stall:p1" })); });
+    await settle(() => fetchSpy.mock.calls.length >= 1);
+    stalled = false;
+    // the read's deadline (past the server's own 45 s) fails the quiet read, then the first retry asks again
+    await act(async () => { jest.advanceTimersByTime(60_000); });
+    await settle(() => false);
+    await act(async () => { jest.advanceTimersByTime(2_000); });
+    await settle(() => seen.length > 0);
+    expect(seen.map((command) => command.name)).toEqual(["config"]);
+    expect(fetchSpy.mock.calls.length).toBe(2);
   });
 
   it("does not ask again when the device may only watch (#2132)", async () => {

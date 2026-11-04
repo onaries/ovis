@@ -154,7 +154,8 @@ export function devinSessionForPane(pane: HerdrPane, panes: HerdrPane[], argv: s
   const explicit = reported ?? named;
   if (live !== undefined && explicit !== null && explicit !== live) throw new ConversationUnavailable("no_session_id");
   const selected = live ?? explicit;
-  if (selected === null) throw new ConversationUnavailable("no_session_id");
+  // no lock and no id the pane names: nothing proves which session the terminal shows, so none is guessed
+  if (selected === null) throw new ConversationUnavailable("no_session_id", undefined, "devin_current_session_unverified");
   if (panes.some((other) => other.pane_id !== pane.pane_id && other.agent === "devin"
     && other.agent_session?.agent === "devin" && other.agent_session.kind === "id" && other.agent_session.value === selected)) {
     throw new ConversationUnavailable("no_session_id");

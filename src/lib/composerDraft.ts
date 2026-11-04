@@ -17,6 +17,22 @@ export const composerDraftKey = (paneKey: string): string => DRAFT_PREFIX + pane
 /** a draft that holds an agent-only message put back by Edit (#511): it is sent `agent_only` until the box is emptied */
 export const AGENT_ONLY_PREFIX = "ovis:composer-agent-only:";
 const agentOnlyKey = (key: string): string => AGENT_ONLY_PREFIX + (key.startsWith(DRAFT_PREFIX) ? key.slice(DRAFT_PREFIX.length) : key);
+/** The send on its way on the draft `key`, from any tab, as its lease in storage says, or null: absent or expired. */
+export function sendLease(storage: Pick<Storage, "getItem">, key: string): InFlight | null {
+  try {
+    const raw = storage.getItem(SENDING_PREFIX + key);
+    if (raw === null) return null;
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== "object" || value === null) return null;
+    const { sent, at } = value as Partial<InFlight>;
+    if (typeof sent !== "string" || typeof at !== "number" || !Number.isFinite(at)) return null;
+    return Date.now() - at > SEND_LEASE_MS ? null : { sent, at };
+  } catch {
+    return null;
+  }
+}
+/** Whether a storage key is a draft's send lease (another tab began or ended a send). */
+export const isSendLeaseKey = (key: string): boolean => key.startsWith(SENDING_PREFIX);
 export class ComposerDraftStore {
   private drafts = new Map<string, Draft>();
   private saved = new Map<string, string | null>();
@@ -58,17 +74,7 @@ export class ComposerDraftStore {
   }
   /** The send another tab has in flight, or null: absent, expired, or this tab's own. */
   private inFlight(key: string): InFlight | null {
-    try {
-      const raw = this.storage().getItem(SENDING_PREFIX + key);
-      if (raw === null) return null;
-      const value: unknown = JSON.parse(raw);
-      if (typeof value !== "object" || value === null) return null;
-      const { sent, at } = value as Partial<InFlight>;
-      if (typeof sent !== "string" || typeof at !== "number" || !Number.isFinite(at)) return null;
-      return Date.now() - at > SEND_LEASE_MS ? null : { sent, at };
-    } catch {
-      return null;
-    }
+    try { return sendLease(this.storage(), key); } catch { return null; }
   }
   refresh(key: string): void {
     if (this.unsaved.has(key)) return;
@@ -152,6 +158,17 @@ export class ComposerDraftStore {
     this.notify();
     return true;
   }
+  /**
+   * begin, for a draft that still holds `sent` as storage has it now: another tab may have sent it and
+   * settled it since this tab drew it, before its storage event arrived here (#2369).
+   */
+  claim(key: string, sent: string): boolean {
+    // the lease is read before the text: a tab's acknowledgement clears the text and only then ends its
+    // lease, so a claim sees either that send still on its way or the draft it settled
+    if (this.own.has(key) || this.inFlight(key) !== null) return false;
+    this.refresh(key);
+    return this.read(key).text === sent && this.begin(key, sent);
+  }
   /** The send this tab began on the draft: its settle and end name it (lib/paneLifetime.ts, #1608). */
   sendOf(key: string): number | undefined { return this.sends.get(key)?.id; }
   /** `send`: the one sendOf named; a send another herdr's pane outlived ends nothing here */
@@ -170,6 +187,9 @@ export class ComposerDraftStore {
    * holds a draft already keeps its own.
    */
   move(from: string, to: string): void {
+    // as storage has them now: another tab may have sent the draft since this one read it (#2369)
+    this.refresh(from);
+    this.refresh(to);
     const text = this.read(from).text;
     if (text === "" || this.own.has(from) || this.inFlight(from) !== null || this.read(to).text !== "") return;
     if (this.isAgentOnly(from)) this.markAgentOnly(to);
@@ -220,6 +240,25 @@ export class ComposerDraftStore {
   }
 }
 export const composerDrafts = new ComposerDraftStore();
+/**
+ * Runs `section` as the one cross-tab critical section of the draft `key`'s sends (#2369): a send's
+ * claim (reading what goes, its lease, its payload) and its acknowledgement, and a pane move that
+ * rekeys the draft, see no other tab's in between. localStorage has no compare-and-swap, so a
+ * lease read and then written leaves two tabs a window to both send. Web Locks exist only in a
+ * secure context: on plain HTTP (a LAN or Tailscale address) `section` runs at once, the lease
+ * alone guarding as before. What `section` returned when it ran at once, else true (queued).
+ */
+export function underSendLock(key: string, section: () => boolean | void): boolean {
+  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+  if (!locks) return section() !== false;
+  let ran = false;
+  // a lock manager that refuses the request (the spec allows a SecurityError) leaves the lease alone guarding, as plain HTTP does
+  void locks.request(`ovis-send:${key}`, () => { ran = true; section(); }).catch((error: unknown) => {
+    if (ran) throw error;
+    section();
+  });
+  return true;
+}
 paneLifetimes.onRetire((machineId) => composerDrafts.forget(machineId));
 /**
  * The draft a `storage` event from another tab concerns, or null. A send is begun and ended as

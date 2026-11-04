@@ -15,6 +15,7 @@ import { pageAddress, reloadOnPlainClick } from "../lib/pageQuery.ts";
 import { PaneCachedContext, PaneWatchedContext, PanePresentedContext, PaneFollowContext, PaneShownContext, PaneSubmitContext } from "../lib/paneSubmitContext.ts";
 import { NO_STICKY_MODIFIERS, type StickyModifiers } from "../lib/keys.ts";
 import { EMPTY_DRAFT, draftIsEmpty, restoreDraft, type InputDraft } from "../lib/draft.ts";
+import { looksLikeKey } from "../../shared/secret-prompt.ts";
 import { messageQueues } from "../lib/messageQueue.ts";
 import { pendingMessages } from "../lib/pendingMessages.ts";
 import { heldCountShown, heldOpenAtFold, heldOpenOnFocus, heldRefocusDue, heldRowError, heldRowsFold, heldRowsHidden, heldToggleShown, SHORT_PHONE_QUERY } from "../lib/heldRows.ts";
@@ -557,7 +558,8 @@ export function PaneTerminal({
   useEffect(() => {
     if (!paneId || draftState.owner !== paneStorageId(machineId, paneId)) return;
     const key = `ovis:terminal-draft:${draftState.owner}`;
-    try { if (draftIsEmpty(draft)) paneLifetimes.paneStorage.removeItem(key); else paneLifetimes.paneStorage.setItem(key, JSON.stringify({ ...draft, at: Date.now() })); } catch {}
+    // held text that looks like a key stays on screen only: never written down, as the input line's (#2523)
+    try { if (draftIsEmpty(draft) || looksLikeKey(draft.text)) paneLifetimes.paneStorage.removeItem(key); else paneLifetimes.paneStorage.setItem(key, JSON.stringify({ ...draft, at: Date.now() })); } catch {}
   }, [draftState, paneId, machineId, draft]);
   // Another herdr took the PC's pane IDs (lib/paneLifetime.ts): the input held for the last one's
   // pane is not this one's. Read again before paint, without the reattach a pane change brings.
@@ -567,7 +569,7 @@ export function PaneTerminal({
     if (lifetimeRef.current === lifetime) return;
     lifetimeRef.current = lifetime;
     // input held a moment ago may not be saved yet (the effect above saves it after paint): to recovery with the rest
-    if (paneId && draftState.owner === paneStorageId(machineId, paneId) && draft.text.trim() !== "") paneLifetimes.keep(machineId, paneId, "held", draft.text);
+    if (paneId && draftState.owner === paneStorageId(machineId, paneId) && draft.text.trim() !== "" && !looksLikeKey(draft.text)) paneLifetimes.keep(machineId, paneId, "held", draft.text);
     let saved = EMPTY_DRAFT;
     try { saved = paneId ? restoreDraft(paneLifetimes.paneStorage.getItem(`ovis:terminal-draft:${paneStorageId(machineId, paneId)}`), Date.now()) : EMPTY_DRAFT; } catch {}
     setDraft(saved);
@@ -835,13 +837,16 @@ export function PaneTerminal({
   });
   // an empty chat: one greeting line over the composer, which a mouse-driven window centres
   const folder = greetingFolder(cwd);
-  const greetingDue = chatView && paneId !== null && agent !== null && !secretActive && !observing && !ended
+  // Sends pressed whose claim waits for the pane's cross-tab lock: each takes the greeting away from its press
+  const [claims, setClaims] = useState(0);
+  const onSendClaim = useCallback((delta: 1 | -1) => setClaims((current) => current + delta), []);
+  const greetingDue = chatView && paneId !== null && agent !== null && !secretActive && !observing && !ended && claims === 0
     && showsGreeting({ memory: greetingMemory(paneStorageId(machineId, paneId)), agentStatus, queued: queued.length + pending.length, folder });
   // a stack too short for the composer and the greeting keeps the chat's own empty line
   const greeted = greetingDue && greetingRoom;
   // a message on its way, before its answer and its bubble, or held as a pending row (which has no
   // bubble): the chat's own empty line does not stand in for the greeting the send took away
-  const sending = pending.length > 0 || (paneId !== null && greetingMemory(paneStorageId(machineId, paneId)).pending > 0);
+  const sending = claims > 0 || pending.length > 0 || (paneId !== null && greetingMemory(paneStorageId(machineId, paneId)).pending > 0);
   // Only the composer moves (Composer.css): the surface under it keeps its box, so the xterm
   // mount is never resized by a greeting coming or going. Measured before paint, so the composer
   // is never seen docked first. The greeting stays mounted while it does not fit, so that it is
@@ -1367,6 +1372,7 @@ export function PaneTerminal({
           ) : null}
           waitingAnswer={waitingAnswer}
           onSend={composerSend}
+          onClaim={onSendClaim}
           onAbort={abortTurn}
           onUploadImage={uploadImage}
         />

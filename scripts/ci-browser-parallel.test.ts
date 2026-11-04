@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { failureSite, longestFirst, scriptTimeoutSeconds, serialBrowserScripts } from "./ci-browser-parallel.ts";
+import { failureSite, longestFirst, scriptTimeoutSeconds, serialBrowserScripts, shardScripts } from "./ci-browser-parallel.ts";
 
 /** A killed process that its parent (a subreaper, say) has not reaped yet is a zombie: not alive. */
 const alive = (pid: number): boolean => {
@@ -103,6 +103,32 @@ describe("parallel browser script order", () => {
     const listed = serialBrowserScripts();
     expect(Object.keys(timings).filter((script) => !listed.includes(script))).toEqual([]);
     expect(Object.values(timings).every((seconds) => Number.isFinite(seconds) && seconds >= 0)).toBe(true);
+  });
+});
+
+describe("parallel browser shards", () => {
+  it("splits the scripts by estimated time into disjoint shards that together hold every script once", () => {
+    const scripts = ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"];
+    const timings = { "a.ts": 200, "b.ts": 100, "c.ts": 100, "d.ts": 90, "e.ts": 10 };
+    // longest first to the least-loaded shard: a -> 1; b -> 2; c -> 2 (100 < 200); d -> 1 (a tie goes to
+    // the first); e -> 2 (200 < 290)
+    expect(shardScripts(scripts, timings, "1/2")).toEqual(["a.ts", "d.ts"]);
+    expect(shardScripts(scripts, timings, "2/2")).toEqual(["b.ts", "c.ts", "e.ts"]);
+    const listed = serialBrowserScripts();
+    const table = JSON.parse(readFileSync(join(import.meta.dir, "ci-browser-timings.json"), "utf8")) as Record<string, number>;
+    const shards = [1, 2, 3, 4].map((k) => shardScripts(listed, table, `${k}/4`));
+    expect(shards.flat().sort()).toEqual([...listed].sort());
+  });
+
+  it("deals the scripts out in turn without timings, and keeps every script without a shard", () => {
+    expect(shardScripts(["a.ts", "b.ts", "c.ts"], {}, "2/2")).toEqual(["b.ts"]);
+    expect(shardScripts(["a.ts", "b.ts"], {}, "1/1")).toEqual(["a.ts", "b.ts"]);
+    expect(shardScripts(["a.ts", "b.ts"], {}, undefined)).toEqual(["a.ts", "b.ts"]);
+    expect(shardScripts(["a.ts", "b.ts"], {}, " ")).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("refuses a shard that is not k/n with 1 <= k <= n", () => {
+    for (const shard of ["0/2", "3/2", "1/0", "2", "a/b", "1/2/3"]) expect(() => shardScripts(["a.ts"], {}, shard)).toThrow("BROWSER_SHARD");
   });
 });
 

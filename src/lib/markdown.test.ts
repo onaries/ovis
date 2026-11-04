@@ -7,7 +7,7 @@ import { FILE_LINK_COUNT, FILE_LINK_LIMIT, linkFilePaths } from "../components/F
 import { HighlightedCode } from "../components/HighlightedCode.tsx";
 import { OpenFileContext } from "./filePaths.ts";
 import { SettingsProvider } from "./settings.ts";
-import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES, foldCode, inlineMarks, isTableSeparator, mathNestsTooDeep, parseInline, parseMarkdown, safeMarkdownHref, trimUrl, type InlineNode, type ListBlock } from "../../shared/markdown.ts";
+import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES, foldCode, inlineMarks, isTableSeparator, mathNestsTooDeep, parseInline, parseMarkdown, safeMarkdownHref, shownText, trimUrl, type InlineNode, type ListBlock } from "../../shared/markdown.ts";
 
 describe("parseMarkdown", () => {
   it("renders inline and display math while leaving fenced code untouched", async () => {
@@ -209,6 +209,25 @@ describe("inline markdown", () => {
     for (const target of ["javascript:bad", "data:text/html,x", "#section"]) {
       expect(parseInline(`[label](${target})`)).toEqual([{ type: "text", value: "label" }]);
     }
+  });
+
+  it("decodes a percent-encoded file link once, as a file URI is", () => {
+    expect(parseInline("[photo](/tmp/ovis%20test/%EC%82%AC%EC%A7%84.png)")).toMatchObject([{ type: "file", path: "/tmp/ovis test/사진.png" }]);
+    expect(parseInline("[x](src/a%20b.ts#L12) [y](a%2520b.md:3)")).toMatchObject([
+      { type: "file", path: "src/a b.ts#L12" },
+      { type: "text", value: " " },
+      { type: "file", path: "a%20b.md:3" },
+    ]);
+    // not valid encoding, a control character or a line once decoded: kept as written
+    expect(parseInline("[x](/tmp/100%.png) [y](/tmp/a%0Ab.md) [z](/tmp/a%23L12)")).toMatchObject([
+      { type: "file", path: "/tmp/100%.png" },
+      { type: "text", value: " " },
+      { type: "file", path: "/tmp/a%0Ab.md" },
+      { type: "text", value: " " },
+      { type: "file", path: "/tmp/a%23L12" },
+    ]);
+    // a terminal shows the address as written
+    expect(shownText(parseInline("Open [the guide](/tmp/a%20b.md)?"), true)).toBe("Open the guide (/tmp/a%20b.md)?");
   });
 
   it("links an address written without its scheme, and leaves files and non-addresses alone", () => {
@@ -525,11 +544,13 @@ describe("text no one wrote by hand", () => {
     const searches = new Set([
       /[`[<*_~$]|:codex-file-citation\{|\\\(|file:\/\/\/|https?:\/\/|www\./g,
       /\n/g, /}/g, /[\n\r\u2028\u2029]/g, /\\\)/g, /\$/g, /[\]\n]/g, /[\s)]/g,
-      /(?<=\S)_(?![\p{L}\p{N}\p{M}_])/gu,
-      /(?<=\S)__(?![\p{L}\p{N}\p{M}_])/gu,
+      /_(?![\p{L}\p{N}\p{M}_])/gu,
+      /__(?![\p{L}\p{N}\p{M}_])/gu,
       // Only the single-underscore token can succeed in the last fixture; trying the bold
       // alternative first would rescan the whole suffix at every `__`.
-      /(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu,
+      /_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu,
+      // one sticky attempt, over a run with no `*` in it
+      /\*\*[^*\n]+\*\*/y,
     ].map((pattern) => pattern.toString()));
     const counted = (text: string): InlineNode[] => {
       let scanned = 0;

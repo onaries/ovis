@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { HerdrPane } from "../../shared/protocol.ts";
 import { buildSnapshot, type HcTerminal, keyBytes, OTHER_WORKSPACE_ID } from "./snapshot.ts";
 
 function terminal(address: string, extra: Partial<HcTerminal> = {}): HcTerminal {
@@ -29,6 +30,29 @@ describe("buildSnapshot", () => {
     expect(snapshot.panes.map((p) => [p.pane_id, p.terminal_id, p.tab_id])).toEqual([
       ["t3", "t3", "s1t1"], ["t1", "t1", "s1t1"], ["t2", "t2", "s1t1"], ["t4", "t4", "s1t2"], ["t5", "t5", "s2t1"],
     ]);
+  });
+
+  it("shows an agent at rest as done while a turn ended past herdr.seen, and idle once looked at", () => {
+    const resting = (address: string, state: string, turn: number, labels?: Record<string, string>) =>
+      terminal(address, { status: { app: "claude-code", state }, turn, ...(labels ? { labels } : {}) });
+    const snapshot = buildSnapshot([
+      resting("t1", "idle", 3, { "herdr.seen": "2" }),
+      resting("t2", "idle", 3, { "herdr.seen": "3" }),
+      resting("t3", "done", 3, { "herdr.seen": "3" }),
+      resting("t4", "working", 3, { "herdr.seen": "1" }),
+      resting("t5", "blocked", 3, { "herdr.seen": "3" }),
+      // no label, or one no client wrote as a turn: the program's own word, as before
+      resting("t6", "idle", 3),
+      resting("t7", "done", 3, { "herdr.seen": "x" }),
+      // a shell that never reported stays without a status
+      terminal("t8", { turn: 0, labels: { "herdr.seen": "0" } }),
+    ], { spaces: [] }, "0.1.17");
+    expect(snapshot.panes.map((pane) => [pane.pane_id, pane.agent_status])).toEqual([
+      ["t1", "done"], ["t2", "idle"], ["t3", "idle"], ["t4", "working"], ["t5", "blocked"], ["t6", "idle"], ["t7", "done"], ["t8", "unknown"],
+    ]);
+    // without the label, a turn ended since the server first saw the terminal is done
+    const since = buildSnapshot([resting("t6", "idle", 3), resting("t9", "idle", 2)], { spaces: [] }, "0.1.17", () => 2);
+    expect(since.panes.map((pane) => [pane.pane_id, pane.agent_status])).toEqual([["t6", "done"], ["t9", "idle"]]);
   });
 
   it("names an unnamed space and tab as the app labels their terminals", () => {
@@ -202,6 +226,63 @@ describe("buildSnapshot, terminals the app has not placed", () => {
     const snapshot = buildSnapshot([terminal("t1", { labels: { "herdr.space": "ovis-s", "herdr.tab": "ovis-t", "ovis.workspace": "web", "ovis.tab": "logs" } }), terminal("t2", { labels: { "ovis.tab": "scratch" } })], layout, "0.1.14");
     expect(snapshot.workspaces[0]!.label).toBe("web");
     expect(snapshot.tabs.map((t) => t.label)).toEqual(["logs", "scratch"]);
+  });
+});
+
+describe("buildSnapshot, what herdr-core reports beyond placement", () => {
+  it("puts a terminal another one started right after its parent's tab, a helper's helper after it, and keeps the rest with the other terminals", () => {
+    const layout = { spaces: [{ id: "s1", name: "web", tabs: [
+      { id: "s1t1", name: "main", root: block("t1") },
+      { id: "s1t2", name: "logs", root: block("t2") },
+    ] }] };
+    const snapshot = buildSnapshot([
+      terminal("t1"), terminal("t2"),
+      terminal("t3", { parent: "t1", name: "tests" }),
+      terminal("t4", { parent: "t1" }),
+      terminal("t5", { parent: "t3" }),
+      // a parent that has finished, or none: as before
+      terminal("t6", { parent: "t9" }),
+      terminal("t7", { parent: null }),
+    ], layout, "0.1.17");
+    expect(snapshot.tabs.map((t) => [t.tab_id, t.workspace_id, t.label])).toEqual([
+      ["s1t1", "s1", "main"], ["s1:t3", "s1", "tests"], ["s1:t5", "s1", "t5"], ["s1:t4", "s1", "t4"], ["s1t2", "s1", "logs"],
+      [`${OTHER_WORKSPACE_ID}:t6`, OTHER_WORKSPACE_ID, "t6"], [`${OTHER_WORKSPACE_ID}:t7`, OTHER_WORKSPACE_ID, "t7"],
+    ]);
+    expect(snapshot.panes.map((p) => [p.pane_id, (p as HerdrPane).parent_pane_id])).toEqual([
+      ["t1", undefined], ["t3", "t1"], ["t5", "t3"], ["t4", "t1"], ["t2", undefined], ["t6", undefined], ["t7", undefined],
+    ]);
+  });
+
+  it("keeps a helper of a terminal under Other terminals right after it there", () => {
+    const snapshot = buildSnapshot([terminal("t1"), terminal("t2"), terminal("t3", { parent: "t1" })], null, "0.1.17");
+    expect(snapshot.tabs.map((t) => t.tab_id)).toEqual([`${OTHER_WORKSPACE_ID}:t1`, `${OTHER_WORKSPACE_ID}:t3`, `${OTHER_WORKSPACE_ID}:t2`]);
+    expect((snapshot.panes.find((p) => p.pane_id === "t3") as HerdrPane).parent_pane_id).toBe("t1");
+  });
+
+  it("leaves a terminal the app placed where the app put it, and names its parent", () => {
+    const layout = { spaces: [{ id: "s1", name: "web", tabs: [{ id: "s1t1", name: "", root: block("t1") }, { id: "s1t2", name: "", root: block("t2") }] }] };
+    const snapshot = buildSnapshot([terminal("t1"), terminal("t2", { parent: "t1" })], layout, "0.1.17");
+    expect(snapshot.panes.map((p) => [p.pane_id, p.tab_id, (p as HerdrPane).parent_pane_id])).toEqual([["t1", "s1t1", undefined], ["t2", "s1t2", "t1"]]);
+  });
+
+  it("carries a blocked agent's kind, its message as written and its progress, and only what it reported", () => {
+    const snapshot = buildSnapshot([
+      terminal("t1", { status: { app: "codex", state: "blocked", kind: "permission", msg: "Allow bash?", progress: 40 } }),
+      // kind belongs to blocked alone; a progress outside 0..100 or a blank message is no report
+      terminal("t2", { status: { app: "claude", state: "working", kind: "question", msg: "  ", progress: 150 } }),
+      terminal("t3", { status: { app: "claude", state: "working", progress: 0 } }),
+      // an agent at rest has no progress left, whatever it last said
+      terminal("t4", { status: { app: "claude", state: "idle", progress: 90, msg: "Done reading" } }),
+      terminal("t5"),
+    ], null, "0.1.17");
+    const facts = snapshot.panes.map((p) => { const pane = p as HerdrPane; return [pane.pane_id, pane.agent_kind, pane.agent_message, pane.agent_progress]; });
+    expect(facts).toEqual([
+      ["t1", "permission", "Allow bash?", 40],
+      ["t2", undefined, undefined, undefined],
+      ["t3", undefined, undefined, 0],
+      ["t4", undefined, undefined, undefined],
+      ["t5", undefined, undefined, undefined],
+    ]);
   });
 });
 

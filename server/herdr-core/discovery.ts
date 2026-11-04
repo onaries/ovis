@@ -236,12 +236,6 @@ export function discoverHc(options: Omit<FindHcOptions, "loginShellPath"> = {}):
   return finding;
 }
 
-/** the hc the last look found, when it is still there */
-export function lastFoundHc(): string | null {
-  const bin = found?.hc?.bin ?? null;
-  return bin !== null && isFile(bin) ? bin : null;
-}
-
 /**
  * What this PC has of herdr-core, for Settings: never waits. Undefined until the first look for hc
  * has ended; a look older than FIND_TTL_MS starts another, and this answer stays meanwhile.

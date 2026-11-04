@@ -7,6 +7,29 @@ import type { Browser, Page } from "playwright-core";
 import { chromePath } from "./chrome-path.ts";
 import { openSettingsPage } from "./settings-page.ts";
 
+/** Resolves once the server's event stream carries a preferences document with `showUsage` at `value` (it opens with the current one). */
+async function serverHolds(origin: string, value: boolean, timeoutMs: number): Promise<void> {
+  const response = await fetch(`${origin}/api/machines/events`, { signal: AbortSignal.timeout(timeoutMs) });
+  assert.ok(response.ok && response.body, `the event stream opens (${response.status})`);
+  const decoder = new TextDecoder();
+  let buffered = "";
+  try {
+    for await (const chunk of response.body) {
+      buffered += decoder.decode(chunk, { stream: true });
+      const frames = buffered.split("\n\n");
+      buffered = frames.pop() ?? "";
+      for (const frame of frames) {
+        const data = frame.split("\n").find((line) => line.startsWith("data: "));
+        const event = data === undefined ? null : JSON.parse(data.slice(6)) as { type?: string; preferences?: { settings: { showUsage?: unknown } } };
+        if (event?.type === "preferences" && event.preferences?.settings.showUsage === value) return;
+      }
+    }
+  } finally {
+    await response.body.cancel().catch(() => undefined);
+  }
+  assert.fail("the event stream ended before the server held the value");
+}
+
 /** A shared setting changed just before the page reloads reaches the server, and stays after the reload (#2374). */
 export async function checkSettingSurvivesReload(browser: Browser, origin: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
@@ -38,7 +61,7 @@ export async function checkSettingSurvivesReload(browser: Browser, origin: strin
     await page.reload();
     await page.locator(".conn-live").waitFor();
     // the server holds the last value once the change sent on the way out lands, and the reloaded page takes it
-    await page.waitForFunction(async (last) => ((await (await fetch("/api/preferences")).json()) as { settings: { showUsage?: unknown } }).settings.showUsage === last, !first, { timeout: 5_000 });
+    await serverHolds(origin, !first, 5_000);
     await page.waitForFunction((last) => (JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as { showUsage?: boolean }).showUsage === last, !first, { timeout: 5_000 });
     assert.equal(await served(), !first, "the server took the last value");
     assert.equal(await shown(page), !first, "the reloaded page keeps the last value");

@@ -24,6 +24,10 @@ export interface PromptCardProps {
   paneId: string;
   prompt: InteractivePrompt;
   onPromptChanged(): void;
+  /** the user edited the card's own answer: its owner keeps the text if the question goes unanswered here */
+  onTextChange?(text: string, cardGone?: boolean): void;
+  /** what the user typed into this question's card before it was drawn again, and has not sent */
+  initialText?: string;
   /** the answer went out; `toMessageBox`: the keyboard's focus was in the card, which is about to go, nothing else has taken it since, and the press was a key or a mouse, not a tap */
   onAnswered(toMessageBox: boolean): void;
   /** its answer went out: the card waits, as while sending, until the next read of the screen replaces it or takes it away */
@@ -37,7 +41,7 @@ export interface PromptCardProps {
   screenWords?: string | null;
 }
 
-export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, answered = false, typedAnswer = null, onTypedAnswerDone, stale = false, screenWords = null }: PromptCardProps) {
+export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, initialText, onAnswered, answered = false, typedAnswer = null, onTypedAnswerDone, stale = false, screenWords = null }: PromptCardProps) {
   const t = useT();
   const { answerPanePrompt } = useMachineApi();
   const [selected, setSelected] = useState<Set<number>>(() => {
@@ -49,7 +53,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, answer
     }
     return new Set();
   });
-  const [custom, setCustom] = useState(() => prompt.default_custom_text ?? "");
+  const [custom, setCustom] = useState(() => initialText ?? prompt.default_custom_text ?? "");
   const [sending, setPending] = useState(false);
   const pending = sending || answered;
   const [error, setError] = useState<UserError | null>(null);
@@ -108,6 +112,8 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, answer
     const coarse = window.matchMedia?.("(pointer: coarse)").matches === true;
     setPending(true);
     setError(null);
+    // the typed text is on its way: a read that sees the question gone meanwhile keeps none of it
+    onTextChange?.("");
     try {
       await answerPanePrompt({ pane_id: paneId, prompt_id: prompt.id, ...choice });
       if (!shown.current) return false;
@@ -116,6 +122,8 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, answer
       const active = document.activeElement;
       onAnswered(focusFollowsAnswer({ fromCard, origin, coarse, cardMounted: card !== null, inCard: card?.contains(active) === true, onPage: active === null || active === document.body }));
     } catch (cause) {
+      // not sent: the text is the user's again, also once this card is gone
+      onTextChange?.(custom, !shown.current);
       if (!shown.current) return false;
       // a card read before the question moved on: refused as changed (409), or as an answer it no longer fits (400).
       // The note stays until the card is replaced or answered again, so the button never looks dead
@@ -325,7 +333,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, answer
         <div className="prompt-card-custom">
           {hasChoices && <span className="prompt-card-custom-label" id={customLabelId}>{sendsChecksWithText(prompt) ? t("Custom answer") : t("Or type your own answer")}</span>}
           <div className="prompt-card-custom-row">
-            <input className="input" value={custom} disabled={pending} placeholder={prompt.options[prompt.custom_option_index] !== undefined ? words.label(prompt.custom_option_index) : t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => setCustom(event.currentTarget.value)} onKeyDown={(event) => {
+            <input className="input" value={custom} disabled={pending} placeholder={prompt.options[prompt.custom_option_index] !== undefined ? words.label(prompt.custom_option_index) : t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => { setCustom(event.currentTarget.value); onTextChange?.(event.currentTarget.value); }} onKeyDown={(event) => {
               // an IME's Enter commits the candidate; WebKit can send it after compositionend, as key code 229
               if (event.key === "Enter" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && custom.trim().length > 0) void answer({ custom_text: custom.trim() });
             }} />

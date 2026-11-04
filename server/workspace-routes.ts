@@ -8,7 +8,7 @@ import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { MAX_LABEL_CHARS } from "../shared/labels.ts";
-import { firstMessageFault } from "../shared/launch-rules.ts";
+import { argumentText, firstMessageFault } from "../shared/launch-rules.ts";
 import type { DirectoryCreated, PendingMessage, ServerMessage, TabMoved, TabMovedToWorkspace, WorkspaceMoved } from "../shared/protocol.ts";
 import type { MoveReceipt } from "./order-sequence.ts";
 import { agentFault, agentLaunch, type AgentPayload } from "./agent-launch.ts";
@@ -27,6 +27,34 @@ export function expandedDirectory(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** the most variables a create request's `env` may set */
+export const MAX_ENV_VARS = 64;
+/** the most a create request's `env` may hold, its names and values in UTF-8 bytes */
+export const MAX_ENV_BYTES = 32 * 1024;
+/** an environment variable's name as a shell takes it in `NAME=value` */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * What is wrong with a create request's `env`, in the API's words; null when herdr can set it (or there
+ * is none). Values are text without control characters, a tab or line break included; the answer
+ * never repeats a value, which may be a key.
+ */
+function envFault(env: unknown): string | null {
+  if (env === undefined) return null;
+  if (!isJsonObject(env)) return "env must be an object of names to string values";
+  const entries = Object.entries(env);
+  if (entries.length > MAX_ENV_VARS) return `env may set at most ${MAX_ENV_VARS} variables`;
+  let bytes = 0;
+  for (const [name, value] of entries) {
+    // the name is quoted and cut: before this check it may hold anything
+    if (!ENV_NAME.test(name)) return `env name ${JSON.stringify(name.slice(0, 64))} must be letters, digits and _, not starting with a digit`;
+    if (typeof value !== "string" || !argumentText(value)) return `env.${name} must be a string without control characters`;
+    bytes += Buffer.byteLength(name) + Buffer.byteLength(value);
+  }
+  if (bytes > MAX_ENV_BYTES) return `env may hold at most ${MAX_ENV_BYTES} bytes`;
+  return null;
 }
 
 /** a create request's first message the bridge could not queue for the agent that did start: its own refusal */
@@ -103,7 +131,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     setRequestRoute(pathname);
     const inWorkspace = pathname === "/api/tab/create";
     if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
-    const payload = await readJsonObject<{ workspace_id?: unknown; cwd?: unknown; label?: unknown; agent?: { kind?: unknown; name?: unknown; args?: unknown } | null; first_message?: unknown; first_message_connection?: unknown }>(request);
+    const payload = await readJsonObject<{ workspace_id?: unknown; cwd?: unknown; label?: unknown; agent?: { kind?: unknown; name?: unknown; args?: unknown } | null; first_message?: unknown; first_message_connection?: unknown; env?: unknown }>(request);
     if (payload instanceof Response) return payload;
     if (inWorkspace && (typeof payload.workspace_id !== "string" || payload.workspace_id.trim() === "")) {
       return badRequest("missing_workspace_id", "workspace_id is required");
@@ -113,6 +141,9 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     if (payload.label === null) delete payload.label;
     if (payload.agent === null) delete payload.agent;
     if (payload.first_message === null) delete payload.first_message;
+    if (payload.env === null) delete payload.env;
+    const envProblem = envFault(payload.env);
+    if (envProblem !== null) return badRequest("invalid_env", envProblem);
     if (payload.cwd !== undefined && typeof payload.cwd !== "string") return badRequest("invalid_cwd", "cwd must be an existing directory");
     const cwd = payload.cwd === undefined ? undefined : expandedDirectory(payload.cwd);
     if (payload.cwd !== undefined && cwd === null) return badRequest("invalid_cwd", "cwd must be an existing directory");
@@ -139,6 +170,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
       const options = {
         ...(cwd === undefined || cwd === null ? {} : { cwd }),
         ...(typeof payload.label === "string" ? { label: payload.label } : {}),
+        ...(payload.env === undefined ? {} : { env: payload.env as Record<string, string> }),
       };
       const created = inWorkspace
         ? await tabCreate({ ...options, workspaceId: payload.workspace_id as string })
@@ -157,7 +189,11 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
       // the request's first message is the user's send: queued for the agent's first ready turn through the
       // bridge's pending path (server/core/pending.ts), never typed here; an agent that did not start gets none
       const firstMessage = launched.agent_started && typeof payload.first_message === "string"
-        ? await queueFirstMessage(created.root_pane.pane_id, payload.first_message, payload.agent.kind as string, requester, launchedPid).then((message): { id: string } | ReturnType<typeof notQueued> => ({ id: message.id }), (error: unknown) => {
+        ? await queueFirstMessage(created.root_pane.pane_id, payload.first_message, payload.agent.kind as string, requester, launchedPid).then((message): { id: string; held?: string } | ReturnType<typeof notQueued> => ({
+          id: message.id,
+          // held from the start (no page to type it, #2743): said, so a client tells it from a queued one
+          ...(message.state === "held" && message.error ? { held: message.error.code } : {}),
+        }), (error: unknown) => {
           console.warn(`first message for ${created.root_pane.pane_id} not queued: ${error instanceof Error ? error.message : String(error)}`);
           // the agent runs and the message did not go in: told apart from an agent that did not start (null)
           return notQueued(error);

@@ -1,6 +1,6 @@
 import { afterEach, expect, it, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { startBunRelay } from "../../relay/bun.ts";
 import { Room } from "../../relay/core.ts";
@@ -262,6 +262,13 @@ it("reuses the active device pairing code for the relay offer", async () => {
   expect(paired.status).toBe(204);
   const subsequentOffer = await f.offer();
   expect(f.app.context.services.devices.activePairing()?.code).toBe(subsequentOffer.code);
+});
+
+it("names the PC in the relay offer as Ovis lists it", async () => {
+  const f = await fixture();
+  await f.start();
+  const offer = await f.offer();
+  expect(offer.name).toBe(hostname().slice(0, 64));
 });
 
 it("creates a new active code when the relay offer has none to reuse", async () => {

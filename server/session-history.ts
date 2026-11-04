@@ -509,7 +509,7 @@ async function piSessions(sessions: string, folders: readonly string[], cwds: re
   const deadline = performance.now() + reader.listingDeadlineMs;
   const headerDeadline = performance.now() + Math.max(PI_HEADER_DEADLINE_MS, reader.listingDeadlineMs);
   const rows: Row[] = [];
-  const selected: Array<{ file: Found; header: NonNullable<PiLabel["header"]> }> = [];
+  const selected: Array<{ index: number; file: Found; header: NonNullable<PiLabel["header"]> }> = [];
   let incomplete = false;
   let unfinishedHeaders = 0;
   let cacheTouches = 0;
@@ -536,7 +536,9 @@ async function piSessions(sessions: string, folders: readonly string[], cwds: re
       const header = label?.header;
       if (label && header) {
         rows.push(row("pi", header.id, { title: label.title, firstMessage: label.firstMessage, startedAt: iso(header.timestamp), updatedAt: new Date(file.mtimeMs).toISOString() }));
-        selected.push({ file, header });
+        // A row already labelled is complete; rescanning it would spend the label deadline
+        // ahead of the unfinished rows after it on every open.
+        if (label.title === null && label.firstMessage === null) selected.push({ index: rows.length - 1, file, header });
       } else if (label) { incomplete = true; unfinishedHeaders++; }
       else rejected = !retainedHeaderless;
     } catch (error) {
@@ -548,9 +550,12 @@ async function piSessions(sessions: string, folders: readonly string[], cwds: re
     }
   }
   if (rows.length === 0 && incomplete) throw new PiMetadataBusy();
-  for (const [index, { file, header: checked }] of selected.entries()) {
+  // A slow header pass must not starve labels on every open: keep a quarter of the listing
+  // deadline for label reads, so each listing still makes bounded progress.
+  const labelDeadline = Math.max(deadline, performance.now() + reader.listingDeadlineMs / 4);
+  for (const { index, file, header: checked } of selected) {
     try {
-      const label = await reader.read((checkActive) => openPiChecked(budget, file, checkActive), deadline, { path: file.real, scope });
+      const label = await reader.read((checkActive) => openPiChecked(budget, file, checkActive), labelDeadline, { path: file.real, scope });
       const header = label?.header;
       // The header pass already proved eligibility, even if it spent the last identity checks.
       // A changed identity must not replace that established row during this listing.

@@ -1,0 +1,29 @@
+appId: sh.ovis.desktop
+productName: Ovis
+copyright: Copyright (c) 2026 devswha
+directories:
+  output: dist
+files:
+  - out/**
+  - renderer/**
+  - package.json
+extraResources:
+  # herdr-core, Bun and the Ovis server, staged by scripts/build.ts; outside the asar so they run
+  - from: stage
+    to: ovis
+  - from: ../assets/icon-only.png
+    to: icon.png
+icon: ../assets/icon-only.png
+npmRebuild: false
+linux:
+  target: AppImage
+  category: Development
+  executableName: ovis
+  syncDesktopName: true
+  artifactName: Ovis-${version}-${arch}.${ext}
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  artifactName: Ovis-${version}-${arch}.${ext}

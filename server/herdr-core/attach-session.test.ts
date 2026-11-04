@@ -1,10 +1,13 @@
 import { describe, expect, it } from "bun:test";
+import { TERMINAL_HISTORY_LINES } from "../../shared/terminal-flow.ts";
 import { CoreAttachSession } from "./attach-session.ts";
-import { encodeFrame, FRAME_CLOSE, FRAME_CREDIT, FRAME_DATA, FRAME_FACTS, FRAME_FOCUS, FRAME_RESIZE, type Frame, HcConnection, type HcTransport, makeFrameReader } from "./connection.ts";
+import { encodeFrame, FRAME_AUTOMATIC_INPUT, FRAME_CLOSE, FRAME_CREDIT, FRAME_DATA, FRAME_FACTS, FRAME_FOCUS, FRAME_RESIZE, type Frame, HcConnection, type HcTransport, makeFrameReader } from "./connection.ts";
 
 const CHANNEL = 7;
 /** what the session asks the viewers' terminal on attach, as `hc attach` asks its own */
 const ASKED = "\x1b[?1004h\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]12;?\x1b\\\x1b[16t\x1b[c";
+/** what goes ahead of hc's first bytes: the viewer's last attach's scrollback is erased, on the main screen, before hc replays it */
+const CLEARED = "\x1b[?1049l\x1b[3J\x1b[H\x1b[2J";
 
 /** A core behind a fake `hc connect` that answers `terminal.attach` with one channel and records what the viewer sends on it. */
 class FakeCore implements HcTransport {
@@ -23,8 +26,9 @@ class FakeCore implements HcTransport {
   /**
    * `paintFirst`: the first paint goes out before the attach's reply, as hc's writer may send it.
    * `holdReply`: the reply waits for `reply()`. `answerClose`: a viewer's CLOSE is answered with one.
+   * `features`: what its hello names. `confirmAutomatic`: the attach's reply confirms `automatic_input`.
    */
-  constructor(private readonly options: { paintFirst?: string; holdReply?: boolean; answerClose?: boolean } = {}) {
+  constructor(private readonly options: { paintFirst?: string; holdReply?: boolean; answerClose?: boolean; features?: readonly string[]; confirmAutomatic?: boolean } = {}) {
     this.readable = new ReadableStream({ start: (controller) => { this.controller = controller; } });
   }
 
@@ -36,7 +40,7 @@ class FakeCore implements HcTransport {
   write(bytes: Uint8Array): void {
     if (this.plain) {
       this.plain = false;
-      this.controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ id: 0, jsonrpc: "2.0", result: { generation: 1, framed: true, version: "0.1.14", core: { id: "c1", name: "lab" } } })}\n`));
+      this.controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ id: 0, jsonrpc: "2.0", result: { generation: 1, framed: true, version: "0.1.14", core: { id: "c1", name: "lab" }, features: this.options.features ?? ["framed", "attach"] } })}\n`));
       return;
     }
     this.frames(bytes);
@@ -80,7 +84,7 @@ class FakeCore implements HcTransport {
     this.attachParams = message.params;
     if (this.options.paintFirst) this.output(this.options.paintFirst);
     const reply = () => {
-      this.controller.enqueue(encodeFrame(0, FRAME_DATA, JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { channel: CHANNEL } })));
+      this.controller.enqueue(encodeFrame(0, FRAME_DATA, JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { channel: CHANNEL, ...(this.options.confirmAutomatic ? { automatic_input: true } : {}) } })));
       queueMicrotask(() => this.answered.resolve());
     };
     if (this.options.holdReply) {
@@ -107,12 +111,12 @@ function attach(onData: (data: string) => void = () => {}, options: ConstructorP
 }
 
 describe("CoreAttachSession", () => {
-  it("attaches at the viewer's grid, and types what was written before hc answered, in order", async () => {
+  it("attaches at the viewer's grid with its history, and types what was written before hc answered, in order", async () => {
     const { core, session } = attach();
     session.write("a");
     session.write("b");
     await core.until(FRAME_DATA, 2);
-    expect(core.attachParams).toEqual({ terminal: "t3", cols: 80, rows: 24 });
+    expect(core.attachParams).toEqual({ terminal: "t3", cols: 80, rows: 24, history: TERMINAL_HISTORY_LINES });
     expect(core.of(FRAME_DATA).map((frame) => new TextDecoder().decode(frame.payload))).toEqual(["a", "b"]);
   });
 
@@ -149,7 +153,7 @@ describe("CoreAttachSession", () => {
     expect(credited()).toEqual([5]);
     session.resume();
     expect(credited()).toEqual([5, 4]);
-    expect(seen.join("").replace(ASKED, "")).toBe("helloheld");
+    expect(seen.join("").replace(ASKED, "")).toBe(`${CLEARED}helloheld`);
   });
 
   it("ends with the program's exit code when hc closes the stream", async () => {
@@ -161,13 +165,13 @@ describe("CoreAttachSession", () => {
     expect(session.write("x")).toBe(false);
   });
 
-  it("hears a first paint that hc sent before its reply to the attach", async () => {
+  it("hears a first paint that hc sent before its reply to the attach, after erasing the viewer's scrollback once", async () => {
     const seen: string[] = [];
     const painted = Promise.withResolvers<void>();
     const { core } = attach((data) => { seen.push(data); painted.resolve(); }, { paintFirst: "first screen" });
     await core.attached;
     await painted.promise;
-    expect(seen.join("")).toBe("first screen");
+    expect(seen.join("")).toBe(`${CLEARED}first screen`);
     // and credits it, or hc would hold the stream at its window
     await core.until(FRAME_CREDIT, 1);
   });
@@ -245,4 +249,60 @@ describe("HcConnection streams", () => {
     expect(core.of(FRAME_CLOSE)).toHaveLength(1);
     hc.close();
   });
+});
+
+describe("CoreAttachSession, automatic input", () => {
+  /** a cursor position report: an answer the program asked for, which reaches it (DA1 would answer the session's own question) */
+  const REPLY = "\x1b[5;10R";
+  const decode = (frames: Frame[]) => frames.map((frame) => new TextDecoder().decode(frame.payload));
+
+  it("sends the viewer terminal's own replies as AUTOMATIC_INPUT once hello named it and the attach confirmed it", async () => {
+    const { core, session } = attach(() => {}, { features: ["framed", "attach", "automatic_input"], confirmAutomatic: true });
+    await core.attached;
+    session.write(REPLY, true);
+    session.write("ls\r");
+    await core.until(FRAME_DATA, 1);
+    await core.until(FRAME_AUTOMATIC_INPUT, 1);
+    expect(decode(core.of(FRAME_AUTOMATIC_INPUT))).toEqual([REPLY]);
+    expect(decode(core.of(FRAME_DATA))).toEqual(["ls\r"]);
+    session.kill();
+  });
+
+  it("keeps a reply written before hc answered the attach automatic, in its place", async () => {
+    const { core, session } = attach(() => {}, { features: ["automatic_input"], confirmAutomatic: true });
+    session.write("a");
+    session.write(REPLY, true);
+    session.write("b");
+    await core.until(FRAME_DATA, 2);
+    await core.until(FRAME_AUTOMATIC_INPUT, 1);
+    expect(core.sent.filter((frame) => frame.kind === FRAME_DATA || frame.kind === FRAME_AUTOMATIC_INPUT).map((frame) => [frame.kind, new TextDecoder().decode(frame.payload)]))
+      .toEqual([[FRAME_DATA, "a"], [FRAME_AUTOMATIC_INPUT, REPLY], [FRAME_DATA, "b"]]);
+    session.kill();
+  });
+
+  it("types text that is no terminal reply as DATA, even tagged automatic by the client", async () => {
+    const { core, session } = attach(() => {}, { features: ["automatic_input"], confirmAutomatic: true });
+    await core.attached;
+    session.write("rm -rf ~/x\r", true);
+    session.write("\x1b[A\r", true);
+    await core.until(FRAME_DATA, 2);
+    expect(decode(core.of(FRAME_DATA))).toEqual(["rm -rf ~/x\r", "\x1b[A\r"]);
+    expect(core.of(FRAME_AUTOMATIC_INPUT)).toEqual([]);
+    session.kill();
+  });
+
+  for (const [label, options] of [
+    ["hello does not name it", { confirmAutomatic: true }],
+    ["the attach does not confirm it", { features: ["automatic_input"] }],
+  ] as const) {
+    it(`types a reply as DATA, as before, when ${label}`, async () => {
+      const { core, session } = attach(() => {}, options);
+      await core.attached;
+      session.write(REPLY, true);
+      await core.until(FRAME_DATA, 1);
+      expect(decode(core.of(FRAME_DATA))).toEqual([REPLY]);
+      expect(core.of(FRAME_AUTOMATIC_INPUT)).toEqual([]);
+      session.kill();
+    });
+  }
 });

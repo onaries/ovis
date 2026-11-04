@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrPane, InteractivePrompt } from "../shared/protocol.ts";
 
-import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, historyEndShowsLive, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, openOmoAsks, paneIsCompacting, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted, piRunsCommand } from "./prompt.ts";
+import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, historyEndShowsLive, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, openOmoAsks, paneIsCompacting, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted, piListsTemplate, piRunsCommand } from "./prompt.ts";
 import { rememberPaneCommands } from "./commands.ts";
 import { registry } from "./dialogs/registry.ts";
 import { gjcCustomEditorMatches } from "./dialogs/fallback.ts";
@@ -1176,6 +1176,12 @@ ${footer}
     ["wrapped before the path", split("   ctrl+g to edit in VS Code ·\n   ~/.claude/plans/plan-readme-heading-mellow-pike.md")],
     ["over three lines", phone],
     ["on one line", split("   ctrl+g to edit in VS Code · ~/.claude/plans/plan-a.md")],
+    ["wrapped inside the extension", split("   ctrl+g to edit in VS Code · ~/.claude/plans/aaaaaaaaa.m\n   d")],
+    ["over four lines", phone.replace("   e-readme-mellow-pike.md", "   e-readme-and-the-changelog-in-one-go-m\n   ellow-pike.md")],
+    ["over seven lines", phone.replace("   e-readme-mellow-pike.md", "   e-readme-and-the-changelog-in-one-go-m\n   ellow-pike-and-a-much-longer-name-tha\n   n-anyone-would-ever-give-a-plan-file-o\n   n-their-own-disk-or-anywhere-else-at-a\n   ll.md")],
+    ["with a space in its wrapped folder", split("   ctrl+g to edit in VS Code · ~/Library/Application\n   Support/Claude Code/plans/plan-a.md")],
+    ["wrapped inside the editor's name", split("   ctrl+g to edit in VS\n   Code · ~/.claude/plans/\n   example.md")],
+    ["with a · in its folder", phone.replace("   ~/.claude/plans/plan-add-a-heading-to-th\n   e-readme-mellow-pike.md", "   ~/claude·work/plans/plan-add-a-heading-t\n   o-the-readme-mellow-pike.md")],
   ];
 
   test.each(screens)("reads the plan with its footer %s", (_footer, screen) => {
@@ -1189,6 +1195,12 @@ ${footer}
 
   test.each(screens)("reads no plan once output follows its footer %s", (_footer, screen) => {
     expect(parseInteractivePrompt("claude", `${screen}\n⏺ User approved Claude's plan\n`)).toBeNull();
+    expect(parseInteractivePrompt("claude", `${screen}\n⏺ Updated README.md\n`)).toBeNull();
+    expect(parseInteractivePrompt("claude", `${screen}\nREADME.md\n`)).toBeNull();
+  });
+
+  test("reads no plan once output runs on from its wrapped footer's last row", () => {
+    expect(parseInteractivePrompt("claude", split("   ctrl+g to edit in VS Code ·\n   ~/.claude/plans/\n   old-plan.m\n   dREADME.md"))).toBeNull();
   });
 });
 
@@ -5763,6 +5775,54 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     });
   });
 
+  describe("Hermes's question, changed in the terminal between the last look and a key", () => {
+    const hermes = (question: string, at: number, ticked: number[] = [], multi = false) => `\n ask 1 question\n ▸ ${question}\n${["Red", "Blue", "Green"].map((row, index) => `   ${at === index ? "▸" : " "} ${multi ? (ticked.includes(index) ? "[x] " : "[ ] ") : ""}${index + 1}. ${row}`).join("\n")}\n   ${at === 3 ? "▸" : " "} 4. Other (type your answer)\n 0/1 answered · ${multi ? "Space toggle · " : ""}↑/↓ select · Enter confirm and continue · Tab/Shift+Tab switch question · Esc/Ctrl+C cancel\n ─ (⌐■_■) deliberating…  · 10s │ opus 5.5\n`;
+
+    // the reads after the move: the look that finds Blue under the cursor, the read before Enter, its settling read
+    for (const [moveOn, read] of [[2, "the read before Enter"], [3, "the settling read before Enter"]] as const) {
+      test(`an arrow pressed in the terminal by ${read}: no Enter on the row it moved to`, async () => {
+        await withPane("hermes", "blocked", hermes("Pick a colour", 0), async (pane) => {
+          const prompt = (await card())!;
+          let reads = 0;
+          pane.onSent = (sent) => { if (sent === "down") { pane.screen = hermes("Pick a colour", 1); reads = 0; } };
+          pane.onRead = () => { reads += 1; if (pane.sent.length > 0 && reads === moveOn) pane.screen = hermes("Pick a colour", 2); };
+          const result = await answer(prompt.id, { option_index: 1 });
+          expect(reads, "the cursor moved under the answer").toBeGreaterThanOrEqual(moveOn);
+          expect(pane.sent, "Enter would answer Green, not the Blue tapped on the card").toEqual(["down"]);
+          expect(result).toEqual({ status: 409, code: "prompt_changed" });
+        });
+      });
+    }
+
+    test("a multi-select answer stops once the terminal ticks a row the answer's next Space would untick", async () => {
+      await withPane("hermes", "blocked", hermes("Pick colours", 0, [], true), async (pane) => {
+        const prompt = (await card())!;
+        let at = 0;
+        const ticked: number[] = [];
+        pane.onSent = (sent) => {
+          if (sent === "down") at += 1;
+          // Space in the terminal on Green right after the answer's first one
+          if (sent === "space") ticked.push(at, ...(ticked.length === 0 ? [2] : []));
+          pane.screen = hermes("Pick colours", at, ticked, true);
+        };
+        const result = await answer(prompt.id, { option_indices: [0, 2] });
+        expect(pane.sent, "a second Space on Green would untick it and Enter would lock Red alone").toEqual(["space", "down", "down"]);
+        expect(result).toEqual({ status: 409, code: "prompt_changed" });
+      });
+    });
+
+    test("a multi-select answer stops once the terminal switches to another question after the first tick", async () => {
+      await withPane("hermes", "blocked", hermes("Pick colours", 0, [], true), async (pane) => {
+        const prompt = (await card())!;
+        // Tab in the terminal right after the first Space: the next question, drawn alike
+        pane.onSent = (sent) => { if (sent === "space") pane.screen = hermes("Pick more colours", 0, [], true); };
+        const result = await answer(prompt.id, { option_indices: [0, 2] });
+        expect(pane.sent, "the other question must not take the remaining moves, ticks or Enter").toEqual(["space"]);
+        expect(result).toEqual({ status: 409, code: "prompt_changed" });
+      });
+    });
+  });
+
   test("an interaction plan sends no commit when Claude's highlight moves past the requested model", async () => {
     await withPane("claude", "idle", claudeModelList(1), async (pane) => {
       const prompt = (await card())!;
@@ -7427,17 +7487,17 @@ describe("piRunsCommand", () => {
     expect(piRunsCommand(pane, "wow!")).toBe(false);
   });
 
-  test("takes the pane's prompt templates, which Pi records only expanded, but not its skills, which are read back", () => {
+  test("keeps a receipt for the pane's prompt templates, which no catalog proves Pi loaded, and its skills", () => {
     const pane = { pane_id: "pi-runs-catalog", agent: "pi", cwd: "/work" } as HerdrPane;
-    expect(piRunsCommand(pane, "/review")).toBe(false);
     rememberPaneCommands(pane, "pi", [
       { name: "skill:commit", description: "Commit", source: "skill" },
       { name: "review", description: "Review", source: "user" },
     ]);
     expect(piRunsCommand(pane, "/skill:commit and push")).toBe(false);
-    expect(piRunsCommand(pane, "/review")).toBe(true);
-    // a template's name ends at any white space, its arguments follow on the next line too
-    expect(piRunsCommand(pane, "/review\nthe parser")).toBe(true);
-    expect(piRunsCommand(pane, "/commit")).toBe(false);
+    expect(piRunsCommand(pane, "/review")).toBe(false);
+    expect(piRunsCommand(pane, "/review\nthe parser")).toBe(false);
+    expect(piListsTemplate(pane, "/review\nthe parser")).toBe(true);
+    expect(piListsTemplate(pane, "/skill:commit and push")).toBe(false);
+    expect(piListsTemplate(pane, "/commit")).toBe(false);
   });
 });

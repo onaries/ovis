@@ -27,6 +27,10 @@ export class PendingMessageStore {
   /** the recovery record kept for a row this page alone holds (keepUnconfirmed), by owner and row */
   private recovery = new Map<string, string>();
   private listeners = new Set<() => void>();
+  /** rows moved off an owner (move), by id: the server lists them under the pane's new ID now */
+  private movedAway = new Map<string, Set<string>>();
+  /** rows a move left while this page had their send on its way, with the ID they go to once it ends */
+  private afterSend = new Map<string, string>();
   // the pane's herdr's storage, or this page's memory (lib/paneLifetime.ts)
   constructor(
     private storage: () => StoragePort = () => paneLifetimes.paneStorage,
@@ -124,6 +128,7 @@ export class PendingMessageStore {
     }
   }
   accept(owner: string, message: PendingMessage, scope: string | null): void {
+    if (this.movedAway.get(owner)?.has(message.id)) return;
     const seen = this.removed.get(owner)?.get(message.id);
     if (this.settledResumed.get(owner)?.has(message.id) || (scope === null ? (seen?.size ?? 0) > 0 : seen?.has(scope))) return;
     this.refresh(owner);
@@ -233,6 +238,56 @@ export class PendingMessageStore {
     }
     this.notify();
   }
+  /**
+   * herdr moved the pane under a new ID (#1503): its rows go there as they are (the server holds its own for an
+   * explicit send and lists them under the new ID), with the proof of the connection that has them; one settled
+   * there already does not come back. A row whose send this page has on its way follows once that send ends
+   * (`end`), as its answer looks for it under the old ID. `only`: that row alone.
+   */
+  move(from: string, to: string, only?: string): void {
+    if (from === to) return;
+    this.refresh(from);
+    this.refresh(to);
+    const rows = this.read(from).filter((message) => only === undefined || message.id === only);
+    // rows still waiting on a send under an earlier ID that moved here go on to the new one
+    for (const [key, next] of this.afterSend) if (next === from) this.afterSend.set(key, to);
+    for (const message of rows) if (this.isBusy(from, message.id)) this.afterSend.set(`${from}\0${message.id}`, to);
+    const moving = rows.filter((message) => !this.isBusy(from, message.id));
+    if (moving.length === 0) return;
+    const target = this.read(to);
+    const have = new Set(target.map((message) => message.id));
+    const fromProofs = this.scopes.get(from), toProofs = this.scopes.get(to) ?? new Map<string, string>();
+    // settled there as publish settles a row: an exact resumed receipt, or a receipt of the connection that proves it
+    const settled = (id: string): boolean => {
+      const proof = fromProofs?.get(id);
+      return this.settledResumed.get(to)?.has(id) === true || (proof !== undefined && this.removed.get(to)?.get(id)?.has(proof) === true);
+    };
+    const carried = moving.filter((message) => !have.has(message.id) && !settled(message.id));
+    const carriedIds = new Set(carried.map((message) => message.id));
+    const away = this.movedAway.get(from) ?? new Set<string>();
+    // moved back to an ID it left before: the server's lists there count for it again
+    const back = this.movedAway.get(to);
+    for (const message of moving) back?.delete(message.id);
+    if (back?.size === 0) this.movedAway.delete(to);
+    for (const message of moving) {
+      // the server's lists under the old ID, told before or as it moved the row, bring none back here
+      away.add(message.id);
+      const proof = fromProofs?.get(message.id);
+      fromProofs?.delete(message.id);
+      if (proof !== undefined && carriedIds.has(message.id) && !toProofs.has(message.id)) toProofs.set(message.id, proof);
+      const kept = this.recovery.get(`${from}\0${message.id}`);
+      if (kept === undefined) continue;
+      this.recovery.delete(`${from}\0${message.id}`);
+      if (carriedIds.has(message.id)) this.recovery.set(`${to}\0${message.id}`, kept); else this.lifetimes.discard(kept);
+    }
+    while (away.size > 1024) away.delete(away.values().next().value!);
+    this.movedAway.set(from, away);
+    if (fromProofs?.size === 0) this.scopes.delete(from);
+    if (toProofs.size > 0) this.scopes.set(to, toProofs);
+    const gone = new Set(moving.map((message) => message.id));
+    this.write(to, [...target, ...carried]);
+    this.write(from, this.read(from).filter((message) => !gone.has(message.id)));
+  }
   suspendScope(scope: string): void { for (const owner of this.rows.keys()) this.suspend(owner, scope); }
   begin(owner: string, id: string): boolean {
     if (this.isBusy(owner, id) || !this.read(owner).some((message) => message.id === id)) return false;
@@ -265,6 +320,11 @@ export class PendingMessageStore {
     this.busy.delete(`${owner}\0${id}`);
     this.rows.set(owner, [...this.read(owner)]);
     this.notify();
+    // its pane moved while the send was on its way: the row follows now
+    const to = this.afterSend.get(`${owner}\0${id}`);
+    if (to === undefined) return;
+    this.afterSend.delete(`${owner}\0${id}`);
+    this.move(owner, to, id);
   }
   fail(owner: string, id: string, error: { code: string; message: string }, uncertain: boolean, attemptedGeneration?: number): void {
     this.unconfirmed.delete(`${owner}\0${id}`);

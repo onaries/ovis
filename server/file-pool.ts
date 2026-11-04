@@ -22,7 +22,8 @@ export const FILE_TASK_DEADLINE_MS = 3_000;
 /**
  * A task of many calls rather than one: a page rendered with its own files (work for the processor
  * too), a folder walked for a name (up to its 5,000 entries, each a call to a disk that may be
- * slow), or a Claude task list scanned from its agent session's history. It may take longer.
+ * slow), a Claude task list scanned from its agent session's history, or an Agy catalog copied (up to
+ * 64 MiB). It may take longer.
  */
 export const FILE_LONG_TASK_DEADLINE_MS = 15_000;
 /**
@@ -163,7 +164,7 @@ export function fileTask<T extends FileTaskResult>(task: FileTask, signal?: Abor
   // failed or was ended mid-task) can still be closed (`abandon`)
   if (task.op === "open" || task.op === "describe") task = { ...task, opened: openedCell() };
   return new Promise<T>((done, fail) => {
-    const deadline = task.op === "commands" ? options.scanDeadlineMs : task.op === "render" || task.op === "walk" || task.op === "claude-tasks" ? options.longDeadlineMs : options.deadlineMs;
+    const deadline = task.op === "commands" ? options.scanDeadlineMs : task.op === "render" || task.op === "walk" || task.op === "claude-tasks" || task.op === "agy-catalog" ? options.longDeadlineMs : options.deadlineMs;
     const pending: Pending = { task, done: done as (result: FileTaskResult) => void, fail, settled: false, timer: setTimeout(() => expire(pending, "the file system did not answer in time"), deadline), ...(onRun ? { onRun } : {}) };
     if (signal !== undefined) {
       const cancel = () => expire(pending, "the request was cancelled");

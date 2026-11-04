@@ -8,6 +8,7 @@ import { SettingsProvider } from "../lib/settings.ts";
 import type { RelayState } from "../lib/useRelay.ts";
 import { CodeRoute, defaultRoute, RelayRoute, sameNameRelayDevice } from "./ConnectPhoneDialog.tsx";
 import { PhonePanel } from "./PhonePanel.tsx";
+import { RelayPairing } from "./RelayPanel.tsx";
 import { QrCode } from "./QrCode.tsx";
 
 // Connect a phone on the phone itself: the QR codes wait behind Show QR code, a phone online with
@@ -103,6 +104,16 @@ describe("Connect a phone on a phone", () => {
   it("keeps the desktop's pairing code QR code up front", async () => {
     await mount(<CodeRoute pairUrl="https://workstation.example.ts.net" startAtOnce />);
     expect(qrCodes()).toHaveLength(1);
+  });
+
+  it("keeps two relay QR codes on screen from replacing each other's code without end", async () => {
+    // the setup guide's and Settings' relay QR codes can be up at once
+    await mount(<><RelayPairing /><RelayPairing /></>);
+    for (let flush = 0; flush < 5; flush += 1) await act(async () => {});
+    // the server's offer reuses its pending code: both show it, and neither asks again for the other's
+    expect(requests.filter((path) => path === "/api/relay/offer").length).toBeLessThanOrEqual(3);
+    expect(qrCodes()).toHaveLength(2);
+    expect(renderer!.root.findAll((node) => node.type === "p" && text(node).includes("This code expired."))).toHaveLength(0);
   });
 
   it("pairs this phone through the relay in one tap: its own offer opens in this browser", async () => {

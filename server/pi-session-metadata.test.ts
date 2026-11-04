@@ -421,6 +421,64 @@ describe("Pi stat-keyed streaming reader", () => {
     expect(positions.filter((position) => position === 0)).toHaveLength(1);
   });
 
+  it("fills labels on later opens even when the header pass spends the whole listing deadline", async () => {
+    jest.useFakeTimers();
+    let now = 0;
+    spyOn(performance, "now").mockImplementation(() => now);
+    // Every chunk read costs a fifth of the listing deadline, so labels need several opens.
+    let chunks = 0;
+    const f = fixture({ read: (fd, buffer, length, position) => new Promise((done, fail) => {
+      read(fd, buffer, 0, length, position, (error, count) => {
+        chunks++;
+        now += PI_READ_DEADLINE_MS / 5;
+        if (error) fail(error); else done(count);
+      });
+    }) });
+    writeFileSync(f.file, header() + filler(3 * PI_CHUNK_BYTES) + name("Eventually named"));
+    const original = f.reader.read.bind(f.reader);
+    // A slow disk: checking the header alone outlasts the listing deadline on every open.
+    spyOn(f.reader, "read").mockImplementation((...args) => {
+      if (args[3] === "header") now += PI_READ_DEADLINE_MS + 100;
+      return original(...args);
+    });
+    const titles: Array<string | null> = [];
+    const reads: number[] = [];
+    for (let open = 0; open < 4; open++) {
+      const before = chunks;
+      const rows = await f.list();
+      expect(rows.map((row) => row.id)).toEqual(["fixture"]);
+      titles.push(rows[0]!.title);
+      reads.push(chunks - before);
+    }
+    // Each open makes bounded label progress instead of re-checking the header alone.
+    expect(titles).toEqual([null, "Eventually named", "Eventually named", "Eventually named"]);
+    // The first open reads past its header chunk; none reads more than the reserve allows.
+    expect(reads[0]).toBeGreaterThan(1);
+    expect(Math.max(...reads)).toBeLessThanOrEqual(3);
+  });
+
+  it("review regression: labelled rows do not spend the reserve ahead of an unfinished one", async () => {
+    jest.useFakeTimers();
+    let now = 0;
+    spyOn(performance, "now").mockImplementation(() => now);
+    const f = fixture();
+    writeFileSync(f.file, header("unfinished") + filler(2 * PI_CHUNK_BYTES) + name("Eventually named"));
+    utimesSync(f.file, 1, 1);
+    const named = join(f.folder, "named.jsonl");
+    writeFileSync(named, header("named") + name("Already named"));
+    utimesSync(named, 2, 2);
+    const original = f.reader.read.bind(f.reader);
+    // A slow disk: the header pass outlasts the listing deadline, and each label scan's
+    // open costs more than half of the reserved quarter.
+    spyOn(f.reader, "read").mockImplementation((...args) => {
+      now += args[3] === "header" ? PI_READ_DEADLINE_MS : PI_READ_DEADLINE_MS * 0.15;
+      return original(...args);
+    });
+    const titles: Array<Array<string | null>> = [];
+    for (let open = 0; open < 3; open++) titles.push((await f.list()).map((row) => row.title));
+    expect(titles.at(-1)).toEqual(["Already named", "Eventually named"]);
+  });
+
   it("review regression: Windows header eligibility spends the last identity checks only once", async () => {
     jest.useFakeTimers();
     spyOn(performance, "now").mockReturnValue(0);
@@ -528,8 +586,9 @@ describe("Pi stat-keyed streaming reader", () => {
       if ("error" in outcome) throw outcome.error;
       const first = outcome.rows;
       expect(first.map((row) => row.id)).toEqual(["newest", "middle", "oldest"]);
+      // An expiry during the header pass still leaves the label scans their reserved quarter.
       expect(first.map((row) => [row.title, row.firstMessage])).toEqual([
-        [null, null], ["Finished middle", "Prompt middle"], ["Finished oldest", "Prompt oldest"],
+        [expiry === "later chunk" ? null : "Finished newest", null], ["Finished middle", "Prompt middle"], ["Finished oldest", "Prompt oldest"],
       ]);
       expect(first.every((row) => row.resume !== null)).toBe(true);
       await f.reader.idle();
@@ -974,7 +1033,8 @@ describe("Pi stat-keyed streaming reader", () => {
       // Both files fit in a chunk, so their EOF-checked labels need no second scan.
       expect(await f.list()).toMatchObject([{ id: "newer", title: "first row" }, { id: "older", title: "second row" }]);
       expect(reads).toBe(2);
-      expect(deadlines).toEqual([PI_HEADER_DEADLINE_MS, PI_HEADER_DEADLINE_MS, PI_READ_DEADLINE_MS]);
+      // Both rows are labelled by their header reads, so no label scan is requested at all.
+      expect(deadlines).toEqual([PI_HEADER_DEADLINE_MS, PI_HEADER_DEADLINE_MS]);
       expect(f.reader.size()).toEqual({ active: 0, waiting: 0 });
       expect(await f.list()).toMatchObject([{ id: "newer", title: "first row" }, { id: "older", title: "second row" }]);
       expect(reads).toBe(2);
@@ -1079,7 +1139,8 @@ describe("Pi stat-keyed streaming reader", () => {
           if (reason === "shutdown") expect(await outcome).toBeInstanceOf(PiMetadataBusy);
           else expect(await outcome).toMatchObject([{ id: "fixture", title: null, firstMessage: null }]);
           await f.reader.idle();
-          expect(stats).toBe(reason === "deadline" ? 3 : phase === "open" ? 0 : 1);
+          // Past the listing deadline, the reserved label scan still checks the descriptor (two stats).
+          expect(stats).toBe(reason === "deadline" ? 5 : phase === "open" ? 0 : 1);
           expect(f.io.bytes).toBe(reason === "deadline" ? Buffer.byteLength(header()) : 0);
           expect(() => fstatSync(fd)).toThrow();
           expect(f.reader.size()).toEqual({ active: 0, waiting: 0 });

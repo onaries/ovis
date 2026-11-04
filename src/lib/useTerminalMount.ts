@@ -6,7 +6,7 @@ import { HerdrSocket } from "./ws.ts";
 import { MachineSession, type MachineSessionRegistry } from "./machineSession.ts";
 import { disposeAfterPendingFrame } from "./terminalDispose.ts";
 import { clipboardKey, hasModifiers, physicalKey, terminalChord, navigationSequence, keyFromData, ctrlEnterSequence, mirroredCtrlEnterKey, modifyOtherKeysLevel, NO_STICKY_MODIFIERS, type StickyModifiers } from "./keys.ts";
-import { EMPTY_DRAFT, applyToDraft, draftIsEmpty, type InputDraft } from "./draft.ts";
+import { EMPTY_DRAFT, applyToDraft, draftIsEmpty, holdBefore, type InputDraft } from "./draft.ts";
 import { pendingMessages } from "./pendingMessages.ts";
 import { FrameGate } from "./inputRow.ts";
 import { AttachmentTooLargeError, assertAttachable, fetchPaneConversation, fetchPaneScroll, fetchPaneSelection, scrollPane } from "./api.ts";
@@ -15,6 +15,7 @@ import { matchHerdrWidths } from "./terminalWidths.ts";
 import { unwrapAgentRows } from "./agentCopy.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { secretPrompt } from "../../shared/secret-prompt.ts";
+import { TERMINAL_HISTORY_LINES } from "../../shared/terminal-flow.ts";
 import type { ClientRole, ServerMessage } from "../../shared/protocol.ts";
 import { terminalTheme, type Palette, type ResolvedTheme, type Settings } from "./settings.ts";
 import { measurableFontStack, openingFontStack, TERMINAL_FONT_STACK } from "./fontFamily.ts";
@@ -33,6 +34,7 @@ import { finalStep, HERDR_MOUSE_SCROLL_LINES, wheelSteps } from "./wheelSteps.ts
 import { createTouchWheelPacer } from "./touchWheelPacer.ts";
 import { attachTerminalWheel, canPanTerminalGrid } from "./terminalWheel.ts";
 import { createTerminalFold, hyperlinkAt, wideGridKey, wideGrids } from "./terminalFold.ts";
+import { userInputTracker } from "./terminalReplies.ts";
 import { visibleTerminalInputBounds } from "./terminalViewport.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import type { ShortcutOverrides } from "./shortcutBindings.ts";
@@ -46,7 +48,8 @@ import { copyOnSelect, herdrUiKnown, loadHerdrUi } from "./herdrUi.ts";
 declare const __HERDR_TEST_HOOKS__: boolean;
 
 /** One piece of typing for the pane: `keys` for a chord or an arrow herdr encodes, else `input` as typed. */
-type Typed = { input: string; keys: string[] | null; chord: boolean; stop: boolean; secret: boolean };
+/** `automatic`: xterm made the input itself (a query's answer), nobody typed it */
+type Typed = { input: string; keys: string[] | null; chord: boolean; stop: boolean; secret: boolean; automatic?: boolean };
 
 export interface TerminalMountDeps {
   activeRef: RefObject<boolean>;
@@ -212,7 +215,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         // xterm keeps no scrollback: the attach stream lives in the alternate screen and herdr
         // owns scrollback (wheel and touch go to it). With scrollback on, the fit addon reserves
         // a scrollbar column - 15px by fallback wherever scrollbars are overlays - and the last
-        // columns of the hero surface go dead.
+        // columns of the hero surface go dead. On herdr-core xterm keeps the history (syncHistory).
         scrollback: 0,
         allowProposedApi: true,
         fontSize: terminalFontSize,
@@ -968,7 +971,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           peakInFlight = Math.max(peakInFlight, inFlight);
           write(data, () => { inFlight--; callback?.(); });
         };
-        Object.assign(host, { outputProbe: () => ({ ...term.oscStringState(), parsingReplay, replayOscOpen, retired: writingOutput && parsingOwner !== outputOwner, queued: outputFrames.length, inFlight, peakInFlight, writes, written, frameSettled: frameGateRef.current.current }) });
+        Object.assign(host, { outputProbe: () => ({ ...term.oscStringState(), parsingReplay, replayOscOpen, retired: writingOutput && parsingOwner !== outputOwner, queued: outputFrames.length, inFlight, peakInFlight, writes, written, frameSettled: frameGateRef.current.current,
+          history: { scrollback: term.options.scrollback ?? 0, length: term.buffer.active.length, viewportY: term.buffer.active.viewportY, baseY: term.buffer.active.baseY } }) });
       }
 
       // OSC 52: the pane program asked the terminal to set the clipboard - the pty
@@ -1017,6 +1021,16 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       const session = machineSessions?.get(machineId) ?? new MachineSession(machineId);
       const socket = session.socket;
       sessionRef.current = session;
+      // On a herdr-core server (`terminal-history`) this terminal keeps the scrollback, as VS Code's
+      // does: the wheel scrolls it natively unless the program reads the mouse, touch below. herdr's
+      // TUI keeps its own. Returns whether it changed.
+      const syncHistory = (): boolean => {
+        const lines = socket.hasTerminalHistory() ? TERMINAL_HISTORY_LINES : 0;
+        if (term.options.scrollback === lines) return false;
+        term.options.scrollback = lines;
+        return true;
+      };
+      syncHistory();
       pendingScopeRef.current = session.scope;
       pendingEpochRef.current = session.epoch;
       socketRef.current = socket;
@@ -1094,7 +1108,9 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       const screenSecret = (): string | null => {
         const lines: string[] = [];
         const buffer = term.buffer.active;
-        for (let row = 0; row < buffer.length; row++) {
+        // the screen only: a prompt is on its last lines, and a herdr-core pane's history (syncHistory) would
+        // cost every output frame a pass over its 2,000 lines
+        for (let row = buffer.baseY; row < buffer.length; row++) {
           const line = buffer.getLine(row);
           const text = line?.translateToString(!buffer.getLine(row + 1)?.isWrapped) ?? "";
           if (line?.isWrapped && lines.length) lines[lines.length - 1] += text;
@@ -1153,6 +1169,9 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         pendingEpochRef.current = session.epoch;
         // Every pane-addressed frame, errors included, belongs only to that pane's renderer.
         if ("pane_id" in message && message.pane_id !== undefined && message.pane_id !== paneRef.current) return;
+        // the features come ahead of any pane's bytes; a changed scrollback changes the fit's scrollbar column
+        // a tab out of use refits when it is back (back())
+        if ((message.type === "features" || message.type === "snapshot") && syncHistory() && inUse()) refit();
         // the PC's shared connection came back after an overload close (another pane's mount, or an
         // explicit pick, reconnected it): its replayed attach serves this pane again
         if (message.type === "snapshot" && stalledRef.current) {
@@ -1416,6 +1435,16 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         modifyOtherKeysRef.current = 0;
         // typing that waited for an idle pane's new attach is held for review, never sent after the reconnect
         failResume();
+        // typing the server never confirmed may not have reached the pane: held for review ahead of
+        // anything typed since, never in a draft while a masked prompt is on screen (#2587)
+        const current = paneRef.current;
+        const lost = current === null ? [] : socket.takeUnconfirmedInput(current);
+        if (current !== null && secretRef.current === null && !draftIsEmpty(holdBefore(lost, EMPTY_DRAFT))) {
+          const samePane = draftPaneRef.current === current;
+          draftPaneRef.current = current;
+          setDraft((prev) => holdBefore(lost, samePane ? prev : EMPTY_DRAFT));
+          draftHeldForRef.current = current;
+        }
       });
       session.connect();
 
@@ -1485,7 +1514,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       // a key, a chord or text for the pane: sent now, or, when the pane cannot take it, told or held for review
       const sendTyped = (current: string, typed: Typed): void => {
         if (typed.keys !== null && socket.sendKeys(current, typed.keys)) return;
-        if (!typed.chord && !holdPendingTextRef.current && socket.sendInput(current, typed.input, typed.stop)) return;
+        if (!typed.chord && !holdPendingTextRef.current && socket.sendInput(current, typed.input, typed.stop, typed.automatic === true, typed.secret)) return;
         retainTyped(current, typed, false);
       };
       // what the pane could not take: told, or held for review (`secretNow`: a masked prompt is on screen now)
@@ -1511,8 +1540,18 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         }
         setDraft((prev) => applyToDraft(prev, typed.input));
         if (!draftIsEmpty(applyToDraft(EMPTY_DRAFT, typed.input))) draftHeldForRef.current = current;
+        // A key the draft cannot hold (Escape, Enter, an arrow, typed right as the terminal opens, say) is told, never
+        // lost in silence. Not Backspace, which edits the draft, nor a mouse report, nor what xterm sends by itself, which
+        // no one typed (a focus report, its answers to the program's queries). Told apart at the source, not by the bytes:
+        // Shift+F3 sends what a cursor-position report does, Alt+] the start of a colour report.
+        else if (typed.automatic !== true && !/^([\x7f\b]+|\x1b\[(<|M)[\s\S]*)$/.test(typed.input)) {
+          setInputError(tRef.current("Not sent: the terminal is not ready for keys."));
+        }
       };
+      const userInput = userInputTracker(term);
       const onData = term.onData((data) => {
+        // asked first, before any return below: the answer belongs to this data alone
+        const automatic = !userInput.wasUserInput();
         // a key from the key bar or the Stop, or a dropped file's paths, ends the swipe before it
         if (!touchWheelDispatching && (barKeyRef.current !== null || stopKeyRef.current || pasting)) cancelTouchRef.current();
         // the split half following the other half's grid of the same tab draws it only: the active
@@ -1581,7 +1620,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         // cannot take now goes the way typing does below, as an arrow always did.
         const arrow = chord === null && !pasting && !composingRef.current && !compositionCommitPendingRef.current && key?.startsWith("Arrow")
           ? terminalChord(key, NO_STICKY_MODIFIERS) : null;
-        const typed: Typed = { input, keys: arrow !== null ? [arrow] : chord !== null ? [chord] : null, chord: chord !== null, stop: stopKey && input === "\u001b", secret };
+        const typed: Typed = { input, keys: arrow !== null ? [arrow] : chord !== null ? [chord] : null, chord: chord !== null, stop: stopKey && input === "\u001b", secret, ...(automatic ? { automatic } : {}) };
         // typed into a tab taking its pane back from idleness: it waits for the new attach (never a password)
         if (resumeInput !== null && resumeInput.pane !== current) takeResume();
         // a mouse report is for the grid it was pressed on: the attach redraws the pane at another, so it is not kept
@@ -1870,6 +1909,13 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         if (steps === 0) return;
         if (scrollableMirror() || wheelStateRef.current.omoQuestion) {
           lineScroll.current?.(-steps * HERDR_MOUSE_SCROLL_LINES);
+          return;
+        }
+        // history this terminal keeps itself (syncHistory) scrolls here, as a real wheel scrolls it: the
+        // wheel dispatched below lands past xterm's viewport, which would type arrow keys to the program
+        if ((term.options.scrollback ?? 0) > 0 && term.buffer.active.type === "normal" && term.modes.mouseTrackingMode === "none") {
+          // a step has the wheel's sign (negative is older lines), as xterm's scrollLines does
+          term.scrollLines(steps * HERDR_MOUSE_SCROLL_LINES);
           return;
         }
         const target = term.element ?? host;
@@ -2374,6 +2420,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         for (const type of keepTextOn) textarea?.removeEventListener(type, keepText, true);
         host.removeEventListener("keydown", onCommandArrow);
         onData.dispose();
+        userInput.dispose();
         host.removeEventListener("paste", onPaste, true);
         host.removeEventListener("keydown", onTyped, true);
         host.removeEventListener("input", onTyped, true);

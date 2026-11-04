@@ -783,6 +783,8 @@ try {
         await box.fill("look at /tmp");
         // the send key: a phone's Return breaks the line by default, its hardware Mod+Enter sends
         await box.press(width <= 480 ? "ControlOrMeta+Enter" : "Enter");
+        // the send is claimed in the pane's cross-tab lock (#2369), a moment after the key: the box empties then
+        await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>("textarea.composer-text")?.value === "");
         await page.getByText("look at /tmp", { exact: true }).waitFor();
         assert.equal(await box.inputValue(), "", "the send key sends a path verbatim instead of accepting a fuzzy skill");
         console.log(`PASS skill completion at word boundaries (${agent}, ${width}px)`);

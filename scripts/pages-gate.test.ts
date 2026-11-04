@@ -257,7 +257,8 @@ describe("Browser lane script lists", () => {
     expect(env(ciJob("integration"), "HERDR_TEST_SHARDS"))
       .toBe("${{ runner.environment == 'self-hosted' && '4' || '1' }}");
     expect(env(ciJob("browser-other"), "BROWSER_WORKERS"))
-      .toBe("${{ runner.environment == 'self-hosted' && '6' || '4' }}");
+      .toBe("${{ runner.environment == 'self-hosted' && '6' || '3' }}");
+    expect(env(ciJob("browser-other"), "BROWSER_SHARD")).toBe("${{ matrix.shard }}/${{ strategy.job-total }}");
   });
 });
 

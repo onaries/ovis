@@ -142,6 +142,7 @@ describe("browser lane", () => {
       { script: "scripts/demo-build.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/ui-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/ui-contexts-regression.ts", seconds: expect.any(Number), code: 0 },
+      { script: "scripts/machine-events-browser-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/workspace-rows-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/pending-pane-switch-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/lan-exposure-notice-regression.ts", seconds: expect.any(Number), code: 0 },

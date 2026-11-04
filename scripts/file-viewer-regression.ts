@@ -25,6 +25,8 @@ import { runMoreItem } from "./header-more.ts";
 import type { Machine } from "../shared/protocol.ts";
 import { chromePath } from "./chrome-path.ts";
 import { routeDrained } from "./drained-route.ts";
+// machine events stay on SSE here: these checks hold or watch /api/machines/events (the socket transport has its own checks)
+process.env["OVIS_MACHINE_EVENTS_WS"] = "0";
 
 const openFiles = async (page: import("playwright-core").Page) => {
   const headerButton = page.locator(".header-files-button");

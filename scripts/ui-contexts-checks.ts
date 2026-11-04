@@ -37,6 +37,8 @@ import { checkBackgroundTabKeepsTerminalSize, checkChatKeepsTerminalSize, checkF
 import { checkUpdateNotice } from "./update-notice-regression.ts";
 import { checkTelemetrySettings } from "./telemetry-regression.ts";
 import { chromePath } from "./chrome-path.ts";
+// machine events stay on SSE here: these checks hold or watch /api/machines/events (the socket transport has its own checks)
+process.env["OVIS_MACHINE_EVENTS_WS"] = "0";
 
 async function timed(name: string, check: () => Promise<void>): Promise<void> {
   const started = performance.now();

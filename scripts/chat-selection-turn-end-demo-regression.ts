@@ -5,7 +5,8 @@
  * Working line gone). The words are in a later reply, or in the ending turn itself below its work
  * block, which folds inside the same row. With a mouse at 1280 the drag is pressed before the turn
  * ends and finished after it, from a bare press and from a drag already partway; at 390 on a touch
- * screen a selection stands (as a long press leaves it) while the turn ends. In every painted frame
+ * screen a selection stands (as a long press leaves it) while the turn ends; the fold is also pressed
+ * at 1280 with reduced motion, where it lands in one frame. In every painted frame
  * between, the words stay where they were, the drag takes exactly them, and once the selection is
  * gone a reader who was following is at the end again. All files and HTTP traffic stay in
  * this disposable, loopback-only app; no herdr session is opened.
@@ -62,7 +63,8 @@ const wordsBox = (page: Page, words: string) => page.evaluate((words) => {
  */
 const watch = (page: Page) => page.evaluate(() => {
   const lab = window as unknown as { watched: number[]; watching: boolean; wordsRange: Range; watcher?: ResizeObserver };
-  const top = () => Math.round((lab.wordsRange.getClientRects()[0]?.top ?? Number.NaN) * 10) / 10;
+  // unrounded: a reading rounded to a tenth makes a 0.96 px step read as a whole pixel
+  const top = () => lab.wordsRange.getClientRects()[0]?.top ?? Number.NaN;
   lab.watched = []; lab.watching = true;
   const step = () => {
     if (!lab.watching) return;
@@ -136,17 +138,20 @@ try {
     try {
       const shapes = [
         // pressed, nothing selected yet, while the turn ends: the press alone holds the chat
-        { name: "desktop-1280-press", width: 1280, height: 800, mobile: false, partway: false, words: LATER, last: false },
-        { name: "desktop-1280-drag", width: 1280, height: 800, mobile: false, partway: true, words: LATER, last: false },
-        { name: "phone-390", width: 390, height: 844, mobile: true, partway: false, words: LATER, last: false },
+        { name: "desktop-1280-press", width: 1280, height: 800, mobile: false, partway: false, words: LATER, last: false, still: false },
+        { name: "desktop-1280-drag", width: 1280, height: 800, mobile: false, partway: true, words: LATER, last: false, still: false },
+        { name: "phone-390", width: 390, height: 844, mobile: true, partway: false, words: LATER, last: false, still: false },
         // in the ending turn itself: its row's top stays put while its work block folds above the
         // words, with the plan after it and as the newest turn
-        { name: "desktop-1280-fold", width: 1280, height: 800, mobile: false, partway: false, words: FOLDED_UNDER, last: true },
-        { name: "phone-390-fold", width: 390, height: 844, mobile: true, partway: false, words: FOLDED_UNDER, last: false },
+        { name: "desktop-1280-fold", width: 1280, height: 800, mobile: false, partway: false, words: FOLDED_UNDER, last: true, still: false },
+        { name: "phone-390-fold", width: 390, height: 844, mobile: true, partway: false, words: FOLDED_UNDER, last: false, still: false },
+        // with reduced motion the block folds in one frame, as one slow frame of the slide does: the
+        // list measures a shrunk row a frame late, and moves the view itself when it does
+        { name: "desktop-1280-fold-reduced-motion", width: 1280, height: 800, mobile: false, partway: false, words: FOLDED_UNDER, last: true, still: true },
       ] as const;
       for (const shape of shapes) {
         const label = shape.name;
-        const context = await browser.newContext({ viewport: { width: shape.width, height: shape.height }, locale: "en-US", hasTouch: shape.mobile, isMobile: shape.mobile });
+        const context = await browser.newContext({ viewport: { width: shape.width, height: shape.height }, locale: "en-US", reducedMotion: shape.still ? "reduce" : "no-preference", hasTouch: shape.mobile, isMobile: shape.mobile });
         try {
           await context.addInitScript(([id, last]) => {
             localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: "dark", palette: "codex" }));
@@ -181,11 +186,15 @@ try {
             await frames(page);
             await endTurn(page);
           }
+          // watched until the fold has slid shut, and the frames the list measures it in after
+          await page.waitForFunction(() => document.querySelector(".chat-view-virtual .animated-height.is-moving") === null, undefined, WAIT);
+          await frames(page);
           await frames(page);
           const tops = await stopWatch(page);
-          assert.ok(tops.length > 2 && tops.every(Number.isFinite), `${label}: the words were watched across the selection (${tops.join(", ")})`);
+          const shown = tops.map((top) => top.toFixed(2)).join(", ");
+          assert.ok(tops.length > 2 && tops.every(Number.isFinite), `${label}: the words were watched across the selection (${shown})`);
           // within a pixel: the view scrolls in whole pixels, and a fold's transition moves a fraction of one
-          assert.ok(tops.every((top) => Math.abs(top - tops[0]!) < 1), `${label}: the words stay put while they are selected, every painted frame (tops ${tops.join(", ")})`);
+          assert.ok(tops.every((top) => Math.abs(top - tops[0]!) < 1), `${label}: the words stay put while they are selected, every painted frame (tops ${shown})`);
           assert.equal(await page.evaluate(() => getSelection()?.toString() ?? ""), shape.words, `${label}: the selection holds exactly the words selected`);
 
           // once the selection is gone, the reader still following is at the end, with no room kept past it
@@ -197,6 +206,68 @@ try {
           });
           assert.deepEqual(end, { gap: 0, room }, `${label}: back at the end once the selection is gone, with the list's own min-height`);
           assert.deepEqual(errors, [], `${label}: no page errors`);
+          console.log(`PASS ${label}`);
+        } finally {
+          await context.close();
+        }
+      }
+
+      // A reader who scrolls up while words stand selected, with no input this page sees (a screen
+      // reader, find in page), has left the end: letting the selection go leaves them where they are.
+      // In a few steps, a pixel at a time, and a pixel at a time after the transcript grew below the
+      // selection (an agent still writing), already far from its end; and back up a pixel at a time
+      // after scrolling down into what grew, past where the chat last put the view.
+      for (const [step, steps, grown, down] of [[30, 3, 0, 0], [1, 90, 0, 0], [1, 20, 150, 0], [1, 100, 300, 200], [151, 1, 300, 150]] as const) {
+        const label = `desktop-1280-reader-away-${step}px${grown ? `-grown-${grown}` : ""}${down ? `-down-${down}` : ""}`;
+        const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+        try {
+          await context.addInitScript((id) => {
+            localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: "dark", palette: "codex" }));
+            localStorage.setItem(`ovis:view:${id}`, "chat");
+          }, PANE);
+          const page = await context.newPage();
+          page.setDefaultTimeout(WAIT.timeout);
+          await page.goto(url);
+          await page.getByText(LATER, { exact: false }).waitFor(WAIT);
+          await frames(page);
+          await wordsBox(page, LATER);
+          await page.evaluate(() => { const selection = getSelection()!; selection.removeAllRanges(); selection.addRange((window as unknown as { wordsRange: Range }).wordsRange); });
+          await frames(page);
+          const gap = () => page.evaluate(() => { const node = document.querySelector<HTMLElement>(".chat-view-virtual")!; return Math.round(node.scrollHeight - node.clientHeight - node.scrollTop); });
+          assert.equal(await gap(), 0, `${label}: at the end before scrolling`);
+          if (grown) {
+            await page.evaluate((grown) => {
+              const footer = document.querySelector<HTMLElement>(".chat-virtual-footer")!;
+              footer.style.paddingBottom = `${Number.parseFloat(getComputedStyle(footer).paddingBottom) + grown}px`;
+            }, grown);
+            await frames(page);
+            assert.equal(await gap(), grown, `${label}: what grew below the selection is not followed under it`);
+          }
+          if (down) {
+            // the row above the words grows first: the hold puts the view back for it, so the chat has
+            // put the view somewhere since the selection began
+            const wordsTop = () => page.evaluate(() => (window as unknown as { wordsRange: Range }).wordsRange.getClientRects()[0]!.top);
+            const before = await wordsTop();
+            await page.evaluate(() => {
+              const rows = [...document.querySelectorAll<HTMLElement>("[data-chat-row]")].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+              rows.at(-2)!.style.paddingBottom = "40px";
+            });
+            await frames(page);
+            await frames(page);
+            assert.ok(Math.abs(await wordsTop() - before) < 1, `${label}: a row growing above the words moves them not, under the selection`);
+            await page.evaluate((down) => { document.querySelector<HTMLElement>(".chat-view-virtual")!.scrollTop += down; }, down);
+            await frames(page);
+            assert.equal(await gap(), grown - down, `${label}: scrolled down into what grew`);
+          }
+          for (let made = 0; made < steps; made++) {
+            await page.evaluate((step) => { document.querySelector<HTMLElement>(".chat-view-virtual")!.scrollTop -= step; }, step);
+            await frames(page);
+          }
+          assert.equal(await gap(), grown - down + step * steps, `${label}: the scroll stands under the selection`);
+          await page.evaluate(() => getSelection()?.removeAllRanges());
+          await frames(page);
+          await frames(page);
+          assert.equal(await gap(), grown - down + step * steps, `${label}: still away from the end once the selection is gone`);
           console.log(`PASS ${label}`);
         } finally {
           await context.close();

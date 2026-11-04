@@ -1,4 +1,5 @@
 import { fileUriPath } from "./fileUri.ts";
+import { charBefore } from "./lookbehind.ts";
 import { parseHtmlBlock, startsHtml } from "./markdownHtml.ts";
 
 export type InlineNode =
@@ -11,7 +12,7 @@ export type InlineNode =
   /** `![alt](src)`; `fallback` is what a surface that draws no images shows after the `!` */
   | { type: "image"; alt: string; src: string; fallback: InlineNode[]; /** CSS pixels, from an HTML `<img width>` */ width?: number }
   /** a link to a local file (`[report](/repo/out/REPORT.md)`): its label opens the path */
-  | { type: "file"; path: string; children: InlineNode[] };
+  | { type: "file"; path: string; children: InlineNode[]; /** the address as written, when decoding changed it: what a terminal shows */ written?: string };
 
 export interface ListItem {
   content: InlineNode[];
@@ -62,7 +63,7 @@ export function shownText(nodes: InlineNode[], addresses = false): string | null
       case "link": case "file": {
         const words = shownText(node.children);
         if (words === null) return null;
-        const href = node.type === "link" ? node.href : node.path;
+        const href = node.type === "link" ? node.href : node.written ?? node.path;
         out += addresses && href && words !== href && words !== href.replace(/^mailto:/, "") ? `${words} (${href})` : words;
         break;
       }
@@ -96,7 +97,8 @@ export function webLikeHref(target: string): string | null {
  * The file a link names, when its target is a path rather than an address: agents link
  * files they wrote (`[report](/repo/out/REPORT.md)`, `[x](src/x.ts#L12)`, `[x](x.ts:12)`).
  * A line anchor (`#L12`, `:12`) stays for the viewer; other anchors are dropped. A line after a bare
- * word is a scheme's (`tel:123`), not a file's.
+ * word is a scheme's (`tel:123`), not a file's. The path is URL-encoded, as a `file:///` URI's is
+ * (`/a%20b/%EC%95%B0.md`): it is decoded once, and kept as written when it is not valid encoding.
  */
 export function markdownFileTarget(href: string): string | null {
   const value = href.trim();
@@ -105,7 +107,21 @@ export function markdownFileTarget(href: string): string | null {
   const target = value.replace(/#(?!L\d+(?:-L?\d+)?$).*$/, "");
   const path = target.replace(/(?::\d+){1,2}$|#L\d+(?:-L?\d+)?$/, "");
   if (path === "" || /^[a-z][a-z0-9+.-]*:/i.test(path) || (path !== target && !/[./]/.test(path))) return null;
-  return target;
+  let decoded = path;
+  try { decoded = decodeURIComponent(path); } catch { /* `100%.png`: not encoding, a name */ }
+  // a control character belongs to no path, an encoded `%3A12` or `%23L12` names the file, not a
+  // line, and an encoded space at either end would be trimmed away by the viewer
+  if (/[\u0000-\u001f\u007f]|(?::\d+){1,2}$|#L\d+(?:-L?\d+)?$|^\s|\s$/.test(decoded)) decoded = path;
+  return decoded + target.slice(path.length);
+}
+
+/** A file link's node, or null when the target names no file. */
+export function markdownFileNode(href: string, children: InlineNode[]): InlineNode | null {
+  const path = markdownFileTarget(href);
+  if (path === null) return null;
+  const written = href.trim();
+  return /^file:/i.test(written) || !/%[0-9a-f]{2}/i.test(written) || path === written
+    ? { type: "file", path, children } : { type: "file", path, written, children };
 }
 
 /** A bare URL without the punctuation that closes the sentence around it (GFM's autolink rule). */
@@ -164,23 +180,37 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   // Underscores inside identifiers are literal: MAC_QA_CHAT_OK must survive
   // rendering exactly as it appears in the terminal and native transcript.
   // a bare or <angle> http(s) URL is a link too; it stops at the first non-ASCII character,
-  // so `…/pull/36에서` links the address and leaves the Korean after it as text
-  const marker = /(`[^`\n]+`|:codex-file-citation\{(?:[ \t]*[a-z_]+="[^"\\\n]*(?:\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4})[^"\\\n]*)*")+[ \t]*\}|\\\(.+?\\\)|(?<![A-Za-z0-9\\$])\$(?:[^\s$\\`]|[^\s$`][^\n\r\u2028\u2029$`]*[^\s$\\`])\$(?![A-Za-z0-9_${#@*(`])|\[[^\]\n]+\]\([^\s)]+\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|(?<![\w.@/-])www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}\p{M}_])__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|(?<!\*)\*[^*\n]+\*(?!\*)|(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/yu;
+  // so `…/pull/36에서` links the address and leaves the Korean after it as text.
+  // What may come before a mark is checked where its opener is found, not with a lookbehind
+  // (shared/lookbehind.ts): `$`, `www.`, `_` and `__` after no word, a lone `*` after no `*`
+  const marker = /(`[^`\n]+`|:codex-file-citation\{(?:[ \t]*[a-z_]+="[^"\\\n]*(?:\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4})[^"\\\n]*)*")+[ \t]*\}|\\\(.+?\\\)|\$(?:[^\s$\\`]|[^\s$`][^\n\r\u2028\u2029$`]*[^\s$\\`])\$(?![A-Za-z0-9_${#@*(`])|\[[^\]\n]+\]\([^\s)]+\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|\*[^*\n]+\*(?!\*)|_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/yu;
   // its last part alone, for a `__` that nothing closes as bold: one `_` may still close it
-  const emphasis = /(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu;
+  const emphasis = /_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu;
+  // its bold part alone, for a `*` right after another, where a lone `*` opens nothing
+  const strong = /\*\*[^*\n]+\*\*/y;
+  const word = /^[\p{L}\p{N}\p{M}_]$/u;
   // what any part of `marker` starts with
   const opener = /[`[<*_~$]|:codex-file-citation\{|\\\(|file:\/\/\/|https?:\/\/|www\./g;
-  /** Where `pattern` is next found from `from` on. Asked with a `from` that only rises, so a place found serves every `from` before it. */
-  const next = (pattern: RegExp): ((from: number) => number) => {
+  /**
+   * Where `pattern` is next found from `from` on, at a place `startsAt` accepts. Asked with a `from`
+   * that only rises, so a place found serves every `from` before it.
+   */
+  const next = (pattern: RegExp, startsAt: (index: number) => boolean = () => true): ((from: number) => number) => {
     let found = -1;
     return (from) => {
       if (found < from) {
         pattern.lastIndex = from;
-        found = pattern.exec(source)?.index ?? Infinity;
+        for (;;) {
+          const index = pattern.exec(source)?.index;
+          if (index === undefined) { found = Infinity; break; }
+          if (startsAt(index)) { found = index; break; }
+          pattern.lastIndex = index + 1;
+        }
       }
       return found;
     };
   };
+  const afterNonSpace = (index: number): boolean => /\S/.test(source[index - 1] ?? "");
   const lineEnd = next(/\n/g);
   const citationEnd = next(/}/g);
   // `.` stops at these, and a formula is `.+?`
@@ -189,8 +219,8 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   const dollarClose = next(/\$/g);
   const labelEnd = next(/[\]\n]/g);
   const targetEnd = next(/[\s)]/g);
-  const emphasisClose = next(/(?<=\S)_(?![\p{L}\p{N}\p{M}_])/gu);
-  const strongClose = next(/(?<=\S)__(?![\p{L}\p{N}\p{M}_])/gu);
+  const emphasisClose = next(/_(?![\p{L}\p{N}\p{M}_])/gu, afterNonSpace);
+  const strongClose = next(/__(?![\p{L}\p{N}\p{M}_])/gu, afterNonSpace);
   let from = 0;
   for (;;) {
     opener.lastIndex = from;
@@ -215,8 +245,13 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
         const end = targetEnd(target);
         if (!(end > target && source[end] === ")")) pattern = null;
       }
+    } else if (char === "w") {
+      if (/[\w.@/-]/.test(source[start - 1] ?? "")) pattern = null;
+    } else if (char === "*") {
+      if (source[start - 1] === "*") pattern = strong;
     } else if (char === "_") {
       const end = lineEnd(start + 1);
+      if (word.test(charBefore(source, start))) continue;
       // a `__` that closes also closes as a `_`, so `marker` has no long search left to fail
       if (!(source[start + 1] === "_" && strongClose(start + 3) < end)) pattern = emphasisClose(start + 2) < end ? emphasis : null;
     }
@@ -273,10 +308,8 @@ export function parseInline(source: string, links = true, depth = 0): InlineNode
       const target = token.slice(split + 2, -1);
       // a label holds no `]`, so no link nests in one: only emphasis counts toward the depth
       const href = safeMarkdownHref(target) ?? webLikeHref(target);
-      const file = href === null ? markdownFileTarget(target) : null;
       const shown: InlineNode = href !== null ? { type: "link", href, children: parseInline(label, false, depth) }
-        : file !== null ? { type: "file", path: file, children: parseInline(label, false, depth) }
-        : { type: "text", value: label };
+        : markdownFileNode(target, parseInline(label, false, depth)) ?? { type: "text", value: label };
       if (image) nodes.push({ type: "image", alt: label, src: target, fallback: [{ type: "text", value: "!" }, shown] });
       else nodes.push(shown);
     } else if (token.startsWith("**") || token.startsWith("__")) {

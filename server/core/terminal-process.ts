@@ -7,7 +7,7 @@ import type { HerdrPane, ServerMessage } from "../../shared/protocol.ts";
 import { AttachOutputTail, AttachStartupProbes, isTakeoverExit } from "../attach-output.ts";
 import { HerdrError, herdrSocketPath, paneRead, paneSendText, sessionSnapshot } from "../herdr/client.ts";
 import { CoreAttachSession } from "../herdr-core/attach-session.ts";
-import { coreConnection, hcBin, runtime } from "../herdr-core/runtime.ts";
+import { coreConnection, HC_MOVED, hcBin, runtime } from "../herdr-core/runtime.ts";
 import { MirrorSession } from "../mirror.ts";
 import { ReplayBuffer } from "../output-window.ts";
 import { PtySession, type PtySessionOptions } from "../pty/session.ts";
@@ -263,6 +263,8 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
     await retiringAttachments.get(paneId);
     const mirrored = !(await terminalAttach());
     const { terminalId, rect } = await terminalInfoFor(paneId);
+    // a pane moved here while its terminal was looked up: the process attached under its old ID still holds herdr's slot (#1503)
+    await retiringAttachments.get(paneId);
     if (isStopped()) throw new HerdrError("server_stopped", "the web bridge stopped during attachment creation");
     // an observer-first attachment spawns at the pane's own grid (fallback 80x24 when
     // the layout has no rect for it): the attach must not seed the shared pty with a
@@ -617,7 +619,9 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       // ended attach (#925): look it up on the PATH and from the home directory the sidecar uses.
       if (!Bun.which(command, { PATH: process.env["PATH"] ?? "", cwd: process.env["HOME"] ?? "/" })) {
         throw new HerdrError("attach_failed", onCore
-          ? `hc could not be started: ${command} is not an executable on the server's PATH (set OVIS_HC_BIN to hc's full path)`
+          ? command === HC_MOVED
+            ? "herdr-core moved (an update?), and Ovis is looking for it again: try again in a moment"
+            : `hc could not be started: ${command} is not an executable on the server's PATH (set OVIS_HC_BIN to hc's full path)`
           : `herdr could not be started: ${command} is not an executable on the server's PATH (set OVIS_HERDR_BIN to herdr's full path)`);
       }
       // A resize since this attach started, even one back to its first grid, makes herdr's screens

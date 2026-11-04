@@ -10,6 +10,8 @@
  * BROWSER_RETRY: 0 runs a failed script once only (default: a failed script runs a second time)
  * BROWSER_ORDER: listed starts the scripts in ci-browser.sh's order (default: longest first, by
  *   scripts/ci-browser-timings.json, so a slow script never starts last and runs on alone)
+ * BROWSER_SHARD: "k/n" runs only shard k of n of the selected scripts, so n jobs split one lane
+ *   (default: every selected script)
  * BROWSER_SCRIPT_TIMEOUT_SECONDS: how long one run of a script may take (default 600), so a hung
  *   script fails and names itself instead of using up the job's timeout. At the bound the script's
  *   process tree is stopped, its last log lines are printed at once, and it is not run again.
@@ -67,13 +69,41 @@ export function selectBrowserScripts(all: string[], include?: string, exclude?: 
  * A script the table does not hold yet counts as its median; ties keep the listed order.
  */
 export function longestFirst(scripts: string[], timings: Record<string, number>): string[] {
-  const known = Object.values(timings).filter((seconds) => Number.isFinite(seconds)).sort((a, b) => a - b);
-  const middle = Math.floor(known.length / 2);
-  const typical = known.length === 0 ? 0 : known.length % 2 === 1 ? known[middle]! : (known[middle - 1]! + known[middle]!) / 2;
-  const estimate = (script: string): number => Number.isFinite(timings[script]) ? timings[script]! : typical;
+  const estimate = timingEstimate(timings);
   return scripts.map((script, index) => ({ script, index, seconds: estimate(script) }))
     .sort((a, b) => b.seconds - a.seconds || a.index - b.index)
     .map(({ script }) => script);
+}
+
+/** A script's seconds by `timings`; one the table does not hold counts as the table's median. */
+function timingEstimate(timings: Record<string, number>): (script: string) => number {
+  const known = Object.values(timings).filter((seconds) => Number.isFinite(seconds)).sort((a, b) => a - b);
+  const middle = Math.floor(known.length / 2);
+  const typical = known.length === 0 ? 0 : known.length % 2 === 1 ? known[middle]! : (known[middle - 1]! + known[middle]!) / 2;
+  return (script) => Number.isFinite(timings[script]) ? timings[script]! : typical;
+}
+
+/**
+ * BROWSER_SHARD "k/n": the scripts shard k of n runs, in their listed order. Longest first by
+ * `timings`, each script goes to the shard with the least estimated time so far (at least a second
+ * a script, so an empty table still deals them out in turn), so the shards end near the same time.
+ * Every job computes the same split from the same table and list. Unset or empty keeps every script.
+ */
+export function shardScripts(scripts: string[], timings: Record<string, number>, shard: string | undefined): string[] {
+  if (shard === undefined || shard.trim() === "") return scripts;
+  const match = shard.trim().match(/^(\d+)\/(\d+)$/);
+  const index = Number(match?.[1]);
+  const total = Number(match?.[2]);
+  if (!match || !(total >= 1 && index >= 1 && index <= total)) throw new Error(`BROWSER_SHARD must be "k/n" with 1 <= k <= n, not "${shard}"`);
+  const estimate = timingEstimate(timings);
+  const loads = new Array<number>(total).fill(0);
+  const mine = new Set<string>();
+  for (const script of longestFirst(scripts, timings)) {
+    const target = loads.indexOf(Math.min(...loads));
+    loads[target]! += Math.max(estimate(script), 1);
+    if (target === index - 1) mine.add(script);
+  }
+  return scripts.filter((script) => mine.has(script));
 }
 
 function readTimings(): Record<string, number> {
@@ -286,7 +316,9 @@ async function runScript(script: string, env: Record<string, string>, log: strin
 
 async function main(): Promise<void> {
   const startedAt = Date.now();
-  const scripts = selectBrowserScripts(serialBrowserScripts(), process.env.BROWSER_SCRIPTS, process.env.BROWSER_EXCLUDE);
+  const timings = readTimings();
+  const shard = process.env.BROWSER_SHARD?.trim();
+  const scripts = shardScripts(selectBrowserScripts(serialBrowserScripts(), process.env.BROWSER_SCRIPTS, process.env.BROWSER_EXCLUDE), timings, shard);
   if (scripts.length === 0) throw new Error("No browser scripts selected");
 
   const requested = Number(process.env.BROWSER_WORKERS);
@@ -297,7 +329,7 @@ async function main(): Promise<void> {
   const logDir = join(process.env.CHECK_DIR || ".ci", "browser-logs");
   mkdirSync(logDir, { recursive: true });
 
-  console.log(`Browser lane: ${scripts.length} scripts, ${workers} workers, logs in ${logDir}`);
+  console.log(`Browser lane: ${scripts.length} scripts${shard ? ` (shard ${shard})` : ""}, ${workers} workers, logs in ${logDir}`);
 
   const chromePath = installChromium();
   const demoBuild = mkdtempSync(join(tmpdir(), "herdr-demo-parallel-"));
@@ -309,7 +341,7 @@ async function main(): Promise<void> {
 
   const retry = process.env.BROWSER_RETRY !== "0";
   const timeoutSeconds = scriptTimeoutSeconds(process.env.BROWSER_SCRIPT_TIMEOUT_SECONDS);
-  const queue = process.env.BROWSER_ORDER === "listed" ? [...scripts] : longestFirst(scripts, readTimings());
+  const queue = process.env.BROWSER_ORDER === "listed" ? [...scripts] : longestFirst(scripts, timings);
   const results: ScriptResult[] = [];
   const lock = { active: 0 };
 

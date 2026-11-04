@@ -32,6 +32,15 @@ export const FRAME_CLOSE = 2;
 export const FRAME_RESIZE = 3;
 export const FRAME_FOCUS = 4;
 export const FRAME_FACTS = 5;
+/**
+ * Reply bytes the viewer's terminal made itself (a query's answer), not anyone typing: hc passes
+ * them to the program as DATA but does not count them as the viewer's activity. Only on a stream
+ * both ends confirmed it for (`Channel.automaticInput`): a core that does not know the kind drops
+ * the frame, and the bytes with it.
+ */
+export const FRAME_AUTOMATIC_INPUT = 6;
+/** The hello feature a core names when it takes FRAME_AUTOMATIC_INPUT. */
+export const AUTOMATIC_INPUT_FEATURE = "automatic_input";
 
 export class HcError extends Error {
   /** hc's stable `data.kind` (`not_found`, `blocked`, `unavailable`, …), or this side's own */
@@ -102,7 +111,14 @@ export interface ChannelHandlers {
 
 export interface Channel {
   readonly id: number;
+  /**
+   * Whether hc takes FRAME_AUTOMATIC_INPUT on this stream: its hello named the feature and its
+   * attach answer confirmed it, as hc's protocol requires before a client may send the kind.
+   */
+  readonly automaticInput: boolean;
   write: (payload: Uint8Array | string) => void;
+  /** Reply bytes the viewer's terminal made itself: FRAME_AUTOMATIC_INPUT where confirmed, else plain DATA as before. */
+  writeAutomatic: (payload: Uint8Array | string) => void;
   /** the viewer's grid; hc takes it as the terminal's size, this being the last active viewer */
   resize: (cols: number, rows: number) => void;
   /** bytes of the stream consumed, for a channel opened with manual credit */
@@ -139,6 +155,8 @@ export interface HcTransport {
 
 /** `hc connect` as a child process; a program that cannot be started is an HcError (`closed`). */
 export function spawnHcConnect(bin: string): HcTransport {
+  // runtime.ts hands out this path that cannot exist while a moved hc is found again
+  if (bin === "/dev/null/herdr-core-moved") throw new HcError("closed", "herdr-core moved (an update?), and Ovis is looking for it again: try again in a moment");
   let child: Bun.Subprocess<"pipe", "pipe", "ignore">;
   try {
     child = Bun.spawn([bin, "connect"], { stdin: "pipe", stdout: "pipe", stderr: "ignore" });
@@ -176,7 +194,7 @@ interface Line {
   dead: boolean;
 }
 
-export interface HelloInfo { version: string; core: { id: string; name: string } }
+export interface HelloInfo { version: string; core: { id: string; name: string }; features: string[] }
 
 /**
  * A lazily opened, self-replacing line to hc: the first call starts `hc connect`, and a line that
@@ -211,12 +229,19 @@ export class HcConnection {
     // framed mode always answers with a channel (only plain mode's subscribe has none)
     const id = result.channel as number;
     const live = () => !line.dead && line.channels.get(id)?.closing === undefined;
+    // the request went out only after hello answered, so this awaits nothing
+    const features = (await line.hello).features;
+    const automaticInput = features.includes(AUTOMATIC_INPUT_FEATURE) && (result as { automatic_input?: unknown }).automatic_input === true;
     return {
       result,
       channel: {
         id,
+        automaticInput,
         write: (payload) => {
           if (live()) line.transport.write(encodeFrame(id, FRAME_DATA, payload));
+        },
+        writeAutomatic: (payload) => {
+          if (live()) line.transport.write(encodeFrame(id, automaticInput ? FRAME_AUTOMATIC_INPUT : FRAME_DATA, payload));
         },
         resize: (cols, rows) => {
           if (!live()) return;
@@ -452,7 +477,7 @@ function parseReason(payload: Uint8Array): Record<string, unknown> | null {
 
 /** The hello's answer, or why it is not one this side can speak to. */
 export function parseHello(text: string): HelloInfo | string {
-  let message: { result?: { generation?: unknown; framed?: unknown; version?: unknown; core?: { id?: unknown; name?: unknown } }; error?: { message?: unknown } };
+  let message: { result?: { generation?: unknown; framed?: unknown; version?: unknown; core?: { id?: unknown; name?: unknown }; features?: unknown }; error?: { message?: unknown } };
   try {
     message = JSON.parse(text);
   } catch {
@@ -463,5 +488,6 @@ export function parseHello(text: string): HelloInfo | string {
   if (result?.generation !== HC_GENERATION) return `hc speaks protocol generation ${String(result?.generation)}; Ovis speaks ${HC_GENERATION}`;
   if (result.framed !== true) return "hc did not switch the connection to framed mode";
   if (typeof result.version !== "string" || typeof result.core?.id !== "string" || typeof result.core.name !== "string") return "hc's hello is missing its version or core";
-  return { version: result.version, core: { id: result.core.id, name: result.core.name } };
+  const features = Array.isArray(result.features) ? result.features.filter((feature): feature is string => typeof feature === "string") : [];
+  return { version: result.version, core: { id: result.core.id, name: result.core.name }, features };
 }

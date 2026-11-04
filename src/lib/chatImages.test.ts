@@ -55,6 +55,16 @@ describe("mentioned chat images", () => {
     // other spaces stop at the next mention too, and a long line of mentions without an upload's name reads none
     expect(images("@/tmp/not-image\u00a0@/A B/.ovis/paste-20261103-065352-8f69b25b.png").map((image) => image.name)).toEqual(["/A B/.ovis/paste-20261103-065352-8f69b25b.png"]);
     expect(images("@/a b c\u00a0".repeat(10_000))).toEqual([]);
+    // a path with spaces reaches only an upload folder, never a relative path in the words after another mention (#2682)
+    for (const words of ["Please review docs/", "check @other docs/.ovis/", "check @~/My Folder/.ovis/", "Please review /x/.ovis/"]) {
+      expect(images(`@/tmp/a.png ${words}paste-20261103-065352-8f69b25b.png now`).map((image) => image.name)).toEqual(["/tmp/a.png"]);
+    }
+    // an upload folder set by OVIS_PASTE_DIR may hold spaces too
+    for (const path of ["/My Uploads/paste-20261103-065352-8f69b25b.png", "/Users/me/John.Doe Files/paste-20261103-065352-8f69b25b.png", "C:\\v1.2 build\\paste-20261103-065352-8f69b25b.png"]) {
+      expect(images(`@${path} Fix footer`).map((image) => image.name)).toEqual([path]);
+    }
+    // and a folder whose name holds " @" is still the upload's path
+    expect(images("@/Users/me/Company @ Work/.ovis/paste-20261103-065352-8f69b25b.png Fix footer").map((image) => image.name)).toEqual(["/Users/me/Company @ Work/.ovis/paste-20261103-065352-8f69b25b.png"]);
   });
 
   it("keeps native attachments before mentioned files", () => {

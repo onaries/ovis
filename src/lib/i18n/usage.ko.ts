@@ -6,6 +6,11 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const USAGE_KO: Record<string, string> = {
+  "Remove {name}?": "{name} 계정을 제거할까요?",
+  "Remove this account from Ovis? Its CLI sign-in and credentials stay on this PC, and Restore under Removed from Ovis brings it back.": "Ovis에서 이 계정을 제거할까요? CLI 로그인과 인증 정보는 이 PC에 그대로 남고, \"Ovis에서 제거됨\"의 복원으로 되돌릴 수 있습니다.",
+  "Removed from Ovis": "Ovis에서 제거됨",
+  "Restore": "복원",
+  "Restore {name}": "{name} 복원",
   "Could not load sign-in options": "로그인 방법을 불러오지 못했습니다",
   "On the server PC": "서버 PC에서 로그인",
   "Install {cli} on the server PC first.": "먼저 서버 PC에 {cli}를 설치하세요.",

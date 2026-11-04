@@ -6,7 +6,7 @@
  * Transcript reads/stats are asynchronous on the checked descriptor, never a reopened path.
  * At most two readers run and 32 wait. Headers have a one-chunk-per-open bound and a shared ten-second
  * deadline; longer headers retain progress too. Label scans share a two-second deadline, including
- * header and queue time. Calls already in
+ * header and queue time, but always keep a quarter of it after the header pass. Calls already in
  * the filesystem retain their descriptor/slot until they return, then close it, never mid-read.
  *
  * Reads use 64 KiB chunks and a bounded JSON projection, not whole-line/transcript buffers. The

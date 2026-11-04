@@ -313,7 +313,9 @@ through the bridge's pending record (`first_message` on the create request): it 
 pane and sent once when the agent is ready, like any queued message, and it can be discarded or sent
 now. Only the page that sent the request (`first_message_connection`) types it on its own, while it
 has the pane attached; if that page disconnects or leaves the pane first, the message is held until
-someone sends it now or discards it, and the pane's other messages go at their turn. A pane holds
+someone sends it now or discards it, and the pane's other messages go at their turn. A request that
+names no page connection (a script or CLI) gets its message held from the start, and the answer says
+so: `first_message: { id, held: "first_message_unattended" }`. A pane holds
 one first message, bound to the agent the launch brought up: its process (the one a shell-started
 agent's launch saw come up) and session, as known when the message is queued and as learned at each
 event of the pane after. A `/resume` or another process of the same kind holds it with

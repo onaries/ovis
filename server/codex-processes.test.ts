@@ -37,6 +37,9 @@ let reportedSession: { source: string; agent: string; kind: string; value: strin
 let shellPid: number | undefined;
 /** The answers to the pane's next process reads, in order (null: herdr gives no process_info); [foreground] once used up. */
 let processReads: ({ pid: number; name?: string; argv?: string[] }[] | null)[];
+/** Which of the pane's own process reads (1 for the first) herdr answers with an error. */
+let failedReads: Set<number>;
+let ownReads: number;
 const children: ReturnType<typeof Bun.spawn>[] = [];
 
 beforeEach(() => {
@@ -59,6 +62,8 @@ beforeEach(() => {
   agentFolders = {};
   reportedSession = null;
   processReads = [];
+  failedReads = new Set();
+  ownReads = 0;
   shellPid = undefined;
   peerScreens = new Map();
   foreground = [];
@@ -81,6 +86,10 @@ beforeEach(() => {
         }
         if (request.method === "pane.read" && peerScreen instanceof Error) {
           socket.end(`${JSON.stringify({ id: request.id, error: { code: "pane_not_found", message: peerScreen.message } })}\n`);
+          return;
+        }
+        if (request.method === "pane.process_info" && request.params?.pane_id === root && failedReads.has(++ownReads)) {
+          socket.end(`${JSON.stringify({ id: request.id, error: { code: "internal", message: "fixture failure" } })}\n`);
           return;
         }
         const own = request.method === "pane.process_info" && request.params?.pane_id === root && processReads.length > 0 ? processReads.shift() : undefined;
@@ -134,6 +143,135 @@ function asOnMac() {
   ];
   return { mockRestore: () => { for (const spy of spies) spy.mockRestore(); } };
 }
+
+// A Chat poll hands its own process read to the lookup (#1879). The pane can change in between: what decides the
+// store and the Kiro guard is the read made now (#2774).
+const labelledSnapshot = () => ({ panes: [{
+  pane_id: root, workspace_id: root, tab_id: root, terminal_id: root,
+  agent: "codex", cwd: root, agent_status: "working", focused: false, revision: 0,
+}], workspaces: [], tabs: [], agents: [], layouts: [], protocol: 1, version: "test" } satisfies SessionSnapshot);
+
+it.skipIf(process.platform !== "linux")("shows no conversation of the store an earlier read's Codex keeps once another Codex runs there", async () => {
+  // Given Codex A writing to this fixture's store, gone by the lookup, and Codex B started since with a store of its own
+  const other = join(root, "other-store");
+  mkdirSync(other, { recursive: true });
+  const start = async (codexHome: string) => {
+    const child = Bun.spawn(["/bin/bash", "-c", "echo READY; exec -a codex sleep 600"], { env: { ...process.env, CODEX_HOME: codexHome }, stdout: "pipe", stderr: "ignore" });
+    children.push(child);
+    expect(await firstLine(child.stdout)).toBe("READY\n");
+    return child.pid;
+  };
+  const before = await start(home);
+  foreground = [{ pid: await start(other), argv: ["codex"] }];
+  agentFolders = { cwd: root };
+  screen = answer;
+  const defaultBefore = process.env["CODEX_HOME"];
+  process.env["CODEX_HOME"] = join(root, "default-store");
+  try {
+    // When the poll's read named A
+    const known = { foreground_processes: [{ pid: before, argv: ["codex"] }] };
+    // Then B is not shown A's conversation, which its screen still matches
+    await expect(paneTranscript(root, undefined, labelledSnapshot(), undefined, undefined, undefined, undefined, undefined, known as never)).rejects.toMatchObject({ message: "no_session_path" });
+    // and a read that names B's store's Codex itself still resolves from that store
+    foreground = [{ pid: before, argv: ["codex"] }];
+    expect(await paneTranscript(root, undefined, labelledSnapshot(), undefined, undefined, undefined, undefined, undefined, known as never)).toMatchObject({ source: "codex-transcript", path });
+  } finally {
+    if (defaultBefore === undefined) delete process.env["CODEX_HOME"]; else process.env["CODEX_HOME"] = defaultBefore;
+  }
+});
+
+it.skipIf(process.platform !== "linux")("shows no conversation of the store the lookup's first read chose once another Codex runs there", async () => {
+  // Given the reads up to the one that chooses the store (omo's check, then paneCodexHomePlaced's) naming Codex A
+  // (this fixture's store), and the reads after them Codex B
+  const other = join(root, "other-store");
+  mkdirSync(other, { recursive: true });
+  const start = async (codexHome: string) => {
+    const child = Bun.spawn(["/bin/bash", "-c", "echo READY; exec -a codex sleep 600"], { env: { ...process.env, CODEX_HOME: codexHome }, stdout: "pipe", stderr: "ignore" });
+    children.push(child);
+    expect(await firstLine(child.stdout)).toBe("READY\n");
+    return child.pid;
+  };
+  const before = await start(home);
+  processReads = [[{ pid: before, argv: ["codex"] }], [{ pid: before, argv: ["codex"] }]];
+  foreground = [{ pid: await start(other), argv: ["codex"] }];
+  agentFolders = { cwd: root };
+  screen = answer;
+  const defaultBefore = process.env["CODEX_HOME"];
+  process.env["CODEX_HOME"] = join(root, "default-store");
+  try {
+    // Then B is not shown A's conversation, though no caller handed a read down
+    await expect(paneTranscript(root, undefined, labelledSnapshot())).rejects.toMatchObject({ message: "no_session_path" });
+  } finally {
+    if (defaultBefore === undefined) delete process.env["CODEX_HOME"]; else process.env["CODEX_HOME"] = defaultBefore;
+  }
+});
+
+it("reads no conversation when the read that decides the Kiro guard fails and a later one shows the wrapper", async () => {
+  // herdr labels the pane's agent Codex: with no process facts it is then taken for a plain pane
+  agentFolders = { cwd: root, agent: "codex" } as typeof agentFolders;
+  const replies = ["The first fixture is ready for careful inspection.", "The second fixture check is now fully complete."];
+  writeFileSync(path, [
+    { type: "session_meta", payload: { id: thread, cwd: root } },
+    ...replies.flatMap((message, index) => [
+      { type: "event_msg", payload: { type: "user_message", message: `Fixture request ${index}` } },
+      { type: "event_msg", payload: { type: "agent_message", message } },
+    ]),
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  screen = "OpenAI Codex (v0.165.0)\n" + replies.map((reply, index) => `› Fixture request ${index}\n\n• ${reply}\n\n`).join("") + "› ";
+  foreground = [{ pid: 2147483647, argv: ["zsh (kiro-cli-term)"] }];
+  shellPid = 2147483647;
+  // as a Chat poll looks: its own read (the wrapper) decides omo's check and the store, so the lookup's first read is
+  // agent.get's; herdr fails it, and answers the ones after
+  failedReads = new Set([1]);
+  const known = { shell_pid: 2147483647, foreground_processes: [{ pid: 2147483647, argv: ["zsh (kiro-cli-term)"] }] };
+  const nested = spyOn(kiro, "kiroCodexProcess").mockResolvedValue({ pid: 2147483646, argv: ["codex"], identity: "10:1,20:1,2147483646:1" });
+  const mac = asOnMac();
+  try {
+    await expect(paneTranscript(root, home, labelledSnapshot(), undefined, undefined, undefined, undefined, undefined, known as never)).rejects.toMatchObject({ message: "no_session_path" });
+  } finally { nested.mockRestore(); mac.mockRestore(); }
+});
+
+it("asks again when herdr answers the lookup's own read without process facts, and resolves the nested Codex then", async () => {
+  // Given a Kiro pane showing its conversation's own long answer: omo's check sees the wrapper, agent.get's read
+  // comes back without process facts, and the read after it shows the wrapper again
+  agentFolders = { cwd: root };
+  screen = answer;
+  foreground = [{ pid: 2147483647, argv: ["zsh (kiro-cli-term)"] }];
+  shellPid = 2147483647;
+  processReads = [foreground, null];
+  // the probe proves the nested Codex from the wrapper herdr names, and nothing from an answer without process facts
+  const nested = spyOn(kiro, "kiroCodexProcess").mockImplementation(async (info) => info === undefined ? null : { pid: 2147483646, argv: ["codex"], identity: "10:1,20:1,2147483646:1" });
+  const mac = asOnMac();
+  try {
+    // Then the conversation is read from the next answer, as before the lookup reused its read
+    expect(await paneTranscript(root, home, labelledSnapshot())).toMatchObject({ source: "codex-transcript", path });
+  } finally { nested.mockRestore(); mac.mockRestore(); }
+});
+
+it("keeps the Kiro guard when the pane became a Kiro wrapper after an earlier read saw a plain Codex", async () => {
+  // Given a pane showing its cwd thread's own prompts and short answers, which only a plain Codex may be read by
+  agentFolders = { cwd: root };
+  const replies = ["The first fixture is ready for careful inspection.", "The second fixture check is now fully complete."];
+  writeFileSync(path, [
+    { type: "session_meta", payload: { id: thread, cwd: root } },
+    ...replies.flatMap((message, index) => [
+      { type: "event_msg", payload: { type: "user_message", message: `Fixture request ${index}` } },
+      { type: "event_msg", payload: { type: "agent_message", message } },
+    ]),
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  screen = "OpenAI Codex (v0.165.0)\n" + replies.map((reply, index) => `› Fixture request ${index}\n\n• ${reply}\n\n`).join("") + "› ";
+  // and herdr now showing Kiro's wrapper around a nested Codex
+  foreground = [{ pid: 2147483647, argv: ["zsh (kiro-cli-term)"] }];
+  shellPid = 2147483647;
+  const nested = spyOn(kiro, "kiroCodexProcess").mockResolvedValue({ pid: 2147483646, argv: ["codex"], identity: "10:1,20:1,2147483646:1" });
+  const mac = asOnMac();
+  try {
+    // When the poll's read, made before, saw a plain Codex
+    const known = { foreground_processes: [{ pid: 2147483646, argv: ["codex"] }] };
+    // Then the pane keeps its nested guard: no weak match, the terminal stands in
+    await expect(paneTranscript(root, home, labelledSnapshot(), undefined, undefined, undefined, undefined, undefined, known as never)).rejects.toMatchObject({ message: "no_session_path" });
+  } finally { nested.mockRestore(); mac.mockRestore(); }
+});
 
 it("reads an unlabelled pane only when the Kiro foreground check proves its nested Codex", async () => {
   unlabelled = true;

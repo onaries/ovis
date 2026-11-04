@@ -59,6 +59,30 @@ the reading of a tool result's JSON envelope and `tool denied:` / `tool failed:`
 Copyright (c) 2026 Altan Sarisin. The MIT license text below applies. The session binding in
 `server/muse-store.ts` is Ovis's own.
 
+## Ovis for the desktop
+
+The desktop app (`app/electron`) ships these programs unmodified, downloaded at build time from
+their official releases and checked against the SHA-256 pinned in `app/electron/scripts/runtimes.ts`.
+None of them is in this repository.
+
+- [herdr-core](https://github.com/herdrdev/herdr-core) 0.1.17 (`hc`), under Apache-2.0, from
+  `releases.herdr.dev`. Its `LICENSE` and `THIRD-PARTY-NOTICES` ship beside it, in the app's
+  `resources/ovis/licenses/herdr-core/`.
+- [Bun](https://github.com/oven-sh/bun) 1.4.2, under MIT. Its `LICENSE.md` ships beside it, in
+  `resources/ovis/licenses/bun/`. Bun statically links JavaScriptCore and WebKit (LGPL-2) and the
+  other libraries that file lists; the sources of the WebKit it links are at
+  [oven-sh/WebKit](https://github.com/oven-sh/WebKit).
+- [Electron](https://github.com/electron/electron) 45, under MIT, Copyright (c) Electron
+  contributors and GitHub Inc. Its `LICENSE` and Chromium's `LICENSES.chromium.html` ship in the
+  app as electron-builder puts them there.
+
+The app's main process bundles [electron-updater](https://github.com/electron-userland/electron-builder)
+6.8.11 (MIT) and the packages it uses: builder-util-runtime, debug, fs-extra, has-flag, js-yaml,
+jsonfile, lazy-val, lodash.escaperegexp, lodash.isequal, ms, supports-color and universalify (MIT),
+graceful-fs and semver (ISC), and sax (Blue Oak Model License 1.0.0). Their license texts, with
+their copyright notices, ship in the app as `out/THIRD_PARTY_LICENSES.txt`, which
+`app/electron/scripts/build.ts` writes from the packages the bundle took in.
+
 ## oh-my-pi figure tokens
 
 `src/lib/svgFigure.ts` adapts the figure token vocabulary and the token and root-tag resolution of

@@ -2,8 +2,8 @@ import { afterEach, expect, it, mock, spyOn } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverHc, findHc } from "./discovery.ts";
-import { hcBin, startRuntime } from "./runtime.ts";
+import { findHc } from "./discovery.ts";
+import { HC_MOVED, hcBin, hcRecovery, startRuntime } from "./runtime.ts";
 
 /** an hc stand-in found, so no test looks at the developer's own PATH, shell or hc */
 const standIn = async () => ({ bin: "/nonexistent/hc", version: "0.1.17" });
@@ -49,26 +49,56 @@ it.skipIf(platform === "win32")("runs the hc it found, not an unrelated one name
   }
 });
 
-it.skipIf(platform === "win32")("finds hc again when the one it runs was moved, as an update can", async () => {
+/** a stand-in hc in `folder` that answers --version with `says` */
+function hcIn(dir: string, folder: string, says: string): string {
+  mkdirSync(join(dir, folder), { recursive: true });
+  const path = join(dir, folder, "herdr-core");
+  writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' '${says}'\n`, { mode: 0o755 });
+  return path;
+}
+
+it.skipIf(platform === "win32")("finds a moved hc again where only the login shell's PATH shows it, as the start did", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ovis-hc-moved-"));
   cleanup = () => rmSync(dir, { recursive: true, force: true });
-  const write = (folder: string) => {
-    mkdirSync(join(dir, folder), { recursive: true });
-    writeFileSync(join(dir, folder, "herdr-core"), "#!/bin/sh\nprintf 'hc 0.1.18\\n'\n", { mode: 0o755 });
-    return join(dir, folder, "herdr-core");
-  };
-  const old = write("old");
+  const old = hcIn(dir, "old", "hc 0.1.17");
+  let login = join(dir, "old");
   process.env["OVIS_RUNTIME"] = "herdr-core";
-  delete process.env["OVIS_HC_BIN"];
-  const adapter = await startRuntime(join(dir, "state"), async () => ({ bin: old, version: "0.1.17" }));
+  const adapter = await startRuntime(join(dir, "state"), () => findHc({ env: { PATH: join(dir, "empty") }, home: dir, loginShellPath: async () => login, usualDirs: [] }));
   if (!adapter) throw new Error("runtime did not start");
   try {
+    expect(hcBin()).toBe(old);
     rmSync(old);
-    const moved = write("new");
-    process.env["PATH"] = join(dir, "new");
+    const moved = hcIn(dir, "new", "hc 0.1.18");
+    login = join(dir, "new");
     hcBin();
-    await discoverHc();
+    await hcRecovery();
     expect(hcBin()).toBe(moved);
+  } finally {
+    adapter.stop();
+  }
+});
+
+it.skipIf(platform === "win32")("never runs a file the search did not just verify: one that fails --version is passed over", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-hc-replaced-"));
+  cleanup = () => rmSync(dir, { recursive: true, force: true });
+  const old = hcIn(dir, "old", "hc 0.1.17");
+  hcIn(dir, "other", "hc 0.1.16");
+  process.env["OVIS_RUNTIME"] = "herdr-core";
+  const adapter = await startRuntime(join(dir, "state"), () => findHc({ env: { PATH: join(dir, "empty") }, home: dir, loginShellPath: async () => null, usualDirs: [join(dir, "old"), join(dir, "other")] }));
+  if (!adapter) throw new Error("runtime did not start");
+  try {
+    expect(hcBin()).toBe(old);
+    rmSync(old);
+    // the file an earlier look found was replaced with one that is not herdr-core
+    const replaced = hcIn(dir, "other", "herbstclient 0.9.5");
+    hcBin();
+    await hcRecovery();
+    expect(hcBin()).not.toBe(replaced);
+    // nothing verified: not even a file that reappears at the old path is handed out
+    hcIn(dir, "old", "herbstclient 0.9.5");
+    expect(hcBin()).toBe(HC_MOVED);
+    await hcRecovery();
+    expect(hcBin()).toBe(HC_MOVED);
   } finally {
     adapter.stop();
   }

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, type Dispatch, type RefObject, type SetStat
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { HerdrSocket } from "./ws.ts";
-import { EMPTY_DRAFT, restoreDraft, type InputDraft } from "./draft.ts";
+import { EMPTY_DRAFT, holdBefore, restoreDraft, type InputDraft } from "./draft.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 import { holdViews, inUse } from "./paneTerminalShared.ts";
@@ -98,7 +98,8 @@ export function usePaneAttach(deps: PaneAttachDeps): void {
     try {
       saved = paneId ? restoreDraft(paneLifetimes.paneStorage.getItem(`ovis:terminal-draft:${paneStorageId(machineId, paneId)}`), Date.now()) : EMPTY_DRAFT;
     } catch {}
-    setDraft(saved);
+    // typing a connection ended with unconfirmed while no terminal of this pane was mounted (#2587)
+    setDraft(holdBefore(paneId ? socket.takeUnconfirmedInput(paneId) : [], saved));
     draftPaneRef.current = paneId;
     term.reset();
     retireOutputRef.current();

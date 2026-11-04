@@ -131,7 +131,8 @@ export function bindScope(hostname: string): BindScope {
   return (family === 4 ? tailnetIpv4.check(address, "ipv4") : family === 6 && tailnetIpv6.check(address, "ipv6")) ? "tailnet" : "other";
 }
 
-const inTailnet = (address: string | null | undefined): boolean => {
+/** Is this one address (never a list) in Tailscale's assigned ranges? */
+export const inTailnet = (address: string | null | undefined): boolean => {
   const family = isIP(address ?? "");
   return family === 4 ? tailnetIpv4.check(address!, "ipv4") : family === 6 && tailnetIpv6.check(address!, "ipv6");
 };

@@ -1274,7 +1274,7 @@ export async function homeSignIn(ctx: UsageContext, provider: "claude" | "codex"
   };
 }
 
-export async function handleUsageRequest(request: Request, url: URL, service: UsageService): Promise<Response> {
+export async function handleUsageRequest(request: Request, url: URL, service: Pick<UsageService, "report">): Promise<Response> {
   if (request.method !== "GET") return jsonResponse({ error: { code: "method_not_allowed", message: "Use GET /api/usage" } }, 405, { allow: "GET" });
   return jsonResponse(await service.report(url.searchParams.get("refresh") === "1"), 200, { "cache-control": "no-store" });
 }

@@ -700,6 +700,77 @@ describe("managed source updates with real Git repositories and builds", () => {
     }
   }, 20_000);
 
+  it("takes a bridge by its own answer, or by the whole one when it predates the bridge-scope boot id, and tells it", async () => {
+    // runSupervisor in a stand-in child, as above: the bridge is a fake whose health answers say what
+    // a bridge of this revision says (its boot id and runtime in ?scope=bridge) or an older one (none)
+    const asked = async (older: boolean, herdrSocket?: string) => {
+      const root = mkdtempSync(join(directory, "launch-root-"));
+      const stateDir = mkdtempSync(join(directory, "launch-state-"));
+      const record = join(stateDir, "launch-record.json");
+      const script = join(stateDir, "launch-stand-in.ts");
+      writeFileSync(script, `
+        import { mock } from "bun:test";
+        import { writeFileSync } from "node:fs";
+        const { Updater } = await import(${JSON.stringify(join(import.meta.dir, "updater.ts"))});
+        class Idle extends Updater {
+          override async initialize() { return { directory: ${JSON.stringify(root)}, revision: "0".repeat(40), source_revision: "0".repeat(40) }; }
+          override start() {}
+        }
+        mock.module(${JSON.stringify(join(import.meta.dir, "updater.ts"))}, () => ({ Updater: Idle }));
+        const urls: string[] = [];
+        const sent: unknown[] = [];
+        let bootId = "";
+        Bun.spawn = ((_argv: string[], options: { env: Record<string, string> }) => {
+          bootId = options.env["OVIS_BOOT_ID"]!;
+          return { exitCode: null, kill() {}, exited: new Promise(() => {}), send(message: unknown) { sent.push(message); } };
+        }) as unknown as typeof Bun.spawn;
+        globalThis.fetch = (async (url: string) => {
+          urls.push(new URL(url).search);
+          const bridge = new URL(url).search === "?scope=bridge";
+          return { ok: true, json: async () => bridge ? (${older} ? { ok: true } : { ok: true, web_ui: { boot_id: bootId }, runtime: "herdr" }) : { web_ui: { boot_id: bootId } } };
+        }) as unknown as typeof fetch;
+        await (await import(${JSON.stringify(join(import.meta.dir, "supervisor.ts"))})).runSupervisor(${JSON.stringify(root)});
+        writeFileSync(${JSON.stringify(record)}, JSON.stringify({ urls, sent }));
+        process.exit(0);
+      `);
+      // no herdr socket by default: a bridge of this revision serving herdr needs no whole answer
+      const child = Bun.spawn([process.execPath, script], { env: { ...process.env, PORT: "59998", HOST: "127.0.0.1", OVIS_STATE_DIR: stateDir,
+        XDG_CONFIG_HOME: join(stateDir, "config"), HERDR_SOCKET: herdrSocket ?? join(stateDir, "no-herdr.sock"), OVIS_AUTO_UPDATE: "0" }, stdout: "pipe", stderr: "pipe" });
+      const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      const timer = setTimeout(() => child.kill("SIGKILL"), 15_000); // a wedged stand-in must not hang the run
+      try {
+        expect(await child.exited).toBe(0);
+        if (!existsSync(record)) throw new Error(`no record was written; the stand-in printed:\n${(await output).join("\n")}`);
+        return JSON.parse(readFileSync(record, "utf8")) as { urls: string[]; sent: Array<{ type?: string }> };
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const current = await asked(false);
+    expect(current.urls).toEqual(["?scope=bridge"]);
+    expect(current.sent.filter((message) => message.type === "bridge-accepted")).toHaveLength(1);
+    const older = await asked(true);
+    expect(older.urls).toEqual(["?scope=bridge", ""]);
+    expect(older.sent.filter((message) => message.type === "bridge-accepted")).toHaveLength(1);
+    if (process.platform === "win32") return; // herdr's socket is a named pipe there: no unix socket file is left behind
+    // a socket file a killed herdr left behind refuses the connect: herdr is stopped, as with no socket (#2670)
+    const stale = join(mkdtempSync(join(directory, "stale-")), "herdr.sock");
+    const holder = Bun.spawn([process.execPath, "-e", `Bun.listen({ unix: ${JSON.stringify(stale)}, socket: { data() {} } }); console.log("listening");`], { stdout: "pipe" });
+    await holder.stdout.getReader().read();
+    holder.kill("SIGKILL");
+    await holder.exited;
+    expect(existsSync(stale)).toBe(true);
+    expect((await asked(false, stale)).urls).toEqual(["?scope=bridge"]);
+    // a herdr that answers the connect must answer the whole health check too
+    const live = join(mkdtempSync(join(directory, "live-")), "herdr.sock");
+    const listener = Bun.listen({ unix: live, socket: { data() {} } });
+    try {
+      expect((await asked(false, live)).urls).toEqual(["?scope=bridge", ""]);
+    } finally {
+      listener.stop(true);
+    }
+  }, 60_000);
+
   it("holds the timer off after a user's own failed unshallow fetch too", async () => {
     // a user's Check skips the backoff, but its failure still starts one: the timer that comes
     // next does not fetch the history again (#1252)

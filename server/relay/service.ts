@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { encodeOffer } from "../../shared/relay-offer.ts";
 import type { RelayStatus } from "../../shared/protocol.ts";
@@ -133,9 +134,11 @@ export class RelayService {
   offer(): { url: string; expires_at: string } {
     if (!this.enabled || !this.identity || !this.services || this.blocked) throw new Error("Start the relay before pairing.");
     const pairing = this.services.devices.activePairing() ?? this.services.devices.startPairing();
+    // the phone lists the PC under the name Ovis shows for it (server/machines.ts), not its scope URL
+    const name = hostname().slice(0, 64);
     return {
       url: encodeOffer({ v: 1, server_id: this.identity.server_id, server_public_key: this.identity.public_key,
-        relay: this.relay, code: pairing.code }, this.app),
+        relay: this.relay, code: pairing.code, ...(name ? { name } : {}) }, this.app),
       expires_at: pairing.expires_at,
     };
   }

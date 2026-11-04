@@ -384,3 +384,36 @@ it("keeps manual Retry usable after a pending retry fails across reconnects", as
   await answer(2, info("/foreground/diagram.png"));
   expect(images()).toHaveLength(1);
 });
+
+it("holds a reopened image at the size it decoded at, and loads nothing before the new stat", async () => {
+  // Given an image a chat on this PC and pane resolved and decoded once, at 240 x 80.
+  const decodedImage = { complete: true, naturalWidth: 240, naturalHeight: 80 };
+  const mount = async (pane = "w1:p1") => {
+    const tree = createElement(SettingsProvider, { children: createElement(MachineContext.Provider, { value: "reopen-pc",
+      children: createElement(ChatMarkdownImages, { paneId: pane, cwd: "/project", connected: true, onOpen, children: createElement(Markdown, { children: "![Diagram](./diagram.png)" }) }),
+    }) });
+    await act(async () => { renderer = create(tree, { createNodeMock: (element) => element.type === "img" ? decodedImage : null }); });
+  };
+  const slot = () => renderer!.root.findAll((node) => node.type === "span" && String(node.props.className).startsWith("image-slot"))[0]!;
+  const reopen = async (pane?: string) => {
+    await act(async () => { renderer!.unmount(); });
+    await mount(pane);
+  };
+  await mount();
+  await answer(0, info("/project/diagram.png"));
+  expect(slot().props.className).toBe("image-slot");
+
+  // When the chat mounts it again, before the new stat answers.
+  await reopen();
+
+  // Then its slot is that image's box, not 16:9, and no bytes load until the stat confirms the file.
+  expect(slot().props.className).toBe("image-slot is-loading is-sized");
+  expect(slot().props.style).toMatchObject({ "--image-width": "240px", "--image-ratio": "240 / 80" });
+  expect(images()).toHaveLength(0);
+  expect(requests).toHaveLength(2);
+  expect(requests[1]!.url.pathname).toBe("/api/machines/reopen-pc/fs/stat");
+
+  // Another pane on the same PC knows nothing of it.
+  await reopen("w9:p9");
+  expect(slot().props.className).toBe("image-slot is-loading");
+});

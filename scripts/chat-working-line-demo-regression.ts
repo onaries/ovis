@@ -172,6 +172,8 @@ try {
       // head of a next turn shows under the answer in that time.
       await page.goto(url(panes.flaky));
       await flaky.locator("[data-chat-row] .work-block-title", { hasText: "Worked for" }).last().waitFor();
+      // Claude stamps a turn by its first entry; two turns read in one poll can share that stamp
+      const answeredAt = "2026-11-04T09:00:00.000Z";
       const asked: ConversationTurn = { role: "user", ts: null, parts: [{ kind: "text", text: "Count the shelves." }] };
       await addTurns(page, panes.flaky, [asked]);
       await status(page, panes.flaky, "working");
@@ -190,7 +192,7 @@ try {
         };
         requestAnimationFrame(drawn);
       }), [panes.flaky, "There are three shelves."]);
-      await addTurns(page, panes.flaky, [asked, { role: "assistant", ts: null, parts: [
+      await addTurns(page, panes.flaky, [asked, { role: "assistant", ts: answeredAt, parts: [
         { kind: "tool", name: "Bash", summary: "ls shelves", input: JSON.stringify({ command: "ls shelves" }), output: "a b c", call_id: "shelves", state: "ok" },
         { kind: "text", text: "There are three shelves.", phase: "final_answer" },
       ] }]);
@@ -207,7 +209,7 @@ try {
       // The agent works on by itself long enough for its head to show, and its next turn is read in
       // already finished, while herdr still says working. The wait runs again for that new turn: no
       // head stands under its answer either.
-      const answeredTurns: ConversationTurn[] = [asked, { role: "assistant", ts: null, parts: [
+      const answeredTurns: ConversationTurn[] = [asked, { role: "assistant", ts: answeredAt, parts: [
         { kind: "tool", name: "Bash", summary: "ls shelves", input: JSON.stringify({ command: "ls shelves" }), output: "a b c", call_id: "shelves", state: "ok" },
         { kind: "text", text: "There are three shelves.", phase: "final_answer" },
       ] }];
@@ -225,10 +227,11 @@ try {
         };
         requestAnimationFrame(drawn);
       }), [panes.flaky, "Shelf b holds the atlas."]);
-      await addTurns(page, panes.flaky, [...answeredTurns,
+      const atlasTurns: ConversationTurn[] = [...answeredTurns,
         { role: "user", ts: null, parts: [{ kind: "text", text: "Which shelf holds the atlas?" }] },
-        { role: "assistant", ts: null, parts: [{ kind: "text", text: "Shelf b holds the atlas.", phase: "final_answer" }] },
-      ]);
+        { role: "assistant", ts: answeredAt, parts: [{ kind: "text", text: "Shelf b holds the atlas.", phase: "final_answer" }] },
+      ];
+      await addTurns(page, panes.flaky, atlasTurns);
       await restedAgain;
       await flaky.locator(".chat-activity").waitFor({ state: "detached" });
       await painted(page);
@@ -236,8 +239,160 @@ try {
       assert.ok(next.length > 0, "the next answer is drawn");
       assert.deepEqual(next.filter((frame) => frame.footer.length > 0).map((frame) => frame.footer), [],
         "no Working head stands under a turn read in already finished, after the last one's wait ran out");
+      console.log("PASS a turn read in already finished, stamped like the last one, has no Working head under its answer");
+
+      // herdr's status can trail the answer by more than the head's wait (a slow PC, a busy herdr):
+      // the pane rests 1.5 s after the answer is drawn. Still no head of a next turn under it.
+      const dusted: ConversationTurn = { role: "user", ts: null, parts: [{ kind: "text", text: "Dust shelf c." }] };
+      await addTurns(page, panes.flaky, [...atlasTurns, dusted]);
+      await status(page, panes.flaky, "working");
+      await flaky.getByText("Dust shelf c.", { exact: true }).waitFor();
+      await painted(page);
+      await record(page, panes.flaky);
+      const restedLate = page.evaluate(([id, answer]) => new Promise<void>((done) => {
+        const drawn = (): void => {
+          if (!document.querySelector(`.pane-frame[data-layout-pane="${id}"]`)?.textContent?.includes(answer!)) { requestAnimationFrame(drawn); return; }
+          // fixed wait: a status lag longer than the head's 800 ms wait
+          setTimeout(() => {
+            (window as unknown as { __herdrDemoOrder: { status(pane: string, status: string): void } }).__herdrDemoOrder.status(id!, "idle");
+            done();
+          }, 1500);
+        };
+        requestAnimationFrame(drawn);
+      }), [panes.flaky, "Shelf c is dusted."]);
+      await addTurns(page, panes.flaky, [...atlasTurns, dusted,
+        { role: "assistant", ts: "2026-11-04T09:01:00.000Z", parts: [{ kind: "text", text: "Shelf c is dusted.", phase: "final_answer" }] },
+      ]);
+      await restedLate;
+      await flaky.locator(".chat-activity").waitFor({ state: "detached" });
+      await painted(page);
+      const late = (await stop(page)).filter((frame) => frame.lastRow.includes("Shelf c is dusted."));
+      assert.ok(late.length > 0, "the late-rested answer is drawn");
+      assert.deepEqual(late.filter((frame) => frame.footer.length > 0).map((frame) => frame.footer), [],
+        "no Working head stands under an answer while a status lag outlasts the wait");
+      console.log("PASS an answer drawn 1.5 s before the pane rests has no Working head under it");
+
+      // An approval answered: the turn's answer is drawn while herdr still says blocked, then working
+      // for longer than the head's wait, then the pane rests. Waiting on the user is no rest under the
+      // answer, so no head of a next turn shows under it.
+      const shelved: ConversationTurn = { role: "user", ts: null, parts: [{ kind: "text", text: "Shelve the atlas." }] };
+      const shelvedBefore = [...atlasTurns, dusted, { role: "assistant" as const, ts: "2026-11-04T09:01:00.000Z", parts: [{ kind: "text" as const, text: "Shelf c is dusted.", phase: "final_answer" as const }] }];
+      await addTurns(page, panes.flaky, [...shelvedBefore, shelved]);
+      await status(page, panes.flaky, "working");
+      await flaky.getByText("Shelve the atlas.", { exact: true }).waitFor();
+      await page.evaluate((id) => (window as unknown as { __herdrDemoOrder: { status(pane: string, status: string): void } }).__herdrDemoOrder.status(id, "blocked"), panes.flaky);
+      await painted(page);
+      await record(page, panes.flaky);
+      await addTurns(page, panes.flaky, [...shelvedBefore, shelved,
+        { role: "assistant", ts: "2026-11-04T09:02:00.000Z", parts: [{ kind: "text", text: "The atlas is shelved.", phase: "final_answer" }] },
+      ]);
+      await flaky.getByText("The atlas is shelved.", { exact: true }).waitFor();
+      await painted(page);
+      await status(page, panes.flaky, "working");
+      const restedAfterBlock = page.evaluate((id) => new Promise<void>((done) => {
+        // fixed wait: a working status after the approval, longer than the head's 800 ms wait
+        setTimeout(() => {
+          (window as unknown as { __herdrDemoOrder: { status(pane: string, status: string): void } }).__herdrDemoOrder.status(id, "idle");
+          done();
+        }, 1500);
+      }), panes.flaky);
+      await restedAfterBlock;
+      await flaky.locator(".chat-activity").waitFor({ state: "detached" });
+      await painted(page);
+      const approved = (await stop(page)).filter((frame) => frame.lastRow.includes("The atlas is shelved."));
+      assert.ok(approved.length > 0, "the answer after the approval is drawn");
+      assert.deepEqual(approved.filter((frame) => frame.footer.length > 0).map((frame) => frame.footer), [],
+        "no Working head stands under an answer drawn while the pane was blocked");
+      console.log("PASS an answer drawn while blocked has no Working head under it when the status catches up");
+
+      // herdr rests before a read holds the turn's answer (#2550, about 1 s live): the turn stays at
+      // work until the answer is drawn, never shown ended with no answer, also over a read between
+      // that brings only more of the turn's work
+      const books: ConversationTurn = { role: "user", ts: null, parts: [{ kind: "text", text: "How many books?" }] };
+      const bookTurns: ConversationTurn[] = [...shelvedBefore, shelved,
+        { role: "assistant", ts: "2026-11-04T09:02:00.000Z", parts: [{ kind: "text", text: "The atlas is shelved.", phase: "final_answer" }] },
+        books,
+      ];
+      await addTurns(page, panes.flaky, bookTurns);
+      await status(page, panes.flaky, "working");
+      await flaky.getByText("How many books?", { exact: true }).waitFor();
+      await flaky.locator(".chat-activity", { hasText: "Working" }).waitFor();
+      await painted(page);
+      await record(page, panes.flaky);
+      const counting: ConversationTurn = { role: "assistant", ts: null, parts: [
+        { kind: "tool", name: "Bash", summary: "ls books", input: JSON.stringify({ command: "ls books" }), output: "40", call_id: "books", state: "ok" },
+      ] };
+      await status(page, panes.flaky, "done");
+      await painted(page);
+      await addTurns(page, panes.flaky, [...bookTurns, counting]);
+      // the new turn's row, open or folded: its header counts the command
+      await page.waitForFunction((id) => [...document.querySelectorAll(`.pane-frame[data-layout-pane="${id}"] [data-chat-row]`)].at(-1)?.textContent?.includes("1 command") === true, panes.flaky);
+      await painted(page);
+      await addTurns(page, panes.flaky, [...bookTurns, { ...counting, parts: [...counting.parts, { kind: "text", text: "There are forty books.", phase: "final_answer" }] }]);
+      await flaky.getByText("There are forty books.", { exact: true }).waitFor();
+      await painted(page);
+      const lagged = await stop(page);
+      assert.deepEqual(lagged.filter((frame) => !frame.lastRow.includes("There are forty books.") && frame.footer.length === 0 && !frame.lastBlocks.some((block) => block.startsWith("live/"))), [],
+        "the turn stays at work until its answer is drawn");
+      console.log("PASS a turn whose answer is read after herdr rests stays at work until the answer is drawn");
+
+      // a rest with no answer to come (a turn stopped from the terminal): the turn ends within the wait
+      await addTurns(page, panes.flaky, [...bookTurns.slice(0, -1), { role: "user", ts: null, parts: [{ kind: "text", text: "Stop here." }] }]);
+      await status(page, panes.flaky, "working");
+      await flaky.getByText("Stop here.", { exact: true }).waitFor();
+      await flaky.locator(".chat-activity", { hasText: "Working" }).waitFor();
+      await status(page, panes.flaky, "done");
+      await flaky.locator(".chat-activity").waitFor({ state: "detached", timeout: 5_000 });
+      console.log("PASS a turn that gets no answer after herdr rests ends within the wait");
+
+      // a /clear in an empty chat reports working for a moment, with no turn: the greeting stays
+      const blank = await page.evaluate(async () => {
+        const response = await fetch("/api/workspace/create", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: "/home/demo/cleared", agent: { kind: "claude" } }) });
+        return ((await response.json()) as { pane_id: string }).pane_id;
+      });
+      const row = page.locator(`.pane-select[title^="${blank} \u2014"]`).first();
+      await row.waitFor({ state: "attached" });
+      await row.evaluate((node: HTMLElement) => node.click());
+      await page.locator(`.pane-select[title^="${blank} \u2014"][aria-current="true"]`).first().waitFor({ state: "attached" });
+      await page.getByTitle("Chat transcript (\u2318\u21e7J)", { exact: true }).click();
+      const greeting = page.locator(".pane-frame.is-current .composer-greeting");
+      // the demo's new agent works for a moment first: it is greeted once it rests
+      await greeting.waitFor({ timeout: 8_000 });
+      await page.locator('.pane-frame.is-current .composer-status[data-status="idle"]').waitFor({ state: "attached", timeout: 8_000 });
+      await painted(page);
+      await record(page, blank);
+      const greeted = page.evaluate(() => {
+        const seen: boolean[] = [];
+        const tick = (): void => {
+          seen.push(document.querySelector(".pane-frame.is-current .composer-greeting") !== null);
+          if ((window as unknown as { greetingFrames?: boolean[] }).greetingFrames === seen) requestAnimationFrame(tick);
+        };
+        (window as unknown as { greetingFrames?: boolean[] }).greetingFrames = seen;
+        tick();
+      });
+      await greeted;
+      await page.evaluate((id) => new Promise<void>((settled) => {
+        const order = (window as unknown as { __herdrDemoOrder: { status(pane: string, status: string): void } }).__herdrDemoOrder;
+        order.status(id, "working");
+        const shown = (): void => {
+          if (document.querySelector('.pane-frame.is-current .composer-status[data-status="working"]') === null) { requestAnimationFrame(shown); return; }
+          // fixed wait: how long a /clear's working status lasted live (241\u2013549 ms)
+          setTimeout(() => { order.status(id, "idle"); settled(); }, 400);
+        };
+        shown();
+      }), blank);
+      await painted(page);
+      const cleared = await stop(page);
+      const greetingFrames = await page.evaluate(() => {
+        const w = window as unknown as { greetingFrames?: boolean[] };
+        const seen = w.greetingFrames ?? [];
+        delete w.greetingFrames;
+        return seen;
+      });
+      assert.ok(greetingFrames.length > 0 && greetingFrames.every(Boolean), "the greeting stays through a /clear's working status");
+      assert.deepEqual(cleared.filter((frame) => frame.footer.length > 0).map((frame) => frame.footer), [], "no Working head stands under the greeting");
       assert.deepEqual(errors, []);
-      console.log("PASS a turn read in already finished waits its own lag: no Working head under its answer");
+      console.log("PASS a short working status over an empty chat keeps its greeting");
       await context.close();
     } finally { await browser.close(); }
   } finally { server.stop(); }

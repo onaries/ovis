@@ -1,8 +1,24 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { MAX_PREFERENCES_BYTES, nextTabLabels, normalizeThemeChange, sharedPreferencesBody, type PreferencesChange, type SharedPreferences } from "../shared/preferences.ts";
 import { badRequest, isJsonObject, jsonResponse } from "./http.ts";
 import { damagedCopy, readStateDocument, writeStateDocument } from "./state-document.ts";
 
+/** The state folder's id (SharedPreferences.state_id), in a file of its own beside preferences.json. */
+export const STATE_ID_FILE = "preferences-id.json";
+const STATE_ID = /^[0-9a-f]{32}$/;
+
+/** The id `dir` holds: undefined when it has none yet, null when its file is damaged. Throws when it cannot be read. */
+export function readStateId(dir: string): string | null | undefined {
+  const read = readStateDocument(join(dir, STATE_ID_FILE));
+  if (read.kind === "missing") return undefined;
+  const id = read.kind === "json" && isJsonObject(read.value) ? read.value["state_id"] : undefined;
+  return typeof id === "string" && STATE_ID.test(id) ? id : null;
+}
+
+export function writeStateId(dir: string, id: string): void {
+  writeStateDocument(join(dir, STATE_ID_FILE), `${JSON.stringify({ state_id: id }, null, 2)}\n`, false);
+}
 const byteLength = (text: string): number => new TextEncoder().encode(text).length;
 
 /** The document a change would make is over MAX_PREFERENCES_BYTES; nothing was kept. */
@@ -22,13 +38,19 @@ export class PreferencesTooLarge extends Error {
  * preferences.json whole on its next save (a rollback, a downgrade), and would erase a list kept
  * there. preferences.json keeps the shape every release reads and writes. The tab labels
  * (`tab_labels`) are kept apart in tab-labels.json for the same reason; they are only ever added
- * (mergeTabLabels), and are absent from the document while none is kept.
+ * (mergeTabLabels), and are absent from the document while none is kept. The state folder's id
+ * (`state_id`) is made at the first save and kept in preferences-id.json, apart for the same reason:
+ * a browser tells a folder that started over by it. A damaged one is left as it is and no id is sent
+ * (browsers then go by the revision): a new one would tell them the folder started over when it did not.
  */
 export class PreferenceStore {
   private current: SharedPreferences = { revision: 0, settings: {}, muted_panes: [] };
   private readonly path: string;
   private readonly mutesPath: string;
   private readonly labelsPath: string;
+  private readonly stateDir: string;
+  /** this state folder's id, once it is on disk (preferences-id.json); null while that file is damaged or unreadable */
+  private stateId: string | null | undefined;
   private readonly listeners = new Set<(preferences: SharedPreferences) => void>();
   /** Until this store has replaced the file, a write reads it again first: it may have been damaged or repaired since. */
   private unsettled = true;
@@ -41,6 +63,14 @@ export class PreferenceStore {
     this.path = join(stateDir, "preferences.json");
     this.mutesPath = join(stateDir, "muted-panes.json");
     this.labelsPath = join(stateDir, "tab-labels.json");
+    this.stateDir = stateDir;
+    try {
+      this.stateId = readStateId(stateDir);
+      if (this.stateId === null) console.error(`${join(stateDir, STATE_ID_FILE)} is not a state folder id; none is sent until it is repaired or removed and the server restarts`);
+    } catch (error) {
+      this.stateId = null;
+      console.error(`Cannot read ${join(stateDir, STATE_ID_FILE)} (${(error as NodeJS.ErrnoException).code ?? "error"}); no state folder id is sent`);
+    }
     try {
       const held = this.readDisk();
       if (held) this.current = held;
@@ -48,6 +78,7 @@ export class PreferenceStore {
       // a missing file is a server that has shared nothing yet; an unreadable one is not, and is never written over
       console.error(`Cannot read ${this.path} (${(error as NodeJS.ErrnoException).code ?? "error"}); shared preferences start empty and are not saved until it can be read`);
     }
+    if (typeof this.stateId === "string") this.current = { ...this.current, state_id: this.stateId };
     try {
       this.current = { ...this.current, muted_panes: this.readMutes() ?? [] };
     } catch (error) {
@@ -99,7 +130,7 @@ export class PreferenceStore {
     const revision = isJsonObject(parsed) && Number.isSafeInteger(parsed["revision"]) ? parsed["revision"] as number : 0;
     // the mutes are muted-panes.json's (readMutes), the labels tab-labels.json's: what this document holds of them is left out
     const labels = this.current.tab_labels;
-    return { revision: Math.max(0, revision), settings: body.settings, ...(body.pins === undefined ? {} : { pins: body.pins }), muted_panes: this.current.muted_panes, ...(labels === undefined ? {} : { tab_labels: labels }) };
+    return { revision: Math.max(0, revision), ...(typeof this.stateId === "string" ? { state_id: this.stateId } : {}), settings: body.settings, ...(body.pins === undefined ? {} : { pins: body.pins }), muted_panes: this.current.muted_panes, ...(labels === undefined ? {} : { tab_labels: labels }) };
   }
 
   get(): SharedPreferences { return this.current; }
@@ -136,6 +167,18 @@ export class PreferenceStore {
       const { tab_labels: _held, ...without } = base;
       base = without;
     }
+    if (this.stateId === undefined) {
+      // the folder's first save names it, before anything else is written: a save whose id cannot be
+      // kept fails, so no document goes out that a browser could take for a folder's without one. An id
+      // another server on this folder wrote since this one started is taken, never written over
+      this.stateId = readStateId(this.stateDir);
+      if (this.stateId === undefined) {
+        const id = randomUUID().replaceAll("-", "");
+        writeStateId(this.stateDir, id);
+        this.stateId = id;
+      }
+    }
+    const stateId = this.stateId ?? undefined;
     change = normalizeThemeChange(base.settings, change);
     const pins = change.pins ?? base.pins;
     // a change that names no list leaves the mutes; an empty list is the last one unmuted
@@ -145,7 +188,7 @@ export class PreferenceStore {
     const labels = labelsUnreadable ? undefined : nextTabLabels(base.tab_labels, change, settings);
     // a change that leaves the labels as they are writes no tab-labels.json
     let kept = labels !== undefined && Object.keys(labels).length > 0 ? labels : undefined;
-    const document = (): SharedPreferences => ({ revision: base.revision + 1, settings, ...(pins === undefined ? {} : { pins }), muted_panes: muted, ...(kept === undefined ? {} : { tab_labels: kept }) });
+    const document = (): SharedPreferences => ({ revision: base.revision + 1, ...(stateId === undefined ? {} : { state_id: stateId }), settings, ...(pins === undefined ? {} : { pins }), muted_panes: muted, ...(kept === undefined ? {} : { tab_labels: kept }) });
     // the labels never make a save too large: the settings, pins and mutes are measured without them, and
     // labels that would not fit beside them are left out of this save (the ones held stay on disk)
     const labelsHeld = base.tab_labels;
@@ -166,7 +209,7 @@ export class PreferenceStore {
     // two renames, preferences.json keeps the refused change and a restart reads it, although memory
     // and the client were told it failed. Nothing is lost; at worst a refused change comes back.
     const keepDamagedMutes = change.muted_panes !== undefined && this.mutesUnsettled && this.readMutes() === null;
-    const { muted_panes: _stored, tab_labels: _labels, ...shared } = document();
+    const { muted_panes: _stored, tab_labels: _labels, state_id: _id, ...shared } = document();
     writeStateDocument(this.path, `${JSON.stringify(shared, null, 2)}\n`, keepDamaged);
     // the labels before the mutes, and never in their way: mutes saved before a failed save of the labels
     // would otherwise silence panes though the browser was told they were not. A label save that fails
@@ -201,7 +244,7 @@ export class PreferenceStore {
           const { tab_labels: _was, ...rest } = this.current;
           this.current = { ...rest, ...(kept === undefined ? {} : { tab_labels: kept }) };
         }
-        const { muted_panes: _held, tab_labels: _heldLabels, ...before } = base;
+        const { muted_panes: _held, tab_labels: _heldLabels, state_id: _heldId, ...before } = base;
         try { writeStateDocument(this.path, `${JSON.stringify(before, null, 2)}\n`, false); }
         catch (restore) { console.error(`Cannot put ${this.path} back after a failed save of ${this.mutesPath}: ${restore instanceof Error ? restore.message : String(restore)}`); }
         throw error;

@@ -12,7 +12,8 @@ import { claudeImageType } from "./claude-transcript.ts";
 import { toolVerb } from "../src/lib/toolVerbs.ts";
 import { continuesHistory } from "../src/lib/chatRows.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
-import { parseAgyTranscript } from "./agy.ts";
+import { agyCatalog, agyToolOutput, parseAgyTranscript } from "./agy.ts";
+import * as filePool from "./file-pool.ts";
 import { agyStoreFromLocks } from "./agy-store.ts";
 import * as agyStore from "./agy-store.ts";
 import * as herdr from "./herdr/client.ts";
@@ -22,7 +23,7 @@ import * as devinSession from "./devin-session.ts";
 import * as omo from "./omo.ts";
 import { claudeProjectDir } from "./claude-store.ts";
 import { launchedAgents } from "./launched-agents.ts";
-import { claudePaneSession, ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
+import { agyTranscriptPage, claudePaneSession, ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
 
 it("labels only Claude's explicit end_turn text as final-answer evidence", () => {
   const entry = (stop_reason: string | null) => JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason, content: [{ type: "text", text: "Answer" }] } });
@@ -216,6 +217,14 @@ describe("Devin pane identity", () => {
   it("never guesses a session from its directory or a stale shell agent_session", () => {
     expect(() => devinSessionForPane(pane, [pane], ["/bin/devin"])).toThrow(ConversationUnavailable);
     expect(() => devinSessionForPane(shell, [shell], ["/bin/devin", "--resume", "stale"])).toThrow(ConversationUnavailable);
+  });
+  it("names a fresh or continued session with no lock and no reported id as unverified, not a missing id", () => {
+    for (const argv of [["/bin/devin"], ["/bin/devin", "--continue"]]) {
+      expect(() => devinSessionForPane(pane, [pane, peer], argv)).toThrow(expect.objectContaining({
+        message: "no_session_id", diagnostic: "devin_current_session_unverified",
+      }));
+    }
+    expect(() => devinSessionForPane(pane, [pane], ["/bin/devin", "--resume"])).toThrow(expect.objectContaining({ diagnostic: undefined }));
   });
   it("accepts only an exact reported or resumed identity and does not consider shell peers", () => {
     expect(devinSessionForPane(reported, [reported, shell], ["/bin/devin"])).toBe("one");
@@ -2527,9 +2536,86 @@ describe("a cut tool output and the whole of it", () => {
       const omp = join(dir, "omp.jsonl");
       writeFileSync(omp, JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "call_1", content: [{ type: "text", text: long }] } }));
       expect(transcriptToolOutput("omp-transcript", omp, "call_1")).toBe(long);
+      expect(transcriptToolOutput("omo-transcript", omp, "call_1")).toBe(long);
+      appendFileSync(omp, `\n${JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "call_2", content: [{ type: "text", text: "x".repeat(17 * 1024 * 1024) }] } })}\n`);
+      expect(transcriptToolOutput("omo-transcript", omp, "call_2")).toBeNull();
       const codex = join(dir, "codex.jsonl");
       writeFileSync(codex, JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "call_x", output: long } }));
       expect(transcriptToolOutput("codex-transcript", codex, "call_x")).toBe(long);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("returns the exact OMO output budget across decoded chunks and content blocks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-omo-output-"));
+    const path = join(dir, "session.jsonl");
+    const record = (id: string, content: { type: string; text: string }[]) =>
+      JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: id, content } }) + "\n";
+    try {
+      writeFileSync(path, record("single", [{ type: "text", text: "x".repeat(3_000_000) }]));
+      expect(transcriptToolOutput("omo-transcript", path, "single")).toBe(`${"x".repeat(2_000_000)}\n… trimmed`);
+      const first = "한\\\n".repeat(300_000);
+      const second = "z".repeat(1_500_000);
+      const whole = first + second;
+      writeFileSync(path, record("large", [{ type: "text", text: first }, { type: "text", text: second }]));
+      expect(transcriptToolOutput("omo-transcript", path, "large")).toBe(`${whole.slice(0, 2_000_000)}\n… trimmed`);
+      writeFileSync(path, record("exact", [{ type: "text", text: "x".repeat(2_000_000) }]));
+      expect(transcriptToolOutput("omo-transcript", path, "exact")).toBe("x".repeat(2_000_000));
+      writeFileSync(path, record("over", [{ type: "text", text: "x".repeat(2_000_001) }]));
+      expect(transcriptToolOutput("omo-transcript", path, "over")).toBe(`${"x".repeat(2_000_000)}\n… trimmed`);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("ignores records outside the OMO tail and resets output on context clear", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-omo-tail-"));
+    const path = join(dir, "session.jsonl");
+    const record = (id: string, text: string) => JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: id, content: [{ type: "text", text }] } }) + "\n";
+    try {
+      writeFileSync(path, record("old", "old output") + record("huge", "x".repeat(17 * 1024 * 1024)) + record("recent", "recent output"));
+      expect(transcriptToolOutput("omo-transcript", path, "old")).toBeNull();
+      expect(transcriptToolOutput("omo-transcript", path, "huge")).toBeNull();
+      expect(transcriptToolOutput("omo-transcript", path, "recent")).toBe("recent output");
+      appendFileSync(path, JSON.stringify({ type: "custom", customType: "context_clear" }) + "\n");
+      expect(transcriptToolOutput("omo-transcript", path, "recent")).toBeNull();
+      appendFileSync(path, record("recent", "after clear"));
+      expect(transcriptToolOutput("omo-transcript", path, "recent")).toBe("after clear");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("reads a whole OMO record that starts exactly where the tail window does", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-omo-edge-"));
+    const path = join(dir, "session.jsonl");
+    const record = JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "edge", content: [{ type: "text", text: "at the edge" }] } }) + "\n";
+    try {
+      // the window starts at the first 64 KiB boundary at least 16 MiB before the end; a newline ends the byte before it
+      writeFileSync(path, "x".repeat(64 * 1024 - 1) + "\n" + record);
+      fs.truncateSync(path, TRANSCRIPT_WINDOW_BYTES + 64 * 1024 - 1);
+      appendFileSync(path, "\n");
+      expect(transcriptToolOutput("omo-transcript", path, "edge")).toBe("at the edge");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("bounds total OMO output reads to the transcript tail", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-omo-io-"));
+    const path = join(dir, "session.jsonl");
+    const record = (id: string, text: string) => JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: id, content: [{ type: "text", text }] } }) + "\n";
+    try {
+      writeFileSync(path, record("old", "outside"));
+      fs.truncateSync(path, 128 * 1024 * 1024);
+      appendFileSync(path, "\n" + record("recent", "inside"));
+      const original = fs.readSync;
+      let bytes = 0;
+      const reads = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+        const got = original(...args); bytes += got; return got;
+      }) as typeof fs.readSync);
+      try {
+        expect(transcriptToolOutput("omo-transcript", path, "recent")).toBe("inside");
+        expect(bytes).toBeGreaterThan(0);
+        expect(bytes).toBeLessThanOrEqual(2 * TRANSCRIPT_WINDOW_BYTES + 1024);
+        bytes = 0;
+        expect(transcriptToolOutput("omo-transcript", path, "old")).toBeNull();
+        expect(bytes).toBeGreaterThan(0);
+        expect(bytes).toBeLessThanOrEqual(2 * TRANSCRIPT_WINDOW_BYTES + 1024);
+      } finally { reads.mockRestore(); }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
@@ -2622,7 +2708,7 @@ describe("Agy native ledger through shared paging", () => {
     db.query("INSERT OR REPLACE INTO steps VALUES (?)").run(index);
     appendFileSync(path, row(index, type, content, extra));
   };
-  const page = () => transcriptPage("agy-transcript", path);
+  const page = () => agyTranscriptPage(path);
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "herdr-agy-unit-"));
     const session = "00000000-0000-4000-8000-000000000001";
@@ -2637,176 +2723,176 @@ describe("Agy native ledger through shared paging", () => {
     forgetTranscriptState();
   });
   afterEach(() => { db.close(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); });
-  it("tracks native turn boundaries without treating each DONE tool step as completion", () => {
-    expect(page().activity).toBe("idle");
+  it("tracks native turn boundaries without treating each DONE tool step as completion", async () => {
+    expect((await page()).activity).toBe("idle");
     // Agy 1.3.3's captured native sequence: user, context, planner call, result,
     // context, another call/result, then the tool-free final planner answer.
     add(0, "USER_INPUT", "fictional request");
     add(1, "EPHEMERAL_MESSAGE", "hidden context");
-    expect(page().activity).toBe("working");
+    expect((await page()).activity).toBe("working");
     add(2, "PLANNER_RESPONSE", "", { thinking: "saved reasoning", tool_calls: [{ name: "run_command", args: { CommandLine: "echo fiction" } }] });
     add(3, "GENERIC", "fictional output");
     add(4, "EPHEMERAL_MESSAGE", "hidden context");
-    expect(page().activity).toBe("working");
-    expect(JSON.stringify(page().turns)).not.toContain("saved reasoning");
+    expect((await page()).activity).toBe("working");
+    expect(JSON.stringify((await page()).turns)).not.toContain("saved reasoning");
     add(5, "PLANNER_RESPONSE", "More work", { tool_calls: [{ name: "view_file", args: { AbsolutePath: "/fiction.txt" } }] });
     add(6, "GENERIC", "another output");
-    expect(page().activity).toBe("working");
+    expect((await page()).activity).toBe("working");
     add(7, "PLANNER_RESPONSE", "Finished", { tool_calls: [] });
-    expect(page().activity).toBe("idle");
+    expect((await page()).activity).toBe("idle");
     add(8, "GENERIC", "late result");
     add(9, "EPHEMERAL_MESSAGE", "late context");
-    expect(page().activity).toBe("idle");
+    expect((await page()).activity).toBe("idle");
     add(10, "USER_INPUT", "next turn");
-    expect(page().activity).toBe("working");
+    expect((await page()).activity).toBe("working");
     // Rewind the new prompt; completion of the retained turn still clears activity.
     db.exec("DELETE FROM steps WHERE idx >= 10");
-    expect(page().activity).toBe("idle");
+    expect((await page()).activity).toBe("idle");
     forgetTranscriptState();
-    expect(page().activity).toBe("idle");
+    expect((await page()).activity).toBe("idle");
   });
-  it("does not complete activity from a partial, unadmitted or unfinished planner answer", () => {
+  it("does not complete activity from a partial, unadmitted or unfinished planner answer", async () => {
     add(0, "USER_INPUT", "one");
     add(1, "PLANNER_RESPONSE", "", { thinking: "saved reasoning" });
-    expect(page().activity).toBe("working");
+    expect((await page()).activity).toBe("working");
     add(2, "PLANNER_RESPONSE", "unfinished", { status: "RUNNING" });
-    expect(page().activity).toBe("working");
+    expect((await page()).activity).toBe("working");
     db.exec("INSERT INTO steps VALUES (3)");
     const final = row(3, "PLANNER_RESPONSE", "complete");
     appendFileSync(path, final.slice(0, -2));
-    expect(page().activity).toBe("working");
+    expect((await page()).activity).toBe("working");
     appendFileSync(path, final.slice(-2));
-    expect(page().activity).toBe("idle");
+    expect((await page()).activity).toBe("idle");
     appendFileSync(path, row(4, "USER_INPUT", "export ahead of DB"));
-    expect(page().activity).toBe("idle");
+    expect((await page()).activity).toBe("idle");
     db.exec("INSERT INTO steps VALUES (4)");
-    expect(page().activity).toBe("working");
+    expect((await page()).activity).toBe("working");
     forgetTranscriptState();
-    expect(page().activity).toBe("working");
+    expect((await page()).activity).toBe("working");
   });
-  it("renders native messages, multiple planner calls and independent results without guessed pairing", () => {
+  it("renders native messages, multiple planner calls and independent results without guessed pairing", async () => {
     add(0, "USER_INPUT", "<USER_REQUEST>Keep <USER_REQUEST>literal</USER_REQUEST> tags</USER_REQUEST>\n<ADDITIONAL_METADATA>hidden</ADDITIONAL_METADATA>");
     add(1, "EPHEMERAL_MESSAGE", "hidden context");
     add(2, "PLANNER_RESPONSE", "Checking", { tool_calls: [{ name: "run_command", args: { CommandLine: "echo fiction" } }, { name: "view_file", args: { AbsolutePath: "/fiction.txt" } }] });
     add(3, "GENERIC", "independent output");
     add(4, "CHECKPOINT", "not a result");
     add(5, "USER_INPUT", "next");
-    const turns = page().turns;
+    const turns = (await page()).turns;
     expect(turns[0]!.parts).toEqual([{ kind: "text", text: "Keep <USER_REQUEST>literal</USER_REQUEST> tags" }]);
     expect(turns[1]!.parts.map((p) => p.kind === "tool" ? [p.name, p.summary, p.output] : p.kind === "text" ? p.text : p.kind)).toEqual([
       "Checking", ["run_command", "echo fiction", ""], ["view_file", "/fiction.txt", ""], ["Tool output", "Step 3", "independent output"],
     ]);
     expect(turns[2]!.role).toBe("user");
   });
-  it("keeps paging and refs stable on append, then rejects them on a DB-only idle rewind", () => {
+  it("keeps paging and refs stable on append, then rejects them on a DB-only idle rewind", async () => {
     // One prompt beyond the 50-prompt page boundary, committed as one fixture batch.
     db.transaction(() => { for (let i = 0; i < 51; i++) { add(i * 2, "USER_INPUT", `prompt ${i}`); add(i * 2 + 1, "GENERIC", "x".repeat(5000)); } })();
-    const first = page();
+    const first = (await page());
     expect(first.cursor).not.toBeNull();
-    const older = transcriptPage("agy-transcript", path, { before: first.cursor! });
+    const older = await agyTranscriptPage(path, { before: first.cursor! });
     const tool = first.turns.flatMap((t) => t.parts).find((p) => p.kind === "tool")!;
     if (tool.kind !== "tool") throw new Error("missing result");
-    expect(transcriptToolOutput("agy-transcript", path, tool.output_ref!)).toBe("x".repeat(5000));
+    expect(await agyToolOutput(path, tool.output_ref!)).toBe("x".repeat(5000));
     add(102, "USER_INPUT", "append");
-    expect(page().history_id).toBe(first.history_id);
-    expect(transcriptPage("agy-transcript", path, { before: first.cursor! })).toEqual(older);
+    expect((await page()).history_id).toBe(first.history_id);
+    expect(await agyTranscriptPage(path, { before: first.cursor! })).toEqual(older);
     db.exec("DELETE FROM steps WHERE idx >= 4");
-    const rewound = page();
+    const rewound = (await page());
     expect(rewound.turns).toHaveLength(4);
     expect(rewound.history_id).not.toBe(first.history_id);
-    expect(() => transcriptPage("agy-transcript", path, { before: first.cursor! })).toThrow(HistoryChanged);
-    expect(transcriptToolOutput("agy-transcript", path, tool.output_ref!)).toBeNull();
+    expect(await agyTranscriptPage(path, { before: first.cursor! }).catch((error: unknown) => error)).toBeInstanceOf(HistoryChanged);
+    expect(await agyToolOutput(path, tool.output_ref!)).toBeNull();
     forgetTranscriptState();
-    expect(page().turns).toEqual(rewound.turns.map((turn) => ({ ...turn, parts: turn.parts.map((part) => part.kind === "tool" ? { ...part, output_ref: expect.any(String) } : part) })));
+    expect((await page()).turns).toEqual(rewound.turns.map((turn) => ({ ...turn, parts: turn.parts.map((part) => part.kind === "tool" ? { ...part, output_ref: expect.any(String) } : part) })));
   });
-  it("replays repeated/backward indices and allows database-only rows", () => {
+  it("replays repeated/backward indices and allows database-only rows", async () => {
     add(0, "USER_INPUT", "one"); add(1, "PLANNER_RESPONSE", "old");
     db.query("INSERT INTO steps VALUES (?)").run(2);
     add(3, "USER_INPUT", "two"); add(4, "PLANNER_RESPONSE", "discard");
-    const before = page();
+    const before = (await page());
     add(3, "USER_INPUT", "replacement");
-    expect(page().turns.map((t) => t.parts[0])).toEqual([{ kind: "text", text: "one" }, { kind: "text", text: "old" }, { kind: "text", text: "replacement" }]);
-    const revision = page().history_id;
+    expect((await page()).turns.map((t) => t.parts[0])).toEqual([{ kind: "text", text: "one" }, { kind: "text", text: "old" }, { kind: "text", text: "replacement" }]);
+    const revision = (await page()).history_id;
     expect(revision).not.toBe(before.history_id);
     add(4, "PLANNER_RESPONSE", "new");
-    expect(page().history_id).toBe(revision);
+    expect((await page()).history_id).toBe(revision);
     add(3, "USER_INPUT", "equal repeat");
-    expect(page().history_id).not.toBe(revision);
-    const warm = page().turns;
+    expect((await page()).history_id).not.toBe(revision);
+    const warm = (await page()).turns;
     forgetTranscriptState();
-    expect(page().turns).toEqual(warm);
+    expect((await page()).turns).toEqual(warm);
   });
-  it("ignores an incomplete tail and does not settle a running row", () => {
+  it("ignores an incomplete tail and does not settle a running row", async () => {
     add(0, "USER_INPUT", "one");
     db.query("INSERT INTO steps VALUES (1)").run();
     const text = row(1, "PLANNER_RESPONSE", "complete");
     appendFileSync(path, text.slice(0, -3));
-    expect(page().turns).toHaveLength(1);
+    expect((await page()).turns).toHaveLength(1);
     appendFileSync(path, text.slice(-3));
-    expect(page().turns).toHaveLength(2);
+    expect((await page()).turns).toHaveLength(2);
     add(2, "PLANNER_RESPONSE", "unfinished", { status: "RUNNING" });
-    expect(JSON.stringify(page().turns)).not.toContain("unfinished");
+    expect(JSON.stringify((await page()).turns)).not.toContain("unfinished");
     add(2, "PLANNER_RESPONSE", "finished");
-    expect(JSON.stringify(page().turns)).toContain("finished");
+    expect(JSON.stringify((await page()).turns)).toContain("finished");
   });
-  it("admits a ledger tail when the DB catches up without changing older cursors", () => {
+  it("admits a ledger tail when the DB catches up without changing older cursors", async () => {
     add(0, "USER_INPUT", "first");
-    const initial = page();
+    const initial = (await page());
     appendFileSync(path, row(1, "PLANNER_RESPONSE", "lagged"));
-    expect(page().turns).toHaveLength(1);
+    expect((await page()).turns).toHaveLength(1);
     db.exec("INSERT INTO steps VALUES (1)");
-    const caughtUp = page();
+    const caughtUp = (await page());
     expect(caughtUp.history_id).toBe(initial.history_id);
     expect(caughtUp.turns).toHaveLength(2);
     add(2, "PLANNER_RESPONSE", "partial", { status: "RUNNING" });
-    const running = page();
+    const running = (await page());
     add(2, "PLANNER_RESPONSE", "complete");
-    expect(page().history_id).toBe(running.history_id);
-    expect(transcriptPage("agy-transcript", path, { from: `${initial.history_id}:0` }).turns).toHaveLength(2);
+    expect((await page()).history_id).toBe(running.history_id);
+    expect((await agyTranscriptPage(path, { from: `${initial.history_id}:0` })).turns).toHaveLength(2);
   });
-  it("never resurrects an observed rewind when replacement DB indices precede their ledger rows", () => {
+  it("never resurrects an observed rewind when replacement DB indices precede their ledger rows", async () => {
     add(0, "USER_INPUT", "kept"); add(1, "GENERIC", "removed".repeat(1000));
-    const before = page();
+    const before = (await page());
     db.exec("DELETE FROM steps WHERE idx=1");
-    const cut = page();
+    const cut = (await page());
     db.exec("INSERT INTO steps VALUES (1)");
-    expect(page().turns).toEqual(cut.turns);
-    expect(page().history_id).toBe(cut.history_id);
+    expect((await page()).turns).toEqual(cut.turns);
+    expect((await page()).history_id).toBe(cut.history_id);
     add(1, "GENERIC", "replacement");
-    expect(JSON.stringify(page().turns)).toContain("replacement");
-    expect(JSON.stringify(page().turns)).not.toContain("removed");
+    expect(JSON.stringify((await page()).turns)).toContain("replacement");
+    expect(JSON.stringify((await page()).turns)).not.toContain("removed");
     const part = before.turns[1]!.parts[0]!;
     if (part.kind !== "tool") throw new Error("missing tool");
-    expect(transcriptToolOutput("agy-transcript", path, part.output_ref!)).toBeNull();
+    expect(await agyToolOutput(path, part.output_ref!)).toBeNull();
   });
-  it("does not hide later turns behind an unfinished or unknown-status historical row", () => {
+  it("does not hide later turns behind an unfinished or unknown-status historical row", async () => {
     add(0, "USER_INPUT", "first");
     add(1, "GENERIC", "unfinished", { status: "UNKNOWN" });
-    expect(page().turns).toHaveLength(1);
+    expect((await page()).turns).toHaveLength(1);
     add(2, "USER_INPUT", "later"); add(3, "PLANNER_RESPONSE", "answer");
-    expect(page().turns.map(t => t.parts[0])).toEqual([
+    expect((await page()).turns.map(t => t.parts[0])).toEqual([
       { kind: "text", text: "first" }, { kind: "text", text: "later" }, { kind: "text", text: "answer" },
     ]);
   });
-  it("uses the same assistant boundaries in full and paged replay around a skipped user row", () => {
+  it("uses the same assistant boundaries in full and paged replay around a skipped user row", async () => {
     add(0, "USER_INPUT", "first"); add(1, "PLANNER_RESPONSE", "before");
     add(2, "USER_INPUT", "hidden", { status: "UNKNOWN" });
     add(3, "PLANNER_RESPONSE", "after");
     const full = parseAgyTranscript(row(0, "USER_INPUT", "first") + row(1, "PLANNER_RESPONSE", "before")
       + row(2, "USER_INPUT", "hidden", { status: "UNKNOWN" }) + row(3, "PLANNER_RESPONSE", "after"));
-    expect(page().turns).toEqual(full);
+    expect((await page()).turns).toEqual(full);
     expect(full).toHaveLength(2);
   });
-  it("continues a bounded cold scan on the next poll", () => {
+  it("continues a bounded cold scan on the next poll", async () => {
     add(0, "USER_INPUT", "start");
     for (let i=1; i<=34; i++) add(i, "EPHEMERAL_MESSAGE", "x".repeat(1024 * 1024));
     add(35, "USER_INPUT", "end");
-    expect(page).toThrow(ConversationUnavailable);
-    expect(page().turns.at(-1)!.parts[0]).toEqual({ kind: "text", text: "end" });
+    expect(await page().catch((error: unknown) => error)).toBeInstanceOf(ConversationUnavailable);
+    expect((await page()).turns.at(-1)!.parts[0]).toEqual({ kind: "text", text: "end" });
   });
-  it("preserves standalone literal user wrapper text", () => {
+  it("preserves standalone literal user wrapper text", async () => {
     add(0, "USER_INPUT", "<USER_REQUEST>literal</USER_REQUEST>");
-    expect(page().turns[0]!.parts[0]).toEqual({ kind: "text", text: "<USER_REQUEST>literal</USER_REQUEST>" });
+    expect((await page()).turns[0]!.parts[0]).toEqual({ kind: "text", text: "<USER_REQUEST>literal</USER_REQUEST>" });
   });
   it.skipIf(process.platform === "win32")("canonicalizes held locks and never chooses among sessions or unheld files", () => {
     const presence = join(root, "presence"); mkdirSync(presence);
@@ -2821,11 +2907,46 @@ describe("Agy native ledger through shared paging", () => {
     const link = join(root, "linked-root"); symlinkSync(root, link);
     expect(agyStoreFromLocks([join(link, "presence", one.split("/").at(-1)!)])?.path).toBe(path);
   });
-  it("distinguishes unreadable database from verified empty history", () => {
+  /** Runs `during` while the read's `call`th catalog read (1: before the page, 2: after it) is under way. */
+  const duringCatalog = (call: number, during: () => void) => {
+    let calls = 0;
+    return spyOn(filePool, "fileTask").mockImplementation(async (task) => {
+      if (task.op !== "agy-catalog") throw new Error(`unexpected ${task.op}`);
+      calls += 1;
+      if (calls === call) during();
+      return [...agyCatalog(task.path)] as never;
+    });
+  };
+  it("keeps output refs when the ledger's state is forgotten while its catalog is read", async () => {
+    add(0, "USER_INPUT", "one"); add(1, "GENERIC", "x".repeat(5000));
+    const spy = duringCatalog(1, () => forgetTranscriptState());
+    try {
+      const tool = (await page()).turns.flatMap((turn) => turn.parts).find((part) => part.kind === "tool");
+      if (tool?.kind !== "tool") throw new Error("missing tool");
+      expect(await agyToolOutput(path, tool.output_ref!)).toBe("x".repeat(5000));
+    } finally { spy.mockRestore(); }
+  });
+  it("passes busy file threads through to both Agy routes, so they answer 503 and not a missing output", async () => {
+    add(0, "USER_INPUT", "one"); add(1, "GENERIC", "x".repeat(5000));
+    const tool = (await page()).turns.flatMap((turn) => turn.parts).find((part) => part.kind === "tool");
+    if (tool?.kind !== "tool") throw new Error("missing tool");
+    const spy = spyOn(filePool, "fileTask").mockRejectedValue(new filePool.FileBusyError("every file thread is busy"));
+    try {
+      expect(await page().catch((error: unknown) => error)).toBeInstanceOf(filePool.FileBusyError);
+      expect(await agyToolOutput(path, tool.output_ref!).catch((error: unknown) => error)).toBeInstanceOf(filePool.FileBusyError);
+    } finally { spy.mockRestore(); }
+  });
+  it("rejects a page whose ledger is cut while its catalog is read again", async () => {
     add(0, "USER_INPUT", "one");
-    page();
+    const spy = duringCatalog(2, () => writeFileSync(path, ""));
+    try { expect(await page().catch((error: unknown) => error)).toBeInstanceOf(ConversationUnavailable); }
+    finally { spy.mockRestore(); }
+  });
+  it("distinguishes unreadable database from verified empty history", async () => {
+    add(0, "USER_INPUT", "one");
+    (await page());
     db.exec("DROP TABLE steps");
-    expect(page).toThrow(ConversationUnavailable);
+    expect(await page().catch((error: unknown) => error)).toBeInstanceOf(ConversationUnavailable);
   });
   it("falls back when the transcript path cannot be inspected", async () => {
     const loop = join(root, "loop"); symlinkSync(loop, loop);

@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, expect, it, jest, mock, spyOn } from "bun:test";
-import { ReplayBuffer } from "../output-window.ts";
-import { connectionData } from "./connections.ts";
+import { afterEach, beforeEach, expect, it, jest, mock, setSystemTime, spyOn } from "bun:test";
+import { OUTPUT_HARD_BYTES, OUTPUT_HIGH_BYTES, OUTPUT_JOIN_BYTES_PER_SECOND, OUTPUT_STALL_MS, ReplayBuffer } from "../output-window.ts";
+import { connectionData, send } from "./connections.ts";
 import type { PaneAttachment } from "./terminal-process.ts";
 import * as terminalProcess from "./terminal-process.ts";
 import * as pty from "../pty/session.ts";
@@ -19,7 +19,7 @@ const { createTerminalRegistry } = await import("./terminals.ts");
 
 afterEach(() => mock.restore());
 
-async function join({ readOnly = false, ready, recovering, times = 1, receiptResumeId, verifyResume }: { readOnly?: boolean; ready: boolean; recovering?: boolean; times?: number; receiptResumeId?: string; verifyResume?: (id: string | undefined) => void }): Promise<ServerMessage[]> {
+async function join({ readOnly = false, ready, recovering, times = 1, receiptResumeId, verifyResume, replayPrefix, retained = "retained screen" }: { readOnly?: boolean; ready: boolean; recovering?: boolean; times?: number; receiptResumeId?: string; verifyResume?: (id: string | undefined) => void; replayPrefix?: string; retained?: string }): Promise<ServerMessage[]> {
   const frames: ServerMessage[] = [];
   const client = {
     data: connectionData({ deviceId: undefined, readOnly }), readyState: WebSocket.OPEN,
@@ -27,10 +27,10 @@ async function join({ readOnly = false, ready, recovering, times = 1, receiptRes
     close() {},
   };
   const replay = new ReplayBuffer(1024);
-  replay.append("retained screen");
+  replay.append(retained);
   attachment = {
     kind: "pty", ready, ...(recovering === undefined ? {} : { recovering }), cols: 80, rows: 24, clients: new Set(), grids: new Map(), stalled: new Map(), replay,
-    process: { exited: Promise.resolve(), pause() {}, resume() {}, resize() {}, winch() {}, kill() {}, write() {} } as unknown as Extract<PaneAttachment, { kind: "pty" }>["process"],
+    process: { exited: Promise.resolve(), pause() {}, resume() {}, resize() {}, winch() {}, kill() {}, write() {}, ...(replayPrefix === undefined ? {} : { replayPrefix }) } as unknown as Extract<PaneAttachment, { kind: "pty" }>["process"],
   };
   const registry = createTerminalRegistry({
     options: {}, clients: new Set([client]), stopped: () => false, terminalAttach: async () => true,
@@ -43,6 +43,54 @@ async function join({ readOnly = false, ready, recovering, times = 1, receiptRes
   registry.conversations.stop();
   return frames;
 }
+
+it("pauses a pane whose output waits behind a large frame queued after its attach, and starts its stall clock once that frame has crossed (#2573)", async () => {
+  let buffered = 0;
+  const ended: string[] = [];
+  const flow: string[] = [];
+  const client = {
+    data: connectionData({ deviceId: undefined, readOnly: false }), readyState: WebSocket.OPEN,
+    getBufferedAmount: () => buffered, send: (text: string) => { buffered += Buffer.byteLength(text); return -1; },
+    close() {},
+  };
+  // a pane that has written nothing yet: no replay
+  attachment = {
+    kind: "pty", ready: true, cols: 80, rows: 24, clients: new Set(), grids: new Map(), stalled: new Map(), replay: new ReplayBuffer(1024),
+    process: { exited: Promise.resolve(), pause() { flow.push("pause"); }, resume() { flow.push("resume"); }, resize() {}, winch() {}, kill() {}, write() {} } as unknown as Extract<PaneAttachment, { kind: "pty" }>["process"],
+  };
+  const registry = createTerminalRegistry({
+    options: {}, clients: new Set([client]), stopped: () => false, terminalAttach: async () => true,
+    holdFor: 0, heldRetry: 0, retryFor: 0, relookupFor: 0,
+    holdPending() {}, holdPendingPane() {}, attached() {}, inputReady() {}, end: (_client, reason) => { ended.push(reason); },
+  });
+  const start = Date.now();
+  try {
+    // a reconnect: the browser attaches on open, and the session's snapshot, past the transport budget, queues after that
+    await registry.terminalFrames.attach(client, { type: "attach", pane_id: "p", cols: 80, rows: 24, keep_size: true, flow_control: "ack" });
+    expect(send(client, { type: "error", code: "x", message: "x".repeat(OUTPUT_HARD_BYTES) })).toBe(-1);
+    const snapshot = buffered;
+    // the pane's output queues behind it in small frames, up to the high-water mark
+    client.data.output.get("p")!.write(OUTPUT_HIGH_BYTES, 10);
+    buffered += OUTPUT_HIGH_BYTES;
+    for (let at = 0; at < 5000; at += 500) { setSystemTime(start + at); registry.reconcileOutput("p"); }
+    // still paused, so the backlog behind the snapshot grows no further, and not closed
+    expect(flow.at(-1)).toBe("pause");
+    expect(ended).toEqual([]);
+    // the snapshot crossed: the output behind it gets the usual deadline from now
+    buffered -= snapshot;
+    const crossed = start + 5000;
+    const deadline = OUTPUT_STALL_MS + Math.ceil(10 * 1000 / OUTPUT_JOIN_BYTES_PER_SECOND);
+    setSystemTime(crossed); registry.reconcileOutput("p");
+    setSystemTime(crossed + deadline - 1); registry.reconcileOutput("p");
+    expect(ended).toEqual([]);
+    setSystemTime(crossed + deadline); registry.reconcileOutput("p");
+    expect(ended).toEqual(["stalled"]);
+  } finally {
+    setSystemTime();
+    registry.closeAttachment("p");
+    registry.conversations.stop();
+  }
+});
 
 it("retains only a bounded opaque resume ID on an attach claim", async () => {
   const valid = crypto.randomUUID();
@@ -68,6 +116,28 @@ for (const readOnly of [false, true]) for (const ready of [false, true]) {
     if (ready) expect(frames.findIndex((frame) => frame.type === "input-ready"))
       .toBeGreaterThan(frames.findIndex((frame) => frame.type === "pty-data"));
     expect(frames.some((frame) => frame.type === "output-recovering")).toBe(false);
+  });
+}
+
+// #2664 review: a herdr-core joiner's bounded tail may have lost the attach's clear, and the history it kept doubled;
+// a tail on the alternate screen keeps no history, and leaving that screen blanked what the tail restores;
+// one that leaves it again reprinted the shell's lines after it into the history the joiner kept
+for (const [stream, cleared] of [
+  [`${coreAttach.CLEAR_HISTORY}whole stream`, "none"],
+  [`${coreAttach.CLEAR_HISTORY}${"h".repeat(2048)}main tail`, "ahead"],
+  [`\x1b[?1049h${"a".repeat(2048)}alternate tail`, "none"],
+  [`\x1b[?1049h${"a".repeat(2048)}\x1b[?1049lshell after`, "where it leaves"],
+] as const) {
+  it(`clears a herdr-core joiner's kept history once in its cut tail (${cleared}): ${stream.slice(-14)}`, async () => {
+    const frames = await join({ ready: true, replayPrefix: coreAttach.CLEAR_JOINER_HISTORY, retained: stream });
+    const tail = new ReplayBuffer(1024);
+    tail.append(stream);
+    expect(frames.filter((frame) => frame.type === "pty-data")).toEqual([
+      { type: "pty-data", pane_id: "p", data: cleared === "ahead" ? coreAttach.CLEAR_JOINER_HISTORY + tail.text()
+        : cleared === "where it leaves" ? tail.text().replace("\x1b[?1049l", coreAttach.CLEAR_JOINER_HISTORY) : tail.text(), replay: true },
+    ]);
+    // #2664 review: rows a cut tail of in-place updates never draws again stay on the joiner's screen
+    expect(coreAttach.CLEAR_JOINER_HISTORY).not.toMatch(/\x1b\[[02]?J|\x1b\[H/);
   });
 }
 
@@ -539,4 +609,56 @@ it("marks a newcomer recovering after a ready stream ends and clears it when the
     registry.conversations.stop();
     mock.module("../pty/session.ts", () => ({ PtySession: RealPtySession }));
   }
+});
+
+it("makes the new ID's first attach wait for the old ID's process, also while it is created and across a second move (#1503)", async () => {
+  let retiring: Map<string, Promise<void>> | undefined;
+  const created = Promise.withResolvers<PaneAttachment>();
+  const exited = Promise.withResolvers<void>();
+  const killed: string[] = [];
+  mock.restore();
+  spyOn(terminalProcess, "createSpawnAttachment").mockImplementation(({ attachments, retiringAttachments }) => {
+    retiring = retiringAttachments;
+    return { spawnAttachment: async (pane: string) => { const made = await created.promise; attachments.set(pane, made); return made; } };
+  });
+  const frames: ServerMessage[] = [];
+  const client = {
+    data: connectionData({ deviceId: undefined, readOnly: false }), readyState: WebSocket.OPEN,
+    getBufferedAmount: () => 0, send: (text: string) => { frames.push(JSON.parse(text)); return text.length; },
+    close() {},
+  };
+  const registry = createTerminalRegistry({
+    options: {}, clients: new Set([client]), stopped: () => false, terminalAttach: async () => true,
+    holdFor: 0, heldRetry: 0, retryFor: 0, relookupFor: 0,
+    holdPending() {}, holdPendingPane() {}, attached() {}, inputReady() {}, end() {},
+  });
+  try {
+    const attaching = registry.terminalFrames.attach(client, { type: "attach", pane_id: "A", cols: 80, rows: 24 });
+    // moved while its terminal is still looked up: the new ID waits from now
+    registry.paneMoved("A", "B");
+    const waitB = retiring?.get("B");
+    expect(waitB).toBeDefined();
+    created.resolve({
+      kind: "pty", ready: true, cols: 80, rows: 24, clients: new Set(), grids: new Map(), stalled: new Map(), replay: new ReplayBuffer(1024),
+      process: { exited: exited.promise, pause() {}, resume() {}, resize() {}, winch() {}, kill() { killed.push("A"); }, write() {} } as unknown as Extract<PaneAttachment, { kind: "pty" }>["process"],
+    });
+    await attaching;
+    await Promise.resolve();
+    // a second move before the first process exited carries the wait on
+    registry.paneMoved("B", "C");
+    const waitC = retiring?.get("C");
+    expect(waitC).toBeDefined();
+    let settled = false;
+    void Promise.all([waitB, waitC]).then(() => { settled = true; });
+    await created.promise.then(() => undefined);
+    for (let turn = 0; turn < 5; turn++) await Promise.resolve();
+    expect(killed).toEqual(["A"]);
+    expect(frames).toContainEqual({ type: "pty-exit", pane_id: "A", code: null });
+    expect(client.data.attached.has("A")).toBe(false);
+    expect(settled).toBe(false);
+    exited.resolve();
+    await Promise.all([waitB, waitC]);
+    expect(retiring?.has("B")).toBe(false);
+    expect(retiring?.has("C")).toBe(false);
+  } finally { registry.conversations.stop(); }
 });

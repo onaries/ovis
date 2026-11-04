@@ -27,6 +27,8 @@ export interface PiDeliveryAnchor {
 export interface PiDeliveryCandidate {
   id: string;
   text: string;
+  /** The pane's catalog listed this `/name` as a prompt template when it was sent. */
+  template?: boolean;
   anchor: PiDeliveryAnchor;
 }
 
@@ -128,9 +130,28 @@ function parseEntry(bytes: Buffer, start: number, end: number): BranchEntry {
     role: typeof message?.role === "string" ? message.role : "", text, ...(expansion ? { skill: expansion } : {}), at, start, end };
 }
 
-/** What Pi's submit handler reads of `text` sent from Chat: tabs as its editor pastes them, trimmed. */
+/**
+ * What Pi's submit handler reads of `text` sent from Chat: line ends and tabs as its editor pastes
+ * them (CRLF and a lone CR as LF, a tab as four spaces, other control characters dropped), trimmed.
+ */
 export function piRecordText(text: string): string {
-  return text.replace(/\t/g, "    ").trim();
+  return text.replace(/\r\n?/g, "\n").replace(/\t/g, "    ").replace(/[\u0000-\u0009\u000b-\u001f]/g, "").trim();
+}
+
+/**
+ * A `/name` send other than a skill is a prompt template Pi records only expanded, an extension's
+ * command Pi may record as nothing, or a message Pi records as typed: which one depends on what that
+ * Pi loaded, which Ovis cannot read. Pi records its sends in order, so the first user record after
+ * such a send is its own (its expansion, or its text), or that of a later send.
+ */
+const piMaybeCommand = (text: string): boolean => text.startsWith("/") && !text.startsWith("/skill:");
+
+/** Whether `entry` is the user record Pi writes for a send of `text`: as typed, or a skill's expansion. */
+function piRecordOf(text: string, entry: BranchEntry): boolean {
+  if (entry.role !== "user") return false;
+  if (entry.text === text) return true;
+  const skill = piSkillSend(text);
+  return skill !== undefined && entry.skill?.name === skill.name && entry.skill.request === skill.request;
 }
 
 /**
@@ -304,11 +325,32 @@ export function matchPiDeliveries(path: string, candidates: readonly PiDeliveryC
       }
       if (parent !== anchor.leaf) { changed.push(candidate.id); continue; }
       const key = (entry: BranchEntry): string => JSON.stringify([path, file, session, entry.id]);
-      const skill = piSkillSend(candidate.text);
-      const same = chain.reverse().filter((entry) => entry.start > afterMatched && entry.role === "user"
-        && (entry.text === candidate.text || (skill !== undefined && entry.skill?.name === skill.name && entry.skill.request === skill.request))
+      const same = chain.reverse().filter((entry) => entry.start > afterMatched && piRecordOf(candidate.text, entry)
         && !consumedEntries.has(key(entry)));
-      const match = same.find((entry) => entry.at === null || entry.at >= anchor.at);
+      const fresh = (entry: BranchEntry): boolean => entry.at === null || entry.at >= anchor.at;
+      const first = piMaybeCommand(candidate.text)
+        ? chain.find((entry) => entry.start > afterMatched && entry.role === "user" && fresh(entry) && !consumedEntries.has(key(entry)))
+        : undefined;
+      const later = candidates.slice(index + 1);
+      const claims = first ? later.filter((next) => piRecordOf(next.text, first)).length : 0;
+      // a later Ovis send's record after it: Pi moved on past this send
+      const passed = first && chain.find((entry) => entry.start >= first.start && fresh(entry) && !consumedEntries.has(key(entry))
+        && later.some((next) => piRecordOf(next.text, entry)));
+      const own = same.find(fresh);
+      // Pi ran it where it moved on without recording it as typed, or where the record after a listed
+      // template is not its text (its expansion). Any other record is skipped, as for every receipt: it
+      // may be a message typed in the terminal, and this send's own record may still follow.
+      if (first && first.text !== candidate.text && !(own && (!passed || own.start < passed.start)) && (passed || candidate.template)) {
+        consumed.push(candidate.id);
+        // The record is its expansion, unless the later receipts it could be theirs claim every copy of
+        // it, as when an extension's command recorded nothing.
+        const copies = chain.filter((entry) => entry.start >= first.start && entry.role === "user" && entry.text === first.text && !consumedEntries.has(key(entry))).length;
+        if (copies > claims) {
+          matchedEntries.push(key(first)); afterMatched = first.start;
+        }
+        continue;
+      }
+      const match = same.find(fresh);
       const earlier = match ? undefined : same[0];
       if (match) consumed.push(candidate.id);
       else if (earlier) ambiguous.push(candidate.id);

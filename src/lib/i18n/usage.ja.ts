@@ -6,6 +6,11 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const USAGE_JA: Record<string, string> = {
+  "Remove {name}?": "{name}を削除しますか？",
+  "Remove this account from Ovis? Its CLI sign-in and credentials stay on this PC, and Restore under Removed from Ovis brings it back.": "このアカウントをOvisから削除しますか？CLIのログインと認証情報はこのPCに残り、「Ovisから削除済み」の「復元」で戻せます。",
+  "Removed from Ovis": "Ovisから削除済み",
+  "Restore": "復元",
+  "Restore {name}": "{name} を復元",
   "Could not load sign-in options": "ログイン方法を読み込めませんでした",
   "On the server PC": "サーバーPCでログイン",
   "Install {cli} on the server PC first.": "先にサーバーPCに{cli}をインストールしてください。",

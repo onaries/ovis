@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:te
 import type { PendingMessage, ServerMessage } from "../shared/protocol.ts";
 import * as agentLaunchModule from "./agent-launch.ts";
 import * as herdr from "./herdr/client.ts";
-import { handleWorkspaceRequest } from "./workspace-routes.ts";
+import { handleWorkspaceRequest, MAX_ENV_BYTES, MAX_ENV_VARS } from "./workspace-routes.ts";
 
 /** each herdr create, launch, queued message and broadcast a create makes, in the order made */
 const calls: string[] = [];
@@ -25,6 +25,50 @@ async function post(path: string, body: unknown): Promise<Response> {
   calls.push("answer");
   return response!;
 }
+
+describe("a create passes the request's env to the new pane (#2745)", () => {
+  /** what each herdr create was asked for */
+  const asked = () => [herdr.tabCreate, herdr.workspaceCreate].flatMap((create) => (create as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((call) => call[0]));
+
+  it.each([
+    ["/api/tab/create", { workspace_id: "w1" }],
+    ["/api/workspace/create", {}],
+  ] as const)("%s hands env to herdr, and leaves it out when null or absent", async (path, base) => {
+    expect((await post(path, { ...base, env: { API_URL: "http://localhost:3000", _Key2: "" } })).status).toBe(200);
+    expect((await post(path, { ...base, env: null })).status).toBe(200);
+    expect((await post(path, base)).status).toBe(200);
+    expect(asked().map((options) => (options as { env?: unknown }).env)).toEqual([{ API_URL: "http://localhost:3000", _Key2: "" }, undefined, undefined]);
+  });
+
+  const many = Object.fromEntries(Array.from({ length: MAX_ENV_VARS + 1 }, (_, at) => [`V${at}`, "x"]));
+  it.each([
+    ["an array", ["A=1"]],
+    ["a string", "A=1"],
+    ["a name that starts with a digit", { "1A": "x" }],
+    ["a name with a dash", { "A-B": "x" }],
+    ["a name with =", { "A=B": "x" }],
+    ["an empty name", { "": "x" }],
+    ["a value that is no string", { A: 1 }],
+    ["a value with a line break", { A: "one\ntwo" }],
+    ["a value with an escape", { A: "\u001b[31m" }],
+    ["a value with a NUL", { A: "a\u0000b" }],
+    ["too many names", many],
+    ["too many bytes", { BIG: "x".repeat(MAX_ENV_BYTES) }],
+  ])("refuses %s with 400 invalid_env before herdr makes anything", async (_, env) => {
+    for (const [path, base] of [["/api/tab/create", { workspace_id: "w1" }], ["/api/workspace/create", {}]] as const) {
+      const response = await post(path, { ...base, env });
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe("invalid_env");
+    }
+    expect(asked()).toEqual([]);
+  });
+
+  it("takes exactly the limits", async () => {
+    const most = Object.fromEntries(Array.from({ length: MAX_ENV_VARS }, (_, at) => [`V${at}`, "x"]));
+    expect((await post("/api/workspace/create", { env: most })).status).toBe(200);
+    expect((await post("/api/workspace/create", { env: { BIG: "x".repeat(MAX_ENV_BYTES - 3) } })).status).toBe(200);
+  });
+});
 
 describe("a create answers after the roster is told", () => {
   // the page draws a new pane only once the roster lists it: without this push, the roster is read

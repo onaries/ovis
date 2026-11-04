@@ -94,13 +94,32 @@ function characters(text: string): string[] {
 const NOT_A_NAME = /^(?:\/|~\/|\.\.?\/|[A-Za-z]:[\\/]|```|~~~)/;
 
 /**
+ * An attached file's mention, `@` and its absolute path (lib/compose.ts imageMention), which names
+ * nothing a tab could be told by (#2637). An upload's path may hold spaces (a folder under
+ * ~/Library), so one in the shape an upload takes (server/paste.ts: `<name>-<YYYYMMDD>-<HHMMSS>-
+ * <8 hex>.<ext>`, a name with no space) is taken whole up to the next path or mention, as
+ * lib/chatImages.ts reads it; any other path ends at a space. Only one in an upload folder `.ovis` may
+ * run past a word ending in an image's extension, so the words after another mention never read as an
+ * upload's path (#2682). A folder's " @" or " ~" followed by a space is part of it.
+ */
+const ATTACHMENT = /(^|\s)@(?:\/|~[\\/]|[A-Za-z]:[\\/])(?:(?:(?!\s(?:@\S|[\\/]|~[\\/]|[A-Za-z]:[\\/])).){0,1024}?[\\/]\.ovis[\\/][\p{L}\p{N}._-]*-\d{8}-\d{6}-[0-9a-f]{8}(?:\.[a-z0-9]{1,10})?(?=\s|$)|(?:(?!\s(?:@\S|[\\/]|~[\\/]|[A-Za-z]:[\\/])|\.(?:png|jpe?g|gif|webp)\s).){0,1024}?[\\/][\p{L}\p{N}._-]*-\d{8}-\d{6}-[0-9a-f]{8}(?:\.[a-z0-9]{1,10})?(?=\s|$)|\S*)/giu;
+
+/**
+ * A label an Ovis before #2637 learned with an attachment's mention in it (a label learned now never
+ * holds one): it is never shown, and a new one takes its place.
+ */
+export function attachmentTabLabel(label: string): boolean {
+  return /(?:^|\s)@(?:\/|~[\\/]|[A-Za-z]:[\\/])/.test(label);
+}
+
+/**
  * What the tab shows of a message: its first line that says something (not a slash command, a path
- * or a code fence), its spaces collapsed, a few words of it cut at a word's end when one is near
+ * or a code fence) once attached files' mentions are left out, its spaces collapsed, a few words of it cut at a word's end when one is near
  * the limit, else at the limit (a language written without spaces), with an ellipsis when anything
  * was cut; null for a message with nothing to name a tab by.
  */
 export function shortTabLabel(text: string): string | null {
-  const line = text.split(/\r\n|[\n\r\u2028\u2029]/).map((part) => part.replace(/\s+/g, " ").trim()).find((part) => part !== "" && !NOT_A_NAME.test(part));
+  const line = text.split(/\r\n|[\n\r\u2028\u2029]/).map((part) => part.replace(ATTACHMENT, "$1").replace(/\s+/g, " ").trim()).find((part) => part !== "" && !NOT_A_NAME.test(part));
   if (line === undefined) return null;
   const head: string[] = [];
   let columns = 0;
@@ -160,6 +179,7 @@ export function settleTabLabels(machines: readonly Pick<Machine, "id" | "state" 
   const keep = (map: Readonly<Record<string, string>>): Record<string, string> => {
     const kept: Record<string, string> = {};
     for (const [key, label] of Object.entries(map)) {
+      if (attachmentTabLabel(label)) continue;
       if (liveKeys.has(key)) { seen.add(key); kept[key] = label; continue; }
       if (seen.has(key) && authoritative.some((machine) => onPc(key, machine.id))) { seen.delete(key); gone.add(key); }
       if (!gone.has(key)) kept[key] = label;

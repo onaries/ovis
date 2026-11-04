@@ -64,6 +64,8 @@ export interface UsageReport {
    * Absent when there are none.
    */
   readonly missing_commands?: readonly MissingCommand[];
+  /** Accounts this PC still lists that were removed from Ovis (POST /api/usage/accounts restores one). Absent when there are none. */
+  readonly removed?: readonly ProviderUsage[];
 }
 
 export interface MissingCommand {
