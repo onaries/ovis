@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneRead, paneSendKeys } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const deadline = Date.now() + 10_000;
@@ -127,7 +128,7 @@ process.stdin.on("data", (data) => {
         await probe("start middle end", 16);
         if (process.env.UI_EVIDENCE_DIR) {
           mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
-          await page.locator(".xterm-rows", { hasText: "start middle end" }).waitFor();
+          await page.locator(shownRows(), { hasText: "start middle end" }).waitFor();
           await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "macos-command-arrows.png") });
         }
         // Normal arrows, Option word movement and Ctrl+arrows as xterm sends them work in DECCKM mode.

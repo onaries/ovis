@@ -9,6 +9,7 @@
  *
  *   GET  /v1/state   -> PiAskBridgeState: the forms pi-ask reports open, and the session file
  *   POST /v1/submit  PiAskSubmitRequest -> PiAskSubmitReply: pi-ask's own submit-result
+ *   GET  /v1/commands -> PiBridgeCommands: the commands pi's extensions registered (#1448)
  */
 
 export const PI_ASK_BRIDGE_DIRECTORY = "herdr-web-ui-ask";
@@ -84,6 +85,24 @@ export function piAskOpenCalls(open: readonly string[], entry: unknown): string[
     .filter((part) => part?.["type"] === "toolCall" && part["name"] === "ask_user" && typeof part["id"] === "string")
     .map((part) => part["id"] as string);
   return calls.length ? [...open.filter((call) => !calls.includes(call)), ...calls] : [...open];
+}
+
+/** One extension command as `pi.getCommands()` lists it (pi 1.3.0 core/slash-commands.ts). */
+export interface PiBridgeCommand {
+  /** pi's invocation name, without the slash: `name:2` when two extensions register `name` */
+  name: string;
+  description?: string;
+  /** `sourceInfo.scope`: user, project, temporary (-e) or system */
+  scope?: string;
+  /** `sourceInfo.origin`: package (an installed pi package) or top-level */
+  origin?: string;
+}
+
+export interface PiBridgeCommands {
+  version: typeof PI_ASK_BRIDGE_VERSION;
+  pid: number;
+  /** Null when pi could not say: no `getCommands` in this pi, or its extension runtime is not bound. */
+  commands: PiBridgeCommand[] | null;
 }
 
 export interface PiAskRemoteAnswer {

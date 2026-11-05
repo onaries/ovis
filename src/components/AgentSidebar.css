@@ -1,20 +1,10 @@
-/* Agents takes the height of its rows, at most half the sidebar, docked above the footer; the
-   workspace list has the rest. Parted from it by space, not a rule. */
+/* Agents takes the height of its rows, under the PCs, with no cap of its own: it shares the sidebar's
+   height with the PC list (Sidebar.css). Parted from it by space, not a rule. */
 .agents-sidebar {
   display: flex;
-  flex: 0 1 auto;
   flex-direction: column;
   min-height: 0;
-  max-height: 50%;
   padding: var(--space-2) var(--side-gutter) 0;
-}
-
-.agents-sidebar.is-collapsed,
-.agents-sidebar.is-empty { flex: 0 0 auto; }
-
-/* A visible Agents list fills the space released by folded PC groups, up to its existing cap. */
-.sidebar-shell:not(:has(.machine-list .machine-workspaces)):has(.agents-sidebar:not(.is-collapsed):not(.is-empty)) .agents-sidebar {
-  flex: 1 1 auto;
 }
 
 /* positioned: a row's visually hidden label is absolute, and must not size the page instead */
@@ -29,18 +19,7 @@
 
 .agents-sidebar.is-empty .agent-list-contents { flex: 0 0 auto; }
 
-/* a list that is cut fades out; at the end of its scroll the fade lies over its own spare space */
-.agent-list-contents::after {
-  content: "";
-  position: sticky;
-  bottom: 0;
-  display: block;
-  height: var(--space-4);
-  background: linear-gradient(transparent, var(--bg-panel));
-  pointer-events: none;
-}
-
-.agents-sidebar.is-empty .agent-list-contents::after { display: none; }
+/* a list that is cut fades at the edge that cuts it (SidebarSections.css) */
 
 .agent-section-toggle {
   flex: 0 0 auto;
@@ -48,23 +27,16 @@
   cursor: pointer;
 }
 
-/* the fold's caret hangs in the leading cell and shows when it is of use */
+/* the fold's caret hangs in the leading cell, always in view, so the head reads as a fold at rest, as the
+   PCs head's does (SidebarSections.css) */
 .agent-section-caret {
   flex: none;
   width: var(--space-4);
   height: var(--space-4);
   margin-inline: calc((var(--side-box) - var(--space-4)) / 2);
-  opacity: 0;
 }
 
-.agent-section-toggle:focus-visible .agent-section-caret,
-.agents-sidebar.is-collapsed .agent-section-caret { opacity: 1; }
-
-@media (hover: hover) {
-  .agent-section-toggle:hover .agent-section-caret { opacity: 1; }
-}
-
-/* a folded list still says how many agents it holds */
+/* the list says how many agents it holds, open or folded, as the PCs head counts its PCs */
 .agent-section-count {
   width: var(--side-box);
   margin-left: auto;
@@ -77,6 +49,151 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* Settings → Group agents by state: a quiet heading over each group, the leading cell left empty
+   so the words line up with the rows' titles, and the group's count in the trailing cell */
+.agent-group-label {
+  display: flex;
+  align-items: center;
+  margin: var(--space-2) 0 0;
+  padding-left: var(--side-box);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  line-height: var(--lh-tight);
+  text-transform: uppercase;
+}
+
+.agent-group-label:first-child { margin-top: 0; }
+
+.agent-group-label[data-group="blocked"] { color: var(--status-blocked); }
+
+.agent-group-count {
+  width: var(--side-box);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Agents a launcher tagged role=background (workers, subagents) stand after the rest, under a
+   heading like a group's that folds them and says how many there are; its caret takes the leading cell */
+.agent-background-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: var(--side-row);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  line-height: var(--lh-tight);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.agent-background-label:first-child .agent-background-toggle { margin-top: 0; }
+.agent-background-toggle .agent-section-count { font-size: inherit; }
+
+/* Settings → Named agent groups: each group the user named under a heading that folds it, as the
+   background agents' does, with a dot for each state that asks for a look and its count */
+.agent-named-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-height: var(--side-row);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  line-height: var(--lh-tight);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.agent-named-group-label:first-child .agent-named-group-toggle { margin-top: 0; }
+.agent-named-group-toggle:disabled { cursor: default; }
+.agent-named-group-toggle .agent-section-caret { opacity: 1; }
+.agent-named-group-toggle .agent-section-count { font-size: inherit; }
+
+.agent-named-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-named-group-dot {
+  flex: none;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: 50%;
+}
+
+.agent-named-group-dot[data-state="blocked"] { background: var(--status-blocked); }
+.agent-named-group-dot[data-state="working"] { background: var(--status-working); }
+
+@media (hover: hover) {
+  .agent-named-group-toggle:hover:not(:disabled) { color: var(--text); }
+}
+
+/* the folded part's rows stay in the list (a row that changes part moves), only out of sight */
+.agent-list .agent-item[hidden],
+.agent-list .agent-helpers[hidden] { display: none; }
+
+/* Settings → Fold helpers under their agent: the line under an agent that folds its helpers hangs from
+   it as a helper does (its elbow below), a helper's height, its caret where a helper's mark stands, its
+   count in the trailing cell, and a dot for each state among the helpers that asks for a look */
+.agent-helpers { position: relative; }
+
+.agent-helpers-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-height: var(--side-row);
+  padding: 0 0 0 var(--space-6);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-helpers-toggle:focus-visible { outline-offset: calc(var(--ring-offset) * -1); }
+.agent-helpers-toggle .agent-section-caret { margin-inline-end: 0; }
+
+.agent-helpers-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (hover: hover) {
+  .agent-helpers-toggle:hover { background: var(--side-hover); color: var(--text); }
+}
+
+@media (hover: hover) {
+  .agent-background-toggle:hover { color: var(--text); }
 }
 
 /* Pinned agents stand first in a card (Sidebar.css); the Agents head stays the list's only head. */
@@ -249,7 +366,8 @@
 .agent-item[data-depth="1"] .agent-row { padding-inline-start: var(--space-6); }
 .agent-item[data-depth="2"] .agent-row { padding-inline-start: calc(2 * var(--space-6)); }
 
-.agent-item[data-depth]::after {
+.agent-item[data-depth]::after,
+.agent-helpers::after {
   position: absolute;
   top: 0;
   inset-inline-start: calc(var(--side-box) / 2);
@@ -266,7 +384,8 @@
 
 /* a helper with a sibling further down (AgentSidebar.tsx, data-more): its line runs on through the
    row to the next one's elbow, so the siblings hang from one line with no break between them */
-.agent-item[data-more]::after {
+.agent-item[data-more]::after,
+.agent-helpers[data-more]::after {
   height: 100%;
   border: 0;
   /* the elbow's own corner, named as it is set: a rounded corner would clip the line's foot */
@@ -356,8 +475,6 @@
 }
 
 @media (pointer: coarse) {
-  .agent-section-caret { opacity: 1; }
-
   /* Row menus stay visible on touch. */
   .agent-actions {
     width: auto;

@@ -117,7 +117,8 @@ Apple counts data as collected when it leaves the device "in a way that allows y
 third-party partners to access it". What the app shows and sends goes only to a computer the
 user runs, so it is not collected in Apple's sense. That holds through the Ovis relay too, on
 the terms of its trust model (`docs/relay.md`, Trust model): a PC paired that way is reached
-through the developer's `relay.ovis.sh`, end-to-end encrypted between the phone and the PC, so
+through the developer's `relay.ovis.sh` (or its regional endpoint `relay-ap.ovis.sh`), end-to-end
+encrypted between the phone and the PC, so
 the relay cannot read the content, and it keeps no logs and stores nothing. The encryption ends
 in the app the phone runs for that PC, which is code the developer serves from `app.ovis.sh`
 (Cloudflare Pages): it holds the phone's key and shows what the PC sends, so it protects the

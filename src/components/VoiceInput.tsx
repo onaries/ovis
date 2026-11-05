@@ -144,19 +144,26 @@ export function useDictation(options: DictationOptions): Dictation {
   }, [t]);
 
   // An answer that lands while an IME is composing (a Hangul syllable half typed) would rewrite the
-  // box under the composition and break it: it waits for compositionend, in arrival order.
+  // box under the composition and break it: it waits for compositionend, in arrival order. Only
+  // a composition something was typed into holds it: Android keyboards (HeliBoard, Gboard) also
+  // open one on the word at the caret with nothing typed, until the next key (#2488), and Chrome
+  // raises compositionstart and compositionupdate for that but no input.
+  const open = useRef(false);
   const composing = useRef(false);
   const held = useRef<VoiceText[]>([]);
   const onText = useCallback((result: VoiceText): void => {
-    if (composing.current) held.current.push(result);
+    // behind what is still held, so a polish never lands before the raw text it rewrites
+    if (composing.current || held.current.length > 0) held.current.push(result);
     else apply(result);
   }, [apply]);
 
   useEffect(() => {
     const element = options.box.current;
     if (!element) return;
-    const start = (): void => { composing.current = true; };
+    const start = (): void => { open.current = true; };
+    const typed = (): void => { if (open.current) composing.current = true; };
     const end = (): void => {
+      open.current = false;
       composing.current = false;
       // after the input event that commits the syllable, so read() already holds it
       setTimeout(() => {
@@ -166,9 +173,11 @@ export function useDictation(options: DictationOptions): Dictation {
       }, 0);
     };
     element.addEventListener("compositionstart", start);
+    element.addEventListener("input", typed);
     element.addEventListener("compositionend", end);
     return () => {
       element.removeEventListener("compositionstart", start);
+      element.removeEventListener("input", typed);
       element.removeEventListener("compositionend", end);
     };
   }, [options.box, apply]);

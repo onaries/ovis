@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createServer } from "./index.ts";
 import { herdrRpc, sessionSnapshot, subscribeEvents, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 import { opencodeAuthHeader, type OpenCodeFormInfo } from "./opencode-service.ts";
-import type { InteractivePrompt } from "../shared/protocol.ts";
+import type { InteractivePrompt, ServerMessage } from "../shared/protocol.ts";
 import { OpenCodePromptState } from "./prompt.ts";
 
 const root = mkdtempSync(join(tmpdir(), "ovis-opencode-prompt-contract-"));
@@ -140,6 +140,21 @@ async function setupOpencodePane(sessionID: string, label: string): Promise<stri
   expect(pane?.agent_session?.agent).toBe("opencode");
   expect(pane?.agent_status).toBe("blocked");
   return paneId;
+}
+
+/** settles once `holds` after a frame the socket received (at once when it holds already), or fails after 10 s */
+function frameWhere(ws: WebSocket, holds: () => boolean): Promise<void> {
+  if (holds()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { ws.removeEventListener("message", check); reject(new Error("expected websocket frame")); }, 10_000);
+    const check = (): void => {
+      if (!holds()) return;
+      clearTimeout(timer);
+      ws.removeEventListener("message", check);
+      resolve();
+    };
+    ws.addEventListener("message", check);
+  });
 }
 
 async function readCard(paneId: string): Promise<InteractivePrompt> {
@@ -355,6 +370,31 @@ describe("opencode prompt contract", () => {
       tools: ["eslint", "tailwind", "custom-tool"],
     });
   });
+
+  it("tells a prompt watch when an answer moves the card to the form's next question, the pane still blocked", async () => {
+    const sessionID = "ses_opencodeWatched";
+    pendingForms[sessionID] = [{
+      id: "form_watched", sessionID, title: "Watched", metadata: { kind: "question" },
+      fields: [{ key: "first", type: "string", custom: true }, { key: "second", type: "string", custom: true }],
+    }];
+    const paneId = await setupOpencodePane(sessionID, "watched");
+    const frames: ServerMessage[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
+    ws.addEventListener("message", (event) => frames.push(JSON.parse(String(event.data)) as ServerMessage));
+    const changes = () => frames.filter((frame) => frame.type === "prompt-changed" && frame.pane_id === paneId).length;
+    try {
+      await frameWhere(ws, () => frames.some((frame) => frame.type === "snapshot"));
+      ws.send(JSON.stringify({ type: "prompt-watch", pane_id: paneId, enabled: true }));
+      await frameWhere(ws, () => changes() === 1);
+      const first = await readCard(paneId);
+      const answered = await fetch(`http://127.0.0.1:${server.port}/api/pane/prompt/answer`, {
+        method: "POST", body: JSON.stringify({ pane_id: paneId, prompt_id: first.id, custom_text: "one" }),
+      });
+      expect(answered.status).toBe(200);
+      expect((await readCard(paneId)).steps?.[1]?.current).toBe(true);
+      await frameWhere(ws, () => changes() === 2);
+    } finally { ws.close(); }
+  }, 30_000);
 
   it("handles custom text answers for OpenCode questions", async () => {
     const SESSION_CUSTOM = "ses_opencodeCustom01";

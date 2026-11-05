@@ -45,7 +45,6 @@ export const WORKSPACE_KO: Record<string, string> = {
   "Agent": "에이전트",
   "Directory": "폴더",
   "absolute path or ~/…": "절대 경로 또는 ~/…",
-  "Name": "이름",
   "Optional workspace label": "워크스페이스 이름 (선택)",
   "Workspace label; follows the branch until you change it": "워크스페이스 이름. 직접 바꾸기 전까지 브랜치를 따릅니다",
   "Open": "열기",
@@ -95,4 +94,6 @@ export const WORKSPACE_KO: Record<string, string> = {
   "Add another agent…": "다른 에이전트 추가…",
   "It is installed, but this PC does not offer it here yet. Restart Ovis on the PC, or start it in a terminal tab.": "설치는 됐지만 이 PC가 아직 여기서 고를 수 있게 내놓지 않아요. PC에서 Ovis를 다시 시작하거나, 터미널 탭에서 시작하세요.",
   "It is installed. Waiting for this PC to offer it here…": "설치됐어요. 이 PC에서 고를 수 있게 될 때까지 기다리는 중…",
+  "Group": "그룹",
+  "Where the Agents list shows it": "에이전트 목록에서 보일 자리",
 };

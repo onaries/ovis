@@ -180,7 +180,7 @@ it("serves a held omo session as an empty conversation until its file is written
   try {
     const pending = await read();
     expect(pending.status).toBe(200);
-    expect(await pending.json()).toEqual({ source: "omo-transcript", turns: [], metadata: { model: null, reasoning_effort: null }, cursor: null, history_id: "unwritten:unwritten-http" });
+    expect(await pending.json()).toEqual({ source: "omo-transcript", turns: [], metadata: { model: null, reasoning_effort: null }, cursor: null, history_id: "unwritten:unwritten-http", server_time: expect.any(String) });
     // a cursor from the conversation before /new has no page here
     expect((await read("&before=stale:0")).status).toBe(409);
     writeFileSync(join(dir, "2026-10-03T00-00-00-000Z_unwritten-http.jsonl"), [

@@ -6,6 +6,8 @@ import { encodeFrame, FRAME_AUTOMATIC_INPUT, FRAME_CLOSE, FRAME_CREDIT, FRAME_DA
 const CHANNEL = 7;
 /** what the session asks the viewers' terminal on attach, as `hc attach` asks its own */
 const ASKED = "\x1b[?1004h\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]12;?\x1b\\\x1b[16t\x1b[c";
+/** what the session asks again on a focus-in: the display questions, focus reports being on already */
+const ASKED_AGAIN = ASKED.slice("\x1b[?1004h".length);
 /** what goes ahead of hc's first bytes: the viewer's last attach's scrollback is erased, on the main screen, before hc replays it */
 const CLEARED = "\x1b[?1049l\x1b[3J\x1b[H\x1b[2J";
 
@@ -230,11 +232,31 @@ describe("CoreAttachSession", () => {
     await core.until(FRAME_FOCUS, 2);
     expect(core.of(FRAME_FOCUS).map((frame) => frame.payload[0])).toEqual([0, 1]);
     expect(core.of(FRAME_DATA)).toHaveLength(0);
-    expect(seen.join("").split(ASKED)).toHaveLength(3);
+    expect(seen.join("").split(ASKED)).toHaveLength(2);
+    expect(seen.join("").split(ASKED_AGAIN)).toHaveLength(3);
     next.want = "off\x1b[?1004l\x1b[?1004h";
     next.hit = Promise.withResolvers<void>();
     core.output("off\x1b[?1004l");
     await next.hit.promise;
+  });
+
+  it("does not keep asking viewers whose terminal answers every focus-reports switch with a focus-in (#2815)", async () => {
+    // two focused xterm.js tabs on the pane: each answers `ESC[?1004h` with ESC [ I
+    const answers: string[] = [];
+    const asked = Promise.withResolvers<void>();
+    const { session } = attach((data) => {
+      for (const _ of data.matchAll(/\x1b\[\?1004h/g)) answers.push("\x1b[I", "\x1b[I");
+      if (data.includes(ASKED)) asked.resolve();
+    });
+    await asked.promise;
+    let rounds = 0;
+    while (answers.length > 0 && rounds < 10) {
+      for (const answer of answers.splice(0)) session.write(answer);
+      rounds++;
+    }
+    expect(answers).toEqual([]);
+    expect(rounds).toBe(1);
+    session.kill();
   });
 });
 

@@ -9,7 +9,7 @@ const base = {
   machineId: "local",
   paneId: "w1:p2",
   selection: { machineId: "local", paneId: "w1:p1" },
-  splitOther: null,
+  splitOthers: [],
   linkPending: false,
   busy: false,
   ownMove: false,
@@ -31,8 +31,10 @@ describe("following herdr's focus", () => {
 
   it("leaves a pane already in front where it is", () => {
     expect(followsHerdrFocus({ ...base, paneId: "w1:p1" })).toBe(false);
-    expect(followsHerdrFocus({ ...base, splitOther: { machineId: "local", paneId: "w1:p2" } })).toBe(false);
-    expect(followsHerdrFocus({ ...base, splitOther: { machineId: "remote", paneId: "w1:p2" } })).toBe(true);
+    expect(followsHerdrFocus({ ...base, splitOthers: [{ machineId: "local", paneId: "w1:p2" }] })).toBe(false);
+    expect(followsHerdrFocus({ ...base, splitOthers: [{ machineId: "remote", paneId: "w1:p2" }] })).toBe(true);
+    // a third slot of the rows and columns is in front too
+    expect(followsHerdrFocus({ ...base, splitOthers: [{ machineId: "remote", paneId: "w1:p2" }, { machineId: "local", paneId: "w1:p2" }] })).toBe(false);
   });
 
   it("lets a link that is still landing go first", () => {

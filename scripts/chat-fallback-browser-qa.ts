@@ -25,6 +25,7 @@ try {
   const terminalReads: string[] = [];
   let structured = false, resolveAgent!: () => void, agentReadArrived!: () => void;
   let lookupTimeout = false;
+  let copilotWaiting = false;
   let source = "codex-transcript";
   let prompt: InteractivePrompt | null = null;
   // the answers of pane "screen": settings read off the agent's own screen (ConversationResponse.screen)
@@ -39,6 +40,7 @@ try {
     if (url.pathname === "/api/pane/commands") return Response.json({ commands: [] });
     if (url.pathname === "/api/pane/conversation") {
       if (pane === "screen") return Response.json({ cursor: null, turns: [], ...screenAnswer });
+      if (copilotWaiting && pane === "agent") return Response.json({ source: "scrollback", turns: [], recovery: "waiting" });
       if (lookupTimeout && pane === "agent") return Response.json({ error: { code: "read_timeout", message: "Conversation read timed out." } }, { status: 504 });
       return Response.json({ source: (structured && pane === "agent") || pane === "empty" ? source : "scrollback", cursor: null, turns: structured && pane === "agent" ? turns : [] });
     }
@@ -420,6 +422,58 @@ try {
   structured = false;
   source = "codex-transcript";
   console.log("PASS fallback polling keeps 10s for other agents and 2s for Copilot under a controlled clock");
+  {
+    // Copilot's reader lost its proof of the conversation shown: the turns stay, marked paused, and
+    // only the pane's activity reads again, not a timer
+    source = "copilot-transcript"; structured = true;
+    turns = [{ role: "assistant", ts: null, parts: [{ kind: "text", text: "Copilot turn before the wait" }] }];
+    const paused = await browser.newPage();
+    let reads = 0;
+    paused.on("request", (request) => { if (new URL(request.url()).pathname === "/api/pane/conversation") reads += 1; });
+    await paused.clock.install();
+    await paused.clock.pauseAt(new Date());
+    await paused.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
+    await paused.goto(`http://127.0.0.1:${server.port}/?pushes`);
+    await paused.evaluate(() => window.chatFallbackQA.agent("copilot"));
+    await paused.getByText("Copilot turn before the wait", { exact: true }).waitFor();
+    copilotWaiting = true;
+    const waited = paused.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+    await paused.evaluate(() => window.chatFallbackQA.refresh());
+    await waited;
+    const banner = paused.getByText("Updates paused — waiting for the agent's next activity", { exact: true });
+    await banner.waitFor();
+    assert.equal(await paused.getByText("Copilot turn before the wait", { exact: true }).isVisible(), true, "a wait keeps the turns shown");
+    assert.equal(await paused.locator(".chat-terminal-fallback").count(), 0, "a wait does not swap the turns for the terminal");
+    const before = reads;
+    await paused.clock.runFor(30_000);
+    assert.equal(reads, before, "a wait schedules no backstop reads");
+    await paused.evaluate(() => window.chatFallbackQA.until(() => window.chatFallbackQA.listening()));
+    // a read that fails while waiting proves nothing to wait on: the backstop retries it
+    copilotWaiting = false; lookupTimeout = true;
+    const failed = paused.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+    await paused.evaluate(() => window.chatFallbackQA.output());
+    await failed;
+    copilotWaiting = true; lookupTimeout = false;
+    const afterFailure = reads;
+    const retried = paused.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation", { timeout: 5000 })
+      .catch(() => assert.fail("a read that failed while waiting is retried without pane activity"));
+    // just past the 10s backstop: further on, the read's own timeout would cancel it before it answers
+    await paused.clock.runFor(11_000);
+    await retried;
+    assert.ok(reads > afterFailure, "a read that failed while waiting is retried without pane activity");
+    await banner.waitFor();
+    copilotWaiting = false;
+    turns = [...turns, { role: "assistant", ts: null, parts: [{ kind: "text", text: "Copilot turn after the wait" }] }];
+    const woken = paused.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+    await paused.evaluate(() => window.chatFallbackQA.output());
+    await woken;
+    await paused.getByText("Copilot turn after the wait", { exact: true }).waitFor();
+    await banner.waitFor({ state: "detached" });
+    if (process.env.UI_EVIDENCE_DIR) await paused.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "copilot-recovered.png") });
+    await paused.close();
+    structured = false; source = "codex-transcript";
+    console.log("PASS a Copilot wait keeps the turns, reads on activity only, and resumes them");
+  }
   {
     // A Codex that reported no session: the scrollback stands in with the model its live footer
     // states, and a conversation not begun with the model its screen states. No file changes when

@@ -1,5 +1,5 @@
 import type { AgentStatus } from "../../shared/protocol.ts";
-import { shouldNotifyStatus, type AlertPrefs } from "../../shared/notify-policy.ts";
+import { alertsAllow, shouldNotifyStatus, type AlertPrefs } from "../../shared/notify-policy.ts";
 import { LOCAL_MACHINE, paneStorageId } from "../../shared/machines.ts";
 
 /** The PC a paneStorageId key belongs to (its ids are URI-encoded, so the first ':' after "remote:" ends it). */
@@ -42,10 +42,11 @@ export const DROPLET_REPEAT_MS = 400;
 /**
  * Whether this device wants to hear about a status at all, the finished-turn length included:
  * `worked` is how long the pane worked before it finished, null when this page did not see
- * it start (then it is told, as the server does).
+ * it start (then it is told, as the server does). A blocked pane is told by what it waits for
+ * (`agentKind`, shared/notify-policy.ts blockedAlertKind).
  */
-export function dropletAllows(prefs: AlertPrefs, status: AgentStatus, worked: number | null): boolean {
-  if (status === "blocked") return prefs.input;
+export function dropletAllows(prefs: AlertPrefs, status: AgentStatus, worked: number | null, agentKind?: string | null): boolean {
+  if (status === "blocked") return alertsAllow(prefs, status, agentKind);
   if (status !== "done" || prefs.done === "off") return false;
   if (prefs.done === "always") return true;
   return worked === null || worked >= LONG_TURN_MS;

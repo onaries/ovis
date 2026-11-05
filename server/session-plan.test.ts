@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { appendFileSync, chmodSync } from "node:fs";
-import type { HerdrPane, PlanSummary } from "../shared/protocol.ts";
+import type { HerdrPane, PaneContext, PlanSummary } from "../shared/protocol.ts";
 import { paneAfterStatus } from "./machines.ts";
 import { readPlan, SessionPlans } from "./session-plan.ts";
 import { at, claude, file } from "./session-plan.fixture.ts";
@@ -130,6 +130,85 @@ describe("SessionPlans", () => {
     expect(planned).toMatchObject({ background_tasks: 1, plan: { done: 1, total: 2, current: "Two" } });
     expect(paneAfterStatus(planned, frame())).toMatchObject({ plan: { done: 1, total: 2 } });
     expect("plan" in paneAfterStatus(planned, frame(null))).toBe(false);
+  });
+
+  it("keeps a remote PC's context as its frames say", () => {
+    const frame = (context?: PaneContext | null) => ({ type: "pane-status" as const, pane_id: "p1", agent_status: "idle" as const, ...(context === undefined ? {} : { context }) });
+    const filled = paneAfterStatus(pane("p1", "claude"), frame({ used: 50_000, window: 200_000 }));
+    expect(filled).toMatchObject({ context: { used: 50_000, window: 200_000 } });
+    expect(paneAfterStatus(filled, frame())).toMatchObject({ context: { used: 50_000 } });
+    expect("context" in paneAfterStatus(filled, frame(null))).toBe(false);
+  });
+
+  it("tells a Claude pane's context as its requests fill it, the main session's only, and clears it with the pane", async () => {
+    // Given a Claude transcript whose last request went past the 200k window.
+    const s = claude();
+    const changes: [string, PaneContext | null][] = [];
+    const plans = new SessionPlans({ claudePath: (id) => id === "p1" ? s.path : null, codexPath: async () => null, onChange: () => {}, onContext: (id, context) => changes.push([id, context]) });
+    const request = (input: number, extra: Record<string, unknown> = {}) => s.add({ type: "assistant", timestamp: at(1), ...extra, message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: "ok" }], usage: { input_tokens: input, cache_creation_input_tokens: 1000, cache_read_input_tokens: 1000 } } });
+    request(240_000);
+    await plans.refresh([pane("p1", "claude")]);
+    plans.poll();
+    // Then it is told with the 1M window, as the chat's ring reads it.
+    expect(changes).toEqual([["p1", { used: 242_000, window: 1_000_000 }]]);
+    expect(plans.contextOf("p1")).toEqual({ used: 242_000, window: 1_000_000 });
+    // A subagent's request fills its own context; an unchanged context is not told again.
+    request(5_000, { isSidechain: true });
+    plans.poll();
+    expect(changes).toHaveLength(1);
+    request(98_000);
+    plans.poll();
+    expect(changes.at(-1)).toEqual(["p1", { used: 100_000, window: 1_000_000 }]);
+    // When the pane runs something else, its context goes.
+    await plans.refresh([pane("p1", "shell")]);
+    expect(changes.at(-1)).toEqual(["p1", null]);
+    expect(plans.contextOf("p1")).toBeNull();
+  });
+
+  it("takes a Claude pane's window from its status line capture, also when the capture comes after the request", async () => {
+    // Given a Claude request under 200k, whose window the transcript does not say.
+    const s = claude();
+    s.add({ type: "assistant", timestamp: at(1), message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: "ok" }], usage: { input_tokens: 30_000 } } });
+    let captured: number | null = null;
+    const asked: [string, string | null][] = [];
+    const plans = new SessionPlans({ claudePath: () => s.path, codexPath: async () => null, onChange: () => {}, claudeWindow: (path, model) => { asked.push([path, model]); return captured; } });
+    await plans.refresh([pane("p1", "claude")]);
+    plans.poll();
+    // Then no window is known: the ring would draw nothing.
+    expect(plans.contextOf("p1")).toEqual({ used: 30_000, window: null });
+    // When the status line names the window without a transcript append, the next poll tells it.
+    captured = 200_000;
+    plans.poll();
+    expect(plans.contextOf("p1")).toEqual({ used: 30_000, window: 200_000 });
+    expect(asked.at(-1)).toEqual([s.path, "claude-opus-5-5"]);
+    // When /model switches the session, the window is asked for the model it set, as the chat asks.
+    s.add({ type: "user", message: { role: "user", content: "<local-command-stdout>Set model to `Sonnet 5.5` for this session only</local-command-stdout>" } });
+    plans.poll();
+    expect(asked.at(-1)).toEqual([s.path, "claude-sonnet-5-5"]);
+  });
+
+  it("clears a pane's context as soon as it runs another session, before its transcript is read", async () => {
+    // Given a Claude pane whose context was told.
+    const s = claude();
+    s.add({ type: "assistant", timestamp: at(1), message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: "ok" }], usage: { input_tokens: 30_000 } } });
+    const changes: [string, PaneContext | null][] = [];
+    const plans = new SessionPlans({ claudePath: () => s.path, codexPath: async () => null, onChange: () => {}, onContext: (id, context) => changes.push([id, context]), claudeWindow: () => 200_000 });
+    await plans.refresh([pane("p1", "claude", "A")]);
+    plans.poll();
+    expect(plans.contextOf("p1")).toEqual({ used: 30_000, window: 200_000 });
+    // When herdr says the pane runs another session, the old figure goes at once, before any poll.
+    await plans.refresh([pane("p1", "claude", "B")]);
+    expect(plans.contextOf("p1")).toBeNull();
+    expect(changes.at(-1)).toEqual(["p1", null]);
+  });
+
+  it("reads a Codex pane's context with the window Codex states", async () => {
+    const f = file("rollout.jsonl");
+    f.add({ timestamp: at(1), type: "event_msg", payload: { type: "token_count", info: { model_context_window: 258_400, last_token_usage: { total_tokens: 64_600 } } } });
+    const plans = new SessionPlans({ claudePath: () => null, codexPath: async () => f.path, onChange: () => {} });
+    await plans.refresh([pane("p2", "codex")]);
+    plans.poll();
+    expect(plans.contextOf("p2")).toEqual({ used: 64_600, window: 258_400 });
   });
 
   it("tells a pane's summary as its plan moves, reads nothing while its transcript is as it was, and clears it when the pane runs something else", async () => {

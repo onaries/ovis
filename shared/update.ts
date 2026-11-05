@@ -47,6 +47,26 @@ export interface UpdateStatus {
    */
   port?: number;
   serving_url?: string | null;
+  /**
+   * Which builds this PC updates to: `stable` releases only, or also the `beta` builds CI publishes
+   * from green main. Absent from a supervisor older than the field, which offers releases only.
+   */
+  channel?: UpdateChannel;
+}
+
+/**
+ * `stable` takes `vX.Y.Z` releases only; `beta` also takes the `vX.Y.Z-beta.N` builds CI tags on
+ * main once its checks pass. Off (`stable`) unless the PC opts in.
+ */
+export type UpdateChannel = "stable" | "beta";
+
+/**
+ * The channel a setting names (`OVIS_UPDATE_CHANNEL`, or the `update-channel` file in the state
+ * dir): `beta` turns the beta builds on, `stable` off; anything else names none.
+ */
+export function readUpdateChannel(value: string | null | undefined): UpdateChannel | null {
+  const name = value?.trim().toLowerCase();
+  return name === "beta" || name === "stable" ? name : null;
 }
 
 export type UpdateErrorCode = "update_offer_changed";
@@ -221,11 +241,14 @@ export function readInstalledNotes(value: unknown): InstalledNotes {
   };
 }
 
-export function unmanagedUpdateStatus(): UpdateStatus {
+/** Why a server the desktop app runs (OVIS_DESKTOP_APP) offers no update here: the app updates itself and its server with it. */
+export const DESKTOP_APP_UPDATES = "This server is part of the Ovis app, which updates them together: updates come with the app, not from here.";
+
+export function unmanagedUpdateStatus(desktopApp = false): UpdateStatus {
   return {
     managed: false, auto_update: false, phase: "idle", current_revision: null,
     latest_revision: null, current_version: null, latest_version: null, available: false, checked_at: null, error: null,
-    blocked_reason: "Start with bun run start or the herdr plugin to enable updates.",
+    blocked_reason: desktopApp ? DESKTOP_APP_UPDATES : "Start with bun run start or the herdr plugin to enable updates.",
   };
 }
 

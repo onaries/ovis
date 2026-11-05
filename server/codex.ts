@@ -2921,13 +2921,62 @@ async function peersFirstExchanges(
 }
 
 /**
+ * A peer in a proven different native store cannot own this store's threads. Unknown stores
+ * still compete, and an explicit lookup home must agree with every Codex process of this pane first.
+ */
+async function withoutOtherCodexStores(
+  panes: HerdrPane[], paneId: string, cwd: string, home: string, processes: readonly { pid: number; argv?: string[] }[],
+): Promise<HerdrPane[]> {
+  const remote = (list: readonly { argv?: string[] }[]) =>
+    list.some(({ argv }) => argv?.some((arg) => arg === "--remote" || arg.startsWith("--remote=")));
+  const rival = (pane: HerdrPane) => pane.pane_id !== paneId && resolveAgent(pane).agent === "codex"
+    && (pane.cwd == null || sameDirectory(pane.cwd, cwd));
+  // nothing to rule out: spare the process reads
+  if (processes.length === 0 || remote(processes) || !panes.some(rival)) return panes;
+  const databaseIdentity = (home: string): string | null => {
+    const file = statSync(realpathSync(join(home, "state_5.sqlite")), { bigint: true });
+    return file.isFile() ? `${file.dev}:${file.ino}` : null;
+  };
+  // each process's store, or null when one cannot be placed for certain
+  const storesOf = async (list: readonly { pid: number; argv?: string[] }[]): Promise<(string | null)[]> =>
+    Promise.all(list.map(async ({ pid, argv }) => {
+      const named = await certainProcessCodexHome(pid, argv ?? []);
+      return named === null ? null : databaseIdentity(named);
+    }));
+  // a foreground process whose command line cannot be read may be a Codex of any store
+  const unread = (info: ProcessInfo | undefined) => (info?.foreground_processes ?? []).some(({ pid, argv }) => {
+    if (argv?.length) return false;
+    if (process.platform !== "linux") return true;
+    try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").length === 0; } catch { return true; }
+  });
+  let store: string | null;
+  try {
+    store = databaseIdentity(home);
+    if (store === null || unread(await paneProcessInfo(paneId))
+      || (await storesOf(processes)).some((actual) => actual !== store)) return panes;
+  } catch { return panes; }
+  const kept = await Promise.all(panes.map(async (pane) => {
+    if (!rival(pane)) return pane;
+    try {
+      const info = await paneProcessInfo(pane.pane_id);
+      if (unread(info)) return pane;
+      const { list } = await codexProcessesOf(pane.pane_id, info ?? null);
+      if (list.length === 0 || remote(list)) return pane;
+      // every Codex process of the peer must sit in a known, different store
+      return (await storesOf(list)).every((theirs) => theirs !== null && theirs !== store) ? null : pane;
+    } catch { return pane; }
+  }));
+  return kept.filter((pane) => pane !== null);
+}
+
+/**
  * The prompt is not ownership evidence on its own. Require its submitted answer,
  * compare older conversations and other same-directory panes too. A peer showing the
  * same exchange leaves ownership ambiguous. No weak binding survives a poll.
  */
 async function shortThreadFromProcess(
   paneId: string, cwd: string, home: string, screen: string,
-  processes: readonly { pid: number }[], panes?: HerdrPane[],
+  processes: readonly { pid: number; argv?: string[] }[], panes?: HerdrPane[],
 ): Promise<string | null> {
   // no later than the process started: Codex 0.163 makes its thread in that same second
   const starts = processes.map(({ pid }) => processStartLowerBound(pid));
@@ -2935,7 +2984,7 @@ async function shortThreadFromProcess(
   const notBefore = Math.min(...starts as number[]);
   let db: Database | undefined;
   try {
-    const peers = panes ?? (await sessionSnapshot()).panes;
+    const peers = await withoutOtherCodexStores(panes ?? (await sessionSnapshot()).panes, paneId, cwd, home, processes);
     if (peers.some((pane) => pane.pane_id !== paneId
       && resolveAgent(pane).agent === "codex" && pane.cwd == null)) return null;
     const opened = openCodexStore(home);

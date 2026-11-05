@@ -130,7 +130,8 @@ export function installHealthFlap(): void {
   }).observe(document, { subtree: true, childList: true, characterData: true });
 }
 
-const POLL_MS = 5000;
+// The demo's event stream is open and its pushed local PC is connected.
+const POLL_MS = 30_000;
 /** What the header says and what the pane can do, read in one frame. */
 export const readHeader = (page: Page) => page.evaluate(() => {
   const pill = (selector: string) => {

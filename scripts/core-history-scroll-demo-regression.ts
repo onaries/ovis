@@ -77,6 +77,19 @@ function installHistoryFixture(): void {
   window.WebSocket = Recorded as unknown as typeof WebSocket;
 }
 
+/** the rows the user sees: libghostty's layer when it draws the pane (xterm's own rows are hidden under it), else xterm's */
+const drawn = (page: Page) => page.evaluate(() => {
+  const host = document.querySelector<HTMLElement>(".pane-frame.is-current .pane-terminal");
+  const rows = host?.querySelectorAll(host.dataset["renderer"] === "ghostty" ? ".ghostty-row" : ".xterm-rows > div") ?? [];
+  return [...rows].map((row) => row.textContent ?? "");
+});
+/** the oldest history line in sight, as its number */
+const topShown = async (page: Page) => Math.min(...(await drawn(page)).flatMap((row) => /HIST-(\d{3})/.exec(row)?.[1] ?? []).map(Number));
+const showsNewest = (page: Page) => page.waitForFunction(() => {
+  const host = document.querySelector<HTMLElement>(".pane-frame.is-current .pane-terminal");
+  const rows = host?.querySelectorAll(host.dataset["renderer"] === "ghostty" ? ".ghostty-row" : ".xterm-rows > div") ?? [];
+  return [...rows].some((row) => row.textContent?.includes("HIST-300"));
+});
 const settled = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 interface History { scrollback: number; length: number; viewportY: number; baseY: number }
 /** the current pane's xterm buffer, from the test build's output probe */
@@ -135,7 +148,7 @@ try {
           await page.goto(`http://127.0.0.1:${server.port}${prefix}?pane=${encodeURIComponent(panes.shell)}&view=terminal&server=${kind}`);
           await page.locator(".conn-live").waitFor();
           await appFaces(page);
-          await page.locator(".pane-frame.is-current .xterm-rows", { hasText: "HIST-300" }).waitFor();
+          await showsNewest(page);
           await settled(page);
           const shown = await history(page);
           assert.ok(shown, `${kind}: the test build's output probe answers`);
@@ -152,10 +165,39 @@ try {
           const box = await terminal.boundingBox();
           assert.ok(box);
           await page.mouse.move(box.x + box.width / 2, box.y + box.height / 3);
+          const topBefore = await topShown(page);
           await page.mouse.wheel(0, -600);
           await settled(page);
           if (kind === "core") {
             await scrolledAbove(page, shown.viewportY, { x: box.x + box.width / 2, y: box.y + box.height / 3 }, "core: the wheel scrolls back");
+            // and the rows drawn follow it, whichever renderer draws them
+            await page.waitForFunction((before) => {
+              const host = document.querySelector<HTMLElement>(".pane-frame.is-current .pane-terminal");
+              const rows = host?.querySelectorAll(host.dataset["renderer"] === "ghostty" ? ".ghostty-row" : ".xterm-rows > div") ?? [];
+              return [...rows].some((row) => Number(/HIST-(\d{3})/.exec(row.textContent ?? "")?.[1] ?? Infinity) < before);
+            }, topBefore, { timeout: 5000 }).catch(async (cause: unknown) => {
+              throw new Error(`core: the wheel moved xterm's view but the rows drawn still start at HIST-${topBefore}: ${JSON.stringify(await drawn(page))}`, { cause });
+            });
+            // read up in the browser's own history, the way back to the newest rows shows; it takes the view there and goes
+            const jump = page.locator(".pane-frame.is-current .terminal-jump-bottom");
+            await jump.waitFor();
+            await jump.click();
+            await page.waitForFunction(() => {
+              const host = document.querySelector(".pane-frame.is-current .pane-terminal") as (HTMLElement & { outputProbe?: () => { history: History } }) | null;
+              const now = host?.outputProbe?.().history;
+              return now !== undefined && now.viewportY === now.baseY;
+            });
+            await jump.waitFor({ state: "detached" });
+            // the keyboard reaches it too: scrolled up again, Enter on the focused button returns to the bottom
+            await page.mouse.wheel(0, -600);
+            await jump.waitFor();
+            await jump.focus();
+            const sentBefore = (await inputs(page)).length;
+            await page.keyboard.press("Enter");
+            await jump.waitFor({ state: "detached" });
+            // it only scrolls: focus is not handed to the program, and the key reaches nobody
+            assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false), false, "core: the press leaves the terminal unfocused");
+            assert.equal((await inputs(page)).length, sentBefore, "core: the press types nothing");
             // back to the bottom: the newest rows again
             await page.mouse.wheel(0, 20000);
             await page.waitForFunction(() => {
@@ -165,7 +207,7 @@ try {
             });
             // a reattach replays the history again: it replaces the scrollback rather than doubling it
             await page.evaluate(() => window.historyFixture.replay());
-            await page.locator(".pane-frame.is-current .xterm-rows", { hasText: "HIST-300" }).waitFor();
+            await showsNewest(page);
             await settled(page);
             const replayed = await history(page);
             assert.equal(replayed?.length, shown.length, `core: a replayed history keeps its length (${JSON.stringify(shown)} -> ${JSON.stringify(replayed)})`);

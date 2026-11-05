@@ -1,11 +1,13 @@
 import { useMemo, useRef } from "react";
 import type { AgentStatus } from "../../shared/protocol.ts";
 import { alertPrefs, type Settings } from "./settings.ts";
+import { useAlertFilters, withAlertFilters } from "./alertFilters.ts";
 
 /** This device's alert choices and its Alerts switch, with refs for the event stream. */
 export function useAlertPrefs({ settings }: { settings: Settings }) {
   // this device's alert choices: sent with its push subscription, and applied to tab alerts here
-  const alerts = useMemo(() => alertPrefs(settings), [settings.alertInput, settings.alertDone]);
+  const filters = useAlertFilters();
+  const alerts = useMemo(() => withAlertFilters(alertPrefs(settings), filters), [settings.alertInput, settings.alertDone, filters]);
   const alertsRef = useRef(alerts);
   alertsRef.current = alerts;
   // the Alerts item's switch for this device (the header's More menu): off drops its push subscription and silences tab and in-app alerts

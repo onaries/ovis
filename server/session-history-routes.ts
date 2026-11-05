@@ -15,14 +15,14 @@
  * the environment a new tab inherits exports none either (claude-store.ts herdrLaunchSource).
  */
 import type { SessionHistoryResponse, SessionResumeResponse, SessionSnapshot } from "../shared/protocol.ts";
-import { claudeRecordOnlyIn, claudeStoreOf, herdrLaunchSource, isClaudeProcess, paneClaudeSource, processLaunchSource, type ClaudeSource, type PaneProcess } from "./claude-store.ts";
+import { claudeRecordOnlyIn, claudeStoreOf, herdrLaunchSource, isClaudeProcess, paneClaudeSource, processLaunchSource, windowsShellClaude, type ClaudeSource, type PaneProcess } from "./claude-store.ts";
 import { coreConnection, servingCore } from "./herdr-core/runtime.ts";
 import { agentLaunch } from "./agent-launch.ts";
 import { recentProcessTable } from "./gjc-runtime.ts";
 import { herdrSocketPath, paneProcessInfo, sessionSnapshot, tabClose, tabCreate } from "./herdr/client.ts";
 import { badRequest, errorResponse, jsonResponse, readJsonObject } from "./http.ts";
 import { isSessionHistoryAgent, listSessions, type SessionHistoryOptions } from "./session-history.ts";
-import { descendantProcesses, type ProcessRow } from "./windows-processes.ts";
+import type { ProcessRow } from "./windows-processes.ts";
 import { userHome } from "./user-home.ts";
 import { PiMetadataBusy } from "./pi-session-metadata.ts";
 
@@ -87,21 +87,6 @@ export function workspaceFolder(snapshot: Snapshot, workspaceId: string): string
 const isClaude = (entry: PaneProcess) => isClaudeProcess({ name: entry.name ?? undefined, argv0: entry.argv0 ?? undefined, argv: entry.argv ?? undefined });
 
 /**
- * The Claude processes under a Windows pane's shell, from the process table: the nearest one, and
- * any other not started by it (two of them: which one a session belongs to cannot be told). Null
- * when the table says nothing, which is no proof that no Claude runs there.
- */
-async function windowsPaneClaude(shellPid: number, table: () => Promise<ProcessRow[]>): Promise<PaneProcess[] | null> {
-  const rows = await table();
-  if (rows.length === 0) return null;
-  const claude = descendantProcesses(rows, shellPid).filter(isClaude);
-  const first = claude[0];
-  if (first === undefined) return [];
-  const below = new Set(descendantProcesses(rows, first.pid).map((entry) => entry.pid));
-  return claude.filter((entry) => entry === first || !below.has(entry.pid));
-}
-
-/**
  * The Claude store of a pane (claude-store.ts claudeStoreOf), whether a Claude was found there (no
  * Claude: the server's default store) and its pid; null when it cannot be told.
  */
@@ -117,7 +102,7 @@ async function paneStore(paneId: string, options: StoreOptions): Promise<{ store
     // herdr names only the shell on Windows, even while Claude runs in it
     if (typeof processes.shell_pid !== "number") return null;
     let below: PaneProcess[] | null;
-    try { below = await windowsPaneClaude(processes.shell_pid, table); } catch { return null; }
+    try { below = await windowsShellClaude(processes.shell_pid, table); } catch { return null; }
     if (below === null) return null;
     foreground = below;
   }

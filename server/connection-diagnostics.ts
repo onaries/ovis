@@ -42,6 +42,7 @@ export class ConnectionDiagnostics {
     /** a budgeted sink returns false to decline a line: the failure then stays unseen */
     private write: (line: string) => unknown = (line) => console.warn(line),
     private now: () => number = Date.now,
+    private wallNow: () => number = () => Date.now(),
   ) {}
 
   failed(key: string, code: FailureCode, fields: Fields): void {
@@ -93,7 +94,7 @@ export class ConnectionDiagnostics {
   private emit(event: "failed" | "recovered", failure: Failure, fields: Fields, now: number): boolean {
     // Pick fields explicitly. Never spread an exception, request, response, or caller's object.
     const record: Record<string, string | number> = {
-      time: new Date(now).toISOString(), event: `${this.component}.${event}`, episode_id: failure.id,
+      time: new Date(this.wallNow()).toISOString(), event: `${this.component}.${event}`, episode_id: failure.id,
       operation: /^[a-z][a-z0-9_.]{0,95}$/.test(fields.operation) ? fields.operation : "unknown",
       code: failure.code, failures: failure.count, suppressed: failure.suppressed,
       since_first_failure_ms: Math.max(0, now - failure.since),

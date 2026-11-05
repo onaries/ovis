@@ -15,6 +15,24 @@ export interface UsageWindow {
   readonly starts_at: string | null;
 }
 
+/** One-off resets of a plan's limits that the account can still use, as the provider lists them (Claude, Codex). */
+export interface UsageResets {
+  /** how many are left to use; sent only when at least one is */
+  readonly available: number;
+  /** ISO 8601 time the soonest of them expires; null when the provider does not say */
+  readonly expires_at: string | null;
+}
+
+/**
+ * Usage paid for beyond the plan's limits, as the provider states it. `spend`: money spent this
+ * billing period, in `currency` (ISO 4217) and its major units, against a monthly `limit` (null when
+ * uncapped; Claude's extra usage). `balance`: credits left to spend (Codex); `balance` is null when
+ * the provider says only that there are some, and `unlimited` when they do not run out.
+ */
+export type UsageCredits =
+  | { readonly kind: "spend"; readonly currency: string; readonly used: number | null; readonly limit: number | null; readonly used_percent: number | null }
+  | { readonly kind: "balance"; readonly balance: number | null; readonly unlimited: boolean };
+
 /**
  * Why a provider's numbers are missing or old: its sign-in expired or was refused; the provider
  * asked to slow down; the request failed; the macOS keychain holding the sign-in could not be
@@ -36,6 +54,10 @@ export interface ProviderUsage {
   readonly plan: string | null;
   /** the last numbers read; kept through a later failure, which `problem` then names */
   readonly windows: readonly UsageWindow[];
+  /** limit resets left to use; absent when there are none. Kept through a later failure, like `windows` */
+  readonly resets?: UsageResets;
+  /** usage beyond the plan's limits; absent when the provider has none to show. Kept like `windows` */
+  readonly credits?: UsageCredits;
   readonly problem: UsageProblem | null;
   /** ISO 8601 time `windows` were read; null when they never were */
   readonly checked_at: string | null;

@@ -24,7 +24,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { readStatusline, type StatuslinePayload } from "./statusline.ts";
 import { installStatusline, removeStatusline, StatuslineInstallError, statuslineInstallState, type StatuslineInstallState } from "./statusline-install.ts";
-import type { ProviderUsage, UsageProblem, UsageProviderId, UsageReport, UsageWindow } from "../shared/protocol.ts";
+import type { ProviderUsage, UsageCredits, UsageProblem, UsageProviderId, UsageReport, UsageResets, UsageWindow } from "../shared/protocol.ts";
 import { jsonResponse } from "./http.ts";
 import { opencodeDatabasePath } from "./opencode.ts";
 
@@ -94,6 +94,8 @@ export type CredentialHome = { readonly kind: "default" } | { readonly kind: "di
 interface Reading {
   plan: string | null;
   windows: UsageWindow[];
+  resets?: UsageResets | null;
+  credits?: UsageCredits | null;
   /** whose numbers these are, when the answer says and the sign-in did not */
   account?: Account | null;
   /** when a local reading was taken (epoch ms); an endpoint's answer is taken now */
@@ -130,6 +132,9 @@ const number = (value: unknown): number | null => {
   return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : null;
 };
 const percent = (value: number): number => Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
+/** a reading's (or a kept answer's) resets and credits, each only when there is one */
+const extras = (from: { resets?: UsageResets | null; credits?: UsageCredits | null }): { resets?: UsageResets; credits?: UsageCredits } =>
+  ({ ...(from.resets ? { resets: from.resets } : {}), ...(from.credits ? { credits: from.credits } : {}) });
 
 /** `home`'s directories whose names start with `prefix` (".codex-work"), in name order */
 function siblingDirs(home: string, prefix: string): string[] {
@@ -339,6 +344,42 @@ function claudeStatuslineWindows(payload: StatuslinePayload): UsageWindow[] {
   return windows;
 }
 
+/** an amount in a currency's minor units (cents) in its major ones, by the digits the currency uses (none for yen) */
+function majorUnits(minor: number, currency: string): number {
+  let digits = 2;
+  try { digits = new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2; } catch {}
+  return minor / 10 ** digits;
+}
+
+/** Claude's extra usage, as Claude Code's /usage reads it: amounts in minor units, no limit when `monthly_limit` is null */
+function claudeCredits(value: unknown): UsageCredits | null {
+  const extra = record(value);
+  if (extra["is_enabled"] !== true) return null;
+  const currency = text(extra["currency"])?.toUpperCase() ?? "USD";
+  const used = number(extra["used_credits"]);
+  const limit = number(extra["monthly_limit"]);
+  const utilization = number(extra["utilization"]);
+  return {
+    kind: "spend", currency, used: used === null ? null : majorUnits(used, currency), limit: limit === null ? null : majorUnits(limit, currency),
+    used_percent: utilization !== null ? percent(utilization) : used !== null && limit !== null && limit > 0 ? percent(used / limit * 100) : null,
+  };
+}
+
+/** The resets Claude lists under `cedar_ember`: those left on grants that are neither paused nor outside their dates. */
+function claudeResets(value: unknown, now: number): UsageResets | null {
+  let available = 0;
+  let soonest: string | null = null;
+  for (const grant of (Array.isArray(record(value)["grants"]) ? record(value)["grants"] as unknown[] : []).map(record)) {
+    const left = number(grant["resets_left"]) ?? 0;
+    const startsAt = epochMs(grant["starts_at"]);
+    const endsAt = isoTime(grant["ends_at"]);
+    if (left <= 0 || grant["paused"] === true || (startsAt !== null && startsAt > now) || (endsAt !== null && Date.parse(endsAt) <= now)) continue;
+    available += left;
+    if (endsAt !== null && (soonest === null || endsAt < soonest)) soonest = endsAt;
+  }
+  return available > 0 ? { available, expires_at: soonest } : null;
+}
+
 const claude: UsageProvider = {
   id: "claude",
   async signIns(ctx) {
@@ -351,7 +392,8 @@ const claude: UsageProvider = {
     return windows.length > 0 ? { plan: signIn.plan ?? null, windows, checkedAt: local.readAt } : null;
   },
   async read(ctx, signIn) {
-    const body = await requestJson(ctx, "https://api.anthropic.com/api/oauth/usage", {
+    // `cedar_ember=1` has the answer list the limit resets too, as Claude Code asks for them
+    const body = await requestJson(ctx, "https://api.anthropic.com/api/oauth/usage?cedar_ember=1", {
       headers: { authorization: `Bearer ${signIn.token}`, accept: "application/json", "anthropic-beta": "oauth-2025-04-20", "user-agent": USER_AGENT },
     });
     const windows = [
@@ -367,7 +409,7 @@ const claude: UsageProvider = {
       if (limit["kind"] !== "weekly_scoped" || !model || used === null || windows.some((window) => window.scope === model)) continue;
       windows.push({ kind: "week", scope: model, used_percent: percent(used), resets_at: isoTime(limit["resets_at"]), starts_at: null });
     }
-    return { plan: null, windows };
+    return { plan: null, windows, resets: claudeResets(body["cedar_ember"], ctx.now()), credits: claudeCredits(body["extra_usage"]) };
   },
 };
 
@@ -409,6 +451,38 @@ async function codexKeychainFound(ctx: UsageContext): Promise<Found[]> {
     .map((found): Found => ({ ...found, home: { kind: "default" } }));
 }
 
+/** Codex's credits as its /status shows them: unlimited, a balance (credits, not money), or only that there are some */
+function codexCredits(value: unknown): UsageCredits | null {
+  const credits = record(value);
+  if (credits["unlimited"] === true) return { kind: "balance", balance: null, unlimited: true };
+  if (credits["has_credits"] !== true) return null;
+  const balance = number(credits["balance"]);
+  return { kind: "balance", balance: balance !== null && balance > 0 ? balance : null, unlimited: false };
+}
+
+/**
+ * The resets Codex counts in its usage answer; when one is left, when the soonest expires, from the
+ * list Codex itself reads. That list is extra: when it cannot be read the count stands alone.
+ */
+async function codexResets(ctx: UsageContext, signIn: SignIn, summary: unknown): Promise<UsageResets | null> {
+  const available = number(record(summary)["available_count"]) ?? 0;
+  if (available <= 0) return null;
+  try {
+    const details = await requestJson(ctx, "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", {
+      headers: {
+        authorization: `Bearer ${signIn.token}`, accept: "application/json", "user-agent": USER_AGENT,
+        ...(signIn.chatgptAccount ? { "chatgpt-account-id": signIn.chatgptAccount } : {}),
+      },
+    });
+    const expiries = (Array.isArray(details["credits"]) ? details["credits"] : []).map(record)
+      .filter((credit) => credit["status"] === "available")
+      .flatMap((credit) => isoTime(credit["expires_at"]) ?? []).sort();
+    return { available, expires_at: expiries[0] ?? null };
+  } catch {
+    return { available, expires_at: null };
+  }
+}
+
 const codex: UsageProvider = {
   id: "codex",
   async signIns(ctx) {
@@ -428,7 +502,7 @@ const codex: UsageProvider = {
     const now = ctx.now();
     const windows = [codexWindow(limits["primary_window"], now), codexWindow(limits["secondary_window"], now)]
       .filter((window): window is UsageWindow => window !== null);
-    return { plan: text(body["plan_type"]), windows };
+    return { plan: text(body["plan_type"]), windows, resets: await codexResets(ctx, signIn, body["rate_limit_reset_credits"]), credits: codexCredits(body["credits"]) };
   },
 };
 
@@ -1105,7 +1179,7 @@ export class UsageService {
     const kept = previous !== null && (!found.account || previous.key === identity(null).key) ? previous : null;
     const keep = (problem: UsageProblem, plan: string | null, wait: number) => settle({
       id: provider.id, ...(kept ? { key: kept.key, account: kept.account } : identity(null)),
-      plan: kept?.plan ?? plan, windows: kept?.windows ?? [], problem, checked_at: kept?.checked_at ?? null,
+      plan: kept?.plan ?? plan, windows: kept?.windows ?? [], ...extras(kept ?? {}), problem, checked_at: kept?.checked_at ?? null,
     }, wait);
     if ("locked" in found) return keep("locked", null, FRESH_MS);
     const signIn: SignIn = found;
@@ -1130,7 +1204,7 @@ export class UsageService {
       const reading = await provider.read(this.ctx, signIn);
       if (reading === null) return settle(null, FRESH_MS);
       return settle({
-        id: provider.id, ...identity(reading.account), plan: reading.plan ?? signIn.plan ?? null, windows: reading.windows, problem: null, checked_at: new Date(now).toISOString(),
+        id: provider.id, ...identity(reading.account), plan: reading.plan ?? signIn.plan ?? null, windows: reading.windows, ...extras(reading), problem: null, checked_at: new Date(now).toISOString(),
       }, FRESH_MS);
     } catch (error) {
       const wait = Math.max(RETRY_MS, error instanceof UsageHttpError ? error.retryAfterMs ?? FRESH_MS : 0);

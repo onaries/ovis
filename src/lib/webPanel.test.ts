@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { panelUrl, shouldOpenWebPage, wantsPanel } from "./webPanel.ts";
+import { localPageAddress, panelUrl, shouldOpenWebPage, wantsPanel } from "./webPanel.ts";
 
 const lan = { protocol: "http:", hostname: "100.123.228.51", origin: "http://100.123.228.51:7317" };
 const local = { protocol: "http:", hostname: "localhost", origin: "http://localhost:7317" };
@@ -36,6 +36,28 @@ describe("panelUrl", () => {
     const tls = { protocol: "https:", hostname: "pc.tail.ts.net", origin: "https://pc.tail.ts.net" };
     expect(panelUrl("http://localhost:5173/", tls)).toBeNull();
     expect(panelUrl("https://localhost:5173/", tls)).toBe("https://pc.tail.ts.net:5173/");
+  });
+});
+
+describe("localPageAddress", () => {
+  const tls = { protocol: "https:" };
+
+  it("reads a port on this PC's loopback, in the app's own scheme unless one is typed", () => {
+    expect(localPageAddress("localhost:8448", lan)).toBe("http://localhost:8448/");
+    expect(localPageAddress(" :8448 ", lan)).toBe("http://localhost:8448/");
+    expect(localPageAddress("127.0.0.1:8448/#/repository?path=/src", lan)).toBe("http://127.0.0.1:8448/#/repository?path=/src");
+    expect(localPageAddress("[::1]:3000/docs", lan)).toBe("http://[::1]:3000/docs");
+    // an https app frames only https: a port `tailscale serve` fronts is reached there
+    expect(localPageAddress("localhost:8448", tls)).toBe("https://localhost:8448/");
+    expect(localPageAddress("http://localhost:8448", tls)).toBe("http://localhost:8448/");
+    expect(localPageAddress("HTTPS://LOCALHOST:8448/", lan)).toBe("https://localhost:8448/");
+  });
+
+  it("reads no other host, no address without a port, and no search", () => {
+    for (const query of ["8448", "localhost", "localhost:", "localhost:0", "localhost:65536", "example.com:8448", "192.168.0.10:8448",
+      "localhost:8448 extra", "ftp://localhost:21", "127.999.0.1:8448", "git status", "~/src", "/tmp", ""]) {
+      expect(localPageAddress(query, lan)).toBeNull();
+    }
   });
 });
 

@@ -13,7 +13,6 @@ export const PALETTE_JA: Record<string, string> = {
   "Close command palette": "コマンドパレットを閉じる",
   "Filter panes by status": "状態でペインを絞り込む",
   "All": "すべて",
-  "Recent": "最近",
   "Workspace": "ワークスペース",
   "Unknown workspace": "不明なワークスペース",
   "Actions": "操作",
@@ -28,4 +27,7 @@ export const PALETTE_JA: Record<string, string> = {
   "Folders": "フォルダ",
   "Open in Files": "ファイルで開く",
   "Pinned folders": "固定したフォルダ",
+  "Open a page on this PC…": "この PC のページを開く…",
+  "Page on this PC": "この PC のページ",
+  "Open {address}": "{address} を開く",
 };

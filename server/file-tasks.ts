@@ -9,6 +9,8 @@ import { paneCommands } from "./commands.ts";
 import type { ProcessRoots } from "./skills/index.ts";
 import { byteRange, describeWithin, fileInfo, openAuthorized, pageFileHooks, pageWithLocalFiles, pathsByName, release, STREAM_CHUNK_BYTES, type PageMedia, type PageMediaGrant } from "./file-view.ts";
 import { walkFiles } from "./files.ts";
+import { readEditableText, TextEditRefused } from "./file-edit.ts";
+import type { EditableText } from "../shared/files.ts";
 
 /**
  * How long a Claude task list reads on before it answers with what it read so far: well inside the
@@ -46,7 +48,19 @@ export type FileTask =
    * `within`: the folder the file must be opened in (`openAuthorized`), for a file the scratch
    * fallback found
    */
-  | { op: "open"; path: string; get: { range: string | null; ifRange: boolean } | null; opened?: Int32Array<SharedArrayBuffer>; fastDiskMs?: number; within?: string | null };
+  | { op: "open"; path: string; get: { range: string | null; ifRange: boolean } | null; opened?: Int32Array<SharedArrayBuffer>; fastDiskMs?: number; within?: string | null }
+  /** a text file in the pane's folder `cwd` read to edit (`file-edit.ts`; its save runs on the server's thread) */
+  | { op: "text-read"; path: string; cwd: string };
+
+/** A text file read to edit, or why not: a refusal crosses the thread as plain fields, not as the error. */
+export type TextTaskResult = { done: EditableText } | { refused: { status: number; code: string; message: string; revision?: string } };
+
+function textTask(run: () => EditableText): TextTaskResult {
+  try { return { done: run() }; } catch (error) {
+    if (!(error instanceof TextEditRefused)) throw error;
+    return { refused: { status: error.status, code: error.code, message: error.message, ...(error.revision ? { revision: error.revision } : {}) } };
+  }
+}
 
 /** A page drawn with its own files put into it (null when it cannot be), and the media addresses that render gave out. */
 export interface RenderedPage { html: Uint8Array<ArrayBuffer> | null; grants: PageMediaGrant[] }
@@ -66,7 +80,7 @@ export interface OpenedFile { size: number; range: [number, number] | "unsatisfi
 export const FAST_DISK_MS = 50;
 const PROBE_BYTES = 64 * 1024;
 
-export type FileTaskResult = FileInfo | FileInfo[] | string[] | number[] | SlashCommand[] | OmoTask[] | boolean | RenderedPage | OpenedFile | { info: FileInfo; within: string } | null;
+export type FileTaskResult = FileInfo | FileInfo[] | string[] | number[] | SlashCommand[] | OmoTask[] | boolean | RenderedPage | OpenedFile | { info: FileInfo; within: string } | TextTaskResult | null;
 
 export function runFileTask(task: FileTask): FileTaskResult {
   switch (task.op) {
@@ -80,6 +94,7 @@ export function runFileTask(task: FileTask): FileTaskResult {
     case "commands": return paneCommands(task.agent, task.cwd, task.home, task.roots, task.version, task.serverEnv);
     case "render": return render(task.path, task.media, task.within ?? null);
     case "open": return open(task.path, task.get, task.opened, task.fastDiskMs ?? FAST_DISK_MS, task.within ?? null);
+    case "text-read": return textTask(() => readEditableText(task.path, task.cwd));
   }
 }
 

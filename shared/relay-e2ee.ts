@@ -7,6 +7,10 @@ import type {
   TransportMessage,
 } from "./vendor/paseo-e2ee/e2ee.ts";
 import { protectedRecordByteLength } from "./vendor/paseo-e2ee/protected-records.ts";
+import { importPublicKey as importKey } from "./vendor/paseo-e2ee/e2ee.ts";
+import type { SecureChannel as Channel } from "./vendor/paseo-e2ee/e2ee.ts";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { concatBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { MAX_FRAME_BYTES } from "./relay-mux.ts";
 
 export type ClientSecureChannelOptions = Omit<ClientOptions, "minimumMode">;
@@ -28,6 +32,58 @@ const DAEMON_RECORD_FAILURE_CLOSE_CODE = 1011;
 
 let handshakeInboundBytes = 0;
 
+const BINDING_DOMAIN = utf8ToBytes("ovis-relay-channel-binding/1");
+
+/**
+ * The two Noise handshake messages one end of a channel sent and accepted, as the carrier saw them.
+ * Both ends of one handshake hold the same pair; a relay that runs a handshake of its own with each
+ * end (with its own key toward the phone) leaves each end a different pair, since it cannot make
+ * the PC's first message's DH with the PC's secret key.
+ */
+interface HandshakeRecord {
+  hello?: string;
+  ready?: string;
+  /** the client's latest inbound handshake text: the ready the vendor accepts is the one that opens it */
+  latest?: string;
+}
+const bindings = new WeakMap<Channel, { record: HandshakeRecord; serverPublicKey: Uint8Array }>();
+
+const carrierText = (data: string | ArrayBuffer): string => typeof data === "string" ? data : new TextDecoder().decode(data);
+
+/** The protected Noise message of a hello or ready envelope (shared/vendor/paseo-e2ee/secure-channel.ts). */
+function handshakeMessage(text: string | undefined): Uint8Array | undefined {
+  if (text === undefined) return;
+  try {
+    const value: unknown = JSON.parse(text);
+    if (typeof value !== "object" || value === null || !("protected" in value)) return;
+    const envelope = value.protected;
+    if (typeof envelope !== "object" || envelope === null || !("message" in envelope) || typeof envelope.message !== "string") return;
+    return Uint8Array.from(atob(envelope.message), (c) => c.charCodeAt(0));
+  } catch { return; }
+}
+
+const lengthPrefixed = (bytes: Uint8Array): Uint8Array => {
+  const out = new Uint8Array(4 + bytes.length);
+  new DataView(out.buffer).setUint32(0, bytes.length);
+  out.set(bytes, 4);
+  return out;
+};
+
+/**
+ * 32 bytes both ends of one protected handshake agree on and nobody else can make them share:
+ * SHA-256 over a domain, the PC's static key and the two handshake messages. The pairing by
+ * comparing digits (shared/relay-pair-sas.ts) is bound to it. Undefined until the channel is open,
+ * and for a channel this module did not open.
+ */
+export function channelBinding(channel: Channel): Uint8Array | undefined {
+  const entry = bindings.get(channel);
+  if (!entry || !channel.isOpen() || channel.securityMode() !== "protected") return;
+  const hello = handshakeMessage(entry.record.hello);
+  const ready = handshakeMessage(entry.record.ready);
+  if (!hello || !ready) return;
+  return sha256(concatBytes(BINDING_DOMAIN, entry.serverPublicKey, lengthPrefixed(hello), lengthPrefixed(ready)));
+}
+
 interface CarrierGuard {
   readonly transport: Transport;
   /** Stops counting inbound messages against the handshake budgets and releases their bytes. */
@@ -41,7 +97,8 @@ interface CarrierGuard {
  * With `budget`, messages that arrive before the handshake completes count against the
  * per-connection and process-wide handshake limits, and the carrier closes past them.
  */
-function guardCarrier(real: Transport, closeCode: () => number, budget: boolean): CarrierGuard {
+function guardCarrier(real: Transport, closeCode: () => number, budget: boolean,
+  record: (direction: "in" | "out", data: string | ArrayBuffer) => void): CarrierGuard {
   let closed = false;
   const closing = Promise.withResolvers<never>();
   closing.promise.catch(() => {});
@@ -66,9 +123,7 @@ function guardCarrier(real: Transport, closeCode: () => number, budget: boolean)
   };
   const transport: Transport = {
     // Only a handshake send needs the race; afterwards each send would keep a reaction until close.
-    send: (data) => closed ? Promise.reject(new Error("Carrier closed"))
-      : counting ? Promise.race([new Promise<void>((resolve) => resolve(real.send(data))), closing.promise])
-      : real.send(data),
+    send: (data) => { record("out", data); return sendGuarded(data); },
     close: (code, reason) => {
       markClosed();
       real.close(code, reason);
@@ -77,9 +132,13 @@ function guardCarrier(real: Transport, closeCode: () => number, budget: boolean)
     onclose: null,
     onerror: null,
   };
+  const sendGuarded = (data: string | ArrayBuffer) => closed ? Promise.reject(new Error("Carrier closed"))
+      : counting ? Promise.race([new Promise<void>((resolve) => resolve(real.send(data))), closing.promise])
+      : real.send(data);
   real.onmessage = (message: TransportMessage) => {
     if (closed) return;
     const { data, isBinary } = message;
+    if (!isBinary) record("in", data);
     const size = typeof data === "string" ? data.length : data.byteLength;
     // The vendor reads a text frame as base64 even when its data arrives as an ArrayBuffer.
     if (isBinary ? size > MAX_CARRIER_BINARY_BYTES
@@ -137,14 +196,21 @@ export async function openClientSecureChannel(transport: Transport, options: Cli
     for (const reject of outstanding) reject(closeError);
     outstanding.clear();
   };
+  const record: HandshakeRecord = {};
   const guard = guardCarrier(transport,
-    () => handshaking ? PROTECTED_HANDSHAKE_FAILED_CLOSE_CODE : PROTECTED_RECORD_FAILED_CLOSE_CODE, false);
+    () => handshaking ? PROTECTED_HANDSHAKE_FAILED_CLOSE_CODE : PROTECTED_RECORD_FAILED_CLOSE_CODE, false,
+    (direction, data) => {
+      if (!handshaking || typeof data !== "string" && !(data instanceof ArrayBuffer)) return;
+      if (direction === "out") record.hello ??= carrierText(data);
+      else record.latest = carrierText(data);
+    });
   const channel = await openClient(guard.transport, {
     ...options, minimumMode: "protected",
     events: {
       ...options.events,
       onopen: () => {
         handshaking = false;
+        record.ready = record.latest;
         ready.resolve();
         options.events?.onopen?.();
       },
@@ -155,6 +221,7 @@ export async function openClientSecureChannel(transport: Transport, options: Cli
       },
     },
   });
+  bindings.set(channel, { record, serverPublicKey: importKey(options.daemonPublicKeyB64) });
   channel.onClose(rejectSends);
   const send = channel.send.bind(channel);
   let chain = ready.promise;
@@ -189,8 +256,15 @@ export async function openClientSecureChannel(transport: Transport, options: Cli
 
 export function openDaemonSecureChannel(transport: Transport, options: DaemonSecureChannelOptions) {
   let handshaking = true;
+  // the daemon answers the first message it gets, which must be the hello, with its first send
+  const record: HandshakeRecord = {};
   const guard = guardCarrier(transport,
-    () => handshaking ? PROTECTED_HANDSHAKE_FAILED_CLOSE_CODE : DAEMON_RECORD_FAILURE_CLOSE_CODE, true);
+    () => handshaking ? PROTECTED_HANDSHAKE_FAILED_CLOSE_CODE : DAEMON_RECORD_FAILURE_CLOSE_CODE, true,
+    (direction, data) => {
+      if (typeof data !== "string" && !(data instanceof ArrayBuffer)) return;
+      if (direction === "in") record.hello ??= carrierText(data);
+      else record.ready ??= carrierText(data);
+    });
   const opening = openDaemon(guard.transport, {
     ...options, minimumMode: "protected",
     events: {
@@ -210,6 +284,7 @@ export function openDaemonSecureChannel(transport: Transport, options: DaemonSec
   // A refused handshake keeps counting until its carrier closes: the vendor may still queue.
   return opening.then((channel) => {
     if (guard.isClosed()) throw new Error("Connection closed during handshake");
+    bindings.set(channel, { record, serverPublicKey: options.daemonKeyPair.publicKey });
     return channel;
   });
 }

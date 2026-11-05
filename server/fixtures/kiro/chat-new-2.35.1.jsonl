@@ -1,0 +1,2 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"9135c588-cc36-49f6-956f-0384b71fedfc","content":[{"kind":"text","data":"after load prompt"}],"meta":{"timestamp":1793256605}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"c50d59b7-62c7-47b2-89ad-3b4d33734c42","content":[{"kind":"text","data":"V2 interactive answer two."}]}}

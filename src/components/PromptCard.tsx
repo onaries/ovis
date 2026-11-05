@@ -1,4 +1,4 @@
-import { useContext, useEffect, useId, useRef, useState } from "react";
+import { Fragment, useContext, useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, ChevronDown, ChevronUp, FileText, Send } from "lucide-react";
 
 import "./PromptCard.css";
@@ -306,20 +306,34 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onTextChange, init
             // the key the user can type, drawn as a keycap; the option's name keeps the menu's "1."
             const number = <span className="prompt-card-number"><span aria-hidden="true">{index + 1}</span><span className="visually-hidden">{index + 1}.</span></span>;
             const described = option.description !== null ? " has-description" : "";
+            // Claude draws an option's preview for the one under its cursor only, beside its menu (#1212)
+            const shown = prompt.option_preview?.option_index === index ? prompt.option_preview : null;
+            const preview = shown !== null && (
+              <div className="prompt-card-option-preview" role="group" aria-label={t("Preview of {option}", { option: text })}>
+                <pre>{shown.text}</pre>
+                {shown.hidden_lines !== undefined && <p className="prompt-card-hint">{t("{n} more lines Claude left out", { n: shown.hidden_lines })}</p>}
+              </div>
+            );
             if (prompt.multi_select) {
               const checked = selected.has(index);
               return (
-                <label className={`prompt-card-option${described}${checked ? " is-checked" : ""}`} key={index}>
-                  <input type="checkbox" checked={checked} disabled={pending} onChange={() => toggle(index)} />
-                  {number} {content}
-                </label>
+                <Fragment key={index}>
+                  <label className={`prompt-card-option${described}${checked ? " is-checked" : ""}`}>
+                    <input type="checkbox" checked={checked} disabled={pending} onChange={() => toggle(index)} />
+                    {number} {content}
+                  </label>
+                  {preview}
+                </Fragment>
               );
             }
             const isSelected = prompt.default_option_index === index;
             return (
-              <button key={index} type="button" className={`prompt-card-option${described}${typedAnswer?.option_index === index ? " is-typed" : ""}${isSelected ? " is-selected" : ""}`} disabled={pending} onClick={(event) => void answer({ option_index: index }, event)}>
-                {number} {content}
-              </button>
+              <Fragment key={index}>
+                <button type="button" className={`prompt-card-option${described}${typedAnswer?.option_index === index ? " is-typed" : ""}${isSelected ? " is-selected" : ""}`} disabled={pending} onClick={(event) => void answer({ option_index: index }, event)}>
+                  {number} {content}
+                </button>
+                {preview}
+              </Fragment>
             );
           })}
         </div>

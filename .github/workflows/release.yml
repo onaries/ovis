@@ -43,10 +43,15 @@ jobs:
     permissions:
       contents: read
       actions: read
-  # the Rust PTY host for Linux and macOS, attached when the release is created: installs read it by tag
+  # the Rust PTY host for Linux and macOS, attached when the release is created: installs read it by tag.
+  # Its attest job signs each binary's build provenance, which needs these permissions.
   pty-sidecar:
     needs: preflight
     uses: ./.github/workflows/pty-sidecar.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     with:
       ref: ${{ github.sha }}
   publish:
@@ -270,15 +275,33 @@ jobs:
           cd "$RUNNER_TEMP/shell"
           echo "$EXPECTED_SHA256  dist-shell.tar.gz" | sha256sum --check --strict
           gh release upload "$RELEASE_TAG" dist-shell.tar.gz dist-shell.tar.gz.sha256 --clobber
+  # after desktop: either app job may make the release latest, and releases/latest/download must then
+  # hold the desktop installers and feeds too; a failed desktop job holds them back until it is rerun
   windows-app:
-    needs: publish
+    needs: [publish, desktop]
     uses: ./.github/workflows/windows-app.yml
     with:
       tag: v${{ inputs.version }}
     permissions:
       contents: write
-  mac-dmg:
+  # the desktop app (app/electron): AppImages, dmg and zip, and the feed files it updates from
+  desktop:
     needs: publish
+    uses: ./.github/workflows/desktop.yml
+    with:
+      tag: v${{ inputs.version }}
+    secrets:
+      MAC_DEVELOPER_ID_P12: ${{ secrets.MAC_DEVELOPER_ID_P12 }}
+      MAC_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_P12_PASSWORD }}
+      MAC_NOTARY_KEY_P8: ${{ secrets.MAC_NOTARY_KEY_P8 }}
+      MAC_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+      MAC_NOTARY_ISSUER: ${{ secrets.MAC_NOTARY_ISSUER }}
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+    permissions:
+      contents: write
+  mac-dmg:
+    needs: [publish, desktop]
     uses: ./.github/workflows/mac-dmg.yml
     with:
       tag: v${{ inputs.version }}

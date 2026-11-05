@@ -181,13 +181,18 @@ export async function checkTelemetrySettings(browser: Browser): Promise<void> {
     assert.deepEqual((await statusAt(origin)).next?.settings, themed);
     assert.equal((await postSettings({ ...themed, palette: "not-a-theme" })).status, 400, "the server refuses an unknown theme id");
     assert.deepEqual((await statusAt(origin)).next?.settings, themed, "a refused snapshot leaves the last one in place");
-    assert.equal(await notice.getByRole("button").count(), 2, "the line offers What is sent and Dismiss, nothing else");
-    const rows = await notice.locator("span").evaluate((span) => span.getBoundingClientRect().height / parseFloat(getComputedStyle(span).lineHeight));
+    assert.equal(await notice.getByRole("button").count(), 3, "the line offers its sentence (Settings), Turn off and Dismiss, nothing else");
+    const rows = await notice.locator(".update-notice-text").evaluate((text) => text.getBoundingClientRect().height / parseFloat(getComputedStyle(text).lineHeight));
     assert.ok(rows < 1.5, `the sentence stays on one row (${rows} rows)`);
-    await telemetrySection.getByRole("switch", { name: "Send anonymous usage counts", exact: true }).click();
+    const sendSwitch = telemetrySection.getByRole("switch", { name: "Send anonymous usage counts", exact: true });
+    await sendSwitch.click();
     await until(async () => !(await statusAt(origin)).enabled, "the Settings switch cancels the pending event");
+    await sendSwitch.click();
+    await until(async () => (await statusAt(origin)).enabled, "the Settings switch turns the counts on again");
     await dialog.getByRole("button", { name: "Close settings", exact: true }).click();
-    await notice.getByRole("button", { name: "Dismiss", exact: true }).click();
+    // the line's own off: one tap, and the line leaves
+    await notice.getByRole("button", { name: "Turn off", exact: true }).click();
+    await until(async () => !(await statusAt(origin)).enabled, "Turn off on the line turns the counts off");
     await notice.waitFor({ state: "hidden" });
     fixtureNow += SEND_GRACE_MS + 1;
     await telemetry.report();

@@ -87,4 +87,13 @@ export const USAGE_JA: Record<string, string> = {
   "This version signs in only in its terminal. Open it to finish.": "このバージョンはターミナルでのみログインします。ターミナルを開いて完了してください。",
   "The sign-in asked for the code again. Paste it once more.": "ログインがコードを再度求めました。もう一度貼り付けてください。",
   "{agent} is already signed in on this PC. Continuing may replace that sign-in.": "{agent} はこの PC ですでにログインしています。続けるとそのログインが置き換わる場合があります。",
+  "Usage credits": "使用クレジット",
+  "Credits": "クレジット",
+  "Unlimited": "無制限",
+  "Available": "利用可能",
+  "{n} credits": "{n} クレジット",
+  "{amount} spent": "{amount} 使用済み",
+  "Limit resets": "制限リセット",
+  "Expires in {time}": "{time}後に期限切れ",
+  "{n} left": "残り{n}回",
 };

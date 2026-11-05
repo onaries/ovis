@@ -1,0 +1,87 @@
+{
+  "session_id": "e66a4ca0-21bd-4ae0-b206-a68a9ce9b696",
+  "cwd": "/home/user/project",
+  "created_at": "2026-10-29T06:49:20.070217172Z",
+  "updated_at": "2026-10-29T06:50:05.414363684Z",
+  "title": "after load prompt",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 3843527626
+          },
+          "result": {
+            "Ok": {
+              "id": "8cb4b51e-02cd-4edf-9cad-77dbad7bd977",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "text",
+                  "data": "V2 interactive answer two."
+                }
+              ],
+              "meta": {
+                "timestamp": 1793256605
+              }
+            }
+          },
+          "message_ids": [
+            "9135c588-cc36-49f6-956f-0384b71fedfc",
+            "c50d59b7-62c7-47b2-89ad-3b4d33734c42"
+          ],
+          "total_request_count": 1,
+          "number_of_cycles": 0,
+          "builtin_tool_uses": 0,
+          "turn_duration": {
+            "secs": 0,
+            "nanos": 384325
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-10-29T06:50:05.413817866Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "cache_read_input_token_count": 0,
+          "cache_write_input_token_count": 0,
+          "model": null,
+          "assistant_response_length": 26,
+          "request_attempts": null,
+          "context_usage_percentage": null,
+          "final_context_usage_percentage": null,
+          "metering_usage": [],
+          "user_prompt_length": 17
+        }
+      ],
+      "last_context_usage": null,
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "e66a4ca0-21bd-4ae0-b206-a68a9ce9b696",
+      "model_info": null,
+      "context_usage_percentage": null
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/home/user/project"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": "kiro_default",
+    "goal": null
+  }
+}

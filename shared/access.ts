@@ -43,8 +43,8 @@ export interface LanExposure {
 
 /** The configured bind address, read from its literal (`bindScope` in server/access.ts): never a DNS lookup or the request's Host. */
 export type BindScope = "loopback" | "tailnet" | "other";
-/** How this one request arrived, as far as it proves (`observedIngress` in server/access.ts); not how every device reaches the server. `direct`: no proxy said it forwarded the request, which a proxy that adds nothing (an SSH tunnel, nginx's bare `proxy_pass`) also looks like. */
-export type ObservedIngress = "direct" | "proxy" | "tailscale" | "funnel" | "unknown" | "relay";
+/** How this one request arrived, as far as it proves (`observedIngress` in server/access.ts); not how every device reaches the server. `direct`: no proxy said it forwarded the request, which a proxy that adds nothing (an SSH tunnel, nginx's bare `proxy_pass`) also looks like. `portal`: Portal vouched for the request with its proof, whatever signed it in (the token or a paired device too), or, running with no sign-in and so with no proof, it came from this PC in the shape Portal forwards to an address that Portal serves. */
+export type ObservedIngress = "direct" | "proxy" | "tailscale" | "funnel" | "unknown" | "relay" | "portal";
 
 /**
  * GET /api/health (both scopes), authenticated requests only, a watching device's included:
@@ -74,6 +74,12 @@ export interface PairedDevice {
   readonly current: boolean;
   /** paired with a public key for relay access, not a browser cookie */
   readonly via_relay?: true;
+  /** account members only, and only to a caller that may drive (docs/account.md, "Account members") */
+  readonly account?: string;
+  /** that member's account key: its `relay_public_key`, which is public */
+  readonly account_key?: string;
+  /** the member on this PC that added it */
+  readonly added_by?: string;
 }
 
 /** POST /api/devices/pair/start */

@@ -28,7 +28,8 @@ const failureOf = (error: unknown): Failure => {
 
 /**
  * What a running background task is doing, read from the PC on request: for a Claude Code
- * subagent (`detail_kind` claude-subagent) its own transcript, bounded, as text; the prompt it was
+ * subagent (`detail_kind` claude-subagent) its own transcript, for an OpenCode one (opencode-subagent)
+ * its child session, bounded, as text; the prompt it was
  * dispatched with, then its prose and the tools it called. A task of another kind has no transcript
  * to open and the sheet says so, as it does for a PC whose bridge is from before the route; nothing
  * is shown as the agent's that the PC did not read. Read when opened and on Refresh, never polled.
@@ -39,13 +40,13 @@ export function BackgroundAgentDetail({ paneId, task, onClose }: { paneId: strin
   const t = useT();
   const id = useId();
   const { fetchPaneBackgroundAgent } = useMachineApi();
-  const supported = task.detail_kind === "claude-subagent" || task.detail_kind === "codex-subagent";
+  const supported = task.detail_kind === "claude-subagent" || task.detail_kind === "opencode-subagent" || task.detail_kind === "codex-subagent";
   const [detail, setDetail] = useState<PaneBackgroundAgentDetail | null>(null);
   const [loading, setLoading] = useState(supported);
   const [failure, setFailure] = useState<Failure | null>(supported ? null : task.detail_kind === undefined ? "update" : "unsupported");
   // each read is one generation: an answer to an earlier read, or to a read of a sheet since closed, is dropped
   const generation = useRef(0);
-  // the Claude session the sheet shows, as its first answer named it: an answer of another session is
+  // the agent's session the sheet shows, as its first answer named it: an answer of another session is
   // the pane's next session, whose agent of the same id is another agent, and is never shown here
   const session = useRef<string | null>(null);
   const load = useCallback((): void => {
@@ -89,7 +90,7 @@ export function BackgroundAgentDetail({ paneId, task, onClose }: { paneId: strin
   // what happened, then what to do about it: each on a line of its own
   const notes: Record<Failure, [string, string]> = {
     update: [t("This PC's bridge does not offer this yet"), t("Update this PC's bridge to see what a running agent is doing.")],
-    unsupported: [t("This PC can't show details for this task"), t("Only a running Claude Code subagent's work can be opened here.")],
+    unsupported: [t("This PC can't show details for this task"), t("Only a running Claude Code or OpenCode subagent's work can be opened here.")],
     missing: [t("The agent is no longer in this pane's session"), t("It may have ended. Close this and look at the task list again.")],
     changed: [t("The pane moved to another session"), t("Close this and open the task again from the list.")],
     offline: [t("This PC is disconnected"), t("Refresh once the PC is connected again.")],

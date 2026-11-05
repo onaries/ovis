@@ -38,6 +38,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hand, type Recording } from "./hand.ts";
+import { shownRows } from "../shown-rows.ts";
 import panes from "../../site/demo/fixtures/panes.json";
 
 const REPO = join(import.meta.dir, "../..");
@@ -766,11 +767,11 @@ const TAKES: Record<string, Take> = {
       marks.add("shell pane opened (replay starts)");
       // off the row (its hover actions clear) and never over the terminal
       await hand.moveTo(160, 590, 800);
-      await until(page, marks, "tests pass line", () => /4 pass/.test(document.querySelector(".xterm-rows")?.textContent ?? ""), 8000);
+      await until(page, marks, "tests pass line", `/4 pass/.test(document.querySelector(${JSON.stringify(shownRows())})?.textContent ?? "")`, 8000);
       await Bun.sleep(3000);
     },
     check: async (page) => {
-      const text = await page.evaluate(() => document.querySelector(".xterm-rows")?.textContent ?? "");
+      const text = await page.evaluate((rows) => document.querySelector(rows)?.textContent ?? "", shownRows());
       if (/\[<\d+;\d+;\d+[Mm]/.test(text)) throw new Error("R5: mouse reports reached the terminal");
     },
   },

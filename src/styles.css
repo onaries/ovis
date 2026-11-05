@@ -1721,6 +1721,19 @@ button {
   --sidebar-shown-w: 0px;
 }
 
+/* Settings → Show the sidebar on hover (lib/sidebarPeek.ts): the collapsed sidebar over the pane, under the
+   header, at the width it has when open; the pane keeps its width, so no pty is resized */
+.app.sidebar-collapsed .sidebar.is-peek {
+  display: flex;
+  position: fixed;
+  top: calc(var(--header-h) + env(safe-area-inset-top, 0px));
+  bottom: 0;
+  left: 0;
+  z-index: var(--z-drawer);
+  width: min(var(--sidebar-user-w, var(--sidebar-w)), 50vw);
+  box-shadow: var(--shadow-drawer);
+}
+
 .scrim {
   display: none;
 }
@@ -1756,9 +1769,9 @@ button {
   padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
-/* the pane area: one pane, or two side by side (lib/split.ts). Each half is a pane slot with its
-   own tab strip and terminal; slot b exists only while split, and the halves keep their slots
-   when they trade sides, drawn by order */
+/* the pane area: one pane, or several side by side and stacked (lib/split.ts). Each slot has its
+   own tab strip and terminal; split, every slot is placed at the share of the area its layout gives
+   it (App's style), and keeps its element, and its terminals, wherever the layout moves it */
 .pane-split {
   position: relative;
   display: flex;
@@ -1775,13 +1788,42 @@ button {
   min-height: 0;
 }
 
-.pane-slot[data-side="left"] {
-  order: 0;
+.pane-split.is-split > .pane-slot {
+  position: absolute;
+}
+
+.pane-slot.joins-right {
   border-right: var(--hairline) solid var(--border-strong);
 }
 
-.pane-slot[data-side="right"] {
-  order: 1;
+.pane-slot.joins-below {
+  border-bottom: var(--hairline) solid var(--border-strong);
+}
+
+/* a boundary between slots with rows and columns (SplitDividers): a band to the pointer, a line to the eye */
+.pane-split-divider {
+  position: absolute;
+  z-index: 1;
+  touch-action: none;
+}
+
+.pane-split-divider[data-dir="row"] {
+  width: 8px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+}
+
+.pane-split-divider[data-dir="column"] {
+  height: 8px;
+  transform: translateY(-50%);
+  cursor: row-resize;
+}
+
+.pane-split-divider:hover,
+.pane-split-divider:active,
+.pane-split-divider:focus-visible {
+  background: var(--accent-tint);
+  outline: none;
 }
 
 /* a half's close sits at the end of its tab strip (TabStrip.css); a half with no strip (its pane
@@ -1955,6 +1997,30 @@ button {
   white-space: nowrap;
 }
 
+/* the chat's session totals after the crumb (lib/sessionStats.ts): an item of its own, so it wraps out
+   of sight first, whole or not at all like the crumb. A phone's header line is the title's: there the
+   More menu says them */
+.context-session {
+  gap: var(--space-2);
+}
+
+.context-session-goal {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.context-session-goal svg {
+  width: 1em;
+  height: 1em;
+}
+
+@media (max-width: 768px) {
+  .context-session {
+    display: none;
+  }
+}
+
 /* the PC's name is whole in the crumb, like the rest of it: the crumb fits or is not drawn.
    Its cap (Machines.css) is for the header with no pane, where it sits beside the brand. */
 .context-sub .machine-context-name {
@@ -2048,6 +2114,157 @@ button {
   font-size: var(--fs-xs);
 }
 
+/* how this device reaches Ovis (components/ConnectionRouteMark.tsx): a quiet glyph and a short word,
+   always there, never a button and never wrapped */
+.conn-route {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--chip-h);
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.conn-route svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+/* a phone gives the pane title the room: the glyph alone says the route there, except the relay,
+   whose word is the one most asked for; below 360px the relay's word goes too. The sentence stays
+   as the mark's title and accessible text. */
+@media (max-width: 480px) {
+  .conn-route:not([data-route="relay"], [data-route="portal"]) .conn-route-word {
+    display: none;
+  }
+}
+
+@media (max-width: 359px) {
+  .conn-route .conn-route-word {
+    display: none;
+  }
+}
+
+/* the selected tab's place in its workspace's strip (App.tsx): after the title, quieter than it, and
+   kept whole while the title shortens */
+.context-position {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+/* the PC's sessions by state (components/HeaderSessions.tsx): a figure per state that has any, in the
+   sidebar's status colours, tabular so a count that changes moves nothing. They stay whole: the pane
+   title is the header's one item that shortens */
+.header-sessions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.header-session-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--chip-h);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  color: var(--text-dim);
+}
+
+.header-session-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+}
+
+.header-session-count.is-working .header-session-dot {
+  background: var(--status-working);
+}
+
+.header-session-count.is-done .header-session-dot {
+  background: var(--status-done);
+}
+
+.header-session-mark {
+  font-weight: var(--fw-bold);
+  color: var(--status-blocked);
+}
+
+/* the waiting figure opens the next session that waits: drawn as a figure, with the state's tint
+   behind it so it reads as the one to press */
+button.header-session-count {
+  position: relative;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--status-blocked) 14%, transparent);
+  color: var(--text-strong);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* with no other session waiting it stays a button for the keyboard's sake, but nothing to press */
+button.header-session-count[aria-disabled="true"] {
+  cursor: default;
+}
+
+@media (hover: hover) {
+  button.header-session-count:not([aria-disabled="true"]):hover {
+    background: color-mix(in srgb, var(--status-blocked) 24%, transparent);
+  }
+}
+
+/* a phone reaches the header's thumb target through an invisible expander, as the lens buttons do */
+@media (max-width: 768px) {
+  button.header-session-count::before {
+    content: "";
+    position: absolute;
+    top: calc((var(--chip-h) - var(--touch-target-header)) / 2);
+    bottom: calc((var(--chip-h) - var(--touch-target-header)) / 2);
+    left: 50%;
+    width: max(100%, var(--touch-target-header));
+    transform: translateX(-50%);
+  }
+}
+
+/* a phone's header line is the title's (App.tsx): the sessions' one pill sits at the end of the tab
+   row under it, tinted with its state like the waiting button, and the tab's place, which that row
+   shows, leaves the header below 420px */
+.tab-strip-sessions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1 0 auto;
+  padding: 0 var(--space-3);
+}
+
+.header-sessions.is-compact .header-session-count {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+}
+
+.header-sessions.is-compact .header-session-count.is-working {
+  background: color-mix(in srgb, var(--status-working) 14%, transparent);
+}
+
+.header-sessions.is-compact .header-session-count.is-done {
+  background: color-mix(in srgb, var(--status-done) 14%, transparent);
+}
+
+@media (max-width: 419px) {
+  .context-position {
+    display: none;
+  }
+}
+
 /* one chip for the connection, drawn only while the bridge is not live; the herdr version lives
    in its tooltip and in Settings */
 .conn {
@@ -2132,6 +2349,11 @@ button {
 
 /* alerts are off on this device: the one state of the menu worth a glance. The button's name
    and the Alerts item say it in words. */
+/* a session waiting where no tab row carries the sessions' pill (App.tsx): More's first item opens it */
+.header-more-dot.is-waiting {
+  background: var(--status-blocked);
+}
+
 .header-more-dot {
   position: absolute;
   top: var(--space-1);
@@ -2162,6 +2384,13 @@ button {
   color: var(--text);
   font-family: var(--font-mono);
   white-space: pre-wrap;
+}
+
+/* the selected chat's totals and goal under the path (lib/sessionStats.ts), at every width */
+.header-more-session {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-1);
 }
 
 /* From 769px the header is two zones. Over the sidebar, the sidebar's own top row (its toggle

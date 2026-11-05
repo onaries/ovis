@@ -79,7 +79,7 @@ function responses() {
   };
 }
 
-async function fixture(options: { bootId?: string; now?: () => number } = {}) {
+async function fixture(options: { bootId?: string; now?: () => number; serverId?: () => string | undefined } = {}) {
   const root = mkdtempSync(join(tmpdir(), "herdr-machine-refresh-"));
   const path = join(root, "herdr.sock");
   const local = responses();
@@ -139,7 +139,7 @@ type TestRuntime = {
   retry?: ReturnType<typeof setTimeout>;
 };
 
-async function remoteFixture(options: { bootId?: string; now?: () => number } = {}) {
+async function remoteFixture(options: { bootId?: string; now?: () => number; serverId?: () => string | undefined } = {}) {
   const local = await fixture(options);
   /** the bridge's own /api/health; without one it answers as before (a snapshot, so no boot id) */
   let health: ((request: Request) => Response | Promise<Response>) | null = null;
@@ -872,6 +872,28 @@ describe("workspace order evidence through the manager", () => {
     call.answer("R");
     await proved;
     expect(remoteOf(manager)?.snapshot).toMatchObject({ order_epoch: "R", read_seq: 0 });
+  });
+
+  it("names each PC by the relay ID its own server has: this one's, and a remote one's from its health (#2876)", async () => {
+    const own = "ab".repeat(16), theirs = "cd".repeat(16);
+    const { manager, send, setHealth } = await remoteFixture({ serverId: () => own });
+    setHealth(() => Response.json({ ok: true, web_ui: { boot_id: "R", revision: null, server_id: theirs } }));
+    expect(manager.list()[0]?.server_id).toBe(own);
+    const proved = published(manager, (machines) => machines.some((machine) => machine.id === "remote" && machine.source_boot_id === "R"));
+    send({ type: "snapshot", snapshot: paired("R", 0) });
+    await proved;
+    expect(remoteOf(manager)?.server_id).toBe(theirs);
+  });
+
+  it("keeps an SSH PC's relay ID across a restart, so its alerts are known by it before it answers (#2876)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-machine-id-"));
+    const id = "0f0f0f0f-0000-4000-8000-000000000001", theirs = "cd".repeat(16);
+    writeFileSync(join(dir, "machines.json"), JSON.stringify([{ id, name: "Office", enabled: false, target: { destination: "office" }, server_id: theirs, snapshot: null }]));
+    const manager = new MachineManager(dir, { seed() {} } as unknown as PushService, new CompletionTracker(null));
+    cleanups.push(() => { manager.stop(); rmSync(dir, { recursive: true, force: true }); });
+    expect(manager.list().find((machine) => machine.id === id)?.server_id).toBe(theirs);
+    manager.patch(id, { name: "Office 2" });
+    expect(JSON.parse(readFileSync(join(dir, "machines.json"), "utf8"))[0].server_id).toBe(theirs);
   });
 
   it("a connection's first epoch is published only once its health proves it", async () => {

@@ -16,11 +16,11 @@ const report = (): UsageReport => ({
       // 86 hours into the week: runs out in about 2 days, 1.4 days before the reset
       { kind: "week", scope: null, used_percent: 63.4, resets_at: at(82), starts_at: at(82 - 168) },
       { kind: "week", scope: "Sonnet", used_percent: 5, resets_at: null, starts_at: null },
-    ] },
+    ], credits: { kind: "spend", currency: "USD", used: 12.19, limit: 15.39, used_percent: 79.2 }, resets: { available: 2, expires_at: at(30.5) } },
     { id: "codex", key: "codex:work", account: "me@work.example", plan: "pro", problem: null, checked_at: at(0), windows: [
       { kind: "session", scope: null, used_percent: 12, resets_at: at(0.8), starts_at: at(0.8 - 5) },
       { kind: "week", scope: null, used_percent: 91, resets_at: at(99), starts_at: at(99 - 168) },
-    ] },
+    ], credits: { kind: "balance", balance: 1231.84, unlimited: false }, resets: { available: 1, expires_at: null } },
     { id: "codex", key: "codex:home", account: "me@example.com", plan: "plus", problem: null, checked_at: "2026-09-29T12:00:00Z", windows: [
       { kind: "week", scope: null, used_percent: 30, resets_at: at(120), starts_at: null },
     ] },
@@ -99,9 +99,15 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     const popover = page.getByRole("dialog", { name: "Subscription usage", exact: true });
     await popover.waitFor();
     assert.equal(await popover.locator(".usage-provider").count(), 7);
-    assert.equal(await popover.getByRole("meter").count(), 9);
+    // Claude's capped usage credits add a meter; Codex's balance and the resets are text only
+    assert.equal(await popover.getByRole("meter").count(), 10);
     assert.equal(await popover.locator(".usage-account").first().textContent(), "me@example.com");
     assert.equal(await popover.locator(".usage-row.is-high").count(), 1);
+    const rowText = (section: number) => popover.locator(".usage-provider").nth(section).locator(".usage-row").evaluateAll((rows) => rows.map((row) => [...row.children].map((cell) => cell.textContent).join("|")));
+    assert.deepEqual((await rowText(0)).slice(3), ["Usage credits|$12.19 / $15.39|", "Limit resets|Expires in 1d 6h|2 left"]);
+    assert.deepEqual((await rowText(1)).slice(2), ["Credits|1,232 credits", "Limit resets|1 left"]);
+    assert.equal(await popover.getByRole("meter", { name: "Usage credits", exact: true }).getAttribute("aria-valuenow"), "20.8", "the credits meter counts what is left, as the limits do");
+    assert.equal(await popover.locator(".usage-row-label").evaluateAll((labels) => labels.every((label) => label.scrollWidth <= label.clientWidth)), true, "no row label is cut short");
     assert.equal(await popover.locator(".usage-note.is-problem").count(), 1, "only the expired sign-in reads as an error");
     if (process.env.UI_EVIDENCE_DIR) {
       mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
@@ -205,6 +211,7 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     const box = await popover.boundingBox();
     assert.ok(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 390, "the popover stays inside the phone's screen");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    assert.equal(await popover.locator(".usage-row-label").evaluateAll((labels) => labels.every((label) => label.scrollWidth <= label.clientWidth)), true, "no row label is cut short on a phone");
     if (process.env.UI_EVIDENCE_DIR) await page.locator(".sidebar-shell").screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-popover-phone.png") });
 
     // Settings on the phone: every account row fits its card, controls included

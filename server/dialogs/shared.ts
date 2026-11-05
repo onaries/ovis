@@ -363,6 +363,7 @@ export function publicPrompt(parsed: ParsedPrompt): InteractivePrompt {
     ...(parsed.fallback ? { fallback: true as const } : {}),
     ...(parsed.own_text ? { own_text: parsed.own_text } : {}),
     ...(parsed.screen_words ? { screen_words: parsed.screen_words } : {}),
+    ...(parsed.option_preview ? { option_preview: parsed.option_preview } : {}),
   };
   parsedByPublicPrompt.set(prompt, parsed);
   return prompt;

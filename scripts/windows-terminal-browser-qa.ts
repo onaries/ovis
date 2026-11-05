@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Request } from "playwright-core";
 import { chromePath } from "./chrome-path.ts";
+import { shownRow, shownRows } from "./shown-rows.ts";
 
 assert.equal(process.platform, "win32", "this regression requires native Windows");
 assert.notEqual(process.env["HERDR_TEST_LIVE"], "1", "this regression requires an isolated test session");
@@ -56,7 +57,8 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(pane)}`);
   const host = page.locator(".pane-terminal");
-  const text = () => page.locator(".xterm-rows").innerText();
+  // the rows the user sees, one line each: libghostty's while it draws, else xterm's (shown-rows.ts)
+  const text = () => page.locator(shownRow()).evaluateAll((rows) => rows.map((row) => row.textContent ?? "").join("\n"));
   await until(async () => (await text()).includes("WIN-HISTORY-120"), "mirrored output");
   await host.hover();
   await page.mouse.wheel(0, -350);
@@ -154,8 +156,8 @@ try {
   // screen and moves the anchor), one column short of the edge, wherever this PC's font puts the columns:
   // the cell width is read from the long prompt's run of P's.
   await pan(0);
-  const { cellWidth, visibleWidth } = await host.evaluate((element) => {
-    const walker = document.createTreeWalker(element.querySelector(".xterm-rows")!, NodeFilter.SHOW_TEXT);
+  const { cellWidth, visibleWidth } = await host.evaluate((element, drawn) => {
+    const walker = document.createTreeWalker(element.querySelector(drawn)!, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (!node.textContent?.startsWith("P".repeat(100))) continue;
       const range = document.createRange();
@@ -166,7 +168,7 @@ try {
       return { cellWidth: range.getBoundingClientRect().width / 100, visibleWidth: box.left + element.clientLeft + element.clientWidth - screen.left };
     }
     throw new Error("no rendered run of the long prompt's P's to measure a cell by");
-  });
+  }, shownRows());
   // the cursor sits after the V's and "> ", in column count + 2
   const vs = Math.floor(visibleWidth / cellWidth) - 4;
   await paneSendText(pane, `function prompt { ("V" * ${vs}) + "> " }`);

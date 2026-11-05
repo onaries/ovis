@@ -3,14 +3,18 @@ import { readFileSync, statSync } from "node:fs";
 import type { AgentStatus, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import type { CompletionTracker } from "./completion.ts";
 import { herdrSocketPath } from "./herdr/client.ts";
+import { isNamedPipe, pipeIdentity } from "./herdr-core/pipe.ts";
 
 /**
  * The same socket identity evidence as CompletionTracker; include creation time against inode
  * reuse. Windows replaces the pid:start marker's contents, not necessarily its file identity.
- * An unreadable file is not proof of a restart.
+ * An unreadable file is not proof of a restart. herdr-core's adapter on Windows is a named pipe with
+ * no file behind it, and reading one connects to the adapter and waits for an answer it never
+ * sends, blocking the server: pipeIdentity stands instead.
  */
 export function finishHerdrIdentity(path = herdrSocketPath(), platform = process.platform): string | null {
   try {
+    if (platform === "win32" && isNamedPipe(path)) return pipeIdentity(path);
     if (platform === "win32") return readFileSync(path, "utf8").trim() || null;
     const stat = statSync(path, { bigint: true });
     return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { OutputWindow, OUTPUT_HARD_BYTES, OUTPUT_HIGH_BYTES, OUTPUT_LOW_BYTES, OUTPUT_STALL_MS } from "../server/output-window.ts";
 import { HttpStream, MuxEngine, MuxStreamError, MUX_FLIGHT, MUX_RECEIVE_RESERVATION_BYTES, WsStream } from "./relay-mux-engine.ts";
 import type { MuxClock, MuxOptions, WsClose } from "./relay-mux-engine.ts";
-import { decodeFrame, encodeFrame, FrameType, LIMITS_V1, MuxProtocolError, WS_CONTINUATION_CAPACITY, WS_START_CAPACITY } from "./relay-mux.ts";
+import { decodeFrame, encodeFrame, FrameType, LIMITS_V1, MAX_LARGE_WS_MESSAGE_BYTES, MuxProtocolError, WS_CONTINUATION_CAPACITY, WS_START_CAPACITY } from "./relay-mux.ts";
 import type { HeaderList, MuxFrame } from "./relay-mux.ts";
 
 const KiB = 1024;
@@ -666,6 +666,63 @@ describe("WebSockets", () => {
       } else expect(remote.cancelled).toBe(true);
     });
   }
+  it("carries a message over 1 MiB to a peer that takes large messages, crediting it as it arrives", async () => {
+    const p = pair();
+    p.client.receiveLargeMessages();
+    p.server.sendLargeMessages();
+    const { local, remote } = await socket(p);
+    const reserved = p.client.stats.reservedBytes;
+    const received = deferred<string | Uint8Array>();
+    local.onMessage = received.resolve;
+    const snapshot = "한".repeat(600_000);
+    expect(remote.send(snapshot)).toBeGreaterThan(0);
+    expect(await received.promise).toBe(snapshot);
+    await p.flush();
+    expect(p.client.stats.reservedBytes).toBe(reserved);
+    expect(p.client.stats.inboundBytes).toBe(0);
+    expect(remote.getBufferedAmount()).toBe(0);
+    // the largest such message leaves the outgoing queue room for a PC's whole output budget behind it
+    expect(remote.send(new Uint8Array(MAX_LARGE_WS_MESSAGE_BYTES))).toBeGreaterThan(0);
+    expect(remote.send(new Uint8Array(MiB))).toBeGreaterThan(0);
+    expect(remote.live).toBe(true);
+    // a message past the larger cap is still refused
+    const closed = deferred<WsClose>();
+    local.onClose = closed.resolve;
+    expect(remote.send(new Uint8Array(MAX_LARGE_WS_MESSAGE_BYTES + 1))).toBe(0);
+    expect((await closed.promise).code).toBe(1009);
+    expect(p.closes).toEqual([]);
+  });
+  it("keeps the 1 MiB cap toward a peer that did not offer large messages", async () => {
+    const p = pair();
+    p.client.receiveLargeMessages();
+    const { local, remote } = await socket(p);
+    const closed = deferred<WsClose>();
+    local.onClose = closed.resolve;
+    expect(remote.send(new Uint8Array(MiB + 1))).toBe(0);
+    expect((await closed.promise).code).toBe(1009);
+    expect(p.closes).toEqual([]);
+  });
+  it("closes a large message with 1009 when its reservation would pass the receive bound", async () => {
+    const p = pair();
+    p.client.receiveLargeMessages();
+    p.server.sendLargeMessages();
+    const sockets = [];
+    for (let i = 0; i < LIMITS_V1.max_ws_streams; i++) sockets.push(await socket(p));
+    // 8 WS windows (8 MiB) and four HTTP windows (1.25 MiB) leave less than the message under the 12 MiB bound
+    for (let i = 0; i < 4; i++) p.client.openHttp({ method: "GET", target: "/api/held", headers: [], body: "none" });
+    await p.flush();
+    const { local, remote } = required(sockets[0]);
+    let delivered = 0;
+    local.onMessage = () => { delivered++; };
+    const closed = deferred<WsClose>();
+    local.onClose = closed.resolve;
+    remote.send(new Uint8Array(MAX_LARGE_WS_MESSAGE_BYTES));
+    expect((await closed.promise).code).toBe(1009);
+    await p.flush();
+    expect(delivered).toBe(0);
+    expect(p.client.active).toBe(true);
+    expect(p.client.stats.reservedBytes).toBeLessThanOrEqual(MUX_RECEIVE_RESERVATION_BYTES);
+  });
   for (const code of [1000, 1008, 1012, 3000, 4008]) {
     it(`passes through close ${code} on the virtual socket`, async () => {
       const p = pair();

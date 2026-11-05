@@ -9,7 +9,7 @@
  * validated, allowlisted settings snapshot. Deploy: telemetry/README.md.
  */
 
-import { ACTIVE_LATE_DAYS, telemetryHarnesses, telemetrySettings, telemetryUsage, type TelemetryHarness, type TelemetrySettings, type TelemetryUsage } from "../shared/telemetry.ts";
+import { ACTIVE_LATE_DAYS, telemetryHarnesses, telemetrySettings, telemetryUsage, type TelemetryHarness, type TelemetryRuntime, type TelemetrySettings, type TelemetryUsage } from "../shared/telemetry.ts";
 
 /** the part of Cloudflare's D1 binding this Worker uses */
 interface D1Statement { bind(...values: unknown[]): { run(): Promise<unknown> } }
@@ -26,6 +26,8 @@ export interface StoredEvent {
   install_method: "plugin" | "managed" | "source";
   /** complete validated snapshot, or null when the sender has not provided one */
   settings: TelemetrySettings | null;
+  /** the terminal runtime, from senders since it was added; null from older ones */
+  runtime: TelemetryRuntime | null;
 }
 
 export interface StoredActive {
@@ -39,6 +41,8 @@ export interface StoredActive {
   harnesses: TelemetryHarness[];
   /** the day's use, from senders since NOTICE_VERSION 5; null from older ones */
   usage: TelemetryUsage | null;
+  /** the terminal runtime, from senders since it was added; null from older ones */
+  runtime: TelemetryRuntime | null;
 }
 
 const MAX_BODY_BYTES = 8192;
@@ -48,6 +52,14 @@ const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9a-z.]{1,24})?$/;
 const WORD = /^[a-z0-9_]{1,16}$/;
 const EVENTS = new Set(["install", "update"]);
 const METHODS = new Set(["plugin", "managed", "source"]);
+const RUNTIMES = new Set(["herdr", "herdr-core"]);
+
+/** the sender's `runtime` when it has one: an older sender has none (null); anything else is not a message (undefined) */
+function readRuntime(value: Record<string, unknown>): TelemetryRuntime | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(value, "runtime")) return null;
+  const runtime = value["runtime"];
+  return typeof runtime === "string" && RUNTIMES.has(runtime) ? runtime as TelemetryRuntime : undefined;
+}
 /** ISO 3166-1 alpha-2 */
 const COUNTRY = /^[A-Z]{2}$/;
 
@@ -62,7 +74,7 @@ export function requestCountry(request: Request): string | null {
 
 /** the event as it is stored, or null when the body is not one */
 /** the fields an event has ever carried; `changed_settings` is what senders before 0.4.9 told and is not kept */
-const EVENT_KEYS = new Set(["event", "install_id", "version", "previous_version", "os", "arch", "install_method", "settings", "changed_settings"]);
+const EVENT_KEYS = new Set(["event", "install_id", "version", "previous_version", "os", "arch", "install_method", "settings", "changed_settings", "runtime"]);
 
 export function readEvent(body: unknown, now: Date): StoredEvent | null {
   if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
@@ -80,17 +92,20 @@ export function readEvent(body: unknown, now: Date): StoredEvent | null {
   const settingsValue = hasSettings ? value["settings"] : null;
   const settings = settingsValue === null ? null : telemetrySettings(settingsValue);
   if (hasSettings && settingsValue !== null && settings === null) return null;
+  const runtime = readRuntime(value);
+  if (runtime === undefined) return null;
   return {
     day: now.toISOString().slice(0, 10),
     event: event as StoredEvent["event"], install_id, version, previous_version, os, arch,
     install_method: install_method as StoredEvent["install_method"],
     settings,
+    runtime,
   };
 }
 
 const ACTIVE_KEYS = ["event", "day", "install_id", "version", "os", "arch", "install_method", "harnesses"];
-/** a sender since NOTICE_VERSION 5 adds `usage`; an older one keeps sending the keys above alone */
-const ACTIVE_KEY_SETS = [ACTIVE_KEYS, [...ACTIVE_KEYS, "usage"]];
+/** a sender since NOTICE_VERSION 5 adds `usage`, and a later one `runtime`; an older one keeps sending the keys above alone */
+const ACTIVE_KEY_SETS = [ACTIVE_KEYS, [...ACTIVE_KEYS, "usage"], [...ACTIVE_KEYS, "usage", "runtime"]];
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
 
@@ -117,7 +132,9 @@ export function readActive(body: unknown, now: Date): StoredActive | null {
   if (!harnesses) return null;
   const usage = expected.includes("usage") ? telemetryUsage(value["usage"]) : null;
   if (expected.includes("usage") && usage === null) return null;
-  return { day, install_id, version, os, arch, install_method: install_method as StoredActive["install_method"], harnesses, usage };
+  const runtime = readRuntime(value);
+  if (runtime === undefined) return null;
+  return { day, install_id, version, os, arch, install_method: install_method as StoredActive["install_method"], harnesses, usage, runtime };
 }
 
 /** the body as text, or null as soon as it passes MAX_BODY_BYTES (without waiting for the rest) */
@@ -159,16 +176,16 @@ export async function handle(request: Request, env: Env, now = new Date()): Prom
     if (!active) return new Response(null, { status: 400 });
     await env.DB.prepare(
       // a later message that day replaces the usage too; one from an older sender (no usage) leaves it
-      "INSERT INTO active (day, install_id, version, os, arch, install_method, country, harnesses, usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (day, install_id) DO UPDATE SET version = excluded.version, os = excluded.os, arch = excluded.arch, install_method = excluded.install_method, country = COALESCE(excluded.country, active.country), harnesses = excluded.harnesses, usage = COALESCE(excluded.usage, active.usage)",
-    ).bind(active.day, active.install_id, active.version, active.os, active.arch, active.install_method, requestCountry(request), JSON.stringify(active.harnesses), active.usage === null ? null : JSON.stringify(active.usage)).run();
+      "INSERT INTO active (day, install_id, version, os, arch, install_method, country, harnesses, usage, runtime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (day, install_id) DO UPDATE SET version = excluded.version, os = excluded.os, arch = excluded.arch, install_method = excluded.install_method, country = COALESCE(excluded.country, active.country), harnesses = excluded.harnesses, usage = COALESCE(excluded.usage, active.usage), runtime = COALESCE(excluded.runtime, active.runtime)",
+    ).bind(active.day, active.install_id, active.version, active.os, active.arch, active.install_method, requestCountry(request), JSON.stringify(active.harnesses), active.usage === null ? null : JSON.stringify(active.usage), active.runtime).run();
     return new Response(null, { status: 204 });
   }
   const stored = readEvent(body, now);
   if (!stored) return new Response(null, { status: 400 });
   const settings = stored.settings === null ? null : JSON.stringify(stored.settings);
   await env.DB.prepare(
-    "INSERT OR IGNORE INTO events (day, event, install_id, version, previous_version, os, arch, install_method, country, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).bind(stored.day, stored.event, stored.install_id, stored.version, stored.previous_version, stored.os, stored.arch, stored.install_method, requestCountry(request), settings).run();
+    "INSERT OR IGNORE INTO events (day, event, install_id, version, previous_version, os, arch, install_method, runtime, country, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(stored.day, stored.event, stored.install_id, stored.version, stored.previous_version, stored.os, stored.arch, stored.install_method, stored.runtime, requestCountry(request), settings).run();
   return new Response(null, { status: 204 });
 }
 

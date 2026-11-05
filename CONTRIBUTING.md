@@ -17,7 +17,9 @@ Everything a PR is checked against is in this repository: this file, the
 [DESIGN.md](DESIGN.md) and the `AGENTS.md` files ([root](AGENTS.md), [server](server/AGENTS.md),
 [src](src/AGENTS.md)), which hold the invariants that people and coding agents both follow.
 Contributions are licensed under the repository's [MIT license](LICENSE). Say in the PR when code is
-adapted from another project, with its license.
+adapted from another project, with its license. Before your first PR is merged, sign the
+[Contributor License Agreement](CLA.md): the CLA Assistant bot asks on the PR, and you sign once by
+commenting the sentence it gives.
 
 ## Set up
 
@@ -119,7 +121,9 @@ the context does not make it clear. The dialog that makes a workspace is
 - **UI text:** every new `t("…")` string needs a Korean, Japanese and Simplified Chinese entry with
   the same placeholders. A string that only one feature's files use goes in that feature's files in
   `src/lib/i18n/` when it has them (`settings.ko.ts`, `settings.ja.ts` and `settings.zh.ts` for the
-  Settings dialog; each file's header lists its feature's files). Any other string goes in
+  Settings dialog, with its Access rows in `settings-access.*.ts` and the composer's optional
+  buttons and chips in `settings-composer.*.ts`; each file's header lists its
+  feature's files). Any other string goes in
   `src/lib/i18n.ko.ts`, `i18n.ja.ts` and `i18n.zh.ts`, and so does a feature's string once another
   feature uses it too. `bun run test:unit` fails on a missing, unused or untranslated entry, and on one
   kept in the wrong file or in different files across the three languages.

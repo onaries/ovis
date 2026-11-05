@@ -107,5 +107,5 @@ after eviction close `1012`.
 To report abuse that goes through `relay.ovis.sh`, such as traffic that isn't Ovis's or a flood of
 connections for one PC, write to devswha@gmail.com with the `server_id` involved and when it
 happened. The `server_id` is the 32 hex characters after `/s/` in an `app.ovis.sh` link, or after
-`server_id=` in the relay's address. The relay keeps no logs and can't read the traffic, so that is
-all there is to go on. A flaw in the relay itself is a vulnerability: report it privately as above.
+`server_id=` in the relay's address. The relay keeps no logs, only per-PC usage counters (bytes, time
+connected, sessions), and can't read the traffic, so that is all there is to go on. A flaw in the relay itself is a vulnerability: report it privately as above.

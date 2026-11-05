@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ProviderUsage, StatuslineState, UsageProviderId, UsageReport, UsageWindow } from "../../shared/protocol.ts";
+import type { ProviderUsage, StatuslineState, UsageCredits, UsageProviderId, UsageReport, UsageWindow } from "../../shared/protocol.ts";
 import { ApiError, fetchStatusline, fetchUsage, setStatusline } from "./api.ts";
 import type { UsageCount, UsageGlance } from "./settings.ts";
-import { t } from "./i18n.ts";
+import { currentLocale, t } from "./i18n.ts";
 import { usePageVisible } from "./visibility.ts";
 
 /** The server asks a provider at most every 5 minutes; a minute here only picks that up sooner. */
@@ -104,6 +104,23 @@ export function formatResetIn(resetsAt: string | null, now: number): string | nu
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return t("{h}h {m}m", { h: hours, m: minutes % 60 });
   return t("{d}d {h}h", { d: Math.floor(hours / 24), h: hours % 24 });
+}
+
+/**
+ * What a credits row says: money in the provider's currency ("€12.19 / €15.39" against a cap,
+ * "€4.00 spent" without one), or Codex's balance in whole credits as Codex's /status rounds it.
+ */
+export function creditsText(credits: UsageCredits): string {
+  const locale = currentLocale();
+  if (credits.kind === "balance") {
+    if (credits.unlimited) return t("Unlimited");
+    return credits.balance === null ? t("Available") : t("{n} credits", { n: new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(credits.balance) });
+  }
+  const money = (amount: number): string => {
+    try { return new Intl.NumberFormat(locale, { style: "currency", currency: credits.currency }).format(amount); } catch { return `${amount} ${credits.currency}`; }
+  };
+  if (credits.limit !== null) return `${credits.used === null ? "—" : money(credits.used)} / ${money(credits.limit)}`;
+  return credits.used === null ? t("Unlimited") : t("{amount} spent", { amount: money(credits.used) });
 }
 
 /** Percent as the meters print it: whole numbers, except the tenth that keeps a sliver above 0 visible. */

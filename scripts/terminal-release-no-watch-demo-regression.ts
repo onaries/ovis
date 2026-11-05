@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { chromium, type Browser } from "playwright-core";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 import terminalFixture from "../site/demo/fixtures/terminal.json";
 
 interface Fixture {
@@ -96,7 +97,7 @@ try {
     await page.evaluate(({ pane, data }) => {
       for (const socket of window.releaseFixture.sockets) socket.push({ type: "pty-data", pane_id: pane, data });
     }, { pane, data: `\x1b[2J\x1b[H${MARK}` });
-    await frame.locator(".xterm-rows", { hasText: MARK }).waitFor({ state: "attached" });
+    await frame.locator(shownRows(), { hasText: MARK }).waitFor({ state: "attached" });
     // the window is left: after RELEASE_AFTER_MS the tab lets go of the pane
     await page.evaluate(() => {
       Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false });
@@ -107,7 +108,7 @@ try {
     await settled();
     await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
     assert.equal(await sentOf("watch"), 0, "a bridge without watch is never asked for a view");
-    assert.equal(await frame.locator(".xterm-rows", { hasText: MARK }).count(), 1, "the released pane keeps its last screen");
+    assert.equal(await frame.locator(shownRows(), { hasText: MARK }).count(), 1, "the released pane keeps its last screen");
     // back in use: the pane is attached again
     const attaches = await sentOf("attach");
     await page.evaluate(() => {

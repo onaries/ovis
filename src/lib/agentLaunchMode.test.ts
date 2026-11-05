@@ -1,6 +1,6 @@
 import { expect, it } from "bun:test";
 
-import { CLAUDE_EFFORTS, CODEX_EFFORTS, firstPromptDelivery, launchAgent, launchArgs, launchCapabilities, launchChoiceFault, modelSuggestions } from "./agentLaunchMode.ts";
+import { CLAUDE_EFFORTS, CODEX_EFFORTS, firstPromptDelivery, launchAgent, launchArgs, launchCapabilities, launchChoiceFault, modelSuggestions, recordedChoices } from "./agentLaunchMode.ts";
 
 const plain = { claudeLaunchMode: "default", codexLaunchMode: "default" } as const;
 
@@ -106,4 +106,14 @@ it("sends the first prompt as Codex's own argument, and as the bridge's pending 
   expect(launchArgs("claude", plain, { prompt: "Fix it" })).toBeUndefined();
   expect(firstPromptDelivery("codex", "   ")).toBeNull();
   expect(firstPromptDelivery("", "Fix it")).toBeNull();
+});
+
+it("carries a chat's recorded model and effort only where the agent's launch takes them (#774)", () => {
+  expect(recordedChoices("claude", { model: "claude-opus-5-5", effort: "xhigh" })).toEqual({ model: "claude-opus-5-5", effort: "xhigh" });
+  expect(recordedChoices("codex", { model: "gpt-6.1-terra", effort: "ultra" })).toEqual({ model: "gpt-6.1-terra", effort: "ultra" });
+  // a record no launch takes: Claude Code's synthetic answers, an effort the agent does not name, nothing recorded
+  expect(recordedChoices("claude", { model: "<synthetic>", effort: "ultra" })).toEqual({ model: "", effort: "" });
+  expect(recordedChoices("codex", { model: null, effort: null })).toEqual({ model: "", effort: "" });
+  // an agent whose command line takes neither
+  expect(recordedChoices("omp", { model: "anthropic/claude-opus-5-5", effort: "high" })).toEqual({ model: "", effort: "" });
 });

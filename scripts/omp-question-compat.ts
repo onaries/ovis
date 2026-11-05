@@ -12,6 +12,7 @@ import { chromium } from "playwright-core";
 import { paneClose, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import type { InteractivePrompt } from "../shared/protocol.ts";
 import { TEST_SESSION } from "./test-herdr.ts";
+import { shownRow } from "./shown-rows.ts";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const appRoot = resolve(process.env["OMP_COMPAT_APP_ROOT"] ?? repo);
@@ -301,7 +302,7 @@ async function waitForTerminalRows(binary: string, env: NodeJS.ProcessEnv, timeo
   const end = Date.now() + timeoutMs;
   let rows = 0;
   while (Date.now() < end) {
-    rows = Number(await browser(binary, env, ["eval", "document.querySelectorAll('.xterm-rows > div').length"]));
+    rows = Number(await browser(binary, env, ["eval", `document.querySelectorAll(${JSON.stringify(shownRow())}).length`]));
     if (rows > 24) return rows;
     await Bun.sleep(250);
   }

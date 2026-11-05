@@ -1,0 +1,49 @@
+/* the side conversations list (OmpBtw.tsx) takes the background tasks list's look; an open topic
+   reads as a short thread under its row: each question, then its answer */
+.btw-menu {
+  max-height: max(var(--row-h), min(calc(var(--row-h) * 14), calc(var(--bg-tasks-room, 100vh) - var(--space-2) * 2)));
+}
+
+/* a task's row is one line of glyph and words; a topic's row carries its open thread under it */
+.btw-menu .bg-task {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.btw-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 var(--space-2) var(--space-2) calc(var(--space-2) + 14px + var(--space-2));
+  padding-left: var(--space-2);
+  border-left: var(--hairline) solid var(--border);
+}
+
+.btw-exchange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.btw-question {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.btw-answer {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.btw-state {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}

@@ -7,6 +7,7 @@ import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { shownRows } from "./shown-rows.ts";
 import { keyBarItemLabel } from "../src/lib/keyBar.ts";
 
 // Production client over the demo's synthetic transport. Editing and typing stay in this
@@ -21,7 +22,7 @@ const DEFAULT_KEY_BAR_KEYS = ["direct", "paste", "keyboard", "Escape", "Tab", "c
 
 interface InputFrame { type: "input" | "keys"; pane_id: string; text?: string; keys?: string[] }
 const framesOf = (page: Page): Promise<InputFrame[]> => page.evaluate(() => (window as unknown as { keyBarFrames: InputFrame[] }).keyBarFrames);
-const keysOf = (page: Page): Promise<string[]> => page.locator(".key-bar [data-key]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-key")!));
+const keysOf = (page: Page): Promise<string[]> => page.locator(".key-bar-row [data-key]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-key")!));
 const settingsOf = (page: Page): Promise<Record<string, unknown>> => page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), SETTINGS_KEY);
 const settled = (page: Page): Promise<void> => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
 const settingsScrolls = new WeakMap<Page, number>();
@@ -381,9 +382,19 @@ try {
           await expectFrame(page, () => bar.getByRole("button", { name: `Press ${name}`, exact: true }).tap(), { type: "keys", keys: [chord!] });
           assert.equal(await input.evaluate((node) => document.activeElement === node), true, "key taps preserve direct typing focus");
         }
-        for (const key of ["Control", "Shift"]) await bar.locator(`[data-key="${key}"]`).tap();
+        // a saved combination sends its own chord and leaves the held modifiers for the next key;
+        // Shift steps from held for one key to locked and then off
+        assert.equal(await bar.locator('[data-key="Control"]').getAttribute("aria-pressed"), "false", "Ctrl held for one key let go after Left");
+        assert.equal(await bar.locator('[data-key="Alt"]').getAttribute("data-latch"), "once");
+        await bar.locator('[data-key="Control"]').tap();
+        await bar.locator('[data-key="Shift"]').tap();
+        assert.equal(await bar.locator('[data-key="Shift"]').getAttribute("data-latch"), "locked");
+        await bar.locator('[data-key="Shift"]').tap();
+        assert.equal(await bar.locator('[data-key="Shift"]').getAttribute("aria-pressed"), "false");
         await expectFrame(page, () => bar.locator('[data-key="ctrl-d"]').tap(), { type: "keys", keys: ["ctrl+alt+d"] });
+        await bar.locator('[data-key="Alt"]').tap();
         await expectFrame(page, () => bar.locator('[data-key="Delete"]').tap(), { type: "input", text: "\x1b[3;3~" });
+        assert.equal(await bar.locator('[data-key="Alt"]').getAttribute("aria-pressed"), "false", "Alt held for one key let go after Delete");
         const beforePaste = (await framesOf(page)).length;
         await input.evaluate((node) => {
           node.dispatchEvent(new KeyboardEvent("keydown", { key: "ㅍ", code: "KeyV", ctrlKey: true, bubbles: true, cancelable: true }));
@@ -394,6 +405,7 @@ try {
         console.log("PASS ordinary keys inherit held modifiers; saved combinations override them, including plus and space, and clipboard shortcuts stay native");
 
         // Removing an armed modifier must leave ordinary typing plain, including after re-adding it.
+        await bar.locator('[data-key="Alt"]').tap();
         assert.equal(await bar.locator('[data-key="Alt"]').getAttribute("aria-pressed"), "true");
         dialog = await openSettings(page);
         editor = dialog.locator(".key-bar-settings");
@@ -439,7 +451,9 @@ try {
           await page.setViewportSize({ width, height: 844 });
           await settled(page);
           const controlC = await page.evaluate(() => {
-            const bar = document.querySelector<HTMLElement>(".key-bar");
+            // the row scrolls, or on the narrowest screens the whole bar does (KeyBar.css)
+            const row = document.querySelector<HTMLElement>(".key-bar-row");
+            const bar = row && getComputedStyle(row).display === "contents" ? row.closest<HTMLElement>(".key-bar") : row;
             const key = bar?.querySelector<HTMLElement>('[data-key="ctrl-c"]');
             if (!bar || !key) return null;
             bar.scrollLeft = 0;
@@ -608,7 +622,7 @@ try {
         await shell.goto(`http://127.0.0.1:${server.port}/herdr-web-ui/demo/app/?pane=${encodeURIComponent(panes.shell)}`);
         await ready(shell);
         const shellBar = shell.locator(".key-bar");
-        const screen = (): Promise<string> => shell.evaluate(() => (document.querySelector(".pane-terminal .xterm-rows")?.textContent ?? "").replaceAll("\u00a0", " "));
+        const screen = (): Promise<string> => shell.evaluate((shown) => (document.querySelector(shown)?.textContent ?? "").replaceAll("\u00a0", " "), shownRows());
         const shows = async (wanted: string): Promise<void> => {
           const deadline = Date.now() + 5_000;
           while (!(await screen()).includes(wanted)) {
@@ -633,9 +647,11 @@ try {
         await shellBar.locator('[data-key="Shift"]').tap();
         await shellBar.locator('[data-key="Enter"]').tap();
         await shows("package.json");
+        // Shift held for one key was let go by Enter: hold it again for the letter
+        assert.equal(await shellBar.locator('[data-key="Shift"]').getAttribute("aria-pressed"), "false");
+        await shellBar.locator('[data-key="Shift"]').tap();
         await shell.keyboard.insertText("q");
         await shows("$ Q");
-        await shellBar.locator('[data-key="Shift"]').tap();
         await shellBar.locator('[data-key="Control"]').tap();
         await shell.keyboard.insertText("c");
         await shows("^C");

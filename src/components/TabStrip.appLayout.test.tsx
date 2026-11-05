@@ -3,10 +3,16 @@ import { act, createElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { PaneInfo, SessionSnapshot, WorkspaceInfo } from "../../shared/protocol.ts";
-import { AppLayoutContext } from "../lib/machineContext.tsx";
+import { AppLayoutContext, appLayoutOf, type LayoutOffer } from "../lib/machineContext.tsx";
 import { SettingsProvider } from "../lib/settings.ts";
+import { setSidebarPins } from "../lib/sidebarPins.ts";
 import { RowMenu } from "./RowMenu.tsx";
 import { TabStrip } from "./TabStrip.tsx";
+
+/** herdr's TUI server, a herdr-core PC the Herdr app lays out, and one whose layout Ovis keeps (lib/machineContext.tsx) */
+const TUI = appLayoutOf({ version: "0.9.5", protocol: 22 });
+const APP_CORE = appLayoutOf({ version: "0.1.17", protocol: 22, runtime: "herdr-core" });
+const OVIS_CORE = appLayoutOf({ version: "0.1.17", protocol: 22, runtime: "herdr-core", layout: { rename: true, split: true, move: true, arrange: true, worktrees: true } });
 
 const workspace = (id: string, tabs: number): WorkspaceInfo =>
   ({ workspace_id: id, label: id, active_tab_id: `${id}:t1`, number: 1, tab_count: tabs, pane_count: tabs, focused: false, agent_status: "idle", worktree: null });
@@ -66,9 +72,9 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
     }
   });
 
-  async function draw(appLayout: boolean): Promise<void> {
+  async function draw(offer: LayoutOffer): Promise<void> {
     await act(async () => {
-      renderer = create(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: appLayout },
+      renderer = create(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: offer },
         createElement(TabStrip, { snapshot, workspace: snapshot.workspaces[0]!, selectedPane: snapshot.panes[0]!, onSelectPane: () => {}, onNewTab: () => {}, onNewTerminal: async () => {}, onMoveToWorkspace: async () => {} }))), { createNodeMock: node });
     });
   }
@@ -92,7 +98,7 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
 
   it("offers a TUI PC's tab its moves and rename, by menu, keys and a double-click", async () => {
     await withFetch(async () => {
-      await draw(false);
+      await draw(TUI);
       expect(await menuOf()).toEqual(["move-right", "move-workspace", "new-agent-tab", "rename-tab", "close-tab"]);
       expect(tab().props["aria-keyshortcuts"]).toBe("Shift+F10 Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
       expect(typeof tab().props.onDoubleClick).toBe("function");
@@ -106,7 +112,7 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
 
   it("keeps a core PC's tab as the Herdr app names and orders it: New tab with agent and Close stay", async () => {
     await withFetch(async () => {
-      await draw(true);
+      await draw(APP_CORE);
       expect(await menuOf()).toEqual(["new-agent-tab", "close-tab"]);
       expect(tab().props["aria-keyshortcuts"]).toBe("Shift+F10");
       expect(tab().props.onDoubleClick).toBeUndefined();
@@ -115,6 +121,50 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
       await keyDown("ArrowRight", { altKey: true, shiftKey: true });
       expect(strip().props["aria-busy"]).toBe(false);
       expect(requested).toEqual([]);
+    });
+  });
+
+  it("offers no Close tab for a tab holding a locked pinned agent, and its Delete and middle click close nothing (#2432)", async () => {
+    stored.set("ovis:settings", JSON.stringify({ agentLocks: true, lockedAgents: ["local:w1:t1:p"] }));
+    setSidebarPins(["local:w1:t1:p"]);
+    try {
+      await withFetch(async () => {
+        await draw(TUI);
+        expect(await menuOf()).toEqual(["move-right", "move-workspace", "new-agent-tab", "rename-tab"]);
+        await keyDown("Delete");
+        await act(async () => tab().props.onAuxClick({ button: 1, preventDefault() {} }));
+        expect(requested).toEqual([]);
+      });
+    } finally {
+      setSidebarPins([]);
+    }
+  });
+
+  it("offers no Close tab for a tab whose locked pane the strip leaves out of its list, as a DAG viewer's (#2432)", async () => {
+    // a second pane in the open tab, unselected and drawn like omo-herdr-dag's viewer, which rosterPanes leaves out
+    const viewer = { pane_id: "w1:t1:dag", workspace_id: "w1", tab_id: "w1:t1", terminal_id: "w1:t1:dag:term", revision: 1, focused: false, agent_status: "idle", label: "DAG · s" } as PaneInfo;
+    snapshot.panes.push(viewer);
+    stored.set("ovis:settings", JSON.stringify({ agentLocks: true, lockedAgents: ["local:w1:t1:dag"] }));
+    setSidebarPins(["local:w1:t1:dag"]);
+    try {
+      await withFetch(async () => {
+        await draw(TUI);
+        expect(await menuOf()).not.toContain("close-tab");
+        await keyDown("Delete");
+        expect(requested).toEqual([]);
+      });
+    } finally {
+      snapshot.panes.pop();
+      setSidebarPins([]);
+    }
+  });
+
+  it("renames, reorders and moves a core PC's tab to another workspace where Ovis keeps its layout", async () => {
+    await withFetch(async () => {
+      await draw(OVIS_CORE);
+      expect(await menuOf()).toEqual(["move-right", "move-workspace", "new-agent-tab", "rename-tab", "close-tab"]);
+      await keyDown("F2");
+      expect(renameFields()).toBe(1);
     });
   });
 });

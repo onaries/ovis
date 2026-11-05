@@ -1,5 +1,3 @@
-import type { ConversationTurn } from "../../shared/protocol.ts";
-
 /**
  * Where a reader left one pane's chat: the turn at the top of the view and how far below the
  * view's top edge it started, or `atEnd` while the reader followed the end. Kept in memory only,
@@ -16,16 +14,8 @@ export interface ChatPosition {
 const LIMIT = 100;
 const positions = new Map<string, ChatPosition>();
 
-/**
- * A turn's identity that survives a remount: row keys are browser slots that a new mount
- * allocates again, so the turn is named by what it is: its role, its time and how its first part
- * begins. Only the beginning counts: a turn still streaming keeps the name it had.
- */
-export function chatTurnAnchor(turn: ConversationTurn): string {
-  const first = turn.parts[0];
-  const head = first === undefined ? "" : "text" in first ? first.text.slice(0, 80) : JSON.stringify(first).slice(0, 80);
-  return `${turn.role}|${turn.ts ?? ""}|${first?.kind ?? ""}|${head}`;
-}
+/** A turn's identity that survives a remount, the one a conversation search names its matches by. */
+export { conversationTurnAnchor as chatTurnAnchor } from "../../shared/conversation-search.ts";
 
 export function rememberChatPosition(storageId: string, position: ChatPosition): void {
   positions.delete(storageId);

@@ -4,13 +4,21 @@
    change of it resizes the pane for every device on it. The masked input (SecretInput.css) takes
    the line's place the same way. */
 .terminal-input-slot {
+  /* the room under the line's controls; more where the line is the screen's bottom row (below) */
+  --terminal-input-pad-bottom: var(--space-1);
   position: relative;
   flex-shrink: 0;
   /* .terminal-input at one row: its top border, its padding above and below, the field's label and
      the gap under it, then the taller of the round targets and a one-row .terminal-input-text (same
      font size, line height, padding and border); the actions' words sit beside the label */
-  height: calc(var(--hairline) + 2 * var(--space-1) + var(--fs-chat) * var(--lh-tight) + var(--space-2)
+  height: calc(var(--hairline) + var(--space-1) + var(--terminal-input-pad-bottom) + var(--fs-chat) * var(--lh-tight) + var(--space-2)
     + max(var(--touch-target), max(var(--fs-input), var(--fs-xl)) * var(--lh-base) + 2 * var(--space-2) + 2 * var(--hairline)));
+}
+
+/* Settings > Terminal > Fold the key bar (#1531): with the key bar folded the line can be the screen's
+   bottom row (PaneTerminal.tsx measures it), and keeps clear of the home indicator */
+.terminal-input-slot.is-at-screen-bottom {
+  --terminal-input-pad-bottom: max(var(--space-2), env(safe-area-inset-bottom, 0px));
 }
 
 /* the masked input stands in on a pane that types straight into the grid: no row is kept */
@@ -44,13 +52,30 @@
   align-items: end;
   /* the same room under the field and the send button as over them, so they never sit on the key
      bar's rule (or the screen's edge) below; the sides keep the key bar's --space-2 */
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--terminal-input-pad-bottom);
   border-top: var(--hairline) solid var(--border);
   background: var(--bg-panel);
 }
 
 .terminal-input.has-voice {
   grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+/* with Terminal keys in the line (Settings > Terminal > Fold the key bar) the actions may not fit the
+   narrowest phone beside the field with Attach and the microphone on too: the field keeps a width to type in, and the actions wrap to a
+   second row above their last one (the line grows upward, as a long draft does), Send kept last */
+.terminal-input.has-key-controls {
+  grid-template-columns: minmax(min(8rem, 40%), 1fr) minmax(0, auto);
+}
+
+.terminal-input.has-key-controls.has-voice {
+  grid-template-columns: minmax(min(8rem, 40%), 1fr) auto minmax(0, auto);
+}
+
+.terminal-input.has-key-controls .terminal-input-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 /* the field's name, above it on the left; the actions' words stand level with it on the right */
@@ -93,6 +118,14 @@
   font-size: max(var(--fs-input), var(--fs-xl));
   line-height: var(--lh-base);
   resize: none;
+}
+
+/* with Terminal keys in the line (Settings > Terminal > Fold the key bar) the field is narrower on a
+   phone: its placeholder is cut on one row rather than wrapped to a second, which would grow the line */
+.terminal-input.has-key-controls .terminal-input-text::placeholder {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .terminal-input-text:focus {
@@ -149,8 +182,11 @@
 
 /* Insert is the quieter of the two: an outline on the elevated surface, so Send alone is the
    filled one. The outline is the dim text colour, which holds 3:1 against the panel in every
-   theme (the hairline border colour does not); the pressed state is the key bar's */
-.terminal-input-insert .terminal-input-face {
+   theme (the hairline border colour does not); the pressed state is the key bar's. Attach (Settings >
+   Terminal, off by default) stands before it the same way */
+.terminal-input-insert .terminal-input-face,
+.terminal-input-attach .terminal-input-face,
+.terminal-input-keys .terminal-input-face {
   border-color: var(--text-dim);
   background: var(--bg-elevated);
   color: var(--text);
@@ -160,12 +196,22 @@
 }
 
 @media (hover: hover) {
-  .terminal-input-insert:hover:not(:disabled) .terminal-input-face {
+  .terminal-input-insert:hover:not(:disabled) .terminal-input-face,
+  .terminal-input-attach:hover:not(:disabled) .terminal-input-face,
+  .terminal-input-keys:hover:not(:disabled) .terminal-input-face {
     background: var(--bg-hover);
   }
 }
 
-.terminal-input-insert:active:not(:disabled) .terminal-input-face {
+.terminal-input-insert:active:not(:disabled) .terminal-input-face,
+.terminal-input-attach:active:not(:disabled) .terminal-input-face,
+.terminal-input-keys:active:not(:disabled) .terminal-input-face {
+  border-color: var(--accent);
+  color: var(--text-strong);
+}
+
+/* Terminal keys, first in the line (KeyBar.tsx LineKeysButton): pressed as an armed key while the row is open */
+.terminal-input-keys[aria-pressed="true"] .terminal-input-face {
   border-color: var(--accent);
   color: var(--text-strong);
 }

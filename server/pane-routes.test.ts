@@ -92,6 +92,48 @@ it("diagnoses fallback and recovery without changing the conversation or 304 res
   } finally { read.mockRestore(); warn.mockRestore(); }
 });
 
+it("answers a conversation with the PC's clock, which its turns' times are on", async () => {
+  const url = new URL(`http://x/api/pane/conversation?pane_id=${crypto.randomUUID()}`);
+  const read = spyOn(conversation, "paneConversation").mockResolvedValue({
+    source: "claude-transcript", turns: [], metadata: { model: null, reasoning_effort: null }, cursor: null, history_id: "h", version: "clock-fixture",
+  });
+  const ask = (headers?: HeadersInit) => handlePaneRequest(new Request(url, { headers }), url, "/api/pane/conversation", {});
+  try {
+    const before = Date.now();
+    const answered = (await ask())!;
+    const body = await answered.json() as { server_time?: string };
+    expect(Date.parse(body.server_time ?? "")).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(body.server_time ?? "")).toBeLessThanOrEqual(Date.now());
+    expect(answered.headers.get("x-server-time")).toBe(body.server_time!);
+    // the time is no part of the answer's version: an unchanged transcript still answers 304, with the time as it answered
+    const after = Date.now();
+    const unchanged = (await ask({ "if-none-match": 'W/"clock-fixture"' }))!;
+    expect(unchanged.status).toBe(304);
+    expect(Date.parse(unchanged.headers.get("x-server-time") ?? "")).toBeGreaterThanOrEqual(after);
+    expect(Date.parse(unchanged.headers.get("x-server-time") ?? "")).toBeLessThanOrEqual(Date.now());
+  } finally { read.mockRestore(); }
+});
+
+it("asks a chat showing a history to wait only when Copilot's rejection may be waited out", async () => {
+  const pane = crypto.randomUUID();
+  const ask = async (diagnostic: "copilot_log_truncated" | "copilot_session_unregistered" | "copilot_api_rpc_timeout" | "copilot_api_no_foreground" | "copilot_api_foreground_changed", history: boolean) => {
+    const url = new URL(`http://x/api/pane/conversation?pane_id=${pane}${history ? "&history_id=shown" : ""}`);
+    const read = spyOn(conversation, "paneConversation").mockRejectedValue(new conversation.ConversationUnavailable("no_session_path", undefined, diagnostic));
+    try { return await (await handlePaneRequest(new Request(url), url, "/api/pane/conversation", {}))!.json(); }
+    finally { read.mockRestore(); }
+  };
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(await ask("copilot_log_truncated", true)).toEqual({ source: "scrollback", turns: [], recovery: "waiting" });
+    expect(await ask("copilot_log_truncated", false)).toEqual({ source: "scrollback", turns: [] });
+    expect(await ask("copilot_session_unregistered", true)).toEqual({ source: "scrollback", turns: [] });
+    // a --ui-server API that timed out may answer later; one that names no or another foreground session settled it
+    expect(await ask("copilot_api_rpc_timeout", true)).toEqual({ source: "scrollback", turns: [], recovery: "waiting" });
+    expect(await ask("copilot_api_no_foreground", true)).toEqual({ source: "scrollback", turns: [] });
+    expect(await ask("copilot_api_foreground_changed", true)).toEqual({ source: "scrollback", turns: [] });
+  } finally { warn.mockRestore(); }
+});
+
 it("diagnoses pending reads while preserving the retry response", async () => {
   const url = new URL(`http://x/api/pane/conversation?pane_id=${crypto.randomUUID()}`);
   const lines: string[] = [];

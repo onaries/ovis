@@ -42,6 +42,10 @@ choose_labels() {
 # the labels of the pull requests' runners (run.sh registers them with self-hosted, Linux and X64):
 # a job that asks only for labels among these can take one of them
 pool_labels='["self-hosted","linux","x64","self-hosted-ovis"]'
+# the light jobs of a pull request's run that share those runners (scripts/light-runner-workflow.test.ts
+# keeps this list in step): they hold a runner for seconds, so counting them would send heavy jobs
+# hosted whenever a few runs start at once
+light_job_names='["Detect changes","herdr-core live contract","Integration and browser","Pull request title","bundle-windows"]'
 
 # Prints how many unfinished jobs of queued or running workflow runs could take one of those
 # runners, stopping once the count passes $1 (one API call per run adds up while many runs wait);
@@ -53,7 +57,7 @@ busy_jobs() {
   done) || return 1
   for id in $ids; do
     jobs=$(gh api --paginate "repos/$REPOSITORY/actions/runs/$id/jobs?filter=latest&per_page=100") || return 1
-    n=$(jq -s -e --argjson pool "$pool_labels" '[.[].jobs[] | select(.status != "completed")
+    n=$(jq -s -e --argjson pool "$pool_labels" --argjson light "$light_job_names" '[.[].jobs[] | select(.status != "completed" and (.name as $name | $light | index($name)) == null)
       | [.labels[] | ascii_downcase] | select(index("self-hosted") != null and all(.[]; . as $x | $pool | index($x) != null))]
       | length' <<<"$jobs") || return 1
     total=$((total + n))

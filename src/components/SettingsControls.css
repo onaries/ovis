@@ -172,6 +172,13 @@
   text-align: center;
 }
 
+/* Settings → File text size: a chosen size offers its way back to the chat's beside the stepper */
+.settings-file-size {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .settings-select-wrap {
   position: relative;
   display: inline-flex;

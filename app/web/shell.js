@@ -7,6 +7,9 @@
  */
 export const APP_ORIGIN = "https://app.ovis.sh";
 
+/** Whether the connect screen offers signing in to the account (the hosted shell's front page); app/scripts/build-web.ts turns it on with OVIS_APP_ACCOUNT=1. */
+export const ACCOUNT_SIGN_IN = false;
+
 /** Whether the phone's first language is Korean, the one language the app's own pages have besides English. */
 export const korean = /^ko\b/i.test(navigator.language ?? "");
 

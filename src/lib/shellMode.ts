@@ -39,3 +39,12 @@ export function shellServiceWorker(pathname: string): { script: string; scope: s
   const scope = serverScopePath(serverId);
   return { script: `${scope}sw.js`, scope };
 }
+
+/**
+ * The hosted shell's worker opens a PC's page from the shell it kept (public/sw.js), so a reload
+ * meant to bring in a newer shell asks that PC's worker to go to the host first; the kept copy
+ * stays its fallback. Keyed by the PC: another PC's worker on the origin does not take the request.
+ */
+export async function requestFreshShell(storage: Pick<CacheStorage, "open">, serverId: string): Promise<void> {
+  await (await storage.open("ovis-files-v1")).put(`/__ovis-fresh-shell/${serverId}`, new Response("1"));
+}

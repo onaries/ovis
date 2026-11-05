@@ -18,7 +18,7 @@ const JSON_ROUTES = [
   "/api/tab/rename", "/api/tab/close", "/api/tab/move", "/api/tab/move-to-workspace", "/api/plugin/action",
   "/api/pane/rename", "/api/agent/rename", "/api/pane/find", "/api/pane/scroll",
   "/api/pane/input", "/api/pane/keys", "/api/pane/close", "/api/layout/ratio",
-  "/api/pane/split", "/api/pane/zoom", "/api/pane/swap", "/api/pane/resize",
+  "/api/pane/split", "/api/pane/zoom", "/api/pane/swap", "/api/pane/move", "/api/pane/resize",
   "/api/pane/clear", "/api/pane/focus", "/api/pane/image",
 ] as const;
 

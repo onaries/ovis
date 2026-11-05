@@ -177,9 +177,9 @@ export function useSidebarActivityState(machines: readonly Machine[], selectedMa
         const key = JSON.stringify([finish.pc, finish.epoch, finish.pane]);
         const previous = shared.current.get(key);
         const answerUpgrade = previous?.id === finish.id && previous.answer === undefined && answer !== undefined;
-        // a finish told (or being told) as `held`, its pane now brought into view: someone looked again
+        // a finish told (or being told) as `held`, or waiting for its retry, its pane now brought into view: someone looked again
         const shownAgain = previous?.id === finish.id && presented === "new"
-          && previous.told !== "new" && (previous.told === "held" || previous.sending === "held");
+          && previous.told !== "new" && (previous.told === "held" || previous.sending === "held" || previous.retry !== undefined);
         if (!previous || finish.id > previous.id || answerUpgrade || shownAgain) {
           const sender = shareRef.current;
           if (sender) {
@@ -192,7 +192,8 @@ export function useSidebarActivityState(machines: readonly Machine[], selectedMa
               shared.current.delete(oldest);
             }
             // a send put off or retried tells a look made earlier: as `held`, so it cannot overrule an
-            // unread told since
+            // unread told since. A return is not put off behind a retry, its own or another pane's: told
+            // late as `held`, it would add nothing to the finish already shared. A sign-in pause holds it.
             const send = async () => {
               if (shared.current.get(key) !== sent || recovery.current !== gate) return true;
               if (gate.unauthorized) { sent.presented = "held"; sent.retry = send; return false; }
@@ -216,7 +217,7 @@ export function useSidebarActivityState(machines: readonly Machine[], selectedMa
               }
               return true;
             };
-            if (gate.unauthorized || gate.running || gate.timer !== undefined) { sent.presented = "held"; sent.retry = send; }
+            if (gate.unauthorized || (!shownAgain && (gate.running || gate.timer !== undefined))) { sent.presented = "held"; sent.retry = send; }
             else void send();
           }
         } else if (finish.id === previous.id) {

@@ -685,11 +685,12 @@ export function parseHermesRows(rows: readonly HermesMessageRow[], identity?: st
           role: "user",
           ts,
           parts: [{ kind: "text", text: pictures === null ? invocation?.request ?? text : `${pictures.images}\n\n${invocation?.request ?? pictures.caption}` }, ...(invocation?.skills ?? []).map((skill) => ({ kind: "skill" as const, skill }))],
+          text_rows: [row.id],
         });
       } else if (row.role === "assistant") {
         let turn = turns[turns.length - 1];
         if (!turn || turn.role !== "assistant") {
-          turn = { role: "assistant", ts, parts: [] };
+          turn = { role: "assistant", ts, parts: [], text_rows: [] };
           turns.push(turn);
         }
         if (ts) turn.end_ts = ts;
@@ -729,6 +730,7 @@ export function parseHermesRows(rows: readonly HermesMessageRow[], identity?: st
 
         if (typeof row.content === "string" && row.content.trim().length > 0) {
           turn.parts.push({ kind: "text", text: row.content });
+          (turn.text_rows ??= []).push(row.id);
         }
       } else if (row.role === "tool") {
         const callId = row.tool_call_id ?? "";
@@ -746,7 +748,7 @@ export function parseHermesRows(rows: readonly HermesMessageRow[], identity?: st
         } else {
           let turn = turns[turns.length - 1];
           if (!turn || turn.role !== "assistant") {
-            turn = { role: "assistant", ts, parts: [] };
+            turn = { role: "assistant", ts, parts: [], text_rows: [] };
             turns.push(turn);
           }
           const orphan: Extract<ConversationPart, { kind: "tool" }> = {

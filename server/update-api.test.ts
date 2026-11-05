@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { noInstalledNotes, noUpdateNotes, unmanagedUpdateStatus, type UpdateRequest, type UpdateStatus } from "../shared/update.ts";
+import { DESKTOP_APP_UPDATES, noInstalledNotes, noUpdateNotes, unmanagedUpdateStatus, type UpdateRequest, type UpdateStatus } from "../shared/update.ts";
 import { connectUpdater, handleUpdateRequest, servedRevision, type UpdateService } from "./update-api.ts";
 
 const directories: string[] = [];
@@ -125,6 +125,20 @@ describe("a manual install", () => {
 });
 
 describe("the update status", () => {
+  it("tells a server the desktop app runs that the app updates itself, not to start Ovis another way", () => {
+    const before = process.env["OVIS_DESKTOP_APP"];
+    try {
+      delete process.env["OVIS_DESKTOP_APP"];
+      expect(connectUpdater().status().blocked_reason).toBe(unmanagedUpdateStatus().blocked_reason);
+      process.env["OVIS_DESKTOP_APP"] = "1";
+      const status = connectUpdater().status();
+      expect(status).toMatchObject({ managed: false, available: false });
+      expect(status.blocked_reason).toBe(DESKTOP_APP_UPDATES);
+    } finally {
+      if (before === undefined) delete process.env["OVIS_DESKTOP_APP"]; else process.env["OVIS_DESKTOP_APP"] = before;
+    }
+  });
+
   const read = async (where?: () => Promise<Pick<UpdateStatus, "port" | "serving_url">>) => {
     const response = await handleUpdateRequest(new Request("http://127.0.0.1/api/updates"), "/api/updates", service(() => offer()), where);
     return { status: response.status, body: await response.json() as UpdateStatus };

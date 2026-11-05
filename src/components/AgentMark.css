@@ -14,3 +14,20 @@
 [data-marks="mono"] .agent-mark.is-brand:not(.claude) svg {
   filter: grayscale(1);
 }
+
+/* A kind with no mark of its own: its initial and the disc's ring in a color picked by its kind (data-hue,
+   AgentMark.tsx), one of the theme's syntax colors. Every theme sets them in both modes and keeps them
+   readable on --bg-elevated, the disc's fill (src/lib/settings.test.ts), so the initial stays legible.
+   Mono leaves the mark quiet. */
+.agent-mark svg[data-hue="keyword"] { --mark-hue: var(--syntax-keyword); }
+.agent-mark svg[data-hue="string"] { --mark-hue: var(--syntax-string); }
+.agent-mark svg[data-hue="number"] { --mark-hue: var(--syntax-number); }
+.agent-mark svg[data-hue="type"] { --mark-hue: var(--syntax-type); }
+.agent-mark svg[data-hue="variable"] { --mark-hue: var(--syntax-variable); }
+.agent-mark svg[data-hue="meta"] { --mark-hue: var(--syntax-meta); }
+
+.agent-mark svg[data-hue] .agent-mark-disc { stroke: var(--mark-hue, var(--border)); }
+.agent-mark svg[data-hue] text { fill: var(--mark-hue, currentColor); }
+
+[data-marks="mono"] .agent-mark svg[data-hue] .agent-mark-disc { stroke: var(--border); }
+[data-marks="mono"] .agent-mark svg[data-hue] text { fill: currentColor; }

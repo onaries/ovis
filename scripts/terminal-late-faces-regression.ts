@@ -23,6 +23,7 @@ import { createServer } from "../server/index.ts";
 import { UsageService } from "../server/usage.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 // Nerd Font icons (a folder, GitHub's mark, a branch): one cell each, a whole em in the icon font
 const ICONS = ["\uf07b", "\uf113", "\ue0a0"];
@@ -113,12 +114,12 @@ setInterval(() => {}, 1 << 30);
   });
   await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(pane)}`);
   await page.locator(".conn-live").waitFor();
-  await page.locator(".pane-terminal .xterm-rows", { hasText: "ROWS_READY" }).waitFor();
+  await page.locator(shownRows(), { hasText: "ROWS_READY" }).waitFor();
   // the typed font is the terminal's (it is set once its faces loaded, or failed to in time)
-  await page.waitForFunction(() => {
-    const rows = document.querySelector(".pane-terminal .xterm-rows");
+  await page.waitForFunction((shown) => {
+    const rows = document.querySelector(shown);
     return rows !== null && getComputedStyle(rows).fontFamily.includes("Late Stand-in");
-  }, undefined, { timeout: 15000 });
+  }, shownRows(), { timeout: 15000 });
   await Promise.race([asked, page.waitForTimeout(15000).then(() => {
     throw new Error(`the late faces were not both asked for: ${JSON.stringify(fetched)}`);
   })]);
@@ -145,8 +146,8 @@ setInterval(() => {}, 1 << 30);
   }));
 
   // Then: every icon is drawn at the size that fits its cell, and the Korean row's bar stands in the Latin row's column.
-  const drawn = await page.evaluate((icons) => {
-    const rows = document.querySelector<HTMLElement>(".pane-terminal .xterm-rows")!;
+  const drawn = await page.evaluate(([icons, shown]) => {
+    const rows = document.querySelector<HTMLElement>(shown)!;
     const left = rows.getBoundingClientRect().left;
     const base = Number.parseFloat(getComputedStyle(rows).fontSize);
     const bars: number[] = [];
@@ -170,9 +171,11 @@ setInterval(() => {}, 1 << 30);
       }
       return null;
     });
-    const hangul = [...rows.querySelectorAll("span")].find(span => span.textContent === "가나다라마바사");
-    return { base, bars, sizes, hangulSize: hangul ? getComputedStyle(hangul).fontSize : null };
-  }, ICONS);
+    // xterm's run of Hangul, or libghostty's two-cell box around one syllable
+    const hangul = [...rows.querySelectorAll("span")].find(span => span.textContent === "가나다라마바사") ?? rows.querySelector(".ghostty-wide");
+    return { base, bars, sizes, hangulSize: hangul ? getComputedStyle(hangul).fontSize : null,
+      renderer: document.querySelector<HTMLElement>(".pane-terminal")?.dataset["renderer"] ?? "xterm" };
+  }, [ICONS, shownRows()] as const);
   console.log(JSON.stringify({ arrived, ...drawn }));
   await page.screenshot({ path: join(evidence, "terminal-late-faces.png") });
 

@@ -34,8 +34,9 @@ const POLISH_PROMPT = [
 /**
  * GPT-5.1 and later reason before answering unless told not to: tidying needs no reasoning and
  * the wait is the user's. Older models take no reasoning setting and keep a fixed temperature.
+ * A router such as OpenRouter names the model after its vendor (`openai/gpt-6-luna`).
  */
-const REASONING_MODEL = /^gpt-(?:5\.\d|[6-9])/;
+const REASONING_MODEL = /^(?:[\w.-]+\/)*gpt-(?:5\.\d|[6-9])/;
 const POLISH_MODE: Record<VoiceMode, string> = {
   chat: "The text is a message to a coding agent.",
   terminal: "The text is a shell command line: no trailing period, no added capitals.",

@@ -31,8 +31,15 @@ async function appSubscription(): Promise<AppSubscription | null> {
   return (await callNative<{ subscription: AppSubscription | null }>(PUSH_PLUGIN, "getSubscription")).subscription;
 }
 
+/**
+ * The desktop app (Electron, app/electron) offers a PushManager with no push service behind it: its
+ * subscribe always fails. Its window stays loaded in the tray, so the page's own notifications carry
+ * its alerts, as on a browser without push.
+ */
+const desktopApp = (): boolean => typeof navigator !== "undefined" && /\bElectron\//.test(navigator.userAgent);
+
 export function pushSupported(): boolean {
-  return appPush() || (typeof navigator !== "undefined" && "serviceWorker" in navigator && typeof globalThis.PushManager !== "undefined");
+  return appPush() || (typeof navigator !== "undefined" && "serviceWorker" in navigator && typeof globalThis.PushManager !== "undefined" && !desktopApp());
 }
 
 /** Test the existing subscription without repairing it first, so stale registrations stay visible. */

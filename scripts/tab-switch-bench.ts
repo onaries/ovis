@@ -22,6 +22,7 @@ import { createServer } from "../server/index.ts";
 import { UsageService } from "../server/usage.ts";
 import { herdrRpc, paneRead, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 const arg = (name: string, fallback: string): string => {
   const at = process.argv.indexOf(`--${name}`);
@@ -59,7 +60,7 @@ async function until(check: () => Promise<boolean>, label: string, ms = 15_000):
 
 /** Clicks a tab in the page and times its screen and its input-ready, both from the click. */
 async function switchTo(page: Page, tabId: string, paneId: string, marker: string): Promise<{ text: number | null; ready: number | null }> {
-  return page.evaluate(async ({ tabId, paneId, marker }) => {
+  return page.evaluate(async ({ tabId, paneId, marker, rows }) => {
     type Bench = { ready: { pane: string; t: number }[] };
     const bench = (window as unknown as { __bench: Bench }).__bench;
     const button = document.querySelector<HTMLElement>(`[role="tab"][data-tab-id="${CSS.escape(tabId)}"]`);
@@ -67,7 +68,7 @@ async function switchTo(page: Page, tabId: string, paneId: string, marker: strin
     const shown = (): boolean => {
       const frame = document.querySelector<HTMLElement>(`.pane-frame.is-current[data-layout-pane="${CSS.escape(paneId)}"]`);
       if (!frame || !frame.checkVisibility()) return false;
-      return (frame.querySelector(".xterm-rows")?.textContent ?? "").includes(marker);
+      return (frame.querySelector(rows)?.textContent ?? "").includes(marker);
     };
     const start = performance.now();
     button.click();
@@ -82,7 +83,7 @@ async function switchTo(page: Page, tabId: string, paneId: string, marker: strin
       if (frame) ready = frame.t - start;
     }
     return { text, ready };
-  }, { tabId, paneId, marker });
+  }, { tabId, paneId, marker, rows: shownRows() });
 }
 
 async function round(browser: Browser, origin: string, root: string, viewport: keyof typeof VIEWPORTS, index: number): Promise<Sample[]> {
@@ -128,10 +129,10 @@ async function round(browser: Browser, origin: string, root: string, viewport: k
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`${origin}/?pane=${encodeURIComponent(tabs[0]!.pane)}`);
     await page.locator(".conn-live").waitFor({ timeout: 15_000 });
-    await page.waitForFunction(({ pane, text }) => {
+    await page.waitForFunction(({ pane, text, rows }) => {
       const frame = document.querySelector(`.pane-frame.is-current[data-layout-pane="${CSS.escape(pane)}"]`);
-      return (frame?.querySelector(".xterm-rows")?.textContent ?? "").includes(text);
-    }, { pane: tabs[0]!.pane, text: marker(0) }, { timeout: 15_000 });
+      return (frame?.querySelector(rows)?.textContent ?? "").includes(text);
+    }, { pane: tabs[0]!.pane, text: marker(0), rows: shownRows() }, { timeout: 15_000 });
 
     const samples: Sample[] = [];
     const visit = async (i: number, kind: Kind | null): Promise<void> => {

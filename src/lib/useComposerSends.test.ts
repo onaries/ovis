@@ -282,6 +282,36 @@ it("Send it sends the named draft over itself, only at once and never as an answ
   expect(calls).toEqual([["fix the tests", "immediate", "fix the tests"], ["my new message", "hold", undefined]]);
 });
 
+// #2596: Ctrl+Enter queues the message as Enter does, then sends that same row now, as its Send now
+it.each([[true, ["steer"]], [false, []]] as const)("a queued send with now=%p steers its own row", async (now, expected) => {
+  const saved = savedStorage();
+  const pane = `send-now-${now}`, owner = paneStorageId("local", pane), actions: string[] = [];
+  const pending = { id: `row-${now}`, request_id: 1, text: "stop and run the tests", state: "held" as const, created_at: "2026-11-05T00:00:00Z" };
+  const socket = {
+    connected: true,
+    on: () => () => {},
+    pendingAction: (paneId: string, id: string, action: string) => {
+      if (paneId === pane && id === pending.id) actions.push(action);
+      return Promise.resolve({ ok: true });
+    },
+  } as unknown as HerdrSocket;
+  const { promise: steered, resolve: settled } = Promise.withResolvers<void>();
+  try {
+    const result = await sends(pane, { ok: true }, [], {
+      agentStatus: "working", inputAtRest: () => false, socketRef: { current: socket },
+      // as useTerminalSends does before it answers: the receipt's row is in the list first
+      submitComposerMessage: () => { pendingMessages.accept(owner, pending, "scope"); return Promise.resolve({ ok: true, pending }); },
+      submitRetention: { retain: () => () => { settled(); } } as unknown as ComposerSendsDeps["submitRetention"],
+    }).composerSend(pending.text, undefined, false, false, now);
+    expect(result).toBe(true);
+    if (now) await steered;
+    expect(actions).toEqual([...expected]);
+  } finally {
+    pendingMessages.removeCopy(owner, pending.id);
+    saved.restore();
+  }
+});
+
 // #511: Send now of a saved copy of a message for an agent alone sends it again as one
 it("sends a held copy of an agent-only message again as agent-only", async () => {
   const saved = savedStorage();

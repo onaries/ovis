@@ -421,6 +421,7 @@ class HerdrBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(HerdrShellPlugin())
         bridge?.registerPluginInstance(OvisPushPlugin())
+        bridge?.registerPluginInstance(OvisAuthPlugin())
     }
 
     override func viewDidLoad() {

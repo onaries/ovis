@@ -42,14 +42,48 @@ async function startFixture(pane: string, session: string, flags = "") {
 beforeAll(async () => {
   if (process.platform !== "linux") return;
   for (const session of [id, other]) mkdirSync(join(home, "session-state", session), { recursive: true });
-  writeFileSync(executable, `import { openSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
+  writeFileSync(executable, `import { openSync, mkdirSync, writeFileSync, appendFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 const home = process.env.COPILOT_HOME;
 const hold = (id) => { const dir = join(home, "session-state", id); mkdirSync(dir, { recursive: true }); openSync(join(dir, \`inuse.\${process.pid}.hold\`), "w"); };
 const lifecycle = process.argv.includes("--lifecycle");
 const log = join(home, "logs", \`process-100-\${process.pid}.log\`);
 let selected = process.argv[2];
+const api = process.argv.includes("--ui-server");
+const sockets = new Set();
+let apiReject = false, apiRace = false, apiReads = 0, acknowledgements = 0;
+const frame = (value) => {
+  const body = Buffer.from(JSON.stringify(value));
+  return Buffer.concat([Buffer.from("Content-Length: " + body.length + "\\r\\n\\r\\n"), body]);
+};
+const lifecycleEvent = (type) => frame({ jsonrpc: "2.0", method: "session.lifecycle", params: { type, sessionId: selected } });
+if (api) createServer((socket) => {
+  sockets.add(socket);
+  socket.on("close", () => sockets.delete(socket));
+  socket.on("error", (error) => { if (error.code !== "ECONNRESET") throw error; });
+  let bytes = Buffer.alloc(0);
+  socket.on("data", (chunk) => {
+    bytes = Buffer.concat([bytes, chunk]);
+    for (;;) {
+      const boundary = bytes.indexOf("\\r\\n\\r\\n");
+      if (boundary < 0) return;
+      const length = Number(bytes.subarray(0, boundary).toString().split(":")[1]);
+      if (bytes.length < boundary + 4 + length) return;
+      const message = JSON.parse(bytes.subarray(boundary + 4, boundary + 4 + length));
+      bytes = bytes.subarray(boundary + 4 + length);
+      if (!["connect", "session.getForeground"].includes(message.method)
+        || Object.keys(message.params).length !== 0) throw new Error("unexpected API write or credentials");
+      const response = apiReject ? { error: { code: -32001, message: "Unauthorized" } }
+        : { result: message.method === "connect" ? { protocolVersion: 3 } : { sessionId: selected } };
+      const reply = frame({ jsonrpc: "2.0", id: message.id, ...response });
+      if (apiRace && message.method === "session.getForeground" && ++apiReads % 2 === 0)
+        socket.write(Buffer.concat([reply, lifecycleEvent("session.background"), lifecycleEvent("session.foreground")]));
+      else socket.write(reply);
+    }
+  });
+}).listen(0, "127.0.0.1");
 mkdirSync(join(home, "logs"), { recursive: true });
 openSync(log, "w");
 if (lifecycle) {
@@ -70,7 +104,22 @@ process.stdin.on("data", (chunk) => {
   buffer += chunk;
   for (let at; (at = buffer.indexOf("\\n")) !== -1;) {
     const line = buffer.slice(0, at); buffer = buffer.slice(at + 1);
-    if (line.startsWith(":hold ")) hold(line.slice(6));
+    if (line.startsWith(":api-")) {
+      if (line.startsWith(":api-switch ")) {
+        for (const socket of sockets) socket.write(lifecycleEvent("session.background"));
+        selected = line.slice(12);
+        for (const socket of sockets) socket.write(lifecycleEvent("session.foreground"));
+      } else if (line === ":api-reject") apiReject = true;
+      else if (line === ":api-allow") apiReject = false;
+      else if (line === ":api-race") apiRace = true;
+      else if (line === ":api-stable") apiRace = false;
+      else if (line === ":api-drop") { for (const socket of sockets) socket.destroy(); }
+      else throw new Error("unknown fixture API command");
+      const ack = join(home, \`api-ack-\${process.pid}.json\`);
+      writeFileSync(ack + ".tmp", JSON.stringify(++acknowledgements));
+      renameSync(ack + ".tmp", ack);
+    }
+    else if (line.startsWith(":hold ")) hold(line.slice(6));
     else if (line.startsWith(":switch ") && lifecycle) {
       const next = line.slice(8);
       appendFileSync(log, new Date().toISOString() + " [INFO] Unregistering foreground session: " + selected + "\\n");
@@ -231,6 +280,111 @@ const handoffTest = async (initialRegistration: boolean) => {
     }
   }
 };
+
+it.skipIf(process.platform !== "linux")("reads the live API without a report, follows warm switches, and fails closed on API loss or conflicts", async () => {
+  const first = "12aa83d8-48bc-41f2-a498-7055c5c44a09";
+  const second = "12aa83d8-48bc-41f2-a498-7055c5c44a0a";
+  for (const session of [first, second]) {
+    mkdirSync(join(home, "session-state", session), { recursive: true });
+    writeFileSync(file(session), fixture(session, session === first ? "API session A" : "API session B"));
+  }
+  appendFileSync(file(first), event("assistant.message", {
+    toolRequests: [{ toolCallId: "api-tool", name: "shell", arguments: { command: "fixture" } }],
+  }) + event("tool.execution_complete", { toolCallId: "api-tool", success: true, result: { content: "output ".repeat(900) } }));
+  const original = fs.readFileSync(file(first), "utf8");
+  const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-copilot-foreground-api" });
+  const current = created.root_pane.pane_id;
+  const commands = new Map<number, number>();
+  const command = async (target: string, pid: number, text: string) => {
+    const expected = (commands.get(pid) ?? 0) + 1;
+    await herdrRpc("pane.send_text", { pane_id: target, text: text + "\n" });
+    for (const deadline = Date.now() + 4000;;) {
+      try { if (JSON.parse(fs.readFileSync(join(home, `api-ack-${pid}.json`), "utf8")) === expected) break; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      if (Date.now() > deadline) throw new Error("isolated API fixture did not acknowledge command");
+      await Bun.sleep(20);
+    }
+    commands.set(pid, expected);
+  };
+  const url = `http://127.0.0.1:${app.port}/api/pane/conversation?pane_id=${encodeURIComponent(current)}`;
+  const read = async () => (await fetch(url)).json() as Promise<{
+    source: string; history_id?: string; cursor?: string;
+    turns: { parts: { text?: string; kind?: string; output_ref?: string }[] }[];
+  }>;
+  const toolUrl = (ref: string) => `http://127.0.0.1:${app.port}/api/pane/conversation/tool-output?${new URLSearchParams({ pane_id: current, ref })}`;
+  try {
+    await startFixture(current, first, "--ui-server --no-proof");
+    const pid = await fixtureInFront(current, first);
+    if (pid === undefined) throw new Error("isolated API fixture has no foreground process");
+    expect((await sessionSnapshot()).panes.find((p) => p.pane_id === current)?.agent_session).toBeFalsy();
+    const initial = await read();
+    expect(initial.source).toBe("copilot-transcript");
+    if (initial.cursor === undefined) throw new Error("API fixture conversation has no cursor");
+    expect(initial.turns[0]?.parts[0]?.text).toBe("API session A");
+    expect((await read()).history_id).toBe(initial.history_id);
+    const outputRef = initial.turns.flatMap((turn) => turn.parts).find((part) => part.kind === "tool")?.output_ref;
+    if (outputRef === undefined) throw new Error("API fixture tool output has no reference");
+    expect(await (await fetch(toolUrl(outputRef))).text()).toBe("output ".repeat(900));
+    await herdrRpc("pane.report_agent_session", { pane_id: current, agent: "copilot", source: "herdr:copilot",
+      seq: Date.now() * 1000, agent_session_id: first });
+    await command(current, pid, `:api-switch ${second}`);
+    const switched = await read();
+    expect(switched.turns[0]?.parts[0]?.text).toBe("API session B");
+    expect(switched.history_id).not.toBe(initial.history_id);
+    expect((await fetch(`${url}&from=${encodeURIComponent(initial.cursor)}`)).status).toBe(409);
+    expect((await fetch(toolUrl(outputRef))).status).toBe(404);
+    await command(current, pid, `:api-switch ${first}`);
+    const returned = await read();
+    expect(returned.turns[0]?.parts[0]?.text).toBe("API session A");
+    expect(returned.history_id).not.toBe(initial.history_id);
+    await command(current, pid, `:api-switch ${second}`);
+    await command(current, pid, `:api-switch ${first}`);
+    expect((await read()).history_id).not.toBe(returned.history_id);
+    expect((await fetch(toolUrl(outputRef))).status).toBe(404);
+    await command(current, pid, ":api-race");
+    expect(await read()).toEqual({ source: "scrollback", turns: [] });
+    await command(current, pid, ":api-stable");
+    expect((await read()).source).toBe("copilot-transcript");
+    // Even valid legacy report/marker evidence cannot rescue a refused API request.
+    await herdrRpc("pane.send_text", { pane_id: current, text: `:hold ${first}\n` });
+    for (const deadline = Date.now() + 4000;;) {
+      if (copilotProcessSession(processEnviron(pid), ["copilot"], pid)?.sessionId === first) break;
+      if (Date.now() > deadline) throw new Error("isolated fixture marker did not open");
+      await Bun.sleep(20);
+    }
+    await command(current, pid, ":api-reject");
+    expect(await read()).toEqual({ source: "scrollback", turns: [] });
+    await command(current, pid, ":api-allow");
+    const recovered = await read();
+    expect(recovered.source).toBe("copilot-transcript");
+    expect(recovered.history_id).not.toBe(returned.history_id);
+    const peer = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-copilot-api-peer" });
+    try {
+      const peerPane = peer.root_pane.pane_id;
+      await startFixture(peerPane, second, "--ui-server --no-proof");
+      const peerPid = await fixtureInFront(peerPane, second);
+      if (peerPid === undefined) throw new Error("isolated API peer has no foreground process");
+      expect((await read()).source).toBe("copilot-transcript");
+      await command(peerPane, peerPid, `:api-switch ${first}`);
+      expect(await read()).toEqual({ source: "scrollback", turns: [] });
+      await command(peerPane, peerPid, `:api-switch ${second}`);
+      expect((await read()).source).toBe("copilot-transcript");
+    } finally { await workspaceClose(peer.workspace.workspace_id); }
+    await command(current, pid, ":api-drop");
+    let reconnected = await read();
+    if (reconnected.source === "scrollback") reconnected = await read();
+    expect(reconnected.source).toBe("copilot-transcript");
+    expect(reconnected.history_id).not.toBe(recovered.history_id);
+    writeFileSync(file(first), fixture(second, "wrong header"));
+    expect(await read()).toEqual({ source: "scrollback", turns: [] });
+    rmSync(file(first));
+    symlinkSync(file(second), file(first));
+    expect(await read()).toEqual({ source: "scrollback", turns: [] });
+    rmSync(file(first));
+    writeFileSync(file(first), original);
+    expect((await read()).source).toBe("copilot-transcript");
+  } finally { await workspaceClose(created.workspace.workspace_id); }
+}, 30_000);
 
 it.skipIf(process.platform !== "linux")("binds only the reported UUID to the foreground process's home and rejects old cursors after a switch", async () => {
   const url = `http://127.0.0.1:${app.port}/api/pane/conversation?pane_id=${encodeURIComponent(pane)}`;

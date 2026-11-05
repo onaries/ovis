@@ -1,5 +1,6 @@
 /**
- * Purpose: verify persistent danger styling and confirmed PC removal in the real demo client.
+ * Purpose: verify Manage PC's Remove PC… (its danger item, the confirm dialog's danger button in every theme, the
+ * busy guard and a failed then retried removal) in the real demo client.
  * Tags: sidebar, machines, accessibility, browser, regression.
  * Usage: bun scripts/sidebar-machine-removal-demo-regression.ts
  */
@@ -15,9 +16,9 @@ import { SUPPORTED_ENTRIES } from "../src/lib/themes.ts";
 const app = mkdtempSync(join(tmpdir(), "herdr-sidebar-machine-removal-"));
 const evidenceDir = process.env.UI_EVIDENCE_DIR;
 const REMOTE_NAME = "Demo remote PC";
-const RENAME_LABEL = "Rename";
-const REMOVE_LABEL = "Remove PC";
-const CONFIRM_LABEL = "Confirm remove PC";
+const RENAME_LABEL = "Rename…";
+const REMOVE_ITEM = "Remove PC…";
+const CONFIRM_LABEL = "Remove PC";
 const REMOVE_EXPLANATION = "Removes this registration. Remote sessions keep running.";
 
 interface Scenario { theme: "dark" | "light" }
@@ -88,8 +89,8 @@ async function dangerStyle(button: Locator): Promise<DangerStyle> {
     };
     const same = (first: Color, second: Color) => Math.abs(first.r - second.r) < 1 && Math.abs(first.g - second.g) < 1 && Math.abs(first.b - second.b) < 1 && Math.abs(first.a - second.a) < 0.01;
     const style = getComputedStyle(element);
-    const panel = element.closest(".machine-controls");
-    if (!panel) throw new Error("danger button is outside .machine-controls");
+    const panel = element.closest(".modal");
+    if (!panel) throw new Error("danger button is outside its dialog");
     const panelBackground = parseColor(getComputedStyle(panel).backgroundColor);
     const buttonBackground = parseColor(style.backgroundColor);
     const text = parseColor(style.color);
@@ -120,8 +121,6 @@ async function dangerStyle(button: Locator): Promise<DangerStyle> {
     };
   });
 }
-
-const opacityOf = (button: Locator): Promise<number> => button.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity));
 
 async function settleButton(button: Locator): Promise<void> {
   await button.evaluate(async (element) => {
@@ -160,52 +159,47 @@ async function checkDangerPresentation(page: Page, theme: Scenario["theme"], sta
   assert.ok(focus.focusVisible && (focus.outlineStyle !== "none" && focus.outlineWidth > 0 || focus.boxShadow !== "none"), `${theme} ${stage} danger button has a visible keyboard focus indicator: ${JSON.stringify(focus)}`);
 }
 
-async function checkDisabledDanger(button: Locator, neighbour: Locator, theme: Scenario["theme"]): Promise<void> {
-  assert.equal(await button.isDisabled(), true, `${theme} confirmation stays disabled while DELETE is held`);
-  assert.equal(await button.getAttribute("class"), "btn btn-danger", `${theme} disabled confirmation keeps its danger class`);
-  assert.equal(await button.getAttribute("aria-busy"), "true", `${theme} the removal in flight is marked busy`);
-  await settleButton(button);
-  await settleButton(neighbour);
-  const style = await dangerStyle(button);
-  const neighbourOpacity = await opacityOf(neighbour);
-  assert.ok(style.tintMatches, `${theme} disabled confirmation keeps the danger tint token: ${JSON.stringify(style)}`);
-  assert.ok(style.borderMatches, `${theme} disabled confirmation keeps the blocked border token: ${JSON.stringify(style)}`);
-  assert.ok(style.textMatches, `${theme} disabled confirmation keeps the danger text token: ${JSON.stringify(style)}`);
-  assert.ok(style.opacity === 1 && neighbourOpacity < 1, `${theme} pending removal keeps its full strength while the disabled Rename beside it dims (${neighbourOpacity}): ${style.opacity}`);
-  assert.ok(style.textContrast >= 4.5, `${theme} disabled confirmation text stays readable: ${style.textContrast.toFixed(2)}:1`);
-  assert.ok(style.borderContrast >= 3, `${theme} disabled confirmation border stays visible: ${style.borderContrast.toFixed(2)}:1`);
-  console.log(`CONTRAST ${theme} disabled (opacity ${style.opacity}, Rename ${neighbourOpacity}): actual text ${style.textContrast.toFixed(2)}:1, border ${style.borderContrast.toFixed(2)}:1`);
-  // every theme block of this mode behind the pending removal: its warning stays readable in each
+/** The confirm's danger button stays readable in every theme block of this mode (the dialog workspace Close uses). */
+async function checkEveryPalette(button: Locator, theme: Scenario["theme"]): Promise<void> {
   const page = button.page();
   const shown = await page.evaluate(() => document.documentElement.dataset.palette);
   for (const { id: palette } of SUPPORTED_ENTRIES.filter((entry) => entry.mode === theme)) {
     await page.evaluate((palette) => { document.documentElement.dataset.palette = palette; }, palette);
     await settleButton(button);
     const themed = await dangerStyle(button);
-    assert.ok(themed.tintMatches && themed.borderMatches && themed.textMatches, `${palette} ${theme} pending removal keeps its danger tokens: ${JSON.stringify(themed)}`);
-    assert.ok(themed.textContrast >= 4.5, `${palette} ${theme} pending removal text stays readable: ${themed.textContrast.toFixed(2)}:1`);
-    assert.ok(themed.borderContrast >= 3, `${palette} ${theme} pending removal border stays visible: ${themed.borderContrast.toFixed(2)}:1`);
-    console.log(`CONTRAST ${palette} ${theme} pending removal: text ${themed.textContrast.toFixed(2)}:1, border ${themed.borderContrast.toFixed(2)}:1`);
+    assert.ok(themed.tintMatches && themed.borderMatches && themed.textMatches, `${palette} ${theme} Remove PC keeps its danger tokens: ${JSON.stringify(themed)}`);
+    assert.ok(themed.textContrast >= 4.5, `${palette} ${theme} Remove PC text stays readable: ${themed.textContrast.toFixed(2)}:1`);
+    assert.ok(themed.borderContrast >= 3, `${palette} ${theme} Remove PC border stays visible: ${themed.borderContrast.toFixed(2)}:1`);
+    console.log(`CONTRAST ${palette} ${theme} Remove PC: text ${themed.textContrast.toFixed(2)}:1, border ${themed.borderContrast.toFixed(2)}:1`);
   }
   await page.evaluate((palette) => { if (palette === undefined) delete document.documentElement.dataset.palette; else document.documentElement.dataset.palette = palette; }, shown);
 }
 
-/** Disabled only because a rename runs, Remove PC dims exactly like the Rename button that runs it. */
-async function checkDimmedLikeNeighbour(remove: Locator, neighbour: Locator, theme: Scenario["theme"]): Promise<void> {
-  assert.equal(await remove.isDisabled(), true, `${theme} Remove PC is disabled while a rename runs`);
-  assert.notEqual(await remove.getAttribute("aria-busy"), "true", `${theme} a rename in flight does not mark Remove PC busy`);
-  await settleButton(remove);
-  await settleButton(neighbour);
-  const removeOpacity = await opacityOf(remove);
-  const neighbourOpacity = await opacityOf(neighbour);
-  assert.ok(removeOpacity < 1, `${theme} Remove PC is dimmed while a rename runs: ${removeOpacity}`);
-  assert.equal(removeOpacity, neighbourOpacity, `${theme} Remove PC dims like the Rename that runs: ${removeOpacity} vs ${neighbourOpacity}`);
-  console.log(`DIM ${theme} rename in flight: Remove PC ${removeOpacity}, Rename ${neighbourOpacity}`);
+/** The menu's Remove PC… reads as a danger item on the menu's own background. */
+async function checkDangerItem(item: Locator, theme: Scenario["theme"]): Promise<void> {
+  const contrast = await item.evaluate((element) => {
+    const parse = (source: string) => { const numbers = source.match(/[\d.]+/g)!.map(Number); return { r: numbers[0]!, g: numbers[1]!, b: numbers[2]! }; };
+    const linear = (channel: number) => { const value = channel / 255; return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4; };
+    const luminance = (color: { r: number; g: number; b: number }) => 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b);
+    const text = luminance(parse(getComputedStyle(element).color));
+    const back = luminance(parse(getComputedStyle(element.closest(".menu")!).backgroundColor));
+    return (Math.max(text, back) + 0.05) / (Math.min(text, back) + 0.05);
+  });
+  assert.ok(contrast >= 4.5, `${theme} Remove PC… text on the menu is ${contrast.toFixed(2)}:1`);
+  console.log(`CONTRAST ${theme} Remove PC… item: ${contrast.toFixed(2)}:1`);
 }
 
-async function capture(controls: Locator, scenario: Scenario, state: "initial" | "armed" | "disabled"): Promise<void> {
+async function capture(target: Locator, scenario: Scenario, state: "menu" | "confirm"): Promise<void> {
   if (!evidenceDir) return;
-  await controls.screenshot({ path: join(evidenceDir, `sidebar-machine-removal-${scenario.theme}-${state}.png`) });
+  await target.screenshot({ path: join(evidenceDir, `sidebar-machine-removal-${scenario.theme}-${state}.png`) });
+}
+
+async function openMenu(page: Page, group: Locator): Promise<Locator> {
+  await group.locator(".machine-header").hover();
+  await group.locator(".machine-manage").click();
+  const menu = page.locator(".row-menu");
+  await menu.waitFor({ state: "visible" });
+  return menu;
 }
 
 async function withScenario(browser: Awaited<ReturnType<typeof chromium.launch>>, url: string, scenario: Scenario): Promise<void> {
@@ -224,73 +218,72 @@ async function withScenario(browser: Awaited<ReturnType<typeof chromium.launch>>
 
     const group = machineGroup(page);
     await group.waitFor({ state: "attached" });
-    const manage = group.locator(".machine-manage");
-    await group.locator(".machine-header").hover();
-    await manage.click();
-    const controls = group.locator(".machine-controls");
-    await controls.waitFor({ state: "visible" });
-    const remove = group.getByRole("button", { name: REMOVE_LABEL, exact: true });
-    assert.equal(await remove.getAttribute("class"), "btn btn-danger", `${scenario.theme} Remove PC is danger styled before confirmation`);
-    await capture(controls, scenario, "initial");
-    await checkDangerPresentation(page, scenario.theme, "initial", remove);
+    let menu = await openMenu(page, group);
+    const removeItem = menu.getByRole("menuitem", { name: REMOVE_ITEM, exact: true });
+    assert.match(await removeItem.getAttribute("class") ?? "", /\bis-danger\b/, `${scenario.theme} Remove PC… is a danger item`);
+    await checkDangerItem(removeItem, scenario.theme);
+    await capture(menu, scenario, "menu");
 
-    await remove.focus();
-    await page.evaluate(() => { (window as unknown as { __sidebarRemoveFocus: Element | null }).__sidebarRemoveFocus = document.activeElement; });
-    await page.keyboard.press("Enter");
-    const confirm = group.getByRole("button", { name: CONFIRM_LABEL, exact: true });
-    await confirm.waitFor();
-    assert.equal(await fixtureValue(page, "calls.deleteCount"), 0, `${scenario.theme} first activation sends zero DELETEs`);
-    assert.equal(await fixtureValue(page, "calls.deleteAttempts"), 0, `${scenario.theme} first activation makes zero DELETE attempts`);
-    assert.equal(await page.evaluate(() => document.activeElement === (window as unknown as { __sidebarRemoveFocus: Element }).__sidebarRemoveFocus), true, `${scenario.theme} arming preserves focus on the same button`);
-    assert.ok((await controls.textContent() ?? "").includes(REMOVE_EXPLANATION), `${scenario.theme} arming explains what removal affects`);
-    assert.equal(await confirm.getAttribute("class"), "btn btn-danger", `${scenario.theme} armed confirmation stays danger styled`);
-    await capture(controls, scenario, "armed");
-    await checkDangerPresentation(page, scenario.theme, "armed", confirm);
+    // the menu's item only asks: the dialog workspace Close uses, Cancel focused
+    await removeItem.click();
+    const dialog = page.getByRole("alertdialog");
+    await dialog.waitFor();
+    assert.equal(await fixtureValue(page, "calls.deleteAttempts"), 0, `${scenario.theme} Remove PC… sends no DELETE`);
+    assert.ok((await dialog.textContent() ?? "").includes(REMOVE_EXPLANATION), `${scenario.theme} the dialog says what removal affects`);
+    const confirm = dialog.getByRole("button", { name: CONFIRM_LABEL, exact: true });
+    assert.equal(await confirm.getAttribute("class"), "btn btn-danger", `${scenario.theme} the dialog's Remove PC is danger styled`);
+    await capture(dialog, scenario, "confirm");
+    await checkDangerPresentation(page, scenario.theme, "confirm", confirm);
+    await checkEveryPalette(confirm, scenario.theme);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    assert.equal(await fixtureValue(page, "calls.deleteAttempts"), 0, `${scenario.theme} Cancel sends no DELETE`);
 
-    await group.locator(".machine-header").hover();
-    await manage.click();
-    await controls.waitFor({ state: "detached" });
-    await group.locator(".machine-header").hover();
-    await manage.click();
-    await controls.waitFor({ state: "visible" });
-    assert.equal(await group.getByRole("button", { name: REMOVE_LABEL, exact: true }).count(), 1, `${scenario.theme} closing and reopening Manage resets confirmation`);
-    assert.equal(await group.getByRole("button", { name: CONFIRM_LABEL, exact: true }).count(), 0, `${scenario.theme} reopened removal starts unarmed`);
-    const reopenedRemove = group.getByRole("button", { name: REMOVE_LABEL, exact: true });
-    const rename = controls.getByRole("button", { name: RENAME_LABEL, exact: true });
+    // a rename in flight holds Remove PC… and Rename… alike
+    menu = await openMenu(page, group);
+    await menu.getByRole("menuitem", { name: RENAME_LABEL, exact: true }).click();
+    const input = page.locator(".machine-rename-input");
+    await input.fill("Renamed demo PC");
     await page.evaluate(() => (window as unknown as { machineControlsFixture: { holdNextMutation(): void } }).machineControlsFixture.holdNextMutation());
-    await rename.click();
-    await controls.locator("form button:disabled").waitFor();
+    await input.press("Enter");
     await page.waitForFunction(() => (window as unknown as { machineControlsFixture: { calls: { mutations: unknown[] } } }).machineControlsFixture.calls.mutations.length === 1);
-    await checkDimmedLikeNeighbour(reopenedRemove, rename, scenario.theme);
+    menu = await openMenu(page, group);
+    assert.equal(await menu.getByRole("menuitem", { name: REMOVE_ITEM, exact: true }).getAttribute("aria-disabled"), "true", `${scenario.theme} Remove PC… waits while a rename runs`);
+    assert.equal(await menu.getByRole("menuitem", { name: RENAME_LABEL, exact: true }).getAttribute("aria-disabled"), "true", `${scenario.theme} Rename… waits while a rename runs`);
+    await menu.getByRole("menuitem", { name: REMOVE_ITEM, exact: true }).dispatchEvent("click");
+    assert.equal(await page.getByRole("alertdialog").count(), 0, `${scenario.theme} a waiting Remove PC… opens nothing`);
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached" });
     await page.evaluate(() => (window as unknown as { machineControlsFixture: { releaseMutation(success: boolean): void } }).machineControlsFixture.releaseMutation(true));
-    await controls.locator("form button:enabled").waitFor();
+    await page.locator(".machine-name", { hasText: "Renamed demo PC" }).waitFor();
     assert.equal(await fixtureValue(page, "calls.deleteAttempts"), 0, `${scenario.theme} a rename sends no DELETE`);
-    await reopenedRemove.focus();
-    await page.keyboard.press("Enter");
-    const destructive = group.getByRole("button", { name: CONFIRM_LABEL, exact: true });
-    await destructive.waitFor();
-    assert.equal(await fixtureValue(page, "calls.deleteAttempts"), 0, `${scenario.theme} re-arming remains inert`);
 
+    const renamed = page.locator(".machine-group").filter({ has: page.locator(".machine-name", { hasText: "Renamed demo PC" }) });
+    menu = await openMenu(page, renamed);
+    await menu.getByRole("menuitem", { name: REMOVE_ITEM, exact: true }).click();
+    await dialog.waitFor();
     await page.evaluate(() => (window as unknown as { machineControlsFixture: { holdNextMutation(): void } }).machineControlsFixture.holdNextMutation());
-    await destructive.click();
+    await confirm.click();
     await page.waitForFunction(() => (window as unknown as { machineControlsFixture: { calls: { deleteAttempts: number } } }).machineControlsFixture.calls.deleteAttempts === 1);
-    await checkDisabledDanger(destructive, rename, scenario.theme);
-    await capture(controls, scenario, "disabled");
-    await destructive.evaluate((button) => {
+    assert.equal(await confirm.isDisabled(), true, `${scenario.theme} confirmation stays disabled while DELETE is held`);
+    assert.equal(await confirm.getAttribute("class"), "btn btn-danger", `${scenario.theme} the pending confirmation keeps its danger class`);
+    await confirm.evaluate((button) => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     assert.equal(await fixtureValue(page, "calls.deleteAttempts"), 1, `${scenario.theme} duplicate clicks while busy issue no additional DELETE`);
 
     await page.evaluate(() => (window as unknown as { machineControlsFixture: { releaseMutation(success: boolean): void } }).machineControlsFixture.releaseMutation(false));
-    await group.getByRole("alert").waitFor();
-    assert.match(await group.getByRole("alert").textContent() ?? "", /Fixture mutation rejected/);
-    assert.equal(await group.count(), 1, `${scenario.theme} rejected removal retains the PC`);
+    await dialog.getByRole("alert").waitFor();
+    assert.match(await dialog.getByRole("alert").textContent() ?? "", /Fixture mutation rejected/);
+    assert.equal(await renamed.count(), 1, `${scenario.theme} rejected removal retains the PC`);
+    assert.equal(await renamed.getByRole("alert").count(), 0, `${scenario.theme} the failure is said in the dialog, not again under the PC`);
     assert.equal(await fixtureValue(page, "calls.deleteCount"), 0, `${scenario.theme} rejected DELETE is not counted as a successful removal`);
-    assert.equal(await destructive.isDisabled(), false, `${scenario.theme} failed removal clears busy state`);
+    assert.equal(await confirm.isDisabled(), false, `${scenario.theme} failed removal clears busy state`);
 
-    await destructive.click();
-    await group.waitFor({ state: "detached" });
+    await confirm.click();
+    await renamed.waitFor({ state: "detached" });
+    await dialog.waitFor({ state: "detached" });
     assert.equal(await fixtureValue(page, "calls.deleteAttempts"), 2, `${scenario.theme} one retry sends one additional DELETE`);
     assert.equal(await fixtureValue(page, "calls.deleteCount"), 1, `${scenario.theme} successful retry removes exactly once`);
     console.log(`PASS ${scenario.theme} PC removal styling, confirmation, busy guard, failure recovery and one successful retry`);

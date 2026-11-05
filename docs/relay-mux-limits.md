@@ -14,6 +14,7 @@ not silently interpreted with new credit. No deployed protocol is migrated.
 | --- | ---: |
 | HTTP DATA credit per stream | 320 KiB |
 | WS DATA credit / maximum message | 1 MiB |
+| Maximum message to a phone that offered `large-ws-messages` | 3 MiB |
 | Plaintext frame / HTTP DATA payload | 16,384 / 16,376 bytes |
 | Bulk protected-wire flight, across streams | 384 KiB |
 | Ordinary flight, including bulk | 408 KiB |
@@ -59,6 +60,15 @@ streams fit (11.75 MiB), and another HTTP stream is refused before dispatch.
 Reservations remain charged during asynchronous cleanup. A WS rejection changes
 its 1 MiB reservation to the smaller HTTP reservation.
 
+A phone offers the `large-ws-messages` feature in HELLO (it is never selected in
+WELCOME, and the v1 limits stay exact); a PC that reads it sends that phone WS
+messages up to 3 MiB, such as a large session's snapshot: the 4 MiB outgoing
+queue then still holds the 1 MiB a PC's core sends behind one. Such a message cannot wait for the 1 MiB window: its receiver reserves
+its whole size against the same 12 MiB bound when its START arrives, credits
+each fragment as it is copied in, and releases the reservation once the message
+is handed over. One that does not fit closes its WS with 1009; the session goes
+on. Inbound payload stays within reservations, so the bound below holds as is.
+
 The shell queues up to 64 HTTP requests when local stream admission is full.
 Requests resume in order after a stream retires and releases its reservation.
 Waiting longer than 30 seconds, exceeding the queue bound, losing the carrier,
@@ -74,7 +84,8 @@ The frame cap, frame/open token buckets, request ceiling, and WS-message ceiling
 remain enforced independently.
 
 Each HTTP inbound queue is at most 320 KiB; each WS inbound payload is at most
-1 MiB. Outgoing payload is at most 4 MiB across streams, with nonterminal streams
+1 MiB, plus the reservations of any large messages (`large-ws-messages`, up to
+3 MiB each) it holds, all within the 12 MiB bound. Outgoing payload is at most 4 MiB across streams, with nonterminal streams
 sharing at most 3 MiB. Metadata is at most 1 MiB and queued control is at most
 64 KiB. Even double-counting inbound reservations and their admitted payload,
 the mux accounting bound per endpoint/channel is:

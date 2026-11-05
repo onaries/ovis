@@ -2,7 +2,8 @@
 
 How the chat lists an agent's `/` commands and skills, sends them, and says what became of them.
 It covers every agent the bridge knows (Claude Code, Codex, OpenCode, pi, omp, OmO, gjc, Hermes,
-Grok, Antigravity, Devin CLI and Command Code) and is written for people who change that code.
+Grok, Antigravity, Devin CLI, Command Code and GitHub Copilot CLI) and is written for people who
+change that code.
 For what a user sees, read the [user guide](guide.md#features); for skill status inside an
 answer, read [Skill activity in chat](chat-skill-activity.md).
 
@@ -50,7 +51,7 @@ catalog; the bridge does not query its SDK broker.
 | Claude Code | the official commands reference, 2.1.301 | user, project and plugin `skills/` and `commands/`, `skillOverrides` | none | MCP prompts a server declares only at run time |
 | Codex | `codex-rs` rust-v0.163.0 slash table | `.codex/skills` of each ancestor, `$CODEX_HOME/skills`, `~/.agents/skills`, system and admin roots, plugin skills as `namespace:name`, to depth 6; custom prompts only before 0.118.0 | skills from a running app-server daemon's `skills/list`, 0.157 or later, never on Windows ([`codex-daemon.ts`](../server/codex-daemon.ts)) | none known |
 | OpenCode | shared builtins pinned to 1.19.3 (so unverified on v2); the rows only one version has are checked against 1.19.3 or 2.0.32, by major.minor | v1 `command/` and `commands/`; v2 skills as `@id`, both command dirs, loose `.md` skills | v2 only: `GET /api/command` and `GET /api/skill` of the service its `service.json` names, checked by pid and version, never started ([`opencode-native.ts`](../server/opencode-native.ts)) | plugin commands on v1 |
-| pi | `earendil-works/pi` slash-commands at 5c1736f8 | agent dir, `~/.agents`, `settings.json` skills, project roots that pi's trust allows | none | extension and package commands |
+| pi | `earendil-works/pi` slash-commands at 5c1736f8 | agent dir, `~/.agents`, `settings.json` skills, project roots that pi's trust allows | extension and package commands from the running pi's `pi.getCommands()`, through the web UI's pi extension when it is installed (`GET /v1/commands` on its socket), never on Windows ([`pi.ts`](../server/pi.ts)) | extension and package commands without that extension |
 | omp | `oh-my-pi` builtin registry at 53a0377d (18.12.3) | omp's skill providers, namespaced on a clash, `disabledProviders` and `enabledProviders` | none | extension and plugin commands |
 | OmO | Senpi 46d15a1c and OmO b6230fcd tables | bundled skills minus the `disabled_skills` union of user, project and profile config | none | extension commands not in the pinned tables |
 | gjc | `builtin-registry.ts` v0.18.12 | bundled workflow skills, `.gjc/commands` of the project and the active profile | none | runtime-only skills not present in scanned roots |
@@ -59,6 +60,7 @@ catalog; the bridge does not query its SDK broker.
 | Antigravity | the recorded agy 1.4.0 palette | `~/.gemini/config/skills` and the two loaded builtin skills | none | none known |
 | Devin CLI | 3000.11.92, checked against its changelog | native roots, plus Claude, Windsurf, Copilot and Cursor roots unless `read_config_from` turns them off | none | MCP prompts not declared on disk |
 | Command Code | its bundled reference at 1.84.0 | `skills/`, nested `commands/`, bundled skills | none | none known |
+| GitHub Copilot CLI | its own `/` menu at 1.0.105, with `copilot help commands` descriptions | `.github`, `.agents` and `.claude` `skills/` of each folder up to the repository root (outside one, up to the home folder or `/`), `$COPILOT_HOME/skills` (default `~/.copilot`), `~/.agents/skills` and `skillDirectories` (a relative one from the pane's folder), recursive, the first of a name winning; files without frontmatter, `disabledSkills`, `user-invocable: false` and names a builtin takes are left out | none | plugin skills, custom agents (`/agent`) |
 
 A command typed by hand that no row lists (an extension command, an undeclared MCP prompt) still
 sends, and a leading command is still tracked. Its outcome stays `accepted` and ends as

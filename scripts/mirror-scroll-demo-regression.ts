@@ -8,6 +8,7 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { appFaces } from "./app-faces.ts";
+import { shownRows } from "./shown-rows.ts";
 
 interface Frame { type: string; pane_id?: string; text?: string; mode?: string }
 interface MirrorFixture {
@@ -213,7 +214,7 @@ try {
           await page.evaluate((paneId) => (window as FixtureWindow).mirrorFixture.sockets.at(-1)!.push({
             type: "pty-data", fixture: "mirror", pane_id: paneId, data: "\x1b[40;1H\x1b[2KLOCAL-PAN-START",
           }), pane);
-          await waitForStep("local pan start frame rendered", () => page.waitForFunction(() => document.querySelector(".pane-terminal .xterm-rows")?.textContent?.includes("LOCAL-PAN-START")));
+          await waitForStep("local pan start frame rendered", () => page.waitForFunction((rows) => document.querySelector(rows)?.textContent?.includes("LOCAL-PAN-START"), shownRows()));
           await terminal.evaluate((node: HTMLElement) => { node.style.height = "200px"; node.style.maxHeight = "200px"; node.style.flex = "none"; node.scrollTop = 80; });
           // ResizeObserver follows the cursor after its resize debounce, not after two paint frames.
           // Wait for that adjustment before placing the grid between its local edges for the wheel.
@@ -232,7 +233,7 @@ try {
           await page.evaluate((paneId) => (window as FixtureWindow).mirrorFixture.sockets.at(-1)!.push({
             type: "pty-data", fixture: "mirror", pane_id: paneId, data: "\x1b[40;1H\x1b[2KLOCAL-PAN-CHANGED",
           }), pane);
-          await waitForStep("local pan changed frame rendered", () => page.waitForFunction(() => document.querySelector(".pane-terminal .xterm-rows")?.textContent?.includes("LOCAL-PAN-CHANGED")));
+          await waitForStep("local pan changed frame rendered", () => page.waitForFunction((rows) => document.querySelector(rows)?.textContent?.includes("LOCAL-PAN-CHANGED"), shownRows()));
           assert.equal(await terminal.evaluate((node) => node.scrollTop), pannedTop, "new output at the last row preserves the locally panned grid");
           assert.deepEqual((await state(page)).inputs, beforePan.inputs, "new mirror output sends no application input");
           assert.deepEqual((await state(page)).offsets, beforePan.offsets, "new mirror output does not request shared history scrolling");

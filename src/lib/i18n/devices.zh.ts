@@ -3,7 +3,7 @@
  * components/DevicesPanel.tsx (with VIA), components/ConnectPhoneDialog.tsx, components/PhonePanel.tsx, components/PortalPanel.tsx,
  * components/PortalAuth.tsx, components/PortalInvite.tsx, components/RelayPanel.tsx,
  * components/PushTestControls.tsx, components/AccessGate.tsx, components/LanExposureNotice.tsx,
- * lib/install.ts, lib/portalAuth.ts, and shared/portal.ts (PORTAL_AUTH_PROBLEMS).
+ * components/InstallHint.tsx, lib/install.ts, lib/installHint.ts, lib/portalAuth.ts, and shared/portal.ts (PORTAL_AUTH_PROBLEMS).
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const DEVICES_ZH: Record<string, string> = {
@@ -62,10 +62,6 @@ export const DEVICES_ZH: Record<string, string> = {
   "Open the app's address on that device and enter it.": "在该设备上打开应用地址并输入代码。",
   "Expires in {time}.": "{time} 后过期。",
   "Devices are managed on a real server.": "设备只能在真实服务器上管理。",
-  "never": "从未",
-  "just now": "刚刚",
-  "{n} min ago": "{n} 分钟前",
-  "{n} h ago": "{n} 小时前",
   "Asking this PC about Tailscale…": "正在查询此 PC 的 Tailscale 状态…",
   "Tailscale already serves this PC": "Tailscale 已在为此 PC 提供服务",
   "Once it is open, install the app, then open the ⋯ menu and tap Alerts.": "打开后安装应用，然后在 ⋯ 菜单中点按“提醒”。",
@@ -157,7 +153,6 @@ export const DEVICES_ZH: Record<string, string> = {
   "Ovis relay": "Ovis 中继",
   "Only the PC's owner can control the relay, using a direct connection. Open Ovis on the PC or at its direct address.": "只有 PC 所有者通过直接连接才能控制中继。请在 PC 上打开 Ovis，或访问 PC 的直接地址。",
   "Reset relay identity": "重置中继身份",
-  "Reset": "重置",
   "Reset the relay identity?": "要重置中继身份吗？",
   "Phones paired through the relay will need to scan a new code.": "通过中继配对的手机需要重新扫描新代码。",
   "Blocked: OVIS_TAILSCALE_SERVE_ONLY says tailscale serve is the only way in. Unset it on this PC and restart the app.": "已阻止：OVIS_TAILSCALE_SERVE_ONLY 规定 tailscale serve 是唯一的访问途径。请在此 PC 上取消它并重启应用。",
@@ -198,5 +193,24 @@ export const DEVICES_ZH: Record<string, string> = {
   "Pairs this phone through the relay, so Ovis keeps working away from home.": "通过中继配对这部手机，离家在外也能使用 Ovis。",
   "A device with this phone's name ({name}) is already paired through the relay.": "已有一台与这部手机同名的设备（{name}）通过中继配对。",
   "Use the relay on this phone": "在这部手机上使用中继",
+  "Copy a link without a code": "复制不含配对码的链接",
+  "Copied. Open it on the phone within 10 minutes: both screens show six digits to compare, and you approve the phone here.": "已复制。请在 10 分钟内在手机上打开它：两个屏幕会显示六位数字供比对，然后在这里批准手机。",
   "This PC's ID": "此电脑的 ID",
+  "Show a code to type": "显示要输入的代码",
+  "New code to type": "新的输入代码",
+  "Hide the code": "隐藏代码",
+  "Code to type": "要输入的代码",
+  "On the other device, open app.ovis.sh, choose Pair with a code and type it. Expires in {time}. It works once.": "在另一台设备上打开 app.ovis.sh，选择“用代码配对”并输入。{time} 后过期，只能使用一次。",
+  "That device then shows an ID: pair only if it matches this PC's ID below, every group.": "随后该设备会显示一个 ID：只有与下方本电脑的 ID 每一组都一致时才配对。",
+  "Disconnect from all PCs": "从所有 PC 断开",
+  "Disconnect everywhere?": "全部断开？",
+  "A new device joined at {time}: {name}, approved on {approver}. If that was not you, revoke it.": "{time} 新设备 {name} 经 {approver} 批准加入。如果不是你，请撤销。",
+  "{name} was removed from this PC at {time}.": "{time} {name} 已从此 PC 移除。",
+  "{name} was revoked on this PC at {time}.": "{time} 已在此 PC 上撤销 {name}。",
+  "{name} was removed from this PC at {time}, by {by}.": "{time} {by} 已将 {name} 从此 PC 移除。",
+  "Not removed yet on: {pcs}. Disconnect it from a device that is in the account there.": "尚未移除的 PC：{pcs}。请用在那台 PC 上属于该账户的设备断开它。",
+  "Sent to {pcs}: each removes it when it next comes online. If it still shows there, disconnect it from another device in the account.": "已发送到 {pcs}：每台 PC 下次上线时会移除它。如果之后仍然显示，请用账户中的另一台设备断开它。",
+  "Add to Home Screen for alerts: {glyph} Share → Add to Home Screen": "添加到主屏幕即可接收提醒：{glyph} 分享 → 添加到主屏幕",
+  "Install the app for alerts.": "安装应用即可接收提醒。",
+  "Install the app for alerts: Menu → Install app": "安装应用即可接收提醒：菜单 → 安装应用",
 };

@@ -31,6 +31,18 @@ does not turn invalid evidence into permission to read old history.
 Existing panes with neither proof cannot be recovered by restarting the web server.
 Resume the intended session in the CLI to establish fresh foreground evidence.
 
+### Copilot's own API (`--ui-server`)
+
+When you start Copilot yourself with `--ui-server`, Chat follows the session that Copilot's
+local API names as its foreground session, through foreground switches. It reads that API only
+when the listener is bound to loopback and belongs to the pane's own process. It sends only
+`connect` and `session.getForeground`. Ovis never adds `--ui-server` to a launch.
+
+That API has no authentication. With Copilot CLI 1.0.105, any program that can reach its
+loopback port can control the session, including creating new sessions, and setting
+`COPILOT_CONNECTION_TOKEN` did not change this. Other users on the same PC may be able to reach
+it too. Whether to run Copilot with it is your choice; without it, Chat uses the evidence above.
+
 ## History and limits
 
 Before its first message, a genuinely new process can show an empty Chat when its

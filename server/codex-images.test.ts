@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pickedTurn, searchPattern, searchTurns } from "../shared/conversation-search.ts";
 import type { ConversationPart } from "../shared/protocol.ts";
 import { codexImageParts, codexOutputPicture, codexTranscriptImage, DataUrlPictureScan, imageType, inlineImageType, InlinePictureScan } from "./codex-images.ts";
 import { parseCodexTranscript } from "./codex.ts";
@@ -26,6 +27,14 @@ it("preserves image-only Codex turns and pairs event/response copies in either o
   }
   expect(parseCodexTranscript(jsonl(event("", ["one.png"]), event("", ["two.png"])))).toHaveLength(2);
   expect(parseCodexTranscript(jsonl(response("", data)))[0]?.parts).toEqual(codexImageParts(response("", data)));
+});
+
+it("opens a prompt a search found before Codex paired its picture with the file, not another of its words", () => {
+  const [match] = searchTurns(parseCodexTranscript(jsonl(response("What color is this?", data))), searchPattern("color")!);
+  const blue = { ...event("What color is this?", ["/tmp/blue.png"]), timestamp: "2026-09-27T00:00:05Z" };
+  const turns = parseCodexTranscript(jsonl(response("What color is this?", data), event("What color is this?", ["/tmp/red.png"]), blue));
+  expect(turns.map((turn) => turn.parts[0])).toEqual([codexImageParts(event("", ["/tmp/red.png"]))[0], codexImageParts(event("", ["/tmp/blue.png"]))[0]]);
+  expect(pickedTurn(turns, match!)).toBe(0);
 });
 
 it("strips Codex's native image envelope but keeps user-typed lookalikes", () => {

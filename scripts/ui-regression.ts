@@ -15,6 +15,7 @@ import { alertsOffMarked, alertsState, runMoreItem } from "./header-more.ts";
 import { routeDrained } from "./drained-route.ts";
 import { contextMenuKey } from "./context-menu-key.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
+import { checkTerminalAttach } from "./terminal-attach-regression.ts";
 import { checkTerminalInput } from "./terminal-input-regression.ts";
 import { checkSafariIme } from "./terminal-safari-ime-regression.ts";
 import { checkIpadIme } from "./terminal-ipad-ime-regression.ts";
@@ -63,6 +64,37 @@ async function watchBrowserEvidence(context: BrowserContext, page: Page, scenari
   return evidence;
 }
 /** WebKit's IME commit: an Enter keydown after compositionend, isComposing false, key code 229 */
+/**
+ * A hook for a check that changes the roster on a page already loaded: a route cannot reach the
+ * machine events the page already receives (its /api/machines/events stream or its terminal
+ * socket), so `window.__rewriteMachinesFrame`, while set, rewrites each event's data before the
+ * app reads it (the plan checks below). Runs in the page as an init script.
+ */
+function rewriteMachinesFrames(): void {
+  const rewrite = () => (window as unknown as { __rewriteMachinesFrame?: (data: string) => string }).__rewriteMachinesFrame;
+  const Native = window.EventSource;
+  window.EventSource = class extends Native {
+    override get onmessage() { return super.onmessage; }
+    override set onmessage(handler) {
+      super.onmessage = typeof handler !== "function" ? handler : (event: MessageEvent) => {
+        const change = rewrite();
+        handler.call(this, change ? new MessageEvent("message", { data: change(event.data) }) : event);
+      };
+    }
+  };
+  // a socket frame is rewritten where its data is read, so the app's listeners stay its own
+  const data = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data")!.get!;
+  Object.defineProperty(MessageEvent.prototype, "data", { configurable: true, get(this: MessageEvent) {
+    const raw: unknown = data.call(this);
+    const change = rewrite();
+    if (!change || !(this.target instanceof WebSocket) || typeof raw !== "string" || !raw.includes("\"machine-event\"")) return raw;
+    let frame: { type?: string; event?: unknown };
+    try { frame = JSON.parse(raw); } catch { return raw; }
+    if (frame.type !== "machine-event") return raw;
+    return JSON.stringify({ ...frame, event: JSON.parse(change(JSON.stringify(frame.event))) });
+  } });
+}
+
 const IME_ENTER = { key: "Enter", code: "Enter", keyCode: 229, which: 229, bubbles: true, cancelable: true };
 /** how long a send that should not happen gets to show up */
 const NO_SEND_WAIT_MS = 400;
@@ -99,21 +131,7 @@ try {
     if (!localStorage.getItem("ovis:settings")) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
     for (const id of ids) localStorage.setItem(`ovis:view:${id}`, "chat");
   }, panes);
-  // A hook for a check that changes the roster on a page already loaded: a route cannot reach the
-  // /api/machines/events stream the page has open, so `window.__rewriteMachinesFrame`, while set,
-  // rewrites each frame's data before the app reads it (the plan check below).
-  await context.addInitScript(() => {
-    const Native = window.EventSource;
-    window.EventSource = class extends Native {
-      override get onmessage() { return super.onmessage; }
-      override set onmessage(handler) {
-        super.onmessage = typeof handler !== "function" ? handler : (event: MessageEvent) => {
-          const rewrite = (window as unknown as { __rewriteMachinesFrame?: (data: string) => string }).__rewriteMachinesFrame;
-          handler.call(this, rewrite ? new MessageEvent("message", { data: rewrite(event.data) }) : event);
-        };
-      }
-    };
-  });
+  await context.addInitScript(rewriteMachinesFrames);
 
   const page = await context.newPage();
   const pageEvidence = evidenceDirectory ? await watchBrowserEvidence(context, page, "main-app") : undefined;
@@ -173,7 +191,8 @@ try {
       if (message.type === "input-ready") inputStates.set(message.pane_id, { ready: message.ready !== false, at: Date.now(), socket });
     });
     socket.on("framesent", ({ payload }) => {
-      const message = JSON.parse(String(payload));
+      // `id` is the per-connection receipt number ("input-receipt"), not what was sent
+      const { id: _receipt, ...message } = JSON.parse(String(payload));
       // composer messages go out as "submit" on servers that list it (#15), keystrokes as "input"
       if (message.type === "input" || message.type === "submit") inputs.push(message);
       if (message.type === "pending-action") pendingActions.push(message);
@@ -2222,6 +2241,18 @@ try {
   await planPhone.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "chat" })));
   const phone = await planPhone.newPage();
   phone.on("pageerror", (error) => errors.push(error.message));
+  // the phone's machine events come over its terminal socket, which a route cannot reach: its
+  // frames carry the plan too, or the next pushed roster takes the chip away
+  await planPhone.addInitScript(rewriteMachinesFrames);
+  await planPhone.addInitScript(([pane, plan]) => {
+    (window as unknown as { __rewriteMachinesFrame?: (data: string) => string }).__rewriteMachinesFrame = (data) => {
+      let payload: { type?: string; machines?: { snapshot?: { panes: { pane_id: string }[] } }[] };
+      try { payload = JSON.parse(data); } catch { return data; }
+      if (payload.type !== "machines") return data;
+      for (const machine of payload.machines ?? []) for (const p of machine.snapshot?.panes ?? []) if (p.pane_id === pane) Object.assign(p, { plan });
+      return JSON.stringify(payload);
+    };
+  }, [paneA, { done: 1, total: 4, current: "Writing the parser" }] as const);
   const unroutePhonePlanned = await planned(phone, { events: true });
   await phone.goto(`${origin}/?pane=${encodeURIComponent(paneA)}`);
   await phone.locator(".conn-live").waitFor();
@@ -2378,6 +2409,7 @@ try {
   if (touchEvidence) await touchEvidence.finish();
   await touch.close();
   console.log("PASS touch terminal input line sends whole lines, Enter alone, and yields to direct typing");
+  await checkTerminalAttach(browser, origin, paneB);
 
   // A closed pane and an obsolete saved pane both yield to a live pane. Local access
   // is automatic, so it must not offer a sign-out action that cannot lock the app.

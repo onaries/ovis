@@ -52,8 +52,9 @@ export const SHADOW_CSS = `
   --diffs-bg-selection-number-override: var(--accent-tint);
   --diffs-selection-number-fg: var(--accent);
   --diffs-font-family: var(--font-mono);
-  --diffs-font-size: var(--fs-xs);
-  --diffs-line-height: calc(var(--fs-xs) * var(--lh-base));
+  /* --source-scale: Settings → File text size on a file's own source (VirtualSource.css); 1 in a diff */
+  --diffs-font-size: calc(var(--fs-xs) * var(--source-scale, 1));
+  --diffs-line-height: calc(var(--fs-xs) * var(--source-scale, 1) * var(--lh-base));
 }
 `;
 

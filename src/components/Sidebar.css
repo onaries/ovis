@@ -9,6 +9,9 @@
   --side-action: var(--space-6);
   --side-hover: color-mix(in srgb, var(--bg-hover) 50%, var(--bg-panel));
   --side-selected: var(--bg-hover);
+  /* Until resized, Agents keeps today's half-shell allocation when both lists are long. The PCs
+     take the rest, but never reserve height beyond their rows: Agents can use what they leave free.
+     The PCs grow first (below), so a long roster does not change today's default split. */
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -76,8 +79,9 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   color: var(--text);
 }
 
-/* The filter over both lists (MachineSidebar.tsx): its word, then one field the height of a row, in the rows'
-   gutter, and its clear inside the field's trailing cell. It never grows: a long query scrolls inside the field. */
+/* The filter over both lists (MachineSidebar.tsx): one field the height of a row, in the rows' gutter, its glass
+   inside the field's leading cell and its clear inside the trailing one, and no word beside it: the placeholder
+   says what it filters. It never grows: a long query scrolls inside the field. */
 .sidebar-filter {
   position: relative;
   display: flex;
@@ -87,17 +91,15 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   padding: var(--space-2) var(--side-gutter) 0;
 }
 
-/* the field's label stays in view whatever is typed: the section head's words (Agents) */
-.sidebar-filter-label {
-  flex: none;
+/* the glass sits in the field's leading cell, out of the pointer's way: a press on it lands in the field */
+.sidebar-filter-glass {
+  position: absolute;
+  top: calc(var(--space-2) + (var(--side-row) - var(--icon-size)) / 2);
+  left: calc(var(--side-gutter) + (var(--side-row) - var(--icon-size)) / 2);
+  width: var(--icon-size);
+  height: var(--icon-size);
   color: var(--text-dim);
-  font-size: var(--fs-input);
-  line-height: var(--lh-tight);
-}
-
-/* the size of the field's own text beside it, as .input steps down on a wide screen */
-@media (min-width: 641px) {
-  .sidebar-filter-label { font-size: var(--fs-md); }
+  pointer-events: none;
 }
 
 .sidebar-filter-input {
@@ -105,6 +107,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   min-width: 0;
   height: var(--side-row);
   padding-right: var(--side-row);
+  padding-left: var(--side-row);
   text-overflow: ellipsis;
 }
 
@@ -706,9 +709,10 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   100% { opacity: 1; }
 }
 
-/* background tasks still running, and a pane's plan: a number beside the state, quieter than it */
+/* background tasks still running, a pane's plan and its context left: a number beside the state, quieter than it */
 .background-count,
-.plan-count {
+.plan-count,
+.context-count {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
@@ -721,7 +725,8 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 }
 
 .background-count svg,
-.plan-count svg {
+.plan-count svg,
+.context-count svg {
   width: var(--space-3);
   height: var(--space-3);
 }
@@ -743,10 +748,25 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   padding: var(--space-2) var(--side-gutter) calc(var(--space-2) + env(safe-area-inset-bottom, 0px));
 }
 
-/* Keep the footer at the bottom when both lists are short after the upper section folds. */
-.sidebar-shell:not(:has(.machine-list .machine-workspaces)) .sidebar-footer {
-  margin-top: auto;
+/* The PCs get free space first, up to their rows; Agents starts with half the whole shell,
+   as before, and gets the space a short PCs list leaves. Neither grows past its own content. */
+.sidebar-shell > .pcs-sidebar {
+  flex: var(--pcs-flex, 1000 1 0);
+  min-height: var(--split-pcs-min, 0px);
+  max-height: var(--section-max, max-content);
 }
+.sidebar-shell > .agents-sidebar {
+  flex: var(--agents-flex, 1 1 50%);
+  min-height: var(--split-agents-min, 0px);
+  max-height: var(--section-max, max-content);
+}
+.sidebar-shell > .pcs-sidebar.is-collapsed,
+.sidebar-shell > .agents-sidebar:is(.is-collapsed, .is-empty) { flex: 0 1 auto; min-height: 0; }
+
+/* When neither list fills its allocation, keep Agents docked to the footer as before. Grouped
+   Agents stays on top, and the footer still stays at the foot of the sidebar. */
+.sidebar-shell:not(.is-agents-first) > .sidebar-split { margin-top: auto; }
+.sidebar-shell.is-agents-first > .sidebar-footer { margin-top: auto; }
 
 .sidebar-footer-action {
   justify-content: flex-start;
@@ -769,6 +789,28 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 
 @media (hover: hover) {
   .sidebar-footer-action:hover:not(:disabled) { background: var(--side-hover); }
+}
+
+/* which PC of the phone's several this is, and the way back to their list: a row above the gear */
+.sidebar-footer-pc {
+  min-height: var(--side-row);
+  margin-bottom: var(--space-1);
+}
+
+.sidebar-footer-pc-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-footer-pc-action {
+  flex: 0 0 auto;
+  margin-inline-start: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
 }
 
 /* the gear first, the plan meters filling the rest */
@@ -853,4 +895,24 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 
 .plan-count.is-done svg {
   color: var(--status-done);
+}
+
+/* the composer's context ring at the badges' size (Composer.css .composer-context): plain until little is left */
+.context-count-track,
+.context-count-used {
+  fill: none;
+  stroke-width: 2.5;
+}
+
+.context-count-track {
+  stroke: var(--border-strong);
+}
+
+.context-count-used {
+  stroke: currentColor;
+  stroke-linecap: round;
+}
+
+.context-count.is-low {
+  color: var(--status-blocked);
 }

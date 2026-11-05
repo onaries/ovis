@@ -35,7 +35,7 @@ cat "$FAKE_GH/$f.json"
 `);
 chmodSync(join(bin, "gh"), 0o755);
 
-type Job = { status: string; labels: string[] };
+type Job = { status: string; labels: string[]; name?: string };
 const ovis = ["self-hosted", "self-hosted-ovis"];
 const running = (count: number, labels = ovis): Job[] => Array.from({ length: count }, () => ({ status: "in_progress", labels }));
 const waiting = (count: number, labels = ovis): Job[] => Array.from({ length: count }, () => ({ status: "queued", labels }));
@@ -115,6 +115,14 @@ describe.skipIf(process.platform === "win32")("CI runner route", () => {
       for (const labels of [["self-hosted"], ["self-hosted", "linux", "x64"]]) {
         expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: running(7, labels) } }) })).toBe("ubuntu-24.04");
       }
+    });
+
+    it("leaves the light jobs out of the count", () => {
+      const light = ["Detect changes", "herdr-core live contract", "Integration and browser", "Pull request title", "bundle-windows"]
+        .map((name): Job => ({ status: "in_progress", labels: ovis, name }));
+      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: [...running(6), ...light] } }) })).toEqual(ovis);
+      expect(routed({ ...pr, FAKE_GH: actions({ in_progress: { 1: [...running(6), { status: "in_progress", labels: ovis, name: "Fast checks" }] } }) }))
+        .toBe("ubuntu-24.04");
     });
 
     it("counts the jobs on every page", () => {

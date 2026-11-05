@@ -44,7 +44,8 @@ export interface SupervisorChannel {
 
 /** Only the managed entrypoint connects IPC; importing createServer in tests does not. */
 export function connectUpdater(channel?: SupervisorChannel): UpdateService {
-  let status = unmanagedUpdateStatus();
+  // the desktop app starts its server itself (app/electron/src/children.ts) and updates it with the app
+  let status = unmanagedUpdateStatus(process.env["OVIS_DESKTOP_APP"] === "1");
   let notes = noUpdateNotes();
   let installed = noInstalledNotes();
   const managed = Boolean(process.send) && process.env["OVIS_MANAGED"] === "1";

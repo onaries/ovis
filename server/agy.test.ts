@@ -231,7 +231,7 @@ it("keeps the recorded skill invocation without its expanded metadata", () => {
   const fixture = readFileSync(new URL("./fixtures/skill-invocations/agy.jsonl", import.meta.url), "utf8");
   const turns = parseAgyTranscript(fixture);
   expect(turns.filter(({ role }) => role === "user").map(({ parts }) => parts)).toEqual([
-    [{ kind: "text", text: "/probe-skill hello" }],
+    [{ kind: "text", text: "/probe-skill hello" }, { kind: "skill", skill: { name: "probe-skill", evidence: "instructions", status: "loaded" } }],
   ]);
 });
 

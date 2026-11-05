@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import * as herdr from "./herdr/client.ts";
+import * as runtime from "./herdr-core/runtime.ts";
 import { agentLaunch } from "./agent-launch.ts";
 import { launchedAgents } from "./launched-agents.ts";
 
@@ -55,5 +56,18 @@ describe("agentLaunch", () => {
     const codex = ["--settings", ULTRACODE];
     expect((await launch("codex", codex, { platform: "win32", settingsDir: dir })).args).toBe(codex);
     expect(existsSync(dir)).toBe(false);
+  });
+
+  it("refuses a shell-started agent on another machine of the core, typing nothing into its shell", async () => {
+    const machine = spyOn(runtime, "hcMachine").mockReturnValue({ name: "lab", id: "lab-id" });
+    const typed = spyOn(herdr, "paneSendText").mockImplementation(async () => ({}) as never);
+    try {
+      const answer = await agentLaunch(PANE, { kind: "gjc" });
+      expect(answer).toMatchObject({ agent_started: false, error: { code: "other_machine" } });
+      expect(typed).not.toHaveBeenCalled();
+    } finally {
+      machine.mockRestore();
+      typed.mockRestore();
+    }
   });
 });

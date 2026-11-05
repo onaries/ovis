@@ -3,8 +3,10 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
+import type { Machine } from "../../shared/machines.ts";
+import { paneLifetimes } from "../lib/paneLifetime.ts";
 import { SettingsProvider } from "../lib/settings.ts";
-import { forgetWaitingSends, rememberWaitingSend, WAITING_HINT_MS, waitingKey, type WaitingSend } from "../lib/sentWaiting.ts";
+import { currentWaitingSends, forgetWaitingSends, rememberWaitingSend, settleWaitingSends, WAITING_HINT_MS, waitingBaseline, waitingKey, type WaitingSend } from "../lib/sentWaiting.ts";
 import { SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
 
 const at = Date.parse("2026-10-29T03:00:00Z");
@@ -122,6 +124,26 @@ describe("mounted", () => {
       expect(shown).toEqual([]);
       act(() => { renderer.update(createElement(Probe, { connected: true })); });
       expect(shown).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  test("a disconnected sibling pane preserves the baseline so a phone's send does not duplicate its transcript turn", () => {
+    // a PC whose snapshots name their herdr: a reconnect to it is the same herdr
+    paneLifetimes.observe([{ id: "skewed-PC", snapshot: { panes: [], herdr_lifetime: "skewed-herdr" } } as unknown as Machine]);
+    const key = waitingKey("skewed-PC", "baseline-owner");
+    const user = (text: string, ts: number) => ({ role: "user" as const, ts: new Date(ts).toISOString(), parts: [{ kind: "text" as const, text }] });
+    // The phone is two seconds ahead of the PC. Its loaded chat already accounts for that skew.
+    const earlier = user("earlier", at - 10_000);
+    settleWaitingSends(key, [earlier], at, true);
+    function Sibling() {
+      useWaitingSends("skewed-PC", "another-pane", false);
+      return null;
+    }
+    try {
+      mount(createElement(Sibling), false);
+      rememberWaitingSend(key, "follow up while working", at + 2_000, waitingBaseline(key));
+      settleWaitingSends(key, [earlier, user("follow up while working", at + 100)], at + 2_100, true);
+      expect(currentWaitingSends(key)).toEqual([]);
     } finally { forgetWaitingSends(key); }
   });
 });

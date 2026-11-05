@@ -14,10 +14,9 @@
  * steps' answers here until the last one is given, as OpenCode's form does (prompt.ts).
  */
 import { existsSync, lstatSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   PI_ASK_BRIDGE_DIRECTORY,
-  type PiAskBridgeState,
   type PiAskFlow,
   type PiAskQuestion,
   type PiAskRemoteAnswer,
@@ -28,9 +27,8 @@ import type { PromptAnswer } from "../shared/protocol.ts";
 import { finishPrompt, own, type ParsedPrompt, type PromptDraft } from "./dialogs/shared.ts";
 import { paneProcessInfo } from "./herdr/client.ts";
 import { badRequest, jsonResponse } from "./http.ts";
-import { piPaneAgentDirs, piTranscriptPath } from "./pi.ts";
+import { bridgeState, ownSocket, piPaneAgentDirs, piTranscriptPath } from "./pi.ts";
 
-const STATE_READ_MS = 1_000;
 /** The extension gives pi-ask 3 s to confirm; this covers that and the socket round trip. */
 const SUBMIT_MS = 4_000;
 const MAX_QUESTIONS = 20;
@@ -86,34 +84,8 @@ function sameFlow(live: PiAskFlow | null, read: PiAskFlow): boolean {
     && (live.title ?? null) === (read.title ?? null) && JSON.stringify(live.questions) === JSON.stringify(read.questions);
 }
 
-/**
- * Only a socket this user owns, in a directory only this user can enter, speaks for a pi: a
- * PI_CODING_AGENT_DIR another user can write to must not let them show a card or read its answer.
- */
-function ownSocket(socket: string): boolean {
-  const uid = process.getuid?.();
-  if (uid === undefined) return false;
-  try {
-    const directory = lstatSync(dirname(socket));
-    const file = lstatSync(socket);
-    return directory.isDirectory() && directory.uid === uid && (directory.mode & 0o077) === 0 && file.isSocket() && file.uid === uid;
-  } catch { return false; }
-}
-
 function sameFile(left: string, right: string): boolean {
   try { return realpathSync(left) === realpathSync(right); } catch { return false; }
-}
-
-async function bridgeState(socket: string, signal?: AbortSignal): Promise<PiAskBridgeState | null> {
-  try {
-    const timeout = AbortSignal.timeout(STATE_READ_MS);
-    const response = await fetch("http://localhost/v1/state", { unix: socket, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-    if (!response.ok) return null;
-    const state = await response.json() as PiAskBridgeState;
-    return typeof state === "object" && state !== null && state.version === 1 && Array.isArray(state.flows) ? state : null;
-  } catch {
-    return null; // no extension listening (a socket a crashed pi left), or too slow: the terminal
-  }
 }
 
 /** pi-ask's reply, or null when it is not known whether pi took the answer. */

@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PI_ASK_EVENTS, type PiAskBridgeState } from "../shared/pi-ask-bridge.ts";
+import { PI_ASK_EVENTS, type PiAskBridgeState, type PiBridgeCommands } from "../shared/pi-ask-bridge.ts";
 import { createPiAskBridge, piAgentDir, type PiAskBridge, type PiEventBus } from "./pi-ask.ts";
 import fixture from "../server/fixtures/pi-ask-user-1.2.0-bridge.json";
 
@@ -38,6 +38,10 @@ const started = { version: 1, flowId: "tool:call-1", toolCallId: "call-1", sourc
 
 async function state(path: string): Promise<PiAskBridgeState> {
   return await (await fetch("http://localhost/v1/state", { unix: path })).json() as PiAskBridgeState;
+}
+
+async function listed(path: string): Promise<PiBridgeCommands> {
+  return await (await fetch("http://localhost/v1/commands", { unix: path })).json() as PiBridgeCommands;
 }
 
 async function submit(path: string, body: unknown): Promise<{ status: number; body: unknown }> {
@@ -200,6 +204,37 @@ describe("pi-ask bridge extension", () => {
     expect(existsSync(path)).toBe(true);
     await bridge.stop();
     expect(existsSync(path)).toBe(false);
+  });
+
+  it("lists the commands pi's extensions registered, from pi's own list, and none when pi cannot say (#1448)", async () => {
+    if (!posix) return;
+    const path = socketPath();
+    const info = (scope: string, origin: string) => ({ path: "/x/index.ts", source: "local", scope, origin });
+    // pi.getCommands() (pi 1.3.0 core/agent-session.ts): extension commands, then prompt templates, then skills
+    let commands = (): unknown => [
+      { name: "team", description: "Start specialist agents", source: "extension", sourceInfo: info("user", "top-level") },
+      { name: "ponytail", source: "extension", sourceInfo: info("project", "package") },
+      { name: "review", description: "Review the diff", source: "prompt", sourceInfo: info("user", "top-level") },
+      { name: "skill:lint", description: "Lint", source: "skill", sourceInfo: info("user", "top-level") },
+    ];
+    const bridge = createPiAskBridge({ events: bus(), socketPath: path, pid: 4242, commands: () => commands() });
+    bridges.push(bridge);
+    await bridge.start(ui());
+
+    expect(await listed(path)).toEqual({ version: 1, pid: 4242, commands: [
+      { name: "team", description: "Start specialist agents", scope: "user", origin: "top-level" },
+      { name: "ponytail", scope: "project", origin: "package" },
+    ] });
+    // the runtime pi has not bound yet, or one a /reload left behind, throws
+    commands = () => { throw new Error("Extension runtime not initialized"); };
+    expect((await listed(path)).commands).toBeNull();
+
+    // a pi without getCommands
+    const older = socketPath();
+    const bare = createPiAskBridge({ events: bus(), socketPath: older, pid: 4242 });
+    bridges.push(bare);
+    await bare.start(ui());
+    expect((await listed(older)).commands).toBeNull();
   });
 
   it("finds the agent directory as pi does", () => {

@@ -1,0 +1,118 @@
+/* The line between the PCs and Agents (SidebarSplit.tsx): a hairline between the sidebar's lists,
+   lit under a pointer and while held, with a grip that shows on hover and always under a finger. */
+.sidebar-split {
+  position: relative;
+  flex: none;
+  height: calc(var(--space-3) - var(--hairline));
+  margin: 0 var(--side-gutter);
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.sidebar-split::before {
+  content: "";
+  position: absolute;
+  top: calc(50% - var(--hairline) / 2);
+  right: 0;
+  left: 0;
+  height: var(--hairline);
+  background: var(--border);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.sidebar-split:focus-visible { outline: none; }
+
+@media (forced-colors: active) {
+  .sidebar-split:focus-visible {
+    outline: var(--hairline) solid Highlight;
+    outline-offset: calc(var(--hairline) * -1);
+  }
+}
+
+@media (hover: hover) {
+  .sidebar-split:hover::before { background: var(--border-strong); }
+}
+
+.sidebar-split.is-dragging::before,
+.sidebar-split:focus-visible::before {
+  top: calc(50% - var(--hairline));
+  height: calc(var(--hairline) * 2);
+  background: var(--accent);
+}
+
+/* about to fold a section: the line goes quiet, and the section snaps to its head and dims */
+.sidebar-split.is-dragging.is-snapping::before { background: var(--text-dim); }
+
+.sidebar-split-grip {
+  position: absolute;
+  top: calc(50% - var(--hairline) * 2);
+  left: calc(50% - var(--space-4));
+  width: var(--space-8);
+  height: calc(var(--hairline) * 4);
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .sidebar-split:hover .sidebar-split-grip { opacity: 1; }
+}
+
+.sidebar-split.is-dragging .sidebar-split-grip,
+.sidebar-split.is-snapping .sidebar-split-grip { opacity: 0; }
+
+/* under a finger: a taller row, the grip always in view, and a touch target of a finger's height that
+   stays a hairline on screen */
+@media (pointer: coarse) {
+  .sidebar-split { height: var(--touch-target); }
+
+  .sidebar-split::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    right: 0;
+    left: 0;
+    z-index: 1;
+    height: var(--touch-target);
+    transform: translateY(-50%);
+  }
+
+  .sidebar-split-grip { opacity: 1; }
+}
+
+/* the section a drag is about to fold dims as it would go */
+.pcs-sidebar.will-fold,
+.agents-sidebar.will-fold { opacity: 0.4; }
+
+.pcs-sidebar,
+.agents-sidebar {
+  overflow: hidden;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+/* A snap preview may shrink either list to its heading before the release folds it. */
+.sidebar-shell.is-splitting > .pcs-sidebar,
+.sidebar-shell.is-splitting > .agents-sidebar { min-height: 0; }
+
+/* A kept split, with both lists open, gives the upper list its height (clamped to the window, SidebarSplit.tsx)
+   and the lower one the rest; so does a drag in progress. Folded or empty, a section takes its head alone (Sidebar.css). */
+.sidebar-shell.has-split:not(:has(> .pcs-sidebar.is-collapsed)):not(:has(> .agents-sidebar:is(.is-collapsed, .is-empty))),
+.sidebar-shell.is-splitting {
+  --pcs-flex: 0 0 var(--split-top);
+  --agents-flex: 1 1 0;
+  --section-max: none;
+}
+
+.sidebar-shell.is-agents-first.has-split:not(:has(> .pcs-sidebar.is-collapsed)):not(:has(> .agents-sidebar:is(.is-collapsed, .is-empty))),
+.sidebar-shell.is-agents-first.is-splitting {
+  --pcs-flex: 1 1 0;
+  --agents-flex: 0 0 var(--split-top);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-split::before,
+  .sidebar-split-grip,
+  .pcs-sidebar,
+  .agents-sidebar { transition: none; }
+}

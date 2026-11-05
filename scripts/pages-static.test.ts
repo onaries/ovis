@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pagePolicy } from "../server/file-view.ts";
 import { shellContentSecurityPolicy } from "../server/static.ts";
+import { REGIONAL_APPS } from "../shared/relay-regions.ts";
 import { applyHeaders, loadPagesSite, pagesResponse, parseHeaders, parseRedirects, pathPattern, redirectFor } from "./pages-static.ts";
 import { shellHeaders, shellRedirects } from "./shell-build.ts";
 
@@ -35,8 +36,8 @@ describe("the shell's Pages files, as Pages reads them", () => {
   });
 
   it("give every page the shell policy and the render host the page policy alone", () => {
-    expect(applyHeaders(headers, `/s/${ID}/`, new Headers()).get("content-security-policy")).toBe(shellContentSecurityPolicy());
-    expect(applyHeaders(headers, "/", new Headers()).get("content-security-policy")).toBe(shellContentSecurityPolicy());
+    expect(applyHeaders(headers, `/s/${ID}/`, new Headers()).get("content-security-policy")).toBe(shellContentSecurityPolicy(Object.values(REGIONAL_APPS)));
+    expect(applyHeaders(headers, "/", new Headers()).get("content-security-policy")).toBe(shellContentSecurityPolicy(Object.values(REGIONAL_APPS)));
     expect(applyHeaders(headers, `/s/${ID}/~render`, new Headers()).get("content-security-policy")).toBe(pagePolicy(null));
     expect(applyHeaders(headers, "/assets/index-abc.js", new Headers()).get("cache-control")).toBe("public, max-age=31536000, immutable");
     for (const path of [`/s/${ID}/`, `/s/${ID}/sw.js`, "/sw.js", "/manifest.webmanifest", "/"]) expect(applyHeaders(headers, path, new Headers()).get("cache-control")).toBe("no-cache");
@@ -69,7 +70,7 @@ describe("the loopback Pages server", () => {
     expect(scope.status).toBe(200);
     expect(await scope.text()).toContain("shell");
     expect(scope.headers.get("content-type")).toBe("text/html; charset=utf-8");
-    expect(scope.headers.get("content-security-policy")).toBe(shellContentSecurityPolicy());
+    expect(scope.headers.get("content-security-policy")).toBe(shellContentSecurityPolicy(Object.values(REGIONAL_APPS)));
     expect(scope.headers.get("cache-control")).toBe("no-cache");
     const worker = await get(`/s/${ID}/sw.js`);
     expect(await worker.text()).toBe("// worker");

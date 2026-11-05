@@ -4,7 +4,8 @@ import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InteractivePrompt, PromptAnswer } from "../shared/protocol.ts";
-import { handlePromptRequest, KeyRefused, parseInteractivePrompt, type PromptRequestOptions } from "./prompt.ts";
+import { handlePromptRequest, KeyRefused, type OmpLookups, OpenCodePromptState, parseInteractivePrompt, type PromptRequestOptions, shownPromptText } from "./prompt.ts";
+import { sessionSnapshot } from "./herdr/client.ts";
 
 /** A deadline a move that cannot finish reaches at once, so no test waits out the real 4 s */
 const SHORT: PromptRequestOptions = { answerDeadlineMs: 300 };
@@ -297,6 +298,28 @@ async function withOmoPane(screen: string, run: (pane: Pane) => Promise<void>, r
   });
 }
 
+/** A prompt watch's reader of p_1, with the state a server keeps for its watches (server/core/server-core.ts). */
+function watchReader(): () => Promise<string | null | undefined> {
+  const state = { openCodeState: new OpenCodePromptState(), ompLookups: new Map() as OmpLookups };
+  return async () => {
+    const { panes } = await sessionSnapshot();
+    return shownPromptText(panes[0]!, panes, state);
+  };
+}
+
+describe("a prompt watch's read of a blocked pane", () => {
+  test("tells a fallback card's question changing while the pane stays blocked, as GET offers that card", async () => {
+    await withPane("hermes", "Approve deployment alpha?\n1. Yes\n2. No\n", async pane => {
+      expect((await card()).fallback).toBe(true);
+      const watch = watchReader();
+      const alpha = await watch();
+      expect(alpha).toBeString();
+      pane.screen = pane.screen.replace("alpha", "beta");
+      expect(await watch()).not.toBe(alpha);
+    });
+  });
+});
+
 async function card(): Promise<InteractivePrompt> {
   const url = new URL("http://127.0.0.1/api/pane/prompt?pane_id=p_1");
   const prompt = ((await (await handlePromptRequest(new Request(url), url, {}))!.json()) as { prompt: InteractivePrompt | null }).prompt;
@@ -396,6 +419,22 @@ describe("the answer route moves between questions, one key at a time, each seen
       follows(pane, omp, 4, "tab", "shift+tab");
       expect(await move(bound.id, { step_next: true })).toEqual({ status: 200, code: undefined });
       expect(pane.sent).toEqual(["tab"]);
+    });
+  });
+
+  test("omp: a prompt watch's failing session lookups use up none of the card's, so an answer while the lookups fail still sends no key", async () => {
+    await withPane("omp", omp(0), async pane => {
+      const bound = await card();
+      const lookup = conversation.ompTranscriptPath as unknown as { mockRejectedValueOnce: (error: Error) => void };
+      const watch = watchReader();
+      for (let read = 0; read < 3; read++) {
+        lookup.mockRejectedValueOnce(new Error("busy"));
+        await watch();
+      }
+      // the lookups still fail when the card is answered: the tap reads the call it was bound to as unproved
+      (conversation.ompTranscriptPath as unknown as { mockRejectedValue: (error: Error) => void }).mockRejectedValue(new Error("busy"));
+      expect(await move(bound.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
     });
   });
 

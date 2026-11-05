@@ -3,7 +3,7 @@ import { BookOpen, Check, Copy, ImageOff, Maximize2 } from "lucide-react";
 
 import { foldCode, mathNestsTooDeep, parseInline, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock } from "../../shared/markdown.ts";
 import { codeIsFilePath, OpenFileContext, splitFilePaths } from "../lib/filePaths.ts";
-import { FilePathLink } from "./FilePathLink.tsx";
+import { CodeFileName, FilePathLink } from "./FilePathLink.tsx";
 import { fileUriPath } from "../../shared/fileUri.ts";
 import { shouldOpenWebPage, WebPanelContext } from "../lib/webPanel.ts";
 import { MachineContext } from "../lib/machineContext.tsx";
@@ -21,6 +21,8 @@ import { lazyChunk } from "../lib/lazyChunk.ts";
 import type { SkillMatcher } from "../lib/skillMentions.ts";
 import { previewChunks } from "../lib/textPreview.ts";
 import type { GalleryImage } from "../lib/imageViewer.ts";
+import { useSettings } from "../lib/settings.ts";
+import { isWebLink, openWebLink } from "../lib/terminalFileLinks.ts";
 
 /** The pane's skill names: a name in an answer's plain text, in its trigger form, reads as a chip. */
 const SkillMatcherContext = createContext<SkillMatcher | null>(null);
@@ -303,9 +305,14 @@ function Inline({ nodes, interactive = true, standalone = false }: { nodes: Inli
   const skillMatcher = useContext(SkillMatcherContext);
   const openWebPage = useContext(WebPanelContext);
   const machineId = useContext(MachineContext);
+  const { settings } = useSettings();
   // a plain or Shift click may open the address beside the pane; Ctrl, Cmd and Alt keep the browser's own meaning
   const webClick = (href: string) => (event: MouseEvent<HTMLAnchorElement>): void => {
     if (shouldOpenWebPage(event, href, openWebPage, machineId)) event.preventDefault();
+    else if (settings.reuseExternalLinkTab && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.altKey && isWebLink(href)) {
+      event.preventDefault();
+      openWebLink(href, true);
+    }
   };
   return <>{nodes.map((node, index) => {
     const key = `${node.type}-${index}`;
@@ -322,7 +329,9 @@ function Inline({ nodes, interactive = true, standalone = false }: { nodes: Inli
         if (open !== null && file !== null) return <FilePathLink key={key} path={file} code open={open} />;
         // agents often put an address in backticks: it stays code to the eye, and opens
         if (interactive && /^https?:\/\/\S+$/i.test(node.value)) return <a key={key} className="markdown-code-link" href={node.value} target="_blank" rel="noopener noreferrer" onClick={webClick(node.value)}><code>{node.value}</code></a>;
-        return open !== null && codeIsFilePath(node.value) ? <FilePathLink key={key} path={node.value} code open={open} /> : <code key={key}>{node.value}</code>;
+        if (open === null || !codeIsFilePath(node.value)) return <code key={key}>{node.value}</code>;
+        // a bare name may be a unit, a host or a key: it stays a link only while the pane's PC may have it
+        return node.value.includes("/") ? <FilePathLink key={key} path={node.value} code open={open} /> : <CodeFileName key={key} name={node.value} open={open} />;
       }
       case "math": return <MathExpression key={key} value={node.value} dollar={node.dollar} />;
       case "image": {

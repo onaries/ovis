@@ -5,7 +5,7 @@ import { greetingMemory } from "./greeting.ts";
 import { MachineSession, MachineSessionRegistry } from "./machineSession.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 import { PendingMessageStore, pendingMessages } from "./pendingMessages.ts";
-import { currentWaitingSends, forgetWaitingSends, waitingKey } from "./sentWaiting.ts";
+import { currentWaitingSends, forgetWaitingSends, observeWaitingClock, settleWaitingSends, waitingKey } from "./sentWaiting.ts";
 import type { HerdrSocket } from "./ws.ts";
 
 type FeaturesFrame = Extract<ServerMessage, { type: "features" }>;
@@ -304,6 +304,50 @@ describe("PC connection ownership", () => {
       clock.mockReturnValue(91_000);
       socket.receive({ type: "pending-messages", pane_id: "w1:p1", messages: [], removed: [{ id: "p1", outcome: "sent" }] });
       expect(currentWaitingSends(key)).toMatchObject([{ text: "review this next", at: 90_000 }]);
+    } finally { clock.mockRestore(); forgetWaitingSends(key); session.close(); }
+  });
+
+  it("settles a row by its own turn, not another device's identical one just before it, though its frame came after its Enter", () => {
+    const { session, socket } = setup("late-frame-pc");
+    const key = waitingKey("late-frame-pc", "w1:p1");
+    const pc = Date.parse("2026-11-05T10:00:00Z");
+    const user = (text: string, at: number) => ({ role: "user" as const, ts: new Date(at).toISOString(), parts: [{ kind: "text" as const, text }] });
+    const earlier = user("earlier", pc + 37);
+    const clock = spyOn(Date, "now").mockReturnValue(pc + 1_200_000);
+    try {
+      start(session, socket);
+      // the chat was opened ten minutes after its newest turn: those times alone allow ten minutes of skew
+      settleWaitingSends(key, [earlier], pc + 600_080, true);
+      // Send now: the PC took the row at pc + 1_200_000 and its turn was written at +400. The socket dropped
+      // before the row's `sending` came, and the reconnect replays it 1.5 s after the Enter, by when a
+      // read had the PC's clock past the turn
+      observeWaitingClock(key, new Date(pc + 1_201_450).toISOString());
+      clock.mockReturnValue(pc + 1_201_500);
+      socket.receive({ type: "pending-messages", pane_id: "w1:p1", messages: [{ ...message("p1", "sending"), sending_at: new Date(pc + 1_200_000).toISOString() }] });
+      socket.receive({ type: "pending-messages", pane_id: "w1:p1", messages: [], removed: [{ id: "p1", outcome: "sent" }] });
+      // another device wrote the same words 300 ms before the PC took the row
+      settleWaitingSends(key, [earlier, user("review this next", pc + 1_199_700)], pc + 1_201_550, true);
+      expect(currentWaitingSends(key)).toHaveLength(1);
+      settleWaitingSends(key, [earlier, user("review this next", pc + 1_199_700), user("review this next", pc + 1_200_400)], pc + 1_201_600, true);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { clock.mockRestore(); forgetWaitingSends(key); session.close(); }
+  });
+
+  it("settles a row by the PC's stamp though its chat never read the pane, with this browser's clock a minute ahead", () => {
+    const { session, socket } = setup("unread-stamp-pc");
+    const key = waitingKey("unread-stamp-pc", "w1:p1");
+    const pc = Date.parse("2026-11-05T10:00:00Z");
+    const user = (text: string, at: number) => ({ role: "user" as const, ts: new Date(at).toISOString(), parts: [{ kind: "text" as const, text }] });
+    const clock = spyOn(Date, "now").mockReturnValue(pc + 60_000);
+    try {
+      start(session, socket);
+      socket.receive({ type: "pending-messages", pane_id: "w1:p1", messages: [{ ...message("p1", "sending"), sending_at: new Date(pc).toISOString() }] });
+      socket.receive({ type: "pending-messages", pane_id: "w1:p1", messages: [], removed: [{ id: "p1", outcome: "sent" }] });
+      // the chat opens on the pane after the row went out: another device's same words before it, then its own turn
+      settleWaitingSends(key, [user("review this next", pc - 300)], pc + 60_500, true);
+      expect(currentWaitingSends(key)).toHaveLength(1);
+      settleWaitingSends(key, [user("review this next", pc - 300), user("review this next", pc + 400)], pc + 60_600, true);
+      expect(currentWaitingSends(key)).toEqual([]);
     } finally { clock.mockRestore(); forgetWaitingSends(key); session.close(); }
   });
 

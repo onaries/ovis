@@ -744,16 +744,34 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   const turns = answerTurns.get(paneId) ?? 0;
   const known = await readKnownPrompt(paneId, pane, agent, codexHome, panes, openCodeStateDir, openCodeState, signal, true);
   if (known.stale) return { agent, status, prompt: null, pane, panes, snapshot, stale: true };
+  const fallback = await fallbackCard(paneId, agent, status, known);
+  if (!fallback) {
+    fallbackLogged.delete(paneId);
+    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes, snapshot, screen: known.screen, inputUnverified: known.inputUnverified };
+  }
+  if (!fallback.prompt) {
+    fallbackLogged.delete(paneId);
+    return { agent, status, prompt: asked(paneId, null, turns), pane, panes, snapshot, screen: fallback.screen };
+  }
+  const prompt = asked(paneId, fallback.prompt, turns)!;
+  if (!fallbackLogged.has(paneId) && fallbackLogged.size < FALLBACK_LOGGED_MAX) {
+    fallbackLogged.add(paneId);
+    console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
+  }
+  return { agent, status, prompt, pane, panes, snapshot, screen: fallback.screen, inputUnverified: known.inputUnverified };
+}
+
+/**
+ * The generic card for a pane herdr says waits on the user on a screen no reader knows: null when it is not such a
+ * pane, `prompt` null when the screen offers no card. Reads only: GET /api/pane/prompt and the prompt watches share it.
+ */
+async function fallbackCard(paneId: string, agent: string, status: string | undefined, known: { prompt: InteractivePrompt | null; screen?: string; suppressFallback?: true }): Promise<{ prompt: InteractivePrompt | null; screen: string } | null> {
   // A custom form just answered can close before Herdr stops reporting blocked. Its hint may
   // outlive the widget, but that is no input to offer as fallback keys. Known next steps still
   // show immediately; only an unrecognized screen waits for this bounded settling window.
   const settling = Date.now() - (formsAnswered.get(paneId) ?? 0) < FORM_SETTLE_MS;
   // a pi pane gets no generic card (readKnownPrompt says so through suppressFallback)
-  if (known.prompt !== null || known.suppressFallback || status !== "blocked" || !agent || settling) {
-    fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes, snapshot, screen: known.screen, inputUnverified: known.inputUnverified };
-  }
-  // herdr says the agent waits on the user and no reader knows the screen: the fallback card
+  if (known.prompt !== null || known.suppressFallback || status !== "blocked" || !agent || settling) return null;
   const screen = known.screen ?? await liveScreen(paneId);
   // Codex's collapsed question queue reads blocked while its main prompt takes a message; a
   // model list of Claude Code's or Codex's that no reader could read is left to the terminal
@@ -761,16 +779,8 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   // ending the screen is no dialog: herdr says blocked a moment before Claude draws its panel,
   // and for a second or two after it closes
   if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexRuntimeError(screen) !== null || codexInputFrame(screen) !== null)) || registry.waits(agent, screen)
-    || (agent === "claude" && claudeInputBoxEndsScreen(screen))) {
-    fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, null, turns), pane, panes, snapshot, screen };
-  }
-  const prompt = asked(paneId, parseFallbackPrompt(agent, screen), turns)!;
-  if (!fallbackLogged.has(paneId) && fallbackLogged.size < FALLBACK_LOGGED_MAX) {
-    fallbackLogged.add(paneId);
-    console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
-  }
-  return { agent, status, prompt, pane, panes, snapshot, screen, inputUnverified: known.inputUnverified };
+    || (agent === "claude" && claudeInputBoxEndsScreen(screen))) return { prompt: null, screen };
+  return { prompt: parseFallbackPrompt(agent, screen), screen };
 }
 
 const piAskReader = new OmoAskReader(); // Pi and OmO share the message/toolCall JSONL envelope.
@@ -871,10 +881,11 @@ const ompAskReader = new OmoAskReader(ompAsksAfter);
  * Each omp pane's last session lookup that answered, which a lookup that fails for a while stands in for, and the
  * failures in a row since: past OMP_LOOKUP_FAILURES the pane's session reads as unproved.
  */
-const ompLookups = new Map<string, { path: string; open: OmoAsks; failures: number }>();
+export type OmpLookups = Map<string, { path: string; open: OmoAsks; failures: number }>;
+const ompLookups: OmpLookups = new Map();
 const OMP_LOOKUP_FAILURES = 3;
 
-async function withOmpMarkdown(paneId: string, cwd: string, prompt: InteractivePrompt, markdown: boolean): Promise<{ prompt: InteractivePrompt; unverified?: true; rebind: (prompt: InteractivePrompt) => InteractivePrompt }> {
+async function withOmpMarkdown(paneId: string, cwd: string, prompt: InteractivePrompt, markdown: boolean, lookups: OmpLookups): Promise<{ prompt: InteractivePrompt; unverified?: true; rebind: (prompt: InteractivePrompt) => InteractivePrompt }> {
   const parsed = parsedByPublicPrompt.get(prompt);
   if (parsed?.responder !== "omp-question" && parsed?.responder !== "omp-submit" && !parsed?.nativeSteps) return { prompt, rebind: (card) => card };
   let path = "";
@@ -884,14 +895,14 @@ async function withOmpMarkdown(paneId: string, cwd: string, prompt: InteractiveP
     if (cwd) {
       path = (await ompTranscriptPath(paneId, cwd)).path;
       open = ompAskReader.read(path);
-      ompLookups.delete(paneId);
-      ompLookups.set(paneId, { path, open, failures: 0 });
-      if (ompLookups.size > 64) ompLookups.delete(ompLookups.keys().next().value!);
+      lookups.delete(paneId);
+      lookups.set(paneId, { path, open, failures: 0 });
+      if (lookups.size > 64) lookups.delete(lookups.keys().next().value!);
     }
   } catch (error) {
-    const last = ompLookups.get(paneId);
+    const last = lookups.get(paneId);
     // Not written yet, no lookup that ever answered, or one failing for long: ordinary answers remain usable, unbound.
-    if (error instanceof ConversationNotStarted || !last || last.failures + 1 >= OMP_LOOKUP_FAILURES) ompLookups.delete(paneId);
+    if (error instanceof ConversationNotStarted || !last || last.failures + 1 >= OMP_LOOKUP_FAILURES) lookups.delete(paneId);
     // A lookup that fails for a moment (a busy herdr, an unreadable /proc): the card keeps the binding (and id) the last
     // lookup gave, and this read authorizes no key, rather than a card with another id that would start a new asking
     else {
@@ -923,6 +934,8 @@ async function readKnownPrompt(
    * read before and parsed with what this read found; a card the screen no longer draws so authorizes no key
    */
   settle = false,
+  /** the omp session lookups this read stands on; a prompt watch keeps its own, so its failing reads use up none of an answer's */
+  ompBindings = ompLookups,
 ): Promise<{ prompt: InteractivePrompt | null; screen?: string; stale?: boolean; inputUnverified?: true; suppressFallback?: true;
   /** the card as the settling read drew it: the same card, its cursor where the screen has it now */ settled?: InteractivePrompt }> {
   // no native card (no session herdr reports, no verified v2 service, no pending form): OpenCode
@@ -1152,7 +1165,7 @@ async function readKnownPrompt(
   let prompt = piNative ? publicPrompt(piNative) : parseDrawn(screen);
   let rebind = (card: InteractivePrompt): InteractivePrompt => card;
   if (prompt && agent === "omp") {
-    const read = await withOmpMarkdown(paneId, pane.cwd ?? "", prompt, markdown);
+    const read = await withOmpMarkdown(paneId, pane.cwd ?? "", prompt, markdown, ompBindings);
     prompt = read.prompt;
     rebind = read.rebind;
     if (read.unverified) inputUnverified = true;
@@ -1363,6 +1376,38 @@ async function withPlanFile(prompt: InteractivePrompt | null, transcript: string
   if (!plan) return prompt;
   const revision = createHash("sha256").update(plan.text).digest("hex").slice(0, 8);
   return { ...prompt, id: `${prompt.id}.${revision}`, body: plan.text.slice(0, 12_000), plan_file: plan.path };
+}
+
+/**
+ * The prompt the pane shows now, as GET /api/pane/prompt reads it (without a plan's file), and the screen
+ * it was read from: what a question's alert offers as buttons (server/push.ts promptActions, which checks
+ * the one against the other). Null when none stands, or the read is not one an answer could be checked against.
+ */
+export async function currentPrompt(paneId: string, options: { codexHome?: string; openCodeStateDir?: string; openCodeState?: OpenCodePromptState; signal?: AbortSignal }): Promise<{ prompt: InteractivePrompt; screen?: string } | null> {
+  const read = await readPrompt(paneId, options.codexHome, options.openCodeStateDir, options.openCodeState ?? defaultOpenCodeState, options.signal);
+  if (read.stale || read.inputUnverified || !read.prompt) return null;
+  return { prompt: read.prompt, ...(read.screen === undefined ? {} : { screen: read.screen }) };
+}
+
+/**
+ * What the prompt on the pane's screen says, for a prompt watch (server/prompt-monitor.ts): the id its text alone
+ * makes, or null when none shows; undefined when the read raced a change. Unlike GET /api/pane/prompt it starts and
+ * ends no asking, so these reads never move the ids the route hands out. `openCodeState` is the watch's own, never
+ * the route's: a watch's read, late or from an older snapshot, must not replace the entry or draft an answer uses.
+ * A pi pane is not read at all (undefined): its pi-ask card keeps the answers to earlier steps in a draft of the
+ * route's (pi-ask-bridge.ts), which a late read of an older form would replace. omp's session lookups are the
+ * watch's own too (`ompLookups`), so failing watch reads never use up the ones an answer stands on. A blocked screen
+ * no reader knows is told by its fallback card, as the route offers it. An OpenCode form is told with the route's
+ * draft (`answers`, read only), as answering a step moves the route's card to the next one with no change on screen.
+ */
+export async function shownPromptText(pane: HerdrPane, panes: HerdrPane[], options: { codexHome?: string; openCodeStateDir?: string; openCodeState: OpenCodePromptState; ompLookups: OmpLookups; answers?: OpenCodePromptState }): Promise<string | null | undefined> {
+  if (pane.agent === "pi") return undefined;
+  const agent = pane.agent ?? "";
+  const known = await readKnownPrompt(pane.pane_id, pane, agent, options.codexHome, panes, options.openCodeStateDir, options.openCodeState, undefined, false, false, options.ompLookups);
+  if (known.stale) return undefined;
+  const shown = contentId(known.prompt ?? (await fallbackCard(pane.pane_id, agent, pane.agent_status, known))?.prompt ?? null) ?? null;
+  const draft = agent === "opencode" ? (options.answers ?? defaultOpenCodeState).entries.get(pane.pane_id)?.draft : undefined;
+  return shown !== null && draft ? `${shown}\0${JSON.stringify(draft)}` : shown;
 }
 
 export async function handlePromptRequest(request: Request, url: URL, options: PromptRequestOptions = {}): Promise<Response | null> {

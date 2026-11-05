@@ -1,0 +1,142 @@
+{
+  "session_id": "9eac7881-3a84-4e94-8f92-2c1e2ed87c48",
+  "cwd": "/home/user/demo",
+  "created_at": "2026-10-29T06:45:59.030909611Z",
+  "updated_at": "2026-10-29T06:46:40.908649436Z",
+  "title": "what is in the README?",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 2798408982
+          },
+          "result": {
+            "Ok": {
+              "id": "d9915791-c5e3-4626-aa7d-112cab81bb0a",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "text",
+                  "data": "The README says **Hello from the demo project.**"
+                }
+              ],
+              "meta": {
+                "timestamp": 1793256364
+              }
+            }
+          },
+          "message_ids": [
+            "6e30b7ff-e7a3-418c-9afb-81b6b5ac5b5f",
+            "d3431ae0-f99b-42c8-92f2-e619dfa9dfe3",
+            "0898c0e4-caaf-4c28-8b91-256842798772",
+            "a76b24b0-dc38-4c85-87d3-a26772d98137"
+          ],
+          "total_request_count": 2,
+          "number_of_cycles": 1,
+          "builtin_tool_uses": 1,
+          "turn_duration": {
+            "secs": 0,
+            "nanos": 30079182
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-10-29T06:46:04.002822266Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "cache_read_input_token_count": 0,
+          "cache_write_input_token_count": 0,
+          "model": null,
+          "assistant_response_length": 71,
+          "request_attempts": null,
+          "context_usage_percentage": null,
+          "final_context_usage_percentage": null,
+          "metering_usage": [],
+          "user_prompt_length": 22
+        },
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 1145661247
+          },
+          "result": {
+            "Ok": {
+              "id": "ba6e7f9d-f18c-49d0-8bc6-dc75e39c97b3",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "text",
+                  "data": "Two files checked; `missing.txt` does not exist."
+                }
+              ],
+              "meta": {
+                "timestamp": 1793256400
+              }
+            }
+          },
+          "message_ids": [
+            "94472ef5-fa34-4c2f-b937-31a14cb1ec78",
+            "70235e55-cdc5-49bd-8b5a-d236c3600fa1",
+            "a6fe3275-d17c-4955-9815-d5b4882a2ad3",
+            "92562fcc-0e5d-45d0-befa-b64d75cd21de",
+            "a120ca70-03a0-4487-b0f4-fba3797f79fa",
+            "e44402bd-cad1-4422-b7e4-7ffbd7780835"
+          ],
+          "total_request_count": 3,
+          "number_of_cycles": 2,
+          "builtin_tool_uses": 2,
+          "turn_duration": {
+            "secs": 0,
+            "nanos": 70885745
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-10-29T06:46:40.908099931Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "cache_read_input_token_count": 0,
+          "cache_write_input_token_count": 0,
+          "model": null,
+          "assistant_response_length": 48,
+          "request_attempts": null,
+          "context_usage_percentage": null,
+          "final_context_usage_percentage": null,
+          "metering_usage": [],
+          "user_prompt_length": 31
+        }
+      ],
+      "last_context_usage": null,
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "9eac7881-3a84-4e94-8f92-2c1e2ed87c48",
+      "model_info": null,
+      "context_usage_percentage": null
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/home/user/demo"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": "kiro_default",
+    "goal": null
+  }
+}

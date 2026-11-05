@@ -238,7 +238,8 @@
   overflow: visible;
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  /* Settings → File text size scales a file's source with its preview; until then it keeps the interface's size */
+  font-size: calc(var(--fs-xs) * var(--file-source-scale, 1));
   line-height: var(--lh-base);
 }
 
@@ -281,11 +282,72 @@
   background: var(--bg-input);
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: calc(var(--fs-xs) * var(--file-source-scale, 1));
   line-height: var(--lh-base);
   white-space: pre;
   resize: none;
 }
+
+/* a text file being edited (TextFileEditor): its bar, then a text box filling the rest of the body */
+.file-editor {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+  min-height: min(60vh, 28rem);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.file-editor-bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.file-editor-status {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.file-editor-alert .file-editor-status {
+  color: var(--notice);
+  font-weight: var(--fw-medium);
+}
+
+/* a phone gives a warning a line of its own, the buttons under it */
+@media (max-width: 600px) {
+  .file-editor-alert .file-editor-status { flex-basis: 100%; }
+}
+
+.file-editor-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  margin: 0;
+  padding: var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: calc(var(--fs-xs) * var(--file-source-scale, 1));
+  line-height: var(--lh-base);
+  white-space: pre;
+  resize: none;
+}
+
+/* a phone keeps the size iOS does not zoom the page in for, whatever the file text size */
+@media (pointer: coarse) {
+  .file-editor-text { font-size: max(var(--fs-input), calc(var(--fs-xs) * var(--file-source-scale, 1))); }
+}
+
+.file-viewer-docked .file-editor { padding-inline: var(--space-3); }
 
 /*
  * A rendered document reads on the viewer's own background, like a page: no panel around it. Its
@@ -305,6 +367,95 @@
 
 /* A table owns horizontal scrolling; vertical gestures continue through it to the document. */
 .file-viewer-markdown .markdown-table-wrap { overscroll-behavior-y: auto; }
+
+/*
+ * Settings > File viewer > Markdown outline (MarkdownOutline.tsx). The body's wrapper takes no box
+ * of its own until a Preview has an outline; then the body and the outline share its row. From
+ * OUTLINE_COLUMN_MIN_PX of width the outline is a column after the document, scrolled on its own;
+ * narrower, a drawer over the document's end edge, so the text keeps its whole width.
+ */
+.file-viewer-split { display: contents; }
+
+.file-viewer-split.is-outlined {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.file-viewer-split.is-outlined > .file-viewer-body { flex: 1 1 0; }
+
+.markdown-outline {
+  position: relative;
+  flex: none;
+  width: 240px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-3) var(--space-2);
+  border-inline-start: var(--hairline) solid var(--border);
+  background: var(--bg);
+}
+
+.markdown-outline.is-drawer {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 1;
+  width: min(85%, 320px);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-pop);
+}
+
+.markdown-outline ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.markdown-outline-item {
+  display: block;
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+/* each level under the shallowest one in the document steps in */
+.markdown-outline-item.is-depth-1 { padding-inline-start: calc(var(--space-2) + var(--space-3)); }
+.markdown-outline-item.is-depth-2 { padding-inline-start: calc(var(--space-2) + 2 * var(--space-3)); }
+.markdown-outline-item.is-depth-3 { padding-inline-start: calc(var(--space-2) + 3 * var(--space-3)); }
+.markdown-outline-item.is-depth-4 { padding-inline-start: calc(var(--space-2) + 4 * var(--space-3)); }
+.markdown-outline-item.is-depth-5 { padding-inline-start: calc(var(--space-2) + 5 * var(--space-3)); }
+
+/* the heading being read: the accent, and a tint so it is not told by color alone */
+.markdown-outline-item[aria-current] {
+  background: var(--bg-hover);
+  color: var(--accent);
+  font-weight: var(--fw-medium);
+}
+
+@media (hover: hover) {
+  .markdown-outline-item:hover { color: var(--text-strong); }
+}
+
+@media (pointer: coarse) {
+  .markdown-outline-item { min-height: var(--touch-target); }
+}
+
+/* the Outline button while its outline shows, as Show source when on */
+.file-viewer-outline-toggle[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
 
 /*
  * On a narrow screen the header is one row, so the file keeps the screen: the name (cut inside its

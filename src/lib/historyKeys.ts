@@ -10,10 +10,12 @@ export const SHEET_UNDER_KEY = "ovis:sheet-under";
 
 export const WEB_PANEL_KEY = "ovis:web-panel";
 export const WEB_PANEL_DOCKED_KEY = "ovis:web-panel-docked";
+/** how many of the web panel's own entries lie right under this one (a page opened over a page from a phone sheet) */
+export const WEB_PANEL_BELOW_KEY = "ovis:web-panel-below";
 
 /** A different panel's entry must not inherit the web panel's ownership marks. */
 export function withoutWebPanel(state: Record<string, unknown>): Record<string, unknown> {
-  const { [WEB_PANEL_KEY]: _page, [WEB_PANEL_DOCKED_KEY]: _docked, ...rest } = state;
+  const { [WEB_PANEL_KEY]: _page, [WEB_PANEL_DOCKED_KEY]: _docked, [WEB_PANEL_BELOW_KEY]: _below, ...rest } = state;
   return rest;
 }
 

@@ -37,6 +37,14 @@ describe("a polled prompt card (#2220 review)", () => {
     expect(polledPrompt(worded, plain)!.screen_words).toBeUndefined();
   });
 
+  it("takes the preview Claude redraws as its cursor moves over the same card (#1212)", () => {
+    const first = polledPrompt(plain, { ...plain, option_preview: { option_index: 0, text: "+--+" } })!;
+    expect(first.option_preview).toEqual({ option_index: 0, text: "+--+" });
+    const moved = polledPrompt(first, { ...plain, option_preview: { option_index: 1, text: "row 1", hidden_lines: 31 } })!;
+    expect(moved.option_preview).toEqual({ option_index: 1, text: "row 1", hidden_lines: 31 });
+    expect(polledPrompt(moved, plain)!.option_preview).toBeUndefined();
+  });
+
   it("keeps the same object for a card that did not change, and gives another card as it is", () => {
     expect(polledPrompt(markdown, { ...markdown })).toBe(markdown);
     const other = { ...plain, id: "b" };

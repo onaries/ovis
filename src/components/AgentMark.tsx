@@ -1,6 +1,6 @@
 import { useId } from "react";
 
-import { fallbackInitial } from "../lib/agentMark.ts";
+import { fallbackHue, fallbackInitial } from "../lib/agentMark.ts";
 import { AGENT_SVG_MARKS } from "./agentSvgMarks.ts";
 import "./AgentMark.css";
 
@@ -148,7 +148,6 @@ function OmoMark({ size }: { size: number }) {
   );
 }
 
-/** The agent nobody has drawn yet: its initial in a quiet disc. */
 /** A mark kept as SVG markup; its ids get this instance's prefix so copies never collide. */
 function SvgMark({ agent, size }: { agent: string; size: number }) {
   const prefix = useId().replace(/[^\w-]/g, "");
@@ -157,11 +156,12 @@ function SvgMark({ agent, size }: { agent: string; size: number }) {
   return <svg viewBox={viewBox} width={size} height={size} role="img" aria-label={agent} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
+/** The agent nobody has drawn yet: its initial in a disc tinted by its kind (AgentMark.css), so two kinds tell apart at a glance. */
 function FallbackMark({ agent, size }: { agent: string; size: number }) {
   const initial = fallbackInitial(agent);
   return (
-    <svg viewBox="0 0 24 24" width={size} height={size} role="img" aria-label={agent}>
-      <circle cx="12" cy="12" r="11" fill="var(--bg-elevated)" stroke="var(--border)" strokeWidth="1" />
+    <svg viewBox="0 0 24 24" width={size} height={size} role="img" aria-label={agent} data-hue={fallbackHue(agent)}>
+      <circle className="agent-mark-disc" cx="12" cy="12" r="11" fill="var(--bg-elevated)" stroke="var(--border)" strokeWidth="1" />
       <text x="12" y="16" textAnchor="middle" fontSize="11" fill="currentColor">
         {initial}
       </text>

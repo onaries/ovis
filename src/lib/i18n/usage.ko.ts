@@ -87,4 +87,13 @@ export const USAGE_KO: Record<string, string> = {
   "This version signs in only in its terminal. Open it to finish.": "이 버전은 터미널에서만 로그인합니다. 터미널을 열어 마무리하세요.",
   "The sign-in asked for the code again. Paste it once more.": "로그인에서 코드를 다시 요청했습니다. 한 번 더 붙여 넣으세요.",
   "{agent} is already signed in on this PC. Continuing may replace that sign-in.": "{agent}는 이미 이 PC에 로그인되어 있습니다. 계속하면 그 로그인을 대체할 수 있습니다.",
+  "Usage credits": "사용 크레딧",
+  "Credits": "크레딧",
+  "Unlimited": "무제한",
+  "Available": "사용 가능",
+  "{n} credits": "{n} 크레딧",
+  "{amount} spent": "{amount} 사용",
+  "Limit resets": "한도 초기화권",
+  "Expires in {time}": "{time} 후 만료",
+  "{n} left": "{n}회 남음",
 };

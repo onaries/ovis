@@ -33,6 +33,14 @@ if (appUrl) {
   writeFileSync(shellJs, script.replace(constant, `export const APP_ORIGIN = ${JSON.stringify(appUrl)};`));
 }
 
+if (process.env["OVIS_APP_ACCOUNT"] === "1") {
+  const shellJs = join(www, "shell.js");
+  const constant = "export const ACCOUNT_SIGN_IN = false;";
+  const script = readFileSync(shellJs, "utf8");
+  if (!script.includes(constant)) throw new Error("shell.js no longer declares ACCOUNT_SIGN_IN the way build-web.ts replaces it");
+  writeFileSync(shellJs, script.replace(constant, "export const ACCOUNT_SIGN_IN = true;"));
+}
+
 const demo = join(www, "demo");
 await buildDemoApp(demo);
 // the build's .gz and .br sidecars are for a server's Accept-Encoding; the app reads files itself,

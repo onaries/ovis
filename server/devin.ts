@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ConversationMetadata, ConversationPart, ConversationTurn } from "../shared/protocol.ts";
-import { devinUserText } from "./skill-invocations/devin.ts";
+import { devinPromptSkill, devinSessionSkills, devinToolSkill, devinUserText } from "./skill-invocations/devin.ts";
 
 const MAX_NODES = 5000;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -84,8 +84,10 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
   try {
     db = new Database(dbPath, { readonly: true, create: false });
     db.exec("BEGIN");
-    const session = db.query<{ main_chain_id: number | null; model: string | null }, [string, string]>(
-      "SELECT main_chain_id, model FROM sessions WHERE id = ? AND working_directory = ? AND hidden = 0",
+    // older stores have no cogs_json column
+    const cogs = db.query("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'cogs_json'").get() ? "cogs_json" : "NULL AS cogs_json";
+    const session = db.query<{ main_chain_id: number | null; model: string | null; cogs_json: string | null }, [string, string]>(
+      `SELECT main_chain_id, model, ${cogs} FROM sessions WHERE id = ? AND working_directory = ? AND hidden = 0`,
     ).get(sessionId, cwd);
     if (!session) throw new DevinHistoryUnavailable();
     // SQLite ids are 64-bit; one past 2^53 arrives rounded and would select a neighbouring node
@@ -148,7 +150,8 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
       states.push(...db.query<ToolState, string[]>(`SELECT tool_call_id, tool_call_json, tool_call_update_json FROM tool_call_state WHERE session_id = ? AND tool_call_id IN (${batch.map(() => "?").join(",")})`).all(sessionId, ...batch));
     }
     const updates = new Map(states.map((state) => [state.tool_call_id, state]));
-    const hash = createHash("sha256").update(history_id).update(String(session.main_chain_id)).update(JSON.stringify(session.model));
+    const sessionSkills = devinSessionSkills(session.cogs_json);
+    const hash = createHash("sha256").update(history_id).update(String(session.main_chain_id)).update(JSON.stringify(session.model)).update(JSON.stringify([...sessionSkills]));
     for (const node of chain) hash.update(JSON.stringify(node));
     for (const state of states.sort((a, b) => a.tool_call_id.localeCompare(b.tool_call_id))) hash.update(JSON.stringify(state));
     const version = hash.digest("hex");
@@ -170,6 +173,9 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
         if (part) {
           if (typeof message.content === "string" && message.content) part.output = toolContent(message.content);
           if (message.is_error === true || message.error === true) part.error = true;
+          const success = record(record(meta.extensions)["chisel/tool_result_meta"]).success;
+          if (part.skill && (part.error || success === false)) part.skill.status = "failed";
+          else if (part.skill && success === true) part.skill.status = "loaded";
         }
         continue;
       }
@@ -178,8 +184,11 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
       // Devin 3000.11.3 stores reasoning as { thinking, signature }
       const thinking = text(typeof message.thinking === "string" ? message.thinking : record(message.thinking).thinking);
       if (role === "assistant" && thinking) parts.push({ kind: "thinking", text: thinking });
-      const content = role === "user" ? text(devinUserText(text(message.content), meta)) : text(message.content);
+      const stored = text(message.content);
+      const content = role === "user" ? text(devinUserText(stored, meta)) : stored;
       if (content) parts.push({ kind: "text", text: content });
+      const promptSkill = role === "user" ? devinPromptSkill(stored, content, sessionSkills) : null;
+      if (promptSkill) parts.push({ kind: "skill", skill: promptSkill });
       if (role === "assistant" && Array.isArray(message.tool_calls)) for (const rawCall of message.tool_calls) {
         const call = record(rawCall);
         if (!text(call.name)) continue;
@@ -192,6 +201,8 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
         const args = call.arguments ?? saved.rawInput;
         const input = typeof args === "string" ? text(args) : args === undefined ? "" : JSON.stringify(args).slice(0, MAX_TEXT);
         const part: Extract<ConversationPart, { kind: "tool" }> = { kind: "tool", name: text(call.name), summary: text(update.title) || text(saved.title) || text(call.name), input, output: toolContent(update.content), ...(update.status === "error" || update.status === "failed" ? { error: true } : {}) };
+        const skill = devinToolSkill(part.name, typeof args === "string" ? parse(args) : record(args), update.status);
+        if (skill) part.skill = skill;
         parts.push(part);
         if (id) pending.set(id, part);
       }

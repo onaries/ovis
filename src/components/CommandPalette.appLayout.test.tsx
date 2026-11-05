@@ -5,10 +5,14 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import type { Machine } from "../../shared/machines.ts";
 import type { PaneInfo, SessionSnapshot, WorkspaceInfo } from "../../shared/protocol.ts";
 import type { AppActions } from "../lib/actions.ts";
-import { AppLayoutContext } from "../lib/machineContext.tsx";
+import { AppLayoutContext, appLayoutOf, type LayoutOffer } from "../lib/machineContext.tsx";
 import { SettingsProvider } from "../lib/settings.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
 
+/** herdr's TUI server, a herdr-core PC the Herdr app lays out, and one whose layout Ovis keeps (lib/machineContext.tsx) */
+const TUI = appLayoutOf({ version: "0.9.5", protocol: 22 });
+const APP_CORE = appLayoutOf({ version: "0.1.17", protocol: 22, runtime: "herdr-core" });
+const OVIS_CORE = appLayoutOf({ version: "0.1.17", protocol: 22, runtime: "herdr-core", layout: { rename: true, split: true, move: true, arrange: true, worktrees: true } });
 const workspace = (id: string, tabs: number): WorkspaceInfo =>
   ({ workspace_id: id, label: id, active_tab_id: `${id}:t1`, number: 1, tab_count: tabs, pane_count: tabs, focused: false, agent_status: "idle", worktree: null });
 const pane = (id: string, workspaceId: string, tabId: string): PaneInfo =>
@@ -28,28 +32,31 @@ const snapshot: SessionSnapshot = {
   }],
 };
 const machines: Machine[] = [{ id: "local", name: "Host", kind: "local", enabled: true, state: "connected", error: null, snapshot }];
-// App's actions on each PC: split and zoom on a TUI PC, none on a core PC (lib/layoutActions.ts, tested there)
-const actionsOf = (core: boolean) => new Proxy({ splitPane: core ? null : () => {}, zoomPane: core ? null : () => {}, enableNotifications: null, openFiles: null, lock: null }, { get: (own, key) => key in own ? own[key as keyof typeof own] : () => {} }) as unknown as AppActions;
+// App's actions on each PC: split and zoom as the PC offers them (lib/layoutActions.ts, tested there)
+const actionsOf = (offer: LayoutOffer, own: Partial<AppActions> = {}) => new Proxy({ splitPane: offer.split ? () => {} : null, zoomPane: offer.arrange ? () => {} : null, enableNotifications: null, openFiles: null, lock: null, openLocalPage: null, ...own }, { get: (own, key) => key in own ? own[key as keyof typeof own] : () => {} }) as unknown as AppActions;
 const LAYOUT_ROWS = ["Rename tab", "Split pane right", "Split pane down", "Split pane right and open it", "Split pane down and open it", "Zoom pane"];
 
 describe("the command palette on a PC the Herdr app lays out", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   const stored = new Map<string, string>();
   let renderer: ReactTestRenderer | undefined;
+  // a cramped screen's height query (CRAMPED_QUERY) holds: a lone tab draws no row there
+  let phone = false;
 
   beforeEach(() => {
     for (const key of ["window", "document", "navigator", "getComputedStyle", "localStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     stored.clear();
     const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); }, removeItem: (key: string) => { stored.delete(key); } };
     const events = new EventTarget();
-    const media = { matches: false, addEventListener() {}, removeEventListener() {} };
+    phone = false;
+    const media = (query: string) => ({ get matches() { return phone && query.includes("max-height"); }, addEventListener() {}, removeEventListener() {} });
     const define = (key: string, value: unknown) => Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
     define("IS_REACT_ACT_ENVIRONMENT", true);
     // the test renderer draws no DOM: nothing is an element, so the focus trap finds nothing to hold
     define("HTMLElement", class HTMLElement {});
     define("localStorage", storage);
     define("navigator", { languages: ["en-US"], platform: "Linux" });
-    define("window", { localStorage: storage, matchMedia: () => media, innerWidth: 1280, innerHeight: 800, history: { state: null, pushState() {}, replaceState() {}, back() {} }, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), requestAnimationFrame: () => 1, cancelAnimationFrame() {}, setTimeout, clearTimeout });
+    define("window", { localStorage: storage, matchMedia: media, location: { protocol: "http:", hostname: "localhost", origin: "http://localhost:7317" }, innerWidth: 1280, innerHeight: 800, history: { state: null, pushState() {}, replaceState() {}, back() {} }, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), requestAnimationFrame: () => 1, cancelAnimationFrame() {}, setTimeout, clearTimeout });
     define("document", { visibilityState: "visible", activeElement: null, documentElement: { dataset: {}, style: { setProperty() {}, removeProperty() {} } }, querySelector: () => null, querySelectorAll: () => [], addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events) });
     define("getComputedStyle", () => ({ getPropertyValue: () => "" }));
   });
@@ -63,26 +70,59 @@ describe("the command palette on a PC the Herdr app lays out", () => {
     }
   });
 
-  async function rows(appLayout: boolean, selectedPaneId: string, initialQuery: string): Promise<string[]> {
+  async function rows(offer: LayoutOffer, selectedPaneId: string, initialQuery: string, actions = actionsOf(offer)): Promise<string[]> {
     await act(async () => { renderer?.unmount(); });
     await act(async () => {
-      renderer = create(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: appLayout },
-        createElement(CommandPalette, { open: true, initialQuery, onClose: () => {}, machines, onSelect: () => {}, snapshot, online: false, selectedPaneId, view: "chat", actions: actionsOf(appLayout) }))));
+      renderer = create(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: offer },
+        createElement(CommandPalette, { open: true, initialQuery, onClose: () => {}, machines, onSelect: () => {}, snapshot, online: false, selectedPaneId, view: "chat", actions }))));
     });
     return renderer!.root.findAll((node) => node.props.className === "menu-item-main" && typeof node.props.children === "string").map((node) => node.props.children as string);
   }
 
   it("lists a TUI PC's rename, split, zoom and move rows", async () => {
-    const listed = await rows(false, "p1", ">");
+    const listed = await rows(TUI, "p1", ">");
     for (const row of LAYOUT_ROWS) expect(listed).toContain(row);
-    expect(await rows(false, "p3", ">move tab")).toEqual(["Move tab to w1"]);
+    expect(await rows(TUI, "p3", ">move tab")).toEqual(["Move tab to w1"]);
+  });
+
+  it("keeps Rename tab where a lone tab draws no row, whose dialog stands in for the row's field", async () => {
+    phone = true;
+    expect(await rows(TUI, "p3", ">rename tab")).toEqual(["Rename tab"]);
   });
 
   it("lists none of them on a core PC, and keeps New workspace and New tab", async () => {
-    const listed = await rows(true, "p1", ">");
+    const listed = await rows(APP_CORE, "p1", ">");
     for (const row of LAYOUT_ROWS) expect(listed).not.toContain(row);
     expect(listed).toContain("New workspace");
     expect(listed).toContain("New tab");
-    expect(await rows(true, "p3", ">move tab")).toEqual([]);
+    expect(await rows(APP_CORE, "p3", ">move tab")).toEqual([]);
+  });
+
+  it("lists a core PC's rename, split, zoom and move rows where Ovis keeps its layout", async () => {
+    const listed = await rows(OVIS_CORE, "p1", ">");
+    for (const row of LAYOUT_ROWS) expect(listed).toContain(row);
+    expect(await rows(OVIS_CORE, "p3", ">move tab")).toEqual(["Move tab to w1"]);
+  });
+
+  it("opens a page this PC serves from a typed address, only where pages open in the app", async () => {
+    const opened: string[] = [];
+    const pages = actionsOf(TUI, { openLocalPage: (url: string) => { opened.push(url); } });
+    expect(await rows(TUI, "p1", ">", pages)).toContain("Open a page on this PC…");
+    const listed = await rows(TUI, "p1", "localhost:8448/#/repository", pages);
+    expect(listed[0]).toBe("Open localhost:8448/#/repository");
+    await act(async () => renderer!.root.find((node) => node.props.id === "palette-item-0").props.onClick());
+    expect(opened).toEqual(["http://localhost:8448/#/repository"]);
+    // the app's own port is the app, not a page beside it
+    expect(await rows(TUI, "p1", "localhost:7317", pages)).not.toContain("Open localhost:7317");
+    // off by default: Web links open in a new tab, and the palette offers no page
+    expect(await rows(TUI, "p1", "localhost:8448")).not.toContain("Open localhost:8448");
+    expect(await rows(TUI, "p1", ">")).not.toContain("Open a page on this PC…");
+  });
+
+  it("lists rename and move but no split or zoom on a core that keeps no documents", async () => {
+    const named = appLayoutOf({ version: "0.1.17", protocol: 22, runtime: "herdr-core", layout: { rename: true, split: false, move: true, arrange: false, worktrees: true } });
+    const listed = await rows(named, "p1", ">");
+    expect(listed).toContain("Rename tab");
+    for (const row of LAYOUT_ROWS.filter((row) => row !== "Rename tab")) expect(listed).not.toContain(row);
   });
 });

@@ -81,11 +81,12 @@ type PaneTarget = { machineId: string; paneId: string };
 
 /**
  * Where this browser's view goes when herdr moved a pane under a new ID: the selection (the pane ID to select,
- * null to keep it) and the split's other half (null to keep it). A pane the user went to meanwhile stays theirs.
+ * null to keep it) and the split's other slots (null to keep them). A pane the user went to meanwhile stays theirs.
  */
-export function movedView<S extends { other: PaneTarget }>(selection: { machineId: string | null; paneId: string | null }, split: S | null, machineId: string, from: string, to: string): { selection: string | null; split: S | null } {
+export function movedView<S extends { panes: Record<string, PaneTarget> }>(selection: { machineId: string | null; paneId: string | null }, split: S | null, machineId: string, from: string, to: string): { selection: string | null; split: S | null } {
+  const moved = split === null ? [] : Object.entries(split.panes).filter(([, pane]) => pane.machineId === machineId && pane.paneId === from);
   return {
     selection: selection.machineId === machineId && selection.paneId === from ? to : null,
-    split: split !== null && split.other.machineId === machineId && split.other.paneId === from ? { ...split, other: { machineId, paneId: to } } : null,
+    split: split !== null && moved.length > 0 ? { ...split, panes: { ...split.panes, ...Object.fromEntries(moved.map(([slot]) => [slot, { machineId, paneId: to }])) } } : null,
   };
 }

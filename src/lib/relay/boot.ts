@@ -26,9 +26,15 @@ interface Page {
  */
 export function takeEntryUrl(page: Page): string {
   const { href, pathname, search, hash } = page.location;
-  const kept = search.length > 1 ? `#${search.slice(1)}` : hash.startsWith("#offer=") ? "" : hash;
+  // a sign-in's return (`#code=…&state=…`, account/signin.ts) leaves with the offer: its code is a credential too
+  const kept = search.length > 1 ? `#${search.slice(1)}` : hash.startsWith("#offer=") || signInFragment(hash) ? "" : hash;
   if (`${search}${hash}` !== kept) page.history.replaceState(null, "", pathname + kept);
   return href;
+}
+
+function signInFragment(hash: string): boolean {
+  const fields = new URLSearchParams(hash.slice(1));
+  return fields.has("state") && (fields.has("code") || fields.has("error"));
 }
 
 /** `load` brings in the shell's chunk; tests hand in their own to see what boot did before it. */

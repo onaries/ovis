@@ -1,3 +1,4 @@
+import type { SystemReport } from "../shared/system.ts";
 import { describe, expect, it, beforeAll, afterAll, spyOn } from "bun:test";
 import { CLEAR_LEGACY_DEVICE_COOKIE, DEVICE_COOKIE_CLEARED } from "./auth.ts";
 import { Database } from "bun:sqlite";
@@ -526,6 +527,58 @@ describe("a Claude bash-mode command on GET /api/pane/conversation", () => {
   }, 20_000);
 });
 
+describe("GET /api/pane/conversation/search", () => {
+  it("finds a Claude pane's messages and answers on every page, never a tool's output, and goes on from its cursor", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-search-contract-"));
+    const cwd = realpathSync(root);
+    const originalHome = process.env["HOME"];
+    const id = "5c1d7e3f-2a48-4b96-8e05-9f3a6c2d1b74";
+    const file = join(cwd, ".claude", "projects", claudeProjectDir(cwd), `${id}.jsonl`);
+    mkdirSync(join(file, ".."), { recursive: true });
+    // 120 prompts: three pages of 50; the user's words on the first page, the answer on the last
+    const at = (n: number, step: number) => new Date(Date.parse("2026-10-27T03:00:00.000Z") + (n * 4 + step) * 1000).toISOString();
+    writeFileSync(file, Array.from({ length: 120 }, (_, n) => [
+      { type: "user", timestamp: at(n, 0), uuid: `u${n}`, message: { role: "user", content: n === 5 ? "Why does the deploy script fail?" : `prompt ${n}` } },
+      { type: "assistant", timestamp: at(n, 1), uuid: `c${n}`, message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_${n}`, name: "Bash", input: { command: "make" } }] } },
+      { type: "user", timestamp: at(n, 2), uuid: `r${n}`, message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_${n}`, content: "the deploy script printed this" }] } },
+      { type: "assistant", timestamp: at(n, 3), uuid: `a${n}`, message: { role: "assistant", content: [{ type: "text", text: n === 110 ? "The deploy script needs its token." : `answer ${n}` }] } },
+    ].map((line) => JSON.stringify(line)).join("\n")).join("\n") + "\n");
+    let app: ReturnType<typeof createServer> | undefined;
+    let workspace: string | undefined;
+    try {
+      process.env["HOME"] = cwd;
+      forgetTranscriptState();
+      const created = await workspaceCreate({ cwd, label: "herdr-web-ui-test-conversation-search" });
+      workspace = created.workspace.workspace_id;
+      const paneId = created.root_pane.pane_id;
+      await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "claude", state: "idle" });
+      await herdrRpc("pane.report_agent_session", { pane_id: paneId, source: "herdr:claude", agent: "claude", seq: Date.now() * 1000, agent_session_id: id });
+      app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(cwd, "state") });
+      const ask = (query: Record<string, string>) => fetch(`http://127.0.0.1:${app!.port}/api/pane/conversation/search?${new URLSearchParams({ pane_id: paneId, ...query })}`);
+      const found: { role: string; before: string; match: string; after: string }[] = [];
+      let answer = await (await ask({ q: "Deploy  Script" })).json() as { history_id: string; cursor: string | null; matches: typeof found };
+      for (let asked = 1; ; asked++) {
+        found.push(...answer.matches.map(({ role, before, match, after }) => ({ role, before, match, after })));
+        if (answer.cursor === null) break;
+        expect(asked).toBeLessThan(5);
+        answer = await (await ask({ q: "Deploy  Script", before: answer.cursor, history_id: answer.history_id })).json() as typeof answer;
+      }
+      expect(found).toEqual([
+        { role: "assistant", before: "The ", match: "deploy script", after: " needs its token." },
+        { role: "user", before: "Why does the ", match: "deploy script", after: " fail?" },
+      ]);
+      // a cursor from another history, and a query it cannot search
+      expect((await ask({ q: "deploy", before: "0", history_id: "another" })).status).toBe(409);
+      expect((await ask({ q: " " })).status).toBe(400);
+    } finally {
+      app?.stop();
+      if (workspace !== undefined) await workspaceClose(workspace);
+      if (originalHome === undefined) delete process.env["HOME"]; else process.env["HOME"] = originalHome;
+      forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
 describe("usage API", () => {
   it.each([false, true])("serializes missing_commands when Linux secret-tool availability is %s", async (installed) => {
     // Given: no Antigravity credentials and an isolated command lookup.
@@ -597,6 +650,34 @@ describe("usage API", () => {
       const withToken = await fetch(`http://localhost:${gated.port}/api/usage`, { headers: { authorization: "Bearer test-usage-token" } });
       expect(withToken.status).toBe(200);
     } finally { open.stop(); gated.stop(); rmSync(usageState, { recursive: true, force: true }); }
+  });
+});
+
+describe("system API", () => {
+  const report: SystemReport = { sampled_at: 1, platform: "linux", uptime_s: 5, cpu_count: 2, cpu_percent: 10, memory: null, load: null, disks: [] };
+  const sampler = { read: async () => report };
+
+  it("answers GET without caching, keeps it behind the token gate, and takes the bridge token too", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-system-contract-"));
+    const open = createServer({ port: 0, stateDir: dir, system: sampler });
+    const bridge = "b".repeat(64);
+    const gated = createServer({ port: 0, stateDir: dir, system: sampler, token: "system-test-token", bridgeToken: bridge });
+    const machineServer = createServer({ port: 0, stateDir: dir, system: null });
+    try {
+      const answered = await fetch(`http://localhost:${open.port}/api/system`);
+      expect(answered.status).toBe(200);
+      expect(answered.headers.get("cache-control")).toBe("no-store");
+      expect(await answered.json()).toEqual(report);
+      expect((await fetch(`http://localhost:${gated.port}/api/system`)).status).toBe(401);
+      const withToken = await fetch(`http://localhost:${gated.port}/api/system`, { headers: { authorization: "Bearer system-test-token" } });
+      expect(withToken.status).toBe(200);
+      // another PC's app reads it through its bridge token, by GET only
+      expect((await fetch(`http://localhost:${gated.port}/api/system`, { headers: { authorization: `Bearer ${bridge}` } })).status).toBe(200);
+      expect((await fetch(`http://localhost:${gated.port}/api/system`, { method: "POST", headers: { authorization: `Bearer ${bridge}` } })).status).toBe(401);
+      expect((await fetch(`http://localhost:${open.port}/api/system`, { method: "POST", headers: { origin: `http://localhost:${open.port}` } })).status).toBe(405);
+      // a server without a load of its own to tell answers as one without the route
+      expect((await fetch(`http://localhost:${machineServer.port}/api/system`)).status).toBe(404);
+    } finally { open.stop(); gated.stop(); machineServer.stop(); rmSync(dir, { recursive: true, force: true }); }
   });
 });
 
@@ -2259,6 +2340,10 @@ describe("workspace and discovery endpoints", () => {
       ["/api/pane/focus", {}, "missing_pane_id"],
       ["/api/pane/swap", { pane_id: "x", direction: "right", target_pane_id: "y" }, "invalid_pane_swap"],
       ["/api/pane/swap", { pane_id: "x", target_pane_id: "" }, "invalid_target_pane_id"],
+      ["/api/pane/move", { target_pane_id: "y", side: "left" }, "missing_pane_id"],
+      ["/api/pane/move", { pane_id: "x", side: "left" }, "invalid_target_pane_id"],
+      ["/api/pane/move", { pane_id: "x", target_pane_id: "y" }, "invalid_side"],
+      ["/api/pane/move", { pane_id: "x", target_pane_id: "y", side: "middle" }, "invalid_side"],
       ["/api/layout/ratio", {}, "missing_tab_id"],
       ["/api/layout/ratio", { tab_id: "x", path: [0], ratio: 0.5 }, "invalid_path"],
       ["/api/layout/ratio", { tab_id: "x", path: [], ratio: 1 }, "invalid_ratio"],

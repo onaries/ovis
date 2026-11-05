@@ -13,7 +13,6 @@ export const PALETTE_ZH: Record<string, string> = {
   "Close command palette": "关闭命令面板",
   "Filter panes by status": "按状态筛选窗格",
   "All": "全部",
-  "Recent": "最近",
   "Workspace": "工作区",
   "Unknown workspace": "未知工作区",
   "Actions": "操作",
@@ -28,4 +27,7 @@ export const PALETTE_ZH: Record<string, string> = {
   "Folders": "文件夹",
   "Open in Files": "在文件中打开",
   "Pinned folders": "已固定的文件夹",
+  "Open a page on this PC…": "打开这台 PC 上的页面…",
+  "Page on this PC": "这台 PC 上的页面",
+  "Open {address}": "打开 {address}",
 };

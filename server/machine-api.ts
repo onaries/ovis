@@ -1,10 +1,11 @@
 import { subscribeMachineEvents } from "./machine-events.ts";
-import type { DevicePairedEvent, MachineRoster, SetupAction, SetupRequest } from "../shared/machines.ts";
+import type { DevicePairedEvent, DeviceRemovedEvent, MachineRoster, RelayPairingsEvent, RemotePairingsEvent, SetupAction, SetupRequest } from "../shared/machines.ts";
 import type { AgentRowTokens } from "../shared/pane-tokens.ts";
 import type { SharedPreferences } from "../shared/preferences.ts";
 import type { PanePromptResponse, SessionSnapshot } from "../shared/protocol.ts";
 import type { SeenFinish } from "../shared/seen.ts";
 import { MachineManager } from "./machines.ts";
+import { TypedCodeError, type TypedCodeFailure } from "../shared/relay-code-offer.ts";
 import { canSendSecret, sameOrigin } from "./machine-security.ts";
 import { isJsonObject, jsonResponse, setRequestRoute } from "./http.ts";
 import { crossSiteFileRead } from "./file-view.ts";
@@ -12,6 +13,17 @@ import { snapshotWithoutHiddenTokens, withoutHiddenTokens } from "./herdr-sideba
 import { parseJson, readCapped, REMOTE_LIMITS, RemoteResponseInvalid, RemoteResponseTooLarge } from "./remote-json.ts";
 
 const fail = (code: string, message: string, status: number) => jsonResponse({ error: { code, message } }, status);
+
+/** POST /api/machines/relay/code: why a typed code found no PC, as `typed_code_<failure>` (the app words each one). */
+const CODE_FAILURES: Record<TypedCodeFailure, [string, number]> = {
+  "not-a-code": ["A code has ten letters and digits", 400],
+  "no-pc": ["No PC shows this code", 404],
+  wrong: ["That code did not work", 400],
+  expired: ["That code ran out", 410],
+  busy: ["Another device is trying this code", 409],
+  unreachable: ["The relay could not be reached", 502],
+  forged: ["The answer did not come from a PC this app can pair with", 502],
+};
 
 /**
  * How far one browser's machine events may fall behind before its stream is ended (it reconnects and
@@ -87,7 +99,7 @@ export const slowMachinePath = (path: string): boolean => path === "worktree/cre
  * forwards, so such a path must be no route at all rather than "some other route".
  */
 export const nonCanonicalPath = (pathname: string): boolean => pathname.includes("//") || (pathname.length > 1 && pathname.endsWith("/")) || /%2f|%5c/i.test(pathname);
-export const MACHINE_PROXY_PATH = /^(?:session|sessions\/(?:history|resume)|agents|agent-catalog(?:\/(?:install|sign-in))?|integrations|usage\/statusline|pane\/(?:read|scroll|find|selection|conversation(?:\/image|\/tool-output)?|commands|files|omo-tasks|background-agent|plan|artifacts|prompt|prompt\/answer|input|keys|close|rename|image|split|zoom|swap|resize|clear|focus)|workspace\/(?:create|rename|move|close|directories|diff\/files|diff\/file|diff\/repositories|diff\/refs)|worktree\/(?:create|list|open|remove)|tab\/(?:create|rename|close|move|move-to-workspace)|layout\/ratio|agent\/(?:rename|commands)|plugins\/actions|plugin\/action|fs\/(?:stat|file|favicon))$/;
+export const MACHINE_PROXY_PATH = /^(?:session|sessions\/(?:history|resume)|agents|agent-catalog(?:\/(?:install|sign-in))?|integrations|system|usage\/statusline|pane\/(?:read|scroll|find|selection|conversation(?:\/image|\/tool-output)?|commands|files|omo-tasks|background-agent|plan|artifacts|btw|prompt|prompt\/answer|input|keys|close|rename|image|split|zoom|swap|move|resize|clear|focus)|workspace\/(?:create|rename|move|close|directories|diff\/files|diff\/file|diff\/repositories|diff\/refs|pr|pr\/log|pr\/merge)|worktree\/(?:create|list|open|remove)|tab\/(?:create|rename|close|move|move-to-workspace)|layout\/ratio|agent\/(?:rename|commands)|plugins\/actions|plugin\/action|fs\/(?:stat|file|favicon|text))$/;
 
 
 /**
@@ -118,8 +130,8 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
   preferences?: { get(): SharedPreferences; subscribe(listener: (preferences: SharedPreferences) => void): () => void }, readOnly = false,
   herdrSidebar?: { get(): AgentRowTokens | null; subscribe(listener: (agents: AgentRowTokens | null) => void): () => void },
   seen?: { list(): SeenFinish[]; subscribe(listener: (finish: SeenFinish) => void): () => void },
-  /** durable device enrollments (server/devices.ts), already without the ones this stream's own device made */
-  pairings?: { subscribe(listener: (event: DevicePairedEvent) => void): () => void },
+  /** durable device enrollments (server/devices.ts), already without the ones this stream's own device made, and relay pairings waiting for approval */
+  pairings?: { subscribe(listener: (event: DevicePairedEvent | DeviceRemovedEvent | RelayPairingsEvent | RemotePairingsEvent) => void): () => void },
   relayBudget?: EventStreamBudget): Promise<Response> {
   const url = new URL(request.url);
   // A PC's file opens as this PC's /api/fs/file does, from any navigation: reading it changes
@@ -249,6 +261,27 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       }, new ByteLengthQueuingStrategy({ highWaterMark: MACHINE_EVENTS_QUEUE_BYTES }));
       return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-store", "x-accel-buffering": "no" } });
     }
+    if (parts[0] === "relay" && parts.length === 1 && request.method === "POST") {
+      setRequestRoute("/api/machines/relay");
+      // the link holds a one-time pairing code, a secret like an SSH password
+      if (!canSendSecret(request)) return fail("https_required", "A pairing link requires HTTPS or localhost", 403);
+      const body: unknown = await request.json().catch(() => null);
+      if (!isJsonObject(body)) return fail("invalid_body", "Expected a pairing link", 400);
+      return jsonResponse({ machine: await manager.addRelay(body.link, body.name, body.found) }, 201);
+    }
+    if (parts[0] === "relay" && parts[1] === "code" && parts.length === 2 && request.method === "POST") {
+      setRequestRoute("/api/machines/relay/code");
+      // the code is a secret, and what it finds holds the other PC's one-time pairing code, which stays on this server
+      if (!canSendSecret(request)) return fail("https_required", "A pairing code requires HTTPS or localhost", 403);
+      const body: unknown = await request.json().catch(() => null);
+      if (!isJsonObject(body)) return fail("invalid_body", "Expected a pairing code", 400);
+      try { return jsonResponse(await manager.relayFoundByCode(body.code, request.signal)); }
+      catch (error) {
+        if (!(error instanceof TypedCodeError)) throw error;
+        const [message, status] = CODE_FAILURES[error.failure];
+        return fail(`typed_code_${error.failure}`, message, status);
+      }
+    }
     if (parts[0] === "setup") {
       if (parts.length === 1 && request.method === "POST") { setRequestRoute("/api/machines/setup"); return jsonResponse(manager.setup(await request.json() as SetupRequest), 202); }
       if (parts.length === 2) {
@@ -335,6 +368,8 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
         const response = await fetch(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body, redirect: "error", signal: AbortSignal.any([request.signal, abort.signal, AbortSignal.timeout(slowMachinePath(path) ? 165_000 : 75_000)]) });
         if (moved && response.ok) moved();
         const etag = response.headers.get("etag");
+        // that PC's clock as it answered a conversation read, a 304 too (src/lib/sentWaiting.ts)
+        const serverTime = response.headers.get("x-server-time");
         // a PC's "try again in a moment" (a 503 file_busy: its file threads or a commands scan were busy)
         const retryAfter = response.status === 503 ? response.headers.get("retry-after") : null;
         // held whole before it is passed on (and parsed, for a watcher's prompt), so only up to a size
@@ -359,7 +394,7 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
         }
         return new Response(body, { status: response.status, headers: {
           "content-type": response.headers.get("content-type") ?? "application/json", "cache-control": "no-store", ...(etag ? { etag } : {}),
-          ...(retryAfter ? { "retry-after": retryAfter } : {}),
+          ...(retryAfter ? { "retry-after": retryAfter } : {}), ...(serverTime ? { "x-server-time": serverTime } : {}),
         } });
       } catch (error) {
         if (error instanceof RemoteResponseTooLarge || error instanceof RemoteResponseInvalid) return unusableAnswer(id, path, error);

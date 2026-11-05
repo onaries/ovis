@@ -47,6 +47,16 @@ const NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 const asciiLower = (text: string): string => text.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
 
+/**
+ * The token a launcher sets to file a pane under the Agents list's background agents
+ * (`--token role=background`, any case, spaces around it ignored; src/lib/agentRoster.ts).
+ */
+export const ROLE_TOKEN = "role";
+
+export function isBackgroundRole(value: unknown): boolean {
+  return typeof value === "string" && asciiLower(value.trim()) === "background";
+}
+
 /** Whether a rule's condition holds for a token's whole value, as herdr's sidebar tests it. */
 export function paneTokenRuleMatches(rule: PaneTokenRule, value: string): boolean {
   if (rule.gt !== undefined || rule.lt !== undefined) {
@@ -70,7 +80,8 @@ export function paneTokenSpecs(layout: AgentRowTokens | null, agent: string | nu
 /**
  * What a pane's tokens say on its agent row, in the order the row draws them: the tokens the
  * agent's herdr rows name, or every token (by name) where the config names none. A missing or
- * blank token says nothing, and neither does one a matching rule hides. A token the rows name twice
+ * blank token says nothing, and neither does one a matching rule hides, nor, where the config names
+ * none, the background tag (`role=background`). A token the rows name twice
  * is said once, at the first place whose rules leave it shown. The values are text the row writes as
  * it is, never markup.
  */
@@ -81,7 +92,8 @@ export function paneTokenValues(layout: AgentRowTokens | null, agent: string | n
     return typeof value === "string" && value.trim() ? value : null;
   };
   const specs = paneTokenSpecs(layout, agent);
-  if (specs === null) return Object.keys(tokens).sort().flatMap((name) => valueOf(name)?.trim() ?? []);
+  // the background tag already says where the row stands: a row drawing every token leaves it out
+  if (specs === null) return Object.keys(tokens).sort().flatMap((name) => name === ROLE_TOKEN && isBackgroundRole(tokens[name]) ? [] : valueOf(name)?.trim() ?? []);
   const shown: string[] = [];
   const said = new Set<string>();
   for (const { name, rules } of specs) {

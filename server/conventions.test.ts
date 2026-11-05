@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { posix } from "node:path";
 import { fail, files, lineOf, read, stripComments } from "../scripts/source-scan.ts";
 
 // Server rules from AGENTS.md and server/AGENTS.md that used to be prose only. Each failure says
@@ -218,8 +219,9 @@ describe("herdr socket", () => {
     // server/herdr-core/adapter.ts is the other end: it answers herdr's events.subscribe (the
     // collector's own, reaching it through HERDR_SOCKET) from hc's event stream of the same name;
     // hc's generated types, their generator and the hc connection only name that hc method as a type
-    // server/herdr-core/pin-label.ts reads hc's own `labels` events for pins, never a pane's status
-    const HC_STREAM_TYPES = ["server/herdr-core/adapter.ts", "server/herdr-core/hc-api.generated.ts", "scripts/hc-types.ts", "server/herdr-core/connection.ts", "server/herdr-core/pin-label.ts"];
+    // server/herdr-core/pin-label.ts reads hc's own `labels` events for pins, never a pane's status;
+    // server/herdr-core/machine-scope.ts only narrows hc's stream to one machine's events for that adapter
+    const HC_STREAM_TYPES = ["server/herdr-core/adapter.ts", "server/herdr-core/hc-api.generated.ts", "scripts/hc-types.ts", "server/herdr-core/connection.ts", "server/herdr-core/pin-label.ts", "server/herdr-core/machine-scope.ts"];
     const raw = matches(files("{server,src,shared,scripts}/**/*.{ts,tsx,mjs,js}").filter((file) => !file.endsWith(".test.ts")), /["']events\.subscribe["']/).filter((match) => match.file !== "server/herdr/client.ts" && !HC_STREAM_TYPES.includes(match.file));
     fail([...subscribers, ...raw].map((match) => match.at),
       "server/collector.ts is the only status subscription (startStatusCollector), and `events.subscribe` is sent only by subscribeEvents in server/herdr/client.ts: take pane status from the collector's callbacks (onStatus, onPaneEnded, onBaseline) in server/index.ts instead of subscribing again.");
@@ -227,21 +229,26 @@ describe("herdr socket", () => {
 });
 
 describe("remote PC bundle boundary", () => {
-  // scripts/build-remote-bundle.ts ships server/, shared/ and integrations/ but not src/: code there that
-  // imports src/ loads from a checkout, where every check runs, and not on a remote PC (#2220)
-  const SRC_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["'](?:\.\.\/)+src\//;
+  // scripts/build-remote-bundle.ts ships server/, shared/ and integrations/ but not src/ or relay/: code
+  // there that imports either loads from a checkout, where every check runs, and not on a remote PC (#2220)
+  const SRC_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']((?:\.\.\/)+(?:src|relay)\/[^"']*)["']/;
+  // server/relay/ is in the bundle: only a path that resolves to the checkout's own src/ or relay/ counts
+  const leavesBundle = (file: string, spec: string) => /^(?:src|relay)\//.test(posix.normalize(posix.join(posix.dirname(file), spec)));
 
-  it("never imports src/ from code the remote bundle carries", () => {
+  it("never imports src/ or relay/ from code the remote bundle carries", () => {
     const shipped = [...serverCode(), ...files("{shared,integrations}/**/*.{ts,mjs,js}").filter((file) => !file.endsWith(".test.ts"))];
-    fail(matches(shipped, SRC_IMPORT).map((found) => found.at),
-      "The remote PC bundle (scripts/build-remote-bundle.ts) carries server/, shared/ and integrations/, not src/: move what this code needs from src/ into shared/, as shared/markdown.ts was.");
+    fail(matches(shipped, SRC_IMPORT).filter((found) => leavesBundle(found.file, SRC_IMPORT.exec(found.code.slice(found.index))![1]!)).map((found) => found.at),
+      "The remote PC bundle (scripts/build-remote-bundle.ts) carries server/, shared/ and integrations/, not src/ or relay/: move what this code needs into shared/, as shared/markdown.ts was.");
   });
 
   it("knows an import of src/ from a mention", () => {
     expect(SRC_IMPORT.test("import { parseInline } from \"../src/lib/markdown.ts\";")).toBe(true);
     expect(SRC_IMPORT.test("const m = await import('../../src/lib/x.ts')")).toBe(true);
     expect(SRC_IMPORT.test("import \"../src/styles.css\";")).toBe(true);
+    expect(SRC_IMPORT.test("import { PAIR_CLOSE } from \"../../relay/pair-room.ts\";")).toBe(true);
     expect(SRC_IMPORT.test("import { a } from \"../shared/markdown.ts\";")).toBe(false);
     expect(SRC_IMPORT.test("import { a } from \"./src-files.ts\";")).toBe(false);
+    expect(leavesBundle("server/relay/pair-code.ts", "../../relay/pair-room.ts")).toBe(true);
+    expect(leavesBundle("server/account/mailbox.ts", "../relay/identity.ts")).toBe(false);
   });
 });

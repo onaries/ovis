@@ -16,9 +16,11 @@ import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useAgentSkills } from "../lib/useAgentSkills.ts";
 import { useT } from "../lib/i18n.ts";
 import { latestRead, READ_AGAIN_MS, READ_AGAIN_TIMES, readAgainUntil } from "../lib/latestRead.ts";
-import { useSettings } from "../lib/settings.ts";
+import { loadSettings, useSettings } from "../lib/settings.ts";
+import { assignAgentGroup, folderAgentGroup, rememberFolderAgentGroup } from "../lib/namedAgentGroups.ts";
+import { sidebarPinKey } from "../lib/sidebarPins.ts";
 import { learnTabLabel } from "../lib/tabLabels.ts";
-import { launchCapabilities, modelSuggestions } from "../lib/agentLaunchMode.ts";
+import { launchCapabilities, modelSuggestions, recordedChoices, type ChatLaunch } from "../lib/agentLaunchMode.ts";
 import { MAX_COMPOSER_CHARS } from "../lib/compose.ts";
 import { createRequest, dialogLaunch, firstMessageOutcome, startNewSession } from "../lib/newSession.ts";
 import { useMachineSessions } from "../lib/machineSessionContext.tsx";
@@ -26,7 +28,7 @@ import { composerDrafts } from "../lib/composerDraft.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { inFlightGuard } from "../lib/sessionHistory.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
-import { nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
+import { focusInOtherModal, nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
 import { useSheetSwipe } from "../lib/sheets.ts";
 import { passingFolder, recentDirectories } from "../lib/recent-directories.ts";
 
@@ -36,6 +38,8 @@ export interface NewTabTarget {
   workspaceLabel: string;
   cwd: string | null;
   number: number;
+  /** opened from a chat's composer: the agent, model and effort the dialog starts on in place of the last ones picked */
+  chat?: ChatLaunch | null;
 }
 
 export interface NewSessionDialogProps {
@@ -61,6 +65,8 @@ export interface NewSessionDialogProps {
   onOpenPane?: (paneId: string) => void;
   /** this device only watches: a setup types into the PC's terminal, so Add another agent is not offered */
   watching?: boolean;
+  /** Settings -> Named agent groups: which grouped keys may stay as the new pane's group is saved (lib/namedAgentGroups.ts liveGroupKeys) */
+  groupKept?: (groupOf: Readonly<Record<string, string>>) => ReadonlySet<string>;
 }
 
 export interface DialogFields {
@@ -92,9 +98,9 @@ export function insertToken(text: string, at: number, token: string): { text: st
   return { text: `${head}${after}`.slice(0, MAX_COMPOSER_CHARS), caret: Math.min(head.length, MAX_COMPOSER_CHARS) };
 }
 
-export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCreated, machineName, prefill = null, onDraft, worktrees = [], onOpenPane, watching = false }: NewSessionDialogProps) {
+export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCreated, machineName, prefill = null, onDraft, worktrees = [], onOpenPane, watching = false, groupKept }: NewSessionDialogProps) {
   const t = useT();
-  const { settings } = useSettings();
+  const { settings, update: updateSettings } = useSettings();
   const machineId = useMachineId();
   const { createTab, createWorkspace, fetchAgentKinds, fetchAgentCommands } = useMachineApi();
   const machineSessions = useMachineSessions();
@@ -106,6 +112,10 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   const [effort, setEffort] = useState("");
   const [ultracode, setUltracode] = useState(false);
   const [prompt, setPrompt] = useState("");
+  // Settings -> Named agent groups: the group the new pane goes in ("": none), the folder's last one until one is picked
+  const groupNames = settings.agentNamedGroups ? settings.agentGroupNames : [];
+  const [group, setGroup] = useState("");
+  const [groupPicked, setGroupPicked] = useState(false);
   // the skills the picked agent would offer in the folder, before any process exists (GET /api/agent/commands)
   const skillFolder = tab ? tab.cwd : cwd.trim() || null;
   const [skills, setSkills] = useAgentSkills(open, agentKind, skillFolder, fetchAgentCommands, t);
@@ -149,17 +159,25 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   defaultCwdRef.current = defaultCwd;
   const prefillRef = useRef(prefill);
   prefillRef.current = prefill;
+  const chatRef = useRef(tab?.chat ?? null);
+  chatRef.current = tab?.chat ?? null;
 
   // The previous launch may have left disabled fields: reset them before the opening paint.
   useLayoutEffect(() => {
     if (!open) return;
     const filled = prefillRef.current;
+    const chat = chatRef.current;
+    const remembered = rememberedAgent();
+    // the chat the button was pressed in comes first: a link's fields may be left from an earlier opening
+    const stored = chat?.agent ?? filled?.agent ?? remembered;
+    const carried = chat !== null ? recordedChoices(chat.agent, chat) : { model: "", effort: "" };
     setCwd(filled?.cwd ?? defaultCwdRef.current ?? "");
     setName(filled?.name ?? "");
-    setModel("");
-    setEffort("");
+    setModel(carried.model);
+    setEffort(carried.effort);
     setUltracode(false);
     setPrompt("");
+    setGroupPicked(false);
     setSkills(null);
     setError(null);
     setPending(false);
@@ -170,8 +188,6 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
     setAdding(false);
     setRefreshing(false);
     setRecentFolders(recentDirectories.read(machineId));
-    const remembered = rememberedAgent();
-    const stored = filled?.agent ?? remembered;
     setAgentKind(stored);
     let cancelled = false;
     const latest = agentReads.current();
@@ -183,10 +199,11 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
         if (stored && !next.some((agent) => agent.kind === stored)) {
           const kind = stored !== remembered && next.some((agent) => agent.kind === remembered) ? remembered : "";
           setAgentKind(kind);
-          // what was chosen meanwhile for the agent that gave way goes as pickAgent's choices go
+          // what was chosen meanwhile for the agent that gave way goes as pickAgent's choices go; a chat's recorded
+          // effort was that chat's agent's, so it goes with it
           const can = launchCapabilities(kind);
           setModel("");
-          setEffort((current) => can.efforts.includes(current) ? current : "");
+          setEffort((current) => chat === null && can.efforts.includes(current) ? current : "");
           if (!can.ultracode) setUltracode(false);
         }
       })
@@ -197,6 +214,13 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
       cancelled = true;
     };
   }, [open]);
+
+  // the folder's last group, as the folder changes, until the reader picks one
+  const groupFolder = tab ? tab.cwd : cwd;
+  const groupKey = groupNames.join("\n");
+  useEffect(() => {
+    if (open && !groupPicked) setGroup(folderAgentGroup(machineId, groupFolder, groupNames) ?? "");
+  }, [open, groupPicked, machineId, groupFolder, groupKey]);
 
   useEffect(() => {
     if (!open || !onDraft) return;
@@ -210,6 +234,8 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
     const onKeyDown = (event: KeyboardEvent): void => {
       // a native modal over it (Add PC, from the palette) takes its own Escape
       if (event.key !== "Escape" || nativeModalOver(surface.current)) return;
+      // Settings opened over it with its shortcut holds the focus: its Escape, though this listener runs first
+      if (focusInOtherModal(surface.current)) return;
       event.preventDefault();
       if (!pending) onClose();
     };
@@ -321,6 +347,17 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
     if (started === null) { setPending(false); return; }
     try {
       const result = await started;
+      // the pane is made, whatever came of its agent: it goes in the group picked, from the groups as last saved
+      // (only while the field is offered: with the setting off, the folder's last group is kept for later)
+      if (groupNames.length > 0) {
+        const picked = groupNames.includes(group) ? group : null;
+        rememberFolderAgentGroup(machineId, tab ? tab.cwd : directory, picked);
+        // No group clears a group the pane's id still had from a pane gone before it (herdr reuses ids)
+        const held = loadSettings().agentGroupOf;
+        const kept = groupKept?.(held);
+        const next = assignAgentGroup(held, sidebarPinKey(machineId, result.pane_id), picked, kept === undefined ? undefined : (key) => kept.has(key));
+        if (next !== null && JSON.stringify(next) !== JSON.stringify(held)) updateSettings({ agentGroupOf: next });
+      }
       if (agentKind && !result.agent_started && result.error?.message) {
         setPending(false);
         // the workspace exists: say so plainly, keep the PC's own words beneath, and Open it rather than make another
@@ -429,6 +466,14 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
             />
             <span className="field-hint">{t(tab ? "Tab name (optional)" : "Optional workspace label")}</span>
           </label>
+          {groupNames.length > 0 && <div className="field">
+            <label className="field-label" htmlFor="new-session-group">{t("Group")}</label>
+            <select id="new-session-group" className="select" value={group} disabled={fieldsDisabled} onChange={(event) => { setGroup(event.target.value); setGroupPicked(true); }}>
+              <option value="">{t("No group")}</option>
+              {groupNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+            <span className="field-hint">{t("Where the Agents list shows it")}</span>
+          </div>}
           {/* the launch's own choices, only where the agent's command line takes them (lib/agentLaunchMode.ts) */}
           {(can.model || can.efforts.length > 0) && <div className="new-session-launch">
             {can.model && <div className="field">

@@ -35,6 +35,10 @@ export interface SocketData {
   /** A fresh claim per attach lifetime; deleting it invalidates queued terminal keys. */
   attached: Map<string, { keepSize: boolean; receiptResumeId?: string }>;
   conversationInterests: Set<string>;
+  /** panes whose conversation this connection follows without attaching them (`conversation-watch` with `detached`) */
+  conversationWatches: Set<string>;
+  /** panes whose prompt this connection follows (`prompt-watch`, server/core/prompt-watch.ts) */
+  promptWatches: Set<string>;
   output: Map<string, OutputWindow>;
 }
 
@@ -72,7 +76,7 @@ function stateOf(client: Client): ConnectionState {
 
 /** The data for a connection's upgrade: it starts to interact unless its access is read-only. */
 export function connectionData(fields: { machineEvents?: MachineEventDocument; relay?: MachineRelay; deviceId: string | undefined; readOnly: boolean; bridge?: boolean; surface?: TelemetrySurface; ingress?: TelemetryIngress; recheckMs?: number }): SocketData {
-  const data: SocketData = { connectionId: crypto.randomUUID(), attached: new Map<string, { keepSize: boolean }>(), conversationInterests: new Set<string>(), output: new Map(), ...fields };
+  const data: SocketData = { connectionId: crypto.randomUUID(), attached: new Map<string, { keepSize: boolean }>(), conversationInterests: new Set<string>(), conversationWatches: new Set<string>(), promptWatches: new Set<string>(), output: new Map(), ...fields };
   states.set(data, { closing: false, revoked: false, mode: fields.readOnly ? "observe" : "interact", roles: 0, watches: new Map<string, PaneWatch>() });
   return data;
 }
@@ -263,6 +267,8 @@ export function createConnections({ clients, present, pending, devices, detachCl
     const state = stateOf(client);
     if (client.data.deviceId) {
       state.unwatchDevice = devices.onRevoke(client.data.deviceId, () => end(client, "revoked"));
+      // a role change while the upgrade was pending (a remote PC's relay dials first) told its listeners before this one
+      if (!state.revoked && !client.data.readOnly && !devices.canDrive(client.data.deviceId)) end(client, "revoked");
       if (state.revoked) return false;
     }
     // a plain close: the page reconnects as after any other, and Portal decides whether it gets in

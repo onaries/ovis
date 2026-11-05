@@ -346,3 +346,17 @@ it("serves an omp session's prompt and tool pictures, named by ref, from omp's b
   expect((await image("pi-prompt:d4a9dbba:1")).status).toBe(404);
   expect((await image("pi:../blobs:0")).status).toBe(404);
 });
+
+it("answers the /btw topics saved beside the pane's own OMP session, and none for a pane whose session is not written", async () => {
+  // OMP 18.14 keeps a session's /btw topics in its artifacts folder: the session file's path without .jsonl
+  const history = join(askSession.slice(0, -".jsonl".length), "btw-history");
+  mkdirSync(history, { recursive: true });
+  writeFileSync(join(history, "entry-btw1.json"), JSON.stringify({ question: "Which port?", answer: "7421", status: "complete", createdAt: 1_792_642_086_836, updatedAt: 1_792_642_088_314, id: "btw1", leafId: null }));
+  const topics = async (pane: string): Promise<{ id: string; answer: string }[]> => {
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/pane/btw?pane_id=${encodeURIComponent(pane)}`);
+    expect(response.status).toBe(200);
+    return (await response.json() as { topics: { id: string; answer: string }[] }).topics;
+  };
+  expect((await topics(askPaneId)).map((topic) => [topic.id, topic.answer])).toEqual([["btw1", "7421"]]);
+  expect(await topics(paneId)).toEqual([]);
+});

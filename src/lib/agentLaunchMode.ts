@@ -118,6 +118,26 @@ export function launchChoiceFault(kind: string, choices: LaunchChoices): "model"
   return null;
 }
 
+/** The agent a chat runs and the model and effort it recorded last (ConversationMetadata), null where it recorded none. */
+export interface ChatLaunch {
+  agent: string;
+  model: string | null;
+  effort: string | null;
+}
+
+/**
+ * The model and effort a new tab of a chat's agent starts on (#774): what the chat recorded, each only
+ * where the agent's launch takes it, else "" for the agent's own configuration.
+ */
+export function recordedChoices(kind: string, recorded: Omit<ChatLaunch, "agent">): { model: string; effort: string } {
+  const model = recorded.model ?? "";
+  const effort = recorded.effort ?? "";
+  return {
+    model: model !== "" && launchChoiceFault(kind, { model }) === null ? model : "",
+    effort: effort !== "" && launchChoiceFault(kind, { effort }) === null ? effort : "",
+  };
+}
+
 /**
  * Where a first prompt for `kind` goes: `positional` as the agent's own argument after `--`, `pending` as
  * the create request's `first_message`, which the bridge queues for the agent's first ready turn

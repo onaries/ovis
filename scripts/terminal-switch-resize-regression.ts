@@ -12,6 +12,7 @@ import { createServer } from "../server/index.ts";
 import { paneSendText, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { UsageService } from "../server/usage.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRow, shownRows } from "./shown-rows.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-switch-resize-")));
 const evidence = process.env["UI_EVIDENCE_DIR"];
@@ -50,11 +51,11 @@ async function viewer(width: number, pane: string, panes: string[]): Promise<Vie
   await page.locator(`[data-layout-pane="${pane}"] [data-pane-content]`).waitFor();
   return { page, sent, close: async () => { assert.deepEqual(errors, [], "no browser errors"); await context.close(); } };
 }
-const rows = (page: Page, pane: string): Promise<string[]> => page.locator(`[data-layout-pane="${pane}"] .xterm-rows > div`)
+const rows = (page: Page, pane: string): Promise<string[]> => page.locator(shownRow(`[data-layout-pane="${pane}"]`))
   .evaluateAll((divs) => divs.map((div) => (div.textContent ?? "").replace(/\s+$/, "")));
 const shows = async (page: Page, pane: string, text: string): Promise<void> => {
   try {
-    await page.locator(`[data-layout-pane="${pane}"] .xterm-rows`, { hasText: text }).waitFor({ state: "attached", timeout: 15_000 });
+    await page.locator(shownRows(`[data-layout-pane="${pane}"]`), { hasText: text }).waitFor({ state: "attached", timeout: 15_000 });
   } catch (error) {
     if (evidence) await page.screenshot({ path: join(evidence, `missing-${text}.png`) });
     throw new Error(`${text} never drawn; rows:\n${(await rows(page, pane)).join("\n")}`, { cause: error });
@@ -88,7 +89,7 @@ try {
     // Back on the tab: whatever it paints on the way (the screen it left, the pane as herdr shows it
     // now, the pane at its own size) is drawn for one grid, never output for another grid parsed
     // into its own (a row with two edge markers, the long line twice), and it ends as a fresh attach.
-    await cached.page.evaluate((pane) => {
+    await cached.page.evaluate(({ pane, row }) => {
       const frames: string[][] = [];
       const matched = Promise.withResolvers<void>();
       const state: { frames: string[][]; expected?: string; matched: Promise<void> } = { frames, matched: matched.promise };
@@ -98,7 +99,7 @@ try {
         const grab = () => {
           const frame = document.querySelector(`[data-layout-pane="${pane}"]`);
           if (frame && getComputedStyle(frame).visibility === "visible") {
-            const lines = [...frame.querySelectorAll(".xterm-rows > div")].map((div) => (div.textContent ?? "").replace(/\s+$/, ""));
+            const lines = [...frame.querySelectorAll(row)].map((div) => (div.textContent ?? "").replace(/\s+$/, ""));
             frames.push(lines);
             if (state.expected !== undefined && lines.join("\n") === state.expected) { matched.resolve(); return; }
           }
@@ -106,7 +107,7 @@ try {
         };
         requestAnimationFrame(grab);
       }, { once: true, capture: true });
-    }, target);
+    }, { pane: target, row: shownRow() });
     await select(cached.page, target);
     const truth = await viewer(cachedWidth, target, panes);
     const expected = await rows(truth.page, target);

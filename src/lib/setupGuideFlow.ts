@@ -97,6 +97,28 @@ export function phoneWay(relay: { unsupported: boolean; status: Pick<RelayStatus
   return relay.status.blocked === null ? "relay" : "other";
 }
 
+/** How Connect your phone's box came open: a tap on it, or by itself (phoneBoxOpensFirst). */
+export type PhoneBoxOpening = "tap" | "first-run";
+
+/**
+ * Whether Connect your phone's box is open when the setup screen first shows: on a first run on the
+ * PC itself (its loopback: the desktop app, or a browser on the PC), where a phone is the next device
+ * to add. Not on a guide reopened from Settings, nor on a page another device opened (a phone).
+ */
+export function phoneBoxOpensFirst(state: GuideState, onThisPc: boolean): boolean {
+  return state.reopened !== true && onThisPc;
+}
+
+/**
+ * Whether the box stays open: one that came open by itself leads with the relay only, so where the
+ * relay cannot lead it closes again rather than sending the page to Settings → Phone untapped. Once
+ * the relay led in it (`led`), the box is the user's, who may have tapped Turn on: a relay blocked
+ * since shows the other ways there, and never closes it.
+ */
+export function phoneBoxStays(opening: PhoneBoxOpening, way: "wait" | "relay" | "other", led: boolean): boolean {
+  return opening === "tap" || led || way !== "other";
+}
+
 /**
  * What the relay part of the box shows: the button that turns it on; its state while it connects (or
  * retries); a start that failed before its link existed (the relay is off and nothing retries it,

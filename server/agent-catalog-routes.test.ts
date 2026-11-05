@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { AGENT_CATALOG, catalogPlatform, type AgentCatalogResponse } from "../shared/agent-catalog.ts";
 import { AgentDetector, catalogLocator, runVersion } from "./agent-catalog-detect.ts";
 import { createServer } from "./index.ts";
+import * as runtime from "./herdr-core/runtime.ts";
 import { handleMachineRequest } from "./machine-api.ts";
 import type { MachineManager } from "./machines.ts";
 
@@ -71,6 +72,28 @@ describe("GET /api/agent-catalog", () => {
     expect([watchPost.status, ((await watchPost.json()) as { error: { code: string } }).error.code]).toEqual([403, "read_only"]);
     const post = await fetch(url("/api/agent-catalog"), { method: "POST", headers: { ...bearer(BROWSER_TOKEN), origin: url("") } });
     expect([post.status, ((await post.json()) as { error: { code: string } }).error.code]).toEqual([400, "method_not_allowed"]);
+  });
+
+  it("answers another machine of the core as unknown, with nothing to install or sign in to from this PC", async () => {
+    writeFileSync(join(bin, "claude"), "#!/bin/sh\necho '2.1.311 (Claude Code)'\n");
+    chmodSync(join(bin, "claude"), 0o755);
+    process.env["PATH"] = bin;
+    const machine = spyOn(runtime, "hcMachine").mockReturnValue({ name: "lab", id: "lab-id" });
+    try {
+      const body = await (await fetch(url("/api/agent-catalog"), { headers: bearer(BROWSER_TOKEN) })).json() as AgentCatalogResponse;
+      expect(body.platform).toBeNull();
+      expect(body.agents.map((agent) => agent.id)).toEqual(AGENT_CATALOG.map((entry) => entry.id));
+      for (const agent of body.agents) {
+        expect(agent.install).toBeNull();
+        expect(agent.state).toEqual({ installed: null, binary: null, on_path: null, version: null, version_error: null, meets_min_version: null });
+      }
+      for (const [path, agent] of [["/api/agent-catalog/install", "codex"], ["/api/agent-catalog/sign-in", "claude"]] as const) {
+        const refused = await fetch(url(path), { method: "POST", headers: { ...bearer(BROWSER_TOKEN), origin: url(""), "content-type": "application/json" }, body: JSON.stringify({ agent }) });
+        expect([refused.status, ((await refused.json()) as { error: { code: string } }).error.code]).toEqual([409, "other_machine"]);
+      }
+    } finally {
+      machine.mockRestore();
+    }
   });
 
   it("reaches another PC's catalog through the PC proxy with that PC's bridge token", async () => {

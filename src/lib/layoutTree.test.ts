@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import type { PaneLayoutRect, PaneLayoutSnapshot } from "../../shared/protocol.ts";
-import { closeLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "./layoutTree.ts";
+import { closeLayoutPane, moveLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "./layoutTree.ts";
 
 const rect = (x: number, y: number, width: number, height: number): PaneLayoutRect => ({ x, y, width, height });
 const area = rect(0, 0, 120, 40);
@@ -174,5 +174,24 @@ describe("resizeLayout", () => {
     ]);
     expectTiling(pinwheel.panes);
     expect(resizeLayout(pinwheel, "centre", "right", 0.05)).toBeNull();
+  });
+});
+
+describe("moveLayoutPane", () => {
+  it("measures the target's room once the pane has left the tree, and changes nothing when there is none", () => {
+    // the one-column target takes its sibling's columns as the sibling leaves: room for both again
+    const pair = tab([{ id: "narrow", rect: rect(0, 0, 1, 40) }, { id: "wide", rect: rect(1, 0, 119, 40) }]);
+    expect(moveLayoutPane(pair, "wide", "narrow", "right")).toBe(true);
+    expect(rectOf(pair.panes, "narrow")).toEqual(rect(0, 0, 60, 40));
+    expect(rectOf(pair.panes, "wide")).toEqual(rect(60, 0, 60, 40));
+    expectTiling(pair.panes);
+    // a pane from elsewhere in the tab leaves the one-column target as narrow: the tab stays as it was
+    const three = tab([{ id: "narrow", rect: rect(0, 0, 1, 40) }, { id: "top", rect: rect(1, 0, 119, 20) }, { id: "bottom", rect: rect(1, 20, 119, 20) }]);
+    const before = structuredClone(three);
+    expect(moveLayoutPane(three, "bottom", "narrow", "right")).toBe(false);
+    expect(three).toEqual(before);
+    expect(moveLayoutPane(three, "bottom", "narrow", "down")).toBe(true);
+    expect(rectOf(three.panes, "bottom")).toEqual(rect(0, 20, 1, 20));
+    expectTiling(three.panes);
   });
 });

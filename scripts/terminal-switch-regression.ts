@@ -9,6 +9,7 @@ import { createServer } from "../server/index.ts";
 import { paneSendText, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { UsageService } from "../server/usage.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 declare global {
   interface Window {
@@ -85,7 +86,7 @@ try {
       for (let i = 0; i < 10; i++) {
         const index = i % 2 === 0 ? 1 : 0;
         const id = panes[index]!;
-        await page.evaluate(({ id, marker }) => {
+        await page.evaluate(({ id, marker, shown }) => {
           window.switchResult = new Promise((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error("switch did not paint")), 10_000);
             document.addEventListener("pointerdown", () => {
@@ -93,7 +94,7 @@ try {
               let contentMs: number | null = null;
               const check = () => {
                 const frame = document.querySelector(`[data-layout-pane="${id}"]`);
-                const rows = frame?.querySelector(".xterm-rows");
+                const rows = frame?.querySelector(shown);
                 const visible = frame && getComputedStyle(frame).visibility === "visible";
                 if (visible && rows?.textContent?.includes(marker)) contentMs ??= performance.now() - start;
                 if (contentMs !== null && frame?.querySelector("[data-pane-content]")) {
@@ -104,7 +105,7 @@ try {
               requestAnimationFrame(check);
             }, { once: true, capture: true });
           });
-        }, { id, marker: `OVIS-SWITCH-${index}` });
+        }, { id, marker: `OVIS-SWITCH-${index}`, shown: shownRows() });
         await select(id);
         samples.push(await page.evaluate(() => window.switchResult));
       }
@@ -139,9 +140,9 @@ try {
           clearTimeout(deliveredTimeout);
           for (const socket of sockets) socket.off("framereceived", onView);
         }
-        assert.equal(await frame(panes[1]!).locator(".xterm-rows", { hasText: hidden }).count(), 0, "a hidden tab does not parse its view");
+        assert.equal(await frame(panes[1]!).locator(shownRows(), { hasText: hidden }).count(), 0, "a hidden tab does not parse its view");
         await select(panes[1]!);
-        await frame(panes[1]!).locator(".xterm-rows", { hasText: hidden }).waitFor({ state: "attached" });
+        await frame(panes[1]!).locator(shownRows(), { hasText: hidden }).waitFor({ state: "attached" });
         await select(panes[0]!);
         const evicting = frames.length;
         for (const id of panes.slice(2)) await select(id);

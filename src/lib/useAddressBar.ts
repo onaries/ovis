@@ -68,6 +68,9 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
   }, [fileLeft, releaseFile]);
   useEffect(() => {
     if (locked !== false || machines.length === 0 || snapshot === null || linkWorkspaceId === undefined || !linkLanded) return;
+    // A popped entry's PC can land before its fallback pane. Keep Forward until that pane is known.
+    // An offline PC never picks one, so its entry is written as it stands.
+    if (poppedTo.current && selectedPaneId === null && snapshot.panes.length > 0 && selectedMachine?.state === "connected") return;
     const link: AppLink = {
       machine: selectedMachineId, workspace: linkWorkspaceId, workspaceSlug: linkSlug, pane: selectedPaneId, view: selectedPaneId ? view : null, file: linkFile,
       settings: settingsOpen ? settingsPage : null, section: settingsOpen && settingsPage === settingsLinkPage ? settingsLinkSection : null,
@@ -87,7 +90,7 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
       if (fileLeft) window.history.replaceState({ [NAV_KEY]: true }, "", url);
       else window.history.pushState({ [NAV_KEY]: true }, "", url);
     } else window.history.replaceState(window.history.state, "", url);
-  }, [locked, machines.length, snapshot, linkLanded, selectedMachineId, selectedPaneId, linkWorkspaceId, linkSlug, linkFile, fileLeft, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, newSessionOpen, newTab, newFields, wideScreen, sidebarCollapsed, autoSelected]);
+  }, [locked, machines.length, snapshot, linkLanded, selectedMachine?.state, selectedMachineId, selectedPaneId, linkWorkspaceId, linkSlug, linkFile, fileLeft, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, newSessionOpen, newTab, newFields, wideScreen, sidebarCollapsed, autoSelected]);
 
 
   // a file a link named opens over its pane once the pane is shown, as the chat's file links do
@@ -116,24 +119,35 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
       // before the PCs are in, nothing can say the entry's PC is still set up: it waits as a link
       // opened with the page does, settled against its roster or answered with a note once they are
       if (machinesRef.current.length === 0) {
-        if (!link.pane && !link.workspace) return;
+        // an entry that asks for nothing drops a creation the page or an earlier entry left waiting
+        if (!link.pane && !link.workspace && !link.create) { pendingCreate.current = null; return; }
+        if (!link.create) setNewSessionOpen(false);
+        pendingCreate.current = link.create ?? null;
         selectTargetRef.current(link.machine, link.pane, link.view ?? undefined);
+        poppedTo.current = true;
+        // a creation-only entry names no place to settle: as when the page opens with one, its PC is
+        // the selection, which the first roster checks, connected or not
+        if (!link.pane && !link.workspace) return;
         pendingLink.current = link; pendingFile.current = null; setLinkLanded(false);
         linkSince.current = rosterSeq.current;
-        poppedTo.current = true;
         return;
       }
       const machine = machinesRef.current.find((candidate) => candidate.id === link.machine);
       const missing = !machine && machinesRef.current.length > 0;
       // the New workspace dialog is part of the address it was open on: Back closes it, Forward opens
       // it again, but not for a PC removed since
-      if (!link.create) setNewSessionOpen(false);
-      else if (!missing && !newSessionOpenRef.current) pendingCreate.current = link.create;
+      // an entry without one drops a creation still waiting; a dialog open for another PC gives way to the entry's
+      if (!link.create) { setNewSessionOpen(false); pendingCreate.current = null; }
+      else if (!missing && (!newSessionOpenRef.current || link.machine !== selectionRef.current.machineId)) { setNewSessionOpen(false); pendingCreate.current = link.create; }
       // an entry naming a PC since removed leaves the app where it is and says so, as a link to it would
       if (missing) setHeaderNote("machine-missing");
       else {
         const pane = machine?.snapshot ? resolveLink(machine.snapshot, link).pane : link.pane;
-        if (pane === null) return;
+        if (pane === null) {
+          // the dialog opens over the pane already shown on its PC; another PC's fallback pane is picked
+          if (link.create && selectionRef.current.machineId !== link.machine) { poppedTo.current = true; selectTargetRef.current(link.machine, null); }
+          return;
+        }
         const current = selectionRef.current;
         // the entry's lens is drawn over the pane's own, as a tapped notification's is. Where it
         // lands is written over the entry, so Forward keeps the entries after it

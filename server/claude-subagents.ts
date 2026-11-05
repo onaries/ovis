@@ -1053,20 +1053,7 @@ export function backgroundAgentDetail(parentPath: string, agentId: string): { de
     // a folder on the way replaced while it was read: what was read may be another folder's
     if (!intact(folder)) return { refusal: "unavailable" };
     if (read.foreign) return { refusal: "not_found" };
-    let { prompt, events, truncated } = read;
-    if (events.length > DETAIL_LIMITS.max_events) { events = events.slice(-DETAIL_LIMITS.max_events); truncated = true; }
-    // the text budget: the prompt first, then the events newest first; an event that does not fit goes with every older one
-    let left = DETAIL_LIMITS.max_output_bytes;
-    if (prompt !== null && Buffer.byteLength(prompt, "utf8") > left) { prompt = cut(prompt, left); truncated = true; }
-    if (prompt !== null) left -= Buffer.byteLength(prompt, "utf8");
-    let first = events.length;
-    while (first > 0) {
-      const bytes = Buffer.byteLength(events[first - 1]!.text, "utf8");
-      if (bytes > left) break;
-      left -= bytes;
-      first -= 1;
-    }
-    if (first > 0) { events = events.slice(first); truncated = true; }
+    const { prompt, events, truncated } = fitDetail(read.prompt, read.events, read.truncated);
     return {
       detail: {
         agent_id: agentId,
@@ -1081,6 +1068,27 @@ export function backgroundAgentDetail(parentPath: string, agentId: string): { de
       },
     };
   } finally { if (folder.fd !== null) closeSync(folder.fd); }
+}
+
+/**
+ * What a detail answers of what was read, within DETAIL_LIMITS: the newest max_events events, then the text budget, the
+ * prompt first and the events newest first (an event that does not fit goes with every older one). `truncated` when
+ * anything was left out here or before.
+ */
+export function fitDetail(prompt: string | null, events: DetailEvent[], truncated: boolean): { prompt: string | null; events: DetailEvent[]; truncated: boolean } {
+  if (events.length > DETAIL_LIMITS.max_events) { events = events.slice(-DETAIL_LIMITS.max_events); truncated = true; }
+  let left = DETAIL_LIMITS.max_output_bytes;
+  if (prompt !== null && Buffer.byteLength(prompt, "utf8") > left) { prompt = cut(prompt, left); truncated = true; }
+  if (prompt !== null) left -= Buffer.byteLength(prompt, "utf8");
+  let first = events.length;
+  while (first > 0) {
+    const bytes = Buffer.byteLength(events[first - 1]!.text, "utf8");
+    if (bytes > left) break;
+    left -= bytes;
+    first -= 1;
+  }
+  if (first > 0) { events = events.slice(first); truncated = true; }
+  return { prompt, events, truncated };
 }
 
 /**

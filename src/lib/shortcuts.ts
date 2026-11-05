@@ -21,6 +21,7 @@ export const SHORTCUTS = [
   { id: "rename-tab", label: "Rename tab", keys: [] },
   { id: "split-right", label: "Split pane right", keys: [] },
   { id: "split-down", label: "Split pane down", keys: [] },
+  { id: "zoom-pane", label: "Zoom or unzoom pane", keys: [] },
   { id: "previous-pane", label: "Previous pane", keys: ["Mod", "Shift", "ArrowUp"] },
   { id: "next-pane", label: "Next pane", keys: ["Mod", "Shift", "ArrowDown"] },
   // no default key either, as New tab: each person picks one in Settings
@@ -254,7 +255,7 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
       if (keepsKeyForText(event, shortcut)) return;
       event.preventDefault();
       // a held chord repeats: a tab or a split is made once per press, not once per key repeat
-      if (event.repeat && (shortcut === "new-tab" || shortcut === "rename-tab" || shortcut === "split-right" || shortcut === "split-down")) return;
+      if (event.repeat && (shortcut === "new-tab" || shortcut === "rename-tab" || shortcut === "split-right" || shortcut === "split-down" || shortcut === "zoom-pane")) return;
       switch (shortcut) {
         case "palette":
           actions.openPalette();
@@ -291,6 +292,9 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
           break;
         case "split-down":
           actions.splitPane?.("down");
+          break;
+        case "zoom-pane":
+          actions.toggleZoom?.();
           break;
         case "previous-pane":
           actions.selectAdjacentPane(-1);

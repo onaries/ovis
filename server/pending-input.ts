@@ -207,6 +207,8 @@ export class PendingInputs<Owner, Lease> {
       || [...this.records.values()].some((other) => other.paneId === item.paneId && other.inFlight)
       || (automatic ? this.next(item.paneId) !== item : !["queued", "held"].includes(item.message.state))) return false;
     item.message.state = "sending"; delete item.message.error; item.inFlight = true;
+    // before anything is typed: the row's turn is written after this on this PC's clock (src/lib/sentWaiting.ts)
+    item.message.sending_at = new Date(this.now()).toISOString();
     // An explicit send can start while an earlier send's turn is not confirmed yet. That gate keeps
     // watching the turn until this message commits its own key: a refusal before it frees nothing.
     // Native queue transfer claims the record but does not start an agent turn.
@@ -236,6 +238,7 @@ export class PendingInputs<Owner, Lease> {
       return;
     }
     item.message.state = uncertain ? "uncertain" : retryWhenReady ? "queued" : "held";
+    if (!uncertain) delete item.message.sending_at;
     if (retryWhenReady && !uncertain) delete item.message.error; else item.message.error = fault;
     const gate = this.gates.get(item.paneId);
     if (uncertain || gate?.by === item.message.id || gate?.completed) this.gates.delete(item.paneId);

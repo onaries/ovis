@@ -537,3 +537,58 @@ describe("Claude Code's question tabs as the card's steps", () => {
     expect(parseInteractivePrompt("claude", cut)?.steps).toBeUndefined();
   });
 });
+
+describe("the preview Claude draws for the option under its cursor (#1212)", () => {
+  // live-captured from Claude Code 2.1.312 in a 119- and a 67-column pane: an option's `preview` is
+  // drawn for the option under the cursor only, wrapped at the box's width and cut to its first rows
+  const shown = (option: string, width: number) => parseInteractivePrompt("claude", readFileSync(new URL(`../fixtures/claude-question-preview-2.1.312-${option}-${width}.txt`, import.meta.url), "utf8"));
+
+  test("reads the box as drawn, for the option the cursor is on", () => {
+    expect(shown("grid", 119)?.option_preview).toEqual({ option_index: 0, text: "+--+ +--+\n|  | |  |\n+--+ +--+\ngrid of cards" });
+    expect(shown("grid", 67)?.option_preview).toEqual({ option_index: 0, text: "+--+ +--+\n|  | |  |\n+--+ +--+\ngrid of cards" });
+    // a long line wraps inside the box: its rows are kept as the pane draws them
+    expect(shown("wide", 67)?.option_preview).toEqual({
+      option_index: 1,
+      text: [..."1234"].map(() => "wide wide wide wide wide wide\n wide wide wide wide wide").join("\n").replace(/ wide$/, ""),
+    });
+  });
+
+  test("says how many rows Claude cut from a long preview", () => {
+    const rows = (count: number) => Array.from({ length: count }, (_, index) => `row ${index + 1}`).join("\n");
+    expect(shown("tall", 119)?.option_preview).toEqual({ option_index: 2, text: rows(14), hidden_lines: 31 });
+    expect(shown("tall", 67)?.option_preview).toEqual({ option_index: 2, text: rows(12), hidden_lines: 33 });
+  });
+
+  test("keeps the preview out of the card's id, and the options as without it", () => {
+    const cards = ["grid", "wide", "tall"].map((option) => shown(option, 119));
+    expect(new Set(cards.map((card) => card?.id)).size).toBe(1);
+    expect(cards[0]?.options.map((option) => option.label)).toEqual(["Grid", "Wide", "Tall"]);
+  });
+
+  test("reads only the box beside the menu, between its edges (#3060 review)", () => {
+    const screen = readFileSync(new URL("../fixtures/claude-question-preview-2.1.312-grid-67.txt", import.meta.url), "utf8");
+    // a box the user drew earlier, above the question at the same column, is no option's preview
+    const box = (text: string) => [`${" ".repeat(34)}┌${"─".repeat(31)}┐`, `${" ".repeat(34)}│ ${text.padEnd(30)}│`, `${" ".repeat(34)}└${"─".repeat(31)}┘`].join("\n");
+    const above = screen.replace(" ☐ Layout", `${box("PRIVATE USER TEXT")}\n ☐ Layout`);
+    expect(parseInteractivePrompt("claude", above)?.option_preview).toEqual({ option_index: 0, text: "+--+ +--+\n|  | |  |\n+--+ +--+\ngrid of cards" });
+    // nor is what stands right of the box's edge
+    const beside = screen.replace("│ grid of cards                 │", "│ grid of cards                 │ OUTSIDE PANEL TEXT");
+    expect(parseInteractivePrompt("claude", beside)?.option_preview?.text).toBe("+--+ +--+\n|  | |  |\n+--+ +--+\ngrid of cards");
+  });
+
+  test("shows no preview from a box too narrow to read, and still the card", () => {
+    // a 40-column pane: Claude draws the box four columns wide, the grid in pieces
+    const screen = readFileSync(new URL("../fixtures/claude-question-preview-2.1.312-grid-40.txt", import.meta.url), "utf8");
+    for (const drawn of [screen, screen.replace(/├─── ✂ ─── 10\n\s+lines hidden ┤/, "├────┤")]) {
+      const narrow = parseInteractivePrompt("claude", drawn);
+      expect(narrow?.options.map((option) => option.label)).toEqual(["Grid", "Wide", "Tall"]);
+      expect(narrow?.option_preview).toBeUndefined();
+    }
+  });
+
+  test("leaves a question without previews as it was", () => {
+    const plain = parseInteractivePrompt("claude", readFileSync(new URL("../fixtures/claude-question-words-2.1.311-120.txt", import.meta.url), "utf8"));
+    expect(plain?.kind).toBe("question");
+    expect(plain?.option_preview).toBeUndefined();
+  });
+});

@@ -21,6 +21,7 @@ function harness({ deviceId, readOnly = false, relay, revokedAlready = false, st
       if (revokedAlready) close(); else revocations.push(close);
       return () => log.push("unwatch device");
     },
+    canDrive: () => true,
   } as unknown as DeviceStore;
   const pending = { close: () => log.push("pending closed") } as unknown as PendingInputs<Client, never>;
   const client = {

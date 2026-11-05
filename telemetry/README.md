@@ -7,7 +7,8 @@ sends and when is in [the guide](../docs/guide.md#anonymous-usage-counts); the s
 
 It stores one row per install, event and version in a D1 table (`schema.sql`): the day, the
 event, the random install ID, the version and the version it replaced, the OS, the CPU
-architecture, how the app was installed, and `settings`, a JSON snapshot validated by the shared
+architecture, how the app was installed, the terminal runtime its server serves (`runtime`:
+`herdr` or `herdr-core`, `NULL` from apps before it), and `settings`, a JSON snapshot validated by the shared
 schema in `shared/telemetry.ts` (`NULL` when the sender has not provided one). The snapshot
 contains only allowlisted enums, booleans and bounded numbers, never raw user-entered strings or
 account identifiers. It adds the country the request came from: the two characters Cloudflare
@@ -15,7 +16,7 @@ works out from the sender's address (`request.cf.country`, such as `KR`), and no
 city, region or network; a request Cloudflare marks as Tor or unknown is stored with no country).
 A second table, `active`, holds one row per install and UTC day the app was opened in a browser
 (`POST /v1/active`): the day, the random install ID, the version, the OS, the CPU architecture, how
-the app was installed, the country, and `harnesses`, a JSON array of the kinds of coding agents
+the app was installed, the terminal runtime, the country, and `harnesses`, a JSON array of the kinds of coding agents
 running that day, from the fixed list `TELEMETRY_HARNESSES` in `shared/telemetry.ts` (any other
 agent is `other`). A later message for the same day replaces the version and the harnesses.
 The Worker itself never reads the sender's address or any header other than the content type, and
@@ -60,6 +61,15 @@ without the column):
 
 ```sh
 bunx wrangler d1 execute herdr-web-ui-telemetry --remote --command "ALTER TABLE active ADD COLUMN usage TEXT CHECK (usage IS NULL OR json_valid(usage))"
+```
+
+Then add `runtime` to both tables, before deploying a Worker that writes it (an app since it was
+added names the terminal runtime its server serves, `herdr` or `herdr-core`; rows from older apps
+keep `NULL`):
+
+```sh
+bunx wrangler d1 execute herdr-web-ui-telemetry --remote --command "ALTER TABLE events ADD COLUMN runtime TEXT CHECK (runtime IS NULL OR runtime IN ('herdr', 'herdr-core'))"
+bunx wrangler d1 execute herdr-web-ui-telemetry --remote --command "ALTER TABLE active ADD COLUMN runtime TEXT CHECK (runtime IS NULL OR runtime IN ('herdr', 'herdr-core'))"
 ```
 
 These ALTERs preserve historical rows; their newly added `settings` value remains `NULL` and is
@@ -128,6 +138,8 @@ FROM active WHERE usage IS NOT NULL GROUP BY day ORDER BY day;
 SELECT version, COUNT(*) FROM (SELECT install_id, MAX(version) AS version FROM events GROUP BY install_id) GROUP BY version ORDER BY version;
 -- OS, architecture and install method
 SELECT os, arch, install_method, COUNT(DISTINCT install_id) FROM events GROUP BY os, arch, install_method;
+-- active installs per terminal runtime and install method, the last 7 days (NULL: apps from before runtime)
+SELECT runtime, install_method, COUNT(DISTINCT install_id) FROM active WHERE day >= date('now', '-6 days') GROUP BY runtime, install_method;
 -- installs per country, each counted once under the last country it was seen in; NULL is an
 -- install never seen with one (heard from only before the country was kept, or never named one)
 SELECT country, COUNT(*) FROM (

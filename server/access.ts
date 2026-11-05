@@ -152,7 +152,7 @@ export function observedIngress(input: Pick<AccessInput, "loopback" | "forwarded
   peerKnown: boolean;
   /** a forwarding header (`forwardingHeaders`) came with the request */
   forwardingHeaders: boolean;
-}): Exclude<ObservedIngress, "relay"> {
+}): Exclude<ObservedIngress, "relay" | "portal"> {
   if (!input.peerKnown) return "unknown";
   const tailscaleHere = input.owner !== null || input.tagged;
   const throughServe = input.serveOnly && input.loopback && tailscaleHere;

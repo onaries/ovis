@@ -212,6 +212,20 @@ describe("bridgePins", () => {
     expect(preferences.get().pins).toEqual(["local:t2", "local:t1"]);
   });
 
+  it("leaves another hc machine's terminals alone: this PC shows none of them, so its list never unpins them (#2768)", async () => {
+    const dir = stateDir();
+    const preferences = store(dir, []);
+    const core = fakeCore([{ address: "t1", state: "live", labels: {} }, { address: "vps/t2", state: "live", labels: { "herdr.pinned": "1" } }]);
+    const pins = bridge(core, preferences, dir);
+    await core.opened();
+    core.tell({ type: "created", terminal: "vps/t3", data: { address: "vps/t3", state: "live", status: AGENT, labels: { "herdr.pinned": "1" } } });
+    await pins.idle();
+    expect(preferences.get().pins).toEqual([]);
+    preferences.set({ settings: {}, pins: ["local:t1"] });
+    await pins.idle();
+    expect(core.written).toEqual([{ terminal: "t1", labels: { "herdr.pinned": "1" } }]);
+  });
+
   it("stops syncing a terminal told again without an agent, as a remote PC coming back tells it", async () => {
     const dir = stateDir();
     const preferences = store(dir, []);
@@ -515,6 +529,284 @@ describe("bridgePins", () => {
       expect(core.written.filter((write) => write.terminal === "t1")).toEqual([]);
     });
   }
+
+  for (const order of ["hangs", "fails and its retry hangs", "hangs while Ovis pins it again and unpins it once more"] as const) {
+    it(`keeps an unpin made in Ovis whose write ${order}, failing only after the agent quit, once an agent runs there again (#2787)`, async () => {
+      const dir = stateDir();
+      const preferences = store(dir, ["local:t1"]);
+      const terminals: Held[] = [{ address: "t1", state: "live", labels: { "herdr.pinned": "1" } }];
+      const core = fakeCore(terminals);
+      const gate = Promise.withResolvers<void>();
+      const reached = Promise.withResolvers<void>();
+      const hc = core.hc as unknown as { call: (method: string, params: unknown) => Promise<unknown> };
+      const call = hc.call;
+      const mode = { now: "pass" as "pass" | "fail" | "hang" };
+      hc.call = async (method, params) => {
+        if (mode.now === "pass") return call(method, params);
+        if (mode.now === "hang") { reached.resolve(); await gate.promise; }
+        else mode.now = "hang";
+        throw new Error("hc is not answering");
+      };
+      const pins = bridge(core, preferences, dir);
+      await core.opened();
+      await pins.idle();
+      mode.now = order === "fails and its retry hangs" ? "fail" : "hang";
+      preferences.set({ settings: {}, pins: [] });
+      await reached.promise;
+      if (order === "hangs while Ovis pins it again and unpins it once more") {
+        preferences.set({ settings: {}, pins: ["local:t1"] });
+        preferences.set({ settings: {}, pins: [] });
+      }
+      // t1's agent quits while the write waits, then the write fails
+      core.tell({ type: "status", terminal: "t1", data: { status: null } });
+      gate.resolve();
+      await pins.idle();
+      // a restart from here still finds the change
+      expect(JSON.parse(readFileSync(join(dir, "herdr-core-pins.json"), "utf8")).pending).toEqual(["c1/t1"]);
+      mode.now = "pass";
+      core.tell({ type: "status", terminal: "t1", data: { status: AGENT } });
+      await pins.idle();
+      expect(preferences.get().pins).toEqual([]);
+      expect(terminals[0]!.labels).toEqual({});
+      expect(core.written).toEqual([{ terminal: "t1", labels: { "herdr.pinned": "" } }]);
+    });
+  }
+
+  for (const quit of ["after", "before"] as const) {
+    it(`keeps a pin the Herdr app made again after an Ovis unpin that landed while Ovis stopped, with the agent quitting ${quit} Ovis stopped`, async () => {
+      const dir = stateDir();
+      const preferences = store(dir, ["local:t1"]);
+      const terminals: Held[] = [{ address: "t1", state: "live", labels: { "herdr.pinned": "1" } }];
+      const first = fakeCore(terminals);
+      const reached = Promise.withResolvers<void>();
+      const hc = first.hc as unknown as { call: (method: string, params: unknown) => Promise<unknown> };
+      const call = hc.call;
+      const hanging = { on: false };
+      hc.call = async (method, params) => {
+        if (!hanging.on) return call(method, params);
+        reached.resolve();
+        return new Promise(() => {});
+      };
+      const earlier = bridge(first, preferences, dir);
+      await first.opened();
+      await earlier.idle();
+      // Ovis unpins t1 and stops before hc answers; the unpin lands, and the Herdr app pins t1 again
+      hanging.on = true;
+      preferences.set({ settings: {}, pins: [] });
+      await reached.promise;
+      if (quit === "before") first.tell({ type: "status", terminal: "t1", data: { status: null } });
+      earlier.stop();
+      terminals[0]!.status = null;
+      const core = fakeCore(terminals);
+      const pins = bridge(core, new PreferenceStore(dir), dir);
+      await core.opened();
+      core.tell({ type: "status", terminal: "t1", data: { status: AGENT } });
+      await pins.idle();
+      expect(new PreferenceStore(dir).get().pins).toEqual(["local:t1"]);
+      expect(core.written).toEqual([]);
+    });
+  }
+
+  for (const order of ["event first", "answer first"] as const) {
+    it(`keeps an unpin made in Ovis while its pin's write waited, when the pin lands after the agent quit (${order}) (#2913)`, async () => {
+      const dir = stateDir();
+      const preferences = store(dir, []);
+      const terminals: Held[] = [{ address: "t1", state: "live", labels: {} }];
+      const core = fakeCore(terminals);
+      const gate = Promise.withResolvers<void>();
+      const reached = Promise.withResolvers<void>();
+      const hc = core.hc as unknown as { call: (method: string, params: unknown) => Promise<unknown> };
+      const call = hc.call;
+      const slow = { on: false };
+      hc.call = async (method, params) => {
+        if (slow.on) { reached.resolve(); await gate.promise; }
+        return call(method, params);
+      };
+      const pins = bridge(core, preferences, dir);
+      await core.opened();
+      await pins.idle();
+      // Ovis pins t1 while hc is slow, and unpins it before hc answers; then t1's agent quits
+      slow.on = true;
+      preferences.set({ settings: {}, pins: ["local:t1"] });
+      await reached.promise;
+      preferences.set({ settings: {}, pins: [] });
+      core.tell({ type: "status", terminal: "t1", data: { status: null } });
+      slow.on = false;
+      if (order === "answer first") core.state.held = [];
+      gate.resolve();
+      await pins.idle();
+      core.release();
+      // a restart from here still finds the change
+      expect(JSON.parse(readFileSync(join(dir, "herdr-core-pins.json"), "utf8")).pending).toEqual(["c1/t1"]);
+      core.tell({ type: "status", terminal: "t1", data: { status: AGENT } });
+      await pins.idle();
+      expect(preferences.get().pins).toEqual([]);
+      expect(terminals[0]!.labels).toEqual({});
+    });
+  }
+
+  it("keeps a pin made again in Ovis while its unpin's write waited, when the unpin lands after the agent quit and the row was pruned (#2913)", async () => {
+    const dir = stateDir();
+    const preferences = store(dir, ["local:t1"]);
+    const terminals: Held[] = [{ address: "t1", state: "live", labels: { "herdr.pinned": "1" } }, { address: "t2", state: "live", labels: {} }];
+    const core = fakeCore(terminals);
+    const gate = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const hc = core.hc as unknown as { call: (method: string, params: unknown) => Promise<unknown> };
+    const call = hc.call;
+    const slow = { on: false };
+    hc.call = async (method, params) => {
+      if (slow.on) { reached.resolve(); await gate.promise; }
+      return call(method, params);
+    };
+    const pins = bridge(core, preferences, dir);
+    await core.opened();
+    await pins.idle();
+    // Ovis unpins t1 while hc is slow and pins it again; t1's agent quits and the Agents list drops the shell's pin as t2 is pinned
+    slow.on = true;
+    preferences.set({ settings: {}, pins: [] });
+    await reached.promise;
+    preferences.set({ settings: {}, pins: ["local:t1"] });
+    core.tell({ type: "status", terminal: "t1", data: { status: null } });
+    slow.on = false;
+    preferences.set({ settings: {}, pins: ["local:t2"] });
+    gate.resolve();
+    await pins.idle();
+    core.tell({ type: "status", terminal: "t1", data: { status: AGENT } });
+    await pins.idle();
+    expect(preferences.get().pins).toEqual(["local:t2", "local:t1"]);
+    expect(terminals[0]!.labels).toEqual({ "herdr.pinned": "1" });
+  });
+
+  for (const order of ["another label changes while its unpin waits", "its pin's event comes before the agent quits"] as const) {
+    it(`keeps Ovis's last change after the agent quit when ${order} (#2913)`, async () => {
+      const dir = stateDir();
+      const unpinOnly = order === "another label changes while its unpin waits";
+      const preferences = store(dir, unpinOnly ? ["local:t1"] : []);
+      const terminals: Held[] = [{ address: "t1", state: "live", labels: unpinOnly ? { "herdr.pinned": "1" } : {} }];
+      const core = fakeCore(terminals);
+      const beforeWrite = Promise.withResolvers<void>();
+      const reached = Promise.withResolvers<void>();
+      const answer = Promise.withResolvers<void>();
+      const hc = core.hc as unknown as { call: (method: string, params: unknown) => Promise<unknown> };
+      const call = hc.call;
+      const slow = { on: false };
+      hc.call = async (method, params) => {
+        if (slow.on) { reached.resolve(); await beforeWrite.promise; }
+        return call(method, params);
+      };
+      const pins = bridge(core, preferences, dir);
+      await core.opened();
+      await pins.idle();
+      slow.on = true;
+      core.state.answer = answer.promise;
+      if (unpinOnly) {
+        // Ovis unpins t1; t1's agent quits and another client sets an unrelated label before the unpin lands
+        preferences.set({ settings: {}, pins: [] });
+        await reached.promise;
+        core.tell({ type: "status", terminal: "t1", data: { status: null } });
+        terminals[0]!.labels["other"] = "x";
+        core.tell({ type: "labels", terminal: "t1", data: { labels: { ...terminals[0]!.labels } } });
+        const wrote = core.writing();
+        beforeWrite.resolve();
+        await wrote;
+      } else {
+        // Ovis pins t1 and unpins it again; the pin's event comes while the agent runs, then the agent quits
+        preferences.set({ settings: {}, pins: ["local:t1"] });
+        await reached.promise;
+        preferences.set({ settings: {}, pins: [] });
+        const wrote = core.writing();
+        beforeWrite.resolve();
+        await wrote;
+        core.tell({ type: "status", terminal: "t1", data: { status: null } });
+      }
+      slow.on = false;
+      answer.resolve();
+      await pins.idle();
+      core.state.answer = null;
+      core.tell({ type: "status", terminal: "t1", data: { status: AGENT } });
+      await pins.idle();
+      expect(preferences.get().pins).toEqual([]);
+      expect(terminals[0]!.labels["herdr.pinned"]).toBeUndefined();
+    });
+  }
+
+  it("keeps a pin made again in Ovis when the agent starts again while its unpin's write still waits, after the row was pruned (#2913)", async () => {
+    const dir = stateDir();
+    const preferences = store(dir, ["local:t1"]);
+    const terminals: Held[] = [{ address: "t1", state: "live", labels: { "herdr.pinned": "1" } }, { address: "t2", state: "live", labels: {} }];
+    const core = fakeCore(terminals);
+    const gate = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const hc = core.hc as unknown as { call: (method: string, params: unknown) => Promise<unknown> };
+    const call = hc.call;
+    const slow = { on: false };
+    hc.call = async (method, params) => {
+      if (!slow.on) return call(method, params);
+      reached.resolve();
+      await gate.promise;
+      throw new Error("hc is not answering");
+    };
+    const pins = bridge(core, preferences, dir);
+    await core.opened();
+    await pins.idle();
+    // Ovis unpins t1 and its write hangs; Ovis pins it again, the agent quits, and the Agents list drops the shell's pin as t2 is pinned
+    slow.on = true;
+    preferences.set({ settings: {}, pins: [] });
+    await reached.promise;
+    preferences.set({ settings: {}, pins: ["local:t1"] });
+    core.tell({ type: "status", terminal: "t1", data: { status: null } });
+    preferences.set({ settings: {}, pins: ["local:t2"] });
+    // the agent starts again before the write fails
+    core.tell({ type: "status", terminal: "t1", data: { status: AGENT } });
+    gate.resolve();
+    slow.on = false;
+    await pins.idle();
+    expect(preferences.get().pins).toEqual(["local:t2", "local:t1"]);
+    expect(terminals[0]!.labels).toEqual({ "herdr.pinned": "1" });
+  });
+
+  it("keeps an Ovis unpin across a restart when its pin's event came before the agent quit and the answer after (#2913)", async () => {
+    const dir = stateDir();
+    const preferences = store(dir, []);
+    const terminals: Held[] = [{ address: "t1", state: "live", labels: {} }];
+    const first = fakeCore(terminals);
+    const beforeWrite = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const answer = Promise.withResolvers<void>();
+    const hc = first.hc as unknown as { call: (method: string, params: unknown) => Promise<unknown> };
+    const call = hc.call;
+    const slow = { on: false };
+    hc.call = async (method, params) => {
+      if (slow.on) { reached.resolve(); await beforeWrite.promise; }
+      return call(method, params);
+    };
+    const earlier = bridge(first, preferences, dir);
+    await first.opened();
+    await earlier.idle();
+    // Ovis pins t1 and unpins it again; the pin's event comes while the agent runs, the agent quits, then hc answers
+    slow.on = true;
+    first.state.answer = answer.promise;
+    preferences.set({ settings: {}, pins: ["local:t1"] });
+    await reached.promise;
+    preferences.set({ settings: {}, pins: [] });
+    const wrote = first.writing();
+    beforeWrite.resolve();
+    await wrote;
+    first.tell({ type: "status", terminal: "t1", data: { status: null } });
+    answer.resolve();
+    await earlier.idle();
+    earlier.stop();
+    // Ovis restarts; an agent runs in t1 again
+    terminals[0]!.status = null;
+    const core = fakeCore(terminals);
+    const pins = bridge(core, new PreferenceStore(dir), dir);
+    await core.opened();
+    core.tell({ type: "status", terminal: "t1", data: { status: AGENT } });
+    await pins.idle();
+    expect(new PreferenceStore(dir).get().pins).toEqual([]);
+    expect(terminals[0]!.labels).toEqual({});
+  });
 
   it("saves the pending mark of a failed Ovis unpin on a later failed write when the first save failed", async () => {
     const dir = stateDir();

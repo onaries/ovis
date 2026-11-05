@@ -7,6 +7,7 @@ import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { paneSendText, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRow, shownRows } from "./shown-rows.ts";
 
 const cwd = process.cwd();
 const shortUri = "file:///etc/hosts";
@@ -30,9 +31,9 @@ try {
     await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(pane)}`);
     await page.locator(".conn-live").waitFor();
     await paneSendText(pane, `printf '\\033[2J\\033[HFILELINK ${shortUri}\\n'\r`);
-    const row = page.locator(".xterm-rows > div", { hasText: /^FILELINK file:\/\// }).first();
+    const row = page.locator(shownRow(), { hasText: /^FILELINK file:\/\// }).first();
     await row.waitFor();
-    await page.waitForFunction(() => document.querySelector(".xterm-rows")?.textContent?.includes("file:///etc/hosts"));
+    await page.waitForFunction((shown) => document.querySelector(shown)?.textContent?.includes("file:///etc/hosts"), shownRows());
     const span = row.locator("span").filter({ hasText: "file://" }).first();
     const box = await span.boundingBox();
     assert.ok(box);
@@ -67,7 +68,7 @@ try {
       await page.locator(".file-viewer").waitFor({ state: "hidden" });
       // a tap has no Cmd or Ctrl: a bare name stays text, and the tap lands on the terminal
       await paneSendText(pane, `printf '\\033[2J\\033[HBARE README.md\\n'\r`);
-      const bare = page.locator(".xterm-rows > div", { hasText: /^BARE README/ }).first();
+      const bare = page.locator(shownRow(), { hasText: /^BARE README/ }).first();
       await bare.waitFor();
       const bareBox = await bare.boundingBox();
       assert.ok(bareBox);
@@ -81,7 +82,7 @@ try {
       await page.locator(".file-viewer").waitFor({ state: "hidden" });
       // one row with a path and a bare name: `MIXED ` is six cells, the path the next 21, the name from cell 28
       await paneSendText(pane, `printf '\\033[2J\\033[HMIXED scripts/test-herdr.ts README.md\\n'\r`);
-      const mixed = page.locator(".xterm-rows > div", { hasText: /^MIXED scripts\// }).first();
+      const mixed = page.locator(shownRow(), { hasText: /^MIXED scripts\// }).first();
       await mixed.waitFor();
       const mixedBox = await mixed.boundingBox();
       assert.ok(mixedBox);
@@ -118,7 +119,7 @@ try {
       await page.locator(".file-viewer").waitFor({ state: "hidden" });
       // a name several files under the pane's folder have: the viewer lists them to choose from
       await paneSendText(pane, `printf '\\033[2J\\033[HTWO access.ts\\n'\r`);
-      const two = page.locator(".xterm-rows > div", { hasText: /^TWO access/ }).first();
+      const two = page.locator(shownRow(), { hasText: /^TWO access/ }).first();
       await two.waitFor();
       const twoBox = await two.boundingBox();
       assert.ok(twoBox);

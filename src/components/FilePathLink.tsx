@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 
 import { splitFilePaths } from "../lib/filePaths.ts";
+import { FileNameLookupContext } from "../lib/fileNameLookup.ts";
 import { useT } from "../lib/i18n.ts";
 
 /**
@@ -21,6 +22,23 @@ export function FilePathLink({ path, code, open }: { path: string; code: boolean
   const t = useT();
   const label = code ? <code>{path}</code> : path;
   return <button type="button" className={`markdown-file${code ? " is-code" : ""}`} title={t("Open {path}", { path })} onClick={() => open(path)}>{label}</button>;
+}
+
+/**
+ * A bare name in a code span (`README.md`): a link while the pane's PC may have it, plain code
+ * once it has nothing of that name (lib/fileNameLookup.ts). An answer asked again keeps the last
+ * one shown until it comes.
+ */
+export function CodeFileName({ name, open }: { name: string; open: (path: string) => void }) {
+  const lookup = useContext(FileNameLookupContext);
+  const [missing, setMissing] = useState(() => lookup?.known(name) === false);
+  useEffect(() => {
+    if (lookup === null) return;
+    let live = true;
+    void lookup.ask(name).then((found) => { if (live) setMissing(!found); });
+    return () => { live = false; };
+  }, [lookup, name]);
+  return missing && lookup !== null ? <code>{name}</code> : <FilePathLink path={name} code open={open} />;
 }
 
 /**

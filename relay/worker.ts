@@ -6,8 +6,14 @@
  * attachment, so the object may be evicted between frames and the room picks up where it was.
  * The PC's keepalive is answered by the runtime itself (`setWebSocketAutoResponse`), so an idle
  * PC never wakes it; an alarm closes sockets idle for IDLE_MS.
+ *
+ * Usage counters (core.ts `UsageReport`) go to the `USAGE` Workers Analytics Engine dataset, one
+ * data point per report, under a hash of the server_id; README.md has the query.
  */
-import { CLOSE, IDLE_MS, KEEPALIVE_PING, KEEPALIVE_PONG, Room, admit, parseSocketRequest, type Frame, type RateLimiter, type RoomHost, type SocketInfo } from "./core.ts";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+import { CLOSE, IDLE_MS, KEEPALIVE_PING, KEEPALIVE_PONG, Room, admit, parseSocketRequest, type Frame, type RateLimiter, type RoomHost, type SocketInfo, type UsageReport } from "./core.ts";
+import { PairRoom, isPairInfo, parsePairRequest, type PairInfo } from "./pair-room.ts";
 
 /** the part of a Cloudflare server-side WebSocket the relay uses */
 export interface HibernatableSocket {
@@ -33,7 +39,26 @@ export interface Env {
   RELAY_LIMITER: RateLimiter;
   /** the backstop over all addresses together */
   RELAY_GLOBAL_LIMITER: RateLimiter;
+  /** Workers Analytics Engine dataset for usage counters (wrangler.toml); without it nothing is counted */
+  USAGE?: { writeDataPoint(point: { indexes: string[]; blobs: string[]; doubles: number[] }): void };
 }
+
+/** the key a PC's usage is kept under: not its server_id itself */
+export const usageKey = (serverId: string) => bytesToHex(sha256(utf8ToBytes(`ovis-relay-usage-v1:${serverId}`))).slice(0, 32);
+
+/**
+ * One report as a data point: index1 the PC's usage key, blob1 the side (`pc` or `device`),
+ * double1 bytes up (device to PC), double2 bytes down, double3 seconds connected, double4 sessions
+ * that ended (1 or 0).
+ */
+export const usagePoint = (report: UsageReport) => ({
+  indexes: [usageKey(report.server_id)],
+  blobs: [report.side],
+  doubles: [report.up, report.down, report.ms / 1000, report.ended ? 1 : 0],
+});
+
+const isUsage = (value: unknown) => typeof value === "object" && value !== null
+  && ["since", "up", "down"].every((key) => typeof (value as Record<string, unknown>)[key] === "number");
 
 /** the Workers runtime's globals the Durable Object needs (tests put fakes in their place) */
 interface Runtime {
@@ -42,7 +67,7 @@ interface Runtime {
 }
 const runtime = () => globalThis as unknown as Runtime;
 
-const ROLES = new Set(["control", "data", "client"]);
+const ROLES = new Set(["control", "data", "client", "warm"]);
 function isInfo(value: unknown): value is SocketInfo {
   if (typeof value !== "object" || value === null) return false;
   const info = value as Record<string, unknown>;
@@ -52,15 +77,21 @@ function isInfo(value: unknown): value is SocketInfo {
     && (info["answered"] === undefined || info["answered"] === true)
     && (info["deadline"] === undefined || typeof info["deadline"] === "number")
     && (info["arrived"] === undefined || typeof info["arrived"] === "number")
-    && (proof === undefined || (typeof proof === "object" && proof !== null && typeof proof["expected"] === "string" && typeof proof["expires"] === "number"));
+    && (proof === undefined || (typeof proof === "object" && proof !== null && typeof proof["expected"] === "string" && typeof proof["expires"] === "number"))
+    && (info["server_id"] === undefined || typeof info["server_id"] === "string")
+    && (info["generation"] === undefined || typeof info["generation"] === "string")
+    && (info["usage"] === undefined || isUsage(info["usage"]))
+    && (info["ended"] === undefined || info["ended"] === true);
 }
 
 export class RelayRoom {
   private readonly room: Room<HibernatableSocket>;
+  /** a pairing rendezvous (pair-room.ts): its Durable Object is named for its nameplate and holds no PC's sockets */
+  private readonly pairRoom: PairRoom<HibernatableSocket>;
   /** alarm reads and writes, one after another, so a later one never undoes an earlier one */
   private alarmWrites: Promise<void> = Promise.resolve();
 
-  constructor(private readonly state: RelayState, _env?: Env) {
+  constructor(private readonly state: RelayState, env?: Pick<Env, "USAGE">) {
     state.setWebSocketAutoResponse(new (runtime().WebSocketRequestResponsePair)(KEEPALIVE_PING, KEEPALIVE_PONG));
     const infos = new WeakMap<HibernatableSocket, SocketInfo>();
     const host: RoomHost<HibernatableSocket> = {
@@ -77,16 +108,14 @@ export class RelayRoom {
       },
       setInfo: (socket, info) => {
         infos.set(socket, info);
-        socket.serializeAttachment(info);
+        // a socket whose send just failed may refuse its attachment too; it is being ended either way
+        try { socket.serializeAttachment(info); } catch { /* see above */ }
       },
       send: (socket, frame) => {
         try { socket.send(frame); } catch {
           // Finish the current room operation before propagating failure: a send may happen
           // while a pair is attaching. Do not rely on a later runtime close event to end it.
-          queueMicrotask(() => {
-            try { socket.close(CLOSE.RESTART, "relay send failed"); } catch { /* already closed */ }
-            this.room.closed(socket);
-          });
+          queueMicrotask(() => this.room.end(socket, CLOSE.RESTART, "relay send failed"));
         }
       },
       close: (socket, code, reason) => {
@@ -94,18 +123,46 @@ export class RelayRoom {
         try { socket.close(code, reason); } catch { /* see above */ }
       },
       keepaliveAt: (socket) => state.getWebSocketAutoResponseTimestamp(socket)?.getTime() ?? null,
+      usage: (report) => env?.USAGE?.writeDataPoint(usagePoint(report)),
       wake: (at) => { void this.armBy(at); },
       now: () => Date.now(),
     };
     this.room = new Room(host);
+    const pairInfos = new WeakMap<HibernatableSocket, PairInfo>();
+    this.pairRoom = new PairRoom<HibernatableSocket>({
+      sockets: host.sockets,
+      info: (socket) => {
+        let info = pairInfos.get(socket);
+        if (!info) {
+          const saved = socket.deserializeAttachment();
+          if (!isPairInfo(saved)) return null;
+          info = saved;
+          pairInfos.set(socket, info);
+        }
+        return info;
+      },
+      setInfo: (socket, info) => {
+        pairInfos.set(socket, info);
+        try { socket.serializeAttachment(info); } catch { /* being ended either way */ }
+      },
+      send: (socket, frame) => {
+        try { socket.send(frame); } catch { queueMicrotask(() => this.pairRoom.end(socket, CLOSE.GOING_AWAY, "relay send failed")); }
+      },
+      close: host.close,
+      wake: host.wake,
+      keepaliveAt: host.keepaliveAt,
+      now: host.now,
+    });
   }
 
   async fetch(request: Request): Promise<Response> {
-    const socket = parseSocketRequest(new URL(request.url));
+    const url = new URL(request.url);
+    const socket = url.pathname === "/v1/pair" ? parsePairRequest(url) : parseSocketRequest(url);
     if ("error" in socket) return new Response(socket.error, { status: 400 });
     const pair = new (runtime().WebSocketPair)();
     this.state.acceptWebSocket(pair[1]);
-    this.room.open(pair[1], socket);
+    if ("kind" in socket) this.pairRoom.open(pair[1], socket);
+    else this.room.open(pair[1], socket);
     await this.armBy(Date.now() + IDLE_MS);
     return new Response(null, { status: 101, webSocket: pair[0] } as ResponseInit);
   }
@@ -126,11 +183,13 @@ export class RelayRoom {
   }
 
   webSocketMessage(socket: HibernatableSocket, message: string | ArrayBuffer): void {
-    this.room.message(socket, message);
+    if (this.pairRoom.owns(socket)) this.pairRoom.message(socket, message);
+    else this.room.message(socket, message);
   }
 
   webSocketClose(socket: HibernatableSocket, code?: number, reason?: string, _wasClean?: boolean): void {
-    this.room.closed(socket);
+    if (this.pairRoom.owns(socket)) this.pairRoom.closed(socket);
+    else this.room.closed(socket);
     // A hibernatable socket's close is not answered by the runtime: without this the peer waits in
     // CLOSING until its own timeout (a phone showed itself connected for 17 s) and counts the drop
     // as 1006. The code is echoed when it is 1000 or 3000-4999; any other is answered 1000.
@@ -139,11 +198,14 @@ export class RelayRoom {
   }
 
   webSocketError(socket: HibernatableSocket): void {
-    this.room.closed(socket);
+    if (this.pairRoom.owns(socket)) this.pairRoom.closed(socket);
+    else this.room.closed(socket);
   }
 
   async alarm(): Promise<void> {
-    const next = this.room.sweep();
+    const roomNext = this.room.sweep();
+    const pairNext = this.pairRoom.sweep();
+    const next = roomNext === null ? pairNext : pairNext === null ? roomNext : Math.min(roomNext, pairNext);
     // the alarm that fired is spent: set the next one outright
     if (next !== null) await (this.alarmWrites = this.alarmWrites.catch(() => undefined).then(() => this.state.storage.setAlarm(Math.max(next, Date.now() + 1000))));
   }
@@ -152,7 +214,8 @@ export class RelayRoom {
 export async function handle(request: Request, env: Env): Promise<Response> {
   const admitted = await admit(request, request.headers.get("cf-connecting-ip") ?? "", { perAddress: env.RELAY_LIMITER, global: env.RELAY_GLOBAL_LIMITER });
   if (admitted instanceof Response) return admitted;
-  return env.RELAY.get(env.RELAY.idFromName(admitted.server_id)).fetch(request);
+  // a pairing room's name cannot be a server_id, which is 32 hex digits
+  return env.RELAY.get(env.RELAY.idFromName("kind" in admitted ? `pair:${admitted.nameplate}` : admitted.server_id)).fetch(request);
 }
 
 export default {

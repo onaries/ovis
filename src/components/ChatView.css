@@ -11,7 +11,10 @@
    tokens by --chat-scale (lib/settings.ts) and the transcript uses the scaled ones under
    the same names, so every message and code block grows together. The prompt card is outside
    this view, over the message box, and grows with them: its dock does the same (Composer.css).
-   A file viewer's Markdown preview is the same rendering, so it takes the chat's size and font too */
+   A file viewer's Markdown preview is the same rendering, so it takes the chat's font too, and its size
+   until Settings → File text size gives files one of their own (--file-scale, lib/settings.ts) */
+.file-viewer-content { --chat-scale: var(--file-scale, 1); }
+
 .chat-view,
 .file-viewer-content {
   --chat-fs-2xs: calc(var(--fs-2xs) * var(--chat-scale, 1));
@@ -134,6 +137,40 @@
 
 .chat-terminal-fallback summary { cursor: pointer; }
 .chat-terminal-fallback pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.chat-terminal-snapshot {
+  min-width: 0;
+  width: 100%;
+  color: var(--text);
+}
+
+.chat-terminal-snapshot-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.chat-terminal-snapshot-head > span {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chat-terminal-snapshot-head svg { width: var(--fs-sm); height: var(--fs-sm); }
+
+.chat-terminal-snapshot pre {
+  min-width: 0;
+  max-width: 100%;
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--chat-fs-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 /* a user turn opens a new exchange: space separates it from the answer above, not a rule
    (the one rule of an exchange closes its folded work) */
@@ -1985,6 +2022,15 @@ ol.markdown-list {
 }
 
 .chat-outcome-state > svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* beside a terminal snapshot that does not show it: which command the state is for */
+.chat-outcome-command {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
 
 /* the reason a skill went as plain text: the chip's second line, in its own quiet register */
 .chat-outcome-note {

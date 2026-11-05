@@ -57,6 +57,9 @@ function write(path: string, value: unknown) {
 }
 
 const CODEX_USAGE = "https://chatgpt.com/backend-api/wham/usage";
+const CODEX_RESETS = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+// the query Claude Code itself sends to have its limit resets listed
+const CLAUDE_USAGE = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
 
 function signInCodex(exp = NOW / 1000 + HOUR / 1000, dir = ".codex", user = "user-1", email = "me@example.com") {
   write(join(home, dir, "auth.json"), {
@@ -118,7 +121,7 @@ describe("providers", () => {
   it("prefers the Claude keychain item on macOS and reads the scoped weekly limits", async () => {
     keychain.set("Claude Code-credentials|me", { status: "found", value: JSON.stringify({ claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR, subscriptionType: "max" } }) });
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "file", expiresAt: NOW + HOUR } });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: {
+    replies.set(CLAUDE_USAGE, { body: {
       five_hour: { utilization: 42, resets_at: "2026-09-29T14:00:00.000Z" },
       seven_day: { utilization: 63.44, resets_at: "2026-10-03T00:00:00Z" },
       seven_day_opus: null,
@@ -132,6 +135,101 @@ describe("providers", () => {
       { kind: "week", scope: null, used_percent: 63.4, resets_at: "2026-10-03T00:00:00.000Z", starts_at: "2026-09-26T00:00:00.000Z" },
       { kind: "week", scope: "Sonnet", used_percent: 5, resets_at: null, starts_at: null },
     ]);
+  });
+
+  it("reads Claude's extra usage in its currency and the limit resets it can still use", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
+    replies.set(CLAUDE_USAGE, { body: {
+      five_hour: { utilization: 42, resets_at: null },
+      extra_usage: { is_enabled: true, monthly_limit: 1539, used_credits: 1219, utilization: 79.2, currency: "EUR" },
+      cedar_ember: { eligible: true, grants: [
+        { id: "a", resets_left: 2, paused: false, ends_at: new Date(NOW + 30 * HOUR).toISOString() },
+        { id: "b", resets_left: 1, paused: false, ends_at: new Date(NOW + 6 * HOUR).toISOString() },
+        // none left, paused, already over, or not begun: none of these can be used now
+        { id: "c", resets_left: 0, paused: false, ends_at: new Date(NOW + HOUR).toISOString() },
+        { id: "d", resets_left: 4, paused: true, ends_at: new Date(NOW + HOUR).toISOString() },
+        { id: "e", resets_left: 4, paused: false, ends_at: new Date(NOW - HOUR).toISOString() },
+        { id: "f", resets_left: 4, paused: false, starts_at: new Date(NOW + HOUR).toISOString(), ends_at: new Date(NOW + 2 * HOUR).toISOString() },
+      ] },
+    } });
+    const [usage] = (await new UsageService(context(), only("claude")).report()).providers;
+    expect(requests.map((request) => request.url)).toEqual([CLAUDE_USAGE]);
+    expect(usage!.credits).toEqual({ kind: "spend", currency: "EUR", used: 12.19, limit: 15.39, used_percent: 79.2 });
+    expect(usage!.resets).toEqual({ available: 3, expires_at: new Date(NOW + 6 * HOUR).toISOString() });
+  });
+
+  it("lists no Claude credits or resets when extra usage is off and no reset is left", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
+    replies.set(CLAUDE_USAGE, { body: {
+      five_hour: { utilization: 42, resets_at: null },
+      extra_usage: { is_enabled: false, monthly_limit: null, used_credits: null, utilization: null },
+      cedar_ember: { eligible: true, grants: [{ id: "a", resets_left: 0, paused: false, ends_at: null }] },
+    } });
+    const [usage] = (await new UsageService(context(), only("claude")).report()).providers;
+    expect(usage).not.toHaveProperty("credits");
+    expect(usage).not.toHaveProperty("resets");
+  });
+
+  it("reads Claude's uncapped extra usage as spend with no limit, in yen without cents", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
+    replies.set(CLAUDE_USAGE, { body: { extra_usage: { is_enabled: true, monthly_limit: null, used_credits: 830, utilization: null, currency: "JPY" } } });
+    const [usage] = (await new UsageService(context(), only("claude")).report()).providers;
+    expect(usage!.credits).toEqual({ kind: "spend", currency: "JPY", used: 830, limit: null, used_percent: null });
+  });
+
+  it("reads Codex's credit balance and its limit resets with the soonest expiry", async () => {
+    signInCodex();
+    const reply = codexReply();
+    replies.set(CODEX_USAGE, { body: { ...(reply.body as object), credits: { has_credits: true, unlimited: false, balance: "31.84" }, rate_limit_reset_credits: { available_count: 2 } } });
+    replies.set(CODEX_RESETS, { body: { available_count: 2, credits: [
+      { id: "r1", reset_type: "codex_rate_limits", status: "available", granted_at: "2026-09-20T00:00:00Z", expires_at: new Date(NOW + 30 * HOUR).toISOString() },
+      { id: "r2", reset_type: "codex_rate_limits", status: "available", granted_at: "2026-09-21T00:00:00Z", expires_at: new Date(NOW + 8 * HOUR).toISOString() },
+      { id: "r3", reset_type: "codex_rate_limits", status: "redeemed", granted_at: "2026-09-19T00:00:00Z", expires_at: new Date(NOW + HOUR).toISOString() },
+    ] } });
+    const [usage] = (await new UsageService(context(), only("codex")).report()).providers;
+    expect(usage!.credits).toEqual({ kind: "balance", balance: 31.84, unlimited: false });
+    expect(usage!.resets).toEqual({ available: 2, expires_at: new Date(NOW + 8 * HOUR).toISOString() });
+    expect((requests[1]!.init.headers as Record<string, string>)["chatgpt-account-id"]).toBe("acct-1");
+  });
+
+  it("keeps Codex's reset count when the list of resets cannot be read, and asks for it only when one is left", async () => {
+    signInCodex();
+    const reply = codexReply();
+    replies.set(CODEX_USAGE, { body: { ...(reply.body as object), credits: { has_credits: false, unlimited: true, balance: null }, rate_limit_reset_credits: { available_count: 1 } } });
+    replies.set(CODEX_RESETS, { status: 500 });
+    const service = new UsageService(context(), only("codex"));
+    const [usage] = (await service.report()).providers;
+    expect(usage!.problem).toBeNull();
+    expect(usage!.credits).toEqual({ kind: "balance", balance: null, unlimited: true });
+    expect(usage!.resets).toEqual({ available: 1, expires_at: null });
+    requests.length = 0;
+    now += FRESH_MS;
+    replies.set(CODEX_USAGE, { body: { ...(reply.body as object), credits: { has_credits: false, unlimited: false, balance: "0" }, rate_limit_reset_credits: { available_count: 0 } } });
+    const [later] = (await service.report()).providers;
+    expect(requests.map((request) => request.url)).toEqual([CODEX_USAGE]);
+    expect(later).not.toHaveProperty("credits");
+    expect(later).not.toHaveProperty("resets");
+  });
+
+  it("keeps the last credits and resets through a failed read, as it keeps the windows", async () => {
+    signInCodex();
+    const reply = codexReply();
+    replies.set(CODEX_USAGE, { body: { ...(reply.body as object), credits: { has_credits: true, unlimited: false, balance: "12" }, rate_limit_reset_credits: { available_count: 1 } } });
+    replies.set(CODEX_RESETS, { body: { available_count: 1, credits: [] } });
+    const service = new UsageService(context(), only("codex"));
+    await service.report();
+    now += FRESH_MS;
+    replies.set(CODEX_USAGE, { status: 500 });
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      const [usage] = (await service.report()).providers;
+      expect(usage!.problem).toBe("failed");
+      expect(usage!.credits).toEqual({ kind: "balance", balance: 12, unlimited: false });
+      expect(usage!.resets).toEqual({ available: 1, expires_at: null });
+    } finally {
+      console.warn = warn;
+    }
   });
 
   it("reads Claude's windows from the status line Claude's own payload keeps, without a request", async () => {
@@ -162,7 +260,7 @@ describe("providers", () => {
     const path = join(home, ".herdr", "statusline-last.json");
     write(path, { _herdr: { account: { id: "work" } }, rate_limits: { five_hour: { used_percentage: 17 } } });
     utimesSync(path, new Date(NOW), new Date(NOW));
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 42 } } });
+    replies.set(CLAUDE_USAGE, { body: { five_hour: { utilization: 42 } } });
     const report = await new UsageService(context(), only("claude")).report();
     expect(report.providers.map((usage) => [usage.key, usage.windows[0]?.used_percent])).toEqual([["claude:personal", 42], ["claude:work", 17]]);
     expect(requests.map((request) => (request.init.headers as Record<string, string>)["authorization"])).toEqual(["Bearer personal"]);
@@ -179,7 +277,7 @@ describe("providers", () => {
     const path = join(home, ".herdr", "statusline-last.json");
     write(path, { _herdr: { account: { id: "a" } }, rate_limits: { five_hour: { used_percentage: 99, resets_at: NOW / 1000 } } });
     utimesSync(path, new Date(NOW - 60_000), new Date(NOW - 60_000));
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 1 } } });
+    replies.set(CLAUDE_USAGE, { body: { five_hour: { utilization: 1 } } });
     const [usage] = (await new UsageService(context(), only("claude")).report()).providers;
     expect(usage?.windows[0]?.used_percent).toBe(1);
     expect(requests).toHaveLength(1);
@@ -191,7 +289,7 @@ describe("providers", () => {
     const path = join(home, ".herdr", "statusline-last.json");
     write(path, { _herdr: { account: { id: "a" } }, rate_limits: { five_hour: { used_percentage: 99, resets_at: (NOW + 60_000) / 1000 } } });
     utimesSync(path, new Date(NOW), new Date(NOW));
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 1 } } });
+    replies.set(CLAUDE_USAGE, { body: { five_hour: { utilization: 1 } } });
     const service = new UsageService(context(), only("claude"));
     expect((await service.report()).providers[0]?.windows[0]?.used_percent).toBe(99);
     expect(requests).toHaveLength(0);
@@ -222,11 +320,11 @@ describe("providers", () => {
     write(path, { _herdr: { account: { id: "a" } }, rate_limits: { five_hour: { used_percentage: 17 } } });
     const taken = NOW - 10 * 60_000;
     utimesSync(path, new Date(taken), new Date(taken));
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 42 } } });
+    replies.set(CLAUDE_USAGE, { body: { five_hour: { utilization: 42 } } });
     const [answered] = (await new UsageService(context(), only("claude")).report()).providers;
     expect(answered).toMatchObject({ problem: null, checked_at: new Date(NOW).toISOString(), windows: [{ used_percent: 42 }] });
     expect(requests).toHaveLength(1);
-    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    replies.set(CLAUDE_USAGE, { status: 403, body: { error: { message: "Request not allowed" } } });
     const [refused] = (await new UsageService(context(), only("claude")).report()).providers;
     expect(refused).toMatchObject({ problem: null, checked_at: new Date(taken).toISOString(), windows: [{ used_percent: 17 }] });
     expect(requests).toHaveLength(2);
@@ -235,12 +333,12 @@ describe("providers", () => {
   it("offers the status line for a 403 to a token that has not expired, never for a real expiry or once it is on", async () => {
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
     write(join(home, ".claude.json"), { oauthAccount: { accountUuid: "a" } });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    replies.set(CLAUDE_USAGE, { status: 403, body: { error: { message: "Request not allowed" } } });
     const read = async () => (await new UsageService(context(), only("claude")).report()).providers[0];
     expect(await read()).toMatchObject({ problem: "expired", statusline_offer: true });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 401, body: {} });
+    replies.set(CLAUDE_USAGE, { status: 401, body: {} });
     expect(await read()).not.toHaveProperty("statusline_offer");
-    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    replies.set(CLAUDE_USAGE, { status: 403, body: { error: { message: "Request not allowed" } } });
     installStatusline({ home });
     expect(await read()).not.toHaveProperty("statusline_offer");
     expect((await read())?.problem).toBe("expired");
@@ -248,7 +346,7 @@ describe("providers", () => {
 
   it("offers the status line only for the sign-in whose config directory the switch changes", async () => {
     write(join(home, ".claude-work", ".credentials.json"), { claudeAiOauth: { accessToken: "work", expiresAt: NOW + HOUR } });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    replies.set(CLAUDE_USAGE, { status: 403, body: { error: { message: "Request not allowed" } } });
     const [elsewhere] = (await new UsageService(context(), only("claude")).report()).providers;
     expect(elsewhere).toMatchObject({ problem: "expired" });
     expect(elsewhere).not.toHaveProperty("statusline_offer");
@@ -259,7 +357,7 @@ describe("providers", () => {
 
   it("takes a CLAUDE_CONFIG_DIR named default as a path, not as the default ~/.claude", async () => {
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    replies.set(CLAUDE_USAGE, { status: 403, body: { error: { message: "Request not allowed" } } });
     const [usage] = (await new UsageService({ ...context(), env: { ...context().env, CLAUDE_CONFIG_DIR: "default" } }, only("claude")).report()).providers;
     expect(usage).toMatchObject({ problem: "expired" });
     expect(usage).not.toHaveProperty("statusline_offer");
@@ -267,7 +365,7 @@ describe("providers", () => {
 
   it("offers the status line when CLAUDE_CONFIG_DIR names the default ~/.claude, however it is spelled", async () => {
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    replies.set(CLAUDE_USAGE, { status: 403, body: { error: { message: "Request not allowed" } } });
     for (const spelled of [join(home, ".claude"), `${join(home, ".claude")}/`]) {
       const [usage] = (await new UsageService({ ...context(), env: { ...context().env, CLAUDE_CONFIG_DIR: spelled } }, only("claude")).report()).providers;
       expect(usage).toMatchObject({ problem: "expired", statusline_offer: true });
@@ -305,7 +403,7 @@ describe("providers", () => {
 
   it("never offers the status line where it cannot run", async () => {
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    replies.set(CLAUDE_USAGE, { status: 403, body: { error: { message: "Request not allowed" } } });
     const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
     Object.defineProperty(process, "platform", { value: "win32" });
     try {
@@ -323,18 +421,18 @@ describe("providers", () => {
     const path = join(home, ".herdr", "statusline-last.json");
     write(path, { _herdr: { account: { id: "a" } }, rate_limits: { five_hour: { used_percentage: 17 } } });
     utimesSync(path, new Date(NOW - 10 * 60_000), new Date(NOW - 10 * 60_000));
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 42 } } });
+    replies.set(CLAUDE_USAGE, { body: { five_hour: { utilization: 42 } } });
     const service = new UsageService(context(), only("claude"));
     expect((await service.report()).providers[0]).toMatchObject({ problem: null, windows: [{ used_percent: 42 }] });
     now += 6 * 60_000;
-    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    replies.set(CLAUDE_USAGE, { status: 403, body: { error: { message: "Request not allowed" } } });
     expect((await service.report()).providers[0]).toMatchObject({ problem: "expired", checked_at: new Date(NOW).toISOString(), windows: [{ used_percent: 42 }] });
     expect(requests).toHaveLength(2);
   });
 
   it("reads Claude's other per-model weekly limits from `limits`, after the flat fields", async () => {
     keychain.set("Claude Code-credentials|me", { status: "found", value: JSON.stringify({ claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR, subscriptionType: "max" } }) });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: {
+    replies.set(CLAUDE_USAGE, { body: {
       five_hour: { utilization: 42, resets_at: "2026-09-29T14:00:00.000Z" },
       seven_day_sonnet: { utilization: 5, resets_at: null },
       limits: [
@@ -355,7 +453,7 @@ describe("providers", () => {
   it("reads the Claude credentials file when Claude Code refreshed it but not the keychain item", async () => {
     keychain.set("Claude Code-credentials|me", { status: "found", value: JSON.stringify({ claudeAiOauth: { accessToken: "stale", expiresAt: NOW - HOUR } }) });
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "file", expiresAt: NOW + 8 * HOUR } });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 1, resets_at: null } } });
+    replies.set(CLAUDE_USAGE, { body: { five_hour: { utilization: 1, resets_at: null } } });
     const [usage] = (await new UsageService(context("darwin"), only("claude")).report()).providers;
     expect((requests[0]!.init.headers as Record<string, string>)["authorization"]).toBe("Bearer file");
     expect(usage!.problem).toBeNull();
@@ -364,13 +462,13 @@ describe("providers", () => {
   it("keeps the Claude keychain item when the credentials file is older", async () => {
     keychain.set("Claude Code-credentials|me", { status: "found", value: JSON.stringify({ claudeAiOauth: { accessToken: "k", expiresAt: NOW + 8 * HOUR } }) });
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "old", expiresAt: NOW - HOUR } });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 1, resets_at: null } } });
+    replies.set(CLAUDE_USAGE, { body: { five_hour: { utilization: 1, resets_at: null } } });
     await new UsageService(context("darwin"), only("claude")).report();
     expect((requests[0]!.init.headers as Record<string, string>)["authorization"]).toBe("Bearer k");
   });
 
   it("reads the later of two unexpired Claude sign-ins, and keeps a keychain item that names no expiry", async () => {
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 1, resets_at: null } } });
+    replies.set(CLAUDE_USAGE, { body: { five_hour: { utilization: 1, resets_at: null } } });
     keychain.set("Claude Code-credentials|me", { status: "found", value: JSON.stringify({ claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } }) });
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "file", expiresAt: NOW + 8 * HOUR } });
     await new UsageService(context("darwin"), only("claude")).report();
@@ -404,7 +502,7 @@ describe("providers", () => {
     keychain.set(`Claude Code-credentials-${createHash("sha256").update(dir).digest("hex").slice(0, 8)}|me`, { status: "found", value: credentials("work") });
     write(join(home, ".claude.json"), { oauthAccount: { accountUuid: "uuid-1", emailAddress: "me@example.com" } });
     write(join(dir, ".claude.json"), { oauthAccount: { accountUuid: "uuid-2", emailAddress: "work@example.com" } });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 1, resets_at: null } } });
+    replies.set(CLAUDE_USAGE, { body: { five_hour: { utilization: 1, resets_at: null } } });
     const report = await new UsageService(context("darwin"), only("claude")).report();
     expect(report.providers.map((usage) => [usage.key, usage.account])).toEqual([["claude:uuid-1", "me@example.com"], ["claude:uuid-2", "work@example.com"]]);
     expect(requests.map((request) => (request.init.headers as Record<string, string>)["authorization"])).toEqual(["Bearer personal", "Bearer work"]);
@@ -412,7 +510,7 @@ describe("providers", () => {
 
   it("reads the Claude credentials file where there is no keychain", async () => {
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "file", expiresAt: NOW + HOUR } });
-    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 1, resets_at: null } } });
+    replies.set(CLAUDE_USAGE, { body: { five_hour: { utilization: 1, resets_at: null } } });
     await new UsageService(context("linux"), only("claude")).report();
     expect((requests[0]!.init.headers as Record<string, string>)["authorization"]).toBe("Bearer file");
   });
@@ -991,7 +1089,6 @@ describe("the service", () => {
   it("runs a refresh that arrives during a plain pass after it, so a cached provider is asked again", async () => {
     signInCodex(NOW / 1000 + 24 * 3600);
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "c", expiresAt: NOW + 24 * HOUR } });
-    const CLAUDE_USAGE = "https://api.anthropic.com/api/oauth/usage";
     replies.set(CODEX_USAGE, codexReply());
     replies.set(CLAUDE_USAGE, { status: 500 });
     const service = new UsageService(context(), [...only("claude"), ...only("codex")]);

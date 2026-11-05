@@ -8,8 +8,10 @@ import { nativeTransport, setTransport } from "../transport.ts";
 import type { WebSocketLike } from "../transport.ts";
 import { useResourceUrlState } from "../useResourceUrl.ts";
 import type { ResourceUrlState } from "../useResourceUrl.ts";
+import { RelayPcOfflineError, RelayUnreachableError } from "./channel.ts";
+import { GLOBAL_RELAY, REGIONAL_RELAYS } from "../../../shared/relay-regions.ts";
 import type { RelayChannelOptions } from "./channel.ts";
-import { isFatalRelayError, openRelayTransport, RelayWebSocket, SSE_BUFFER_LIMIT } from "./transport.ts";
+import { isFatalRelayError, openRelayTransport, RECONNECT_PC_ANSWER_MS, RelayWebSocket, SSE_BUFFER_LIMIT } from "./transport.ts";
 import { LIMITS_V1, MuxProtocolError } from "../../../shared/relay-mux.ts";
 import { RelayResourceTooLargeError } from "./resources.ts";
 import { writeFileSync } from "node:fs";
@@ -21,7 +23,7 @@ afterEach(() => {
   setTransport(nativeTransport);
 });
 
-async function fixture(options: Partial<RelaySessionOptions> = {}) {
+async function fixture(options: Partial<RelaySessionOptions> = {}, { relay = "wss://relay.example", unreachable = 0 } = {}) {
   const app = relayFixture();
   cleanups.push(() => app.close());
   const device = await relayDevice(app);
@@ -30,17 +32,23 @@ async function fixture(options: Partial<RelaySessionOptions> = {}) {
   /** each channel's relay socket: `open` false is one closing with no close event yet */
   const carriers: { open: boolean }[] = [];
   const callbacks: NonNullable<RelayChannelOptions["onClose"]>[] = [];
-  const attempts = { count: 0, failures: 0, refusal: null as Error | null };
+  const attempts = { count: 0, failures: 0, offline: 0, unreachable, refusal: null as Error | null,
+    pcAnswerMs: [] as (number | undefined)[], relays: [] as string[], offered: [] as string[] };
   const fatal: Error[] = [];
   const offer = { v: 1 as const, server_id: "0123456789abcdef0123456789abcdef",
-    server_public_key: "", relay: "wss://relay.example" };
+    server_public_key: "", relay };
   const transport = await openRelayTransport(offer, {
     clock,
     onFatal: (error) => fatal.push(error),
-    openChannel: async (_offer, config = {}) => {
+    openChannel: async (channelOffer, config = {}) => {
       attempts.count++;
+      attempts.pcAnswerMs.push(config.pcAnswerMs);
+      attempts.relays.push(config.carrier ?? channelOffer.relay);
+      attempts.offered.push(channelOffer.relay);
+      if (attempts.unreachable > 0) { attempts.unreachable--; throw new RelayUnreachableError(null, true); }
       if (attempts.refusal !== null) { const refusal = attempts.refusal; attempts.refusal = null; throw refusal; }
       if (attempts.failures > 0) { attempts.failures--; throw new TypeError("Network offline"); }
+      if (attempts.offline > 0) { attempts.offline--; throw new RelayPcOfflineError(); }
       const connection = await relayConnection(app, options);
       connections.push(connection);
       await connection.auth(device);
@@ -571,6 +579,47 @@ it("reconnects only the carrier with backoff from one second capped at thirty se
   expect([...f.clock.tasks.values()].map((task) => task.at - f.clock.now())).toEqual([1000]);
 });
 
+it("tries again a second after each attempt the relay held waiting for a PC that is away, so a restarted PC is reached at once", async () => {
+  // Given an established carrier whose PC goes away for six attempts: each waited PC_ANSWER_MS at the relay.
+  const f = await fixture({ dispatch: async () => Response.json({ ok: true }) });
+  f.attempts.offline = 6;
+  await f.drop();
+  // When every retry deadline fires.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    expect([...f.clock.tasks.values()].map((task) => task.at - f.clock.now())).toEqual([1000]);
+    f.clock.advance(1000);
+    await expect(f.transport.connect()).rejects.toBeInstanceOf(RelayPcOfflineError);
+  }
+  // Then the next attempt still comes a second later, and reaches the PC once it is back.
+  expect([...f.clock.tasks.values()].map((task) => task.at - f.clock.now())).toEqual([1000]);
+  f.clock.advance(1000);
+  await f.transport.connect();
+  expect(f.attempts.count).toBe(8);
+  // the first open waits the shell's PC_ANSWER_MS; every reconnect waits nearly the relay's whole hold
+  expect(f.attempts.pcAnswerMs).toEqual([undefined, ...Array<number>(7).fill(RECONNECT_PC_ANSWER_MS)]);
+  expect(await (await f.transport.fetch("/api/back")).json()).toEqual({ ok: true });
+  expect(f.fatal).toEqual([]);
+});
+
+it("keeps the growing pause after such waits while the page is hidden", async () => {
+  // Given a hidden page whose PC goes away for two attempts.
+  const page = Object.assign(new EventTarget(), { visibilityState: "hidden" });
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", { configurable: true, value: page });
+  cleanups.push(() => { if (descriptor) Object.defineProperty(globalThis, "document", descriptor); else Reflect.deleteProperty(globalThis, "document"); });
+  const f = await fixture({ dispatch: async () => Response.json({ ok: true }) });
+  f.attempts.offline = 2;
+  await f.drop();
+  // When each retry deadline fires.
+  for (const delay of [1000, 2000]) {
+    expect([...f.clock.tasks.values()].map((task) => task.at - f.clock.now())).toEqual([delay]);
+    f.clock.advance(delay);
+    await expect(f.transport.connect()).rejects.toBeInstanceOf(RelayPcOfflineError);
+  }
+  // Then the pause still doubles: a hidden page reconnects when it is shown, not on the fast cadence.
+  expect([...f.clock.tasks.values()].map((task) => task.at - f.clock.now())).toEqual([4000]);
+});
+
 it("stops reconnecting once the PC refuses the device for good, and tells the shell", async () => {
   // Given an established carrier whose next reconnect the PC answers with auth_revoked.
   const f = await fixture({ dispatch: async () => Response.json({ ok: true }) });
@@ -598,6 +647,42 @@ it("tells a refusal that cannot change from a carrier that may come back", () =>
     expect(isFatalRelayError(new MuxProtocolError(code, code))).toBe(false);
   }
   expect(isFatalRelayError(new TypeError("Network offline"))).toBe(false);
+});
+
+it("signs in again on renew, so a session proves the key the saved pairing holds now", async () => {
+  const f = await fixture({ dispatch: async () => Response.json({ ok: true }) });
+  const first = f.connections.at(-1);
+  if (!first) throw new Error("Missing relay connection");
+  f.transport.renew();
+  await bounded(first.closed);
+  expect([...f.clock.tasks.values()].map((task) => task.at - f.clock.now())).toEqual([1000]);
+  f.clock.advance(1000);
+  await f.transport.connect();
+  expect(f.attempts.count).toBe(2);
+  expect(f.fatal).toEqual([]);
+  expect((await f.transport.fetch("/api/health")).status).toBe(200);
+});
+
+it("settles a renew once the carrier that replaces it is up, not on one already on its way", async () => {
+  // Given a carrier that drops, and one renew asked while its reconnect is under way.
+  const f = await fixture({ dispatch: async () => Response.json({ ok: true }) });
+  await f.drop();
+  f.clock.advance(1000);
+  const reconnecting = f.transport.connect();
+  let up = false;
+  const renewed = f.transport.renew().then(() => { up = true; });
+  // When the reconnect started before the renew lands.
+  await reconnecting;
+  // Then it may have signed with the old key: it is ended, and the renew waits for the next carrier.
+  await bounded(f.connections.at(-1)!.closed);
+  expect(up).toBe(false);
+  expect([...f.clock.tasks.values()].map((task) => task.at - f.clock.now())).toEqual([1000]);
+  f.clock.advance(1000);
+  await f.transport.connect();
+  await bounded(renewed);
+  expect(up).toBe(true);
+  expect(f.attempts.count).toBe(3);
+  expect((await f.transport.fetch("/api/health")).status).toBe(200);
 });
 
 it("reconnects after an authorization change without telling the shell to forget the PC", async () => {
@@ -859,3 +944,23 @@ it("keeps a StrictMode resource usable and revokes each owned blob on cleanup", 
   expect(revoked).toContain(url);
   await expect(fetch(url)).rejects.toBeInstanceOf(TypeError);
 });
+
+it("falls back to the global relay when a regional one cannot be reached, and reconnects through it", async () => {
+  // Given a PC paired through a regional relay that does not answer
+  const f = await fixture({}, { relay: REGIONAL_RELAYS[0]!, unreachable: 1 });
+  // Then the first open went on through the global relay, which the PC also keeps a link to
+  expect(f.attempts.relays).toEqual([REGIONAL_RELAYS[0]!, GLOBAL_RELAY]);
+  expect(f.connections).toHaveLength(1);
+  // And the device is still saved with the regional relay the offer named
+  expect(f.attempts.offered).toEqual([REGIONAL_RELAYS[0]!, REGIONAL_RELAYS[0]!]);
+  // And a reconnect starts where the last connection got through
+  await f.drop();
+  await f.transport.connect();
+  expect(f.attempts.relays).toEqual([REGIONAL_RELAYS[0]!, GLOBAL_RELAY, GLOBAL_RELAY]);
+});
+
+it("never falls back from a relay that is not one of Ovis's regional relays", async () => {
+  // Given a self-hosted relay that does not answer, the open fails without trying Ovis's relay
+  await expect(fixture({}, { relay: "wss://relay.example", unreachable: 1 })).rejects.toBeInstanceOf(RelayUnreachableError);
+});
+

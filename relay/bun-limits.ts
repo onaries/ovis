@@ -5,6 +5,8 @@ export const DEFAULT_RELAY_LIMITS = {
   globalPerMinute: 600,
   maxSockets: 1024,
   maxRooms: 256,
+  /** pairing rooms (pair-room.ts), counted apart so typed codes never take a PC's place */
+  maxPairRooms: 256,
   maxAddresses: 4096,
   /** open sockets (waiting, connected or still upgrading) one address may hold at once */
   maxSocketsPerAddress: 64,
@@ -33,6 +35,7 @@ export function relayLimitsFromArgs(args: readonly string[], env: Readonly<Recor
     globalPerMinute: value("global-per-minute", "RELAY_GLOBAL_PER_MINUTE", DEFAULT_RELAY_LIMITS.globalPerMinute),
     maxSockets: value("max-sockets", "RELAY_MAX_SOCKETS", DEFAULT_RELAY_LIMITS.maxSockets),
     maxRooms: value("max-rooms", "RELAY_MAX_ROOMS", DEFAULT_RELAY_LIMITS.maxRooms),
+    maxPairRooms: value("max-pair-rooms", "RELAY_MAX_PAIR_ROOMS", DEFAULT_RELAY_LIMITS.maxPairRooms),
     maxAddresses: value("max-addresses", "RELAY_MAX_ADDRESSES", DEFAULT_RELAY_LIMITS.maxAddresses),
     maxSocketsPerAddress: value("max-sockets-per-address", "RELAY_MAX_SOCKETS_PER_ADDRESS", DEFAULT_RELAY_LIMITS.maxSocketsPerAddress),
   });

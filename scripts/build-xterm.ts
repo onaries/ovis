@@ -1,6 +1,7 @@
 /** xterm's source uses const enums in .d.ts files; TypeScript must inline them before Vite. */
 import ts from "typescript-api";
 import type { BunPlugin } from "bun";
+import type { Terminal } from "@xterm/xterm";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -101,6 +102,15 @@ export function xtermSourcePlugin(xterm: string): BunPlugin {
       build.onResolve({ filter: /^(browser|common|vs)\// }, ({ path }) => ({ path: join(xterm, path + ".js") }));
     },
   };
+}
+
+/** The patched Terminal the app ships, for a test under Bun (the package's own build lacks the patch). */
+export async function patchedTerminal(root: string): Promise<typeof Terminal> {
+  const source = buildXtermSource(root);
+  const bundle = await Bun.build({ entrypoints: [join(source, "browser/public/Terminal.js")], plugins: [xtermSourcePlugin(source)], target: "bun" });
+  if (!bundle.success) throw new AggregateError(bundle.logs, "Could not build xterm");
+  const xterm: { Terminal: typeof Terminal } = await import(`data:text/javascript;base64,${Buffer.from(await bundle.outputs[0]!.text()).toString("base64")}`);
+  return xterm.Terminal;
 }
 
 /** One spelling per file for TypeScript's paths and node's alike. */

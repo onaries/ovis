@@ -3,7 +3,7 @@
  * components/DevicesPanel.tsx (with VIA), components/ConnectPhoneDialog.tsx, components/PhonePanel.tsx, components/PortalPanel.tsx,
  * components/PortalAuth.tsx, components/PortalInvite.tsx, components/RelayPanel.tsx,
  * components/PushTestControls.tsx, components/AccessGate.tsx, components/LanExposureNotice.tsx,
- * lib/install.ts, lib/portalAuth.ts, and shared/portal.ts (PORTAL_AUTH_PROBLEMS).
+ * components/InstallHint.tsx, lib/install.ts, lib/installHint.ts, lib/portalAuth.ts, and shared/portal.ts (PORTAL_AUTH_PROBLEMS).
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const DEVICES_KO: Record<string, string> = {
@@ -62,10 +62,6 @@ export const DEVICES_KO: Record<string, string> = {
   "Open the app's address on that device and enter it.": "그 기기에서 앱 주소를 열고 입력하세요.",
   "Expires in {time}.": "{time} 뒤 만료됩니다.",
   "Devices are managed on a real server.": "기기 관리는 실제 서버에서만 됩니다.",
-  "never": "없음",
-  "just now": "방금",
-  "{n} min ago": "{n}분 전",
-  "{n} h ago": "{n}시간 전",
   "Asking this PC about Tailscale…": "이 PC의 Tailscale 상태를 확인하는 중…",
   "Tailscale already serves this PC": "Tailscale이 이미 이 PC를 서빙하고 있습니다",
   "Once it is open, install the app, then open the ⋯ menu and tap Alerts.": "열리면 앱을 설치한 뒤 ⋯ 메뉴에서 알림을 누르세요.",
@@ -157,7 +153,6 @@ export const DEVICES_KO: Record<string, string> = {
   "Ovis relay": "Ovis 릴레이",
   "Only the PC's owner can control the relay, using a direct connection. Open Ovis on the PC or at its direct address.": "릴레이는 PC 소유자만 직접 연결해서 제어할 수 있습니다. PC에서 Ovis를 열거나 PC의 직접 주소로 접속하세요.",
   "Reset relay identity": "릴레이 신원 재설정",
-  "Reset": "재설정",
   "Reset the relay identity?": "릴레이 신원을 재설정할까요?",
   "Phones paired through the relay will need to scan a new code.": "릴레이로 페어링된 폰은 새 코드를 다시 스캔해야 합니다.",
   "Blocked: OVIS_TAILSCALE_SERVE_ONLY says tailscale serve is the only way in. Unset it on this PC and restart the app.": "차단됨: OVIS_TAILSCALE_SERVE_ONLY가 tailscale serve를 유일한 접속 경로로 정하고 있습니다. 이 PC에서 해제하고 앱을 다시 시작하세요.",
@@ -198,5 +193,24 @@ export const DEVICES_KO: Record<string, string> = {
   "Pairs this phone through the relay, so Ovis keeps working away from home.": "이 폰을 릴레이로 페어링해 집 밖에서도 Ovis를 쓸 수 있게 합니다.",
   "A device with this phone's name ({name}) is already paired through the relay.": "이 폰과 이름이 같은 기기({name})가 이미 릴레이로 페어링되어 있습니다.",
   "Use the relay on this phone": "이 폰에서 릴레이 사용",
+  "Copy a link without a code": "코드 없는 링크 복사",
+  "Copied. Open it on the phone within 10 minutes: both screens show six digits to compare, and you approve the phone here.": "복사했습니다. 10분 안에 휴대폰에서 여세요. 두 화면에 같은 여섯 자리 숫자가 뜨면 비교한 뒤 여기서 휴대폰을 승인합니다.",
   "This PC's ID": "이 PC의 ID",
+  "Show a code to type": "입력할 코드 보기",
+  "New code to type": "새 입력 코드",
+  "Hide the code": "코드 숨기기",
+  "Code to type": "입력할 코드",
+  "On the other device, open app.ovis.sh, choose Pair with a code and type it. Expires in {time}. It works once.": "다른 기기에서 app.ovis.sh를 열고 코드로 페어링을 골라 입력하세요. {time} 후 만료되며, 한 번만 쓸 수 있습니다.",
+  "That device then shows an ID: pair only if it matches this PC's ID below, every group.": "그러면 그 기기에 ID가 뜹니다. 아래 이 PC의 ID와 모든 묶음이 같을 때만 페어링하세요.",
+  "Disconnect from all PCs": "모든 PC에서 끊기",
+  "Disconnect everywhere?": "모든 PC에서 끊을까요?",
+  "A new device joined at {time}: {name}, approved on {approver}. If that was not you, revoke it.": "{time}에 새 기기 {name}이(가) {approver}의 승인으로 들어왔습니다. 본인이 아니라면 취소하세요.",
+  "{name} was removed from this PC at {time}.": "{time}에 {name}이(가) 이 PC에서 빠졌습니다.",
+  "{name} was revoked on this PC at {time}.": "{time}에 이 PC에서 {name}을(를) 취소했습니다.",
+  "{name} was removed from this PC at {time}, by {by}.": "{time}에 {by}에서 {name}을(를) 이 PC에서 뺐습니다.",
+  "Not removed yet on: {pcs}. Disconnect it from a device that is in the account there.": "아직 빠지지 않은 PC: {pcs}. 그 PC에서 계정에 들어 있는 기기로 끊으세요.",
+  "Sent to {pcs}: each removes it when it next comes online. If it still shows there, disconnect it from another device in the account.": "{pcs}에 보냈습니다. 각 PC가 다음에 켜질 때 뺍니다. 그 뒤에도 남아 있으면 계정에 들어 있는 다른 기기로 끊으세요.",
+  "Add to Home Screen for alerts: {glyph} Share → Add to Home Screen": "알림을 받으려면 홈 화면에 추가하세요: {glyph} 공유 → 홈 화면에 추가",
+  "Install the app for alerts.": "알림을 받으려면 앱을 설치하세요.",
+  "Install the app for alerts: Menu → Install app": "알림을 받으려면 앱을 설치하세요: 메뉴 → 앱 설치",
 };

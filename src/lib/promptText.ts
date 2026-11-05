@@ -55,19 +55,21 @@ export function screenWordsToShow(prompt: InteractivePrompt, turns: readonly Con
  * The card a poll keeps (ChatView). Another prompt, or none, replaces it. The same prompt (its id) keeps
  * its object while nothing it shows changed, so the card is not drawn again, and takes what changed
  * without being replaced, so the card keeps its edits: its navigation (steps, step back, own_text), the
- * words read off the screen over it (screen_words, #2088), and how its words are drawn, an omp card's
- * own Markdown arriving after its first read or withdrawn.
+ * words read off the screen over it (screen_words, #2088), the preview Claude redraws as its cursor moves
+ * (option_preview, #1212), and how its words are drawn, an omp card's own Markdown arriving after its
+ * first read or withdrawn.
  */
 export function polledPrompt(current: InteractivePrompt | null, next: InteractivePrompt | null): InteractivePrompt | null {
   if (current === null || next === null || current.id !== next.id) return next;
-  const shown = (prompt: InteractivePrompt) => JSON.stringify([prompt.steps, prompt.can_step_back, prompt.own_text, prompt.question, prompt.options, prompt.text_format ?? null, prompt.screen_words ?? null]);
+  const shown = (prompt: InteractivePrompt) => JSON.stringify([prompt.steps, prompt.can_step_back, prompt.own_text, prompt.question, prompt.options, prompt.text_format ?? null, prompt.screen_words ?? null, prompt.option_preview ?? null]);
   if (shown(current) === shown(next)) return current;
-  const { text_format: _format, screen_words: _words, ...kept } = current;
+  const { text_format: _format, screen_words: _words, option_preview: _preview, ...kept } = current;
   // own_text names steps by index: it goes with the steps it was read with
   return {
     ...kept, steps: next.steps, can_step_back: next.can_step_back, own_text: next.own_text,
     question: next.question, options: next.options, ...(next.text_format ? { text_format: next.text_format } : {}),
     ...(next.screen_words !== undefined ? { screen_words: next.screen_words } : {}),
+    ...(next.option_preview !== undefined ? { option_preview: next.option_preview } : {}),
   };
 }
 

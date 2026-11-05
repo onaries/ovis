@@ -64,6 +64,16 @@ export function nativeModalOver(surface: HTMLElement | null): boolean {
   return false;
 }
 
+/**
+ * The keyboard is in another `aria-modal` surface than this one. Window and document listeners run in the order
+ * they were added, not the order the dialogs are drawn in, so a dialog beneath leaves this Escape to the one in
+ * front, the one with the focus (#3037).
+ */
+export function focusInOtherModal(surface: HTMLElement | null): boolean {
+  const focused = document.activeElement?.closest("[aria-modal='true']");
+  return focused != null && focused !== surface;
+}
+
 export function useFocusTrap<T extends HTMLElement>(open: boolean, options: FocusTrapOptions = {}): MutableRefObject<T | null> {
   const surface = useRef<T | null>(null);
   // read in the listeners, so a dialog that changes its mind mid-life is not held to its first render

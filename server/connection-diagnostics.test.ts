@@ -4,7 +4,7 @@ import { ConnectionDiagnostics, transportFailureCode } from "./connection-diagno
 function fixture() {
   let now = Date.parse("2026-10-19T00:00:00Z");
   const lines: string[] = [];
-  const diagnostics = new ConnectionDiagnostics("herdr.rpc", (line) => lines.push(line), () => now);
+  const diagnostics = new ConnectionDiagnostics("herdr.rpc", (line) => lines.push(line), () => now, () => now);
   return { diagnostics, lines, records: () => lines.map((line) => JSON.parse(line)), advance: (ms: number) => { now += ms; } };
 }
 

@@ -1,9 +1,10 @@
 import { afterEach, expect, it, mock, spyOn } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findHc } from "./discovery.ts";
 import { HC_MOVED, hcBin, hcRecovery, startRuntime } from "./runtime.ts";
+import { socketAddress } from "../herdr/client.ts";
 
 /** an hc stand-in found, so no test looks at the developer's own PATH, shell or hc */
 const standIn = async () => ({ bin: "/nonexistent/hc", version: "0.1.17" });
@@ -141,14 +142,39 @@ it.skipIf(platform === "win32")("refuses another user's state directory before c
   expect(existsSync(join(dir, "herdr-core.sock"))).toBe(false);
 });
 
-it("rejects herdr-core on Windows before creating state", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ovis-hc-windows-"));
+it("rejects herdr-core on an OS it is not served on before creating state", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-hc-freebsd-"));
   cleanup = () => rmSync(dir, { recursive: true, force: true });
   const state = join(dir, "state");
   process.env["OVIS_RUNTIME"] = "herdr-core";
-  Object.defineProperty(process, "platform", { value: "win32" });
-  await expect(startRuntime(state, standIn)).rejects.toThrow();
+  Object.defineProperty(process, "platform", { value: "freebsd" });
+  await expect(startRuntime(state, standIn)).rejects.toThrow(/not freebsd/);
   expect(existsSync(state)).toBe(false);
+});
+
+it.skipIf(platform !== "win32")("serves herdr-core on Windows through a named pipe the herdr client reaches", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-hc-windows-"));
+  cleanup = () => rmSync(dir, { recursive: true, force: true });
+  process.env["OVIS_RUNTIME"] = "herdr-core";
+  const adapter = await startRuntime(join(dir, "state"), standIn);
+  if (!adapter) throw new Error("runtime did not start");
+  try {
+    expect(adapter.socketPath).toMatch(/^\\\\\.\\pipe\\ovis-herdr-core-[0-9a-f]{32}$/);
+    expect(process.env["HERDR_SOCKET"]).toBe(adapter.socketPath);
+    // the client's own address for it: a pipe name is used as it is
+    expect(socketAddress(adapter.socketPath)).toBe(adapter.socketPath);
+    // a second server on the same state folder is refused while this one listens
+    await expect(startRuntime(join(dir, "state"), standIn)).rejects.toThrow(/Another Ovis owns this state directory/);
+    // and through a junction to the same folder, which names the same pipe
+    symlinkSync(join(dir, "state"), join(dir, "alias"), "junction");
+    await expect(startRuntime(join(dir, "alias"), standIn)).rejects.toThrow(/Another Ovis owns this state directory/);
+  } finally {
+    adapter.stop();
+  }
+  // and the pipe went with it: a server started afterwards takes the same name
+  const again = await startRuntime(join(dir, "state"), standIn);
+  if (!again) throw new Error("runtime did not start again");
+  again.stop();
 });
 
 it("leaves the default runtime's state and socket unchanged even on Windows", async () => {

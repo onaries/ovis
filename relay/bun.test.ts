@@ -61,7 +61,7 @@ describe("relay over HTTP", () => {
       const server = newServer();
       const url = relayUrls(`ws://127.0.0.1:${limited.port}`, server).control;
       const ok = await openServer(url, server);
-      expect(await ok.json("sync")).toEqual({ type: "sync", connection_ids: [] });
+      expect(await ok.json("sync")).toEqual({ type: "sync", connection_ids: [], warm: expect.stringMatching(/^[0-9a-f]{32}$/) });
       ok.socket.close();
       expect(asked).toEqual(["address:127.0.0.1", "global:all"]);
 
@@ -162,14 +162,14 @@ describe("relay sockets", () => {
     const id = newServer();
     const urls = relayUrls(base, id);
     const first = await openServer(urls.control, id);
-    expect(await first.json("sync")).toEqual({ type: "sync", connection_ids: [] });
+    expect(await first.json("sync")).toEqual({ type: "sync", connection_ids: [], warm: expect.stringMatching(/^[0-9a-f]{32}$/) });
     const paired = await openPair(base, id, first);
     const waiting = await Peer.open(urls.client);
     const { connection_id } = await waiting.json("assigned") as { connection_id: string };
     await first.json("connected");
     const second = await openServer(urls.control, id);
     expect(await first.closeCode("replaced control")).toBe(CLOSE.POLICY);
-    expect(await second.json("sync")).toEqual({ type: "sync", connection_ids: [connection_id] });
+    expect(await second.json("sync")).toEqual({ type: "sync", connection_ids: [connection_id], warm: expect.stringMatching(/^[0-9a-f]{32}$/) });
     // the pair already attached keeps working without its control socket
     paired.client.socket.send("still");
     expect(await paired.data.next()).toBe("still");

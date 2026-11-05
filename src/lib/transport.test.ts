@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "bun:test";
 import { apiFetch } from "./api-request-id.ts";
 import { fetchHealth, requestRelay } from "./api.ts";
 import type { RelayStatus } from "../../shared/protocol.ts";
-import { getTransport, nativeTransport, serverResourceUrl, setTransport, type Transport } from "./transport.ts";
+import { abandonNativeReads, getTransport, nativeTransport, serverResourceUrl, setTransport, type Transport } from "./transport.ts";
 
 function testTransport(fetch: Transport["fetch"]): Transport {
   return {
@@ -68,4 +68,56 @@ it("relay controls use the selected transport even for a refusal carrying relay 
   expect(calls[0]?.input).toBe("/api/relay/start");
   expect(calls[0]?.init?.method).toBe("POST");
   expect(new Headers(calls[0]?.init?.headers).get("x-herdr-update")).toBe("1");
+});
+
+it("gives up the reads in flight on the browser's own connections, not a write nor a read sent after", async () => {
+  // Given: requests sent on connections the network lost, which never answer by themselves
+  const original = globalThis.fetch;
+  const signals = new Map<string, AbortSignal>();
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_, reject) => {
+    signals.set(String(input), init!.signal!);
+    init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+  })) as typeof fetch;
+  try {
+    const read = nativeTransport.fetch("/api/a");
+    const write = nativeTransport.fetch("/api/b", { method: "POST" });
+    void write.catch(() => undefined);
+    // When
+    abandonNativeReads();
+    const later = nativeTransport.fetch("/api/c");
+    void later.catch(() => undefined);
+    // Then
+    await expect(read).rejects.toMatchObject({ name: "AbortError" });
+    expect(signals.get("/api/b")?.aborted ?? false).toBe(false);
+    expect(signals.get("/api/c")!.aborted).toBe(false);
+    // the caller's own abort still reaches the request
+    const own = new AbortController();
+    const mine = nativeTransport.fetch("/api/d", { signal: own.signal });
+    own.abort();
+    await expect(mine).rejects.toMatchObject({ name: "AbortError" });
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+it("gives up only another PC's reads when that PC's connection was lost, and every read when this server's was", async () => {
+  // Given
+  const original = globalThis.fetch;
+  const signals = new Map<string, AbortSignal>();
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    signals.set(String(input), init!.signal!);
+    return new Promise<Response>(() => undefined);
+  }) as typeof fetch;
+  try {
+    for (const path of ["/api/pane/conversation?pane_id=p", "/api/machines/pc%202/pane/conversation?pane_id=p", "/api/machines/pc3/files"]) void nativeTransport.fetch(path);
+    // When: the server's way to "pc 2" may be what was lost
+    abandonNativeReads("pc 2");
+    // Then
+    expect([...signals.values()].map((signal) => signal.aborted)).toEqual([false, true, false]);
+    // When: this server's own connection was lost, so was every read on the browser's way to it
+    abandonNativeReads();
+    expect([...signals.values()].map((signal) => signal.aborted)).toEqual([true, true, true]);
+  } finally {
+    globalThis.fetch = original;
+  }
 });

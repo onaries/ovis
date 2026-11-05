@@ -9,6 +9,7 @@ import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { UsageService } from "../server/usage.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 // The sheet's open agent list floats over it: a stroke down on the list at its top is the list's,
 // and the sheet stays where it is. A checkout made with Shell opens its terminal: the sheet steps
@@ -73,7 +74,7 @@ try {
     await sheet.waitFor({ state: "detached" });
     await page.waitForFunction((pane) => new URLSearchParams(location.search).get("pane") === pane, opened.pane_id, { timeout: 10_000 });
     assert.equal(await page.locator(".pane-frame.is-current").getAttribute("data-layout-pane"), opened.pane_id, "the checkout's shell pane is the one shown");
-    await page.locator(".pane-frame.is-current .xterm-rows").waitFor();
+    await page.locator(shownRows(".pane-frame.is-current")).waitFor();
     assert.deepEqual(errors, []);
     console.log("PASS a phone's New worktree with Shell opens the checkout's terminal");
     await context.close();

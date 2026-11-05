@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { importPublicKey } from "../../shared/relay-e2ee.ts";
 import { deriveServerId } from "../../shared/relay-server-proof.ts";
-import { loadRelayIdentity, RelayIdentityError, relayIdentityPath, rotateRelayIdentity } from "./identity.ts";
+import { loadRelayIdentity, RelayIdentityError, relayIdentityPath, rotateRelayIdentity, savedServerId } from "./identity.ts";
 import { privateStateFs } from "../private-state.ts";
 
 const dirs: string[] = [];
@@ -15,6 +15,16 @@ afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: tru
 const mode = (path: string): number => statSync(path).mode & 0o777;
 
 describe("relay identity", () => {
+  it("tells the saved server_id without creating an identity where there is none (#2876)", () => {
+    const dir = stateDir();
+    expect(savedServerId(dir)).toBeUndefined();
+    expect(fs.existsSync(relayIdentityPath(dir))).toBe(false);
+    const { server_id } = loadRelayIdentity(dir);
+    expect(savedServerId(dir)).toBe(server_id);
+    writeFileSync(relayIdentityPath(dir), "not json");
+    expect(savedServerId(dir)).toBeUndefined();
+  });
+
   it("loads the winning identity when another creator publishes first", () => {
     const dir = stateDir();
     const open = privateStateFs.openSync;

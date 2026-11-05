@@ -9,6 +9,7 @@
 import { homedir } from "node:os";
 import { AGENT_CATALOG, catalogPlatform, commandProblems, type AgentCatalogEntry, type AgentTabStarted, type CatalogPlatform } from "../shared/agent-catalog.ts";
 import type { AgentDetector } from "./agent-catalog-detect.ts";
+import { hcMachine } from "./herdr-core/runtime.ts";
 import { paneProcessInfo, paneSendKeys, paneSendText, sessionSnapshot, tabClose, tabCreate, workspaceCreate } from "./herdr/client.ts";
 import { badRequest, conflictResponse, errorResponse, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
 import { paneShell, shellCommandLine, type PaneShell } from "./shell-agent.ts";
@@ -142,6 +143,8 @@ export class AgentInstaller {
     if (extra.length > 0) return badRequest("unknown_field", `This route does not take ${extra.join(", ")}`);
     const entry = AGENT_CATALOG.find((candidate) => candidate.id === body["agent"]);
     if (!entry) return badRequest("unknown_agent", "Name an agent from GET /api/agent-catalog");
+    // another machine of the core: this PC's commands, paths and home folder are not that machine's
+    if (hcMachine() !== null) return conflictResponse("other_machine", "Install and sign in to agents from a terminal on this machine: Ovis cannot run them there for it");
     if (this.platform === null) return conflictResponse("platform_unsupported", "Ovis has no install commands for this operating system");
     try {
       return pathname === INSTALL_PATH ? await this.#install(entry, this.platform, body) : await this.#signIn(entry, this.platform);

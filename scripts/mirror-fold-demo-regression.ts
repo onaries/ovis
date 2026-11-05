@@ -16,6 +16,7 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { appFaces } from "./app-faces.ts";
+import { shownRow, shownRows } from "./shown-rows.ts";
 
 const COLS = 120;
 const ROWS = 40;
@@ -127,10 +128,10 @@ const HERDR_MOUSE = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
 
 interface Visible { folded: boolean; cut: string[]; hostScrollWidth: number; hostClientWidth: number }
 /** Whether every row's END marker is inside the pane's visible width, in whichever view draws it. */
-const visibleMarkers = (page: Page): Promise<Visible> => page.evaluate((rows) => {
+const visibleMarkers = (page: Page): Promise<Visible> => page.evaluate(({ rows, grid }) => {
   const host = document.querySelector<HTMLElement>(".pane-frame.is-current .pane-terminal")!;
   const folded = host.hasAttribute("data-folded");
-  const drawn = host.querySelector<HTMLElement>(folded ? ".terminal-fold" : ".xterm-rows")!;
+  const drawn = host.querySelector<HTMLElement>(folded ? ".terminal-fold" : grid)!;
   const box = host.getBoundingClientRect();
   const left = box.left + host.clientLeft;
   const right = left + host.clientWidth;
@@ -163,7 +164,7 @@ const visibleMarkers = (page: Page): Promise<Visible> => page.evaluate((rows) =>
     if (!found || found.left < left - 1 || found.right > right + 1) cut.push(found ? `${marker} at ${Math.round(found.left)}-${Math.round(found.right)} of ${Math.round(left)}-${Math.round(right)}` : `${marker} not drawn`);
   }
   return { folded, cut, hostScrollWidth: host.scrollWidth, hostClientWidth: host.clientWidth };
-}, ROWS);
+}, { rows: ROWS, grid: shownRows() });
 
 /** The rectangle of `text` in the folded rows, and the pane's visible box, both in viewport pixels. */
 const foldedText = (page: Page, text: string): Promise<{ rect: { left: number; top: number; right: number; bottom: number } | null; box: { top: number; bottom: number } }> => page.evaluate((wanted) => {
@@ -349,7 +350,7 @@ async function open(browser: Browser, origin: string, viewport: { width: number;
   await appFaces(page);
   return { page, errors, close: () => context.close() };
 }
-const drawnScreen = (page: Page): Promise<unknown> => page.waitForFunction(() => document.querySelector(".pane-frame.is-current .xterm-rows")?.textContent?.includes("FOLD-LAST"));
+const drawnScreen = (page: Page): Promise<unknown> => page.waitForFunction((grid) => document.querySelector(grid)?.textContent?.includes("FOLD-LAST"), shownRows(".pane-frame.is-current"));
 
 const app = mkdtempSync(join(tmpdir(), "herdr-mirror-fold-demo-"));
 try {
@@ -517,7 +518,7 @@ try {
       // an attached PC's pane (no mirror) on a phone: fitted to the screen as before, never folded
       const attached = await open(browser, origin, { width: 390, height: 844 }, true, "&fold=off");
       try {
-        await attached.page.waitForFunction(() => (document.querySelector(".pane-frame.is-current .xterm-rows")?.textContent?.trim().length ?? 0) > 0);
+        await attached.page.waitForFunction((grid) => (document.querySelector(grid)?.textContent?.trim().length ?? 0) > 0, shownRows(".pane-frame.is-current"));
         await settled(attached.page);
         const state = await attached.page.evaluate(() => {
           const host = document.querySelector<HTMLElement>(".pane-frame.is-current .pane-terminal")!;
@@ -534,7 +535,7 @@ try {
       try {
         const { page: phone } = wide;
         const host = (): Promise<{ width: number }> => phone.evaluate(() => ({ width: document.querySelector<HTMLElement>(".pane-frame.is-current .pane-terminal")!.clientWidth }));
-        await phone.waitForFunction(() => window.foldFixture?.sockets.length > 0 && (document.querySelector(".pane-frame.is-current .xterm-rows")?.textContent?.trim().length ?? 0) > 0);
+        await phone.waitForFunction((grid) => window.foldFixture?.sockets.length > 0 && (document.querySelector(grid)?.textContent?.trim().length ?? 0) > 0, shownRows(".pane-frame.is-current"));
         await settled(phone);
         // driving: the phone sizes the pty and the program draws at its width (the other device's grid is not
         // adopted), so there is nothing to fold, and the menu has no width to choose
@@ -594,7 +595,7 @@ try {
         await foldState(phone, false);
         assert.equal(await savedWrap(phone), false, "the choice is the same device setting as a mirror's");
         await pushScreen(phone, TUI);
-        await phone.waitForFunction((top) => document.querySelector(".pane-frame.is-current .xterm-rows > div")?.textContent === top, tuiRows[0]);
+        await phone.waitForFunction(({ top, row }) => document.querySelector(row)?.textContent === top, { top: tuiRows[0], row: shownRow(".pane-frame.is-current") });
         // a finger pans the grid sideways to the box's right edge
         for (let turns = 0; ; turns++) {
           const before = (await hostScroll(phone)).left;
@@ -605,9 +606,9 @@ try {
           if (after === before) break;
           assert.ok(turns < 20, "the swipes reach the grid's right edge");
         }
-        const corner = await phone.evaluate(() => {
+        const corner = await phone.evaluate((shown) => {
           const node = document.querySelector<HTMLElement>(".pane-frame.is-current .pane-terminal")!;
-          const row = node.querySelector(".xterm-rows > div")!;
+          const row = node.querySelector(shown)!;
           let last: Text | null = null;
           for (let walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT), each = walker.nextNode(); each; each = walker.nextNode()) if ((each as Text).data.length > 0) last = each as Text;
           const range = document.createRange();
@@ -616,7 +617,7 @@ try {
           const glyph = range.getBoundingClientRect();
           const box = node.getBoundingClientRect();
           return { glyph: last!.data.at(-1), left: glyph.left, right: glyph.right, viewLeft: box.left + node.clientLeft, viewRight: box.left + node.clientLeft + node.clientWidth, scrollLeft: node.scrollLeft, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth };
-        });
+        }, shownRow());
         assert.ok(corner.scrollWidth > corner.clientWidth && corner.scrollLeft > 0, `Original width: the watched grid pans sideways ${JSON.stringify(corner)}`);
         assert.ok(corner.glyph === "┐" && corner.left >= corner.viewLeft - 1 && corner.right <= corner.viewRight + 1, `a TUI's right edge comes into view when panned ${JSON.stringify(corner)}`);
         // Wrap to screen again: the boxes fold with the text, nothing cut off or panned

@@ -60,12 +60,13 @@ function scrolledUnder(target: EventTarget | null, surface: HTMLElement): number
 
 /**
  * A field edits its text, a slider and a reorder grip take the stroke for themselves, and so does a
- * list that floats over the sheet (an open agent picker): it scrolls on its own. Only what lies
+ * list that floats over the sheet (an open agent picker; one placed inside it, as the Markdown
+ * outline's drawer, says so with `data-sheet-stroke="own"`): it scrolls on its own. Only what lies
  * inside the sheet: the sheet itself takes no pan of the browser's either (styles.css).
  */
 function ownsStroke(target: EventTarget | null, surface: HTMLElement): boolean {
   for (let node = target instanceof HTMLElement ? target : null; node && node !== surface; node = node.parentElement) {
-    if (node.isContentEditable || /^(?:INPUT|TEXTAREA|SELECT)$/.test(node.tagName)) return true;
+    if (node.dataset["sheetStroke"] === "own" || node.isContentEditable || /^(?:INPUT|TEXTAREA|SELECT)$/.test(node.tagName)) return true;
     const style = getComputedStyle(node);
     if (style.touchAction === "none" || style.position === "fixed") return true;
   }

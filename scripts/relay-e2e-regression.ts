@@ -41,6 +41,7 @@ import { chromePath } from "./chrome-path.ts";
 import { assertCspClean, watchCsp } from "./csp-violations.ts";
 import type { CspWatch } from "./csp-violations.ts";
 import { servePagesSite } from "./pages-static.ts";
+import { shownRow } from "./shown-rows.ts";
 import { relayBrowserSocket, relayServerTree } from "./relay-browser-bridge.ts";
 import { relayMediaQa } from "./relay-media-browser-qa.ts";
 import { relayShellQa } from "./relay-shell-browser-qa.ts";
@@ -230,7 +231,7 @@ async function main(): Promise<void> {
       });
     } finally { db.close(); }
   }, serverId);
-  const terminalText = (page: Page, pane: string): Promise<string> => page.evaluate((pane) => [...document.querySelectorAll(`.terminal-stack[data-pane-owner="${pane}"] .xterm-rows > div`)].map((row) => (row.textContent ?? "").replaceAll("\u00a0", " ")).join("\n"), pane);
+  const terminalText = (page: Page, pane: string): Promise<string> => page.evaluate((rows) => [...document.querySelectorAll(rows)].map((row) => (row.textContent ?? "").replaceAll("\u00a0", " ")).join("\n"), shownRow(`.terminal-stack[data-pane-owner="${pane}"]`));
 
   try {
     browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });

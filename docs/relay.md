@@ -32,8 +32,10 @@ when and for how long, and how much goes each way. The rhythm of the traffic sho
 in a terminal goes out at once as a small frame, so the timing of keystrokes is visible, and so is
 the size of what the PC sends back. Nothing is padded, and no cover traffic hides any of this.
 
-`relay.ovis.sh` keeps none of it: it writes no logs, stores nothing, and uses the address only to
-rate-limit connections ([what it keeps](../relay/README.md#what-it-sees-and-keeps)). That is how
+`relay.ovis.sh` writes no logs and uses the address only to rate-limit connections. It keeps only
+usage counters for capacity planning: per PC (under a hash of its relay ID), bytes each way, time
+connected and sessions, kept three months; no content, address or device identity
+([what it keeps](../relay/README.md#what-it-sees-and-keeps)). That is how
 it's run, not something you can check from outside, so assume that whoever runs a relay, and the
 network in front of it (Cloudflare, for `relay.ovis.sh`), can record everything above.
 
@@ -75,8 +77,8 @@ What keeps that in check:
   what `app.ovis.sh` serves with what the tag builds ([Releasing](development.md#releasing)). Your
   browser doesn't make that comparison for you.
 - The app's own pages run scripts from `app.ovis.sh` only. Their Content-Security-Policy is the one
-  the PC's own server sends, with only the relay's `wss:` connections and `blob:` media and frames
-  added (`shellContentSecurityPolicy()` in [`server/static.ts`](../server/static.ts)). A rendered
+  the PC's own server sends, with only the relay's `wss:` connections, the account service (`https://account.ovis.sh`) and
+  `blob:` media and frames added (`shellContentSecurityPolicy()` in [`server/static.ts`](../server/static.ts)). A rendered
   HTML page from the PC runs apart from them, in a sandboxed render host with the PC's own policy
   for rendered pages ([Files](#files)).
 - The host sees requests for static files: the phone's address, and the PC's relay ID in the path
@@ -92,13 +94,22 @@ What keeps that in check:
   never leaves the phone either, unless such a file address is copied out and opened in a browser
   without the app.
 
+Once a phone has opened a PC, the app's service worker starts that PC's page from the copy of the
+app it kept and fetches `app.ovis.sh`'s in the background for the next open
+([`public/sw.js`](../public/sw.js)), so a reopen doesn't wait on the host. A new release, a fix
+included, therefore reaches a phone on the open after the one that fetched it. A copy kept more
+than a day ago is not opened first: the host is asked, the copy is used only when it doesn't
+answer. A PC newer than the app reloads the page once onto the host's copy at once (`reloadPage` in
+[`src/lib/relay/shell.tsx`](../src/lib/relay/shell.tsx)).
+
 To take `app.ovis.sh` out of the picture, [host the app yourself](guide.md#running-your-own-relay).
 
 ### Who gets in
 
 **Pairing.** While the relay is online, **Settings → Phone & devices** on the PC shows a QR code
 holding a link of the form `https://app.ovis.sh/s/<server_id>/#offer=<data>`. The data names the PC
-(`server_id`), its public key, the relay's address and a pairing code
+(`server_id`), its public key, the relay's address, a pairing code and the PC's host name (at most 64
+characters), which the phone lists the PC under
 ([`shared/relay-offer.ts`](../shared/relay-offer.ts)). It sits in the link's fragment, which
 browsers never send to a server, and the app takes it off the address bar before anything else runs
 ([`src/lib/relay/boot.ts`](../src/lib/relay/boot.ts)). Since a PC's `server_id` is worked out from
@@ -109,6 +120,114 @@ shows: six digits, good for ten minutes, spent after five wrong tries. The PC ma
 pairing codes in 10 minutes, and after 20 failed relay pairings in 10 minutes it takes none for the
 next 10: a pairing tried then ends with `auth_failed`, and the phone shows **That pairing code no
 longer works**.
+
+**Pairing by comparing digits.** A phone can also pair without a code, from a link that holds the
+PC's `server_id`, public key, relay and host name only (**Copy a link without a code** under the QR
+code; it holds nothing secret, though whoever carries the link can read the host name). Copying it opens a 10-minute window, as a Bluetooth device's pairing mode
+does: outside it the PC refuses a comparison with `auth_failed` before any prompt, and does not count
+it as a failed pairing, so nobody the owner did not invite can raise a prompt. Such a link may have come through a channel nobody vouches
+for, so its key is not trusted on its own: a relay, or whoever handed the link over, could have put
+its own key there and sit between the phone and the PC. Trust comes from two people looking at
+two screens instead, as in Bluetooth's numeric comparison:
+
+1. The phone offers the feature `pair-sas` in `HELLO`; a PC that supports it selects it in
+   `WELCOME`. An older PC selects nothing, and the phone says to update Ovis on the PC. An older
+   phone never offers it, and pairs with a code as before.
+2. Both ends work out a **channel binding**: SHA-256 over `ovis-relay-channel-binding/1`, the PC's
+   static key and the two Noise handshake messages, each length-prefixed
+   (`channelBinding` in [`shared/relay-e2ee.ts`](../shared/relay-e2ee.ts)). The two ends of one
+   handshake hold the same binding. A relay in the middle runs one handshake with the phone (with
+   its own key) and another with the PC, so the two ends hold different ones: it cannot make the
+   PC's handshake message, whose DH needs the PC's secret key, appear on the phone's side.
+3. **Commit.** The phone picks 32 random bytes `Np` and sends `PAIR_REQUEST` with its label, its new
+   device key and `commitment = SHA-256("ovis-relay-pair-commit/1" || binding || device key || Np)`.
+4. **Challenge.** The PC answers `PAIR_CHALLENGE` with 32 random bytes `Nc` of its own.
+5. **Reveal.** The phone sends `PAIR_REVEAL` with `Np`. The PC checks it against the commitment
+   (in constant time) and ends the session with `auth_failed` if it does not hold.
+6. **Compare.** Both show `SHA-256("ovis-relay-pair-digits/1" || binding || device key || Np || Nc)`,
+   its first 8 bytes as a number modulo 10^6, as six digits. The PC shows them in every one of
+   its own windows that may approve a phone (driving, direct, not a Portal visitor, not an open LAN
+   window, which also gets 403 `owner_only` for the codeless link and the approval): **{name} wants to
+   pair through the relay. Approve it only if its screen shows 123 456**, with Approve and Decline.
+7. **Confirm and approve.** The phone sends `PAIR_CONFIRM` once its person taps **The numbers
+   match**, and the PC's owner approves (`POST /api/relay/pairing`). Only both together make the
+   device, the same record and key a pairing with a code makes, and `AUTH_OK` follows as usual.
+   On a PC without a screen, `bun scripts/plugin.ts pair --approve` in its terminal shows each
+   waiting phone with its digits and asks y/n: the PC's terminal is the PC itself.
+
+The approval may also come from a phone already linked to the owner's account, connected through
+the relay: it is shown three sets of digits and must pick the new device's
+([Who may admit a device](account.md#who-may-admit-a-device)). Every device connected to the PC
+hears of each admission, and of the account device that approved it.
+   Neither the phone nor the PC can finish alone.
+
+Why it holds: the phone is bound to `Np` before it sees `Nc`, and the PC chooses `Nc` before it sees
+`Np`, so neither end, nor a relay that is both ends at once, can steer the digits. A relay that
+passes the comparison on unchanged is refused at step 5, since the commitment is bound to the
+phone's channel. A relay that runs a comparison of its own with each end gets the same six digits
+on both screens once in a million tries. Not every try shows: the PC's digits are known to the
+other end once `PAIR_CHALLENGE` arrives, so a peer may abandon a comparison before its reveal, and
+then no prompt appears. Each abandoned comparison still counts as a failed relay pairing, so within
+the 20 failures allowed in 10 minutes a relay gets about 20 tries, one in fifty thousand, before
+relay pairing pauses. Without step 3, a relay could try handshakes until the digits matched; the
+commitment is what stops that.
+
+Limits: a comparison starts only inside the window opened by copying the link; both people have 90 seconds from `PAIR_REQUEST` (under the relay's 120-second idle close),
+after which the session ends with `timeout` and the prompt goes. At most three phones wait for
+approval at once; a fourth gets `auth_failed`. Every comparison that ends without a device
+(declined, abandoned, timed out, a broken commitment, a wrong pick) counts as a failed relay
+pairing. A comparison that pairs this PC only counts toward the same 20 failures in 10 minutes as
+a wrong code, after which the PC takes no such pairing for 10 minutes. One that asks to join the
+account (`pair-intent-account`) counts toward 20 of its own, so a flood of those cannot pause
+pairing with a QR code or a code. A relay in the middle can spend both, so it gets about 40 tries
+in 10 minutes, one in twenty-five thousand, before both pause.
+**Revoke all** ends every comparison under way, an approved one included, and withdraws its prompt. The prompt lives in memory only. The relay learns nothing new: the comparison travels inside the
+encrypted channel, so it sees only a few more frames and their sizes and timing.
+
+The phone's screen asks **Does {name} show this number?** with **The numbers match** and **Cancel**,
+then waits for the approval. A PC that declines, or does not approve in time, leaves the phone at
+**{name} did not approve this phone**, with no key saved.
+
+**Pairing with a typed code.** For a device with no camera pointed at the PC, **Show a code to
+type** under the QR code shows ten characters, `XXXXX-XXXXX` (Crockford base32: no I, L, O or U;
+O, I and L typed are read as 0, 1 and 1), and **Pair with a code** on app.ovis.sh's front page takes
+them. The code finds the PC and hands the device the same offer the QR code carries, then the
+device pairs with the six-digit code in it as a scanned QR code does: nothing else admits it
+([`shared/relay-pair-code.ts`](../shared/relay-pair-code.ts),
+[`server/relay/pair-code.ts`](../server/relay/pair-code.ts),
+[`src/lib/relay/pairCode.ts`](../src/lib/relay/pairCode.ts)).
+
+1. Its first three characters are a public **nameplate**: the PC holds a rendezvous for it on
+   `relay.ovis.sh` (`/v1/pair`, [relay/README.md](../relay/README.md#what-it-answers)), and the
+   device joins it. The other seven (35 bits) are the **password**, which never leaves either end.
+2. The two run CPace ([draft-irtf-cfrg-cpace-21](https://datatracker.ietf.org/doc/draft-irtf-cfrg-cpace/),
+   `CPACE-RISTR255-SHA512`, the PC as initiator) with the password, `CI = lv_cat("ovis-pair-code/1",
+   nameplate)`, a fresh 16-byte `sid` per try and role labels as associated data. The device answers
+   with its share and a confirmation (HKDF of the session key). The PC checks it in constant time and
+   only then sends the offer, sealed with ChaCha20-Poly1305 under another key from the session key.
+3. The device checks the offer as it checks a scanned link (its key must give its `server_id`, and
+   it must carry a pairing code), then shows **Does {name}'s screen show this ID?** with the PC's full
+   ID in eight groups of four. The PC shows its ID under the code. Only **It matches** goes on to
+   pairing, through the PC's own page as a QR code does.
+
+Why it holds: someone reading the frames, the relay included, cannot test guesses offline; each
+guess takes a live exchange. The PC counts the tries itself: one is taken before its first message,
+three end the code, and a correct one spends it (single use). With 35 bits and three tries a code,
+an attacker who tried every one of ten million codes would get one in about a thousand. A relay
+that plays the PC can test one guess against a device's confirmation without the PC counting it,
+so the device runs exactly one exchange per tap and never retries with the code; even a right
+guess gives it only an offer whose ID the person must match against the PC's screen.
+
+Limits: minting a code starts a fresh six-digit code (under its 10 codes in 10 minutes) and lives as
+long as it; the PC checks that code is still the pending one before it sends the offer, and tells a
+device that knew the code it ran out otherwise. Wrong typed codes do not count toward the 20 failed
+relay pairings that pause QR pairing. A code is a relay control like the QR code: made on the PC or
+a direct connection, never through the relay (`local_required`) or by a Portal visitor. The PC
+offers codes only on `relay.ovis.sh` (409 `code_unavailable` on a relay of its own), where the hosted
+app looks for them. The relay sees the nameplate, when the two meet and how big the frames are.
+CPace asks for the password's mapping to run in constant time; this one is JavaScript (noble), which
+promises no such thing. The PC works out its first message before a device arrives and every try
+hashes a fresh `sid`, so the relay cannot time it against an arrival or measure one input twice.
 
 **Device keys.** Pairing makes a key pair on the phone for that one PC: ECDSA P-256, made by
 WebCrypto as non-extractable, so no script, the app's own included, can read the private half out.
@@ -122,8 +241,11 @@ the relay saw is therefore no use later, or with another PC.
 "this computer": only the phone's key does. A request through the relay keeps only a short list of
 headers ([below](#requests-through-the-mux)), never `Cookie`, `Authorization`, `Host`, `Origin` or
 forwarding headers, and signing in with the token answers 403 `device_key_required`. A phone on the
-relay can't start or stop the relay, show its QR code or reset its identity (403 `local_required`); like any paired
-device that can type, it can still start a pairing code under Devices.
+relay can't start or stop the relay, show its QR code or reset its identity (403 `local_required`). A pairing
+code admits whoever holds it. On a PC linked to an account, only a phone linked to that account
+with drive access may start one through the relay; any other gets 403 `account_required`
+(`read_only` for a watch device). On a PC in no account, any paired relay device that can type
+may still start one under Devices, as before.
 
 **Who controls the relay.** Start, stop, pairing offers and identity reset require drive access
 and a direct connection to the PC. A Portal visitor may read the state but cannot change it:
@@ -198,13 +320,20 @@ it, and the identity reset is refused.
    the answer is `{"type":"server_proof","answer":"<HMAC-SHA256 hex>"}`. The MAC key is the raw
    X25519 shared secret, and the message is
    `nonce || UTF8(server_id + NUL + role + NUL + connection_id + NUL + "ovis-relay-server-proof-v1")`,
-   with role `control` or `data` and an empty control connection ID. The relay rejects an all-zero
+   with role `control`, `data` or `warm` and an empty connection ID for `control` (the generation for `warm`). The relay rejects an all-zero
    shared secret and compares the MAC in constant time. This proves the PC's secret possession to
    the relay; it does not authenticate the relay to the PC or replace the phone's Noise handshake.
 2. **The phone connects.** The app opens the same address with `role=client`. The relay gives the
    connection a random ID and tells the PC, which opens a data WebSocket for it, and from then on the
    relay passes frames between the two sockets byte for byte
-   ([what it answers](../relay/README.md#what-it-answers)).
+   ([what it answers](../relay/README.md#what-it-answers)). So that a phone does not wait for that
+   socket to open and prove itself, a PC whose relay says it takes one (`"warm":"<generation>"` in
+   `sync`, new for each control socket) keeps one data socket proven in advance
+   (`role=server&warm=<generation>`), which goes with that control socket. The next phone takes it at once:
+   the relay tells it `{"type":"bound","connection_id":"…"}` before the phone's first frame, tells
+   the control socket nothing, and the PC opens the next one. A warm socket proves itself like any
+   other and only carries what the phone and the PC encrypt end to end, so it changes nothing the
+   relay can see or do.
    A phone takes one of eight answered-client slots only when the PC's data socket sends its first
    non-keepalive frame. Up to four unanswered phones may wait; a fifth displaces the oldest with
    `1013`. A waiting phone closes `1013` after 15 seconds in which the PC could answer, reset when
@@ -216,8 +345,15 @@ it, and the identity reset is refused.
    attaches or the phone sends again.
 3. **Handshake.** The phone and the PC run the Noise NK handshake over those sockets, with the PC's
    public key from the QR code.
-4. **Admission.** Inside the encrypted channel they speak Ovis Mux v1. The phone sends `HELLO`, the
-   PC answers `WELCOME` with 32 fresh random bytes, its version and its limits, the phone sends `PAIR`
+4. **Admission.** Inside the encrypted channel they speak Ovis Mux v1. The phone sends `HELLO`; the
+   PC sends `WELCOME` with 32 fresh random bytes, its version and its limits as soon as its side of
+   the handshake is done, without waiting for `HELLO`, so it reaches the phone one round trip
+   sooner, unless a pairing window is open (then it answers `HELLO`, as older phones expect when they
+   compare digits). That `WELCOME` is marked `provisional`: it offers version 1 with no features, it doesn't
+   say the phone's `HELLO` was accepted, and the PC still checks that `HELLO` (version 1 offered, no
+   required feature it can't select) and requires it before `PAIR` or `AUTH`. A `HELLO` that offers
+   pairing by comparing digits gets a second, final `WELCOME` with what the PC selects, and a phone
+   comparing digits waits for that one. The phone sends `PAIR`
    (the first time, with the code) or `AUTH` (later, with its signature), and the PC answers
    `AUTH_OK`. Nothing else is accepted before that. The phone saves a new PC's key only on
    `AUTH_OK`, so a link whose PC never admits it takes no PC's place on the phone. The PC closes a
@@ -264,11 +400,15 @@ oversized frame ends the session before anything in it is parsed.
 
 | Type | Name | From | Carries |
 | --- | --- | --- | --- |
-| `0x01` | `HELLO` | phone | `protocol: "ovis-mux"`, the versions and features it offers |
-| `0x02` | `WELCOME` | PC | version 1, the limits, `nonce` (32 random bytes), `server_version`, `relay_protocol`, `min_supported_client` |
+| `0x01` | `HELLO` | phone | `protocol: "ovis-mux"`, the versions and features it offers (`relay-hints`, from 0.5.0, which the PC answers in `AUTH_OK`) |
+| `0x02` | `WELCOME` | PC | version 1, the limits, `nonce` (32 random bytes), `server_version`, `relay_protocol`, `min_supported_client`; `provisional` on the one sent before `HELLO` |
 | `0x03` | `AUTH` | phone | `scheme: "device-key"`, `device_id`, `signature` (64 bytes, P-256 `r` and `s`, base64url) |
 | `0x0A` | `PAIR` | phone | the six-digit `code`, a `label` of up to 64 characters, `public_key` (P-256 SPKI, base64url) |
-| `0x04` | `AUTH_OK` | PC | `session_id`, `device_id`, `role` (`drive` or `watch`) |
+| `0x0B` | `PAIR_REQUEST` | phone | with `pair-sas`: `label`, `public_key` and `commitment` (32 bytes, base64url) ([comparing digits](#who-gets-in)) |
+| `0x0C` | `PAIR_CHALLENGE` | PC | `nonce`: the PC's 32 random bytes |
+| `0x0D` | `PAIR_REVEAL` | phone | `nonce`: the 32 bytes the commitment was made with |
+| `0x0E` | `PAIR_CONFIRM` | phone | `confirmed: true`: the person said both screens show the same digits |
+| `0x04` | `AUTH_OK` | PC | `session_id`, `device_id`, `role` (`drive` or `watch`), and with `relay-hints` `relays`: up to two `wss:` origins, the one new connections should use first |
 | `0x05` | `SESSION_ERROR` | either | a `code` from [Errors](#errors-and-close-codes) and a short `message` |
 | `0x06` | `GOAWAY` | either | `shutdown` or `id_exhausted`, the last stream ID taken, how long to drain (up to 5 seconds) |
 | `0x07`, `0x08` | `PING`, `PONG` | either | a 64-bit number, echoed |
@@ -295,7 +435,9 @@ oversized frame ends the session before anything in it is parsed.
   only `content-type`, `content-length`, `content-range`, `accept-ranges`, `etag`, `last-modified`,
   `cache-control`, `content-disposition`, `retry-after`, `x-request-id` and the security headers
   `content-security-policy`, `x-content-type-options`, `cross-origin-resource-policy` and
-  `referrer-policy`, exactly as the handler set them. No cookie is ever set.
+  `referrer-policy`, exactly as the handler set them, and `x-server-time` (the PC's clock as it
+  answered a chat's read) to a phone that offered the `server-time-header` feature in HELLO: an
+  older phone refuses a header it does not list. No cookie is ever set.
 - **Bodies and event streams.** A request body may be up to 64 MiB. Responses stream as they're
   read, and an event stream such as the PC list's (`/api/machines/events`) is a response that stays
   open. A request gets the same time budget as on a direct connection: 60 seconds unless its route
@@ -413,12 +555,12 @@ The relay service has limits of its own (frame size, phones per PC, connections 
 | `unsupported_extension` | one side requires a feature the other lacks |
 | `unsupported_transport` | the connection can't carry a full-size frame |
 | `protocol_error` | a malformed frame, or one out of order, such as a request before `AUTH_OK` |
-| `auth_failed` | a wrong, spent or expired pairing code, an unknown device or a bad signature, a pairing while the PC takes none after too many failures, and every admission on a serve-only PC |
+| `auth_failed` | a wrong, spent or expired pairing code, an unknown device or a bad signature, a pairing while the PC takes none after too many failures, and every admission on a serve-only PC; for a comparison of digits, a commitment that does not hold, three phones already waiting, or the owner declining |
 | `auth_revoked` | the device was revoked |
 | `auth_changed` | the device's role changed while it was connected; its terminal sockets close with 1008 and the app reconnects by itself with the new role. Renaming a device ends no session |
 | `flow_control_error` | data past a stream's window |
 | `resource_exhausted` | too many new streams or frames a second, or a queue over its limit |
-| `timeout` | admission or a keepalive took too long |
+| `timeout` | admission or a keepalive took too long, or a comparison of digits was not finished in 90 seconds |
 | `internal_error` | something failed on the other side |
 
 `RESET` ends one stream and leaves the others: `cancelled`, `refused` (over a stream limit, or the
@@ -463,6 +605,7 @@ What the app on the phone shows when a connection doesn't come up
 | … is offline | the relay answered, but the PC didn't within 15 seconds: its Ovis is stopped or not connected to the relay |
 | … did not finish connecting | the PC answered, but admission didn't finish within 10 seconds |
 | That pairing code no longer works | the code was wrong, spent or expired |
+| … did not approve this phone | a pairing by comparing digits was declined on the PC, or not approved in time; no key is saved |
 | This phone was removed from … | the device was revoked; the phone has deleted its key |
 | … has a new identity | the PC's key isn't the one the phone paired with, or the saved key isn't the one the PC's `server_id` is worked out from |
 | This link is not …'s | the link's key isn't the one its `server_id` is worked out from: refused before any connection every time it's opened, Forget or not, with only **Back**; nothing is saved or removed |
@@ -502,19 +645,21 @@ is always up.
   to `relay/` or `shared/relay-server-proof.ts` reaches main
   and passes CI or when run by hand from main, and always with the maintainer's approval. A deploy
   drops every connection; PCs and phones reconnect by themselves, and nothing is sent again. Workers
-  Logs are off and the relay stores nothing ([relay/README.md](../relay/README.md#deploy)).
+  Logs are off and the relay stores only its usage counters
+  ([relay/README.md](../relay/README.md#usage-counters)).
 - **`app.ovis.sh`** is a Cloudflare Pages project. The Release workflow deploys it from each release
   tag, and [Releasing](development.md#releasing) has its one-time setup. A build of main can be
   deployed by hand to `preview.ovis-app.pages.dev` to try before a release; it never changes `app.ovis.sh`.
 - To report abuse that goes through `relay.ovis.sh`, see [SECURITY.md](../SECURITY.md#the-ovis-relay).
 
 A relay you run with Bun limits connections by default: 120 a minute from one address, 600 a minute
-in all, 1024 sockets, 256 PCs, 4096 addresses tracked at once and 64 open sockets per address
-(waiting, connected or still upgrading). A new socket past the per-address cap gets `429` with
+in all, 1024 sockets, 256 PCs, 256 typed-code pairing rooms (apart from the PCs', since anyone may
+open one), 4096 addresses tracked at once and 64 open sockets per address (waiting, connected or
+still upgrading). A new socket past the per-address cap gets `429` with
 `Retry-After: 60`; sockets already open keep their place. Raise the limits with
-`--per-address-per-minute`, `--global-per-minute`, `--max-sockets`, `--max-rooms`,
+`--per-address-per-minute`, `--global-per-minute`, `--max-sockets`, `--max-rooms`, `--max-pair-rooms`,
 `--max-addresses` and `--max-sockets-per-address`, or `RELAY_PER_ADDRESS_PER_MINUTE`,
-`RELAY_GLOBAL_PER_MINUTE`, `RELAY_MAX_SOCKETS`, `RELAY_MAX_ROOMS`, `RELAY_MAX_ADDRESSES` and
+`RELAY_GLOBAL_PER_MINUTE`, `RELAY_MAX_SOCKETS`, `RELAY_MAX_ROOMS`, `RELAY_MAX_PAIR_ROOMS`, `RELAY_MAX_ADDRESSES` and
 `RELAY_MAX_SOCKETS_PER_ADDRESS`. Behind a TLS proxy on the same machine every
 connection comes from the proxy's address, so size the per-address limit for the whole deployment
 and limit addresses at the proxy instead.
@@ -522,6 +667,55 @@ and limit addresses at the proxy instead.
 To run your own relay, or your own copy of the app, see
 [Running your own relay](guide.md#running-your-own-relay) and
 [relay/README.md](../relay/README.md#running-your-own).
+
+## Regional relays
+
+`relay.ovis.sh` runs on Cloudflare, which serves some networks from far away (from Korea, from Los
+Angeles). Regional relay endpoints run the same relay (`relay/bun.ts` behind a TLS proxy) closer to
+them; the list is `REGIONAL_RELAYS` in [`shared/relay-regions.ts`](../shared/relay-regions.ts), now
+`relay-ap.ovis.sh` in Seoul.
+
+- **The PC chooses.** A PC with no `OVIS_RELAY_URL` measures each relay's `/health` when the relay
+  is turned on (the best of two round trips after a first one that opens the connection). A regional
+  relay that answers in at most half the global relay's time, with both answering, is saved in
+  `relay/region.json` under `OVIS_STATE_DIR` and kept from then on; with none saved, the PC measures
+  again at every start, and a measurement that finishes after the relay was turned off is dropped.
+  A PC with `OVIS_RELAY_URL` set uses that relay alone, unless it names one of Ovis's regional
+  relays: that one is used with no measuring, and beside `relay.ovis.sh`, as below.
+- **It stays on both.** The PC keeps its link to `relay.ovis.sh` and opens a second one, with the
+  same key and proof, to the regional relay. New pairing QR codes and pairing links without a code
+  name the regional relay while its link is online (the global one otherwise), and the relay status
+  is the global link's. Each link
+  has its own session limits.
+- **It tells phones paired before.** A phone that offers `relay-hints` is told in `AUTH_OK` the
+  relay new offers name, then `relay.ovis.sh`, and saves the first for that PC; the app uses it from
+  the next time it opens that PC. This comes inside the encrypted channel from the PC the phone authenticated,
+  so the relay cannot change it, and a phone only ever moves between Ovis's own relays: one saved
+  with any other relay, and a named relay that is not Ovis's, are left as they are (`hintedRelay`
+  in [`shared/relay-regions.ts`](../shared/relay-regions.ts)). An older phone or PC offers or takes
+  no hints, and nothing changes for it.
+- **The phone falls back.** A phone (or a PC that added this PC through the relay) whose saved relay
+  is one of the regional ones and that cannot get through it (the relay does not answer, or the PC
+  does not answer there) tries `relay.ovis.sh` at once, and keeps using the one that worked. A phone never falls back from any other relay, so a
+  self-hosted one is never traded for Ovis's.
+
+- **The app comes from nearby too.** Beside each regional relay a copy of the hosted app is served
+  (`app-ap.ovis.sh` beside `relay-ap.ovis.sh`, `REGIONAL_APPS` in the same file). A browser that
+  opens a pairing link on `app.ovis.sh` for a regional relay moves to that copy before the app's
+  bundle loads (`regionalAppUrl`, run by the page's first script), and pairs there. Only a link
+  with a pairing code moves: a phone keeps a PC's key in the address it paired on, so a PC saved on
+  `app.ovis.sh` stays there, and a browser's list of PCs is then split between the two addresses
+  (each lists the PCs paired on it). The iOS and Android apps stay on `app.ovis.sh`. The page moves
+  only once the copy answers with the build `app.ovis.sh` serves, so a copy that is down or a
+  release behind is never moved to. Each file of the copy is checked byte for byte against
+  `app.ovis.sh` before it is served ([relay/README.md](../relay/README.md#a-regional-copy-of-the-app)),
+  but the box still delivers the code that holds the phone's keys: whoever controls it is a trust
+  root, as Cloudflare Pages is for `app.ovis.sh`
+  ([The hosted app is a trust root](#the-hosted-app-is-a-trust-root)).
+
+Which relay carries a connection changes nothing about its protection: the phone and the PC
+encrypt end to end whichever relay passes the frames on, and each relay sees what
+[What the relay sees](#what-the-relay-sees) says.
 
 ## Code
 
@@ -532,6 +726,7 @@ To run your own relay, or your own copy of the app, see
 | [`shared/relay-e2ee.ts`](../shared/relay-e2ee.ts) | the encryption, from paseo's code vendored in `shared/vendor/paseo-e2ee/` (never edited; `bun scripts/vendor-paseo.ts <commit>` updates it) |
 | [`shared/relay-mux.ts`](../shared/relay-mux.ts), [`shared/relay-mux-engine.ts`](../shared/relay-mux-engine.ts) | Ovis Mux v1 |
 | [`shared/relay-offer.ts`](../shared/relay-offer.ts) | the pairing link |
+| [`shared/relay-pair-sas.ts`](../shared/relay-pair-sas.ts), [`server/relay/pairing-approvals.ts`](../server/relay/pairing-approvals.ts) | pairing by comparing digits: the commitment and digits, and the prompts waiting on the PC |
 | [`src/lib/relay/`](../src/lib/relay) | the hosted app: channel, device key, transport, file loading and screens |
 | [`public/sw.js`](../public/sw.js) | the service worker; in the hosted app it also answers file addresses through the relay |
 | [`scripts/shell-build.ts`](../scripts/shell-build.ts) | the hosted app's build (`bun run build:shell`, into `dist-shell/`) |

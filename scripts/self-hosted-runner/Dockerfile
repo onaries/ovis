@@ -1,7 +1,8 @@
 FROM ubuntu:24.04
 
-ARG RUNNER_VERSION=2.338.0
-ARG RUNNER_SHA256=af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32
+# entrypoint.sh registers with --disableupdate: raise this within 30 days of a new actions/runner release
+ARG RUNNER_VERSION=2.338.2
+ARG RUNNER_SHA256=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
 ARG GH_VERSION=2.102.0
 ARG GH_SHA256=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
 # Keep in sync with playwright-core in bun.lock.

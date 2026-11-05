@@ -41,9 +41,9 @@ function check(eventName: string, payload?: unknown, raw?: string) {
 const titled = (action: string, title: unknown) => check("pull_request", { action, pull_request: { title } });
 
 describe.skipIf(process.platform === "win32")("PR title check", () => {
-  it("runs alone in a hosted job that checks out nothing, reading the title as data", () => {
+  it("runs alone in a job that checks out nothing, fork pull requests hosted, reading the title as data", () => {
     expect(Object.keys(workflow.jobs)).toEqual(["title"]);
-    expect(workflow.jobs.title!["runs-on"]).toBe("ubuntu-24.04");
+    expect(workflow.jobs.title!["runs-on"]).toStartWith("${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || ");
     expect(steps).toEqual([step]);
     expect(step.shell).toBe("node {0}");
     expect(step.env).toBeUndefined();

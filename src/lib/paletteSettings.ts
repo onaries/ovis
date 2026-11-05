@@ -38,7 +38,7 @@ export function settingsPageEntries(t: Translate): SettingsPageEntry[] {
     { id: "about", label: t("About"), aliases: t("version update release herdr") },
     { id: "agents", section: "guide", label: t("Setup guide"), aliases: t("onboarding first run getting started welcome") },
     { id: "appearance", section: "typography", label: t("Typography"), aliases: `${t("Interface font size")} ${t("Interface font")}` },
-    { id: "chat", section: "composer", label: t("Composer"), aliases: [t("Enter sends"), t("Return inserts a new line"), t("Send queued messages automatically"), t("New tab button"), t("Artifacts chip"), t("Suggestion chip")].join(" ") },
+    { id: "chat", section: "composer", label: t("Composer"), aliases: [t("Enter sends"), t("Return inserts a new line"), t("Send queued messages automatically"), t("New tab button"), t("Artifacts chip"), t("Side conversations chip (experimental)"), t("Paste and send button"), t("Suggestion chip")].join(" ") },
     { id: "chat", section: "quick-replies", label: t("Quick replies"), aliases: t("Show above the message box") },
     { id: "remote", section: "sidebar-pcs", label: t("Show in sidebar"), aliases: t("hide PCs on this device") },
     { id: "voice", section: "openai-key", label: t("OpenAI API key"), aliases: "" },
@@ -68,6 +68,7 @@ export function actionAliases(t: Translate): Readonly<Record<string, string>> {
     lock: t("logout log out lock"),
     files: t("folder explorer open file"),
     refresh: t("reload update sync"),
+    "local-page": t("web browser localhost port site address"),
   };
 }
 

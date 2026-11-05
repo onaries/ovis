@@ -1,0 +1,32 @@
+❯ Do not use any tool except AskUserQuestion. Call AskUserQuestion
+  once right now with one question "Which layout?", header
+  "Layout", and three options, each with a preview field: option
+  "Grid" whose preview is exactly these 4 lines: "+--+ +--+", "|
+  | |  |", "+--+ +--+", "grid of cards"; option "Wide" whose
+  preview is one single line made of the word wide repeated 40
+  times separated by spaces; option "Tall" whose preview is 45
+  lines, line N reading "row N" for N from 1 to 45. Do not write
+  anything else.
+
+───────────────────────────────────────────────────────────────────
+ ☐ Layout
+
+Which layout?
+
+  1. Grid                         ┌───────────────────────────────┐
+❯ 2. Wide                         │ wide wide wide wide wide wide │
+  3. Tall                         │  wide wide wide wide wide     │
+                                  │ wide wide wide wide wide wide │
+                                  │  wide wide wide wide wide     │
+                                  │ wide wide wide wide wide wide │
+                                  │  wide wide wide wide wide     │
+                                  │ wide wide wide wide wide wide │
+                                  │  wide wide wide wide          │
+                                  └───────────────────────────────┘
+
+                                  Notes: press n to add notes
+
+───────────────────────────────────────────────────────────────────
+  Chat about this
+
+Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel

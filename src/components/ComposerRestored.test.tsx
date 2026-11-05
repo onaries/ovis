@@ -72,3 +72,20 @@ it("sends a restored message with a `> ` quote line only to an agent", async () 
 it("sends any other restored message as before (control)", async () => {
   expect(await resendRestored("Keep this backup")).toEqual([undefined]);
 });
+
+// #2596: Ctrl+Enter sends the message now, as the queued row's Send now would; Enter keeps its queue
+it.each([
+  ["Ctrl+Enter", { ctrlKey: true }, [true]],
+  ["Enter", {}, [undefined]],
+  ["Cmd+Enter", { metaKey: true }, []],
+] as const)("%s in the box sends now only for Ctrl", async (_name, keys, expected) => {
+  const calls: unknown[][] = [];
+  const props: ComposerProps = { paneId: pane, agent: "claude", agentStatus: "working", connected: true, autoFocus: false, onSend: (...args) => { calls.push(args); return true; }, onAbort() {}, onUploadImage: async () => "" };
+  composerDrafts.set(draftKey, "steer this");
+  await act(async () => { renderer = create(<Composer {...props} />); });
+  const box = renderer!.root.findAll((node) => node.type === "textarea" && node.props.onKeyDown !== undefined)[0]!;
+  await act(async () => {
+    box.props.onKeyDown({ key: "Enter", shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, repeat: false, ...keys, nativeEvent: { isComposing: false, keyCode: 13 }, preventDefault() {} });
+  });
+  expect(calls.map((call) => call[4])).toEqual([...expected]);
+});

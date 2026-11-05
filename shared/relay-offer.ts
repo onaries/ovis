@@ -50,7 +50,7 @@ export function decodeOffer(url: string): RelayOffer | null {
   return offer;
 }
 
-function validateOffer(value: unknown): RelayOffer {
+export function validateOffer(value: unknown): RelayOffer {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid offer");
   const o = value as Record<string, unknown>;
   if (o.v !== 1) throw new Error("Unsupported offer version");

@@ -83,6 +83,16 @@ describe("bridge pending input", () => {
     expect(f.queue.next("p1")).toBe(partial ? null : second);
   });
 
+  it("stamps a try with this PC's clock as it goes out, and drops the stamp once the message waits again", () => {
+    const f = fixture(), item = f.enqueue(1);
+    f.advance(500);
+    expect(f.queue.claim(item, false)).toBe(true);
+    expect(item.message).toMatchObject({ state: "sending", sending_at: new Date(1_500).toISOString() });
+    f.queue.settle(item, { code: "agent_blocked", message: "blocked" }, false, true);
+    expect(item.message.state).toBe("queued");
+    expect(item.message.sending_at).toBeUndefined();
+  });
+
   it.each(["submit_changed", "submit_partial", "submit_failed", "disconnected", "timeout", "unknown_failure"])(
     "retains ambiguous held-copy disposition across generations and dismissal: %s", async (code) => {
       const f = fixture(), item = f.enqueue(1);

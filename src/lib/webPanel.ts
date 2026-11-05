@@ -48,6 +48,28 @@ export function panelUrl(uri: string, app: AppLocation): string | null {
   return url.href;
 }
 
+/** A loopback name and a port, a path after it: `localhost:8448`, `:8448`, `127.0.0.1:3000/docs`. */
+const LOCAL_PAGE = /^(?:(https?):\/\/)?(localhost|127(?:\.\d{1,3}){3}|\[::1\])?:(\d{1,5})([/?#]\S*)?$/i;
+
+/**
+ * The page a palette query names on this PC, or null for any other query. Only a loopback name
+ * with a port is read, so a search is never taken for an address. Without a scheme it takes the
+ * app's own: an https app frames only https pages, such as a port `tailscale serve` fronts.
+ */
+export function localPageAddress(query: string, app: Pick<AppLocation, "protocol">): string | null {
+  const match = LOCAL_PAGE.exec(query.trim());
+  if (match === null) return null;
+  const [, scheme = app.protocol.slice(0, -1), host = "localhost", port = "", rest = "/"] = match;
+  const number = Number(port);
+  if (number < 1 || number > 65535) return null;
+  // the pattern lets an octet past 255 through (`127.999.0.1`), which no URL holds
+  try {
+    return new URL(`${scheme.toLowerCase()}://${host}:${port}${rest}`).href;
+  } catch {
+    return null;
+  }
+}
+
 export function wantsPanel(target: WebLinkTarget, shiftKey: boolean): boolean {
   return (target === "panel") !== shiftKey;
 }

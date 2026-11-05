@@ -1,7 +1,7 @@
 import { expect, it } from "bun:test";
 import type { PaneLayoutSnapshot, PaneSplit, SessionSnapshot, WorkspaceCreated } from "../shared/protocol.ts";
 
-it("the demo preserves native split paths, explicit swaps and focus while zoomed", async () => {
+it("the demo preserves native split paths, explicit swaps, moves beside a pane and focus while zoomed", async () => {
   const saved = new Map(["window", "location", "PushManager"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   try {
     const storage = new Map<string, string>();
@@ -52,6 +52,23 @@ it("the demo preserves native split paths, explicit swaps and focus while zoomed
     expect((await post("layout/ratio", { tab_id: tabId, path: [0], ratio: 0.5 })).status).toBe(400);
     expect((await post("layout/ratio", { tab_id: tabId, path: [], ratio: 1 })).status).toBe(400);
     expect((await post("pane/focus", null)).status).toBe(400);
+    // a pane moved beside another of its tab takes that side of it, its ID kept (#1819)
+    const moving = ((await (await post("workspace/create", { cwd: "/home/demo/move-check", label: "move-check" })).json()) as WorkspaceCreated).pane_id;
+    const moveTab = (await snapshot()).panes.find((pane) => pane.pane_id === moving)!.tab_id;
+    const target = await split(moving, "right");
+    for (const side of ["down", "up", "right", "left"] as const) {
+      // a zoomed tab shows every pane again, as herdr-core's move makes it, so the moved one is in view
+      await post("pane/zoom", { pane_id: target, mode: "on" });
+      expect(await (await post("pane/move", { pane_id: moving, target_pane_id: target, side })).json()).toEqual({ ok: true, changed: true, reason: null });
+      const tab = (await snapshot()).layouts.find((candidate) => candidate.tab_id === moveTab)!;
+      expect(tab.zoomed).toBe(false);
+      const [pane, beside] = [rect(tab, moving), rect(tab, target)];
+      expect({ left: pane.x < beside.x, right: pane.x > beside.x, up: pane.y < beside.y, down: pane.y > beside.y }[side]).toBe(true);
+      expect(tab.panes.map((candidate) => candidate.pane_id).sort()).toEqual([moving, target].sort());
+    }
+    expect(await (await post("pane/move", { pane_id: moving, target_pane_id: moving, side: "left" })).json()).toEqual({ ok: true, changed: false, reason: "same_pane" });
+    expect(await (await post("pane/move", { pane_id: moving, target_pane_id: root, side: "left" })).json()).toEqual({ ok: true, changed: false, reason: "cross_tab" });
+    expect((await post("pane/move", { pane_id: moving, target_pane_id: target, side: "middle" })).status).toBe(400);
   } finally {
     for (const [key, descriptor] of saved) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);

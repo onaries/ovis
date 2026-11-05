@@ -164,7 +164,7 @@ export function fileTask<T extends FileTaskResult>(task: FileTask, signal?: Abor
   // failed or was ended mid-task) can still be closed (`abandon`)
   if (task.op === "open" || task.op === "describe") task = { ...task, opened: openedCell() };
   return new Promise<T>((done, fail) => {
-    const deadline = task.op === "commands" ? options.scanDeadlineMs : task.op === "render" || task.op === "walk" || task.op === "claude-tasks" || task.op === "agy-catalog" ? options.longDeadlineMs : options.deadlineMs;
+    const deadline = task.op === "commands" ? options.scanDeadlineMs : task.op === "render" || task.op === "walk" || task.op === "claude-tasks" || task.op === "agy-catalog" || task.op === "text-read" ? options.longDeadlineMs : options.deadlineMs;
     const pending: Pending = { task, done: done as (result: FileTaskResult) => void, fail, settled: false, timer: setTimeout(() => expire(pending, "the file system did not answer in time"), deadline), ...(onRun ? { onRun } : {}) };
     if (signal !== undefined) {
       const cancel = () => expire(pending, "the request was cancelled");

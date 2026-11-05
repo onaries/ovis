@@ -45,6 +45,24 @@
   white-space: nowrap;
 }
 
+/* a line whose sentence is itself a button (the usage counts' line opens Settings): it reads as
+   the sentence, cut like one, and shows it is a link only under the pointer or the focus */
+.update-notice.is-line > .update-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: start;
+  color: inherit;
+  font: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.update-notice-text:hover,
+.update-notice-text:focus-visible { text-decoration: underline; }
+
 /* the reload warning is read in full on a phone: its sentence wraps instead of being cut */
 .update-notice.is-line.is-warning { flex-wrap: wrap; }
 .update-notice.is-line.is-warning > span { white-space: normal; overflow: visible; text-overflow: clip; }

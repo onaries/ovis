@@ -526,10 +526,13 @@ try {
         const held = await hold(PENDING[0]!.steps);
         const detaches = await page.evaluate((paneId) => window.replayFixture.sent.filter((frame) => frame.type === "detach" && frame.pane_id === paneId).length, panes.shell);
         // the roster is read again on session-changed, and now says herdr could not restore the pane
+        // (a server tells that on its machine events too; the demo's pane socket alone does not, so
+        // the page is asked to read the roster now instead of at its open stream's 30-second backstop)
         await page.evaluate((paneId) => {
           const state = window.replayFixture;
           state.unrestored = paneId;
           state.sockets.at(-1)!.push({ type: "session-changed" });
+          document.dispatchEvent(new Event("visibilitychange"));
         }, panes.shell);
         await page.waitForFunction(([paneId, count]) => window.replayFixture.sent.filter((frame) => frame.type === "detach" && frame.pane_id === paneId).length > count, [panes.shell, detaches] as const);
         const reset = await host.evaluate((element) => ({ mounted: element.isConnected, probe: (element as unknown as { outputProbe(): Probe }).outputProbe() }));
@@ -550,6 +553,7 @@ try {
           const state = window.replayFixture;
           state.unrestored = null;
           state.sockets.at(-1)!.push({ type: "session-changed" });
+          document.dispatchEvent(new Event("visibilitychange"));
         });
         await page.waitForFunction(([paneId, count]) => window.replayFixture.sent.filter((frame) => frame.type === "attach" && frame.pane_id === paneId).length > count, [panes.shell, attaches] as const);
         console.log("PASS pending write at reset");

@@ -4,13 +4,15 @@
  * connection screen (renderer/connect.html) with what failed. Closing the window keeps Ovis in
  * the tray; Quit stops the server. The core and its terminals keep running, as for every hc client.
  */
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, session, shell, Tray, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, session, shell, Tray, type MenuItemConstructorOptions } from "electron";
 import { existsSync, readFileSync, type WriteStream } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ChildProcess } from "node:child_process";
 import { choosePort, coreEnv, endLeftover, installCore, isFile, layout, openLog, processCommand, processStartSync, readSaved, serverEnv, startCore, startServer, stopServer, writeSaved, type RunningServer } from "./children.ts";
-import { updatePlan } from "./updates.ts";
+import { accountServiceOf, startLoopbackSignIn, type LoopbackSignIn } from "./accountSignIn.ts";
+import { awakeLabel, DESKTOP_ACTIVITY_FILE, holdAwake, readAwakeSettings, readWorking, writeAwakeSettings, type AwakeSettings } from "./awake.ts";
+import { checkForUpdates, debInstallCommand, updateChannel, updatePlan } from "./updates.ts";
 
 type StepState = "pending" | "ok" | "failed";
 export interface Status {
@@ -45,6 +47,16 @@ let quitting = false;
 let stopped = false;
 let updateReady: (() => void) | null = null;
 let status: Status = { core: "pending", server: "pending", detail: "", versions };
+const awakePath = join(app.getPath("userData"), "awake.json");
+let awake = readAwakeSettings(awakePath);
+/** the powerSaveBlocker held while an agent works (awake.ts), and how many worked when last read */
+let awakeBlocker: number | null = null;
+let awakeWorking = 0;
+
+const accountService = accountServiceOf(process.env);
+
+/** The sign-ins that service offers: OVIS_ACCOUNT_PROVIDERS (GitHub alone without it), so Apple shows only once it is set up. */
+const accountProviders = (process.env["OVIS_ACCOUNT_PROVIDERS"] ?? "").split(",").map((name) => name.trim()).filter((name) => name === "github" || name === "apple");
 
 function serverOrigin(): string | null {
   return server ? new URL(server.url).origin : null;
@@ -104,9 +116,9 @@ async function launch(): Promise<void> {
       setStatus({ core: "failed", detail: `This build has no bundled herdr-core and Bun in ${resources}. Build it with \`bun scripts/build.ts stage\` in app/electron.` });
       return;
     }
-    log = openLog(join(logs, "ovis.log"));
     let hc: string;
     try {
+      log = openLog(join(logs, "ovis.log"));
       hc = await installCore(programs.hc, join(app.getPath("userData"), "bin"), coreEnv(process.env), log);
       await startCore(hc, coreEnv(process.env), log);
       setStatus({ core: "ok" });
@@ -224,12 +236,44 @@ function guard(contents: Electron.WebContents, blank?: BrowserWindow): void {
   });
 }
 
+/** holds off system sleep while the setting is on and an agent works, and lets go as soon as none does */
+function updateAwake(): void {
+  const working = server ? readWorking(join(stateDir, DESKTOP_ACTIVITY_FILE)) : 0;
+  const hold = holdAwake({ settings: awake, working, onBattery: powerMonitor.isOnBatteryPower(), serverRunning: server !== null });
+  const changed = hold !== (awakeBlocker !== null) || (hold && working !== awakeWorking);
+  awakeWorking = working;
+  if (hold && awakeBlocker === null) awakeBlocker = powerSaveBlocker.start("prevent-app-suspension");
+  if (!hold && awakeBlocker !== null) {
+    powerSaveBlocker.stop(awakeBlocker);
+    awakeBlocker = null;
+  }
+  if (changed) rebuildTrayMenu();
+}
+
+function setAwake(next: AwakeSettings): void {
+  awake = next;
+  try { writeAwakeSettings(awakePath, next); } catch (error) { console.error(`Saving ${awakePath} failed: ${message(error)}`); }
+  updateAwake();
+  rebuildTrayMenu();
+}
+
 function rebuildTrayMenu(): void {
   if (!tray) return;
   const url = server?.url ?? null;
+  const holding = awakeBlocker !== null ? awakeLabel(awakeWorking) : null;
+  tray.setToolTip(holding ? `Ovis: ${holding}` : "Ovis");
   const items: MenuItemConstructorOptions[] = [
+    ...(holding ? [{ label: holding, enabled: false }, { type: "separator" as const }] : []),
     { label: "Open Ovis", click: showWindow },
     { label: "Open in Browser", enabled: url !== null, click: () => url && openOutside(url) },
+    { type: "separator" },
+    {
+      label: "Keep Computer Awake",
+      submenu: [
+        { label: "While an Agent Is Working", type: "checkbox", checked: awake.whileWorking, click: (item) => setAwake({ ...awake, whileWorking: item.checked }) },
+        { label: "Also on Battery", type: "checkbox", checked: awake.onBattery, enabled: awake.whileWorking, click: (item) => setAwake({ ...awake, onBattery: item.checked }) },
+      ],
+    },
     { type: "separator" },
     { label: "Restart Ovis Server", enabled: busy === null, click: () => void restart() },
     ...(updateReady ? [{ label: "Restart to Update", click: updateReady }] : []),
@@ -287,19 +331,53 @@ function allowPermissions(): void {
 }
 
 async function startUpdates(): Promise<void> {
-  const plan = updatePlan({ packaged: app.isPackaged, env: process.env, platform: process.platform, builtWithFeed: existsSync(join(process.resourcesPath, "app-update.yml")) });
+  let linuxPackage: string | null = null;
+  try { linuxPackage = readFileSync(join(process.resourcesPath, "package-type"), "utf8").trim(); } catch { /* not a Linux package */ }
+  const plan = updatePlan({ packaged: app.isPackaged, env: process.env, platform: process.platform, builtWithFeed: existsSync(join(process.resourcesPath, "app-update.yml")),
+    channel: updateChannel(process.env, stateDir), linuxPackage, execPath: process.execPath });
   if (!plan.enabled) {
     console.log(`Updates are off: ${plan.reason}.`);
     return;
   }
-  const { autoUpdater } = await import("electron-updater");
+  const updater = await import("electron-updater");
+  // one privileged apt-get and nothing else. DebUpdater's own dpkg path follows any failure with
+  // `apt-get install -f` (a cancelled prompt asked again, and a no-op repair restarted Ovis on its
+  // old version); its apt path allows unauthenticated, downgraded and held packages.
+  class OvisDebUpdater extends updater.DebUpdater {
+    protected override doInstall(options: { isForceRunAfter: boolean }): boolean {
+      const file = this.installerPath;
+      if (file == null) {
+        this.dispatchError(new Error("No downloaded update to install"));
+        return false;
+      }
+      try {
+        this.runCommandWithSudoIfNeeded(debInstallCommand(file, !this.isRunningAsRoot()));
+      } catch (error) {
+        this.dispatchError(error instanceof Error ? error : new Error(String(error)));
+        return false;
+      }
+      if (options.isForceRunAfter) app.relaunch();
+      return true;
+    }
+  }
+  const autoUpdater = plan.installer === "deb" ? new OvisDebUpdater() : plan.installer === "appimage" ? new updater.AppImageUpdater() : updater.autoUpdater;
   if (plan.feed) autoUpdater.setFeedURL({ provider: "generic", url: plan.feed });
-  autoUpdater.on("error", (error) => console.error(`Update check failed: ${message(error)}`));
+  // beta-mac.yml and beta-linux.yml on beta, latest-*.yml otherwise; setting a channel allows downgrades, which stay off
+  autoUpdater.channel = plan.channel === "beta" ? "beta" : "latest";
+  autoUpdater.allowPrerelease = plan.channel === "beta";
+  autoUpdater.allowDowngrade = false;
+  console.log(`Updates: ${plan.channel} channel.`);
+  // a .deb installs behind a password prompt: only when asked from the tray, never on a plain quit
+  if (plan.installer === "deb") autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.on("error", (error) => console.error(`Update failed: ${message(error)}`));
   autoUpdater.on("update-downloaded", () => {
-    updateReady = () => void stopForQuit().then(() => autoUpdater.quitAndInstall());
+    // the .deb installs first and the app quits (stopping the server) only once it did, then starts again;
+    // a cancelled prompt leaves the app and its server running. The AppImage starts its new copy at
+    // once, so the server stops before.
+    updateReady = plan.installer === "deb" ? () => autoUpdater.quitAndInstall() : () => void stopForQuit().then(() => autoUpdater.quitAndInstall());
     rebuildTrayMenu();
   });
-  const check = () => void autoUpdater.checkForUpdates().catch((error: unknown) => console.error(`Update check failed: ${message(error)}`));
+  const check = () => void checkForUpdates(autoUpdater, (line) => console.error(line));
   check();
   setInterval(check, 6 * 60 * 60 * 1000);
 }
@@ -314,6 +392,26 @@ if (!app.requestSingleInstanceLock()) {
   });
   ipcMain.on("ovis:logs", (event) => {
     if (event.senderFrame?.url.startsWith("file:")) void shell.openPath(logs);
+  });
+  // signing in to the account (accountSignIn.ts): only the server's own pages may, and only to the account service named
+  let signIn: LoopbackSignIn | null = null;
+  ipcMain.on("ovis:account-service", (event) => {
+    event.returnValue = ours(event.senderFrame?.url ?? "") && accountService !== null ? { service: accountService, providers: accountProviders } : null;
+  });
+  ipcMain.handle("ovis:account-start", async (event) => {
+    if (!ours(event.senderFrame?.url ?? "") || accountService === null) throw new Error("Signing in is not offered here");
+    signIn = await startLoopbackSignIn();
+    return signIn.redirectUri;
+  });
+  ipcMain.handle("ovis:account-open", async (event, url: unknown) => {
+    if (!ours(event.senderFrame?.url ?? "") || accountService === null || signIn === null) throw new Error("No sign-in is waiting");
+    if (typeof url !== "string" || new URL(url).origin !== accountService) throw new Error("That is not the account service");
+    const waiting = signIn;
+    const state = new URL(url).searchParams.get("state");
+    if (state === null) throw new Error("That sign-in names no state");
+    waiting.expect(state);
+    openOutside(url);
+    try { return await waiting.returned; } finally { if (signIn === waiting) signIn = null; }
   });
   app.on("before-quit", (event) => {
     if (stopped) return;
@@ -330,6 +428,9 @@ if (!app.requestSingleInstanceLock()) {
     createMenu();
     createWindow();
     createTray();
+    setInterval(updateAwake, 5_000);
+    powerMonitor.on("on-ac", updateAwake);
+    powerMonitor.on("on-battery", updateAwake);
     void start().then(startUpdates);
   });
 }

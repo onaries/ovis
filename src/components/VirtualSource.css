@@ -11,8 +11,11 @@
   flex-direction: column;
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  line-height: calc(var(--fs-xs) * var(--lh-base));
+  /* the file viewer's source size (FileViewer.css): Settings → File text size, else the interface's;
+     the rows in the shadow root take it through --source-scale (lib/sourceTheme.ts) */
+  --source-scale: var(--file-source-scale, 1);
+  font-size: calc(var(--fs-xs) * var(--source-scale));
+  line-height: calc(var(--fs-xs) * var(--source-scale) * var(--lh-base));
 }
 
 .virtual-source-scroll {

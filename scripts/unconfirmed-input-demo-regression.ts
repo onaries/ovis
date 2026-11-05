@@ -14,6 +14,7 @@ import { chromium, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 const SETTINGS_KEY = "ovis:settings";
 const PREFIX = "/herdr-web-ui/demo/app/";
@@ -61,7 +62,8 @@ async function open(page: Page, origin: string): Promise<void> {
   await page.clock.install();
   await page.goto(`${origin}?pane=${encodeURIComponent(panes.shell)}&view=terminal`);
   await page.locator(".conn-live").waitFor({ state: "attached" });
-  await page.locator(".pane-frame:not(.is-hidden) .xterm-rows").waitFor();
+  // the rows the pane shows: libghostty's once its module loads, when xterm's are hidden (shown-rows.ts)
+  await page.locator(shownRows(".pane-frame:not(.is-hidden)")).first().waitFor();
   await page.waitForFunction(() => !document.querySelector<HTMLTextAreaElement>(".pane-frame:not(.is-hidden) .xterm-helper-textarea")?.disabled);
   await page.locator(".pane-frame:not(.is-hidden) .xterm-helper-textarea").focus();
 }

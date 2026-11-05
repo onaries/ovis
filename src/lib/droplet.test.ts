@@ -15,6 +15,9 @@ describe("dropletAllows", () => {
     expect(dropletAllows({ input: true, done: "long" }, "done", 1_000)).toBe(false);
     expect(dropletAllows({ input: true, done: "long" }, "done", LONG_TURN_MS)).toBe(true);
     expect(dropletAllows({ input: true, done: "always" }, "working", null)).toBe(false);
+    // what a blocked agent says it waits for picks the choice that applies
+    expect(dropletAllows({ input: true, done: "off", permission: false }, "blocked", null, "permission")).toBe(false);
+    expect(dropletAllows({ input: false, done: "off", permission: true }, "blocked", null, "permission")).toBe(true);
   });
 
   it("tells a long-turn device about a turn it did not see start, as the server does", () => {

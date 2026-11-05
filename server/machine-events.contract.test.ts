@@ -148,3 +148,43 @@ it("tells a pairing to every machine-event socket but the asking browser's and o
     expect(pairings(lan.frames)).toEqual([]);
   } finally { for (const client of clients) client.socket.close(); server.stop(); rmSync(stateDir, { recursive: true, force: true }); }
 });
+
+it("tells relay pairings waiting for approval to a driving machine-event socket, as SSE does", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-machine-events-relay-pairings-"));
+  const server = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "test-token", tailscaleOwner: null });
+  const client = await connection(`http://127.0.0.1:${server.port}`);
+  const waiting = (count: number) => (frame: ServerMessage) => frame.type === "machine-event" && frame.event.type === "relay-pairings" && frame.event.pairings.length === count;
+  try {
+    client.socket.send(JSON.stringify({ type: "machine-events", enabled: true }));
+    await client.wait(waiting(0));
+    const asked = server.context.services.relay.approvals.ask("New phone", "123456", Date.now() + 90_000);
+    const shown = await client.wait(waiting(1));
+    expect(shown.type === "machine-event" && shown.event.type === "relay-pairings" && shown.event.pairings[0]?.digits).toBe("123456");
+    const frames = client.frames.length;
+    asked?.withdraw();
+    await client.wait((frame) => client.frames.indexOf(frame) >= frames && waiting(0)(frame));
+  } finally {
+    client.socket.close();
+    server.stop();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+it("tells a watch device's machine-event socket that no relay pairing waits for it, so a window that lost drive drops its prompts", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-machine-events-relay-watch-"));
+  const server = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "test-token", tailscaleOwner: null });
+  const devices = server.context.services.devices;
+  const paired = devices.pair(devices.startPairing().code, "Observer", "watch")!;
+  const asked = server.context.services.relay.approvals.ask("New phone", "123456", Date.now() + 90_000);
+  const client = await connection(`http://127.0.0.1:${server.port}`, withHeaders({ cookie: `${DEVICE_COOKIE}=${paired.token}` }));
+  try {
+    client.socket.send(JSON.stringify({ type: "machine-events", enabled: true }));
+    const told = await client.wait((frame) => frame.type === "machine-event" && frame.event.type === "relay-pairings");
+    expect(told.type === "machine-event" && told.event.type === "relay-pairings" && told.event.pairings).toEqual([]);
+  } finally {
+    asked?.withdraw();
+    client.socket.close();
+    server.stop();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});

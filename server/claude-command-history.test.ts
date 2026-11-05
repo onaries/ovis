@@ -895,26 +895,52 @@ it("gives up a read stuck in flight once the last server lets go", async () => {
   expect(transcriptReader.size()).toEqual({ active: 0, waiting: 0, paths: 0 });
 }, 5000);
 
-it("counts the time it keeps a transcript open from when its read was asked for", async () => {
+it("waits out another reader's lease of the transcript, however long, and counts its own time from its lease", async () => {
   const s = fixture();
   writeFileSync(s.path, notice("large") + filler.repeat(8));
-  let now = Date.now();
-  setSystemTime(new Date(now));
-  try {
-    // another reader of the same transcript (one lease a path) holds it while most of half the
-    // read's deadline goes by
-    const held = gate(), entered = gate();
-    const other = transcriptReader.read(s.path, async () => { entered.open(); await held.opened; });
-    await entered.opened;
-    // and as much again at the third read: a lease held by its own start would run out of time then
-    slowReads((_, count) => { if (count === 3) setSystemTime(new Date(now += 5_000)); });
-    const reading = waitCommandHistory(s.path, s.limit(), 60_000);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    setSystemTime(new Date(now += 6_000));
-    held.open();
-    await other;
-    expect(await reading).toMatchObject({ complete: true, through: s.limit() });
-  } finally { setSystemTime(); }
+  // the clock and its timers move only as the test moves them
+  controlledClock();
+  // another reader of the same transcript (one lease a path), an image lookup on a slow network
+  // home, holds it for longer than the read's deadline
+  const held = gate(), entered = gate();
+  const other = transcriptReader.read(s.path, async () => { entered.open(); await held.opened; });
+  await entered.opened;
+  // and half the read's deadline passes at its third read: it lets go at the end of that turn, and
+  // reads on in another lease
+  slowReads((_, count) => { if (count === 3) jest.advanceTimersByTime(5_000); });
+  const reading = waitCommandHistory(s.path, s.limit(), 60_000);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(transcriptReader.size()).toMatchObject({ active: 1, waiting: 1 });
+  jest.advanceTimersByTime(18_000);
+  held.open();
+  await other;
+  expect(await reading).toMatchObject({ complete: true, through: s.limit() });
+}, 5000);
+
+it("gives up the wait for the lease of a read let go of meanwhile, and never opens the transcript for it", async () => {
+  const s = fixture();
+  writeFileSync(s.path, notice("evicted"));
+  const held = gate(), entered = gate();
+  release.push(held.open);
+  const other = transcriptReader.read(s.path, async () => { entered.open(); await held.opened; });
+  await entered.opened;
+  let leased = 0;
+  wrapReads((path, work) => async (file) => { if (path === s.path) leased++; return work(file); });
+  commandHistory(s.path, s.limit());
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(transcriptReader.size()).toMatchObject({ active: 1, waiting: 1 });
+  // as many other sessions as are kept: the least recently used one, the read waiting, goes
+  for (let index = 0; index < 16; index++) {
+    const other = fixture(`other${index}`);
+    writeFileSync(other.path, notice(`o${index}`));
+    commandHistory(other.path, 0, false);
+  }
+  expect(transcriptReader.size()).toMatchObject({ active: 1, waiting: 0 });
+  await commandHistorySettled();
+  held.open();
+  await other;
+  await transcriptReader.settled();
+  expect(leased).toBe(0);
 }, 5000);
 
 it("drops a window read across a start over that a request made while the window waited for the disk", async () => {

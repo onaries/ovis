@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type MutableRefObject } from "react";
+import { useCallback, useMemo, useRef, type MutableRefObject } from "react";
 import { ApiError } from "./api.ts";
 import { answerFromText, answerRefusal, needsConfirmation, type TypedAnswer } from "./promptAnswer.ts";
 import { composerDelivery, pendingActionUncertain, submitNote, submitNotTyped, submitRefusal, type DraftRefusal } from "./compose.ts";
@@ -85,8 +85,11 @@ export function useComposerSends(deps: ComposerSendsDeps) {
     };
   }, [answering, answerPending, paneId, pendingAnswer, sendAnswer, setPendingAnswer]);
 
+  // the latest Send now, for a Ctrl+Enter send whose receipt comes after a render
+  const sendNowRef = useRef<(id: string) => Promise<void>>(async () => {});
+
   const composerSend = useCallback(
-    (text: string, clearDraft?: string, sendAnyway = false, agentOnly = false): boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal> => {
+    (text: string, clearDraft?: string, sendAnyway = false, agentOnly = false, now = false): boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal> => {
       const pane = paneRef.current;
       // A refused send keeps the draft; no second choice goes to the card waiting on its read.
       if (pane !== null && answerPending) return false;
@@ -156,6 +159,9 @@ export function useComposerSends(deps: ComposerSendsDeps) {
           if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text, sentAt, sentAfter);
         }
         if (pane !== null && typedNow) showSentCommand(pane, text, known, seen);
+        // Ctrl+Enter: the row it was queued as goes now, by the same steer as its Send now. A refused steer
+        // leaves that row with its reason, as a refused Send now does (#2596)
+        if (now && answer.pending !== undefined) void sendNowRef.current(answer.pending.id);
         return true;
       });
     },
@@ -265,6 +271,8 @@ export function useComposerSends(deps: ComposerSendsDeps) {
     if (navigator.locks) await navigator.locks.request(`pending:${queueOwner}:${id}`, perform);
     else await perform();
   }, [agent, agentStatus, answering, ended, heldByOpenQueue, paneId, queueOwner, submitComposerMessage, submitRetention, showSentCommand, inputRowNow, stillOpenNote]);
+
+  sendNowRef.current = (id) => actOnPending(id, "steer");
 
   return { composerSend, actOnPending, waitingAnswer };
 }

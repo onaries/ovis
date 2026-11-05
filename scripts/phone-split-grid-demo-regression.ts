@@ -6,6 +6,7 @@ import { chromium, type BrowserContext, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 // A phone shows a split tab one pane at a time and keeps the others mounted behind it (#819). The
 // pty is shared with every device, so a hidden pane must not size it: a PC drawing the split would
@@ -110,7 +111,7 @@ try {
       // the split tab shows one pane on the phone, the other mounted behind it; the phone turns
       const shell = await page.locator(".pane-frame.is-hidden").getAttribute("data-layout-pane") as string;
       const sibling = await page.locator(".pane-frame:not(.is-hidden)").getAttribute("data-layout-pane") as string;
-      await page.locator(`.pane-frame:not(.is-hidden)[data-layout-pane="${sibling}"] .xterm-rows`).waitFor();
+      await page.locator(shownRows(`.pane-frame:not(.is-hidden)[data-layout-pane="${sibling}"]`)).waitFor();
       await page.waitForTimeout(1_000);
       await page.evaluate(() => { (window as unknown as Recorded).sent = []; });
       await page.setViewportSize({ width: 700, height: 390 });

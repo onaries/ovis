@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { Browser } from "playwright-core";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 /** Where xterm's composition box and its first and last characters are drawn, in viewport px. */
 function compositionGlyphs(): { left: number; right: number; first: { left: number; right: number }; last: { left: number; right: number } } | null {
@@ -52,8 +53,8 @@ export async function checkTerminalComposition(browser: Browser, origin: string)
       await ctx.addInitScript(([m, f]) => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", terminalInputMode: m, ...(f ? { terminalFontFamily: f } : {}) })), [mode, font]);
       const page = await ctx.newPage();
       await page.goto(`${origin}/?pane=${encodeURIComponent(ws.root_pane.pane_id)}`);
-      await page.locator(".xterm-rows").waitFor();
-      await page.waitForFunction(() => document.querySelector(".xterm-rows")?.textContent?.includes("400") ?? false, null, { timeout: 15_000 });
+      await page.locator(shownRows()).first().waitFor();
+      await page.waitForFunction((rows) => document.querySelector(rows)?.textContent?.includes("400") ?? false, shownRows(), { timeout: 15_000 });
       // simulate long dictation composition
       const cdp = await ctx.newCDPSession(page);
       const target = mode === "line" ? ".terminal-input-text" : ".xterm-helper-textarea";
@@ -77,7 +78,11 @@ export async function checkTerminalComposition(browser: Browser, origin: string)
       const view = await page.evaluate(() => {
         const box = document.querySelector(".composition-view.active")?.getBoundingClientRect();
         const screen = document.querySelector(".xterm-screen")!.getBoundingClientRect();
-        const cell = screen.width / (document.querySelector(".xterm-rows")!.firstElementChild!.textContent!.length || 1);
+        // the cell the user sees: libghostty's, while it draws the pane, else xterm's row width over its characters
+        const layer = document.querySelector<HTMLElement>(".pane-terminal[data-renderer='ghostty'] .ghostty-layer");
+        const cell = layer
+          ? parseFloat(layer.style.getPropertyValue("--ghostty-cw"))
+          : screen.width / (document.querySelector(".xterm-rows")!.firstElementChild!.textContent!.length || 1);
         const host = document.querySelector<HTMLElement>(".pane-terminal")!;
         const pad = getComputedStyle(document.querySelector(".pane-terminal .xterm")!);
         // the width the fit gives the grid: the pane's, less the gutter on .xterm
@@ -106,8 +111,8 @@ export async function checkTerminalComposition(browser: Browser, origin: string)
       await ctx.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", terminalInputMode: "direct" })));
       const page = await ctx.newPage();
       await page.goto(`${origin}/?pane=${encodeURIComponent(ws.root_pane.pane_id)}`);
-      await page.locator(".xterm-rows").waitFor();
-      await page.waitForFunction(() => document.querySelector(".xterm-rows")?.textContent?.includes("x".repeat(31)) ?? false, null, { timeout: 15_000 });
+      await page.locator(shownRows()).first().waitFor();
+      await page.waitForFunction((rows) => document.querySelector(rows)?.textContent?.includes("x".repeat(31)) ?? false, shownRows(), { timeout: 15_000 });
       const cdp = await ctx.newCDPSession(page);
       await page.locator(".xterm-helper-textarea").focus();
       const word = "あああああああああかさたなはまや";

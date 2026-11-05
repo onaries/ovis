@@ -46,6 +46,13 @@ describe("catalog sources", () => {
     expect(dup.map((r) => [r.id, r.provenance?.transport])).toEqual([["/a", "native"], ["/b", "scan"]]);
   });
 
+  test("a provider whose rows the agent runs first hides the scanned rows typed the same, and only those", async () => {
+    // pi: an extension's /mine runs before the prompt template mine.md expands
+    register({ agent: "x", owns: [], shadows: true, rows: async () => [row("mine", "plugin"), row("clear", "plugin")] });
+    const merged = await mergeCatalogSources("x", pane, "/w", base);
+    expect(merged.map((r) => [r.name, r.source])).toEqual([["clear", "builtin"], ["clear", "plugin"], ["mine", "plugin"], ["skill-a", "skill"]]);
+  });
+
   test("a slow provider times out, is aborted and the rows fall back", async () => {
     let aborted = false;
     register({

@@ -20,8 +20,8 @@ export function followsHerdrFocus(input: {
   machineId: string;
   paneId: string;
   selection: { machineId: string; paneId: string | null };
-  /** the split's other half, while it is drawn */
-  splitOther: SplitTarget | null;
+  /** the panes the split's other slots show, while they are drawn */
+  splitOthers: readonly SplitTarget[];
   linkPending: boolean;
   /** this device is in use: following would drop the keyboard, close what is open or leave an unsent message (#1470) */
   busy: boolean;
@@ -30,7 +30,7 @@ export function followsHerdrFocus(input: {
 }): boolean {
   if (!input.enabled || input.linkPending || input.busy || input.ownMove) return false;
   if (input.machineId !== input.selection.machineId || input.paneId === input.selection.paneId) return false;
-  return !sameTarget(input.splitOther, { machineId: input.machineId, paneId: input.paneId });
+  return !input.splitOthers.some((other) => sameTarget(other, { machineId: input.machineId, paneId: input.paneId }));
 }
 
 /** This device's requests that move herdr's focus, still unanswered, by PC. */

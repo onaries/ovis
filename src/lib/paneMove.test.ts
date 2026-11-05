@@ -253,10 +253,11 @@ it("keeps the comments a send on its way carries out of a second send from the m
   expect(comments.unreserved(comments.read(after)).map((item) => item.comment)).toEqual(["carried", "for the next message"]);
 });
 
-it("takes the view of a pane moved elsewhere to its new ID in either half, and nothing the user went to meanwhile (#1503)", () => {
-  const split = { other: { machineId: "pc", paneId: "w1:p1" }, ratio: 0.5 };
+it("takes the view of a pane moved elsewhere to its new ID in any slot, and nothing the user went to meanwhile (#1503)", () => {
+  const split = { panes: { b: { machineId: "pc", paneId: "w1:p1" }, c: { machineId: "pc", paneId: "w4:p1" } }, active: "a" };
   expect(movedView({ machineId: "pc", paneId: "w1:p1" }, split, "pc", "w1:p1", "w2:p1"))
-    .toEqual({ selection: "w2:p1", split: { other: { machineId: "pc", paneId: "w2:p1" }, ratio: 0.5 } });
+    .toEqual({ selection: "w2:p1", split: { panes: { b: { machineId: "pc", paneId: "w2:p1" }, c: { machineId: "pc", paneId: "w4:p1" } }, active: "a" } });
+  expect(movedView({ machineId: "pc", paneId: "w9:p1" }, split, "pc", "w8:p1", "w2:p1")).toEqual({ selection: null, split: null });
   // the same pane ID on another PC is another pane
   expect(movedView({ machineId: "other", paneId: "w1:p1" }, null, "pc", "w1:p1", "w2:p1")).toEqual({ selection: null, split: null });
   expect(movedView({ machineId: "pc", paneId: "w3:p1" }, null, "pc", "w1:p1", "w2:p1")).toEqual({ selection: null, split: null });

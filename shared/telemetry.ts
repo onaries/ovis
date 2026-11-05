@@ -205,6 +205,8 @@ export function telemetrySettings(value: unknown): TelemetrySettings | null {
   }
 }
 export type InstallMethod = "plugin" | "managed" | "source";
+/** The terminal runtime the server serves (server/herdr-core/runtime.ts): herdr's TUI server, or herdr-core. */
+export type TelemetryRuntime = "herdr" | "herdr-core";
 
 /** Harness kinds an active message may name: the supported agents (shared/supported-agents.ts) and "other". A literal list, not an import, so the Worker's copy only changes with a deploy. */
 export const TELEMETRY_HARNESSES = ["agy", "claude", "codex", "devin", "gjc", "grok", "hermes", "omo", "omp", "opencode", "other", "pi"] as const;
@@ -316,6 +318,8 @@ export interface TelemetryActive {
   harnesses: TelemetryHarness[];
   /** the day's use so far; a receiver deployed before it existed refuses it, so the Worker goes out first (telemetry/README.md) */
   usage: TelemetryUsage;
+  /** the terminal runtime the server serves; a receiver deployed before it existed refuses it, so the Worker goes out first */
+  runtime: TelemetryRuntime;
 }
 
 /** How many days back a late delivery may still name: the visit day and the two before the receiver's today. */
@@ -339,6 +343,8 @@ export interface TelemetryEvent {
   install_method: InstallMethod;
   /** the latest browser's allowlisted settings snapshot; null before one has told */
   settings: TelemetrySettings | null;
+  /** the terminal runtime the server serves; a receiver deployed before it existed refuses it, so the Worker goes out first */
+  runtime: TelemetryRuntime;
 }
 
 export interface TelemetryStatus {

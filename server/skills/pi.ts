@@ -164,8 +164,8 @@ function discoverSkills({ home, cwd, env, serverEnv }: AgentCommandContext): Sla
 }
 
 export const source: AgentCommandSource = {
-  // Extension and package commands are runtime-only and are not listed; typed commands still send
-  // through the terminal and receive an unknown outcome.
+  // Extension and package commands are runtime-only: only the running pi lists them, through the web
+  // UI's extension (piExtensionCommands in ../pi.ts). Typed without it, they still send.
   // The upstream quit description uses `${APP_NAME}`; its pinned app name is "pi".
   pin: "1.3.0",
   builtins: PI_BUILTINS,
@@ -174,8 +174,7 @@ export const source: AgentCommandSource = {
   terminalBound: PI_TERMINAL_BOUND,
   agentHidden: PI_AGENT_HIDDEN,
   discover(ctx) {
-    // pi's packages and extension commands stay out: no file scan can know them, and they are in
-    // the terminal's own `/` menu either way
+    // pi's packages and extension commands stay out: no file scan can know them
     const { home, cwd } = ctx;
     const agentDir = agentDirectory(home, ctx.env, ctx.serverEnv);
     const trusted = cwd !== null && cwd !== undefined && projectTrusted(agentDir, plainObject(readJson(join(agentDir, "settings.json"))), cwd);

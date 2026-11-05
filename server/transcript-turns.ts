@@ -5,6 +5,7 @@ import { claudeImages, isCommandEntry, senpiPrompt, withoutPictureBytes } from "
 import { copilotPromptOpens, copilotRootRecord } from "./copilot.ts";
 import { musePrompt } from "./muse.ts";
 import { lettaPrompt } from "./letta.ts";
+import { kimiPrompt } from "./kimi.ts";
 
 /**
  * A Claude session's branch, followed as the file is scanned. Claude Code links each record to the
@@ -98,6 +99,7 @@ const TURN_MARK: Record<StreamSource, Buffer> = {
   "copilot-transcript": Buffer.from('"user.message"'),
   "grok-transcript": Buffer.from('"user_message_chunk"'),
   "agy-transcript": Buffer.from('"USER_INPUT"'),
+  "kimi-transcript": Buffer.from('"context.append_message"'),
   "muse-transcript": Buffer.from('"payload_type":"runtime.user_intent.accepted"'),
   "letta-transcript": Buffer.from('"kind":"user"'),
   "codex-transcript": Buffer.from('"task_started"'),
@@ -125,6 +127,7 @@ function opensTurn(source: StreamSource, line: string, blobs: string | null): bo
   if (source === "codex-transcript") return entry.type === "event_msg" && entry.payload?.type === "task_started";
   if (source === "muse-transcript") return musePrompt(entry as Record<string, unknown>) !== null;
   if (source === "letta-transcript") return lettaPrompt(entry as Record<string, unknown>) !== null;
+  if (source === "kimi-transcript") return kimiPrompt(entry) !== null;
   if (source !== "claude-transcript") {
     const message = piMessage(entry);
     if (message?.role !== "user") return false;

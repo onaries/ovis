@@ -69,6 +69,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(HerdrShellPlugin.class);
+        registerPlugin(OvisAuthPlugin.class);
         // the PC's key: its origin, or its scope on the hosted shell's origin for a relay PC
         String pc = PCStore.current(this);
         String origin = pc == null ? null : PCStore.origin(pc);

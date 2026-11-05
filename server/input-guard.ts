@@ -101,3 +101,14 @@ const MOUSE_REPORTS = /^(?:\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3})+$/;
 export function isMouseReport(text: string): boolean {
   return MOUSE_REPORTS.test(text);
 }
+
+/** One or more of the answers a herdr-core attach takes out of the input (`takeReplies`): colours, cell size, DA1, focus. */
+const TERMINAL_REPLIES = /^(?:\x1b\]1[012];[^\x07\x1b\r\n?]*(?:\x07|\x1b\\)|\x1b\[6;\d+;\d+t|\x1b\[\?[\d;]*c|\x1b\[[IO])+$/;
+
+/**
+ * Whether `text` is nothing but the terminal's own answers to what its attach asked. The attach
+ * takes them out of what reaches the program, while `pane.send_text` would type them into it (#2816).
+ */
+export function isTerminalReply(text: string): boolean {
+  return TERMINAL_REPLIES.test(text);
+}

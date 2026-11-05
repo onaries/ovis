@@ -17,6 +17,7 @@ import { createServer } from "../server/index.ts";
 import { UsageService } from "../server/usage.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 const DARK = "\x1b[48;2;38;38;38m\x1b[38;2;220;220;220m";
 const LIGHT = "\x1b[48;2;232;232;232m\x1b[38;2;30;30;30m";
@@ -48,10 +49,13 @@ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 interface Span { left: number; right: number; background: number[] | null; fitted: boolean; text: string }
 interface Row { top: number; height: number; spans: Span[] }
 
+/** A wide glyph fitted to its two cells: terminalGlyphs' clip-path on xterm's spans, libghostty's `.ghostty-wide` box. */
+const FITTED = "[style*='clip-path'], .ghostty-wide";
+
 /** The rows as drawn: each span's place on the page, its background and whether it was fitted. */
 const drawnRows = (page: Page, count: number): Promise<{ rows: Row[]; frame: { left: number; top: number; width: number; height: number } }> =>
-  page.evaluate((count) => {
-    const container = document.querySelector<HTMLElement>(".pane-terminal .xterm-rows")!;
+  page.evaluate(([count, shown, fitted]) => {
+    const container = document.querySelector<HTMLElement>(shown)!;
     const canvas = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
     const rgba = (value: string): number[] | null => {
       canvas.clearRect(0, 0, 1, 1);
@@ -65,12 +69,12 @@ const drawnRows = (page: Page, count: number): Promise<{ rows: Row[]; frame: { l
       const box = row.getBoundingClientRect();
       const spans = [...row.children].filter((node): node is HTMLElement => node instanceof HTMLElement).map((span): Span => {
         const rect = span.getBoundingClientRect();
-        return { left: rect.left, right: rect.right, background: rgba(getComputedStyle(span).backgroundColor), fitted: span.style.clipPath !== "" || span.querySelector("[style*='clip-path']") !== null, text: span.textContent ?? "" };
+        return { left: rect.left, right: rect.right, background: rgba(getComputedStyle(span).backgroundColor), fitted: span.style.clipPath !== "" || span.querySelector(fitted) !== null, text: span.textContent ?? "" };
       });
       return { top: box.top, height: box.height, spans };
     });
     return { rows, frame: { left: frame.left, top: frame.top, width: frame.width, height: frame.height } };
-  }, count);
+  }, [count, shownRows(), FITTED] as const);
 
 /** The screenshot's pixels, decoded by the page itself. */
 async function pixels(page: Page, png: Buffer): Promise<{ width: number; height: number; data: number[] }> {
@@ -118,10 +122,11 @@ setInterval(() => {}, 1 << 30);
       page.on("pageerror", error => errors.push(error.message));
       await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(pane)}`);
       await page.locator(".conn-live").waitFor();
-      await page.locator(".pane-terminal .xterm-rows", { hasText: "한글" }).waitFor();
+      await page.locator(shownRows(), { hasText: "한글" }).waitFor();
       // both faces loaded and the rows drawn again with them
       await page.evaluate(() => document.fonts.ready.then(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))));
-      await page.locator(".pane-terminal .xterm-rows [style*='clip-path']").first().waitFor();
+      await page.waitForFunction(([shown, fitted]) => document.querySelector(shown)?.querySelector(fitted) != null, [shownRows(), FITTED] as const);
+      const renderer = await page.evaluate(() => document.querySelector<HTMLElement>(".pane-terminal")?.dataset["renderer"] ?? "xterm");
 
       // When: the rows are drawn, the pixels at each fitted run's last edge are read.
       const { rows, frame } = await drawnRows(page, ROWS.length);
@@ -155,7 +160,7 @@ setInterval(() => {}, 1 << 30);
           }
         });
       });
-      const bars = await page.evaluate(() => [...document.querySelector(".pane-terminal .xterm-rows")!.children].slice(4, 6).map((row) => {
+      const bars = await page.evaluate((shown) => [...document.querySelector(shown)!.children].slice(4, 6).map((row) => {
         const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
         let right = Number.NaN;
         for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -167,9 +172,9 @@ setInterval(() => {}, 1 << 30);
           right = range.getBoundingClientRect().left;
         }
         return right;
-      }));
+      }), shownRows());
       if (!(Math.abs(bars[0]! - bars[1]!) < 0.5)) failures.push(`${name}: the Korean row's closing bar stands at ${bars[1]}, the Latin row's at ${bars[0]}`);
-      console.log(`${name}: ${edges} fitted run edges checked, ${seams.length} stray pixels, bars at ${bars.join(" / ")}`);
+      console.log(`${name} (${renderer}): ${edges} fitted run edges checked, ${seams.length} stray pixels, bars at ${bars.join(" / ")}`);
       if (edges === 0) failures.push(`${name}: no fitted Hangul run was drawn`);
       if (seams.length > 0) failures.push(`${name}: ${seams.slice(0, 6).join("; ")}`);
       if (errors.length > 0) failures.push(`${name}: page errors ${errors.join("; ")}`);

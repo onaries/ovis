@@ -1,19 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import webpush from "web-push";
 
 import { paneAlertsMuted, type AlertPrefs } from "../shared/notify-policy.ts";
 import { paneStorageId } from "../shared/machines.ts";
-import type { AgentStatus, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
+import type { AgentStatus, HerdrPane, InteractivePrompt, SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker } from "./completion.ts";
 import { handlePreferencesRequest, PreferenceStore } from "./preferences.ts";
 import { DeviceStore } from "./devices.ts";
 import { createPushService, handlePushRequest, parseSubscription, type PushService } from "./push.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
 import { privateStateFs } from "./private-state.ts";
+import { parseInteractivePrompt } from "./prompt.ts";
 
 /**
  * The server half of web push, end to end against a fake push service that decrypts
@@ -46,6 +47,12 @@ afterEach(() => {
   fake.stop();
   rmSync(stateDir, { recursive: true, force: true });
 });
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((yes) => { resolve = yes; });
+  return { promise, resolve };
+}
 
 /** Alerts go out at once, and each status change is awaited until its alert went out. */
 function subscribed(options: Partial<Parameters<typeof createPushService>[0]> = {}): PushService {
@@ -211,6 +218,7 @@ describe("push delivery", () => {
       title: "claude: fix the build",
       body: "waiting for your input",
       tag: "herdr-pane-w1:p1",
+      kind: "input",
     });
     expect(received!.urgency).toBe("high");
     expect(received!.ttl).toBe(12 * 60 * 60);
@@ -257,9 +265,9 @@ describe("push delivery", () => {
   it("names the pane by its current title, falling back to the seeded one", async () => {
     let fresh: string | Error = "claude: new task";
     const push = subscribed({
-      lookupTitle: async () => {
+      lookupPane: async () => {
         if (fresh instanceof Error) throw fresh;
-        return fresh;
+        return { title: fresh };
       },
     });
     push.seed([pane("w1:p1", "working", "claude: old task")]);
@@ -280,6 +288,7 @@ describe("push delivery", () => {
       title: "vim notes.md",
       body: "terminal ended",
       tag: "herdr-pane-w1:p1",
+      kind: "ended",
     });
   });
 
@@ -599,6 +608,103 @@ describe("alert timing and each device's choice", () => {
     expect(fake.received).toHaveLength(0);
   });
 
+  it("tells a permission apart from a question, and one never chosen follows questions", async () => {
+    let agentKind: string | undefined = "permission";
+    const push = createPushService({ loopbackHttp: true, stateDir, timing: { short: 0, long: 0, longTurn: 0 },
+      lookupPane: async () => ({ title: "claude", ...(agentKind ? { agent_kind: agentKind } : {}) }) });
+    push.seed([pane("w1:p1", "working", "claude")]);
+    const ask = async (alerts: AlertPrefs) => {
+      push.subscribe(fake.subscription, alerts);
+      await push.onStatus("w1:p1", "working");
+      await push.onStatus("w1:p1", "blocked");
+      await push.settled();
+      const kinds = fake.received.map((r) => r.payload.kind);
+      fake.received.length = 0;
+      return kinds;
+    };
+    expect(await ask({ input: false, done: "off", permission: true })).toEqual(["permission"]);
+    expect(await ask({ input: false, done: "off" })).toEqual([]);
+    expect(await ask({ input: true, done: "off" })).toEqual(["permission"]);
+    expect(await ask({ input: true, done: "off", permission: false })).toEqual([]);
+    // an agent that does not say what it waits for asks a question
+    agentKind = undefined;
+    expect(await ask({ input: true, done: "off", permission: false })).toEqual(["input"]);
+    expect(await ask({ input: false, done: "off", permission: true })).toEqual([]);
+  });
+
+  it("tells a turn that stopped on an error only to a device that asked, unless the pane moves on first", async () => {
+    const off = timed({ input: true, done: "always" });
+    await off.push.onStatus("w1:p1", "working");
+    await off.push.onStatus("w1:p1", "idle");
+    await off.push.onFailed("w1:p1");
+    await off.push.settled();
+    expect(fake.received).toHaveLength(0);
+
+    const on = timed({ input: true, done: "off", error: true });
+    await on.push.onStatus("w1:p1", "working");
+    await on.push.onStatus("w1:p1", "idle");
+    await on.push.onFailed("w1:p1");
+    await on.push.settled();
+    expect(fake.received.map((r) => [r.payload.kind, r.payload.body])).toEqual([["error", "stopped on an error"]]);
+    fake.received.length = 0;
+    // retried at the desk before the alert went out: no longer news
+    await on.push.onStatus("w1:p1", "working");
+    await on.push.onStatus("w1:p1", "idle");
+    await on.push.onFailed("w1:p1");
+    await on.push.onStatus("w1:p1", "working");
+    await on.push.settled();
+    expect(fake.received).toHaveLength(0);
+    // taken for working (its background work still runs): it did not stop, and no later change would call the alert off
+    await on.push.onFailed("w1:p1");
+    await on.push.settled();
+    expect(fake.received).toHaveLength(0);
+  });
+
+  it("asks a waiting alert's device again for the PC as the alert goes out", async () => {
+    const { push } = timed({ input: true, done: "off" });
+    await push.onStatus("w1:p1", "working");
+    await push.onStatus("w1:p1", "blocked");
+    // the device turned this PC off while the question waited
+    push.subscribe(fake.subscription, { input: true, done: "off", pcs_off: [hostname()] });
+    await push.settled();
+    expect(fake.received).toHaveLength(0);
+  });
+
+  it("tells nothing of a PC the device turned off, by the name the roster gives it", async () => {
+    const push = createPushService({ loopbackHttp: true, stateDir, localName: "Desk", timing: { short: 0, long: 0, longTurn: 0 } });
+    push.subscribe(fake.subscription, { input: true, done: "always", pcs_off: ["Home PC"] });
+    push.seed([pane("w1:p1", "working", "alpha")]);
+    push.seed([pane("w1:p1", "working", "beta")], "pc-b", "Home PC");
+    await push.onStatus("w1:p1", "blocked", "pc-b");
+    await push.onEnded("w1:p1", "pc-b");
+    await push.onStatus("w1:p1", "blocked");
+    await push.settled();
+    expect(fake.received.map((r) => r.payload.machine_id ?? "local")).toEqual(["local"]);
+    fake.received.length = 0;
+    push.subscribe(fake.subscription, { input: true, done: "always", pcs_off: ["Desk"] });
+    await push.onStatus("w1:p1", "done");
+    await push.onEnded("w1:p1");
+    await push.onStatus("w1:p1", "working", "pc-b");
+    await push.onStatus("w1:p1", "done", "pc-b");
+    await push.settled();
+    expect(fake.received.map((r) => r.payload.machine_id ?? "local")).toEqual(["pc-b"]);
+  });
+
+  it("tells nothing of a PC the device turned off by its relay ID, whatever the roster it was turned off in calls it (#2876)", async () => {
+    const own = "ab".repeat(16), other = "cd".repeat(16);
+    // created as server/core/status.ts creates it: this PC knows itself by its hostname and its relay ID
+    const push = createPushService({ loopbackHttp: true, stateDir, serverId: () => own, timing: { short: 0, long: 0, longTurn: 0 } });
+    push.subscribe(fake.subscription, { input: true, done: "always", pcs_off: [own, other] });
+    push.seed([pane("w1:p1", "working", "alpha")]);
+    push.seed([pane("w1:p1", "working", "beta")], "pc-b", "Home PC", other);
+    push.seed([pane("w1:p1", "working", "gamma")], "pc-c", "Laptop");
+    await push.onStatus("w1:p1", "blocked");
+    await push.onStatus("w1:p1", "blocked", "pc-b");
+    await push.onStatus("w1:p1", "blocked", "pc-c");
+    await push.settled();
+    expect(fake.received.map((r) => r.payload.machine_id ?? "local")).toEqual(["pc-c"]);
+  });
+
   it("keeps a device's choice through a re-registration without one, and a restart", async () => {
     const push = createPushService({ loopbackHttp: true, stateDir });
     push.subscribe(fake.subscription, { input: false, done: "off" });
@@ -635,7 +741,7 @@ it("settles only after a delivery already under way, when a later group is calle
   const push = createPushService({
     loopbackHttp: true,
     stateDir, timing: { short: 0, long: 10_000, longTurn: 0 },
-    lookupTitle: () => { asked(); return new Promise((resolve) => { release = () => resolve("claude"); }); },
+    lookupPane: () => { asked(); return new Promise((resolve) => { release = () => resolve({ title: "claude" }); }); },
   });
   const slower = await startFakePushService();
   try {
@@ -1212,7 +1318,7 @@ describe("a window of the app in use (#751)", () => {
 
   it("holds an alert when a window comes into use while its title is looked up", async () => {
     let inUse = false;
-    const push = subscribed({ inUse: () => inUse, lookupTitle: async () => { inUse = true; return "claude"; } });
+    const push = subscribed({ inUse: () => inUse, lookupPane: async () => { inUse = true; return { title: "claude" }; } });
     push.seed([pane("w1:p1", "working", "claude")]);
     await push.onStatus("w1:p1", "blocked");
     expect(fake.received).toHaveLength(0);
@@ -1313,7 +1419,7 @@ describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
     const push = createPushService({
       loopbackHttp: true, stateDir, timing: { short: 0, long: 0, longTurn: 0 },
       muted: (machineId, paneId) => paneAlertsMuted(store.get().muted_panes, machineId, paneId),
-      lookupTitle: () => { asked(); return new Promise((resolve) => { release = () => resolve("claude"); }); },
+      lookupPane: () => { asked(); return new Promise((resolve) => { release = () => resolve({ title: "claude" }); }); },
     });
     const stop = store.subscribe(() => push.mutesChanged());
     const put = (keys: string[]) => handlePreferencesRequest(new Request("http://test/api/preferences", { method: "PUT", body: JSON.stringify({ settings: {}, muted_panes: keys }) }), store);
@@ -1394,5 +1500,161 @@ describe("the shared pane mute (shared/preferences.ts muted_panes)", () => {
     await push.onStatus("w1:p1", "blocked");
     await push.settled();
     expect(fake.received.at(-1)?.payload.title).toBe("mine");
+  });
+});
+
+describe("answer buttons on a question's alert (#2916)", () => {
+  const prompt = (overrides: Partial<InteractivePrompt> = {}): InteractivePrompt => ({
+    id: "prompt-1", agent: "omp", kind: "approval", title: "Allow dangerous command?", question: "Allow dangerous command?", body: null,
+    options: [{ label: "Allow once", description: null }, { label: "Deny", description: null }],
+    multi_select: false, custom_option_index: null, ...overrides,
+  });
+  /** `shown` as a reader got it off a screen that shows it whole: a Claude panel under its rule */
+  const onScreen = (shown: InteractivePrompt) => ({ prompt: shown, screen: drawn(shown) });
+  const drawn = (shown: InteractivePrompt, between: string[] = []) => [
+    "─".repeat(40), ...(shown.title === shown.question ? [] : [` ${shown.title}`]), ...(shown.body ?? "").split("\n").filter(Boolean).map((line) => `   ${line}`),
+    ...between, ` ${shown.question}`, ...shown.options.map((option, index) => ` ${index === 0 ? "❯" : " "} ${index + 1}. ${option.label}`), "", " Esc to cancel",
+  ].join("\n");
+  const alertFor = async (shown: InteractivePrompt | null, options: Partial<Parameters<typeof createPushService>[0]> = {}) => {
+    fake.received.length = 0;
+    const push = subscribed({ lookupPrompt: async () => shown && onScreen(shown), ...options });
+    push.seed([pane("w1:p1", "working", "omp")]);
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received).toHaveLength(1);
+    const { prompt_id, actions } = fake.received[0]!.payload;
+    return { prompt_id, actions };
+  };
+
+  it("carries the prompt's identity and its two short options", async () => {
+    expect(await alertFor(prompt())).toEqual({ prompt_id: "prompt-1", actions: [{ option_index: 0, label: "Allow once" }, { option_index: 1, label: "Deny" }] });
+    expect(await alertFor(prompt({ kind: "question", options: [{ label: "Yes", description: null }, { label: "No", description: null }] })))
+      .toEqual({ prompt_id: "prompt-1", actions: [{ option_index: 0, label: "Yes" }, { option_index: 1, label: "No" }] });
+  });
+
+  it("says what the buttons answer: the prompt's title, question and the first lines it shows", async () => {
+    fake.received.length = 0;
+    const push = subscribed({ lookupPrompt: async () => onScreen(prompt({ title: "Bash command", question: "Do you want to proceed?", body: "rm -rf build\nDelete the build directory" })) });
+    push.seed([pane("w1:p1", "working", "claude")]);
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received[0]!.payload.body).toBe("Bash command\nDo you want to proceed?\nrm -rf build\nDelete the build directory");
+  });
+
+  it("keeps every line of what is approved, a repeated one too", async () => {
+    fake.received.length = 0;
+    const push = subscribed({ lookupPrompt: async () => onScreen(prompt({ title: "Bash command", question: "Do you want to proceed?", body: "cd ..\ncd ..\nrm -rf project" })) });
+    push.seed([pane("w1:p1", "working", "claude")]);
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received[0]!.payload.body).toBe("Bash command\nDo you want to proceed?\ncd ..\ncd ..\nrm -rf project");
+  });
+
+  it("drops an alert whose pane moved on while its prompt was read, so it never replaces the newer one", async () => {
+    fake.received.length = 0;
+    const slow = deferred();
+    const started = deferred();
+    let read = 0;
+    const push = createPushService({ loopbackHttp: true, stateDir, timing: { short: 0, long: 0, longTurn: 0 },
+      lookupPrompt: async () => {
+        const id = `prompt-${++read}`;
+        // the first read is slow: it ends only after the second asking was told
+        if (read === 1) { started.resolve(); await slow.promise; }
+        return onScreen(prompt({ id }));
+      } });
+    push.subscribe(fake.subscription);
+    push.seed([pane("w1:p1", "working", "omp")]);
+    await push.onStatus("w1:p1", "blocked");
+    await started.promise;
+    await push.onStatus("w1:p1", "working");
+    await push.onStatus("w1:p1", "blocked");
+    await fake.waitFor((r) => r.payload.prompt_id === "prompt-2", "the second asking's alert", 5_000);
+    slow.resolve();
+    await push.settled();
+    expect(fake.received.map((r) => r.payload.prompt_id)).toEqual(["prompt-2"]);
+  });
+
+  it("never lets a question's slow read send it after the finish that followed", async () => {
+    fake.received.length = 0;
+    const slow = deferred();
+    const started = deferred();
+    const push = createPushService({ loopbackHttp: true, stateDir, timing: { short: 0, long: 0, longTurn: 0 },
+      lookupPrompt: async () => { started.resolve(); await slow.promise; return onScreen(prompt()); } });
+    push.subscribe(fake.subscription, { input: true, done: "always" });
+    push.seed([pane("w1:p1", "working", "omp")]);
+    await push.onStatus("w1:p1", "blocked");
+    await started.promise;
+    await push.onStatus("w1:p1", "done");
+    await fake.waitFor((r) => r.payload.body === "work finished", "the finish", 5_000);
+    slow.resolve();
+    await push.settled();
+    expect(fake.received.map((r) => r.payload.body)).toEqual(["work finished"]);
+  });
+
+  it("offers buttons only for what the screen shows whole, verbatim, whichever reader read it", async () => {
+    const shown = prompt({ title: "Bash command", question: "Do you want to proceed?", body: "echo safe" });
+    const none = { prompt_id: undefined, actions: undefined };
+    const read = (screen: string | undefined) => alertFor(null, { lookupPrompt: async () => ({ prompt: shown, ...(screen === undefined ? {} : { screen }) }) });
+    expect((await read(drawn(shown))).actions).toHaveLength(2);
+    // a line the reader left out of the body (Claude's `Tip:` filter took a line of the command)
+    expect(await read(drawn(shown, ["   Tip:; rm -rf production"]))).toEqual(none);
+    // a line over the body the reader's window did not take: nothing over it says the prompt begins there
+    expect(await read(drawn(shown).replace(" Bash command", " Bash command\n   rm -rf production"))).toEqual(none);
+    // a marker between the body and the question (Claude's older approval keeps only the lines over it)
+    expect(await read(drawn(shown, [" This command requires approval"]))).toEqual(none);
+    // the body begins at the top of the screen: the rest of it may have scrolled away
+    expect(await read(drawn(shown).split("\n").slice(2).join("\n"))).toEqual(none);
+    // an option row that is not where the card says
+    expect(await read(drawn(shown).replace("2. Deny", "2. Maybe\n    3. Deny"))).toEqual(none);
+    // a prompt not read off a screen at all
+    expect(await read(undefined)).toEqual(none);
+  });
+
+  it("gives no buttons for the screens Claude's reader takes only part of (#2916 review)", async () => {
+    const none = { prompt_id: undefined, actions: undefined };
+    const real = (screen: string) => alertFor(null, { lookupPrompt: async () => ({ prompt: parseInteractivePrompt("claude", screen)!, screen }) });
+    // the newer panel, whole: buttons
+    const whole = ["─".repeat(40), " Bash command", "", "   echo safe", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel"];
+    expect((await real(whole.join("\n"))).actions).toHaveLength(2);
+    // its `Tip:` filter dropping a line of the command
+    expect(await real([...whole.slice(0, 4), "   Tip:; rm -rf production", ...whole.slice(4)].join("\n"))).toEqual(none);
+    // the older approval: its body is only the few lines over its marker
+    expect(await real([" Bash command", "", "   rm -rf production", "", "   echo one", "", "   echo two", "", "   echo three", "", "   echo four", "",
+      " This command requires approval", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel"].join("\n"))).toEqual(none);
+    // a long command scrolled past the panel's top: only its tail is on the screen
+    expect(await real(["   │ rm -rf production", "   │ echo tail", "   ╌╌╌╌╌╌╌╌╌╌╌╌", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel"].join("\n"))).toEqual(none);
+  });
+
+  it("keeps today's alert for a prompt the buttons cannot answer whole", async () => {
+    const none = { prompt_id: undefined, actions: undefined };
+    const three = [{ label: "Yes", description: null }, { label: "Yes, don't ask again", description: null }, { label: "No", description: null }];
+    for (const shown of [
+      null,
+      prompt({ options: three }),
+      prompt({ options: [{ label: "Yes, and allow every edit in this folder for the session", description: null }, { label: "No", description: null }] }),
+      prompt({ multi_select: true }),
+      prompt({ custom_option_index: 1 }),
+      prompt({ kind: "plan" }),
+      // what it allows does not fit the alert whole: the part cut off could be the one that matters
+      prompt({ body: `npm run build && ${"x".repeat(300)}; rm -rf production` }),
+      prompt({ body: "one\ntwo\nthree\nfour\nrm -rf production" }),
+      prompt({ options: [{ label: "Yes", description: "and remember it for this folder" }, { label: "No", description: null }] }),
+      prompt({ kind: "menu" }),
+      prompt({ steps: [{ label: "One", answered: false, current: true }, { label: "Two", answered: false, current: false }] }),
+      prompt({ queued: "collapsed" }),
+    ]) expect(await alertFor(shown)).toEqual(none);
+  });
+
+  it("gives no buttons to a device that may only watch, nor when the prompt cannot be read", async () => {
+    const none = { prompt_id: undefined, actions: undefined };
+    expect(await alertFor(prompt(), { canAnswer: () => false })).toEqual(none);
+    expect(await alertFor(prompt(), { lookupPrompt: async () => { throw new Error("herdr busy"); } })).toEqual(none);
+  });
+
+  it("asks for the prompt only for this PC's panes", async () => {
+    fake.received.length = 0;
+    let asked = 0;
+    const push = subscribed({ lookupPrompt: async () => { asked += 1; return onScreen(prompt()); } });
+    push.seed([pane("w1:p1", "working", "omp")], "pc-2", "Laptop");
+    await push.onStatus("w1:p1", "blocked", "pc-2");
+    expect(asked).toBe(0);
+    expect(fake.received[0]!.payload.actions).toBeUndefined();
   });
 });

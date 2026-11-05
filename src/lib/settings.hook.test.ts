@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { COMPOSER_ARTIFACTS_STORAGE_KEY, DEFAULT_SETTINGS, ENTER_SENDS_STORAGE_KEY, enterSendsOn, SettingsProvider, useSettings, type Settings } from "./settings.ts";
+import { COMPOSER_ARTIFACTS_STORAGE_KEY, DEFAULT_SETTINGS, ENTER_SENDS_STORAGE_KEY, enterSendsOn, SettingsProvider, useSettings, VOICE_ENGINE_STORAGE_KEY, type Settings } from "./settings.ts";
 import { SETTINGS_STORAGE_KEY } from "./themeBoot.ts";
 
 describe("settings across tabs", () => {
@@ -203,6 +203,20 @@ describe("settings across tabs", () => {
 
     // Then this tab's composer follows it without writing anything.
     expect(settings.enterSends).toBe(false);
+    expect(writes).toBe(0);
+  });
+
+  it("follows the speech recognition chosen in another tab", async () => {
+    // Given an open tab on Auto.
+    await open();
+    expect(settings.voiceEngine).toBe("auto");
+
+    // When another tab chooses the browser's recognition.
+    records.set(VOICE_ENGINE_STORAGE_KEY, JSON.stringify("browser"));
+    await storage(VOICE_ENGINE_STORAGE_KEY);
+
+    // Then this tab's next dictation uses it too, without writing anything.
+    expect(settings.voiceEngine).toBe("browser");
     expect(writes).toBe(0);
   });
 

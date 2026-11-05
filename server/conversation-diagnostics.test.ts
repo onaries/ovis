@@ -88,6 +88,7 @@ it("keeps the logging interval monotonic across wall-clock corrections", () => {
   const wall = spyOn(Date, "now").mockReturnValue(100_000);
   try {
     diagnostics.unavailable("pane", new ConversationUnavailable("no_session_path"));
+    expect(records()[0].time).toBe(new Date(100_000).toISOString());
     wall.mockReturnValue(1);
     advance(29_999);
     diagnostics.unavailable("pane", new ConversationUnavailable("no_session_path"));
@@ -95,12 +96,18 @@ it("keeps the logging interval monotonic across wall-clock corrections", () => {
     advance(1);
     diagnostics.unavailable("pane", new ConversationUnavailable("no_session_path"));
     expect(records()).toHaveLength(2);
+    expect(records()[1]).toMatchObject({ time: new Date(1).toISOString(), since_first_failure_ms: 30_000 });
+    wall.mockReturnValue(4 * 60 * 60 * 1000);
+    advance(30_000);
+    diagnostics.unavailable("pane", new ConversationUnavailable("no_session_path"));
+    expect(records()[2]).toMatchObject({ time: new Date(4 * 60 * 60 * 1000).toISOString(), since_first_failure_ms: 60_000 });
   } finally { wall.mockRestore(); }
 });
 
 it("accepts every code-owned Copilot diagnostic without accepting a forged stage", () => {
-  const { diagnostics, records } = fixture();
+  const { diagnostics, records, advance } = fixture();
   for (const diagnostic of COPILOT_UNAVAILABLE_REASONS) {
+    advance(30_000);
     diagnostics.unavailable(diagnostic, new ConversationUnavailable("no_session_path", undefined, diagnostic));
   }
   const forged = new ConversationUnavailable("no_session_path");

@@ -16,6 +16,7 @@ import { chromium, devices, type Browser } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { CONTENT_SECURITY_POLICY } from "../server/static.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 import { buildDemoApp } from "./demo-build.ts";
 
 const PREFIX = "/herdr-web-ui/demo/app/";
@@ -36,7 +37,7 @@ const BROWSERS = [
 ];
 const PANES = [
   { name: "chat", pane: panes.omp, drawn: ".pane-frame.is-current .chat-turn" },
-  { name: "terminal", pane: panes.shell, drawn: ".pane-frame.is-current .xterm-rows" },
+  { name: "terminal", pane: panes.shell, drawn: shownRows(".pane-frame.is-current") },
 ];
 const failures: string[] = [];
 

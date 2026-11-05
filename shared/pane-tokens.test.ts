@@ -16,6 +16,12 @@ describe("paneTokenValues", () => {
     expect(paneTokenValues({ rows: [{ name: "quota" }], by_agent: {} }, null, {})).toEqual([]);
   });
 
+  test("without herdr rows the background tag is not drawn, where rows that name it draw it", () => {
+    expect(paneTokenValues(null, null, { role: " Background ", quota: "5h 95%" })).toEqual(["5h 95%"]);
+    expect(paneTokenValues(null, null, { role: "lead" })).toEqual(["lead"]);
+    expect(paneTokenValues({ rows: [{ name: "role" }], by_agent: {} }, null, { role: "background" })).toEqual(["background"]);
+  });
+
   test("herdr's rows choose the tokens and their order; an agent's own rows replace them", () => {
     const layout: AgentRowTokens = { rows: [{ name: "summary" }, { name: "quota" }, { name: "summary" }], by_agent: { codex: [{ name: "progress" }] } };
     expect(paneTokenValues(layout, "claude", tokens)).toEqual(["reviewing auth", "5h 95% · Wk 67%"]);

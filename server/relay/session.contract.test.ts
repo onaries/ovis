@@ -2,7 +2,7 @@ import { afterEach, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { decodeFrame, encodeFrame, FrameType, LIMITS_V1 } from "../../shared/relay-mux.ts";
+import { decodeFrame, encodeFrame, FrameType, LIMITS_V1, SERVER_TIME_HEADER } from "../../shared/relay-mux.ts";
 import { MuxStreamError } from "../../shared/relay-mux-engine.ts";
 import type { MachineEvent } from "../../shared/machines.ts";
 import { handleRequest } from "../dispatch.ts";
@@ -35,6 +35,35 @@ it("serves health through real protected channels and records the route template
   const log = readFileSync(join(f.stateDir, "http-requests.jsonl"), "utf8");
   expect(log).toContain('"/api/health"');
   expect(log).not.toContain("not-logged");
+});
+
+it("names its relays in AUTH_OK to a phone that offered relay hints", async () => {
+  const f = fixture();
+  const device = await relayDevice(f);
+  const relays = ["wss://relay-ap.ovis.sh", "wss://relay.ovis.sh"];
+  const link = await relayConnection(f, { relayHints: () => relays });
+  expect((await link.auth(device, ["relay-hints"])).relays).toEqual(relays);
+  // answered in AUTH_OK only: a provisional WELCOME goes out before HELLO is read
+  expect((await link.welcome).payload.features).toEqual([]);
+});
+
+it("admits a phone that requires relay hints from a PC that has them, and refuses it otherwise", async () => {
+  const f = fixture();
+  const device = await relayDevice(f);
+  const hinting = await relayConnection(f, { relayHints: () => ["wss://relay.ovis.sh"] });
+  expect((await hinting.auth(device, ["relay-hints"], ["relay-hints"])).relays).toEqual(["wss://relay.ovis.sh"]);
+  const plain = await relayConnection(f);
+  plain.mux.sendSession({ type: FrameType.HELLO, flags: 0, stream_id: 0,
+    payload: { protocol: "ovis-mux", versions: [1], features: ["relay-hints"], required_features: ["relay-hints"] } });
+  expect(await plain.serverError).toBe("unsupported_extension");
+});
+
+it("names no relays to a phone that did not offer relay hints", async () => {
+  const f = fixture();
+  const device = await relayDevice(f);
+  const link = await relayConnection(f, { relayHints: () => ["wss://relay-ap.ovis.sh", "wss://relay.ovis.sh"] });
+  const auth = await link.auth(device);
+  expect(auth).not.toHaveProperty("relays");
 });
 
 it("keeps a renamed relay device admitted and still revokes its session", async () => {
@@ -417,6 +446,41 @@ it("closes a device revoked during listener registration before publishing AUTH_
   } finally { raced.mockRestore(); }
 });
 
+it("sends WELCOME behind the protected handshake, before HELLO, and still requires HELLO before AUTH", async () => {
+  const f = fixture();
+  const device = await relayDevice(f);
+  const link = await relayConnection(f);
+  await link.flush();
+  // nothing sent by the phone yet: WELCOME already went out
+  expect(link.frames.map((frame) => frame.type)).toEqual([FrameType.WELCOME]);
+  expect((await link.auth(device)).device_id).toBe(device.id);
+  expect(link.frames.filter((frame) => frame.type === FrameType.WELCOME)).toHaveLength(1);
+
+  const early = await relayConnection(f);
+  const signature = Buffer.alloc(64).toString("base64url");
+  early.mux.sendSession({ type: FrameType.AUTH, flags: 0, stream_id: 0, payload: { scheme: "device-key", device_id: device.id, signature } });
+  expect(await bounded(early.serverError)).toBe("protocol_error");
+
+  const twice = await relayConnection(f);
+  await twice.hello();
+  twice.mux.sendSession({ type: FrameType.HELLO, flags: 0, stream_id: 0, payload: { protocol: "ovis-mux", versions: [1], features: [], required_features: [] } });
+  expect(await bounded(twice.serverError)).toBe("protocol_error");
+});
+
+it("sends no WELCOME before HELLO while a pairing window is open, so a phone from before provisional WELCOMEs can compare digits", async () => {
+  const f = fixture();
+  f.app.context.services.relay.approvals.openWindow();
+  const link = await relayConnection(f);
+  await link.flush();
+  expect(link.frames).toEqual([]);
+  let provisional = false;
+  link.onFrame = (frame) => { if (frame.type === FrameType.WELCOME && frame.payload.provisional) provisional = true; };
+  expect((await link.auth(await relayDevice(f))).device_id).toMatch(/^[0-9a-f]{16}$/);
+  // HELLO was answered by one WELCOME, as before provisional ones
+  expect(link.frames.filter((frame) => frame.type === FrameType.WELCOME)).toHaveLength(1);
+  expect(provisional).toBe(false);
+});
+
 it("enforces the ten second setup deadline without a wall-clock sleep", async () => {
   const f = fixture();
   const clock = new TestClock();
@@ -592,6 +656,18 @@ it("preserves every whitelisted security header and drops cookies and unrelated 
   expect(response.headers.has("set-cookie")).toBe(false);
   expect(response.headers.has("x-private")).toBe(false);
   expect(await response.text()).toBe("body");
+});
+
+it("tells its clock only to a phone that offered to take it: an older phone refuses the header", async () => {
+  const f = fixture();
+  const device = await relayDevice(f);
+  const dispatch = async () => new Response(null, { status: 304, headers: { etag: 'W/"v1"', "x-server-time": "2026-11-05T10:00:00.000Z" } });
+  for (const [features, told] of [[[], null], [[SERVER_TIME_HEADER], "2026-11-05T10:00:00.000Z"]] as const) {
+    const link = await relayConnection(f, { dispatch });
+    await link.auth(device, [...features]);
+    const response = await link.open("/api/pane/conversation?pane_id=w1%3Ap1").response;
+    expect([response.status, response.headers.get("etag"), response.headers.get("x-server-time")]).toEqual([304, 'W/"v1"', told]);
+  }
 });
 
 it("renders pages without an absolute page-media origin over the relay", async () => {

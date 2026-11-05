@@ -1,6 +1,7 @@
-import type { PlanStep } from "../shared/protocol.ts";
+import type { ConversationMetadata, PlanStep } from "../shared/protocol.ts";
 import { parseTodoAnswer, type TodoStatus } from "../shared/todos.ts";
 import { plain, readLines, remember } from "./claude-subagents.ts";
+import { parseConversationMetadata } from "./conversation-metadata.ts";
 
 /**
  * The plan an agent keeps for its session, read back from the session's transcript, for the
@@ -20,6 +21,9 @@ import { plain, readLines, remember } from "./claude-subagents.ts";
  *
  * A transcript is read from its start, PLAN_BUDGET bytes per call, then only what was appended;
  * until the first read has reached the end, no plan is told.
+ *
+ * The same read follows how much of its context a Claude Code or Codex session's last request
+ * filled, for the sidebar's ring: the lines that can say it are folded as the chat's metadata folds them.
  */
 export const PLAN_BUDGET = 32 * 1024 * 1024;
 const LINE_BUDGET = 8 * 1024 * 1024;
@@ -46,6 +50,8 @@ interface Read {
   steps: Map<string, PlanStep>;
   /** Claude's task calls still waiting for their answer, by tool_use id */
   calls: Map<string, { name: string; input: Row }>;
+  /** the model and the context the lines read so far report */
+  metadata: ConversationMetadata;
 }
 const reads = new Map<string, Read>();
 
@@ -57,18 +63,18 @@ export function readPlan(source: PlanSource, path: string, budget = { left: PLAN
   return planState(source, path, budget).steps;
 }
 
-export function planState(source: PlanSource, path: string, budget: { left: number }): { steps: PlanStep[] | null; behind: boolean } {
+export function planState(source: PlanSource, path: string, budget: { left: number }): { steps: PlanStep[] | null; behind: boolean; metadata: ConversationMetadata | null } {
   const stat = plain(path);
-  if (stat === null) return { steps: null, behind: false };
+  if (stat === null) return { steps: null, behind: false, metadata: null };
   const key = `${source}\0${path}`;
   let state = reads.get(key);
   if (!state || state.id !== stat.id || state.offset > stat.size) {
-    state = { id: stat.id, offset: 0, skipping: false, catching: true, behind: true, steps: new Map(), calls: new Map() };
+    state = { id: stat.id, offset: 0, skipping: false, catching: true, behind: true, steps: new Map(), calls: new Map(), metadata: { model: null, reasoning_effort: null } };
   }
   remember(reads, key, state, MAX_FILES);
   const read = state;
   const readers = { "claude-transcript": claudeLine, "codex-transcript": codexLine, "omo-session": omoLine } satisfies Record<PlanSource, (read: Read, line: string) => void>;
-  const each = (line: string) => readers[source](read, line);
+  const each = (line: string) => { readers[source](read, line); contextLine(read, source, line); };
   read.behind = read.offset < stat.size;
   while (read.offset < stat.size && budget.left > 0) {
     const done = readLines(path, read.offset, stat.size, LINE_BUDGET, each, read.skipping);
@@ -83,7 +89,20 @@ export function planState(source: PlanSource, path: string, budget: { left: numb
     if (consumed === 0 || !done.more) break;
   }
   if (!read.behind) read.catching = false;
-  return { steps: read.catching || read.steps.size === 0 ? null : [...read.steps.values()].map((step) => ({ ...step, blocked_by: [...step.blocked_by] })), behind: read.behind };
+  return { steps: read.catching || read.steps.size === 0 ? null : [...read.steps.values()].map((step) => ({ ...step, blocked_by: [...step.blocked_by] })), behind: read.behind, metadata: read.catching ? null : read.metadata };
+}
+
+/** The lines that can say what a request filled, or reset or change the model: only these are parsed for the context. */
+const CONTEXT_MARKS: Record<PlanSource, readonly string[]> = {
+  "claude-transcript": ['"usage"', "command-name>", "local-command-stdout>"],
+  "codex-transcript": ['"token_count"', '"turn_context"', '"session_meta"'],
+  // OmO's figure has no window: the ring would draw nothing
+  "omo-session": [],
+};
+
+function contextLine(read: Read, source: PlanSource, line: string): void {
+  if (source === "omo-session" || !CONTEXT_MARKS[source].some((mark) => line.includes(mark))) return;
+  read.metadata = parseConversationMetadata(line, source, read.metadata);
 }
 
 /** Forgets every read (tests). */

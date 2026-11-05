@@ -10,7 +10,10 @@ IFS= read -r RUNNER_TOKEN || true
 : "${RUNNER_NAME:?RUNNER_NAME is required}"
 RUNNER_LABELS="${RUNNER_LABELS:-self-hosted-ovis}"
 
-./config.sh --unattended --ephemeral \
+# --disableupdate: a runner older than GitHub's latest release otherwise downloads the update after it
+# is handed a job, and GitHub cancels that job about 3.5 minutes later with no runner and no step.
+# The image's RUNNER_VERSION is what keeps it current (README "Runner version").
+./config.sh --unattended --ephemeral --disableupdate \
   --url "$RUNNER_URL" \
   --token "$RUNNER_TOKEN" \
   --name "$RUNNER_NAME" \

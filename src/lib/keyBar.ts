@@ -64,6 +64,21 @@ export const DEFAULT_KEY_BAR_ITEMS: KeyBarItem[] = [
   { type: "key", key: "ArrowUp" }, { type: "key", key: "ArrowDown" }, { type: "key", key: "ArrowLeft" }, { type: "key", key: "ArrowRight" },
 ];
 
+/** The expanded bar's second row: keys a phone keyboard hides behind its symbol pages. */
+export const KEY_BAR_SECOND_ROW: readonly string[] = ["Escape", "Tab", "pipe", "tilde", "slash", "-"];
+/** The expanded bar's arrow pad, an inverted T: Up over Left, Down and Right. */
+export const KEY_BAR_ARROW_PAD: readonly string[] = ["ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"];
+
+/**
+ * The first row's keys. Expanded, a plain key the second row or the arrow pad already shows is left
+ * out of it; a saved combination stays, since it sends its own chord.
+ */
+export function keyBarRowItems(items: readonly KeyBarItem[], expanded: boolean): readonly KeyBarItem[] {
+  if (!expanded) return items;
+  return items.filter((item) => item.type === "modifier" || item.modifiers !== undefined
+    || (!KEY_BAR_SECOND_ROW.includes(item.key) && !KEY_BAR_ARROW_PAD.includes(item.key)));
+}
+
 /** Stable descriptor identity; an inherited key and an exact bare key have different behavior. */
 export function keyBarItemId(item: KeyBarItem): string {
   if (item.type === "modifier") return `modifier:${item.modifier}`;

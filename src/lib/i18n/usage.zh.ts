@@ -87,4 +87,13 @@ export const USAGE_ZH: Record<string, string> = {
   "This version signs in only in its terminal. Open it to finish.": "此版本只能在终端中登录。请打开终端完成登录。",
   "The sign-in asked for the code again. Paste it once more.": "登录再次要求输入代码。请再粘贴一次。",
   "{agent} is already signed in on this PC. Continuing may replace that sign-in.": "{agent} 已在这台电脑上登录。继续可能会替换该登录。",
+  "Usage credits": "额外用量",
+  "Credits": "额度",
+  "Unlimited": "无限制",
+  "Available": "可用",
+  "{n} credits": "{n} 额度",
+  "{amount} spent": "已用 {amount}",
+  "Limit resets": "限额重置",
+  "Expires in {time}": "{time}后过期",
+  "{n} left": "剩余 {n} 次",
 };

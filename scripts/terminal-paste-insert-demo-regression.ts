@@ -17,6 +17,7 @@ import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRow, shownRows } from "./shown-rows.ts";
 
 const playwrightCore = "playwright-core";
 const { chromium } = (await import(playwrightCore)) as typeof import("playwright-core");
@@ -123,8 +124,8 @@ const hook = (page: Page) => ({
 
 const lineValue = (page: Page, expected: string) => page.waitForFunction((value) => document.querySelector<HTMLTextAreaElement>(".pane-frame.is-current .terminal-input-text")?.value === value, expected, { timeout: 10_000 });
 const noteText = (page: Page, expected: string) => page.waitForFunction((value) => document.querySelector(".pane-frame.is-current .terminal-input-note")?.textContent === value, expected, { timeout: 10_000 });
-const screenShows = (page: Page, text: string) => page.waitForFunction((value) => document.querySelector(".pane-frame.is-current .pane-terminal .xterm-rows")?.textContent?.includes(value) === true, text, { timeout: 10_000 });
-const screenText = (page: Page) => page.locator(".pane-frame.is-current .pane-terminal .xterm-rows").evaluate((rows) => rows.textContent ?? "");
+const screenShows = (page: Page, text: string) => page.waitForFunction(({ value, shown }) => document.querySelector(shown)?.textContent?.includes(value) === true, { value: text, shown: shownRows(".pane-frame.is-current") }, { timeout: 10_000 });
+const screenText = (page: Page) => page.locator(shownRows(".pane-frame.is-current")).evaluate((rows) => rows.textContent ?? "");
 const drafts = (page: Page) => page.evaluate(() => Object.fromEntries(Object.keys(localStorage).filter((key) => key.startsWith("ovis:terminal-line:")).map((key) => [key, localStorage.getItem(key)])));
 const settled = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 
@@ -339,10 +340,10 @@ async function checkAcknowledgedInsert(page: Page): Promise<void> {
   check("Insert sends its insert frame and nothing else: no resize, focus or take-over", frames.length === 1 && frames[0]!.type === "insert" && frames[0]!.text === "git status", frames);
   // the inserted line runs on its explicit Enter, leaving the prompt clean for what follows
   await page.locator('.pane-frame.is-current .key-bar [data-key="Enter"]').tap();
-  await page.waitForFunction(() => {
-    const rows = [...document.querySelectorAll(".pane-frame.is-current .pane-terminal .xterm-rows > div")].map((row) => (row.textContent ?? "").trimEnd()).filter(Boolean);
+  await page.waitForFunction((row) => {
+    const rows = [...document.querySelectorAll(row)].map((row) => (row.textContent ?? "").trimEnd()).filter(Boolean);
     return rows.at(-2)?.includes("working tree clean") === true && rows.at(-1)?.endsWith("$") === true;
-  });
+  }, shownRow(".pane-frame.is-current"));
   await setLine(page, "");
   console.log("PASS paste at the caret from the tap, Insert acknowledged by the bridge, the shell ran nothing until Enter");
 }

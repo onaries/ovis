@@ -349,7 +349,7 @@ interface SessionView {
 }
 
 /** The session's visible extent, its history id and what any change to it changes. */
-function sessionView(db: Database, sessionId: string): SessionView | null {
+export function sessionView(db: Database, sessionId: string): SessionView | null {
   const session = db.query<{ revert: string | null }, [string]>("SELECT revert FROM session_v2 WHERE id = ?").get(sessionId);
   if (session === null) return null;
   const stats = db.query<{ count: number; last: number | null; updated: number | null }, [string]>(
@@ -450,7 +450,7 @@ export const OPENCODE_ROW_SIZE = { octets: "octet_length(data)", bytes: "length(
 export type OpencodeRowSize = (typeof OPENCODE_ROW_SIZE)[keyof typeof OPENCODE_ROW_SIZE];
 
 let supported: OpencodeRowSize | null = null;
-function supportedRowSize(db: Database): OpencodeRowSize {
+export function supportedRowSize(db: Database): OpencodeRowSize {
   if (supported === null) {
     try { db.query("SELECT octet_length('')").get(); supported = OPENCODE_ROW_SIZE.octets; }
     catch { supported = OPENCODE_ROW_SIZE.bytes; }
@@ -625,6 +625,38 @@ export function opencodeSessionVersion(path: string, sessionId: string): string 
     });
   } catch (error) {
     if (unusable(error) || busy(error)) return null;
+    throw error;
+  }
+}
+
+/**
+ * The terminal title OpenCode's TUI sets on a session with this title (its `app.tsx`). An untitled
+ * session's terminal title is plain `OpenCode`, as on its home screen: it names no session.
+ */
+export function opencodeTerminalTitle(title: string): string {
+  return `OC | ${title.length > 40 ? `${title.slice(0, 37)}\u2026` : title}`;
+}
+
+/**
+ * Every session in the store (2.x or 1.x) whose terminal title is this one: the session a terminal
+ * shows only when there is exactly one, whichever sessions that terminal reported. Read without
+ * waiting on the store's writer: it runs on every snapshot.
+ */
+export function opencodeSessionsTitled(path: string | null, terminalTitle: string): string[] {
+  if (path === null || !terminalTitle.startsWith("OC | ")) return [];
+  // the title as shown, or the start OpenCode cut it to: the rows are then compared as OpenCode shows them
+  const start = terminalTitle.slice("OC | ".length).replace(/\u2026$/, "");
+  if (start === "") return [];
+  try {
+    return withStore(path, (db) => {
+      const flavor = storeFlavor(db);
+      if (flavor === "unknown") return [];
+      const table = flavor === "v1" ? "session" : "session_v2";
+      const rows = db.query<{ id: string; title: unknown }, [string, string]>(`SELECT id, title FROM ${table} WHERE substr(title, 1, length(?)) = ?`).all(start, start);
+      return rows.flatMap((row) => typeof row.title === "string" && opencodeTerminalTitle(row.title) === terminalTitle ? [row.id] : []);
+    }, 0) ?? [];
+  } catch (error) {
+    if (unusable(error) || busy(error)) return [];
     throw error;
   }
 }

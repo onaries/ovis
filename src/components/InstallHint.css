@@ -1,0 +1,28 @@
+/* the install line shares .update-notice's layout with the other lines over the pane
+   (src/components/UpdateControls.css); its words wrap rather than cut, since they are the steps */
+.update-notice.is-install {
+  flex-wrap: nowrap;
+}
+
+.update-notice.is-install > svg {
+  flex: 0 0 auto;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--accent);
+}
+
+/* Safari's share glyph, the size of the words around it */
+.install-hint-glyph {
+  width: 1.1em;
+  height: 1.1em;
+  margin-inline: 0.2em;
+  vertical-align: -0.2em;
+}
+
+.install-hint-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}

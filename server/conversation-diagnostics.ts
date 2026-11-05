@@ -23,7 +23,7 @@ export class ConversationDiagnostics {
       this.lines++;
       write(line);
       return true;
-    }, () => performance.timeOrigin + now());
+    }, now);
   }
 
   private available(): boolean {

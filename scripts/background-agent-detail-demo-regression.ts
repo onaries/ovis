@@ -312,7 +312,7 @@ try {
           const before = await detailReads(page);
           await openDetail(page, 1);
           await note(page, "This PC can't show details for this task").waitFor();
-          await dialog(page).locator(".bg-agent-note-line", { hasText: "Only a running Claude Code subagent's work can be opened here." }).waitFor();
+          await dialog(page).locator(".bg-agent-note-line", { hasText: "Only a running Claude Code or OpenCode subagent's work can be opened here." }).waitFor();
           assert.equal(await dialog(page).locator(".bg-agent-section").count(), 0, "no empty transcript stands in for the command's");
           assert.equal(await dialog(page).getByRole("button", { name: "Refresh", exact: true }).count(), 0, "nothing to read again");
           assert.equal(await detailReads(page), before, "a command's row asks the PC for nothing");

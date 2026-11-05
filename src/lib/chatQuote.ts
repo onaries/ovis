@@ -8,9 +8,13 @@ import { quoteBlock } from "./replyComments.ts";
  * draft holds, kept as it is, and nothing is sent. Quotes stack in the order they were taken.
  */
 export function draftWithQuote(draft: string, quote: string): string {
-  if (quote.trim() === "") return draft;
+  return quote.trim() === "" ? draft : draftWithBlock(draft, quoteBlock(quote));
+}
+
+/** `block` after whatever the draft holds, a blank line between them and after it. */
+function draftWithBlock(draft: string, block: string): string {
   const gap = draft === "" || draft.endsWith("\n\n") ? "" : draft.endsWith("\n") ? "\n" : "\n\n";
-  return `${draft}${gap}${quoteBlock(quote)}\n\n`;
+  return `${draft}${gap}${block}\n\n`;
 }
 
 const listeners = new Map<string, Set<() => void>>();
@@ -37,11 +41,19 @@ export function onQuoted(paneKey: string, listener: () => void): () => void {
  * (#511): a shell would read its `>` lines as redirects. False: it would not fit, and nothing changed.
  */
 export function quoteIntoComposer(paneKey: string, quote: string): boolean {
+  return quote.trim() === "" || blockIntoComposer(paneKey, quoteBlock(quote));
+}
+
+/**
+ * Puts a ready block of text (a failing check's log, a review comment) into the pane's draft as
+ * quoteIntoComposer puts a quote: after the draft, for an agent alone, nothing sent. False: it would
+ * not fit, and nothing changed.
+ */
+export function blockIntoComposer(paneKey: string, block: string): boolean {
   const key = draftKeyOf(paneKey);
   const draft = composerDrafts.read(key).text;
-  const next = draftWithQuote(draft, quote);
-  if (!quoteFits(draft, quote)) return false;
-  if (next === draft) return true;
+  const next = draftWithBlock(draft, block);
+  if (next.length > MAX_COMPOSER_CHARS) return false;
   composerDrafts.markAgentOnly(key);
   composerDrafts.set(key, next);
   for (const listener of listeners.get(paneKey) ?? []) listener();

@@ -11,7 +11,7 @@ import { bootRelayShell, takeEntryUrl } from "./boot.ts";
 import { RelayAdmissionTimeoutError, RelayUnreachableError, UnsafeRelayDestinationError } from "./channel.ts";
 import { ServerIdentityChangedError } from "./device.ts";
 import { testOffer } from "./device.test.ts";
-import { failureOf, forgedOffer, forgetsDevice, iosBrowserTab, keyMismatch, offerOf, shellEntry } from "./shellState.ts";
+import { failureOf, forgedOffer, forgetsDevice, iosBrowserTab, keyMismatch, offerOf, pairsAgainWithoutKey, shellEntry } from "./shellState.ts";
 
 const APP = "https://app.example";
 
@@ -183,6 +183,12 @@ describe("the offer fragment", () => {
     expect(linked.replaced).toEqual([]);
   });
 
+  it("takes a sign-in's return off the address before the shell loads, and the entry keeps it", () => {
+    const returned = page(`${APP}/#code=secret&state=s1`);
+    expect(takeEntryUrl(returned)).toBe(`${APP}/#code=secret&state=s1`);
+    expect(returned.replaced).toEqual(["/"]);
+  });
+
   it("moves a query from before the fragment carried it into the fragment, off the next request", () => {
     const old = page(`${APP}/s/${"12".repeat(16)}/?file=%2Fhome%2Fme%2Fa.md`);
     expect(takeEntryUrl(old)).toBe(`${APP}/s/${"12".repeat(16)}/?file=%2Fhome%2Fme%2Fa.md`);
@@ -231,5 +237,31 @@ describe("the offer fragment", () => {
       // Bun has no window of its own: leave none behind
       if (saved.window === undefined) delete (globalThis as { window?: unknown }).window;
     }
+  });
+});
+
+describe("a link without a code on a phone that holds an old key", () => {
+  const refused = new MuxProtocolError("auth_failed", "auth_failed");
+  it("drops the key and compares digits once, after the PC refused the old key", () => {
+    expect(pairsAgainWithoutKey(refused, { code: false, paired: false, codeless: true })).toBe(true);
+  });
+  it("never for a code, after digits were compared, a second time, or another error", () => {
+    expect(pairsAgainWithoutKey(refused, { code: true, paired: false, codeless: false })).toBe(false);
+    expect(pairsAgainWithoutKey(refused, { code: false, paired: false, codeless: true, compared: true })).toBe(false);
+    expect(pairsAgainWithoutKey(refused, { code: false, paired: false, codeless: true, refreshed: true })).toBe(false);
+    expect(pairsAgainWithoutKey(refused, { code: false, paired: true, codeless: false })).toBe(false);
+    expect(pairsAgainWithoutKey(new MuxProtocolError("timeout", "timeout"), { code: false, paired: false, codeless: true })).toBe(false);
+  });
+});
+
+describe("a link without a code that the PC refused before any digits", () => {
+  const refused = new MuxProtocolError("auth_failed", "auth_failed");
+  it("says the PC is not taking new phones now, not that a code expired", () => {
+    expect(failureOf(refused, { code: false, paired: false, codeless: true })).toBe("pair-unavailable");
+  });
+  it("keeps the code and saved-key screens for the attempts that have them", () => {
+    expect(failureOf(refused, { code: true, paired: false })).toBe("code-expired");
+    expect(failureOf(refused, { code: false, paired: true })).toBe("revoked");
+    expect(failureOf(refused, { code: false, paired: false, codeless: true, compared: true })).toBe("pair-declined");
   });
 });

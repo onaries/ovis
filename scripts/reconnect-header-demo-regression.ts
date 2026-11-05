@@ -106,7 +106,8 @@ try {
           await appFaces(page);
           await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
           assert.equal(await page.locator(".context-connection").count(), 0, `${width}: a page opening is not a reconnect`);
-          const crumb = await page.locator(".context-sub").innerText();
+          // the crumb, not the session's line (.context-session) that shares its class
+          const crumb = await page.locator(".context-sub:not(.context-session)").innerText();
           const height = await page.locator(".app-header").evaluate((node) => node.getBoundingClientRect().height);
           const composer = page.getByRole("textbox", { name: "Message", exact: true });
           await composer.fill(DRAFT);
@@ -138,7 +139,7 @@ try {
           if (evidence) await page.screenshot({ path: join(evidence, `reconnect-header-${width}-connected.png`) });
 
           await page.locator(".context-connection").waitFor({ state: "detached" });
-          assert.equal(await page.locator(".context-sub").innerText(), crumb, `${width}: then the crumb comes back`);
+          assert.equal(await page.locator(".context-sub:not(.context-session)").innerText(), crumb, `${width}: then the crumb comes back`);
           assert.equal(await composer.inputValue(), DRAFT + MORE, `${width}: the return sends nothing: the draft waits for the user`);
           assert.equal(await page.locator(".chat-turn-user", { hasText: DRAFT }).count(), 0, `${width}: and no message was sent`);
           if (!phone) {

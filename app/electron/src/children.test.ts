@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,7 +40,7 @@ describe("environments", () => {
 
   it("runs the server on herdr-core through the bundled hc, on loopback, in the app's state folder", () => {
     const env = serverEnv({ PATH: "/bin", HOST: "0.0.0.0", HERDR_PLUGIN_ROOT: "/p", OVIS_MANAGED: "1", HERDR_SOCKET: "/s", OVIS_TOKEN: "t" }, { hc: "/app/bin/herdr-core", stateDir: "/data/server", port: 4321 });
-    expect(env).toMatchObject({ PATH: "/bin", OVIS_RUNTIME: "herdr-core", OVIS_HC_BIN: "/app/bin/herdr-core", OVIS_STATE_DIR: "/data/server", HOST: "127.0.0.1", PORT: "4321", HC_SESSION: "ovis" });
+    expect(env).toMatchObject({ PATH: "/bin", OVIS_RUNTIME: "herdr-core", OVIS_HC_BIN: "/app/bin/herdr-core", OVIS_STATE_DIR: "/data/server", HOST: "127.0.0.1", PORT: "4321", HC_SESSION: "ovis", OVIS_DESKTOP_APP: "1" });
     for (const name of ["HERDR_PLUGIN_ROOT", "OVIS_MANAGED", "HERDR_SOCKET", "OVIS_TOKEN"]) expect(env).not.toHaveProperty(name);
   });
 
@@ -68,11 +68,25 @@ describe("withoutInherited", () => {
   it("starts the program directly without bash", () => {
     expect(withoutInherited("/app/bin/bun", ["index.ts"], "/no/bash")).toEqual(["/app/bin/bun", ["index.ts"]]);
   });
+
+  it("starts the program directly on Windows, whatever bash the PC has", () => {
+    expect(withoutInherited("C:\\app\\bin\\bun.exe", ["index.ts"], process.execPath, "win32")).toEqual(["C:\\app\\bin\\bun.exe", ["index.ts"]]);
+  });
 });
 
-describe("startServer", () => {
+describe("layout", () => {
+  it("names the Windows programs with .exe", () => {
+    expect(layout("/r", "win32")).toEqual({ bun: join("/r", "bin", "bun.exe"), hc: join("/r", "bin", "herdr-core.exe"), server: join("/r", "server") });
+    expect(layout("/r", "linux").hc).toBe(join("/r", "bin", "herdr-core"));
+  });
+});
+
+// the stand-ins below are POSIX shell scripts, which Windows cannot run
+const posix = process.platform !== "win32";
+
+describe.skipIf(!posix)("startServer", () => {
   it("resolves with the address the server says it listens on, and stops it", async () => {
-    const programs = fakeServer(`console.log("Ovis listening on http://127.0.0.1:" + process.env.PORT); process.on("SIGTERM", () => process.exit(0)); setInterval(() => {}, 1000);`);
+    const programs = fakeServer(`process.on("SIGTERM", () => process.exit(0)); console.log("Ovis listening on http://127.0.0.1:" + process.env.PORT); setInterval(() => {}, 1000);`);
     const log = openLog(join(tempDir(), "logs", "ovis.log"));
     const server = await startServer(programs, { ...process.env, PORT: "45678" }, log, 20_000);
     expect(server.url).toBe("http://127.0.0.1:45678");
@@ -89,7 +103,7 @@ describe("startServer", () => {
   });
 
   it("finds where it listens after more output than it keeps", async () => {
-    const programs = fakeServer(`process.stdout.write("x".repeat(200 * 1024) + "\\n"); console.log("Ovis listening on http://127.0.0.1:" + process.env.PORT); process.on("SIGTERM", () => process.exit(0)); setInterval(() => {}, 1000);`);
+    const programs = fakeServer(`process.on("SIGTERM", () => process.exit(0)); process.stdout.write("x".repeat(200 * 1024) + "\\n"); console.log("Ovis listening on http://127.0.0.1:" + process.env.PORT); setInterval(() => {}, 1000);`);
     const log = openLog(join(tempDir(), "ovis.log"));
     const server = await startServer(programs, { ...process.env, PORT: "45679" }, log, 20_000);
     expect(server.url).toBe("http://127.0.0.1:45679");
@@ -136,7 +150,21 @@ describe("installCore", () => {
     log.end();
   });
 
-  it("swaps a different copy the way hc's installer does, with hc update --from", async () => {
+  it("takes the ConPTY beside the bundled hc along on a first copy, as hc on Windows needs it there", async () => {
+    const root = tempDir();
+    const bundled = fakeHc(join(root, "bundle"), "0.1.17");
+    mkdirSync(join(root, "bundle", "conpty", "x64"), { recursive: true });
+    writeFileSync(join(root, "bundle", "conpty", "conpty.dll"), "dll");
+    writeFileSync(join(root, "bundle", "conpty", "x64", "OpenConsole.exe"), "exe");
+    const log = openLog(join(root, "ovis.log"));
+    await installCore(bundled, join(root, "data", "bin"), process.env, log);
+    expect(readFileSync(join(root, "data", "bin", "conpty", "conpty.dll"), "utf8")).toBe("dll");
+    expect(readFileSync(join(root, "data", "bin", "conpty", "x64", "OpenConsole.exe"), "utf8")).toBe("exe");
+    // closed before afterEach removes the folder it writes in
+    await new Promise<void>((resolve) => log.end(resolve));
+  });
+
+  it.skipIf(!posix)("swaps a different copy the way hc's installer does, with hc update --from", async () => {
     const root = tempDir();
     const bundled = fakeHc(join(root, "bundle"), "0.1.18");
     const installed = fakeHc(join(root, "data", "bin"), "0.1.17");
@@ -148,7 +176,7 @@ describe("installCore", () => {
 });
 
 describe("installCore after a rollback", () => {
-  it("keeps a newer hc in the data folder instead of asking it to go back", async () => {
+  it.skipIf(!posix)("keeps a newer hc in the data folder instead of asking it to go back", async () => {
     const root = tempDir();
     const write = (dir: string, version: string) => {
       mkdirSync(dir, { recursive: true });
@@ -181,6 +209,18 @@ describe("openLog", () => {
     await new Promise<void>((resolve) => second.end("second run\n", resolve));
     expect(readFileSync(`${path}.1`, "utf8")).toBe("first run\n");
     expect(readFileSync(path, "utf8")).toBe("second run\n");
+  });
+
+  it("has the file open once it returns, so its folder going away later does not fail the stream", async () => {
+    const dir = tempDir();
+    const path = join(dir, "ovis.log");
+    const log = openLog(path);
+    expect(existsSync(path)).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+    const failed = new Promise<Error>((resolve) => log.once("error", resolve));
+    const closed = new Promise<null>((resolve) => log.once("close", () => resolve(null)));
+    log.end("after the folder went\n");
+    expect(await Promise.race([failed, closed])).toBeNull();
   });
 });
 
@@ -218,7 +258,7 @@ describe("saved settings", () => {
 });
 
 describe("endLeftover", () => {
-  it("ends only the same process: this app's Bun on its server, started at the recorded time", async () => {
+  it.skipIf(!posix)("ends only the same process: this app's Bun on its server, started at the recorded time", async () => {
     const programs = fakeServer(`process.on("SIGTERM", () => process.exit(0)); console.log("Ovis listening on http://127.0.0.1:1"); setInterval(() => {}, 1000);`);
     const log = openLog(join(tempDir(), "ovis.log"));
     let spawned = 0;
@@ -231,17 +271,46 @@ describe("endLeftover", () => {
     expect(await endLeftover({ pid, bun: programs.bun, started: "then" }, { ...ours, started: async () => "later" })).toBe(false);
     expect(await endLeftover({ pid, bun: programs.bun, started: null }, ours)).toBe(false);
     expect(server.child.exitCode).toBeNull();
+    // Windows quotes a program path with a space in it; a quoted other Bun is still not ours
+    expect(await endLeftover({ pid, bun: programs.bun, started: "then" }, { ...ours, command: async () => `"/other/bun" ${programs.server}/server/index.ts` })).toBe(false);
+    expect(await endLeftover({ pid, bun: programs.bun, started: "then" }, { ...ours, command: async () => `"${programs.bun}" ${programs.server}/server/index.ts` })).toBe(true);
+    expect(await server.exited).toBe(0);
+    log.end();
+  });
+
+  it.skipIf(!posix)("ends only the same process when it is found unquoted too", async () => {
+    const programs = fakeServer(`process.on("SIGTERM", () => process.exit(0)); console.log("Ovis listening on http://127.0.0.1:1"); setInterval(() => {}, 1000);`);
+    const log = openLog(join(tempDir(), "ovis.log"));
+    const server = await startServer(programs, process.env, log, 20_000);
+    const pid = server.child.pid!;
+    const ours = { command: async () => `${programs.bun} ${programs.server}/server/index.ts`, started: async () => "then" };
     expect(await endLeftover({ pid, bun: programs.bun, started: "then" }, ours)).toBe(true);
     expect(await server.exited).toBe(0);
     log.end();
   });
 
   it("reads a live process's start time and command, and nothing for one that is gone", async () => {
-    expect(await processStart(process.pid)).toMatch(/\d{4}$/);
+    // ps's `Wed Nov  4 08:00:00 2026`, or CIM's UTC `2026-11-04T08:00:00.1234560Z` on Windows
+    expect(await processStart(process.pid)).toMatch(process.platform === "win32" ? /^\d{4}-\d\d-\d\dT.*Z$/ : /\d{4}$/);
     expect(processStartSync(process.pid)).toBe(await processStart(process.pid));
     expect(await processCommand(process.pid)).toContain("bun");
-    const gone = Bun.spawn(["true"]);
+    const gone = Bun.spawn(process.platform === "win32" ? ["cmd.exe", "/c", "exit"] : ["true"]);
     await gone.exited;
     expect(await processStart(gone.pid)).toBeNull();
-  });
+    // each lookup on Windows starts PowerShell for its CIM query: over 5 s for the four on a cold runner, at most 15 s each
+  }, 90_000);
+
+  it.skipIf(process.platform !== "win32")("reads a command line whose path is not ASCII whole, as a user name may be", async () => {
+    const dir = join(tempDir(), "오비스 사용자");
+    mkdirSync(dir);
+    const exe = join(dir, "ping.exe");
+    copyFileSync(join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "ping.exe"), exe);
+    const child = Bun.spawn([exe, "-n", "60", "127.0.0.1"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      expect(await processCommand(child.pid)).toContain(dir);
+    } finally {
+      child.kill();
+      await child.exited;
+    }
+  }, 90_000);
 });

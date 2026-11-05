@@ -1,0 +1,177 @@
+/*
+ * The relay shell's account part (AccountPcs.tsx), inside the shell's card (RelayShell.css). The
+ * sign-in follows Linear's and Warp's: the mark, one short title and line, the provider buttons
+ * stacked full width, a quiet link to the other way in, and one small line at the foot.
+ */
+
+/* signed out with nothing saved: the card's content centred, as a sign-in page's is */
+.account-centered {
+  text-align: center;
+}
+
+.account-centered .relay-shell-mark {
+  margin-inline: auto;
+}
+
+.account-subtitle {
+  margin-bottom: var(--space-5);
+}
+
+.account-providers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/*
+ * Apple's button is black on light and white on dark; GitHub's matches it, so neither is the one
+ * to pick. The theme's strongest ink is that black or white, so no colour is added here.
+ */
+.account-provider {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--touch-target);
+  background: var(--text-strong);
+  border-color: var(--text-strong);
+  color: var(--bg-panel);
+  font-weight: var(--fw-medium);
+}
+
+.account-provider:hover {
+  background: var(--text-strong);
+  color: var(--bg-panel);
+  opacity: 0.88;
+}
+
+.account-provider-mark {
+  flex: none;
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+.account-error {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--status-blocked);
+  overflow-wrap: anywhere;
+}
+
+/* the other way in: a link's weight, a touch target's height */
+.account-link {
+  display: block;
+  width: 100%;
+  min-height: var(--touch-target);
+  margin-top: var(--space-2);
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.account-link:hover {
+  color: var(--text-strong);
+}
+
+.account-fineprint {
+  margin: var(--space-4) 0 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  color: var(--text-dim);
+}
+
+.account-pc-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* the state in words, after a dot in its colour: the words carry it, the dot only helps the eye */
+.account-pc-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-regular);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.account-pc-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-idle);
+}
+
+[data-pc-state="paired"] .account-pc-dot { background: var(--status-done); }
+[data-pc-state="needs-approval"] .account-pc-dot { background: var(--status-working); }
+[data-pc-state="needs-update"] .account-pc-dot { background: var(--status-blocked); }
+
+/* a PC to compare digits with: the row is the button, as a saved PC's row is the link */
+.account-pc-join {
+  width: 100%;
+  background: none;
+  border: 0;
+  border-bottom: var(--hairline) solid var(--border);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+/* a PC that does not open yet: the row without the link's hover */
+.account-pc-waiting:hover {
+  color: var(--text-strong);
+}
+
+/* the sign-in under the saved PCs: a hairline from the list before it */
+.account-or {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: var(--hairline) solid var(--border);
+}
+
+/* sign out and leave: quiet links under the list; leaving asks once more, in the card */
+.account-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: var(--hairline) solid var(--border);
+}
+
+.account-link-danger {
+  color: var(--status-blocked);
+}
+
+/* Settings on the PC's own page: GitHub's device code, set like the pairing code (.devices-code) */
+.account-device {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.account-device-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-pairing);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.12em;
+  color: var(--text-strong);
+  user-select: all;
+}
+
+.account-device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

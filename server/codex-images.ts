@@ -155,25 +155,38 @@ export function ompBlobAnchor(blobs: string | null): { path: string; identity: s
 
 /**
  * Steps a windowed reader takes: it yields between two windows of a file, where an async reader gives
- * the event loop its turn (finishAsync) and a synchronous one goes straight on (finish).
+ * the event loop its turn (finishAsync) and a synchronous one goes straight on (finish). A reader
+ * with an asynchronous file yields the read it waits for instead (awaited), which only finishAsync runs.
  */
-export type Steps<T> = Generator<void, T, void>;
+export type Steps<T> = Generator<void | Promise<void>, T, void>;
 
 /** Runs a reader's steps straight through. */
 export function finish<T>(steps: Steps<T>): T {
   for (;;) {
     const step = steps.next();
     if (step.done) return step.value;
+    if (step.value !== undefined) throw new Error("synchronous steps cannot wait for an asynchronous read");
   }
 }
 
 /** Runs a reader's steps with the event loop running between them, so a large file never holds the bridge for more than a window's work. */
 export async function finishAsync<T>(steps: Steps<T>): Promise<T> {
+  let failed: { error: unknown } | undefined;
   for (;;) {
-    const step = steps.next();
+    const step = failed === undefined ? steps.next() : steps.throw(failed.error);
+    failed = undefined;
     if (step.done) return step.value;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (step.value === undefined) await new Promise<void>((resolve) => setImmediate(resolve));
+    // a read that fails fails where the steps wait for it, so their own cleanup runs
+    else try { await step.value; } catch (error) { failed = { error }; }
   }
+}
+
+/** The value of `pending`, waited for as a step (finishAsync). */
+export function* awaited<T>(pending: Promise<T>): Steps<T> {
+  let value!: T;
+  yield pending.then((result) => { value = result; });
+  return value;
 }
 
 /** How much of a blob is read at a time, and all a blob not served costs to check. */

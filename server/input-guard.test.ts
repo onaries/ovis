@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { isMouseReport, sightingFacts, typingGuards } from "./input-guard.ts";
+import { isMouseReport, isTerminalReply, sightingFacts, typingGuards } from "./input-guard.ts";
 
 const attach = (...members: string[]) => ({ clients: new Set(members), ready: true, process: {}, kind: "pty" as const, cols: 80 });
 /** typing taken while `origin` was the attach the client was in (none: typed with no attach of its own), now that `current` is the pane's */
@@ -25,6 +25,18 @@ test("a click or a wheel is told from typing, so a queued one keeps the attach i
   // typing, keys and a report mixed with typing are not mouse reports
   for (const text of ["", "a", "\x1b[A", "\x1b[<0;5;3", "\x1b[<0;5;3Mx", "x\x1b[<0;5;3M", "\x1b[M #", "\x1b[1;5A"]) {
     expect(isMouseReport(text)).toBe(false);
+  }
+});
+
+test("the terminal's own answers are told from typing, so queued ones go to the attach that asked (#2816)", () => {
+  expect(isTerminalReply("\x1b[I")).toBe(true);
+  expect(isTerminalReply("\x1b[O")).toBe(true);
+  expect(isTerminalReply("\x1b]11;rgb:1818/1616/1313\x07")).toBe(true);
+  expect(isTerminalReply("\x1b[6;17;8t")).toBe(true);
+  expect(isTerminalReply("\x1b[I\x1b]10;rgb:d8d8/d0d0/c3c3\x1b\\\x1b]12;rgb:f0f0/a8a8/3030\x1b\\\x1b[?1;2c")).toBe(true);
+  // typing, keys and an answer mixed with typing are not answers
+  for (const text of ["", "I", "\x1b[A", "\x1b[1;2A", "\x1bOB", "\x1b]11;?\x1b\\", "\x1b[Ix", "x\x1b[I", "\x1b]13;rgb:0/0/0\x07", "\x1b]11;hello\rworld\x07"]) {
+    expect(isTerminalReply(text)).toBe(false);
   }
 });
 

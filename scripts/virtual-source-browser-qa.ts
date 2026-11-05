@@ -1,7 +1,8 @@
 /**
  * The virtualized source viewer (VirtualSource) in the built app, against a file server that
  * answers ranges as the real one does: bounded rows for a file of 120 000+ lines at the top, the
- * middle and the end; a far line marked and in view with wrap off and on and across a resize;
+ * middle and the end; a far line marked and in view with wrap off and on, across a File text size
+ * change while wrapped and across a resize;
  * native selection and a real copy that keep blank and trailing lines and leave the gutter out;
  * the whole source copied from the text; truthful byte and line cuts and the colors notice; the
  * highlight, wrap and theme settings; close and reopen; and a remote PC's file.
@@ -319,6 +320,15 @@ try {
     await settled(page, FAR_LINE, `${label} wrap on`);
     assert.ok((await mounted(page)).rows < 500, `${label}: wrapped rows stay bounded`);
     await shot(page, `far-wrap-${width}-${theme}`);
+    // File text size changed while wrapped (#2978): the file mounts again at the new row height and the
+    // wrapped rows re-measure for a few frames after it; the marked line comes back to the view each way
+    for (const fileFontSize of [24, null]) {
+      const lineHeight = (): Promise<number> => page.evaluate(() => Number.parseFloat(getComputedStyle(document.querySelector(".virtual-source")!).lineHeight));
+      const was = await lineHeight();
+      await page.evaluate((fileFontSize) => window.virtualQA.settings({ fileFontSize }), fileFontSize);
+      await page.waitForFunction((was) => Number.parseFloat(getComputedStyle(document.querySelector(".virtual-source")!).lineHeight) !== was, was);
+      await settled(page, FAR_LINE, `${label} wrapped, File text size ${fileFontSize ?? "reset"}`);
+    }
     const other = width === 1440 ? { width: 390, height: 844 } : { width: 1440, height: 900 };
     await page.setViewportSize(other);
     await settled(page, FAR_LINE, `${label} resized to ${other.width}px`);
@@ -330,7 +340,7 @@ try {
     await settled(page, FAR_LINE, `${label} wrap off`);
     await close(page);
     assert.deepEqual(errors, [], `${label}: no errors around the far line`);
-    console.log(`PASS ${label}: line ${FAR_LINE} marked and in view, with wrap off and on, after a resize to ${other.width}px and back`);
+    console.log(`PASS ${label}: line ${FAR_LINE} marked and in view, with wrap off and on, across a File text size change while wrapped, after a resize to ${other.width}px and back`);
 
     // reopened: the rows come back, with a colored source this time
     await open(page, `/src/big.ts:${FAR_LINE}`);

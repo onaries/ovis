@@ -111,7 +111,7 @@ describe("an OpenCode session's subagents are its child sessions", () => {
     expect(done).toEqual({
       id: "ses_done", title: "find the bug", category: "explore", model: "child-model", status: "completed",
       started_at: new Date(NOW - 40 * MIN).toISOString(), ended_at: new Date(NOW - 37 * MIN).toISOString(),
-      turns: 2, tool_calls: 1, tokens: 1125, detail_kind: null,
+      turns: 2, tool_calls: 1, tokens: 1125, detail_kind: "opencode-subagent",
     });
     // the model a child names before its first step is the session's own
     expect(state.tasks.find((task) => task.id === "ses_failed")!.model).toBe("session-model");

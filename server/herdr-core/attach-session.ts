@@ -103,7 +103,12 @@ export class CoreAttachSession {
   private display: Display = {};
   /** the display facts hc has, as JSON: sent again only when they change */
   private sentDisplay = "{}";
-  private readonly ask: () => void;
+  /**
+   * Asks ASK_DISPLAY, and turns focus reports on with it only on attach: xterm.js answers every
+   * `ESC[?1004h` with a focus report, so turning them on again for each focus-in made every focused
+   * viewer answer the others' focus-in, endlessly (#2815).
+   */
+  private readonly ask: (focusOn?: boolean) => void;
   private cols: number;
   private rows: number;
   private readonly end: (code: number | null) => void;
@@ -111,7 +116,7 @@ export class CoreAttachSession {
   constructor(options: CoreAttachOptions) {
     this.cols = options.cols;
     this.rows = options.rows;
-    this.ask = () => options.onData(FOCUS_ON + ASK_DISPLAY);
+    this.ask = (focusOn = false) => options.onData((focusOn ? FOCUS_ON : "") + ASK_DISPLAY);
     const { promise, resolve } = Promise.withResolvers<void>();
     this.exited = promise;
     const decoder = new TextDecoder();
@@ -152,7 +157,7 @@ export class CoreAttachSession {
       this.settle();
       this.report();
       // the viewer's terminal answers through write(), as it answered `hc attach`
-      this.ask();
+      this.ask(true);
     }, (error: unknown) => {
       // the old `hc attach` printed why in the pane; the server log is where it goes now
       console.error(`herdr-core attach for ${options.terminal} failed: ${error instanceof Error ? error.message : String(error)}`);

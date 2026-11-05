@@ -8,6 +8,7 @@ import {
   createSpeechGate,
   createVoiceEngine,
   dictationLocale,
+  pickVoiceEngine,
   insertAtCaret,
   levelFromRms,
   micErrorReason,
@@ -177,6 +178,25 @@ describe("replaceIfUnchanged", () => {
   it("is null when the user edited the span", () => {
     expect(replaceIfUnchanged("say hullo world", { start: 4, end: 15 }, "hello world", "Hello, world.")).toBeNull();
     expect(replaceIfUnchanged("short", { start: 2, end: 40 }, "ort", "x")).toBeNull();
+  });
+});
+
+describe("pickVoiceEngine", () => {
+  it("prefers the key on auto and falls back to the browser", () => {
+    expect(pickVoiceEngine("auto", true, true, true)).toEqual({ engine: "server", unavailableReason: null });
+    expect(pickVoiceEngine("auto", false, true, true)).toEqual({ engine: "browser", unavailableReason: null });
+    expect(pickVoiceEngine("auto", false, true, false)).toEqual({ engine: null, unavailableReason: "not_configured" });
+  });
+
+  it("holds to the browser even with a key saved", () => {
+    expect(pickVoiceEngine("browser", true, true, true)).toEqual({ engine: "browser", unavailableReason: null });
+    expect(pickVoiceEngine("browser", true, true, false)).toEqual({ engine: null, unavailableReason: "unsupported" });
+  });
+
+  it("holds to the key and never falls back to the browser", () => {
+    expect(pickVoiceEngine("server", true, true, true)).toEqual({ engine: "server", unavailableReason: null });
+    expect(pickVoiceEngine("server", false, true, true)).toEqual({ engine: null, unavailableReason: "not_configured" });
+    expect(pickVoiceEngine("server", true, false, true)).toEqual({ engine: null, unavailableReason: "unsupported" });
   });
 });
 

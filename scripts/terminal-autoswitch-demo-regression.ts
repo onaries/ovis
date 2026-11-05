@@ -6,6 +6,7 @@ import { chromium, type Page } from "playwright-core";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { appFaces } from "./app-faces.ts";
+import { shownRows } from "./shown-rows.ts";
 import panes from "../site/demo/fixtures/panes.json";
 
 // Real client and demo transport. Only receipts and demo-turn completion are held, then released
@@ -597,7 +598,7 @@ try {
         await of(pane).peek.waitFor({ state: "detached" });
         await of(pane).chat.locator(".composer").waitFor();
       };
-      const screen = (pane: string, text: string) => of(pane).stack.locator(".xterm-rows", { hasText: text });
+      const screen = (pane: string, text: string) => of(pane).stack.locator(shownRows(), { hasText: text });
 
       // omp's /settings: the panel hides the editor's row, Escape draws it back, and the chat comes back by itself
       await open(panes.omp, "/sett");

@@ -1,5 +1,5 @@
 import {
-  decodeFrame, encodeFrame, FrameType, HTTP_END_FLAGS, LIMITS_V1, MAX_FRAME_BYTES,
+  decodeFrame, encodeFrame, FrameType, HTTP_END_FLAGS, LIMITS_V1, MAX_FRAME_BYTES, MAX_LARGE_WS_MESSAGE_BYTES,
   MuxProtocolError, WS_CONTINUATION_CAPACITY, WS_DATA_FLAGS, WS_START_CAPACITY,
 } from "./relay-mux.ts";
 import type { HeaderList, LimitsV1, MuxFrame, SessionError, StreamError } from "./relay-mux.ts";
@@ -8,7 +8,9 @@ type Payload<T extends MuxFrame["type"]> = Extract<MuxFrame, { type: T }>["paylo
 export type HttpRequest = Payload<typeof FrameType.HTTP_OPEN>;
 export type HttpResponse = Payload<typeof FrameType.HTTP_HEADERS>;
 export type WsRequest = Payload<typeof FrameType.WS_OPEN>;
-export type SessionFrame = Extract<MuxFrame, { type: 1 | 2 | 3 | 4 | 10 }>;
+export type SessionFrame = Extract<MuxFrame, { type: 1 | 2 | 3 | 4 | 10 | 11 | 12 | 13 | 14 }>;
+/** Setup frames only a phone sends; the others (WELCOME, PAIR_CHALLENGE, AUTH_OK) come from the PC. */
+const CLIENT_SETUP: readonly number[] = [FrameType.HELLO, FrameType.AUTH, FrameType.PAIR, FrameType.PAIR_REQUEST, FrameType.PAIR_REVEAL, FrameType.PAIR_CONFIRM];
 type Traffic = "interactive" | "bulk" | "control";
 type CancelTimer = () => void;
 const U64_MAX = 0xffffffffffffffffn;
@@ -357,9 +359,10 @@ export class WsStream extends MuxStream {
   /** The peer's graceful CLOSE arrived and every message before it was handled; onClose still follows. */
   onPeerClose: ((event: Omit<WsClose, "clean">) => void) | undefined;
   private handler: ((message: string | Uint8Array) => void | Promise<void>) | undefined;
-  private readonly messages: { data: string | Uint8Array; bytes: number }[] = [];
+  /** `held`: the reservation of a message over the v1 limit, whose bytes were credited as they came */
+  private readonly messages: { data: string | Uint8Array; bytes: number; held: number }[] = [];
   private delivering = false;
-  private assembling: { data: Uint8Array; offset: number; text: boolean } | undefined;
+  private assembling: { data: Uint8Array; offset: number; text: boolean; held: number } | undefined;
   private closing: Payload<typeof FrameType.WS_CLOSE> | undefined;
   private receivedClose: Payload<typeof FrameType.WS_CLOSE> | undefined;
   private notified = false;
@@ -391,9 +394,9 @@ export class WsStream extends MuxStream {
   /** Accepted once, even if still queued. Never retry this message based on this return value. */
   send(message: string | Uint8Array): number {
     if (!this.live || this.closing || this.rejection) throw new MuxStreamError("cancelled");
-    if (message.length > LIMITS_V1.max_ws_message_bytes) { this.close(1009, "message too large", true); return 0; }
+    if (message.length > this.engine.sendMessageBytes) { this.close(1009, "message too large", true); return 0; }
     const data = typeof message === "string" ? new TextEncoder().encode(message) : message;
-    if (data.length > LIMITS_V1.max_ws_message_bytes) {
+    if (data.length > this.engine.sendMessageBytes) {
       this.close(1009, "message too large", true);
       return 0;
     }
@@ -418,7 +421,11 @@ export class WsStream extends MuxStream {
       if (this.assembling) { this.reset("stream_protocol_error"); return; }
       const length = frame.payload.total_message_bytes;
       if (length === undefined) { this.reset("stream_protocol_error"); return; }
-      this.assembling = { data: new Uint8Array(length), offset: 0, text: !!(frame.flags & WS_DATA_FLAGS.TEXT) };
+      // A message over the v1 limit (LARGE_WS_MESSAGES) cannot wait for the window to credit it: its whole
+      // size is reserved against the receive bound before it is allocated, and each fragment credited as it comes.
+      const held = length > LIMITS_V1.max_ws_message_bytes ? length : 0;
+      if (held && !this.engine.reserve(this, held)) { this.close(1009, "message too large", true); return; }
+      this.assembling = { data: new Uint8Array(length), offset: 0, text: !!(frame.flags & WS_DATA_FLAGS.TEXT), held };
     }
     const message = this.assembling;
     if (!message || message.offset + frame.payload.data.length > message.data.length) {
@@ -427,6 +434,7 @@ export class WsStream extends MuxStream {
     message.data.set(frame.payload.data, message.offset);
     message.offset += frame.payload.data.length;
     this.inboundBytes += frame.payload.data.length;
+    if (message.held) this.engine.consume(this, frame.payload.data.length);
     if (!!(frame.flags & WS_DATA_FLAGS.END) !== (message.offset === message.data.length)) {
       this.reset("stream_protocol_error"); return;
     }
@@ -444,7 +452,7 @@ export class WsStream extends MuxStream {
     // Zero-length messages still own queue entries. Bound those independently of DATA credit.
     if (!this.engine.retainMetadata(this, 8)) return;
     this.pendingInbound++;
-    this.messages.push({ data, bytes: message.offset });
+    this.messages.push({ data, bytes: message.offset, held: message.held });
     this.deliver();
   }
   private deliver(): void {
@@ -461,7 +469,8 @@ export class WsStream extends MuxStream {
       this.inboundBytes -= message.bytes;
       this.pendingInbound--;
       this.engine.releaseMetadata(this, 8);
-      this.engine.consume(this, message.bytes);
+      if (message.held) this.engine.release(this, message.held);
+      this.engine.consume(this, message.held ? 0 : message.bytes);
       this.peerClosed();
       this.finishClose();
       this.deliver();
@@ -544,6 +553,10 @@ export class WsStream extends MuxStream {
 
 export class MuxEngine {
   readonly limits: LimitsV1;
+  /** The largest WS message sent to the peer: past the v1 limit only for a phone that offered LARGE_WS_MESSAGES. */
+  sendMessageBytes: number = LIMITS_V1.max_ws_message_bytes;
+  /** The largest WS message taken from the peer: past the v1 limit only where this end offered LARGE_WS_MESSAGES. */
+  receiveMessageBytes: number = LIMITS_V1.max_ws_message_bytes;
   /** Local admission can resume only after retirement releases the receive reservation. */
   onStreamAvailable: (() => void) | undefined;
   generation = 0;
@@ -624,9 +637,38 @@ export class MuxEngine {
     this.setupTimer();
     this.refreshIdle();
   }
+  /**
+   * Replaces the setup deadline: a pairing by comparing digits waits for a person on both ends
+   * (shared/relay-pair-sas.ts PAIR_APPROVAL_MS), not the 10 seconds a code or a signature takes.
+   */
+  extendSetup(ms: number): void {
+    check(this.active && this.deviceId === undefined, "Session setup already ended");
+    this.setupTimer();
+    this.setupTimer = this.timer(() => this.fail("timeout", "Mux setup timed out"), ms);
+  }
+  /** This end offers LARGE_WS_MESSAGES in HELLO. */
+  receiveLargeMessages(): void {
+    this.receiveMessageBytes = MAX_LARGE_WS_MESSAGE_BYTES;
+  }
+  /** The peer offered LARGE_WS_MESSAGES in HELLO. */
+  sendLargeMessages(): void {
+    this.sendMessageBytes = MAX_LARGE_WS_MESSAGE_BYTES;
+  }
+  /** Charges one large inbound message to its stream's reservation, within the same receive bound as admission. */
+  reserve(stream: WsStream, bytes: number): boolean {
+    if (this.reserved + bytes > MUX_RECEIVE_RESERVATION_BYTES) return false;
+    stream.reservation += bytes;
+    this.reserved += bytes;
+    return true;
+  }
+  release(stream: WsStream, bytes: number): void {
+    stream.reservation -= bytes;
+    this.reserved -= bytes;
+    queueMicrotask(() => { if (this.active) this.onStreamAvailable?.(); });
+  }
   sendSession(frame: SessionFrame): void {
     check(this.active && this.deviceId === undefined, "Session setup already ended");
-    const clientFrame = frame.type === FrameType.HELLO || frame.type === FrameType.AUTH || frame.type === FrameType.PAIR;
+    const clientFrame = CLIENT_SETUP.includes(frame.type);
     check(clientFrame === (this.options.role === "client"), "Wrong setup direction");
     this.enqueueControl(frame);
   }
@@ -951,7 +993,7 @@ export class MuxEngine {
    */
   private oversizedMessage(bytes: Uint8Array): boolean {
     if (bytes.length < 12 || bytes.length > MAX_FRAME_BYTES || bytes[1] !== FrameType.WS_DATA || !((bytes[3] ?? 0) & WS_DATA_FLAGS.START)) return false;
-    if (new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(8) <= LIMITS_V1.max_ws_message_bytes) return false;
+    if (new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(8) <= this.receiveMessageBytes) return false;
     const envelope = bytes.slice(0, 12);
     envelope[3] = (envelope[3] ?? 0) | WS_DATA_FLAGS.END;
     envelope.fill(0, 8);
@@ -979,8 +1021,9 @@ export class MuxEngine {
         for (const stream of this.streams) if (stream.id === undefined || stream.id > frame.payload.last_open_id) this.reset(stream, "refused", false);
         this.timer(() => this.carrierLost(new MuxProtocolError("timeout", "GOAWAY drained")), frame.payload.drain_ms);
         return;
-      case FrameType.HELLO: case FrameType.WELCOME: case FrameType.AUTH: case FrameType.AUTH_OK: case FrameType.PAIR: {
-        const clientFrame = frame.type === FrameType.HELLO || frame.type === FrameType.AUTH || frame.type === FrameType.PAIR;
+      case FrameType.HELLO: case FrameType.WELCOME: case FrameType.AUTH: case FrameType.AUTH_OK: case FrameType.PAIR:
+      case FrameType.PAIR_REQUEST: case FrameType.PAIR_CHALLENGE: case FrameType.PAIR_REVEAL: case FrameType.PAIR_CONFIRM: {
+        const clientFrame = CLIENT_SETUP.includes(frame.type);
         check(this.deviceId === undefined && clientFrame === (this.options.role === "server"), "Unexpected setup frame");
         this.options.onSession?.(frame);
         return;

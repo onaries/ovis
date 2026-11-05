@@ -29,6 +29,8 @@ export interface TerminalSendsDeps {
   hostRef: RefObject<HTMLDivElement | null>;
   inputLine: boolean;
   inputRowNow: () => InputRowState | null;
+  /** Settings > Terminal > Keyboard only from the key bar, with the keyboard down (#1635) */
+  keyboardHeld: boolean;
   /** this pane's keyboard-control owner (lib/keyboardControl.ts): the mode switch reads its keyboard */
   keyboardOwnerRef: RefObject<string>;
   keyboardToggleFocusRef: RefObject<boolean>;
@@ -38,6 +40,8 @@ export interface TerminalSendsDeps {
   lineComposingRef: RefObject<boolean>;
   machineId: string;
   modifiersRef: RefObject<StickyModifiers>;
+  /** after a key that carried the held modifiers: lets go of those held for one key */
+  consumeModifiers: () => void;
   onChatSuggestion: (pane: string, value: string | null) => void;
   paneId: string | null;
   paneRef: RefObject<string | null>;
@@ -63,7 +67,7 @@ export interface TerminalSendsDeps {
 }
 
 export function useTerminalSends(deps: TerminalSendsDeps) {
-  const { activeRef, agent, cancelTouchRef, chatView, coarse, composingRef, directTyping, draft, draftHeldForRef, heldRef, hostRef, inputLine, inputRowNow, keyboardOwnerRef, keyboardToggleFocusRef, knownOutcomes, lineComposingRef, lineFocus, machineId, modifiersRef, onChatSuggestion, paneId, paneRef, pendingEpochRef, pendingSubmissionsRef, reassertIfStaleRef, redrawGreeting, releaseRef, secretRef, sessionRef, setChatRefresh, setChatSent, setChatUnsent, setDraft, showSentCommand, socketRef, stillOpenNote, stillOpenRef, submitRetention, tRef, termRef, updateSettings } = deps;
+  const { activeRef, agent, cancelTouchRef, chatView, coarse, composingRef, directTyping, draft, draftHeldForRef, heldRef, hostRef, inputLine, inputRowNow, keyboardHeld, keyboardOwnerRef, keyboardToggleFocusRef, knownOutcomes, lineComposingRef, lineFocus, machineId, modifiersRef, consumeModifiers, onChatSuggestion, paneId, paneRef, pendingEpochRef, pendingSubmissionsRef, reassertIfStaleRef, redrawGreeting, releaseRef, secretRef, sessionRef, setChatRefresh, setChatSent, setChatUnsent, setDraft, showSentCommand, socketRef, stillOpenNote, stillOpenRef, submitRetention, tRef, termRef, updateSettings } = deps;
   const sendDraft = useCallback(() => {
     const socket = socketRef.current;
     const pane = paneRef.current;
@@ -168,6 +172,8 @@ export function useTerminalSends(deps: TerminalSendsDeps) {
     cancelTouchRef.current();
     const sent = socket.submit(pane, message, payload, true);
     if (sent === null) return false;
+    // the line's Enter was the next key: modifiers held for one key are done with, as pressEnter's
+    consumeModifiers();
     const releaseSubmit = submitRetention?.retain(pane);
     term.scrollToBottom();
     return sent.then((result) => (result.ok ? true : submitNote(result.code, result.message))).finally(() => {
@@ -211,8 +217,10 @@ export function useTerminalSends(deps: TerminalSendsDeps) {
     if (draftHeldForRef.current === pane) return tRef.current("Not sent: send or discard the held input first.");
     reassertIfStaleRef.current();
     cancelTouchRef.current();
-    const sent = hasModifiers(modifiersRef.current)
+    const modified = hasModifiers(modifiersRef.current);
+    const sent = modified
       ? socket.sendKeys(pane, [terminalChord("Enter", modifiersRef.current)!]) : socket.sendInput(pane, "\r");
+    if (modified) consumeModifiers();
     termRef.current?.scrollToBottom();
     return sent;
   }, []);
@@ -255,6 +263,17 @@ export function useTerminalSends(deps: TerminalSendsDeps) {
       if (activeRef.current && coarse && !chatView && turnedOn && keyboardUp) termRef.current?.focus();
     }
   }, [inputLine, coarse, chatView, directTyping, paneId]);
+
+  // Settings > Terminal > Keyboard only from the key bar (#1635): in direct typing, xterm's field
+  // carries inputmode="none" while the keyboard is down, as the input line does. Its own effect, after
+  // the one above, so a re-hold never re-runs that one's blur or handoff
+  useLayoutEffect(() => {
+    if (inputLine) return;
+    const textarea = hostRef.current?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
+    if (!textarea) return;
+    if (keyboardHeld) textarea.setAttribute("inputmode", "none");
+    else textarea.removeAttribute("inputmode");
+  }, [keyboardHeld, inputLine, coarse, chatView, directTyping, paneId]);
 
   return { sendDraft, discardDraft, submitComposerMessage, sendComposerText, sendTerminalLine, insertTerminalText, reassertGrid, pressEnter, toggleDirect };
 }

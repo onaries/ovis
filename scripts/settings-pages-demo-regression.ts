@@ -533,10 +533,11 @@ try {
               assert.equal(await body.locator("[role='alert']").count(), 0, "the Agents page shows no error");
               assert.deepEqual(await body.locator(".agents-item").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent"))), ["claude", "codex", "omp", "pi", "hermes"]);
               assert.deepEqual(await body.locator("[data-section='other-accounts'] .usage-provider-heading > span:not(.usage-account-count):not(.agent-mark)").allTextContents(), ["Cursor", "OpenCode"]);
-              assert.deepEqual(await body.locator("h3").allTextContents(), [label("On this PC"), label("Other agents herdr found"), label("Not found on this PC"), label("Other accounts"), label("New agents"), label("Plan limits")]);
-              // herdr's integrations no row shows: found on the PC first, then the rest, each with its command
+              assert.deepEqual(await body.locator("h3").allTextContents(), [label("On this PC"), label("Other agents herdr found"), label("Other accounts"), label("New agents"), label("Plan limits")]);
+              // herdr's integrations no row shows, each with its command; one with neither its agent nor its
+              // hook on the PC (copilot, cursor, antigravity-cli) is not listed at all (#2738)
               assert.deepEqual(await body.locator("[data-section='integrations'] .settings-label").allTextContents(), ["opencode"]);
-              assert.deepEqual(await body.locator("[data-section='integrations-missing'] .settings-label").allTextContents(), ["copilot", "cursor", "antigravity-cli"]);
+              assert.equal(await body.locator("[data-section='integrations-missing']").count(), 0);
               // the launch modes are always there, whatever the PC has
               assert.equal(await body.locator("[data-section='launch-modes'] select").count(), 2);
               const install = (target: string): string => `herdr integration install ${target}`;

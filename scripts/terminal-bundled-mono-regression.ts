@@ -20,6 +20,7 @@ import { UsageService } from "../server/usage.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { terminalLineHeight } from "../src/lib/terminalLineHeight.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 const ROWS = ["|abcdefghijklmn|", "|가나다라마바사|"];
 const FACE = /\/JetBrainsMono-Regular[^/]*\.woff2$/;
@@ -76,9 +77,9 @@ function paneFrames(page: Page, pane: string) {
   };
 }
 
-/** The font family xterm's rows are drawn in. */
+/** The font family the shown rows are drawn in: libghostty's while it draws the pane, else xterm's. */
 const rowsFamily = (page: Page): Promise<string> =>
-  page.evaluate(() => getComputedStyle(document.querySelector(".pane-terminal .xterm-rows")!).fontFamily);
+  page.evaluate((shown) => getComputedStyle(document.querySelector(shown)!).fontFamily, shownRows());
 
 try {
   // Given: a pane that prints a Latin and a Korean row, each closed by a bar.
@@ -147,12 +148,12 @@ setInterval(() => {}, 1 << 30);
     release = true;
     for (const route of held.splice(0)) await route.continue();
     attach ??= await frames.attach();
-    await page.waitForFunction((family) => getComputedStyle(document.querySelector(".pane-terminal .xterm-rows")!).fontFamily.includes(family), FAMILY);
-    await page.locator(".pane-terminal .xterm-rows", { hasText: ROWS[1]! }).waitFor();
+    await page.waitForFunction(([family, shown]) => getComputedStyle(document.querySelector(shown)!).fontFamily.includes(family), [FAMILY, shownRows()] as const);
+    await page.locator(shownRows(), { hasText: ROWS[1]! }).waitFor();
 
     // Then: the grid is measured from the face, its rows are the face's, and it fits its host
-    const drawn = await page.evaluate((family) => {
-      const rows = document.querySelector<HTMLElement>(".pane-terminal .xterm-rows")!;
+    const drawn = await page.evaluate(([family, shown]) => {
+      const rows = document.querySelector<HTMLElement>(shown)!;
       const screen = document.querySelector<HTMLElement>(".pane-terminal .xterm-screen")!;
       const size = Number.parseFloat(getComputedStyle(rows).fontSize);
       const canvas = document.createElement("canvas").getContext("2d")!;
@@ -179,15 +180,17 @@ setInterval(() => {}, 1 << 30);
         cols,
         gridRows: rows.children.length,
         width: Number.parseFloat(screen.style.width),
-        rowHeight: Number.parseFloat((rows.children[0] as HTMLElement).style.height),
+        // xterm sets each row's height inline; libghostty's rows take theirs from --ghostty-ch
+        rowHeight: Number.parseFloat((rows.children[0] as HTMLElement).style.height) || rows.children[0]!.getBoundingClientRect().height,
         hostWidth: screen.closest(".xterm")!.parentElement!.clientWidth,
         glyph: metrics.width,
         charHeight: metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent,
         bars,
         loaded: document.fonts.check(`${size}px "${family}"`, "M"),
         dpr: devicePixelRatio,
+        renderer: document.querySelector<HTMLElement>(".pane-terminal")?.dataset["renderer"] ?? "xterm",
       };
-    }, FAMILY);
+    }, [FAMILY, shownRows()] as const);
     const [latin, korean] = drawn.bars;
     // |abcdefghijklmn|: the closing bar stands 15 cells after the opening one
     const cell = (latin!.at(-1)! - latin![0]!) / (ROWS[0]!.length - 1);
@@ -237,14 +240,14 @@ setInterval(() => {}, 1 << 30);
     await page.route(FACE, (route) => release ? route.continue() : void held.push(route));
     await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(pane)}`);
     // the pane is attached once the font effect gave up waiting for the held face
-    await page.locator(".pane-terminal .xterm-rows", { hasText: ROWS[1]! }).waitFor();
+    await page.locator(shownRows(), { hasText: ROWS[1]! }).waitFor();
     await frames.inputReady();
     const box = (await page.locator(".pane-terminal").boundingBox())!;
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
     const cdp = await context.newCDPSession(page);
     const pair = (distance: number) => [{ x: cx - distance / 2, y: cy, id: 1 }, { x: cx + distance / 2, y: cy, id: 2 }];
-    const fontPx = () => page.evaluate(() => Number.parseFloat(getComputedStyle(document.querySelector(".pane-terminal .xterm-rows")!).fontSize));
+    const fontPx = () => page.evaluate((shown) => Number.parseFloat(getComputedStyle(document.querySelector(shown)!).fontSize), shownRows());
     const badge = page.locator(".terminal-font-size");
     const startPx = await fontPx();
     await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pair(100) });
@@ -259,7 +262,7 @@ setInterval(() => {}, 1 << 30);
     release = true;
     for (const route of held.splice(0)) await route.continue();
     // the family is set in the same task as any resize its fit would send
-    await page.waitForFunction((family) => getComputedStyle(document.querySelector(".pane-terminal .xterm-rows")!).fontFamily.includes(family), FAMILY);
+    await page.waitForFunction(([family, shown]) => getComputedStyle(document.querySelector(shown)!).fontFamily.includes(family), [FAMILY, shownRows()] as const);
     // Then: the pinch keeps its live size and sizes no pty while the fingers are down
     assert.equal(await fontPx(), pinchedPx, `the arriving face keeps the pinch's live size (grow=${grow})`);
     assert.deepEqual(frames.resizes().slice(before), [], `no resize while the fingers are down (grow=${grow})`);
@@ -267,7 +270,7 @@ setInterval(() => {}, 1 << 30);
     // the badge is hidden in the same task as the release's resize, last
     await badge.waitFor({ state: "hidden" });
     // xterm adds and removes row elements in the resize itself; their text is drawn again in a later frame
-    const gridRows = await page.evaluate(() => document.querySelector(".pane-terminal .xterm-rows")!.children.length);
+    const gridRows = await page.evaluate((shown) => document.querySelector(shown)!.children.length, shownRows());
     const after = frames.resizes().slice(before);
     assert.equal(after.length, 1, `one resize when the fingers lift (grow=${grow}): ${JSON.stringify(after)}`);
     assert.equal(after[0]!.rows, gridRows, "the resize is the grid the face gave");

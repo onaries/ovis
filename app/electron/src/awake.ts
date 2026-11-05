@@ -1,0 +1,49 @@
+/**
+ * Keep this computer awake while an agent works: an opt-in from the tray. The server the app runs
+ * writes how many agents work (server/desktop-activity.ts); while the setting is on, the server runs
+ * and one works, the app holds off system sleep (Electron's powerSaveBlocker, `prevent-app-suspension`:
+ * the display may still turn off). On battery only when the user also allowed it.
+ */
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+
+/** the file the server keeps in its state folder (server/desktop-activity.ts DESKTOP_ACTIVITY_FILE) */
+export const DESKTOP_ACTIVITY_FILE = "desktop-activity.json";
+
+export interface AwakeSettings {
+  whileWorking: boolean;
+  onBattery: boolean;
+}
+
+const OFF: AwakeSettings = { whileWorking: false, onBattery: false };
+
+function readJson(path: string): unknown {
+  try { return JSON.parse(readFileSync(path, "utf8")); } catch { return null; }
+}
+
+export function readAwakeSettings(path: string): AwakeSettings {
+  const saved = readJson(path) as Partial<Record<keyof AwakeSettings, unknown>> | null;
+  if (typeof saved?.whileWorking !== "boolean" || typeof saved.onBattery !== "boolean") return { ...OFF };
+  return { whileWorking: saved.whileWorking, onBattery: saved.onBattery };
+}
+
+export function writeAwakeSettings(path: string, settings: AwakeSettings): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.tmp`;
+  writeFileSync(temporary, JSON.stringify(settings));
+  renameSync(temporary, path);
+}
+
+/** how many agents the server says work; none when it says nothing readable */
+export function readWorking(path: string): number {
+  const working = (readJson(path) as { working?: unknown } | null)?.working;
+  return typeof working === "number" && Number.isSafeInteger(working) && working > 0 ? working : 0;
+}
+
+export function holdAwake({ settings, working, onBattery, serverRunning }: { settings: AwakeSettings; working: number; onBattery: boolean; serverRunning: boolean }): boolean {
+  return settings.whileWorking && serverRunning && working > 0 && (!onBattery || settings.onBattery);
+}
+
+export function awakeLabel(working: number): string {
+  return `Keeping this computer awake: ${working} ${working === 1 ? "agent" : "agents"} working`;
+}

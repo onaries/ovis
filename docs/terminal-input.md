@@ -74,6 +74,9 @@ The key bar waits only for a direct-typing (xterm) composition, so a key cannot 
 pending commit. A composition in the input line leaves the key bar live: Esc, ^C and the arrows
 go to the pane at once, Ctrl, Alt and Shift arm, and the line's unfinished text stays where it is.
 Only the switch to direct typing waits for it, so the line is not removed mid-word.
+A key bar key, or a hardware arrow, Home, Tab, Esc or Ctrl key, empties xterm's helper textarea as
+Enter does, so a keyboard's later correction (Gboard rewriting a word) only reaches text typed since
+the cursor moved (#2836).
 
 The key bar defaults to Esc, Tab, ^C, Ctrl, Alt, Shift, Enter and the arrows. Esc, Tab and ^C
 come first so they stay reachable without scrolling on narrow phones.

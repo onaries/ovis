@@ -2,7 +2,8 @@ import { afterEach, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import type { ClientMessage, ServerMessage } from "../../shared/protocol.ts";
-import { decodeFrame, FrameType } from "../../shared/relay-mux.ts";
+import { RECEIPT_RESUME_ID } from "../../shared/receipt-resume.ts";
+import { decodeFrame, FrameType, LARGE_WS_MESSAGES, LIMITS_V1 } from "../../shared/relay-mux.ts";
 import type { createCore } from "../core/index.ts";
 import { handleRequest } from "../dispatch.ts";
 import * as herdr from "../herdr/client.ts";
@@ -304,7 +305,9 @@ it("routes machine_id through MachineRelay and resets upstream loss", async () =
     await socket.opened;
     expect(await socket.until((message) => message.type === "pty-data")).toMatchObject({ data: "REMOTE" });
     socket.send({ type: "attach", pane_id: "remote-pane", cols: 80, rows: 24, flow_control: "ack", receipt_resume_id: "12345678-1234-4234-8234-123456789abc" });
-    expect(await bounded(received.promise)).toEqual({ type: "attach", pane_id: "remote-pane", cols: 80, rows: 24, flow_control: "ack" });
+    const forwarded = await bounded(received.promise);
+    expect(forwarded).toEqual({ type: "attach", pane_id: "remote-pane", cols: 80, rows: 24, flow_control: "ack", receipt_resume_id: expect.stringMatching(RECEIPT_RESUME_ID) });
+    expect(forwarded).not.toHaveProperty("receipt_resume_id", "12345678-1234-4234-8234-123456789abc");
     await socket.until((message) => message.type === "pong");
     const reset = deferred<string>();
     link.onFrame = (frame) => { if (frame.type === FrameType.RESET) reset.resolve(frame.payload.code); };
@@ -406,12 +409,44 @@ it("counts only serialized stream bytes, drains on receipts, and closes overflow
   await link.flush();
   expect(drains).toBe(1);
   expect(received).toEqual([text]);
-  socket.send("x".repeat(OUTPUT_HARD_BYTES));
-  expect(socket.send("x")).toBe(0);
+  // a phone that did not offer large messages cannot take a frame past the v1 limit: closed as stalled, once
+  expect(socket.send("x".repeat(LIMITS_V1.max_ws_message_bytes + 1))).toBe(0);
   socket.close(4008);
   expect(closes).toBe(1);
   await link.session.mux.flush();
   expect(link.frames.filter((frame) => frame.type === FrameType.WS_CLOSE)).toHaveLength(1);
+});
+
+it("delivers a frame over 1 MiB, and the frames behind it, to a phone that offered large messages (#2773)", async () => {
+  const f = fixture();
+  const made = deferred<VirtualSocket>();
+  const closes: number[] = [];
+  const device = await relayDevice(f, "drive");
+  const link = await relayConnection(f, {
+    websocket: {
+      open(socket) {
+        if (!(socket instanceof VirtualSocket)) throw new Error("Missing virtual socket");
+        made.resolve(socket);
+      },
+      message() {},
+      close(_socket, code) { closes.push(code); },
+      drain() {},
+    },
+  });
+  link.mux.receiveLargeMessages();
+  await link.auth(device, [LARGE_WS_MESSAGES]);
+  const ws = link.mux.openWs({ target: "/ws", headers: [], protocols: [] });
+  const received: string[] = [];
+  const both = deferred<void>();
+  ws.onMessage = (raw) => { received.push(String(raw)); if (received.length === 2) both.resolve(); };
+  const socket = await bounded(made.promise);
+  // a large session's snapshot, then the output the core sends while it still crosses
+  const snapshot = JSON.stringify({ type: "snapshot", panes: "x".repeat(OUTPUT_HARD_BYTES) });
+  expect(socket.send(snapshot)).not.toBe(0);
+  expect(socket.send("after")).not.toBe(0);
+  await bounded(both.promise);
+  expect(received).toEqual([snapshot, "after"]);
+  expect(closes).toEqual([]);
 });
 
 it("keeps RECEIVED transport accounting distinct from CREDIT while a WS sink is held", async () => {

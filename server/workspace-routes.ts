@@ -16,6 +16,7 @@ import { createDirectory, listDirectories } from "./directories.ts";
 import { HerdrError, paneMoveToNewTab, sessionSnapshot, tabClose, tabCreate, tabMove, tabRename, workspaceClose, workspaceCreate, workspaceMove, workspaceRename, worktreeCreate, worktreeList, worktreeOpen, worktreeRemove } from "./herdr/client.ts";
 import { badRequest, conflictResponse, errorResponse, isJsonObject, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
 import { paneContext } from "./pane-context.ts";
+import { PullRequestError, mergeInputOf, mergePullRequest, pullRequestLog, pullRequestView } from "./pull-request.ts";
 import { repoDiffResponse } from "./repo-diff.ts";
 import type { ShellAgentLocator } from "./shell-agent.ts";
 
@@ -27,6 +28,28 @@ export function expandedDirectory(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The folder a repository route reads: the pane's own, or `directory` (absolute, `~/…`, or relative to
+ * the pane's folder). A refusal in the API's envelope when there is none.
+ */
+async function routeFolder(paneId: string | null, directory: string): Promise<string | Response> {
+  if (!paneId && directory === "") return badRequest("missing_directory", "pane_id or directory query parameter is required");
+  let base: string | undefined;
+  if (paneId) {
+    try { base = (await paneContext(paneId)).cwd; } catch (error) {
+      // a named folder is still read; the pane's own folder is gone with the pane
+      if (directory === "") return errorResponse(error);
+    }
+  }
+  let cwd = base;
+  if (directory !== "") {
+    const relative = directory !== "~" && !directory.startsWith("~/") && !isAbsolute(directory);
+    if (relative && base === undefined) return badRequest("invalid_cwd", "a relative directory needs the pane it belongs to");
+    cwd = expandedDirectory(relative ? resolve(base!, directory) : directory) ?? undefined;
+  }
+  return cwd ?? badRequest("invalid_cwd", "directory must be a directory this user can read");
 }
 
 /** the most variables a create request's `env` may set */
@@ -67,7 +90,9 @@ const notQueued = (error: unknown): { error: { code: string; message: string } }
 export async function handleWorkspaceRequest(request: Request, url: URL, pathname: string, bunServer: Pick<ServerContext, "timeout">, broadcastAll: (message: ServerMessage) => void,
   queueFirstMessage: (paneId: string, text: string, kind: string, requester: string | null, launchedPid: number | null) => Promise<PendingMessage>,
   /** a move herdr confirmed: its receipt in this server's order (server/order-sequence.ts), taken at once */
-  workspaceMoved: () => MoveReceipt, shellAgents?: ShellAgentLocator): Promise<Response | null> {
+  workspaceMoved: () => MoveReceipt, shellAgents?: ShellAgentLocator,
+  /** false: the folders are another machine's, which hc checks as it starts the shell there */
+  localFolders = true): Promise<Response | null> {
   if (pathname === "/api/workspace/directories" && request.method === "POST") {
     setRequestRoute(pathname);
     let payload: unknown;
@@ -104,24 +129,42 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
     // file contents, like /api/fs/file: this app reads them, another site's page does not
     if (request.headers.get("sec-fetch-site") === "cross-site") return jsonResponse({ error: { code: "cross_site", message: "A repository's changes are read from this app" } }, 403);
-    const paneId = url.searchParams.get("pane_id");
-    const directory = (url.searchParams.get("directory") ?? "").trim();
-    if (!paneId && directory === "") return badRequest("missing_directory", "pane_id or directory query parameter is required");
-    let base: string | undefined;
-    if (paneId) {
-      try { base = (await paneContext(paneId)).cwd; } catch (error) {
-        // a named folder is still read; the pane's own folder is gone with the pane
-        if (directory === "") return errorResponse(error);
-      }
-    }
-    let cwd = base;
-    if (directory !== "") {
-      const relative = directory !== "~" && !directory.startsWith("~/") && !isAbsolute(directory);
-      if (relative && base === undefined) return badRequest("invalid_cwd", "a relative directory needs the pane it belongs to");
-      cwd = expandedDirectory(relative ? resolve(base!, directory) : directory) ?? undefined;
-    }
-    if (cwd === undefined) return badRequest("invalid_cwd", "directory must be a directory this user can read");
+    const cwd = await routeFolder(url.searchParams.get("pane_id"), (url.searchParams.get("directory") ?? "").trim());
+    if (cwd instanceof Response) return cwd;
     return repoDiffResponse(pathname.endsWith("/repositories") ? "repositories" : pathname.endsWith("/files") ? "files" : pathname.endsWith("/refs") ? "refs" : "file", cwd, url.searchParams);
+  }
+
+  // The branch's pull request, through this PC's own gh sign-in: read like the changes, merged only on a POST
+  if (pathname === "/api/workspace/pr" || pathname === "/api/workspace/pr/log" || pathname === "/api/workspace/pr/merge") {
+    setRequestRoute(pathname);
+    const merging = pathname.endsWith("/merge");
+    if (request.method !== (merging ? "POST" : "GET")) return badRequest("method_not_allowed", merging ? "use POST" : "use GET");
+    // review comments and job logs are the repository's contents: this app reads them, another site's page does not
+    if (request.headers.get("sec-fetch-site") === "cross-site") return jsonResponse({ error: { code: "cross_site", message: "A pull request is read from this app" } }, 403);
+    let paneId = url.searchParams.get("pane_id");
+    let directory = (url.searchParams.get("directory") ?? "").trim();
+    let merge = null;
+    if (merging) {
+      const payload = await readJsonObject<Record<string, unknown>>(request);
+      if (payload instanceof Response) return payload;
+      merge = mergeInputOf(payload);
+      if (merge === null) return badRequest("invalid_body", "number, head_oid (a full commit hash) and method (merge, squash or rebase) are required");
+      paneId = typeof payload["pane_id"] === "string" ? payload["pane_id"] : null;
+      directory = typeof payload["directory"] === "string" ? payload["directory"].trim() : "";
+    }
+    const cwd = await routeFolder(paneId, directory);
+    if (cwd instanceof Response) return cwd;
+    try {
+      if (merge !== null) {
+        await mergePullRequest(cwd, merge);
+        return jsonResponse({ ok: true });
+      }
+      const body = pathname.endsWith("/log") ? await pullRequestLog(cwd, url.searchParams.get("job_id") ?? "", url.searchParams.get("host") ?? "github.com") : await pullRequestView(cwd);
+      return jsonResponse(body, 200, { "cache-control": "private, no-store" });
+    } catch (error) {
+      if (error instanceof PullRequestError) return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);
+      return errorResponse(error);
+    }
   }
 
   // A tab is made the way a workspace is: herdr opens it with a shell in its root pane, and
@@ -145,7 +188,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     const envProblem = envFault(payload.env);
     if (envProblem !== null) return badRequest("invalid_env", envProblem);
     if (payload.cwd !== undefined && typeof payload.cwd !== "string") return badRequest("invalid_cwd", "cwd must be an existing directory");
-    const cwd = payload.cwd === undefined ? undefined : expandedDirectory(payload.cwd);
+    const cwd = payload.cwd === undefined ? undefined : localFolders ? expandedDirectory(payload.cwd) : payload.cwd;
     if (payload.cwd !== undefined && cwd === null) return badRequest("invalid_cwd", "cwd must be an existing directory");
     if (payload.label !== undefined && typeof payload.label !== "string") return badRequest("missing_label", "label must be a string");
     if (typeof payload.label === "string") {

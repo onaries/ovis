@@ -63,8 +63,39 @@
   transform: translateX(calc(100% + var(--space-2)));
 }
 
+/* rows and columns: every slot outlined, and one highlight moving to the place the pane would take */
+.split-drop-slot {
+  position: absolute;
+  border: var(--hairline) dashed var(--border-strong);
+  border-radius: var(--radius-md);
+}
+
+.split-drop-zone {
+  position: absolute;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: var(--space-3);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-tint);
+  opacity: 0;
+  transition: left var(--dur-fast) var(--ease-out), top var(--dur-fast) var(--ease-out), width var(--dur-fast) var(--ease-out),
+    height var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+
+.split-drop[data-edge] .split-drop-zone {
+  opacity: 1;
+}
+
+.split-drop-zone .split-drop-label {
+  color: var(--text);
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .split-drop,
+  .split-drop-zone,
   .split-drop-target {
     transition: none;
   }

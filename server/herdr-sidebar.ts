@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Machine } from "../shared/machines.ts";
 import type { SessionSnapshot } from "../shared/protocol.ts";
-import { PANE_TOKEN_NAME, paneTokenRuleMatches, paneTokenSpecs, type AgentRowTokens, type PaneTokenRule, type PaneTokenSpec } from "../shared/pane-tokens.ts";
+import { isBackgroundRole, PANE_TOKEN_NAME, paneTokenRuleMatches, paneTokenSpecs, type AgentRowTokens, type PaneTokenRule, type PaneTokenSpec, ROLE_TOKEN } from "../shared/pane-tokens.ts";
 
 /** how often a watched config.toml is looked at again while a browser listens */
 const POLL_MS = 5_000;
@@ -179,7 +179,9 @@ export function snapshotWithoutHiddenTokens<S extends Pick<SessionSnapshot, "pan
   const shown = <T extends { pane_id: string; tokens?: Record<string, unknown> }>(item: T, agent: string | null): T => {
     const specs = paneTokenSpecs(layout, agent);
     if (!item.tokens || specs === null) return item;
-    const kept = Object.entries(item.tokens).filter(([name, value]) => !hiddenEverywhere(specs, name, value));
+    // the background tag files the row under the Agents list's background part: a rule may hide it from
+    // the row (the browser applies the rows' rules too), never from the browser
+    const kept = Object.entries(item.tokens).filter(([name, value]) => (name === ROLE_TOKEN && isBackgroundRole(value)) || !hiddenEverywhere(specs, name, value));
     if (kept.length === Object.keys(item.tokens).length) return item;
     changed = true;
     return { ...item, tokens: Object.fromEntries(kept) };

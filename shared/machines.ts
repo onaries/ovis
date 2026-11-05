@@ -19,8 +19,16 @@ export interface Machine {
   herdr_profile_id?: string;
   id: string;
   name: string;
-  kind: "local" | "ssh";
+  /** hc: another machine of this PC's herdr-core (`hc machine add`), reached through that core */
+  kind: "local" | "ssh" | "relay" | "hc";
   target?: SshTarget;
+  /** a PC added through the Ovis relay (no SSH): its relay ID and the relay it is reached through */
+  relay?: { server_id: string; relay: string };
+  /**
+   * The PC's relay ID (server/relay/identity.ts) as its own server has it: the local PC's own, an SSH PC's
+   * from its /api/health. Absent where that server has none, or is older. What a device turns its alerts off by.
+   */
+  server_id?: string;
   enabled: boolean;
   state: MachineState;
   error: string | null;
@@ -68,6 +76,14 @@ export interface RemoteOvis {
  * Any other error beside that offer says why its last update failed, and the card shows it.
  */
 export const OWN_UPDATE_OFFER = "This PC runs its own Ovis";
+/**
+ * What a device's `pcs_off` (shared/notify-policy.ts) lists this PC by: its relay ID, which its own
+ * server and every roster that lists it know alike, else its name.
+ */
+export function pcAlertKey(machine: Pick<Machine, "name" | "relay" | "server_id">): string {
+  return machine.relay?.server_id ?? machine.server_id ?? machine.name;
+}
+
 /** GET /api/machines: with ?verify_source_boot=<id>, also that PC's freshly proved boot id */
 export interface MachineRoster { machines: Machine[]; verified_source_boot?: { machine_id: string; boot_id: string } }
 /**
@@ -84,12 +100,36 @@ export interface HerdrIdentity {
   /** without attach, the terminal lens shows the pane's screen repainted a few times a second (server/mirror.ts) */
   terminal_mirror?: boolean;
   /**
-   * `herdr-core`: the PC's terminals are herdr-core's (OVIS_RUNTIME=herdr-core), whose workspaces,
-   * tabs and splits belong to the Herdr app's window; renaming, moving, splitting and resizing
-   * them is not offered. Absent: herdr's TUI server.
+   * `herdr-core`: the PC's terminals are herdr-core's (OVIS_RUNTIME=herdr-core), which has no
+   * workspaces, tabs or splits of its own: the layout calls and the worktree actions are offered
+   * only as `layout` says. Absent: herdr's TUI server.
    */
   runtime?: "herdr-core";
+  /** herdr-core only: which layout calls it answers (HerdrCoreLayout); absent, none */
+  layout?: HerdrCoreLayout;
 }
+
+/**
+ * What a herdr-core PC lets Ovis do with its workspaces, tabs and splits. On a core no Herdr app
+ * arranges (its `herdr-app` document was never written, as on the desktop app's own core) Ovis keeps
+ * names and places in terminal labels (`rename`, `move` a one-pane tab to another workspace) and
+ * splits, ratios, zoom, swap and order in its own `ovis-layout` document (`split`, `arrange`: only
+ * where the core writes documents). `worktrees`: Ovis runs git's worktree commands itself and opens
+ * a checkout as a workspace it places. Where the Herdr app arranges them, they are the app's, and
+ * none is offered.
+ */
+export interface HerdrCoreLayout {
+  rename: boolean;
+  split: boolean;
+  move: boolean;
+  arrange: boolean;
+  worktrees: boolean;
+}
+/**
+ * The workspace a herdr-core PC shows its terminals no workspace holds in ("Other terminals"): it has
+ * no name to change, and a helper whose parent is shown cannot go there (server/herdr-core/adapter.ts).
+ */
+export const HC_OTHER_WORKSPACE_ID = "hc-other";
 /** where this server's runtime came from: OVIS_RUNTIME, the choice saved from Settings, or what the PC has */
 export type RuntimeSource = "env" | "saved" | "detected";
 /** why Settings cannot switch the runtime: OVIS_RUNTIME decides, the server was not started by Ovis's launcher, or herdr-core is not served on this OS */
@@ -176,21 +216,71 @@ export type SetupAction = { action: "answer"; challenge_id: string; answer: stri
  * own; `event_id` is what a browser deduplicates by. Carries nothing a credential could be
  * made from: the label is the normalized one (at most 48 characters), the id the public one.
  */
+/**
+ * A device lost its access (docs/account.md, "On the PC"): revoked on this PC (`by` "pc", or the device that
+ * revoked it), or removed by an account record (`by` the member that signed it). Told to driving streams only.
+ */
+export interface DeviceRemovedEvent {
+  type: "device-removed";
+  event_id: string;
+  device_id: string;
+  label: string;
+  removed_at: string;
+  by?: { device_id: string; label: string } | "pc";
+}
 export interface DevicePairedEvent {
   type: "device-paired";
   event_id: string;
   device_id: string;
   label: string;
   enrolled_at: string;
+  /** the account member that approved it from another device (docs/account.md, "Who may admit a device"); absent when approved on this PC or by a code */
+  approved_by?: { device_id: string; label: string };
 }
+/** What a comparison asks for (docs/account.md, "Negotiation"): pairing this PC only, or joining the account. */
+export type PairingIntent = "pc" | "account";
 /** `preferences`: what every browser of this server shares changed (shared/preferences.ts) */
+/**
+ * A phone asking to pair through the relay by comparing digits (docs/relay.md): the six digits its
+ * screen shows too, waiting for the owner to approve it until `expires_at`.
+ */
+export interface RelayPairingRequest {
+  id: string;
+  label: string;
+  digits: string;
+  expires_at: string;
+  /** absent from an older server: `pc` */
+  intent?: PairingIntent;
+}
+/**
+ * The same request as an account member connected through the relay sees it: three candidates
+ * instead of the digits, one of them the new device's, which the approver must pick
+ * (`POST /api/relay/pairing` with `digits`).
+ */
+export interface RemotePairingRequest {
+  id: string;
+  label: string;
+  intent: PairingIntent;
+  choices: [string, string, string];
+  expires_at: string;
+  /** the new device's key (P-256 SPKI, base64url) from PAIR_REQUEST, bound by its commitment and the digits: what the approver signs an `add` for */
+  key: string;
+}
+
 export type MachineEvent = { type: "machines"; machines: Machine[] } | { type: "machine-message"; machine_id: string; message: ServerMessage }
   | { type: "preferences"; preferences: SharedPreferences }
   /** the `$name` tokens herdr's `[ui.sidebar.agents]` rows draw on this server's PC, for every PC's agent rows (server/herdr-sidebar.ts) */
   | { type: "herdr-sidebar"; agents: AgentRowTokens | null }
   /** finishes a browser of this server presented (shared/seen.ts): every record when the stream opens, then each change */
   | { type: "seen"; finishes: SeenFinish[] }
-  | DevicePairedEvent;
+  | DevicePairedEvent
+  | DeviceRemovedEvent
+  | RelayPairingsEvent
+  | RemotePairingsEvent;
+/** every relay pairing waiting for approval, after each change; only to the PC's own windows that may approve one */
+export interface RelayPairingsEvent { type: "relay-pairings"; pairings: RelayPairingRequest[] }
+/** every relay pairing waiting for approval, after each change; only to drive account members connected through the relay */
+export interface RemotePairingsEvent { type: "remote-pairings"; pairings: RemotePairingRequest[] }
 /** `security`: authenticated requests only, absent from an older server (shared/protocol.ts SecuritySummary) */
 /**
  * `web_ui.boot_id`: this server lifetime's id, as in the full health answer. `runtime`: the runtime it

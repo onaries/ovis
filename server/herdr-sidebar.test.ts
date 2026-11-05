@@ -206,6 +206,17 @@ codex = [[{ token = "$quota", rules = [{ starts_with = "5h 4" }, { contains = "W
     // no rows: every value goes as it is
     expect(withoutHiddenTokens(null, machines)).toBe(machines);
   });
+
+  test("keeps the background tag a rule hides, so the row still files under background agents, and the row still draws none of it", () => {
+    const raw = parse(`
+[ui.sidebar.agents]
+rows = [["agent", { token = "$role", rules = [{ equals = "background", ignore_case = true, hide = true }] }]]
+`);
+    const shown = withoutHiddenTokens(raw, [machineWith([{ pane_id: "w1:p1", agent: "claude", tokens: { role: "Background" } }, { pane_id: "w1:p2", agent: "claude", tokens: { role: "BACKGROUND-ish" } }], [])]);
+    expect(shown[0]!.snapshot!.panes.map((pane) => pane.tokens)).toEqual([{ role: "Background" }, { role: "BACKGROUND-ish" }]);
+    const told = decidedRowTokens(raw, reportedTokenValues(shown));
+    expect(paneTokenValues(told, "claude", { role: "Background" })).toEqual([]);
+  });
 });
 
 describe("HerdrSidebarConfig", () => {

@@ -1,3 +1,4 @@
+import type { Machine } from "../../shared/machines.ts";
 import type { ConversationTurn } from "../../shared/protocol.ts";
 import { composerMessage } from "./compose.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
@@ -7,11 +8,19 @@ import { paneLifetimes } from "./paneLifetime.ts";
  * it is none of these. `latest` is the newest time of all the turns it held (the PC's clock) and
  * `takenAt` when the chat first read them (the browser's): their difference is never less than how
  * far the browser's clock runs ahead of the PC's, so it bounds the skew without trusting either clock.
+ * `pcFloor` bounds the send itself more tightly, on the PC's clock alone: the PC's clock had passed
+ * it when the send began, so the send's own turn is no older.
  */
 export interface WaitingBaseline {
   keys: ReadonlySet<string>;
   latest: number | null;
   takenAt: number;
+  /**
+   * The PC's last answer to this chat's reads and what this browser's monotonic clock says has passed
+   * since (observeWaitingClock), or the time the PC stamped on a queued row as it went out. null from
+   * an older bridge, which says neither: the turns' times alone bound the skew.
+   */
+  pcFloor: number | null;
 }
 
 /** One confirmed send, independent of any other sends to the same pane. */
@@ -53,6 +62,16 @@ const becomesTurn = (text: string): boolean => !/^\s*[/!]/u.test(text);
 const turnTime = (turn: Turn): number => turn.ts === null ? Number.NaN : Date.parse(turn.ts);
 
 /**
+ * How far the two clocks may drift apart per millisecond after the PC answered: ten times a poor
+ * quartz's hundred parts per million. A chat reads its pane every few seconds while it is open, but
+ * a send can come long after a hidden tab's last read.
+ */
+const CLOCK_DRIFT = 0.001;
+
+/** How far the wall clock may run ahead of the monotonic one, past drift, before the device is taken to have slept. A step of the wall clock past it counts the same, as the wall clock alone did before. */
+const SLEEP_SLACK_MS = 2_000;
+
+/**
  * `answeredAt`: the newest time of the turns written after this one, NaN when none is dated.
  * `last`: it is the last of the turns read, nothing after it, dated or not.
  */
@@ -74,7 +93,12 @@ function newerThanSend(send: WaitingSend, at: number, key: string, answeredAt: n
   }
   if (after.keys.has(key)) return false;
   // written before the send, though the chat had not shown it yet: older than the send by any clock
-  return after.latest === null || (at >= after.latest && at + coarse + (after.takenAt - after.latest) > send.at);
+  if (after.latest !== null && at < after.latest) return false;
+  // The PC's own clock bounds it more tightly than its newest turn, read perhaps long after it was
+  // written, and needs neither of this browser's wall clock times: an identical turn another device
+  // or the terminal wrote just before the send is not this one, whatever either wall clock did since
+  if (after.pcFloor !== null) return at + coarse >= after.pcFloor;
+  return after.latest === null || at + coarse + (after.takenAt - after.latest) > send.at;
 }
 
 function turnMatches(send: WaitingSend, turn: Turn, key: string, answeredAt: number, last: boolean): boolean {
@@ -90,7 +114,10 @@ interface WaitingPane {
 }
 const waiting = new Map<string, WaitingPane>();
 /** the user turns each pane's chat showed last, for the baseline of its next send */
-const shown = new Map<string, WaitingBaseline>();
+const shown = new Map<string, Omit<WaitingBaseline, "pcFloor">>();
+/** each pane's last answered read: the PC's clock as it answered, and this browser's monotonic clock as it arrived */
+const clocks = new Map<string, { pcTime: number; received: number; receivedWall: number }>();
+const listedPanes = new Map<string, ReadonlySet<string>>();
 const empty: readonly WaitingSend[] = [];
 const listeners = new Set<() => void>();
 const announce = (): void => { for (const listener of listeners) listener(); };
@@ -118,9 +145,34 @@ function userTurns(turns: readonly Turn[]): { turn: Turn; key: string; answeredA
   });
 }
 
-/** What the pane's chat holds now; take it before submitting, as `at` is. */
-export function waitingBaseline(key: string): WaitingBaseline | null {
-  return shown.get(key) ?? null;
+/**
+ * What the pane's chat holds now; take it before submitting, as `at` is. `now`: this browser's
+ * monotonic clock (performance.now), which a wall clock step does not move; `wall` its wall clock.
+ */
+export function waitingBaseline(key: string, now = performance.now(), wall = Date.now()): WaitingBaseline | null {
+  const turns = shown.get(key);
+  if (turns === undefined) return null;
+  const clock = clocks.get(key);
+  if (clock === undefined) return { ...turns, pcFloor: null };
+  const counted = Math.max(0, now - clock.received), walked = wall - clock.receivedWall;
+  // Many browsers stop the monotonic clock while the device sleeps, though the PC's clock goes on: once
+  // the wall clock went on further than the two can drift apart, it is the one that counted the sleep
+  const passed = walked > counted + SLEEP_SLACK_MS + counted * CLOCK_DRIFT ? walked : counted;
+  // the PC's clock went on at least as fast as this one, less what the two may drift apart
+  return { ...turns, pcFloor: clock.pcTime + passed * (1 - CLOCK_DRIFT) };
+}
+
+/**
+ * A read of the pane was answered (a 304 too): `serverTime` is the PC's clock as it answered
+ * (ConversationResponse.server_time, or the `x-server-time` header), `received` this browser's
+ * monotonic clock as the answer arrived and `receivedWall` its wall clock then. Each answer replaces
+ * those that arrived before it: a PC whose clock was set back is bounded by its clock now, and an older
+ * read whose body was parsed late does not bring its time back. Without a time (an older bridge) the
+ * last one stays.
+ */
+export function observeWaitingClock(key: string, serverTime: string | null | undefined, received = performance.now(), receivedWall = Date.now()): void {
+  const pcTime = serverTime == null ? Number.NaN : Date.parse(serverTime);
+  if (Number.isFinite(pcTime) && !((clocks.get(key)?.received ?? Number.NEGATIVE_INFINITY) > received)) clocks.set(key, { pcTime, received, receivedWall });
 }
 
 export function rememberWaitingSend(key: string, text: string, at = Date.now(), after: WaitingBaseline | null = null): void {
@@ -182,13 +234,48 @@ export function settleWaitingSends(key: string, turns: readonly Turn[], now = Da
 /** Release a pane's waiting sends, consumed-turn identities and shown turns (a replaced herdr, tests). */
 export function forgetWaitingSends(key: string): void {
   shown.delete(key);
+  clocks.delete(key);
   if (waiting.delete(key)) announce();
+}
+
+/** The chat dropped its transcript for another history: the turns it showed are no baseline for its next send. */
+export function forgetWaitingBaseline(key: string): void {
+  shown.delete(key);
+}
+
+/**
+ * A connection loss drops provisional bubbles, but does not invalidate a chat's loaded turns. Only a
+ * PC whose snapshots name their herdr keeps them: an older bridge's replacement would reuse its pane
+ * ids unnoticed, so its baselines go with the connection.
+ */
+export function clearMachineWaitingSends(machineId: string): void {
+  if (typeof paneLifetimes.generation(machineId) !== "string") { forgetMachineWaitingSends(machineId); return; }
+  let changed = false;
+  for (const key of waiting.keys()) {
+    if (key.startsWith(`${machineId}:`)) { waiting.delete(key); changed = true; }
+  }
+  if (changed) announce();
 }
 
 // herdr gives pane ids out again once it is replaced (lib/paneLifetime.ts): the earlier herdr's
 // sends never reach the new panes, so a PC's waiting lines go with its herdr
 export function forgetMachineWaitingSends(machineId: string): void {
-  for (const key of [...waiting.keys(), ...shown.keys()]) if (key.startsWith(`${machineId}:`)) forgetWaitingSends(key);
+  listedPanes.delete(machineId);
+  for (const key of [...waiting.keys(), ...shown.keys(), ...clocks.keys()]) if (key.startsWith(`${machineId}:`)) forgetWaitingSends(key);
+}
+
+export function pruneWaitingSends(machines: readonly Machine[]): void {
+  for (const machine of machines) {
+    if (machine.state !== "connected" || machine.snapshot === null) continue;
+    // a roster read from a herdr this page already left (paneLifetimes skipped it) proves no pane closed
+    const lifetime = machine.snapshot.herdr_lifetime;
+    if (lifetime !== undefined && lifetime !== paneLifetimes.generation(machine.id)) continue;
+    const open = new Set(machine.snapshot.panes.map((pane) => waitingKey(machine.id, pane.pane_id)));
+    for (const key of listedPanes.get(machine.id) ?? []) {
+      if (!open.has(key)) forgetWaitingSends(key);
+    }
+    listedPanes.set(machine.id, open);
+  }
 }
 
 paneLifetimes.onRetire(forgetMachineWaitingSends);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { altSequence, clipboardKey, physicalKey, controlCode, ctrlEnterSequence, mirroredCtrlEnterKey, isPrintable, keySequence, modifyOtherKeysLevel, sanitizeKeyBarExtras, navigationSequence, terminalChord, keyFromData } from "./keys.ts";
+import { altSequence, clipboardKey, physicalKey, controlCode, ctrlEnterSequence, mirroredCtrlEnterKey, isPrintable, keySequence, modifyOtherKeysLevel, sanitizeKeyBarExtras, navigationSequence, terminalChord, keyFromData, NO_MODIFIER_LATCH, releaseLatched, stepModifier } from "./keys.ts";
 
 describe("clipboardKey", () => {
   it("recognizes native Ctrl+C/V on Korean and Russian layouts without replacing Latin layout letters", () => {
@@ -217,5 +217,25 @@ describe("mirroredCtrlEnterKey", () => {
     // control: unchanged on an attached pane, with or without modifyOtherKeys
     expect(mirroredCtrlEnterKey(false, 0)).toBeNull();
     expect(mirroredCtrlEnterKey(false, 2)).toBeNull();
+  });
+});
+
+describe("key bar modifier latch", () => {
+  it("steps one modifier off, once, locked and off again, leaving the others", () => {
+    const once = stepModifier(NO_MODIFIER_LATCH, "ctrl");
+    expect(once).toEqual({ held: { ctrl: true, alt: false, shift: false }, locked: { ctrl: false, alt: false, shift: false } });
+    const locked = stepModifier(once, "ctrl");
+    expect(locked).toEqual({ held: { ctrl: true, alt: false, shift: false }, locked: { ctrl: true, alt: false, shift: false } });
+    const withAlt = stepModifier(locked, "alt");
+    expect(withAlt.held).toEqual({ ctrl: true, alt: true, shift: false });
+    expect(stepModifier(withAlt, "ctrl")).toEqual({ held: { ctrl: false, alt: true, shift: false }, locked: { ctrl: false, alt: false, shift: false } });
+  });
+
+  it("lets go of the modifiers held for one key and keeps the locked ones", () => {
+    const latch = stepModifier(stepModifier(stepModifier(NO_MODIFIER_LATCH, "ctrl"), "ctrl"), "shift");
+    expect(releaseLatched(latch)).toEqual({ held: { ctrl: true, alt: false, shift: false }, locked: { ctrl: true, alt: false, shift: false } });
+    const settled = releaseLatched(latch);
+    expect(releaseLatched(settled)).toBe(settled);
+    expect(releaseLatched(NO_MODIFIER_LATCH)).toBe(NO_MODIFIER_LATCH);
   });
 });

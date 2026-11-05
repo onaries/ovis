@@ -262,11 +262,13 @@ describe("action pins and checkout credentials", () => {
     for (const file of actionFiles) {
       const text = readFileSync(join(root, file), "utf8");
       expect(auditActions(file, text)).toEqual([]);
-      for (const [, uses] of text.matchAll(/uses:\s*([^\s#]+)/g)) if (!uses!.startsWith("./")) names.add(actionName(uses!));
+      for (const [, uses] of text.matchAll(/\buses:\s*([^\s#]+)/g)) if (!uses!.startsWith("./")) names.add(actionName(uses!));
     }
     expect([...names].sort()).toEqual([
+      "actions/attest-build-provenance",
       "actions/cache", "actions/cache/restore", "actions/checkout", "actions/deploy-pages", "actions/download-artifact",
-      "actions/setup-node", "actions/upload-artifact", "actions/upload-pages-artifact", "oven-sh/setup-bun",
+      "actions/setup-node", "actions/upload-artifact", "actions/upload-pages-artifact",
+      "contributor-assistant/github-action", "oven-sh/setup-bun",
     ]);
     const dependabot = Bun.YAML.parse(readFileSync(join(root, ".github/dependabot.yml"), "utf8")) as {
       updates: Array<{ "package-ecosystem": string; directories: string[] }>;

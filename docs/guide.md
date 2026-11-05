@@ -111,7 +111,21 @@ a half's bar onto the left or right half of the pane area. A pick in the sidebar
 list then opens in the active half only, and the focus stays there. Both halves can show the same
 tab, and you type in whichever half is active; the other half shows that tab at the active half's size.
 To rearrange a split tab instead, drop a pane's title on another pane's title in the same tab: the
-two panes trade places.
+two panes trade places. Drop it on another pane's body to move it beside that pane, on the side
+nearest the pointer; the highlighted half shows where it goes. Within its own tab a title only
+arranges the tab: to open it in a half, drop it on the other half while that half shows another tab.
+
+To see more than two panes at once, turn on **Settings > Terminal > Split into rows and columns**.
+Then drop a pane on the edge of another pane in the split to open it beside, above or below that
+pane, up to four at once, or on its middle to open it in that pane's place. Drag the line between
+two panes, or focus it and use the arrow keys, to resize them.
+
+A tool that starts background workers or subagents can keep them out of the way: tag each such
+pane with `herdr pane report-metadata <pane_id> --source <id> --token role=background`. The
+**Agents** list then shows those panes, and the helpers they start, after the others under
+**Background agents**, folded at first with their count. A background agent that asks a question
+moves up with the others until it is answered, and a pinned one stays in the pinned card. Panes
+without the tag stay where they are.
 
 
 **3. Take it with you.** Scan the installer's QR code with a phone signed in to the same Tailscale account, then install the app from the browser. No Tailscale? Turn on the [Ovis relay](#through-the-ovis-relay) and scan its QR code instead. See [On your phone](#on-your-phone).
@@ -172,6 +186,7 @@ Every agent herdr runs shows up with its live status, terminal and alerts. The c
 | **Letta Code** | **Experimental; Linux and macOS.** Read-only native transcript, once herdr's Letta integration is installed (`herdr integration install letta`, experimental). A turn shows when it ends; meanwhile Chat says **Working…**. Windows uses Terminal. See [Letta Code](#letta-code) below. | — use Terminal |
 | **DeepSeek Harness** (`dsh-tui`) | **Linux.** Native session log of the pane's dsh process, bound by the session lock it holds; dsh-tui panes, and dsh-tui-pi's (`dsh --profile tui`) found by their process. Install it from **Settings → Agents** or the setup guide (`npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui`; its first start needs pnpm), and start it from **New workspace**, **New tab with agent…** or **New worktree**, which run `dsh-tui` in the pane's shell. macOS uses Terminal; Windows is not offered. See [DeepSeek Harness](dsh.md). | — use Terminal |
 | **GitHub Copilot CLI** | Linux native transcript when the foreground session is verified. See [Copilot setup and limits](copilot-chat.md). | — recorded choices are read-only; answer questions and approvals in Terminal |
+| **Kimi Code** | **Experimental; tested on Linux, expected on macOS.** Native wire log of the pane's own Kimi process, bound by the session lock the CLI writes for that process (`~/.kimi-code/locks/sessions/`) or, on Linux, by the main log it holds open; two panes in one folder each show their own session, and an idle Kimi keeps showing its last session while the same process runs in the pane. A Kimi that has not written its session yet uses Terminal, never another session of the folder. Records before a context compaction stay in the log and are shown. Windows uses Terminal. | — use Terminal |
 | **Anything else** | The terminal's text | — use Terminal |
 
 GJC chat and GJC done alerts use a native extension rather than SDK session queries. From
@@ -221,7 +236,8 @@ runtime bundle, run it with the bundle's Bun as for GJC above. The extension lis
 only your user can open, `herdr-web-ui-ask/<pid>.sock` in the same directory, and relays the
 card's answer to pi-ask as its submit event: the form then shows as a card with one question per
 step, its options and **Type your own answer**. The card shows only when the pane's pi process
-answers on that socket, writes the session herdr reports for the pane, has one form open and
+answers on that socket, writes the session herdr reports for the pane (on herdr-core, the one
+it names there itself), has one form open and
 that form's `ask_user` call is still unanswered on pi's current branch (after a `/tree` move
 too); anything else, a form opened by `/answer` or `/ask:replay`, Windows, and pi without the
 extension use Terminal. pi-ask is never answered with typed keys: a pi pane never gets the
@@ -230,6 +246,13 @@ extension serves the pane's pi, pi's own dialogs (select, confirm, input) show n
 a pi-ask form can open there at any moment. The terminal answers those; without the extension,
 pi's own dialogs keep their cards as before. Notes and
 **Elaborate** stay in Terminal. Checked with pi 1.4.0 and pi-ask 1.2.0.
+
+The same extension lets Chat suggest the slash commands that pi's extensions and installed packages
+register (such as `/team` or `/ponytail`), which no file can tell: it passes on the running pi's own
+list (`pi.getCommands()`, pi 1.3.0 or later), and a command named after a pi builtin is left out as
+pi's own menu does. An extension installed before this, pi without it, two pi processes in one pane,
+and Windows suggest only the builtins, prompts and skills; typing such a command in full still sends
+it. Run the installer again and restart pi to update an installed extension.
 
 Command Code chat needs the session herdr reports for the pane. Command Code sends that report
 and herdr keeps only the sessions of the agents it knows natively, so no released herdr accepts
@@ -313,12 +336,15 @@ across an Ovis restart, which forgets where it saw each `letta` before. Check th
 | **Read the conversation** | Prompts and Markdown answers (links, code blocks, tables). Each turn's commands, edits and progress are folded into one "Worked for …" block. Copy an answer as Markdown or plain text. A Claude Code bash-mode command (`!`) shows as one card: the command, then what it printed, with what it wrote to stderr in red. In a pi, omp, Claude Code or Codex pane, a picture the agent's own tool opened shows inside that tool's row. A picture opens in a full-screen viewer: zoom at the pointer, pan, step through the message's other pictures, **Copy image** and **Download**. Skill names an answer writes (`/name`, or `$name` for Codex) show as chips when the pane's own command list names that skill. Once you have sent four or more messages, a rail of dashes at the left, one per message you sent, jumps between them (not on a phone, or when the chat column leaves less than 32 px of margin at each side). |
 | **Follow the plan** | A supported todo-tool call folds into the turn's work block like any tool: it reads as the done count or the step it took, and opened, as the whole list by phase. |
 | **Drop into the real terminal** | xterm.js 6 on the live pane: full-screen TUIs, raw keys and herdr's scrollback, shared with your own herdr TUI. When a program marks its redraws as synchronized output, as herdr does, xterm.js 6 waits for the whole frame (up to a second) before drawing it, so a fast-redrawing agent does not show half of its new screen over its old one. In a program that reads the mouse, hold Alt to scroll it faster with a trackpad. Drag to select and it is copied on release, unless herdr's `[ui] copy_on_select` is off on the PC serving Ovis: then it is only selected, and stays selected under the pointer until Ctrl+C or Copy copies it. The wheel or the screen's edge scrolls further back while you drag. In an OpenCode pane a drag goes to OpenCode, which selects inside its own panel and copies it itself, as in a native terminal; hold Shift (Option on a Mac) to select and copy in Ovis instead, which is also the way when OpenCode's own copy does not reach this device's clipboard. Ctrl+C copies a selection instead of interrupting. **Quote in message**, shown while text is selected, adds the selection to that pane's chat draft in a code block headed by the pane name, and its line numbers when herdr reports them; nothing is sent. |
+| **Search the conversation** | **Search conversation**, from the pane's menu (right-click on a desktop, the tab's ⋯ on a phone) or the command palette, finds a word in what you wrote and in the agent's answers, earlier pages included; tool output, thinking and progress notes are left out. Matches list newest first as snippets; picking one opens the chat at that message, loading the earlier messages up to it. Nothing in the chat is highlighted, and the phone's screen gains no button. A remote PC offers it once its bridge is updated to one that searches. |
 | **Find in terminal** | **More → Find in terminal** or Mod+Shift+F searches literal text in herdr's history, with a match count, previous/next navigation and visible match highlights. Search jumps and scrolling move the same viewport in every attached client, including the TUI. Older bridges retain search navigation without automatic highlights. |
 | **Jump across PCs** | The command palette (Mod+Shift+K) searches all connected PCs at once by PC, workspace, branch, tab, pane title or agent kind. PC names distinguish results, and Recent remembers each pane's PC. Picking a result opens that PC and pane directly. Disconnected PCs are omitted; app and plugin actions remain on the currently selected PC. It also finds Settings pages and actions by related words (try `theme` or `font`), and browses folders: type a path such as `~/`, or pick **Browse folders**, and the folder you reach opens in Files. |
+| **See each PC's load** | On by default once two or more PCs are connected; turn it on or off for this device in **Settings → Remote PCs → PC load in the sidebar**. Under a PC's name in the sidebar: CPU, memory (without the file cache) and the fullest disk as three small meters, red from 85%. Tap them for memory used and total, load average, uptime and every disk. A PC is read only while its group is open, the sidebar is shown and the page is visible. A remote PC shows nothing until its bridge is updated to this version, and a herdr-core machine shows none. Linux reads `/proc`; elsewhere CPU, load and disks come from the OS, Windows adds memory, and macOS leaves memory out. |
 | **Answer prompts** | Approval, question and plan menus become cards. Tap an option, or type its number in the composer. The server checks that the menu is still current before answering. |
 | **Compose** | `/` commands and `@` file mentions, any file or image up to 32 MB attached by path, and a draft per pane. Send during work schedules a next-turn message; use its ↑ Send now action to send it now. A strip under the input card names the pane's working folder (the whole path on hover) and, for a workspace of a repository with a worktree open, its branch at the other end; a phone leaves it out. Pick or type a terminal-only command and send normally: after acceptance, the pane's terminal opens over the chat, in this browser only, with **Back to Chat** and **Keep Terminal**; the chat stays where you were reading. For Claude Code's panels (`/config`, `/permissions`, `/theme` and the like) the chat may come back by itself when you close the panel, once Claude records the close; for Codex, omp, pi, gjc, OmO, Hermes (classic CLI), Devin, agy and Grok it comes back after their recorded pickers and panels, once the agent's empty input row is back on the screen; otherwise use **Back to Chat**, the header's Chat, or Back on a phone. If you go back to the same pane's chat while the command's screen is still open, the composer says so (Claude Code and every agent above, not OpenCode) and holds Send, quick replies and a queued message's Send now until the screen closes (**Send anyway** sends the message once); **Show terminal** opens it again. Messages the PC sends by itself at the end of a turn are not held. Automatic queued delivery never changes your view. Chat keeps one quiet **Ran in terminal** row with **Open Terminal**, which shows the terminal over the chat again; ordinary commands keep their outcome chips, and Hermes keeps its informational result cards. `/resume` opens **Earlier sessions…**. [Agent commands in Chat](agent-commands.md) explains where each agent's commands come from and what counts as a result. |
 | **Follow every agent** | Live RUN / INPUT / DONE / READY status for all panes, and alerts when an agent needs input, finishes or its terminal ends. |
 | **Open what agents make** | A file path in an answer opens in a viewer (images, video, audio, PDF, text), or find it with **Browse files**, and download it to your phone. A source file opens whole up to 8 MB and 200,000 lines; past 2,000 lines it scrolls as a window of rows, colored up to 256 KB and 5,000 lines and plain beyond. A link with `:line` or `#L12` opens at that line. |
+| **Edit a text file** | Off by default: turn on **Settings → Chat → File viewer → Edit text files** on this device. A text file under the pane's folder, up to 1 MB, then shows **Edit file** in the viewer: change it in a plain text box and press **Save** twice (the second press confirms). If the file changed on the PC since you opened it, nothing is written: your text stays in the box to copy, and **Reload file** shows the file as it is now. Only a device that drives the PC can edit (not a watching device, a Portal visitor or an open LAN window), and only a UTF-8 file with one kind of line ending that is yours, not read-only and not hard-linked; a file outside the pane's folder, or in `.git`, never opens for editing. The file is replaced in one step with its permissions and line endings kept. Saving works on Linux and macOS PCs; a Windows PC says it can't save yet. A remote PC's file is edited and checked on that PC. |
 | **See what changed** | **Browse files → Changes** lists what changed in the git repository the pane sits in: the **Working tree**, what is **Staged**, or two **Commits** you name, as a folder tree with git's status letter and the added and removed lines. A row opens its diff, **Unified** or **Split** (Settings → Chat → File viewer → Diff layout; a phone shows one column), with **Copy path**, **Copy patch** and **Open file**. The files a turn's edit tools changed, listed in its work block, open the same diff. It only reads; a remote PC's repository is read on that PC. |
 | **Manage sessions** | Start an agent in a folder you type or pick with **Browse**. In New workspace, Browse filters the currently loaded folders as you type (case-insensitive); opening a folder updates Directory, so **Start** uses that path even without **Use this folder** (which closes Browse), and a folder under home stays written as `~/…`. **New folder** (the folder-plus button in Browse's bar) makes a folder inside the one shown and opens it. It does not search subfolders or folders beyond the displayed 500. Add a tab to a workspace (as herdr's prefix+c), switch tabs from the strip over the pane, rename workspaces from their ⋯/right-click menu and panes from their own menu, reorder workspaces (drag a row, or on a phone long-press it and drag; Alt+Up/Down moves a focused row one step), and jump anywhere from the command palette. For Claude Code, New workspace and New tab have an **Ultracode** switch under Model and Effort, which asks Claude Code to start the session with Ultracode on at the chosen effort level. It needs Claude Code 2.1.284 or later, a model with xhigh and dynamic workflows on; otherwise Claude Code ignores it without a word (see [Starting an agent with a first message](agent-commands.md#starting-an-agent-with-a-first-message)). |
 | **Speak instead of typing** | A mic beside Attach in the composer and beside Send in the terminal input line. Tap to start and again to finish, or hold it while you talk (not on a touch screen without an API key); the words land at the caret and are never sent by themselves. See [Voice input](#voice-input). |
@@ -480,6 +506,16 @@ gets `429` and `Retry-After: 60`, without closing sockets already open.
 
 To stop trusting `app.ovis.sh` too, host the app yourself. `bun run build:shell` builds it into `dist-shell/`. Serve that folder over HTTPS from a host that follows its `_redirects` and `_headers` files, as Cloudflare Pages does (another host needs the same rewrites and headers), and set `OVIS_RELAY_APP_URL` on the PC to its address: the PC's QR codes then open your copy. Build it from the same release as the PC's Ovis.
 
+### Through an account
+
+Signing in links your devices once instead of pairing each phone with each PC. It's optional: a QR code and a pairing code work as before, with or without an account.
+
+1. At `app.ovis.sh`, choose **Continue with GitHub** or **Continue with Apple**. **Your PCs** lists the PCs of your account and the ones this phone is already paired with.
+2. A phone already paired by QR code needs nothing more: the next time it opens each PC, it moves that pairing into the account by itself. Until then the PC's row says **Ready · not in the account yet**, since removing the phone through the account would not reach it.
+3. A PC marked **Needs approval** has not let this device in yet. Tap it: this device and the PC show the same six digits, as with a link without a code. The first device of an account is approved on the PC itself. After that, any device already in the account can approve: it asks whether to add the new device and shows three numbers, and you pick the one the new device shows. One approval adds the device to every PC of the account: the approving device signs a record that adds it to each PC, and a PC that was off picks that record up when it comes back.
+
+Who gets into a PC is still decided by that PC alone, in **Settings → Phone & devices**, where **Revoke** always works. The account service at `account.ovis.sh` lists your PCs and carries signed messages between your devices; it can't read your sessions or add a device by itself ([how it works](account.md)). [The privacy policy](https://ovis.sh/privacy/) says what it stores.
+
 ### Through Tailscale
 
 Serve the app over **HTTPS** to install it and receive push alerts. The simplest way is Tailscale: keep the server on `127.0.0.1` and let Tailscale add the HTTPS address.
@@ -506,6 +542,26 @@ whether the test was sent or failed; a missing subscription offers **Turn alerts
 While the app is in front on any device, its window visible and focused, no alert goes to any
 device: you are already looking at the change. Alerts resume once no window of the app is in use.
 The test push is always sent.
+
+Each pane keeps one alert: a new one replaces its last. iOS lets an alert be removed only
+30 seconds after it arrived, so a quicker repeat stays until the pane's next alert.
+
+An alert for an approval or a question with two short options (**Allow** / **Deny**, **Yes** /
+**No**) carries them as buttons on desktop browsers and Android, under the question and what it is
+about (the command or the file): a tap answers it without opening the app, and the card closes
+everywhere. If the question changed or was answered on another device meanwhile, nothing is sent
+and a new alert says so; tap it to open the pane. Questions with more or longer options, a command
+too long to show whole, typed answers and forms of several questions open the pane, as do alerts
+on iOS, in the relay app, and on a device paired to watch only.
+
+To get the same alerts in a chat app, choose a destination under **Settings → Alerts → Also send
+to**: an ntfy topic, a Slack or Discord webhook, a Telegram bot (its token and a chat id), or
+plain JSON to any URL. It has its own choice of alerts, waits and holds back like a device does,
+and is saved on this PC, owner-only, and shown masked afterwards. A message names the PC, the pane
+and what happened, with a link to the pane, never what the agent asked or said; the pane goes by its
+terminal title, which an agent may take from your task. **Send a test**
+checks it; a destination that fails shows its last error and is retried a few times, with at most
+one alert waiting.
 
 ### Using the app
 
@@ -577,7 +633,7 @@ With several PCs, you don't need Ovis on each of them. Install it on one PC that
    From a checkout, stop `bun run start` instead, and whatever starts it again.
 
    An Ovis left running there still works with the always-on app, but it stays a second app: it sends its own alerts and updates only through its own updater, which the always-on app can at most ask to run. Once it is stopped, the always-on app runs its own bridge there and keeps that bridge on its own version.
-3. **Add each PC in the always-on app:** Settings → Remote PCs → **Add PC**, then approve the install once. A PC already saved in herdr (`herdr machine`) is listed there already: choose **Connect**. The always-on PC must reach it over SSH as the account Ovis runs under, so try `ssh <pc>` there first. A PC the app already had, connected while that PC's own Ovis ran, keeps waiting for that Ovis to come back: open its **Manage PC** control in the sidebar, choose **Reconnect / setup** and approve the install.
+3. **Add each PC in the always-on app:** Settings → Remote PCs → **Add PC**, then approve the install once. A PC already saved in herdr (`herdr machine`) is listed there already: choose **Connect**. The always-on PC must reach it over SSH as the account Ovis runs under, so try `ssh <pc>` there first. A PC the app already had, connected while that PC's own Ovis ran, keeps waiting for that Ovis to come back: open its **Manage PC** menu in the sidebar, choose **Reconnect / setup** and approve the install.
 4. **Open the always-on PC's address everywhere**, in the other PCs' browsers and on your phone, install the app from there, and turn on **Alerts** in it on each device. Pairings and alerts set up with a PC's own Ovis stay with that Ovis, so pair a device again if the new address asks.
 
 Then there is one app to update: each release is downloaded and built once, the bridges on the other PCs follow it in the background (when SSH gets in with the saved key, without a password; otherwise the PC's card offers the update), push alerts come from one place, and no versions have to be kept in step.
@@ -603,6 +659,7 @@ Anyone who can reach the server can type into your terminals, so what matters is
 | `tailscale serve`, your own devices | Nothing needed: your login. With `OVIS_TAILSCALE_SERVE_ONLY=1` on a one-login tailnet, the owner's phone needs nothing either. With a token set, the token, once per device |
 | `tailscale serve` on a tailnet you share with others | Your devices: your login (with a token set, the token once). Theirs: refused unless you pair them |
 | Your LAN (`HOST=0.0.0.0` or a LAN address) | Pair each device, or set a token |
+| Your LAN over HTTPS (`OVIS_LAN_HTTPS_PORT`, see [On your LAN over HTTPS](#on-your-lan-over-https)) | Pair each device, or the token. Never open, even before the first pairing |
 | A public domain, reverse proxy or Portal | Set a token, with HTTPS, and set the proxy up as in [Behind a reverse proxy](#behind-a-reverse-proxy). Never `tailscale funnel` it. Portal can also ask [its own sign-in](#who-may-open-the-address) first |
 | The Ovis relay | Paired devices only: pair each phone once by scanning the relay's QR code. No token needed, see below |
 
@@ -613,6 +670,26 @@ Until the first device is paired, and with no token set, a LAN or proxied addres
 A token is a credential on the wire as much as a cookie is: on plain `http://`, anyone on the network path reads it, and then every keystroke after it. Reach this PC over Tailscale, put it behind a TLS-terminating proxy, or keep it on loopback and tunnel in; the server says so on startup when it is bound to another address over http.
 
 The pairing code is a one-time secret: five wrong tries spend it.
+
+### On your LAN over HTTPS
+
+A phone on the same network as the PC can reach Ovis directly over HTTPS, beside the address it uses today (a tunnel, `tailscale serve`, loopback). It is off unless you set `OVIS_LAN_HTTPS_PORT` (for example `7318`) where Ovis starts, as with `HOST` and `PORT` ([Configuration](#configuration)).
+
+- **Where it listens.** On that port of each private IPv4 address the PC has (`10.x`, `172.16-31.x`, `192.168.x`, `169.254.x`), never on every address. `OVIS_LAN_HTTPS_HOST=<address>` binds one address instead (`0.0.0.0` only when you write it). The main listener stays as it is. The addresses are read when Ovis starts: restart it after the PC joins another network.
+- **Who gets in.** Only clients on a private IPv4 network, and only with the token or a paired device: never "this computer", a Tailscale login, the bridge token or an open install, even before the first device is paired. Pair a device with a code shown on the PC (Settings → Phone & devices): a code started through the relay is not taken here. A code has five tries of its own here, so wrong tries here never spend it for a phone pairing another way. Twenty wrong codes within ten minutes pause pairing here for ten minutes, and wrong tokens from every address here share one budget.
+- **Its certificate.** Unless you give one, Ovis makes a self-signed certificate on first start and keeps it in the state folder (`lan-https/`, the key readable only by you). It names the PC's addresses, and a new one is made when they change or it runs out (after 825 days). Startup prints each address with the certificate's SHA-256 fingerprint.
+- **Your own certificate.** Set `OVIS_LAN_HTTPS_CERT` and `OVIS_LAN_HTTPS_KEY` to PEM files, for example from a local CA made with [mkcert](https://github.com/FiloSottile/mkcert) (`mkcert -install`, then `mkcert 192.168.1.20` with the PC's address).
+
+A bad value, a busy port or a certificate that does not load turns only this listener off, with a message at startup.
+
+**Trust the certificate before you sign in through it.** A browser warns about a certificate it does not know, and clicking through that warning without checking it is how someone else on the network would collect your token or pairing code. Either:
+
+- **Compare the fingerprint** the browser shows (the padlock or the warning's details) with the one Ovis printed, and continue only when they match. That is enough for a browser tab, but browsers turn off service workers on such a page, so the installed app, alerts and the microphone need the next way.
+- **Trust a local CA on the phone.** Use the mkcert way above and copy mkcert's `rootCA.pem` (`mkcert -CAROOT` says where it is) to the phone. The self-signed certificate Ovis makes is not a CA, so phones do not offer to trust it this way: for it, compare the fingerprint.
+  - iPhone and iPad: open the file (AirDrop or Files), install the profile in Settings → General → VPN & Device Management, then turn it on under Settings → General → About → Certificate Trust Settings.
+  - Android: Settings → Security → Encryption & credentials → Install a certificate → CA certificate (the menu names differ between makers).
+
+Keep the main listener off the same LAN address over plain http (`HOST` set to that address) while you use this: the browser keeps one cookie per address, so signing in over HTTPS signs that http tab out.
 
 ### Behind a reverse proxy
 
@@ -861,10 +938,34 @@ macOS). See [INSTALL.md](../INSTALL.md#2-choose-the-install-method).
 - **Chat:** while a line the terminal wrapped is on screen, its colors cannot be matched to the
   screen's text, so a grey suggestion Claude Code or Hermes leaves in an empty input box then reads
   as typed text, and a send waits for you to confirm it.
-- **Not on herdr-core:** renaming, moving or reordering workspaces, tabs and panes, and
-  splitting, swapping, zooming or resizing panes, which belong to the app's window; Ovis hides
-  those actions on such a PC. Search in a pane, scrolling or selecting the history through the
-  scroll buttons beside it, plugins and worktrees are not available either. Remote PCs keep running herdr's TUI server.
+- **Layout:** on a herdr-core no Herdr app arranges (the desktop app's own core, or one where the
+  app never ran), Ovis keeps the layout itself: renaming, reordering and moving workspaces and
+  tabs, and splitting, resizing, swapping, zooming and naming panes work as on herdr. Names and
+  places are terminal labels and the order and splits one document of Ovis's own
+  ([its format](herdr-core-layout.md)). Where the Herdr app arranges the core, the layout is the
+  app's window's: Ovis shows it and hides those actions. A Herdr app started later on a core
+  Ovis arranged takes in its terminals, grouped and named as they were, but not their split
+  ratios or order; from then on the app arranges them.
+- **Agents' sessions:** herdr-core keeps no session reports, which herdr's own agent integrations
+  send to herdr's TUI server only, so a chat that needs one has none there. pi's chat comes from
+  the session the pane's pi names itself through the web UI's pi extension (see
+  [Supported agents](#supported-agents): `bun scripts/install-pi-integration.ts`, then restart
+  pi); without the extension a pi pane uses Terminal. Other agents whose chat reads only that
+  report, OpenCode for example, use Terminal on herdr-core.
+- **Not on herdr-core:** search in a pane, scrolling or selecting the history through the
+  scroll buttons beside it, plugins and worktrees.
+- **Other machines:** each machine the core reaches (`hc machine add vps`, or added in the Herdr
+  app) is a PC of its own in the sidebar, beside this one: its workspaces and tabs as its own
+  `herdr-app` document lays them out, its live terminals, input, status and alerts, and new
+  workspaces and tabs started there. Ovis reaches it through this PC's core: nothing of Ovis is
+  installed on it, and it is added, renamed or removed with `hc machine` or in the Herdr app.
+  Ovis starts one more server of its own for each (on loopback, with an empty home folder of its
+  own), so its agents' chat history is not read here: their transcripts are on that machine.
+  Its files are not reachable from Ovis yet: file previews, the Files view, diffs, pasted images
+  and the folder picker are refused for it. A folder typed for a new workspace there is passed to
+  that machine as written (empty: its home). Pins and "seen" are not shared with the Herdr app
+  there. Temporary machines (`hc machine add --temp`) are not shown, and
+  PCs added over SSH or through the relay keep working beside them.
 
 ## Configuration
 
@@ -876,17 +977,21 @@ Each `OVIS_*` variable was called `HERDR_WEB_*` before Ovis took its name (`OVIS
 | `PORT` | `7317` | HTTP and WebSocket port. Left unset, the plugin takes the next of 17317, 27317, 37317 and 47317 when 7317 cannot be opened (another program has it, or Windows reserves it for Hyper-V, WSL2 or Docker), keeps that port for later starts, and the installer and the **Ovis status** action print the address. A port set here is never changed |
 | `HERDR_SOCKET` | `~/.config/herdr/herdr.sock` | herdr socket for API calls and terminal attach. For a named session, use `~/.config/herdr/sessions/<name>/herdr.sock`. A plugin install follows the socket of the herdr session that starts it; set `HERDR_SOCKET` in the plugin's config to pin another one, and that setting wins. |
 | `OVIS_TOKEN` | unset | Shared token for scripts and proxies. Once set, every client that is not a paired device needs it, this computer and your own Tailscale login included |
+| `OVIS_LAN_HTTPS_PORT` | unset (off) | Opens an HTTPS listener on this port for devices on the same network, beside the main one; only the token or a paired device gets in there (see [On your LAN over HTTPS](#on-your-lan-over-https)) |
+| `OVIS_LAN_HTTPS_HOST` | unset (every private IPv4 address) | The one IPv4 address that listener binds instead; `0.0.0.0` only when written |
+| `OVIS_LAN_HTTPS_CERT`, `OVIS_LAN_HTTPS_KEY` | unset (self-signed, kept in the state dir) | PEM files of your own certificate and key for that listener, for example from a local CA; set both or neither |
 | `OVIS_CSP` | unset (enforced) | `report-only` sends the policy as `Content-Security-Policy-Report-Only`: the browser reports what it would block and the app keeps working. Used to measure the policy after a change |
 | `OVIS_TAILSCALE_OWNER` | this PC's Tailscale login | The Tailscale login that gets in through `tailscale serve` without pairing. Set it on a PC whose Tailscale node is tagged, which has no login of its own |
 | `OVIS_TAILSCALE_SERVE_ONLY` | unset (off) | `1` declares `tailscale serve` the only way anything reaches this port. Then the owner's own device gets in through serve without a code, on a tailnet one login owns with no tagged node. Enable it only when no public reverse proxy, tunnel or other forwarding server exposes this port: a visitor through one would otherwise get the owner's access. It also keeps the [Ovis relay](#through-the-ovis-relay) off |
 | `OVIS_TAILSCALE_HTTPS_PORT` | unset (first free of 443, 8443, 7317, 17317) | The HTTPS port the installer publishes the app on with `tailscale serve`, and the one **Settings → Phone & devices** suggests. When another service already uses it, the installer stops and says so instead of taking another port, since an app installed on a phone stays on the address it came from. An address that already serves the app is kept |
-| `OVIS_RELAY_URL` | `wss://relay.ovis.sh` | The [Ovis relay](#through-the-ovis-relay) this PC connects to while the relay is on: a `wss://` address with no path, such as [your own](#running-your-own-relay). Read when the server starts; a value that is not such an address keeps the server from starting |
+| `OVIS_RELAY_URL` | `wss://relay.ovis.sh` | The [Ovis relay](#through-the-ovis-relay) this PC connects to while the relay is on: a `wss://` address with no path, such as [your own](#running-your-own-relay). Unset, the PC uses `relay.ovis.sh` and, when a [regional relay](relay.md#regional-relays) answers much faster, that one too. Read when the server starts; a value that is not such an address keeps the server from starting |
 | `OVIS_RELAY_APP_URL` | `https://app.ovis.sh` | The address the relay's QR codes open on a phone: an `https://` address with no path. Set it when you [host the app yourself](#running-your-own-relay). A value that is not such an address keeps the server from starting |
 | `OVIS_STATE_DIR` | `~/.config/ovis` | Push keys, device subscriptions, PC registrations, update builds, the app's Portal and relay identities, and the Portal sign-in you chose |
 | `OVIS_PORTAL_OIDC_CLIENT_SECRET` | unset | The OIDC client secret for **Google or company login** in Portal's panel ([Who may open the address](#who-may-open-the-address)). Read at each start into Portal's environment only; set here, it cannot be changed from the app |
 | `OVIS_OPENAI_API_KEY` | unset | OpenAI API key for [voice input](#voice-input). Set here, it cannot be changed from the app |
 | `OVIS_OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API root for voice input |
 | `OVIS_AUTO_UPDATE` | `0` | `1` installs new releases without asking |
+| `OVIS_UPDATE_CHANNEL` | unset (`stable`) | `beta` also offers the [beta builds](#beta-builds) made from main; `stable` turns them off whatever the state dir's `update-channel` file says |
 | `OVIS_TELEMETRY` | unset (on) | `0` sends no [anonymous usage counts](#anonymous-usage-counts), whatever the switch in Settings says. `DO_NOT_TRACK=1` does the same |
 | `OVIS_PUSH_SUBJECT` | this repository's URL | VAPID contact URL or `mailto:` address |
 | `OVIS_BUNDLE_MANIFEST` | unset | Remote-PC bundle manifest (path or URL) that overrides local and published bundles |
@@ -918,6 +1023,18 @@ From a checkout, stop `bun run start` and run it again.
 
 Updates need a clean checkout: `main` for a source install, or herdr's plugin checkout. Local changes block an update, and they are never overwritten. More in [app updates](app-updates.md).
 
+### Beta builds
+
+A PC can also take the beta builds made from `main`: each commit whose checks pass is tagged
+`beta/vX.Y.Z-beta.N`, where X.Y.Z is the next release. They are off unless you opt in, and a PC that
+did not is never offered one. To opt in, write `beta` to the `update-channel` file in the state dir
+(`~/.config/ovis/update-channel`, or `OVIS_STATE_DIR`'s), or set `OVIS_UPDATE_CHANNEL=beta`. The
+next check, within 5 minutes, offers the newest beta, and it installs like a release. To leave,
+remove the file or write `stable`: nothing is downgraded, and the PC waits for the next release.
+
+The desktop app reads the same setting from its own state dir (`server/update-channel` in the app's
+data folder) when it starts, and then updates from the beta builds of the app.
+
 ### Updating herdr
 
 herdr itself is updated from **Settings → About → Update herdr**. herdr refuses `herdr update` typed into one of its panes ("run `herdr update` outside herdr"), and every terminal in the app is a pane, so the server runs it instead, for the herdr on the PC the app runs on:
@@ -930,15 +1047,15 @@ This is for Linux and macOS. On Windows, and for a remote PC, update herdr on th
 
 ## Anonymous usage counts
 
-The app tells its maintainer how many installs there are, which versions they run, which countries the messages come from and which app settings people choose. It sends one message when it is first installed and one each time it runs a new version, plus a daily active message described below. The first time you open the app, a line under the header says so, with **What is sent**, which opens **Settings → About** and its switch. Nothing is sent before that line has been shown, and the first message waits ten minutes after it, so turning the switch off there stops it. An install that saw an older notice sees the expanded notice (version 5, which adds the day's usage to the daily active message) once more, and sends nothing until then. An existing choice to turn counts off stays off.
+The app tells its maintainer how many installs there are, which versions they run, which countries the messages come from and which app settings people choose. It sends one message when it is first installed and one each time it runs a new version, plus a daily active message described below. The first time you open the app, a line under the header says so. Tapping its text opens **Settings → About → Anonymous usage counts** with its switch, and **Turn off** on the line turns the counts off in one tap. Nothing is sent before that line has been shown, and the first message waits ten minutes after it, so turning the switch off there stops it. An install that saw an older notice sees the expanded notice (version 5, which adds the day's usage to the daily active message) once more, and sends nothing until then. An existing choice to turn counts off stays off.
 
-A message holds the event (`install` or `update`), a random ID made on this PC, the app's version and the version an update replaced, the OS and CPU architecture, how the app was installed (herdr plugin, `bun run start`, or `bun run server`), and an allowlisted `settings` snapshot. The snapshot contains actual choices for appearance, terminal and chat behavior, notifications, language, voice controls, usage-meter display and the file viewer, including defaults. Custom fonts, shortcuts, key-bar layouts, quick replies and the usage meters' account order are represented by customization flags, not their text, key combinations or account names; quick replies and hidden usage accounts also have counts. Account identifiers and the order itself, paths, addresses, credentials, commands, terminal content, conversations and files are not collected.
+A message holds the event (`install` or `update`), a random ID made on this PC, the app's version and the version an update replaced, the OS and CPU architecture, how the app was installed (herdr plugin, `bun run start`, or `bun run server`), the terminal runtime its server serves (`herdr` or `herdr-core`), and an allowlisted `settings` snapshot. The snapshot contains actual choices for appearance, terminal and chat behavior, notifications, language, voice controls, usage-meter display and the file viewer, including defaults. Custom fonts, shortcuts, key-bar layouts, quick replies and the usage meters' account order are represented by customization flags, not their text, key combinations or account names; quick replies and hidden usage accounts also have counts. Account identifiers and the order itself, paths, addresses, credentials, commands, terminal content, conversations and files are not collected.
 
-The daily active message goes out at most once per UTC day on which the app is opened in a browser. It's dated with that day even when it goes out later (for example after the ten-minute wait), and it's sent again the same day only if a new kind of coding agent shows up (with the usage already sent), or, at most once an hour and only when the app is opened, when the day's usage below changed (a day's last usage goes out with the next day's message). The usage is counted only once the version 5 notice has been shown: nothing of it from before then is kept or sent. It holds the event (`active`), the day, the random ID, the app's version, the OS and CPU architecture, how the app was installed, `harnesses`: the kinds of coding agents running in herdr panes, taken from a fixed list (such as `claude` or `codex`), with any other agent counted as `other`, and `usage`: the kinds of screen the app was opened on that day (the iOS, Android or Mac app, an installed web app or a browser tab, each on a phone or a computer), how those screens reached this PC (from this PC itself, the local network, Tailscale, Funnel or another proxy), and three counts: prompt answers sent from the app, pane alerts that reached a device, and pane alerts tapped. A count made on a day the app is not opened is never sent. Pane names, pane counts, paths, terminal content, which pane or agent an answer or alert was for, and the time of day are never part of it, and a remote PC's panes aren't included.
+The daily active message goes out at most once per UTC day on which the app is opened in a browser. It's dated with that day even when it goes out later (for example after the ten-minute wait), and it's sent again the same day only if a new kind of coding agent shows up (with the usage already sent), or, at most once an hour and only when the app is opened, when the day's usage below changed (a day's last usage goes out with the next day's message). The usage is counted only once the version 5 notice has been shown: nothing of it from before then is kept or sent. It holds the event (`active`), the day, the random ID, the app's version, the OS and CPU architecture, how the app was installed, the terminal runtime, `harnesses`: the kinds of coding agents running in herdr panes, taken from a fixed list (such as `claude` or `codex`), with any other agent counted as `other`, and `usage`: the kinds of screen the app was opened on that day (the iOS, Android or Mac app, an installed web app or a browser tab, each on a phone or a computer), how those screens reached this PC (from this PC itself, the local network, Tailscale, Funnel or another proxy), and three counts: prompt answers sent from the app, pane alerts that reached a device, and pane alerts tapped. A count made on a day the app is not opened is never sent. Pane names, pane counts, paths, terminal content, which pane or agent an answer or alert was for, and the time of day are never part of it, and a remote PC's panes aren't included.
 
 The snapshot is the last one a browser reported to this server, not a list of devices or a complete picture of a person. Changing a setting updates that local snapshot but does not send another telemetry event. Before a browser reports, `settings` is `null`. The receiver ([`telemetry/`](../telemetry/README.md)) keeps the event fields, the day and the country the message came from (two letters, such as `KR`, worked out by its host from the connection), and never stores your IP address or anything finer than the country. The random install ID and settings can link events from an installation; they do not guarantee anonymity.
 
-**Settings → About → Anonymous usage counts** shows the next message exactly as it would be sent, and its switch turns the counts off for this PC. `OVIS_TELEMETRY=0` or `DO_NOT_TRACK=1` in the server's environment turns them off whatever the switch says, and they are always off in CI. A remote PC's bridge sends nothing.
+**Settings → About → Anonymous usage counts** shows the next message exactly as it would be sent under **What is sent**, which links back to this section, and its switch turns the counts off for this PC. `OVIS_TELEMETRY=0` or `DO_NOT_TRACK=1` in the server's environment turns them off whatever the switch says, and they are always off in CI. A remote PC's bridge sends nothing.
 
 ## Keyboard shortcuts
 
@@ -1013,7 +1130,7 @@ U and D to **Scroll pane up** and **Scroll pane down** in Settings → Shortcuts
 or record a chord such as `⌘+U`). This lets you read history without leaving the message box or reaching for
 the screen. Shift+PageUp/PageDown alone retains the focused control's own behavior.
 
-On a desktop, Enter sends and Shift+Enter adds a line. On a touch screen, Return adds a line and the Send button sends the message, unless you turn off Settings → Chat → Composer → Return inserts a new line, which makes Return send. On a desktop, turning off Enter sends switches sending to Mod+Enter. On a touch screen with a hardware keyboard, Mod+Enter sends while Return inserts a new line is on. This choice is saved per device.
+On a desktop, Enter sends and Shift+Enter adds a line. On a touch screen, Return adds a line and the Send button sends the message, unless you turn off Settings → Chat → Composer → Return inserts a new line, which makes Return send. While the agent works, Ctrl+Enter sends the message now, as the queued row's ↑ Send now would, the same key Claude Code uses for this in its own input. On a desktop, turning off Enter sends switches sending to Mod+Enter. On a touch screen with a hardware keyboard, Mod+Enter sends while Return inserts a new line is on. This choice is saved per device.
 
 ## How it works
 
@@ -1075,13 +1192,14 @@ No, but a phone needs two things Tailscale gives at once: a way to reach the PC 
 <details>
 <summary><b>Does my code or conversation leave my machine?</b></summary>
 
-Session files stay on the PC running each agent, and their contents are sent to browsers connected to the app. Ovis has no account service, and its relay is off unless you turn it on. The agents' own connections to model providers depend on their configuration.
+Session files stay on the PC running each agent, and their contents are sent to browsers connected to the app. Signing in to the account service is optional (see [Through an account](#through-an-account)), and the relay is off unless you turn it on. The agents' own connections to model providers depend on their configuration.
 
 Optional features can send data off the PC:
 - [Voice input](#voice-input) sends recordings to the configured transcription provider; polishing also sends the transcribed text. Without a configured API key, browser speech recognition may use the browser vendor's service.
 - [Subscription usage](#subscription-usage), when enabled, sends each provider's credentials to that provider's usage endpoint.
 - Updates and remote-PC setup fetch releases or configured runtime bundles over the network; remote panes are reached over SSH.
 - Enabled push alerts go through the browser vendor's push service as encrypted notifications.
+- A destination under **Settings → Alerts → Also send to** gets each alert it chose in plain text: the PC's and the pane's names (a pane's is its terminal title, which an agent may take from your task), what happened and a link to the pane.
 - [Portal](#behind-a-reverse-proxy), while it runs, carries every connection to the app through the relay you chose: the relay sees connection addresses, timing and volume, and holds the certificate for the address.
 - The [Ovis relay](#through-the-ovis-relay), while it's on, carries everything between a paired phone and this PC through `relay.ovis.sh`, end-to-end encrypted: the relay sees connection addresses, timing and sizes, down to the timing of keystrokes, but none of the content. The app on the phone comes from `app.ovis.sh`, which itself sees only requests for the app's files, whose path names the PC. You have to trust whoever serves that app, since it's the code that holds the phone's key and shows you the PC ([trust model](relay.md#trust-model)).
 
@@ -1105,7 +1223,7 @@ Samsung Internet has a forced dark mode that repaints every page, including one 
 
 All three are in the herdr plugin marketplace too, and each does something this app does not. [collie](https://github.com/AltanS/collie) is a mobile terminal for herdr, tmux and zellij, with a status dashboard, a key pad, quick replies and voice input, served over Tailscale by its own bridge. [roamgate](https://github.com/powerfooI/roamgate) is a browser client for herdr with a file explorer and diff annotations, installed by its own script. [herdr-remote](https://github.com/dcolinmorgan/herdr-remote) is a macOS menu-bar app with a phone dashboard and a Telegram bot behind a relay and a free tunnel.
 
-Ovis reads the agent's own transcript, so Claude Code, Codex, omp, omo, gjc, pi, OpenCode and identifiable Devin CLI panes are a chat with the work folded per turn. Supported prompt cards are checked against the live menu before an answer is typed; Devin prompts use Terminal. The terminal is the same live pane as your TUI, other PCs join over SSH from the sidebar, and it installs and updates as a herdr plugin, with no account of its own. You reach it over Tailscale, SSH, your own HTTPS proxy, or the Ovis relay, which is end-to-end encrypted and off until you turn it on. If you want tmux or zellij, diffs or Telegram, one of the others is the better fit.
+Ovis reads the agent's own transcript, so Claude Code, Codex, omp, omo, gjc, pi, OpenCode and identifiable Devin CLI panes are a chat with the work folded per turn. Supported prompt cards are checked against the live menu before an answer is typed; Devin prompts use Terminal. The terminal is the same live pane as your TUI, other PCs join over SSH from the sidebar, and it installs and updates as a herdr plugin, with no account of its own. You reach it over Tailscale, SSH, your own HTTPS proxy, or the Ovis relay, which is end-to-end encrypted and off until you turn it on. If you want tmux or zellij, diffs or to answer agents from Telegram, one of the others is the better fit.
 </details>
 
 <details>

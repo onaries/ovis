@@ -1,10 +1,14 @@
 import { randomBytes } from "node:crypto";
+import { channelBinding } from "../../shared/relay-e2ee.ts";
 import type { SecureChannel } from "../../shared/relay-e2ee.ts";
+import { commitmentHolds, fromBase64Url, PAIR_APPROVAL_MS, pairDigits, randomPairNonce, toBase64Url } from "../../shared/relay-pair-sas.ts";
 import { MuxEngine, MuxStreamError } from "../../shared/relay-mux-engine.ts";
 import type { HttpStream, MuxClock, SessionFrame, WsStream } from "../../shared/relay-mux-engine.ts";
-import { FrameType, LIMITS_V1, RELAY_PROTOCOL, REQUEST_HEADERS, RESPONSE_HEADERS, WS_CONTINUATION_CAPACITY } from "../../shared/relay-mux.ts";
+import { ACCOUNT_FEATURE, FrameType, LARGE_WS_MESSAGES, LIMITS_V1, PAIR_INTENT_ACCOUNT, PAIR_INTENT_PC, PAIR_SAS_FEATURE, RELAY_HINTS, RELAY_PROTOCOL, REQUEST_HEADERS, RESPONSE_HEADERS, SERVER_TIME_HEADER, WS_CONTINUATION_CAPACITY } from "../../shared/relay-mux.ts";
 import type { HeaderList, SessionError } from "../../shared/relay-mux.ts";
+import type { PairingIntent } from "../../shared/machines.ts";
 import { PairingRateLimitedError, type DeviceMatch } from "../devices.ts";
+import { accountDeviceId } from "../../shared/account-records.ts";
 import { handleRequest } from "../dispatch.ts";
 import type { RequestServices, ServerContext } from "../dispatch.ts";
 import type { EventStreamBudget } from "../machine-api.ts";
@@ -51,6 +55,8 @@ export interface RelaySessionOptions {
   readonly onClose?: (code: SessionError) => void;
   /** The client signed in or paired: from here on the carrier counts as a device's session. */
   readonly onAuthenticated?: (deviceId: string) => void;
+  /** The relays a phone that offered RELAY_HINTS is told in AUTH_OK, the preferred one first. */
+  readonly relayHints?: () => readonly string[];
 }
 
 export interface RelayWebSocketRequest {
@@ -66,9 +72,27 @@ export interface RelayWebSocketRequest {
 export class RelaySession {
   readonly mux: MuxEngine;
   readonly sessionId = randomBytes(16).toString("hex");
-  private state: "hello" | "auth" | "verifying" | "ready" | "closed" = "hello";
+  private state: "hello" | "auth" | "pair-commit" | "pair-wait" | "verifying" | "ready" | "closed" = "hello";
   private readonly nonce = randomBytes(32);
+  /** This session's channel binding, when the phone offered pairing by comparing digits and this PC selected it. */
+  private sasBinding: Uint8Array | undefined;
+  /** What a comparison on this session asks for, as selected in WELCOME; `pc` unless the phone offered `pair-intent-account`. */
+  private intent: PairingIntent = "pc";
+  /** A WELCOME went out: the provisional one before HELLO, or the answer to it. */
+  private welcomed = false;
+  /** A pairing by comparing digits under way; `ended` once it made a device or counted as a failure. */
+  private sas: {
+    label: string; publicKey: string; commitment: Uint8Array; pcNonce: Uint8Array; expiresAt: number;
+    phoneConfirmed: boolean; approved: boolean; approvedBy?: string; ended: boolean; membersOnly: boolean; withdraw?: () => void; cancelDeadline?: () => void; stopRevokeAll?: () => void; stopApprover?: () => void;
+  } | undefined;
   private device: DeviceMatch | undefined;
+  /** The key this session's device signed in or paired with: a `link` must start from it (docs/account.md). */
+  private key = "";
+  /** Whether the device signed in with AUTH, the only admission that proves it holds its key. */
+  private keyProven = false;
+  private hinting = false;
+  /** the phone offered SERVER_TIME_HEADER: one that did not refuses the header */
+  private serverTime = false;
   private unwatch: (() => void) | undefined;
   private sourceBytes = 0;
   private readonly clock: MuxClock;
@@ -95,6 +119,7 @@ export class RelaySession {
       close: (code) => options.channel.close(code),
       onClose: (error) => {
         this.state = "closed";
+        this.endPairing(false);
         this.unwatch?.();
         this.unwatch = undefined;
         options.onClose?.(error.code);
@@ -137,10 +162,31 @@ export class RelaySession {
       },
     });
     options.channel.onClose(() => this.mux.carrierLost());
+    // A WELCOME with no feature rides right behind the protected handshake's answer, so a phone signing in
+    // gets its nonce one round trip sooner. It is provisional: HELLO is still required, and checked, before
+    // AUTH or PAIR, and a HELLO that offers pairing by comparing digits gets the final WELCOME. Only while no
+    // comparison can be under way: a phone from before `provisional` reads the first WELCOME as the answer.
+    if (!options.services.relay.approvals.windowOpen()) this.welcome([], true);
+  }
+
+  private welcome(features: readonly string[], provisional: boolean): void {
+    this.welcomed = true;
+    this.mux.sendSession({
+      type: FrameType.WELCOME, flags: 0, stream_id: 0,
+      payload: {
+        protocol: "ovis-mux", version: 1, features, limits: LIMITS_V1,
+        nonce: this.nonce.toString("base64url"), server_version: this.options.serverVersion,
+        relay_protocol: RELAY_PROTOCOL, min_supported_client: this.options.minSupportedClient,
+        ...(provisional ? { provisional: true as const } : {}),
+      },
+    });
   }
 
   /** A sign-in or pairing is being checked, or its AUTH_OK waits to be sent. */
   get verifying(): boolean { return this.state === "verifying"; }
+
+  /** Both ends are comparing digits: admission waits for people, up to PAIR_APPROVAL_MS. */
+  get pairing(): boolean { return this.state === "pair-commit" || this.state === "pair-wait"; }
 
   get bufferedBytes(): number { return this.sourceBytes + this.mux.stats.bufferedBytes; }
 
@@ -159,6 +205,7 @@ export class RelaySession {
   close(code: SessionError = "auth_revoked"): void {
     if (this.state === "closed") return;
     this.state = "closed";
+    this.endPairing(false);
     this.unwatch?.();
     this.unwatch = undefined;
     if (code !== "auth_revoked" && code !== "auth_changed") { this.mux.fail(code, code); return; }
@@ -181,50 +228,181 @@ export class RelaySession {
       case FrameType.HELLO:
         if (this.state !== "hello") { this.close("protocol_error"); return; }
         if (!frame.payload.versions.includes(1)) { this.close("unsupported_version"); return; }
-        if (frame.payload.required_features.length) { this.close("unsupported_extension"); return; }
+        // selected only where it can finish: a protected channel to bind the digits to
+        if (frame.payload.features.includes(PAIR_SAS_FEATURE)) this.sasBinding = channelBinding(this.options.channel);
+        // relay hints are answered in AUTH_OK, not WELCOME: a provisional WELCOME goes out before HELLO is read
+        this.hinting = this.options.relayHints !== undefined && frame.payload.features.includes(RELAY_HINTS);
+        // a large session's snapshot goes in one message only to a phone that takes it (#2773)
+        const large = frame.payload.features.includes(LARGE_WS_MESSAGES);
+        if (large) this.mux.sendLargeMessages();
+        this.serverTime = frame.payload.features.includes(SERVER_TIME_HEADER);
+        // an intent is selected only with pair-sas, and only the one offered (docs/account.md, "Negotiation")
+        const intents = frame.payload.features.filter((f) => f === PAIR_INTENT_PC || f === PAIR_INTENT_ACCOUNT);
+        if (intents.length > 1) { this.close("protocol_error"); return; }
+        const selected = [...this.sasBinding ? [PAIR_SAS_FEATURE, ...intents] : [], ...frame.payload.features.includes(ACCOUNT_FEATURE) ? [ACCOUNT_FEATURE] : []];
+        // a feature the phone requires has to be one this PC takes on this channel
+        if (frame.payload.required_features.some((feature) => !selected.includes(feature) && !(feature === RELAY_HINTS && this.hinting) && !(feature === LARGE_WS_MESSAGES && large))) { this.close("unsupported_extension"); return; }
         this.state = "auth";
-        this.mux.sendSession({
-          type: FrameType.WELCOME, flags: 0, stream_id: 0,
-          payload: {
-            protocol: "ovis-mux", version: 1, features: [], limits: LIMITS_V1,
-            nonce: this.nonce.toString("base64url"), server_version: this.options.serverVersion,
-            relay_protocol: RELAY_PROTOCOL, min_supported_client: this.options.minSupportedClient,
-          },
-        });
+        if (this.sasBinding && intents[0] === PAIR_INTENT_ACCOUNT) this.intent = "account";
+        // after a provisional WELCOME (nothing selected), another goes out only when this one selects something
+        if (!this.welcomed || selected.length > 0) this.welcome(selected, false);
         return;
       case FrameType.AUTH: case FrameType.PAIR: {
         if (this.state !== "auth") { this.close("protocol_error"); return; }
         this.state = "verifying";
         const devices = this.options.services.devices;
         if (this.options.services.serveOnly) { this.close("auth_failed"); return; }
+        this.keyProven = frame.type === FrameType.AUTH;
         const device = frame.type === FrameType.AUTH
           ? await devices.matchRelay(frame.payload.device_id, this.nonce, frame.payload.signature, this.options.serverId)
           : devices.pairRelay(frame.payload.code, frame.payload.label, frame.payload.public_key)?.device;
-        if (!this.mux.active) return;
-        if (!device) { this.close("auth_failed"); return; }
-        this.unwatch = devices.onRevoke(device.id, () => this.close(devices.has(device.id) ? "auth_changed" : "auth_revoked"));
-        if (!devices.has(device.id) || !this.mux.active) { this.unwatch(); return; }
-        if (devices.list(null).find((current) => current.id === device.id)?.role !== device.role) {
-          this.close("auth_changed");
-          return;
-        }
-        this.device = Object.freeze(device);
-        // The commit callback runs before the sink: synchronous carriers can immediately OPEN.
-        // Until then OPEN is still unauthenticated, even while AUTH_OK waits behind receipt credit.
-        this.mux.enqueueControl({
-          type: FrameType.AUTH_OK, flags: 0, stream_id: 0,
-          payload: { session_id: this.sessionId, device_id: device.id, role: device.role },
-        }, undefined, () => {
-          if (!devices.has(device.id)) { this.close("auth_revoked"); return; }
-          this.mux.authenticate(device.id);
-          this.state = "ready";
-          this.options.onAuthenticated?.(device.id);
-        });
+        this.enter(device);
         return;
       }
-      case FrameType.WELCOME: case FrameType.AUTH_OK:
+      case FrameType.PAIR_REQUEST: {
+        if (this.state !== "auth" || !this.sasBinding) { this.close("protocol_error"); return; }
+        if (this.options.services.serveOnly) { this.close("auth_failed"); return; }
+        // nobody asked for a link lately: refused before any prompt, and not counted, since no person was asked,
+        // unless it is an account join the account service has seen (accountJoin, docs/account.md design 5.3)
+        let membersOnly = false;
+        if (!this.options.services.relay.approvals.windowOpen()) {
+          this.state = "verifying";
+          if (!await this.accountJoin(frame.payload.public_key)) { this.close("auth_failed"); return; }
+          if (!this.mux.active) return;
+          membersOnly = true;
+        }
+        this.options.services.devices.assertRelayPairing(this.path);
+        this.state = "pair-commit";
+        this.sas = {
+          label: frame.payload.label, publicKey: frame.payload.public_key, commitment: fromBase64Url(frame.payload.commitment),
+          pcNonce: randomPairNonce(), expiresAt: Date.now() + PAIR_APPROVAL_MS, phoneConfirmed: false, approved: false, ended: false, membersOnly,
+        };
+        // past the comparison's deadline the session ends with `timeout` and its prompt goes at once;
+        // the mux's own setup deadline stays just behind it as the backstop
+        this.sas.cancelDeadline = this.clock.setTimeout(() => { if (this.pairing) this.close("timeout"); }, PAIR_APPROVAL_MS);
+        // revoking every device also ends a comparison under way, even one the owner already approved
+        this.sas.stopRevokeAll = this.options.services.devices.onRevokeAll(() => { if (this.pairing) this.close("auth_failed"); });
+        this.mux.extendSetup(PAIR_APPROVAL_MS + 1_000);
+        this.mux.sendSession({ type: FrameType.PAIR_CHALLENGE, flags: 0, stream_id: 0, payload: { nonce: toBase64Url(this.sas.pcNonce) } });
+        return;
+      }
+      case FrameType.PAIR_REVEAL: {
+        const sas = this.sas;
+        if (this.state !== "pair-commit" || !sas || !this.sasBinding) { this.close("protocol_error"); return; }
+        const phoneNonce = fromBase64Url(frame.payload.nonce);
+        if (!commitmentHolds(sas.commitment, this.sasBinding, sas.publicKey, phoneNonce)) { this.close("auth_failed"); return; }
+        // a pause that began while this phone held its reveal still keeps its prompt off the owner's screen
+        this.options.services.devices.assertRelayPairing(this.path);
+        const asked = this.options.services.relay.approvals.ask(sas.label,
+          pairDigits(this.sasBinding, sas.publicKey, phoneNonce, sas.pcNonce), sas.expiresAt,
+          { intent: this.intent, key: sas.publicKey, deviceId: accountDeviceId(this.options.serverId, sas.publicKey), membersOnly: sas.membersOnly });
+        if (!asked) { this.close("auth_failed"); return; }
+        this.state = "pair-wait";
+        sas.withdraw = asked.withdraw;
+        void asked.decision.then((decision) => {
+          if (this.sas !== sas || this.state !== "pair-wait") return;
+          if (!decision.approved) { this.close("auth_failed"); return; }
+          sas.approved = true;
+          sas.approvedBy = decision.by?.id;
+          // an approver revoked or given another role before the phone confirms takes the approval with it, for good
+          if (decision.by) sas.stopApprover = this.options.services.devices.onRevoke(decision.by.id, () => { if (this.pairing) this.close("auth_failed"); });
+          this.finishPairing();
+        }).catch(() => this.close("internal_error"));
+        return;
+      }
+      case FrameType.PAIR_CONFIRM: {
+        if (this.state !== "pair-wait" || !this.sas || this.sas.phoneConfirmed) { this.close("protocol_error"); return; }
+        this.sas.phoneConfirmed = true;
+        this.finishPairing();
+        return;
+      }
+      case FrameType.WELCOME: case FrameType.AUTH_OK: case FrameType.PAIR_CHALLENGE:
         this.close("protocol_error");
     }
+  }
+
+  private hints(): { relays?: readonly string[] } {
+    const relays = this.hinting ? this.options.relayHints?.() ?? [] : [];
+    return relays.length ? { relays } : {};
+  }
+
+  /** Both people said the digits match: the phone on its screen, the owner on this PC. */
+  private finishPairing(): void {
+    const sas = this.sas;
+    if (!sas || !sas.phoneConfirmed || !sas.approved || this.state !== "pair-wait") return;
+    // an answer that lands after the deadline, before its timer ran, makes no device either
+    if (Date.now() > sas.expiresAt) { this.close("timeout"); return; }
+    this.state = "verifying";
+    let device: DeviceMatch | undefined;
+    try { device = this.options.services.devices.pairRelayApproved(sas.label, sas.publicKey, { path: this.path, id: accountDeviceId(this.options.serverId, sas.publicKey), ...(sas.approvedBy === undefined ? {} : { addedBy: sas.approvedBy }) })?.device; }
+    catch (error) {
+      if (error instanceof PairingRateLimitedError) { this.close("auth_failed"); return; }
+      throw error;
+    }
+    // pairRelayApproved counted a refused key itself
+    this.endPairing(true);
+    this.enter(device);
+  }
+
+  /** Once per comparison: one that made no device counts against relay pairing (server/devices.ts). */
+  private endPairing(counted: boolean): void {
+    const sas = this.sas;
+    if (!sas || sas.ended) return;
+    sas.ended = true;
+    sas.cancelDeadline?.();
+    sas.stopRevokeAll?.();
+    sas.stopApprover?.();
+    sas.withdraw?.();
+    if (!counted) this.options.services.devices.noteRelayFailure(this.path);
+  }
+
+  /**
+   * An account join outside the pairing window (docs/account.md, design 5.3): only with the account
+   * intent, on a PC in an account with a member to approve, for a key the account service has a fresh
+   * admission for, at most 5 a minute. Never counted as a failed pairing: nobody was asked.
+   */
+  private async accountJoin(key: string): Promise<boolean> {
+    const { devices, relay, accountMailbox } = this.options.services;
+    const allowed = () => this.intent === "account" && devices.account() !== null && devices.hasAccountApprover();
+    if (!allowed()) return false;
+    // a pull may take a while: the comparison's own deadline starts now
+    this.mux.extendSetup(PAIR_APPROVAL_MS + 1_000);
+    if (!await accountMailbox.admitted(key) || !allowed()) return false;
+    // counted only once admitted, so refused strangers cannot spend the PC's joins
+    return relay.approvals.takeAccountJoin();
+  }
+
+  /** Which failure count this session's comparison spends (server/devices.ts PairingPath). */
+  private get path(): "code" | "account" { return this.intent === "account" ? "account" : "code"; }
+
+  /** A verified AUTH, PAIR or approved comparison becomes this session's one principal. */
+  private enter(device: DeviceMatch | null | undefined): void {
+    const devices = this.options.services.devices;
+    if (!this.mux.active) return;
+    if (!device) { this.close("auth_failed"); return; }
+    const unrevoke = devices.onRevoke(device.id, () => this.close(devices.has(device.id) ? "auth_changed" : "auth_revoked"));
+    // a link moves the row to another key: a session signed in with the one it had ends, all but the linking one
+    const unlinked = devices.onLinked(device.id, (sessionId) => { if (sessionId !== this.sessionId) this.close("auth_changed"); });
+    this.unwatch = () => { unrevoke(); unlinked(); };
+    if (!devices.has(device.id) || !this.mux.active) { this.unwatch(); return; }
+    if (devices.list(null).find((current) => current.id === device.id)?.role !== device.role) {
+      this.close("auth_changed");
+      return;
+    }
+    this.device = Object.freeze(device);
+    // a key sent with a code or a comparison was never signed with: nothing account-side may rest on it
+    this.key = this.keyProven ? devices.relayKeyOf(device.id) ?? "" : "";
+    // The commit callback runs before the sink: synchronous carriers can immediately OPEN.
+    // Until then OPEN is still unauthenticated, even while AUTH_OK waits behind receipt credit.
+    this.mux.enqueueControl({
+      type: FrameType.AUTH_OK, flags: 0, stream_id: 0,
+      payload: { session_id: this.sessionId, device_id: device.id, role: device.role, ...this.hints() },
+    }, undefined, () => {
+      if (!devices.has(device.id)) { this.close("auth_revoked"); return; }
+      this.mux.authenticate(device.id);
+      this.state = "ready";
+      this.options.onAuthenticated?.(device.id);
+    });
   }
 
   private principal(): DeviceMatch | undefined {
@@ -250,8 +428,7 @@ export class RelaySession {
         return;
       }
       if (!response) { stream.reset("internal_error"); return; }
-      const allowed: readonly string[] = RESPONSE_HEADERS;
-      const rejection = stream.reject(response.status, [...response.headers].filter(([name]) => allowed.includes(name)));
+      const rejection = stream.reject(response.status, this.responseHeaders(response.headers));
       // Rejection transfers disposal to an HTTP stream; it still owns the request signal.
       if (response.body) await rejection.sendBody(response.body);
       else rejection.end();
@@ -261,11 +438,17 @@ export class RelaySession {
     }
   }
 
+  /** The response headers this phone takes. */
+  private responseHeaders(headers: Headers): [string, string][] {
+    const allowed: readonly string[] = RESPONSE_HEADERS;
+    return [...headers].filter(([name]) => allowed.includes(name) && (name !== "x-server-time" || this.serverTime));
+  }
+
   private context(device: DeviceMatch, timeout: ServerContext["timeout"], upgrade: ServerContext["upgrade"],
     relayBodyBudget?: EventStreamBudget): ServerContext {
     return {
       services: this.options.services, port: this.options.port, requestIP: () => null, timeout, upgrade,
-      peer: { kind: "relay", device, sessionId: this.sessionId }, relayBodyBudget,
+      peer: { kind: "relay", device, sessionId: this.sessionId, serverId: this.options.serverId, key: this.key }, relayBodyBudget,
     };
   }
 
@@ -318,8 +501,7 @@ export class RelaySession {
       if (!stream.live || stream.final) { await response?.body?.cancel(); return; }
       if (!response) { stream.reset("internal_error"); return; }
       reader = response.body?.getReader();
-      const allowed: readonly string[] = RESPONSE_HEADERS;
-      stream.headers(response.status, [...response.headers].filter(([name]) => allowed.includes(name)));
+      stream.headers(response.status, this.responseHeaders(response.headers));
       if (!stream.live) return;
       if (!reader || stream.noBody) {
         await reader?.cancel();

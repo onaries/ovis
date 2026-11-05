@@ -1,6 +1,7 @@
 import type { WsStream } from "../../shared/relay-mux-engine.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
 import type { createCore, SocketData } from "../core/index.ts";
+import { LARGE_REPLY_BYTES } from "../herdr/client.ts";
 import { OUTPUT_HARD_BYTES, OUTPUT_LOW_BYTES } from "../output-window.ts";
 
 export type RelaySocketHandlers = ReturnType<typeof createCore>["socketHandlers"];
@@ -60,7 +61,11 @@ export class VirtualSocket implements SocketLike {
     if (this.peerDraining) return Buffer.byteLength(text);
     if (this.readyState !== WebSocket.OPEN) return 0;
     const bytes = Buffer.byteLength(text);
-    if (this.getBufferedAmount() + bytes > OUTPUT_HARD_BYTES) {
+    // The core holds each client to OUTPUT_HARD_BYTES itself and excuses frames larger than that, a large
+    // session's snapshot among them, while they drain (connections.ts `backlog`); this is only the last guard,
+    // as `backpressureLimit` is on a native socket (core/socket.ts). A frame the phone cannot take in one
+    // message (relay-mux.ts LARGE_WS_MESSAGES) closes as stalled, as before it did (#2773).
+    if (bytes > this.stream.engine.sendMessageBytes || this.getBufferedAmount() + bytes > OUTPUT_HARD_BYTES + LARGE_REPLY_BYTES) {
       this.close(OUTPUT_STALLED_CLOSE_CODE, "terminal output transport stalled");
       return 0;
     }

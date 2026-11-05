@@ -5,7 +5,12 @@
  */
 import { AGENT_CATALOG, catalogPlatform, catalogRow, type AgentCatalogResponse, type CatalogPlatform } from "../shared/agent-catalog.ts";
 import type { AgentDetector } from "./agent-catalog-detect.ts";
+import { hcMachine } from "./herdr-core/runtime.ts";
 import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
+
+/** What this PC can tell about another machine of the core's agents: nothing (machine-bridge.ts). */
+const UNKNOWN = { installed: null, binary: null, on_path: null, version: null, version_error: null, meets_min_version: null } as const;
+const OTHER_MACHINE = "Ovis cannot tell what this machine has installed: install agents from a terminal on it.";
 
 export async function agentCatalogFor(platform: CatalogPlatform | null, detector: AgentDetector): Promise<AgentCatalogResponse> {
   const agents = await Promise.all(AGENT_CATALOG.map(async (entry) => catalogRow(entry, platform, await detector.state(entry, platform))));
@@ -19,7 +24,11 @@ export async function handleAgentCatalogRequest(request: Request, pathname: stri
   if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
   try {
     // what is installed changes under it (an install in a terminal tab): never kept by a browser
-    return jsonResponse(await agentCatalogFor(platform, detector), 200, { "cache-control": "no-store" });
+    // another machine of the core: its platform and installs are not this PC's, so neither is told
+    const catalog: AgentCatalogResponse = hcMachine() !== null
+      ? { platform: null, agents: AGENT_CATALOG.map((entry) => ({ ...catalogRow(entry, null, { ...UNKNOWN }), no_install: OTHER_MACHINE })) }
+      : await agentCatalogFor(platform, detector);
+    return jsonResponse(catalog, 200, { "cache-control": "no-store" });
   } catch (error) {
     return errorResponse(error);
   }

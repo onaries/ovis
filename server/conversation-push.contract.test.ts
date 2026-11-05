@@ -229,6 +229,53 @@ describe("native conversation invalidation", () => {
     socket.ws.close();
   });
 
+  it("follows a pane's conversation without attaching it, through the pane's attach and detach, until a detached disable or close", async () => {
+    const socket = await connect();
+    const snapshot = socket.frames.find((frame) => frame.type === "snapshot");
+    expect(snapshot?.type === "snapshot" && snapshot.features?.includes("conversation-watch-detached")).toBe(true);
+    const follow = (target: TranscriptSocket, enabled: boolean, id = paneId): void => target.send({ type: "conversation-watch", pane_id: id, enabled, detached: true });
+    follow(socket, true);
+    await socket.changed(paneId);
+    const monitor = monitors.get(paneId)!;
+    expect(monitor.size).toBe(1);
+    let after = socket.frames.length;
+    appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "detached-model" })}\n`);
+    await socket.changed(paneId, after);
+    expect((await read()).metadata?.model).toBe("detached-model");
+
+    // the pane's own attach, its attached interest's disable and its detach leave the detached interest be
+    attach(socket);
+    await socket.waitFor((frame) => frame.type === "pane-geometry" && frame.pane_id === paneId);
+    watch(socket, false);
+    socket.send({ type: "detach", pane_id: paneId });
+    await barrier(socket);
+    expect(monitor.size).toBe(1);
+    after = socket.frames.length;
+    appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "still-followed-model" })}\n`);
+    await socket.changed(paneId, after);
+    expect(socket.frames.some((frame) => frame.type === "error")).toBe(false);
+
+    follow(socket, false);
+    await barrier(socket);
+    expect(monitor.size).toBe(0);
+    after = socket.frames.length;
+    follow(socket, true);
+    await socket.changed(paneId, after);
+    socket.ws.close();
+    await until(() => monitor.size === 0, "closing the connection released its detached interest");
+
+    const crowded = await connect();
+    for (let i = 0; i < 32; i++) follow(crowded, true, `${paneId}-detached-${i}`);
+    after = crowded.frames.length;
+    follow(crowded, true, `${paneId}-detached-32`);
+    await crowded.waitFor((frame) => frame.type === "error" && frame.code === "too_many_conversation_watches", after);
+    after = crowded.frames.length;
+    crowded.ws.send(JSON.stringify({ type: "conversation-watch", pane_id: paneId, enabled: true, detached: "yes" }));
+    await crowded.waitFor((frame) => frame.type === "error" && frame.code === "invalid_conversation_watch", after);
+    crowded.ws.close();
+    await until(() => monitor.size === 0, "closing the crowded connection released every detached interest");
+  }, 30_000);
+
   it("shares interested pane monitors, notices metadata/tear/replacement/missing/new-session writes and releases detach/close claims", async () => {
     const first = await connect();
     const second = await connect();

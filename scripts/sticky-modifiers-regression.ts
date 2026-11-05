@@ -72,9 +72,13 @@ try {
     await input.focus();
     let previousMask = 0;
     const held = async (mask: number) => {
+      // locked (two taps from off, one back to off), so each stays held across every key below
       for (const [bit, key] of [[4, "Control"], [2, "Alt"], [1, "Shift"]] as const) {
-        if ((mask & bit) !== (previousMask & bit)) await page.locator(`[data-key="${key}"]`).tap();
-        assert.equal(await page.locator(`[data-key="${key}"]`).getAttribute("aria-pressed"), String(!!(mask & bit)));
+        const button = page.locator(`[data-key="${key}"]`);
+        if ((mask & bit) && !(previousMask & bit)) { await button.tap(); await button.tap(); }
+        else if (!(mask & bit) && (previousMask & bit)) await button.tap();
+        assert.equal(await button.getAttribute("aria-pressed"), String(!!(mask & bit)));
+        assert.equal(await button.getAttribute("data-latch"), mask & bit ? "locked" : null);
       }
       previousMask = mask;
       assert.equal(await input.evaluate((element) => document.activeElement === element), true, "touch toggle keeps typing focus");

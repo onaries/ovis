@@ -107,9 +107,11 @@ const NODE_HOST = join(import.meta.dir, "pty-host.mjs");
 const IDENTITY = 'if [ "$#" -eq 0 ]; then printf "pty-sidecar: usage: fixture\\n" >&2; exit 2; fi';
 const DELEGATE = `exec node '${NODE_HOST}' "$@"`;
 
+// No core dump from a fake that crashes on purpose: with a relative core_pattern it would land in
+// the working directory, the checkout, where check.ts counts it as a source change.
 function fakeHost(body: string, mode = 0o755, shebang = true): string {
   const path = join(fixtures, crypto.randomUUID());
-  writeFileSync(path, `${shebang ? "#!/bin/sh\n" : ""}${body}\n`);
+  writeFileSync(path, `${shebang ? "#!/bin/sh\nulimit -c 0\n" : ""}${body}\n`);
   chmodSync(path, mode);
   return path;
 }
@@ -786,7 +788,8 @@ parity("rust");
 
 /** The Rust host run directly, so a test can write what PtySession never does: frames cut off, floods. */
 function direct(args: string[]) {
-  const proc = Bun.spawn([RUST_HOST ?? "", "40", "5", ...args], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  // exec keeps the host's pid; no core dump in the checkout when a test aborts it (see fakeHost)
+  const proc = Bun.spawn(["sh", "-c", 'ulimit -c 0; exec "$0" "$@"', RUST_HOST ?? "", "40", "5", ...args], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   let output = "";
   const waiters = new Set<() => void>();
   void (async () => {

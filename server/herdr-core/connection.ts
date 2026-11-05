@@ -153,13 +153,13 @@ export interface HcTransport {
   kill: () => void;
 }
 
-/** `hc connect` as a child process; a program that cannot be started is an HcError (`closed`). */
-export function spawnHcConnect(bin: string): HcTransport {
+/** `hc connect` as a child process (in `env`, else this process's); a program that cannot be started is an HcError (`closed`). */
+export function spawnHcConnect(bin: string, env?: Record<string, string | undefined>): HcTransport {
   // runtime.ts hands out this path that cannot exist while a moved hc is found again
   if (bin === "/dev/null/herdr-core-moved") throw new HcError("closed", "herdr-core moved (an update?), and Ovis is looking for it again: try again in a moment");
   let child: Bun.Subprocess<"pipe", "pipe", "ignore">;
   try {
-    child = Bun.spawn([bin, "connect"], { stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+    child = Bun.spawn([bin, "connect"], { stdin: "pipe", stdout: "pipe", stderr: "ignore", ...(env ? { env } : {}) });
   } catch (error) {
     throw new HcError("closed", `hc could not be started (${bin}): ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -181,7 +181,7 @@ export function spawnHcConnect(bin: string): HcTransport {
 
 interface Line {
   transport: HcTransport;
-  /** the hello answer: version and features of the core behind it */
+  /** the hello answer: version, methods and features of the core behind it */
   hello: Promise<HelloInfo>;
   pending: Map<number, PendingCall>;
   channels: Map<number, OpenChannel>;
@@ -194,7 +194,8 @@ interface Line {
   dead: boolean;
 }
 
-export interface HelloInfo { version: string; core: { id: string; name: string }; features: string[] }
+/** What the core answered hello with: what it can do is read from `methods` and `features`, never from `version`. */
+export interface HelloInfo { version: string; core: { id: string; name: string }; methods: string[]; features: string[] }
 
 /**
  * A lazily opened, self-replacing line to hc: the first call starts `hc connect`, and a line that
@@ -477,7 +478,7 @@ function parseReason(payload: Uint8Array): Record<string, unknown> | null {
 
 /** The hello's answer, or why it is not one this side can speak to. */
 export function parseHello(text: string): HelloInfo | string {
-  let message: { result?: { generation?: unknown; framed?: unknown; version?: unknown; core?: { id?: unknown; name?: unknown }; features?: unknown }; error?: { message?: unknown } };
+  let message: { result?: { generation?: unknown; framed?: unknown; version?: unknown; core?: { id?: unknown; name?: unknown }; methods?: unknown; features?: unknown }; error?: { message?: unknown } };
   try {
     message = JSON.parse(text);
   } catch {
@@ -488,6 +489,6 @@ export function parseHello(text: string): HelloInfo | string {
   if (result?.generation !== HC_GENERATION) return `hc speaks protocol generation ${String(result?.generation)}; Ovis speaks ${HC_GENERATION}`;
   if (result.framed !== true) return "hc did not switch the connection to framed mode";
   if (typeof result.version !== "string" || typeof result.core?.id !== "string" || typeof result.core.name !== "string") return "hc's hello is missing its version or core";
-  const features = Array.isArray(result.features) ? result.features.filter((feature): feature is string => typeof feature === "string") : [];
-  return { version: result.version, core: { id: result.core.id, name: result.core.name }, features };
+  const strings = (list: unknown): string[] => (Array.isArray(list) ? list.filter((item): item is string => typeof item === "string") : []);
+  return { version: result.version, core: { id: result.core.id, name: result.core.name }, methods: strings(result.methods), features: strings(result.features) };
 }

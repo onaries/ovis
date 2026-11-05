@@ -50,6 +50,25 @@ export interface PaneSwapped {
   target_pane_id: string | null;
 }
 
+/** POST /api/pane/move: the pane leaves its place for `side` of another pane of its own tab, taking half of that pane's. */
+export interface MovePaneRequest {
+  pane_id: string;
+  target_pane_id: string;
+  side: PaneDirection;
+}
+
+/**
+ * `changed` false names why nothing moved: same_pane, or cross_tab for a target in another tab.
+ * `changed` true with a reason: the pane moved but stayed right of or below its target, herdr having
+ * refused, or failed, the swap that puts it left or above. An error means the pane is not beside its
+ * target: its message says it went back into its tab, or where it waits.
+ */
+export interface PaneMoved {
+  ok: true;
+  changed: boolean;
+  reason: string | null;
+}
+
 /**
  * POST /api/pane/resize: the border the pane shares with a neighbour moves `direction`-wards by
  * `amount` of the split that border belongs to, which herdr measures on the split's own extent,

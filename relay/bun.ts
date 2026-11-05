@@ -5,9 +5,10 @@
  */
 import type { ServerWebSocket } from "bun";
 import { MAX_MESSAGE_BYTES, Room, admit, type Limiters, type SocketInfo, type SocketRequest } from "./core.ts";
+import { PairRoom, PAIR_GUEST_GAP_MS, type PairInfo, type PairSocketRequest } from "./pair-room.ts";
 import { memoryLimiters, relayLimits, relayLimitsFromArgs, type BunRelayLimits } from "./bun-limits.ts";
 
-interface SocketData { request: SocketRequest; info: SocketInfo | null; address: string }
+interface SocketData { request: SocketRequest | PairSocketRequest; info: SocketInfo | PairInfo | null; address: string }
 type Socket = ServerWebSocket<SocketData>;
 
 export interface BunRelayOptions {
@@ -16,6 +17,8 @@ export interface BunRelayOptions {
   /** Overrides only rate limiting, not the hard room/socket caps. */
   limiters?: Limiters;
   limits?: Partial<BunRelayLimits>;
+  /** the shortest gap between two guests of a pairing room (pair-room.ts); tests make it 0 */
+  pairGuestGapMs?: number;
 }
 
 export interface BunRelay {
@@ -29,7 +32,9 @@ const SWEEP_MS = 10_000;
 export function startBunRelay(options: BunRelayOptions = {}): BunRelay {
   const limits = relayLimits(options.limits);
   const limiters = options.limiters ?? memoryLimiters(limits);
-  const rooms = new Map<string, { room: Room<Socket>; sockets: Set<Socket>; pending: number }>();
+  const rooms = new Map<string, { room: Room<Socket> | PairRoom<Socket>; sockets: Set<Socket>; pending: number }>();
+  // a pairing room's key cannot be a server_id, which is 32 hex digits
+  const keyOf = (request: SocketRequest | PairSocketRequest) => "kind" in request ? `pair:${request.nameplate}` : request.server_id;
   let socketCount = 0;
   /** open and upgrading sockets per connecting address; an address with none is forgotten */
   const byAddress = new Map<string, number>();
@@ -38,22 +43,29 @@ export function startBunRelay(options: BunRelayOptions = {}): BunRelay {
     if (left > 0) byAddress.set(address, left);
     else byAddress.delete(address);
   };
-  const roomOf = (serverId: string) => {
-    let entry = rooms.get(serverId);
+  const roomOf = (request: SocketRequest | PairSocketRequest) => {
+    const key = keyOf(request);
+    let entry = rooms.get(key);
     if (!entry) {
       const sockets = new Set<Socket>();
-      const room = new Room<Socket>({
+      const common = {
         sockets: () => sockets,
-        info: (socket) => socket.data.info,
-        setInfo: (socket, info) => { socket.data.info = info; },
-        send: (socket, frame) => { socket.send(frame); },
-        close: (socket, code, reason) => { socket.close(code, reason); },
+        send: (socket: Socket, frame: string | ArrayBuffer | Uint8Array) => { socket.send(frame); },
+        close: (socket: Socket, code: number, reason: string) => { socket.close(code, reason); },
         now: () => Date.now(),
-      });
+      };
+      const room = "kind" in request
+        ? new PairRoom<Socket>({ ...common, info: (socket) => socket.data.info as PairInfo | null, setInfo: (socket, info) => { socket.data.info = info; } }, options.pairGuestGapMs ?? PAIR_GUEST_GAP_MS)
+        : new Room<Socket>({ ...common, info: (socket) => socket.data.info as SocketInfo | null, setInfo: (socket, info) => { socket.data.info = info; } });
       entry = { room, sockets, pending: 0 };
-      rooms.set(serverId, entry);
+      rooms.set(key, entry);
     }
     return entry;
+  };
+  const openIn = (room: Room<Socket> | PairRoom<Socket>, socket: Socket) => {
+    const request = socket.data.request;
+    if (room instanceof PairRoom) { if ("kind" in request) room.open(socket, request); }
+    else if (!("kind" in request)) room.open(socket, request);
   };
 
   const server = Bun.serve<SocketData>({
@@ -67,11 +79,14 @@ export function startBunRelay(options: BunRelayOptions = {}): BunRelay {
       if ((byAddress.get(address) ?? 0) >= limits.maxSocketsPerAddress) {
         return new Response("too many open connections from this address", { status: 429, headers: { "retry-after": "60", "cache-control": "no-store" } });
       }
-      if (socketCount >= limits.maxSockets || (!rooms.has(admitted.server_id) && rooms.size >= limits.maxRooms)) {
+      const pairing = "kind" in admitted;
+      // a pairing room needs no PC's key to open, so it never takes one of the places PCs connect to
+      const kindCount = [...rooms.keys()].filter((key) => key.startsWith("pair:") === pairing).length;
+      if (socketCount >= limits.maxSockets || (!rooms.has(keyOf(admitted)) && kindCount >= (pairing ? limits.maxPairRooms : limits.maxRooms))) {
         return new Response("relay capacity reached", { status: 503, headers: { "retry-after": "60", "cache-control": "no-store" } });
       }
       // Reserve synchronously before upgrading: concurrent fetches cannot oversubscribe either cap.
-      const entry = roomOf(admitted.server_id);
+      const entry = roomOf(admitted);
       entry.pending++;
       socketCount++;
       byAddress.set(address, (byAddress.get(address) ?? 0) + 1);
@@ -79,7 +94,7 @@ export function startBunRelay(options: BunRelayOptions = {}): BunRelay {
       entry.pending--;
       socketCount--;
       release(address);
-      if (entry.pending === 0 && entry.sockets.size === 0) rooms.delete(admitted.server_id);
+      if (entry.pending === 0 && entry.sockets.size === 0) rooms.delete(keyOf(admitted));
       return new Response("expected a WebSocket upgrade", { status: 426 });
     },
     websocket: {
@@ -91,23 +106,23 @@ export function startBunRelay(options: BunRelayOptions = {}): BunRelay {
       // the room closes idle sockets itself (IDLE_MS), as on Cloudflare
       idleTimeout: 0,
       open(socket) {
-        const entry = roomOf(socket.data.request.server_id);
+        const entry = roomOf(socket.data.request);
         entry.pending--;
         entry.sockets.add(socket);
-        entry.room.open(socket, socket.data.request);
+        openIn(entry.room, socket);
       },
       message(socket, message) {
-        rooms.get(socket.data.request.server_id)?.room.message(socket, message);
+        rooms.get(keyOf(socket.data.request))?.room.message(socket, message);
       },
       close(socket) {
-        const serverId = socket.data.request.server_id;
-        const entry = rooms.get(serverId);
+        const key = keyOf(socket.data.request);
+        const entry = rooms.get(key);
         if (!entry) return;
         entry.room.closed(socket);
         entry.sockets.delete(socket);
         socketCount--;
         release(socket.data.address);
-        if (entry.pending === 0 && entry.sockets.size === 0) rooms.delete(serverId);
+        if (entry.pending === 0 && entry.sockets.size === 0) rooms.delete(key);
       },
     },
   });

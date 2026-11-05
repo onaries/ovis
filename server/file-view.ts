@@ -687,7 +687,7 @@ function pageOpenedAs(fd: number, file: string, opened: BigIntStats): boolean {
 }
 
 /** Every folder from `root` to `file`'s own is a folder (not a link), owned by `uid`, and writable by no group or other user. */
-function ownedFolders(root: string, file: string, uid: number | undefined): boolean {
+export function ownedFolders(root: string, file: string, uid: number | undefined): boolean {
   if (uid === undefined) return false;
   const base = root.endsWith(sep) ? root.slice(0, -1) : root;
   const below = dirname(file).slice(base.length).split(sep).filter(Boolean);

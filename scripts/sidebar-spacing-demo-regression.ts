@@ -1,6 +1,8 @@
 /**
  * Purpose: verify sidebar spacing when PC groups fold in a real browser, and that picking an agent of a folded PC
- * keeps its fold. The demo's roster is rewritten into two PCs (the Host "Laptop" and "Work PC"): a lone Host is
+ * keeps its fold. How the PCs and Agents share the height: Agents takes half the sidebar where both lists are
+ * long and sits on the footer with the gap above it where both are short, as it always has, and takes the
+ * height the PCs leave free down to the footer when they end above that half. The demo's roster is rewritten into two PCs (the Host "Laptop" and "Work PC"): a lone Host is
  * drawn without its header and has no fold (MachineSidebar.tsx).
  * Tags: sidebar, spacing, responsive, browser, regression.
  * Usage: bun scripts/sidebar-spacing-demo-regression.ts
@@ -69,6 +71,29 @@ const closeAgentWorkspaces = (page: Page) => page.evaluate(async () => {
   throw new Error("the demo still lists an agent workspace after 32 closes");
 });
 
+/**
+ * Where the lists sit: the PCs' rows (the last PC's bottom), Agents' box and whether its rows are cut, and the
+ * footer. `pcsCut` and `agentsCut` say a list holds more rows than it shows.
+ */
+const layout = (page: Page) => page.evaluate(() => {
+  const box = (selector: string) => document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+  const list = document.querySelector<HTMLElement>(".machine-list")!;
+  const contents = document.querySelector<HTMLElement>(".agent-list-contents")!;
+  const rows = [...document.querySelectorAll<HTMLElement>(".machine-group:not([hidden])")].at(-1)!.getBoundingClientRect();
+  const agents = box(".agents-sidebar");
+  return {
+    lineHeight: document.querySelector(".sidebar-split")?.getBoundingClientRect().height ?? 0,
+    shellHeight: box(".sidebar-shell").height,
+    rowsBottom: Math.min(rows.bottom, list.getBoundingClientRect().bottom),
+    pcsCut: list.scrollHeight - list.clientHeight > 1,
+    agentsTop: agents.top,
+    agentsBottom: agents.bottom,
+    agentsHeight: agents.height,
+    agentsCut: !contents.hidden && contents.scrollHeight - contents.clientHeight > 1,
+    footerTop: box(".sidebar-footer").top,
+  };
+});
+
 let server: ReturnType<typeof Bun.serve> | undefined;
 try {
   await buildDemoApp(app);
@@ -113,6 +138,29 @@ try {
       assert.equal(before.length > 0, !empty, `${label} ${empty ? "has no agent rows" : "has agent rows"} before folding`);
       assert.equal(await machineToggle.getAttribute("aria-expanded"), "true");
 
+      // Both PCs open, their rows longer than the sidebar: Agents takes half of it, as it always has, or less when
+      // its rows are fewer, and sits on the footer.
+      const open = await layout(page);
+      if (!empty) assert.ok(open.pcsCut, `${label} the two open PCs are longer than their list`);
+      if (open.agentsCut) assert.ok(Math.abs(open.agentsHeight - open.shellHeight / 2) <= 1, `${label} with both lists long Agents takes half the sidebar (${open.agentsHeight}px of ${open.shellHeight}px)`);
+      else assert.ok(open.agentsHeight <= open.shellHeight / 2 + 1, `${label} Agents with few rows takes no more than half the sidebar`);
+      assert.ok(Math.abs(open.agentsBottom - open.footerTop) <= 1, `${label} Agents sits on the footer while the PCs are long`);
+      assert.ok(!open.pcsCut || open.agentsTop - open.rowsBottom <= open.lineHeight + 1, `${label} the PC rows reach Agents while they are long`);
+
+      // With Work PC folded, inspect either case: Laptop still needs scrolling, or the PCs now fit
+      // and Agents uses the freed height (or, if both fit, stays on the footer with the gap above).
+      await machineToggles.nth(1).click();
+      await page.waitForFunction(() => document.querySelectorAll(".machine-workspaces").length === 1);
+      const short = await layout(page);
+      assert.ok(Math.abs(short.agentsBottom - short.footerTop) <= 1, `${label} Agents sits on the footer under one open PC`);
+      if (!short.pcsCut && short.agentsCut) {
+        assert.ok(short.agentsTop - short.rowsBottom <= spacing + short.lineHeight, `${label} Agents takes the height the PCs leave free (${short.agentsTop - short.rowsBottom}px left between them)`);
+      } else if (!short.pcsCut && !short.agentsCut) {
+        assert.ok(short.agentsTop - short.rowsBottom > spacing, `${label} with both lists short the gap lies above Agents, not under it`);
+      }
+      await machineToggles.nth(1).click();
+      await page.waitForFunction(() => document.querySelectorAll(".machine-workspaces").length === 2);
+
       for (const toggle of await machineToggles.all()) await toggle.click();
       await page.waitForFunction(() => !document.querySelector(".machine-workspaces"));
       const metrics = await page.evaluate(() => {
@@ -124,19 +172,24 @@ try {
         const contents = document.querySelector<HTMLElement>(".agent-list-contents")!;
         const footer = box(".sidebar-footer")!;
         return {
+          lineHeight: box(".sidebar-split")?.height ?? 0,
           shellHeight: shell.height,
           machineBottom: machine.bottom,
           listBottom: list.bottom,
           agentsTop: agents.top,
-          agentsHeight: agents.height,
+          agentsBottom: agents.bottom,
+          footerTop: footer.top,
+          contentsCut: contents.scrollHeight - contents.clientHeight,
           contentsOverflow: getComputedStyle(contents).overflowY,
           footerBottom: footer.bottom,
           shellBottom: shell.bottom,
         };
       });
-      assert.ok(metrics.agentsTop - metrics.machineBottom <= spacing, `${label} folded PC gap is ${metrics.agentsTop - metrics.machineBottom}px`);
+      if (metrics.contentsCut > 1) assert.ok(metrics.agentsTop - metrics.machineBottom <= spacing + metrics.lineHeight, `${label} folded PC gap is ${metrics.agentsTop - metrics.machineBottom}px`);
       assert.ok(metrics.listBottom - metrics.machineBottom <= spacing, `${label} folded list padding is ${metrics.listBottom - metrics.machineBottom}px`);
-      assert.ok(metrics.agentsHeight <= metrics.shellHeight / 2 + 1, `${label} Agents keeps its half-sidebar cap`);
+      // every PC folded: Agents takes the height down to the footer before it cuts a row, and never runs under it
+      assert.ok(metrics.contentsCut <= 1 || Math.abs(metrics.agentsBottom - metrics.footerTop) <= 1, `${label} Agents cuts rows only once it reaches the footer (${metrics.contentsCut}px cut, ${metrics.footerTop - metrics.agentsBottom}px left)`);
+      assert.ok(Math.abs(metrics.agentsBottom - metrics.footerTop) <= 1, `${label} Agents ends above the footer`);
       assert.equal(metrics.contentsOverflow, "auto", `${label} Agents keeps scroll ownership`);
       assert.equal(Math.round(metrics.footerBottom), Math.round(metrics.shellBottom), `${label} footer stays at the bottom`);
       assert.deepEqual(await page.locator(".agents-sidebar .agent-title").allTextContents(), before, `${label} agent order is unchanged`);

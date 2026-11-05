@@ -14,7 +14,7 @@ import { defaultStateDir, HANDOVER_EXIT, moveLegacyStateDir, updateStateDir } fr
 import { herdrMayListen, herdrSocketPath } from "./herdr/client.ts";
 import { legacyLauncherStateDir, withLegacyNames } from "./legacy-env.ts";
 import { acquireOwnerDirectory } from "./owner-guard.ts";
-import { runCommand, Updater, type Release } from "./updater.ts";
+import { runCommand, updateChannel, Updater, type Release } from "./updater.ts";
 
 /** After a try at the Rust PTY host, the next supervisor start waits this long before another (as the unshallow fetch does, #1252). */
 const RUST_HOST_RETRY_MS = 6 * 60 * 60_000;
@@ -233,6 +233,7 @@ export async function runSupervisor(root = resolve(import.meta.dir, "..")) {
   // only a launcher-started supervisor can hand over: run directly, it keeps serving the update itself
   const launched = typeof process.send === "function";
   const updater = new Updater({ root, stateDir, autoUpdate: process.env["OVIS_AUTO_UPDATE"] === "1", publish,
+    channel: () => updateChannel(process.env, appStateDir),
     pluginCheckout: pluginRoot !== undefined && resolve(pluginRoot) === root,
     notice: process.env["OVIS_SUPERVISOR_FALLBACK"]
       ? "The updated supervisor failed to start, so the previous one is running this version. The next update tries again."

@@ -69,6 +69,17 @@ describe("applyPaneStatus", () => {
     expect("plan" in none.panes.find((pane) => pane.pane_id === "w1:p1")!).toBe(false);
   });
 
+  it("carries a pane's context, keeps it through frames that say nothing of it, and drops it on null", () => {
+    const current = snapshotFixture();
+    const filled = applyPaneStatus(current, "w1:p1", "working", undefined, false, undefined, undefined, undefined, { used: 50_000, window: 200_000 });
+    expect(filled.panes.find((pane) => pane.pane_id === "w1:p1")).toMatchObject({ context: { used: 50_000, window: 200_000 } });
+    expect(applyPaneStatus(filled, "w1:p1", "working", undefined, false, undefined, undefined, undefined, { used: 50_000, window: 200_000 })).toBe(filled);
+    const kept = applyPaneStatus(filled, "w1:p1", "idle");
+    expect(kept.panes.find((pane) => pane.pane_id === "w1:p1")).toMatchObject({ context: { used: 50_000, window: 200_000 } });
+    const none = applyPaneStatus(kept, "w1:p1", "idle", undefined, false, undefined, undefined, undefined, null);
+    expect("context" in none.panes.find((pane) => pane.pane_id === "w1:p1")!).toBe(false);
+  });
+
   it("returns the same snapshot object when the status already matches", () => {
     const current = snapshotFixture();
     expect(applyPaneStatus(current, "w1:p1", "working")).toBe(current);

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Keyboard, Link2, RefreshCw } from "lucide-react";
 
 import "./RelayPanel.css";
 
-import { ApiError, requestRelayOffer, startPairing, type RelayOffer } from "../lib/api.ts";
+import { copyText } from "../lib/clipboard.ts";
+import { ApiError, cancelRelayCode, requestRelayCode, requestRelayLink, requestRelayOffer, startPairing, type RelayCode, type RelayOffer } from "../lib/api.ts";
 import { useT } from "../lib/i18n.ts";
 import { callNative, hasNativePlugin } from "../lib/nativeApp.ts";
 import { announcePairingCode, PAIRING_CODE_EVENT } from "../lib/useRelay.ts";
@@ -74,6 +75,10 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
   const shown = useRef<string | null>(null);
   const quiet = useRef(false);
   const again = () => setGeneration((value) => value + 1);
+  // a six-digit code started anywhere else ends the typed code on the PC (server/relay/pair-code.ts): its words go too
+  const [typedReset, setTypedReset] = useState(0);
+  const [typedId, setTypedId] = useState<string | null>(null);
+  const dropTyped = () => setTypedReset((value) => value + 1);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,6 +109,7 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
   useEffect(() => {
     const onCode = (event: Event) => {
       if (announcing.current) return;
+      dropTyped();
       const code = (event as CustomEvent<PairingCode | undefined>).detail?.code;
       if (relayAnnouncing) {
         if (code === undefined || code !== shown.current) { quiet.current = true; again(); }
@@ -137,6 +143,7 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
 
   const renew = async () => {
     setState("minting");
+    dropTyped();
     try {
       const code = await startPairing();
       announcing.current = true;
@@ -157,7 +164,9 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
     </>
   );
   // the id a phone shows when a link carries another key: compared here, on the PC itself
-  const serverId = offer !== null ? decodeOffer(offer.url)?.server_id ?? null : null;
+  // the typed code names the PC too, so its ID stays to compare with while the QR offer is being fetched again
+  const offerId = offer === null ? undefined : decodeOffer(offer.url)?.server_id;
+  const serverId = offerId ?? typedId;
   const pcId = serverId !== null && (
     <div className="relay-pairing-id">
       <p className="settings-description">{t("This PC's ID")}</p>
@@ -174,6 +183,7 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
       {offer !== null && <ShareLink url={offer.url} copyLabel={t("Copy link")}>{newCode}</ShareLink>}
       {offer === null && <div className="phone-actions">{newCode}</div>}
       {offer !== null && <QrReveal value={offer.url} label={t("QR code that pairs a phone through the relay")} hint={t("Scan it with the other device's camera.")} />}
+      <TypedCode reset={typedReset} onMinted={(minted) => { setTypedId(minted.server_id); again(); }} />
       {pcId}
     </div>
   );
@@ -192,8 +202,116 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
         <div className="phone-actions">
           <button type="button" className="btn" disabled={state === "minting"} onClick={() => void renew()}><RefreshCw aria-hidden="true" />{t("New code")}</button>
         </div>
+        <CodelessLink />
+        <TypedCode reset={typedReset} onMinted={(minted) => { setTypedId(minted.server_id); again(); }} />
         {pcId}
       </div>
     </div>
+  );
+}
+
+/**
+ * No camera, no way to send a link: a code to type on the other device (Pair with a code at
+ * app.ovis.sh), shown as GitHub's device sign-in shows its code. It starts a new six-digit code,
+ * so the QR code above is asked for again (`onMinted`). The other device then shows this PC's ID
+ * to compare with the one below.
+ */
+function TypedCode({ reset, onMinted }: { reset: number; onMinted: (code: RelayCode) => void }) {
+  const t = useT();
+  const [code, setCode] = useState<RelayCode | null>(null);
+  // the latest Show or Hide: an answer to an older one is not shown
+  const request = useRef(0);
+  // one Show or Hide at a time: their requests could reach the PC out of order
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { request.current++; setCode(null); }, [reset]);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [left, setLeft] = useState("");
+  useEffect(() => {
+    if (code === null) return;
+    const tick = () => {
+      const ms = Date.parse(code.expires_at) - Date.now();
+      if (ms <= 0) { setCode(null); return; }
+      setLeft(`${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")}`);
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [code]);
+  const show = async () => {
+    const mine = ++request.current;
+    setFailure(null);
+    setBusy(true);
+    try {
+      const minted = await requestRelayCode();
+      if (mine !== request.current) return;
+      setCode(minted);
+      onMinted(minted);
+    } catch (reason) {
+      if (mine !== request.current) return;
+      setCode(null);
+      setFailure(failureText(reason));
+    } finally { setBusy(false); }
+  };
+  const hide = async () => {
+    const mine = ++request.current;
+    setFailure(null);
+    setBusy(true);
+    try {
+      await cancelRelayCode();
+      if (mine === request.current) setCode(null);
+    } catch (reason) {
+      // the code may still work on the relay: it stays on screen, with why it did not go
+      if (mine === request.current) setFailure(failureText(reason));
+    } finally { setBusy(false); }
+  };
+  return (
+    <>
+      <div className="phone-actions">
+        <button type="button" className="btn" disabled={busy} onClick={() => void show()}><Keyboard aria-hidden="true" />{code === null ? t("Show a code to type") : t("New code to type")}</button>
+        {code !== null && <button type="button" className="btn" disabled={busy} onClick={() => void hide()}>{t("Hide the code")}</button>}
+      </div>
+      {code !== null && (
+        <div className="relay-typed-code" role="status">
+          <p className="relay-typed-code-value" aria-label={t("Code to type")}>{code.code}</p>
+          <p className="settings-hint">{t("On the other device, open app.ovis.sh, choose Pair with a code and type it. Expires in {time}. It works once.", { time: left })}</p>
+          <p className="settings-hint">{t("That device then shows an ID: pair only if it matches this PC's ID below, every group.")}</p>
+        </div>
+      )}
+      {failure !== null && <p className="settings-hint relay-error" role="alert">{failure}</p>}
+    </>
+  );
+}
+
+/**
+ * No camera: a link without a code, sent to the phone any way at all. It holds nothing secret, so
+ * the phone that opens it and this PC show six digits to compare, and the owner approves the
+ * phone here (RelayPairingPrompt).
+ */
+function CodelessLink() {
+  const t = useT();
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  // the link to select once drawn, unless focus moved on while the copy was refused (the user is elsewhere, as copyText leaves it)
+  const [link, setLink] = useState<{ url: string; select: boolean } | null>(null);
+  const linkRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (link?.select && linkRef.current) window.getSelection()?.selectAllChildren(linkRef.current);
+  }, [link]);
+  const copy = async () => {
+    const initiator = document.activeElement;
+    try {
+      const { url } = await requestRelayLink();
+      // where the browser refuses the clipboard (plain http on the LAN), the link stays on screen, selected once drawn
+      if (await copyText(url)) { setLink(null); setNote({ ok: true, text: t("Copied. Open it on the phone within 10 minutes: both screens show six digits to compare, and you approve the phone here.") }); }
+      else { setLink({ url, select: document.activeElement === initiator }); setNote(null); }
+    } catch (reason) { setNote({ ok: false, text: failureText(reason) }); }
+  };
+  return (
+    <>
+      <div className="phone-actions">
+        <button type="button" className="btn" onClick={() => void copy()}><Link2 aria-hidden="true" />{t("Copy a link without a code")}</button>
+      </div>
+      {link !== null && <code className="settings-hint relay-codeless-link" ref={linkRef}>{link.url}</code>}
+      {note !== null && <p className={note.ok ? "settings-hint" : "settings-hint relay-error"} role={note.ok ? "status" : "alert"}>{note.text}</p>}
+    </>
   );
 }

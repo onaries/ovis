@@ -3,7 +3,7 @@ import { LINE_BYTES, makeLineReader } from "../herdr/client.ts";
 import { MAX_PINS, type PreferencesChange, type SharedPreferences } from "../../shared/preferences.ts";
 import { readStateDocument, writeStateDocument } from "../state-document.ts";
 import type { HcConnection } from "./connection.ts";
-import { isRecord } from "./snapshot.ts";
+import { isRecord, onOtherMachine } from "./snapshot.ts";
 
 /**
  * Pinned agents, shared by every Herdr client (herdr-app docs/labels.md): present and non-empty,
@@ -55,6 +55,11 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
   const leftOut = new Set<string>();
   /** the agreed pins on disk are behind memory: the next agreement writes them, even an unchanged one */
   let unsaved = false;
+  /**
+   * pending marks whose label write has not answered yet: kept off disk until it fails, as such a write
+   * may still land, and a restart could not tell that from an app change made since
+   */
+  const sending = new Set<string>();
   let core = "";
   const keyOf = (address: string) => `${machineId}:${address}`;
   const agreedKey = (address: string) => `${core}/${address}`;
@@ -65,7 +70,7 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
 
   const saveAgreed = () => {
     try {
-      writeStateDocument(agreedPath, `${JSON.stringify({ ...Object.fromEntries(agreed), [SHELLS]: [...shells], [PENDING]: [...pending] })}\n`, false);
+      writeStateDocument(agreedPath, `${JSON.stringify({ ...Object.fromEntries(agreed), [SHELLS]: [...shells], [PENDING]: [...pending].filter((key) => !sending.has(key)) })}\n`, false);
       unsaved = false;
     } catch (error) {
       unsaved = true;
@@ -79,6 +84,27 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
       return;
     }
     agreed.set(agreedKey(address), pinned);
+    saveAgreed();
+  };
+  /**
+   * A write of ours landed: both sides held `pinned` then. Once the agent quit, its queued writes never
+   * start and the list may prune its row, so Ovis's newest choice, as the mark against the agreement
+   * last told it while the agent ran, stays pending when it differs from what landed. While the agent
+   * runs, a differing list is a change queued behind this write: marked as one still being sent.
+   */
+  const landed = (address: string, pinned: boolean) => {
+    const key = agreedKey(address);
+    if (agents.has(address)) {
+      setAgreed(address, pinned);
+      if (listed(address) !== pinned && !refused.has(address)) { pending.add(key); sending.add(key); }
+      return;
+    }
+    const choice = agreed.has(key) ? agreed.get(key) !== pending.has(key) : pinned;
+    setAgreed(address, pinned);
+    if (choice === pinned) return;
+    pending.add(key);
+    // this mark is no longer one a waiting write may still settle: saved now
+    sending.delete(key);
     saveAgreed();
   };
   /** Ovis's list made to say `pinned`; false when it cannot hold another pin */
@@ -127,6 +153,13 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
       if (stopped || !live.has(address) || refused.has(address) || !agents.has(address) || store.get().pins === undefined) return;
       const pinned = listed(address);
       if (live.get(address) === pinned) { setAgreed(address, pinned); return; }
+      // Ovis's change stays Ovis's until it lands, even once the terminal is a shell whose row the list
+      // prunes: so it is marked now, while the agent runs, not when a write fails after the agent quit
+      const key = agreedKey(address);
+      if (agreed.has(key) && agreed.get(key) !== pinned && !pending.has(key)) {
+        pending.add(key);
+        sending.add(key);
+      }
       // hc tells every label write back as a labels event, in order: that one is ours, not the app's
       const queued = echoes.get(address) ?? [];
       const echo = { pinned, heard: false, answered: false };
@@ -134,11 +167,13 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
       echoes.set(address, queued);
       try {
         await hc.call("terminal.label", { terminal: address, labels: { [PINNED_LABEL]: pinned ? "1" : "" } });
+        // a newer change still marked is Ovis's, no longer one this write may settle: saved now
+        if (sending.delete(key) && pending.has(key)) saveAgreed();
         echo.answered = true;
         // once its event came, that event and any after it (the app's) already say what the label is
         if (!echo.heard) {
           live.set(address, pinned);
-          setAgreed(address, pinned);
+          landed(address, pinned);
         }
         clearTimeout(retries.get(address)?.timer);
         retries.delete(address);
@@ -148,18 +183,9 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
         // a write hc refused sends no event back
         const index = queued.indexOf(echo);
         if (index >= 0) queued.splice(index, 1);
-        // Ovis's change stays Ovis's, even once the terminal is a shell whose row the list prunes:
-        // pending while Ovis's list differs from what was agreed (a newer change may have taken it back),
-        // never for a write that landed
-        const key = agreedKey(address);
-        // a shell's row the list may have pruned tells nothing of Ovis's change
-        const differs = agreed.has(key) && agents.has(address) && listed(address) !== agreed.get(key);
-        // saved again while an earlier save failed, so a restart still finds the mark
-        if (!echo.heard && (differs !== pending.has(key) || unsaved)) {
-          if (differs) pending.add(key);
-          else pending.delete(key);
-          saveAgreed();
-        }
+        // the mark stays as the write's start and Ovis's list since left it: saved now the write failed,
+        // and again while an earlier save failed, so a restart still finds it
+        if (sending.delete(key) || unsaved) saveAgreed();
         retry(address);
       }
     });
@@ -167,8 +193,8 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
     void run.then(() => { if (writes.get(address) === run) writes.delete(address); });
   };
 
-  /** A terminal's label heard: settled against what both sides last agreed on. */
-  const heard = (address: string, labelPinned: boolean) => {
+  /** A terminal's label heard (`told` by a labels event): settled against what both sides last agreed on. */
+  const heard = (address: string, labelPinned: boolean, told = false) => {
     const before = live.get(address);
     live.set(address, labelPinned);
     // the event of a write of ours, early or late: no change of the app's
@@ -179,13 +205,15 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
         const echo = queued.shift()!;
         echo.heard = true;
         // an answered write already agreed, and a later write of ours may have agreed past it since
-        if (!echo.answered && agents.has(address)) setAgreed(address, labelPinned);
+        if (!echo.answered && (agents.has(address) || agreed.has(agreedKey(address)))) landed(address, labelPinned);
         return;
       }
+      // a labels event that changed another label, not the pin: our write's event is still to come
+      if (told && before === labelPinned) return;
       // a label neither of our writes set: the app's, and what we sent no longer tells its order
       queued.length = 0;
     }
-    // the app changed the pin after Ovis's failed write: its change is the last one
+    // the app changed the pin after Ovis's change that had not landed: its change is the last one
     if (before !== undefined && before !== labelPinned && pending.delete(agreedKey(address))) saveAgreed();
     // only an agent is in the Agents list: a shell's pin is never pruned from it as an unpin
     if (!agents.has(address)) return;
@@ -194,9 +222,11 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
     const ovis = listed(address);
     if (ovis || !labelPinned) leftOut.delete(address);
     // back from a shell, Ovis's list may have pruned the row: only a pin there tells Ovis's side,
-    // unless Ovis changed it itself and the label write failed
+    // unless Ovis changed it itself and its label write has not landed
     const shell = shells.has(agreedKey(address)) && labelPinned === base && !pending.has(agreedKey(address));
-    const wanted = base === undefined || leftOut.has(address) || shell ? labelPinned || ovis : labelPinned !== base ? labelPinned : ovis;
+    // Ovis's change not landed yet is the other way from the agreement, even past a row the list pruned
+    const mine = pending.has(agreedKey(address)) ? !base : ovis;
+    const wanted = base === undefined || leftOut.has(address) || shell ? labelPinned || ovis : labelPinned !== base ? labelPinned : mine;
     if (ovis !== wanted && !list(address, wanted)) {
       refused.add(address);
       return;
@@ -253,13 +283,17 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
     for (const address of [...refused]) heard(address, live.get(address) ?? false);
     // no browser has shared its pins yet: that is no unpin
     if (preferences.pins === undefined) return;
-    // a change in Ovis's list taken back before its label was written leaves nothing pending
-    let undone = false;
+    // while the agent runs, the mark follows Ovis's list: a change taken back before its label was
+    // written leaves nothing pending, and one made behind a write still waiting is marked now, as the
+    // write queued for it never starts once the agent quits
+    let marked = false;
     for (const address of live.keys()) {
       const key = agreedKey(address);
-      if (agents.has(address) && pending.has(key) && listed(address) === agreed.get(key)) undone = pending.delete(key);
+      if (!agents.has(address) || !agreed.has(key)) continue;
+      if (listed(address) === agreed.get(key)) marked = pending.delete(key) || marked;
+      else if (writes.has(address) && !refused.has(address) && !pending.has(key)) { pending.add(key); sending.add(key); }
     }
-    if (undone) saveAgreed();
+    if (marked) saveAgreed();
     for (const address of live.keys()) writeLabel(address);
   });
 
@@ -283,10 +317,12 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
       if (message["method"] === "missed") { end(); return; }
       const params = message["params"];
       if (message["method"] !== "event" || !isRecord(params) || typeof params["terminal"] !== "string") return;
+      // another machine's terminal is no row of this PC's list (snapshot.ts `onOtherMachine`): its pin is left alone
+      if (onOtherMachine(params["terminal"])) return;
       const data = isRecord(params["data"]) ? params["data"] : {};
       switch (params["type"]) {
         case "created": record(data); return;
-        case "labels": if (live.has(params["terminal"])) heard(params["terminal"], pinnedIn(data["labels"])); return;
+        case "labels": if (live.has(params["terminal"])) heard(params["terminal"], pinnedIn(data["labels"]), true); return;
         case "status": if (live.has(params["terminal"])) agentIs(params["terminal"], data["status"]); return;
         case "finished":
         case "removed": gone(params["terminal"]); return;
@@ -310,17 +346,18 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
       agents.clear();
       refused.clear();
       leftOut.clear();
-      const shown = new Set(result.terminals.filter((terminal) => terminal.state === "live").map((terminal) => agreedKey(terminal.address)));
+      const terminals = result.terminals.filter((terminal) => !onOtherMachine(terminal.address));
+      const shown = new Set(terminals.filter((terminal) => terminal.state === "live").map((terminal) => agreedKey(terminal.address)));
       let pruned = false;
       for (const key of agreed.keys()) if (key.startsWith(`${core}/`) && !shown.has(key)) { agreed.delete(key); shells.delete(key); pending.delete(key); pruned = true; }
       if (pruned) saveAgreed();
       // every terminal known before any is settled, so a list started for one holds the others' pins
-      for (const terminal of result.terminals) {
+      for (const terminal of terminals) {
         if (terminal.state !== "live") continue;
         live.set(terminal.address, pinnedIn(terminal.labels));
         if (isAgent(terminal.status)) agents.add(terminal.address);
       }
-      for (const terminal of result.terminals) record(terminal);
+      for (const terminal of terminals) record(terminal);
       const waiting = early;
       early = null;
       for (const message of waiting) apply(message);
@@ -346,7 +383,7 @@ export function bridgePins(hc: Hc, store: PinStore, machineId: string, stateDir:
 
 /** the key in herdr-core-pins.json listing `shells`; never a terminal's, which holds a `/` */
 const SHELLS = "shells";
-/** the key listing agreed terminals whose last label write of Ovis's change failed */
+/** the key listing agreed terminals whose label write of Ovis's change has not landed */
 const PENDING = "pending";
 
 function readAgreed(path: string): { agreed: Map<string, boolean>; shells: Set<string>; pending: Set<string> } {

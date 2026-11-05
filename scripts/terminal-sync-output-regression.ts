@@ -10,8 +10,8 @@
  * - B: the `pty-data` frames as the browser's WebSocket receives them;
  * - C: the client's `pty-ack` for each frame, sent from xterm's write callback in the task that
  *   parsed it, so a frame not yet acked has not been parsed whole;
- * - D: every render of xterm's rows (a MutationObserver on `.xterm-rows`), decoded back to the
- *   frame each row belongs to.
+ * - D: every render of the rows the pane shows (a MutationObserver on `shownRows`: libghostty's
+ *   while it draws, xterm's otherwise), decoded back to the frame each row belongs to.
  *
  * A render is `torn` when xterm had parsed a herdr block's open but not its close, and `mixed` when
  * its rows are not all one frame. xterm 5.5 did not honour mode 2026, so a herdr block split over
@@ -36,6 +36,7 @@ import { PtySession, type PtySessionOptions } from "../server/pty/session.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { STARTUP_PROBES } from "../server/attach-output.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 type Variant = "plain" | "heavy" | "korean";
 
@@ -165,9 +166,10 @@ interface PageTap {
 
 /**
  * The page-side taps: the WebSocket's `pty-data` frames in, its `pty-ack`s out, and each render
- * of the rows with the parse state it was drawn from. `rowSource` is rowText's source.
+ * of the shown rows (`shown`, a shownRows selector) with the parse state it was drawn from.
+ * `rowSource` is rowText's source.
  */
-function installSyncTap(rowSource: string): void {
+function installSyncTap({ rowSource, shown }: { rowSource: string; shown: string }): void {
   // the one generator the producer draws with; the context bypasses the app's CSP for it
   const rowText = new Function(`return ${rowSource}`)() as (variant: string, n: number, r: number, cols: number) => string;
   const sync = /\x1b\[\?2026([hl])/g;
@@ -220,13 +222,13 @@ function installSyncTap(rowSource: string): void {
     return frame;
   };
   tap.current = () => {
-    const container = document.querySelector(".pane-terminal .xterm-rows");
+    const container = document.querySelector(shown);
     return container ? decode([...container.children].map((row) => (row.textContent ?? "").trimEnd())) : null;
   };
   new MutationObserver((records) => {
-    const target = records.find((record) => (record.target instanceof Element ? record.target : record.target.parentElement)?.closest(".xterm-rows"));
+    const target = records.find((record) => (record.target instanceof Element ? record.target : record.target.parentElement)?.closest(shown));
     if (!target) return;
-    const container = (target.target instanceof Element ? target.target : target.target.parentElement)!.closest(".xterm-rows")!;
+    const container = (target.target instanceof Element ? target.target : target.target.parentElement)!.closest(shown)!;
     const ack = tap.acks.at(-1);
     const torn = ack ? openAfter.get(`${ack.stream}:${ack.offset}`) === true : false;
     const rows = [...container.children].map((row) => (row.textContent ?? "").trimEnd());
@@ -256,7 +258,7 @@ function tapAttachReads(): HopChunk[] {
 async function openTerminalPage(browser: Browser, port: number, pane: string, viewport = { width: 1600, height: 1000 }): Promise<Page> {
   const context = await browser.newContext({ viewport, bypassCSP: true });
   await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })));
-  await context.addInitScript(installSyncTap, rowText.toString());
+  await context.addInitScript(installSyncTap, { rowSource: rowText.toString(), shown: shownRows() });
   const page = await context.newPage();
   page.setDefaultTimeout(15000);
   await page.goto(`http://127.0.0.1:${port}/?pane=${encodeURIComponent(pane)}`);
@@ -303,11 +305,11 @@ async function run(): Promise<void> {
     server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(state, "server"), tailscaleOwner: null, usage: new UsageService(undefined, []) });
     browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     const page = await openTerminalPage(browser, server.port, pane);
-    await page.locator(".pane-terminal .xterm-rows", { hasText: "PRODUCER_READY" }).waitFor();
-    const grid = await page.evaluate(() => {
-      const rows = document.querySelector(".pane-terminal .xterm-rows")!.children.length;
+    await page.locator(shownRows(), { hasText: "PRODUCER_READY" }).waitFor();
+    const grid = await page.evaluate((shown) => {
+      const rows = document.querySelector(shown)!.children.length;
       return { rows };
-    });
+    }, shownRows());
 
     let n = 0;
     /** frames drawn with their close */
@@ -330,7 +332,7 @@ async function run(): Promise<void> {
           tap.expect = { variants: ["plain", "korean"], cols };
         }, size);
         await page.waitForFunction((key) => (window as unknown as { __syncTap: PageTap }).__syncTap.current!() === key, String(n)).catch(async (error) => {
-          const rows = await page.evaluate(() => [...document.querySelector(".pane-terminal .xterm-rows")!.children].map((row) => (row.textContent ?? "").trimEnd()));
+          const rows = await page.evaluate((shown) => [...document.querySelector(shown)!.children].map((row) => (row.textContent ?? "").trimEnd()), shownRows());
           throw new Error(`frame ${variant}:${n} (${size.cols}x${size.rows}) never showed whole; the rows:\n${rows.join("\n")}`, { cause: error });
         });
       }

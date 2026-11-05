@@ -214,8 +214,9 @@ function configuredSocket(config: string): string | null {
   return typeof socket === "string" && socket !== "" ? socket : null;
 }
 
+/** hc's Windows pipe answers a stat with EBUSY while each of its instances is taken (live-seen with a core running): it is there */
 function exists(path: string): boolean {
-  try { statSync(path); return true; } catch { return false; }
+  try { statSync(path); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EBUSY"; }
 }
 
 /** how long one look for hc stands: it runs a login shell and each candidate's --version */

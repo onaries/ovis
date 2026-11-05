@@ -20,6 +20,7 @@ const keyBarItems: KeyBarItem[] = [
   { type: "modifier", modifier: "ctrl" },
   { type: "key", key: "ArrowLeft" },
   ...["ArrowUp", "ArrowDown", "ArrowRight", "Tab", "Enter", "Backspace", "Delete", "Home", "End", "PageUp", "PageDown", "F1", "F2", "F3", "F4"].map((key): KeyBarItem => ({ type: "key", key })),
+  { type: "key", key: "ArrowRight", modifiers: { ctrl: false, alt: true, shift: false } },
 ];
 
 type InputFrame =
@@ -116,7 +117,7 @@ try {
         await page.locator(".conn-live").waitFor({ state: "attached" });
         await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.key-bar .key[data-key="ArrowLeft"]')?.disabled === false, undefined, { timeout: 5_000 });
         await page.locator(".xterm-helper-textarea").focus();
-        const bar = page.locator(".key-bar");
+        const bar = page.locator(".key-bar-row");
         const left = bar.locator('.key[data-key="ArrowLeft"]');
         const escape = bar.locator('.key[data-key="Escape"]');
         const ctrl = bar.locator('.key[data-key="Control"]');
@@ -166,7 +167,7 @@ try {
           await Bun.sleep(16);
         }
         await touch(cdp, "touchEnd");
-        await page.waitForFunction((initial) => (document.querySelector(".key-bar")?.scrollLeft ?? initial) > initial, scroll.left, { timeout: 2_000 });
+        await page.waitForFunction((initial) => (document.querySelector(".key-bar-row")?.scrollLeft ?? initial) > initial, scroll.left, { timeout: 2_000 });
         await Bun.sleep(KEY_REPEAT_DELAY_MS + NO_SEND_WAIT_MS);
         assert.equal(leftKeys(await framesSince(page, before)).length, 0, "a swipe sends no arrow");
         assert.deepEqual(await framesSince(page, before), [], "a swipe sends no other input either");
@@ -200,9 +201,11 @@ try {
         console.log(`PASS holding Backspace repeats (${backspaceKeys.length} keys) and stops on release`);
         await bar.evaluate((row) => { row.scrollLeft = 0; });
 
-        // 6. Repeats must use the same sticky-modifier path as the existing touch click.
+        // 6. Repeats must use the same sticky-modifier path as the existing touch click. Ctrl held for
+        // one key stays held through the whole hold and is let go when the finger lifts.
         await ctrl.tap();
         assert.equal(await ctrl.getAttribute("aria-pressed"), "true", "Ctrl is armed");
+        assert.equal(await ctrl.getAttribute("data-latch"), "once", "one tap holds Ctrl for one key");
         before = (await framesOf(page)).length;
         const modifiedRelease = await hold(page, cdp, left, HOLD_MS);
         const modifiedFrames = await framesSince(page, before);
@@ -213,9 +216,51 @@ try {
         assert.equal((await framesOf(page)).length, modifiedRelease, "Ctrl+Left has no extra release click");
         await Bun.sleep(NO_SEND_WAIT_MS);
         assert.equal((await framesOf(page)).length, modifiedRelease, "Ctrl+Left stops after release");
-        assert.equal(await ctrl.getAttribute("aria-pressed"), "true", "repeat does not consume sticky Ctrl");
+        assert.equal(await ctrl.getAttribute("aria-pressed"), "false", "lifting the finger lets go of Ctrl held for one key");
+        console.log(`PASS sticky Ctrl applies to every held Left repeat (${modifiedKeys.length} Ctrl+Left keys), then lets go`);
+
+        // 6b. Two taps lock Ctrl: it carries every key until a third tap lets it go.
         await ctrl.tap();
-        console.log(`PASS sticky Ctrl applies to every held Left repeat (${modifiedKeys.length} Ctrl+Left keys)`);
+        await ctrl.tap();
+        assert.equal(await ctrl.getAttribute("data-latch"), "locked", "a second tap locks Ctrl");
+        assert.equal(await ctrl.getAttribute("aria-label"), "Control, locked");
+        before = (await framesOf(page)).length;
+        await left.tap();
+        await left.tap();
+        await page.waitForFunction((count) => (window as unknown as Recorder).keyBarFrames.length >= count + 2, before, { timeout: 5_000 });
+        assert.deepEqual(sentKeys(await framesSince(page, before)), ["ctrl+left", "ctrl+left"], "a locked Ctrl carries every key");
+        assert.equal(await ctrl.getAttribute("data-latch"), "locked", "keys leave a locked Ctrl locked");
+        await ctrl.tap();
+        assert.equal(await ctrl.getAttribute("aria-pressed"), "false", "a third tap lets Ctrl go");
+        console.log("PASS two taps lock Ctrl for every key and a third lets it go");
+
+        // 6c. A hardware key's own auto-repeat keeps Ctrl held for one key; letting the key up ends it.
+        await ctrl.tap();
+        await page.locator(".xterm-helper-textarea").focus();
+        before = (await framesOf(page)).length;
+        await page.keyboard.down("ArrowLeft");
+        await page.keyboard.down("ArrowLeft");
+        await page.keyboard.down("ArrowLeft");
+        await page.waitForFunction((count) => (window as unknown as Recorder).keyBarFrames.length >= count + 3, before, { timeout: 5_000 });
+        assert.equal(await ctrl.getAttribute("aria-pressed"), "true", "Ctrl stays held while the hardware key repeats");
+        await page.keyboard.up("ArrowLeft");
+        assert.deepEqual(leftKeys(await framesSince(page, before)), ["ctrl+left", "ctrl+left", "ctrl+left"], "every auto-repeat carries Ctrl");
+        assert.equal(await ctrl.getAttribute("aria-pressed"), "false", "letting the hardware key up lets Ctrl go");
+        console.log("PASS a hardware key's auto-repeat keeps Ctrl held for one key until the key is let up");
+
+        // 6d. A held saved combination sends its own chord and leaves a Ctrl held for one key alone.
+        await ctrl.tap();
+        const altRight = bar.getByRole("button", { name: "Press Alt+Right", exact: true });
+        before = (await framesOf(page)).length;
+        await hold(page, cdp, altRight, HOLD_MS);
+        const comboKeys = sentKeys(await framesSince(page, before));
+        assert.ok(comboKeys.length >= 5 && comboKeys.every((key) => key === "alt+right"), `the saved Alt+Right repeats as itself: ${JSON.stringify(comboKeys)}`);
+        assert.equal(await ctrl.getAttribute("data-latch"), "once", "releasing a held saved combination leaves Ctrl held for one key");
+        await ctrl.tap();
+        await ctrl.tap();
+        assert.equal(await ctrl.getAttribute("aria-pressed"), "false");
+        await bar.evaluate((row) => { row.scrollLeft = 0; });
+        console.log(`PASS a held saved combination repeats its own chord (${comboKeys.length} keys) and leaves a once-held Ctrl alone`);
 
         // 7. Probe the cancelable contextmenu while the arrow is physically held, not after it.
         await hold(page, cdp, left, KEY_REPEAT_DELAY_MS + KEY_REPEAT_INTERVAL_MS, async () => {
@@ -233,6 +278,41 @@ try {
         assert.deepEqual(await helper.evaluate((field: HTMLTextAreaElement) => ({ value: field.value, wrap: getComputedStyle(field).whiteSpace })),
           { value: "", wrap: "nowrap" }, "a non-iOS phone keeps xterm's helper textarea as it was");
         console.log("PASS outside iOS the helper textarea stays empty and unwrapped");
+
+        // 8b. More keys opens the second row and the arrow pad without taking the typing focus; the
+        // pad's arrows repeat as the row's did, the row leaves out what they show, and it is saved.
+        const more = page.locator('.key-bar > .key[data-key="more"]');
+        await helper.focus();
+        assert.equal(await more.getAttribute("aria-expanded"), "false");
+        await more.tap();
+        await page.locator(".key-bar.is-expanded .key-bar-arrow-pad").waitFor();
+        assert.equal(await more.getAttribute("aria-expanded"), "true");
+        assert.equal(await more.getAttribute("aria-label"), "Fewer keys");
+        assert.equal(await helper.evaluate((node) => document.activeElement === node), true, "More keys keeps the typing focus");
+        assert.deepEqual(await page.locator(".key-bar-second-row [data-key]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-key"))),
+          ["Escape", "Tab", "pipe", "tilde", "slash", "-"]);
+        const rowKeys = await bar.locator("[data-key]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-key")));
+        for (const key of ["Escape", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]) assert.ok(!rowKeys.includes(key), `the row leaves out ${key} the second row or the pad shows`);
+        assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ovis:settings")!).keyBarExpanded), true, "the open bar is saved for this device");
+        // the inverted T: Up over Down, Left and Right beside Down, every key inside the screen
+        const padBoxes = await page.locator(".key-bar-arrow-pad .key").evaluateAll((nodes) => Object.fromEntries(nodes.map((node) => {
+          const box = node.getBoundingClientRect();
+          return [node.getAttribute("data-key"), { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2), right: box.right }];
+        })));
+        assert.equal(padBoxes.ArrowUp.x, padBoxes.ArrowDown.x, "Up stands over Down");
+        assert.ok(padBoxes.ArrowUp.y < padBoxes.ArrowDown.y && padBoxes.ArrowLeft.y === padBoxes.ArrowDown.y && padBoxes.ArrowRight.y === padBoxes.ArrowDown.y, "Left, Down and Right share the lower row");
+        assert.ok(padBoxes.ArrowLeft.x < padBoxes.ArrowDown.x && padBoxes.ArrowDown.x < padBoxes.ArrowRight.x && padBoxes.ArrowRight.right <= 393, "the pad fits the screen");
+        const padUp = page.locator('.key-bar-arrow-pad .key[data-key="ArrowUp"]');
+        before = (await framesOf(page)).length;
+        const padRelease = await hold(page, cdp, padUp, HOLD_MS);
+        const upKeys = sentKeys(await framesSince(page, before));
+        assert.ok(upKeys.length >= 5 && upKeys.every((key) => key === "up"), `the pad's Up repeats while held: ${JSON.stringify(upKeys)}`);
+        assert.equal((await framesOf(page)).length, padRelease, "the pad's Up stops on release with no extra click");
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "the open bar adds no sideways page scroll");
+        await more.tap();
+        await page.locator(".key-bar-arrow-pad").waitFor({ state: "detached" });
+        assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ovis:settings")!).keyBarExpanded), false);
+        console.log(`PASS More keys opens the second row and the arrow pad (Up repeated ${upKeys.length} keys) without taking the focus, and closes again`);
 
         if (evidence) {
           mkdirSync(evidence, { recursive: true });

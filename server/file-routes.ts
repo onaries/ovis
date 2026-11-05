@@ -1,19 +1,23 @@
 /**
- * The file routes: what a file is and its bytes (GET/HEAD /api/fs/stat, /api/fs/file), a folder's
+ * The file routes: what a file is and its bytes (GET/HEAD /api/fs/stat, /api/fs/file), a text file
+ * to edit and its save (GET/PUT /api/fs/text, file-edit.ts), a folder's
  * project icon (/api/fs/favicon) and a rendered page's own media (/api/fs/page-media/:media_id).
  * The dispatcher in index.ts runs the access gate first and hands over who asks: a page's media
  * plays only for the client and device that rendered it (file-view.ts).
  */
-import { sep } from "node:path";
+import { isAbsolute, sep } from "node:path";
 
 import type { ProjectFavicon } from "../shared/files.ts";
 import type { Access } from "./access.ts";
 import { isSecureRequest } from "./auth.ts";
 import { claudeSessionTempDir, claudeTempBases } from "./claude-store.ts";
 import { claudePaneSession } from "./conversation.ts";
+import { MAX_TEXT_SAVE_BODY_BYTES, readCappedText, saveEditableText, TextEditRefused } from "./file-edit.ts";
+import { fileTask } from "./file-pool.ts";
+import type { TextTaskResult } from "./file-tasks.ts";
 import { fileResponse, findFile, crossSiteFileRead, pageMediaResponse, pageMediaSource, PAGE_MEDIA_PATH, watchPageMedia } from "./file-view.ts";
 import { paneGet } from "./herdr/client.ts";
-import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
+import { badRequest, errorResponse, isJsonObject, jsonResponse, setRequestRoute } from "./http.ts";
 import { paneContext, resolveAgent } from "./pane-context.ts";
 import { findProjectFavicon } from "./project-favicon.ts";
 
@@ -46,6 +50,17 @@ export async function handleFileRequest(request: Request, url: URL, pathname: st
     try { return await fileRoute(request, url, pathname, { bridgeAuthorized, requestHost, forwarded, client, access }, watch); } catch (error) { return errorResponse(error); } finally { watch.done(); }
   }
 
+  // a text file read to edit and saved (file-edit.ts); who may is checked by the dispatcher (textEditAllowed)
+  if (pathname === "/api/fs/text") {
+    setRequestRoute(pathname);
+    if (request.method !== "GET" && request.method !== "PUT") return badRequest("method_not_allowed", "use GET or PUT");
+    if (crossSiteFileRead(request)) return jsonResponse({ error: { code: "cross_site", message: "A file is edited from this app only" } }, 403);
+    try { return await textRoute(request, url); } catch (error) {
+      if (error instanceof TextEditRefused) return jsonResponse({ error: { code: error.code, message: error.message, ...(error.revision ? { revision: error.revision } : {}) } }, error.status);
+      return errorResponse(error);
+    }
+  }
+
   // a rendered page's own video, by the address its render gave it: the page has no origin and
   // no cookie, so the address is all it holds (requiresAuth lets this path through)
   if (pathname.startsWith(PAGE_MEDIA_PATH)) {
@@ -55,6 +70,36 @@ export async function handleFileRequest(request: Request, url: URL, pathname: st
     return media ?? jsonResponse({ error: { code: "not_found", message: "no such page media" } }, 404);
   }
   return null;
+}
+
+/** GET and PUT /api/fs/text (shared/files.ts): the pane's folder is the one a file may be edited in. */
+async function textRoute(request: Request, url: URL): Promise<Response> {
+  if (request.method === "GET") {
+    const paneId = url.searchParams.get("pane_id") ?? "";
+    if (paneId === "") return badRequest("missing_pane", "pane_id is required");
+    return textAnswer(await fileTask<TextTaskResult>({ op: "text-read", path: url.searchParams.get("path") ?? "", cwd: (await paneContext(paneId)).cwd }));
+  }
+  // JSON only: a form or a text/plain body from another page is refused before it is read
+  if (request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") return jsonResponse({ error: { code: "invalid_content_type", message: "send application/json" } }, 415);
+  let body: unknown;
+  try { body = JSON.parse(await readCappedText(request, MAX_TEXT_SAVE_BODY_BYTES)); } catch (error) {
+    if (error instanceof TextEditRefused) throw error;
+    return badRequest("invalid_json", "request body must be JSON");
+  }
+  if (!isJsonObject(body)) return badRequest("invalid_body", "request body must be a JSON object");
+  const { pane_id: paneId, path, revision, text } = body;
+  if (typeof paneId !== "string" || paneId === "") return badRequest("missing_pane", "pane_id is required");
+  if (typeof path !== "string" || typeof revision !== "string" || typeof text !== "string") return badRequest("invalid_body", "path, revision and text are strings");
+  const cwd = (await paneContext(paneId)).cwd;
+  // on this thread, synchronously: two saves never interleave, and no save goes on after its answer
+  return jsonResponse(saveEditableText(path, cwd, revision, text));
+}
+
+/** A text task's answer, or the refusal it came back with. */
+function textAnswer(result: TextTaskResult): Response {
+  if ("done" in result) return jsonResponse(result.done);
+  const { status, code, message, revision } = result.refused;
+  return jsonResponse({ error: { code, message, ...(revision ? { revision } : {}) } }, status);
 }
 
 /** GET/HEAD /api/fs/stat, /api/fs/file and /api/fs/favicon, past the method and site checks. */
@@ -67,11 +112,14 @@ async function fileRoute(request: Request, url: URL, pathname: string, { bridgeA
   }
   const paneId = url.searchParams.get("pane_id");
   let cwd: string | null = null;
+  let paneUnread = false;
   if (paneId) {
-    try { cwd = (await paneContext(paneId)).cwd; } catch { /* an absolute path still opens */ }
+    try { cwd = (await paneContext(paneId)).cwd; } catch { paneUnread = true; /* an absolute path still opens */ }
   }
   const path = url.searchParams.get("path") ?? "";
   const found = await findFile(path, cwd, () => paneId ? claudeTempFolder(paneId) : Promise.resolve(null), paneId ? mayBeClaudeTemp : undefined);
+  // a relative path whose pane could not be read was not looked for: the chat keeps its link (src/lib/fileNameLookup.ts)
+  if (found === null && paneUnread && !isAbsolute(path)) return jsonResponse({ error: { code: "pane_unknown", message: "the pane a relative path belongs to could not be read" } }, 404);
   if (found === null) return jsonResponse({ error: { code: "not_found", message: "no readable file at that path" } }, 404);
   // several files end in that name: the viewer lists them to choose from
   if ("candidates" in found) return jsonResponse({ error: { code: "ambiguous_path", message: "several files have that name", candidates: found.candidates } }, 409);

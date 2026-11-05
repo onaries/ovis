@@ -55,6 +55,8 @@ interface Entry {
   turns: number;
   /** times it started over (restart): a request can start it over while a slice waits for the disk */
   restarts: number;
+  /** a slice's wait for its lease, given up when it is let go of (discard): it would read nothing */
+  leasing: AbortController | null;
 }
 
 const MAX_SESSIONS = 16;
@@ -64,9 +66,14 @@ const CHUNK = 1024 * 1024;
 /** A session lets the next one have its turn after about this much work (the event loop gets one at every read too). */
 const SLICE_MS = 4;
 /**
- * A read that has not answered in this long is given up for now (TranscriptBusyError) and tried
- * again a second later. A busy reader is no failure of the transcript, so one whose reads keep
- * running out of time is tried every second for as long as it is watched, with no longer backoff.
+ * A read that has not answered this long after its lease began is given up for now
+ * (TranscriptBusyError) and tried again a second later. Its wait for the lease is not counted: an
+ * image lookup of the same transcript holds it for as long as the lookup takes (seconds on a
+ * network home), and a read given up behind it would only wait behind it again. A slice waiting so
+ * holds one of the history's slices as the lease ahead holds one of the reader's: two of them leave
+ * no room for another transcript's read in the reader either. A busy reader is no failure of the
+ * transcript, so one whose reads keep running out of time is tried every second for as long as it
+ * is watched, with no longer backoff.
  */
 const READ_MS = 10_000;
 /** A transcript that changed after a check is checked again this long after, at the soonest, unless a request waits for it. */
@@ -132,7 +139,7 @@ export function commandHistory(path: string, limit: number, schedule = true, nee
     }
     entry = {
       path, session: basename(path, ".jsonl"), version, limit, offset: 0, skipping: false, cutAt: null, spans: [], checked: null, checkedThrough: 0, checkedFrom: -Infinity, checkedTick: -Infinity, check: null,
-      checkedAt: -Infinity, checks: 0, wanted: 0, waiters: 0, ends: [], queued: false, listeners: new Set(), failures: 0, retryAt: 0, timer: null, turns: 0, restarts: 0,
+      checkedAt: -Infinity, checks: 0, wanted: 0, waiters: 0, ends: [], queued: false, listeners: new Set(), failures: 0, retryAt: 0, timer: null, turns: 0, restarts: 0, leasing: null,
     };
   }
   entries.set(path, entry);
@@ -292,6 +299,8 @@ function discard(entry: Entry): void {
   if (entries.get(entry.path) === entry) entries.delete(entry.path);
   if (entry.queued) { queue.splice(queue.indexOf(entry), 1); entry.queued = false; }
   if (entry.timer !== null) { clearTimeout(entry.timer); entry.timer = null; }
+  entry.leasing?.abort();
+  entry.leasing = null;
   notify(entry);
 }
 
@@ -403,14 +412,17 @@ async function step(entry: Entry): Promise<void> {
   let restarted = false;
   // the transcript as known when the stat now on its way was asked for
   let known = entry.version;
-  const deadline = Date.now() + READ_MS;
-  // the transcript is let go of well inside the read's deadline, however long the read waited to begin
-  const held = deadline - READ_MS / 2;
-  const signal = cancel.signal;
+  // its wait for the lease has no deadline: one let go of meanwhile gives it up, as every one does at a reset
+  const leasing = new AbortController();
+  entry.leasing = leasing;
+  const signal = AbortSignal.any([cancel.signal, leasing.signal]);
   // a slice on the event loop counts from here, as main's does: its open and checks hold the loop too
   const began = performance.now();
   try {
     await transcriptReader.read(entry.path, async (file) => {
+      if (entry.leasing === leasing) entry.leasing = null;
+      // the transcript is let go of well inside the read's deadline, which counts from its lease (its open included)
+      const held = file.deadline - READ_MS / 2;
       let stop = (file.waited() ? performance.now() : began) + SLICE_MS;
       // the whole lines of the last window that a slice ended before taking in, and the stat taken after they were read
       let rest: { from: number; to: number; bytes: Buffer; version: HistoryVersion } | null = null;
@@ -482,7 +494,7 @@ async function step(entry: Entry): Promise<void> {
         if (after === null) { known = entry.version; after = await file.stat(); }
         now = after;
       }
-    }, { deadline, signal });
+    }, { budget: READ_MS, signal });
     if (entries.get(entry.path) !== entry) return;
     entry.failures = 0;
     entry.retryAt = 0;
@@ -495,6 +507,8 @@ async function step(entry: Entry): Promise<void> {
     // the reader busy or a read too slow: no failure of this transcript, so it is never given up for it
     if (!(error instanceof TranscriptBusyError)) entry.failures++;
     entry.retryAt = Date.now() + Math.min(RETRY_MAX_MS, 1000 * 2 ** (Math.max(1, entry.failures) - 1));
+  } finally {
+    if (entry.leasing === leasing) entry.leasing = null;
   }
   if (entries.get(entry.path) !== entry) return;
   const work = due(entry, Date.now());

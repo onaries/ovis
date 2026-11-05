@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
 
 import { NOTICE_VERSION, type TelemetryStatus } from "../../shared/telemetry.ts";
 import { ApiError, changeTelemetry, fetchTelemetry } from "../lib/api.ts";
@@ -11,13 +12,18 @@ import { SettingsGroup, SettingsRow, Toggle } from "./SettingsControls.tsx";
  * active message with the harness kinds (shared/telemetry.ts). Showing it is what lets the
  * server send, so it is recorded once it has been painted in a visible
  * tab, and the server still waits a while before the first event so the switch behind What is sent
- * stops it. It stays one line on any width; Settings says what is sent in full.
- * Closing it only hides it in this tab.
+ * stops it. It stays one line on any width: its text opens Settings, which says what is sent in
+ * full, and Turn off is the switch's off in one tap. Closing it only hides it in this tab.
  */
 export function TelemetryNotice({ enabled, onOpen }: { enabled: boolean; onOpen: () => void }) {
   const t = useT();
   const [shown, setShown] = useState(false);
   const [closed, setClosed] = useState(false);
+  const [turningOff, setTurningOff] = useState(false);
+  const [offFailed, setOffFailed] = useState(false);
+  // set from the tap on Turn off: an answer to an earlier request that still says on is not taken,
+  // so it cannot tell the snapshot again behind the off
+  const turnedOff = useRef(false);
   // The server keeps this browser's latest safe settings snapshot for its next count. The snapshot
   // contains no raw user-entered values or account identifiers.
   const { settings } = useSettings();
@@ -34,7 +40,7 @@ export function TelemetryNotice({ enabled, onOpen }: { enabled: boolean; onOpen:
   useEffect(() => {
     if (!enabled || !allowed || submittedSettingsSignature.current === settingsSignature) return;
     submittedSettingsSignature.current = settingsSignature;
-    changeTelemetry({ settings: settingsSnapshot }).then(setStatus, (error: unknown) => {
+    changeTelemetry({ settings: settingsSnapshot }).then((next) => { if (!turnedOff.current) setStatus(next); }, (error: unknown) => {
       if (!(error instanceof ApiError && error.status === 404)) console.error("telemetry settings", error);
     });
   }, [enabled, allowed, settingsSignature, settingsSnapshot]);
@@ -65,7 +71,7 @@ export function TelemetryNotice({ enabled, onOpen }: { enabled: boolean; onOpen:
         notice_seen: true,
         notice_version: NOTICE_VERSION,
         settings: snapshot,
-      }).then((next) => { submittedSettingsSignature.current = JSON.stringify(snapshot); setStatus(next); },
+      }).then((next) => { submittedSettingsSignature.current = JSON.stringify(snapshot); if (!turnedOff.current) setStatus(next); },
         (error: unknown) => console.error("telemetry notice", error));
     };
     const onVisibility = () => { if (document.visibilityState === "visible") afterPaint(); };
@@ -74,13 +80,29 @@ export function TelemetryNotice({ enabled, onOpen }: { enabled: boolean; onOpen:
     return () => { recorded = true; cancelAnimationFrame(frame); document.removeEventListener("visibilitychange", onVisibility); };
   }, [shown]);
   if (!shown || closed) return null;
-  const text = t("Ovis sends anonymous usage counts.");
-  return <div className="update-notice is-line" role="status">
-    <span title={text}>{text}</span>
-    <button type="button" className="btn btn-ghost" onClick={() => { setClosed(true); onOpen(); }}>{t("What is sent")}</button>
-    <button type="button" className="btn btn-ghost" onClick={() => setClosed(true)}>{t("Dismiss")}</button>
+  const turnOff = () => {
+    turnedOff.current = true;
+    setTurningOff(true);
+    setOffFailed(false);
+    // a refusal brings the line back, even after a close, and says so: the off is never taken for granted
+    changeTelemetry({ enabled: false }).then((next) => { setStatus(next); setClosed(true); }, (error: unknown) => {
+      console.error("telemetry off", error);
+      turnedOff.current = false;
+      setTurningOff(false);
+      setOffFailed(true);
+      setClosed(false);
+    });
+  };
+  const text = offFailed ? t("Couldn't turn the counts off. Open Settings to use the switch.") : t("Ovis sends anonymous usage counts to improve it.");
+  return <div className="update-notice is-line is-telemetry" role={offFailed ? "alert" : "status"}>
+    <button type="button" className="update-notice-text" title={text} aria-haspopup="dialog" onClick={() => { setClosed(true); onOpen(); }}>{text}</button>
+    <button type="button" className="btn btn-ghost" disabled={turningOff} onClick={turnOff}>{t("Turn off")}</button>
+    <button type="button" className="icon-button update-notice-dismiss" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={() => setClosed(true)}><X /></button>
   </div>;
 }
+
+/** every field of the messages, explained */
+const FIELDS_HELP = "https://github.com/devswha/ovis/blob/main/docs/guide.md#anonymous-usage-counts";
 
 /** Settings → About: the switch and the messages as they would be sent. Hidden on a server that sends none. */
 export function TelemetryControls() {
@@ -157,6 +179,7 @@ export function TelemetryControls() {
         <p className="settings-hint">{t("Once a day you open the app:")}</p>
         <pre className="update-output">{JSON.stringify(status.active, null, 2)}</pre>
         <p className="settings-hint">{t("The receiver adds the country this message comes from (two letters, such as KR). It does not store the address.")}</p>
+        <a className="settings-link" href={FIELDS_HELP} target="_blank" rel="noreferrer">{t("What each field means")}</a>
       </details>
     </SettingsGroup>
   );

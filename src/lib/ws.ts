@@ -2,7 +2,7 @@ import type { ClientMessage, ClientRole, PendingMessage, ServerFeature, ServerMe
 import { receiptResumeId } from "./receiptResume.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
 import { ConnectionTrace } from "./connectionTrace.ts";
-import { getTransport, type WebSocketLike } from "./transport.ts";
+import { abandonNativeReads, getTransport, type WebSocketLike } from "./transport.ts";
 
 type Handler = (message: ServerMessage) => void;
 
@@ -139,9 +139,11 @@ export class HerdrSocket {
   /**
    * Per pane, typing sent on this connection that no pong has confirmed yet, in the order sent (see
    * awaitReceipt): `fence` is the id of the first ping sent after it, whose pong (or a later one) proves
-   * the server read it.
+   * the server read it. `id`: sent with its input to a bridge listing "input-receipt", whose input-result
+   * alone confirms it (a pong only proves the bridge read it, not that the pane took it).
    */
-  private readonly unconfirmed = new Map<string, { text: string; fence: number }[]>();
+  private readonly unconfirmed = new Map<string, { text: string; fence: number; id?: number }[]>();
+  private nextInput = 1;
   /** the ping that fences typing, while its pong is on its way: typing sent meanwhile waits for the next one */
   private inputFence: number | null = null;
   /**
@@ -185,6 +187,8 @@ export class HerdrSocket {
   private markProbeDone: () => void = () => {};
   /** probes since the last pong that ended in a drop: each doubles the next deadline */
   private probeDrops = 0;
+  /** a connection was found dead without a close: the reads sent meanwhile are given up once a new one opens */
+  private pathLost = false;
   /** whether the last snapshot listed "ping": kept across reconnects, so a socket whose snapshot never comes is probed too */
   private pingKnown = false;
   /** the periodic check that pings a connection silent for IDLE_PROBE_MS */
@@ -358,6 +362,11 @@ export class HerdrSocket {
       this.openedAt = Date.now();
       this.lastFrameAt = this.openedAt;
       this.watchIdle(socket);
+      // the path is back: reads sent on the lost one would hold the browser's connections to the server
+      if (this.pathLost) {
+        this.pathLost = false;
+        abandonNativeReads(new URL(this.url, "http://localhost").searchParams.get("machine_id") ?? "local");
+      }
       // always send the role, never only when non-default: a user can flip the role
       // while disconnected (setMode stores it without sending), so without this frame
       // the reconnect would leave the server on the stale role and no ack would ever
@@ -429,6 +438,8 @@ export class HerdrSocket {
         // its connection is trusted as before rather than dropped at the deadline or left paused
         if (!this.pingKnown && this.probing) this.endProbe();
         // typing sent before this was kept unfenced: fenced now, or trusted as before by a bridge that answers no ping
+        // typing sent with an id to a bridge that now lists no receipts is fenced by a ping instead
+        if (!this.features.has("input-receipt")) for (const typed of this.unconfirmed.values()) for (const entry of typed) if (entry.id !== undefined) { delete entry.id; entry.fence = this.nextPing; }
         if (this.features.has("ping")) this.fenceInput();
         else { this.unconfirmed.clear(); this.inputFence = null; }
         if (!this.features.has("input-ready")) for (const pane of this.outputSeen) if (this.attached.has(pane)) this.inputReady.add(pane);
@@ -492,6 +503,13 @@ export class HerdrSocket {
       }
       if (message.type === "secret-result" && this.matchesRequest(message.id, "secret", message.pane_id)) {
         this.resolveRequest(message.id, message.ok ? { ok: true } : { ok: false, code: message.code ?? "secret_failed", message: "Secret was not sent. Check the prompt and enter it again." });
+      }
+      // written, or refused (an error frame tells the user): either way nothing is left to hold
+      if (message.type === "input-result") {
+        const typed = this.unconfirmed.get(message.pane_id);
+        const left = typed?.filter((entry) => entry.id !== message.id);
+        if (left && left.length > 0) this.unconfirmed.set(message.pane_id, left);
+        else this.unconfirmed.delete(message.pane_id);
       }
       if (message.type === "insert-result" && this.matchesRequest(message.id, "insert", message.pane_id)) {
         this.resolveRequest(message.id, message.ok ? { ok: true } : { ok: false, code: message.code ?? "insert_failed", message: message.message ?? "the pane did not take the text" });
@@ -657,6 +675,7 @@ export class HerdrSocket {
   private drop(socket: WebSocketLike): void {
     this.trace.record("probe_drop", { pending: this.submits.size }, true);
     this.probeDrops += 1;
+    this.pathLost = true;
     this.endConnection();
     // a server close (4008) that comes after this still stops output
     this.endedEarly.add(socket);
@@ -885,6 +904,11 @@ export class HerdrSocket {
     return !this.featuresKnown || this.features.has("watch");
   }
 
+  /** Whether this connection's server has listed its features yet (hasTerminalHistory is final once it has). */
+  featuresListed(): boolean {
+    return this.featuresKnown;
+  }
+
   /** Whether the browser keeps a pane's scrollback (`terminal-history`); false until the features come. */
   hasTerminalHistory(): boolean {
     return this.terminalHistory;
@@ -924,6 +948,11 @@ export class HerdrSocket {
     state.keepSize = false;
     state.releaseSizeOwed = true;
     this.send({ type: "resize", pane_id: paneId, cols, rows });
+  }
+
+  /** Whether the PC searches a pane's conversation (`conversation-search`); false until the features come, and from an older bridge. */
+  canSearchConversation(): boolean {
+    return this.features.has("conversation-search");
   }
 
   /** Whether this connection may take a held pane from another web bridge: a server that knows how, and not observing. */
@@ -998,8 +1027,10 @@ export class HerdrSocket {
    * `secret`: typed at a masked prompt. Neither is kept to be held when its connection ends unconfirmed */
   sendInput(paneId: string, text: string, stop = false, automatic = false, secret = false): boolean {
     if (!this.canInput(paneId)) { this.traceProbeRefusal(); return false; }
-    try { this.rawSend({ type: "input", pane_id: paneId, text, ...(stop ? { stop: true } : {}), ...(automatic ? { automatic: true } : {}) }); } catch { return false; }
-    if (!secret && !automatic) this.awaitReceipt(paneId, text);
+    // an id before the bridge said what it takes too: an older bridge ignores it, and the typing is fenced by a ping then
+    const id = !secret && !automatic && (!this.featuresKnown || this.features.has("input-receipt")) ? this.nextInput++ : undefined;
+    try { this.rawSend({ type: "input", pane_id: paneId, text, ...(stop ? { stop: true } : {}), ...(automatic ? { automatic: true } : {}), ...(id !== undefined ? { id } : {}) }); } catch { return false; }
+    if (!secret && !automatic) this.awaitReceipt(paneId, text, id);
     return true;
   }
 
@@ -1009,19 +1040,26 @@ export class HerdrSocket {
    * connection's frames in order, so the pong of a ping sent after the typing proves it was read;
    * until then it is kept, and a connection that ends first leaves it to the pane's terminal, which
    * holds it for review (takeUnconfirmedInput). Typing sent before the bridge said what it takes is kept
-   * unfenced until it does; an older bridge, which answers no ping, is then trusted as before.
+   * unfenced until it does; an older bridge, which answers no ping, is then trusted as before. Typing sent
+   * with an `id` ("input-receipt") waits for its input-result instead: the bridge may have read it and still
+   * dropped it, queued behind the pane's input when its connection ended (#2677).
    */
-  private awaitReceipt(paneId: string, text: string): void {
-    if (this.featuresKnown && !this.features.has("ping")) return;
+  private awaitReceipt(paneId: string, text: string, id?: number): void {
+    if (id === undefined && this.featuresKnown && !this.features.has("ping")) return;
     const typed = this.unconfirmed.get(paneId) ?? [];
-    typed.push({ text, fence: this.nextPing });
+    typed.push({ text, fence: this.nextPing, ...(id !== undefined ? { id } : {}) });
     this.unconfirmed.set(paneId, typed);
     if (this.featuresKnown) this.fenceInput();
   }
 
+  private needsFence(): boolean {
+    for (const typed of this.unconfirmed.values()) if (typed.some((entry) => entry.id === undefined)) return true;
+    return false;
+  }
+
   /** Pings after the typing still unconfirmed, unless a fence is already on its way: one at a time, however fast the typing. */
   private fenceInput(): void {
-    if (this.inputFence !== null || this.unconfirmed.size === 0) return;
+    if (this.inputFence !== null || !this.needsFence()) return;
     this.inputFence = this.nextPing++;
     // a send that throws ends the connection, and its end holds the typing
     try { this.rawSend({ type: "ping", id: this.inputFence }); } catch { /* see above */ }
@@ -1030,7 +1068,7 @@ export class HerdrSocket {
   /** A pong confirms the typing sent before its ping: any ping's, a probe's included. */
   private confirmInput(pong: number): void {
     for (const [paneId, typed] of this.unconfirmed) {
-      const left = typed.filter((entry) => entry.fence > pong);
+      const left = typed.filter((entry) => entry.id !== undefined || entry.fence > pong);
       if (left.length === 0) this.unconfirmed.delete(paneId);
       else this.unconfirmed.set(paneId, left);
     }
@@ -1155,8 +1193,19 @@ export class HerdrSocket {
         resolve({ ok: false, code: "timeout", message: "the pane did not confirm this request in time" });
       }, SUBMIT_TIMEOUT_MS);
     });
-    try { this.rawSend(message); this.trace.record("submit_sent", { request_id: id }); }
-    catch {
+    try {
+      this.rawSend(message);
+      this.trace.record("submit_sent", { request_id: id });
+      // a socket silent since the request left may be half-open (a network that dropped without a
+      // close): ask it now rather than at the idle check, up to IDLE_PROBE_MS away
+      const socket = this.socket;
+      const sentAt = Date.now();
+      window.setTimeout(() => {
+        // a hidden page is probed when it is shown again (onWake), as the idle check leaves it
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+        if (this.submits.has(id) && this.socket === socket && this.lastFrameAt <= sentAt) this.probe();
+      }, PROBE_TIMEOUT_MS);
+    } catch {
       this.submits.get(id)?.(NOT_TRANSMITTED);
       this.submits.delete(id);
       this.requests.delete(id);

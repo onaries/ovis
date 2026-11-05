@@ -20,10 +20,16 @@ export interface AgentsPage {
   rows: AgentsPageRow[];
   /** providers with accounts that no row lists (Cursor, an agent not on this PC), in the order they came */
   otherProviders: UsageProviderId[];
-  /** herdr's integrations no row shows: agents not on the PC, or ones the catalog does not know; found ones first */
+  /**
+   * herdr's integrations no row shows: agents not on the PC, or ones the catalog does not know; found
+   * ones first. One with neither its agent nor its hook on the PC is left out: herdr lists every
+   * built-in one, so it would only say what the PC does not have (Install another agent offers those).
+   */
   otherIntegrations: AgentIntegration[];
   /** what the PC surely lacks and can install: one it cannot tell about offers no Install */
   installable: AgentCatalogRow[];
+  /** the PC told no agent's install state (another machine of herdr-core's): nothing is said to be there or missing */
+  installsUnknown: boolean;
 }
 
 function integrationFor(agent: AgentCatalogRow, integrations: readonly AgentIntegration[]): AgentIntegration | null {
@@ -58,9 +64,11 @@ export function agentsPage({ agents, providers, missing = [], integrations, acco
   return {
     rows,
     otherProviders: [...new Set(providers.map((usage) => usage.id))].filter((id) => !claimed.has(id)),
-    otherIntegrations: integrations.filter((integration) => !rows.some((entry) => entry.integration?.target === integration.target))
+    otherIntegrations: integrations.filter((integration) => !rows.some((entry) => entry.integration?.target === integration.target)
+      && (integration.available || integration.state !== "not_installed"))
       .sort((a, b) => Number(b.available) - Number(a.available)),
     installable: available.filter((agent) => agent.state.installed === false && agent.install !== null),
+    installsUnknown: agents.length > 0 && agents.every((agent) => agent.state.installed === null),
   };
 }
 

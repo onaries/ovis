@@ -55,11 +55,11 @@ export function SettingsSelect({ className, children, ...props }: ComponentProps
 export interface SegmentedOption<T extends string> { value: T; label: string }
 
 /** One of a few short choices, all in sight. Five or more go in a select instead. */
-export function Segmented<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: readonly SegmentedOption<T>[]; onChange: (value: T) => void }) {
+export function Segmented<T extends string>({ label, value, options, onChange, disabled }: { label: string; value: T; options: readonly SegmentedOption<T>[]; onChange: (value: T) => void; disabled?: boolean }) {
   return (
     <div className="segmented settings-segmented" role="group" aria-label={label}>
       {options.map((option) => (
-        <button key={option.value} type="button" aria-pressed={value === option.value} onClick={() => onChange(option.value)}>{option.label}</button>
+        <button key={option.value} type="button" aria-pressed={value === option.value} disabled={disabled} onClick={() => onChange(option.value)}>{option.label}</button>
       ))}
     </div>
   );

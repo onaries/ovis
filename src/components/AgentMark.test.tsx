@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { fallbackHue } from "../lib/agentMark.ts";
 import { AgentMark, hasBrandColors } from "./AgentMark.tsx";
 
 describe("agent marks", () => {
@@ -10,5 +11,10 @@ describe("agent marks", () => {
     expect(renderToStaticMarkup(createElement(AgentMark, { agent: "claude" }))).toContain('class="agent-mark claude is-brand"');
     expect(renderToStaticMarkup(createElement(AgentMark, { agent: "codex" }))).toContain('class="agent-mark codex"');
     expect(renderToStaticMarkup(createElement(AgentMark, { agent: "zed" }))).toContain('class="agent-mark zed"');
+  });
+
+  it("colors a kind without a mark the same however its name is encoded, as its initial is", () => {
+    expect(fallbackHue("caf\u00e9")).toBe(fallbackHue("cafe\u0301"));
+    expect(fallbackHue(" Zed ")).toBe(fallbackHue("zed"));
   });
 });

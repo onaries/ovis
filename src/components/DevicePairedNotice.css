@@ -15,3 +15,12 @@
   gap: var(--space-2);
   margin-inline-start: auto;
 }
+
+/* a relay pairing's digits, to compare with the phone's screen: monospace, never broken between groups */
+.relay-pairing-digits {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-caps);
+  white-space: nowrap;
+  color: var(--text-strong);
+}

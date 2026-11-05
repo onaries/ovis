@@ -14,7 +14,7 @@ import type {
 } from "../../shared/protocol.ts";
 import type { AgentInfo, AgentManifestInfo, AgentStartParams, PaneInfo, PaneLayoutSnapshot, PaneProcessInfo, PaneScrollInfo, TabInfo, WorkspaceInfo } from "../../shared/herdr-api.generated.ts";
 import type { HerdrMethod, HerdrMethods, SingleHerdrMethod, UntypedHerdrMethod } from "./methods.ts";
-import type { HerdrIdentity } from "../../shared/machines.ts";
+import type { HerdrCoreLayout, HerdrIdentity } from "../../shared/machines.ts";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const diagnostics = new ConnectionDiagnostics("herdr.rpc");
@@ -370,7 +370,11 @@ export async function ping(socketPath?: string): Promise<HerdrIdentity> {
   const attach = terminalAttachSupported(result.capabilities);
   // without attach the web server repaints the pane's screen instead (server/mirror.ts)
   const core = result.capabilities?.["runtime"] === "herdr-core";
-  return { version: result.version, protocol: result.protocol, terminal_attach: attach, ...(attach ? {} : { terminal_mirror: true }), ...(core ? { runtime: "herdr-core" as const } : {}) };
+  // herdr-core's layout calls (shared/machines.ts HerdrCoreLayout): each one it did not say yes to is off
+  const offered = result.capabilities?.["layout"];
+  const said = (call: keyof HerdrCoreLayout): boolean => typeof offered === "object" && offered !== null && (offered as Record<string, unknown>)[call] === true;
+  const layout: HerdrCoreLayout = { rename: said("rename"), split: said("split"), move: said("move"), arrange: said("arrange"), worktrees: said("worktrees") };
+  return { version: result.version, protocol: result.protocol, terminal_attach: attach, ...(attach ? {} : { terminal_mirror: true }), ...(core ? { runtime: "herdr-core" as const, layout } : {}) };
 }
 
 export async function sessionSnapshot(socketPath?: string, timeoutMs?: number): Promise<SessionSnapshot> {
@@ -864,6 +868,122 @@ export async function paneSwapWith(paneId: string, targetPaneId: string, socketP
       }
     }
     return { ...result.swap, reason: result.swap.reason ?? null, target_pane_id: result.swap.target_pane_id ?? null };
+  });
+}
+
+/**
+ * The pane leaves its place for `side` of another pane of its own tab, its terminal running and its
+ * ID kept. herdr 0.9.5 moves a pane into a tab only from another one (`same_tab` otherwise), and only
+ * right of or below its target: the pane first goes to a tab of its own in its workspace, which herdr
+ * closes again once the pane is back beside the target, and a swap then puts it left of or above
+ * it. A herdr that moves within a tab, and herdr-core, take the first call. A pane herdr will not move
+ * out of its tab (a zoomed tab, say) moves nothing, `changed: false`. A pane herdr will not
+ * bring back beside its target goes back beside another pane of its tab, and the error says so, or
+ * says where it waits. A swap herdr refuses, or that fails, leaves it moved, right of or below the
+ * target: `reason` says why. Queued with the other focus writers: herdr's focus, which a focused
+ * pane moved out or a swap takes, goes back where it was, unless something else took it meanwhile.
+ */
+export async function paneMoveBeside(paneId: string, targetPaneId: string, side: PaneDirection, socketPath?: string): Promise<{ changed: boolean; reason: string | null }> {
+  return queueHerdrFocus(socketPath, async (socket) => {
+    const before = await sessionSnapshot(socket);
+    const pane = before.panes.find((candidate) => candidate.pane_id === paneId);
+    const target = before.panes.find((candidate) => candidate.pane_id === targetPaneId);
+    if (!pane || !target) throw new HerdrError("pane_not_found", `pane ${pane ? targetPaneId : paneId} not found`);
+    if (paneId === targetPaneId) return { changed: false, reason: "same_pane" };
+    if (pane.tab_id !== target.tab_id) return { changed: false, reason: "cross_tab" };
+    type Moved = { changed?: boolean; reason?: string | null; pane: PaneInfo; source_layout?: { focused_pane_id?: string | null } };
+    const move = async (id: string, destination: Record<string, unknown>) =>
+      (await herdrRpc<{ move_result: Moved }>("pane.move", { pane_id: id, destination, focus: false }, socket)).move_result;
+    const into = { type: "tab", tab_id: target.tab_id, target_pane_id: targetPaneId, split: side === "left" || side === "right" ? "right" : "down" };
+    /** herdr's focus back on `wanted` where the move took it (`took`), never over a choice made meanwhile. */
+    const restore = async (wanted: string | null, took: (at: string | null | undefined) => boolean): Promise<void> => {
+      if (!wanted) return;
+      try {
+        const at = (await sessionSnapshot(socket)).focused_pane_id;
+        // Already inside the focus queue: do not enqueue recursively.
+        if (at !== wanted && took(at)) await herdrRpc("pane.focus", { pane_id: wanted }, socket);
+      } catch (error) {
+        // The layout is already committed, as after a swap.
+        console.warn("pane move focus restore failed", error);
+      }
+    };
+    // where herdr's focus went when the focused pane left its tab: the move's doing, not the user's
+    let left: string | null = null;
+    /** Whether herdr's snapshot lists `out` in its tab again; false without one. */
+    const inTab = (now: { panes: PaneInfo[] } | null, out: string) => now?.panes.some((candidate) => candidate.pane_id === out && candidate.tab_id === target.tab_id) === true;
+    /** A pane out of its tab and not beside its target goes back beside the target, else beside any pane still there; the error says where it is. */
+    const strayed = async (out: string, why: HerdrError): Promise<never> => {
+      const now = await sessionSnapshot(socket).catch(() => null);
+      // a move herdr made without its answer arriving may have brought it back already
+      let back = inTab(now, out);
+      const panes = back ? [] : (now?.panes ?? []).filter((candidate) => candidate.tab_id === target.tab_id && candidate.pane_id !== out);
+      for (const beside of [...panes.filter((candidate) => candidate.pane_id === targetPaneId), ...panes.filter((candidate) => candidate.pane_id !== targetPaneId)]) {
+        back = await move(out, { type: "tab", tab_id: target.tab_id, target_pane_id: beside.pane_id, split: "right" }).then((home) => home.changed !== false, () => false);
+        if (back) break;
+      }
+      // or one of these moves did, so herdr answered the next same_tab
+      let read = now;
+      if (!back && panes.length > 0) {
+        read = await sessionSnapshot(socket).catch(() => null);
+        back = inTab(read, out);
+      }
+      if (!back) throw new HerdrError(why.code, `pane ${out} ${read === null ? "may wait" : "waits"} in a tab of its own: ${why.message}`);
+      if (left !== null) await restore(out, (at) => at === left);
+      throw new HerdrError(why.code, `pane ${out} went back into its tab: ${why.message}`);
+    };
+    const failed = (error: unknown) => error instanceof HerdrError ? error : new HerdrError("pane_not_moved", error instanceof Error ? error.message : String(error));
+    let moved = await move(paneId, into);
+    if (moved.changed === false && moved.reason === "same_tab") {
+      // herdr moves no pane out of a zoomed tab (its PaneMoveReason zoomed_tab)
+      if (before.layouts.find((layout) => layout.tab_id === target.tab_id)?.zoomed) return { changed: false, reason: "zoomed_tab" };
+      let passing: Moved;
+      try {
+        passing = await move(paneId, { type: "new_tab", workspace_id: pane.workspace_id });
+      } catch (error) {
+        // herdr may have moved it before its answer was lost: then it comes back as from a refusal
+        const now = await sessionSnapshot(socket).catch(() => null);
+        const out = now?.panes.find((candidate) => candidate.pane_id === paneId && candidate.tab_id !== target.tab_id);
+        if (!out) throw error;
+        const at = now?.panes.find((candidate) => candidate.pane_id === now.focused_pane_id);
+        if (before.focused_pane_id === paneId && at?.tab_id === target.tab_id) left = at.pane_id;
+        return strayed(out.pane_id, failed(error));
+      }
+      if (passing.changed === false) return { changed: false, reason: passing.reason ?? null };
+      const out = passing.pane.pane_id;
+      if (before.focused_pane_id === paneId) left = passing.source_layout?.focused_pane_id ?? null;
+      try {
+        moved = await move(out, into);
+      } catch (error) {
+        return strayed(out, failed(error));
+      }
+      if (moved.changed === false) return strayed(out, new HerdrError("pane_not_moved", `herdr answered ${moved.reason ?? "unchanged"}`));
+    }
+    if (moved.changed === false) return { changed: false, reason: moved.reason ?? null };
+    const id = moved.pane.pane_id;
+    if (side === "left" || side === "up") {
+      // the focus just before the swap is the one kept, the move's own taken back to the moved pane;
+      // without it the swap would take herdr's focus with nothing to give back, so the pane stays put,
+      // its focus given back as after a move right or down
+      const focused = await sessionSnapshot(socket).then((now) => now.focused_pane_id ?? null, (error: unknown) => failed(error));
+      if (focused instanceof HerdrError) {
+        if (left !== null) await restore(id, (at) => at === left);
+        return { changed: true, reason: focused.code };
+      }
+      const kept = left !== null && focused === left ? id : focused;
+      // the move is committed whatever the swap does: a swap that fails leaves the pane right of or
+      // below its target, and one whose answer is lost is read from the layout
+      const swap = await herdrRpc<{ swap: { changed: boolean; reason?: string | null } }>("pane.swap", { source_pane_id: id, target_pane_id: targetPaneId }, socket)
+        .then((answer) => answer.swap, async (error: unknown) => {
+          const layout = await sessionSnapshot(socket).then((now) => now.layouts.find((candidate) => candidate.tab_id === target.tab_id), () => undefined);
+          const rect = (pane: string) => layout?.panes.find((candidate) => candidate.pane_id === pane)?.rect;
+          const [mine, theirs] = [rect(id), rect(targetPaneId)];
+          const first = mine !== undefined && theirs !== undefined && (side === "left" ? mine.x < theirs.x : mine.y < theirs.y);
+          return first ? { changed: true, reason: null } : { changed: false, reason: failed(error).code };
+        });
+      await restore(kept, (at) => at === id || (left !== null && at === left));
+      if (!swap.changed) return { changed: true, reason: swap.reason ?? "unchanged" };
+    } else if (left !== null) await restore(id, (at) => at === left);
+    return { changed: true, reason: null };
   });
 }
 

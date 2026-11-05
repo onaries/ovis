@@ -1,4 +1,4 @@
-import { errorResponse, jsonResponse, setRequestRoute } from "../http.ts";
+import { errorResponse, jsonResponse, readJsonObject, setRequestRoute } from "../http.ts";
 import type { ServerContext } from "../dispatch.ts";
 import { updateRequestAllowed } from "../update-api.ts";
 
@@ -11,7 +11,33 @@ export async function handleRelayRequest(request: Request, pathname: string, con
     setRequestRoute("/api/relay");
     return reply(service.status());
   }
+  const peer = context.peer;
+  // one admission rule (docs/account.md): this PC itself, or a drive account member through the relay
+  const remoteApprover = peer.kind === "relay" && context.services.devices.isAccountApproverSession(peer.device.id, peer.key) ? peer.device : null;
+  if (pathname === "/api/relay/pairings" && request.method === "GET") {
+    setRequestRoute("/api/relay/pairings");
+    if (peer.kind === "relay") return remoteApprover ? reply({ pairings: service.approvals.remoteList() }) : fail("account_required", "Approve pairings on this PC, or from a device linked to your account.", 403);
+    return reply({ pairings: service.approvals.list() });
+  }
   if (request.method !== "POST") return fail("method_not_allowed", "Use GET for status and POST for relay actions.", 405);
+  if (pathname === "/api/relay/pairing" && peer.kind === "relay") {
+    setRequestRoute("/api/relay/pairing");
+    if (!remoteApprover) return fail("account_required", "Approve pairings on this PC, or from a device linked to your account.", 403);
+    const body = await readJsonObject(request);
+    if (body instanceof Response) return body;
+    if (typeof body.id !== "string" || (body.decision !== "approve" && body.decision !== "decline")
+      || (body.decision === "approve" && (typeof body.digits !== "string" || !/^[0-9]{6}$/.test(body.digits)))) {
+      return fail("invalid_relay_pairing", "Send the pairing's id, a decision of approve or decline, and the digits the new device shows.", 400);
+    }
+    const outcome = service.approvals.decideRemote(body.id, body.decision === "approve", typeof body.digits === "string" ? body.digits : "", remoteApprover);
+    if (outcome.outcome !== "decided") {
+      return outcome.outcome === "gone"
+        ? fail("relay_pairing_gone", "That device is no longer waiting: it left, was decided, or its time ran out.", 404)
+        : fail("wrong_digits", "Those are not the digits the new device shows; it was not let in.", 409);
+    }
+    // the id the new device's row takes once its person confirms too: what the approver's add record and introductions name
+    return reply(body.decision === "approve" ? { ok: true, device_id: outcome.device_id } : { ok: true });
+  }
   if (!updateRequestAllowed(request)) return fail("invalid_relay_request", "Use the relay controls from this app.", 403);
   // A relayed session would hold the relay it runs on; Portal visitors are refused in dispatch.ts (owner_only).
   if (context.peer.kind === "relay") return fail("local_required", "Control the relay from a direct connection to this PC.", 403);
@@ -32,6 +58,34 @@ export async function handleRelayRequest(request: Request, pathname: string, con
         // While connecting, a client the offer reaches waits at the relay for this PC; in error nothing may answer it.
         if (service.status().phase === "error") return fail("relay_offline", "The relay is not reachable; wait until it is online before pairing.", 409);
         return reply(service.offer());
+      case "/api/relay/code": {
+        setRequestRoute("/api/relay/code");
+        if (service.status().phase === "off" || service.status().blocked) return fail("relay_off", "Start the relay before pairing.", 409);
+        if (service.status().phase === "error") return fail("relay_offline", "The relay is not reachable; wait until it is online before pairing.", 409);
+        const code = await service.pairCode();
+        if (code === null) return fail("code_unavailable", "Pairing with a typed code works through Ovis's relay only; scan the QR code instead.", 409);
+        return reply(code);
+      }
+      case "/api/relay/code/cancel":
+        setRequestRoute("/api/relay/code/cancel");
+        service.cancelPairCode();
+        return reply({ ok: true });
+      case "/api/relay/link":
+        setRequestRoute("/api/relay/link");
+        if (service.status().phase === "off" || service.status().blocked) return fail("relay_off", "Start the relay before pairing.", 409);
+        return reply(service.pairingLink());
+      case "/api/relay/pairing": {
+        setRequestRoute("/api/relay/pairing");
+        const body = await readJsonObject(request);
+        if (body instanceof Response) return body;
+        if (typeof body.id !== "string" || (body.decision !== "approve" && body.decision !== "decline")) {
+          return fail("invalid_relay_pairing", "Send the pairing's id and a decision of approve or decline.", 400);
+        }
+        if (!service.approvals.decide(body.id, body.decision === "approve")) {
+          return fail("relay_pairing_gone", "That phone is no longer waiting: it left, was decided, or its time ran out.", 404);
+        }
+        return reply({ ok: true });
+      }
       case "/api/relay/reset-identity": {
         setRequestRoute("/api/relay/reset-identity");
         const status = await service.resetIdentity();

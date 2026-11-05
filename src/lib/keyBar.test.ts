@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { KEY_BAR_EXTRAS, NO_STICKY_MODIFIERS } from "./keys.ts";
-import { DEFAULT_KEY_BAR_ITEMS, KEY_BAR_ITEMS_MAX, KEY_BAR_KEYS, keyBarInputSequence, keyBarItemId, keyBarItemLabel, migrateKeyBarItems, sanitizeKeyBarItems, type KeyBarItem } from "./keyBar.ts";
+import { DEFAULT_KEY_BAR_ITEMS, KEY_BAR_ARROW_PAD, KEY_BAR_ITEMS_MAX, KEY_BAR_KEYS, KEY_BAR_SECOND_ROW, keyBarInputSequence, keyBarItemId, keyBarItemLabel, keyBarRowItems, migrateKeyBarItems, sanitizeKeyBarItems, type KeyBarItem } from "./keyBar.ts";
 
 describe("key bar migration", () => {
   const caps = (items: KeyBarItem[]) => items.map(keyBarItemLabel);
@@ -88,5 +88,23 @@ describe("key bar input", () => {
     expect(keyBarInputSequence("ctrl-c", false)).toBe("\x03");
     for (const key of [" ", "+", "я", "😀"]) expect(keyBarInputSequence(key, false)).toBe(key);
     expect(["F1", "F4", "F5", "F12"].map((key) => keyBarInputSequence(key, false))).toEqual(["\x1bOP", "\x1bOS", "\x1b[15~", "\x1b[24~"]);
+  });
+});
+
+describe("keyBarRowItems", () => {
+  it("keeps the first row as saved when compact", () => {
+    expect(keyBarRowItems(DEFAULT_KEY_BAR_ITEMS, false)).toBe(DEFAULT_KEY_BAR_ITEMS);
+  });
+
+  it("expanded, leaves out the plain keys the second row and the arrow pad show, keeping modifiers and combinations", () => {
+    const combination: KeyBarItem = { type: "key", key: "ArrowLeft", modifiers: { ctrl: true, alt: false, shift: false } };
+    const items: KeyBarItem[] = [...DEFAULT_KEY_BAR_ITEMS, { type: "key", key: "pipe" }, { type: "key", key: "-" }, { type: "key", key: "Home" }, combination];
+    expect(keyBarRowItems(items, true).map(keyBarItemId)).toEqual([
+      "key:\"ctrl-c\":held", "modifier:ctrl", "modifier:alt", "modifier:shift", "key:\"Enter\":held", "key:\"Home\":held", keyBarItemId(combination),
+    ]);
+  });
+
+  it("sends every second-row and arrow-pad key", () => {
+    for (const key of [...KEY_BAR_SECOND_ROW, ...KEY_BAR_ARROW_PAD]) expect(keyBarInputSequence(key, false)).not.toBeNull();
   });
 });

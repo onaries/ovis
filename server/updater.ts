@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { CHECKOUT_CHANGED_REASON, noInstalledNotes, noUpdateNotes, unmanagedUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../shared/update.ts";
+import { CHECKOUT_CHANGED_REASON, noInstalledNotes, readUpdateChannel, type UpdateChannel, noUpdateNotes, unmanagedUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../shared/update.ts";
 import { compareVersions, releaseNotes, releaseSummaries, SUMMARIES_FILE } from "./release-notes.ts";
 import { releaseIn } from "./update-state.ts";
 
@@ -39,6 +39,7 @@ export function readNotesFile(path: string): string {
   } finally { closeSync(fd); }
 }
 const SHA = /^[0-9a-f]{40,64}$/;
+const NOT_MAIN_REASON = "Switch the source checkout to main to update.";
 
 /** Shown when the launcher runs from an installed release instead of the checkout it was built from (#1373). */
 export const RELEASE_FOLDER_REASON = "This server runs from an installed update's folder, not from its source checkout. Restart Ovis from its source checkout (the herdr plugin's Stop, then Start, or bun run start there) to update.";
@@ -56,6 +57,46 @@ export function isReleaseFolder(directory: string): boolean {
 }
 /** A release is a plain `vX.Y.Z` tag: `remote-v*` bundle tags and pre-releases never qualify. */
 const RELEASE_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
+/**
+ * A beta build CI tagged on green main (.github/workflows/beta.yml): taken only on the beta channel.
+ * Outside `v*`, which the installers, the app setups and the release jobs read as releases.
+ */
+const BETA_TAG = /^beta\/v(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$/;
+/** A tag's version, without the v: `0.4.23` for `v0.4.23`, `0.4.23-beta.7` for `beta/v0.4.23-beta.7`. */
+const tagVersion = (tag: string) => tag.replace(/^(beta\/)?v/, "");
+
+/**
+ * The newest tag the channel takes, by version: `v0.4.23` outranks every `beta/v0.4.23-beta.N`, and
+ * `beta.10` outranks `beta.9`. On `stable` no beta is ever a candidate.
+ */
+export function latestTag(tags: string[], channel: UpdateChannel): string | undefined {
+  let best: { tag: string; key: number[] } | undefined;
+  for (const tag of tags) {
+    const release = RELEASE_TAG.exec(tag);
+    const match = release ?? (channel === "beta" ? BETA_TAG.exec(tag) : null);
+    if (!match) continue;
+    // a release sorts after every beta of its version
+    const key = [Number(match[1]), Number(match[2]), Number(match[3]), release ? Infinity : Number(match[4])];
+    const i = best ? key.findIndex((part, j) => part !== best!.key[j]) : 0;
+    if (!best || (i !== -1 && key[i]! > best.key[i]!)) best = { tag, key };
+  }
+  return best?.tag;
+}
+
+/** The name of the setting file in the app's state dir that opts a PC into the beta channel. */
+export const UPDATE_CHANNEL_FILE = "update-channel";
+
+/**
+ * The channel this PC updates on: `OVIS_UPDATE_CHANNEL` when it names one, else the
+ * `update-channel` file in the app's state dir (`beta`), else `stable`. Read at every check, so
+ * writing the file takes effect without a restart.
+ */
+export function updateChannel(env: Record<string, string | undefined>, appStateDir: string): UpdateChannel {
+  const set = readUpdateChannel(env["OVIS_UPDATE_CHANNEL"]);
+  if (set) return set;
+  try { return readUpdateChannel(readFileSync(join(appStateDir, UPDATE_CHANNEL_FILE), "utf8")) ?? "stable"; }
+  catch { return "stable"; }
+}
 
 function packageVersion(directory: string): string | null {
   try {
@@ -191,7 +232,14 @@ export class Updater {
     notice?: string;
     activate: (release: Release, commit: () => void) => Promise<void>;
     publish: (status: UpdateStatus) => void;
-  }) { this.status.auto_update = options.autoUpdate; this.status.error = options.notice ?? null; }
+    /** The channel to update on, asked at every check (updateChannel); `stable` when not given. */
+    channel?: () => UpdateChannel;
+  }) {
+    this.status.auto_update = options.autoUpdate; this.status.error = options.notice ?? null;
+    this.status.channel = this.channel();
+  }
+
+  private channel(): UpdateChannel { return this.options.channel?.() ?? "stable"; }
 
   /** One git command in the source checkout; a test stands in here for a fetch that fails
    * without git ending it itself (#1252). */
@@ -212,7 +260,11 @@ export class Updater {
       if (!SHA.test(this.sourceRevision)) throw new Error("Invalid source revision");
       this.release = { directory: this.options.root, revision: this.sourceRevision, source_revision: this.sourceRevision };
       const reason = await this.sourceBlock();
-      if (!reason) {
+      // A detached, clean checkout started without herdr's HERDR_PLUGIN_ROOT (a herdr plugin's
+      // checkout started from a shell) may not update, but the release this updater already built
+      // from this same commit still runs: the source_revision check below holds HEAD unmoved.
+      // Local changes or another branch keep the source checkout, as before.
+      if (!reason || (reason === NOT_MAIN_REASON && await this.detachedAndClean())) {
         try {
           const saved = JSON.parse(readFileSync(join(this.options.stateDir, "current.json"), "utf8")) as Release;
           // Only directories created by this updater may be resumed, under this state dir's name for them.
@@ -276,10 +328,22 @@ export class Updater {
   private async sourceBlock(): Promise<string | null> {
     if (isReleaseFolder(this.options.root)) return RELEASE_FOLDER_REASON;
     const branch = await this.git("branch", "--show-current");
-    if (branch !== "main" && !(branch === "" && this.options.pluginCheckout)) return "Switch the source checkout to main to update.";
+    if (branch !== "main" && !(branch === "" && this.options.pluginCheckout)) return NOT_MAIN_REASON;
     if (await this.git("status", "--porcelain", "--untracked-files=all")) return "The source checkout has local changes. Commit or move them before updating.";
     if (await this.git("rev-parse", "HEAD") !== this.sourceRevision) return CHECKOUT_CHANGED_REASON;
     return null;
+  }
+
+  /** Still detached, clean and at the revision read at the start; a failed or timed-out check is
+   * not eligible: the source checkout runs, still managed and blocked. */
+  private async detachedAndClean(): Promise<boolean> {
+    try {
+      return await this.git("branch", "--show-current") === ""
+        && !await this.git("status", "--porcelain", "--untracked-files=all")
+        && await this.git("rev-parse", "HEAD") === this.sourceRevision;
+    } catch {
+      return false;
+    }
   }
 
   start() {
@@ -292,15 +356,17 @@ export class Updater {
   }
 
   private async discover(byUser = false) {
-    this.patch({ phase: "checking", error: this.options.notice ?? null, error_code: null, available: false, blocked_reason: null });
+    const channel = this.channel();
+    this.patch({ phase: "checking", error: this.options.notice ?? null, error_code: null, available: false, blocked_reason: null, channel });
     const reason = await this.sourceBlock();
     if (reason) { this.patch({ blocked_reason: reason, checked_at: new Date().toISOString() }); return; }
-    // Only published releases update installs: commits pushed to main without a tag stay put.
-    await this.fetchInto(() => this.git("fetch", "--no-tags", "origin", "+refs/tags/v*:refs/tags/v*"));
-    const tags = (await this.git("for-each-ref", "--sort=-v:refname", "--format=%(refname:short)", "refs/tags/v*"))
-      .split("\n").filter((tag) => RELEASE_TAG.test(tag));
+    // Only published releases update installs: commits pushed to main without a tag stay put. The
+    // beta channel also takes the beta tags CI makes on green main.
+    const betas = channel === "beta" ? ["+refs/tags/beta/*:refs/tags/beta/*"] : [];
+    await this.fetchInto(() => this.git("fetch", "--no-tags", "origin", "+refs/tags/v*:refs/tags/v*", ...betas));
+    const tags = (await this.git("for-each-ref", "--format=%(refname:short)", "refs/tags/v*", "refs/tags/beta/")).split("\n");
     const checked_at = new Date().toISOString();
-    const latest = tags[0];
+    const latest = latestTag(tags, channel);
     if (!latest) {
       this.notes = noUpdateNotes();
       this.patch({ latest_revision: null, latest_version: null, checked_at, blocked_reason: null, available: false });
@@ -320,8 +386,9 @@ export class Updater {
       }
     }
     // the notes of the last check stay readable while this one runs; they change with its answer
-    this.notes = available ? await this.changes(target, latest.slice(1)) : noUpdateNotes();
-    this.patch({ latest_revision: target, latest_version: latest.slice(1), checked_at, blocked_reason: block, available });
+    // a beta is told by the releases up to its base version: its own changes have no section yet
+    this.notes = available ? await this.changes(target, tagVersion(latest).replace(/-beta\.\d+$/, "")) : noUpdateNotes();
+    this.patch({ latest_revision: target, latest_version: tagVersion(latest), checked_at, blocked_reason: block, available });
   }
 
   /**

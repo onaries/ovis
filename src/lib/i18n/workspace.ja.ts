@@ -45,7 +45,6 @@ export const WORKSPACE_JA: Record<string, string> = {
   "Agent": "エージェント",
   "Directory": "ディレクトリ",
   "absolute path or ~/…": "絶対パスまたは ~/…",
-  "Name": "名前",
   "Optional workspace label": "ワークスペースのラベル (任意)",
   "Workspace label; follows the branch until you change it": "ワークスペースのラベル。変更するまでブランチ名に従います",
   "Open": "開く",
@@ -95,4 +94,6 @@ export const WORKSPACE_JA: Record<string, string> = {
   "Add another agent…": "別のエージェントを追加…",
   "It is installed, but this PC does not offer it here yet. Restart Ovis on the PC, or start it in a terminal tab.": "インストールは済みましたが、このPCではまだここで選べません。PCでOvisを再起動するか、ターミナルタブで起動してください。",
   "It is installed. Waiting for this PC to offer it here…": "インストールしました。このPCでここから選べるようになるのを待っています…",
+  "Group": "グループ",
+  "Where the Agents list shows it": "エージェント一覧での表示先",
 };

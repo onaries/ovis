@@ -13,14 +13,18 @@ afterEach(() => { calls.length = 0; fetchSpy.mockClear(); });
 it("same-origin API ids preserve explicit headers", async () => {
   // Given: all HeadersInit shapes, including an explicit id.
   const headers = new Headers({ "x-request-id": "explicit", "x-herdr-machine": "1" });
-  const signal = new AbortController().signal;
+  const caller = new AbortController();
+  const signal = caller.signal;
   // When
   await apiFetch("/api/session", { headers, signal, cache: "no-store" });
   await apiFetch("/api/session", { headers: [["x-herdr-machine", "1"]] });
   await apiFetch("/api/session", { headers: { "content-type": "application/json" } });
   // Then
   expect(new Headers(calls[0]?.init?.headers).get("x-request-id")).toBe("explicit");
-  expect(calls[0]?.init?.signal).toBe(signal);
+  // the native transport may add its own abort to a read; the caller's still reaches the request
+  expect(calls[0]?.init?.signal?.aborted).toBe(false);
+  caller.abort();
+  expect(calls[0]?.init?.signal?.aborted).toBe(true);
   expect(calls[0]?.init?.cache).toBe("no-store");
   expect(new Headers(calls[1]?.init?.headers).get("x-herdr-machine")).toBe("1");
   expect(new Headers(calls[2]?.init?.headers).get("content-type")).toBe("application/json");

@@ -1,7 +1,8 @@
 /**
  * New tab with an agent's model, effort, Ultracode, skills and first message (#774, #1311, #2232) on the
  * unmodified app over the demo's fixture transport: the composer's button, absent until this device turns it
- * on in Settings (Chat, Composer, New tab button), then opens the dialog on the pane's workspace;
+ * on in Settings (Chat, Composer, New tab button), then opens the dialog on the pane's workspace, on the
+ * chat's own agent and the model and effort it recorded, where the tab menu keeps the last agent picked;
  * Codex shows its `$` skills before any process exists (GET /api/agent/commands), a chip
  * puts its token in the message, and Start sends exactly one tab/create with the agent's own
  * arguments however often it is pressed while the first is in flight (the prompt is Codex's
@@ -204,11 +205,17 @@ try {
         await settled(page);
         await page.screenshot({ path: join(evidence, "desktop-dark-composer-opted-in.png") });
         const dialog = await openDialog(page);
+        // the button is the chat's way to another of its agent: Claude Code, on the model and effort its transcript recorded (#774)
+        assert.match(await dialog.locator(".agent-picker-trigger").innerText(), /Claude Code/, "the dialog starts on the chat's agent");
+        assert.equal(await dialog.getByLabel("Model").inputValue(), "claude-opus-5-5", "on the model the chat recorded");
+        assert.equal(await dialog.getByLabel("Effort").inputValue(), "high", "and the effort it recorded");
+        await settled(page);
+        await page.screenshot({ path: join(evidence, "desktop-dark-from-chat.png") });
         await page.keyboard.press("Escape");
         await dialog.waitFor({ state: "detached" });
         assert.equal((await recorded(page)).length, 0, "opening and closing the dialog starts nothing");
         assert.deepEqual(errors, []);
-        console.log("PASS the composer's New tab button is off by default, and Settings' Composer group turns it on for this device");
+        console.log("PASS the composer's New tab button is off by default, Settings' Composer group turns it on for this device, and it opens the dialog on the chat's agent, model and effort");
       } finally { await optIn.close(); }
 
       // the plan's scenario: a phone, Codex, its $ skills, a prompt, Start; a double tap sends one create

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "./index.ts";
 import { herdrRpc } from "./herdr/client.ts";
+import { startFakePushService } from "./push.fake.ts";
 
 /**
  * Answers to Claude's unnumbered menus (the folder-trust check among them), against the real
@@ -58,6 +59,34 @@ process.stdin.on("data", (chunk) => {
   if (key === "1" || key === "2") appendFileSync(out, (key === "1" ? "Staging" : "Production") + "\\n");
 });
 setInterval(() => { tick += 1; draw(); }, 200);
+draw();
+writeFileSync(out, "");
+`;
+
+/**
+ * Claude's command approval with two numbered rows, its whole panel under its rule: ↑/↓ move its `❯`, Enter or a row's number
+ * logs the row it picks.
+ */
+const APPROVAL = `
+const { appendFileSync, writeFileSync } = require("node:fs");
+const [out, spec] = process.argv.slice(2);
+const { rows } = JSON.parse(spec);
+let cursor = 0;
+const draw = () => process.stdout.write("\\u001b[2J\\u001b[H" + [
+  "─".repeat(40), " Bash command", "", "   pwd", "", " Do you want to proceed?",
+  ...rows.map((row, index) => " " + (index === cursor ? "❯" : " ") + " " + (index + 1) + ". " + row), "", " Esc to cancel",
+].join("\\r\\n"));
+process.stdin.setRawMode(true);
+process.stdin.resume();
+process.stdin.on("data", (chunk) => {
+  const data = chunk.toString("utf8");
+  if (/\\u001b[\\[O]B/.test(data)) cursor = Math.min(rows.length - 1, cursor + 1);
+  if (/\\u001b[\\[O]A/.test(data)) cursor = Math.max(0, cursor - 1);
+  const digit = /^[1-9]$/.test(data) ? Number(data) - 1 : -1;
+  if (digit >= 0 && digit < rows.length) appendFileSync(out, rows[digit] + "\\n");
+  else if (data.includes("\\r")) appendFileSync(out, rows[cursor] + "\\n");
+  draw();
+});
 draw();
 writeFileSync(out, "");
 `;
@@ -184,6 +213,47 @@ describe("answers to Claude's unnumbered menus", () => {
     expect(response.status).toBe(200);
     expect(await confirmed(ticking)).toEqual(["Production"]);
   });
+});
+
+describe("answer buttons on a question's alert (#2916)", () => {
+  it("carries the card's id and options, and its button's answer goes through as the card's would", async () => {
+    // a server of its own, whose alerts go out at once to a fake device
+    const device = await startFakePushService();
+    const alerting = createServer({ port: 0, hostname: "127.0.0.1", stateDir: join(root, "push-buttons"), machines: false, pushLoopbackHttp: true, alertTiming: { short: 0, long: 0, longTurn: 0 } });
+    try {
+      const subscribe = await fetch(`http://127.0.0.1:${alerting.port}/api/push/subscribe`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ subscription: device.subscription }),
+      });
+      expect(subscribe.status).toBe(204);
+      writeFileSync(join(root, "approval.js"), APPROVAL);
+      const asked = await menu("push-buttons", [], ["Yes", "No"], false, "approval.js");
+      // the server may still be subscribing to the new pane: report it again until its alert arrives
+      const alert = () => device.received.find((push) => push.payload.pane_id === asked.pane);
+      for (let attempt = 0; attempt < 20 && !alert(); attempt++) {
+        await herdrRpc("pane.report_agent", { pane_id: asked.pane, source: "manual", agent: "claude", state: "working" });
+        await herdrRpc("pane.report_agent", { pane_id: asked.pane, source: "manual", agent: "claude", state: "blocked" });
+        await device.waitFor((push) => push.payload.pane_id === asked.pane, "the question's alert", 1_000).catch(() => undefined);
+      }
+      const payload = alert()!.payload;
+      const shown = await card(asked);
+      expect(payload.prompt_id).toBe(shown.id);
+      expect(shown.kind).toBe("approval");
+      expect(payload.actions).toEqual([{ option_index: 0, label: "Yes" }, { option_index: 1, label: "No" }]);
+      // what a tap allows is on the alert: the question and the command
+      expect(payload.body).toContain("Do you want to proceed?");
+      expect(payload.body).toContain("pwd");
+      // what the worker sends for the second button (public/sw.js answerFromAlert)
+      const response = await fetch(`http://127.0.0.1:${alerting.port}/api/pane/prompt/answer`, {
+        method: "POST", headers: { "content-type": "application/json", "x-herdr-machine": "1" },
+        body: JSON.stringify({ pane_id: asked.pane, prompt_id: payload.prompt_id, option_index: payload.actions![1]!.option_index }),
+      });
+      expect(response.status).toBe(200);
+      expect(await confirmed(asked)).toEqual(["No"]);
+    } finally {
+      alerting.stop();
+      device.stop();
+    }
+  }, 30_000);
 });
 
 /**

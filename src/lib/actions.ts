@@ -6,6 +6,7 @@
 
 import type { SplitPaneDirection } from "../../shared/protocol.ts";
 import type { ZoomMode } from "./layoutMap.ts";
+import type { ChatLaunch } from "./agentLaunchMode.ts";
 
 export type PaneView = "chat" | "terminal";
 
@@ -31,9 +32,10 @@ export interface AppActions {
   openNewSession: () => void;
   /**
    * The New tab dialog for a workspace: the named one (a sidebar row's menu, on its own PC),
-   * else the selected pane's. Nothing happens without a workspace to add the tab to.
+   * else the selected pane's. Nothing happens without a workspace to add the tab to. `chat`: opened
+   * from a chat's composer, the dialog starts on that chat's agent, model and effort.
    */
-  openNewTab: (target?: { machineId: string; workspaceId: string }) => void;
+  openNewTab: (target?: { machineId: string; workspaceId: string }, chat?: ChatLaunch | null) => void;
   /** The inline name field of the selected pane's tab, as the tab menu's Rename opens it; nothing while the tab strip is not drawn. */
   renameTab: () => void;
   /**
@@ -76,6 +78,10 @@ export interface AppActions {
   refresh: () => void;
   /** null without a pane: the files of its folder, each opened in the file viewer */
   openFiles: (() => void) | null;
+  /** a page this PC serves (lib/webPanel.ts localPageAddress) in the web panel; null unless Web links open in the app */
+  openLocalPage: ((url: string) => void) | null;
+  /** Search conversation over the selected pane's chat; null where it shows no chat, or its PC's bridge does not search */
+  searchConversation: (() => void) | null;
   /**
    * herdr's split beside the selected pane (its prefix+v and prefix+-), null without a pane. The
    * selection stays on this pane, as herdr's --no-focus keeps its focus, unless `focus` asks for
@@ -87,4 +93,9 @@ export interface AppActions {
    * lib/layoutMap.ts): its tab shows it alone, or every pane again; null without a pane
    */
   zoomPane: ((mode: ZoomMode) => void) | null;
+  /**
+   * The Zoom pane shortcut: zooms the selected pane, or unzooms it where its tab shows it alone;
+   * nothing for a pane alone in its tab. null where zoomPane is
+   */
+  toggleZoom: (() => void) | null;
 }

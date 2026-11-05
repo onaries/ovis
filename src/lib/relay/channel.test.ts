@@ -3,17 +3,21 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DeviceStore } from "../../../server/devices.ts";
-import { bounded } from "../../../server/relay/test-helpers.ts";
+import { RelaySession } from "../../../server/relay/session.ts";
+import { bounded, relayFixture } from "../../../server/relay/test-helpers.ts";
+import type { RelayPairingRequest } from "../../../shared/machines.ts";
+import type { RelayOffer } from "../../../shared/relay-offer.ts";
 import { exportPublicKey, generateKeyPair, openDaemonSecureChannel } from "../../../shared/relay-e2ee.ts";
 import type { SecureChannel, Transport } from "../../../shared/relay-e2ee.ts";
 import { decodeFrame, encodeFrame, FrameType, LIMITS_V1, MuxProtocolError } from "../../../shared/relay-mux.ts";
 import type { MuxFrame } from "../../../shared/relay-mux.ts";
 import { MuxEngine } from "../../../shared/relay-mux-engine.ts";
-import { ADMISSION_MS, ASSIGNMENT_MS, openRelayChannel, PC_ANSWER_MS, RelayAdmissionTimeoutError, RelayUnreachableError } from "./channel.ts";
+import { ADMISSION_MS, ASSIGNMENT_MS, openRelayChannel, PC_ANSWER_MS, RelayAdmissionTimeoutError, RelayPcOfflineError, RelayUnreachableError } from "./channel.ts";
 import type { RelaySocket } from "./channel.ts";
-import { failureOf } from "./shellState.ts";
+import { failureOf, pairsAgainWithoutKey } from "./shellState.ts";
 import { base64url, getDevice } from "./device.ts";
 import { MemoryDeviceStore } from "./device.test.ts";
+import { GLOBAL_RELAY } from "../../../shared/relay-regions.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); jest.useRealTimers(); });
@@ -46,12 +50,13 @@ class FakeSocket implements RelaySocket {
   }
 }
 
-async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" | "auth-ok" | "features" | "assigned" | "receipt" | "silence" | "protocol", onClose?: (error: Error) => void) {
+async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" | "auth-ok" | "features" | "assigned" | "receipt" | "silence" | "protocol" | "early-welcome" | "account", onClose?: (error: Error) => void,
+  pc: { relay?: string; hints?: readonly string[] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "relay-channel-"));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const registry = new DeviceStore(dir);
   const keys = generateKeyPair();
-  const offer = { v: 1 as const, server_id: "12".repeat(16), server_public_key: exportPublicKey(keys.publicKey), relay: "wss://relay.example",
+  const offer = { v: 1 as const, server_id: "12".repeat(16), server_public_key: exportPublicKey(keys.publicKey), relay: pc.relay ?? "wss://relay.example",
     ...(pairing ? { code: registry.startPairing().code } : {}) };
   const store = new MemoryDeviceStore();
   if (!pairing) {
@@ -62,6 +67,8 @@ async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" |
   }
   const nonce = new Uint8Array(32).fill(9);
   const trace: string[] = [];
+  let offered: readonly string[] = [];
+  let hinting = false;
   const authSeen = Promise.withResolvers<void>();
   const allowAuth = Promise.withResolvers<void>();
   const httpSeen = Promise.withResolvers<string>();
@@ -104,8 +111,16 @@ async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" |
       onHttp: (stream) => { httpSeen.resolve(stream.request.target); stream.headers(200); stream.end(); },
       onSession: (frame) => { void handle(frame).catch(fail); },
     });
+    // a PC that sends WELCOME right behind its handshake answer, before the phone's HELLO arrives
+    if (attack === "early-welcome") {
+      trace.push("server:WELCOME");
+      server.sendSession({ type: FrameType.WELCOME, flags: 0, stream_id: 0, payload: welcome() });
+    }
   });
   void daemonOpening.catch(() => {});
+  const welcome = () => ({ protocol: "ovis-mux" as const, version: 1 as const, features: attack === "features" ? ["unoffered"] : attack === "account" ? ["account"] : [],
+    limits: { ...LIMITS_V1, max_streams: 2 }, nonce: attack === "nonce" ? base64url(nonce.slice(1)) : base64url(nonce),
+    server_version: "test", relay_protocol: attack === "protocol" ? 2 : 1, min_supported_client: "0.0.0" });
   const raw = (type: number, payload: unknown): Uint8Array => {
     const body = new TextEncoder().encode(JSON.stringify(payload));
     const bytes = new Uint8Array(8 + body.length);
@@ -114,8 +129,10 @@ async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" |
   };
   const handle = async (frame: MuxFrame): Promise<void> => {
     if (frame.type === FrameType.HELLO) {
+      offered = frame.payload.features;
+      hinting = pc.hints !== undefined && offered.includes("relay-hints");
       // a PC that finished the handshake and then hung: nothing answers HELLO
-      if (attack === "silence") return;
+      if (attack === "silence" || attack === "early-welcome") return;
       if (attack === "receipt") {
         await secure.send(encodeFrame({ type: FrameType.RECEIVED, flags: 0, stream_id: 0, payload: 99n }).slice().buffer);
         return;
@@ -129,14 +146,11 @@ async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" |
           payload: { device_id: "ab".repeat(8), session_id: "cd".repeat(16), role: "drive" } }).slice().buffer);
         return;
       }
-      const welcome = { protocol: "ovis-mux" as const, version: 1 as const, features: attack === "features" ? ["unoffered"] : [],
-        limits: { ...LIMITS_V1, max_streams: 2 }, nonce: attack === "nonce" ? base64url(nonce.slice(1)) : base64url(nonce),
-        server_version: "test", relay_protocol: attack === "protocol" ? 2 : 1, min_supported_client: "0.0.0" };
       trace.push("server:WELCOME");
       if (attack === "welcome" || attack === "nonce") {
-        await secure.send(raw(FrameType.WELCOME, attack === "welcome" ? { ...welcome, protocol: "wrong" } : welcome).slice().buffer);
+        await secure.send(raw(FrameType.WELCOME, attack === "welcome" ? { ...welcome(), protocol: "wrong" } : welcome()).slice().buffer);
       } else {
-        server.sendSession({ type: FrameType.WELCOME, flags: 0, stream_id: 0, payload: welcome });
+        server.sendSession({ type: FrameType.WELCOME, flags: 0, stream_id: 0, payload: welcome() });
       }
       return;
     }
@@ -154,7 +168,7 @@ async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" |
     await allowAuth.promise;
     trace.push("server:AUTH_OK");
     server.sendSession({ type: FrameType.AUTH_OK, flags: 0, stream_id: 0,
-      payload: { session_id: "cd".repeat(16), device_id: deviceId, role: "drive" } });
+      payload: { session_id: "cd".repeat(16), device_id: deviceId, role: "drive", ...(hinting ? { relays: pc.hints } : {}) } });
     await server.flush();
     server.authenticate(deviceId);
   };
@@ -163,7 +177,7 @@ async function fixture(pairing: boolean, attack?: "welcome" | "nonce" | "ping" |
     queueMicrotask(() => socket.deliver(JSON.stringify(attack === "assigned" ? { type: "wrong" } : { type: "assigned", connection_id: "ef".repeat(16) })));
     return socket;
   } });
-  return { opening, trace, authSeen, allowAuth, httpSeen, socket, store, offer };
+  return { opening, trace, authSeen, allowAuth, httpSeen, socket, store, offer, get offered() { return offered; } };
 }
 
 for (const pairing of [false, true]) {
@@ -179,9 +193,23 @@ for (const pairing of [false, true]) {
     expect(channel.device.device_id).toBe((await f.store.get(f.offer.server_id))?.device_id ?? null);
     expect(channel.connectionId).toBe("ef".repeat(16));
     expect(channel.mux.limits.max_streams).toBe(2);
-    expect(channel.server).toEqual({ version: "test", relayProtocol: 1 });
+    expect(channel.server).toEqual({ version: "test", relayProtocol: 1, features: [] });
     expect(f.trace.slice(0, 4)).toEqual(["client:HELLO", "server:WELCOME", `client:${pairing ? "PAIR" : "AUTH"}`, "server:AUTH_OK"]);
     console.log(`ORDER: ${f.trace.slice(0, 4).join(" -> ")}; no other client frame before AUTH_OK`);
+    channel.mux.openHttp({ method: "GET", target: "/api/test", headers: [], body: "none" });
+    expect(await f.httpSeen.promise).toBe("/api/test");
+    channel.close();
+  });
+
+  it(`signs in with ${pairing ? "PAIR" : "AUTH"} on a WELCOME the PC sent without waiting for HELLO`, async () => {
+    const f = await fixture(pairing, "early-welcome");
+    await f.authSeen.promise;
+    // this PC never answers HELLO: its one WELCOME went out as soon as its channel opened
+    expect(f.trace.filter((entry) => entry === "server:WELCOME")).toHaveLength(1);
+    expect(f.trace.filter((entry) => entry.startsWith("client:"))).toEqual(["client:HELLO", `client:${pairing ? "PAIR" : "AUTH"}`]);
+    f.allowAuth.resolve();
+    const channel = await f.opening;
+    expect(channel.server).toEqual({ version: "test", relayProtocol: 1, features: [] });
     channel.mux.openHttp({ method: "GET", target: "/api/test", headers: [], body: "none" });
     expect(await f.httpSeen.promise).toBe("/api/test");
     channel.close();
@@ -277,10 +305,31 @@ it("calls the PC offline when the relay assigned the connection but nothing answ
   await flush();
   // Then the failure is the PC's silence, the screen is pc-offline, and the socket is closed.
   const error = outcome.get()?.error;
+  expect(error).toBeInstanceOf(RelayPcOfflineError);
   expect(error).toBeInstanceOf(MuxProtocolError);
   expect(error).toMatchObject({ code: "timeout" });
   expect(failureOf(error, { code: false, paired: true })).toBe("pc-offline");
   expect(socket.closed).toBe(4000);
+});
+
+it("waits for the PC as long as pcAnswerMs says, for a reconnect behind the app", async () => {
+  // Given a relay that assigns the connection, a PC that never attaches, and a longer wait asked for.
+  jest.useFakeTimers();
+  const socket = new SilentSocket();
+  const created = Promise.withResolvers<void>();
+  const offer = { v: 1 as const, server_id: "12".repeat(16), server_public_key: exportPublicKey(generateKeyPair().publicKey), relay: "wss://relay.example" };
+  const outcome = settled(openRelayChannel(offer, { store: new MemoryDeviceStore(), pcAnswerMs: 25_000, socket: () => { created.resolve(); return socket; } }));
+  await created.promise;
+  socket.deliver(JSON.stringify({ type: "assigned", connection_id: "ef".repeat(16) }));
+  await socket.sent.promise;
+  // When PC_ANSWER_MS passes, then the asked-for wait.
+  jest.advanceTimersByTime(PC_ANSWER_MS);
+  await flush();
+  expect(outcome.get()).toBeNull();
+  jest.advanceTimersByTime(25_000 - PC_ANSWER_MS);
+  await flush();
+  // Then the PC is called offline only at the end of that wait.
+  expect(outcome.get()?.error).toBeInstanceOf(RelayPcOfflineError);
 });
 
 it("calls a PC that answered the handshake but never finished admission unresponsive, not offline", async () => {
@@ -353,6 +402,14 @@ it("stops at a PC of another relay protocol before any credential, as an update"
   expect(f.socket.closed).toBe(true);
 });
 
+it("offers the account feature in HELLO and keeps what the PC selected, so an older PC can be told apart", async () => {
+  const f = await fixture(false, "account");
+  await f.authSeen.promise;
+  f.allowAuth.resolve();
+  const channel = await f.opening;
+  expect(channel.server.features).toEqual(["account"]);
+});
+
 for (const attack of ["welcome", "nonce", "ping", "auth-ok", "features", "assigned", "receipt"] as const) {
   it(`refuses malformed or unexpected ${attack} without sending credentials`, async () => {
     // Given an encrypted server that sends invalid setup traffic.
@@ -364,3 +421,198 @@ for (const attack of ["welcome", "nonce", "ping", "auth-ok", "features", "assign
     expect(f.trace.filter((entry) => entry.startsWith("client:"))).toEqual(attack === "assigned" ? [] : ["client:HELLO"]);
   });
 }
+
+const REGIONAL = "wss://relay-ap.ovis.sh";
+
+for (const pairing of [false, true]) {
+  it(`offers relay hints and saves the regional relay the PC names${pairing ? " when pairing" : ""}`, async () => {
+    const f = await fixture(pairing, undefined, undefined, { relay: GLOBAL_RELAY, hints: [REGIONAL, GLOBAL_RELAY] });
+    f.allowAuth.resolve();
+    const channel = await f.opening;
+    expect(f.offered).toContain("relay-hints");
+    expect((await f.store.get(f.offer.server_id))?.relay).toBe(REGIONAL);
+    expect(channel.device.relay).toBe(REGIONAL);
+    channel.close();
+  });
+}
+
+it("keeps a self-hosted relay whatever relays the PC names", async () => {
+  const f = await fixture(false, undefined, undefined, { relay: "wss://relay.example", hints: [REGIONAL, GLOBAL_RELAY] });
+  f.allowAuth.resolve();
+  const channel = await f.opening;
+  expect((await f.store.get(f.offer.server_id))?.relay).toBe("wss://relay.example");
+  channel.close();
+});
+
+it("keeps Ovis's relay when the PC names one that is not Ovis's", async () => {
+  const f = await fixture(false, undefined, undefined, { relay: GLOBAL_RELAY, hints: ["wss://relay.attacker.example", GLOBAL_RELAY] });
+  f.allowAuth.resolve();
+  const channel = await f.opening;
+  expect((await f.store.get(f.offer.server_id))?.relay).toBe(GLOBAL_RELAY);
+  channel.close();
+});
+
+/** One relay connection from the phone's real channel to the PC's real session, passing frames on. */
+function connectReal(f: ReturnType<typeof relayFixture>, keys: ReturnType<typeof generateKeyPair>, offer: RelayOffer, store: MemoryDeviceStore,
+  compare?: (digits: string) => Promise<void>, relays?: readonly string[]) {
+  let session: RelaySession | undefined;
+  let socket: FakeSocket;
+  const daemon: Transport = {
+    onmessage: null, onclose: null, onerror: null,
+    send: (data) => socket.deliver(data),
+    // as on a WebSocket, the PC's close reaches the phone in a later task than the frames it sent first
+    close: (code, reason) => { setImmediate(() => socket.close(code, reason)); },
+  };
+  socket = new FakeSocket(daemon);
+  // frames the phone sends as soon as its side opens wait for the session, as a relay's latency would make them
+  const early: (string | ArrayBuffer)[] = [];
+  void openDaemonSecureChannel(daemon, { daemonKeyPair: keys, events: { onmessage: (data) => { if (session) session.receive(data); else early.push(data); } } }).then((channel) => {
+    session = new RelaySession({
+      channel, services: f.app.context.services, port: f.app.port, serverId: offer.server_id, serverVersion: "0.4.20",
+      minSupportedClient: "0.4.20", routingOverhead: 0, maxWireMessageBytes: 64 * 1024,
+      ...(relays ? { relayHints: () => relays } : {}),
+    });
+    for (const data of early.splice(0)) session.receive(data);
+  }, () => {});
+  const opening = openRelayChannel(offer, {
+    store, ...(compare ? { compare } : {}),
+    socket: () => {
+      queueMicrotask(() => socket.deliver(JSON.stringify({ type: "assigned", connection_id: "ab".repeat(16) })));
+      return socket;
+    },
+  });
+  void opening.catch(() => {});
+  return opening;
+}
+
+async function comparing(compare: (digits: string) => Promise<void>) {
+  const f = relayFixture();
+  cleanups.push(() => f.close());
+  // as copying a link without a code does
+  f.app.context.services.relay.approvals.openWindow();
+  const keys = generateKeyPair();
+  const store = new MemoryDeviceStore();
+  const offer = { v: 1 as const, server_id: "12".repeat(16), server_public_key: exportPublicKey(keys.publicKey), relay: "wss://relay.example" };
+  const waiting = Promise.withResolvers<RelayPairingRequest>();
+  const cleared = Promise.withResolvers<void>();
+  let seen = false;
+  cleanups.push(f.app.context.services.relay.approvals.subscribe((list) => {
+    if (list[0]) { seen = true; waiting.resolve(list[0]); } else if (seen) cleared.resolve();
+  }));
+  const opening = connectReal(f, keys, offer, store, compare);
+  return { f, store, offer, opening, waiting: bounded(waiting.promise), cleared: bounded(cleared.promise) };
+}
+
+it("pairs again with a new code a phone that already holds a key for the PC", async () => {
+  const f = relayFixture();
+  cleanups.push(() => f.close());
+  const keys = generateKeyPair();
+  const store = new MemoryDeviceStore();
+  const base = { v: 1 as const, server_id: "12".repeat(16), server_public_key: exportPublicKey(keys.publicKey), relay: "wss://relay.example" };
+  const devices = f.app.context.services.devices;
+  const first = await bounded(connectReal(f, keys, { ...base, code: devices.startPairing().code }, store));
+  first.close();
+  // a fresh QR code scanned on the same phone: the PC makes a new device for the same key, and the phone keeps it
+  const second = await bounded(connectReal(f, keys, { ...base, code: devices.startPairing().code }, store));
+  cleanups.push(() => second.close());
+  expect(second.device.device_id).not.toBe(first.device.device_id);
+  expect((await store.get(base.server_id))?.device_id).toBe(second.device.device_id);
+});
+
+it("pairs a new device without a code once both screens show the same digits and the PC approves it", async () => {
+  const shown = Promise.withResolvers<string>();
+  const matched = Promise.withResolvers<void>();
+  const { f, store, offer, opening, waiting } = await comparing((digits) => { shown.resolve(digits); return matched.promise; });
+  const request = await waiting;
+  expect(await bounded(shown.promise)).toBe(request.digits);
+  expect(f.app.context.services.relay.approvals.decide(request.id, true)).toBe(true);
+  matched.resolve();
+  const channel = await bounded(opening);
+  cleanups.push(() => channel.close());
+  const saved = await store.get(offer.server_id);
+  expect(saved?.device_id).toBe(channel.device.device_id);
+  expect(f.app.context.services.devices.list(null).find((device) => device.id === saved?.device_id)?.via_relay).toBe(true);
+});
+
+it("saves no key when the PC declines, and lands on the not-approved screen", async () => {
+  const { f, store, offer, opening, waiting, cleared } = await comparing(() => new Promise(() => {}));
+  const request = await waiting;
+  expect(f.app.context.services.relay.approvals.decide(request.id, false)).toBe(true);
+  const error = await bounded(opening.then(() => null, (reason: unknown) => reason));
+  expect(error).toBeInstanceOf(MuxProtocolError);
+  expect(failureOf(error, { code: false, paired: false, compared: true })).toBe("pair-declined");
+  expect(await store.get(offer.server_id)).toBeUndefined();
+  await cleared;
+});
+
+it("does not take AUTH_OK from a PC before this phone said the digits match", async () => {
+  const keys = generateKeyPair();
+  let socket: FakeSocket;
+  const daemon: Transport = {
+    onmessage: null, onclose: null, onerror: null,
+    send: (data) => socket.deliver(data),
+    close: (code, reason) => { setImmediate(() => socket.close(code, reason)); },
+  };
+  socket = new FakeSocket(daemon);
+  const ready = Promise.withResolvers<SecureChannel>();
+  const send = (frame: MuxFrame) => ready.promise.then((channel) => channel.send(encodeFrame(frame).slice().buffer));
+  // a PC endpoint that skips the comparison: it admits the phone as soon as the phone reveals its nonce
+  void openDaemonSecureChannel(daemon, { daemonKeyPair: keys, events: { onmessage: (data) => {
+    const frame = decodeFrame(new Uint8Array(data as ArrayBuffer));
+    if (frame.type === FrameType.HELLO) void send({ type: FrameType.WELCOME, flags: 0, stream_id: 0, payload: { protocol: "ovis-mux", version: 1,
+      features: ["pair-sas"], limits: LIMITS_V1, nonce: base64url(new Uint8Array(32)), server_version: "0.4.21", relay_protocol: 1, min_supported_client: "0.4.20" } });
+    if (frame.type === FrameType.PAIR_REQUEST) void send({ type: FrameType.PAIR_CHALLENGE, flags: 0, stream_id: 0, payload: { nonce: base64url(new Uint8Array(32).fill(7)) } });
+    if (frame.type === FrameType.PAIR_REVEAL) void send({ type: FrameType.AUTH_OK, flags: 0, stream_id: 0, payload: { session_id: "ab".repeat(16), device_id: "cd".repeat(8), role: "drive" } });
+  } } }).then((channel) => ready.resolve(channel), () => {});
+  const store = new MemoryDeviceStore();
+  const offer = { v: 1 as const, server_id: "12".repeat(16), server_public_key: exportPublicKey(keys.publicKey), relay: "wss://relay.example" };
+  const shown = Promise.withResolvers<void>();
+  const opening = openRelayChannel(offer, { store, compare: () => { shown.resolve(); return new Promise(() => {}); },
+    socket: () => { queueMicrotask(() => socket.deliver(JSON.stringify({ type: "assigned", connection_id: "ab".repeat(16) }))); return socket; } });
+  cleanups.push(() => socket.close());
+  const error = await bounded(opening.then(() => null, (reason: unknown) => reason));
+  await bounded(shown.promise);
+  expect(error).toBeInstanceOf(MuxProtocolError);
+  expect((error as MuxProtocolError).code).toBe("protocol_error");
+  expect(await store.get(offer.server_id)).toBeUndefined();
+});
+
+it("a phone the PC removed is refused at sign-in from a link without a code, and pairs by digits once its old key is gone", async () => {
+  const f = relayFixture();
+  cleanups.push(() => f.close());
+  f.app.context.services.relay.approvals.openWindow();
+  const keys = generateKeyPair();
+  const store = new MemoryDeviceStore();
+  const base = { v: 1 as const, server_id: "12".repeat(16), server_public_key: exportPublicKey(keys.publicKey), relay: "wss://relay.example" };
+  const devices = f.app.context.services.devices;
+  const first = await bounded(connectReal(f, keys, { ...base, code: devices.startPairing().code }, store));
+  first.close();
+  devices.revoke(first.device.device_id!);
+  const shown = Promise.withResolvers<string>();
+  const compare = (digits: string) => { shown.resolve(digits); return Promise.resolve(); };
+  // what the shell gets from the first try: the PC's refusal of the old key (shellState.ts pairsAgainWithoutKey)
+  const refused = await bounded(connectReal(f, keys, base, store, compare).then(() => null, (reason: unknown) => reason));
+  expect(pairsAgainWithoutKey(refused, { code: false, paired: false, codeless: true })).toBe(true);
+  await store.remove(base.server_id);
+  const waiting = Promise.withResolvers<RelayPairingRequest>();
+  cleanups.push(f.app.context.services.relay.approvals.subscribe((list) => { if (list[0]) waiting.resolve(list[0]); }));
+  const again = connectReal(f, keys, base, store, compare);
+  const request = await bounded(waiting.promise);
+  expect(await bounded(shown.promise)).toBe(request.digits);
+  f.app.context.services.relay.approvals.decide(request.id, true);
+  const channel = await bounded(again);
+  cleanups.push(() => channel.close());
+  expect((await store.get(base.server_id))?.device_id).toBe(channel.device.device_id);
+});
+
+it("saves the regional relay a real PC names after its provisional WELCOME", async () => {
+  const f = relayFixture();
+  cleanups.push(() => f.close());
+  const keys = generateKeyPair();
+  const store = new MemoryDeviceStore();
+  const offer = { v: 1 as const, server_id: "12".repeat(16), server_public_key: exportPublicKey(keys.publicKey), relay: GLOBAL_RELAY,
+    code: f.app.context.services.devices.startPairing().code };
+  const channel = await bounded(connectReal(f, keys, offer, store, undefined, [REGIONAL, GLOBAL_RELAY]));
+  cleanups.push(() => channel.close());
+  expect((await store.get(offer.server_id))?.relay).toBe(REGIONAL);
+});

@@ -1,6 +1,9 @@
-import type { AgentInfo, AgentStatus, PaneInfo, PaneLayoutSnapshot, PaneProcessInfo, SessionSnapshot, TabInfo, WorkspaceInfo } from "../../shared/herdr-api.generated.ts";
+import type { AgentInfo, AgentSessionInfo, AgentStatus, PaneInfo, PaneLayoutSnapshot, PaneProcessInfo, SessionSnapshot, TabInfo, WorkspaceInfo } from "../../shared/herdr-api.generated.ts";
+import { HC_OTHER_WORKSPACE_ID } from "../../shared/machines.ts";
 import type { HerdrPane } from "../../shared/protocol.ts";
 import type { Foreground, Status, Terminal } from "./hc-api.generated.ts";
+import { clampRatio, type Grouping, type LayoutNode, LAYOUT_AREA, parseOvisLayout, place, reconcile, sideBySide } from "./layout-doc.ts";
+import { worktreeOfLabels } from "./worktrees.ts";
 
 /**
  * How herdr-core's terminals look to the rest of the server: herdr's session snapshot, built from
@@ -19,7 +22,7 @@ import type { Foreground, Status, Terminal } from "./hc-api.generated.ts";
 
 /** The protocol these answers keep to: herdr's, as `shared/herdr-api.generated.ts` was made from. */
 export const HERDR_PROTOCOL = 22;
-export const OTHER_WORKSPACE_ID = "hc-other";
+export const OTHER_WORKSPACE_ID = HC_OTHER_WORKSPACE_ID;
 export const LAYOUT_DOC = "herdr-app";
 /** The labels the Herdr app groups its terminals by (herdr-app src/window.rs): a terminal it has not placed is adopted there. */
 export const SPACE_LABEL = "herdr.space";
@@ -27,6 +30,8 @@ export const TAB_LABEL = "herdr.tab";
 /** The names a person gave a workspace or tab Ovis made: names live in the app's document, which Ovis never writes. */
 export const WORKSPACE_NAME_LABEL = "ovis.workspace";
 export const TAB_NAME_LABEL = "ovis.tab";
+/** The name a person gave a pane, on a core whose layout Ovis keeps: the terminal's own name otherwise. */
+export const PANE_NAME_LABEL = "ovis.pane";
 /**
  * The last turn a person looked at, shared by every Herdr client (herdr-app docs/labels.md): an
  * agent at rest whose turn is past it is done, one at or below it idle. Missing, the program's own
@@ -44,8 +49,17 @@ export type HcForeground = Pick<Foreground, "pid" | "name"> & Partial<Pick<Foreg
 
 /** The fields of hc's `Terminal` record this side reads, by hc's own schema; `parent` is the terminal that started it (`t3`), set once at its start. */
 export type HcTerminal = Pick<Terminal, "address" | "cols" | "rows" | "cwd" | "state"> &
-  Partial<Pick<Terminal, "argv" | "pid" | "name" | "title" | "labels" | "turn" | "parent">> &
+  Partial<Pick<Terminal, "argv" | "pid" | "name" | "title" | "labels" | "turn" | "parent" | "records">> &
   { status?: HcStatus | null; foreground?: HcForeground | null };
+
+/**
+ * A terminal on another machine the core reaches (`hc machine add vps`): hc lists and reports it
+ * under that machine's name (`vps/t14`), where this PC's own are bare (`t7`). Each such machine is
+ * a PC of its own (machine-scope.ts), so none of their terminals is this PC's: no workspace, tab, pane or event.
+ */
+export function onOtherMachine(address: string): boolean {
+  return address.includes("/");
+}
 
 /** The one object guard of server/herdr-core/: hc's records and the app's document come from outside. */
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -70,7 +84,7 @@ export function agentStatusOf(status: HcStatus | null | undefined): AgentStatus 
 }
 
 /** herdr-core's names for agents herdr names otherwise: the rest of the server knows herdr's (`claude`, `agy`). */
-const HERDR_AGENT_NAMES: Record<string, string> = { "claude-code": "claude", antigravity: "agy" };
+const HERDR_AGENT_NAMES: Record<string, string> = { "claude-code": "claude", antigravity: "agy", "kimi-code": "kimi" };
 
 /** The agent a status names, by herdr's name; a program that never reported one runs none herdr would see. */
 /** The turn a terminal's `herdr.seen` names; null when it has none, or none a client wrote as a turn. */
@@ -105,6 +119,24 @@ export function agentOf(terminal: HcTerminal): string | null {
   return agentOfStatus(terminal.status);
 }
 
+/**
+ * The sessions an OpenCode TUI reports as pending (its `program-status.ts`): one OSC 7501 record per
+ * open tab's session that works or waits, under the session's id, cleared once it rests. A record
+ * says nothing of which tab is on screen, and hc names a resting session nowhere: the sessions a
+ * terminal ever named are only candidates for the one it shows (adapter.ts `sessionOf`).
+ */
+export function opencodeRecords(records: unknown): string[] {
+  if (!isRecord(records)) return [];
+  return Object.keys(records).filter((id) => {
+    const record = records[id];
+    return isRecord(record) && record["app"] === "opencode";
+  });
+}
+
+
+/** The agent session a terminal shows, as herdr's OpenCode integration reports it (adapter.ts `sessionOf`). */
+export type SessionOf = (terminal: HcTerminal) => AgentSessionInfo | null;
+
 const STATUS_RANK: Record<string, number> = { blocked: 4, working: 3, done: 2, idle: 1 };
 
 /** A group's status is its most pressing pane's, as herdr's sidebar rolls it up. */
@@ -114,37 +146,42 @@ function rollUp(statuses: readonly AgentStatus[]): AgentStatus {
   return best;
 }
 
-/** A terminal in a tab, at its place in the tab's split tree (cells from the tab's top left). */
-interface Placed { terminal: HcTerminal; x: number; y: number }
+/** A size the Herdr app gives a node (herdr-app src/layout.rs `Size`): a weight shares its row; pixels or none weigh 1. */
+function weightOf(node: Record<string, unknown>): number {
+  const size = node["size"];
+  return isRecord(size) && typeof size["weight"] === "number" && Number.isFinite(size["weight"]) && size["weight"] > 0 ? size["weight"] : 1;
+}
+
+/** Nodes side by side (or stacked), each its weight's share, as one split after another. */
+function chain(parts: readonly { node: LayoutNode; weight: number }[], direction: "right" | "down"): LayoutNode {
+  if (parts.length === 1) return parts[0]!.node;
+  const total = parts.reduce((sum, part) => sum + part.weight, 0);
+  return { split: direction, ratio: clampRatio(parts[0]!.weight / total), first: parts[0]!.node, second: chain(parts.slice(1), direction) };
+}
 
 /**
- * Lays a tab's split tree (the app's document: never trusted to have a shape) out in reading order:
- * a `column` stacks its children, anything else sets them side by side, one cell apart as a
- * divider; each terminal takes its own grid. `take` hands over a live terminal not placed yet,
- * so one named twice is placed once.
+ * A tab's tree in the app's document (never trusted to have a shape: herdr-app src/layout.rs
+ * `Node`) as a split tree over the live terminals, so it is laid out top down like Ovis's own: a
+ * `column` stacks its children, anything else sets them side by side: a \`stack\` and a hidden node
+ * too, which Ovis cannot switch or show, so each terminal stays in reach and closes with its tab. `take` hands over a live terminal not placed
+ * yet, so one named twice is placed once; each one placed is added to `held`, in reading order.
  */
-function tile(node: unknown, x: number, y: number, take: (address: string) => HcTerminal | null, into: Placed[]): { width: number; height: number } {
-  if (!isRecord(node)) return { width: 0, height: 0 };
+function appTree(node: unknown, take: (address: string) => HcTerminal | null, held: HcTerminal[]): LayoutNode | null {
+  if (!isRecord(node)) return null;
   const content = node["content"];
   if (isRecord(content) && typeof content["terminal"] === "string") {
     const terminal = take(content["terminal"]);
-    if (!terminal) return { width: 0, height: 0 };
-    into.push({ terminal, x, y });
-    return { width: terminal.cols, height: terminal.rows };
+    if (!terminal) return null;
+    held.push(terminal);
+    return { leaf: terminal.address };
   }
   const children = node["children"];
-  if (!Array.isArray(children)) return { width: 0, height: 0 };
-  const stacked = node["type"] === "column";
-  let along = 0;
-  let across = 0;
-  for (const child of children) {
-    const size = stacked ? tile(child, x, y + along, take, into) : tile(child, x + along, y, take, into);
-    if (size.width === 0 && size.height === 0) continue;
-    along += (stacked ? size.height : size.width) + 1;
-    across = Math.max(across, stacked ? size.width : size.height);
-  }
-  const length = Math.max(0, along - 1);
-  return stacked ? { width: across, height: length } : { width: length, height: across };
+  if (!Array.isArray(children)) return null;
+  const parts = children.flatMap((child) => {
+    const tree = appTree(child, take, held);
+    return tree && isRecord(child) ? [{ node: tree, weight: weightOf(child) }] : [];
+  });
+  return parts.length === 0 ? null : chain(parts, node["type"] === "column" ? "down" : "right");
 }
 
 function basename(path: string): string {
@@ -152,7 +189,18 @@ function basename(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-interface Group { id: string; label: string; folder?: string; tabs: { id: string; label: string; placed: Placed[] }[] }
+/**
+ * A tab as the snapshot shows it: its terminals in reading order and the tree that places them
+ * (null: side by side). `kept`: a tab Ovis keeps in labels on a core no Herdr app arranges, whose
+ * order and tree come from Ovis's own document (layout-doc.ts).
+ */
+interface ShownTab { id: string; label: string; terminals: HcTerminal[]; root: LayoutNode | null; kept: boolean }
+interface Group { id: string; label: string; folder?: string; tabs: ShownTab[] }
+
+/** One more pane to the right of what a tree already shows, its share as one of them. */
+function besides(root: LayoutNode | null, count: number, address: string): LayoutNode | null {
+  return root && { split: "right", ratio: clampRatio(count / (count + 1)), first: root, second: { leaf: address } };
+}
 
 /**
  * The app's spaces and tabs over the live terminals. A name the user gave wins; an unnamed space
@@ -161,7 +209,9 @@ interface Group { id: string; label: string; folder?: string; tabs: { id: string
  * with no live terminal stays a place for a labeled terminal and shows only once it holds one.
  */
 function groups(terminals: readonly HcTerminal[], layout: unknown): Group[] {
-  const live = new Map(terminals.filter((terminal) => terminal.state === "live").map((terminal) => [terminal.address, terminal]));
+  // no Herdr app arranges this core: the tabs labels make are Ovis's to lay out
+  const own = layout === null || layout === undefined;
+  const live = new Map(terminals.filter((terminal) => terminal.state === "live" && !onOtherMachine(terminal.address)).map((terminal) => [terminal.address, terminal]));
   const placed = new Set<string>();
   const take = (address: string): HcTerminal | null => {
     const terminal = live.get(address);
@@ -180,15 +230,15 @@ function groups(terminals: readonly HcTerminal[], layout: unknown): Group[] {
     for (const [index, tab] of space["tabs"].entries()) {
       if (!isRecord(tab) || !fresh(tab["id"])) continue;
       ids.add(tab["id"]);
-      const held: Placed[] = [];
-      tile(tab["root"], 0, 0, take, held);
+      const held: HcTerminal[] = [];
+      const root = appTree(tab["root"], take, held);
       const tabName = tab["name"];
       // a tab with no live terminal stays a place: a labeled terminal the app will adopt into it keeps its ids
       // (unnamed, it reads as the terminal it gets is labeled, below)
-      if (held.length === 0) { group.tabs.push({ id: tab["id"], label: typeof tabName === "string" ? tabName : "", placed: [] }); continue; }
-      const first = held[0]!.terminal;
+      if (held.length === 0) { group.tabs.push({ id: tab["id"], label: typeof tabName === "string" ? tabName : "", terminals: [], root: null, kept: false }); continue; }
+      const first = held[0]!;
       const where = first.labels?.["where"]?.split(" / ").map((part) => part.trim());
-      group.tabs.push({ id: tab["id"], label: typeof tabName === "string" && tabName ? tabName : where?.[1] || first.labels?.[TAB_NAME_LABEL] || String(index + 1), placed: held });
+      group.tabs.push({ id: tab["id"], label: typeof tabName === "string" && tabName ? tabName : where?.[1] || first.labels?.[TAB_NAME_LABEL] || String(index + 1), terminals: held, root, kept: false });
       if (!group.label) {
         const spaceName = space["name"];
         const folder = space["folder"];
@@ -225,10 +275,12 @@ function groups(terminals: readonly HcTerminal[], layout: unknown): Group[] {
     const tab = group.tabs.find((candidate) => candidate.id === tabId);
     if (tab && !tab.label) tab.label = where?.[1] || terminal.labels?.[TAB_NAME_LABEL] || String(group.tabs.indexOf(tab) + 1);
     // beside what the tab already shows, never over it: the app places it when it adopts it
-    if (tab) tab.placed.push({ terminal, x: tab.placed.length ? Math.max(...tab.placed.map((held) => held.x + held.terminal.cols + 1)) : 0, y: 0 });
-    else {
+    if (tab) {
+      tab.root = besides(tab.root, tab.terminals.length, terminal.address);
+      tab.terminals.push(terminal);
+    } else {
       ids.add(tabId);
-      group.tabs.push({ id: tabId, label: where?.[1] || terminal.labels?.[TAB_NAME_LABEL] || String(group.tabs.length + 1), placed: [{ terminal, x: 0, y: 0 }] });
+      group.tabs.push({ id: tabId, label: where?.[1] || terminal.labels?.[TAB_NAME_LABEL] || String(group.tabs.length + 1), terminals: [terminal], root: null, kept: own && tabId === labeled });
     }
   }
   // a terminal another one started (an agent's helper, `hc run` from a shell) that nothing above
@@ -236,7 +288,7 @@ function groups(terminals: readonly HcTerminal[], layout: unknown): Group[] {
   // reads under that tab. A parent placed only here goes first, so a helper's helper follows it.
   // With no parent, or one not shown, it stays with the other terminals.
   const tabOf = new Map<string, { group: Group; tab: Group["tabs"][number] }>();
-  for (const group of result) for (const tab of group.tabs) for (const { terminal } of tab.placed) tabOf.set(terminal.address, { group, tab });
+  for (const group of result) for (const tab of group.tabs) for (const terminal of tab.terminals) tabOf.set(terminal.address, { group, tab });
   const under = new Map<Group["tabs"][number], Group["tabs"][number]>();
   const below = (tab: Group["tabs"][number], ancestor: Group["tabs"][number]): boolean => {
     for (let at = under.get(tab); at; at = under.get(at)) if (at === ancestor) return true;
@@ -252,7 +304,7 @@ function groups(terminals: readonly HcTerminal[], layout: unknown): Group[] {
       let tabId = `${home.group.id}:${terminal.address}`;
       for (let n = 2; ids.has(tabId); n++) tabId = `${home.group.id}:${terminal.address}:${n}`;
       ids.add(tabId);
-      const tab = { id: tabId, label: terminal.labels?.[TAB_NAME_LABEL] || terminal.name || terminal.address, placed: [{ terminal, x: 0, y: 0 }] };
+      const tab: ShownTab = { id: tabId, label: terminal.labels?.[TAB_NAME_LABEL] || terminal.name || terminal.address, terminals: [terminal], root: null, kept: false };
       let at = home.group.tabs.indexOf(home.tab) + 1;
       while (at < home.group.tabs.length && below(home.group.tabs[at]!, home.tab)) at++;
       home.group.tabs.splice(at, 0, tab);
@@ -280,12 +332,12 @@ function groups(terminals: readonly HcTerminal[], layout: unknown): Group[] {
   // parents that started each other: their own order
   for (const terminal of waiting) add(terminal);
   // a space or tab of the app's with nothing live in it shows nothing
-  const shown = result.map((group) => ({ ...group, tabs: group.tabs.filter((tab) => tab.placed.length > 0) })).filter((group) => group.tabs.length > 0);
+  const shown = result.map((group) => ({ ...group, tabs: group.tabs.filter((tab) => tab.terminals.length > 0) })).filter((group) => group.tabs.length > 0);
   if (rest.length > 0) {
     shown.push({
       id: OTHER_WORKSPACE_ID,
       label: "Other terminals",
-      tabs: rest.map((terminal) => ({ id: `${OTHER_WORKSPACE_ID}:${terminal.address}`, label: terminal.labels?.[TAB_NAME_LABEL] || terminal.name || terminal.address, placed: [{ terminal, x: 0, y: 0 }] })),
+      tabs: rest.map((terminal) => ({ id: `${OTHER_WORKSPACE_ID}:${terminal.address}`, label: terminal.labels?.[TAB_NAME_LABEL] || terminal.name || terminal.address, terminals: [terminal], root: null, kept: false })),
     });
   }
   return shown;
@@ -309,13 +361,18 @@ export function reportedFacts(status: HcStatus | null | undefined): Pick<HerdrPa
   };
 }
 
-function paneOf(terminal: HcTerminal, workspaceId: string, tabId: string, shown: ReadonlySet<string>, firstTurn?: FirstTurn): HerdrPane {
+function paneOf(terminal: HcTerminal, workspaceId: string, tabId: string, shown: ReadonlySet<string>, firstTurn?: FirstTurn, sessionOf?: SessionOf): HerdrPane {
   const cwd = terminal.foreground?.cwd ?? terminal.cwd;
+  const session = sessionOf?.(terminal) ?? null;
   return {
+    ...(session ? { agent_session: session } : {}),
     ...(terminal.parent && terminal.parent !== terminal.address && shown.has(terminal.parent) ? { parent_pane_id: terminal.parent } : {}),
+    // only a tab its labels make takes a split (adapter.ts `pane.split`)
+    ...(terminal.labels?.[SPACE_LABEL] === workspaceId && terminal.labels?.[TAB_LABEL] === tabId ? {} : { own_tab: true as const }),
     ...reportedFacts(terminal.status),
     pane_id: terminal.address,
     terminal_id: terminal.address,
+    grid: { cols: terminal.cols, rows: terminal.rows },
     workspace_id: workspaceId,
     tab_id: tabId,
     agent: agentOf(terminal),
@@ -324,7 +381,7 @@ function paneOf(terminal: HcTerminal, workspaceId: string, tabId: string, shown:
     foreground_cwd: cwd,
     title: terminal.title ?? null,
     terminal_title: terminal.title ?? null,
-    label: terminal.name ?? null,
+    label: terminal.labels?.[PANE_NAME_LABEL] || terminal.name || null,
     focused: false,
     revision: terminal.turn ?? 0,
   };
@@ -337,6 +394,7 @@ export function agentInfoOf(pane: PaneInfo): AgentInfo {
     workspace_id: pane.workspace_id,
     tab_id: pane.tab_id,
     agent: pane.agent ?? null,
+    ...(pane.agent_session ? { agent_session: pane.agent_session } : {}),
     agent_status: pane.agent_status,
     cwd: pane.cwd ?? null,
     foreground_cwd: pane.foreground_cwd ?? null,
@@ -347,41 +405,95 @@ export function agentInfoOf(pane: PaneInfo): AgentInfo {
   };
 }
 
+/** The workspaces and tabs Ovis keeps in labels, each tab's terminals in reading order: what its document is reconciled with. */
+function keptGrouping(placed: readonly Group[]): Grouping[] {
+  return placed.filter((group) => group.id !== OTHER_WORKSPACE_ID && group.tabs.some((tab) => tab.kept))
+    .map((group) => ({ id: group.id, tabs: group.tabs.filter((tab) => tab.kept).map((tab) => ({ id: tab.id, panes: tab.terminals.map((terminal) => terminal.address) })) }));
+}
+
+/**
+ * Ovis's layout document over the live terminals (layout-doc.ts `reconcile`), for a call that
+ * changes it: what the snapshot shows, which the call edits and writes back.
+ */
+export function keptLayout(terminals: readonly HcTerminal[], ovisDoc: unknown) {
+  return reconcile(parseOvisLayout(ovisDoc), keptGrouping(groups(terminals, null)));
+}
+
+/**
+ * The groups in the order Ovis's document keeps, each kept tab with its tree and zoom: workspaces
+ * first by the document, then as labels made them, Other terminals last; within a workspace, its
+ * kept tabs by the document, each with the helpers' tabs that follow it.
+ */
+function arranged(placed: Group[], ovisDoc: unknown): { groups: Group[]; zoomed: Map<string, string> } {
+  const zoomed = new Map<string, string>();
+  const layout = reconcile(parseOvisLayout(ovisDoc), keptGrouping(placed));
+  const byId = new Map(placed.map((group) => [group.id, group]));
+  const ordered = [...layout.workspaces.map((workspace) => byId.get(workspace.id)!), ...placed.filter((group) => !layout.workspaces.some((workspace) => workspace.id === group.id))];
+  // Other terminals stays last
+  ordered.sort((a, b) => Number(a.id === OTHER_WORKSPACE_ID) - Number(b.id === OTHER_WORKSPACE_ID));
+  for (const workspace of layout.workspaces) {
+    const group = byId.get(workspace.id)!;
+    // runs: a kept tab and the tabs that follow it until the next kept one (its helpers)
+    const lead: ShownTab[] = [];
+    const runs = new Map<string, ShownTab[]>();
+    let run = lead;
+    for (const tab of group.tabs) {
+      if (tab.kept) runs.set(tab.id, run = []);
+      run.push(tab);
+    }
+    group.tabs = [...lead, ...workspace.tabs.flatMap((tab) => runs.get(tab.id) ?? [])];
+    for (const tab of workspace.tabs) {
+      const shown = group.tabs.find((candidate) => candidate.id === tab.id);
+      if (!shown) continue;
+      shown.root = tab.root;
+      if (tab.zoomed) zoomed.set(tab.id, tab.zoomed);
+    }
+  }
+  return { groups: ordered, zoomed };
+}
+
 /**
  * herdr's session snapshot of the core. Nothing has herdr's focus: the app keeps its own focus per
- * window, and no pane is in front of anyone the way a herdr TUI's is. Each pane's layout rect is
- * its terminal's own grid, the size an observer attaches at, at its place in the tab's splits.
+ * window, and no pane is in front of anyone the way a herdr TUI's is. Each tab is the fixed
+ * LAYOUT_AREA cut top down by its tree (the app's, or Ovis's own document `ovisDoc` where no Herdr
+ * app arranges the core), never by its terminals' grids: a viewer sizes a terminal to its pane's
+ * cell, and a grid read back as the pane made panes shrink each other (#2812).
  */
-export function buildSnapshot(terminals: readonly HcTerminal[], layout: unknown, version: string, firstTurn?: FirstTurn): SessionSnapshot {
+export function buildSnapshot(terminals: readonly HcTerminal[], layout: unknown, version: string, firstTurn?: FirstTurn, ovisDoc?: unknown, sessionOf?: SessionOf): SessionSnapshot {
   const workspaces: WorkspaceInfo[] = [];
   const tabs: TabInfo[] = [];
   const panes: PaneInfo[] = [];
   const layouts: PaneLayoutSnapshot[] = [];
-  const placed = groups(terminals, layout);
-  const shown = new Set(placed.flatMap((group) => group.tabs.flatMap((tab) => tab.placed.map(({ terminal }) => terminal.address))));
+  const own = layout === null || layout === undefined;
+  const grouped = groups(terminals, layout);
+  const { groups: placed, zoomed } = own ? arranged(grouped, ovisDoc) : { groups: grouped, zoomed: new Map<string, string>() };
+  const shown = new Set(placed.flatMap((group) => group.tabs.flatMap((tab) => tab.terminals.map((terminal) => terminal.address))));
   for (const [index, group] of placed.entries()) {
     const groupPanes: PaneInfo[] = [];
     for (const [tabIndex, tab] of group.tabs.entries()) {
-      const tabPanes = tab.placed.map(({ terminal }) => paneOf(terminal, group.id, tab.id, shown, firstTurn));
+      const byAddress = new Map(tab.terminals.map((terminal) => [terminal.address, terminal]));
+      const cut = place(tab.root ?? sideBySide(tab.terminals.map((terminal) => terminal.address)));
+      const tabPanes = cut.panes.map(({ pane_id }) => paneOf(byAddress.get(pane_id)!, group.id, tab.id, shown, firstTurn, sessionOf));
       groupPanes.push(...tabPanes);
+      const alone = zoomed.get(tab.id);
+      const focused = alone ?? tabPanes[0]!.pane_id;
       tabs.push({ tab_id: tab.id, workspace_id: group.id, label: tab.label, number: tabIndex + 1, agent_status: rollUp(tabPanes.map((pane) => pane.agent_status)), focused: false, pane_count: tabPanes.length });
       layouts.push({
         workspace_id: group.id,
         tab_id: tab.id,
-        area: {
-          x: 0,
-          y: 0,
-          width: Math.max(...tab.placed.map(({ terminal, x }) => x + terminal.cols)),
-          height: Math.max(...tab.placed.map(({ terminal, y }) => y + terminal.rows)),
-        },
-        focused_pane_id: tabPanes[0]!.pane_id,
-        panes: tab.placed.map(({ terminal, x, y }, at) => ({ pane_id: terminal.address, focused: at === 0, rect: { x, y, width: terminal.cols, height: terminal.rows } })),
-        splits: [],
-        zoomed: false,
+        area: { ...LAYOUT_AREA },
+        focused_pane_id: focused,
+        panes: cut.panes.map(({ pane_id, rect }) => ({ pane_id, focused: pane_id === focused, rect })),
+        splits: cut.splits,
+        zoomed: alone !== undefined,
       });
     }
     panes.push(...groupPanes);
+    // a checkout Ovis opened as a worktree, or the repository's own it was opened from (worktrees.ts);
+    // only where Ovis places workspaces: the app may put a labeled terminal beside others
+    const worktree = !own || group.id === OTHER_WORKSPACE_ID ? null : group.tabs.flatMap((tab) => tab.terminals).map((terminal) => worktreeOfLabels(terminal.labels)).find((facts) => facts !== null) ?? null;
     workspaces.push({
+      ...(worktree ? { worktree } : {}),
       workspace_id: group.id,
       label: group.label,
       number: index + 1,

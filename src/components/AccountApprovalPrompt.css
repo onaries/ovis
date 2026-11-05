@@ -1,0 +1,96 @@
+/*
+ * A device asking to join the account (AccountApprovalPrompt.tsx): the modal's card, its content
+ * centred, the three numbers as large as the pairing digits so the pick is a look, not a read.
+ */
+
+.account-approval {
+  width: min(100%, calc(var(--sidebar-w) + 2 * var(--space-6)));
+  padding: var(--space-6);
+  text-align: center;
+}
+
+.account-approval-mark {
+  display: grid;
+  place-items: center;
+  width: calc(var(--touch-target) + var(--space-2));
+  height: calc(var(--touch-target) + var(--space-2));
+  margin: 0 auto var(--space-4);
+  border-radius: 50%;
+  background: var(--bg-input);
+  color: var(--accent);
+}
+
+.account-approval-mark svg {
+  width: calc(var(--icon-size) * 1.5);
+  height: calc(var(--icon-size) * 1.5);
+}
+
+.account-approval-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.account-approval-via {
+  margin: var(--space-1) 0 var(--space-5);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.account-approval-ask {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-strong);
+}
+
+.account-approval-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.account-approval-choice {
+  min-height: calc(var(--touch-target) + var(--space-3));
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-bold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-strong);
+  cursor: pointer;
+}
+
+.account-approval-choice:hover {
+  border-color: var(--border-strong);
+}
+
+.account-approval-choice[aria-checked="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.account-approval-error {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--status-blocked);
+}
+
+.account-approval-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+.account-approval-note {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}

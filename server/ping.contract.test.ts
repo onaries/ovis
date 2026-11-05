@@ -102,6 +102,8 @@ describe("WebSocket liveness ping", () => {
     const socket = await connect(`ws://127.0.0.1:${proxy!.port}/ws`);
     const snapshot = socket.seen.find((message) => message.type === "snapshot");
     expect(snapshot?.type === "snapshot" && snapshot.features).toContain("agent-only");
+    // and the search the remote's own bridge answers, so the browser offers it for that PC's chats
+    expect(snapshot?.type === "snapshot" && snapshot.features).toContain("conversation-search");
     socket.send({ type: "submit", id: 77, pane_id: "w9:p9", text: "x", payload: "x", agent_only: false } as never);
     expect(await socket.next((message) => message.type === "submit-result" && message.id === 77, "relayed submit result"))
       .toMatchObject({ ok: false, code: "invalid_delivery" });

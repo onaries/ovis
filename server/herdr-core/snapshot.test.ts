@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { HerdrPane } from "../../shared/protocol.ts";
-import { buildSnapshot, type HcTerminal, keyBytes, OTHER_WORKSPACE_ID } from "./snapshot.ts";
+import { buildSnapshot, type HcTerminal, keyBytes, opencodeRecords, OTHER_WORKSPACE_ID } from "./snapshot.ts";
 
 function terminal(address: string, extra: Partial<HcTerminal> = {}): HcTerminal {
   return { address, cols: 120, rows: 40, cwd: "/home/u", state: "live", ...extra };
@@ -98,16 +98,31 @@ describe("buildSnapshot", () => {
     expect(snapshot.agents.map((a) => [a.pane_id, a.agent])).toEqual([["t1", "claude"], ["t2", "codex"], ["t3", "omp"], ["t5", "claude"], ["t6", "agy"]]);
   });
 
-  it("gives each pane its terminal's own grid at its place in the tab's splits, so no two panes overlap", () => {
-    const layout = { spaces: [{ id: "s1", name: "a", tabs: [{ id: "s1t1", name: "", root: { type: "row", id: "r", children: [block("t1"), { type: "column", id: "c", children: [block("t2"), block("t3")] }] } }] }] };
-    const snapshot = buildSnapshot([terminal("t1", { cols: 80, rows: 49 }), terminal("t2", { cols: 60, rows: 24 }), terminal("t3", { cols: 60, rows: 24 })], layout, "0.1.14");
+  it("cuts the tab top down by the app's tree and weights, whatever size the terminals are, with a divider per split", () => {
+    const weighted = { ...block("t1"), size: { weight: 3 } };
+    const layout = { spaces: [{ id: "s1", name: "a", tabs: [{ id: "s1t1", name: "", root: { type: "row", id: "r", children: [weighted, { type: "column", id: "c", children: [block("t2"), block("t3")] }] } }] }] };
+    const snapshot = buildSnapshot([terminal("t1", { cols: 80, rows: 49 }), terminal("t2", { cols: 60, rows: 1 }), terminal("t3", { cols: 60, rows: 24 })], layout, "0.1.14");
     const tab = snapshot.layouts[0]!;
     expect(tab.panes.map((pane) => [pane.pane_id, pane.rect])).toEqual([
-      ["t1", { x: 0, y: 0, width: 80, height: 49 }],
-      ["t2", { x: 81, y: 0, width: 60, height: 24 }],
-      ["t3", { x: 81, y: 25, width: 60, height: 24 }],
+      ["t1", { x: 0, y: 0, width: 750, height: 1000 }],
+      ["t2", { x: 750, y: 0, width: 250, height: 500 }],
+      ["t3", { x: 750, y: 500, width: 250, height: 500 }],
     ]);
-    expect(tab.area).toEqual({ x: 0, y: 0, width: 141, height: 49 });
+    expect(tab.area).toEqual({ x: 0, y: 0, width: 1000, height: 1000 });
+    expect(tab.splits.map((split) => [split.id, split.direction, split.ratio])).toEqual([["split_0_root", "right", 0.75], ["split_1_1", "down", 0.5]]);
+  });
+
+  it("shows every child of a stack and a hidden node in the app's tab, once, as Ovis can neither switch nor show them", () => {
+    const hidden = { ...block("t3"), hidden: true };
+    const layout = { spaces: [{ id: "s1", name: "a", tabs: [{ id: "s1t1", name: "", root: { type: "row", id: "r", children: [
+      { type: "stack", id: "st", active: "p-t2", children: [block("t1"), block("t2")] }, hidden, block("t4"),
+    ] } }] }] };
+    for (const labels of [undefined, { "herdr.space": "s1", "herdr.tab": "s1t1" }]) {
+      const snapshot = buildSnapshot(["t1", "t2", "t3", "t4"].map((address) => terminal(address, labels ? { labels } : {})), layout, "0.1.17");
+      expect(snapshot.layouts.map((tab) => tab.panes.map((pane) => [pane.pane_id, pane.rect.x, pane.rect.width]))).toEqual([[["t1", 0, 167], ["t2", 167, 166], ["t3", 333, 334], ["t4", 667, 333]]]);
+      // each in its tab only, neither under Other terminals nor again beside it
+      expect(snapshot.tabs.map((tab) => tab.tab_id)).toEqual(["s1t1"]);
+    }
   });
 
   it("places a terminal the document names twice once, and skips a space or tab whose id was seen or is empty", () => {
@@ -213,12 +228,40 @@ describe("buildSnapshot, terminals the app has not placed", () => {
     expect(new Set(tabIds).size).toBe(tabIds.length);
   });
 
+  it("keeps split panes' rects while viewers size each terminal to its pane, so none shrinks (#2812)", () => {
+    // split t5 right (t6), then t5 down (t7), as Ovis's layout document records it
+    const labels = { "herdr.space": "ovis-s", "herdr.tab": "ovis-t" };
+    const doc = { schema: 1, workspaces: [{ id: "ovis-s", tabs: [{ id: "ovis-t", zoomed: null, root: { split: "right", ratio: 0.5, first: { split: "down", ratio: 0.5, first: { leaf: "t5" }, second: { leaf: "t7" } }, second: { leaf: "t6" } } }] }] };
+    let grids: HcTerminal[] = ["t5", "t7", "t6"].map((address) => terminal(address, { cols: 200, rows: 120, labels }));
+    const seen: unknown[] = [];
+    for (let round = 0; round < 3; round++) {
+      const tab = buildSnapshot(grids, null, "0.1.17", undefined, doc).layouts[0]!;
+      seen.push(tab.panes.map((pane) => [pane.pane_id, pane.rect]));
+      // a 160x50-cell canvas: each attach resizes its terminal to its pane's share of it
+      grids = grids.map((held) => {
+        const rect = tab.panes.find((pane) => pane.pane_id === held.address)!.rect;
+        return { ...held, cols: Math.floor(rect.width / tab.area.width * 160), rows: Math.floor(rect.height / tab.area.height * 50) };
+      });
+    }
+    expect(seen[0]).toEqual([
+      ["t5", { x: 0, y: 0, width: 500, height: 500 }],
+      ["t7", { x: 0, y: 500, width: 500, height: 500 }],
+      ["t6", { x: 500, y: 0, width: 500, height: 1000 }],
+    ]);
+    expect(seen[1]).toEqual(seen[0]);
+    expect(seen[2]).toEqual(seen[0]);
+    // the cells each terminal has, apart from its place: an attach that must not resize starts at these
+    expect(buildSnapshot(grids, null, "0.1.17", undefined, doc).panes.map((pane) => [pane.pane_id, (pane as HerdrPane).grid])).toEqual([
+      ["t5", { cols: 80, rows: 25 }], ["t7", { cols: 80, rows: 25 }], ["t6", { cols: 80, rows: 50 }],
+    ]);
+  });
+
   it("puts a second unplaced terminal of a tab beside the first, not over it", () => {
     const snapshot = buildSnapshot([
       terminal("t1", { cols: 80, labels: { "herdr.space": "ovis-s", "herdr.tab": "ovis-t" } }),
       terminal("t2", { cols: 60, labels: { "herdr.space": "ovis-s", "herdr.tab": "ovis-t" } }),
     ], null, "0.1.14");
-    expect(snapshot.layouts[0]!.panes.map((p) => [p.pane_id, p.rect.x])).toEqual([["t1", 0], ["t2", 81]]);
+    expect(snapshot.layouts[0]!.panes.map((p) => [p.pane_id, p.rect.x])).toEqual([["t1", 0], ["t2", 500]]);
   });
 
   it("keeps the name a person gave once the app adopts the terminal into an unnamed space and tab", () => {
@@ -259,10 +302,31 @@ describe("buildSnapshot, what herdr-core reports beyond placement", () => {
     expect((snapshot.panes.find((p) => p.pane_id === "t3") as HerdrPane).parent_pane_id).toBe("t1");
   });
 
+  it("marks the panes in a tab of their own terminal, in Other terminals or a helper's, which take no split (#2806)", () => {
+    const kept = { "herdr.space": "s1", "herdr.tab": "tb1" };
+    const snapshot = buildSnapshot([terminal("t1", { labels: kept }), terminal("t2", { labels: kept }), terminal("t3", { parent: "t1" }), terminal("t4")], null, "0.1.17");
+    expect(snapshot.panes.map((p) => [p.pane_id, p.tab_id, (p as HerdrPane).own_tab])).toEqual([
+      ["t1", "tb1", undefined], ["t2", "tb1", undefined], ["t3", "s1:t3", true], ["t4", `${OTHER_WORKSPACE_ID}:t4`, true],
+    ]);
+  });
+
   it("leaves a terminal the app placed where the app put it, and names its parent", () => {
     const layout = { spaces: [{ id: "s1", name: "web", tabs: [{ id: "s1t1", name: "", root: block("t1") }, { id: "s1t2", name: "", root: block("t2") }] }] };
     const snapshot = buildSnapshot([terminal("t1"), terminal("t2", { parent: "t1" })], layout, "0.1.17");
     expect(snapshot.panes.map((p) => [p.pane_id, p.tab_id, (p as HerdrPane).parent_pane_id])).toEqual([["t1", "s1t1", undefined], ["t2", "s1t2", "t1"]]);
+  });
+
+  it("shows no terminal of another hc machine, labeled, placed or neither, as this PC's (#2768)", () => {
+    const layout = { spaces: [{ id: "s1", name: "here", tabs: [{ id: "s1t1", name: "", root: { type: "row", id: "r", children: [block("t1"), block("vps/t2")] } }] }] };
+    const snapshot = buildSnapshot([
+      terminal("t1"),
+      terminal("vps/t2"),
+      terminal("vps/t14", { labels: { "herdr.space": "spcRemote", "herdr.tab": "tbRemote", where: "ubuntu / 1" } }),
+      terminal("vps/t15"),
+      terminal("t3", { parent: "vps/t14" }),
+    ], layout, "0.1.17");
+    expect(snapshot.workspaces.map((w) => [w.workspace_id, w.label])).toEqual([["s1", "here"], [OTHER_WORKSPACE_ID, "Other terminals"]]);
+    expect(snapshot.panes.map((p) => [p.pane_id, p.tab_id, (p as HerdrPane).parent_pane_id])).toEqual([["t1", "s1t1", undefined], ["t3", `${OTHER_WORKSPACE_ID}:t3`, undefined]]);
   });
 
   it("carries a blocked agent's kind, its message as written and its progress, and only what it reported", () => {
@@ -283,6 +347,21 @@ describe("buildSnapshot, what herdr-core reports beyond placement", () => {
       ["t4", undefined, undefined, undefined],
       ["t5", undefined, undefined, undefined],
     ]);
+  });
+});
+
+describe("OpenCode sessions", () => {
+  it("reads OpenCode's own pending records only, by their ids", () => {
+    expect(opencodeRecords({ ses_a: { app: "opencode", state: "working" }, deploy: { app: "make", state: "working" }, ses_b: "working" })).toEqual(["ses_a"]);
+    expect(opencodeRecords(undefined)).toEqual([]);
+  });
+
+  it("puts the session it is given on the pane and its agent", () => {
+    const session = { agent: "opencode", source: "herdr:opencode", kind: "id", value: "ses_a" };
+    const snapshot = buildSnapshot([terminal("t1", { status: { app: "opencode", state: "idle" } }), terminal("t2")], null, "0.1.18", undefined, undefined,
+      (entry) => entry.address === "t1" ? session : null);
+    expect(snapshot.panes.map((pane) => pane.agent_session ?? null)).toEqual([session, null]);
+    expect(snapshot.agents.map((agent) => agent.agent_session ?? null)).toEqual([session]);
   });
 });
 

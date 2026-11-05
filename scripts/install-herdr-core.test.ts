@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,13 +28,25 @@ const FUNCTIONS = ["say", "fail", "kill_tree", "bounded", "is_core", "core_dirs"
 const dir = mkdtempSync(join(tmpdir(), "ovis-install-core-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
+/** the system's tools without a herdr, herdr-core or hc this PC has in /usr/bin or /bin, so only a test's stand-ins answer */
+const SYSTEM = join(dir, "system");
+mkdirSync(SYSTEM);
+const linked = new Set(["herdr", "herdr-core", "hc"]);
+for (const from of ["/usr/bin", "/bin"].filter((system) => existsSync(system))) {
+  for (const name of readdirSync(from)) {
+    if (linked.has(name) || !existsSync(join(from, name))) continue;
+    linked.add(name);
+    symlinkSync(join(from, name), join(SYSTEM, name));
+  }
+}
+
 /** a PC of its own: HOME, and a bin dir of stand-in tools that is the whole PATH besides the system's */
 function pc(tools: Record<string, string> = {}): { home: string; bin: string; env: Record<string, string> } {
   const home = mkdtempSync(join(dir, "home-"));
   const bin = join(home, "tools");
   mkdirSync(bin);
   for (const [name, body] of Object.entries(tools)) writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
-  return { home, bin, env: { HOME: home, PATH: `${bin}:/usr/bin:/bin`, OVIS_RUNTIME: "", XDG_CONFIG_HOME: "", OVIS_HC_BIN: "", HC_SESSION: "", HC_SOCKET: "" } };
+  return { home, bin, env: { HOME: home, PATH: `${bin}:${SYSTEM}`, OVIS_RUNTIME: "", XDG_CONFIG_HOME: "", OVIS_HC_BIN: "", HC_SESSION: "", HC_SOCKET: "" } };
 }
 
 /** runs `call` after install.sh's constants and functions under /bin/sh with `set -eu`, as the script runs */
@@ -241,7 +253,7 @@ describe("core_service", () => {
 
   it("refuses a PATH with a newline, which would start a unit directive of its own", () => {
     const { home, env } = pc({ bun, systemctl: "exit 0" });
-    const result = sh("os=linux; core_settings; core_service", { ...env, PATH: `${env["PATH"]}\nExecStartPost=/bin/true` });
+    const result = sh("os=linux; core_settings; core_service", { ...env, PATH: `${env["PATH"]}:/bin\nExecStartPost=/bin/true` });
     expect(result.code).toBe(1);
     expect(result.out).toContain("a newline in PATH or HOME");
     expect(existsSync(join(home, ".config", "systemd"))).toBe(false);

@@ -3,7 +3,7 @@
  * components/DevicesPanel.tsx (with VIA), components/ConnectPhoneDialog.tsx, components/PhonePanel.tsx, components/PortalPanel.tsx,
  * components/PortalAuth.tsx, components/PortalInvite.tsx, components/RelayPanel.tsx,
  * components/PushTestControls.tsx, components/AccessGate.tsx, components/LanExposureNotice.tsx,
- * lib/install.ts, lib/portalAuth.ts, and shared/portal.ts (PORTAL_AUTH_PROBLEMS).
+ * components/InstallHint.tsx, lib/install.ts, lib/installHint.ts, lib/portalAuth.ts, and shared/portal.ts (PORTAL_AUTH_PROBLEMS).
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const DEVICES_JA: Record<string, string> = {
@@ -62,10 +62,6 @@ export const DEVICES_JA: Record<string, string> = {
   "Open the app's address on that device and enter it.": "そのデバイスでアプリのアドレスを開き、コードを入力してください。",
   "Expires in {time}.": "{time} 後に期限切れになります。",
   "Devices are managed on a real server.": "デバイスは実際のサーバー上でのみ管理できます。",
-  "never": "なし",
-  "just now": "たった今",
-  "{n} min ago": "{n} 分前",
-  "{n} h ago": "{n} 時間前",
   "Asking this PC about Tailscale…": "この PC の Tailscale の状態を確認しています…",
   "Tailscale already serves this PC": "Tailscale はすでにこの PC を公開しています",
   "Once it is open, install the app, then open the ⋯ menu and tap Alerts.": "開いたらアプリをインストールし、⋯ メニューの「通知」をタップしてください。",
@@ -157,7 +153,6 @@ export const DEVICES_JA: Record<string, string> = {
   "Ovis relay": "Ovis リレー",
   "Only the PC's owner can control the relay, using a direct connection. Open Ovis on the PC or at its direct address.": "リレーを操作できるのは、PC に直接接続した所有者だけです。PC 上で Ovis を開くか、PC の直接のアドレスにアクセスしてください。",
   "Reset relay identity": "リレー ID をリセット",
-  "Reset": "リセット",
   "Reset the relay identity?": "リレー ID をリセットしますか？",
   "Phones paired through the relay will need to scan a new code.": "リレー経由でペアリングしたスマートフォンは、新しいコードを読み取り直す必要があります。",
   "Blocked: OVIS_TAILSCALE_SERVE_ONLY says tailscale serve is the only way in. Unset it on this PC and restart the app.": "ブロック中: OVIS_TAILSCALE_SERVE_ONLY により tailscale serve が唯一の入口になっています。この PC で解除し、アプリを再起動してください。",
@@ -198,5 +193,24 @@ export const DEVICES_JA: Record<string, string> = {
   "Pairs this phone through the relay, so Ovis keeps working away from home.": "このスマートフォンをリレー経由でペアリングし、外出先でも Ovis を使えるようにします。",
   "A device with this phone's name ({name}) is already paired through the relay.": "このスマートフォンと同じ名前のデバイス（{name}）がすでにリレー経由でペアリングされています。",
   "Use the relay on this phone": "このスマートフォンでリレーを使う",
+  "Copy a link without a code": "コードなしのリンクをコピー",
+  "Copied. Open it on the phone within 10 minutes: both screens show six digits to compare, and you approve the phone here.": "コピーしました。10 分以内にスマートフォンで開いてください。両方の画面に表示される 6 桁の数字を比べ、ここでスマートフォンを承認します。",
   "This PC's ID": "このPCのID",
+  "Show a code to type": "入力用のコードを表示",
+  "New code to type": "新しい入力コード",
+  "Hide the code": "コードを隠す",
+  "Code to type": "入力するコード",
+  "On the other device, open app.ovis.sh, choose Pair with a code and type it. Expires in {time}. It works once.": "もう一方のデバイスで app.ovis.sh を開き、「コードでペアリング」を選んで入力してください。{time} で期限切れになり、使えるのは一度だけです。",
+  "That device then shows an ID: pair only if it matches this PC's ID below, every group.": "するとそのデバイスに ID が表示されます。下のこの PC の ID とすべてのまとまりが一致する場合だけペアリングしてください。",
+  "Disconnect from all PCs": "すべての PC から切断",
+  "Disconnect everywhere?": "すべてから切断しますか？",
+  "A new device joined at {time}: {name}, approved on {approver}. If that was not you, revoke it.": "{time} に新しいデバイス {name} が {approver} の承認で参加しました。心当たりがなければ取り消してください。",
+  "{name} was removed from this PC at {time}.": "{time} に {name} がこの PC から外れました。",
+  "{name} was revoked on this PC at {time}.": "{time} にこの PC で {name} を取り消しました。",
+  "{name} was removed from this PC at {time}, by {by}.": "{time} に {by} が {name} をこの PC から外しました。",
+  "Not removed yet on: {pcs}. Disconnect it from a device that is in the account there.": "まだ外れていない PC: {pcs}。その PC でアカウントに入っているデバイスから切断してください。",
+  "Sent to {pcs}: each removes it when it next comes online. If it still shows there, disconnect it from another device in the account.": "{pcs} に送りました。各 PC は次にオンラインになったときに外します。まだ残っていたら、アカウントに入っている別のデバイスから切断してください。",
+  "Add to Home Screen for alerts: {glyph} Share → Add to Home Screen": "通知を受け取るにはホーム画面に追加: {glyph} 共有 → ホーム画面に追加",
+  "Install the app for alerts.": "通知を受け取るにはアプリをインストールしてください。",
+  "Install the app for alerts: Menu → Install app": "通知を受け取るにはアプリをインストール: メニュー → アプリをインストール",
 };

@@ -370,7 +370,7 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
         {catalogError !== null && <p className="settings-hint agents-note" role="alert">{catalogError.message}{catalogError.detail !== null && <><br /><code>{catalogError.detail}</code></>}</p>}
         {agents === null ? catalogError === null && <div className="settings-card"><p className="settings-item settings-hint" role="status">{t("Loading…")}</p></div>
           : page === null ? null
-            : page.rows.length === 0 ? <div className="settings-card"><p className="settings-item settings-hint">{t("None on this PC yet.")}</p></div>
+            : page.rows.length === 0 ? <div className="settings-card"><p className="settings-item settings-hint">{page.installsUnknown ? t("Ovis cannot tell which agents this PC has. Install them from a terminal on it.") : t("None on this PC yet.")}</p></div>
               : <ul className="settings-card agents-card">
                 {page.rows.map((entry) => <AgentItem key={entry.agent.id} entry={entry} open={open.has(entry.agent.id)} onToggle={() => toggle(entry.agent.id)}
                   allProviders={providers} removed={removed} read={settings.showUsage && usage.report !== null} limitsOn={settings.showUsage} local={local} watching={watching} integrationsRead={integrationOutcome?.kind === "list"}

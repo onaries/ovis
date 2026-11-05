@@ -16,11 +16,11 @@ export interface OmoTask {
   tokens: number | null;
   /**
    * What GET /api/pane/background-agent can show of it while it runs: `claude-subagent` for a
-   * Claude Code subagent (its own transcript), `codex-subagent` for the parent's assignment and
-   * reported result, null for a source it reads nothing of (OmO's tasks,
-   * a Claude background command). Absent from a bridge from before the route.
+   * Claude Code subagent (its own transcript), `opencode-subagent` for an OpenCode subagent (its
+   * child session in OpenCode's store), null for a source it reads nothing of (OmO's tasks, a Codex parent assignment and result as `codex-subagent`, or a
+   * background command). Absent from a bridge from before the route.
    */
-  detail_kind?: "claude-subagent" | "codex-subagent" | null;
+  detail_kind?: "claude-subagent" | "opencode-subagent" | "codex-subagent" | null;
 }
 
 /** One step of an OmO workflow (a DAG node); `error` is why a failed one failed. */
@@ -54,12 +54,13 @@ export interface OmoActivity {
 
 /**
  * GET /api/pane/background-agent?pane_id=&agent_id=: what a running Claude Code subagent's own
- * transcript holds now, or a Codex parent's reported assignment and result, read-only and bounded:
+ * transcript holds now, or a Codex parent's reported assignment and result, read-only and bounded (server/claude-subagents.ts backgroundAgentDetail),
+ * or an OpenCode subagent's child session (server/opencode-subagents.ts opencodeAgentDetail):
  * the prompt it was dispatched with, then its prose and the tools it called, as text. The read
  * covers the start of its file (the prompt) and its end (recent activity): `truncated` when the
  * file, the events or the text went past the `limits`, `incomplete` when a record inside what was
  * read could not be used (torn, over its size, or not a record). `session_id` names the Claude
- * session it belongs to: an opaque identity, never a path.
+ * or OpenCode session it belongs to: an opaque identity, never a path.
  */
 export interface PaneBackgroundAgentDetail {
   agent_id: string;

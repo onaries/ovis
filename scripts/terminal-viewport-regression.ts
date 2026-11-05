@@ -208,6 +208,38 @@ try {
     await until(async () => metricsReads.length > beforeOutput, "output wakes the backed-off poll");
     assert.ok(metricsReads[beforeOutput]! - outputAt < 1500, `output brings the next read back within about 1 s, took ${metricsReads[beforeOutput]! - outputAt} ms`);
 
+    // Output alone at the bottom: after its first second a burst reads at the 2 s follow pace, not every 250 ms.
+    let streaming = true;
+    const stream = (async () => {
+      for (let line = 0; streaming; line++) {
+        await herdrRpc("pane.send_input", { pane_id: paneId, text: `follow_${line}`, keys: ["enter"] });
+        // fixed wait: a steady stream of output, one line every 100 ms
+        await Bun.sleep(100);
+      }
+    })();
+    try {
+      // fixed wait: the burst's first second keeps the busy cadence
+      await Bun.sleep(1500);
+      const followFrom = Date.now();
+      // fixed wait: proving the follow pace over a window the busy cadence would fill with 16 reads
+      await Bun.sleep(4000);
+      const followReads = metricsReads.filter((at) => at > followFrom).length;
+      // the follow pace is 2 s, and a read that saw no output in flight backs off by 1 s instead
+      assert.ok(followReads <= 6, `a view following output at the bottom reads metrics at the follow pace, read ${followReads} times in 4 s`);
+      // A page on metrics that output has overtaken reads them again first: the program may have entered its alternate screen.
+      await until(async () => Date.now() - metricsReads.at(-1)! > 400, "the follow pace leaves the metrics older than the busy cadence");
+      const sent: string[] = [];
+      const track = (request: import("playwright-core").Request) => { if (new URL(request.url()).pathname === "/api/pane/scroll") sent.push(request.method()); };
+      page.on("request", track);
+      try {
+        await page.locator(".xterm-helper-textarea").evaluate((node: HTMLTextAreaElement) => node.focus());
+        const pageWrite = page.waitForRequest((request) => request.url().endsWith("/api/pane/scroll") && request.method() === "POST");
+        await page.keyboard.press("ControlOrMeta+Shift+PageUp");
+        await pageWrite;
+      } finally { page.off("request", track); }
+      assert.equal(sent[0], "GET", `a page on stale metrics reads them before scrolling, sent ${sent.join(",")}`);
+    } finally { streaming = false; await stream; }
+
     await pageToEdge(1);
     await until(async () => (await paneScrollInfo(paneId))!.offset_from_bottom > 100, "paging scrolls up before the held-view poll check");
     const upFrom = Date.now();

@@ -28,6 +28,30 @@ export function hasModifiers(modifiers: StickyModifiers): boolean {
   return modifiers.ctrl || modifiers.alt || modifiers.shift;
 }
 
+/**
+ * The key bar's modifiers: `held` is what the next key carries, `locked` the part of it that stays
+ * after that key. A tap steps one modifier off -> once -> locked -> off, the way a phone keyboard's
+ * Shift goes from one capital to Caps Lock, by taps rather than a double tap's timing.
+ */
+export interface ModifierLatch { held: StickyModifiers; locked: StickyModifiers }
+export const NO_MODIFIER_LATCH: ModifierLatch = { held: NO_STICKY_MODIFIERS, locked: NO_STICKY_MODIFIERS };
+
+export function stepModifier(latch: ModifierLatch, modifier: keyof StickyModifiers): ModifierLatch {
+  const held = latch.held[modifier];
+  const locked = latch.locked[modifier];
+  return {
+    held: { ...latch.held, [modifier]: !locked },
+    locked: { ...latch.locked, [modifier]: held && !locked },
+  };
+}
+
+/** After a key that carried them: only the locked modifiers stay held. Same object when nothing changes. */
+export function releaseLatched(latch: ModifierLatch): ModifierLatch {
+  const { held, locked } = latch;
+  if (held.ctrl === locked.ctrl && held.alt === locked.alt && held.shift === locked.shift) return latch;
+  return { held: { ctrl: held.ctrl && locked.ctrl, alt: held.alt && locked.alt, shift: held.shift && locked.shift }, locked };
+}
+
 /** Ctrl+C/V remain native clipboard shortcuts on non-Latin layouts; Latin layouts keep their typed letter. */
 export function clipboardKey(key: string, code: string): string {
   const typed = key.toLowerCase();

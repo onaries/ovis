@@ -15,6 +15,7 @@ import { createServer } from "../server/index.ts";
 import { UsageService } from "../server/usage.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 /** the column every row's marker is written to, whatever stands before it */
 const MARK_COLUMN = 100;
@@ -63,13 +64,13 @@ setInterval(() => {}, 1 << 30);
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(pane)}`);
   await page.locator(".conn-live").waitFor();
-  await page.locator(".pane-terminal .xterm-rows", { hasText: `MARK${ROWS.length - 1}` }).waitFor();
+  await page.locator(shownRows(), { hasText: `MARK${ROWS.length - 1}` }).waitFor();
   // fonts settle and xterm measures again: read once the rows stop changing
   await page.evaluate(() => document.fonts.ready.then(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve()))));
 
   // When: the rows are drawn, each marker is found where the browser put it.
-  const drawn = await page.evaluate((count) => {
-    const rows = document.querySelector<HTMLElement>(".pane-terminal .xterm-rows")!;
+  const drawn = await page.evaluate(([count, shown]) => {
+    const rows = document.querySelector<HTMLElement>(shown)!;
     const left = rows.getBoundingClientRect().left;
     const marks: number[] = [];
     for (let index = 0; index < count; index += 1) {
@@ -95,8 +96,9 @@ setInterval(() => {}, 1 << 30);
     probe.style.setProperty("text-spacing-trim", "space-all");
     const full = probe.getBoundingClientRect().width;
     probe.remove();
-    return { marks, trims: trimmed < full - 1, measureTrim: measure ? getComputedStyle(measure).getPropertyValue("text-spacing-trim") : null };
-  }, ROWS.length);
+    return { marks, trims: trimmed < full - 1, measureTrim: measure ? getComputedStyle(measure).getPropertyValue("text-spacing-trim") : null,
+      renderer: document.querySelector<HTMLElement>(".pane-terminal")?.dataset["renderer"] ?? "xterm" };
+  }, [ROWS.length, shownRows()] as const);
   console.log(JSON.stringify(drawn));
   await page.screenshot({ path: join(evidence, "terminal-cjk-punctuation.png") });
 

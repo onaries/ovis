@@ -637,6 +637,64 @@ describe("sidebar finish acknowledgement through React effects", () => {
     expect(told).toEqual([[1, "new"], [2, "held"], [2, "new"]]);
   });
 
+  it("tells a return made while its held share waits for a retry as a look right away", async () => {
+    // Given finish 2 of pane a shared as held, failed with a transient error and waiting for its retry.
+    jest.useFakeTimers();
+    const told: [number, string | undefined][] = [];
+    let failed = false;
+    const share = async (finish: SeenFinish, presented?: SeenPresentation) => {
+      told.push([finish.id, presented]);
+      if (finish.id === 2 && !failed) { failed = true; throw Object.assign(new Error("restart"), { status: 503 }); }
+    };
+    const warn = console.warn;
+    console.warn = () => undefined;
+    try {
+      const client = await open(roster({ a: 1, b: 1 }, { b: "working" }), "a", false, share);
+      await client.update(roster({ a: 2, b: 1 }, { b: "working" }), "a");
+      expect(told).toEqual([[1, "new"], [2, "held"]]);
+
+      // When the person goes away and comes back before the retry.
+      await client.update(roster({ a: 2, b: 1 }, { b: "working" }), "b");
+      await client.update(roster({ a: 2, b: 1 }, { b: "working" }), "a");
+
+      // Then the return is told as a look then, and the held retry it replaced is not sent.
+      expect(told).toEqual([[1, "new"], [2, "held"], [2, "new"]]);
+      await act(async () => { jest.advanceTimersByTime(60_000); });
+      expect(told).toEqual([[1, "new"], [2, "held"], [2, "new"]]);
+    } finally {
+      console.warn = warn;
+    }
+  });
+
+  it("tells a return as a look right away while another pane's share waits for a retry", async () => {
+    // Given finish 2 of pane a told as held, and pane c's finish waiting for a retry.
+    jest.useFakeTimers();
+    const told: [string, number, string | undefined][] = [];
+    let failed = false;
+    const share = async (finish: SeenFinish, presented?: SeenPresentation) => {
+      told.push([finish.pane, finish.id, presented]);
+      if (finish.pane === "c" && !failed) { failed = true; throw Object.assign(new Error("restart"), { status: 503 }); }
+    };
+    const warn = console.warn;
+    console.warn = () => undefined;
+    try {
+      const client = await open(roster({ a: 1, c: 1 }), "a", false, share);
+      await client.update(roster({ a: 2, c: 1 }), "a");
+      await client.update(roster({ a: 2, c: 1 }), "c");
+      expect(told).toEqual([["a", 1, "new"], ["a", 2, "held"], ["c", 1, "new"]]);
+
+      // When the person comes back to a before c's retry.
+      await client.update(roster({ a: 2, c: 1 }), "a");
+
+      // Then the return is told as a look then, not behind c's retry, and c's retry is held.
+      expect(told).toEqual([["a", 1, "new"], ["a", 2, "held"], ["c", 1, "new"], ["a", 2, "new"]]);
+      await act(async () => { jest.advanceTimersByTime(60_000); });
+      expect(told).toEqual([["a", 1, "new"], ["a", 2, "held"], ["c", 1, "new"], ["a", 2, "new"], ["c", 1, "held"]]);
+    } finally {
+      console.warn = warn;
+    }
+  });
+
   it("keeps a finish told as a look when its answer upgrade is shared as held", async () => {
     // Given finish 1 of a shared as new without an answer.
     const told: [number, string | undefined, boolean][] = [];

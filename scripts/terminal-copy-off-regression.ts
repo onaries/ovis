@@ -12,6 +12,7 @@ import type { Browser } from "playwright-core";
 import { paneSendText, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { createServer } from "../server/index.ts";
 import { UsageService } from "../server/usage.ts";
+import { shownRow, shownRows } from "./shown-rows.ts";
 
 export async function checkTerminalCopyOff(browser: Browser): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "ovis-copy-off-"));
@@ -78,10 +79,10 @@ setInterval(() => {}, 1000);
       // the preference is read as the terminal mounts: a drag before its answer would copy nothing either way
       const preference = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/herdr-ui");
       await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
-      await page.locator(".pane-terminal .xterm-rows").waitFor();
+      await page.locator(shownRows()).first().waitFor();
       assert.deepEqual(await (await preference).json(), { copy_on_select: false }, "the server reads herdr's copy_on_select");
       await paneSendText(pane, `clear; node ${script}\r`);
-      const first = page.locator(".pane-terminal .xterm-rows > div", { hasText: "COPYOFF-first-line" });
+      const first = page.locator(shownRow(), { hasText: "COPYOFF-first-line" });
       await first.waitFor();
       const clipboard = (): Promise<string> => page.evaluate(() => navigator.clipboard.readText());
       await page.evaluate(() => navigator.clipboard.writeText("UNCHANGED"));
@@ -161,7 +162,7 @@ setInterval(() => {}, 1000);
       await row.waitFor();
       const left = await copyBeforeAnswer(async () => {
         await row.click();
-        await page.locator(".pane-terminal .xterm-rows > div", { hasText: "COPYOFF-target-pane" }).first().waitFor();
+        await page.locator(shownRow(), { hasText: "COPYOFF-target-pane" }).first().waitFor();
       });
       assert.match(left, /^COPYOFF-first-line/, "leaving the pane before herdr answers cancels the explicit copy of herdr's text");
       console.log("PASS leaving the pane before herdr answers cancels that explicit copy, which keeps the visible rows");

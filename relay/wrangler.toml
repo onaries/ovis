@@ -15,6 +15,12 @@ enabled = false
 name = "RELAY"
 class_name = "RelayRoom"
 
+# Usage counters (worker.ts usagePoint): per PC, bytes each way, time connected and sessions; no
+# frame, address or connection_id. Analytics Engine keeps each data point three months.
+[[analytics_engine_datasets]]
+binding = "USAGE"
+dataset = "ovis_relay_usage"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RelayRoom"]

@@ -1,9 +1,29 @@
+import { createHmac, randomBytes } from "node:crypto";
+import { RECEIPT_RESUME_ID } from "../shared/receipt-resume.ts";
 import { authenticatedWebSocket } from "./remote-websocket.ts";
 import { OUTPUT_HARD_BYTES, OUTPUT_HIGH_BYTES, OUTPUT_STALL_MS } from "./output-window.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../shared/terminal-flow.ts";
 import type { MachineManager } from "./machines.ts";
 import type { ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
 import { LARGE_REPLY_BYTES } from "./herdr/client.ts";
+
+/** Unlinkable receipt identities for one connection server lifetime; no browser-controlled namespace crosses PCs or devices. */
+export class RelayReceiptIds {
+  private readonly key = randomBytes(32);
+
+  /**
+   * Returns an opaque UUID stable for this server, PC, authenticated device and browser UUID.
+   * Invalid browser UUIDs return undefined; restarting the server invalidates derived identities.
+   */
+  scope(machine: string, device: string | undefined, browser: string): string | undefined {
+    if (!RECEIPT_RESUME_ID.test(browser)) return undefined;
+    const digest = createHmac("sha256", this.key).update(JSON.stringify([machine, device ?? null, browser])).digest();
+    digest[6] = (digest[6]! & 0x0f) | 0x40;
+    digest[8] = (digest[8]! & 0x3f) | 0x80;
+    const hex = digest.subarray(0, 16).toString("hex");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+}
 
 /**
  * The browser's socket as the core hands it over (connections.ts `relayClient`): `send` holds it to this PC's
@@ -58,7 +78,8 @@ export class MachineRelay {
    * `browserSnapshot`: the PC's snapshot frame as the browser is told it, without the token values this
    * server's sidebar rows hide (#2160). Other frames pass as they came.
    */
-  constructor(manager: MachineManager, id: string, private readonly readOnly: boolean, private readonly browserSnapshot: (snapshot: SessionSnapshot) => SessionSnapshot) {
+  constructor(manager: MachineManager, id: string, private readonly readOnly: boolean, private readonly browserSnapshot: (snapshot: SessionSnapshot) => SessionSnapshot,
+    private readonly receiptId?: (browser: string) => string | undefined) {
     const endpoint = manager.endpoint(id);
     if (!endpoint) throw new Error("This PC is disconnected");
     this.upstream = authenticatedWebSocket(endpoint.url.replace("http:", "ws:") + "/ws", endpoint.token);
@@ -118,6 +139,10 @@ export class MachineRelay {
     if (this.closed || !this.client) return;
     if (this.client.send(raw) === 0) this.close(OUTPUT_STALLED_CLOSE_CODE, "output delivery failed");
   }
+  /**
+   * Forwards browser frames with scoped resume IDs only for controlling attachments; raw browser
+   * resume IDs and observer resume IDs are stripped. Malformed frames remain upstream's responsibility.
+   */
   message(raw: string | Buffer): void {
     if (this.closed) return;
     if (this.upstream.readyState !== WebSocket.OPEN) { this.close(); return; }
@@ -125,9 +150,11 @@ export class MachineRelay {
     try {
       const message = JSON.parse(text);
       if (message?.type === "attach") {
-        // Receipt resumption is local-only: the shared bridge token carries no trusted
-        // origin-device namespace, so forwarding a browser UUID would cross devices.
-        delete message.receipt_resume_id;
+        // The bridge authenticates this server's shared token, not the browser's device.
+        // Only controlling clients receive a server-scoped receipt identity.
+        const id = !this.readOnly && typeof message.receipt_resume_id === "string" ? this.receiptId?.(message.receipt_resume_id) : undefined;
+        if (id) message.receipt_resume_id = id;
+        else delete message.receipt_resume_id;
         text = JSON.stringify(message);
       } else if (this.readOnly && message?.type === "role") {
         text = JSON.stringify({ type: "role", mode: "observe" });

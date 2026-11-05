@@ -14,7 +14,8 @@ export const PERMANENT_SERVER_PROOF_REFUSALS: readonly string[] = [SERVER_KEY_MI
 
 export interface ProofRoute {
   readonly server_id: string;
-  readonly role: "control" | "data" | "client";
+  /** `account` proves the key to the account service (docs/account.md); the relay verifies only `control`, `data` and `warm`. */
+  readonly role: "control" | "data" | "client" | "warm" | "account";
   readonly connection_id: string | null;
 }
 

@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { herdrRpc, paneMoveToNewTab, paneRead, paneSendText, ping, sessionSnapshot, tabRename, workspaceClose, workspaceCreate, workspaceRename } from "../herdr/client.ts";
+import { startHerdrCoreAdapter } from "./adapter.ts";
 import { CoreAttachSession } from "./attach-session.ts";
 import { HcConnection } from "./connection.ts";
+import { listHcMachines } from "./machine-bridge.ts";
+import { MachineScopedConnection } from "./machine-scope.ts";
 import { buildSnapshot } from "./snapshot.ts";
 import type { HerdrPane } from "../../shared/protocol.ts";
 
@@ -240,5 +244,152 @@ describe.skipIf(!bin)("hc client against a real hc", () => {
       await hc.call("terminal.rm", { terminal: address });
     }
     await subscription.channel.close();
+  }, TEST_MS);
+
+  it("renames and moves Ovis's own workspaces and tabs in labels, and splits them in its own document, on a core no Herdr app arranges", async () => {
+    const socket = join(dir, "herdr.sock");
+    const adapter = await startHerdrCoreAdapter(hc, socket);
+    // the core is this test's own and stops in afterAll: a failure here leaves nothing for another test
+    try {
+      expect((await ping(socket)).layout).toEqual({ rename: true, split: true, move: true, arrange: true, worktrees: true });
+      const api = await workspaceCreate({ cwd: dir, label: "api" }, socket);
+      const web = await workspaceCreate({ cwd: dir, label: "web" }, socket);
+
+      await workspaceRename(api.workspace.workspace_id, "backend", socket);
+      await tabRename(api.tab.tab_id, "server", socket);
+      // #2812: split right, then the first pane down; a viewer sizes each terminal to its pane, and the panes keep their places
+      const right = (await herdrRpc<{ pane: HerdrPane }>("pane.split", { target_pane_id: api.root_pane.pane_id, direction: "right" }, socket)).pane;
+      const down = (await herdrRpc<{ pane: HerdrPane }>("pane.split", { target_pane_id: api.root_pane.pane_id, direction: "down" }, socket)).pane;
+      const tabRects = async () => (await sessionSnapshot(socket)).layouts.find((layout) => layout.tab_id === api.tab.tab_id)!.panes.map((pane) => [pane.pane_id, pane.rect]);
+      const placed = [
+        [api.root_pane.pane_id, { x: 0, y: 0, width: 500, height: 500 }],
+        [down.pane_id, { x: 0, y: 500, width: 500, height: 500 }],
+        [right.pane_id, { x: 500, y: 0, width: 500, height: 1000 }],
+      ];
+      expect(await tabRects()).toEqual(placed);
+      for (const [paneId, cols, rows] of [[api.root_pane.pane_id, 15, 1], [down.pane_id, 56, 29], [right.pane_id, 56, 29]] as const) {
+        const { channel } = await hc.open("terminal.attach", { terminal: paneId, cols, rows }, { onData: () => {}, onClose: () => {} });
+        await channel.close();
+      }
+      expect(await tabRects()).toEqual(placed);
+      expect(await tabRects()).toEqual(placed);
+      expect((await hc.call("doc.get", { name: "ovis-layout" })).version).toBe(2);
+      await herdrRpc("pane.close", { pane_id: down.pane_id }, socket);
+      await herdrRpc("pane.close", { pane_id: right.pane_id }, socket);
+
+      let snapshot = await sessionSnapshot(socket);
+      expect(snapshot.workspaces.find((workspace) => workspace.workspace_id === api.workspace.workspace_id)?.label).toBe("backend");
+      expect(snapshot.tabs.find((tab) => tab.tab_id === api.tab.tab_id)?.label).toBe("server");
+      expect(snapshot.panes.filter((pane) => pane.tab_id === api.tab.tab_id).map((pane) => pane.pane_id)).toEqual([api.root_pane.pane_id]);
+
+      const moved = await paneMoveToNewTab(web.root_pane.pane_id, api.workspace.workspace_id, "moved", socket);
+      expect(moved).toMatchObject({ pane: { pane_id: web.root_pane.pane_id, workspace_id: api.workspace.workspace_id }, closed_tab_id: web.tab.tab_id, closed_workspace_id: web.workspace.workspace_id });
+      snapshot = await sessionSnapshot(socket);
+      expect(snapshot.workspaces.some((workspace) => workspace.workspace_id === web.workspace.workspace_id)).toBe(false);
+      expect(snapshot.tabs.filter((tab) => tab.workspace_id === api.workspace.workspace_id).map((tab) => tab.label)).toEqual(["server", "moved"]);
+      // the moved pane takes its new workspace's name, so it never renames it
+      expect(snapshot.workspaces.find((workspace) => workspace.workspace_id === api.workspace.workspace_id)?.label).toBe("backend");
+      await workspaceClose(api.workspace.workspace_id, socket);
+    } finally {
+      adapter.stop();
+    }
+  }, TEST_MS);
+});
+
+/**
+ * Another machine of a real hc's core, shown as a PC of its own (#2497): two cores of their own
+ * (sessions, state, config and runtime folders nobody else uses), the second added to the first as
+ * `lab` through a `--via` command that runs its `hc connect` in its own env, as SSH would there. Runs
+ * only where OVIS_TEST_HC_BIN names an hc.
+ */
+describe.skipIf(!bin)("another machine of a real hc's core", () => {
+  let dir = "";
+  /** each core's env, set only once every isolating variable is in it */
+  const envs: Record<string, string>[] = [];
+  let hc: MachineScopedConnection | null = null;
+  let stopAdapter: (() => void) | null = null;
+  let socket = "";
+
+  const until = async <T>(label: string, read: () => Promise<T | null>): Promise<T> => {
+    const deadline = Date.now() + WAIT_MS;
+    for (;;) {
+      const value = await read();
+      if (value !== null) return value;
+      if (Date.now() > deadline) throw new Error(`no ${label} within ${WAIT_MS}ms`);
+      await Bun.sleep(25);
+    }
+  };
+  const run = async (env: Record<string, string>, args: string[]) => {
+    const proc = Bun.spawn([bin!, ...args], { env, stdout: "pipe", stderr: "pipe" });
+    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    expect({ args, code, err: code === 0 ? "" : err }).toEqual({ args, code: 0, err: "" });
+    return out;
+  };
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), "ovis-hc-machine-"));
+    // `--via` finds hc on the PATH as `herdr-core`
+    mkdirSync(join(dir, "bin"));
+    symlinkSync(bin!, join(dir, "bin", "herdr-core"));
+    const inherited = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => !entry[0].startsWith("HC_") && entry[1] !== undefined));
+    for (const name of ["here", "lab"]) {
+      for (const sub of ["state", "config", "run"]) mkdirSync(join(dir, name, sub), { recursive: true, mode: 0o700 });
+      envs.push({
+        ...inherited,
+        PATH: `${join(dir, "bin")}:${process.env["PATH"] ?? "/usr/bin:/bin"}`,
+        HC_SESSION: `ovis-test-${name}-${process.pid}`,
+        XDG_STATE_HOME: join(dir, name, "state"),
+        XDG_CONFIG_HOME: join(dir, name, "config"),
+        XDG_RUNTIME_DIR: join(dir, name, "run"),
+        HC_SOCKET: join(dir, name, "run", "hc.sock"),
+      });
+    }
+    const [here, lab] = envs as [Record<string, string>, Record<string, string>];
+    await run(here, ["server", "start"]);
+    await run(lab, ["server", "start"]);
+    const via = join(dir, "bin", "via-lab");
+    const assignments = Object.entries(lab).filter(([key]) => key.startsWith("HC_") || key.startsWith("XDG_") || key === "PATH").map(([key, value]) => `${key}='${value}'`).join(" ");
+    writeFileSync(via, `#!/bin/sh\nexec env ${assignments} sh -c "$1"\n`);
+    chmodSync(via, 0o755);
+    await run(here, ["machine", "add", "--name", "lab", "--via", via]);
+    await run(here, ["run", "--bg", "bash"]);
+    hc = new MachineScopedConnection(() => {
+      const child = Bun.spawn([bin!, "connect"], { env: here, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+      return {
+        readable: child.stdout,
+        write: (bytes: Uint8Array) => { child.stdin.write(bytes); void child.stdin.flush(); },
+        exited: child.exited,
+        kill: () => child.kill(),
+      };
+    }, "lab", (JSON.parse(await run(here, ["machine", "ls", "--json"])) as { machines: { id: string }[] }).machines[0]!.id);
+    socket = join(dir, "lab.sock");
+    stopAdapter = (await startHerdrCoreAdapter(hc, socket, undefined, { otherMachine: true })).stop;
+  }, TEST_MS);
+
+  afterAll(async () => {
+    stopAdapter?.();
+    hc?.close();
+    // only this test's cores, each by its own isolated env
+    const stopped = await Promise.all(envs.map((env) => Bun.spawn([bin!, "server", "stop"], { env, stdout: "ignore", stderr: "ignore" }).exited));
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    expect(stopped.every((code) => code === 0)).toBe(true);
+  }, TEST_MS);
+
+  it("lists the machine, then starts, types into and reads a terminal there by its own address", async () => {
+    expect((await listHcMachines(hc!)).map((machine) => [machine.name, machine.connected])).toEqual([["lab", true]]);
+    // this PC's own terminal is none of lab's
+    expect((await sessionSnapshot(socket)).panes).toEqual([]);
+    const made = await workspaceCreate({ label: "on lab" }, socket);
+    const paneId = made.root_pane.pane_id;
+    expect(paneId).not.toContain("/");
+    const listed = JSON.parse(await run(envs[1]!, ["ls", "--json"])) as { terminals: { address: string }[] };
+    expect(listed.terminals.map((terminal) => terminal.address)).toContain(paneId);
+    expect((await sessionSnapshot(socket)).workspaces.map((workspace) => workspace.label)).toEqual(["on lab"]);
+    await paneSendText(paneId, "echo lab-$((40+2))\r", socket);
+    const text = await until("echo", async () => {
+      const read = await paneRead({ paneId, source: "recent", format: "text", lines: 50 }, socket);
+      return read.text.includes("lab-42") ? read.text : null;
+    });
+    expect(text).toContain("lab-42");
   }, TEST_MS);
 });

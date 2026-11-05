@@ -26,8 +26,10 @@ export interface KeyRepeat {
   press: (x: number, y: number) => void;
   /** Returns true only when movement cancels a hold that has not started repeating. */
   move: (x: number, y: number) => boolean;
-  release: () => void;
-  cancel: () => void;
+  /** Ends the hold; true when it had started repeating. */
+  release: () => boolean;
+  /** Ends the hold without its click; true when it had started repeating. */
+  cancel: () => boolean;
   /** Consumes the one click suppressed by a released, repeating hold. */
   takeClick: () => boolean;
 }
@@ -82,12 +84,16 @@ export function createKeyRepeat(send: () => void, clock: KeyRepeatClock = defaul
       return true;
     },
     release() {
-      if (repeating) suppressClick = true;
+      const repeated = repeating;
+      if (repeated) suppressClick = true;
       stop();
+      return repeated;
     },
     cancel() {
+      const repeated = repeating;
       stop();
       suppressClick = false;
+      return repeated;
     },
     takeClick() {
       const allowed = !suppressClick;

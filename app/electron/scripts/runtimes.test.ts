@@ -21,9 +21,10 @@ describe("download", () => {
 });
 
 describe("hostTarget", () => {
-  it("names the four builds, and no other", () => {
+  it("names the five builds, and no other", () => {
     expect(hostTarget("darwin", "arm64")).toBe("darwin-arm64");
     expect(hostTarget("linux", "x64")).toBe("linux-x64");
-    expect(() => hostTarget("win32", "x64")).toThrow(/not win32-x64/);
+    expect(hostTarget("win32", "x64")).toBe("win32-x64");
+    expect(() => hostTarget("win32", "arm64")).toThrow(/not win32-arm64/);
   });
 });

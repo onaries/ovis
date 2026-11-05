@@ -7,3 +7,41 @@
 .files-dialog .modal-body {
   min-height: calc(var(--control-h) * 8);
 }
+
+/*
+ * Beside the pane (Settings: Files beside the pane, a wide window): the docked file panel's column
+ * (FileViewer.css .file-panel), its header one compact row on a hairline like the docked viewer's,
+ * and the list filling the rest of the height.
+ */
+/* a docked file or web page has its place: kept out of the row, not unmounted */
+.files-panel[hidden] {
+  display: none;
+}
+
+.files-dialog-docked {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.files-dialog-docked .modal-header {
+  min-height: calc(var(--control-h) + var(--space-2));
+  padding: 0 var(--space-2) 0 var(--space-3);
+}
+
+.files-dialog-docked .modal-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.files-dialog-docked .modal-body {
+  min-height: 0;
+  padding: var(--space-3);
+}
+
+/* the narrowest panel keeps the tabs and Close; the palette's folder search waits for a wider one */
+@container file-panel (max-width: 360px) {
+  .files-dialog-docked .modal-title,
+  .files-dialog-docked .files-dialog-tabs + .icon-button:not(:last-child) { display: none; }
+}

@@ -22,7 +22,8 @@ import { directoryKey, withoutVerbatimPrefix } from "./codex.ts";
 import { darwinStartTime, sysctlCall } from "./darwin-process.ts";
 import { recentProcessTable } from "./gjc-runtime.ts";
 import { processAlive, processStartUpperBoundAsync } from "./process-start.ts";
-import type { ProcessRow } from "./windows-processes.ts";
+import { jobProcessesBelow, type JobProcess } from "./foreground-job.ts";
+import { descendantProcesses, type ProcessRow } from "./windows-processes.ts";
 import { userHome } from "./user-home.ts";
 
 const MAX_PROJECT_NAME = 200;
@@ -40,6 +41,34 @@ export function isClaudeProcess(entry: { name?: string; argv0?: string; argv?: r
   // the native build runs under its version as the name and titles itself "Claude": both its
   // argv0 and its argv[0] say so, which one field alone does not prove
   return /^\d+\.\d+\.\d+$/.test(entry.name ?? "") && entry.argv0 === "Claude" && entry.argv?.[0] === "Claude";
+}
+
+/**
+ * The Claude processes under a Windows pane's shell, from the process table: herdr and herdr-core
+ * name only the shell in front there (windows-processes.ts). The nearest one, and any other not
+ * started by it (two of them: which one a session belongs to cannot be told). Null when the table
+ * says nothing, which is no proof that no Claude runs there.
+ */
+export async function windowsShellClaude(shellPid: number, table: () => Promise<ProcessRow[]> = recentProcessTable): Promise<{ pid: number; argv: string[] }[] | null> {
+  const rows = await table();
+  if (rows.length === 0) return null;
+  const claude = descendantProcesses(rows, shellPid).filter(isClaudeProcess);
+  const first = claude[0];
+  if (first === undefined) return [];
+  const below = new Set(descendantProcesses(rows, first.pid).map((entry) => entry.pid));
+  return claude.filter((entry) => entry === first || !below.has(entry.pid));
+}
+
+/**
+ * The Claude below a herdr-core terminal's foreground process, in its job (foreground-job.ts): a
+ * launcher or script that runs Claude as its child (#3009). Only one Claude there is taken: with two,
+ * which one the terminal shows cannot be told, and none is. Null when the job cannot be read.
+ */
+export async function jobClaude(pid: number): Promise<JobProcess[] | null> {
+  const job = await jobProcessesBelow(pid);
+  if (job === null) return null;
+  const claude = job.filter((entry) => isClaudeProcess({ name: entry.name, argv: entry.argv, ...(entry.argv[0] === undefined ? {} : { argv0: entry.argv[0] }) }));
+  return claude.length === 1 ? claude : [];
 }
 
 /** Java's String.hashCode, which Claude Code uses for the suffix of a long name. */

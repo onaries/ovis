@@ -156,6 +156,25 @@ export function closeLayoutPane(layout: PaneLayoutSnapshot, paneId: string): voi
   layout.panes = render(layout, remaining);
 }
 
+/**
+ * A pane moved beside another of its tab, as herdr-core moves it: it leaves the tree as a close
+ * takes it, then halves the target as a split does, so the target's room is measured once the
+ * pane has left. With no room there, the tab stays as it was.
+ */
+export function moveLayoutPane(layout: PaneLayoutSnapshot, paneId: string, targetId: string, direction: SplitDirection): boolean {
+  const root = tree(layout);
+  const moving = layout.panes.find((pane) => pane.pane_id === paneId);
+  if (!root || !moving || paneId === targetId) return false;
+  // a close edits the tree in place but gives the layout new arrays
+  const saved = { root: structuredClone(root), panes: layout.panes, splits: layout.splits };
+  closeLayoutPane(layout, paneId);
+  if (splitLayout(layout, targetId, moving, direction)) return true;
+  trees.set(layout, saved.root);
+  layout.panes = saved.panes;
+  layout.splits = saved.splits;
+  return false;
+}
+
 /** A swap exchanges leaf identities, not the hierarchy or split ratios. */
 export function swapLayoutPanes(layout: PaneLayoutSnapshot, paneId: string, otherId: string): void {
   const root = tree(layout);

@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, syml
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SUPPORTED_AGENT_KINDS } from "../shared/supported-agents.ts";
-import { ACTIVE_LATE_DAYS, emptyUsage, harnessOf, NOTICE_VERSION, TELEMETRY_COUNT_MAX, TELEMETRY_HARNESSES, type TelemetryActive, type TelemetryChange, type TelemetryEvent, type TelemetrySettings, type TelemetryUsage } from "../shared/telemetry.ts";
+import { ACTIVE_LATE_DAYS, emptyUsage, harnessOf, NOTICE_VERSION, TELEMETRY_COUNT_MAX, TELEMETRY_HARNESSES, type TelemetryActive, type TelemetryChange, type TelemetryEvent, type TelemetryRuntime, type TelemetrySettings, type TelemetryUsage } from "../shared/telemetry.ts";
 import { DEFAULT_SETTINGS, telemetrySettingsSnapshot, type Settings } from "../src/lib/settings.ts";
 import { handleTelemetryRequest, installMethod, Telemetry, telemetryBlocked, USAGE_RESEND_MS, visitSurface } from "./telemetry.ts";
 
@@ -13,7 +13,7 @@ afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: tru
 /** a fixture receiver: never the real ACTIVE_URL */
 const TEST_ACTIVE_URL = "https://telemetry.test/v1/active";
 
-function setup(options: { version?: string; env?: Record<string, string>; status?: number; previous?: string | null; stateDir?: string; grace?: number; fetch?: typeof fetch; now?: string } = {}) {
+function setup(options: { version?: string; env?: Record<string, string>; status?: number; previous?: string | null; stateDir?: string; grace?: number; fetch?: typeof fetch; now?: string; runtime?: TelemetryRuntime } = {}) {
   const stateDir = options.stateDir ?? mkdtempSync(join(tmpdir(), "telemetry-"));
   if (!options.stateDir) dirs.push(stateDir);
   const sent: TelemetryEvent[] = [];
@@ -35,7 +35,7 @@ function setup(options: { version?: string; env?: Record<string, string>; status
   const telemetry = new Telemetry({
     stateDir, version: options.version ?? "0.4.1", env: options.env ?? {}, fetch: fake,
     activeUrl: TEST_ACTIVE_URL,
-    platform: "linux", arch: "x64", previousVersion: () => options.previous ?? null,
+    platform: "linux", arch: "x64", previousVersion: () => options.previous ?? null, runtime: options.runtime,
     now: () => clock.now, noticeGraceMs: options.grace ?? 0,
     setTimer: (fn, ms) => {
       const timer = { fn, ms, cleared: false };
@@ -80,12 +80,23 @@ describe("telemetry events", () => {
     expect(telemetry.status()).toMatchObject({ enabled: true, notice_seen: false, blocked_by_env: false });
   });
 
+  test("the install event and the day's active message name the runtime the server serves", async () => {
+    const { telemetry, sent, actives } = setup({ runtime: "herdr-core" });
+    seen(telemetry);
+    await telemetry.report();
+    await telemetry.active(["claude"]);
+    expect(sent.map((event) => event.runtime)).toEqual(["herdr-core"]);
+    expect(actives.map((active) => active.runtime)).toEqual(["herdr-core"]);
+    expect(telemetry.status().next).toBeNull();
+    expect(telemetry.status().active.runtime).toBe("herdr-core");
+  });
+
   test("the notice sends the install once, and a restart on the same version sends nothing", async () => {
     const { telemetry, sent, stateDir } = setup();
     telemetry.change({ notice_seen: true, notice_version: NOTICE_VERSION });
     await telemetry.report();
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ event: "install", version: "0.4.1", previous_version: null, os: "linux", arch: "x64", install_method: "source", settings: null });
+    expect(sent[0]).toMatchObject({ event: "install", version: "0.4.1", previous_version: null, os: "linux", arch: "x64", install_method: "source", settings: null, runtime: "herdr" });
     expect(sent[0]!.install_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(statSync(join(stateDir, "telemetry.json")).mode & 0o777).toBe(0o600);
 
@@ -312,7 +323,7 @@ describe("daily active message", () => {
     seen(telemetry);
     await telemetry.active(["claude", null, "claude", "weird"]);
     expect(urls.filter((url) => url === TEST_ACTIVE_URL)).toHaveLength(1);
-    expect(actives).toEqual([{ event: "active", day: "2026-10-08", install_id: expect.stringMatching(/^[0-9a-f-]{36}$/), version: "0.4.1", os: "linux", arch: "x64", install_method: "source", harnesses: ["claude", "other"], usage: emptyUsage() }]);
+    expect(actives).toEqual([{ event: "active", day: "2026-10-08", install_id: expect.stringMatching(/^[0-9a-f-]{36}$/), version: "0.4.1", os: "linux", arch: "x64", install_method: "source", harnesses: ["claude", "other"], usage: emptyUsage(), runtime: "herdr" }]);
     await telemetry.active(["claude", null, "claude", "weird"]);
     expect(actives).toHaveLength(1);
   });
@@ -404,7 +415,7 @@ describe("daily active message", () => {
   test("(g) status().active previews today's message as it would be sent", async () => {
     const { telemetry } = setup();
     const before = telemetry.status().active;
-    expect(before).toEqual({ event: "active", day: "2026-10-08", install_id: expect.stringMatching(/^[0-9a-f-]{36}$/), version: "0.4.1", os: "linux", arch: "x64", install_method: "source", harnesses: [], usage: emptyUsage() });
+    expect(before).toEqual({ event: "active", day: "2026-10-08", install_id: expect.stringMatching(/^[0-9a-f-]{36}$/), version: "0.4.1", os: "linux", arch: "x64", install_method: "source", harnesses: [], usage: emptyUsage(), runtime: "herdr" });
     await telemetry.active(["codex", "claude", undefined]);
     expect(telemetry.status().active).toEqual({ ...before, harnesses: ["claude", "codex"] });
   });

@@ -1,12 +1,36 @@
-import { afterEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
-import { appendFileSync, mkdtempSync, renameSync, rmSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { forgetTranscriptState, pictureIndexForTests, transcriptImage, transcriptImageAsync, transcriptPage } from "./conversation.ts";
+import { TranscriptReader, transcriptReader } from "./transcript-reader.ts";
+
+/**
+ * The cooperative lookups read through a reader that opens, reads and stats the transcript with fs's
+ * own calls, each answered as an async read is: a test's spy on fs.readSync, fs.fstatSync or
+ * fs.statSync sees every read and stat a lookup makes, as it did when the lookup read the file itself.
+ * A lease reads at most a MiB at a time (TranscriptFile.window).
+ */
+let leases: { mockRestore(): void } | undefined;
+beforeEach(() => {
+  const reader = new TranscriptReader({
+    open: async (path) => {
+      const fd = fs.openSync(path, "r");
+      return {
+        stat: async () => fs.fstatSync(fd),
+        read: async (buffer, offset, length, position) => ({ bytesRead: fs.readSync(fd, buffer, offset, length, position) }),
+        close: async () => fs.closeSync(fd),
+      };
+    },
+    stat: async (path, follow) => follow ? fs.statSync(path) : fs.lstatSync(path),
+  });
+  leases = spyOn(transcriptReader, "read").mockImplementation(reader.read.bind(reader) as typeof transcriptReader.read);
+});
 
 const roots: string[] = [];
 afterEach(() => {
+  leases?.mockRestore();
   setSystemTime();
   forgetTranscriptState();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -78,15 +102,49 @@ describe("cooperative Claude images", () => {
     expect(await transcriptImageAsync(path, `${id(3)}:1`)).toBeNull();
   });
 
+  it("serves through the shared reader's own file access, warm and cold", async () => {
+    // the other tests read through fs's calls (the reader above); this one through the reader's own
+    leases?.mockRestore();
+    leases = undefined;
+    const { path, ref } = fixture();
+    exact(await transcriptImageAsync(path, ref));
+    exact(await transcriptImageAsync(path, ref));
+    expect(await transcriptImageAsync(path, `${id(3)}:0:2`)).toBeNull();
+    appendFileSync(path, line({ type: "progress", data: "the session goes on" }));
+    exact(await transcriptImageAsync(path, ref));
+  });
+
+  it("serves a record read over several windows, whose shape keeps bytes of its first window", async () => {
+    const { path } = fixture(true);
+    // the record's head (its type and uuid, then the start of a long text) is kept from the first
+    // window, read in the lease's own buffer; the next windows are read into that same buffer, so
+    // a shape that held on to the first window instead of copying it would no longer parse
+    const text = "y".repeat(2.5 * 1024 * 1024);
+    writeFileSync(path, line({ type: "user", uuid: id(7), message: { content: [{ type: "text", text }, picture] } }));
+    let reads = 0;
+    const read = fs.readSync;
+    const counting = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+      reads += 1;
+      return read(...args);
+    }) as typeof fs.readSync);
+    try {
+      exact(await transcriptImageAsync(path, `${id(7)}:1`));
+      exact(await transcriptImageAsync(path, `${id(7)}:1`));
+    } finally { counting.mockRestore(); }
+    expect(reads).toBeGreaterThan(6);
+    expect(await transcriptImageAsync(path, `${id(7)}:0`)).toBeNull();
+  });
+
   it("bounds record judgments between event-loop turns even with a warm boundary", async () => {
     const { path, ref } = fixture(true);
     exact(await transcriptImageAsync(path, ref));
     let since = 0, most = 0, total = 0;
-    const alloc = Buffer.alloc.bind(Buffer);
-    const counting = spyOn(Buffer, "alloc").mockImplementation(((...args: Parameters<typeof Buffer.alloc>) => {
+    // every record the searches judge is parsed (its shape): a lease's window read allocates no buffer
+    const parse = JSON.parse;
+    const counting = spyOn(JSON, "parse").mockImplementation(((...args: Parameters<typeof JSON.parse>) => {
       since += 1; total += 1;
-      return alloc(...args);
-    }) as typeof Buffer.alloc);
+      return parse(...args);
+    }) as typeof JSON.parse);
     let looking = true;
     const turn = () => { most = Math.max(most, since); since = 0; if (looking) setImmediate(turn); };
     try {
@@ -159,7 +217,8 @@ describe("cooperative Claude images", () => {
     } finally { watching.mockRestore(); }
   });
 
-  for (const change of ["replace", "truncate", "rewrite", "rewrite and grow", "clear", "rewind"] as const) it(`rejects an image after an in-flight ${change}`, async () => {
+  // "replace" renames a file over the open transcript, which needs POSIX rename-over-an-open-file semantics
+  for (const change of ["replace", "truncate", "rewrite", "rewrite and grow", "clear", "rewind"] as const) it.skipIf(change === "replace" && process.platform === "win32")(`rejects an image after an in-flight ${change}`, async () => {
     const { path, ref } = fixture();
     const apply = () => {
       if (change === "replace") { writeFileSync(`${path}.new`, line({ type: "user", uuid: id(3), message: { content: [picture] } })); renameSync(`${path}.new`, path); }
@@ -226,13 +285,13 @@ it("a lookup rejected after an in-place rewrite and growth leaves no stale bound
   let scanned = false;
   let changed = false;
   const read = fs.readSync;
-  // the boundary scan reads the whole file at once; the next read from the start is the picture's record:
-  // there, once the boundary is published, rewrite the record after the picture into a /clear (same length,
-  // same inode) and append, before the lookup reads on
+  // the boundary scan reads the file from its start, a window at a time; the next read from the start is the
+  // picture's record: there, once the boundary is published, rewrite the record after the picture into a
+  // /clear (same length, same inode) and append, before the lookup reads on
   const watch = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
     const result = read(...args);
     const at = args as unknown as [number, Uint8Array, number, number, number];
-    if (at[4] === 0 && at[3] > 1024 * 1024) scanned = true;
+    if (at[4] === 0 && !scanned) scanned = true;
     else if (at[4] === 0 && scanned && !changed) {
       writeFileSync(path, picture + clear + padding.repeat(3));
       appendFileSync(path, JSON.stringify({ type: "progress", data: "append" }) + "\n");
@@ -350,7 +409,8 @@ it("a lookup that sees the file rewritten drops the boundary it kept, even when 
   expect(await transcriptImageAsync(path, `${id(1)}:0`)).toBeNull();
 });
 
-it("a filesystem exception revokes a rejected lookup's boundary", async () => {
+// renames the directory that holds the open transcript, which needs POSIX rename semantics (Windows refuses it)
+it.skipIf(process.platform === "win32")("a filesystem exception revokes a rejected lookup's boundary", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ovis-image-exception-"));
   roots.push(dir, `${dir}.away`);
   const path = join(dir, "session.jsonl");
@@ -379,6 +439,71 @@ it("a filesystem exception revokes a rejected lookup's boundary", async () => {
   appendFileSync(path, line({ type: "progress", data: "append" }));
   // The failed lookup must not leave a cached boundary that predates this clear.
   expect(await transcriptImageAsync(path, `${id(1)}:0`)).toBeNull();
+});
+
+it("rejects an image when the path's last check sees a same-size rewrite that put the modification time back", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-image-ctime-"));
+  roots.push(dir);
+  const path = join(dir, "session.jsonl");
+  const other = Buffer.from(png);
+  other[40] = other[40]! ^ 1;
+  const text = (bytes: Buffer) => line({ type: "user", uuid: id(1), parentUuid: null, message: { content: [{ ...picture, source: { ...picture.source, data: bytes.toString("base64") } }] } });
+  writeFileSync(path, text(png));
+  const time = Math.floor(Date.now() / 1000) - 10;
+  utimesSync(path, time, time);
+  // the lookup's last path check, after its last stat of the pinned file: only the change time moved
+  let checks = 0;
+  const stat = fs.statSync;
+  const watch = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
+    if (args[0] === path && ++checks === 3) { writeFileSync(path, text(other)); utimesSync(path, time, time); }
+    return stat(...args);
+  }) as typeof fs.statSync);
+  try { expect(await transcriptImageAsync(path, `${id(1)}:0`)).toBeNull(); } finally { watch.mockRestore(); }
+  expect(checks).toBe(3);
+  expect(Buffer.from((await transcriptImageAsync(path, `${id(1)}:0`))!.bytes)).toEqual(other);
+});
+
+// Windows makes a symbolic link only with Developer Mode or the right to make one, which a test
+// run may not have: the reader's `follow` is checked with injected IO there (transcript-reader.test.ts)
+describe.skipIf(process.platform === "win32")("a transcript reached through a link", () => {
+  // a Claude store can be reached through a linked directory (one config directory linked into
+  // another), or name its transcript by a link: the path is checked by the file it names, as statSync does
+  it("serves through a link to the file and through a linked directory", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ovis-claude-image-link-"));
+    roots.push(dir);
+    const path = join(dir, "store", "session.jsonl");
+    mkdirSync(dirname(path));
+    writeFileSync(path, line({ type: "user", uuid: id(1), parentUuid: null, message: { content: [picture] } }));
+    const file = join(dir, "linked.jsonl");
+    symlinkSync(path, file);
+    const store = join(dir, "linked-store");
+    symlinkSync(dirname(path), store, "dir");
+    for (const linked of [file, join(store, basename(path))]) {
+      exact(await transcriptImageAsync(linked, `${id(1)}:0`));
+      // again, on the boundary the first lookup kept
+      exact(await transcriptImageAsync(linked, `${id(1)}:0`));
+      exact(transcriptImage(linked, `${id(1)}:0`));
+    }
+  });
+
+  it("rejects an image when the link is moved to another file during the lookup", async () => {
+    const { path, ref } = fixture();
+    const link = join(dirname(path), "linked.jsonl");
+    const copy = join(dirname(path), "copy.jsonl");
+    copyFileSync(path, copy);
+    symlinkSync(path, link);
+    // the same bytes in another file, once the lookup's first read returns: the path no longer names the file it read
+    let moved = false;
+    const read = fs.readSync;
+    const watch = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+      const result = read(...args);
+      if (!moved) { moved = true; rmSync(link); symlinkSync(copy, link); }
+      return result;
+    }) as typeof fs.readSync);
+    try { expect(await transcriptImageAsync(link, ref)).toBeNull(); } finally { watch.mockRestore(); }
+    expect(moved).toBe(true);
+    exact(await transcriptImageAsync(link, ref));
+  });
 });
 
 describe("finding a picture's record", () => {
@@ -488,6 +613,57 @@ describe("finding a picture's record", () => {
     // record the whole transcript before that). Going back costs a 64 KiB piece past each window of a
     // MiB, and each of the four shorter windows it starts with can cost the line it cuts: under a fifth more
     expect(bytes).toBeLessThan(result * 1.2);
+  });
+
+  it("goes back over lines of a MiB to a call far back in a few reads per line", async () => {
+    // every read is a round trip on a network home: a window that cuts a long line finds the line's start
+    // in pieces that grow, not 64 KiB at a time, and the next window is as long as that one turned out
+    let text = line({ type: "user", uuid: id(1), parentUuid: null, message: { content: "look" } });
+    text += line({ type: "assistant", uuid: id(2), message: { content: [{ type: "tool_use", id: "read", name: "Read" }] } });
+    const lines = 20;
+    for (let at = 0; at < lines; at += 1) text += line({ type: "progress", uuid: id(100 + at), data: "x".repeat(1024 * 1024) });
+    const path = transcript(text + line({ type: "user", uuid: id(3), message: { content: [{ type: "tool_result", tool_use_id: "read", content: [picture] }] } }));
+    quiet();
+    exact(await transcriptImageAsync(path, `${id(3)}:0:0`));
+    let reads = 0;
+    const read = fs.readSync;
+    const watch = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+      reads += 1;
+      return read(...args);
+    }) as typeof fs.readSync);
+    try { exact(await transcriptImageAsync(path, `${id(3)}:0:0`)); } finally { watch.mockRestore(); }
+    // the piece before a window that finds the line's start, and the window of a MiB, which does not read
+    // again what that piece holds: two reads a line, and a few more for the first windows (64 KiB pieces
+    // took 6 a line)
+    expect(reads).toBeLessThan(3 * lines);
+  });
+
+  it("finds a tool's call whose id a search window's edge cuts in two", async () => {
+    // the forward search reads a MiB at a time from the floor: the call's id is put across the first edge
+    const call = line({ type: "assistant", uuid: id(2), message: { content: [{ type: "tool_use", id: "read-across-the-edge", name: "Read" }] } });
+    const head = (pad: number) => line({ type: "user", uuid: id(1), parentUuid: null, message: { content: "x".repeat(pad) } });
+    const pad = 1024 * 1024 - Buffer.byteLength(head(0)) - call.indexOf("read-across-the-edge") - 8;
+    const text = head(pad) + call;
+    expect(Buffer.byteLength(head(pad)) + call.indexOf("read-across-the-edge")).toBe(1024 * 1024 - 8);
+    const path = transcript(text + line({ type: "user", uuid: id(3), message: { content: [{ type: "tool_result", tool_use_id: "read-across-the-edge", content: [picture] }] } }));
+    exact(await asMain(path, `${id(3)}:0:0`));
+    exact(await transcriptImageAsync(path, `${id(3)}:0:0`));
+  });
+
+  it("finds a tool's call whose id the backward walk's first window cuts where what its probe read ends", async () => {
+    // the result's first window back is 64 KiB: its probe finds the call's line start, and the window
+    // begins with the probe's bytes of that line, up to 64 KiB before the result, which is in the id
+    const id2 = "read-across-the-probe";
+    const call = (pad: number) => line({ type: "assistant", uuid: id(2), message: { content: [{ type: "tool_use", id: id2, name: "Read", input: { pad: "x".repeat(pad) } }] } });
+    const tail = (pad: number) => Buffer.byteLength(call(pad)) - call(pad).indexOf(id2);
+    const pad = 64 * 1024 + 8 - tail(0);
+    expect(tail(pad)).toBe(64 * 1024 + 8);
+    const path = transcript(line({ type: "user", uuid: id(1), parentUuid: null, message: { content: "look" } }) + call(pad)
+      + line({ type: "user", uuid: id(3), message: { content: [{ type: "tool_result", tool_use_id: id2, content: [picture] }] } }));
+    quiet();
+    exact(await transcriptImageAsync(path, `${id(3)}:0:0`));
+    exact(await transcriptImageAsync(path, `${id(3)}:0:0`));
+    exact(await asMain(path, `${id(3)}:0:0`));
   });
 
   it("finds a tool's call however far back it was made, and only the last block naming it decides", async () => {
@@ -744,8 +920,11 @@ describe("finding a picture's record", () => {
   it("reads a kept scan's bytes again when a later lookup would share a read begun before it, while a rewrite kept the file's times", async () => {
     // A read of the bytes vouches only to lookups that began before it. Here a lookup begins after the
     // read took its window, and after a same-size rewrite that kept every time the file reports: sharing
-    // that read would serve the picture the bytes no longer hold
-    const old = Date.now() - 3_600_000 + 0.25;
+    // that read would serve the picture the bytes no longer hold. The times are fine and recent (under
+    // PICTURE_RACY_MS), so the quiet rule vouches for nothing and only when the read began decides: the
+    // later lookup takes its turn once the first is done (one transcript's lookups go one after another),
+    // when an older read would otherwise vouch for it by the quiet rule
+    const old = Date.now() - 1_000 + 0.25;
     const { path, after } = rewritable();
     const restore = holdTimes(path, old, old);
     try {

@@ -585,13 +585,13 @@ async function firstLine(stdout: ReadableStream<Uint8Array>): Promise<string> {
 }
 
 /** A ready, owned process with Codex's argv[0], no rollout descriptor and no timer. */
-async function runningCodex(resume = false): Promise<ReturnType<typeof Bun.spawn>> {
+async function runningCodex(resume = false, env = process.env): Promise<ReturnType<typeof Bun.spawn>> {
   const node = Bun.which("node");
   if (node === null) throw new Error("node is required for the Codex process fixture");
   const child = Bun.spawn([
     "/bin/bash", "-c", 'exec -a "$1" "$2" -e \'process.stdout.write("READY\\n"); process.stdin.resume()\' "${@:3}"',
     "fixture", join(root, "codex"), node, ...(resume ? ["resume", thread] : []),
-  ], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  ], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env });
   children.push(child);
   expect(await firstLine(child.stdout)).toBe("READY\n");
   return child;
@@ -1706,7 +1706,7 @@ function shortRollout(file: string, prompt = shortPrompt, reply = shortAnswer): 
 
 /** Owned process and temporary native store; no Codex or paid model is invoked. */
 async function shortSession(milliseconds = true, cwd = root): Promise<number> {
-  const child = await runningCodex();
+  const child = await runningCodex(false, { ...process.env, CODEX_HOME: home });
   foreground = [{ pid: child.pid, argv: [join(root, "codex")] }];
   const started = processStartedAt(child.pid);
   if (started === null) throw new Error("fixture process start is unavailable");
@@ -1737,6 +1737,176 @@ function addShortThread(id: string, file: string, created: number, prompt = "Oth
 const fixturePane = (id: string, cwd = root) => ({
   pane_id: id, workspace_id: root, tab_id: root, terminal_id: id,
   agent: "codex" as const, agent_status: "working" as const, cwd, focused: false, revision: 0,
+});
+
+shortIt("ignores a same-directory peer that uses another Codex home", async () => {
+  await shortSession();
+  const otherHome = join(root, "other-codex-home");
+  mkdirSync(otherHome);
+  fs.copyFileSync(join(home, "state_5.sqlite"), join(otherHome, "state_5.sqlite"));
+  const peer = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+  foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex")] }]);
+  peerScreens.set("peer", "Working…");
+  expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBe(path);
+});
+
+shortIt("ignores a default-home peer beside an isolated Codex profile", async () => {
+  await shortSession();
+  const userHome = join(root, "other-user");
+  mkdirSync(join(userHome, ".codex"), { recursive: true });
+  fs.copyFileSync(join(home, "state_5.sqlite"), join(userHome, ".codex", "state_5.sqlite"));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "CODEX_HOME"));
+  const peer = await runningCodex(false, { ...env, HOME: userHome });
+  foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex")] }]);
+  peerScreens.set("peer", shortScreen);
+  expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBe(path);
+});
+
+shortIt("keeps a peer sharing the selected native database through a symlink ambiguous", async () => {
+  await shortSession();
+  const otherHome = join(root, "other-codex-home");
+  mkdirSync(otherHome);
+  symlinkSync(join(home, "state_5.sqlite"), join(otherHome, "state_5.sqlite"));
+  const peer = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+  foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex")] }]);
+  peerScreens.set("peer", shortScreen);
+  expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
+});
+
+shortIt("compares the selected and actual databases through different Codex homes", async () => {
+  await shortSession();
+  const actualHome = join(root, "actual-codex-home");
+  mkdirSync(actualHome);
+  symlinkSync(join(home, "state_5.sqlite"), join(actualHome, "state_5.sqlite"));
+  const own = await runningCodex(false, { ...process.env, CODEX_HOME: actualHome });
+  foreground = [{ pid: own.pid, argv: [join(root, "codex")] }];
+  const otherHome = join(root, "other-codex-home");
+  mkdirSync(otherHome);
+  fs.copyFileSync(join(home, "state_5.sqlite"), join(otherHome, "state_5.sqlite"));
+  const peer = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+  foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex")] }]);
+  peerScreens.set("peer", "Working…");
+  expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBe(path);
+});
+
+for (const database of ["missing", "directory"]) {
+  shortIt(`keeps a peer with a ${database} native database competitive`, async () => {
+    await shortSession();
+    const otherHome = join(root, "other-codex-home");
+    mkdirSync(otherHome);
+    const file = join(otherHome, "state_5.sqlite");
+    if (database === "directory") mkdirSync(file);
+    const peer = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+    foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex")] }]);
+    peerScreens.set("peer", shortScreen);
+    expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
+  });
+}
+
+for (const remote of [["--remote", "ws://fixture.invalid:4500"], ["--remote=ws://fixture.invalid:4500"]]) {
+  shortIt(`keeps a remote peer ambiguous with ${remote[0]}`, async () => {
+    await shortSession();
+    const otherHome = join(root, "other-codex-home");
+    mkdirSync(otherHome);
+    fs.copyFileSync(join(home, "state_5.sqlite"), join(otherHome, "state_5.sqlite"));
+    const peer = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+    foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex"), ...remote] }]);
+    peerScreens.set("peer", shortScreen);
+    expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
+  });
+
+  shortIt(`keeps local peers ambiguous when this pane uses ${remote[0]}`, async () => {
+    await shortSession();
+    foreground[0]!.argv = [join(root, "codex"), ...remote];
+    const otherHome = join(root, "other-codex-home");
+    mkdirSync(otherHome);
+    fs.copyFileSync(join(home, "state_5.sqlite"), join(otherHome, "state_5.sqlite"));
+    const peer = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+    foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex")] }]);
+    peerScreens.set("peer", shortScreen);
+    expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
+  });
+}
+
+shortIt("keeps a peer ambiguous while any of its Codex processes shares the selected store", async () => {
+  await shortSession();
+  const otherHome = join(root, "other-codex-home");
+  mkdirSync(otherHome);
+  fs.copyFileSync(join(home, "state_5.sqlite"), join(otherHome, "state_5.sqlite"));
+  const elsewhere = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+  const shared = await runningCodex(false, { ...process.env, CODEX_HOME: home });
+  foregrounds.set("peer", [elsewhere, shared].map((child) => ({ pid: child.pid, argv: [join(root, "codex")] })));
+  peerScreens.set("peer", "Working…");
+  expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
+});
+
+shortIt("keeps a peer ambiguous while one of its foreground processes cannot be read", async () => {
+  await shortSession();
+  const otherHome = join(root, "other-codex-home");
+  mkdirSync(otherHome);
+  fs.copyFileSync(join(home, "state_5.sqlite"), join(otherHome, "state_5.sqlite"));
+  const elsewhere = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+  foregrounds.set("peer", [{ pid: elsewhere.pid, argv: [join(root, "codex")] }, { pid: 2147483647 }]);
+  peerScreens.set("peer", "Working\u2026");
+  expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
+});
+
+shortIt("keeps peers ambiguous while one of this pane's foreground processes cannot be read", async () => {
+  await shortSession();
+  foreground.push({ pid: 2147483647 });
+  const otherHome = join(root, "other-codex-home");
+  mkdirSync(otherHome);
+  fs.copyFileSync(join(home, "state_5.sqlite"), join(otherHome, "state_5.sqlite"));
+  const peer = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+  foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex")] }]);
+  peerScreens.set("peer", "Working\u2026");
+  expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
+});
+
+shortIt("keeps peers ambiguous while any of this pane's Codex processes uses another store", async () => {
+  await shortSession();
+  const otherHome = join(root, "other-codex-home");
+  mkdirSync(otherHome);
+  fs.copyFileSync(join(home, "state_5.sqlite"), join(otherHome, "state_5.sqlite"));
+  const own = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+  foreground.push({ pid: own.pid, argv: [join(root, "codex")] });
+  const peer = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+  foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex")] }]);
+  peerScreens.set("peer", "Working…");
+  expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
+});
+
+shortIt("keeps a peer with an inaccessible environment ambiguous", async () => {
+  await shortSession();
+  foregrounds.set("peer", [{ pid: 2147483647, argv: [join(root, "codex")] }]);
+  peerScreens.set("peer", "Working…");
+  expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
+});
+
+for (const spelling of ["same", "trailing slash", "symlink"]) {
+  shortIt(`keeps a same-store peer ambiguous through its ${spelling} path`, async () => {
+    await shortSession();
+    const alias = join(root, "codex-alias");
+    if (spelling === "symlink") symlinkSync(home, alias, "dir");
+    const peerHome = spelling === "symlink" ? alias : spelling === "trailing slash" ? `${home}/` : home;
+    const peer = await runningCodex(false, { ...process.env, CODEX_HOME: peerHome });
+    foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex")] }]);
+    peerScreens.set("peer", "Working…");
+    expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
+  });
+}
+
+shortIt("keeps peers ambiguous when the selected store differs from the pane's actual store", async () => {
+  await shortSession();
+  const otherHome = join(root, "other-codex-home");
+  mkdirSync(otherHome);
+  fs.copyFileSync(join(home, "state_5.sqlite"), join(otherHome, "state_5.sqlite"));
+  const own = await runningCodex(false, { ...process.env, CODEX_HOME: otherHome });
+  foreground = [{ pid: own.pid, argv: [join(root, "codex")] }];
+  const peer = await runningCodex(false, { ...process.env, CODEX_HOME: home });
+  foregrounds.set("peer", [{ pid: peer.pid, argv: [join(root, "codex")] }]);
+  peerScreens.set("peer", "Working…");
+  expect(await codexTranscriptPath(root, root, home, [fixturePane(root), fixturePane("peer")])).toBeNull();
 });
 
 shortIt("resolves one submitted short exchange without keeping a screenless binding", async () => {

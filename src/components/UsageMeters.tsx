@@ -3,10 +3,10 @@ import { RefreshCw } from "lucide-react";
 
 import "./UsageMeters.css";
 
-import type { ProviderUsage, UsageWindow } from "../../shared/protocol.ts";
+import type { ProviderUsage, UsageCredits, UsageWindow } from "../../shared/protocol.ts";
 import { useT, type Translate } from "../lib/i18n.ts";
 import { useSettings, type UsageCount, type UsageGlance } from "../lib/settings.ts";
-import { canSignInAgain, formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
+import { canSignInAgain, creditsText, formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { UsageSignInAgain } from "./UsageLocalLogin.tsx";
 import { UsageSignInDialog } from "./UsageSignInDialog.tsx";
@@ -51,6 +51,24 @@ function Chip({ usage, count, glance }: { usage: ProviderUsage; count: UsageCoun
   );
 }
 
+/** Usage beyond the plan: its amount, and a meter when it runs against a cap. */
+function CreditsRow({ credits, count }: { credits: UsageCredits; count: UsageCount }) {
+  const t = useT();
+  const label = credits.kind === "spend" ? t("Usage credits") : t("Credits");
+  const text = creditsText(credits);
+  const used = credits.kind === "spend" ? credits.used_percent : null;
+  const value = used === null ? null : count === "left" ? Math.round((100 - used) * 10) / 10 : used;
+  return (
+    <div className={`usage-row${used !== null && used >= HIGH_PERCENT ? " is-high" : ""}`}>
+      <span className="usage-row-label">{label}</span>
+      <span className="usage-row-value">{text}</span>
+      {value !== null && <span className="usage-bar" role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={value} aria-valuetext={text}>
+        <span style={{ width: value > 0 ? `max(4px, ${value}%)` : 0 }} />
+      </span>}
+    </div>
+  );
+}
+
 function Provider({ usage, now, count, onLocalLogin, onFollow, watching }: { usage: ProviderUsage; now: number; count: UsageCount; onLocalLogin: ((paneId: string) => void) | undefined; onFollow: (request: Extract<UsageLoginRequest, { provider: "claude" | "codex" }>) => void; watching: boolean }) {
   const t = useT();
   const statusline = useStatuslineSwitch(false);
@@ -89,7 +107,18 @@ function Provider({ usage, now, count, onLocalLogin, onFollow, watching }: { usa
           </div>
         );
       })}
-      {usage.windows.length === 0 && !problem && <p className="usage-note">{t("No limits reported")}</p>}
+      {usage.credits && <CreditsRow credits={usage.credits} count={count} />}
+      {usage.resets && (() => {
+        const expires = formatResetIn(usage.resets.expires_at, now);
+        return (
+          <div className="usage-row">
+            <span className="usage-row-label">{t("Limit resets")}</span>
+            {expires && <span className="usage-row-reset">{t("Expires in {time}", { time: expires })}</span>}
+            <span className="usage-row-value">{t("{n} left", { n: usage.resets.available })}</span>
+          </div>
+        );
+      })()}
+      {usage.windows.length === 0 && !usage.credits && !usage.resets && !problem && <p className="usage-note">{t("No limits reported")}</p>}
     </section>
   );
 }

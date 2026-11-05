@@ -7,6 +7,8 @@ import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ConversationPart, ConversationTurn } from "../shared/protocol.ts";
 import { FileBusyError, fileTask } from "./file-pool.ts";
+import { agyInvokedSkills } from "./skill-invocations/agy.ts";
+import { skillDocument } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
 import { toolSummary } from "./transcript-records.ts";
 
@@ -287,14 +289,19 @@ async function agyHistoryRead<T>(path: string, read: (projection: AgyProjection,
   } finally { closeSync(fd); }
 }
 
+/** A USER_INPUT step's request and the metadata Agy appends after it, or null when it is not that envelope. */
+function agyEnvelope(text: string): { request: string; metadata: string } | null {
+  if (!text.startsWith("<USER_REQUEST>")) return null;
+  const end = text.lastIndexOf("</USER_REQUEST>");
+  if (end < 0) return null;
+  const metadata = text.slice(end + "</USER_REQUEST>".length);
+  if (!/^\s*<(?:ADDITIONAL_METADATA|USER_SETTINGS_CHANGE)>/.test(metadata)) return null;
+  return { request: text.slice("<USER_REQUEST>".length, end).replace(/^\n|\n$/g, ""), metadata };
+}
+
 /** A USER_INPUT step's prompt, without the request wrapper Agy adds around it. */
 export function agyUserText(text: string): string {
-  if (!text.startsWith("<USER_REQUEST>")) return text;
-  const end = text.lastIndexOf("</USER_REQUEST>");
-  if (end < 0) return text;
-  const suffix = text.slice(end + "</USER_REQUEST>".length);
-  if (!/^\s*<(?:ADDITIONAL_METADATA|USER_SETTINGS_CHANGE)>/.test(suffix)) return text;
-  return text.slice("<USER_REQUEST>".length, end).replace(/^\n|\n$/g, "");
+  return agyEnvelope(text)?.request ?? text;
 }
 function outputRef(path: string, step: Step): string {
   const index = indexes.get(path)!;
@@ -309,7 +316,12 @@ export function parseAgyTranscript(text: string, path?: string): ConversationTur
     if (value.status !== "DONE") continue;
     const content = typeof value.content === "string" ? value.content : "";
     const ts = typeof value.created_at === "string" ? value.created_at : null;
-    if (value.type === "USER_INPUT") { turns.push({ role: "user", ts, parts: [{ kind: "text", text: agyUserText(content) }] }); continue; }
+    if (value.type === "USER_INPUT") {
+      const envelope = agyEnvelope(content);
+      const skills = envelope === null ? [] : agyInvokedSkills(envelope.request, envelope.metadata).map((skill) => ({ kind: "skill" as const, skill }));
+      turns.push({ role: "user", ts, parts: [{ kind: "text", text: envelope?.request ?? content }, ...skills] });
+      continue;
+    }
     if (value.type !== "PLANNER_RESPONSE" && value.type !== "GENERIC") continue;
     const parts: ConversationPart[] = [];
     if (value.type === "GENERIC") {
@@ -325,7 +337,11 @@ export function parseAgyTranscript(text: string, path?: string): ConversationTur
         const tool = record(call), input = record(tool.args);
         if (typeof tool.name !== "string") continue;
         const mapped = { ...input, command: input.CommandLine, file_path: input.AbsolutePath ?? input.TargetFile };
-        parts.push({ kind: "tool", name: tool.name, summary: toolSummary(tool.name, mapped), input: JSON.stringify(input), output: "" });
+        const part: Extract<ConversationPart, { kind: "tool" }> = { kind: "tool", name: tool.name, summary: toolSummary(tool.name, mapped), input: JSON.stringify(input), output: "" };
+        // the ledger ties no output step to its call, so a read stays requested
+        const skill = tool.name === "read_file" ? skillDocument(input.Path) : null;
+        if (skill) part.skill = { ...skill, status: "requested" };
+        parts.push(part);
       }
     }
     if (!parts.length) continue;

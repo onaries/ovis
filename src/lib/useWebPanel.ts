@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LOCAL_MACHINE } from "../../shared/machines.ts";
-import { WEB_PANEL_KEY as HISTORY_KEY, WEB_PANEL_DOCKED_KEY as DOCKED_KEY, withoutWebPanel } from "./historyKeys.ts";
+import { WEB_PANEL_KEY as HISTORY_KEY, WEB_PANEL_DOCKED_KEY as DOCKED_KEY, WEB_PANEL_BELOW_KEY as BELOW_KEY, SHEET_HISTORY_KEY, withoutWebPanel } from "./historyKeys.ts";
 import { backUnderCurrentEntry } from "./historyNavigation.ts";
 import { outsideSettings, settingsEntry } from "./settingsHistory.ts";
 import { panelUrl, wantsPanel } from "./webPanel.ts";
@@ -19,9 +19,18 @@ function isDocked(state: unknown): boolean {
   return outsideSettings(state)[DOCKED_KEY] === true;
 }
 
-/** The current entry as the web panel's: a popup entry on narrow windows, a docked mark on wide ones. */
-function panelState(state: unknown, url: string | null): Record<string, unknown> {
-  return { ...withoutWebPanel(outsideSettings(state)), ...(url === null ? { [DOCKED_KEY]: true } : { [HISTORY_KEY]: { url } }) };
+/** How many of the panel's own entries lie right under this one, which closing goes back past too. */
+function pagesBelow(state: unknown): number {
+  const below = outsideSettings(state)[BELOW_KEY];
+  return typeof below === "number" && Number.isInteger(below) && below > 0 ? below : 0;
+}
+
+/**
+ * The current entry as the web panel's: a popup entry on narrow windows, a docked mark on wide ones.
+ * The count of the panel's entries under it stays with the entry unless `below` sets it.
+ */
+function panelState(state: unknown, url: string | null, below = pagesBelow(state)): Record<string, unknown> {
+  return { ...withoutWebPanel(outsideSettings(state)), ...(url === null ? { [DOCKED_KEY]: true } : { [HISTORY_KEY]: { url } }), ...(below > 0 ? { [BELOW_KEY]: below } : {}) };
 }
 
 /**
@@ -46,7 +55,7 @@ export function useWebPanel({ settings, filePanelAvailable }: { settings: Settin
     } else if (webPage !== null && webPanelFromState(state) === null) {
       if (isDocked(state)) window.history.replaceState(panelState(state, webPage), "");
       // a popup file pushed over the page's entry: Back off the file lands there and shows the popup
-      else if (!ownsEntry.current) window.history.pushState(panelState(state, webPage), "");
+      else if (!ownsEntry.current) window.history.pushState(panelState(state, webPage, 0), "");
       ownsEntry.current = true;
     }
   }, [filePanelAvailable, webPage]);
@@ -68,7 +77,7 @@ export function useWebPanel({ settings, filePanelAvailable }: { settings: Settin
         ownsEntry.current = false;
         setWebPage(null);
       } else if (!wide && page !== null && !inSettings) {
-        window.history.pushState(panelState(event.state, page), "");
+        window.history.pushState(panelState(event.state, page, 0), "");
         ownsEntry.current = true;
       }
     };
@@ -83,9 +92,16 @@ export function useWebPanel({ settings, filePanelAvailable }: { settings: Settin
     if (url === null) return false;
     takeOver?.();
     const state = window.history.state;
-    const owned = takeOver !== undefined || (ownsEntry.current && (webPanelFromState(state) !== null || isDocked(state)));
+    // a phone sheet's entry (the palette's) copies the page's mark: it stays the sheet's, and the push
+    // below takes it over as any navigation from a sheet does (lib/sheetHistory.ts), so the sheet's
+    // closing does not step back onto the page shown before
+    const sheet = state !== null && typeof state === "object" && typeof (state as Record<string, unknown>)[SHEET_HISTORY_KEY] === "string";
+    const owned = takeOver !== undefined || (!sheet && ownsEntry.current && (webPanelFromState(state) !== null || isDocked(state)));
+    // the sheet's entry copies the page's under it: the new page stacks on that one, and Close page
+    // goes back past both (Back still steps through them)
+    const stacked = sheet && ownsEntry.current && webPanelFromState(state) !== null;
     if (owned) window.history.replaceState(panelState(state, filePanelAvailable ? null : url), "");
-    else if (!filePanelAvailable) window.history.pushState(panelState(state, url), "");
+    else if (!filePanelAvailable) window.history.pushState(panelState(state, url, stacked ? pagesBelow(state) + 1 : 0), "");
     // a docked page swapped under a popup file keeps the entry below it
     ownsEntry.current = owned || !filePanelAvailable || ownsEntry.current;
     closingWebPage.current = false;
@@ -118,7 +134,8 @@ export function useWebPanel({ settings, filePanelAvailable }: { settings: Settin
     if (webPanelFromState(state) !== null || (ownsEntry.current && isDocked(state))) {
       closingWebPage.current = true;
       if (isDocked(state)) setWebPage(null);
-      backUnderCurrentEntry()?.catch(() => { closingWebPage.current = false; });
+      // past the pages stacked under this one too, or the one under it would show again (#3054)
+      backUnderCurrentEntry(1 + pagesBelow(state))?.catch(() => { closingWebPage.current = false; });
     } else {
       ownsEntry.current = false;
       setWebPage(null);

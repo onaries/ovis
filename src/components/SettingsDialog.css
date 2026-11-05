@@ -275,6 +275,41 @@
   min-width: 0;
 }
 
+/* Named agent groups: the new name and its Add share a row, the field taking the room */
+.agent-group-add {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin-top: var(--space-2);
+}
+
+.agent-group-add .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Alerts → Also send to: the URL or token and its buttons share a row */
+.alert-webhook-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.alert-webhook-input {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.alert-webhook-chat {
+  flex: 0 1 9rem;
+  min-width: 0;
+}
+
+.alert-webhook-error {
+  color: var(--danger-text);
+}
+
 /* Voice input: the key field and its buttons share a row, the notes stay dim */
 .voice-key {
   display: flex;
@@ -286,6 +321,31 @@
 .voice-key-input {
   flex: 1 1 12rem;
   min-width: 0;
+}
+
+.relay-pc-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.relay-pc-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.relay-pc-found {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.relay-pc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .voice-error {
@@ -431,7 +491,8 @@
   }
 
   /* the key takes the line; Save and Remove share the next one */
-  .voice-key-input {
+  .voice-key-input,
+  .alert-webhook-input {
     flex-basis: 100%;
   }
 

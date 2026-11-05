@@ -104,6 +104,19 @@ export function parseConversationMetadata(text: string, source: ConversationResp
   if (source === "agy-transcript") return metadata;
   // Letta's transcript names no model or effort
   if (source === "letta-transcript") return metadata;
+  // Kimi's loop names the model and thinking effort on every request.
+  if (source === "kimi-transcript") {
+    for (const line of text.split("\n")) {
+      if (!line.includes('"llm.request"')) continue;
+      try {
+        const record = JSON.parse(line) as { type?: unknown; kind?: unknown; model?: unknown; thinkingEffort?: unknown } | null;
+        if (record === null || record.type !== "llm.request" || record.kind === "compaction") continue;
+        if (typeof record.model === "string") metadata.model = record.model;
+        if (typeof record.thinkingEffort === "string") metadata.reasoning_effort = record.thinkingEffort;
+      } catch { /* a partial line: the next read has it whole */ }
+    }
+    return metadata;
+  }
   if (source === "copilot-transcript") {
     for (const { type, data } of copilotRecords(text)) {
       const model = type === "session.start" ? label(data.selectedModel)

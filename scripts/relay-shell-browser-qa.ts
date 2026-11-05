@@ -36,6 +36,7 @@ import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/clien
 import { startFakePushService } from "../server/push.fake.ts";
 import type { FakePushService } from "../server/push.fake.ts";
 import { shellContentSecurityPolicy } from "../server/static.ts";
+import { REGIONAL_APPS } from "../shared/relay-regions.ts";
 import type { UpdateService } from "../server/update-api.ts";
 import { MIN_SERVER_VERSION } from "../shared/relay-mux.ts";
 import { noInstalledNotes, noUpdateNotes } from "../shared/update.ts";
@@ -104,10 +105,15 @@ export async function relayShellQa(tree: RelayServerTree): Promise<void> {
     socket.addEventListener("message", (event) => {
       if (typeof event.data === "string" && event.data.includes('"sync"')) synced.resolve();
     });
-    if (new URL(url).searchParams.has("connection_id")) {
+    const counted = (): void => {
       dataSockets.add(socket);
       socketsChanged.dispatchEvent(new Event("change"));
       socket.addEventListener("close", () => { dataSockets.delete(socket); socketsChanged.dispatchEvent(new Event("change")); });
+    };
+    if (new URL(url).searchParams.has("connection_id")) counted();
+    // a warm socket is a phone's connection from the moment the relay binds it to one
+    else if (new URL(url).searchParams.has("warm")) {
+      socket.addEventListener("message", (event) => { if (typeof event.data === "string" && event.data.includes('"bound"')) counted(); });
     }
     return socket;
   } });
@@ -537,11 +543,13 @@ export async function relayShellQa(tree: RelayServerTree): Promise<void> {
       for (const theme of ["light", "dark"] as const) {
         const { context, page } = await open({ width, height, theme });
         const response = await page.goto(`${origin}/`);
-        assert.equal(response?.headers()["content-security-policy"], shellContentSecurityPolicy(), "the front page carries the shell policy");
+        assert.equal(response?.headers()["content-security-policy"], shellContentSecurityPolicy(Object.values(REGIONAL_APPS)), "the front page carries the shell policy");
         assert.equal(await page.evaluate(() => document.documentElement.dataset["theme"]), theme);
         await state(page, "empty").waitFor();
         await page.getByRole("heading", { name: "Scan the QR code on your PC" }).waitFor();
-        assert.equal(await page.locator("main button").count(), 0, "the front page offers no Back");
+        assert.equal(await page.getByRole("button", { name: "Back" }).count(), 0, "the front page offers no Back");
+        // its one action: a PC with no camera pointed at it shows a code to type instead (pairCode.ts)
+        assert.deepEqual(await page.locator("main button").allInnerTexts(), ["Pair with a code"], "the front page offers Pair with a code");
         await shot(page, `empty-${device}-${theme}`);
         await context.close();
       }
@@ -859,7 +867,7 @@ export async function relayShellQa(tree: RelayServerTree): Promise<void> {
     {
       const { context, page } = await open();
       const response = await page.goto(scope);
-      assert.equal(response?.headers()["content-security-policy"], shellContentSecurityPolicy());
+      assert.equal(response?.headers()["content-security-policy"], shellContentSecurityPolicy(Object.values(REGIONAL_APPS)));
       await state(page, "empty").waitFor();
       const facts = await page.evaluate(async (id) => {
         const registration = await navigator.serviceWorker.ready;

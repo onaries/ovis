@@ -22,6 +22,11 @@ export interface CatalogSource {
    * scanned rows of these kinds. Without it, the kinds present in an answer are owned.
    */
   owns?: readonly ("commands" | "skills")[];
+  /**
+   * the agent runs a row of this provider before any scanned row of the same trigger and name (pi
+   * dispatches an extension command before it expands a prompt template): those scanned rows go
+   */
+  shadows?: boolean;
   /** the backend commands and skills the agent reports for this pane, or null when it has no answer */
   rows(pane: CatalogPane, cwd: string, signal: AbortSignal, context?: CatalogContext): Promise<SlashCommand[] | null>;
 }
@@ -95,8 +100,10 @@ export async function mergeCatalogSources(agent: string | null, pane: CatalogPan
     const ownsCommands = owns ? owns.includes("commands") : native.some((row) => row.source !== "skill");
     const identity = (row: SlashCommand): string | null => row.id === undefined ? null : JSON.stringify([row.trigger ?? "/", row.name, row.id]);
     const nativeIdentities = new Set(native.map(identity).filter((key) => key !== null));
+    const typed = (row: SlashCommand): string => JSON.stringify([row.trigger ?? "/", row.name]);
+    const shadowed = providers[index]!.shadows ? new Set(native.map(typed)) : null;
     merged = [
-      ...merged.filter((row) => row.source === "builtin" || ((row.source === "skill" ? !ownsSkills : !ownsCommands) && !nativeIdentities.has(identity(row) ?? ""))),
+      ...merged.filter((row) => row.source === "builtin" || ((row.source === "skill" ? !ownsSkills : !ownsCommands) && !nativeIdentities.has(identity(row) ?? "") && !shadowed?.has(typed(row)))),
       ...native,
     ].sort((left, right) => left.name.localeCompare(right.name) || left.source.localeCompare(right.source));
   }

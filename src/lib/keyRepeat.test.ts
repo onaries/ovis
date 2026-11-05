@@ -191,6 +191,21 @@ describe("key bar hold repeat", () => {
     expect(clock.pending()).toBe(1);
   });
 
+  it("tells whether the hold it ends had repeated", () => {
+    const { clock, repeat } = fixture();
+    repeat.press(0, 0);
+    clock.advance(KEY_REPEAT_DELAY_MS - 1);
+    expect(repeat.release()).toBe(false);
+    repeat.press(0, 0);
+    clock.advance(KEY_REPEAT_DELAY_MS);
+    expect(repeat.release()).toBe(true);
+    expect(repeat.release()).toBe(false);
+    repeat.press(0, 0);
+    clock.advance(KEY_REPEAT_DELAY_MS);
+    expect(repeat.cancel()).toBe(true);
+    expect(repeat.cancel()).toBe(false);
+  });
+
   it("does not schedule another tick when sending synchronously releases the hold", () => {
     const clock = fakeClock();
     let sends = 0;

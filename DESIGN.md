@@ -494,6 +494,16 @@ blocks of `src/styles.css`.
 
 ### File viewer
 
+- Edit text files (off by default, Settings → File viewer): a pencil **Edit file** button in the header
+  turns the body into a text box (`.file-editor-text`, the source's mono size, never under
+  `--fs-input` on a touch screen so iOS does not zoom) under one bar: what is going on on the left
+  in `--text-dim` (`--notice` for a conflict or a refusal, with `role="alert"`), the buttons on the right.
+  Save asks again in the same bar ("Save changes to NAME?", Keep editing / Save) instead of a
+  dialog over the dialog. A file changed since it was opened follows Zed's "changed on disk" handling:
+  the typed text stays in the box to copy, and Reload file shows the file as it is now; unlike
+  Zed there is no Overwrite, so a save never replaces a change the editor has not seen. While the
+  text differs from the file, Escape, a press on the scrim and the sheet swipe do not close the
+  viewer; Cancel and Close do.
 - `--notice` colors a note that the view is partial (a file cut short, code too long to color): the
   size in the header's meta line becomes `256 KB of 1.3 MB`, always beside a warning icon so the
   color is not the only sign. It is a warning yellow, at least 4.5:1 on
@@ -752,8 +762,21 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
 - File viewer: `wrapCode` (wrap long lines instead of scrolling sideways; default off),
   `markdownWidth`: `readable` (the chat lane, `--chat-w`, centered; default) or `full`, and
   `diffStyle`: `unified` (default) or `split` for a repository diff (a phone draws one column
-  whatever it says, and the viewer says so).
+  whatever it says, and the viewer says so), and `markdownOutline` (off by default, below).
   These layout choices stay on this device, like chat width.
+- Markdown outline (`markdownOutline`, #636): a Preview with two headings or more lists the
+  document's own headings (not ones inside a quote), levels stepped in, a repeated title one entry
+  per heading. It follows Zed's outline panel: the heading being read (the last past a line 32 px
+  under the body's top; at the document's end the last in view) is marked with the accent on a
+  `--bg-hover` tint and kept in the middle of the list by scrolling the list alone, so the
+  document's position and the focus never move with it. A chosen entry brings its heading to 8 px
+  under the top and stays marked while the document rests there. From 760 px of body width it is
+  a 240 px column after the document; narrower (a phone, the docked panel) it waits for the
+  header's (docked: the toolbar's) Outline button and opens as a drawer over the document's end
+  edge on `--bg-elevated`, the text keeping its width, as GitHub's file outline does. The drawer
+  takes the focus on the marked entry, centered; a choice, Escape or a press outside closes it and
+  the focus goes back to the button.
+- Web links from every agent's chat and terminal open in a new tab by default. The device setting `reuseExternalLinkTab` follows the Codex app's reusable-tab choice: one Ovis page keeps one external tab and replaces its address on later clicks. A browser lets a page steer a tab of another site only as its opener, so that tab keeps Ovis as its opener: the site in it can see and navigate the Ovis tab, which is why the setting is off by default and says so (Ovis's `Referrer-Policy: no-referrer` still sends no address). A new tab has no opener. If the browser refuses to steer the tab, the link opens in a new tab. Reuse is best effort: a site that sets Cross-Origin-Opener-Policy cuts the link, and the next click opens a new tab. Ctrl, Cmd and Alt clicks still open a new tab, and the iOS, Android, Mac and desktop apps, which hand links to the system browser, neither show the setting nor reuse a tab. The Web links panel choice and Shift-click behavior stay independent.
 - New agents (Settings → Agents): `claudeLaunchMode` (`--permission-mode`: `acceptEdits`,
   `auto`, `plan`, `dontAsk`, `bypassPermissions`) and `codexLaunchMode` (`readOnly`, `auto`,
   `fullAccess`, each a `--sandbox` and `--ask-for-approval` pair) become the `agent.args` the new
@@ -937,7 +960,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `--sidebar-user-w` on `.app`; the sidebar and its top row in the header both read
   `--sidebar-shown-w`. A phone's drawer keeps `--sidebar-w`.
 - The sidebar keeps its width on desktop until its edge is dragged, and is a `<=768px` drawer. The desktop collapse removes its
-  column; the drawer uses a scrim and keeps safe-area insets. On touch, a mostly horizontal swipe in
+  column; the drawer uses a scrim and keeps safe-area insets. Settings → Appearance → **Show the sidebar on hover** (#2588;
+  off by default, this device's choice) follows the Claude desktop app's collapsed sidebar, on the existing toggle rather
+  than an edge strip: a mouse resting `150ms` on the toggle of a collapsed sidebar shows it as `.sidebar.is-peek`, fixed
+  under the header at its open width with `--shadow-drawer` at `--z-drawer` and no scrim, so the pane keeps its width and
+  no pty resizes. Nothing takes the focus. The trip into it keeps it; `300ms` after the pointer left both it goes, later
+  while a menu or popover it opened is up, a field in it (the filter, a rename) has the focus, or a row is dragged in it
+  (and after a drop on it, until the pointer moves). Escape puts it away and still reaches what has the focus, unless a modal
+  dialog, a menu or popover the focus is in or on, or a field in it whose Escape does something (a rename, a filter with
+  words), takes it first; hidden with the focus in it, it hands the focus to its toggle; a click on the toggle
+  keeps the sidebar open as before. A touch never peeks (lib/sidebarPeek.ts). On touch, a mostly horizontal swipe in
   from the left `24px` edge opens the drawer and a swipe to the left closes it. While the finger is
   down the drawer is under it and the scrim darkens with it; let go, it stays open when more than half
   shows or a flick (`0.35` px/ms, not after a `100ms` rest) went that way, and slides the rest from there.
@@ -1078,6 +1110,38 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   Discord's per-channel mute, a checkbox item in the row's own menu, not a per-channel switch
   (Codex's and Claude's apps have no mute of their own); agent-of-empires has a per-channel
   override, which the shared, PC-keyed list replaces.
+  While Settings -> Appearance -> Lock pinned agents (experimental) is on (shared, off by default;
+  off, no item shows and no lock holds), a pinned agent row's menu also offers Lock agent (#2432): a locked row has no Unpin agent until
+  Unlock agent, draws a lock beside its state (drawn as the muted bell is, named Locked), and this
+  app offers no way to close it: no Close pane in the pane's menu, no Close tab (menu item,
+  Delete key or middle click) for the tab it is in, and no Close workspace, Close group or Delete
+  worktree checkout for a workspace whose close would take it; a confirmation already open when a
+  lock lands goes, and a workspace or group close also goes unsent when the workspaces or panes it
+  would take differ from those it was opened over. A tab is checked by every pane in it, by id,
+  whatever the strip lists. A watching device sees the item disabled, as Mute alerts is. The locks are the shared `lockedAgents`
+  setting, pin keys that hold only while the row is pinned, so every browser and phone honours
+  them; a lock moves with its pin when herdr moves the pane. Closing from herdr, the Herdr app or a
+  script is untouched. Browsers' pinned tabs keep their place but still close; this adds the
+  missing lock to the pin, as an item in the row's own menu, off until chosen. It follows VS
+  Code's Lock Group (a locked place that ordinary actions leave alone) rather than the coding-agent
+  apps (the Codex and Claude apps, Paseo, T3 Code), whose session lists we follow for pin and
+  archive but which give a session no lock: their sessions are not the pane a user drives the
+  others from, which is what this guards.
+  While Settings -> Appearance -> Named agent groups is on (shared, off by default; off, nothing is
+  drawn or offered), the unpinned agent rows split into groups the user names (#2431), in the
+  order Settings lists them, then the rows in no group under No group; with every row in no group
+  the list draws no heading at all. A heading folds its group (kept on this device), and draws its
+  count and a dot for each state that asks for a look (needs you, working), as Slack's sidebar
+  sections do with their unread marks. Nothing is grouped by itself: New workspace and New tab
+  offer a Group field, starting on the group last picked for that PC's folder (kept on this
+  device), and a row's menu offers Move to <group> and Remove from <group>. A helper stays in its
+  agent's group unless it has its own. The groups are the shared `agentGroupNames` and
+  `agentGroupOf` settings (pin keys), so every browser and phone draws the same list; a group
+  moves with its pane when herdr moves it, and the groups of gone panes leave with the next change.
+  With Group agents by state also on, each named group lists its rows needs-you first, without
+  state headings. The coding-agent apps (the Codex and Claude apps, Paseo, T3 Code) group sessions
+  by project only; this follows Slack's user-made sidebar sections instead, since one folder holds
+  both long-lived agents and one-off tasks.
   A desktop (`pointer: fine` wider than 768px, the tab strip's rule) draws no row `⋯`: a
   right-click or the context-menu key opens the menu, at the pointer or at the row, and dismissal
   returns the focus where it was.
@@ -1108,11 +1172,20 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   A lone pane beside such a `⋯` draws no second ellipsis (its actions are in the tab's menu), on a
   desktop as on touch. The pane's own context menu carries pane actions; it opens at the pointer
   without changing which pane is focused. The pane header's ellipsis opens the same menu on touch.
-  A lone tab with no row (a phone's screen made short by its keyboard) keeps that ellipsis at the
-  pane's top right, below a glass header and never under the header's own `⋯`, as an iPhone
-  navigation bar (and the Claude iOS app) keeps one overflow button in the bar and the content's
-  controls below it. Wherever that ellipsis shows to a finger, the pane's banners (View only and the
-  rest) start below it, so none covers it.
+  A lone tab with no row (a phone at most 700px tall, including the iPhone Duo's 678-point outer
+  display, landscape or a screen made short by its keyboard) draws no pane ellipsis either: a second
+  `⋯` below the glass header would repeat the header's own. The header's `⋯` is then the one menu,
+  as an iPhone navigation bar (and the Claude iOS app) keeps one overflow button in the bar. After its
+  own items and a divider it carries what the missing row's menu would: a split tab's panes first,
+  then the pane's actions, then New terminal (the row's `+`), New tab with agent… (as Chrome for
+  iPhone keeps New Tab in its overflow menu) and Rename tab, in a dialog in place of the row's inline
+  field, which the palette's Rename tab and its shortcut open too. Move to workspace… (a one-pane
+  tab) lists the other workspaces in a second menu, where the row's menu lists them in place, and
+  Close tab asks first, as the row's does for a workspace's last tab: it closes the workspace too,
+  and is the one way to close a split tab whole there. Extending the compact-height state to the Duo follows
+  Apple's outer-display guidance to put chrome at the edge and preserve vertical room for content.
+  Wherever a lone pane's ellipsis shows to a finger, the pane's banners (View only and the rest)
+  start below it, so none covers it; with no row they start below the glass header.
 - On a PC whose terminals are the Herdr app's (`HerdrIdentity.runtime` `herdr-core`), the app's
   window owns the workspaces, tabs and splits, and herdr-core refuses to rename, reorder or move
   them, to split, swap, zoom or resize a pane, and the worktree actions. The browser then leaves
@@ -1167,10 +1240,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   apps keep it; the roster has only the label filter below, which the maintainer approved in #1043
   and which differs from the palette-only design on purpose: it narrows the lists in place, by the
   words the rows show, and holds no state.
-- **Filter workspaces and agents** (`.sidebar-filter`, MachineSidebar.tsx) is its word, **Filter**
-  (`.sidebar-filter-label`, in `--text-dim` at the size of the field's text, in view whatever is typed), then one
-  `.input` the height of a row (`--side-row`, so a finger's `--touch-target` on a phone) in the rows'
-  gutter above the lists, its placeholder naming the scope (**Workspaces and agents**) and its
+- **Filter workspaces and agents** (`.sidebar-filter`, MachineSidebar.tsx) is one `.input` the height
+  of a row (`--side-row`, so a finger's `--touch-target` on a phone) in the rows' gutter above the
+  lists, with a `--text-dim` glass (`.sidebar-filter-glass`, `aria-hidden`) in its leading cell and no
+  word beside it, as VS Code's and macOS's search fields have none: its placeholder is its accessible
+  name, **Filter workspaces and agents**, so what a sighted reader and a screen reader are told is the
+  same, and its
   suggestions the names the rows show (a `<datalist>`, rebuilt from the roster, nothing typed kept),
   with its clear (`.sidebar-filter-clear`, the same square, inside the field's trailing
   cell) only while there is text; the browser's own search cancel glyph is off, so there is one. The
@@ -1224,18 +1299,68 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   bar of at least 3:1: a workspace row's is a border pulled into the gutter so its content does
   not move; an agent row's is drawn inside the row, since the Agents list scrolls and would clip
   it. No rule
-  separates sections: `--space-4` and a dim `--fs-sm` head do.
-- The PC/workspace list and the lower Agents list scroll independently above the fixed footer.
-  Agents takes the height of its rows, at most half the sidebar, docked above the footer; the
-  workspace list has the rest. The Agents heading stays outside its scroll area and shows its
-  count only while folded. A list that is cut fades out at its lower edge. An empty or folded
-  Agents list gives its space back; PC and workspace folds do not hide agent rows. In the drawer
-  (`max-width: 768px`) the list starts folded. The reader's fold is kept on this device
-  (`ovis:agents-collapsed`, like a PC's fold) and wins over that default on the next launch; a
-  filter's fold is not kept. Until the PCs are in and every connected PC's
-  panes have come, an empty list says **Loading agents…**, never "No agents running".
-- A PC's header is the head of its workspaces, and the caret beside its `+` is the one fold over
-  them. The roster has no label or fold of its own.
+  separates sections but the resize line between the PCs and Agents: `--space-4` and a dim `--fs-sm`
+  head do.
+- The PCs and Agents scroll independently above the fixed footer. Until resized, Agents keeps
+  today's default: at most half the whole sidebar when both lists need scrolling, and the PCs
+  get the rest. If the PCs fit in less, Agents can use the height they leave free, up to the
+  footer, rather than clipping rows above an empty band. If both fit, Agents stays docked to the
+  footer with the unused space above it. The flex column gives PCs free height first, up to
+  their content, and Agents a half-shell basis; neither grows beyond its rows. Empty or folded
+  Agents gives its space back. PC and workspace folds never hide agent rows. Each head stays
+  outside its scroll area. A list fades at an edge only while rows lie past it, top or bottom
+  (`lib/useEdgeFades.ts` marks the edges, a `mask-image` fades them), so a list at its top fades its
+  foot alone, one scrolled to its end its head alone, and one that holds all its rows neither; the
+  mask fades whatever lies under it (a selected row, the pinned card) to the panel. Forced colors
+  draw no fade.
+  In the drawer (`max-width: 768px`) Agents starts folded. Its fold stays on this device
+  (`ovis:agents-collapsed`) and wins over that default on the next launch; a filter's fold does
+  not persist. Until the PCs are in and each connected PC's panes have come, an empty list says
+  **Loading agents…**, never "No agents running".
+- The resize line needs a fixed target to fold PCs to, so their roster gets a **PCs** head, also
+  for a lone Host. It folds only this section, not its Agents, and keeps the fold on this device
+  (`ovis:pcs-collapsed`); under a filter the fold is temporary. Its rows stay mounted while hidden
+  so their branch labels remain searchable. This head comes out of the PCs' allocation; it does
+  not shrink Agents' default allocation. The **PCs** and **Agents** heads are drawn alike
+  (`.sidebar-section-label`): the fold's caret in the leading cell, always in view, open or
+  folded, so a head reads as a fold at rest; the dim words; and in the trailing cell how many PCs
+  this device shows or how many agents run, open or folded, as VS Code's view heads count theirs. The PCs count says its words (**2 PCs shown**) to a screen
+  reader and in its tooltip, never a bare number. The first PC starts right under the head.
+- Between the lists is a resize line (`SidebarSplit.tsx`, `role="separator"`): a `--border`
+  hairline in its own hit area, `--border-strong` on hover, `--accent` while held or focused.
+  A grip shows on hover and always under a finger. Dragging gives the upper section its chosen
+  height and the lower section the rest, kept in px on this device as `ovis:sidebar-split`.
+  The default layout and saved-split clamp share measured minimums: both sections keep a heading
+  and a row when they fit. In a very short window they share the available room instead, with
+  overflow clipped inside each section so neither its controls nor its rows cover the divider
+  or footer. A drag-to-fold preview can still shrink either section to its heading.
+  Double-click or Enter resets to today's default split. ↑/↓ moves the line a row; Home folds
+  the upper section and End the lower. Dragging a section below about one row snaps it to its
+  heading and dims it; release folds it with the same fold as its caret. Reopening restores its
+  saved height. A drag opens a folded section first. The reset follows [Zed's Agent panel](https://zed.dev/docs/reference/all-settings#flexible-sizing),
+  whose resize handle restores the default proportion on double-click. The fold follows VS Code's
+  resizable sidebar views and macOS split views (Mail, Finder); Ovis's width divider is the local
+  precedent. On phones, the line occupies a `--touch-target` row so its hit area never covers
+  adjacent PC actions. Only it takes `touch-action: none`, leaving both lists swipe-scrollable.
+  With **Group agents by state**, Agents is above PCs, and the line's directions, folds and
+  `aria-controls` follow that order. Each order keeps its own height: `ovis:sidebar-split` for
+  PCs above, `ovis:sidebar-split-agents-first` for Agents above.
+- Each PC's header stays the head of its workspaces, and its own caret beside the `+` folds
+  those workspaces; a pointer on its name folds them too, and the keyboard has the caret. The
+  section's caret folds the whole roster instead. A folded PC is one row, with no gap to the
+  next: a `--space-4` gap of its own made each about a row and a half (issue 2617). An open PC's
+  workspaces end with a `--space-2` gap before the next header. At rest a header's trailing cell
+  says how many agents run on that PC (`.machine-agent-count`, its words, **3 agents running**, for
+  a screen reader; no tooltip, as presses pass through it to the `+` and a hover hides it), and a
+  disconnected PC, whose snapshot is the last one seen, counts nothing; a pointer over the header
+  or the focus in it trades that count for its manage button, caret and `+`, as the Codex app shows
+  a row's actions on hover. The caret and the `+` keep their cells while unseen, so the name never
+  moves and a press lands on them. Only a fine pointer that hovers, with no touch screen beside it,
+  gets the trade: under a finger, on a hybrid laptop with a touch screen, or with no hover, the
+  actions always show (a disabled `+` dimmed as ever) and the count stays out of sight, still read by a
+  screen reader. A coarse primary pointer gets the existing finger-sized actions (`Machines.css`);
+  hybrid action visibility does not change that sizing rule. A connected PC's clipped state line keeps no padding, which
+  would lengthen the list's scroll.
 - When the sidebar shows one PC and it is the Host (the only PC, or the others hidden on this device), its group
   has no header: there is no other PC to tell it from, and the workspaces start the list, as the Claude app lists its
   sessions with no heading for the computer they run on. Nothing the header held is lost. The state words, the notice
@@ -1244,15 +1369,22 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   grid with the `+` in the folders' cell and its words in `--text-dim`, left out while a filter is on, while the PC is
   offline and while the empty box offers the same, and there while the PC's first roster loads; the group keeps the PC's name as its accessible name, and the
   filter neither searches nor suggests a name no row shows. The Claude and Codex apps put their New button at the top;
-  here it closes the list, so the workspaces come first. A Host has no manage panel, and Add PC is in Settings and the
-  palette. A lone PC that is not the Host keeps its header: its name says which PC this is, and its manage panel has
+  here it closes the list, so the workspaces come first. A Host has no Manage PC menu, and Add PC is in Settings and the
+  palette. A lone PC that is not the Host keeps its header: its name says which PC this is, and its Manage PC menu has
   no other place. No setting turns this off, since nothing is lost.
-- **Settings → Remote PCs → Show in sidebar** hides a PC on this device (`lib/hiddenMachines.ts`,
+- **Settings → Remote PCs → Show in sidebar**, and Manage PC's **Hide on this device**, hide a PC on this device (`lib/hiddenMachines.ts`,
   its own `ovis:hidden-pcs` key, like the fold): it leaves the PC groups, the Agents list and the
   command palette, stays connected, and a link or an alert to its pane still opens that pane. The
   list shows when there are two PCs or more, the Host first; the last PC shown cannot be hidden, and
-  hiding the PC the selection is on moves it to the Host, else the first PC shown. Under the PCs a
-  quiet `--fs-xs` `--text-dim` line says how many are hidden here and opens that group. The banner of
+  hiding the PC the selection is on moves it to the Host, else the first PC shown. The PCs head says
+  how many are hidden here, after its words: a quiet `--text-dim` pill (`.sidebar-hidden-pcs`), an eye
+  crossed out and the count, named in words (**1 PC hidden on this device**), a touch target on a phone.
+  It opens a menu, a sheet on a phone, headed **Hidden on this device** with a note that a hidden PC
+  stays connected, that shows each PC again in place (**Show Work PC**), in the roster's order, or goes
+  to that Settings group (**Choose PCs in Settings…**). Showing one follows the switch's rules and moves
+  no selection; showing the last takes the pill away, and the focus it held goes to the PCs head's fold,
+  not the page; so does the focus of an open menu whose last PC the roster or another tab takes away.
+  VS Code's view heads list the views hidden there to show again the same way. The banner of
   a PC that needs setup or a bridge update still shows for a hidden PC: it asks for an action. herdr's
   TUI shows one session at a time and Orca hides other clients' workspaces; Ovis shows every PC of
   the roster, so the choice is per PC and per device, not a sidebar switch.
@@ -1346,6 +1478,51 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   It changes only the Agents list; herdr's order and the workspace rows stay as they are.
   A raw counter rollback clears synthetic recency even on older bridges without an epoch.
   This ordering correction never changes finish identities or read records.
+- Appearance's **Group agents by state** (off by default, kept on this device, as the sidebar
+  filter is) moves the Agents list above the workspaces and splits its unpinned rows into
+  groups: **Needs you** (blocked), **Working** (BG included), **Done** (a finish not read yet)
+  and **Idle** (ready, a finish already read, an unknown state, or a PC that is away). Each
+  group has a quiet caps heading with its count in the trailing cell, as Slack's sidebar
+  sections do; the Needs you heading takes `--status-blocked`. An empty group is left out, and
+  the pinned card stays first. **Within a state** orders each group: **Longest wait** (the
+  default; the oldest `state_change_seq` first, as herdr's agent view sorts with
+  `state_change_seq` ascending, #2015), **Recent** (the newest first) or **Name**. herdr's
+  counters only compare within one PC, so Longest wait and Recent order each PC's rows in the
+  PCs' list order; Name orders across PCs. An agent and its helpers stay together, in the
+  group of the one of them that needs the reader most. The shared Agents order applies while
+  grouping is off.
+- Panes a launcher tags `role=background` (`herdr pane report-metadata --token`, any case),
+  and the helpers they start (`parent_pane_id`), stand after the Agents list's other unpinned
+  rows, under a **Background agents** heading styled like a group's (`.agent-background-toggle`)
+  that folds them, folded at first on every screen and kept per device; its count always shows.
+  The split is herdr's fact, never a guess: an untagged pane stays where it is. A blocked one
+  stands with the other rows until answered, so a question is never folded away; a pinned one
+  stays in the pinned card. Grouping by state groups only the other rows, and a row that draws
+  every token (no herdr rows) leaves the tag out; a herdr rule that hides it takes it off the row,
+  never off the snapshot, so the row still files. The parts are one list, so a row that changes
+  part is moved with its focus and open menu. It follows the Codex
+  app, which keeps background and subagent work in a box at the bottom of its sidebar (#1369).
+- Settings > Appearance > **Fold helpers under their agent** (the device setting `foldHelpers`,
+  off by default, #772) puts one line under each agent row that has helpers in the same list
+  (`.agent-helpers`): it hangs from the agent as a helper does, a helper's height, with a caret
+  where a helper's mark stands, **Helpers**, a dot for each state among them that asks for a look
+  (as a named group's heading) and their count in the trailing cell. Folded, the helpers leave
+  sight but stay in the list, so a row that comes back keeps its focus; a helper that needs the
+  reader and the selected one stay in sight under the line, so automation that starts many
+  workers never folds a question away. The fold is per top-level family: a helper's own helpers
+  fold under the same line, and a kept one is drawn at its depth. Every agent starts folded; the
+  ones opened are kept per device by pin key, read anew on each change so two tabs keep each
+  other's, and pruned as the pins are (never a PC still loading or hidden). A helper with the focus
+  that folds away hands it to the line, and the line's name says whose helpers they are. The
+  filter folds nothing, as it opens the other folds. It follows the
+  disclosure rows of Zed's and VS Code's tree views (a parent row whose children fold under it,
+  with a count). It does not virtualize the list: #772 leaves that until a measured roster
+  (`scripts/roster-bench.ts`) shows drawing the rows is what costs.
+- An agent kind with no mark of its own draws its initial and its disc's ring in a color picked
+  from the kind's name: one of the theme's syntax colors (`--syntax-keyword`, `-string`,
+  `-number`, `-type`, `-variable`, `-meta`), which every theme sets in both modes and keeps
+  readable on `--bg-elevated`, the disc's fill. It is the same on every device, and two unknown
+  kinds tell apart. Agent logos → Mono leaves the mark quiet.
 - A DONE opened here draws as ready in the Agents list and its workspace roll-up, as herdr's
   own client does. This follows the Codex app's [unread completion dot](https://github.com/openai/codex/issues/50856).
   A finish read in one browser is read in every browser of the server (a phone and
@@ -1504,18 +1681,26 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   error, idle = disconnected), then the fold's caret (`.machine-toggle`, always shown; the name
   itself is not a control) and a `+` in the status column that starts a workspace on that
   PC (disabled while it is offline). An SSH PC's manage button sits before the
-  caret and shows on hover, focus, while its panel is open, while the PC is not connected, and always
+  caret and shows on hover, focus, while its menu is open, while the PC is not connected, and always
   on touch. Connected is the dot alone; every other state is also written under the name, with the server's
   error clamped to two lines and complete in the tooltip.
-- SSH PC management stays inline: its rename form and action buttons reflow within the sidebar
-  instead of floating over it. Rename shares the name field's row where both fit and goes under
-  the field in a narrow sidebar; the action buttons wrap into rows that share a height. A
-  one-line button is `--control-h` tall, as the field beside it (`--touch-target` on a coarse
-  pointer, where Rename keeps its own line under the field), and only a wrapped label grows its
-  button. Wrapping labels keep controls contained at narrow widths, with touch-sized buttons
-  on coarse pointers. This follows the
-  width-constrained responsive sidebar in [T3 Code](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/ui/sidebar.tsx)
-  but keeps herdr's existing inline panel instead of adopting its mobile sheet; no code is borrowed.
+- Manage PC opens a row menu (`RowMenu`): a popover under the button on a desktop, a bottom sheet on a phone, as a
+  workspace's and an agent's ⋯ do. Its head names the PC, with its state word and "over SSH" (a PC added through the relay:
+  "through the relay") under the name. The items
+  are **Rename…**, **Disconnect** (**Connect** while the PC is disabled), **Reconnect / setup**, **Update bridge…**,
+  **Hide on this device** and, after a rule, **Remove PC…** in the danger colour. Rename… swaps the name in the header
+  for a field (up to 100 characters, its text selected): Enter saves, and Escape or a click away keeps the old name;
+  Enter and Escape give the focus back to the manage button, and on a phone that Escape leaves the drawer out. Remove PC… asks in the dialog a workspace's Close asks
+  in (`ConfirmDialog`), which says only the registration goes and shows a failure in place. Hide on this device
+  follows Show in sidebar's rules: the last PC shown has no such item, and the focus goes to the line under the PCs
+  that says how many are hidden. A PC herdr manages keeps herdr's limits: no Rename…, Disconnect or Remove PC…, and
+  the head says to do those in herdr. A machine of herdr-core (`kind: "hc"`) offers only Hide on this device, and its
+  head says to add, rename or remove it with `hc machine` or in the Herdr app. A PC added through the relay has no Reconnect / setup or Update bridge…, and its
+  Remove PC… dialog says to revoke its access under Phone & devices on that PC too. Reconnect / setup is left out while the PC's own notice offers setup or
+  Connect, Update bridge… while it offers Connect, and both wait while the PC is disabled or has no address. Rename…,
+  Connect or Disconnect and Remove PC… wait while one of them runs. The inline panel this replaces pushed the
+  workspaces down, one button per line. Ovis's own `RowMenu` for workspace and agent rows is the precedent, and the
+  Codex and Claude apps put a row's actions in a menu, not an inline panel; no code is borrowed.
 - A repository's worktree workspaces (`workspace.worktree.is_linked_worktree`)
   sit indented under the row of the workspace on its main checkout (`.worktree-children`), without
   a tree hairline; a worktree whose repository workspace is not open stays at the top level.
@@ -1533,6 +1718,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   so a footer row kept showing in every browser tab and in browsers that never prompt. Settings →
   Phone & devices → Install offers it when the browser can install, and the steps otherwise,
   as the Claude web app keeps getting its apps in the account menu rather than a sidebar row.
+- Above that row, only where the page is one PC of a phone's list (a PC's page on the hosted
+  relay shell, or the phone app), one full-width row (`.sidebar-footer-pc`) names the PC, the lone
+  Host's name its header no longer shows, then **Change PC** in `--text-dim` and a switch glyph: a
+  tap goes back to the list of PCs (the shell's front page, or the app's list), as the Claude app's
+  sidebar foot names whose account it is and switches it in one tap. Settings → Phone & devices
+  keeps its Change PC row. A PC's own app never shows it: its sidebar lists its PCs itself.
 
 ### Plan meters (`.usage*`)
 - Right of the Settings gear, one button holding as many chips as the row has room for (judged
@@ -1548,6 +1739,35 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   footer and scrolling when it outgrows the sidebar: per account its mark, name and plan pill with
   the email or login right-aligned and ellipsized, then one row per limit (label, reset time, right-aligned percent) over a 4px bar. A problem
   note is dim, red for an expired sign-in or a failed request.
+- Under the limits, only when the provider reports them: **Usage credits** (Claude's extra usage,
+  spent against its monthly cap in the provider's currency, over a bar counted like the limits) or
+  **Credits** (Codex's balance, in whole credits), then **Limit resets** (how many are left, and
+  when the soonest expires). Reference: Claude Code's `/usage` (its "Usage credits" row) and
+  Codex's `/status` (its "Credits" row), whose own readings these are; no code is borrowed.
+
+### PC load (`.machine-stats`)
+- Shown while Settings → Remote PCs → **PC load in the sidebar** is on, for this device only. Until
+  it is flipped it follows the roster: on while two or more PCs are connected, off for a lone PC,
+  whose load is not what tells PCs apart.
+- Under an expanded, connected PC's name and above its workspaces: one button holding three
+  meters in a row, each a label, the percent in `tabular-nums` and a 3px bar on a `--border-strong`
+  track (the plan meters' construction): **CPU**, **Memory** (without the file cache) and
+  **Disk** (the fullest of the disks that hold the root and home folder), and a caret at the end
+  that opens the numbers behind them: memory used and total, load average and core count, uptime
+  and a bar per disk. From 85% the percent and bar take `--status-blocked`, as the plan meters do
+  from 80%; amber stays chrome. The open or closed choice is kept per PC in this browser.
+- It is drawn only for a PC that can say: a PC whose bridge is from before `GET /api/system`
+  shows nothing, and so does one that has not answered yet. A figure the PC cannot measure
+  is a dash, never `0%`. The meters are drawn only; the button's label carries the numbers for a
+  screen reader ("Show system details for Work PC. CPU 4%, Memory 22%, Disk 50%").
+- Nothing is read for a PC that is folded, offline or in a hidden tab, nor while the sidebar, its
+  PCs list or a phone's drawer is closed. The next ask starts 5 s after the last one came back or
+  timed out, so a stuck PC never has more than one open, and a reading no ask has renewed for a
+  minute is dropped rather than shown as now. A herdr-core machine shows none: its server runs on
+  the PC that reaches it, which cannot read that machine's load.
+- Reference: no app listed in `src/AGENTS.md` shows a machine's load in its project list that I
+  know of (they assume one machine); this follows the app's own plan meters and PC group header,
+  and differs only in measuring a PC instead of a subscription. No code is borrowed.
 
 ### New workspace dialog
 - Agent select comes from `GET /api/agents`; shell-only is always available. The bridge offers the
@@ -1654,7 +1874,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - In a mouse-driven window wider than 640px (the composer's own `(max-width: 640px), (pointer:
   coarse)` query) the chat's composer can show a **New tab with an agent…** icon button
   (lucide `MessageSquarePlus`, beside Attach) that opens this dialog as New tab on the pane's
-  workspace, as the tab menu does. It is off until this device turns it on (Settings → Chat →
+  workspace, as the tab menu does, but on the chat's own agent and the model and effort its
+  transcript recorded last (`ConversationMetadata`, the composer's model pill), each only where
+  the agent's launch takes it (`recordedChoices`); every field stays editable before Start. The tab
+  menu and the shortcuts keep the last agent picked and the agent's own model. This follows the
+  Codex app's new thread, which starts on the model and reasoning effort already shown in its
+  composer rather than resetting them. It is off until this device turns it on (Settings → Chat →
   Composer, **New tab button**, the device setting `composerNewTabButton`): the composer's row stays
   minimal, as the Codex and Claude apps keep theirs (attach and the mic; a new thread starts from the
   sidebar), and the tab menu opens the same dialog either way. A phone's card has no row to spare for
@@ -1750,8 +1975,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   pane with the previously selected pane and retains the browser's selection. On a desktop,
   dragging a pane's title onto another pane's title in the same tab on the same PC exchanges
   their positions too. The eligible title is highlighted instead of offering a split-view
-  half. Sidebar drags, drops outside an eligible title, and drops across tabs or PCs keep
-  their existing docking behavior. This follows tmux's explicit `swap-pane` operation,
+  half. Sidebar drags and drops across tabs or PCs keep their existing docking behavior; a
+  title dropped on another pane's body of its tab moves it (below). This follows tmux's explicit `swap-pane` operation,
   exposed through a title drop like VS Code's editor-group drag targets rather than a new
   layout setting. Explicit swaps leave herdr's focused pane, tab and workspace where they
   were: the bridge serializes Ovis focus-changing calls (focus, swaps, split, zoom and close)
@@ -1769,9 +1994,49 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   caused by restoration. No sequence fields, pane-name tokens, or held/replayed events are
   added. The root fix needs native `pane.swap focus:false` or correlated event identifiers.
   A refused title swap shows a layout notice with a localized reason.
+- Dropping a pane's title on another pane's body in the same tab moves it to the side of that pane
+  nearest the pointer (#1819). While it is over that body, the half the dragged pane would take is
+  outlined in `--accent` over `--accent-tint`, from the nearest edge, each edge's distance counted
+  as a share of the pane's width or height so each side takes a quarter of a pane of any shape; the
+  side shown stays where two shares meet. The split view guide stays hidden over the tab, and over
+  the dragged pane itself nothing is offered (the pointer shows no drop). A title over the other half
+  showing another tab, over a canvas drawing one pane, and a sidebar row, a tab or a half's bar
+  anywhere still open a half: a drag within the tab arranges it, a drag that brings a pane in opens
+  split view. `POST /api/pane/move` runs it. herdr 0.9.5 refuses `pane.move` within the tab
+  (`same_tab`) and places a moved pane only right of or below its target, so the bridge moves the
+  pane to a new tab of its workspace, back beside the target, and swaps the two for left or up; the
+  pane keeps its ID and terminal, and herdr closes the passing tab. A herdr that moves within a tab,
+  and herdr-core (one edit of Ovis's layout document), take the first call. A pane herdr will not
+  bring back beside its target goes back into its tab beside another pane, and a refused swap leaves
+  it right of or below; the layout notice says so. herdr's focus goes back where it was, as after a
+  swap: only from the pane herdr picked when the focused pane left, or from the swap's source. This follows VS Code's editor-group drop overlay (the half a dragged
+  editor would take, by the nearest edge) without its centre target: a pane joins no other pane, and
+  its title is the swap target.
   A close confirms when
   the pane is busy or is the last pane of the workspace. Rename is herdr's label; clearing it
   returns to its automatic title. Herdr owns every resulting layout and name.
+- The browser's own split view (`lib/split.ts`, part of #1158) takes more than two panes with
+  Settings → Terminal → Split into rows and columns (`splitGrid`, per device, off by default:
+  off, it keeps the two halves of #861 and #1176). The layout is a tree of row and column splits
+  whose leaves are slots, at most four (each slot but `a` is one more set of connections, and a
+  laptop's screen leaves a quarter of it per terminal). Every slot keeps a one-letter id and is
+  drawn in one container at the rectangle the tree gives it (`position: absolute`), so a slot
+  keeps its element and its terminals when the layout around it changes. A drop in a slot's edge
+  band (a quarter of its width or height) opens the pane in a new slot beside, above or below it;
+  its middle opens the pane in the slot's place; a single pane keeps the halves' midpoint with its
+  12px band and adds a band along its top and bottom. A full area takes no new slot. The guide
+  outlines every slot and moves one `--accent` highlight to the place the pane would take. Each
+  boundary is a `role="separator"` band (8px to the pointer), dragged or moved with the arrow
+  keys in 5% steps between 15% and 85%. A pane may show in several slots: the active slot sizes
+  its pty when it shows the tab, else the first slot in reading order, and the others follow
+  (PaneFollowContext). Closing the active slot gives its place and the selection to the slot it
+  shared a split with. Two slots side by side are the two halves again (`data-side`, Close this
+  half); the split is kept in `ovis:split` for a reload, and a split saved by the two-half
+  version opens as before. Turned off, the setting leaves two halves: the active slot and the
+  first other one in reading order, each keeping its terminals, at half each. This follows VS Code's editor groups (split right or down into a
+  grid, draggable boundaries, the drop overlay by edge or centre), with the grid's tree model
+  from bricks-8's fork; moving a pane to a window of its own and stepping slots from the
+  keyboard are left for later.
 - Up to 768px a split has no room: the canvas shows the selected pane alone, full size and
   borderless as a zoomed one, with no split boundary, and the tab's menu picks another. The
   other panes stay mounted and hidden at the same full size. This is only what the browser draws:
@@ -1945,7 +2210,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   Collie reference: https://github.com/AltanS/collie/blob/main/docs/configure.md#changes.
   The compact fields follow Ovis's existing T3 Code-inspired settings controls rather than
   adding another navigation surface; no external code is copied.
-- Files has two faces, **Browse** | **Changes** (`.segmented` in its header). **Changes** lists
+- Files has three faces, **Browse** | **Changes** | **Pull request** (`.segmented` in its header). **Changes** lists
   what a comparison changed in the repository the pane sits in: the working tree against the
   index, the index against HEAD, two commits named by hand (**From commit**, **To commit**,
   **Compare**), or the branch against a base (**Branch**, below); a Refresh button re-reads it,
@@ -2071,6 +2336,36 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   scope over: the base is cleared, nothing is compared there until **Compare**, and a list still
   on its way for the target left behind is dropped.
 
+### Pull request (`.pull-request`)
+- **Pull request**, the third face of Files, shows the pull request of the pane's branch as the PC
+  running it reads it through its own `gh` sign-in (`GET /api/workspace/pr`): nothing new to sign
+  in to. It follows GitHub's mobile app: title and state first, then checks, then conversations,
+  in one column at every width. Read when the tab opens and on **Refresh pull request**, never
+  polled. Without `gh`, signed out, or without a pull request it says so in one line.
+- Primary action: **Merge** (`.btn-primary`, labelled with the repository's default method:
+  Squash and merge, Rebase and merge, Merge pull request), at the end, right-aligned on a desktop
+  and as wide as the column on a phone. It is off, with GitHub's reason above it, unless GitHub
+  would merge now (`mergeStateStatus` clean, unstable or has_hooks): required checks or reviews,
+  a branch behind its base, conflicts, a draft, or a base that merges through a merge queue (the
+  queue would merge whatever the head is by then, so that merge is left to GitHub). It asks first
+  (`ConfirmDialog`), and merges only the head commit the view showed (`--match-head-commit`) into
+  the base it showed (read again first); the branch is kept.
+- Priorities: 1. the title (`#n`, links to GitHub) and its state chip with `head -> base` in mono;
+  2. **Checks**, failing first, then pending, then the rest, with a `failing, pending, passed`
+  count, each row an icon in its status token (`--status-blocked`, `--status-working`,
+  `--status-done`), `workflow / name` and a link; 3. **Open review threads** (unresolved only):
+  `path:line` in mono, an `Outdated` tag, the first comment clamped to four lines with its
+  author, and how many more replies wait on GitHub.
+- **Send to agent** (`.btn`) on a failing check and on each thread puts text into the pane's
+  composer draft, after what it already holds, and sends nothing: a check's `workflow / name`,
+  its page and the last 80 lines of its Actions log (timestamps and colour codes removed) in a
+  code fence; a thread's `path:line`, author, link and first comment as a `>` quote. A note under
+  the row says it was added, added without the log, or too long for the box.
+- Left out on purpose: re-running checks, writing review replies, the diff (Changes has it), and
+  any polling.
+- Layout: one column inside the Files sheet; bar, branches line, Checks, Open review threads,
+  Merge, each separated by a hairline.
+
 ### Header context and connection
 - A selected pane shows agent mark + title (`--fs-md`), then on the same line the crumb
   PC › workspace › folder (`--fs-xs`, `--text-dim`); with one PC registered the PC is left out, as
@@ -2080,6 +2375,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   title may shorten with an ellipsis; the crumb never does: when it does not fit whole beside the
   whole title it is not drawn, and the title has the row. The full path is in the context's
   tooltip and at the top of the More menu. With no selection, the brand fills the context slot.
+- After the crumb, from `769px`, the selected chat's session totals (`.context-session`,
+  `lib/sessionStats.ts`, #2017) in the crumb's face: **Worked 2h 5m** (the sum of the agent turns'
+  own durations, each one's "Worked for"; **Worked at least …** until the chat has loaded back to the
+  beginning), the transcript file's size (`transcript_bytes` on the newest conversation page), and
+  a Target glyph with the omo goal's status. It is its own item after the crumb, so it wraps out of
+  sight before the crumb does, and it gives the line to the connection's word. Its tooltip, and the
+  More menu's header under the path at every width, say it in full: the totals (an unknown one says
+  so) and `Goal: objective · status · time`. The Codex desktop app shows a thread's active goal by
+  its title the same way; Ovis puts it on the crumb line because the header is one line. A Codex
+  goal (kept in Codex's own state store, not the rollout) is not read.
 - The More menu (`.header-more-button`, the `RowMenu` popover, a bottom sheet at `<=640px`) opens
   with the location on two lines, "PC › workspace" then the full path in mono. Its first item,
   at every width, is **Search panes and actions**, which opens the command palette (its shortcut
@@ -2093,6 +2398,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   marks the state that needs a look, never "on".
 - The segmented Chat/Terminal view switch lives in the header. There is no floating view-toggle pill.
   Files is an action, not a third lens: it opens the Files dialog and never joins the switch.
+  With Settings → Chat → Files beside the pane on (`filesPanel`, per device, off by default) a
+  window of 980px or more opens Files as a panel in the docked file's place, right of the pane, as
+  the Codex app keeps its files in a right sidebar beside the conversation; the button is then a
+  toggle (`aria-pressed`). A file docking from it takes its place and closing the file shows the
+  list again; the panel keeps the docked viewer's hairline column, resize edge and compact header.
 - At `<=768px` the drawer toggle and More are `--touch-target-header` squares. The lens buttons
   are not: they keep the switch's track and inset, as the segmented control entry describes.
 - Connection is one quiet chip, drawn only while the bridge is not live: a pulsing dot plus the
@@ -2111,6 +2421,40 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the PC and split half the header shows, by the half that reported it: a recovery on one PC or half
   is not said once another is shown, and a pane's first connection is not a reconnect. A stalled
   output, which retries nothing, gets no line: the chip says disconnected. The return sends nothing: a draft stays a draft.
+- Beside the chip, always shown, one quiet mark says how this device reaches Ovis (`.conn-route`,
+  `components/ConnectionRouteMark.tsx`, `lib/connectionRoute.ts`): a 14px glyph and one short
+  `--text-dim` word, **relay** (the hosted shell, or a request Portal vouched for, whatever signed it in), **Tailscale** (a tailnet address, or a
+  request the server saw come through serve; a MagicDNS name alone says "Via Tailscale, or Funnel
+  from the internet", since the name serves both), **LAN** (a private address or a local-only name), **direct** (any other
+  address, a bare machine name and a request the server saw come through Funnel included) or
+  **local** (loopback: this PC, or a tunnel to another, which nothing can tell apart). The route,
+  not the connection's state, is its title and accessible text ("Via Tailscale"); the chip tells the
+  state. It is read from what the page owns and the server's own word on the request
+  (`observed_ingress`), never guessed. It is not a button and never wraps. At `<=480px` only the
+  relay keeps its word (the one most asked for) and the rest keep the glyph; below `360px` the
+  relay's word goes too, so the pane title keeps its room. The phone app's demo shows none. It
+  follows Paseo's app, which says beside a host whether it is reached directly or through its relay.
+- Beside the route mark, the PC's sessions by state (`.header-sessions`,
+  `components/HeaderSessions.tsx`, `lib/headerSessions.ts`): one figure per state that has any,
+  in the sidebar's colours and marks, `--status-working` dot for running (a turn waiting on its own
+  background work counts), `--status-blocked` question mark for waiting for an answer,
+  `--status-done` dot for finished and not looked at yet (a finish looked at reads as ready, as in
+  the sidebar). Tabular figures, so a count that changes moves nothing; nothing at all while every
+  session rests, and nothing for a PC that is not connected (its cached roster is greyed out in the
+  sidebar). The waiting figure is the one button: tinted with its state, it opens the next waiting
+  session after the selected one in the roster's order, wrapping, never the selected one and never
+  one a zoomed tab hides (a pick of it lands on the zoomed pane); with none to open it stays a
+  button, `aria-disabled`, so a keyboard's focus is not dropped. It follows Slack's "next unread"
+  rather than a coding-agent app, because the question on a phone is the same: which conversation
+  needs me now. After the title, `--text-dim` and kept whole, the selected tab's place in its
+  workspace's strip (`.context-position`, "1/2", said "Tab 1 of 2"), only with two tabs or more.
+  At `<=480px` the header's line is the title's, as wide as without these: the figures become one
+  pill (waiting, else running, else done, tinted with its state) at the end of the tab row under the
+  header (`.tab-strip-sessions`), a full `--touch-target-header` target. Where that row is not drawn
+  (a lone tab on a cramped phone) More carries the jump: **Open the next session waiting for you** is
+  its first item, and its button wears a `--status-blocked` dot (`.header-more-dot.is-waiting`, in
+  place of the alerts-off dot) and says the count in its name. Below `420px` the tab's place leaves
+  the header: the tab row shows it.
 
 ### Chat turn (`.chat-turn`)
 - Native conversation rows use LegendList 3.3.5, with the chat view as the single
@@ -2463,6 +2807,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   maintainer-approved adaptation of agent-of-empires' plan strip (#1040): only its step
   visibility is taken, and herdr keeps its existing shared chip rather than importing that
   separate always-visible strip or a progress bar, so the status line stays one row on a phone.
+- Settings > Appearance > **Context left on agent rows** (the device setting `sidebarContext`, off
+  by default, #1305) adds the composer's context ring to each agent row, after the plan count
+  (`.context-count`): the same ring at the badges' size, then the percentage left in the same quiet
+  mono figures, with the composer's words as its name and title ("Context 62% left · 76k of 200k
+  tokens"). It turns `--status-blocked` at 20% left or less, the composer's own threshold, and
+  draws nothing where the composer's ring would draw nothing (no known window), so a row only
+  shows it for Claude Code and Codex panes, whose transcripts the server already reads for the
+  plan. The Codex app, Paseo and T3 Code keep the ring by the composer only, and so does Ovis by
+  default; the row ring is opt-in for people who watch several agents' context at once.
 - The chip opens one list above the card: a **Plan** heading with `N of M done`, the steps in wave
   order (a status glyph, the name, what a running step does now, then a dim state · time · teammate
   line; a waiting step's name is dim), then a **Background tasks** heading over the tasks list when
@@ -2502,6 +2855,27 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   subagent's transcript; agent-of-empires's background-agents panel (MIT) suggested the
   interaction of opening prompt, tool and result from the row, and nothing of it is copied.
 
+### OMP side conversations (`.btw-menu`, `.btw-thread`)
+- OMP's `/btw` asks a side question that stays out of the main conversation and its context; OMP
+  saves each topic beside the session (`btw-history/`), not in its transcript. Chat therefore does
+  not draw them as turns: an OMP pane's composer offers a **Side conversations** chip beside the
+  background tasks chip, in its look (`.bg-tasks-toggle`, the messages glyph, the count; a narrow
+  card keeps the glyph and the number). It is off by default (Settings → Chat → Composer → Side
+  conversations chip (experimental), the device setting `composerBtw`), and shows only once the session saved a
+  topic.
+- It opens one list above the card, newest topic first: each row is a disclosure (a chevron, OMP's
+  title or else the first question, then a dim `when · N follow-ups · state` line, the state only
+  when it is not complete). An open topic reads as a short thread under its row, indented past the
+  glyph behind a hairline: each question in `--text-strong` semibold, its answer as Markdown, a
+  state that is not complete in dim words (answering, cancelled, interrupted, failed with OMP's
+  reason). Read-only: asking, following up and cancelling stay in OMP's terminal.
+- The list is read every 10 seconds while the chip is up and every 3 while it is open: a saved
+  answer does not touch the transcript, so the conversation's updates never announce one. Only the
+  main session's topics are read, never a focused subagent's (`btw-history/sessions/`). The
+  presentation follows OMP's own `/btw` history overlay (topics newest first, each opening on its
+  thread) and Claude Code's `/btw`, whose side answers also stay out of the transcript; the chip
+  itself is the Artifacts chip's pattern.
+
 ### Background tasks ended (`.chat-task-results`)
 - Where OmO reports background tasks that ended, or a Claude Code subagent ends (its
   `<task-notification>`, drawn once however many records carry it), the transcript shows one `--bg-elevated` card
@@ -2540,6 +2914,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   dialog; the Claude app shows them as the turn's text, which the chat shows once the transcript
   has the turn (then the card leaves its copy out). Words whose start is above the screen are not
   shown: they cannot be told from the user's own wrapped prompt.
+- An option's preview (#1212): Claude Code draws AskUserQuestion's `preview` in a box beside its
+  menu for the option under its cursor only, and its session file has no copy until the answer, so
+  the card shows that box's text (`option_preview`, read off the screen) under that option, in line
+  with its label, in a mono box (`--bg`, `--fs-xs`) kept as drawn: Claude's own wrapping stays, and
+  the box scrolls both ways (eight lines at most) so a mockup's columns never re-wrap. A preview
+  Claude cut says how many lines it left out (its terminal shows only that count too). It follows the cursor as the terminal
+  moves it; the card never moves the cursor to show another option's. A box under 20 columns (a
+  pane of about 40) shows the preview in unreadable pieces, so the card shows none. It follows
+  Claude Code's terminal, which shows the preview beside the option it belongs to.
 - Height: at most the larger of 60% of the app's height (`--app-height`, so a phone's keyboard
   counts) and six touch rows (`240px`), at every width. Only the reference text gives way: six
   lines at rest, two at the least (one for a one-line command), scrolling in itself with a fade
@@ -2630,6 +3013,13 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `--space-1` tall), then ONE row of controls under it:
   on the left the add button (lucide `Plus`, named "Attach files"), the mic when voice input
   shows it (see Voice input), and the background-task chip; on the right the status content and ONE round Send/Stop button.
+  Once this device turns it on (Settings → Chat → Composer, **Paste and send button**, the device
+  setting `composerPasteSend`, off by default), **Paste and send** (lucide `ClipboardPaste`, beside
+  Attach) reads this device's clipboard on the press, never the PC's, and sends its text through
+  Send's own path (queued while the agent works, kept in the box when refused). It is on only for an
+  empty box with no files; a read that answers after the pane, the connection or the box changed
+  sends nothing, and an empty, refused or too-long clipboard is said in the note, never cut to fit.
+  The Codex and Claude apps have no such button; it follows the terminal key bar's Paste here.
   The message's text starts `--space-4` in (`--space-3` on a phone, `480px` and below).
 - The strip (`.composer-strip`) tucked under the card, as t3code's composer context strip: the
   card's own `--bg-elevated` with a `--border` hairline, inset on each side by the card's radius
@@ -3049,7 +3439,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   draft and returns focus to the text box. If Send must finish a composition, blur is an editing
   boundary even when a mobile keyboard omits compositionend; refocus follows in the next task,
   without stealing focus from another control. A disconnect withdraws any waiting Send.
-- With a mouse, Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. On touch screens the same device setting is shown inverted as **Return inserts a new line**, with Send and hardware Mod+Enter explained below it, and is on until the device chooses, as in the ChatGPT and Claude phone apps: a soft keyboard's Return breaks the line and the Send button sends. The choice is kept in its own key (`ovis:enter-sends`); an older record's `enterSends: false` counts as chosen, its `true` (written by any save) does not. On a touch screen the text scrolls inside under a third of the visible height, so a long draft never pushes the row with Send under the keyboard. IME Enter is ignored. Stop sends Escape. While the agent works and a draft shows Send in Stop's place, Escape in the box is Stop; an open completion menu takes the first Escape, and its X in the top corner (`.composer-menu-close`, Close suggestions, sticky over the rows it scrolls; the first row leaves it room) does the same for a pointer or a phone, which has no Escape, keeping the text and the focus in the box. T3 Code's command menu closes on Escape alone. Working Send schedules a pending message; its Send now action submits that same message now.
+- With a mouse, Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. While Enter sends, Ctrl+Enter (not Cmd on a Mac, Claude Code's own key for this during a turn) sends now: the message is queued or held as Enter would, then that row goes by the same steer as its **Send now**, and a refused steer leaves the row with its reason; at rest it sends like Enter (#2596). On touch screens the same device setting is shown inverted as **Return inserts a new line**, with Send and hardware Mod+Enter explained below it, and is on until the device chooses, as in the ChatGPT and Claude phone apps: a soft keyboard's Return breaks the line and the Send button sends. The choice is kept in its own key (`ovis:enter-sends`); an older record's `enterSends: false` counts as chosen, its `true` (written by any save) does not. On a touch screen the text scrolls inside under a third of the visible height, so a long draft never pushes the row with Send under the keyboard. IME Enter is ignored. Stop sends Escape. While the agent works and a draft shows Send in Stop's place, Escape in the box is Stop; an open completion menu takes the first Escape, and its X in the top corner (`.composer-menu-close`, Close suggestions, sticky over the rows it scrolls; the first row leaves it room) does the same for a pointer or a phone, which has no Escape, keeping the text and the focus in the box. T3 Code's command menu closes on Escape alone. Working Send schedules a pending message; its Send now action submits that same message now.
 
 - dsh-tui uses the existing T3 Code-style composer command menu for its local slash commands:
   filtering, keyboard selection and touch insertion keep execution behind explicit Send. The
@@ -3108,6 +3498,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   a phone (the composer's `(max-width: 640px), (pointer: coarse)`), and leaves it out where dictation
   cannot work (no HTTPS, or no key and no browser recognition). On shows it in both inputs and on a
   phone, disabled with its reason where it cannot work.
+- Under the mic setting, per device: **Dictation language** (Auto, or one from the list) and
+  **Speech recognition** (`voiceEngine`: `auto`, `browser` or `server`, a Segmented of Auto, Browser,
+  API key; default `auto`). Auto uses the server's API key when one is saved, else the browser's
+  recognition; Browser and API key never fall back to the other, so a mic that cannot record says
+  why (API key without a saved key: "Save an API key to use the mic"). Browser hides Tidy dictated
+  text, which only the key's path does. The choice has its own storage key (`ovis:voice-engine`),
+  so an older tab's save keeps it, and open tabs follow it at once. Two rows, no new composer
+  control: macOS's Dictation settings likewise keep the language and the source beside the switch,
+  not on the input.
 - A mouse holds the mic to talk (release finishes) or taps it to toggle. A touch on the browser's
   speech recognition (no key) taps to start and taps to finish, from the click: iOS starts it only
   from a user activation, which a touch's pointerdown is not (#2343). With a key, a touch holds too.
@@ -3182,6 +3581,23 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   row, and a picked row that leaves hands its place, and the focus, to the row now there (the search
   when none is left). Below 640px the sheet is one fixed height, the chips and footer staying put.
 
+### Conversation search (`.conversation-search`)
+- **Search conversation** (#2018) is the palette's sheet (`.command-palette`: top-offset
+  `--palette-w` on a desktop, one fixed-height sheet below 640px) holding a search field and a
+  list of snippets, opened from the pane's menu and the palette only: nothing is added to the
+  chat or the composer, so a phone's screen keeps its room.
+- It follows the Codex app's Find in chat in what it reads (the user's messages and the agent's
+  final answers, older pages included, searched on the PC) and differs in what it shows: a list of
+  matches, newest first, instead of a match count with next/previous and highlights in the chat.
+  The chat marks nothing; a snippet's matched words take `--text-strong` at `--fw-semibold`.
+- A row is a `.menu-item`: the speaker (the user's icon, or the agent's mark), a two-line snippet
+  with the match near its start, and the turn's time as `.palette-row-subtitle`.
+  The footer says how far the search got (Searching earlier messages…, the whole conversation,
+  the newest 200), or what a pick is doing.
+- A pick keeps the sheet open, its row spinning, while the chat reads the pages back to the turn
+  (the largest page size, so a turn 500 prompts back takes ten reads); the sheet closes once the
+  turn sits at the top of the view, or says the conversation no longer holds it.
+
 ### Settings dialog
 - A Settings shortcut opened over a file preview places Settings above it (`--z-modal + 2`, one
   above the preview). Settings owns Escape until it closes; the preview keeps its history entry
@@ -3209,13 +3625,18 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (panes open in, show thinking, chat width, chat font size and family; then
   **Composer**: Enter sends, send queued messages automatically, in a mouse-driven window wider than
   640px the New tab button (off by default), the Artifacts chip (off by default, the device setting
-  `composerArtifacts`), and on a touch screen the suggestion chip (off by default); then
-  **Quick replies**; then **File viewer**: wrap long lines, Markdown width, Diff layout), **Terminal** (font size, font family, wheel
-  speed, input mode, Key bar, Clipboard from a pane, Use alongside herdr's own window, Follow
+  `composerArtifacts`), the Side conversations chip (experimental, off by default, the device setting
+  `composerBtw`), the Paste and send button (off by default, the device setting
+  `composerPasteSend`), and on a touch screen the suggestion chip (off by default); then
+  **Quick replies**; then **File viewer**: wrap long lines, Markdown width, Markdown outline (off by default, the device setting `markdownOutline`), Diff layout), **Terminal** (font size, font family, wheel
+  speed, input mode, Key bar, Keyboard only from the key bar (off by default, the device setting
+  `terminalKeyboardOnRequest`), Fold the key bar (touch screens, off by default, the device setting
+  `terminalFoldKeyBar`), Clipboard from a pane, Pictures in the terminal (off by default, the
+  device setting `terminalImages`), Use alongside herdr's own window, Follow
   herdr's focus), **Alerts**, **Voice input**, **Agents**,
   **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (Connect a phone,
   Keep screen on, Install; then Portal, where the server offers it; then paired devices; then Access),
-  **Remote PCs** (Add PC, Update PC bridges automatically; then **Show in sidebar**), **About** (Updates, herdr, the repository links). A button that points at
+  **Remote PCs** (Add PC, Update PC bridges automatically, PC load in the sidebar; then **Show in sidebar**), **About** (Updates, herdr, the repository links). A button that points at
   Updates opens the dialog on About.
 - Every page is built from the same parts (`components/SettingsControls.tsx`). A group is an
   optional caption (`--fs-sm`, `--fw-semibold`, `--text-dim`, sentence case) over one card:
@@ -3516,6 +3937,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 ### Terminal host, key bar and drawer
 - A browser page restored while visible and focused refits and reasserts its terminal grid,
   including when restoration sends `pageshow` without a new focus or visibility-change event.
+- **Drawn with libghostty** (every pane, no setting): libghostty-vt draws the
+  pane's text, cursor and Kitty graphics pictures in a layer over xterm's screen, at xterm's cell size;
+  xterm's own text and cursor are hidden under it, and not redrawn, and xterm keeps input, selection,
+  links, search and scrolling. Screen readers read the libghostty rows, and a polite live log announces
+  the lines a program writes (not the screen a pane opens on). It follows Ghostty's own split of a terminal core (libghostty-vt) from the renderer an app
+  draws with, rather than a second terminal widget: everything built on xterm keeps working while the
+  drawing moves. The layer takes no pointer events; pictures keep the layer Kitty gave them (below
+  the text, or above it). xterm draws by itself only where the layer cannot: a module that does not load
+  or fails, and an iTerm2 or sixel picture, so a pane never goes blank.
 - **Find in terminal** in the header's More menu and Mod+Shift+F opens a find bar above the
   grid. It uses the existing input and icon-button primitives: a query, match ordinal,
   previous/next and close controls, with a dim note that scrolling is shared by all clients.
@@ -3586,6 +4016,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the chat lens' round button form (`--control-h`, `--touch-target` on coarse pointers,
   `--radius-pill`, `--shadow-pop`), keeps focus in the terminal, and is hidden at the bottom, in
   read-only views and while Find owns the viewport. A grown touch input line floats over it.
+  On a herdr-core server (`terminal-history`) xterm keeps the history itself, so the same
+  button shows whenever xterm's own view is above its bottom, under the same conditions, and
+  takes it back with xterm's scrollToBottom. This follows VS Code's integrated terminal,
+  whose history scrolls locally and returns to the bottom on demand.
 - Mod+Shift+PageUp/PageDown pages the selected pane only, preserving chat composer focus and
   selection. Chat moves instantly by its viewport minus one prose line;
   Terminal uses native viewport rows minus one. A page still
@@ -3660,8 +4094,25 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   with the keyboard put away leaves it away (only the keyboard key or a tap on the line or the grid
   raises it). That follows the platform's own rule rather than an app's: a button never raises a
   phone's keyboard, only a text field does. A fine pointer, which raises no keyboard, still moves
-  the focus to the grid. Modifiers remain highlighted until toggled off,
-  leaving the pane/lens or disconnecting; each exposes `aria-pressed`.
+  the focus to the grid. A modifier steps by taps, off → once → locked → off, as a phone keyboard's
+  Shift goes from one capital to Caps Lock (iOS and Gboard), by taps rather than a double tap's
+  timing. Once, it has the accent edge and carries the next key only: a key-bar key (a held key's
+  repeats keep it until the finger lifts), a typed key, or the input line's Enter lets it go; a
+  saved combination sends its own chord and leaves it held. Locked, it is also filled
+  (`--accent-tint`) and underlined, carries every key, and says "…, locked" in its name. Both end
+  on leaving the pane/lens or disconnecting; each exposes `aria-pressed` and `data-latch`.
+- **More keys** (`ChevronUp`, then **Fewer keys** with `ChevronDown`, `aria-expanded`) is pinned at
+  the bar's end, out of the row's scroll, and is a Tab stop like the keyboard control. Under
+  `360px` (a cover screen) it scrolls at the row's end instead, so `^C` stays in the first view. It opens a
+  second row over the first: Esc, Tab, `|`, `~`, `/`, `-` (the keys a phone keyboard hides behind
+  its symbol pages), which narrow below `--touch-target` on a narrow phone rather than scroll, and
+  an arrow pad at the right-hand end of both rows in a hardware keyboard's inverted T (Up over Down,
+  Left and Right beside it), each a `--touch-target` column, whose arrows repeat while held. The
+  first row then leaves out the plain keys the second row and the pad show. Rows are
+  `--touch-target` tall so the keys' expanders meet without overlapping, and the keys keep the
+  compact bar's room above and below them. The choice is the device's (`keyBarExpanded`). Termux's
+  two rows of extra keys with their inverted-T arrows are the model; here the second row is opened
+  on demand, since the terminal gives up a row's height for it.
 - That is the default row. Settings → Terminal → Key bar can add, remove and reorder every
   terminal key and register exact combinations. Removing a held modifier clears it immediately.
   A deliberately empty row retains only the Input line switch, Paste and the keyboard control on a
@@ -3717,6 +4168,20 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the terminal; only the focus-preserving tap AoE's button relies on is shared, and the key bar
   already had it. Disabled keys (`.key:disabled`, and the refusing control) draw their glyph in
   `--text-dim`, so a bar with nothing to send to reads as such.
+- **Keyboard only from the key bar** (Settings > Terminal, off by default, the device setting
+  `terminalKeyboardOnRequest`, #1635): on a touch screen the control above becomes the only way the
+  terminal raises the soft keyboard. Until the control's Show asks for it, the input line and
+  xterm's field carry `inputmode="none"`, so a tap on the grid, the line, Send or a key still
+  focuses them and raises nothing (a browser shows no keyboard for that mode, and a switch to it
+  hides one). Show removes the attribute from the field it focuses inside the same tap. The request
+  is the tap's own, not the measurement's, which is blind to a floating keyboard or a zoomed page
+  (its settle window would otherwise take an unmeasured keyboard back): it ends at Hide, at a
+  keyboard measured going down (Android's back gesture), or when the focus leaves the pane's
+  fields, and the attribute comes back. Nothing is held while the control cannot be pressed
+  (offline, held, ended, view only): the line still takes a draft there, so a tap raises the
+  keyboard as with the setting off. The
+  mode switch stays its own key beside the control. The model is Termux's KEYBOARD extra key, the
+  keyboard toggle of a phone terminal app: reading is the rest state, typing is asked for.
 - When the row outgrows the viewport it scrolls sideways, and the edge that hides more keys fades
   out: `KeyBar` sets `data-overflow-start` / `data-overflow-end` on `.key-bar` (measured before
   first paint, on scroll and on resize, once a frame) and `KeyBar.css` masks that edge with a
@@ -3762,6 +4227,31 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   draft with a separate no-Enter insert; agent-of-empires' compose sheet has Insert beside Send but
   clears its draft on a synchronous boolean, which this design rejects: the draft is cleared on the
   bridge's acknowledgement, as Send's is, and nothing typed is queued across a disconnect.
+- **Fold the key bar** (Settings > Terminal, touch screens only, off by default, the device setting
+  `terminalFoldKeyBar`, #1531): in Input line mode the key bar's row is folded and the terminal gets
+  it back (about 48 px). The line's actions start with a **Terminal keys** button (`LineKeysButton` in
+  KeyBar.tsx), a round target without words over it, pressed as an armed key while the row is open;
+  the open row is the whole bar, mode key first. The mode key stays in the bar rather than moving into
+  the line as the issue proposed: two more round targets left a 360 px line too narrow to type in.
+  Folding lets go of any modifier the row held, since a folded row cannot show it, and leaving the
+  line folds the row again. Send stays last, at the edge, as in the composer. Folded, a line that
+  reaches the screen's bottom keeps `max(--space-2, safe-area-inset-bottom)` under its controls, and
+  its placeholder is cut on one row rather than wrapped. With Attach files and the microphone also on,
+  a phone too narrow for them wraps the actions above the field rather than crushing it. With
+  Keyboard only from the key bar on, Show keyboard is a tap into the opened row. Direct typing keeps
+  the whole bar. Design reference: the Claude and Codex phone apps, which keep one input row with
+  its actions at its end.
+- **Attach files** in the terminal lens (#1633; Settings > Terminal > **Attach files button**, the
+  device setting `terminalAttachButton`, off by default and offered on a touch screen only, so the
+  input line and the key bar stay as they were). On, the input line gets **Attach**
+  (`.terminal-input-attach`, lucide paperclip, caption "Attach") before Insert, outlined as Insert
+  is, and direct typing gets a key (`[data-key="attach"]`, "Attach files") right after the
+  keyboard control; both live in rows that already exist, so no height is added. Each opens the
+  system picker (`<input type="file" multiple>`); the picked files take the paths a paste or a drop
+  already takes: into the line at its caret under the paste's staleness rule with "Uploading
+  file…" meanwhile, or pasted into the grid as a drop is, never with Enter. It follows the
+  attach action mobile SSH clients put beside their terminal input and the composer's own Attach
+  files; the composer's `+` glyph is not used, since a `+` on a key bar reads as the character.
 
 ### In-app alert
 - While the app is on screen, a pane that needs input, finishes a turn (by the device's Finished
@@ -3838,6 +4328,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   accounts already signed in; the guide opened again from Settings changes no setting (nor says it
   will).
 - "Start with …" and beside it a plain "Connect your phone", which opens a `--bg-panel` box under them.
+  On a first run on the PC itself (the desktop app, or a browser on its loopback) the box is open from
+  the start, as a phone is the next device to add; it leads with the relay only, so where the relay
+  cannot lead it stays closed instead of sending the page to Settings → Phone untapped. The relay stays
+  off until "Turn on the Ovis relay", as Paseo keeps its relay off until Enable relay; unlike Paseo,
+  which leaves pairing in Settings, the first run shows it.
   Where the Ovis relay can lead (offered here, nothing blocks it, not a watching device or a Portal
   visitor), the box leads with it (off until the user turns it on, then a QR code): one line on what it does, the device-gate note when turning
   it on closes the gate, and "Turn on the Ovis relay" as the primary button (the tap is the consent).
@@ -3903,6 +4398,21 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   for the flow; the states and their words are this app's, in the token gate's own frame, so a
   phone that pairs through the relay and one that pairs with a code see the same room. Neither
   the Codex nor the Claude app has a hosted relay shell to follow.
+- Account part (components/AccountPcs.tsx, lib/account/), only on the front page and only when
+  the page names an account service (`<meta name="ovis-account-service">`); without one the front
+  page is the saved-PC list above, unchanged. Signed out: **Continue with GitHub** and **Continue
+  with Apple**, two equal neutral `.btn`s (App Review 4.8 wants Apple wherever another provider
+  is, and neither is the one to pick), a `--fs-xs` dim line on what the account service learns,
+  then the QR route under a hairline (an `h2`, the page keeps one `h1`). With saved PCs the list
+  comes first and the sign-in follows it. Signed in: **Your PCs** with "Signed in with GitHub"
+  under it, one row per PC of the account merged with the PCs this device is paired with: the
+  name, and under it a `--fs-sm` dim line in words (Paired; This device is not approved on it
+  yet; Offline, last seen 3 h ago; Its Ovis needs an update to join the account), no badge. Only
+  a paired PC is a link with a chevron; the others are plain rows. The `<main>` adds
+  `data-account-state` (`signed-out`, `signing-in`, `signed-in`) for scripts; each row
+  `data-pc-state`. Precedent: Tailscale's admin machine list (every machine of the account, its
+  state in words) for the list, and Signal's linked devices for keeping trust on devices already
+  linked rather than on the sign-in.
 - Relay files keep the existing file viewer and its Paseo-style file bar, rather than adding a
   separate remote-files screen. A client without a resource-capable service worker shows the
   usual file note as an alert when the 64 MiB limit is exceeded. Copy link and new-tab actions
@@ -4102,3 +4612,14 @@ Other hosts keep opening in a new tab, and unsafe schemes stay blocked; the app'
 limited to its own host. This follows T3 Code's in-thread visual replies and full-screen page view,
 while keeping external page links in the browser as its [HTML renders guide](https://github.com/pingdotgg/t3code/blob/main/docs/user/html-renders.md)
 does. No code or visual assets are copied.
+
+With **In the app** chosen, the command palette also opens such a page by its address: **Open a
+page on this PC…** starts the query as `localhost:`, and a query that is a loopback name with a
+port (`localhost:8448`, `:8448`, `127.0.0.1:3000/docs`) leads the list with **Open** that
+address, so a local tool with a web UI (a Git client, a docs site) sits beside the pane without a
+link printed in a terminal. Without a scheme the address takes the app's own, since an https app
+frames only https pages (a port `tailscale serve` fronts). The page is the PC's that serves the
+app whichever PC is selected, and it goes through the same `panelUrl` checks: the app's own port
+and pages the panel refuses get no row. Nothing is proxied: the browser reaches the page under the
+app's hostname, as for a clicked link. This follows VS Code's Simple Browser, which a palette
+command opens on a typed address; no code is copied.

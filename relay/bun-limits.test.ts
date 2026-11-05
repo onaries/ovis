@@ -48,7 +48,7 @@ test("flags override environment values and invalid budgets fail startup", () =>
     RELAY_MAX_SOCKETS: "8", RELAY_PER_ADDRESS_PER_MINUTE: "6", RELAY_MAX_ROOMS: "3",
     RELAY_GLOBAL_PER_MINUTE: "17", RELAY_MAX_ADDRESSES: "11", RELAY_MAX_SOCKETS_PER_ADDRESS: "4",
   });
-  expect(limits).toEqual({ maxSockets: 9, perAddressPerMinute: 7, maxRooms: 3, globalPerMinute: 17, maxAddresses: 11, maxSocketsPerAddress: 5 });
+  expect(limits).toEqual({ maxSockets: 9, perAddressPerMinute: 7, maxRooms: 3, maxPairRooms: 256, globalPerMinute: 17, maxAddresses: 11, maxSocketsPerAddress: 5 });
   expect(relayLimitsFromArgs([], { RELAY_MAX_SOCKETS_PER_ADDRESS: "4" }).maxSocketsPerAddress).toBe(4);
   for (const value of ["0", "-1", "NaN", "1.5", "Infinity", "", "9007199254740992"]) {
     expect(() => relayLimitsFromArgs(["--max-sockets", value], {})).toThrow();

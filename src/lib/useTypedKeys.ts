@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { Terminal } from "@xterm/xterm";
-import { hasModifiers, navigationSequence, terminalChord, type StickyModifiers } from "./keys.ts";
+import { hasModifiers, navigationSequence, stepModifier, terminalChord, type ModifierLatch, type StickyModifiers } from "./keys.ts";
 import { keyBarInputSequence, type KeyBarKeyItem } from "./keyBar.ts";
 import { hermesCtrlCTooSoon, stopKey } from "./hermesStop.ts";
 import type { Translate } from "./i18n.ts";
@@ -18,10 +18,14 @@ export interface TypedKeysDeps {
   composingRef: RefObject<boolean>;
   inputLineRef: RefObject<boolean>;
   modifiersRef: RefObject<StickyModifiers>;
+  /** the held modifiers that stay after a key (lib/keys.ts ModifierLatch) */
+  lockedRef: RefObject<StickyModifiers>;
+  setLatch: (latch: ModifierLatch) => void;
+  /** after a key that carried the held modifiers: lets go of those held for one key */
+  consumeModifiers: () => void;
   paneId: string | null;
   reassertIfStaleRef: RefObject<() => void>;
   setInputError: Dispatch<SetStateAction<string | null>>;
-  setModifiers: Dispatch<SetStateAction<StickyModifiers>>;
   socketRef: RefObject<HerdrSocket | null>;
   stopKeyRef: RefObject<boolean>;
   tRef: RefObject<Translate>;
@@ -29,9 +33,10 @@ export interface TypedKeysDeps {
 }
 
 export function useTypedKeys(deps: TypedKeysDeps) {
-  const { agent, agentStatus, barKeyRef, coarseRef, commitPendingText, compositionCommitPendingRef, composingRef, inputLineRef, modifiersRef, paneId, reassertIfStaleRef, setInputError, setModifiers, socketRef, stopKeyRef, tRef, termRef } = deps;
-  // key-bar taps go through xterm so the onData -> socket path above is reused
-  const pressKey = useCallback((item: KeyBarKeyItem) => {
+  const { agent, agentStatus, barKeyRef, coarseRef, commitPendingText, compositionCommitPendingRef, composingRef, inputLineRef, modifiersRef, lockedRef, setLatch, consumeModifiers, paneId, reassertIfStaleRef, setInputError, socketRef, stopKeyRef, tRef, termRef } = deps;
+  // key-bar taps go through xterm so the onData -> socket path above is reused. A held key's repeats
+  // (`repeat`) keep a modifier held for one key until the finger lifts (KeyBar's onKeyHoldEnd)
+  const pressKey = useCallback((item: KeyBarKeyItem, repeat = false) => {
     const term = termRef.current;
     if (!term) return;
     if (composingRef.current || compositionCommitPendingRef.current) return;
@@ -47,6 +52,7 @@ export function useTypedKeys(deps: TypedKeysDeps) {
     commitPendingText();
     barKeyRef.current = { key: item.key, chord };
     try { term.input(input); } finally { barKeyRef.current = null; }
+    if (item.modifiers === undefined && !repeat) consumeModifiers();
     // with the input line, the keyboard belongs to it: a key tap must not move it to the grid. On a
     // touch screen a key tap never takes the focus at all: focusing the grid raises the soft
     // keyboard, and a key pressed with the keyboard put away (after dictating, say) must leave it
@@ -56,9 +62,7 @@ export function useTypedKeys(deps: TypedKeysDeps) {
 
   const toggleModifier = useCallback((modifier: keyof StickyModifiers) => {
     if (composingRef.current) return;
-    const next = { ...modifiersRef.current, [modifier]: !modifiersRef.current[modifier] };
-    modifiersRef.current = next;
-    setModifiers(next);
+    setLatch(stepModifier({ held: modifiersRef.current, locked: lockedRef.current }, modifier));
     if (!inputLineRef.current && !coarseRef.current) termRef.current?.focus();
   }, []);
 

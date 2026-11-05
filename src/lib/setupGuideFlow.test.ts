@@ -4,7 +4,7 @@ import { AGENT_CATALOG, catalogRow, type AgentCatalogRow, type AgentInstallState
 import type { HealthAuth, RelayStatus } from "../../shared/protocol.ts";
 import type { ProviderUsage } from "../../shared/usage.ts";
 import { onSetupGuideRequest, openSetupGuide } from "./setupGuide.ts";
-import { agentRows, autoOpen, CHECK_SETTLE_MS, checkList, checkStatus, foundAgents, guideStep, INSTALL_GIVE_UP_MS, installedHere, openInFolder, phoneBoxMode, phoneWay, preferredAgent, readGuide, readSignedIn, relayStep, REOPENED, saveGuide, settleDelay, setupView, signedInAgents, tileState, turnsUsageOn, WELCOME, type FreshFacts, type PcCheck } from "./setupGuideFlow.ts";
+import { agentRows, autoOpen, CHECK_SETTLE_MS, checkList, checkStatus, foundAgents, guideStep, INSTALL_GIVE_UP_MS, installedHere, openInFolder, phoneBoxMode, phoneBoxOpensFirst, phoneBoxStays, phoneWay, preferredAgent, readGuide, readSignedIn, relayStep, REOPENED, saveGuide, settleDelay, setupView, signedInAgents, tileState, turnsUsageOn, WELCOME, type FreshFacts, type PcCheck } from "./setupGuideFlow.ts";
 
 const FRESH: FreshFacts = { workspaces: 0, savedSettings: false, sharedRevision: 0, pairingGate: "open", watching: false };
 
@@ -253,6 +253,27 @@ describe("tileState", () => {
     expect(tileState(false, { kind: "failed", message: "offline", after: "install" }, true, 0)).toBe("installing");
     // the request itself never answered: stuck too, not back to Install
     expect(tileState(false, { kind: "idle" }, true, INSTALL_GIVE_UP_MS)).toBe("stuck");
+  });
+});
+
+describe("phoneBoxOpensFirst and phoneBoxStays", () => {
+  it("opens Connect your phone by itself on a first run on the PC only", () => {
+    expect(phoneBoxOpensFirst({ step: "setup" }, true)).toBe(true);
+    // a page another device opened (a phone), or the guide reopened from Settings
+    expect(phoneBoxOpensFirst({ step: "setup" }, false)).toBe(false);
+    expect(phoneBoxOpensFirst(REOPENED, true)).toBe(false);
+  });
+
+  it("keeps a box that came open by itself only while the relay may lead; a tapped one always", () => {
+    expect(phoneBoxStays("first-run", "wait", false)).toBe(true);
+    expect(phoneBoxStays("first-run", "relay", false)).toBe(true);
+    // never sent to Settings → Phone without a tap
+    expect(phoneBoxStays("first-run", "other", false)).toBe(false);
+    expect(phoneBoxStays("tap", "other", false)).toBe(true);
+  });
+
+  it("keeps a box the relay led in, when the relay is blocked after Turn on", () => {
+    expect(phoneBoxStays("first-run", "other", true)).toBe(true);
   });
 });
 

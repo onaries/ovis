@@ -23,6 +23,13 @@ export function announcePairingCode(code: PairingCode): void {
   window.dispatchEvent(new CustomEvent<PairingCode>(PAIRING_CODE_EVENT, { detail: code }));
 }
 
+/**
+ * The PC's device list changed behind the app: the relay shell linked this client's pairing to the
+ * account (relay/shell.tsx) and the session that signed in again is up, so a Devices panel read
+ * before the link lists this client as no member yet and reads the list again.
+ */
+export const DEVICES_CHANGED_EVENT = "ovis:devices-changed";
+
 /** how often the relay is asked again: closely while it connects or retries, otherwise at rest */
 function pollDelay(status: RelayStatus): number {
   if (status.phase === "connecting") return 1_500;

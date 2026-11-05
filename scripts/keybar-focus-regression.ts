@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { Browser } from "playwright-core";
 import { paneSendText, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 type InputWindow = Window & { typed_: { pane: string; text: string }[] };
 
@@ -45,8 +46,8 @@ export async function checkKeyBarKeepsKeyboardDown(browser: Browser, origin: str
         });
         const page = await context.newPage();
         await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
-        await page.locator(".xterm-rows").waitFor();
-        await page.waitForFunction(() => document.querySelector(".xterm-rows")?.textContent?.includes("$") ?? false);
+        await page.locator(shownRows()).first().waitFor();
+        await page.waitForFunction((shown) => document.querySelector(shown)?.textContent?.includes("$") ?? false, shownRows());
         if (mode === "line") await page.locator(".terminal-input").waitFor();
         // a command typed but not run: only the key bar's Enter runs it. Its echo does not hold the
         // joined marker, so the marker drawn proves the shell took the Enter (a count of prompts
@@ -57,14 +58,15 @@ export async function checkKeyBarKeepsKeyboardDown(browser: Browser, origin: str
         // would turn the command's first letter into M-p (a history search). C-g ends any such sequence
         // (Esc C-g aborts too) and C-u clears the line, so the command is typed on an empty prompt
         await paneSendText(pane, `\x07\x15printf 'KB_%s\\n' ${nonce}`);
-        await page.locator(".xterm-rows", { hasText: nonce }).waitFor({ timeout: 10_000 });
+        await page.locator(shownRows(), { hasText: nonce }).waitFor({ timeout: 10_000 });
         // the keyboard put away: nothing focused
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
         const focus = () => page.evaluate(() => ({ active: document.activeElement?.tagName, grid: document.activeElement?.classList.contains("xterm-helper-textarea") === true, height: visualViewport!.height }));
         const before = await focus();
         assert.equal(before.active, "BODY", `${tag}: nothing focused to start with`);
         await page.locator(".key-bar").waitFor();
-        for (const key of ["Control", "Control", "Enter", "Escape"]) {
+        // Ctrl steps through held for one key and locked back to off, so Enter goes out plain
+        for (const key of ["Control", "Control", "Control", "Enter", "Escape"]) {
           const sentBefore = await page.evaluate(() => (window as unknown as InputWindow).typed_.length);
           const button = page.locator(`.key-bar [data-key="${key}"]`);
           if (touch) await button.tap();
@@ -79,8 +81,8 @@ export async function checkKeyBarKeepsKeyboardDown(browser: Browser, origin: str
           assert.deepEqual(sent, [{ pane, text }], `${tag}: a ${key} tap sends its key to the pane once, and nothing else`);
         }
         // and the shell took the Enter: the command ran
-        await page.locator(".xterm-rows", { hasText: marker }).waitFor({ timeout: 10_000 }).catch(async (error) => {
-          throw new Error(`${tag}: the key bar's Enter did not run the typed command (${marker}); screen: ${JSON.stringify((await page.locator(".xterm-rows").textContent())?.slice(-300))}`, { cause: error });
+        await page.locator(shownRows(), { hasText: marker }).waitFor({ timeout: 10_000 }).catch(async (error) => {
+          throw new Error(`${tag}: the key bar's Enter did not run the typed command (${marker}); screen: ${JSON.stringify((await page.locator(shownRows()).first().textContent())?.slice(-300))}`, { cause: error });
         });
       } finally { await context.close(); }
     }

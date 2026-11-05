@@ -23,6 +23,18 @@ upgrade, and a request that is not an upgrade is `426`.
 | control | `role=server` | the PC, one per `server_id` |
 | client | `role=client` | a phone or browser; the relay picks its `connection_id` |
 | data | `role=server&connection_id=<id>` | the PC, one per client |
+| warm | `role=server&warm=<generation>` | the PC, at most one: a data socket opened before its client arrives |
+
+`GET /v1/pair?nameplate=<3 Crockford base32>&role=host|guest&v=1`, a WebSocket upgrade: the
+rendezvous for pairing with a typed code (`pair-room.ts`, [docs/relay.md](../docs/relay.md#who-gets-in), "Pairing with a typed code").
+The PC holds a nameplate (`host`, one per nameplate, else `4409`; at most 11 minutes); a device
+joins it (`guest`: `4404` with no host, `1013` while another guest is there, past 12 guests in the
+room's life or within 2 seconds of the last). Each guest gets a random attempt id the host hears in
+`{"type":"guest","attempt"}` and `{"type":"gone","attempt"}`; a guest's binary frames reach the
+host prefixed with that id, and the host's must start with the current guest's id, which is
+stripped (a stale one goes nowhere). `{"type":"drop","attempt"}` ends that guest. Frames are at
+most 4096 bytes; a guest has 30 seconds. The relay reads none of the exchange and keeps no limit
+the PC relies on.
 
 The PC proves every socket it opens (control and data): its query also carries
 `proof=1&public_key=<64 lowercase hex>`, its static X25519 public key, and its `server_id` must be
@@ -31,7 +43,8 @@ digits. The relay's first frame is then
 `{"type":"server_challenge","public_key":"<ephemeral X25519 hex>","nonce":"<32 random bytes hex>"}`,
 and the PC's first frame must be `{"type":"server_proof","answer":"<HMAC-SHA256 hex>"}`, keyed with
 the X25519 shared secret over `nonce || UTF8(server_id + NUL + role + NUL + connection_id + NUL +
-"ovis-relay-server-proof-v1")` (role `control` or `data`, an empty connection id for control);
+"ovis-relay-server-proof-v1")` (role `control`, `data` or `warm`; the connection id is empty for
+control and the generation for warm);
 `shared/relay-server-proof.ts` has both sides. The relay compares the answer in constant time and
 refuses an all-zero shared secret. Until it answers, the socket is no part of the room: it hears no
 client and replaces nothing. A missing proof, a key that does not derive the `server_id`, a wrong,
@@ -47,11 +60,22 @@ reports the reason in relay status. An invalid or out-of-order first challenge i
 the PC with `4000` and retried. Refusing a data socket does not stop the control link.
 
 - A client's first frame is `{"type":"assigned","connection_id":"<32 hex>"}`, its random 128-bit id.
-- The control socket hears `{"type":"sync","connection_ids":[...]}` when it opens (the clients
-  still waiting for a data socket), `{"type":"connected","connection_id":"..."}` when a client
-  arrives and `{"type":"disconnected","connection_id":"..."}` when one leaves. The PC answers
-  `connected` (or `sync`) by opening the client's data socket. Anything else the PC sends on the
-  control socket is dropped.
+- The control socket hears `{"type":"sync","connection_ids":[...],"warm":"<32 hex>"}` when it opens
+  (the clients still waiting for a data socket; `warm` says this relay takes a warm socket and
+  names this control socket's generation, new for each one),
+  `{"type":"connected","connection_id":"..."}` when a client arrives and
+  `{"type":"disconnected","connection_id":"..."}` when one leaves. The PC answers `connected` (or
+  `sync`) by opening the client's data socket. Anything else the PC sends on the control socket is
+  dropped.
+- Warm socket: so that a client does not wait for the PC to open and prove a socket, the PC may
+  keep one proven `warm` socket ready, opened with the generation its control socket's `sync` named.
+  A client arriving while that control socket is connected takes it at once: the warm socket hears `{"type":"bound","connection_id":"..."}` before any of
+  that client's frames and is its data socket from then on, and the control socket hears no
+  `connected` for it. The PC then opens the next one. A newer warm socket replaces an older one
+  (`1008`); one no client has taken, proven or still proving, closes `1001` when its control socket
+  is replaced or gone, and one whose generation is not the connected control socket's closes `1001`
+  once proven. Anything else a warm socket
+  sends before it is taken is dropped.
 - A client holds one of the PC's slots once the PC has answered it, that is once its data socket
   has sent a frame. Until then it is waiting: with the PC connected, it is closed `1013` 15 s after
   the PC could have answered (from its data socket attaching, or from the client or the PC
@@ -88,8 +112,8 @@ the PC with `4000` and retried. Refusing a data socket does not stop the control
 
 | Code | Meaning |
 |---|---|
-| `1001` | to a data socket: its client left. To any socket: idle, or a data socket for a client that is gone |
-| `1008` | to a control socket: a newer control socket for the same `server_id` replaced it. Also an unknown wire version, or a second data socket for one client |
+| `1001` | to a data socket: its client left. To a warm socket: no control socket (any more), or a newer one replaced it. To any socket: idle, or a data socket for a client that is gone |
+| `1008` | to a control socket: a newer control socket for the same `server_id` replaced it. To a warm socket: a newer warm socket replaced it. Also an unknown wire version, or a second data socket for one client |
 | `1009` | a frame over 64 KiB |
 | `1012` | to a client: its data socket (the PC's side) went away, or the relay lost the frames it held (a Durable Object evicted mid-wait, noticed when the data socket attaches or the client sends again; each such close is counted in the room's `heldFramesLost`); reconnect |
 | `1013` | a limit above; try again later |
@@ -119,12 +143,47 @@ large they are, and the connecting address (as the key of the per-address rate l
 does not see what a frame says: frames are encrypted end to end, and the relay neither parses nor
 logs them.
 
-It keeps nothing. Who each socket is lives in memory and, on Cloudflare, in the socket's own
-attachment, which is gone with the socket. A client's frames are held in memory only until its
-data socket attaches. The Durable Object's SQLite storage stays empty (it holds the idle alarm
-only), Workers Logs are off (`[observability] enabled = false`), and nothing writes a log line. A
-relay restart or a Cloudflare deploy drops every socket; the PC reconnects and announces itself
-again, and clients reconnect.
+It keeps usage counters and nothing else. Who each socket is lives in memory and, on Cloudflare, in
+the socket's own attachment, which is gone with the socket. A client's frames are held in memory
+only until its data socket attaches. The Durable Object's SQLite storage stays empty (it holds the
+idle alarm only), Workers Logs are off (`[observability] enabled = false`), and nothing writes a
+log line. A relay restart or a Cloudflare deploy drops every socket; the PC reconnects and
+announces itself again, and clients reconnect.
+
+### Usage counters
+
+For capacity planning, the Cloudflare relay counts how much each PC uses it. When a PC's control
+socket or a phone's socket closes, and every 5 minutes while it stays open, it writes one data
+point to the `ovis_relay_usage` Workers Analytics Engine dataset (`USAGE` in `wrangler.toml`):
+
+| Field | Holds |
+|---|---|
+| `index1` | the PC's usage key: the first 32 hex digits of `SHA256(UTF8("ovis-relay-usage-v1:" + server_id))`, not the `server_id` itself |
+| `blob1` | `pc` (the PC's control socket) or `device` (a phone or browser, both directions of its pair) |
+| `double1`, `double2` | bytes from the device to the PC, and from the PC to the device (frames passed on; keepalives not counted) |
+| `double3` | seconds connected |
+| `double4` | `1` when the socket closed with this point (one session), `0` for a 5-minute point |
+
+A device's time counts from the PC's first answer, and its bytes from its first frame; a phone the
+PC never answered is no session and writes nothing. The relay tells devices apart only by their random per-connection `connection_id`,
+which is not written: a point says "a device of this PC", never which one. No frame content,
+address, public key or `connection_id` is written. The counts live in the socket's attachment
+until they are written, so an eviction loses none; a deploy or a reset of the Durable Object, which
+drops the sockets without their close, loses at most the last 5 minutes of each. Analytics Engine keeps each point three months
+and then drops it. The Bun server counts nothing.
+
+Only the Cloudflare account that runs the relay can read them, through the Analytics Engine SQL API
+with a token that has Account Analytics Read:
+
+```sh
+curl -s "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/analytics_engine/sql" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" --data "
+    SELECT toStartOfDay(timestamp) AS day, index1 AS pc, blob1 AS side,
+      SUM(_sample_interval * double1) AS bytes_up, SUM(_sample_interval * double2) AS bytes_down,
+      SUM(_sample_interval * double3) / 60 AS minutes, SUM(_sample_interval * double4) AS sessions
+    FROM ovis_relay_usage WHERE timestamp > NOW() - INTERVAL '30' DAY
+    GROUP BY day, pc, side ORDER BY day, pc, side FORMAT JSON"
+```
 
 ## Deploy
 
@@ -190,17 +249,36 @@ The global cap remains a backstop.
 | `--global-per-minute` | `RELAY_GLOBAL_PER_MINUTE` | 600 |
 | `--max-sockets` | `RELAY_MAX_SOCKETS` | 1024 |
 | `--max-rooms` | `RELAY_MAX_ROOMS` | 256 |
+| `--max-pair-rooms` | `RELAY_MAX_PAIR_ROOMS` | 256 (pairing rooms for typed codes, apart from PCs' rooms) |
 | `--max-addresses` | `RELAY_MAX_ADDRESSES` | 4096 |
 | `--max-sockets-per-address` | `RELAY_MAX_SOCKETS_PER_ADDRESS` | 64 |
 
 Flags override environment. Values must be positive safe integers; zero, infinity, fractions
 and missing flag values fail startup. `startBunRelay({ limits: { maxSockets: 2048, ... } })`
 accepts the same budgets as camel-case options (`perAddressPerMinute`, `globalPerMinute`,
-`maxSockets`, `maxRooms`, `maxAddresses`, `maxSocketsPerAddress`). Programmatic options do not read environment.
+`maxSockets`, `maxRooms`, `maxPairRooms`, `maxAddresses`, `maxSocketsPerAddress`). Programmatic options do not read environment.
 `startBunRelay({ limiters })` can replace just the rate limiters; room/socket caps still hold.
 Admission reserves both caps synchronously before upgrade, rolls back failed upgrades and
 reclaims a room when its last pending/open socket leaves. `/health` remains available at capacity.
 All per-room and per-frame limits apply on both adapters.
+
+## A regional copy of the app
+
+A relay box can also serve a copy of the hosted app for its region, as `app-ap.ovis.sh` does
+beside `relay-ap.ovis.sh` (`REGIONAL_APPS` in `shared/relay-regions.ts`):
+
+1. A DNS record for the copy's address that points at the box directly (not through a CDN that
+   routes the region elsewhere).
+2. The Caddy site, printed from the same rules the Pages build writes (`_redirects`, `_headers`):
+   `bun scripts/shell-caddy.ts app-ap.ovis.sh >> /etc/caddy/Caddyfile`.
+3. `bun relay/shell-mirror.ts --dir /opt/ovis-shell`, run every few minutes (a systemd timer) as a user
+   that owns only that folder. Each run reads the commit `app.ovis.sh` serves from its
+   `build.json`, finds the GitHub release built from it, checks its `dist-shell.tar.gz` against the
+   SHA-256 published with it and its `build.json` against the commit, compares every file with
+   the same file fetched from `app.ovis.sh`, and swaps `current` to it only if `app.ovis.sh` still
+   serves that commit. It refuses a tarball with links, special files or paths outside it. A box
+   that serves the app delivers code that holds phones' keys, so keep it to that and the relay,
+   and keep `/opt/ovis-shell` writable by the mirror's user alone.
 
 ## Tests
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import {
   decodeFrame, encodeFrame, FrameType, HTTP_END_FLAGS, LIMITS_V1,
-  MAX_FRAME_BYTES, MuxProtocolError, REQUEST_HEADERS, RESPONSE_HEADERS,
+  MAX_FRAME_BYTES, MAX_LARGE_WS_MESSAGE_BYTES, MuxProtocolError, REQUEST_HEADERS, RESPONSE_HEADERS,
   SESSION_ERRORS, STREAM_ERRORS, validateHeaders, validateTarget, WS_DATA_FLAGS,
   WS_CONTINUATION_CAPACITY, WS_START_CAPACITY,
 } from "./relay-mux.ts";
@@ -326,7 +326,7 @@ describe("WS fragment arithmetic", () => {
     expect(MAX_FRAME_BYTES).toBe(first.length);
   });
   for (const [flags, total, length] of [
-    [4, undefined, 1], [1, 1, 0], [3, 1, 0], [1, 0, 1], [1, 1048577, 1],
+    [4, undefined, 1], [1, 1, 0], [3, 1, 0], [1, 0, 1], [1, MAX_LARGE_WS_MESSAGE_BYTES + 1, 1],
     [3, 2, 1], [1, 1, 1], [0, undefined, 0], [2, undefined, 0],
     [0, 1, 1], [1, 1048576, 16373], [0, undefined, 16377],
   ] as const) {
@@ -339,7 +339,31 @@ describe("WS fragment arithmetic", () => {
   });
   it("rejects declared oversize START before any reassembly", () => {
     const payload = new Uint8Array(5);
-    new DataView(payload.buffer).setUint32(0, 1048577);
+    new DataView(payload.buffer).setUint32(0, MAX_LARGE_WS_MESSAGE_BYTES + 1);
     rejects(() => decodeFrame(wire(FrameType.WS_DATA, payload, 1)));
+  });
+});
+
+describe("relay hints", () => {
+  const authOk = (relays?: unknown) => ({ type: FrameType.AUTH_OK, flags: 0, stream_id: 0,
+    payload: { session_id: "a".repeat(32), device_id: "b".repeat(16), role: "drive", ...(relays === undefined ? {} : { relays }) } }) as MuxFrame;
+
+  it("carries a PC's relays in AUTH_OK, and none when it names none", () => {
+    const relays = ["wss://relay-ap.ovis.sh", "wss://relay.ovis.sh"];
+    expect(decodeFrame(encodeFrame(authOk(relays))).payload).toEqual(authOk(relays).payload);
+    expect(decodeFrame(encodeFrame(authOk())).payload).not.toHaveProperty("relays");
+  });
+
+  it("fits two of the longest relay origins in one AUTH_OK", () => {
+    const longest = (letter: string) => `wss://${letter.repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(49)}.example`;
+    expect(longest("a").length).toBeLessThanOrEqual(256);
+    expect(() => encodeFrame(authOk([longest("a"), longest("e")]))).not.toThrow();
+  });
+
+  it("takes only a few wss origins", () => {
+    for (const relays of [["https://relay.ovis.sh"], ["wss://relay.ovis.sh/path"], ["wss://user@relay.ovis.sh"], "wss://relay.ovis.sh",
+      ["wss://a.example", "wss://b.example", "wss://c.example"]]) {
+      expect(() => encodeFrame(authOk(relays))).toThrow(MuxProtocolError);
+    }
   });
 });

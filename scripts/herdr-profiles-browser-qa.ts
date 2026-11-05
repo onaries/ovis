@@ -51,12 +51,18 @@ try {
         if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
       }
       await group.waitFor({ state: "attached" });
+      // Manage PC's menu (a popover, a sheet on a phone) keeps herdr's limits: it says where the rest is done, with
+      // no Rename… or Remove PC…
+      if (!phone) await group.locator(".machine-header").hover();
       await group.getByRole("button", { name: "Manage Build machine" }).click();
-      await group.getByText("Managed by herdr. Rename, disable or remove it there.").waitFor();
-      assert.equal(await group.getByRole("button", { name: "Remove PC", exact: true }).count(), 0);
-      assert.equal(await group.getByRole("button", { name: "Rename", exact: true }).count(), 0);
+      const menu = page.locator(".row-menu, .row-sheet");
+      await menu.getByText("Managed by herdr. Rename, disable or remove it there.").waitFor();
+      assert.equal(await menu.getByText("Remove PC…", { exact: true }).count(), 0);
+      assert.equal(await menu.getByText("Rename…", { exact: true }).count(), 0);
       assert.equal(submitted.length, 0);
       if (evidence) await page.screenshot({ path: join(evidence, phone ? "phone.png" : "desktop.png"), fullPage: true });
+      await page.keyboard.press("Escape");
+      await menu.waitFor({ state: "detached" });
       await group.getByRole("button", { name: "Connect", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "Connect", exact: true });
       await dialog.getByRole("button", { name: "Install and connect", exact: true }).waitFor();
@@ -83,8 +89,14 @@ try {
       profiles = [{ ...profile, label: "Renamed machine", enabled: false }];
       const renamed = page.getByRole("region", { name: "PC Renamed machine", exact: true });
       await renamed.waitFor({ state: "attached", timeout: 12_000 });
-      await renamed.getByRole("button", { name: "Reconnect / setup", exact: true }).waitFor({ state: "attached" });
-      assert.equal(await renamed.getByRole("button", { name: "Reconnect / setup", exact: true }).isDisabled(), true);
+      // herdr's rename reaches the header, and its disable holds the menu's setup
+      if (!phone) await renamed.locator(".machine-header").hover();
+      await renamed.getByRole("button", { name: "Manage Renamed machine" }).click();
+      const setup = menu.locator(".menu-item, .row-sheet-item").filter({ hasText: "Reconnect / setup" });
+      await setup.waitFor();
+      assert.equal(await setup.getAttribute("aria-disabled"), "true");
+      await page.keyboard.press("Escape");
+      await menu.waitFor({ state: "detached" });
       profiles = [];
       await renamed.waitFor({ state: "detached", timeout: 12_000 });
       assert.deepEqual(errors, []);

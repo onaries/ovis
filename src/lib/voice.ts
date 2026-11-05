@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchVoiceStatus } from "./api.ts";
 import { getTransport } from "./transport.ts";
 import { LOCALE_TAGS, type Language, type LanguageSetting } from "./i18n.ts";
-import { useSettings, type DictationLanguage } from "./settings.ts";
+import { useSettings, type DictationLanguage, type VoiceEngineChoice } from "./settings.ts";
 import {
   VOICE_FORM,
   VOICE_KEYWORDS_MAX,
@@ -845,6 +845,19 @@ export function createVoiceEngine(io: EngineIO) {
   };
 }
 
+/**
+ * The engine a take uses for the chosen one: auto prefers the server's key and falls back to the
+ * browser's recognition; an explicit choice never falls back, so the mic says why it cannot record.
+ */
+export function pickVoiceEngine(choice: VoiceEngineChoice, configured: boolean, recorder: boolean, speech: boolean): { engine: VoiceEngine | null; unavailableReason: VoiceUnavailable | null } {
+  const server = choice !== "browser" && configured && recorder;
+  const browser = choice !== "server" && speech;
+  if (server) return { engine: "server", unavailableReason: null };
+  if (browser) return { engine: "browser", unavailableReason: null };
+  if (choice === "browser") return { engine: null, unavailableReason: "unsupported" };
+  return { engine: null, unavailableReason: configured ? "unsupported" : "not_configured" };
+}
+
 export function useVoiceInput(options: VoiceInputOptions): VoiceInput {
   const { settings, resolvedLanguage } = useSettings();
   const status = useVoiceStatus(options.enabled);
@@ -857,9 +870,7 @@ export function useVoiceInput(options: VoiceInputOptions): VoiceInput {
   if (!options.enabled) unavailableReason = "disabled";
   else if (!secure) unavailableReason = "insecure";
   else if (status === undefined) unavailableReason = null;
-  else if (status?.configured && mime) engine = "server";
-  else if (Speech) engine = "browser";
-  else unavailableReason = status?.configured ? "unsupported" : "not_configured";
+  else ({ engine, unavailableReason } = pickVoiceEngine(settings.voiceEngine, status?.configured === true, mime !== null, Speech !== null));
 
   const [state, setState] = useState<VoiceState>("idle");
   const [elapsedMs, setElapsed] = useState(0);

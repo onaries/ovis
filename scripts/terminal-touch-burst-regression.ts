@@ -28,6 +28,7 @@ import { createServer } from "../server/index.ts";
 import { UsageService } from "../server/usage.ts";
 import { herdrRpc, paneRead, paneScrollInfo, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRow, shownRows } from "./shown-rows.ts";
 import { finalStep, HERDR_MOUSE_SCROLL_LINES, wheelSteps } from "../src/lib/wheelSteps.ts";
 import { TOUCH_WHEEL_QUEUE_LIMIT, TOUCH_WHEEL_REPORTS_PER_FRAME } from "../src/lib/touchWheelPacer.ts";
 
@@ -163,7 +164,9 @@ async function instrument(context: BrowserContext): Promise<void> {
     window.addEventListener("keydown", (event) => { probe.events.push({ k: "keydown", t: now(), frame: event.key }); }, { capture: true });
     document.addEventListener("wheel", (event) => { if (!event.isTrusted) probe.events.push({ k: "wheel", t: now(), ft: probe.frameTime ?? undefined }); }, { capture: true });
     new MutationObserver((records) => {
-      if (records.some((record) => (record.target as Element).closest?.(".xterm-rows") || record.target.parentElement?.closest(".xterm-rows"))) probe.lastPaint = now();
+      // the rows the user sees: libghostty's while it draws the pane (xterm's are hidden and not redrawn), else xterm's
+      const painted = ".xterm-rows, .ghostty-text";
+      if (records.some((record) => (record.target as Element).closest?.(painted) || record.target.parentElement?.closest(painted))) probe.lastPaint = now();
     }).observe(document, { subtree: true, childList: true, characterData: true });
     const watched = new WeakSet<WebSocket>();
     const send = WebSocket.prototype.send;
@@ -256,7 +259,7 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "app history " + n + 
     await page.locator(".xterm-helper-textarea").first().focus();
     await page.keyboard.press("k");
     await answered;
-    await page.waitForFunction((value) => document.querySelector(".xterm-rows")?.textContent?.includes(value), text);
+    await page.waitForFunction(([value, shown]) => document.querySelector(shown)?.textContent?.includes(value), [text, shownRows()] as const);
     return page.evaluate(() => performance.now());
   };
 
@@ -275,7 +278,7 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "app history " + n + 
     for (let rep = 0; rep <= REPS; rep++) for (const gesture of gestures) {
       const recorded = rep === REPS;
       const box = (await screen.boundingBox())!;
-      const rows = await page.locator(".xterm-rows > div").count();
+      const rows = await page.locator(shownRow()).count();
       const cell = box.height / rows;
       const stepPixels = cell * HERDR_MOUSE_SCROLL_LINES;
       // a screen of travel, plus a quarter step so finalStep's half-step rounding never sits on an edge
@@ -387,7 +390,7 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "app history " + n + 
   await open(appPane);
   const overflow = await (async () => {
     const box = (await page.locator(".xterm-screen").first().boundingBox())!;
-    const rows = await page.locator(".xterm-rows > div").count();
+    const rows = await page.locator(shownRow()).count();
     const stepPixels = (box.height / rows) * HERDR_MOUSE_SCROLL_LINES;
     const x = box.x + box.width / 2;
     const top = box.y + 4;
@@ -439,7 +442,7 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "app history " + n + 
     await open(appPane);
     await page.locator(".xterm-helper-textarea").first().focus();
     const box = (await page.locator(".xterm-screen").first().boundingBox())!;
-    const rows = await page.locator(".xterm-rows > div").count();
+    const rows = await page.locator(shownRow()).count();
     const stepPixels = (box.height / rows) * HERDR_MOUSE_SCROLL_LINES;
     const x = box.x + box.width / 2;
     const top = box.y + 4;

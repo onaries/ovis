@@ -2,8 +2,10 @@
 import { createHash } from "node:crypto";
 import { constants, closeSync, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import type { ConversationPart, ConversationTurn, ConversationResponse } from "../shared/protocol.ts";
+import type { ConversationPart, ConversationTurn, ConversationResponse, SkillActivity } from "../shared/protocol.ts";
 import { imageType, inlineImageType } from "./codex-images.ts";
+import { skillDocument } from "./skill-activity.ts";
+import { grokPromptSkill } from "./skill-invocations/grok.ts";
 import { toolSummary } from "./transcript-records.ts";
 import { trimOutput } from "./tool-output.ts";
 
@@ -198,6 +200,8 @@ export function parseGrokTranscript(text: string, path?: string, wholeCall?: str
   let assistant: ConversationTurn | undefined;
   let prompt: number | undefined;
   const calls = new Map<string, { fields: RecordValue; part: Tool; diffs: Map<string, RecordValue> }>();
+  // after every chunk's text, so a later chunk still extends the prompt's text part
+  const promptSkills = new Map<ConversationTurn, SkillActivity>();
   const appendText = (turn: ConversationTurn, value: unknown) => {
     if (typeof value !== "string" || !value) return;
     const last = turn.parts.at(-1);
@@ -221,7 +225,11 @@ export function parseGrokTranscript(text: string, path?: string, wholeCall?: str
         user = { role: "user", ts: event.ts, parts: [] };
         assistant = undefined; calls.clear(); turns.push(user);
       }
-      if (meta.hideFromScrollback !== true) appendText(user!, record(u.content).text);
+      if (meta.hideFromScrollback !== true) {
+        appendText(user!, record(u.content).text);
+        const skill = grokPromptSkill(u.content);
+        if (skill) promptSkills.set(user!, skill);
+      }
       for (const picture of updatePictures(u)) user!.parts.push({ kind: "image", media_type: picture.mediaType, ref: `grok-image:${digestOf(picture.data)}` });
       continue;
     }
@@ -253,6 +261,9 @@ export function parseGrokTranscript(text: string, path?: string, wholeCall?: str
     call.part.summary = typeof fields.title === "string" && fields.title ? fields.title.slice(0, 120) : toolSummary(call.part.name, input);
     call.part.input = typeof fields.rawInput === "string" ? fields.rawInput : fields.rawInput === undefined ? "" : JSON.stringify(fields.rawInput);
     call.part.error = fields.status === "failed";
+    const skill = call.part.name === "read_file" ? skillDocument(input.target_file) : null;
+    if (skill) call.part.skill = { ...skill, status: fields.status === "completed" ? "loaded" : fields.status === "failed" ? "failed" : "requested" };
+    else delete call.part.skill;
     // ACP replaces content as a whole. Keep the edit evidence separately so a later
     // completion message cannot erase a diff that the tool already displayed.
     const content = Array.isArray(fields.content) ? fields.content : [];
@@ -268,6 +279,7 @@ export function parseGrokTranscript(text: string, path?: string, wholeCall?: str
     if (wholeCall === id) call.part.output = output.length > 2_000_000 ? `${output.slice(0, 2_000_000)}\n… trimmed` : output;
     else trimOutput(call.part, output, path ? outputRef(path, id) : `grok:${hash(id + output)}`);
   }
+  for (const [turn, skill] of promptSkills) turn.parts.push({ kind: "skill", skill });
   return turns.filter((turn) => turn.parts.length > 0);
 }
 

@@ -1,0 +1,265 @@
+/* the Pull request tab of the Files dialog: title and state, checks, open review threads, Merge; one column at every width */
+.pull-request {
+  display: flex;
+  flex-direction: column;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.pull-request-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.pull-request-heading {
+  min-width: 0;
+  font-weight: 600;
+  font-size: var(--fs-md);
+}
+
+.pull-request-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.pull-request-title > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pull-request-title svg {
+  flex: none;
+  width: 0.9em;
+  height: 0.9em;
+  color: var(--text-dim);
+}
+
+.pull-request-number {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.pull-request-branches {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--hairline) solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.pull-request-refs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.pull-request-refs svg {
+  flex: none;
+  width: 1em;
+  height: 1em;
+}
+
+.pull-request-state {
+  flex: none;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--status-done-tint);
+  color: var(--status-done);
+  font-weight: 600;
+}
+
+.pull-request-state[data-state="draft"],
+.pull-request-state[data-state="closed"] {
+  background: none;
+  color: var(--text-dim);
+  border: var(--hairline) solid var(--border);
+}
+
+.pull-request-state[data-state="merged"] {
+  background: var(--status-working-tint);
+  color: var(--status-working);
+}
+
+.pull-request-section {
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.pull-request-section-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.pull-request-count {
+  color: var(--text-dim);
+  font-weight: 400;
+  font-size: var(--fs-xs);
+}
+
+.pull-request-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pull-request-row {
+  padding: var(--space-1) var(--space-2);
+}
+
+.pull-request-row + .pull-request-row {
+  border-top: var(--hairline) solid var(--border);
+}
+
+.pull-request-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+}
+
+.pull-request-check-icon {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  color: var(--text-dim);
+}
+
+.pull-request-row[data-state="pass"] .pull-request-check-icon { color: var(--status-done); }
+.pull-request-row[data-state="fail"] .pull-request-check-icon { color: var(--status-blocked); }
+.pull-request-row[data-state="pending"] .pull-request-check-icon { color: var(--status-working); }
+
+.pull-request-check-name,
+.pull-request-thread-place {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+}
+
+/* a thread's path is what the row is about: it wraps rather than being cut */
+.pull-request-thread-place {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  white-space: normal;
+}
+
+.pull-request-workflow {
+  color: var(--text-dim);
+}
+
+.pull-request-link {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.pull-request-send {
+  flex: none;
+}
+
+.pull-request-tag {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.pull-request-comment {
+  margin: 0 0 var(--space-1) calc(1rem + var(--space-2));
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pull-request-author {
+  margin-right: var(--space-1);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.pull-request-replies,
+.pull-request-sent {
+  margin: 0 0 var(--space-1) calc(1rem + var(--space-2));
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.pull-request-sent[data-state="too_long"] {
+  color: var(--status-blocked);
+}
+
+.pull-request-note {
+  margin: 0;
+  padding: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+
+.pull-request-error {
+  color: var(--status-blocked);
+}
+
+.pull-request-loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+/* Merge closes the view, its reason (when it is off) above it */
+.pull-request-merge {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-2);
+}
+
+.pull-request-merge .pull-request-note {
+  padding: 0;
+  font-size: var(--fs-sm);
+  text-align: end;
+}
+
+.pull-request-merge .btn svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* a phone: Merge as wide as the column, a thumb's target */
+@media (max-width: 480px) {
+  .pull-request-merge {
+    align-items: stretch;
+  }
+
+  .pull-request-merge .pull-request-note {
+    text-align: start;
+  }
+}

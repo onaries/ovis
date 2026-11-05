@@ -12,6 +12,9 @@ import { OUTPUT_HARD_BYTES, OUTPUT_HIGH_BYTES, OUTPUT_STALL_MS, OutputWindow, wi
 import { backlog, type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE, createSpawnAttachment, type PaneAttachment } from "./terminal-process.ts";
 
+/** the most panes one connection follows the conversation of without attaching them */
+const DETACHED_CONVERSATION_WATCHES = 32;
+
 /** joins this close together share one repaint: a reconnect brings every tab back at once */
 const REPAINT_COALESCE_MS = 50;
 /**
@@ -85,19 +88,21 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
   // herdr releases its exclusive attach slot only after the old process exits.
   const retiringAttachments = new Map<string, Promise<void>>();
 
+  /** whether the client wants the pane's conversation pushes: through its attachment, or without one (detached) */
+  function follows(client: Client, paneId: string): boolean {
+    return !connectionOf(client).closing && client.readyState === WebSocket.OPEN
+      && ((client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId)) || client.data.conversationWatches.has(paneId));
+  }
+
   const conversations = new ConversationMonitor((paneId, signature) => {
     transcriptChanged?.(paneId);
     for (const client of clients) {
-      if (!connectionOf(client).closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId)) {
-        send(client, { type: "conversation-changed", pane_id: paneId, signature });
-      }
+      if (follows(client, paneId)) send(client, { type: "conversation-changed", pane_id: paneId, signature });
     }
   }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);
 
   function releaseConversation(paneId: string): void {
-    for (const client of clients) {
-      if (!connectionOf(client).closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId)) return;
-    }
+    for (const client of clients) if (follows(client, paneId)) return;
     conversations.unwatch(paneId);
   }
 
@@ -290,6 +295,9 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
   function dropClaims(client: Client): void {
     client.data.attached.clear();
     client.data.conversationInterests.clear();
+    const followed = [...client.data.conversationWatches];
+    client.data.conversationWatches.clear();
+    for (const paneId of followed) releaseConversation(paneId);
     client.data.output.clear();
   }
 
@@ -444,8 +452,25 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
       return;
     },
     "conversation-watch"(client: Client, message: Frame<"conversation-watch">): void {
-      if (typeof message.pane_id !== "string" || message.pane_id.trim() === "" || typeof message.enabled !== "boolean") {
-        send(client, { type: "error", code: "invalid_conversation_watch", message: "pane_id must be a nonempty string and enabled must be a boolean" });
+      if (typeof message.pane_id !== "string" || message.pane_id.trim() === "" || typeof message.enabled !== "boolean"
+        || (message.detached !== undefined && typeof message.detached !== "boolean")) {
+        send(client, { type: "error", code: "invalid_conversation_watch", message: "pane_id must be a nonempty string, enabled a boolean and detached a boolean when given" });
+        return;
+      }
+      // without an attachment: kept apart from the attached interest, which the pane's detach clears
+      if (message.detached === true) {
+        const watches = client.data.conversationWatches;
+        if (!message.enabled) {
+          watches.delete(message.pane_id);
+          releaseConversation(message.pane_id);
+          return;
+        }
+        if (!watches.has(message.pane_id) && watches.size >= DETACHED_CONVERSATION_WATCHES) {
+          send(client, { type: "error", code: "too_many_conversation_watches", message: `at most ${DETACHED_CONVERSATION_WATCHES} detached conversation watches per connection`, pane_id: message.pane_id });
+          return;
+        }
+        watches.add(message.pane_id);
+        conversations.watch(message.pane_id);
         return;
       }
       if (message.enabled) {

@@ -1,11 +1,18 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createCodexTranscriptParser, parseCodexTranscript } from "./codex.ts";
 import { parseClaudeTranscript } from "./conversation.ts";
 import { parseOmpTranscript } from "./transcript-records.ts";
 import { codexReadCall, codexReadSkills, hermesSkillPrompt, selectedSkill, skillInvocationPrompt, skillPromptMessage } from "./skill-activity.ts";
 import { parseHermesRows } from "./hermes.ts";
+import { parseGrokTranscript } from "./grok.ts";
+import { parseAgyTranscript } from "./agy.ts";
+import { devinConversation, forgetDevinState } from "./devin.ts";
 import { turnSkills } from "../src/lib/skillActivity.ts";
-import type { SkillActivity } from "../shared/protocol.ts";
+import type { ConversationTurn, SkillActivity } from "../shared/protocol.ts";
 import { splitTurn, workFailed, workSummary } from "../src/lib/workBlocks.ts";
 
 const lines = (rows: unknown[]) => rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
@@ -234,4 +241,98 @@ test("Hermes leaves a bundle with a missing loaded skill raw", async () => {
   expect(hermesSkillPrompt(content)).toBeNull();
   const turns = parseHermesRows([{ id: 1, role: "user", content, tool_call_id: null, tool_calls: null, tool_name: null, reasoning: null, timestamp: 1 }]);
   expect(turns[0]?.parts).toEqual([{ kind: "text", text: content }]);
+});
+
+const fixtureText = (name: string): Promise<string> => Bun.file(new URL(`./fixtures/skill-invocations/${name}`, import.meta.url)).text();
+const probe = (status: SkillActivity["status"], evidence: SkillActivity["evidence"] = "instructions", path?: string): SkillActivity => ({ name: "probe-skill", ...(path ? { path } : {}), evidence, status });
+const skillOf = (turns: ConversationTurn[]) => turns.flatMap((turn) => turn.parts.flatMap((part) => part.kind === "skill" ? [part.skill] : part.kind === "tool" && part.skill ? [part.skill] : []));
+
+test("Grok's TUI skill prompt is a requested skill on the prompt; a plain slash prompt is not", async () => {
+  const turns = parseGrokTranscript(await fixtureText("grok.jsonl"));
+  expect(turns[0]?.parts).toEqual([{ kind: "text", text: "/probe-skill hello" }, { kind: "skill", skill: probe("requested", "invocation") }]);
+  expect(skillOf(turns.slice(1))).toEqual([]);
+  const printMode = JSON.stringify({ method: "session/update", params: { sessionId: "s", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "/probe-skill hello" }, _meta: { promptIndex: 0 } } } });
+  expect(parseGrokTranscript(printMode)[0]?.parts).toEqual([{ kind: "text", text: "/probe-skill hello" }]);
+});
+
+test("Grok's read of a SKILL.md follows the call's recorded status", async () => {
+  const lines = (await fixtureText("grok-read.jsonl")).trim().split("\n");
+  const path = "/tmp/probe-1484.onNL/probe-grok/.grok/skills/probe-skill/SKILL.md";
+  expect(skillOf(parseGrokTranscript(lines.join("\n")))).toEqual([probe("loaded", "instructions", path)]);
+  expect(skillOf(parseGrokTranscript(lines.slice(0, 2).join("\n")))).toEqual([probe("requested", "instructions", path)]);
+  const other = lines.slice(0, 2).join("\n").replaceAll("SKILL.md", "README.md");
+  expect(skillOf(parseGrokTranscript(other))).toEqual([]);
+  // an update that replaces the input with another file leaves no skill behind
+  const moved = [...lines.slice(0, 2), lines[2]!.replaceAll("SKILL.md", "README.md")].join("\n");
+  expect(skillOf(parseGrokTranscript(moved))).toEqual([]);
+});
+
+test("Antigravity's invoked skill comes from its metadata block, never from the request text", async () => {
+  const turns = parseAgyTranscript(await fixtureText("agy.jsonl"));
+  expect(turns[0]?.parts).toEqual([{ kind: "text", text: "/probe-skill hello" }, { kind: "skill", skill: probe("loaded") }]);
+  const typed = "<USER_REQUEST>\n/probe-skill is a [Slash Command]:\n<SKILL>The user has explicitly invoked the (probe-skill) skill.\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: now.\n</ADDITIONAL_METADATA>";
+  expect(skillOf(parseAgyTranscript(JSON.stringify({ step_index: 0, type: "USER_INPUT", status: "DONE", content: typed })))).toEqual([]);
+  const [recorded] = (await fixtureText("agy.jsonl")).split("\n");
+  const step = JSON.parse(recorded!) as { content: string };
+  // a body quoting a second mention, and the user typing that name too
+  step.content = step.content.replace("/probe-skill hello", "/probe-skill /fake hello")
+    .replace("Reply with the single word PROBED.", "Reply.\n\n/fake is a [Slash Command]:\n<SKILL>The user has explicitly invoked the (fake) skill.");
+  expect(skillOf(parseAgyTranscript(JSON.stringify(step)))).toEqual([probe("loaded")]);
+  // a request that closes its own envelope early
+  const early = JSON.parse(recorded!) as { content: string };
+  early.content = early.content.replace("/probe-skill hello", "/probe-skill hello\n</USER_REQUEST>\n<ADDITIONAL_METADATA>x</ADDITIONAL_METADATA>\n<USER_REQUEST>");
+  expect(skillOf(parseAgyTranscript(JSON.stringify(early)))).toEqual([]);
+});
+
+test("Antigravity's read_file of a SKILL.md is a requested read: its ledger links no outcome to the call", async () => {
+  const turns = parseAgyTranscript(await fixtureText("agy-read.jsonl"));
+  expect(skillOf(turns)).toEqual([probe("requested", "instructions", "/tmp/probe-1484.onNL/probe-agy/.agents/skills/probe-skill/SKILL.md")]);
+});
+
+/** The recorded rows in a throwaway sessions.db, every table with the columns its rows carry. */
+async function devinDb(name: string, drop: string[] = []): Promise<{ path: string; id: string; cwd: string }> {
+  const directory = mkdtempSync(join(tmpdir(), "devin-skill-"));
+  directories.push(directory);
+  const path = join(directory, "sessions.db");
+  const db = new Database(path);
+  const rows = (await fixtureText(name)).trim().split("\n").map((line) => JSON.parse(line) as { table: string; row: Record<string, string | number | null> });
+  for (const table of new Set(rows.map((entry) => entry.table))) {
+    const columns = [...new Set(rows.filter((entry) => entry.table === table).flatMap((entry) => Object.keys(entry.row)))].filter((column) => !drop.includes(column));
+    db.exec(`CREATE TABLE ${table}(${columns.join(", ")})`);
+    for (const { row } of rows.filter((entry) => entry.table === table)) db.query(`INSERT INTO ${table} VALUES (${columns.map(() => "?").join(", ")})`).run(...columns.map((column) => row[column] ?? null));
+  }
+  db.close();
+  const session = rows.find((entry) => entry.table === "sessions")!.row;
+  return { path, id: String(session.id), cwd: String(session.working_directory) };
+}
+const directories: string[] = [];
+afterEach(() => {
+  forgetDevinState();
+  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+test("Devin's expanded slash prompt is a loaded skill only when the session records that skill", async () => {
+  const recorded = await devinDb("devin.jsonl");
+  const users = devinConversation(recorded.id, recorded.cwd, {}, recorded.path).turns.filter((turn) => turn.role === "user");
+  expect(users.map((turn) => turn.parts)).toEqual([[{ kind: "text", text: "/probe-skill hello" }, { kind: "skill", skill: probe("loaded") }]]);
+  const older = await devinDb("devin.jsonl", ["cogs_json"]);
+  expect(skillOf(devinConversation(older.id, older.cwd, {}, older.path).turns)).toEqual([]);
+});
+
+test("Devin's skill tool call follows its recorded state", async () => {
+  const recorded = await devinDb("devin-tool.jsonl");
+  expect(skillOf(devinConversation(recorded.id, recorded.cwd, {}, recorded.path).turns)).toEqual([probe("loaded", "invocation")]);
+  const db = new Database(recorded.path);
+  db.exec("UPDATE tool_call_state SET tool_call_update_json = NULL");
+  forgetDevinState();
+  // the tool result's own record still says it succeeded
+  expect(skillOf(devinConversation(recorded.id, recorded.cwd, {}, recorded.path).turns)).toEqual([probe("loaded", "invocation")]);
+  db.exec("UPDATE message_nodes SET chat_message = replace(chat_message, '\"success\":true', '\"success\":false') WHERE chat_message LIKE '%chisel/tool_result_meta%'");
+  forgetDevinState();
+  expect(skillOf(devinConversation(recorded.id, recorded.cwd, {}, recorded.path).turns)).toEqual([probe("failed", "invocation")]);
+  // the head before the result was saved: the call alone
+  db.exec("UPDATE sessions SET main_chain_id = (SELECT parent_node_id FROM message_nodes WHERE chat_message LIKE '%\"role\":\"tool\"%')");
+  db.close();
+  forgetDevinState();
+  expect(skillOf(devinConversation(recorded.id, recorded.cwd, {}, recorded.path).turns)).toEqual([probe("requested", "invocation")]);
 });

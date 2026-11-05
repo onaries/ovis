@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { accessSync, constants, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ACTIVE_LATE_DAYS, emptyUsage, harnessOf, NOTICE_VERSION, sameUsage, TELEMETRY_COUNT_MAX, telemetryHarnesses, telemetrySettings, telemetrySurface, telemetryUsage, type InstallMethod, type TelemetryActive, type TelemetryChange, type TelemetryEvent, type TelemetryHarness, type TelemetryIngress, type TelemetrySettings, type TelemetryStatus, type TelemetrySurface, type TelemetryUsage, type TelemetryUsageCount } from "../shared/telemetry.ts";
+import { ACTIVE_LATE_DAYS, emptyUsage, harnessOf, NOTICE_VERSION, sameUsage, TELEMETRY_COUNT_MAX, telemetryHarnesses, telemetrySettings, telemetrySurface, telemetryUsage, type InstallMethod, type TelemetryActive, type TelemetryChange, type TelemetryEvent, type TelemetryHarness, type TelemetryIngress, type TelemetryRuntime, type TelemetrySettings, type TelemetryStatus, type TelemetrySurface, type TelemetryUsage, type TelemetryUsageCount } from "../shared/telemetry.ts";
 import { badRequest, errorResponse, isJsonObject, jsonResponse } from "./http.ts";
 import { updateRequestAllowed } from "./update-api.ts";
 
@@ -259,6 +259,8 @@ export class Telemetry {
     arch?: string;
     /** the version the running release replaced, as the supervisor told it; null when none did */
     previousVersion?: () => string | null;
+    /** the terminal runtime this server serves; herdr when unset */
+    runtime?: TelemetryRuntime;
     /** tests move the clock; the notice's grace is measured with it */
     now?: () => number;
     noticeGraceMs?: number;
@@ -332,6 +334,7 @@ export class Telemetry {
       install_method: installMethod(this.options.env),
       harnesses: [...(entry?.harnesses ?? [])],
       usage: entry ? { ...entry.usage, surfaces: [...entry.usage.surfaces], ingress: [...entry.usage.ingress] } : emptyUsage(),
+      runtime: this.options.runtime ?? "herdr",
     };
   }
 
@@ -351,6 +354,7 @@ export class Telemetry {
       arch: this.options.arch ?? process.arch,
       install_method: installMethod(this.options.env),
       settings: this.saved.settings === null ? null : telemetrySettings(this.saved.settings),
+      runtime: this.options.runtime ?? "herdr",
     };
   }
 

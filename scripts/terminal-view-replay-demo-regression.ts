@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { chromium, type Browser } from "playwright-core";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRows } from "./shown-rows.ts";
 
 interface Fixture {
   copies: string[];
@@ -106,11 +107,11 @@ try {
       await page.evaluate(({ pane, data }) => {
         for (const socket of window.viewFixture.sockets) socket.push({ type: "watch-data", pane_id: pane, data });
       }, { pane: a, data: VIEW });
-      assert.equal(await frame(a).locator(".xterm-rows", { hasText: MARK }).count(), 0, "a hidden tab keeps its view unparsed");
+      assert.equal(await frame(a).locator(shownRows(), { hasText: MARK }).count(), 0, "a hidden tab keeps its view unparsed");
       // back on the first tab: the view is drawn, its query unanswered and its copy request not run
       const back = await page.evaluate(() => window.viewFixture.sent.length);
       await page.locator(`.tab-strip [role="tab"][data-tab-id="${tabA}"]`).click();
-      await frame(a).locator(".xterm-rows", { hasText: MARK }).waitFor({ state: "attached" });
+      await frame(a).locator(shownRows(), { hasText: MARK }).waitFor({ state: "attached" });
       await page.waitForFunction(({ pane, start }) => window.viewFixture.sent.slice(start).some((sent) => sent.type === "attach" && sent.pane_id === pane), { pane: a, start: back }, { timeout: 10_000 });
       // the reply xterm would type is sent as the view parses: the attach's own output, parsed after it, settles that
       await frame(a).locator("[data-pane-content]").waitFor();

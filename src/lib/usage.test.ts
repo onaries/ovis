@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ProviderUsage, UsageWindow } from "../../shared/protocol.ts";
-import { canSignInAgain, composerUsage, formatPercent, formatResetIn, glanceWindow, meterPercent, meterText, moveInOrder, orderProviders, providerForAgent, statusWindows, tightestWindow, usageName, windowLabel } from "./usage.ts";
+import { canSignInAgain, composerUsage, creditsText, formatPercent, formatResetIn, glanceWindow, meterPercent, meterText, moveInOrder, orderProviders, providerForAgent, statusWindows, tightestWindow, usageName, windowLabel } from "./usage.ts";
 
 const NOW = Date.parse("2026-09-29T12:00:00Z");
 const window = (used_percent: number, kind: UsageWindow["kind"] = "week", scope: string | null = null): UsageWindow => ({ kind, scope, used_percent, resets_at: null, starts_at: null });
@@ -9,6 +9,15 @@ const provider = (id: ProviderUsage["id"], windows: UsageWindow[], account: stri
 });
 
 describe("usage meters", () => {
+  it("says credits as the provider counts them: money in its currency, Codex's in whole credits", () => {
+    expect(creditsText({ kind: "spend", currency: "EUR", used: 12.19, limit: 15.39, used_percent: 79.2 })).toBe("€12.19 / €15.39");
+    expect(creditsText({ kind: "spend", currency: "JPY", used: 830, limit: null, used_percent: null })).toBe("¥830 spent");
+    expect(creditsText({ kind: "spend", currency: "USD", used: null, limit: null, used_percent: null })).toBe("Unlimited");
+    expect(creditsText({ kind: "balance", balance: 1231.84, unlimited: false })).toBe("1,232 credits");
+    expect(creditsText({ kind: "balance", balance: null, unlimited: false })).toBe("Available");
+    expect(creditsText({ kind: "balance", balance: null, unlimited: true })).toBe("Unlimited");
+  });
+
   it("uses the agent's provider and the first visible account in Settings order", () => {
     const accounts = [provider("claude", [window(40)]), provider("codex", [window(20)], "a@x"), provider("codex", [window(80)], "b@x")];
     expect(composerUsage(accounts, "codex", ["codex:b@x"], [])?.account).toBe("b@x");

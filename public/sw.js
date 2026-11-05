@@ -95,9 +95,10 @@ async function fileFor(path) {
  * starts with: the worker before may have answered them, and a network that drops before the
  * page asks again must not leave a shell without them. Until then the old caches and their
  * shell stay, a complete start offline. Then the caches of other names go, their typefaces and
- * icons moved to FILES first.
+ * icons moved to FILES first, except `spare`: the cache whose shell a page is running right now,
+ * which may still ask for a file of its build. The next open, from the shell kept here, retires it.
  */
-async function keepShell(response) {
+async function keepShell(response, spare) {
   const html = await response.clone().text();
   const cache = await caches.open(CACHE);
   for (const path of shellFiles(html)) {
@@ -108,7 +109,7 @@ async function keepShell(response) {
   }
   await cache.put("/", response);
   const files = await caches.open(FILES);
-  const names = (await caches.keys()).filter((name) => name !== CACHE && name !== FILES);
+  const names = (await caches.keys()).filter((name) => name !== CACHE && name !== FILES && name !== spare);
   for (const name of names) {
     const old = await caches.open(name);
     // the files the retired cache's shell starts with: a page given that shell may not have asked yet
@@ -128,8 +129,33 @@ async function keepShell(response) {
 
 /** The shell to start from offline: this cache's, else the one a cache not yet deleted holds. */
 async function cachedShell() {
-  const cache = await caches.open(CACHE);
-  return (await cache.match("/")) || (await caches.match("/"));
+  return (await keptShell())?.response;
+}
+
+/**
+ * A page that needs the host's shell (src/lib/shellMode.ts requestFreshShell) leaves this entry in
+ * FILES: the next navigation takes it and asks the network first, its kept shell still the fallback.
+ */
+const FRESH_SHELL = "/__ovis-fresh-shell";
+/** How long a kept shell is opened without asking the host first: past it, a refresh that kept failing shows. */
+const KEPT_SHELL_MS = 24 * 60 * 60 * 1000;
+
+async function takeFreshRequest() {
+  return (await caches.open(FILES)).delete(`${FRESH_SHELL}/${shellServerId()}`);
+}
+
+function keptRecently(response) {
+  const at = Date.parse(response.headers.get("date") || "");
+  return Number.isFinite(at) && Date.now() - at < KEPT_SHELL_MS;
+}
+
+/** The shell kept for the next start and the cache that holds it; null when none was kept. */
+async function keptShell() {
+  for (const name of [CACHE, ...(await caches.keys()).filter((name) => name !== CACHE && name !== FILES)]) {
+    const response = await (await caches.open(name)).match("/");
+    if (response) return { response, cache: name };
+  }
+  return null;
 }
 
 // Only the shell build stamps this contract. Server-served workers keep their fetch behavior.
@@ -260,6 +286,20 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(
       (async () => {
+        // The hosted shell starts from the shell it kept: its host may be a slow ocean away, and
+        // which build a page runs is told apart from the PC's by the version policy, not by being
+        // fresh. The network's shell is kept for the next open.
+        let kept = null;
+        try {
+          const fresh = RELAY_RESOURCES ? await takeFreshRequest() : false;
+          kept = RELAY_RESOURCES && !fresh ? await keptShell() : null;
+        } catch (err) { /* storage that fails costs only the head start: the network is asked */ }
+        if (kept && keptRecently(kept.response)) {
+          event.waitUntil(fetch(request)
+            .then((response) => (response.ok ? keepShell(response, kept.cache) : undefined))
+            .catch(() => undefined));
+          return kept.response;
+        }
         let response;
         try {
           response = await fetch(request);
@@ -328,6 +368,81 @@ function ofThisPc(url) {
   try { return new URL(url).pathname.startsWith(`/s/${shellServerId()}/`); } catch { return false; }
 }
 
+// The tag replaces the pane's last alert everywhere but iOS, whose webpushd files each one
+// under an id of its own (WebKit bugs 258922, 319860): the pane's earlier alerts are closed by
+// hand. Their alert_ids are noted before showing, so an alert shown meanwhile (another push for
+// the pane) is never closed, and the handles are listed again after showing: where the tag did
+// replace, an old handle names the new alert. iOS refuses close() for 30 s after showing, so a
+// quicker repeat waits for the next alert. A failed listing closes nothing.
+async function earlierAlerts(tag) {
+  try {
+    return new Set((await self.registration.getNotifications({ tag })).map((alert) => alert.data?.alert_id));
+  } catch {
+    return new Set();
+  }
+}
+
+async function closeEarlierAlerts(tag, earlier) {
+  if (earlier.size === 0) return;
+  try {
+    for (const alert of await self.registration.getNotifications({ tag })) {
+      if (earlier.has(alert.data?.alert_id)) alert.close();
+    }
+  } catch {
+    /* the new alert is up: a failed clean-up leaves only the old ones */
+  }
+}
+
+// Answer buttons (#2916): an alert for a question the server found answerable whole (server/push.ts
+// promptActions) carries its options as buttons. A tap answers through POST /api/pane/prompt/answer
+// with the prompt's id, so the server's own check decides: a prompt that changed or was answered on
+// another device takes nothing, and a new alert says so; its tap opens the pane. Only the worker a
+// PC's own server serves shows them: the hosted shell's worker cannot reach its PC (only a window
+// holds the relay channel). Where a platform shows no buttons (iOS), the alert is as it was.
+function answerButtons(payload) {
+  if (shellServerId() !== null || typeof payload.prompt_id !== "string" || !payload.pane_id || (payload.machine_id || "local") !== "local") return null;
+  if (!Array.isArray(payload.actions)) return null;
+  const answers = payload.actions.slice(0, 2).filter((action) => Number.isInteger(action?.option_index) && typeof action.label === "string" && action.label !== "");
+  return answers.length > 0 ? answers : null;
+}
+
+/** The answer a button picked, sent; a new alert in its place when it did not take. */
+async function answerFromAlert(data, index) {
+  const answer = data.actions[index];
+  if (!answer) return;
+  let body;
+  try {
+    const response = await self.fetch("/api/pane/prompt/answer", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-herdr-machine": "1" },
+      body: JSON.stringify({ pane_id: data.pane_id, prompt_id: data.prompt_id, option_index: answer.option_index }),
+    });
+    if (response.ok) return;
+    body = response.status === 409 ? "This question changed or was already answered. Tap to open it." : "The answer may not have gone through. Tap to open the question.";
+  } catch {
+    body = "The answer may not have gone through. Tap to open the question.";
+  }
+  // the tapped alert is closed: one showing under its tag now is the pane's newer alert, which says what holds now
+  try {
+    if ((await self.registration.getNotifications({ tag: data.tag })).length > 0) return;
+  } catch {
+    /* no listing: the follow-up shows */
+  }
+  // and one whose push came in while that was listed: checked with no wait before the notice goes up
+  const latest = latestAlerts.get(data.tag);
+  if (latest !== undefined && latest !== data.alert_id) return;
+  await self.registration.showNotification(data.title, {
+    body,
+    tag: data.tag,
+    data: { pane_id: data.pane_id, machine_id: data.machine_id, workspace_id: data.workspace_id, alert_id: crypto.randomUUID() },
+    icon: "/icons/icon-192.png?v=sheep1",
+    badge: "/icons/badge-96.png?v=sheep1",
+  });
+}
+
+/** the newest alert each tag was given in this worker's life, noted as its push arrives (answerFromAlert) */
+const latestAlerts = new Map();
+
 self.addEventListener("push", (event) => {
   let payload = {};
   try {
@@ -335,20 +450,31 @@ self.addEventListener("push", (event) => {
   } catch (err) {
     payload = { body: event.data ? event.data.text() : "" };
   }
+  // noted before anything is awaited: an answer's notice that comes back meanwhile sees it is no longer the newest
+  const tag = payload.tag || "herdr";
+  const alertId = crypto.randomUUID();
+  latestAlerts.set(tag, alertId);
   event.waitUntil(
     (async () => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const watching = windows.some((client) => client.visibilityState === "visible" && ofThisPc(client.url));
+      const earlier = await earlierAlerts(tag);
+      const answers = answerButtons(payload);
       await self.registration.showNotification(payload.title || "Ovis", {
         body: payload.body || "",
-        tag: payload.tag || "herdr",
+        tag,
         renotify: !watching,
         silent: watching,
-        data: { pane_id: payload.pane_id || null, machine_id: payload.machine_id || "local", workspace_id: payload.workspace_id || null },
+        ...(answers ? { actions: answers.map((answer, index) => ({ action: `answer-${index}`, title: answer.label })) } : {}),
+        data: {
+          pane_id: payload.pane_id || null, machine_id: payload.machine_id || "local", workspace_id: payload.workspace_id || null, alert_id: alertId,
+          ...(answers ? { prompt_id: payload.prompt_id, actions: answers, title: payload.title || "Ovis", tag } : {}),
+        },
         icon: "/icons/icon-192.png?v=sheep1",
         // Android's status bar and small icon: white on transparent, or Chrome's bell
         badge: "/icons/badge-96.png?v=sheep1",
       });
+      await closeEarlierAlerts(tag, earlier);
     })(),
   );
 });
@@ -378,8 +504,13 @@ function isAppWindow(url) {
 let latestNotificationClick = 0;
 let latestNotificationSelection = null;
 self.addEventListener("notificationclick", (event) => {
-  const click = ++latestNotificationClick;
   event.notification.close();
+  const button = /^answer-(\d)$/.exec(event.action || "");
+  if (button && event.notification.data?.prompt_id) {
+    event.waitUntil(answerFromAlert(event.notification.data, Number(button[1])));
+    return;
+  }
+  const click = ++latestNotificationClick;
   const paneId = event.notification.data ? event.notification.data.pane_id : null;
   const machineId = event.notification.data?.machine_id || "local";
   // the workspace the pane was last seen in: an ended pane's tap opens it (src/lib/deepLink.ts)

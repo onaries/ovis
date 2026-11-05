@@ -63,6 +63,9 @@ export const inUse = (): boolean => document.visibilityState === "visible" && do
     is connecting for the first time. The words say which (here, ChatView and the header's chip). */
 export const connectedSockets = new WeakSet<HerdrSocket>();
 
+/** A character a terminal takes as a key (a line break reaches the program as Enter): never pasted inside a stored file's path. */
+export const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+
 /** A failure as one line: the plain sentence, then what the server or the browser said. */
 export const plainError = (cause: unknown): string => {
   const failure = userErrorMessage(cause);

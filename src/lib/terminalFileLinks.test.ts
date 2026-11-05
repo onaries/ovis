@@ -1,7 +1,67 @@
 import { describe, expect, it } from "bun:test";
 import { Terminal } from "@xterm/xterm";
 import { fileUriPath } from "../../shared/fileUri.ts";
-import { bareNameLinks, hyperlinkFilter, isWebLink, terminalFileLinks } from "./terminalFileLinks.ts";
+import { bareNameLinks, createWebLinkOpener, hyperlinkFilter, isWebLink, terminalFileLinks } from "./terminalFileLinks.ts";
+
+describe("openWebLink", () => {
+  // which path a click takes; what a real browser does with it is scripts/external-link-tab-regression.ts
+  it("opens a new tab unless asked to reuse, and falls back to one whenever the reused tab is gone or refused", () => {
+    const clicked: Record<string, string>[] = [];
+    const opened: { closed: boolean; location: { href: string }; focus: () => void; focused: number }[] = [];
+    let blocked = false;
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Object.defineProperty(globalThis, "document", { configurable: true, value: { createElement: () => {
+      const link = { href: "", target: "", rel: "", click: () => clicked.push({ href: link.href, target: link.target, rel: link.rel }) };
+      return link;
+    } } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { open: (uri: string) => {
+      if (blocked) return null;
+      const tab = { closed: false, location: { href: uri }, focused: 0, focus() { this.focused++; } };
+      opened.push(tab);
+      return tab;
+    } } });
+    try {
+      const open = createWebLinkOpener();
+      open("https://one.example", false);
+      open("https://two.example", true);
+      open("https://three.example", true);
+      expect(clicked).toEqual([{ href: "https://one.example", target: "_blank", rel: "noopener noreferrer" }]);
+      expect(opened).toHaveLength(1);
+      expect(opened[0]).toMatchObject({ location: { href: "https://three.example" }, focused: 1 });
+      opened[0]!.closed = true;
+      open("https://four.example", true);
+      expect(opened).toHaveLength(2);
+      expect(opened[1]).toMatchObject({ location: { href: "https://four.example" }, focused: 0 });
+      blocked = true;
+      createWebLinkOpener()("https://blocked.example", true);
+      expect(clicked.at(-1)).toEqual({ href: "https://blocked.example", target: "_blank", rel: "noopener noreferrer" });
+      // a tab the browser no longer lets this page steer still opens the address, in a new tab
+      blocked = false;
+      const refusing = createWebLinkOpener();
+      refusing("https://five.example", true);
+      Object.defineProperty(opened.at(-1)!.location, "href", { set: () => { throw new Error("SecurityError"); } });
+      refusing("https://six.example", true);
+      expect(clicked.at(-1)).toEqual({ href: "https://six.example", target: "_blank", rel: "noopener noreferrer" });
+      const windowOpen = (globalThis as unknown as { window: { open: unknown } }).window.open;
+      (globalThis as unknown as { window: { open: unknown } }).window.open = () => { throw new Error("SecurityError"); };
+      createWebLinkOpener()("https://seven.example", true);
+      expect(clicked.at(-1)).toEqual({ href: "https://seven.example", target: "_blank", rel: "noopener noreferrer" });
+      (globalThis as unknown as { window: { open: unknown } }).window.open = windowOpen;
+      // an app hands the address to the system browser: it never keeps a window to reuse
+      (globalThis as { Capacitor?: unknown }).Capacitor = { isNativePlatform: () => true };
+      createWebLinkOpener()("https://app.example", true);
+      expect(opened).toHaveLength(3);
+      expect(clicked.at(-1)).toEqual({ href: "https://app.example", target: "_blank", rel: "noopener noreferrer" });
+    } finally {
+      Reflect.deleteProperty(globalThis, "Capacitor");
+      if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
+      else Reflect.deleteProperty(globalThis, "document");
+      if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
+  });
+});
 
 /** a plain press of the primary button, as xterm hands one to a link */
 const click = { button: 0 } as MouseEvent;

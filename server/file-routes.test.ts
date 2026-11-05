@@ -57,7 +57,9 @@ describe("file routes", () => {
       expect(found.status).toBe(200);
       expect(await found.json()).toMatchObject({ name: "notes.txt", size: 5 });
       get.mockImplementation(async (paneId) => { throw new HerdrError("pane_not_found", `pane ${paneId} not found`); });
-      expect(await error(await fetch(url("/api/fs/stat?pane_id=w1:p1&path=notes.txt")))).toEqual([404, "not_found"]);
+      // not "no such file": the chat keeps a link for a name it could not look for (src/lib/fileNameLookup.ts)
+      expect(await error(await fetch(url("/api/fs/stat?pane_id=w1:p1&path=notes.txt")))).toEqual([404, "pane_unknown"]);
+      expect(await error(await fetch(url(`/api/fs/stat?pane_id=w1:p1&path=${q(join(folder, "missing.txt"))}`)))).toEqual([404, "not_found"]);
       expect((await fetch(url(`/api/fs/stat?pane_id=w1:p1&path=${q(notes)}`))).status).toBe(200);
     } finally {
       get.mockRestore();

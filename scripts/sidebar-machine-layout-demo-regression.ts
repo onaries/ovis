@@ -1,5 +1,6 @@
 /**
- * Purpose: verify sidebar PC control layout at narrow and wide widths and two-step removal in a real browser.
+ * Purpose: verify the Manage PC row menu (a popover on a desktop, a sheet on a phone), its items, Rename… in the
+ * header and Remove PC… in the confirm dialog at narrow and wide widths, in a real browser.
  * Tags: sidebar, machines, responsive, accessibility, browser, regression.
  * Usage: bun scripts/sidebar-machine-layout-demo-regression.ts [--geometry-only]
  */
@@ -16,14 +17,9 @@ const evidenceDir = process.env.UI_EVIDENCE_DIR;
 const geometryOnly = process.argv.includes("--geometry-only") || process.env.SIDEBAR_GEOMETRY_ONLY === "1";
 const REMOTE_NAME = "Demo remote PC";
 const MANAGED_NAME = "Managed demo PC";
-const REMOVE_LABEL: Record<string, string> = { en: "Remove PC", ko: "PC 제거", ja: "PC を削除", zh: "移除 PC" };
-const CONFIRM_LABEL: Record<string, string> = { en: "Confirm remove PC", ko: "PC 제거 확인", ja: "PC の削除を確認", zh: "确认移除 PC" };
-const REMOVE_EXPLANATION: Record<string, string> = {
-  en: "Removes this registration. Remote sessions keep running.",
-  ko: "이 등록만 지웁니다. 원격 세션은 계속 돕니다.",
-  ja: "この登録のみを削除します。リモートのセッションは実行されたままです。",
-  zh: "仅移除此注册。远程会话会继续运行。",
-};
+const RENAME_LABEL: Record<string, string> = { en: "Rename…", ko: "이름 바꾸기…", ja: "名前を変更…", zh: "重命名…" };
+const REMOVE_LABEL: Record<string, string> = { en: "Remove PC…", ko: "PC 제거…", ja: "PC を削除…", zh: "移除 PC…" };
+const REMOVE_EXPLANATION = "Removes this registration. Remote sessions keep running.";
 
 interface Scenario {
   name: string;
@@ -34,17 +30,13 @@ interface Scenario {
   touch: boolean;
   desktopSidebar: boolean;
   sidebarWidth?: number;
-  renameRow?: "shared" | "stacked";
-  wrappedRow?: boolean;
   screenshots?: boolean;
 }
 
 const scenarios: Scenario[] = [
-  { name: "en-desktop-240-dark", language: "en", theme: "dark", density: "comfortable", viewport: { width: 1280, height: 900 }, touch: false, desktopSidebar: true, renameRow: "stacked", screenshots: true },
-  { name: "en-desktop-240-wrapped", language: "en", theme: "dark", density: "comfortable", viewport: { width: 1280, height: 900 }, touch: false, desktopSidebar: true, wrappedRow: true },
+  { name: "en-desktop-240-dark", language: "en", theme: "dark", density: "comfortable", viewport: { width: 1280, height: 900 }, touch: false, desktopSidebar: true, screenshots: true },
   { name: "en-desktop-240-light", language: "en", theme: "light", density: "compact", viewport: { width: 1280, height: 900 }, touch: false, desktopSidebar: true, screenshots: true },
-  // Verify a shared Rename row with room to spare, not a 300px threshold that varies with text, scale and scrollbars.
-  { name: "en-desktop-520-light", language: "en", theme: "light", density: "comfortable", viewport: { width: 1280, height: 900 }, touch: false, desktopSidebar: true, sidebarWidth: 520, renameRow: "shared", screenshots: true },
+  { name: "en-desktop-520-light", language: "en", theme: "light", density: "comfortable", viewport: { width: 1280, height: 900 }, touch: false, desktopSidebar: true, sidebarWidth: 520, screenshots: true },
   { name: "en-phone-320-dark", language: "en", theme: "dark", density: "compact", viewport: { width: 320, height: 844 }, touch: true, desktopSidebar: false, screenshots: true },
   { name: "en-phone-320-light", language: "en", theme: "light", density: "comfortable", viewport: { width: 320, height: 844 }, touch: true, desktopSidebar: false, screenshots: true },
   { name: "ko-phone-320-dark", language: "ko", theme: "dark", density: "comfortable", viewport: { width: 320, height: 844 }, touch: true, desktopSidebar: false },
@@ -53,11 +45,16 @@ const scenarios: Scenario[] = [
   { name: "ko-desktop-240-dark", language: "ko", theme: "dark", density: "compact", viewport: { width: 1280, height: 900 }, touch: false, desktopSidebar: true },
   { name: "ja-desktop-240-light", language: "ja", theme: "light", density: "comfortable", viewport: { width: 1280, height: 900 }, touch: false, desktopSidebar: true },
   { name: "zh-desktop-240-dark", language: "zh", theme: "dark", density: "comfortable", viewport: { width: 1280, height: 900 }, touch: false, desktopSidebar: true },
-  { name: "en-phone-390-light", language: "en", theme: "light", density: "compact", viewport: { width: 390, height: 844 }, touch: true, desktopSidebar: false, renameRow: "stacked" },
+  { name: "en-phone-390-light", language: "en", theme: "light", density: "compact", viewport: { width: 390, height: 844 }, touch: true, desktopSidebar: false, screenshots: true },
+  { name: "en-phone-390-dark", language: "en", theme: "dark", density: "comfortable", viewport: { width: 390, height: 844 }, touch: true, desktopSidebar: false, screenshots: true },
   { name: "en-landscape-844x390-dark", language: "en", theme: "dark", density: "comfortable", viewport: { width: 844, height: 390 }, touch: true, desktopSidebar: true },
 ];
 
+// a PC's group by its name; while its name is a field, by the field
 const machineGroup = (page: Page, name: string): Locator => page.locator(".machine-group").filter({ has: page.locator(".machine-name", { hasText: name }) });
+const renamingGroup = (page: Page): Locator => page.locator(".machine-group").filter({ has: page.locator(".machine-rename-input") });
+const surface = (page: Page): Locator => page.locator(".row-menu, .row-sheet");
+const items = (page: Page): Locator => surface(page).locator(".menu-item, .row-sheet-item");
 const getHook = (page: Page, expression: string) => page.evaluate((key) => {
   const fixture = (window as unknown as { machineControlsFixture: { calls: Record<string, unknown>; roster: unknown[] } }).machineControlsFixture;
   let value: unknown = fixture;
@@ -67,99 +64,120 @@ const getHook = (page: Page, expression: string) => page.evaluate((key) => {
   }
   return value;
 }, expression);
+// another tab's view of the fixture PC: waits until it is gone (null), or holds every given field
+const observedPc = (page: Page, observer: number, want: { name?: string; enabled?: boolean } | null) => page.waitForFunction(([index, fields]) => {
+  const hooks = (window as unknown as { machineControlsFixture: { observerRoster(index: number): Array<{ id: string; name: string; enabled: boolean }> | null } }).machineControlsFixture;
+  const roster = hooks.observerRoster(index as number);
+  const pc = roster?.find((machine) => machine.id === "sidebar-fixture");
+  if (fields === null) return roster !== null && roster !== undefined && pc === undefined;
+  return pc !== undefined && Object.entries(fields as Record<string, unknown>).every(([key, value]) => (pc as unknown as Record<string, unknown>)[key] === value);
+}, [observer, want] as const);
+// an item by its whole label: "Connect" is also in "Disconnect" and "Reconnect / setup"
+const item = (page: Page, label: string): Locator => items(page).filter({ hasText: new RegExp(`^\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`) });
 
-async function fitGeometry(page: Page, name: string, scenario: Scenario): Promise<void> {
-  const metrics = await page.evaluate(() => {
-    const rect = (element: Element | null) => {
-      if (!element) return null;
-      const box = element.getBoundingClientRect();
-      return { left: box.left, right: box.right, width: box.width, height: box.height };
-    };
-    const sidebar = document.querySelector(".sidebar");
-    const list = document.querySelector<HTMLElement>(".machine-list");
-    const controls = document.querySelector(".machine-controls");
-    if (!sidebar || !list || !controls) return null;
-    const panelRect = controls.getBoundingClientRect();
-    const panelStyle = getComputedStyle(controls);
-    const input = controls.querySelector("input");
-    const inputRect = input ? input.getBoundingClientRect() : null;
-    const elements = [...controls.querySelectorAll("form, .machine-control-buttons, input, button, .field-label")];
-    const lineCount = (element: Element) => {
-      const range = document.createRange();
-      range.selectNodeContents(element);
-      return new Set([...range.getClientRects()].map((box) => Math.round(box.top))).size;
-    };
-    return {
-      viewport: { width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth },
-      sidebar: rect(sidebar),
-      list: { clientWidth: list.clientWidth, scrollWidth: list.scrollWidth },
-      panel: rect(controls),
-      input: inputRect ? { left: inputRect.left, right: inputRect.right, top: inputRect.top, bottom: inputRect.bottom, width: inputRect.width, height: inputRect.height } : null,
-      controlHeight: Number.parseFloat(panelStyle.getPropertyValue("--control-h")),
-      touchTarget: Number.parseFloat(panelStyle.getPropertyValue("--touch-target")),
-      elements: elements.map((element) => {
-        const box = element.getBoundingClientRect();
-        return {
-          name: element.className || element.tagName,
-          left: box.left,
-          right: box.right,
-          top: box.top,
-          bottom: box.bottom,
-          height: box.height,
-          lines: element instanceof HTMLButtonElement ? lineCount(element) : 1,
-          inRow: element.parentElement?.classList.contains("machine-control-buttons") ?? false,
-          clientWidth: element instanceof HTMLElement ? element.clientWidth : 0,
-          scrollWidth: element instanceof HTMLElement ? element.scrollWidth : 0,
-        };
-      }),
-      panelEdges: { left: panelRect.left, right: panelRect.right },
-    };
-  });
-  assert.ok(metrics, `${scenario.name} ${name}: controls are present`);
-  const sidebarWidth = scenario.sidebarWidth ?? 240;
-  if (scenario.desktopSidebar) assert.ok(Math.abs(metrics.sidebar!.width - sidebarWidth) <= 1, `${scenario.name} sidebar is ${sidebarWidth}px: ${JSON.stringify(metrics.sidebar)}`);
-  else {
-    assert.ok(metrics.sidebar!.left >= -1 && metrics.sidebar!.right <= scenario.viewport.width + 1, `${scenario.name} drawer stays in viewport: ${JSON.stringify(metrics.sidebar)}`);
-  }
-  assert.ok(metrics.list!.scrollWidth <= metrics.list!.clientWidth + 1, `${scenario.name} machine list has no horizontal overflow: ${JSON.stringify(metrics.list)}`);
-  assert.ok(metrics.panel!.left >= metrics.sidebar!.left - 1 && metrics.panel!.right <= metrics.sidebar!.right + 1, `${scenario.name} panel fits its sidebar: ${JSON.stringify({ sidebar: metrics.sidebar, panel: metrics.panel })}`);
-  assert.ok(metrics.panel!.right <= scenario.viewport.width + 1, `${scenario.name} panel fits the viewport: ${JSON.stringify(metrics.panel)}`);
-  assert.ok(metrics.input && metrics.input.left >= metrics.panelEdges!.left - 1 && metrics.input.right <= metrics.panelEdges!.right + 1, `${scenario.name} 100-character name field outer box fits the panel: ${JSON.stringify({ input: metrics.input, panel: metrics.panel })}`);
-  for (const element of metrics.elements!) {
-    assert.ok(element.left >= metrics.panelEdges!.left - 1 && element.right <= metrics.panelEdges!.right + 1, `${scenario.name} ${element.name} fits the control panel: ${JSON.stringify(element)}`);
-    if (element.name === "field-label") assert.ok(element.scrollWidth <= element.clientWidth + 1, `${scenario.name} field label text fits: ${JSON.stringify(element)}`);
-    if (element.name.includes("btn")) assert.ok(element.scrollWidth <= element.clientWidth + 1, `${scenario.name} button label fits: ${JSON.stringify(element)}`);
-    if (scenario.touch && element.name.includes("btn")) assert.ok(element.height >= 44 - 1, `${scenario.name} touch button is at least 44px tall: ${JSON.stringify(element)}`);
-  }
-  const oneLine = scenario.touch ? metrics.touchTarget : metrics.controlHeight;
-  const buttons = metrics.elements!.filter((element) => element.name.includes("btn"));
-  for (const button of buttons) {
-    if (!button.inRow && button.lines === 1) assert.ok(Math.abs(button.height - oneLine) <= 1, `${scenario.name} one-line button is the standard control's height (${oneLine}px): ${JSON.stringify(button)}`);
-  }
-  const rename = buttons.find((button) => !button.inRow);
-  assert.ok(rename && metrics.input, `${scenario.name} rename form has its field and button`);
-  const renameRow = rename.left >= metrics.input.right - 1 && Math.abs(rename.bottom - metrics.input.bottom) <= 1 ? "shared" : rename.top >= metrics.input.bottom - 1 ? "stacked" : "overlapping";
-  assert.notEqual(renameRow, "overlapping", `${scenario.name} Rename shares the name field's row or sits under it: ${JSON.stringify({ rename, input: metrics.input })}`);
-  if (scenario.renameRow) assert.equal(renameRow, scenario.renameRow, `${scenario.name} Rename is ${scenario.renameRow === "shared" ? "on the name field's row" : "under the name field"} in a ${sidebarWidth}px sidebar: ${JSON.stringify({ rename, input: metrics.input })}`);
-  const rows: (typeof buttons)[] = [];
-  for (const button of buttons.filter((button) => button.inRow)) {
-    // Bottom-aligned buttons still share a flex row when one label wraps and its neighbour does not.
-    const row = rows.find((row) => row.every((peer) => Math.min(button.bottom, peer.bottom) - Math.max(button.top, peer.top) > 1));
-    if (row) row.push(button);
-    else rows.push([button]);
-  }
-  for (const row of rows) {
-    const [first] = row;
-    assert.ok(first);
-    assert.ok(row.every((button) => Math.abs(button.top - first.top) <= 1 && Math.abs(button.height - first.height) <= 1), `${scenario.name} buttons that share a row share its top and height: ${JSON.stringify(row)}`);
-    if (row.every((button) => button.lines === 1)) assert.ok(Math.abs(first.height - oneLine) <= 1, `${scenario.name} one-line row is the standard control's height (${oneLine}px): ${JSON.stringify(row)}`);
-  }
-  if (scenario.wrappedRow) assert.ok(rows.some((row) => row.some((button) => button.lines === 1) && row.some((button) => button.lines > 1)), `${scenario.name} exercises a one-line button beside a wrapped label: ${JSON.stringify(rows)}`);
+async function press(locator: Locator, scenario: Scenario): Promise<void> {
+  if (scenario.touch) await locator.tap();
+  else await locator.click();
 }
 
-async function capture(page: Page, scenario: Scenario, state: "initial" | "armed"): Promise<void> {
+/** Opens the PC's Manage PC menu from its sliders button and checks the button says so. */
+async function openMenu(page: Page, group: Locator, scenario: Scenario): Promise<Locator> {
+  if (!scenario.touch) await group.locator(".machine-header").hover();
+  const manage = group.locator(".machine-manage");
+  assert.equal(await manage.getAttribute("aria-haspopup"), "menu", `${scenario.name} the manage button says it opens a menu`);
+  assert.equal(await manage.getAttribute("aria-expanded"), "false", `${scenario.name} the manage button is closed before the press`);
+  await press(manage, scenario);
+  await surface(page).waitFor({ state: "visible" });
+  // a phone's sheet slides up from under the screen: measured once it is in place
+  await surface(page).evaluate(async (menu) => { await Promise.all(menu.getAnimations({ subtree: true }).map((animation) => animation.finished)); });
+  assert.equal(await manage.getAttribute("aria-expanded"), "true", `${scenario.name} the manage button says its menu is open`);
+  return manage;
+}
+
+async function closeWithEscape(page: Page, manage: Locator, scenario: Scenario): Promise<void> {
+  await page.keyboard.press("Escape");
+  await surface(page).waitFor({ state: "detached" });
+  assert.equal(await manage.evaluate((button) => document.activeElement === button), true, `${scenario.name} Escape gives the focus back to the manage button`);
+  assert.equal(await manage.getAttribute("aria-expanded"), "false", `${scenario.name} the manage button says its menu is closed`);
+}
+
+async function itemLabels(page: Page): Promise<string[]> {
+  return (await items(page).allInnerTexts()).map((text) => text.trim());
+}
+
+/** The open menu fits the screen, says which PC it is for, and keeps every label whole; a sheet's items are touch-sized. */
+async function menuGeometry(page: Page, manage: Locator, scenario: Scenario): Promise<void> {
+  const metrics = await page.evaluate(() => {
+    const menu = document.querySelector(".row-menu, .row-sheet")!;
+    const rect = (element: Element) => { const box = element.getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width, height: box.height }; };
+    return {
+      sheet: menu.classList.contains("row-sheet"),
+      box: rect(menu),
+      viewport: { width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth },
+      head: [...menu.querySelectorAll(".machine-menu-head > *")].map((element) => ({ className: element.className, text: element.textContent ?? "", ...rect(element), fits: element.scrollWidth <= element.clientWidth + 1 || element.classList.contains("machine-menu-name") })),
+      items: [...menu.querySelectorAll(".menu-item, .row-sheet-item")].map((item) => {
+        const label = item.querySelector(".menu-item-main, .row-sheet-label")!;
+        return { text: label.textContent ?? "", ...rect(item), fits: label.scrollWidth <= label.clientWidth + 1 };
+      }),
+    };
+  });
+  const sheetExpected = scenario.viewport.width <= 640;
+  assert.equal(metrics.sheet, sheetExpected, `${scenario.name} Manage PC is a ${sheetExpected ? "sheet" : "popover"} at ${scenario.viewport.width}px`);
+  const { box, viewport } = metrics;
+  assert.ok(box.left >= -1 && box.right <= viewport.width + 1 && box.top >= -1 && box.bottom <= viewport.height + 1, `${scenario.name} the menu fits the screen: ${JSON.stringify({ box, viewport })}`);
+  assert.ok(viewport.scrollWidth <= viewport.width + 1, `${scenario.name} the page does not scroll sideways: ${JSON.stringify(viewport)}`);
+  if (!metrics.sheet) {
+    const button = await manage.boundingBox();
+    assert.ok(button && (box.top >= button.y + button.height - 1 || box.bottom <= button.y + 1), `${scenario.name} the popover opens under or over its button: ${JSON.stringify({ box, button })}`);
+  }
+  assert.ok(metrics.head.length >= 2, `${scenario.name} the menu's head names the PC and its state: ${JSON.stringify(metrics.head)}`);
+  for (const line of metrics.head) {
+    assert.ok(line.left >= box.left - 1 && line.right <= box.right + 1, `${scenario.name} the head's ${line.className} fits the menu: ${JSON.stringify(line)}`);
+    assert.ok(line.fits, `${scenario.name} the head's ${line.className} is not cut: ${JSON.stringify(line)}`);
+  }
+  for (const entry of metrics.items) {
+    assert.ok(entry.left >= box.left - 1 && entry.right <= box.right + 1, `${scenario.name} ${entry.text} fits the menu: ${JSON.stringify(entry)}`);
+    assert.ok(entry.fits, `${scenario.name} ${entry.text} is not cut: ${JSON.stringify(entry)}`);
+    if (metrics.sheet) assert.ok(entry.height >= 44 - 1, `${scenario.name} ${entry.text} is touch-sized in the sheet: ${JSON.stringify(entry)}`);
+  }
+}
+
+async function capture(page: Page, scenario: Scenario, state: "menu" | "renaming"): Promise<void> {
   if (!evidenceDir || !scenario.screenshots) return;
   await page.screenshot({ path: join(evidenceDir, `sidebar-machine-layout-${scenario.name}-${state}.png`) });
+}
+
+/** Rename… swaps the name for a field in the header: a 100-character name stays inside the sidebar, and Escape keeps the old name. */
+async function renameGeometry(page: Page, manage: Locator, scenario: Scenario): Promise<void> {
+  const before = (await getHook(page, "calls.mutations") as unknown[]).length;
+  await press(item(page, RENAME_LABEL[scenario.language]!), scenario);
+  await surface(page).waitFor({ state: "detached" });
+  const input = renamingGroup(page).locator(".machine-rename-input");
+  await input.waitFor({ state: "visible" });
+  assert.equal(await input.evaluate((element) => document.activeElement === element), true, `${scenario.name} the name's field takes the focus`);
+  assert.equal(await input.inputValue(), REMOTE_NAME, `${scenario.name} the field starts with the PC's name`);
+  assert.equal(await input.getAttribute("maxlength"), "100", `${scenario.name} the field takes up to 100 characters`);
+  await input.fill("x".repeat(100));
+  const fit = await page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>(".machine-list")!;
+    const sidebar = document.querySelector(".sidebar")!.getBoundingClientRect();
+    const field = document.querySelector(".machine-rename-input")!.getBoundingClientRect();
+    return { list: { clientWidth: list.clientWidth, scrollWidth: list.scrollWidth }, sidebar: { left: sidebar.left, right: sidebar.right }, field: { left: field.left, right: field.right } };
+  });
+  assert.ok(fit.list.scrollWidth <= fit.list.clientWidth + 1, `${scenario.name} a 100-character name does not widen the PC list: ${JSON.stringify(fit)}`);
+  assert.ok(fit.field.left >= fit.sidebar.left - 1 && fit.field.right <= fit.sidebar.right + 1, `${scenario.name} the name's field fits the sidebar: ${JSON.stringify(fit)}`);
+  await capture(page, scenario, "renaming");
+  // a press in the field places the caret: the name's own fold (a press on the name) stays out of it
+  await press(input, scenario);
+  assert.equal(await renamingGroup(page).evaluate((group) => group.classList.contains("is-folded")), false, `${scenario.name} a press in the name's field does not fold the PC`);
+  assert.equal(await input.evaluate((element) => document.activeElement === element), true, `${scenario.name} the field keeps the focus after a press in it`);
+  await page.keyboard.press("Escape");
+  await input.waitFor({ state: "detached" });
+  // the field keeps its own Escape: a phone's drawer stays out (lib/useSidebarLayout.ts)
+  assert.equal(await manage.evaluate((button) => document.activeElement === button), true, `${scenario.name} Escape in the field gives the focus back to the manage button`);
+  if (!scenario.desktopSidebar) assert.equal(await page.locator(".sidebar.is-open").isVisible(), true, `${scenario.name} Escape in the field leaves the drawer out`);
+  assert.equal((await getHook(page, "calls.mutations") as unknown[]).length, before, `${scenario.name} Escape sends no rename`);
+  await machineGroup(page, REMOTE_NAME).waitFor({ state: "attached" });
 }
 
 async function withScenario(browser: Awaited<ReturnType<typeof chromium.launch>>, url: string, scenario: Scenario, fullBehavior: boolean): Promise<void> {
@@ -188,14 +206,9 @@ async function withScenario(browser: Awaited<ReturnType<typeof chromium.launch>>
     await remoteGroup.waitFor({ state: "attached" });
 
     if (geometryOnly) {
-      if (!scenario.touch) await remoteGroup.locator(".machine-header").hover();
-      const manage = remoteGroup.locator(".machine-manage");
-      if (scenario.touch) await manage.tap();
-      else await manage.click();
-      const controls = remoteGroup.locator(".machine-controls");
-      await controls.waitFor({ state: "visible" });
-      await controls.locator("input").fill("x".repeat(100));
-      await fitGeometry(page, "100-character geometry-only", scenario);
+      const manage = await openMenu(page, remoteGroup, scenario);
+      await menuGeometry(page, manage, scenario);
+      await renameGeometry(page, manage, scenario);
       console.log(`PASS ${scenario.name} geometry-only baseline`);
       assert.deepEqual(errors, [], `${scenario.name} has no uncaught browser errors`);
       return;
@@ -206,95 +219,90 @@ async function withScenario(browser: Awaited<ReturnType<typeof chromium.launch>>
     assert.equal(await host.locator(".machine-manage").count(), 0, `${scenario.name} local host has no Manage button`);
     assert.ok((await host.locator(".machine-kind").textContent() ?? "").trim().length > 0, `${scenario.name} local host has a localized kind label`);
 
+    // a PC herdr manages keeps herdr's limits: its setup, its bridge update and its place here, and the hint says where the rest is
     const managed = machineGroup(page, MANAGED_NAME);
-    if (!scenario.touch) await managed.locator(".machine-header").hover();
-    const managedManage = managed.locator(".machine-manage");
-    if (scenario.touch) await managedManage.tap();
-    else await managedManage.click();
-    const managedControls = managed.locator(".machine-controls");
-    await managedControls.waitFor();
-    assert.ok((await managedControls.locator(".field-hint").textContent() ?? "").trim().length > 0, `${scenario.name} herdr-managed restriction is explained in the active locale`);
-    assert.equal(await managedControls.locator("form").count(), 0, `${scenario.name} herdr-managed PC has no rename form`);
-    assert.equal(await managedControls.getByRole("button", { name: REMOVE_LABEL[scenario.language], exact: true }).count(), 0, `${scenario.name} herdr-managed PC has no removal control`);
-    assert.equal(await managedControls.locator(".machine-control-buttons button").count(), 2, `${scenario.name} herdr-managed PC retains its two setup/update actions`);
-    if (scenario.touch) await managedManage.tap();
-    else await managedManage.click();
-    await managedControls.waitFor({ state: "detached" });
+    const managedManage = await openMenu(page, managed, scenario);
+    assert.ok((await surface(page).locator(".machine-menu-note").textContent() ?? "").trim().length > 0, `${scenario.name} herdr-managed restriction is explained in the active locale`);
+    assert.equal(await items(page).count(), 3, `${scenario.name} herdr-managed PC offers setup, the bridge update and Hide: ${JSON.stringify(await itemLabels(page))}`);
+    assert.equal(await item(page, RENAME_LABEL[scenario.language]!).count(), 0, `${scenario.name} herdr-managed PC has no Rename…`);
+    assert.equal(await item(page, REMOVE_LABEL[scenario.language]!).count(), 0, `${scenario.name} herdr-managed PC has no Remove PC…`);
+    await closeWithEscape(page, managedManage, scenario);
 
-    if (!scenario.touch) await remoteGroup.locator(".machine-header").hover();
-    const remoteManage = remoteGroup.locator(".machine-manage");
-    if (scenario.touch) await remoteManage.tap();
-    else await remoteManage.click();
-    const controls = remoteGroup.locator(".machine-controls");
-    await controls.waitFor({ state: "visible" });
-    // Make wrapping deterministic while retaining the real flex row and its alignment rules.
-    if (scenario.wrappedRow) await controls.getByRole("button", { name: "Reconnect / setup", exact: true }).evaluate((button) => { button.style.maxWidth = "80px"; });
-    await capture(page, scenario, "initial");
-    await controls.locator("input").fill("x".repeat(100));
-    await fitGeometry(page, "initial", scenario);
-    assert.equal(await page.locator(".machine-list").evaluate((list) => (list as HTMLElement).scrollWidth <= (list as HTMLElement).clientWidth + 1), true, `${scenario.name} machine list fits after a 100-character PC name`);
-    await controls.locator("input").fill(REMOTE_NAME);
-
-    const remove = remoteGroup.getByRole("button", { name: REMOVE_LABEL[scenario.language], exact: true });
-    const beforeDeleteCount = await getHook(page, "calls.deleteCount");
-    const beforeDeleteAttempts = await getHook(page, "calls.deleteAttempts");
-    await remove.focus();
-    await page.evaluate(() => { (window as unknown as { __sidebarRemoveFocus: Element | null }).__sidebarRemoveFocus = document.activeElement; });
-    await page.keyboard.press("Enter");
-    const confirm = remoteGroup.getByRole("button", { name: CONFIRM_LABEL[scenario.language], exact: true });
-    await confirm.waitFor();
-    assert.equal(await getHook(page, "calls.deleteCount"), beforeDeleteCount, `${scenario.name} first keyboard removal click sends zero DELETEs`);
-    assert.equal(await getHook(page, "calls.deleteAttempts"), beforeDeleteAttempts, `${scenario.name} first keyboard removal click sends no DELETE request`);
-    assert.equal(await page.evaluate(() => document.activeElement === (window as unknown as { __sidebarRemoveFocus: Element }).__sidebarRemoveFocus), true, `${scenario.name} first removal click preserves focus on the same button`);
-    assert.ok((await controls.textContent() ?? "").includes(REMOVE_EXPLANATION[scenario.language]!), `${scenario.name} confirmation explains that only the registration is removed`);
-    await fitGeometry(page, "armed", scenario);
-    await capture(page, scenario, "armed");
+    const manage = await openMenu(page, remoteGroup, scenario);
+    const labels = await itemLabels(page);
+    assert.equal(labels.length, 6, `${scenario.name} an added PC offers six actions: ${JSON.stringify(labels)}`);
+    assert.equal(labels[0], RENAME_LABEL[scenario.language], `${scenario.name} Rename… comes first`);
+    assert.equal(labels.at(-1), REMOVE_LABEL[scenario.language], `${scenario.name} Remove PC… comes last`);
+    assert.equal(await surface(page).locator(".is-danger").count(), 1, `${scenario.name} only Remove PC… is a danger item`);
+    assert.equal((await surface(page).locator(".machine-menu-name").textContent())?.trim(), REMOTE_NAME, `${scenario.name} the menu's head names the PC`);
+    await menuGeometry(page, manage, scenario);
+    await capture(page, scenario, "menu");
+    await renameGeometry(page, manage, scenario);
+    // Remove PC…'s confirm keeps its own Escape: a phone's drawer stays out under it (lib/useSidebarLayout.ts)
+    if (!scenario.desktopSidebar) {
+      const removeManage = await openMenu(page, remoteGroup, scenario);
+      await press(item(page, REMOVE_LABEL[scenario.language]!), scenario);
+      const dialog = page.locator(".confirm-dialog");
+      await dialog.waitFor();
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "detached" });
+      assert.equal(await page.locator(".sidebar.is-open").isVisible(), true, `${scenario.name} Escape on Remove PC's confirm leaves the drawer out`);
+      assert.equal(await removeManage.evaluate((button) => document.activeElement === button), true, `${scenario.name} Escape on Remove PC's confirm gives the focus back to the manage button`);
+      assert.equal(await getHook(page, "calls.deleteAttempts"), 0, `${scenario.name} Escape on Remove PC's confirm sends no DELETE`);
+    }
 
     if (fullBehavior && !geometryOnly) {
       const observer = await page.evaluate(() => (window as unknown as { machineControlsFixture: { observe(): number } }).machineControlsFixture.observe());
-      await page.waitForFunction((index) => {
-        const hooks = (window as unknown as { machineControlsFixture: { observerRoster(index: number): Array<{ id: string }> | null } }).machineControlsFixture;
-        return hooks.observerRoster(index)?.some((machine) => machine.id === "sidebar-fixture");
-      }, observer);
+      await observedPc(page, observer, {});
 
-      const remoteManage = remoteGroup.locator(".machine-manage");
-      if (scenario.touch) await remoteManage.tap();
-      else await remoteManage.click();
-      await controls.waitFor({ state: "detached" });
-      if (scenario.touch) await remoteManage.tap();
-      else await remoteManage.click();
-      await controls.waitFor({ state: "visible" });
-      assert.equal(await remoteGroup.getByRole("button", { name: CONFIRM_LABEL.en, exact: true }).count(), 0, "closing and reopening Manage resets armed removal confirmation");
-      assert.equal(await remoteGroup.locator(".field-hint").filter({ hasText: REMOVE_EXPLANATION.en }).count(), 0, "reopening Manage clears the removal explanation");
+      // Disconnect and Connect run at once and close the menu
+      await openMenu(page, remoteGroup, scenario);
+      await item(page, "Disconnect").click();
+      await surface(page).waitFor({ state: "detached" });
+      await observedPc(page, observer, { enabled: false });
+      await openMenu(page, remoteGroup, scenario);
+      assert.deepEqual(await itemLabels(page), ["Rename…", "Connect", "Reconnect / setup", "Update bridge…", "Hide on this device", "Remove PC…"], "a disabled PC offers Connect in Disconnect's place");
+      assert.equal(await item(page, "Reconnect / setup").getAttribute("aria-disabled"), "true", "setup waits while the PC is disabled");
 
-      await remoteGroup.getByRole("button", { name: "Disconnect", exact: true }).click();
-      await remoteGroup.getByRole("button", { name: "Connect", exact: true }).waitFor();
-      await remoteGroup.getByRole("button", { name: REMOVE_LABEL.en, exact: true }).waitFor();
-      await page.waitForFunction((index) => {
-        const hooks = (window as unknown as { machineControlsFixture: { observerRoster(index: number): Array<{ id: string; enabled: boolean }> | null } }).machineControlsFixture;
-        return hooks.observerRoster(index)?.find((machine) => machine.id === "sidebar-fixture")?.enabled === false;
-      }, observer);
-
+      // Rename…: Enter saves, and the focus is back on the manage button
+      await item(page, "Rename…").click();
       const renamed = "Renamed fixture PC";
-      await controls.locator("input").fill(renamed);
-      await controls.getByRole("button", { name: "Rename", exact: true }).click();
+      const input = renamingGroup(page).locator(".machine-rename-input");
+      await input.fill(`  ${renamed}  `);
+      await input.press("Enter");
       const renamedGroup = machineGroup(page, renamed);
-      await page.waitForFunction((name) => [...document.querySelectorAll(".machine-name")].some((element) => element.textContent === name), renamed);
-      await page.waitForFunction(([index, name]) => {
-        const hooks = (window as unknown as { machineControlsFixture: { observerRoster(index: number): Array<{ id: string; name: string }> | null } }).machineControlsFixture;
-        return hooks.observerRoster(index as number)?.find((machine) => machine.id === "sidebar-fixture")?.name === name;
-      }, [observer, renamed] as const);
-      await renamedGroup.getByRole("button", { name: "Connect", exact: true }).click();
-      await renamedGroup.getByRole("button", { name: "Disconnect", exact: true }).waitFor();
-      await page.waitForFunction((index) => {
-        const hooks = (window as unknown as { machineControlsFixture: { observerRoster(index: number): Array<{ id: string; enabled: boolean }> | null } }).machineControlsFixture;
-        return hooks.observerRoster(index)?.find((machine) => machine.id === "sidebar-fixture")?.enabled === true;
-      }, observer);
+      await renamedGroup.waitFor();
+      await observedPc(page, observer, { name: renamed });
+      assert.equal(await renamedGroup.locator(".machine-manage").evaluate((button) => document.activeElement === button), true, "Enter gives the focus back to the manage button");
+      // a click away keeps the old name
+      const sent = (await getHook(page, "calls.mutations") as unknown[]).length;
+      await openMenu(page, renamedGroup, scenario);
+      await item(page, "Rename…").click();
+      await renamingGroup(page).locator(".machine-rename-input").fill("Never sent");
+      await renamingGroup(page).locator(".machine-rename-input").evaluate((element) => (element as HTMLElement).blur());
+      await renamedGroup.waitFor();
+      assert.equal((await getHook(page, "calls.mutations") as unknown[]).length, sent, "leaving the field sends no rename");
 
+      await openMenu(page, renamedGroup, scenario);
+      await item(page, "Connect").click();
+      await observedPc(page, observer, { enabled: true });
 
-      await renamedGroup.getByRole("button", { name: REMOVE_LABEL.en, exact: true }).click();
-      const destructive = renamedGroup.getByRole("button", { name: CONFIRM_LABEL.en, exact: true });
-      await destructive.waitFor();
+      // Remove PC… asks in the dialog a workspace's Close asks in; Escape answers no
+      const renamedManage = await openMenu(page, renamedGroup, scenario);
+      await item(page, "Remove PC…").click();
+      const dialog = page.locator(".confirm-dialog");
+      await dialog.waitFor();
+      assert.equal(await dialog.getByRole("heading").textContent(), `Remove PC ${renamed}?`, "the dialog names the PC");
+      assert.ok((await dialog.textContent() ?? "").includes(REMOVE_EXPLANATION), "the dialog says only the registration goes");
+      assert.equal(await dialog.getByRole("button", { name: "Cancel", exact: true }).evaluate((button) => document.activeElement === button), true, "Cancel takes the focus, so Enter answers no");
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "detached" });
+      assert.equal(await renamedManage.evaluate((button) => document.activeElement === button), true, "a no gives the focus back to the manage button");
+      assert.equal(await getHook(page, "calls.deleteAttempts"), 0, "asking sends no DELETE");
+
+      await openMenu(page, renamedGroup, scenario);
+      await item(page, "Remove PC…").click();
+      const destructive = dialog.getByRole("button", { name: "Remove PC", exact: true });
       await page.evaluate(() => (window as unknown as { machineControlsFixture: { holdNextMutation(): void } }).machineControlsFixture.holdNextMutation());
       await destructive.click();
       await page.waitForFunction(() => (window as unknown as { machineControlsFixture: { calls: { deleteAttempts: number } } }).machineControlsFixture.calls.deleteAttempts === 1);
@@ -305,32 +313,31 @@ async function withScenario(browser: Awaited<ReturnType<typeof chromium.launch>>
       });
       assert.equal(await getHook(page, "calls.deleteAttempts"), 1, "duplicate clicks while busy issue no additional DELETE");
       await page.evaluate(() => (window as unknown as { machineControlsFixture: { releaseMutation(success: boolean): void } }).machineControlsFixture.releaseMutation(false));
-      await renamedGroup.getByRole("alert").waitFor();
-      assert.match(await renamedGroup.getByRole("alert").textContent() ?? "", /Fixture mutation rejected/);
+      await dialog.getByRole("alert").waitFor();
+      assert.match(await dialog.getByRole("alert").textContent() ?? "", /Fixture mutation rejected/);
       assert.equal(await renamedGroup.count(), 1, "failed removal retains the remote PC registration");
       assert.equal(await getHook(page, "calls.deleteCount"), 0, "failed DELETE does not increment the successful deletion count");
       assert.equal(await destructive.isDisabled(), false, "failed removal clears busy state");
-      await page.waitForFunction((index) => {
-        const hooks = (window as unknown as { machineControlsFixture: { observerRoster(index: number): Array<{ id: string }> | null } }).machineControlsFixture;
-        return hooks.observerRoster(index)?.some((machine) => machine.id === "sidebar-fixture");
-      }, observer);
 
       await destructive.click();
       await renamedGroup.waitFor({ state: "detached" });
+      await dialog.waitFor({ state: "detached" });
       assert.equal(await getHook(page, "calls.deleteAttempts"), 2, "one retry sends exactly one additional DELETE");
       assert.equal(await getHook(page, "calls.deleteCount"), 1, "only the successful DELETE counts");
-      await page.waitForFunction((index) => {
-        const hooks = (window as unknown as { machineControlsFixture: { observerRoster(index: number): Array<{ id: string }> | null } }).machineControlsFixture;
-        return hooks.observerRoster(index)?.every((machine) => machine.id !== "sidebar-fixture");
-      }, observer);
-      assert.equal(await page.evaluate(() => {
-        const hooks = (window as unknown as { machineControlsFixture: { calls: { mutations: Array<{ id: string; method: string }> } } }).machineControlsFixture;
-        return hooks.calls.mutations.filter((call) => call.id === "sidebar-fixture" && call.method === "DELETE").length;
-      }), 2, "first confirmation is inert; failed and successful second confirmations each issue one DELETE");
-      console.log("PASS keyboard arm, Manage disclosure reset, coherent rename/toggle events, busy suppression, failure recovery and one successful removal");
+      await observedPc(page, observer, null);
+
+      // Hide on this device is Settings' Show in sidebar turned off: the PC leaves, the PCs head counts it and takes the focus
+      await openMenu(page, managed, scenario);
+      await item(page, "Hide on this device").click();
+      await managed.waitFor({ state: "detached" });
+      const hiddenCount = page.locator(".pcs-sidebar > .sidebar-section-head .sidebar-hidden-pcs");
+      assert.equal(await hiddenCount.getAttribute("aria-label"), "1 PC hidden on this device", "the PCs head says one PC is hidden");
+      assert.equal(await hiddenCount.evaluate((button) => document.activeElement === button), true, "the focus goes to the PCs head's hidden-PC count");
+      assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem("ovis:hidden-pcs") ?? "[]")), ["sidebar-managed-fixture"], "the PC is hidden on this device only");
+      console.log("PASS Manage PC menu: Disconnect/Connect, Rename… Enter and blur, Remove PC… confirm with busy suppression, failure recovery and one removal, Hide on this device");
     }
 
-    console.log(`PASS ${scenario.name} panel/form/buttons/input/labels fit the sidebar`);
+    console.log(`PASS ${scenario.name} Manage PC menu, its items and the rename field fit`);
     assert.deepEqual(errors, [], `${scenario.name} has no uncaught browser errors`);
   } finally {
     await context.close();

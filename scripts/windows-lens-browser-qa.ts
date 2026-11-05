@@ -12,6 +12,7 @@ import { chromium, type Page } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { shownRow, shownRows } from "./shown-rows.ts";
 
 const root = mkdtempSync(join(tmpdir(), "ovis-winlens-"));
 const evidence = process.env["UI_EVIDENCE_DIR"];
@@ -26,12 +27,13 @@ async function until(done: () => Promise<boolean>, label: string, timeout = 10_0
   while (Date.now() < deadline) { if (await done()) return; await Bun.sleep(100); }
   throw new Error(`Timed out: ${label}`);
 }
-const screen = (page: Page) => page.locator(".xterm-rows").innerText();
+/** the pane's screen as the user sees it, one line per row (libghostty's rows or xterm's, see shown-rows.ts) */
+const screen = (page: Page) => page.locator(shownRow()).evaluateAll((rows) => rows.map((row) => row.textContent ?? "").join("\n"));
 
 /** Where `text` sits against the terminal mount: each side's distance inside it, negative when cut off. */
-const inset = (page: Page, text: string) => page.evaluate((needle) => {
+const inset = (page: Page, text: string) => page.evaluate(({ needle, drawn }) => {
   const host = document.querySelector(".pane-terminal");
-  const rows = host?.querySelector(".xterm-rows");
+  const rows = host?.querySelector(drawn);
   if (!host || !rows) return null;
   const box = host.getBoundingClientRect();
   const walker = document.createTreeWalker(rows, NodeFilter.SHOW_TEXT);
@@ -45,7 +47,7 @@ const inset = (page: Page, text: string) => page.evaluate((needle) => {
     return { left: rect.left - box.left, right: box.left + host.clientWidth - rect.right, top: rect.top - box.top, bottom: box.top + host.clientHeight - rect.bottom };
   }
   return null;
-}, text);
+}, { needle: text, drawn: shownRows() });
 const shown = (at: Awaited<ReturnType<typeof inset>>): boolean => at !== null && Math.min(at.left, at.right, at.top, at.bottom) > -1;
 const scrollOf = (page: Page) => page.evaluate(() => {
   const host = document.querySelector(".pane-terminal")!;
@@ -119,7 +121,7 @@ try {
   await page.keyboard.type("printf '\\033[31mred-cell\\033[0m\\n'");
   await page.keyboard.press("Enter");
   // herdr may expand palette colours to RGB; test the painted colour, not xterm's palette class.
-  await until(async () => await page.locator(".xterm-rows span", { hasText: /^red-cell$/ }).evaluateAll((spans) =>
+  await until(async () => await page.locator(shownRows().split(", ").map((rows) => `${rows} span`).join(", "), { hasText: /^red-cell$/ }).evaluateAll((spans) =>
     spans.some((span) => {
       const [red, green, blue] = getComputedStyle(span).color.match(/\d+/g)?.map(Number) ?? [];
       return red !== undefined && green !== undefined && blue !== undefined && red > green * 1.5 && red > blue * 1.5;
@@ -142,6 +144,8 @@ try {
 
   // #230: the grid is the pane's own, wider and taller than a phone. Every cell can be reached.
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  // the pane menu's Original width: unchosen, a touch or narrow screen folds the wide grid and nothing pans
+  await phone.addInitScript(() => localStorage.setItem("ovis:mirror-wrap", JSON.stringify(false)));
   const small = await phone.newPage();
   small.on("pageerror", (error) => errors.push(error.message));
   small.setDefaultTimeout(10_000);
@@ -185,6 +189,7 @@ try {
 
   // a small desktop window: the wheel pans, and a scrollbar is there
   const narrow = await browser.newContext({ viewport: { width: 700, height: 420 } });
+  await narrow.addInitScript(() => localStorage.setItem("ovis:mirror-wrap", JSON.stringify(false)));
   const windowed = await narrow.newPage();
   windowed.on("pageerror", (error) => errors.push(error.message));
   await windowed.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
@@ -235,6 +240,7 @@ try {
   await operator.keyboard.press("Enter");
   await until(async () => (await screen(operator)).includes("right-edge"), "the operator's screen");
   const watch = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await watch.addInitScript(() => localStorage.setItem("ovis:mirror-wrap", JSON.stringify(false)));
   const observer = await watch.newPage();
   observer.on("pageerror", (error) => errors.push(error.message));
   observer.setDefaultTimeout(10_000);
