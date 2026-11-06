@@ -8,7 +8,7 @@
  * fixture transport: no herdr, no user state.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
@@ -311,12 +311,12 @@ const preeditOverFold = async (page: Page, label: string): Promise<void> => {
 };
 const SETTINGS = { language: "en", defaultView: "terminal", terminalInputMode: "direct", terminalFontFamily: "JetBrains Mono Web", terminalWheelSpeed: 2, alertsOn: false };
 
-async function open(browser: Browser, origin: string, viewport: { width: number; height: number }, phone: boolean, query = ""): Promise<{ page: Page; errors: string[]; close: () => Promise<void> }> {
+async function open(browser: Browser, origin: string, viewport: { width: number; height: number }, phone: boolean, query = "", settings: Partial<typeof SETTINGS> & { theme?: string } = {}): Promise<{ page: Page; errors: string[]; close: () => Promise<void> }> {
   const context = await browser.newContext({ viewport, isMobile: phone, hasTouch: phone, locale: "en-US" });
   // fixed metrics: the 120-column grid fits a 1440px desktop and no phone
   await context.addInitScript((settings) => {
     if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify(settings));
-  }, SETTINGS);
+  }, { ...SETTINGS, ...settings });
   // what a tap reached and which links the page tried to open, for a failure to report
   await context.addInitScript(() => {
     const seen = { taps: [] as string[], anchors: [] as string[] };
@@ -355,6 +355,48 @@ async function open(browser: Browser, origin: string, viewport: { width: number;
 }
 const drawnScreen = (page: Page): Promise<unknown> => page.waitForFunction((grid) => document.querySelector(grid)?.textContent?.includes("FOLD-LAST"), shownRows(".pane-frame.is-current"));
 
+async function proportionalFold(browser: Browser, origin: string): Promise<void> {
+  const evidence = process.env["UI_EVIDENCE_DIR"];
+  if (evidence) mkdirSync(evidence, { recursive: true });
+  for (const width of [390, 1440]) for (const theme of ["light", "dark"]) {
+    const fixture = await open(browser, origin, { width, height: 844 }, true, "", { terminalFontFamily: "system-ui", theme });
+    try {
+      const { page } = fixture;
+      await drawnScreen(page);
+      await foldState(page, true);
+      await page.locator('.pane-frame.is-current .key-bar [data-key="direct"]').click();
+      await page.locator(".pane-frame.is-current .terminal-input-text").waitFor();
+      await settled(page);
+      const grid = await page.evaluate((cols) => {
+        const host = document.querySelector(".pane-frame.is-current .pane-terminal");
+        const screen = host?.querySelector<HTMLElement>(".xterm-screen");
+        const row = host?.querySelector(".terminal-fold-row");
+        if (!host || !screen || !row) throw new Error("Folded grid is not drawn");
+        const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+        const left: number[] = [];
+        for (let node = walker.nextNode(); node && left.length < 12; node = walker.nextNode()) {
+          for (let index = 0; index < (node.textContent?.length ?? 0) && left.length < 12; index++) {
+            const range = document.createRange();
+            range.setStart(node, index); range.setEnd(node, index + 1);
+            left.push(range.getBoundingClientRect().left);
+          }
+        }
+        return { left, cell: screen.getBoundingClientRect().width / cols, folded: host.hasAttribute("data-folded") };
+      }, COLS);
+      if (evidence) await page.screenshot({ path: join(evidence, `fold-font-${width}-${theme}-line.png`) });
+      assert.equal(grid.folded, true);
+      assert.equal(grid.left.length, 12);
+      assert.ok(grid.left.slice(1).every((left, index) => Math.abs(left - (grid.left[index] ?? 0) - grid.cell) < 0.2),
+        `the input line's folded terminal retains its grid columns with a proportional font: ${JSON.stringify(grid)}`);
+      await page.locator('.pane-frame.is-current .key-bar [data-key="direct"]').click();
+      await page.locator(".pane-frame.is-current .terminal-input-text").waitFor({ state: "detached" });
+      await rowsWhole(page, `${width}px ${theme} proportional font`);
+      assert.deepEqual(fixture.errors, []);
+      console.log(`PASS folded proportional font columns and input mode switch ${width}px ${theme}`);
+    } finally { await fixture.close(); }
+  }
+}
+
 const app = mkdtempSync(join(tmpdir(), "herdr-mirror-fold-demo-"));
 try {
   await buildDemoApp(app);
@@ -377,6 +419,7 @@ try {
   try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
+      await proportionalFold(browser, origin);
       const phone = await open(browser, origin, { width: 390, height: 844 }, true);
       const { page } = phone;
       try {

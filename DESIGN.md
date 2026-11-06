@@ -4101,7 +4101,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   input row and Find; it moves down under the folded rows until its cursor row lies on theirs, so an
   IME preedit shows where its text will. The apps this repo compares against all size their terminal
   to the window, which a mirror cannot; this follows Collie (AltanS/collie, `ansi-output.tsx`), which
-  draws herdr's pane read the same way and never resizes the pane. No code is copied. A full-screen
+  draws herdr's pane read the same way and never resizes the pane. No code is copied. A proportional
+  device font keeps the grid's cell advances in these folded runs too: inline letter spacing is
+  measured in the same browser font, preserving whole-word wrapping when an input mode switch
+  reveals a wider grid under the keyboard. This keeps Collie's wrapping model and the terminal's columns. A full-screen
   program's boxes fold with the text, so the pane menu offers Original width (`terminalMirrorWrap`,
   this device's, kept in its own `ovis:mirror-wrap` key so an older tab's save of `ovis:settings` cannot
   erase it), the grid at its size panned sideways as before, and Wrap to screen back. Until the

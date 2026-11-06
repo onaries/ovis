@@ -184,7 +184,7 @@ const cursorStyle = (shape: FoldCursor["shape"], theme: ITheme): string => {
  * its cell is drawn on its own (FOLD_CURSOR_CLASS), the blank cells up to it included; past the last
  * column (a write that filled the row, waiting to wrap) it stands on the last cell, as xterm draws it.
  */
-export function rowHtml(line: IBufferLine, cols: number, theme: ITheme, scratch: IBufferCell, minimumContrast = 1, cursor: FoldCursor | null = null): string {
+export function rowHtml(line: IBufferLine, cols: number, theme: ITheme, scratch: IBufferCell, minimumContrast = 1, cursor: FoldCursor | null = null, spacing?: (cell: IBufferCell) => number): string {
   let end = 0;
   for (let x = 0; x < cols; x++) {
     const cell = line.getCell(x, scratch);
@@ -201,7 +201,7 @@ export function rowHtml(line: IBufferLine, cols: number, theme: ITheme, scratch:
     if (!cell) break;
     // the second half of a wide glyph: the glyph itself was the cell before
     if (cell.getWidth() === 0) continue;
-    const next = cellStyle(cell, theme, minimumContrast);
+    const next = cellStyle(cell, theme, minimumContrast) + (spacing ? `letter-spacing:${spacing(cell)}px;` : "");
     // the cursor's cell (or the wide glyph it is on), alone in a span of its own
     if (cursor !== null && x <= at && at < x + Math.max(1, cell.getWidth())) {
       html += run(text, style);
@@ -385,6 +385,26 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { foreign,
     if (grid && term.rows > 0) view.style.setProperty("--fold-line", `${grid.offsetHeight / term.rows}px`);
     view.style.color = theme.foreground ?? "";
     view.style.background = theme.background ?? "";
+    // Inline spacing keeps the grid's columns without atomic boxes breaking a word at every glyph.
+    const probe = document.createElement("span");
+    probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;letter-spacing:0";
+    view.append(probe);
+    const widths = new Map<string, number>();
+    const spacing = (cell: IBufferCell): number => {
+      const chars = cell.getChars() || " ";
+      const weight = cell.isBold() ? term.options.fontWeightBold ?? "bold" : term.options.fontWeight ?? "normal";
+      const style = cell.isItalic() ? "italic" : "normal";
+      const key = `${weight}:${style}:${chars}`;
+      let width = widths.get(key);
+      if (width === undefined) {
+        probe.style.fontWeight = String(weight);
+        probe.style.fontStyle = style;
+        probe.textContent = chars;
+        width = probe.getBoundingClientRect().width;
+        widths.set(key, width);
+      }
+      return Math.max(1, cell.getWidth()) * (grid?.offsetWidth ?? 0) / term.cols - width;
+    };
     while (rows.length < term.rows) {
       const row = document.createElement("div");
       row.className = "terminal-fold-row";
@@ -403,11 +423,12 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { foreign,
     for (let y = Math.max(0, start); y <= Math.min(end, term.rows - 1); y++) {
       const line = buffer.getLine(buffer.viewportY + y);
       const cursor = shown && y === cursorY ? { x: buffer.cursorX, shape: cursorShape(shown) } : null;
-      const html = line ? rowHtml(line, term.cols, theme, scratch, term.options.minimumContrastRatio ?? 1, cursor) : "";
+      const html = line ? rowHtml(line, term.cols, theme, scratch, term.options.minimumContrastRatio ?? 1, cursor, spacing) : "";
       if (html === drawn[y]) continue;
       drawn[y] = html;
       rows[y]!.innerHTML = html;
     }
+    probe.remove();
     align();
     onDrawn();
   };

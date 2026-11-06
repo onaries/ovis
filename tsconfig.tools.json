@@ -67,6 +67,7 @@
     "scripts/application-paging-regression.ts",
     "scripts/omo-question-wheel-regression.ts",
     "scripts/mirror-scroll-demo-regression.ts",
+    "scripts/mirror-fold-demo-regression.ts",
     "scripts/windows-terminal-browser-qa.ts",
     "scripts/terminal-cjk-punctuation-regression.ts",
     "scripts/pane-paging-demo-regression.ts",
