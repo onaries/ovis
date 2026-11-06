@@ -16,6 +16,7 @@ type Task = { task: OmoTask; prompt: string; result: string | null; resultCut: b
 type Read = {
   path: string; identity: string; offset: number; skipping: boolean; behind: boolean;
   session: string | null; tasks: Map<string, Task>; calls: Map<string, Call>; cells: Map<string, Call>;
+  refreshing?: boolean;
 };
 
 /** Parent-reported lifecycle, with cumulative child usage from Codex's read-only thread store. */
@@ -45,6 +46,10 @@ export class CodexBackgroundTasks {
       read.behind = done.failed === true || done.more;
     }
     this.publish(paneId, this.tasksOf(paneId).filter((task) => task.status === "running").length);
+    if (this.countOf(paneId) > 0 && !read.refreshing) {
+      read.refreshing = true;
+      void this.tasksWithUsage(paneId).finally(() => { read.refreshing = false; });
+    }
   }
 
   countOf(paneId: string): number { return this.counts.get(paneId) ?? 0; }
@@ -75,13 +80,28 @@ export class CodexBackgroundTasks {
         `SELECT id, tokens_used, source FROM threads WHERE id IN (${tasks.map(() => "?").join(", ")})`,
       ).all(...tasks.map((task) => task.id));
       const usage = new Map<string, number>();
+      const children = new Set<string>();
       for (const child of rows) {
         let source: Row;
         try { source = row(JSON.parse(child.source)); } catch (error) { if (error instanceof SyntaxError) continue; throw error; }
         const parent = row(row(source["subagent"])["thread_spawn"])["parent_thread_id"];
-        if (parent === session && Number.isSafeInteger(child.tokens_used) && child.tokens_used >= 0) usage.set(child.id, child.tokens_used);
+        if (parent !== session) continue;
+        children.add(child.id);
+        if (Number.isSafeInteger(child.tokens_used) && child.tokens_used >= 0) usage.set(child.id, child.tokens_used);
       }
-      return tasks.map((task) => ({ ...task, tokens: usage.get(task.id) ?? null }));
+      if (db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'thread_spawn_edges'").get()) {
+        const closed = db.query<{ child_thread_id: string }, string[]>(
+          `SELECT child_thread_id FROM thread_spawn_edges WHERE parent_thread_id = ? AND status = 'closed' AND child_thread_id IN (${tasks.map(() => "?").join(", ")})`,
+        ).all(session, ...tasks.map(task => task.id));
+        for (const child of closed) {
+          const found = children.has(child.child_thread_id) ? read.tasks.get(child.child_thread_id) : undefined;
+          if (found?.task.status !== "running") continue;
+          found.task.status = "cancelled";
+          found.task.ended_at = null;
+        }
+      }
+      this.publish(paneId, this.tasksOf(paneId).filter(task => task.status === "running").length);
+      return this.tasksOf(paneId).map((task) => ({ ...task, tokens: usage.get(task.id) ?? null }));
     } catch {
       // Older or unavailable stores leave usage unknown, without hiding the parent's task list.
       return tasks;

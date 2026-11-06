@@ -21,6 +21,8 @@ mkdirSync(join(root, "sessions"));
 const parent = join(root, "sessions", "parent.jsonl");
 const db = new Database(join(root, "state_5.sqlite"), { create: true });
 db.run("CREATE TABLE threads (id TEXT PRIMARY KEY, tokens_used INTEGER, source TEXT)");
+db.run("CREATE TABLE thread_spawn_edges (parent_thread_id TEXT, child_thread_id TEXT, status TEXT)");
+db.query("INSERT INTO thread_spawn_edges VALUES (?, ?, 'open')").run("parent-session", parallelId);
 db.query("INSERT INTO threads VALUES (?, ?, ?)").run(agentId, 29_014, JSON.stringify({ subagent: { thread_spawn: { parent_thread_id: "parent-session" } } }));
 db.query("INSERT INTO threads VALUES (?, ?, ?)").run(parallelId, 99_000, JSON.stringify({ subagent: { thread_spawn: { parent_thread_id: "parent-session" } } }));
 const started = record({ id: "parent-session" }, "session_meta")
@@ -62,6 +64,7 @@ try {
   browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
   let missing = 0;
   for (const width of [390, 1440]) for (const theme of ["light", "dark"]) {
+    db.run("UPDATE thread_spawn_edges SET status = 'open'");
     db.run("UPDATE threads SET tokens_used = 29014");
     writeFileSync(parent, started + completed); tracker.poll("parent", null); activityReads = 0;
     const page = await browser.newPage({ viewport: { width, height: 900 } });
@@ -129,6 +132,13 @@ try {
     await page.evaluate(() => window.codexBackgroundQA.count(1));
     await page.waitForFunction(() => document.querySelectorAll(".bg-task.is-running").length === 1);
     await second.waitFor();
+    db.query("UPDATE thread_spawn_edges SET status = 'closed' WHERE child_thread_id = ?").run(parallelId);
+    await page.locator(".bg-task.is-running").waitFor({ state: "detached" });
+    assert.equal(tracker.countOf("parent"), 0, "a native closure clears the composer count without a parent result");
+    await page.evaluate((count) => window.codexBackgroundQA.count(count), tracker.countOf("parent"));
+    await page.getByText("Nothing running right now", { exact: true }).waitFor();
+    assert.equal(await chip.getAttribute("aria-label"), "Background tasks");
+    if (evidence) await page.screenshot({ path: join(evidence, `codex-${width}-${theme}-closed.png`) });
     await page.evaluate(() => window.codexBackgroundQA.pane("other"));
     await chip.waitFor({ state: "detached" });
     assert.equal(await page.locator(".bg-agent-detail").count(), 0);

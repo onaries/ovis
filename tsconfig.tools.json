@@ -51,6 +51,7 @@
     "scripts/omp-codex-image-browser-qa.ts",
     "scripts/grok-image-browser-qa.ts",
     "scripts/agy-chat-browser-qa.ts",
+    "scripts/codex-background-browser-qa.ts",
     "scripts/copilot-image-browser-qa.ts",
     "scripts/gjc-status-browser-regression.ts",
     "scripts/sidebar-activity-demo-regression.ts",

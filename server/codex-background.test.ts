@@ -18,18 +18,18 @@ const entry = (payload: unknown, type = "response_item") => JSON.stringify({ typ
 const call = (name: string, args: unknown, call_id = "call") => entry({ type: "function_call", name, arguments: JSON.stringify(args), call_id });
 const output = (value: unknown, call_id = "call") => entry({ type: "function_call_output", output: JSON.stringify(value), call_id });
 const spawn = () => call("multi_agent_v1__spawn_agent", { agent_type: "explorer", message: "Inspect task lifecycle" }) + output({ agent_id: id, nickname: "Explorer" });
-function fixture(body = spawn()) {
+function fixture(body = spawn(), changed: (count: number) => void = () => {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-codex-tasks-"))); roots.push(root);
   const path = join(root, "rollout.jsonl");
   writeFileSync(path, entry({ id: "parent" }, "session_meta") + body);
   const counts: number[] = [];
-  const tracker = new CodexBackgroundTasks((_pane, count) => counts.push(count), () => Date.parse(at), root);
+  const tracker = new CodexBackgroundTasks((_pane, count) => { counts.push(count); changed(count); }, () => Date.parse(at), root);
   tracker.poll("pane", path);
   return { root, path, tracker, counts };
 }
 
-function usageFixture() {
-  const setup = fixture();
+function usageFixture(changed?: (count: number) => void) {
+  const setup = fixture(spawn(), changed);
   mkdirSync(join(setup.root, "sessions"));
   const path = join(setup.root, "sessions", "parent.jsonl");
   writeFileSync(path, entry({ id: "parent", source: "cli" }, "session_meta") + spawn());
@@ -58,6 +58,53 @@ it("reads a child's native cumulative usage and refreshes it without summing sna
   tracker.poll("pane", path); usage(60_000);
   expect(await tracker.tasksWithUsage("pane")).toMatchObject([{ status: "running", tokens: 60_000 }]);
   expect(tracker.tasksOf("pane")[0]?.tokens).toBeNull();
+});
+
+it("stops counting a durably closed child without a parent completion record or an open list", async () => {
+  let ended: (() => void) | undefined;
+  const observed = new Promise<void>(resolve => { ended = resolve; });
+  const { root, path, tracker, counts } = usageFixture(count => { if (count === 0) ended?.(); });
+  await tracker.tasksWithUsage("pane");
+  const db = new Database(join(root, "state_5.sqlite"));
+  try {
+    db.run("CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT, status TEXT)");
+    db.query("INSERT INTO thread_spawn_edges VALUES (?, ?, 'closed')").run("parent", id);
+  } finally { db.close(); }
+  tracker.poll("pane", path);
+  await observed;
+  expect(tracker.countOf("pane")).toBe(0);
+  expect(tracker.tasksOf("pane")).toEqual([]);
+  expect(counts).toEqual([1, 0]);
+  expect(tracker.detail("pane", id)).toMatchObject({ detail: { events: [] } });
+});
+
+it.each(["open", "unknown", "foreign-parent"])("keeps a child running without a matching explicit closure: %s", async (status) => {
+  const { root, tracker } = usageFixture();
+  const db = new Database(join(root, "state_5.sqlite"));
+  try {
+    db.run("CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT, status TEXT)");
+    db.query("INSERT INTO thread_spawn_edges VALUES (?, ?, ?)").run(status === "foreign-parent" ? "other" : "parent", id, status === "foreign-parent" ? "closed" : status);
+  } finally { db.close(); }
+  expect(await tracker.tasksWithUsage("pane")).toMatchObject([{ id, status: "running", tokens: 29_014 }]);
+  expect(tracker.countOf("pane")).toBe(1);
+});
+
+it("preserves a reported result after native closure and allows a new explicit assignment", async () => {
+  const { root, path, tracker } = usageFixture();
+  appendFileSync(path, call("wait_agent", { targets: [id] }) + output({ status: { [id]: { completed: "Verified result" } } }));
+  tracker.poll("pane", path);
+  const db = new Database(join(root, "state_5.sqlite"));
+  try {
+    db.run("CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT, status TEXT)");
+    db.query("INSERT INTO thread_spawn_edges VALUES (?, ?, 'closed')").run("parent", id);
+    expect(await tracker.tasksWithUsage("pane")).toMatchObject([{ id, status: "completed", ended_at: at }]);
+    expect(tracker.detail("pane", id)).toMatchObject({ detail: { events: [{ text: "Verified result" }] } });
+    db.run("UPDATE thread_spawn_edges SET status = 'open'");
+    appendFileSync(path, call("followup_task", { agent_id: id, message: "Next assignment" }) + output({}));
+    tracker.poll("pane", path);
+    expect(await tracker.tasksWithUsage("pane")).toMatchObject([{ id, status: "running", ended_at: null }]);
+    expect(tracker.countOf("pane")).toBe(1);
+  } finally { db.close(); }
 });
 
 it("never attributes another parent's usage or unspawned children to this task", async () => {
