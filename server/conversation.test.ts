@@ -2760,7 +2760,7 @@ describe("Agy native ledger through shared paging", () => {
     add(3, "GENERIC", "fictional output");
     add(4, "EPHEMERAL_MESSAGE", "hidden context");
     expect((await page()).activity).toBe("working");
-    expect(JSON.stringify((await page()).turns)).not.toContain("saved reasoning");
+    expect((await page()).turns[1]?.parts).toContainEqual({ kind: "thinking", text: "saved reasoning" });
     add(5, "PLANNER_RESPONSE", "More work", { tool_calls: [{ name: "view_file", args: { AbsolutePath: "/fiction.txt" } }] });
     add(6, "GENERIC", "another output");
     expect((await page()).activity).toBe("working");

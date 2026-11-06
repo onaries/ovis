@@ -2618,6 +2618,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   thinking** on as well (Settings → Chat, this device's, offered while Show thinking is on;
   `expandThinking`) the block starts open (#2346); one the reader opens or folds stays so for its
   message.
+  Agy's recorded planner `thinking` uses this same fold as Codex and Claude; it appears once
+  the native export completes the step, without inventing a live stream, duration or token count.
 - Auto-follow stops when the reader scrolls up, or opens a tool, a folded block or a whole output:
   they read there, and the opened row stays put while the turn streams below it (#1388). T3 Code
   keeps a reader at the very bottom pinned when they toggle a tool; Ovis already reads scrolling

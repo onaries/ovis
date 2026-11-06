@@ -332,6 +332,7 @@ export function parseAgyTranscript(text: string, path?: string): ConversationTur
       trimOutput(part, content, path && step ? outputRef(path, step) : `agy:${hash(line)}`);
       parts.push(part);
     } else {
+      if (typeof value.thinking === "string" && value.thinking.trim()) parts.push({ kind: "thinking", text: value.thinking });
       if (content) parts.push({ kind: "text", text: content });
       for (const call of Array.isArray(value.tool_calls) ? value.tool_calls : []) {
         const tool = record(call), input = record(tool.args);

@@ -227,6 +227,27 @@ it("does not recreate a live WAL pair unlinked between its check and open", asyn
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+it("keeps recorded thinking before planner text and tools, including a thinking-only step", () => {
+  const steps = [
+    { step_index: 0, type: "USER_INPUT", content: "Check an image.", thinking: "Not planner thinking" },
+    { step_index: 1, type: "PLANNER_RESPONSE", thinking: "Inspect the image name." },
+    { step_index: 2, type: "PLANNER_RESPONSE", thinking: "Compare the metadata.", content: "Checking.", tool_calls: [{ name: "view_file", args: { AbsolutePath: "/image.png" } }] },
+  ];
+  const turns = parseAgyTranscript(steps.map(step => JSON.stringify({ ...step, status: "DONE" })).join("\n"));
+  expect(turns[0]?.parts).toEqual([{ kind: "text", text: "Check an image." }]);
+  expect(turns[1]?.parts).toEqual([
+    { kind: "thinking", text: "Inspect the image name." },
+    { kind: "thinking", text: "Compare the metadata." },
+    { kind: "text", text: "Checking." },
+    expect.objectContaining({ kind: "tool", name: "view_file" }),
+  ]);
+});
+
+it.each([undefined, null, 17, {}, [], "", " \n"].map(thinking => ({ thinking })))("ignores empty or non-text thinking: %j", ({ thinking }) => {
+  const turns = parseAgyTranscript(JSON.stringify({ step_index: 0, type: "PLANNER_RESPONSE", status: "DONE", thinking, content: "Answer." }));
+  expect(turns[0]?.parts).toEqual([{ kind: "text", text: "Answer." }]);
+});
+
 it("keeps the recorded skill invocation without its expanded metadata", () => {
   const fixture = readFileSync(new URL("./fixtures/skill-invocations/agy.jsonl", import.meta.url), "utf8");
   const turns = parseAgyTranscript(fixture);
