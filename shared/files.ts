@@ -16,6 +16,31 @@ export interface FileInfo {
   kind: FileKind;
 }
 
+/** One Markdown file of GET /api/pane/docs. */
+export interface MarkdownDocument {
+  /** relative to the listing's `root`, `/`-separated */
+  path: string;
+  size: number;
+  /** ISO time of the last change */
+  modified: string;
+}
+
+/**
+ * GET /api/pane/docs?pane_id=: the Markdown files (`.md`, `.markdown`) under the pane's folder,
+ * newest first: in a repository git's tracked and untracked files that are not ignored, elsewhere a
+ * bounded walk that counts only Markdown files. Read only: each opens through /api/fs/file as
+ * `root` + `/` + `path`. Every file found is looked at and the newest `MAX_MARKDOWN_DOCUMENTS`
+ * (server/files.ts) listed; `truncated` says some were left out, by that cap, the walk's caps or the
+ * listing's time limit on a slow disk. 400 missing_pane_id; 403 read_only for a watching device,
+ * as /api/pane/files.
+ */
+export interface PaneDocuments {
+  /** the pane's folder, absolute */
+  root: string;
+  documents: MarkdownDocument[];
+  truncated: boolean;
+}
+
 /** The largest text file the viewer edits and saves (`/api/fs/text`), in bytes as stored. */
 export const MAX_EDITABLE_TEXT_BYTES = 1024 * 1024;
 

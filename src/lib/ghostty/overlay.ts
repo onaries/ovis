@@ -47,10 +47,10 @@ const POWERLINE_GLYPH = /^[\ue0a4-\ue0d6]$/u;
 const MEASURED_MAX = 4096;
 
 const latin1 = new TextDecoder("latin1");
-/** an iTerm2 inline picture (OSC 1337 File=) or a sixel one (DCS ... q): the pictures xterm's image addon draws */
+/** an iTerm2 inline picture (OSC 1337 File=, or MultipartFile= as imgcat sends it) or a sixel one (DCS ... q): the pictures xterm's image addon draws */
 export function hasXtermPicture(data: string | Uint8Array): boolean {
   const text = typeof data === "string" ? data : latin1.decode(data);
-  return text.includes("\x1b]1337;File=") || /\x1bP[0-9;]*q/.test(text);
+  return text.includes("\x1b]1337;File=") || text.includes("\x1b]1337;MultipartFile=") || /\x1bP[0-9;]*q/.test(text);
 }
 
 /** hasXtermPicture over a stream of writes: a picture's start split between two writes is told too */
@@ -58,7 +58,7 @@ export function xtermPictureScanner(): (data: string | Uint8Array) => boolean {
   let tail = "";
   return (data) => {
     const text = tail + (typeof data === "string" ? data : latin1.decode(data));
-    // longer than any start it looks for (`ESC ] 1337 ; File =`, a sixel DCS with its parameters)
+    // longer than any start it looks for (`ESC ] 1337 ; MultipartFile =`, a sixel DCS with its parameters)
     tail = text.slice(-64);
     return hasXtermPicture(text);
   };

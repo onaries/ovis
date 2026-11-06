@@ -42,6 +42,9 @@ That API has no authentication. With Copilot CLI 1.0.105, any program that can r
 loopback port can control the session, including creating new sessions, and setting
 `COPILOT_CONNECTION_TOKEN` did not change this. Other users on the same PC may be able to reach
 it too. Whether to run Copilot with it is your choice; without it, Chat uses the evidence above.
+On Linux, when a single Copilot process started without it shows terminal output in Chat, a
+notice says the option may help and names its risk, so the choice can be made where the problem
+shows.
 
 ## History and limits
 
@@ -56,7 +59,12 @@ links. The marker-and-report fallback cannot detect an unobserved switch away an
 
 The reader scans at most 16 MiB of lifecycle-log catch-up per lookup and checkpoints
 complete reads, including unavailable selections. Ambiguity remains unavailable until a
-fresh registration; it does not permanently block later registrations.
+fresh registration; it does not permanently block later registrations. Two descriptors on the
+same log path, as Copilot holds while it copies its log to rotate it, are one log; two logs of
+the same process are ambiguous. While Copilot moves its copies up for a rotation, a missing copy
+with an older one still there leaves that lookup unavailable unless the open log itself registers
+or releases a session; once the new copy is in place, a later lookup follows the rotation from the
+bytes already read.
 Unchanged file identity, size and timestamps reuse the last verification only when both
 mtime and ctime were at least three seconds old at that check and the wall clock has not
 moved behind it; younger timestamps or a clock rollback trigger rehashing

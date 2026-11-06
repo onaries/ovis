@@ -16,10 +16,10 @@ const app = mkdtempSync(join(tmpdir(), "ovis-search-demo-"));
 const evidence = process.env.UI_EVIDENCE_DIR;
 if (evidence) mkdirSync(evidence, { recursive: true });
 
-/** The pane's menu: a mouse right-clicks the pane, a finger takes the tab's ⋯, which carries the pane's actions. */
+/** The pane's menu: a mouse right-clicks the pane; a phone's header, which lists the tabs, has More carry the pane's actions. */
 const paneMenu = async (page: Page, width: number): Promise<void> => {
   if (width >= 640) await page.locator(".pane-frame.is-current .chat-view").click({ button: "right", position: { x: 300, y: 200 } });
-  else await page.locator(".tab-strip-menu").first().click();
+  else await page.locator(".header-more-button").click();
   await page.getByText("Close pane", { exact: true }).first().waitFor();
 };
 const paletteActions = async (page: Page): Promise<string[]> => {

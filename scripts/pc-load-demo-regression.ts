@@ -12,7 +12,7 @@ import { openSettingsPage } from "./settings-page.ts";
 // Host "Laptop", "Work PC" under load and "Lab", a herdr-core machine; no herdr session is opened. With no choice
 // made the line is on, under Laptop and Work PC and never under Lab (its server runs on the PC that reaches it).
 // Work PC's high figures are red. While the sidebar is out of view (a phone's closed drawer, a desktop's hidden
-// list) no PC is asked, however long it stays so; shown again, it asks at once. Settings -> Remote PCs -> PC load
+// list) no PC is asked, however long it stays so; shown again, it asks at once. Settings -> Devices and PCs -> PC load
 // in the sidebar turns it off on this device, in a key of its own. Screenshots go to UI_EVIDENCE_DIR when set.
 const app = mkdtempSync(join(tmpdir(), "ovis-pc-load-demo-"));
 const evidence = process.env.UI_EVIDENCE_DIR;
@@ -141,7 +141,7 @@ try {
 
           // turned off on this device: the line leaves every PC, kept in its own key
           await page.locator(".sidebar-footer-settings").click();
-          await openSettingsPage(page, "Remote PCs");
+          await openSettingsPage(page, "Devices and PCs");
           const toggle = page.locator(".settings-dialog").getByRole("switch", { name: "PC load in the sidebar", exact: true });
           assert.equal(await toggle.getAttribute("aria-checked"), "true");
           await toggle.click();

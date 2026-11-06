@@ -13,7 +13,7 @@ import { openSettingsPage } from "./settings-page.ts";
 // HOME and XDG data dir of its own, so the install's OS integration (desktop entries, icons) lands
 // in this run's directory and never in the user's; no herdr session is opened.
 // The sidebar offers no Install app at any point: it kept showing in every tab of a browser that had
-// the app installed and in browsers that never prompt. Settings → Phone & devices → Install offers it:
+// the app installed and in browsers that never prompt. Settings → Devices and PCs → More settings → Install offers it:
 // the button while the browser holds a prompt, the steps while it holds none, Installed once it is.
 // HEADED=1 (under xvfb-run where there is no display) runs the same steps in a window.
 const root = mkdtempSync(join(tmpdir(), "herdr-install-state-demo-"));
@@ -40,10 +40,12 @@ const assertNoSidebarInstall = async (page: Page): Promise<void> => {
 };
 // installHelp() for desktop Chromium over loopback (src/lib/install.ts)
 const CHROMIUM_HELP = "Use the install icon in the address bar, or the browser menu's Install option.";
-/** Settings → Phone & devices → Install, opened in this page. */
+/** Settings → Devices and PCs → More settings → Install, opened in this page. */
 const installRow = async (page: Page): Promise<Locator> => {
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
-  await openSettingsPage(page, "Phone & devices");
+  await openSettingsPage(page, "Devices and PCs");
+  const more = page.locator('.settings-body:not([hidden]) .settings-fold[data-fold="more"]');
+  if (await more.getAttribute("open") === null) await more.locator(":scope > summary").click();
   return page.locator(".settings-row").filter({ has: page.locator(".settings-label", { hasText: /^Install$/ }) });
 };
 const installButton = (row: Locator): Locator => row.getByRole("button", { name: "Install app", exact: true });

@@ -22,41 +22,42 @@ const MATRIX: readonly (readonly [Language, string, SettingsPageId, string])[] =
   ["en", "notifications", "alerts", "-"],
   ["en", "shortcuts", "shortcuts", "-"],
   ["en", "phone", "devices", "-"],
-  ["en", "OpenAI API key", "voice", "openai-key"],
+  ["en", "OpenAI API key", "chat", "openai-key"],
   ["en", "Return inserts a new line", "chat", "composer"],
-  ["en", "Send queued messages automatically", "chat", "composer"],
-  ["en", "New tab button", "chat", "composer"],
-  ["en", "Suggestion chip", "chat", "composer"],
+  ["en", "Send queued messages automatically", "chat", "composer-more"],
+  ["en", "Suggestion chip", "agents", "-"],
   ["en", "Show above the message box", "chat", "quick-replies"],
+  ["en", "Dictation language", "chat", "voice-more"],
+  ["ko", "받아쓰기 언어", "chat", "voice-more"],
   ["ko", "인터페이스 글자 크기", "appearance", "typography"],
   ["ko", "채팅 글자 크기", "chat", "-"],
   ["ko", "Enter로 보내기", "chat", "composer"],
   ["ko", "빠른 답장", "chat", "quick-replies"],
   ["ko", "터미널 글자 크기", "terminal", "-"],
-  ["ko", "OpenAI API 키", "voice", "openai-key"],
+  ["ko", "OpenAI API 키", "chat", "openai-key"],
   ["ko", "단축키", "shortcuts", "-"],
   ["ko", "알림", "alerts", "-"],
-  ["ko", "대기 메시지 자동 전송", "chat", "composer"],
+  ["ko", "대기 메시지 자동 전송", "chat", "composer-more"],
   ["ko", "입력창 위에 표시", "chat", "quick-replies"],
   ["ja", "インターフェースの文字サイズ", "appearance", "typography"],
   ["ja", "チャットのフォントサイズ", "chat", "-"],
   ["ja", "Enter で送信", "chat", "composer"],
   ["ja", "クイック返信", "chat", "quick-replies"],
   ["ja", "ターミナルのフォントサイズ", "terminal", "-"],
-  ["ja", "OpenAI API キー", "voice", "openai-key"],
+  ["ja", "OpenAI API キー", "chat", "openai-key"],
   ["ja", "ショートカット", "shortcuts", "-"],
   ["ja", "通知", "alerts", "-"],
-  ["ja", "送信待ちメッセージを自動で送信", "chat", "composer"],
+  ["ja", "送信待ちメッセージを自動で送信", "chat", "composer-more"],
   ["ja", "入力欄の上に表示", "chat", "quick-replies"],
   ["zh", "界面字号", "appearance", "typography"],
   ["zh", "聊天字号", "chat", "-"],
   ["zh", "按 Enter 发送", "chat", "composer"],
   ["zh", "快捷回复", "chat", "quick-replies"],
   ["zh", "终端字号", "terminal", "-"],
-  ["zh", "OpenAI API 密钥", "voice", "openai-key"],
+  ["zh", "OpenAI API 密钥", "chat", "openai-key"],
   ["zh", "快捷键", "shortcuts", "-"],
   ["zh", "提醒", "alerts", "-"],
-  ["zh", "自动发送排队消息", "chat", "composer"],
+  ["zh", "自动发送排队消息", "chat", "composer-more"],
   ["zh", "显示在输入框上方", "chat", "quick-replies"],
 ];
 
@@ -93,7 +94,7 @@ describe("settings entries", () => {
     expect(rankByTitle("theme", pages)).toEqual(["appearance"]);
     expect(rankByTitle("palette", pages)).toEqual(["appearance"]);
     // the Typography group holds the interface font size, after the pages within its rank
-    expect(rankByTitle("font", pages)).toEqual(["chat", "terminal", "appearance#typography"]);
+    expect(rankByTitle("font", pages)).toEqual(["chat", "terminal", "appearance#typography", "appearance#typography-more"]);
   });
 
   it("finds the fixed settings matrix in every supported language", () => {
@@ -103,16 +104,16 @@ describe("settings entries", () => {
       const expected = { page, section: section === "-" ? actual.section : section };
       return actual.page === expected.page && actual.section === expected.section ? [] : [{ language, query, expected, actual }];
     });
-    expect(MATRIX.length).toBe(47);
+    expect(MATRIX.length).toBe(48);
     expect(misses).toEqual([]);
   });
 
   it("ranks titles before section aliases", () => {
     const pages = pagesIn(identity);
     // a group's heading holds the word: it leads the page that has it only as an alias
-    expect(rankByTitle("composer", pages)).toEqual(["chat#composer", "chat"]);
+    expect(rankByTitle("composer", pages)).toEqual(["chat#composer", "chat#composer-more", "chat"]);
     // a group found only by its setting's label comes after the page whose title holds the word
-    expect(rankByTitle("interface", pages)).toEqual(["appearance#typography"]);
+    expect(rankByTitle("interface", pages)).toEqual(["appearance#typography", "appearance#typography-more"]);
     expect(rankByTitle("chat", pages)[0]).toBe("chat");
     expect(rankByTitle("enter", pages)).toEqual(["chat", "chat#composer"]);
   });
@@ -146,7 +147,7 @@ describe("requested page", () => {
     // the palette's own opening clears what it asked before, so Settings opened another way finds nothing
     requestSettingsPage(null);
     expect(requestedSettingsPage()).toBeNull();
-    requestSettingsPage({ page: "voice" });
+    requestSettingsPage({ page: "terminal" });
     expect(requestedSettingsPage()?.section).toBeUndefined();
   });
 });

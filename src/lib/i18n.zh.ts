@@ -1,6 +1,7 @@
 import { SETTINGS_ZH } from "./i18n/settings.zh.ts";
 import { SETTINGS_ACCESS_ZH } from "./i18n/settings-access.zh.ts";
 import { SETTINGS_COMPOSER_ZH } from "./i18n/settings-composer.zh.ts";
+import { SETTINGS_LAYOUT_ZH } from "./i18n/settings-layout.zh.ts";
 import { TERMINAL_ZH } from "./i18n/terminal.zh.ts";
 import { COMPOSER_ZH } from "./i18n/composer.zh.ts";
 import { CHAT_ZH } from "./i18n/chat.zh.ts";
@@ -91,7 +92,7 @@ const BASE: Record<string, string> = {
   "Settings": "设置",
   "Chat": "聊天",
   "Agent default": "代理默认",
-  "Phone & devices": "手机和设备",
+  "Devices and PCs": "设备和电脑",
   "Access token": "访问 Token",
 
   // ---- shortcuts (lib/shortcuts.ts labels) ----
@@ -211,6 +212,7 @@ const BASE: Record<string, string> = {
   "{count} done": "{count} 个已完成",
   "Open the next session waiting for you": "打开下一个等待你回应的会话",
   "Tab {index} of {count}": "第 {index} 个标签页，共 {count} 个",
+  "Tabs of {workspace}": "{workspace} 的标签页",
   "Reconnecting…": "正在重连…",
   "Add PC": "添加 PC",
   "Connect": "连接",
@@ -237,6 +239,7 @@ const BASE: Record<string, string> = {
   "No matching folders": "没有匹配的文件夹",
   "This folder cannot be opened.": "无法打开此文件夹。",
   "Folders could not be loaded.": "无法加载文件夹。",
+  "Unlock agent": "解锁 Agent",
 
   // ---- files ----
   "Files": "文件",
@@ -263,7 +266,6 @@ const BASE: Record<string, string> = {
   "New code": "新代码",
   "Paired: {name}.": "已配对：{name}。",
   "QR code that pairs a phone with code {code}": "使用代码 {code} 配对手机的二维码",
-  "Connect a phone": "连接手机",
   "Pairing code": "配对码",
   "Open this address on your phone": "在手机上打开此地址",
   "{agent} is ready": "{agent} 已就绪",
@@ -294,7 +296,7 @@ const BASE: Record<string, string> = {
   "Microphone permission was denied": "麦克风权限已被拒绝",
   "Voice input needs HTTPS": "语音输入需要 HTTPS",
   // ---- errors (lib/userError.ts) ----
-  "This browser is not signed in to this PC any more. Pair it again in Settings → Phone & devices.": "此浏览器已不再登录此电脑。请在设置 → 手机和设备中重新配对。",
+  "This browser is not signed in to this PC any more. Pair it again in Settings → Devices and PCs.": "此浏览器已不再登录此电脑。请在设置 → 设备和电脑中重新配对。",
   "That item no longer exists on the PC. Refresh and try again.": "该项目在电脑上已不存在。请刷新后重试。",
   "It changed on the PC while you were acting. Check it and try again.": "你操作期间电脑上的内容已更改。请检查后重试。",
   "The PC took too long to answer. Try again.": "电脑响应时间过长。请重试。",
@@ -309,7 +311,7 @@ const BASE: Record<string, string> = {
   "Can't reach the PC": "无法连接到电脑",
   "PC disk is full": "电脑磁盘已满",
   "No permission on the PC": "电脑上没有权限",
-  "Pair it again in Settings → Phone & devices.": "请在设置 → 手机和设备中重新配对。",
+  "Pair it again in Settings → Devices and PCs.": "请在设置 → 设备和电脑中重新配对。",
   "Refresh and try again.": "请刷新后重试。",
   "Check it and try again.": "请检查后重试。",
   "Check your connection, then try again.": "请检查网络连接后重试。",
@@ -386,9 +388,6 @@ const BASE: Record<string, string> = {
   "Copy details": "复制详细信息",
   "This pane can't be shown.": "无法显示此窗格。",
   "The sidebar can't be shown.": "无法显示侧边栏。",
-  "Diff layout": "差异布局",
-  "Unified": "单栏",
-  "Split": "并排",
   // t3code ports (a)
   // t3code ports (d)
   "Change PC": "切换电脑",
@@ -426,7 +425,6 @@ const BASE: Record<string, string> = {
   "this PC": "这台电脑",
   "It matches": "一致",
   "Does {name}'s screen show this ID?": "{name} 的屏幕上显示的是这个 ID 吗？",
-  "The PC shows its ID under the code, in Settings → Phone & devices. Pair only if every group matches.": "电脑会在“设置 → 手机和设备”中代码下方显示它的 ID。只有每一组都一致时才配对。",
   "ID of the PC this code found": "此代码找到的电脑的 ID",
   "A code has ten letters and digits, like 7K3QD-M2XHA.": "代码由十个字母和数字组成，例如 7K3QD-M2XHA。",
   "No PC shows this code. Check it, or show a new one on the PC.": "没有电脑显示这个代码。请检查，或在电脑上显示新代码。",
@@ -443,12 +441,38 @@ const BASE: Record<string, string> = {
   "No group": "无分组",
   "Context {percent}% left": "上下文剩余 {percent}%",
   "{used} of {window} tokens": "{used} / {window} Token",
+  "Suggestion chip": "建议标签",
+  "Artifacts chip": "Artifact 标签",
+  "Side conversations chip (experimental)": "旁支对话标签（实验性）",
+  "Permission mode": "权限模式",
+  "Model": "模型",
+  "One model name, without spaces.": "填写一个不含空格的模型名称。",
+  "Effort": "推理强度",
+  "Sandbox and approvals": "沙箱与审批",
+  "Add this PC to my account": "将此电脑添加到我的账号",
+  "Add this PC to your account, so every device of your account can use it with one approval.": "将此电脑添加到账号后，只需批准一次，账号的所有设备都能使用它。",
+  "Every device of your account can use this PC after that.": "之后，账号的所有设备都能使用此电脑。",
+  "On a phone already in your account, open the Ovis app and tap Add on {name}. Then approve it here.": "在已加入账号的手机上打开 Ovis 应用，点按 {name} 的“添加”。然后在这里批准。",
+  "This PC could not be listed in your account. Try again.": "无法将此电脑列入你的账号。请重试。",
+  "Turn on remote access through the Ovis relay above first.": "请先在上方开启通过 Ovis 中继的远程访问。",
+  "New terminal": "新建终端",
+  "New terminal failed: {reason}": "新建终端失败：{reason}",
+  "herdr prefix: press a key": "herdr 前缀键：请按一个键",
+  "Connect a device": "连接设备",
+  "This device": "此设备",
+  "Sign out of {provider}": "退出 {provider} 登录",
+  "Ovis relay": "Ovis 中继",
+  "Reset relay identity": "重置中继身份",
+  "Reset the relay identity?": "要重置中继身份吗？",
+  "Phones paired through the relay will need to scan a new code.": "通过中继配对的手机需要重新扫描新代码。",
+  "Pairs this phone through the relay, so Ovis keeps working away from home.": "通过中继配对这部手机，离家在外也能使用 Ovis。",
+  "This PC": "本机",
 };
 
 /** The parts ZH is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const ZH_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
-  settings: { ...SETTINGS_ZH, ...SETTINGS_ACCESS_ZH, ...SETTINGS_COMPOSER_ZH },
+  settings: { ...SETTINGS_ZH, ...SETTINGS_ACCESS_ZH, ...SETTINGS_COMPOSER_ZH, ...SETTINGS_LAYOUT_ZH },
   terminal: TERMINAL_ZH,
   composer: COMPOSER_ZH,
   chat: CHAT_ZH,

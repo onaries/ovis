@@ -1,4 +1,4 @@
-import type { ConversationPart } from "../../shared/protocol.ts";
+import type { ConversationPart, GoalWaitSources } from "../../shared/protocol.ts";
 
 /**
  * omo's goal (`create_goal` / `update_goal` / `get_goal`) as the chat shows it on the turn. Each
@@ -63,6 +63,22 @@ export function formatGoalTime(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m`;
   return minutes % 60 === 0 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+type GoalWait = Extract<ConversationPart, { kind: "goal_wait" }>;
+
+/** OmO writes `resumed` as its goal continues: a wait this long past due outlived the OmO that wrote it. */
+const GOAL_WAIT_GRACE_MS = 60_000;
+
+/** Until when the chat shows a goal's wait (ms since the epoch). */
+export function goalWaitUntil(wait: GoalWait): number {
+  return Date.parse(wait.due_at) + GOAL_WAIT_GRACE_MS;
+}
+
+/** What a goal's wait waits on, kinds it waits on none of left out. */
+export function goalWaitSources(wait: GoalWait): [keyof GoalWaitSources, number][] {
+  const kinds: (keyof GoalWaitSources)[] = ["tasks", "monitors", "terminals", "dags", "cells"];
+  return kinds.flatMap((kind) => wait.waiting_on[kind] > 0 ? [[kind, wait.waiting_on[kind]] as [keyof GoalWaitSources, number]] : []);
 }
 
 /** A goal call that answered `{"goal": null}`: there is no goal (any more). */

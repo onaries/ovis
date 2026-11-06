@@ -1741,9 +1741,12 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
     }
     if (api.diagnostic !== "not_opted_in") throw new ConversationUnavailable("no_session_path", undefined, `copilot_api_${api.diagnostic}`);
   }
+  // Copilot's API answered that it was started without --ui-server; with it, Chat would ask it which
+  // session it shows rather than prove that from files, so any failure below may be helped by the flag.
+  const hint = processes.length === 1 ? "copilot_ui_server" as const : undefined;
   if (report != null && (report.agent !== "copilot" || report.kind !== "id"
     || report.source !== "herdr:copilot" || typeof report.value !== "string" || !SESSION_ID.test(report.value))) {
-    throw new ConversationUnavailable("no_session_id", undefined, "copilot_report_invalid");
+    throw new ConversationUnavailable("no_session_id", undefined, "copilot_report_invalid", hint);
   }
   if (processes.length === 2) {
     if (report == null) throw new ConversationUnavailable("no_session_id", undefined, "copilot_report_invalid");
@@ -1774,7 +1777,7 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
       return { path, binding: `${foreground.pid}:${logged.generation}`, peerClaims: await peerClaims! };
   }
   if (report != null) {
-    if (await claimedByPeer(report.value)) throw new ConversationUnavailable("no_session_id", undefined, "copilot_peer_conflict");
+    if (await claimedByPeer(report.value)) throw new ConversationUnavailable("no_session_id", undefined, "copilot_peer_conflict", hint);
     if (logged === null) {
       const path = copilotTranscriptFile(report.value, selected);
       if (path !== null && nodePath.basename(nodePath.dirname(path)) === report.value)
@@ -1791,7 +1794,7 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
     : report == null ? "copilot_report_missing"
     : selected?.sessionId !== report.value ? "copilot_report_mismatch" : "copilot_transcript_unreadable");
   throw new ConversationUnavailable(copilotExplicitResume(argv) ? "copilot_resume_unknown" : report == null ? "no_session_id" : "no_session_path",
-    undefined, diagnostic);
+    undefined, diagnostic, hint);
 }
 
 /** Where a pane's conversation is: a transcript file, or a session in OpenCode's database. */
@@ -2099,7 +2102,7 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
         && (shown === undefined || !page.history_id.startsWith(shown.prefix) || (reported != null && reported !== shown.session));
       const waits = page.history_id !== undefined && copilotRecoverable(error.diagnostic) && !moved;
       if ((page.before !== undefined || page.since !== undefined || page.from !== undefined) && !waits) throw new HistoryChanged();
-      throw moved ? new ConversationUnavailable(error.message, error.screen, "copilot_report_mismatch") : error;
+      throw moved ? new ConversationUnavailable(error.message, error.screen, "copilot_report_mismatch", error.hint) : error;
     }
     // an agent this server started writes no session before its first message (launched-agents.ts)
     const launch = launchedAgents.notBegun(paneId, pane.agent_status);
@@ -2551,7 +2554,12 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   // the store decides the parser, not the pane's label: omo writes omp's
   // session shape while herdr may be calling that same pane `claude`. The page
   // bounds the turns, so none are cut: they must meet the next page exactly.
-  const turns = live?.turns ?? parseTurns(source, path, text, undefined, undefined, start);
+  // a page is parsed in stretches (before and after the newest turn start), and OmO's goal wait is
+  // only ever the conversation's last word: on an older page, or anywhere but the end, it is over
+  const parsed = live?.turns ?? parseTurns(source, path, text, undefined, undefined, start);
+  const turns = parsed.some((turn, index) => turn.parts[0]?.kind === "goal_wait" && (page.before !== undefined || index < parsed.length - 1))
+    ? parsed.filter((turn, index) => turn.parts[0]?.kind !== "goal_wait" || (page.before === undefined && index === parsed.length - 1))
+    : parsed;
   const metadata = live?.metadata ?? parseConversationMetadata(`${head}\n${text}`, source, undefined, piAgentDir);
   // Record the stat from BEFORE the read: an append during parsing must cause
   // another read on the next poll, not permanently cache a torn tail.

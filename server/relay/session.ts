@@ -83,7 +83,7 @@ export class RelaySession {
   /** A pairing by comparing digits under way; `ended` once it made a device or counted as a failure. */
   private sas: {
     label: string; publicKey: string; commitment: Uint8Array; pcNonce: Uint8Array; expiresAt: number;
-    phoneConfirmed: boolean; approved: boolean; approvedBy?: string; ended: boolean; membersOnly: boolean; withdraw?: () => void; cancelDeadline?: () => void; stopRevokeAll?: () => void; stopApprover?: () => void;
+    phoneConfirmed: boolean; approved: boolean; approvedBy?: string; ended: boolean; membersOnly: boolean; localOnly: boolean; withdraw?: () => void; cancelDeadline?: () => void; stopRevokeAll?: () => void; stopApprover?: () => void;
   } | undefined;
   private device: DeviceMatch | undefined;
   /** The key this session's device signed in or paired with: a `link` must start from it (docs/account.md). */
@@ -265,6 +265,8 @@ export class RelaySession {
         // nobody asked for a link lately: refused before any prompt, and not counted, since no person was asked,
         // unless it is an account join the account service has seen (accountJoin, docs/account.md design 5.3)
         let membersOnly = false;
+        // taken under the PC's own add-me screen: this comparison stays the PC's to decide, whenever its digits show
+        const localOnly = this.options.services.relay.approvals.localOnlyOpen();
         if (!this.options.services.relay.approvals.windowOpen()) {
           this.state = "verifying";
           if (!await this.accountJoin(frame.payload.public_key)) { this.close("auth_failed"); return; }
@@ -275,7 +277,7 @@ export class RelaySession {
         this.state = "pair-commit";
         this.sas = {
           label: frame.payload.label, publicKey: frame.payload.public_key, commitment: fromBase64Url(frame.payload.commitment),
-          pcNonce: randomPairNonce(), expiresAt: Date.now() + PAIR_APPROVAL_MS, phoneConfirmed: false, approved: false, ended: false, membersOnly,
+          pcNonce: randomPairNonce(), expiresAt: Date.now() + PAIR_APPROVAL_MS, phoneConfirmed: false, approved: false, ended: false, membersOnly, localOnly,
         };
         // past the comparison's deadline the session ends with `timeout` and its prompt goes at once;
         // the mux's own setup deadline stays just behind it as the backstop
@@ -295,7 +297,7 @@ export class RelaySession {
         this.options.services.devices.assertRelayPairing(this.path);
         const asked = this.options.services.relay.approvals.ask(sas.label,
           pairDigits(this.sasBinding, sas.publicKey, phoneNonce, sas.pcNonce), sas.expiresAt,
-          { intent: this.intent, key: sas.publicKey, deviceId: accountDeviceId(this.options.serverId, sas.publicKey), membersOnly: sas.membersOnly });
+          { intent: this.intent, key: sas.publicKey, deviceId: accountDeviceId(this.options.serverId, sas.publicKey), membersOnly: sas.membersOnly, localOnly: sas.localOnly });
         if (!asked) { this.close("auth_failed"); return; }
         this.state = "pair-wait";
         sas.withdraw = asked.withdraw;
@@ -333,6 +335,9 @@ export class RelaySession {
     // an answer that lands after the deadline, before its timer ran, makes no device either
     if (Date.now() > sas.expiresAt) { this.close("timeout"); return; }
     this.state = "verifying";
+    // a member's remote approval never lets in a key this PC holds back (removed elsewhere, or a remove for it waits here);
+    // only a pairing approved on this PC itself does
+    if (sas.approvedBy !== undefined && this.options.services.accountMailbox.gates().held(sas.publicKey)) { this.close("auth_failed"); return; }
     let device: DeviceMatch | undefined;
     try { device = this.options.services.devices.pairRelayApproved(sas.label, sas.publicKey, { path: this.path, id: accountDeviceId(this.options.serverId, sas.publicKey), ...(sas.approvedBy === undefined ? {} : { addedBy: sas.approvedBy }) })?.device; }
     catch (error) {

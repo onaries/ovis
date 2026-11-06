@@ -127,6 +127,13 @@ pane with `herdr pane report-metadata <pane_id> --source <id> --token role=backg
 moves up with the others until it is answered, and a pinned one stays in the pinned card. Panes
 without the tag stay where they are.
 
+Workspaces can be set apart the same way: tag each one a tool opens for its workers with
+`herdr workspace report-metadata <workspace_id> --source <id> --token role=background`, and turn on
+**Settings > Appearance > Background workspaces apart** (off by default). The sidebar then lists those
+workspaces after the others, under **Background workspaces**, folded at first with their count. The
+workspace you have open, and one whose agent asks a question, stay in sight, and a pinned one stays in
+the pinned card.
+
 
 **3. Take it with you.** Scan the installer's QR code with a phone signed in to the same Tailscale account, then install the app from the browser. No Tailscale? Turn on the [Ovis relay](#through-the-ovis-relay) and scan its QR code instead. See [On your phone](#on-your-phone).
 
@@ -335,7 +342,7 @@ across an Ovis restart, which forgets where it saw each `letta` before. Check th
 | --- | --- |
 | **Read the conversation** | Prompts and Markdown answers (links, code blocks, tables). Each turn's commands, edits and progress are folded into one "Worked for …" block. Copy an answer as Markdown or plain text. A Claude Code bash-mode command (`!`) shows as one card: the command, then what it printed, with what it wrote to stderr in red. In a pi, omp, Claude Code or Codex pane, a picture the agent's own tool opened shows inside that tool's row. A picture opens in a full-screen viewer: zoom at the pointer, pan, step through the message's other pictures, **Copy image** and **Download**. Skill names an answer writes (`/name`, or `$name` for Codex) show as chips when the pane's own command list names that skill. Once you have sent four or more messages, a rail of dashes at the left, one per message you sent, jumps between them (not on a phone, or when the chat column leaves less than 32 px of margin at each side). |
 | **Follow the plan** | A supported todo-tool call folds into the turn's work block like any tool: it reads as the done count or the step it took, and opened, as the whole list by phase. |
-| **Drop into the real terminal** | xterm.js 6 on the live pane: full-screen TUIs, raw keys and herdr's scrollback, shared with your own herdr TUI. When a program marks its redraws as synchronized output, as herdr does, xterm.js 6 waits for the whole frame (up to a second) before drawing it, so a fast-redrawing agent does not show half of its new screen over its old one. In a program that reads the mouse, hold Alt to scroll it faster with a trackpad. Drag to select and it is copied on release, unless herdr's `[ui] copy_on_select` is off on the PC serving Ovis: then it is only selected, and stays selected under the pointer until Ctrl+C or Copy copies it. The wheel or the screen's edge scrolls further back while you drag. In an OpenCode pane a drag goes to OpenCode, which selects inside its own panel and copies it itself, as in a native terminal; hold Shift (Option on a Mac) to select and copy in Ovis instead, which is also the way when OpenCode's own copy does not reach this device's clipboard. Ctrl+C copies a selection instead of interrupting. **Quote in message**, shown while text is selected, adds the selection to that pane's chat draft in a code block headed by the pane name, and its line numbers when herdr reports them; nothing is sent. |
+| **Drop into the real terminal** | xterm.js 6 on the live pane: full-screen TUIs, raw keys and herdr's scrollback, shared with your own herdr TUI. When a program marks its redraws as synchronized output, as herdr does, xterm.js 6 waits for the whole frame (up to a second) before drawing it, so a fast-redrawing agent does not show half of its new screen over its old one. In a program that reads the mouse, hold Alt to scroll it faster with a trackpad. Drag to select and it is copied on release, unless herdr's `[ui] copy_on_select` is off on the PC serving Ovis: then it is only selected, and stays selected under the pointer until Ctrl+C or Copy copies it. The wheel or the screen's edge scrolls further back while you drag. In an OpenCode pane a drag goes to OpenCode, which selects inside its own panel and copies it itself, as in a native terminal; hold Shift (Option on a Mac) to select and copy in Ovis instead, which is also the way when OpenCode's own copy does not reach this device's clipboard. In a Codex pane a drag stays Ovis's and stops at the screen's edge, since herdr keeps no history for a program on the alternate screen. **Settings > Terminal > Experimental > Codex panes: let Codex select and scroll** hands it to Codex on this device: Codex selects through its whole history, scrolls it while the drag is held past the top or bottom edge, and copies it on Ctrl+C or Enter. On herdr that copy does not reach this device's clipboard (herdr does not pass it on), and Ovis cannot quote Codex's selection, so a note after the drag says Shift+drag (Option+drag on a Mac) still selects, copies and quotes in Ovis. Ctrl+C copies a selection instead of interrupting. **Quote in message**, shown while text is selected, adds the selection to that pane's chat draft in a code block headed by the pane name, and its line numbers when herdr reports them; nothing is sent. |
 | **Search the conversation** | **Search conversation**, from the pane's menu (right-click on a desktop, the tab's ⋯ on a phone) or the command palette, finds a word in what you wrote and in the agent's answers, earlier pages included; tool output, thinking and progress notes are left out. Matches list newest first as snippets; picking one opens the chat at that message, loading the earlier messages up to it. Nothing in the chat is highlighted, and the phone's screen gains no button. A remote PC offers it once its bridge is updated to one that searches. |
 | **Find in terminal** | **More → Find in terminal** or Mod+Shift+F searches literal text in herdr's history, with a match count, previous/next navigation and visible match highlights. Search jumps and scrolling move the same viewport in every attached client, including the TUI. Older bridges retain search navigation without automatic highlights. |
 | **Jump across PCs** | The command palette (Mod+Shift+K) searches all connected PCs at once by PC, workspace, branch, tab, pane title or agent kind. PC names distinguish results, and Recent remembers each pane's PC. Picking a result opens that PC and pane directly. Disconnected PCs are omitted; app and plugin actions remain on the currently selected PC. It also finds Settings pages and actions by related words (try `theme` or `font`), and browses folders: type a path such as `~/`, or pick **Browse folders**, and the folder you reach opens in Files. |
@@ -345,7 +352,7 @@ across an Ovis restart, which forgets where it saw each `letta` before. Check th
 | **Follow every agent** | Live RUN / INPUT / DONE / READY status for all panes, and alerts when an agent needs input, finishes or its terminal ends. |
 | **Open what agents make** | A file path in an answer opens in a viewer (images, video, audio, PDF, text), or find it with **Browse files**, and download it to your phone. A source file opens whole up to 8 MB and 200,000 lines; past 2,000 lines it scrolls as a window of rows, colored up to 256 KB and 5,000 lines and plain beyond. A link with `:line` or `#L12` opens at that line. |
 | **Edit a text file** | Off by default: turn on **Settings → Chat → File viewer → Edit text files** on this device. A text file under the pane's folder, up to 1 MB, then shows **Edit file** in the viewer: change it in a plain text box and press **Save** twice (the second press confirms). If the file changed on the PC since you opened it, nothing is written: your text stays in the box to copy, and **Reload file** shows the file as it is now. Only a device that drives the PC can edit (not a watching device, a Portal visitor or an open LAN window), and only a UTF-8 file with one kind of line ending that is yours, not read-only and not hard-linked; a file outside the pane's folder, or in `.git`, never opens for editing. The file is replaced in one step with its permissions and line endings kept. Saving works on Linux and macOS PCs; a Windows PC says it can't save yet. A remote PC's file is edited and checked on that PC. |
-| **See what changed** | **Browse files → Changes** lists what changed in the git repository the pane sits in: the **Working tree**, what is **Staged**, or two **Commits** you name, as a folder tree with git's status letter and the added and removed lines. A row opens its diff, **Unified** or **Split** (Settings → Chat → File viewer → Diff layout; a phone shows one column), with **Copy path**, **Copy patch** and **Open file**. The files a turn's edit tools changed, listed in its work block, open the same diff. It only reads; a remote PC's repository is read on that PC. |
+| **See what changed** | **Browse files → Changes** lists what changed in the git repository the pane sits in: the **Working tree**, what is **Staged**, or two **Commits** you name, as a folder tree with git's status letter and the added and removed lines. A row opens its diff, **Unified** or **Split** (the switch in the diff's header; a phone shows one column), with **Copy path**, **Copy patch** and **Open file**. The files a turn's edit tools changed, listed in its work block, open the same diff. It only reads; a remote PC's repository is read on that PC. |
 | **Manage sessions** | Start an agent in a folder you type or pick with **Browse**. In New workspace, Browse filters the currently loaded folders as you type (case-insensitive); opening a folder updates Directory, so **Start** uses that path even without **Use this folder** (which closes Browse), and a folder under home stays written as `~/…`. **New folder** (the folder-plus button in Browse's bar) makes a folder inside the one shown and opens it. It does not search subfolders or folders beyond the displayed 500. Add a tab to a workspace (as herdr's prefix+c), switch tabs from the strip over the pane, rename workspaces from their ⋯/right-click menu and panes from their own menu, reorder workspaces (drag a row, or on a phone long-press it and drag; Alt+Up/Down moves a focused row one step), and jump anywhere from the command palette. For Claude Code, New workspace and New tab have an **Ultracode** switch under Model and Effort, which asks Claude Code to start the session with Ultracode on at the chosen effort level. It needs Claude Code 2.1.284 or later, a model with xhigh and dynamic workflows on; otherwise Claude Code ignores it without a word (see [Starting an agent with a first message](agent-commands.md#starting-an-agent-with-a-first-message)). |
 | **Speak instead of typing** | A mic beside Attach in the composer and beside Send in the terminal input line. Tap to start and again to finish, or hold it while you talk (not on a touch screen without an API key); the words land at the caret and are never sent by themselves. See [Voice input](#voice-input). |
 | **Watch your plan limits** | Beside the Settings gear, how much of each AI subscription signed in on the PC is left, or used: the session's or the week's limit per account, and every limit with its reset time on a tap. See [Subscription usage](#subscription-usage). |
@@ -454,7 +461,7 @@ The Ovis relay lets your phone reach this PC from anywhere, with no Tailscale, n
 
 Step by step:
 
-1. On the PC, open **Settings → Phone & devices**, choose **Connect** next to **Connect a phone**, and turn on the switch on the **Ovis relay** card. Once it says **Online**, a QR code shows below. It works for ten minutes, and **New code** makes another.
+1. On the PC, open **Settings → Devices and PCs**, choose **Connect** next to **Connect a device**, and turn on the **Ovis relay** switch. Once it is online, a QR code shows with a code to type beside it. Both work for ten minutes, and **Refresh** makes new ones. Signed in to your Ovis account, the dialog asks the new device to sign in instead, and you approve it once on a device already in the account; **Connect with a code (no sign-in)** still shows the QR code. The relay's switch and **Reset relay identity** are also under **More settings** on that page.
 2. Scan the QR code with the phone's camera. Ovis opens in the phone's browser at `app.ovis.sh` and asks whether to pair with this PC: tap **Pair**.
 3. Install it: in Safari, choose **Share → Add to Home Screen**; in Chrome, choose **Install app** or **Add to Home screen** from its menu. Then open the **⋯** menu at the top right and tap **Alerts** to get alerts on this phone. iPhone needs iOS 16.4+ and the home-screen app.
 
@@ -462,7 +469,7 @@ If the relay cannot start before its link exists, the switch stays off and shows
 **The relay did not start: …** with the reason. Fix the cause, then press **Try again**.
 A link that already exists stays on while retrying a connection error.
 
-The phone pairs once. It makes a key of its own for this PC, which never leaves the phone, and proves itself with it on every connection, so there's no token or password to type. The PC lists the phone under **Phone & devices**, marked **via relay**, and **Revoke** there removes it and closes its connections at once. Opened again later, the app connects by itself. Each PC is an app of its own: pair another PC from its own QR code, and `app.ovis.sh` lists every PC the phone is paired with.
+The phone pairs once. It makes a key of its own for this PC, which never leaves the phone, and proves itself with it on every connection, so there's no token or password to type. The PC lists the phone under **Devices and PCs → My devices**, marked **via relay**, and **Revoke** there removes it and closes its connections at once. Opened again later, the app connects by itself. Each PC is an app of its own: pair another PC from its own QR code, and `app.ovis.sh` lists every PC the phone is paired with.
 
 **On an iPhone or iPad, add it to the Home Screen to stay paired.** In a Safari tab, the phone's key for a PC can be cleared after a week without a visit, and the phone then has to pair again. The home-screen app keeps it, and the app reminds you of this in Safari.
 
@@ -475,7 +482,7 @@ The phone pairs once. It makes a key of its own for this PC, which never leaves 
 Good to know:
 
 - Relay controls require drive access and a direct connection to this PC. A visitor signed in
-  through Portal can read the state in Connect a phone, with an explanation, but gets no relay
+  through Portal can read the state in Connect a device, with an explanation, but gets no relay
   switch, no QR code and no identity reset. Relay changes answer `403 read_only` for the default watch visitor;
   even a saved drive invitation gets `403 owner_only`, because the watch guard runs first
   ([`server/dispatch.ts:223-243`](../server/dispatch.ts#L223-L243)).
@@ -583,6 +590,14 @@ On a phone:
 - **Settings → Phone & devices → Keep screen on** keeps the screen awake while a terminal or chat
   pane is open. It is off by default, releases when the app is hidden, and resumes when
   you return. It needs HTTPS or localhost and browser support; power-saving mode may refuse it.
+- A font named in **Settings → Terminal → Terminal font**, **Chat → Chat font** or the custom
+  interface font only draws where it is installed, and a phone has none of your PC's fonts. To
+  use one there, copy its files into `fonts/` under `OVIS_STATE_DIR` (default
+  `~/.config/ovis/fonts/`) on the PC. The PC serves them to its signed-in devices only.
+  Each file's name is its family, with an optional `-Regular`, `-Bold`, `-Italic` or `-BoldItalic`
+  (`D2Coding-Bold.ttf` is D2Coding in bold), and `.woff2`, `.woff`, `.ttf` and `.otf` files of up to
+  32 MB are served, at most 64 of them in file name order. A device downloads only the families its
+  Settings name, and keeps the files where the browser allows it. Reload the app after adding a file.
 
 On an iPad with a hardware keyboard (a Magic Keyboard, say), the small bar that rises from the
 bottom when a field gets the focus (language, arrows, dictation) is iPadOS's shortcuts bar for
@@ -880,8 +895,8 @@ Whether the core runs is read from its socket file (`HC_SOCKET`, `socket` in hc'
 `config.toml`, else `<session>.sock` under `$XDG_RUNTIME_DIR/herdr-core/`; `HC_SESSION` names the
 session, `default` otherwise); nothing connects to it.
 
-`OVIS_RUNTIME=herdr-core` is Linux/macOS only: there is no Windows named pipe support yet.
-Ovis refuses to start with this runtime on Windows; use the default `herdr` runtime there.
+On Windows Ovis serves herdr-core only when `OVIS_RUNTIME=herdr-core` is set, as the desktop app
+sets it: the automatic choice stays on herdr there, and Settings offers no switch.
 
 On a Linux or macOS PC with herdr-core and no herdr, the one-line installer
 (`curl -fsSL https://ovis.sh/install.sh | sh`) sets this up by itself: no herdr and no plugin, Ovis
@@ -903,7 +918,29 @@ macOS). See [INSTALL.md](../INSTALL.md#2-choose-the-install-method).
 - **Starting an agent:** the agent's command is typed into the pane's shell, so it starts only
   in a pane that runs a plain shell of its own (sh, bash, dash, zsh, ksh, mksh, ash or fish), and
   only while nothing else runs in front of it. A pane the app started with a program directly
-  cannot take one.
+  cannot take one. On Windows that shell is PowerShell (herdr-core's own, or one started with
+  interactive switches only) or cmd (without `/c`, `/k`, `/r` or `/v`). A POSIX shell cannot take
+  one there: Git Bash rewrites an argument that looks like a path on its way to the agent, and this
+  PC's process table does not show what runs in WSL. herdr-core names only the shell in front of a
+  Windows pane, so that table says the rest: the pane is busy while any program runs below its
+  shell, console hosts aside, or the table cannot be read, and the agent has started once a
+  program named for it runs there. A command PowerShell runs in itself (`Read-Host`) shows no
+  program there and takes the line as its input, and text left at a Windows prompt runs with the
+  line, as no key clears it in every editing mode. An argument the shell would change is refused
+  before anything is typed: in Windows PowerShell one whose whitespace all follows an odd number of
+  `"` (`"fix the bug"`, `x="a b"`); in PowerShell 7 an empty one, one holding a `"`, or one holding
+  whitespace and ending in a backslash; in cmd one holding a `"` or a `%`. In PowerShell one
+  holding `%` or `^` is refused too, and one holding `&`, `|`, `<` or `>` unless it also holds a
+  space and no `!`, and no argument of the line holds a `"`: an agent PowerShell starts through a
+  `.cmd` file alone (an npm install also has a `.ps1`, which PowerShell prefers) has its arguments
+  read by cmd as well, where an `&` outside cmd's quotes would end the agent's line and run the
+  rest. PowerShell quotes an argument only for its whitespace, a `"` in any argument moves cmd's
+  quotes, cmd expands `%NAME%` (and `!NAME!` with delayed expansion) inside quotes too, a shim's
+  `call` doubles a `^`, and which file the agent's name finds is not known before. Where the execution policy blocks scripts (`Restricted`, the Windows
+  default), PowerShell refuses that `.ps1` and does not fall back to the `.cmd`: the start fails,
+  and the pane says why. cmd looks in the pane's folder before the `PATH`, as it does for what you
+  type. Command Code is not offered on Windows, where its command `cmd` is cmd.exe, and a Windows
+  PC offers no agent on another machine of its core, whose shells its process table does not show.
 - **Status and alerts:** an agent's status is what it reports to herdr-core (OSC 7501), so an
   agent that reports none shows no status. A turn is done only when the program itself reports
   its turn finished (`done`, or `working` then `idle`); `error` shows no status. When a blocked
@@ -1104,6 +1141,21 @@ List and tab controls also have focus-local keys; those do not become global ter
 On a focused tab, Alt+Shift+Left/Right reorders it and Shift+F10 opens its menu. For the pane menu
 on desktop, tab to the pane header's **⋯** (it appears on keyboard focus) and press Enter.
 Shift+F10 inside the terminal stays with the terminal program.
+
+**Settings → Shortcuts → Use herdr's prefix keys** (off by default) brings herdr's own prefix
+keys to the app. It reads `[keys]` in herdr's `config.toml` on the PC serving the page (read only,
+herdr's defaults when there is none): herdr's prefix (`ctrl+b` unless the config sets another; any
+of them when `prefix` or `extra_prefixes` lists several), then a key herdr binds runs the same
+action here. These actions are taken: `new_tab` (a terminal
+tab, at once), `split_vertical` / `split_horizontal`, `zoom`, `previous_tab` / `next_tab`,
+`switch_tab` (`1..9`), `rename_tab`, `previous_workspace` / `next_workspace`, `new_workspace`,
+`toggle_sidebar`, `settings`, and `help` / `goto` / `workspace_picker` (the command palette).
+Bindings resolve as herdr resolves them: one key or a list per action, and a key the config gives any
+other action or custom command is no longer the default's. The Settings row lists what it read. Every
+other action, a direct (non-prefix) binding and `[[keys.command]]` stay herdr's. The header says when the prefix waits for its key; Escape, a click
+or leaving the window cancels it, and a key with no action behind it (the prefix again too) goes to
+the pane as typed, so the prefix pressed twice sends it. Text fields, dialogs, menus, IME
+composition and the app's own shortcuts keep their keys.
 
 On a phone, use the header, the tab's ⋯ and the More menu for app actions. The command palette
 and its plugin actions are not available in the phone touch UI. Use a wider screen or an external

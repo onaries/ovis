@@ -7,6 +7,9 @@ import { errors as browserErrors, type Browser, type Page } from "playwright-cor
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { chromePath } from "./chrome-path.ts";
+// machine events stay on SSE here: the page watches its status events on /api/machines/events
+// (the socket transport has its own checks), also when this script runs on its own
+process.env["OVIS_MACHINE_EVENTS_WS"] = "0";
 
 /**
  * The alert sound: real herdr status changes make the open tab chime, once a tap let the page

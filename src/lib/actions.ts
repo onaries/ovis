@@ -6,7 +6,6 @@
 
 import type { SplitPaneDirection } from "../../shared/protocol.ts";
 import type { ZoomMode } from "./layoutMap.ts";
-import type { ChatLaunch } from "./agentLaunchMode.ts";
 
 export type PaneView = "chat" | "terminal";
 
@@ -22,6 +21,8 @@ export interface AppActions {
   selectAdjacentPane: (direction: -1 | 1) => void;
   /** the previous/next tab of the selected pane's workspace in tab strip order; wraps around */
   selectAdjacentTab: (direction: -1 | 1) => void;
+  /** the selected pane's workspace's tab at `number` (1-based) in tab strip order, as herdr's prefix+1..9; nothing past the last */
+  selectTabNumber: (number: number) => void;
   /** the previous/next workspace of the selected PC in sidebar order (pins, worktree groups); wraps around */
   selectAdjacentWorkspace: (direction: -1 | 1) => void;
   setView: (view: PaneView) => void;
@@ -32,10 +33,9 @@ export interface AppActions {
   openNewSession: () => void;
   /**
    * The New tab dialog for a workspace: the named one (a sidebar row's menu, on its own PC),
-   * else the selected pane's. Nothing happens without a workspace to add the tab to. `chat`: opened
-   * from a chat's composer, the dialog starts on that chat's agent, model and effort.
+   * else the selected pane's. Nothing happens without a workspace to add the tab to.
    */
-  openNewTab: (target?: { machineId: string; workspaceId: string }, chat?: ChatLaunch | null) => void;
+  openNewTab: (target?: { machineId: string; workspaceId: string }) => void;
   /** The inline name field of the selected pane's tab, as the tab menu's Rename opens it; nothing while the tab strip is not drawn. */
   renameTab: () => void;
   /**
@@ -64,7 +64,7 @@ export interface AppActions {
   agentStarted: (machineId: string, paneId: string) => void;
   openFind: () => void;
   openSettings: () => void;
-  /** the Add PC dialog, from Settings → Remote PCs and the palette; Settings closes first */
+  /** the Add PC dialog, from Settings → Devices and PCs and the palette; Settings closes first */
   openAddPc: () => void;
   toggleSidebar: () => void;
   /** the sidebar's Filter field, focused, with the drawer or the sidebar opened first: drawn even where Settings → Appearance leaves it out */

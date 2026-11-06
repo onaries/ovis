@@ -45,8 +45,9 @@ in three ways:
 - `link`: a device already paired with this PC through the relay (by QR, code or comparing digits)
   proves its account key over its own session, and its row takes the account key and `account` in
   one write. This is how a PC gets its first member, so it needs no member before it.
-- `enroll`: a member hands a PC it just paired a batch of `add` records for the account's other
-  clients. It is a batch of records, nothing more.
+- `enroll`: a member hands a PC it just brought into the account the account's removals and the
+  `add` records for its other devices, in one batch ([Enrolling a PC](#enrolling-a-pc)). It is a
+  batch of records, nothing more.
 
 The row an `add` makes has a known id, so the new device can sign in without asking the PC first:
 the first 16 hex digits of `SHA-256("ovis-account-device/1" || server_id || key)`, with `server_id`
@@ -195,12 +196,23 @@ the relay too. Mutations need the app's mutation guard, like the other routes.
 `GET /api/account/status`
 
 ```json
-{ "account": "acct_1" , "members": 3, "unlinked": ["6a1f0c9e2b7d4a10"], "removals": [<remove>, …], "mailbox": { "last_pull_at": "2026-11-05T01:02:03.000Z", "error": null } }
+{ "account": "acct_1" , "members": 3, "unlinked": ["6a1f0c9e2b7d4a10"], "removals": [<remove>, …], "adds": [<add>, …], "blocked": ["<key>", …], "enrolling": false, "mailbox": { "last_pull_at": "2026-11-05T01:02:03.000Z", "error": null } }
 ```
 
 `account` is `null` before the first member. `unlinked` lists relay rows that are not members.
 `removals` lists the signed `remove`s behind this PC's tombstones for its account, as received (a
-Revoke on the PC has none). A client trusts none of them before it checks it (below).
+Revoke on the PC has none). `adds` lists the signed `add`s behind its rows, as received: the one
+that made a row, or the approver's own for a row its remote approval made. `blocked` lists every key
+an add cannot bring in here: every tombstone (signed or not), every key a waiting remove names, and
+every key an enrollment held ([Enrolling a PC](#enrolling-a-pc)). `enrolling` is true while the PC
+waits for its first member's enrollment. `blocked_all` is true when the PC holds every add back
+(removal evidence was lost to a full queue, or its waiting records cannot be read): then `blocked`
+may not name every key it keeps out, and a client enrolling another PC sends that PC no add and
+`held_full`. A client trusts none of them before it checks it (below).
+With `?fresh=1` the PC first pulls its mailbox (a pull that starts after the request), so a remove
+waiting there is counted, and adds `fresh`: true only when that pull read the whole mailbox
+without an error, for the PC's current account and relay identity. A PC whose account service is
+turned off (`off`) has no mailbox and answers `fresh: true`; one whose address is unusable does not.
 
 `POST /api/account/link` `{ "record": <link> }`: the request's own device must be the record's
 `device_id`, with `old_key` its current key, `server_id` this PC's. The row's key becomes `key` and it
@@ -220,11 +232,51 @@ Outcomes: `applied`, `unchanged` (an `add` for a key already present; a `remove`
 removed and absent, or signed before this PC paired the key again) and `refused` with a code. A
 `remove` for a key this PC never had still leaves its tombstone, so the key cannot be added later.
 A `remove` refused `signer_not_member` waits on the PC with the mailbox's own such records
-(`account-pending.json`) and applies once its signer becomes a member there.
+(`account-pending.json`) and applies once its signer becomes a member there; when that queue cannot
+take it, its outcome is `account_unavailable` instead, and the client sends it again. An `add` is
+refused `enrolling` while the PC waits for its first member's enrollment, and `removal_pending`
+while its key is held ([Enrolling a PC](#enrolling-a-pc)).
 
-`POST /api/account/enroll` `{ "account": "acct_1", "records": [<add>, …] }`: what a member sends a
-PC it just paired. The request's own device must already be a member of `account` (it links itself
-first). Same answer as `records`.
+`POST /api/account/enroll` `{ "account": "acct_1", "records": [<remove or add>, …], "held": ["<key>", …], "held_full": false, "last": true }`:
+what a member sends a PC it brought into the account, over the relay session of a device that is
+already a member of `account` (it links itself first). At most 512 records and 4096 held keys;
+`held_full` says there were more (every add is then refused from then on, until
+`account-held.json` is removed; any member may send it); `last: false` says more
+parts follow, or an earlier part had a remove the PC could not decide (the client then sends the
+whole enrollment again on its next connection). Within one request, an add for the key of a remove
+the PC could not keep is held back too. Same answer as `records`, in the order sent; the PC applies them in its own order
+(below).
+
+### Enrolling a PC
+
+A link sent while the PC has no account starts its **enrollment barrier**
+(`account-enrolling.json`, written before the link, naming the linking device): until that device's
+last `enroll` part answers every remove (none `account_unavailable`), no `add` applies here from
+`records` or the mailbox. One from the mailbox waits in `account-pending.json` and is tried again
+after the enrollment. An `enroll` from any other member applies its removes, but its adds wait
+like any other (`enrolling`), and it ends no wait, unless the device the barrier names is no longer
+a drive member here (revoked, say): then any member's last part ends it. A
+refused link leaves the barrier (with no account here no add applies anyway); the next first link
+takes it over. The first link that succeeds keeps it, unless the PC has no account again (its
+first member was revoked before enrolling it): then the next first link takes it over. There is no timeout: a client that never enrolls leaves the account's adds waiting,
+and its devices join this PC by comparing digits instead.
+
+An enrollment applies, whatever the order sent:
+
+1. `held`: kept for good in `account-held.json` (at most 4096; past that every add is refused).
+   These are keys the member found removed, or suspected, on the account's other PCs.
+2. every `remove`, in the order signed; one whose signer is not a member here waits, as above;
+3. the `add`s in rounds: an add whose signer another add of the batch lets in applies in the next
+   round. After each round the PC tries its waiting records again, so a remove whose signer just
+   became a member applies before the next round's adds;
+4. then the barrier lifts, and the adds that waited for it are tried in turn.
+
+A held key is also refused to a member's remote approval (the session ends `auth_failed`) and to a
+`link` moving a row onto it (`removal_pending`); only a pairing approved on this PC lets it in.
+At every step an `add` is refused `removal_pending` when its key or its signer is held: a waiting remove names it
+(whatever that remove's signer, including one earlier in the same batch), an enrollment held it,
+the waiting queue cannot be read, or waiting removes were ever pushed out of a full queue. A key already on a row is not affected (its
+add is `unchanged`), so a pairing done on this PC settles it.
 
 What a client keeps: on each connection to a PC of its account it reads that PC's `removals` and
 keeps, verbatim, each one that verifies, is for its account and is signed by its own key or by a
@@ -232,17 +284,58 @@ device it approved itself (an `add` it signed), at most 256. A PC cannot make it
 signed by a key the PC made up, and it signs nothing for any of them.
 
 What a client enrolls (`enrollPc` in [`src/lib/account/join.ts`](../src/lib/account/join.ts)): when
-its link brings a PC that had no account into it, it sends that PC, over a session signed in with
-the account key, the `remove`s it signed itself and the ones it kept, as signed (through
-`records`), so the PC tombstones those keys, now or once their signer is a member there. It takes
-no key from another PC's device list or status. It reads every record's outcome and sends again, on
-its next connection to that PC, each one the PC did not answer or answered `account_unavailable`,
-and any removal it signed while the enrollment ran.
+its link brings a PC that had no account into it, it first reads every other PC of the account it
+is linked on (`?fresh=1`, at most 8 seconds each): their `blocked`, `removals` and `adds`. If
+none of them answers it sends nothing and tries again on its next connection. When it reads no other
+PC at all while the account's directory lists others, it sends no add either. A new PC from
+before enrollments (its status has no `enrolling`) gets the removes through `records` and no add. A PC whose answer
+is not `fresh` (its mailbox read failed, or it is from before enrollments) counts for its removals
+only: while any such PC answers, the client sends the removals but no add. A PC whose read failed
+also keeps the new PC's wait until a later connection finds it read whole; one from before
+enrollments ends it (a passing failure leaves no lasting hold; only a PC that says `blocked_all`
+makes the client send `held_full`): the account's devices
+then ask that PC once each, as before. A new PC from before enrollments, which refuses removes in
+`enroll`, gets them through `records` and no add. Then, over a
+session signed in with the account key, one `enroll`, as signed:
 
-It enrolls no `add`. No client can know it holds every removal of the account: one may sit in the
-unread mailbox of a PC that is off, or only on PCs this client has no pairing with. An add it
-signed earlier could then let a device another member removed into the new PC. So a new PC admits
-the account's devices by approval instead: each device asks once and is compared digit by digit.
+- the `remove`s it signed itself and the ones it kept;
+- the `add`s it signed itself and the ones those PCs list, except any for a key one of them keeps
+  out or that any verified removal it saw names, whoever signed it. Such a device asks once by
+  comparing digits instead. The new PC applies an add only when its signer is a member there, so a
+  PC that lists adds signed by a key it made up lets nobody in;
+- those keys as `held`, so no add that reaches the PC later lets them in either.
+
+It signs nothing for any of it. It reads every record's outcome and sends again, on its next
+connection to that PC, each one the PC did not answer or could not decide on, and any removal it
+signed while the enrollment ran. Then each PC that answered introduces the new PC to every device
+the enrollment let in ([Introductions](#introductions)), so those devices sign in there without
+asking.
+
+A removal that only PCs the client could not reach hold, and that the account service hides from
+the new PC's mailbox, is missed: the removed device then comes back on the new PC, announced there
+as any admission is. A client reading its other PCs first makes that need every PC holding the
+removal to be off or unreachable.
+
+### Adding a PC
+
+How a person adds a PC to the account in the apps (WhatsApp's linked devices and Tailscale's
+Tailnet Lock follow the same idea: an existing device approves once, and the server only carries
+messages):
+
+1. On the new PC, Settings → Devices and PCs → Account: sign in, then **Add this PC to my account**.
+   The PC lists itself in the account's directory (`PUT /v1/pcs`, its relay key and relay) and opens
+   a pairing window with `POST /api/relay/link` and the header `x-ovis-local-only: 1`. What that window takes is decided on
+   this PC only: it is never listed to account members (`remote-pairings`) or approved by one, even
+   once the PC has members. The screen keeps the window open while it waits.
+2. On any device already in the account, the PC shows as a card, **Add {name} to your account?**,
+   for 10 minutes after the directory took it. Its key comes from the directory and is checked
+   against its id, as for any PC there; the person then **types the six digits the new PC shows**
+   (not a tap: the directory's name is anyone's), and approves on the PC.
+3. The device is then the PC's first member: it links, and enrolls the PC
+   ([Enrolling a PC](#enrolling-a-pc)), so the account's other devices are let in and introduced.
+
+A wrong number ends that comparison; the person starts again from the card. QR codes and pairing
+codes stay under **Other ways** for a device without an account.
 
 ### Introductions
 
@@ -252,10 +345,11 @@ through X, and then signs in to each as usual; each PC still decides by its own 
 `POST /api/account/introduce` `{ "key", "pcs": [{ "server_id", "server_public_key", "relay", "name" }] }`:
 from a drive account member (`account_required` otherwise), for a key X holds a row for that an
 account member added (`added_by`, from an `add` or a remote approval; `introduction_unknown_key`
-otherwise). `pcs` lists only PCs the member verified itself (QR, digits, or its own pairing), at
+otherwise). A device paired with X by code or QR and linked there is not introduced: it compares
+digits once with a PC it was not added to. `pcs` lists only PCs the member verified itself (QR, digits, or its own pairing), at
 most 32: `server_id` must derive from `server_public_key`, `relay` is a `wss:` origin, `name` at
-most 48 characters (`introduction_invalid` otherwise). X keeps it in memory only, for 10 minutes;
-a later one for the same key replaces it. Answers 204.
+most 48 characters (`introduction_invalid` otherwise). X keeps it in `account-introductions.json`, for 30 days after the last one, merged by PC (a later
+entry for the same PC replaces it, at most 32 PCs and 256 devices). Answers 204.
 
 `GET /api/account/introduction`: over the new device's own signed-in session, watch access included
 (the one account route that needs no drive access, since it reads only the caller's own
@@ -305,9 +399,15 @@ is what authenticates the PC.
 - **Reset relay identity** removes every relay device, members included, so the PC leaves the
   account; a client adds it again by pairing with its new identity, after the client's usual "this
   PC's identity changed" notice.
+- `account-enrolling.json` and `account-held.json` that will not parse are not empty: every add is
+  refused, and a link or enrollment answers `account_unavailable`, until they are restored or removed.
 - A record refused only because its signer is not a member yet (a `remove` that arrived before its
-  signer's own `add`) is kept in `account-pending.json` and tried again on every pull, a restart
-  included, until it applies; at most 1000 wait, the oldest dropped first.
+  signer's own `add`), or an `add` held back ([Enrolling a PC](#enrolling-a-pc)), is kept in
+  `account-pending.json` and tried again on every pull, a restart included, until it applies. At
+  most 1000 wait: past that the oldest adds go first (a relayed remove makes room by dropping a
+  waiting add), and if a remove has to go, every add is refused from then on (`account-held.json` says `full`; remove that file to lift it). A pending file that
+  will not parse is not an empty one: adds are refused and the mailbox pulls nothing until it is
+  restored.
 - The PC collects its mailbox from `OVIS_ACCOUNT_SERVICE_URL` (https, or http on loopback only;
   `https://account.ovis.sh` when unset, none when `off`), only while it has members and a relay identity (one on disk counts, the relay on or off; none is ever made for it). An address
   it cannot use shows as the mailbox's error in `/api/account/status`.
@@ -470,6 +570,8 @@ the account service gets an answer the relay refuses.
 | `introduction_invalid` | 400 | an introduction's PC list does not parse, or a `server_id` does not derive from its key |
 | `introduction_none` | 404 | no introduction waits for this device |
 | `account_unavailable` | 503 | the tombstone file cannot be read; no account record applies |
+| `enrolling` | — | the PC waits for its first member's enrollment; an add waits too (a record outcome) |
+| `removal_pending` | — | the key is held: a waiting remove or an enrollment named it, or the waiting queue cannot be trusted (a record outcome) |
 
 ## What this does not protect against
 
@@ -479,11 +581,12 @@ the account service gets an answer the relay refuses.
   together with a stolen sign-in still could.
 - **A PC that stays off while the account service hides a removal** keeps the removed device until a
   client connects to it and hands over the record directly.
-- **Relayed removals are best effort.** A client relays the removals it kept only when it brings a
-  PC into the account, not ones it learns later; a PC from before relaying (#2956) drops one whose
-  signer is not its member yet; a PC keeps at most 8 signers' records per removed key and at most
-  1000 waiting records, and a client keeps at most 256. None of this admits a device: adds are not
-  enrolled, so a new PC still lets the account's devices in only by approval.
+- **A removal no reachable PC holds.** When a client brings a PC into the account, a removal held
+  only by PCs it cannot reach, and hidden by the account service, is missed (see what a client
+  enrolls): the device comes back on that PC, announced there. A client relays the removals it kept
+  only when it brings a PC into the account, not ones it learns later.
+- **A client from before enrollments** links a new PC and never enrolls it: that PC's barrier stays,
+  and the account's devices join it by comparing digits.
 - **A coding agent on the desktop app's machine** can drive the app's account key (rule 3). The same
   holds for a sign-in made in a browser on a PC's own address: that page's script is the PC's, so a
   compromised PC can use the sign-in kept there. Its account key is linked to no PC (a browser

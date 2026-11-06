@@ -351,10 +351,10 @@
 
 /*
  * A rendered document reads on the viewer's own background, like a page: no panel around it. Its
- * size and font are the chat's (ChatView.css). The Markdown width setting keeps it to the chat's
- * lane (--chat-w, whatever Settings → Chat width makes it: the Default lane that follows the pane
- * is measured from the pane that opened the viewer and written on it, lib/chatLane.ts), centered as an image or a PDF is and narrower
- * with the viewer, or lets it fill the viewer (then its text starts on the title's edge).
+ * size and font are the chat's (ChatView.css). It keeps to the chat's lane (--chat-w, whatever
+ * Settings → Chat width makes it: the Default lane that follows the pane is measured from the pane
+ * that opened the viewer and written on it, lib/chatLane.ts), centered as an image or a PDF is and
+ * narrower with the viewer.
  */
 .file-viewer-markdown {
   align-self: stretch;

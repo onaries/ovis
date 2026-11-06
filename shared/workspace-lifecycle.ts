@@ -114,6 +114,19 @@ export interface WorktreeListing {
   worktrees: WorktreeEntry[];
 }
 
+/** The most workspaces one GET /api/worktree/inventory may name; a client asks for more in several reads. */
+export const MAX_INVENTORY_WORKSPACES = 64;
+
+/** One workspace in GET /api/worktree/inventory: its listing, or the error GET /api/worktree/list would have answered. */
+export type WorktreeInventoryEntry =
+  | { workspace_id: string; listing: WorktreeListing }
+  | { workspace_id: string; error: { status: number; code: string; message: string } };
+
+/** GET /api/worktree/inventory: several workspaces' checkouts in one read, each workspace once, in the order asked. */
+export interface WorktreeInventory {
+  entries: WorktreeInventoryEntry[];
+}
+
 export interface WorkspaceCreated {
   workspace_id: string;
   pane_id: string;

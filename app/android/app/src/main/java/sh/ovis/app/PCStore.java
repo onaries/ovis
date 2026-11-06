@@ -15,6 +15,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -38,6 +39,46 @@ final class PCStore {
 
     /** The address to open instead of the bare origin until a PC page loads: a pairing link keeps its code through Try again. In memory only, as it can hold that code. */
     static String pendingStart;
+
+    /** A PC's page on the hosted shell the app was opened with (appLink), until the connect screen takes it. In memory only, as it can hold a pairing offer's code. */
+    static volatile String link;
+
+    private static final Pattern PC_SCOPE = Pattern.compile("/s/([0-9a-f]{32})/?");
+
+    /**
+     * `data` when an intent of `action` is a view of a PC on the hosted shell
+     * (`https://app.ovis.sh/s/<server_id>/`, within the manifest's verified link), whatever its
+     * fragment or query, else null: a link to another page of the hosted shell is not taken, so it
+     * does not close the page that is open.
+     */
+    static String appLink(String action, String data) {
+        if (!"android.intent.action.VIEW".equals(action) || data == null) return null;
+        return appScope(data) == null ? null : data;
+    }
+
+    /** The scope key (`https://app.ovis.sh/s/<server_id>/`) of a PC's link on the hosted shell, or null. */
+    static String appScope(String link) {
+        URI uri;
+        try {
+            uri = new URI(link);
+        } catch (URISyntaxException notAnAddress) {
+            return null;
+        }
+        boolean hostedShell = "https".equalsIgnoreCase(uri.getScheme()) && "app.ovis.sh".equalsIgnoreCase(uri.getHost()) && (uri.getPort() == -1 || uri.getPort() == 443);
+        Matcher scope = PC_SCOPE.matcher(uri.getRawPath() == null ? "" : uri.getRawPath());
+        return hostedShell && scope.matches() ? "https://app.ovis.sh/s/" + scope.group(1) + "/" : null;
+    }
+
+    /**
+     * Whether an app link is one to pair from: the PC's scope alone or with its pairing offer, which
+     * the connect screen checks as it does a scanned QR code (app/web/shell.js relayLink). Any other
+     * fragment or query is a view of the PC (a file, a pane), which opens only a PC already saved.
+     */
+    static boolean pairingLink(String link) {
+        URI uri = URI.create(link);
+        String fragment = uri.getRawFragment();
+        return uri.getRawQuery() == null && (fragment == null || fragment.isEmpty() || fragment.startsWith("offer="));
+    }
 
     /** Why the PC's page failed, for the error page: WebView's reason, or the HTTP status it answered. */
     static volatile String failure;
@@ -315,6 +356,20 @@ final class PCStore {
             else if (https || publicHttp(hop)) return hop;
         }
         return null;
+    }
+
+    /**
+     * The origin on the way from the address being opened (`from`) to a held-back redirect's `target`
+     * that the app refuses to go to on its own, or null. With `ovis`, the Ovis server ovisOrigin found
+     * over `path`, it is judged by that whole way (insecureHop). Without one the target is taken for a
+     * sign-in in front of the PC, which loads without the bridge: judged by the target's own origin,
+     * as the probe's later hops are not where the WebView goes; a target with no origin this class can
+     * read (an underscore in its host) is refused as it is.
+     */
+    static String refusedHop(String from, String target, String ovis, List<String> path) {
+        if (ovis != null) return insecureHop(from, path);
+        String next = origin(target);
+        return next == null ? target : insecureHop(from, Collections.singletonList(next));
     }
 
     private static final Pattern IPV4 = Pattern.compile("^(0|[1-9]\\d{0,2})\\.(0|[1-9]\\d{0,2})\\.(0|[1-9]\\d{0,2})\\.(0|[1-9]\\d{0,2})$");

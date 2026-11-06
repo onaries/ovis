@@ -14,18 +14,18 @@ import { SettingsRow } from "./SettingsControls.tsx";
 export function wayBackIn(t: Translate, viaPortal: boolean, oidc = false): { row: string; confirm: string } {
   return viaPortal
     ? { row: t("Forget this browser's sign-in. Getting back in means signing in through Portal again."), confirm: oidc ? t("Getting back in means signing in through Portal again. While this browser is still signed in to Google or your company's login, that sign-in lets it straight back in: sign out there too.") : t("Getting back in means signing in through Portal again.") }
-    : { row: t("Forget this browser's sign-in. Getting back in takes the access token or a pairing code."), confirm: t("Getting back in takes the access token, or a pairing code from the PC: Settings → Phone & devices there, or the pair command in its terminal.") };
+    : { row: t("Forget this browser's sign-in. Getting back in takes the access token or a pairing code."), confirm: t("Getting back in takes the access token, or a pairing code from the PC: Settings → Devices and PCs there, or the pair command in its terminal.") };
 }
 
 /** Settings → Phone & devices → Devices → Sign out: forget this browser's sign-in, after asking once. */
-export function SignOutRow({ viaPortal, oidc = false, onSignOut }: { viaPortal: boolean; oidc?: boolean; onSignOut: () => Promise<void> }) {
+export function SignOutRow({ viaPortal, oidc = false, onSignOut, label }: { viaPortal: boolean; oidc?: boolean; onSignOut: () => Promise<void>; /** the row's and its button's name, beside another Sign out on the page */ label?: string }) {
   const t = useT();
   const [confirming, setConfirming] = useState(false);
   const words = wayBackIn(t, viaPortal, oidc);
   return (
     <>
-      <SettingsRow label={t("Sign out")} description={words.row}>
-        <button type="button" className="btn" onClick={() => setConfirming(true)}>{t("Sign out")}</button>
+      <SettingsRow label={label ?? t("Sign out")} description={words.row}>
+        <button type="button" className="btn" onClick={() => setConfirming(true)}>{label ?? t("Sign out")}</button>
       </SettingsRow>
       {confirming && <ConfirmDialog title={t("Sign out of this browser?")} body={words.confirm} confirmLabel={t("Sign out")} onClose={() => setConfirming(false)} onConfirm={onSignOut} />}
     </>

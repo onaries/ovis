@@ -80,7 +80,7 @@ setInterval(() => {}, 1000);
       const preference = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/herdr-ui");
       await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
       await page.locator(shownRows()).first().waitFor();
-      assert.deepEqual(await (await preference).json(), { copy_on_select: false }, "the server reads herdr's copy_on_select");
+      assert.equal((await (await preference).json()).copy_on_select, false, "the server reads herdr's copy_on_select");
       await paneSendText(pane, `clear; node ${script}\r`);
       const first = page.locator(shownRow(), { hasText: "COPYOFF-first-line" });
       await first.waitFor();

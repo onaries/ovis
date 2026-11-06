@@ -57,6 +57,23 @@ public class HerdrShellPlugin extends Plugin {
         reopen();
     }
 
+    /**
+     * The app link the app was opened with (MainActivity), once, or "": the connect screen opens it
+     * as it would a scanned QR code. A PC's page has the bridge too: an activity showing a PC (its
+     * server URL is the PC's) never hands the link out, as it may hold another PC's pairing code.
+     */
+    @PluginMethod
+    public void takeLink(PluginCall call) {
+        String link = null;
+        if (getBridge().getServerUrl() == null) {
+            link = PCStore.link;
+            PCStore.link = null;
+        }
+        JSObject result = new JSObject();
+        result.put("url", link == null ? "" : link);
+        call.resolve(result);
+    }
+
     @PluginMethod
     public void forget(PluginCall call) {
         String key = call.getString("url");

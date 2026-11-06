@@ -25,7 +25,7 @@ import * as gjcRuntime from "./gjc-runtime.ts";
 import * as runtime from "./herdr-core/runtime.ts";
 import { claudeProjectDir } from "./claude-store.ts";
 import { launchedAgents } from "./launched-agents.ts";
-import { agyTranscriptPage, claudePaneSession, ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
+import { agyTranscriptPage, claudePanePid, claudePaneSession, ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
 
 it("labels only Claude's explicit end_turn text as final-answer evidence", () => {
   const entry = (stop_reason: string | null) => JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason, content: [{ type: "text", text: "Answer" }] } });
@@ -1641,7 +1641,33 @@ describe("gjc sessions", () => {
       JSON.stringify({ type: "message", timestamp: "2026-09-25T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "hi" }] } }),
       JSON.stringify({ type: "message", timestamp: "2026-09-25T00:00:01.000Z", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "401 Authentication Failed" } }),
     ].join("\n");
-    expect(parseOmpTranscript(text).at(-1)?.parts).toEqual([{ kind: "text", text: "Error: 401 Authentication Failed" }]);
+    expect(parseOmpTranscript(text).at(-1)?.parts).toEqual([{ kind: "text", text: "Error: 401 Authentication Failed", failed: true }]);
+  });
+
+  it("keeps each failed request apart from the attempt that followed it in the same turn", () => {
+    const failure = (at: string, error: string) => JSON.stringify({ type: "message", timestamp: at, message: { role: "assistant", content: [], stopReason: "error", errorMessage: error } });
+    const text = [
+      JSON.stringify({ type: "message", timestamp: "2026-09-25T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "hi" }] } }),
+      failure("2026-09-25T00:00:01.000Z", "503 overloaded"),
+      failure("2026-09-25T00:00:05.000Z", "Connection error."),
+      JSON.stringify({ type: "message", timestamp: "2026-09-25T00:00:09.000Z", message: { role: "assistant", content: [{ type: "text", text: "hello" }], stopReason: "stop" } }),
+    ].join("\n");
+    expect(parseOmpTranscript(text).at(-1)?.parts).toEqual([
+      { kind: "text", text: "Error: 503 overloaded", failed: true },
+      { kind: "text", text: "Error: Connection error.", failed: true },
+      { kind: "text", text: "hello", phase: "final_answer" },
+    ]);
+  });
+
+  it("carries the token counts a compaction record states, and none it does not", () => {
+    const compaction = (extra: Record<string, unknown>) => JSON.stringify({ type: "compaction", id: "c1", parentId: "u1", timestamp: "2026-09-25T00:00:02.000Z", summary: "folded", firstKeptEntryId: "u1", ...extra });
+    const card = (extra: Record<string, unknown>) => parseOmpTranscript(compaction(extra)).at(-1)?.parts;
+    // OmO: the tokens before, and what its structural pass saved (senpi.compaction.summary.v1)
+    expect(card({ tokensBefore: 761969, details: { schema: "senpi.compaction.summary.v1", tokenEstimate: 736131, structuralYield: { savedTokens: 493241, savingsRatio: 0.65, tokensBefore: 761969 }, origin: "core-route" }, fromHook: true }))
+      .toEqual([{ kind: "compact", text: "folded", tokens_before: 761969, tokens_saved: 493241 }]);
+    // omp's handoff records the size after; a zero before is no count
+    expect(card({ tokensBefore: 0, tokensAfter: 7189, method: "handoff" })).toEqual([{ kind: "compact", text: "folded", tokens_after: 7189 }]);
+    expect(card({ tokensBefore: "many", details: { structuralYield: { savedTokens: -3 } } })).toEqual([{ kind: "compact", text: "folded" }]);
   });
 
   it("hides agent-attributed IRC deliveries without hiding quoted user text or adding a page boundary", () => {
@@ -1793,6 +1819,54 @@ describe("OmO background task results", () => {
   });
 });
 
+describe("OmO goal continuation and waits", () => {
+  /** what OmO writes when it continues an active goal on its own (the TUI's "goal continues") */
+  const continuation = (ts: string, objective: string) => JSON.stringify({
+    type: "custom_message", customType: "goal-continuation", display: false, timestamp: ts, details: { ticketId: "t1" },
+    content: `Continue working toward the active thread goal.\n\n<untrusted_objective>\n${objective}\n</untrusted_objective>\n\nUsage so far:\n- Tokens used: 120`,
+  });
+  const turnStart = (ts: string, cause: string) => JSON.stringify({ type: "custom", customType: "engine-turn-start", data: { customType: cause }, timestamp: ts });
+  /** OmO's goal waiting on background work before it continues, and its end */
+  const warmup = (ts: string, phase: string, dueAtMs: number) => JSON.stringify({
+    type: "custom", customType: "goal-cache-warmup", timestamp: ts,
+    data: { phase, goalId: "g1", delayMs: 270_000, dueAtMs, iteration: 1, activeMonitorCount: 3, wakeSources: { "omo-dag": 1, "omo-wake-queue": 4, "senpi-codemode": 0, "senpi-task": 2, "terminal-background-sessions": 1, "terminal-monitors": 3 } },
+  });
+  const final = (ts: string, text: string) => JSON.stringify({ type: "message", timestamp: ts, message: { role: "assistant", content: [{ type: "text", text }], stopReason: "stop" } });
+  const due = Date.parse("2026-10-05T00:06:30.000Z");
+
+  it("draws a turn OmO started to continue its goal as a notice in the user's seat, with the goal's objective", () => {
+    const text = [
+      omoUser("2026-10-05T00:00:00.000Z", "set a goal"),
+      final("2026-10-05T00:01:00.000Z", "Waiting for CI."),
+      turnStart("2026-10-05T00:02:00.000Z", "goal-continuation"),
+      continuation("2026-10-05T00:02:00.000Z", "Ship the &lt;ver&gt; guard &amp; its test"),
+      final("2026-10-05T00:03:00.000Z", "CI is green."),
+    ].join("\n");
+    const turns = parseOmpTranscript(text);
+    expect(turns.map((turn) => turn.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(turns[2]).toEqual({ role: "user", ts: "2026-10-05T00:02:00.000Z", parts: [{ kind: "notice", text: "Ship the <ver> guard & its test", source: "goal-continuation" }] });
+  });
+
+  it("shows the goal waiting on background work while it is the conversation's last word, with when it resumes and what it waits on", () => {
+    const waiting = [omoUser("2026-10-05T00:00:00.000Z", "go"), final("2026-10-05T00:02:00.000Z", "Started the checks."), warmup("2026-10-05T00:02:00.000Z", "scheduled", due)];
+    expect(parseOmpTranscript(waiting.join("\n")).at(-1)).toEqual({ role: "user", ts: "2026-10-05T00:02:00.000Z", parts: [{
+      kind: "goal_wait", due_at: "2026-10-05T00:06:30.000Z", waiting_on: { tasks: 2, monitors: 3, terminals: 1, dags: 1, cells: 0 },
+    }] });
+    const kinds = (lines: string[]) => parseOmpTranscript(lines.join("\n")).map((turn) => turn.parts[0]?.kind);
+    // it ends when it resumes, when a wake starts a turn, or once anything else is said after it
+    expect(kinds([...waiting, warmup("2026-10-05T00:06:30.000Z", "resumed", due)])).toEqual(["text", "text"]);
+    expect(kinds([...waiting, turnStart("2026-10-05T00:03:00.000Z", "senpi-monitor:notification")])).toEqual(["text", "text"]);
+    expect(kinds([...waiting, final("2026-10-05T00:03:00.000Z", "A check failed.")])).toEqual(["text", "text", "text"]);
+    // a record that adds no turn leaves it standing
+    const empty = JSON.stringify({ type: "message", timestamp: "2026-10-05T00:03:00.000Z", message: { role: "assistant", content: [] } });
+    expect(kinds([...waiting, empty])).toEqual(["text", "text", "goal_wait"]);
+    // a later wait takes the earlier one's place
+    const again = parseOmpTranscript([...waiting, warmup("2026-10-05T00:03:00.000Z", "scheduled", due + 60_000)].join("\n"));
+    expect(again.map((turn) => turn.parts[0]?.kind)).toEqual(["text", "text", "goal_wait"]);
+    expect(again.at(-1)?.parts[0]).toMatchObject({ due_at: "2026-10-05T00:07:30.000Z" });
+  });
+});
+
 const omoUser = (ts: string, text: string) => JSON.stringify({ type: "message", timestamp: ts, message: { role: "user", content: [{ type: "text", text }] } });
 /** an OmO `task` call and the result that names the tasks it started */
 const omoSpawn = (ts: string, id: string, input: Record<string, unknown>, details: Record<string, unknown>) => [
@@ -1921,6 +1995,22 @@ describe("transcript pages", () => {
     for (const page of [transcriptPage("omo-transcript", path), transcriptPage("omo-transcript", cold)]) {
       const ended = page.turns.at(-1)?.parts[0];
       expect(ended?.kind === "task_result" ? ended.tasks.map((task) => task.title) : ended).toEqual(["Survey the repo"]);
+    }
+  });
+
+  it("keeps OmO's goal wait only while it is the newest page's last turn, live and cold alike", () => {
+    const root = temp();
+    const path = join(root, "omo.jsonl");
+    const wait = JSON.stringify({ type: "custom", customType: "goal-cache-warmup", timestamp: "2026-10-05T00:01:00.000Z", data: { phase: "scheduled", dueAtMs: Date.parse("2026-10-05T00:05:00.000Z"), wakeSources: { "terminal-monitors": 1 } } });
+    const answer = JSON.stringify({ type: "message", timestamp: "2026-10-05T00:00:30.000Z", message: { role: "assistant", content: [{ type: "text", text: "watching" }], stopReason: "stop" } });
+    writeFileSync(path, `${[omoUser("2026-10-05T00:00:00.000Z", "watch it"), answer, wait].join("\n")}\n`);
+    expect(transcriptPage("omo-transcript", path).turns.map((turn) => turn.parts[0]?.kind)).toEqual(["text", "text", "goal_wait"]);
+    // the next prompt is a turn start: what came before it is parsed apart from it, and the wait is over
+    appendFileSync(path, `${omoUser("2026-10-05T00:02:00.000Z", "something else")}\n`);
+    const cold = join(root, "cold.jsonl");
+    copyFileSync(path, cold);
+    for (const page of [transcriptPage("omo-transcript", path), transcriptPage("omo-transcript", cold)]) {
+      expect(page.turns.map((turn) => turn.parts[0]?.kind)).toEqual(["text", "text", "text"]);
     }
   });
 
@@ -3473,6 +3563,67 @@ describe.skipIf(process.platform !== "linux")("a Claude herdr-core does not name
   it("follows no `hc attach` whose client reaches another core", async () => {
     expect((await viewed("t2", "t2", { ...OWN, HC_SESSION: "other" })).found).toBeNull();
   });
+});
+
+// the native claude.exe the shell started can run the session in a child claude.exe, and only that child writes the PID record
+it("finds a Windows pane's session by the child claude.exe holding the PID record, not the one its shell started", async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const home = mkdtempSync(join(tmpdir(), "claude-win32-launcher-"));
+  const previousHome = process.env["HOME"];
+  const previousProfile = process.env["USERPROFILE"];
+  // or the lookup reads the developer's own store too
+  const previousConfig = process.env["CLAUDE_CONFIG_DIR"];
+  delete process.env["CLAUDE_CONFIG_DIR"];
+  const session = "7d9f3a52-4e2c-4b1a-9c5d-8e7f6a5b4c32";
+  const cwd = join(home, "work");
+  const started = 1_793_000_000_000;
+  const exe = "C:\\Users\\demo\\.local\\bin\\claude.exe";
+  const transcript = join(home, ".claude", "projects", claudeProjectDir(cwd), `${session}.jsonl`);
+  const pidRecord = join(home, ".claude", "sessions", "20108.json");
+  mkdirSync(join(home, ".claude", "projects", claudeProjectDir(cwd)), { recursive: true });
+  writeFileSync(transcript, "");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  const procStart = String((BigInt(started) + 11_644_473_600_000n) * 10_000n);
+  writeFileSync(pidRecord, JSON.stringify({ pid: 20108, kind: "interactive", sessionId: session, procStart }));
+  const shellOnly = { shell_pid: 3244, foreground_processes: [{ pid: 3244, name: "pwsh.exe", argv: ["C:\\Program Files\\PowerShell\\7\\pwsh.exe"] }] };
+  const rpc = spyOn(herdr, "herdrRpc").mockImplementation((async (method: string) => method === "agent.get" ? { agent: {} } : { process_info: shellOnly }) as unknown as typeof herdr.herdrRpc);
+  const table = spyOn(gjcRuntime, "recentProcessTable").mockResolvedValue([
+    { pid: 3244, parent: 900, path: "C:\\Program Files\\PowerShell\\7\\pwsh.exe", commandLine: "pwsh.exe", started: started - 60_000 },
+    { pid: 20107, parent: 3244, path: exe, commandLine: `"${exe}"`, started: started - 1_000 },
+    { pid: 20108, parent: 20107, path: exe, commandLine: `"${exe}" --permission-mode auto`, started },
+  ]);
+  process.env["HOME"] = home;
+  process.env["USERPROFILE"] = home;
+  const pane = { pane_id: "claude-win32-launcher", agent: "claude", cwd, foreground_cwd: cwd } as HerdrPane;
+  Object.defineProperty(process, "platform", { value: "win32" });
+  try {
+    const found = await claudePaneSession(pane);
+    expect(found?.path).toBe(transcript);
+    expect(found?.pid).toBe(20108);
+    expect(await claudePanePid(pane)).toBe(20108);
+    expect(await paneTranscript(pane.pane_id, undefined, { panes: [pane] } as unknown as SessionSnapshot)).toMatchObject({ source: "claude-transcript", path: transcript });
+    // elsewhere herdr names the program in front: a shell alone runs no Claude, and no process table is read
+    for (const other of ["linux", "darwin"]) {
+      Object.defineProperty(process, "platform", { value: other });
+      table.mockClear();
+      expect(await claudePaneSession(pane)).toBeNull();
+      expect(await claudePanePid(pane)).toBeNull();
+      expect(table).not.toHaveBeenCalled();
+    }
+    // no record written yet: the claude.exe the shell started stands, with no session to read
+    Object.defineProperty(process, "platform", { value: "win32" });
+    rmSync(pidRecord);
+    expect(await claudePaneSession(pane)).toBeNull();
+    expect(await claudePanePid(pane)).toBe(20107);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    if (previousHome === undefined) delete process.env["HOME"]; else process.env["HOME"] = previousHome;
+    if (previousProfile === undefined) delete process.env["USERPROFILE"]; else process.env["USERPROFILE"] = previousProfile;
+    if (previousConfig === undefined) delete process.env["CLAUDE_CONFIG_DIR"]; else process.env["CLAUDE_CONFIG_DIR"] = previousConfig;
+    table.mockRestore(); rpc.mockRestore();
+    forgetTranscriptState();
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 // any client snapshot starts the Claude subagent refresh that reads this, also the one a pending message is checked against (#1545)

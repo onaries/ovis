@@ -39,6 +39,22 @@ function linuxBirth(pid: number): number | null {
   }
 }
 
+/**
+ * What tells one process from another on every read, however the wall clock moves: Linux's start in
+ * ticks after boot (`btime`, and so processStartedAt, follows a clock that is set later), macOS's
+ * kernel start record. null where neither answers.
+ */
+export function processStartIdentity(pid: number): number | null {
+  if (process.platform === "darwin") return darwinStart(pid);
+  if (process.platform !== "linux") return null;
+  try {
+    const ticks = Number(readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").pop()!.split(" ")[19]);
+    return Number.isFinite(ticks) ? ticks : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Whether `pid` names a running process: signal 0 checks without sending anything, and a refusal means it runs. */
 export function processAlive(pid: number): boolean {
   try {

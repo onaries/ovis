@@ -3,6 +3,7 @@ import { FolderSearch, X } from "lucide-react";
 
 import "./FilesDialog.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
+import { MarkdownDocuments } from "./MarkdownDocuments.tsx";
 import { PullRequestPanel } from "./PullRequestPanel.tsx";
 import { RepoChanges } from "./RepoChanges.tsx";
 import type { RepoDiffFile } from "../../shared/protocol.ts";
@@ -10,6 +11,7 @@ import { useT } from "../lib/i18n.ts";
 import { useMachineId } from "../lib/machineContext.tsx";
 import { subscribeFilesFolder } from "../lib/paletteFolders.ts";
 import type { RepoComparison } from "../lib/repoDiff.ts";
+import { useSettings } from "../lib/settings.ts";
 import { focusInOtherModal, nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
 import { useSheetSwipe } from "../lib/sheets.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
@@ -35,7 +37,7 @@ export interface FilesDialogProps {
   covered?: boolean;
 }
 
-type Tab = "browse" | "changes" | "pr";
+type Tab = "browse" | "changes" | "pr" | "docs";
 
 /** The files of the pane's folder (and any other), each opened in the file viewer, and the changes of its repository, each opened as a diff. */
 export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, onBrowseFolders, onClose, docked = false, panelStart, covered = false }: FilesDialogProps) {
@@ -44,10 +46,14 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
   const phone = useMediaQuery("(max-width: 480px)");
   // docked beside the pane, the rest of the page stays reachable: no trap, swipe or Back entry
   const surface = useFocusTrap<HTMLElement>(!docked);
-  const [tab, setTab] = useState<Tab>("browse");
+  const [chosenTab, setTab] = useState<Tab>("browse");
+  // Documents is offered only while its setting is on (off by default): turned off, its tab is Browse again
+  const documentsOffered = useSettings().settings.filesDocuments;
+  const tab: Tab = chosenTab === "docs" && !documentsOffered ? "browse" : chosenTab;
   // the changes are read with the first visit and kept, as the browser keeps its folder
   const [changesVisited, setChangesVisited] = useState(false);
   const [prVisited, setPrVisited] = useState(false);
+  const [docsVisited, setDocsVisited] = useState(false);
   useSheetSwipe(surface, docked ? null : onClose);
   // a file opened from the list is drawn over it with an entry of its own: Back closes the file first
   usePhoneSheetBack(onClose, !viewing && !docked);
@@ -76,6 +82,7 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
     setTab(next);
     if (next === "changes") setChangesVisited(true);
     if (next === "pr") setPrVisited(true);
+    if (next === "docs") setDocsVisited(true);
   };
   // the folder the browser shows now (it tells each one it opens), for the pane it showed it for;
   // else the one the dialog opened at
@@ -88,6 +95,7 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
         <button type="button" aria-pressed={tab === "browse"} onClick={() => show("browse")}>{t("Browse")}</button>
         <button type="button" aria-pressed={tab === "changes"} onClick={() => show("changes")}>{t("Changes")}</button>
         <button type="button" aria-pressed={tab === "pr"} onClick={() => show("pr")}>{t("Pull request")}</button>
+        {documentsOffered && <button type="button" aria-pressed={tab === "docs"} onClick={() => show("docs")}>{t("Documents")}</button>}
       </div>
       {!phone && <button type="button" className="icon-button" aria-label={t("Browse folders in the palette")} title={t("Browse folders in the palette")} onClick={browseFolders}><FolderSearch aria-hidden="true" /></button>}
       <button type="button" className="icon-button" aria-label={t("Close files")} onClick={onClose}><X aria-hidden="true" /></button>
@@ -100,6 +108,8 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
       {changesVisited && <div hidden={tab !== "changes"}><RepoChanges paneId={paneId} directory={start} onOpenDiff={onOpenDiff} /></div>}
       {/* one panel per PC and pane: an answer or a merge still on its way for the last pane never lands in this one */}
       {prVisited && <div hidden={tab !== "pr"}><PullRequestPanel key={`${machineId}:${paneId}`} paneId={paneId} directory={start} /></div>}
+      {/* one list per PC and pane, as the browser: a pane switch reads the new pane's folder */}
+      {docsVisited && documentsOffered && <div hidden={tab !== "docs"}><MarkdownDocuments key={`${machineId}:${paneId}`} paneId={paneId} onOpenFile={onOpenFile} /></div>}
     </div>
   </>;
   if (docked) return (

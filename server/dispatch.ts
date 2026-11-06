@@ -44,12 +44,15 @@ import { handlePortalRequest } from "./portal.ts";
 import { handleRelayRequest } from "./relay/routes.ts";
 import { handleAccountRequest } from "./account/routes.ts";
 import type { AccountMailbox } from "./account/mailbox.ts";
+import type { AccountHolds } from "./account/holds.ts";
 import type { AccountIntroductions } from "./account/introductions.ts";
 import type { RelayService } from "./relay/service.ts";
 import { handleTelemetryRequest, visitSurface } from "./telemetry.ts";
 import type { TelemetryIngress } from "../shared/telemetry.ts";
 import { handleStatuslineRequest, handleUsageRequest } from "./usage.ts";
 import { handleSystemRequest, type SystemSampler } from "./system-stats.ts";
+import { handleUserFontsRequest } from "./user-fonts.ts";
+import { USER_FONTS_PATH } from "../shared/user-fonts.ts";
 import type { UsageAccountList } from "./usage-account-list.ts";
 import { handleVoiceRequest } from "./voice.ts";
 import { BRIDGE_PROTOCOL } from "../shared/machines.ts";
@@ -83,6 +86,7 @@ export interface RequestServices {
   readonly devices: DeviceStore;
   readonly accountMailbox: AccountMailbox;
   readonly accountIntroductions: AccountIntroductions;
+  readonly accountHolds: AccountHolds;
   readonly preferences: PreferenceStore;
   readonly herdrSidebar: HerdrSidebarConfig;
   /** `loginPath`: the request states a Tailscale login, so the PC's own login must be known, not merely cached as unknown */
@@ -99,6 +103,8 @@ export interface RequestServices {
   readonly usage: UsageService;
   readonly usageAccounts: UsageAccountList;
   readonly systemSampler: SystemSampler | null;
+  /** the state folder's fonts/, served to every device that may read this PC (server/user-fonts.ts) */
+  readonly fontsDir: string;
   readonly voice: VoiceService;
   readonly browserSnapshot: <S extends SessionSnapshot>(snapshot: S) => S;
   readonly core: ReturnType<typeof createCore>;
@@ -130,7 +136,7 @@ export interface ServerContext {
 }
 
 /** The routes that read or write files and folders on this disk (or run git and gh in them) for a pane, a workspace or a picker. */
-const OTHER_MACHINE_FILES = /^\/api\/(?:fs\/|pane\/(?:files|image)$|workspace\/(?:diff\/|directories$|pr(?:$|\/)))/;
+const OTHER_MACHINE_FILES = /^\/api\/(?:fs\/|pane\/(?:files|docs|image)$|workspace\/(?:diff\/|git\/|directories$|pr(?:$|\/)))/;
 
 export async function handleRequest(request: Request, ctx: ServerContext): Promise<Response | undefined> {
   const { options, hostname, token, bridgeToken, bootId, devices, preferences, herdrSidebar, identityOf, serveOnly, portalGuards, shellAgents, agentDetector, agentOffered, agentInstaller, openCodeState, cliProxyRoutes, usageLogin, usage, voice, browserSnapshot, core, seen, piReader, orderSequence, clientConnectionLog, requestLog, portalStartupResult, portalStartup } = ctx.services;
@@ -238,8 +244,9 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   // is a POST only to keep the subscription out of the address, and answers the device about its own.
   // A watch device may report its own connection metadata, never terminal input or file data.
   const ownPreferences = pathname === "/api/auth" || pathname === "/api/push/subscribe" || pathname === "/api/push/status" || pathname === "/api/connection-diagnostics";
-  // a repository's changes are file contents too: the patch of a credential file is that file
-  const repositoryDiff = /^\/api\/(?:machines\/[^/]+\/)?workspace\/diff\//.test(pathname);
+  // a repository's changes are file contents too: the patch of a credential file is that file; its
+  // history (commit messages, branch names) is read the same way
+  const repositoryDiff = /^\/api\/(?:machines\/[^/]+\/)?workspace\/(?:diff|git)\//.test(pathname);
   // a pull request's review comments and job logs are the repository's contents as well
   const pullRequest = /^\/api\/(?:machines\/[^/]+\/)?workspace\/pr(?:\/|$)/.test(pathname);
   // earlier sessions carry their first prompts
@@ -249,14 +256,14 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   // composer's menu that lists them is a drive feature (#2132)
   const commandRows = /^\/api\/(?:machines\/[^/]+\/)?(?:agent|pane)\/commands$/.test(pathname);
   // the paths under a pane's folder that match a query are a directory listing too; they feed the
-  // composer's @-mention picker, a drive feature (#2244)
-  const paneFiles = /^\/api\/(?:machines\/[^/]+\/)?pane\/files$/.test(pathname);
+  // composer's @-mention picker, a drive feature (#2244); so are its Markdown files, which Files' Documents lists
+  const paneFiles = /^\/api\/(?:machines\/[^/]+\/)?pane\/(?:files|docs)$/.test(pathname);
   // where a plugin action's run stands carries what its command printed when it failed, asked for by a
   // log id: only the device that started the run (a POST, which a watching device cannot send) asks it
   const pluginRun = /^\/api\/(?:machines\/[^/]+\/)?plugin\/action$/.test(pathname);
   // a repository's checkouts are its folders' paths and branches, those not open in herdr too; the worktree
   // dialog that lists them is a drive feature, and the sidebar names a branch only for a driving device (#2250)
-  const worktreeList = /^\/api\/(?:machines\/[^/]+\/)?worktree\/list$/.test(pathname);
+  const worktreeList = /^\/api\/(?:machines\/[^/]+\/)?worktree\/(?:list|inventory)$/.test(pathname);
   // the digits of a waiting comparison are what approving it takes (docs/account.md, "Who may admit a device")
   const pairingDigits = pathname === "/api/relay/pairings";
   if (readOnly && (fileRead || directoryListing || repositoryDiff || pullRequest || sessionHistory || commandRows || paneFiles || pluginRun || worktreeList || pathname.endsWith("/pane/codex-restart") || pairingDigits || mutating && !ownPreferences)) {
@@ -483,6 +490,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   if (pathname === "/api/seen") { setRequestRoute(pathname); return handleSeenRequest(request, seen); }
 
   if (pathname === "/api/system") { setRequestRoute(pathname); return handleSystemRequest(request, ctx.services.systemSampler); }
+  if (pathname === USER_FONTS_PATH || pathname.startsWith(`${USER_FONTS_PATH}/`)) return handleUserFontsRequest(request, pathname, ctx.services.fontsDir, url.search);
   if (pathname === "/api/usage") { setRequestRoute(pathname); return handleUsageRequest(request, url, ctx.services.usageAccounts); }
   if (pathname === "/api/usage/accounts") { setRequestRoute(pathname); return ctx.services.usageAccounts.handle(request); }
   // on or off only: the server decides what is installed and where (server/statusline-install.ts)

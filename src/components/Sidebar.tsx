@@ -33,10 +33,10 @@ import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { useWorktreeBranches } from "../lib/useWorktreeBranches.ts";
 import { useSessionHistoryOffered } from "../lib/useSessionHistoryOffered.ts";
 import { watchTouchReorder } from "../lib/touchReorder.ts";
-import { placeBlock, workspaceMoves, worktreeGroups as groupWorktrees } from "../lib/workspaceOrder.ts";
+import { isBackgroundWorkspace, placeBlock, splitBackgroundGroups, workspaceMoves, worktreeGroups as groupWorktrees } from "../lib/workspaceOrder.ts";
 import { worktreeLabel } from "../lib/worktreeName.ts";
 import { lastViewedPane, rememberViewedPane } from "../lib/lastViewedPane.ts";
-import { paneMark, sidebarAgents, workspaceAgentLabels } from "../lib/sidebarAgents.ts";
+import { agentTabName, paneMark, sidebarAgents, workspaceAgentLabels, type SidebarAgent } from "../lib/sidebarAgents.ts";
 import { PANE_DRAG_TYPE, paneDragData } from "../lib/split.ts";
 import { publishWorkspaceRows, workspaceRows } from "../lib/adjacentTarget.ts";
 import { currentSidebarPins, pinnedGroupIds, pinnedWorkspaceIds, pruneWorkspacePins, reorderWorkspacePins, setSidebarPins, splitPinnedGroups, subscribeSidebarPins, toggleSidebarPin, workspacePinKey, type WorkspaceGroup } from "../lib/sidebarPins.ts";
@@ -50,6 +50,16 @@ export function storedWorktreeCollapsed(machineId: string, repoKeys: string[]): 
     for (const key of repoKeys) if (localStorage.getItem(worktreeCollapsedKey(machineId, key)) === "1") collapsed.add(key);
   } catch { /* storage denied: nothing is folded */ }
   return collapsed;
+}
+
+/** the fold of a PC's background workspaces, kept on this device; it starts folded */
+const backgroundFoldKey = (machineId: string) => `ovis:workspaces-background-collapsed:${machineId}`;
+export function storedBackgroundFolded(machineId: string): boolean {
+  try {
+    return localStorage.getItem(backgroundFoldKey(machineId)) !== "0";
+  } catch {
+    return true;
+  }
 }
 
 export { paneTitle };
@@ -245,6 +255,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
   const t = useT();
   const { settings } = useSettings();
   const twoLine = settings.sidebarRows === "two";
+  // Settings > Appearance > Agents under workspaces: each workspace's agents hang under its row (#773)
+  const agentTree = settings.sidebarAgentTree;
   const machineId = useMachineId();
   const pressPane = useContext(PanePressContext);
   // what the PC's herdr answers for its workspaces (lib/machineContext.tsx): herdr-core has no worktrees, and
@@ -302,7 +314,22 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
   // opens it for the filter's time only, the saved fold untouched (lib/sidebarFilter.ts)
   const [filterFolds, setFilterFolds] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const filtering = filtered !== null;
-  useEffect(() => { if (!filtering) setFilterFolds((current) => current.size === 0 ? current : new Map()); }, [filtering]);
+  // Settings → Background workspaces apart: workspaces tagged role=background stand after the others, under
+  // a heading that folds them (kept per PC on this device); under a filter it opens, for the filter's time only
+  const backgroundApart = settings.sidebarBackgroundWorkspaces;
+  const [backgroundCollapsed, setBackgroundCollapsed] = useState(() => storedBackgroundFolded(machineId));
+  const [backgroundFilterFold, setBackgroundFilterFold] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (filtering) return;
+    setFilterFolds((current) => current.size === 0 ? current : new Map());
+    setBackgroundFilterFold(null);
+  }, [filtering]);
+  const backgroundFolded = filtering ? backgroundFilterFold ?? false : backgroundCollapsed;
+  const toggleBackground = (): void => {
+    if (filtering) { setBackgroundFilterFold(!backgroundFolded); return; }
+    setBackgroundCollapsed(!backgroundCollapsed);
+    try { localStorage.setItem(backgroundFoldKey(machineId), backgroundCollapsed ? "0" : "1"); } catch { /* storage denied: this page keeps it */ }
+  };
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   // a workspace holding a locked pinned agent (lib/paneLocks.ts) is closed or deleted from no menu here
@@ -403,12 +430,31 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
   // under a filter only the kept rows are drawn, in the same order, in the same groups and cards; pins, folds
   // and herdr's order are read from the whole roster as before, and a move waits until the filter is cleared
   const visibleGroups = useMemo(() => filtered === null ? shownGroups : { pinned: filterWorkspaceGroups(shownGroups.pinned, filtered.workspaces), rest: filterWorkspaceGroups(shownGroups.rest, filtered.workspaces) }, [shownGroups, filtered]);
+  // a folded background part still shows the workspace that is open and one whose agent asks a question
+  const inSight = (group: WorkspaceGroup<WorkspaceInfo>): boolean => [group.workspace, ...group.children].some((member) => member.workspace_id === viewedWorkspaceId
+    || (online && rollupStatus(roster.filter((pane) => pane.workspace_id === member.workspace_id).map((pane) => activity.status(machineId, pane))) === "blocked"));
+  const drawnGroup = (group: WorkspaceGroup<WorkspaceInfo>): boolean => roster.some((pane) => pane.workspace_id === group.workspace.workspace_id);
+  // a repository's worktrees file with it, also once a pin of the repository sets them apart as rows of their own
+  const worktreeIds = new Set(worktreeGroups.flatMap((group) => group.children.map((child) => child.workspace_id)));
+  type Parts = { people: WorkspaceGroup<WorkspaceInfo>[]; background: WorkspaceGroup<WorkspaceInfo>[]; shown: WorkspaceGroup<WorkspaceInfo>[] };
+  const parts = (groups: WorkspaceGroup<WorkspaceInfo>[]): Parts => {
+    if (!backgroundApart) return { people: groups, background: [], shown: [] };
+    const { people, background } = splitBackgroundGroups(groups, worktreeIds);
+    const drawn = background.filter(drawnGroup);
+    return { people, background: drawn, shown: backgroundFolded ? drawn.filter(inSight) : drawn };
+  };
+  const visibleParts = parts(visibleGroups.rest);
+  const movableParts = parts(shownGroups.rest);
   // the rows as drawn, filter and folds included, for the previous/next workspace steps (lib/adjacentTarget.ts)
-  const drawnRows = workspaceRows([...visibleGroups.pinned, ...visibleGroups.rest], (group) => worktreesFolded(group.workspace.worktree?.repo_key ?? "", group.children), viewedWorkspaceId ?? null).join("\n");
+  const drawnRows = workspaceRows([...visibleGroups.pinned, ...visibleParts.people, ...visibleParts.shown], (group) => worktreesFolded(group.workspace.worktree?.repo_key ?? "", group.children), viewedWorkspaceId ?? null).join("\n");
   useEffect(() => publishWorkspaceRows(machineId, drawnRows === "" ? [] : drawnRows.split("\n")), [machineId, drawnRows]);
   // a pinned head's worktrees remain outside the card, but cannot move away from their repository
   const fixedIds = useMemo(() => new Set([...pinnedGroupIds(worktreeGroups, pinnedIds, (workspace) => workspace.workspace_id)].filter((id) => !pinnedIds.includes(id))), [worktreeGroups, pinnedIds]);
-  const movableGroups = shownGroups.rest.filter((group) => !fixedIds.has(group.workspace.workspace_id));
+  // a row moves among the rows of its own part; a folded part's rows stay put, as under a filter, since a
+  // move there would also pass the rows the fold hides
+  const stillIds = new Set(backgroundFolded ? movableParts.background.flatMap((group) => [group.workspace, ...group.children].map((member) => member.workspace_id)) : []);
+  const movableGroups = [...movableParts.people, ...backgroundFolded ? [] : movableParts.background].filter((group) => !fixedIds.has(group.workspace.workspace_id));
+  const partOf = (group: WorkspaceGroup<WorkspaceInfo>): boolean => backgroundApart && isBackgroundWorkspace(group.workspace) && !worktreeIds.has(group.workspace.workspace_id);
   // a pin moves the row to the other list, so React draws it anew: the row that had the focus gets it back
   const refocusRow = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -628,7 +674,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     const groupIndex = movableGroups.findIndex((group) => group.workspace.workspace_id === workspaceId);
     if (groupIndex >= 0) {
       const target = movableGroups[groupIndex + direction];
-      return target ? placeBlock(workspaceOrder, groupIds(movableGroups[groupIndex]!), groupIds(target), side) : null;
+      return target && partOf(target) === partOf(movableGroups[groupIndex]!) ? placeBlock(workspaceOrder, groupIds(movableGroups[groupIndex]!), groupIds(target), side) : null;
     }
     const parent = movableGroups.find((group) => group.children.some((child) => child.workspace_id === workspaceId));
     if (!parent) return null;
@@ -666,7 +712,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     const sourceGroup = movableGroups.find((group) => group.workspace.workspace_id === sourceId);
     if (sourceGroup) {
       const targetGroup = movableGroups.find((group) => group.workspace.workspace_id === targetId || group.children.some((child) => child.workspace_id === targetId));
-      if (!targetGroup || targetGroup === sourceGroup) return null;
+      if (!targetGroup || targetGroup === sourceGroup || partOf(targetGroup) !== partOf(sourceGroup)) return null;
       const movingDown = workspaceOrder.indexOf(sourceId) < workspaceOrder.indexOf(targetGroup.workspace.workspace_id);
       return placeBlock(workspaceOrder, groupIds(sourceGroup), groupIds(targetGroup), movingDown ? "after" : "before");
     }
@@ -679,7 +725,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
   // a finger's drag lands where the mouse's does: the same groups, the same index for herdr
   const touchHandlers = useRef<Parameters<typeof watchTouchReorder>[1] | null>(null);
   touchHandlers.current = {
-    canLift: (id) => editingWorkspaceId !== id && !fixedIds.has(id) && filtered === null && arrange,
+    canLift: (id) => editingWorkspaceId !== id && !fixedIds.has(id) && !stillIds.has(id) && filtered === null && arrange,
     onLift: (id) => { setMenu(null); setTouchDrag({ source: id, over: id }); },
     onOver: (id) => setTouchDrag((current) => current && { ...current, over: id }),
     onDrop: (id, target) => {
@@ -725,10 +771,59 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     moveVisible(workspaceId, event.key === "ArrowUp" ? -1 : 1);
   };
 
+  /**
+   * One agent under its workspace's row, in the tree Settings turns on: its mark, its title as the Agents
+   * list names it, its tab where the workspace has several, and its state in the same trailing cell. It
+   * opens its pane as the Agents row does; its pin, mute and group stay in the Agents list's menu.
+   */
+  const renderAgentRow = (entry: SidebarAgent) => {
+    const { pane, agent } = entry;
+    const selected = pane.pane_id === selectedPaneId;
+    const title = pane.label?.trim() || agent?.title?.trim() || pane.title?.trim() || displayPaneTitle(pane);
+    const tabName = agentTabName(entry.tab, snapshot?.tabs.filter((tab) => tab.workspace_id === pane.workspace_id) ?? [], t);
+    // the live name other tools address the agent by, as the Agents row says it: two agents of one title tell apart by it
+    const name = agent?.name?.trim() || null;
+    const place = [...new Set([name, tabName])].filter((part): part is string => part !== null && part !== title).join(" · ") || null;
+    const kind = entry.agentLabel ?? entry.canonicalAgent;
+    const mark = paneMark(entry);
+    // under the filter a row it did not match is there for the selection, drawn as context as in the Agents list
+    const context = filtered !== null && !filtered.matchedPanes.has(pane.pane_id);
+    return <li key={pane.pane_id} className={`workspace-agent${selected ? " is-selected" : ""}${context ? " is-filter-context" : ""}`} data-agent-pane={pane.pane_id}>
+      <button type="button" className="workspace-agent-select" disabled={!online} aria-current={selected ? "true" : undefined}
+        title={[...new Set([title, kind, name, tabName, pane.cwd].filter(Boolean))].join(" — ")}
+        draggable={online && !coarsePointer}
+        // dropped on the pane area, the row opens its pane in half of it (lib/split.ts)
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData(PANE_DRAG_TYPE, paneDragData({ machineId, paneId: pane.pane_id }));
+        }}
+        onPointerDown={(event) => { if (event.button === 0 && !event.ctrlKey && !selected && pane.agent != null) pressPane?.(machineId, pane.pane_id); }}
+        onClick={() => actions.selectPane(pane.pane_id)}
+      >
+        <span className="sidebar-mark" aria-hidden="true">{mark !== null ? <AgentMark agent={mark} size={18} /> : <Terminal />}</span>
+        {kind && kind !== title && <span className="visually-hidden">{kind}: </span>}
+        <span className="workspace-agent-title">{title}</span>
+        {place && <span className="workspace-agent-place">{place}</span>}
+        {context && selected && <span className="sidebar-filter-note">{t("Selected")}</span>}
+        {/* the counts give way before the title in a narrow sidebar: cut at the row's trailing cell, never over it */}
+        <span className="workspace-agent-badges">
+          <BackgroundBadge count={online ? pane.background_tasks : 0} />
+          <PlanBadge plan={online ? pane.plan : undefined} />
+          <ContextBadge context={online && settings.sidebarContext ? pane.context : undefined} />
+        </span>
+        <span className="sidebar-pane-meta">{online && pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge compact status={online ? activity.status(machineId, pane) : undefined} />}</span>
+      </button>
+    </li>;
+  };
+
   const renderWorkspaceRow = (workspace: WorkspaceInfo, children: WorkspaceInfo[] = [], nested = false, drop?: "before" | "after") => {
     const panes = roster.filter((pane) => pane.workspace_id === workspace.workspace_id);
     if (panes.length === 0) return null;
     const pane = currentPane(workspace, panes);
+    // the tree's agents of this workspace, the Agents list's rows in its order; under the filter the ones it keeps, as that list does
+    const workers = agentTree ? agentRows.filter((entry) => entry.pane.workspace_id === workspace.workspace_id && (filtered === null || filtered.panes.has(entry.pane.pane_id))) : [];
+    // the selected agent's own row carries the selection's fill, its workspace's row the place
+    const workerSelected = workers.some((entry) => entry.pane.pane_id === selectedPaneId);
     const selected = panes.some((candidate) => candidate.pane_id === selectedPaneId);
     const repoKey = workspace.worktree?.repo_key;
     const linked = workspace.worktree?.is_linked_worktree === true;
@@ -758,7 +853,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     const foldedCount = collapsed ? children.filter((child) => !roster.some((candidate) => candidate.workspace_id === child.workspace_id && candidate.pane_id === selectedPaneId)).length : 0;
     const editingWorkspace = editingWorkspaceId === workspace.workspace_id;
     // a row that cannot move still drags its pane into half of the pane area; on herdr-core only the move is off
-    const placed = fixedIds.has(workspace.workspace_id) || filtered !== null;
+    const placed = fixedIds.has(workspace.workspace_id) || stillIds.has(workspace.workspace_id) || filtered !== null;
     const fixed = placed || !arrange;
     const filterNote = context && selected ? <span className="sidebar-filter-note">{t("Selected")}</span> : null;
     const menuOpen = menu?.workspace.workspace_id === workspace.workspace_id;
@@ -768,7 +863,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     const face = <WorkspaceFavicon root={workspace.worktree?.checkout_path ?? pane.cwd ?? null} fallback={<span className="sidebar-mark workspace-folder" aria-hidden="true">{unfolded ? <FolderOpen /> : <Folder />}</span>} />;
     const toggleMenu = (anchor: HTMLElement, point?: { x: number; y: number }, previousFocus?: HTMLElement | null): void => setMenu(menuOpen ? null : { anchor, point, previousFocus, workspace, title: rowTitle, place: [branchNote, ...paths].filter(Boolean).join(" · ") || workspace.label });
     return <li
-      className={`workspace workspace-group pane-item${selected ? " is-selected" : ""}${collapsed ? " is-collapsed" : ""}${context ? " is-filter-context" : ""}${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${touchDrag?.source === workspace.workspace_id ? " is-lifted" : ""}`}
+      className={`workspace workspace-group pane-item${selected ? " is-selected" : ""}${workerSelected ? " has-selected-agent" : ""}${collapsed ? " is-collapsed" : ""}${context ? " is-filter-context" : ""}${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${touchDrag?.source === workspace.workspace_id ? " is-lifted" : ""}`}
       key={workspace.workspace_id}
       data-workspace={workspace.workspace_id}
       data-branch={branchTitle ?? undefined}
@@ -860,6 +955,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
         </div>
       </div>
       {inlineError?.workspaceId === workspace.workspace_id && <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>}
+      {/* the worktrees drawn under it go on from the same branch: the last agent is a tee, not an elbow */}
+      {workers.length > 0 && <ul className="workspace-agents" aria-label={t("Agents in {name}", { name: rowTitle })} data-more={children.some((child) => !collapsed || roster.some((candidate) => candidate.workspace_id === child.workspace_id && candidate.pane_id === selectedPaneId)) ? "" : undefined}>{workers.map(renderAgentRow)}</ul>}
     </li>;
   };
 
@@ -899,7 +996,14 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
             <p className="sidebar-pinned-label" aria-hidden="true"><span><Pin />{t("Pinned")}</span></p>
             <ul className="workspace-list workspace-list-pinned sidebar-pinned" aria-label={t("Pinned")}>{visibleGroups.pinned.map(renderGroup)}</ul>
           </>}
-          <ul className="workspace-list">{visibleGroups.rest.map(renderGroup)}</ul>
+          <ul className="workspace-list">{visibleParts.people.map(renderGroup)}</ul>
+          {visibleParts.background.length > 0 && <>
+            <button type="button" className="workspace-background-toggle" aria-expanded={!backgroundFolded} aria-controls={`${rosterId}-background`} onClick={toggleBackground}>
+              {backgroundFolded ? <ChevronRight className="workspace-background-caret" aria-hidden="true" /> : <ChevronDown className="workspace-background-caret" aria-hidden="true" />}
+              <span>{t("Background workspaces")}</span><span className="workspace-background-count">{visibleParts.background.length}</span>
+            </button>
+            <ul className="workspace-list workspace-list-background" id={`${rosterId}-background`} aria-label={t("Background workspaces")}>{visibleParts.shown.map(renderGroup)}</ul>
+          </>}
           {inlineError && inlineError.workspaceId === undefined && (
             <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>
           )}

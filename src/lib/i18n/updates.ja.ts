@@ -52,4 +52,5 @@ export const UPDATES_JA: Record<string, string> = {
   "Building the app": "アプリをビルド中",
   "Restarting the app": "アプリを再起動中",
   "Last checked {when}": "最終確認: {when}",
+  "This server is part of the Ovis app, which updates them together: updates come with the app, not from here.": "このサーバーは Ovis アプリの一部で、アプリと一緒にアップデートされます。アップデートはここではなくアプリから届きます。",
 };

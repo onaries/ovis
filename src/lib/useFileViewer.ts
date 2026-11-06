@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { outsideSettings } from "./settingsHistory.ts";
-import { withoutWebPanel } from "./historyKeys.ts";
+import { FILE_PREVIEW_KEY, WEB_PANEL_BELOW_KEY, webPagesBelow, withoutWebPanel } from "./historyKeys.ts";
 import type { FilePresentation } from "./filePresentation.ts";
 import { backUnderCurrentEntry } from "./historyNavigation.ts";
 
@@ -10,7 +10,7 @@ interface FilePreview {
   machineId: string;
   presentation?: FilePresentation;
 }
-const HISTORY_KEY = "ovis:file-preview";
+const HISTORY_KEY = FILE_PREVIEW_KEY;
 
 function previewFromState(state: unknown): FilePreview | null {
   if (state === null || typeof state !== "object") return null;
@@ -42,10 +42,15 @@ export function useFileViewer() {
   const openFile = useCallback((preview: FilePreview, replace = false) => {
     if (closing.current) return;
     // a preview opened over Settings is no entry of Settings: a reload on it closes Settings and keeps the file
-    const state = { ...withoutWebPanel(outsideSettings(window.history.state)), [HISTORY_KEY]: preview };
+    const current = outsideSettings(window.history.state);
+    const state = { ...withoutWebPanel(current), [HISTORY_KEY]: preview };
     // Choosing a different file inside an open preview must not add another Back step.
-    if (replace || previewFromState(window.history.state)) window.history.replaceState(state, "");
-    else window.history.pushState(state, "");
+    if (replace || previewFromState(window.history.state)) {
+      // a docked file taking over the entry of a page stacked on the web panel's other entries keeps
+      // their count: closing it goes back past them too, or the page under it would show again (#3058)
+      const below = webPagesBelow(current);
+      window.history.replaceState(below > 0 ? { ...state, [WEB_PANEL_BELOW_KEY]: below } : state, "");
+    } else window.history.pushState(state, "");
     setViewing(preview);
   }, []);
 
@@ -55,7 +60,7 @@ export function useFileViewer() {
       closing.current = true;
       // X, Escape and scrim clicks consume the same entry as the system Back button. A traversal
       // the browser refuses lands nowhere and fires no popstate: the latch is let go for the next click.
-      backUnderCurrentEntry()?.catch(() => { closing.current = false; });
+      backUnderCurrentEntry(1 + webPagesBelow(outsideSettings(window.history.state)))?.catch(() => { closing.current = false; });
     } else setViewing(null);
   }, []);
 
@@ -67,7 +72,11 @@ export function useFileViewer() {
     setViewing(next);
   }, []);
 
-  /** Hands the file's entry to a move to another pane: the file leaves it without a traversal, and the viewer closes. */
+  /**
+   * Hands the file's entry to a move to another pane, or to a web page that takes its place: the file
+   * leaves it without a traversal, and the viewer closes. The count of the web panel's entries under it
+   * stays, so a page taking the entry over still goes back past them on closing.
+   */
   const releaseFile = useCallback(() => {
     const { [HISTORY_KEY]: _, ...rest } = (window.history.state ?? {}) as Record<string, unknown>;
     window.history.replaceState(rest, "");

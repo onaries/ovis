@@ -12,7 +12,7 @@ import { useEdgeFades } from "../lib/useEdgeFades.ts";
 import { agentGroup, agentRoster, groupAgentRows, splitBackgroundRows, type AgentGroup, type AgentRow } from "../lib/agentRoster.ts";
 import { assignAgentGroup, liveGroupKeys, loadFoldedAgentGroups, rowAgentGroup, saveFoldedAgentGroups, splitNamedGroups } from "../lib/namedAgentGroups.ts";
 import { currentPaneMutes, paneMuteKey, prunePaneMutes, setPaneMutes, subscribePaneMutes, togglePaneMute } from "../lib/paneMutes.ts";
-import { lockedPinKeys, toggleAgentLock } from "../lib/paneLocks.ts";
+import { lockedPinKeys, locksAfterPinToggle, toggleAgentLock } from "../lib/paneLocks.ts";
 import { agentContext, agentTabName, paneMark } from "../lib/sidebarAgents.ts";
 import { useSettings } from "../lib/settings.ts";
 import { useSidebarActivity } from "../lib/sidebarActivity.tsx";
@@ -291,9 +291,9 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const live = new Set(allRows.map(({ machine, entry }) => sidebarPinKey(machine.id, entry.pane.pane_id)));
     const next = toggleSidebarPin(pruneSidebarPins(pinned, live, machines, hidden), key);
     setSidebarPins(next);
-    // a lock leaves with its pin, so a pane that later takes the same id is not locked by it
-    const locks = settings.lockedAgents.filter((held) => next.includes(held));
-    if (locks.length !== settings.lockedAgents.length) updateSettings({ lockedAgents: locks });
+    // a lock leaves with its pin, so a pane that later takes the same id is not locked by it; a fresh pin starts unlocked,
+    // also of a lock only another tab of this browser saved (lib/settings.ts: a change made from the stored settings)
+    updateSettings(({ lockedAgents }) => ({ lockedAgents: locksAfterPinToggle(lockedAgents, next, key) }));
   };
   const toggleMute = (machineId: string, paneId: string): void => {
     // as the pins: the mutes of panes a connected PC no longer has leave with this change, and no other PC's

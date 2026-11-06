@@ -94,3 +94,8 @@
   font-size: var(--fs-xs);
   color: var(--text-dim);
 }
+
+/* a device asking to join is answered over everything, Connect a device included (it is where one is often asked for) */
+.modal-scrim:has(> .account-approval) {
+  z-index: var(--z-palette);
+}

@@ -13,11 +13,11 @@ export interface MinimapTurn {
   readonly preview: string;
 }
 
-/** One tick per message the user sent; a compaction, a runtime notice or a task report is no turn of theirs. */
+/** One tick per message the user sent; a compaction, a runtime notice, a task report or a goal's wait is no turn of theirs. */
 export function minimapTurns(turns: readonly ConversationTurn[]): MinimapTurn[] {
   const result: MinimapTurn[] = [];
   turns.forEach((turn, row) => {
-    if (turn.role !== "user" || turn.parts.some((part) => part.kind === "compact" || part.kind === "notice" || part.kind === "task_result")) return;
+    if (turn.role !== "user" || turn.parts.some((part) => part.kind === "compact" || part.kind === "notice" || part.kind === "task_result" || part.kind === "goal_wait")) return;
     const text = turn.parts.map((part) => part.kind === "text" ? part.text : part.kind === "shell" ? `!${part.command}` : "").join(" ").replace(/\s+/g, " ").trim();
     result.push({ row, preview: text.length > 120 ? `${text.slice(0, 119)}…` : text });
   });

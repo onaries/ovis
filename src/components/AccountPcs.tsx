@@ -1,9 +1,11 @@
+// the list's rows are the relay shell's (.relay-shell-pc*), also in Settings, where RelayShell.tsx is not loaded
+import "./RelayShell.css";
 import "./AccountPcs.css";
 
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 
-import type { MyPc } from "../lib/account/myPcs.ts";
+import { newPcs, type MyPc } from "../lib/account/myPcs.ts";
 import type { AccountProvider } from "../lib/account/store.ts";
 import { useT } from "../lib/i18n.ts";
 import { lastSeen } from "../lib/lastSeen.ts";
@@ -49,7 +51,7 @@ export function AccountFinePrint() {
   return <p className="account-fineprint">{t("The account only lists your PCs. Sessions stay end-to-end encrypted.")}</p>;
 }
 
-function stateText(pc: MyPc, t: ReturnType<typeof useT>): string {
+export function accountPcStateText(pc: MyPc, t: ReturnType<typeof useT>): string {
   switch (pc.state) {
     // a pairing from before the account: removing this device through the account does not reach it yet
     case "paired": return pc.linked ? t("Ready") : t("Ready · not in the account yet");
@@ -68,7 +70,7 @@ export function AccountPcList({ pcs, onJoin }: { pcs: readonly MyPc[]; onJoin?: 
         const body = (
           <span className="account-pc-text">
             <span className="relay-shell-pc-name">{pc.name}</span>
-            <span className="account-pc-state"><span className="account-pc-dot" aria-hidden="true" />{stateText(pc, t)}</span>
+            <span className="account-pc-state"><span className="account-pc-dot" aria-hidden="true" />{accountPcStateText(pc, t)}</span>
           </span>
         );
         return (
@@ -87,7 +89,7 @@ export function AccountPcList({ pcs, onJoin }: { pcs: readonly MyPc[]; onJoin?: 
 
 /** The front page once signed in: the account's PCs, then how another one joins. */
 export function AccountPcs({ view, onJoin, onSignOut, onLeave }: {
-  view: Extract<AccountView, { kind: "signed-in" }>; onJoin?: (pc: MyPc) => void;
+  view: Extract<AccountView, { kind: "signed-in" }>; onJoin?: (pc: MyPc, options?: { typed?: boolean }) => void;
   /** ends the sign-in; every pairing stays */
   onSignOut?: () => void;
   /** removes this device from every PC of the account, then signs out */
@@ -99,6 +101,13 @@ export function AccountPcs({ view, onJoin, onSignOut, onLeave }: {
     <>
       <h1 className="relay-shell-title">{t("Your PCs")}</h1>
       <p className="relay-shell-copy account-subtitle">{t("Signed in with {provider}", { provider: PROVIDER_NAMES[view.provider] })}</p>
+      {view.pcs !== null && onJoin && newPcs(view.pcs, Date.now()).map((pc) => (
+        <section key={pc.server_id} className="account-new-pc" aria-label={t("New PC")}>
+          <p className="account-new-pc-title">{t("Add {name} to your account?", { name: pc.name })}</p>
+          <p className="account-fineprint">{t("You type the number {name} shows on its own screen, then approve there. Every device of your account can then use it.", { name: pc.name })}</p>
+          <button type="button" className="btn btn-primary" onClick={() => onJoin(pc, { typed: true })}>{t("Add this PC")}</button>
+        </section>
+      ))}
       {view.pcs === null
         ? <div className="relay-shell-wait" role="status"><div className="boot-spinner" aria-hidden="true" /><span className="visually-hidden">{t("Loading your PCs…")}</span></div>
         : <AccountPcList pcs={view.pcs} {...(onJoin ? { onJoin } : {})} />}

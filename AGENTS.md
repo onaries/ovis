@@ -62,6 +62,13 @@ to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](sr
   fresh `%TEMP%` clone that it deletes afterwards (one such run at a time):
   `ssh winvm "pwsh -File C:\ProgramData\winvm\Invoke-InSession.ps1 -Command '& C:\ProgramData\winvm\pr-check.ps1 -Pr <N>'"`.
   When a run leaves state behind, `winvm reset`, then `winvm start`.
+- On this PC `/tmp` is a small tmpfs that runs out of inodes: run `bun run check fast`, tests
+  and review checkouts with `TMPDIR=$HOME/.cache/ovis-tmp/<name>` (create it first, delete it
+  when done).
+- A UI change touching a shared component (FilesDialog, RepoChanges, the sidebar, selection or
+  focus, the terminal view) runs the browser regressions that cover it (the
+  `scripts/*-regression.ts` and `scripts/*-qa.ts` that name it) in the CI runner image before it
+  is ready for review, even when the new behaviour is opt-in.
 
 ## Maintainer workflow
 - A session that changes code, in any harness, stops at an open PR: only the maintainer's merge
@@ -90,6 +97,27 @@ to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](sr
   the Release run is done.
 - Required checks: Fast checks, Integration and browser, Native Windows install. Resolve review
   threads before merging (branch protection does not enforce it).
+- The merge pass may merge on a local merge gate instead of waiting for GitHub's runs. On a
+  freshly fetched `origin/main` with the PR head merged in (nothing pushed), it runs CI's release
+  guards, then four groups side by side, each in a checkout and container of its own of the
+  self-hosted CI runner image, as the image's own user: Fast checks, the integration suite and
+  CI's two browser jobs (the second with 16 workers). The containers get CPUs 64-127, the CI
+  runner containers move to 0-63 while it runs, and herdr's panes stay on 0-95. CI's change
+  filter picks the groups: a docs-only PR runs Fast checks alone, a PR changing only `src/` runs
+  only the integration files that import `src/`. The suites see none of the host's environment
+  or credentials, but the release guards and `bun install` run on the host, so an external PR is
+  gated only after its diff has been reviewed.
+- The gate posts its result and the `main` commit it ran on as a "Local merge gate" PR comment;
+  the merge pass then squash-merges with `--admin --match-head-commit` at the gated head (branch
+  protection lets admins bypass the required checks), with a clear review at that head and no
+  unresolved threads. As with a merge on GitHub's checks (branches need not be up to date),
+  `main` may have moved meanwhile, and main's own CI run checks the result. An integration file
+  whose every failed test ran 2 s or more, or failed on a timeout or a start that never came, is
+  rerun once and listed in the comment; any other failure is red. A PR still waits for GitHub's
+  checks when it touches what only GitHub's runners check: `app/`, `crates/`, a `.ps1`,
+  `install.*`, `.github/`, `package.json`, `bun.lock`, `patches/`, `scripts/plugin*`, or the
+  files of a test that the Windows or macOS jobs of `ci.yml` run (`server/grok.test.ts` covers
+  `server/grok*`).
 - Run `bun run check fast` before every push, and push a PR's commits together: each push to a
   PR cancels its CI run in progress and starts every job again.
 - A handoff or a PR's Validation says which checks ran (`bun run check fast`, `full`, or which

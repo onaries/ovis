@@ -58,8 +58,7 @@ function write(path: string, value: unknown) {
 
 const CODEX_USAGE = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_RESETS = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
-// the query Claude Code itself sends to have its limit resets listed
-const CLAUDE_USAGE = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
+const CLAUDE_USAGE = "https://api.anthropic.com/api/oauth/usage";
 
 function signInCodex(exp = NOW / 1000 + HOUR / 1000, dir = ".codex", user = "user-1", email = "me@example.com") {
   write(join(home, dir, "auth.json"), {
@@ -137,37 +136,26 @@ describe("providers", () => {
     ]);
   });
 
-  it("reads Claude's extra usage in its currency and the limit resets it can still use", async () => {
+  it("reads Claude's extra usage in its currency, against its monthly cap", async () => {
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
     replies.set(CLAUDE_USAGE, { body: {
       five_hour: { utilization: 42, resets_at: null },
       extra_usage: { is_enabled: true, monthly_limit: 1539, used_credits: 1219, utilization: 79.2, currency: "EUR" },
-      cedar_ember: { eligible: true, grants: [
-        { id: "a", resets_left: 2, paused: false, ends_at: new Date(NOW + 30 * HOUR).toISOString() },
-        { id: "b", resets_left: 1, paused: false, ends_at: new Date(NOW + 6 * HOUR).toISOString() },
-        // none left, paused, already over, or not begun: none of these can be used now
-        { id: "c", resets_left: 0, paused: false, ends_at: new Date(NOW + HOUR).toISOString() },
-        { id: "d", resets_left: 4, paused: true, ends_at: new Date(NOW + HOUR).toISOString() },
-        { id: "e", resets_left: 4, paused: false, ends_at: new Date(NOW - HOUR).toISOString() },
-        { id: "f", resets_left: 4, paused: false, starts_at: new Date(NOW + HOUR).toISOString(), ends_at: new Date(NOW + 2 * HOUR).toISOString() },
-      ] },
     } });
     const [usage] = (await new UsageService(context(), only("claude")).report()).providers;
     expect(requests.map((request) => request.url)).toEqual([CLAUDE_USAGE]);
     expect(usage!.credits).toEqual({ kind: "spend", currency: "EUR", used: 12.19, limit: 15.39, used_percent: 79.2 });
-    expect(usage!.resets).toEqual({ available: 3, expires_at: new Date(NOW + 6 * HOUR).toISOString() });
+    expect(usage).not.toHaveProperty("resets");
   });
 
-  it("lists no Claude credits or resets when extra usage is off and no reset is left", async () => {
+  it("lists no Claude credits when extra usage is off", async () => {
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
     replies.set(CLAUDE_USAGE, { body: {
       five_hour: { utilization: 42, resets_at: null },
       extra_usage: { is_enabled: false, monthly_limit: null, used_credits: null, utilization: null },
-      cedar_ember: { eligible: true, grants: [{ id: "a", resets_left: 0, paused: false, ends_at: null }] },
     } });
     const [usage] = (await new UsageService(context(), only("claude")).report()).providers;
     expect(usage).not.toHaveProperty("credits");
-    expect(usage).not.toHaveProperty("resets");
   });
 
   it("reads Claude's uncapped extra usage as spend with no limit, in yen without cents", async () => {
@@ -209,6 +197,17 @@ describe("providers", () => {
     expect(requests.map((request) => request.url)).toEqual([CODEX_USAGE]);
     expect(later).not.toHaveProperty("credits");
     expect(later).not.toHaveProperty("resets");
+  });
+
+  it("keeps a fresh Codex reading when its list of resets answers 429", async () => {
+    signInCodex();
+    const reply = codexReply();
+    replies.set(CODEX_USAGE, { body: { ...(reply.body as object), rate_limit_reset_credits: { available_count: 1 } } });
+    replies.set(CODEX_RESETS, { status: 429, headers: { "retry-after": "3600" } });
+    const [usage] = (await new UsageService(context(), only("codex")).report()).providers;
+    expect(usage!.problem).toBeNull();
+    expect(usage!.windows.map((window) => window.used_percent)).toEqual([12, 77]);
+    expect(usage!.resets).toEqual({ available: 1, expires_at: null });
   });
 
   it("keeps the last credits and resets through a failed read, as it keeps the windows", async () => {

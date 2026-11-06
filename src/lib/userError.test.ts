@@ -11,7 +11,7 @@ describe("userErrorMessage", () => {
   afterEach(() => setCurrentLanguage("en"));
 
   it("tells a signed-out browser to pair again", () => {
-    for (const status of [401, 403]) expect(userErrorMessage(api(status))).toEqual({ message: "This browser is not signed in to this PC any more. Pair it again in Settings → Phone & devices.", detail: "herdr said no" });
+    for (const status of [401, 403]) expect(userErrorMessage(api(status))).toEqual({ message: "This browser is not signed in to this PC any more. Pair it again in Settings → Devices and PCs.", detail: "herdr said no" });
   });
 
   it("says a missing item is gone", () => {
@@ -134,7 +134,7 @@ describe("userFailure", () => {
   afterEach(() => setCurrentLanguage("en"));
 
   it("names the cause the status gives, with the advice beyond trying again folded beside it", () => {
-    expect(userFailure(api(401))).toEqual({ kind: "signed-out", cause: "Not signed in to this PC", advice: "Pair it again in Settings → Phone & devices.", detail: "herdr said no" });
+    expect(userFailure(api(401))).toEqual({ kind: "signed-out", cause: "Not signed in to this PC", advice: "Pair it again in Settings → Devices and PCs.", detail: "herdr said no" });
     expect(userFailure(api(404))).toEqual({ kind: "gone", cause: "It no longer exists on the PC", advice: "Refresh and try again.", detail: "herdr said no" });
     expect(userFailure(api(409))).toEqual({ kind: "changed", cause: "It changed on the PC", advice: "Check it and try again.", detail: "herdr said no" });
     expect(userFailure(new TypeError("Failed to fetch"))).toEqual({ kind: "unreachable", cause: "Can't reach the PC", advice: "Check your connection, then try again.", detail: "Failed to fetch" });

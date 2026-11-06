@@ -847,7 +847,7 @@ index 90e27a5d9905ae036a0ac0a18e298adf782c923b..13a26d01f96d5b2eb1578ad9f3ed0d54
    public registerEscHandler(id: IFunctionIdentifier, callback: () => boolean | Promise<boolean>): IDisposable {
      return this._inputHandler.registerEscHandler(id, callback);
 diff --git a/src/common/InputHandler.ts b/src/common/InputHandler.ts
-index ba53941a7a27a2f65e668c2c5d0b4e3a213e09b8..88acd44b6272937c03f37d4950757f91121b3c2b 100644
+index ba53941a7a27a2f65e668c2c5d0b4e3a213e09b8..c726551973c561f0be307657224b7e10d2e8da8d 100644
 --- a/src/common/InputHandler.ts
 +++ b/src/common/InputHandler.ts
 @@ -593,6 +593,8 @@ export class InputHandler extends Disposable implements IInputHandler {
@@ -883,6 +883,19 @@ index ba53941a7a27a2f65e668c2c5d0b4e3a213e09b8..88acd44b6272937c03f37d4950757f91
    /**
     * BEL
     * Bell (Ctrl-G).
+@@ -1215,7 +1227,11 @@ export class InputHandler extends Disposable implements IInputHandler {
+         this._eraseInBufferLine(j, 0, this._activeBuffer.x + 1, true, respectProtect);
+         if (this._activeBuffer.x + 1 >= this._bufferService.cols) {
+           // Deleted entire previous line. This next line can no longer be wrapped.
+-          this._activeBuffer.lines.get(j + 1)!.isWrapped = false;
++          // Ovis: j is a screen row (the buffer's row is ybase + j), and the last row has none below it;
++          // a selective erase (DECSED) may leave protected cells, which the next row still continues
++          const next = this._activeBuffer.lines.get(this._activeBuffer.ybase + j + 1);
++          const kept = respectProtect && (this._activeBuffer.lines.get(this._activeBuffer.ybase + j)?.getTrimmedLength() ?? 0) > 0;
++          if (next && j + 1 < this._bufferService.rows && !kept) next.isWrapped = false;
+         }
+         while (j--) {
+           this._resetBufferLine(j, respectProtect);
 diff --git a/src/common/Types.ts b/src/common/Types.ts
 index 3c147b8ed43bc0c72886963b0df500a28a6c02f9..008209d87d305db0e406271938d92e57b4fa8000 100644
 --- a/src/common/Types.ts
@@ -895,6 +908,20 @@ index 3c147b8ed43bc0c72886963b0df500a28a6c02f9..008209d87d305db0e406271938d92e57
  
    /** C0 BEL */ bell(): boolean;
    /** C0 LF */ lineFeed(): boolean;
+diff --git a/src/common/buffer/Buffer.ts b/src/common/buffer/Buffer.ts
+index 81ab156b57af8c49ed83ffecf6184d13a2c75f75..6114c6bc9545542cc85fb8c2cc889dfc3c69a0f8 100644
+--- a/src/common/buffer/Buffer.ts
++++ b/src/common/buffer/Buffer.ts
+@@ -450,7 +450,8 @@ export class Buffer implements IBuffer {
+           if (this.y < newRows - 1) {
+             this.y++;
+             this.lines.pop();
+-          } else {
++          } else if (this.ybase < Math.min(this.lines.maxLength, this.lines.length + countToInsert) - newRows) {
++            // Ovis: as below, ybase stays within the buffer; with no scrollback the top row is trimmed instead
+             this.ybase++;
+             this.ydisp++;
+           }
 diff --git a/src/common/input/Keyboard.ts b/src/common/input/Keyboard.ts
 index c825b4120e7211ca2b51f474154f3b52be016432..3bab4e2b55c092a68facabd6f2ed802769ec058f 100644
 --- a/src/common/input/Keyboard.ts

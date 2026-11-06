@@ -168,6 +168,17 @@ describe("GET /api/pane/btw hard caps", () => {
     expect(body.more).toBe(true);
   });
 
+  it("counts the first item of every container, so nested single-item arrays cannot pass for half their items", async () => {
+    const { transcript, folder } = history("nested");
+    // 1,500 chains of eleven nested single-item containers: about 34,500 items, about 18,000 when first items go uncounted
+    const chain = JSON.parse(`${"[".repeat(10)}{}${"]".repeat(10)}`);
+    writeFileSync(join(folder, "entry-n.json"), JSON.stringify({ ...topic("n", 2), images: Array.from({ length: 1500 }, () => chain) }));
+    writeFileSync(join(folder, "entry-q.json"), JSON.stringify(topic("q", 1)));
+    const { body } = await answer(transcript);
+    expect(body.topics.map((found) => found.id)).toEqual(["q"]);
+    expect(body.more).toBe(true);
+  });
+
   it("stops listing a folder of thousands of topic files, and says it stopped", async () => {
     const { transcript, folder } = history("crowded");
     for (let index = 0; index < 5000; index++) writeFileSync(join(folder, `entry-f${index}.json`), JSON.stringify(topic(`f${index}`, index)));

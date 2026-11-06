@@ -58,7 +58,7 @@ try {
       await off.viewer.getByRole("button", { name: "Show source", exact: true }).waitFor();
       assert.equal(await off.viewer.getByRole("button", { name: "Edit file", exact: true }).count(), 0, `${tag}: no Edit while the setting is off`);
       // Settings → Chat → File viewer holds the switch, off
-      await off.page.goto(`${origin}/?pane=${encodeURIComponent(pane)}&settings=chat`);
+      await off.page.goto(`${origin}/?pane=${encodeURIComponent(pane)}&settings=chat&section=file-viewer-more`);
       const toggle = off.page.locator(".settings-dialog").getByRole("switch", { name: "Edit text files", exact: true });
       await toggle.scrollIntoViewIfNeeded();
       assert.equal(await toggle.getAttribute("aria-checked"), "false", `${tag}: Edit text files is off by default`);

@@ -14,6 +14,16 @@ export interface ChatRowMemory {
 
 export const ChatRowMemoryContext = createContext<ChatRowMemory | null>(null);
 
+/** The memory of the row `key`, made the first time it is asked for: before the row is drawn too. */
+export function chatRowMemory(memories: Map<string, ChatRowMemory>, key: string): ChatRowMemory {
+  let memory = memories.get(key);
+  if (!memory) {
+    memory = { toggles: new Map(), outputs: new Map(), runs: new Map(), dormant: new Map() };
+    memories.set(key, memory);
+  }
+  return memory;
+}
+
 export function useChatRowToggle(key: string, initial: boolean | null) {
   const memory = useContext(ChatRowMemoryContext);
   const [value, setValue] = useState(() => memory?.toggles.has(key) ? memory.toggles.get(key) ?? null : initial);

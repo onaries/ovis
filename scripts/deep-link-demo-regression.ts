@@ -596,7 +596,8 @@ try {
         await more.waitFor();
         const search = more.getByRole("button", { name: "Search panes and actions", exact: true });
         assert.equal(await search.count(), 1, "More offers Search panes and actions");
-        assert.equal((await more.locator(".row-sheet-item .row-sheet-label").allTextContents())[0], "Search panes and actions", "Search panes and actions is More's first item");
+        // a phone's header lists the tabs, so More leads with the jump to a session waiting for you, when one waits
+        assert.equal((await more.locator(".row-sheet-item .row-sheet-label").allTextContents()).find((label) => label !== "Open the next session waiting for you"), "Search panes and actions", "Search panes and actions is More's first item of its own");
         await more.getByRole("button", { name: "Browse files", exact: true }).tap();
         const files = page.getByRole("dialog", { name: "Files", exact: true });
         await files.waitFor();
@@ -660,9 +661,9 @@ try {
         await waitSelected(page, INFRA);
         await page.goForward();
         await waitSelected(page, DOCS);
-        // an item that opens a dialog on the sheet's address keeps the sheet's entry: the tab menu's
-        // Rename pane dialog stays up once the sheet's closing has settled, and Back closes it alone
-        await page.locator(".tab-strip-menu").tap();
+        // an item that opens a dialog on the sheet's address keeps the sheet's entry: More's (a phone's
+        // pane menu) Rename pane dialog stays up once the sheet's closing has settled, and Back closes it alone
+        await more.tap();
         await page.getByRole("button", { name: "Rename pane", exact: true }).tap();
         const creation = page.getByRole("dialog", { name: "Rename pane", exact: true });
         await creation.waitFor();

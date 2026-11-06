@@ -29,7 +29,11 @@ jobs:
       # The action checks only commit authors, which anyone can set to another account's email, so
       # the account that opened the PR must also author one of its commits and sign. Without a
       # linked account the action falls back to the free-text git author name, which the allowlist
-      # would accept (`devswha`, `x[bot]`), and it reads only the first 100 commits.
+      # would accept (`devswha`, `x[bot]`), and it reads only the first 100 commits. When the
+      # maintainer opens a PR from someone else's fork, the fork's owner stands in for the opener;
+      # a fork with no personal owner (an organization's, or a deleted one) needs an outside opener.
+      # Co-authors are not checked: agents co-author as ordinary accounts (`claude`, `cursoragent`),
+      # and the action takes a signature only from a commit author.
       - name: Require a GitHub account on every commit
         shell: bash
         env:
@@ -37,8 +41,8 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
-          meta=$(gh api "repos/$REPO/pulls/$PR" --jq '"\(.user.login) \(.commits)"')
-          read -r opener count <<<"$meta"
+          meta=$(gh api "repos/$REPO/pulls/$PR" --jq '"\(.user.login) \(.commits) \(.head.repo.full_name // "-") \(.head.repo.owner.login // "-") \(.head.repo.owner.type // "-")"')
+          read -r opener count head_repo head_owner head_type <<<"$meta"
           if [ "$count" -gt 100 ]; then
             echo "::error title=CLA::This pull request has $count commits; the CLA check reads only the first 100. Squash it to 100 commits or fewer and push again."
             exit 1
@@ -49,9 +53,21 @@ jobs:
             echo "::error title=CLA::Commits $unlinked have no GitHub account as their author, so the CLA cannot be checked. Commit with an email linked to your GitHub account (git commit --amend --reset-author) and push again."
             exit 1
           fi
-          if [ "$opener" != devswha ] && [[ "$opener" != *"[bot]" ]] && ! awk -v o="$opener" '$2 == o { found = 1 } END { exit !found }' <<<"$commits"; then
+          exempt() { [ "$1" = devswha ] || [[ "$1" == *"[bot]" ]]; }
+          authored() { awk -v o="$1" '$2 == o { found = 1 } END { exit !found }' <<<"$commits"; }
+          if ! exempt "$opener" && ! authored "$opener"; then
             echo "::error title=CLA::No commit in this pull request is authored by @$opener, who opened it, so @$opener cannot sign the CLA here. Add a commit made with an email linked to @$opener's GitHub account and push again."
             exit 1
+          fi
+          if exempt "$opener" && [ "$head_repo" != "$REPO" ] && ! exempt "$head_owner"; then
+            if [ "$head_type" != User ]; then
+              echo "::error title=CLA::This pull request comes from $head_repo, which has no personal owner to sign the CLA. Ask the contributor to open it from their own account."
+              exit 1
+            fi
+            if ! authored "$head_owner"; then
+              echo "::error title=CLA::No commit in this pull request is authored by @$head_owner, whose fork $head_repo it comes from, so @$head_owner cannot sign the CLA here. Add a commit made with an email linked to @$head_owner's GitHub account and push again."
+              exit 1
+            fi
           fi
       - name: Check and record CLA signatures
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1

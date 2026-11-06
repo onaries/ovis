@@ -92,8 +92,8 @@ try {
   assert.ok(exposed.text?.includes("0.0.0.0"), "the notice names the address it is reachable at");
   assert.notEqual(exposed.tint?.actual, "rgba(0, 0, 0, 0)", "the notice carries a background of its own");
   assert.equal(exposed.tint?.actual, exposed.tint?.danger, "the notice's background is the danger tint");
-  assert.equal(exposed.settings, "Phone & devices", "the notice's button opens Settings on the devices page");
-  console.log("PASS the open-to-the-network notice appears, names the address and opens Phone & devices");
+  assert.equal(exposed.settings, "Devices and PCs", "the notice's button opens Settings on the devices page");
+  console.log("PASS the open-to-the-network notice appears, names the address and opens Devices and PCs");
 
   const loopback = await read(browser, "127.0.0.1");
   console.log(`loopback  : ${JSON.stringify(loopback)}`);

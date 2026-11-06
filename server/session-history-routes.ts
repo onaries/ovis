@@ -98,15 +98,15 @@ async function paneStore(paneId: string, options: StoreOptions): Promise<{ store
   if (processes === undefined || !Array.isArray(foreground) || foreground.length === 0) return null;
   const platform = options.platform ?? process.platform;
   const table = options.table ?? recentProcessTable;
+  const home = options.stores?.home ?? userHome();
   if (platform === "win32" && !foreground.some(isClaude)) {
     // herdr names only the shell on Windows, even while Claude runs in it
     if (typeof processes.shell_pid !== "number") return null;
     let below: PaneProcess[] | null;
-    try { below = await windowsShellClaude(processes.shell_pid, table); } catch { return null; }
+    try { below = await windowsShellClaude(processes.shell_pid, table, home); } catch { return null; }
     if (below === null) return null;
     foreground = below;
   }
-  const home = options.stores?.home ?? userHome();
   const source = await paneClaudeSource(foreground, home, platform, table);
   const store = await claudeStoreOf(source, home, options.stores?.env ?? process.env);
   const claude = foreground.filter(isClaude);

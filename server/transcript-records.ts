@@ -1,5 +1,5 @@
 /** Shared native-record rules keep paging, rendering and on-demand results consistent. */
-import type { ConversationPart, ConversationTurn, OmoTaskResult } from "../shared/protocol.ts";
+import type { ConversationPart, ConversationTurn, GoalWaitSources, OmoTaskResult } from "../shared/protocol.ts";
 import type { SubagentDetail, TaskNotification } from "./claude-subagents.ts";
 import { skillInvocationPrompt, skillPromptMessage } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
@@ -175,6 +175,43 @@ const label = (value: unknown): string | null => typeof value === "string" && va
 const amount = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 
 /**
+ * OmO continues an active goal on its own with a `goal-continuation` custom message (`display:
+ * false`), the TUI's "goal continues" line: the turn after it is the goal's, not an answer to anyone.
+ * A notice in the user's seat, its text the objective the message quotes (escaped as OmO writes it).
+ */
+export function omoGoalContinuation(value: unknown): Extract<ConversationPart, { kind: "notice" }> | null {
+  const entry = record(value);
+  if (entry.type !== "custom_message" || entry.customType !== "goal-continuation" || typeof entry.content !== "string") return null;
+  const quoted = /<untrusted_objective>([\s\S]*?)<\/untrusted_objective>/.exec(entry.content)?.[1];
+  const objective = quoted?.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&quot;", '"').replaceAll("&#39;", "'").replaceAll("&amp;", "&").trim();
+  return { kind: "notice", text: objective || entry.content.trim().split("\n")[0]!, source: "goal-continuation" };
+}
+
+/** OmO's names for what a goal's wait waits on (`wakeSources`), by GoalWaitSources' names; its wake queue is its own. */
+const GOAL_WAIT_SOURCES: Record<string, keyof GoalWaitSources> = {
+  "senpi-task": "tasks", "terminal-monitors": "monitors", "terminal-background-sessions": "terminals", "omo-dag": "dags", "senpi-codemode": "cells",
+};
+
+/**
+ * OmO's goal waiting on background work (`goal-cache-warmup`): `scheduled` names when it continues
+ * and what it waits on; any other phase (`resumed`) ends the wait, and so does a record that
+ * cannot say when it would continue.
+ */
+export function omoGoalWait(value: unknown): { wait: Extract<ConversationPart, { kind: "goal_wait" }> | null } | null {
+  const entry = record(value);
+  if (entry.type !== "custom" || entry.customType !== "goal-cache-warmup") return null;
+  const data = record(entry.data);
+  const due = amount(data.dueAtMs);
+  if (data.phase !== "scheduled" || due === null || Number.isNaN(new Date(due).getTime())) return { wait: null };
+  const waiting_on: GoalWaitSources = { tasks: 0, monitors: 0, terminals: 0, dags: 0, cells: 0 };
+  for (const [source, count] of Object.entries(record(data.wakeSources))) {
+    const kind = GOAL_WAIT_SOURCES[source];
+    if (kind !== undefined) waiting_on[kind] = Math.floor(amount(count) ?? 0);
+  }
+  return { wait: { kind: "goal_wait", due_at: new Date(due).toISOString(), waiting_on } };
+}
+
+/**
  * The summaries OmO's `task` calls gave their tasks, by task id: the call's result names the
  * task it started (`details.task_id`, or one `details.items` entry per task of a batch).
  */
@@ -288,10 +325,12 @@ interface OmpParseState {
   /** The caller's map when parsing a page in stretches; previews must never write to it. */
   taskTitles: Map<string, string>;
   settled: boolean;
+  /** The index of the turn that shows OmO's goal waiting (omoGoalWait); only ever the last turn. */
+  wait: number | null;
 }
 
 function ompParseState(options: OmpTranscriptOptions): OmpParseState {
-  return { turns: [], pending: new Map(), taskTitles: options.taskTitles ?? new Map(), settled: false };
+  return { turns: [], pending: new Map(), taskTitles: options.taskTitles ?? new Map(), settled: false, wait: null };
 }
 
 /**
@@ -308,7 +347,13 @@ export function createOmpTranscriptParser(options: OmpTranscriptOptions = {}): T
 
 function ompTranscriptParser(state: OmpParseState, images: boolean, callIds: boolean, blobs: string | null): TranscriptParser {
   const { turns, pending, taskTitles } = state;
-  const assistantTurn = (ts?: string): ConversationTurn => {
+  const endWait = (): void => {
+    if (state.wait !== null) turns.splice(state.wait, 1);
+    state.wait = null;
+  };
+  const assistantTurn = (ts: string | undefined, speaks: boolean): ConversationTurn => {
+    // the agent speaks again: a goal's wait is over, and the turn it would continue is the one before it
+    if (speaks) endWait();
     const last = turns[turns.length - 1];
     if (last !== undefined && last.role === "assistant" && !state.settled) return last;
     const turn: ConversationTurn = { role: "assistant", ts: ts ?? null, parts: [] };
@@ -319,8 +364,15 @@ function ompTranscriptParser(state: OmpParseState, images: boolean, callIds: boo
   const contentParts = (content: unknown): { type?: string; text?: unknown }[] =>
     Array.isArray(content) ? content.filter((part) => typeof part === "object" && part !== null) : [];
 
+  // a goal's wait holds only while nothing follows it: a turn the last record added after it ends it
+  // (an assistant record with nothing to draw opens an empty turn, which is not one)
+  const settleWait = (): void => {
+    if (state.wait !== null && turns.slice(state.wait + 1).some((turn) => turn.parts.length > 0)) endWait();
+  };
+
   const write = (text: string): void => {
     for (const line of text.split("\n")) {
+      settleWait();
       if (line.trim().length === 0) continue;
       let entry: unknown;
       try {
@@ -329,8 +381,24 @@ function ompTranscriptParser(state: OmpParseState, images: boolean, callIds: boo
         continue; // a torn tail line while omp is mid-append
       }
       if (entry === null || typeof entry !== "object") continue;
-      if (isContextClear(entry, "omp-transcript")) { turns.length = 0; pending.clear(); continue; }
+      if (isContextClear(entry, "omp-transcript")) { turns.length = 0; pending.clear(); state.wait = null; continue; }
       const timestamp = (entry as { timestamp?: string }).timestamp;
+      const goalWait = omoGoalWait(entry);
+      if (goalWait !== null) {
+        endWait();
+        if (goalWait.wait !== null) {
+          state.wait = turns.length;
+          turns.push({ role: "user", ts: timestamp ?? null, parts: [goalWait.wait] });
+        }
+        continue;
+      }
+      // OmO starts a turn nobody typed (a wake, a monitor's event, the goal's continuation): the wait is over
+      if (record(entry).type === "custom" && record(entry).customType === "engine-turn-start") { endWait(); continue; }
+      const continuation = omoGoalContinuation(entry);
+      if (continuation !== null) {
+        turns.push({ role: "user", ts: timestamp ?? null, parts: [continuation] });
+        continue;
+      }
       const skillPrompt = skillPromptMessage(entry);
       if (skillPrompt !== null) {
         turns.push({ role: "user", ts: timestamp ?? null, parts: [{ kind: "text", text: skillPrompt.request }, ...skillPrompt.skills.map((skill) => ({ kind: "skill" as const, skill }))] });
@@ -353,7 +421,7 @@ function ompTranscriptParser(state: OmpParseState, images: boolean, callIds: boo
       if ((entry as { type?: unknown }).type === "compaction") {
         const summary = (entry as { summary?: unknown }).summary;
         if (typeof summary === "string" && summary.trim().length > 0) {
-          turns.push({ role: "user", ts: timestamp ?? null, parts: [{ kind: "compact", text: summary }] });
+          turns.push({ role: "user", ts: timestamp ?? null, parts: [{ kind: "compact", text: summary, ...compactionTokens(entry) }] });
         }
         continue;
       }
@@ -401,7 +469,13 @@ function ompTranscriptParser(state: OmpParseState, images: boolean, callIds: boo
       }
 
       if (message.role === "assistant" && Array.isArray(message.content)) {
-        const turn = assistantTurn(timestamp);
+        const speaks = message.content.some((block: unknown) => {
+          const b = record(block);
+          return b.type === "text" ? typeof b.text === "string" && b.text.length > 0
+            : b.type === "thinking" ? (typeof b.thinking === "string" ? b.thinking : typeof b.text === "string" ? b.text : "").length > 0
+            : b.type === "toolCall" && typeof b.name === "string";
+        }) || (message.stopReason === "error" && typeof message.errorMessage === "string" && message.errorMessage.length > 0);
+        const turn = assistantTurn(timestamp, speaks);
         if (timestamp) turn.end_ts = timestamp;
         for (const block of message.content) {
           if (typeof block !== "object" || block === null) continue;
@@ -432,11 +506,12 @@ function ompTranscriptParser(state: OmpParseState, images: boolean, callIds: boo
         // a failed request (a 401, an overloaded provider) leaves an empty message: without its
         // error the chat showed the prompt with no answer at all
         if (message.stopReason === "error" && typeof message.errorMessage === "string" && message.errorMessage.length > 0) {
-          turn.parts.push({ kind: "text", text: `Error: ${message.errorMessage}` });
+          turn.parts.push({ kind: "text", text: `Error: ${message.errorMessage}`, failed: true });
         }
         state.settled = message.stopReason === "stop";
       }
     }
+    settleWait();
   };
 
   return {
@@ -452,6 +527,17 @@ function ompTranscriptParser(state: OmpParseState, images: boolean, callIds: boo
       return structuredClone(turns.filter((turn) => turn.parts.length > 0));
     },
   };
+}
+
+/** The token counts a pi-family compaction record states; a missing, zero or malformed count is left out. */
+function compactionTokens(entry: object): { tokens_before?: number; tokens_after?: number; tokens_saved?: number } {
+  const count = (value: unknown): number | undefined => typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  const { tokensBefore, tokensAfter, details } = entry as { tokensBefore?: unknown; tokensAfter?: unknown; details?: { structuralYield?: { savedTokens?: unknown } } | null };
+  const before = count(tokensBefore);
+  const after = count(tokensAfter);
+  // OmO (senpi.compaction.summary.v1) records what its structural pass saved, not the size after
+  const saved = typeof details === "object" && details !== null ? count(details.structuralYield?.savedTokens) : undefined;
+  return { ...(before !== undefined ? { tokens_before: before } : {}), ...(after !== undefined ? { tokens_after: after } : {}), ...(saved !== undefined ? { tokens_saved: saved } : {}) };
 }
 
 /** One-shot parsing shares the incremental record rules, including valid no-newline tails. */

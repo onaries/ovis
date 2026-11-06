@@ -110,12 +110,16 @@ export class MachineRelay {
   }
   /**
    * A frame as the browser is told it: a frame that names `tokens` anywhere is read, whatever its key
-   * order, and a snapshot among them re-written where a value leaves; the rest pass unread.
+   * order, and a snapshot among them re-written where a value leaves; a watch-only browser's features frame
+   * leaves its `paste_dir`; the rest pass unread.
    */
   private told(raw: string): string {
-    if (!raw.includes('"tokens"')) return raw;
+    const pasteDir = this.readOnly && raw.includes('"paste_dir"');
+    if (!raw.includes('"tokens"') && !pasteDir) return raw;
     let message: ServerMessage;
     try { message = JSON.parse(raw) as ServerMessage; } catch { return raw; }
+    // a watch-only browser is not told the PC's upload folder (server/core/socket.ts), whatever its bridge says
+    if (message.type === "features" && pasteDir) { const { paste_dir: _folder, ...features } = message; return JSON.stringify(features); }
     if (message.type !== "snapshot") return raw;
     const snapshot = this.browserSnapshot(message.snapshot);
     return snapshot === message.snapshot ? raw : JSON.stringify({ ...message, snapshot });

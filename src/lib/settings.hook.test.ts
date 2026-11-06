@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { createElement } from "react";
+import { createElement, StrictMode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { COMPOSER_ARTIFACTS_STORAGE_KEY, DEFAULT_SETTINGS, ENTER_SENDS_STORAGE_KEY, enterSendsOn, SettingsProvider, useSettings, VOICE_ENGINE_STORAGE_KEY, type Settings } from "./settings.ts";
 import { SETTINGS_STORAGE_KEY } from "./themeBoot.ts";
@@ -10,9 +10,10 @@ describe("settings across tabs", () => {
   let events: EventTarget;
   let renderer: ReactTestRenderer | undefined;
   let settings: Settings;
-  let update: (patch: Partial<Settings>) => void;
+  let update: (patch: Partial<Settings> | ((current: Settings) => Partial<Settings>)) => void;
   let writes: number;
   let full: boolean;
+  let unreadable: boolean;
 
   beforeEach(() => {
     for (const key of ["window", "document", "navigator", "getComputedStyle", "IS_REACT_ACT_ENVIRONMENT"]) {
@@ -23,11 +24,12 @@ describe("settings across tabs", () => {
     settings = DEFAULT_SETTINGS;
     writes = 0;
     full = false;
+    unreadable = false;
     Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { languages: ["en-US"] } });
     Object.defineProperty(globalThis, "window", { configurable: true, value: {
       localStorage: {
-        getItem: (key: string) => records.get(key) ?? null,
+        getItem: (key: string) => { if (unreadable) throw new Error("SecurityError"); return records.get(key) ?? null; },
         setItem: (key: string, value: string) => { if (full) throw new Error("QuotaExceededError"); writes++; records.set(key, value); },
       },
       addEventListener: events.addEventListener.bind(events),
@@ -50,12 +52,13 @@ describe("settings across tabs", () => {
     descriptors.clear();
   });
 
-  async function open(): Promise<void> {
+  async function open(strict = false): Promise<void> {
     function Probe() {
       ({ settings, update } = useSettings());
       return null;
     }
-    await act(async () => { renderer = create(createElement(SettingsProvider, null, createElement(Probe))); });
+    const tree = createElement(SettingsProvider, null, createElement(Probe));
+    await act(async () => { renderer = create(strict ? createElement(StrictMode, null, tree) : tree); });
   }
 
   async function storage(key: string | null): Promise<void> {
@@ -137,6 +140,78 @@ describe("settings across tabs", () => {
     // Then both changes are stored.
     const stored = JSON.parse(records.get(SETTINGS_STORAGE_KEY) ?? "{}") as Partial<Settings>;
     expect([stored.terminalFontSize, stored.chatWidth]).toEqual([20, "wide"]);
+  });
+
+  it("reads what this tab holds for a change made from it, while storage refuses every write (#2977)", async () => {
+    // Given a tab whose storage refuses writes, and a lock it holds only in memory.
+    await open();
+    full = true;
+    await act(async () => { update({ lockedAgents: ["pc:w1:p1"] }); });
+
+    // When two changes are made from what it holds, in one turn.
+    await act(async () => {
+      update((current) => ({ lockedAgents: current.lockedAgents.map((key) => key === "pc:w1:p1" ? "pc:w2:p1" : key) }));
+      update((current) => ({ lockedAgents: [...current.lockedAgents, "pc:w1:p3"] }));
+    });
+
+    // Then each reads the one before it: the lock moved, and the second one is kept with it.
+    expect(settings.lockedAgents).toEqual(["pc:w2:p1", "pc:w1:p3"]);
+  });
+
+  const move = (current: Settings): Partial<Settings> => ({ lockedAgents: current.lockedAgents.map((key) => key === "pc:w1:p1" ? "pc:w2:p1" : key) });
+
+  it.each([false, true])("makes a change from what another tab saved since this one heard, keeping the rest of it (#2977), StrictMode %p", async (strict) => {
+    // Given a tab opened before another tab of this browser locked two panes.
+    await open(strict);
+    records.set(SETTINGS_STORAGE_KEY, JSON.stringify({ lockedAgents: ["pc:w1:p1", "pc:w1:p2"] }));
+
+    // When this tab moves one pane's lock.
+    await act(async () => { update(move); });
+
+    // Then both locks are kept, the moved one under its new ID, in this tab and in storage.
+    expect(settings.lockedAgents).toEqual(["pc:w2:p1", "pc:w1:p2"]);
+    expect((JSON.parse(records.get(SETTINGS_STORAGE_KEY) ?? "{}") as Partial<Settings>).lockedAgents).toEqual(["pc:w2:p1", "pc:w1:p2"]);
+  });
+
+  it("keeps what this tab holds when storage stops reading after it loaded (#2977)", async () => {
+    // Given a tab that loaded two locks, and storage that then refuses reads and writes.
+    records.set(SETTINGS_STORAGE_KEY, JSON.stringify({ lockedAgents: ["pc:w1:p1", "pc:w1:p2"] }));
+    await open();
+    unreadable = true;
+    full = true;
+
+    // When the pane moves.
+    await act(async () => { update(move); });
+
+    // Then both locks are kept, the moved one under its new ID.
+    expect(settings.lockedAgents).toEqual(["pc:w2:p1", "pc:w1:p2"]);
+  });
+
+  it("keeps what this tab holds when the stored record is broken", async () => {
+    // Given a tab that loaded two locks, and a record that then no longer parses.
+    records.set(SETTINGS_STORAGE_KEY, JSON.stringify({ lockedAgents: ["pc:w1:p1", "pc:w1:p2"] }));
+    await open();
+    records.set(SETTINGS_STORAGE_KEY, "{broken");
+
+    // When the pane moves.
+    await act(async () => { update(move); });
+
+    // Then both locks are kept, the moved one under its new ID.
+    expect(settings.lockedAgents).toEqual(["pc:w2:p1", "pc:w1:p2"]);
+  });
+
+  it("keeps this tab's change that storage refused over storage's older copy", async () => {
+    // Given a lock this tab stored, then removed while storage refused the write.
+    await open();
+    await act(async () => { update({ lockedAgents: ["pc:w1:p1"] }); });
+    full = true;
+    await act(async () => { update({ lockedAgents: [] }); });
+
+    // When the pane moves.
+    await act(async () => { update(move); });
+
+    // Then the removed lock does not come back from storage.
+    expect(settings.lockedAgents).toEqual([]);
   });
 
   it("breaks the line on Return on a touch screen until this device chooses, and Enter still sends on a desk", async () => {

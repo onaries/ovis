@@ -3,11 +3,11 @@
  * The wheel or a pinch zooms at the pointer, a drag pans, a double-click toggles fit and the
  * picture's own pixels, and the bar and the keys (+ - 0, arrows) do the same; at fit, Left and
  * Right step through the gallery. Copy puts the picture on the clipboard as PNG and Download
- * saves it under its name. Escape, the close button, a phone's Back and a swipe down that starts
- * on the bar or the caption leave (the stage takes every stroke for panning), and the focus
- * returns to the thumbnail that opened it while it is still drawn. ChatView holds the viewer, not
- * the chat row, so a row scrolled out of the render window does not close it. The zoom arithmetic
- * is MermaidLightbox's.
+ * saves it under its name (in the iOS app and a home-screen app, through the share sheet).
+ * Escape, the close button, a phone's Back and a swipe down that starts on the bar or the caption
+ * leave (the stage takes every stroke for panning), and the focus returns to the thumbnail that
+ * opened it while it is still drawn. ChatView holds the viewer, not the chat row, so a row
+ * scrolled out of the render window does not close it. The zoom arithmetic is MermaidLightbox's.
  */
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
@@ -18,6 +18,7 @@ import "./ImageLightbox.css";
 import { canCopyImage, copyImage } from "../lib/clipboard.ts";
 import { useT } from "../lib/i18n.ts";
 import { actualSizeFactor, arrowAction, wrapIndex, zoomPercent, type GalleryImage } from "../lib/imageViewer.ts";
+import { downloadLeavesApp, imageFile, shareFile, type ShareOutcome } from "../lib/saveImage.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { useSheetSwipe } from "../lib/sheets.ts";
 import { nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
@@ -46,10 +47,45 @@ export function ImageLightbox({ images, index, onClose }: { images: GalleryImage
   const count = images.length;
   const image = images[current];
   const src = useResourceUrl(image?.src ?? null);
-  const download = useResourceUrl(image?.src.startsWith("/api/") && getTransport().kind === "relay"
+  // where a download link would replace the app (the iOS app, a home-screen app), Download hands
+  // the shown picture to the share sheet instead: its own bytes keep their image type, which a
+  // relay download (application/octet-stream) would lose, and Save Image needs
+  const [viaShare] = useState(downloadLeavesApp);
+  const download = useResourceUrl(viaShare ? null : image?.src.startsWith("/api/") && getTransport().kind === "relay"
     ? `${image.src}${image.src.includes("?") ? "&" : "?"}download=1` : image?.src ?? null);
   const many = count > 1;
   const copyable = canCopyImage();
+  // the sheet opens only within the tap, so the file is read once the picture has loaded, and
+  // Download waits for it
+  const [prepared, setPrepared] = useState<{ src: string; file: File | null } | null>(null);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const preparing = useRef<AbortController | null>(null);
+  const shown = useRef(image?.src);
+  shown.current = image?.src;
+  useEffect(() => () => preparing.current?.abort(), []);
+  const prepare = (): void => {
+    if (!viaShare || image === undefined) return;
+    preparing.current?.abort();
+    const abort = new AbortController();
+    preparing.current = abort;
+    const at = image.src;
+    imageFile(at, image.file, picture.current, abort.signal).then(
+      (file) => setPrepared({ src: at, file }),
+      () => { if (!abort.signal.aborted) setPrepared({ src: at, file: null }); },
+    );
+  };
+  const ready = prepared !== null && prepared.src === image?.src ? prepared : null;
+  const save = (): void => {
+    if (ready === null) return;
+    if (ready.file === null) {
+      // the read failed: say so, and read again for the next tap
+      setSaveFailed(true);
+      prepare();
+      return;
+    }
+    // a result for a picture the viewer has stepped away from says nothing under the next one
+    void shareFile(ready.file).then((result: ShareOutcome) => { if (shown.current === ready.src) setSaveFailed(result === "failed"); });
+  };
 
   const measure = (): void => {
     const node = picture.current;
@@ -73,6 +109,8 @@ export function ImageLightbox({ images, index, onClose }: { images: GalleryImage
     setView(FIT);
     setFit(1);
     setCopied(null);
+    setSaveFailed(false);
+    preparing.current?.abort();
   };
 
   useEffect(() => {
@@ -172,7 +210,9 @@ export function ImageLightbox({ images, index, onClose }: { images: GalleryImage
           {copyable && <button type="button" className={`icon-button${copied === "done" ? " is-copied" : ""}`} onClick={() => void copy()} disabled={unavailable} aria-label={copied === "done" ? t("Copied") : t("Copy image")} title={copied === "done" ? t("Copied") : t("Copy image")}>
             {copied === "done" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
           </button>}
-          <a className="icon-button" href={download ?? undefined} download={image.file} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
+          {viaShare
+            ? <button type="button" className="icon-button" onClick={save} disabled={unavailable || ready === null} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></button>
+            : <a className="icon-button" href={download ?? undefined} download={image.file} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>}
           <button ref={close} type="button" className="icon-button" onClick={onClose} aria-label={t("Close")} title={t("Close")}><X aria-hidden="true" /></button>
         </div>
         <div
@@ -191,7 +231,7 @@ export function ImageLightbox({ images, index, onClose }: { images: GalleryImage
               src={src ?? undefined}
               alt={image.name}
               draggable={false}
-              onLoad={measure}
+              onLoad={() => { measure(); prepare(); }}
               onError={() => setFailed(image.src)}
             />}
           </div>
@@ -207,6 +247,7 @@ export function ImageLightbox({ images, index, onClose }: { images: GalleryImage
             {many && <button type="button" className="icon-button" onClick={() => step(1)} aria-label={t("Next image")} title={t("Next image")}><ChevronRight aria-hidden="true" /></button>}
           </div>
           {copied === "failed" && <p className="image-lightbox-note" role="alert">{t("Couldn't copy the image. Download it instead.")}</p>}
+          {saveFailed && <p className="image-lightbox-note" role="alert">{t("Couldn't save the image.")}</p>}
         </div>
       </div>
     </div>,

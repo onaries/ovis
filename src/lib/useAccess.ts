@@ -5,11 +5,13 @@ import { fetchBridgeHealth, pairDevice } from "./api.ts";
 import { deviceLabel, takePairCode } from "./phone.ts";
 import { canSignOut as authEndsHere } from "./signOut.ts";
 import { sameData } from "./useMachineRoster.ts";
+import { addServedFonts } from "./userFonts.ts";
 
 /** What Settings → Phone & devices shows of the server's access facts: `absent` is an older server that sends none. */
 export type SecurityFacts = { state: "loading" } | { state: "error" } | { state: "absent" } | { state: "known"; summary: SecuritySummary };
 
-export function useAccessState() {
+/** `fonts`: the interface and chat font fields, whose served files are fetched once this device may read the PC. */
+export function useAccessState(fonts: { readonly ui: string; readonly chat: string } = { ui: "", chat: "" }) {
   // null until the server has said whether it wants a token: the shell, and with it
   // the WebSocket, never mounts before that is known
   const [locked, setLocked] = useState<boolean | null>(null);
@@ -50,6 +52,13 @@ export function useAccessState() {
     // retain the gate while the connection server restarts, but not the facts it last reported
     catch { if (newest()) setSecurity((previous) => previous.state === "error" ? previous : { state: "error" }); }
   }, []);
+  // a family this PC serves from its fonts/ folder joins the page once this device may read the PC (a
+  // list asked while signed out is refused); the text takes it as it arrives (lib/fontFaces.ts)
+  useEffect(() => {
+    if (locked !== false) return;
+    void addServedFonts(fonts.ui);
+    void addServedFonts(fonts.chat);
+  }, [locked, fonts.ui, fonts.chat]);
   return { locked, setLocked, lockReason, setLockReason, pairCode, consumePairCode, pairingUnconfirmed, onPaired, auth, setAuth, canSignOut, security, readBridgeHealth };
 }
 

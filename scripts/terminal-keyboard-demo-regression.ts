@@ -710,10 +710,11 @@ async function composingOrUnavailableTarget(browser: Browser): Promise<Record<st
     const sibling = await focusedPane();
     assert.deepEqual(sibling, { active: "terminal-input-text", frame: shownFrame, draft: shellDraft(shownFrame), hiddenFocused: false }, `Show focuses the shown pane's own line, with its own draft, never the sibling's (${JSON.stringify(sibling)})`);
     // the other pane shown instead: its control focuses its line, with the draft and caret that line has
-    await page.locator(".tab-strip-menu:visible").tap();
+    // a phone's header lists the tabs: More carries the open tab's panes
+    await page.locator(".header-more-button").tap();
     const sheet = page.getByRole("dialog");
     await sheet.waitFor();
-    await sheet.locator('.row-sheet-item:not([aria-current="true"])').first().tap();
+    await sheet.locator(`.row-sheet-item[data-item="pane:${hiddenFrame}"]`).tap();
     await page.locator(`.pane-frame:not(.is-hidden)[data-layout-pane="${hiddenFrame}"]`).waitFor();
     await ready(page);
     const other = await control(page);

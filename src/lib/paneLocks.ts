@@ -23,6 +23,16 @@ export function toggleAgentLock(locks: readonly string[], pins: readonly string[
   return !locks.includes(key) && pinned.has(key) ? [...kept, key] : kept;
 }
 
+/**
+ * The locks after a pin of `key` is flipped (`pins` holds the pins after it): an unpin takes its lock with it, and a
+ * fresh pin starts unlocked, so a lock that stayed behind (an unpin from a browser that had not heard of it yet,
+ * #2977) does not come back with it. Locks of rows no longer pinned leave too.
+ */
+export function locksAfterPinToggle(locks: readonly string[], pins: readonly string[], key: string): string[] {
+  const pinned = new Set(pins);
+  return locks.filter((held) => held !== key && pinned.has(held));
+}
+
 /** Whether this PC's pane is a locked pinned agent, for the menus that close panes and tabs. */
 export function usePaneLocked(machineId: string): (paneId: string) => boolean {
   const pins = useSyncExternalStore(subscribeSidebarPins, currentSidebarPins, currentSidebarPins);

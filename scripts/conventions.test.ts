@@ -134,7 +134,6 @@ describe("demo transport", () => {
     "/api/account/introduction": "account linking: no screen of the app asks for it yet (the account screens come with their own demo answers)",
     "/api/account/link": "account linking: no screen of the app asks for it yet (the account screens come with their own demo answers)",
     "/api/account/records": "account linking: no screen of the app asks for it yet (the account screens come with their own demo answers)",
-    "/api/account/status": "account linking: no screen of the app asks for it yet (the account screens come with their own demo answers)",
     "/api/auth": "the demo is never locked (/api/health says authenticated), so neither the token form nor sign-out runs",
     "/api/bridge": "a remote PC's bridge endpoint, asked by another server, never by the browser",
     "/api/runtime": "switching the runtime: the demo's health carries no herdr_runtime, so Settings offers no Switch",
@@ -149,6 +148,9 @@ describe("demo transport", () => {
     "/api/pane/selection": "copying a selection across screens: not part of the demo (listed when this guard was added)",
     "/api/updates/check": "the demo's /api/updates says managed: false, so Settings offers no check",
     "/api/updates/install": "the demo's /api/updates says managed: false, so Settings offers no install",
+    "/api/workspace/git/branches": "a repository's history, for API clients: no screen of the app asks for it yet",
+    "/api/workspace/git/log": "a repository's history, for API clients: no screen of the app asks for it yet",
+    "/api/workspace/git/show": "a repository's history, for API clients: no screen of the app asks for it yet",
   };
   /** Client frames the demo needs no case for, each with its reason; any other frame gets a case in site/demo/transport.ts. */
   const DEMO_IGNORES: Record<string, string> = {

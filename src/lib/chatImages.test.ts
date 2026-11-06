@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { userGalleryImages } from "./chatImages.ts";
 import { imageMention } from "./compose.ts";
+import { setPasteFolder } from "./pasteFolders.ts";
 
 const t = (text: string) => text;
 const images = (text: string) => userGalleryImages("fixture pc", "w1:p1", [], text, t);
@@ -65,6 +66,29 @@ describe("mentioned chat images", () => {
     }
     // and a folder whose name holds " @" is still the upload's path
     expect(images("@/Users/me/Company @ Work/.ovis/paste-20261103-065352-8f69b25b.png Fix footer").map((image) => image.name)).toEqual(["/Users/me/Company @ Work/.ovis/paste-20261103-065352-8f69b25b.png"]);
+  });
+
+  it("reads an upload whole through its PC's OVIS_PASTE_DIR named like an image file (#2771)", () => {
+    const path = "/tmp/shots.png backup/paste-20261104-101500-0a1b2c3d.png";
+    const windows = "C:\\Shots\\v2.webp old\\paste-20261104-101500-0a1b2c3d.png";
+    // a PC that never named the folder: the upload's path stops at the image-named word, as before (#2682)
+    expect(images(`@${path} Fix footer`).map((image) => image.name)).toEqual(["/tmp/shots.png"]);
+    setPasteFolder("fixture pc", "/tmp/shots.png backup");
+    try {
+      expect(images(`@${path} Fix footer`).map((image) => image.name)).toEqual([path]);
+      // only that folder: the words after another mention stay the user's
+      expect(images("@/tmp/a.png Please review docs/paste-20261103-065352-8f69b25b.png now").map((image) => image.name)).toEqual(["/tmp/a.png"]);
+      // the folder as its server wrote it: another case is another folder
+      expect(images(`@${path.replace("shots", "Shots")} Fix footer`).map((image) => image.name)).toEqual(["/tmp/Shots.png"]);
+      // in the message's order among the other mentions
+      expect(images(`@/a/one.png @${path} @/b/two.gif`).map((image) => image.name)).toEqual(["/a/one.png", path, "/b/two.gif"]);
+      // only that PC's
+      expect(userGalleryImages("other pc", "w1:p1", [], `@${path} Fix footer`, t).map((image) => image.name)).toEqual(["/tmp/shots.png"]);
+      setPasteFolder("fixture pc", "C:\\Shots\\v2.webp old");
+      expect(images(`@${windows} Fix footer`).map((image) => image.name)).toEqual([windows]);
+    } finally {
+      setPasteFolder("fixture pc", undefined);
+    }
   });
 
   it("keeps native attachments before mentioned files", () => {

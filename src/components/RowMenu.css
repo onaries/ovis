@@ -189,12 +189,52 @@
   color: var(--text-dim);
 }
 
-.row-sheet-item.has-divider {
+/* an item with a button of its own at its end (a tab list's Close): the item takes the row */
+.row-sheet-line {
+  display: flex;
+  align-items: stretch;
+}
+
+.row-sheet-line > .row-sheet-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.row-sheet-aside {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 48px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.row-sheet-aside svg {
+  width: 18px;
+  height: 18px;
+}
+
+.row-sheet-aside:active,
+.row-sheet-aside:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--text-strong);
+  opacity: 1;
+}
+
+.row-sheet-item.has-divider,
+.row-sheet-line.has-divider {
   position: relative;
   margin-top: calc(var(--space-2) + var(--hairline));
 }
 
-.row-sheet-item.has-divider::before {
+.row-sheet-item.has-divider::before,
+.row-sheet-line.has-divider::before {
   content: "";
   position: absolute;
   top: calc(-1 * var(--space-1) - var(--hairline));

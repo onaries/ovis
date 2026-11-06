@@ -831,7 +831,7 @@ async function pair(): Promise<number> {
         if (!decodeOffer(offer.url)) throw new Error("invalid relay offer URL");
         out.push("", "Ovis relay", link(offer.url), "", qr(offer.url));
       } else {
-        out.push("To turn on Ovis relay: Settings -> Phone & devices -> Ovis relay.");
+        out.push("To turn on Ovis relay: Settings -> Devices and PCs -> Ovis relay.");
       }
     }
   } catch (error) {

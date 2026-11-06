@@ -7,7 +7,7 @@ import { paneLifetimes } from "./paneLifetime.ts";
 import type { PaneView } from "./actions.ts";
 import { notificationViewForPane, type NotificationTarget } from "./notificationTarget.ts";
 import type { TerminalPeek } from "./terminalPeek.ts";
-import type { Settings } from "./settings.ts";
+import { HISTORY_PROMPTS, type Settings } from "./settings.ts";
 
 /**
  * The lens a pane opens in: the one picked for it by hand, remembered per pane, else its default
@@ -100,7 +100,7 @@ export function usePaneLens({ settings, selectedPaneId, selectedMachineId, selec
   // a press on an agent pane's tab or sidebar row starts its chat's first read before the pick renders
   // it, when the lens a pick gives it (asked, not kept) is the chat
   const pressPane = (machineId: string, paneId: string): void => {
-    if (storedView(lenses, viewPicks, paneId, machineId, true, attachOn(machineId), false) === "chat") prefetchPaneConversation(paneId, machineId, settings.historyPrompts);
+    if (storedView(lenses, viewPicks, paneId, machineId, true, attachOn(machineId), false) === "chat") prefetchPaneConversation(paneId, machineId, HISTORY_PROMPTS);
   };
   return { lenses, view, pressPane };
 }

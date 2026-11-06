@@ -4,7 +4,7 @@ import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  agentGet, HerdrError, herdrRpc, LARGE_REPLY_BYTES, LINE_BYTES, makeLineReader, paneFocus, paneMoveBeside, paneProcessInfo, paneRead, paneSwap, paneSwapWith, sessionSnapshot,
+  agentGet, focusFromMove, HerdrError, herdrRpc, LARGE_REPLY_BYTES, LINE_BYTES, makeLineReader, paneFocus, paneMoveBeside, paneProcessInfo, paneRead, paneSwap, paneSwapWith, sessionSnapshot,
   subscribeEvents, type EventFrame,
 } from "./client.ts";
 import type { AgentInfo, PaneInfo, PaneLayoutRect, PaneLayoutSnapshot, SessionSnapshot, TabInfo, WorkspaceInfo } from "../../shared/herdr-api.generated.ts";
@@ -370,6 +370,43 @@ it("gives herdr's focus back to the moved pane, but not over a focus the user mo
       expect(state.focus).toBe(pick);
     }
   }
+});
+
+it("tells herdr's passing focus on a sibling apart from the user's, until the moved pane has it back", async () => {
+  const { path, state } = await movePeer();
+  for (const side of ["right", "up"] as const) {
+    state.focus = "source";
+    const during: boolean[] = [];
+    // a focus frame from before the move, on a pane outside the tab, does not end the hold
+    state.onInto = () => { during.push(focusFromMove("other"), focusFromMove("sibling"), focusFromMove("target")); };
+    await paneMoveBeside("source", "target", side, path);
+    expect(during).toEqual([false, true, true]);
+    // herdr's pane_focused for the moved pane may arrive after the answer: until then the hold stays
+    expect(focusFromMove("sibling")).toBe(true);
+    expect(focusFromMove("source")).toBe(false);
+    expect(focusFromMove("sibling")).toBe(false);
+    // the user picks a pane meanwhile: that pick is the user's, and so is herdr's focus after it
+    state.focus = "source";
+    state.onInto = () => { state.focus = "other"; };
+    await paneMoveBeside("source", "target", side, path);
+    // herdr's frames in order: the pick, and for up the swap's focus of its source
+    expect(focusFromMove("other")).toBe(false);
+    if (side === "up") expect(focusFromMove("source")).toBe(false);
+    expect(focusFromMove("sibling")).toBe(false);
+  }
+  // the hold lasts through a recovery: herdr refuses the move back, and the pane goes back beside another
+  state.focus = "source";
+  state.failInto = 1;
+  const recovering: boolean[] = [];
+  state.onInto = () => { recovering.push(focusFromMove("sibling")); };
+  await rejection(paneMoveBeside("source", "target", "right", path));
+  expect(recovering).toEqual([true, true]);
+  expect(focusFromMove("source")).toBe(false);
+  expect(focusFromMove("sibling")).toBe(false);
+  // a pane moved without herdr's focus takes nobody's
+  state.focus = "elsewhere";
+  state.onInto = () => { expect(focusFromMove("sibling")).toBe(false); };
+  await paneMoveBeside("source", "target", "right", path);
 });
 
 it("refuses a pane beside itself or beside a pane of another tab, moving nothing", async () => {

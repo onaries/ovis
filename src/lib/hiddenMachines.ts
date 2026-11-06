@@ -1,5 +1,5 @@
 /**
- * Settings → Remote PCs → Show in sidebar: the PCs one device keeps out of its sidebar, its Agents
+ * Settings → Devices and PCs → Show in sidebar: the PCs one device keeps out of its sidebar, its Agents
  * list and its command palette. Nothing goes to the server: a hidden PC stays connected, its agents
  * keep running, and a link or an alert to one of its panes still opens that pane. One PC is always
  * shown.

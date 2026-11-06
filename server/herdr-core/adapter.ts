@@ -4,7 +4,8 @@ import { createConnection } from "node:net";
 import type { Socket } from "bun";
 import { AGENT_LABELS } from "../agents-routes.ts";
 import { LINE_BYTES, makeLineReader } from "../herdr/client.ts";
-import { SHELL_AGENTS, shellCommandLine } from "../shell-agent.ts";
+import { cmdQuote, powershellNativeArgs, SHELL_AGENTS, shellCommandLine } from "../shell-agent.ts";
+import { descendantProcesses, type ProcessRow, windowsProcessTable } from "../windows-processes.ts";
 import { type HcConnection, HcError } from "./connection.ts";
 import { foreignLayout, leaves, neighbour, OVIS_LAYOUT_DOC, type OvisLayout, type PaneDirection, resizeLeaf, setRatio, splitLeaf, swapLeaves, type TabLayout } from "./layout-doc.ts";
 import { agentInfoOf, agentOfStatus, agentStatusOf, buildSnapshot, type FirstTurn, keptLayout, opencodeRecords, type SessionOf, reportedFacts, type HcStatus, type HcTerminal, hcKeyName, HERDR_PROTOCOL, isRecord, keyBytes, LAYOUT_DOC, onOtherMachine, OTHER_WORKSPACE_ID, PANE_NAME_LABEL, processInfoOf, SEEN_LABEL, shownStatusOf, SPACE_LABEL, TAB_LABEL, TAB_NAME_LABEL, WORKSPACE_NAME_LABEL } from "./snapshot.ts";
@@ -99,12 +100,17 @@ export type SeenObserver = (address: string, turn: number, labels: Record<string
 
 /**
  * `otherMachine`: the terminals are another machine's, reached through this PC's core (machine-scope.ts):
- * their processes and folders are not this PC's, so no process facts are told and no checkout opened.
+ * their processes and folders are not this PC's, so no process facts are told and no checkout opened,
+ * and a Windows PC, which reads what runs in a pane off its own processes, starts no agent there.
  */
 export interface AdapterOptions {
   otherMachine?: boolean;
   /** the OpenCode sessions whose terminal title this is (opencode.ts `opencodeSessionsTitled`); unset, no OpenCode pane shows a session */
   opencodeTitled?: (terminalTitle: string) => readonly string[];
+  /** the PC this server runs on; a test names another */
+  platform?: NodeJS.Platform;
+  /** this PC's process table, read afresh within `timeoutMs` each time; a test stands in for it */
+  processTable?: (timeoutMs: number) => Promise<ProcessRow[]>;
 }
 
 /** The sessions a terminal named that it keeps as candidates, the newest last. */
@@ -244,6 +250,56 @@ const SHELL = /(?:^|\/)-?(?:sh|bash|dash|zsh|ksh|mksh|ash|fish)$/u;
 /** The flags a plain interactive shell may be started with; anything else (`-c`) runs a program in it. */
 const SHELL_FLAGS = new Set(["-l", "--login", "-i"]);
 const plainShell = (argv: readonly string[]): boolean => SHELL.test(argv[0] ?? "") && argv.slice(1).every((arg) => SHELL_FLAGS.has(arg));
+/** The switches that leave PowerShell an interactive shell. */
+const POWERSHELL_SWITCHES = new Set(["-nologo", "-noexit", "-noprofile", "-login"]);
+/** How the `-Command` of hc's own PowerShell begins (a live record, hc 0.1.17): its prompt hook, which keeps the terminal's cwd current. */
+const HC_PROMPT_HOOK = "$global:__hc_prompt = $function:prompt;";
+/** What Windows may start below a shell for a console, which is no program of the pane's. */
+const CONSOLE_HOSTS = new Set(["conhost", "openconsole"]);
+
+/** A Windows program's name as its path ends: Windows takes it in any case, with or without its `.exe`. */
+const windowsProgram = (program: string): string => (program.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.exe$/, "");
+
+/** A shell a start line is typed into, each quoted its own way: `powershell` is Windows PowerShell 5.1, `pwsh` PowerShell 7. */
+type StartShell = "posix" | "powershell" | "pwsh" | "cmd";
+
+/**
+ * The shell a terminal's program is, or null for one that runs a program: `claude`, `sh -c claude`,
+ * the app's `powershell.exe -NoExit -Command "& 'claude'"`. On Windows it is hc's own PowerShell
+ * (its `-Command` is only its prompt hook), another PowerShell or cmd.exe, and no POSIX one: Git
+ * Bash's MSYS turns an argument that looks like a path (`/review`) into a Windows path on its way
+ * to the agent, and the variable that stops it would stay set for every command the agent runs
+ * there; WSL's bash runs the agent where this PC's process table does not see it.
+ */
+function startShellOf(argv: readonly string[], platform: NodeJS.Platform): StartShell | null {
+  if (platform !== "win32") return plainShell(argv) ? "posix" : null;
+  const name = windowsProgram(argv[0] ?? "");
+  const args = argv.slice(1);
+  // cmd runs what follows a /c, /k or /r, even one run together with another switch (`/q/c`), and
+  // its /v reads `!` in an argument, which nothing here quotes for
+  if (name === "cmd") return args.every((arg) => !/\/[ckrv]/i.test(arg)) ? "cmd" : null;
+  if (name !== "powershell" && name !== "pwsh") return null;
+  const hooked = args.length >= 2 && /^-(?:command|c)$/i.test(args.at(-2)!) && args.at(-1)!.startsWith(HC_PROMPT_HOOK);
+  return (hooked ? args.slice(0, -2) : args).every((arg) => POWERSHELL_SWITCHES.has(arg.toLowerCase())) ? name : null;
+}
+
+/**
+ * The line that starts `command` with `args` in `shell`. Ctrl-U first in a POSIX shell: a line
+ * someone left half typed is cleared, not run with the command after it. PowerShell's default
+ * editing mode would type Ctrl-U into the line, and no key clears a line in each of its modes: a
+ * PowerShell or cmd line goes alone, in PowerShell as a call (`& 'claude' …`), as a bare quoted
+ * name is a string there, and in cmd with the name unquoted: a `.cmd` shim found on the PATH under
+ * a quoted name reads the current folder as its own (`%~dp0`, live-verified), and the name is only
+ * letters, digits and `-`. An argument the shell would not pass unchanged is refused.
+ */
+function startLine(shell: StartShell, command: string, args: readonly string[]): string {
+  if (shell === "posix") return `\u0015${shellCommandLine("posix", command, args)}\r`;
+  try {
+    return `${shell === "cmd" ? [command, ...args.map(cmdQuote)].join(" ") : shellCommandLine("powershell", command, powershellNativeArgs(shell, args))}\r`;
+  } catch (error) {
+    throw new AdapterError("invalid_params", error instanceof Error ? error.message : String(error));
+  }
+}
 
 /** How long a typed agent start may take to show in front of its shell. */
 const AGENT_START_MS = 10_000;
@@ -338,6 +394,11 @@ function herdrCode(error: HcError, missing: string): string {
 }
 
 function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (live: ReadonlySet<string>) => void, options: AdapterOptions, sessionOf?: SessionOf): (request: Request) => Promise<Reply> {
+  const platform = options.platform ?? process.platform;
+  const processTable = options.processTable ?? windowsProcessTable;
+  /** A Windows pane's programs are read off this PC's process table, which says nothing of another machine's. */
+  const programsUnseen = platform === "win32" && options.otherMachine === true;
+
   const terminal = async (address: string, missing = "pane_not_found"): Promise<HcTerminal> => {
     const found = await hc.call("terminal.get", { terminal: address }).catch((error: unknown) => {
       throw error instanceof HcError ? new AdapterError(herdrCode(error, missing), error.message) : error;
@@ -458,37 +519,58 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
   };
 
   /**
-   * hc's text read of the screen with its colors (paintedScreen): hc reads text only, so this is the
-   * first paint of an attach that only watches, which never types or resizes, closed once the screen
-   * is in. No paint within PAINT_MS, a stream that ends first, or a paint of another shape answers
-   * the plain text, as a read without colors.
+   * The first paint (with `history` lines, else a screen's worth) of an attach that only watches, which never types or
+   * resizes, closed once the screen is in, and the rows it was painted at. null: no paint within
+   * PAINT_MS of hc answering the attach, or a stream that ended first.
    */
-  const coloredScreen = async (paneId: string): Promise<string> => {
+  const watchedPaint = async (paneId: string, history?: number): Promise<{ paint: string | null; rows: number }> => {
     const record = await terminal(paneId);
     const decoder = new TextDecoder();
     let paint = "";
     const { promise, resolve } = Promise.withResolvers<string | null>();
-    const timer = setTimeout(() => resolve(null), PAINT_MS);
-    const { result, channel } = await hc.open("terminal.attach", { terminal: paneId, cols: record.cols, rows: record.rows, history: record.rows, observe: true }, {
+    const { result, channel } = await hc.open("terminal.attach", { terminal: paneId, cols: record.cols, rows: record.rows, history: history ?? record.rows, observe: true }, {
       onData: (payload) => {
         paint += decoder.decode(payload, { stream: true });
         if (paint.includes(PAINT_END)) resolve(paint);
       },
       onClose: () => resolve(null),
-    }).catch((error: unknown) => {
-      clearTimeout(timer);
-      throw error;
     });
-    let screen: string | null;
+    // from hc's answer on: opening may take longer itself (another machine's relayed attach)
+    const timer = setTimeout(() => resolve(null), PAINT_MS);
     try {
-      const painted = await promise;
       // resized since it was looked up: the paint has the rows it has now
-      screen = painted === null ? null : paintedScreen(painted, result.terminal?.rows ?? record.rows);
+      return { paint: await promise, rows: result.terminal?.rows ?? record.rows };
     } finally {
       clearTimeout(timer);
       await channel.close();
     }
+  };
+
+  /**
+   * hc's text read of the screen with its colors (paintedScreen): hc reads text only, so this is the
+   * first paint of a watch-only attach. No paint, or a paint of another shape, answers the plain
+   * text, as a read without colors.
+   */
+  const coloredScreen = async (paneId: string): Promise<string> => {
+    const { paint, rows } = await watchedPaint(paneId);
+    const screen = paint === null ? null : paintedScreen(paint, rows);
     return screen ?? (await hc.call("terminal.read", { terminal: paneId, lines: 0 })).text;
+  };
+
+  /**
+   * Whether the terminal's program is on the alternate screen, which hc's record does not say: hc
+   * paints its reset, which ends in a clear, then the alternate screen first if the program is on it
+   * (herdr-core ghostty-vt `paint`). No paint, or an attach hc refused (a kept terminal whose
+   * program is lost, whose stored screen hc still reads), counts as the alternate screen.
+   */
+  const onAlternateScreen = async (paneId: string): Promise<boolean> => {
+    const { paint } = await watchedPaint(paneId, 0).catch((error: unknown) => {
+      if (error instanceof HcError) return { paint: null };
+      throw error;
+    });
+    if (paint === null) return true;
+    const cleared = paint.indexOf("\u001b[H\u001b[2J");
+    return cleared === -1 || paint.startsWith("\u001b[?1049h", cleared + "\u001b[H\u001b[2J".length);
   };
 
   /** Input to one pane in the order it was asked for: each attach and its bytes finish before the next. */
@@ -499,6 +581,26 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
     turns.set(paneId, settled);
     void settled.then(() => { if (turns.get(paneId) === settled) turns.delete(paneId); });
     return run;
+  };
+
+  /**
+   * What runs in a pane's shell, each program by the parts of the words that name it (its name, then
+   * argv), or null when that cannot be read. hc names the program in front of the shell, but on
+   * Windows only ever the shell (live-verified, hc 0.1.17: a running claude.exe was the shell's
+   * child, and the shell was in front): there it is what is below the shell in this PC's process
+   * table, in lower case as Windows takes a name in any.
+   */
+  const running = async (record: HcTerminal, timeoutMs: number): Promise<string[][] | null> => {
+    if (platform !== "win32") {
+      const front = record.foreground;
+      return front && front.pid !== record.pid ? [[front.name, ...(front.argv ?? []).slice(0, 2)].flatMap((part) => part.split("/"))] : [];
+    }
+    if (!record.pid) return null;
+    const rows = await processTable(timeoutMs);
+    // a PC runs hundreds of processes: none at all is a table that could not be read
+    if (rows.length === 0) return null;
+    return descendantProcesses(rows, record.pid).filter((entry) => !CONSOLE_HOSTS.has(windowsProgram(entry.argv[0] ?? "")))
+      .map((entry) => entry.argv.slice(0, 2).flatMap((word) => word.toLowerCase().split(/[\\/]/)));
   };
 
   /**
@@ -644,24 +746,28 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
       if (format === "ansi" && source === "visible" && params["strip_ansi"] !== true) {
         return { read: { pane_id: paneId, workspace_id: pane.workspace_id, tab_id: pane.tab_id, source, format, text: await coloredScreen(paneId), revision: pane.revision, truncated: false } };
       }
-      // hc reads the screen plus `lines` of history above it; herdr's recent read is the last `lines` lines
-      const read = await hc.call("terminal.read", { terminal: paneId, lines: recent ? wanted ?? 1000 : 0 });
+      // hc reads the screen plus `lines` of history above it; herdr's recent read is the last `lines` lines.
+      // A program on the alternate screen keeps no history there, as on herdr: for one, hc would scroll
+      // the program to read its own, then repaint every viewer, a drag in it included (#3128)
+      const history = recent && !(await onAlternateScreen(paneId));
+      const read = await hc.call("terminal.read", { terminal: paneId, lines: history ? wanted ?? 1000 : 0 });
       let text = read.text;
       if (recent && wanted !== null) {
         const rows = text.split("\n");
         if (rows.length > wanted) text = rows.slice(-wanted).join("\n");
       }
       // hc reads text only: plain text is an ANSI screen without colours
-      return { read: { pane_id: paneId, workspace_id: pane.workspace_id, tab_id: pane.tab_id, source, format, text, revision: pane.revision, truncated: !read.complete } };
+      return { read: { pane_id: paneId, workspace_id: pane.workspace_id, tab_id: pane.tab_id, source, format, text, revision: pane.revision, truncated: !read.complete || (recent && !history) } };
     },
     // herdr starts an agent by its kind (its command is its kind) from herdr's own manifests; hc has
     // none, so the kinds Ovis knows are offered, and the start types the command into the pane's
     // shell as a person would. Ovis's own shell-started agents are offered and started by the
-    // server itself (shell-agent.ts), through pane.send_text. On Windows hc's shell is PowerShell or
-    // cmd, which the typed start does not quote for yet (plainShell refuses it): no kind is offered there.
+    // server itself (shell-agent.ts), through pane.send_text. On Windows that shell is PowerShell or
+    // cmd (startShellOf), and another machine's terminals, whose programs its table does not show,
+    // are offered no kind; nor is Command Code, whose command `cmd` is cmd.exe there.
     async "server.agent_manifests"() {
-      if (process.platform === "win32") return { manifests: [] };
-      const manifests = Object.keys(AGENT_LABELS).filter((agent) => !Object.hasOwn(SHELL_AGENTS, agent))
+      if (programsUnseen) return { manifests: [] };
+      const manifests = Object.keys(AGENT_LABELS).filter((agent) => !Object.hasOwn(SHELL_AGENTS, agent) && !(platform === "win32" && agent === "cmd"))
         .map((agent) => ({ agent, source: "herdr-core", source_kind: "herdr-core", local_override_shadowing_remote: false }));
       return { manifests };
     },
@@ -669,43 +775,52 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
       const paneId = paneIdOf(params);
       const kind = params["kind"];
       if (typeof kind !== "string" || !/^[a-z][a-z0-9-]*$/.test(kind)) throw new AdapterError("invalid_params", "kind is required");
+      // Command Code's command `cmd` is cmd.exe here, which would answer as a started agent
+      if (platform === "win32" && kind === "cmd") throw new AdapterError("invalid_params", "Command Code's command is cmd.exe on Windows");
       const args = Array.isArray(params["args"]) ? params["args"].filter((arg): arg is string => typeof arg === "string") : [];
       // a control character could end the quoted line early and type something else
       if (args.some((arg) => /[\u0000-\u001f\u007f]/.test(arg))) throw new AdapterError("invalid_params", "an argument holds a control character");
       const command = AGENT_COMMANDS[kind] ?? kind;
       // only into the pane's own shell, once hc has seen it in front: a running program would take
       // the line as its input (agent-launch.ts retries a busy pane while a new shell comes up). The
-      // pane's input turn is held for the typing only, so nothing typed after waits on the start.
+      // pane's input turn is held for the check and the typing only, so nothing typed after waits on the start.
       await inTurn(paneId, async () => {
         const ready = await terminal(paneId);
+        if (programsUnseen) throw new AdapterError("agent_pane_unsupported", `pane ${paneId} is on another machine, whose programs this PC cannot see`);
         // the terminal's own program must be a plain shell: one the app started as a program (`claude`)
         // is in front of itself too, and `sh -c claude` (a template, a line) runs it under dash's pid.
         // Such a pane never takes a start: no retry
         const own = ready.argv ?? [];
-        if (!plainShell(own)) throw new AdapterError("agent_pane_unsupported", `pane ${paneId} runs no shell of its own to start an agent in`);
+        const shell = startShellOf(own, platform);
+        if (shell === null) throw new AdapterError("agent_pane_unsupported", `pane ${paneId} runs no shell of its own to start an agent in`);
         // fish reads a backslash inside single quotes as an escape: the argument would change
         const front = ready.foreground;
         const frontArgv = front?.argv ?? (front ? [front.name] : []);
         if ([own[0], frontArgv[0]].some((program) => /(?:^|\/)-?fish$/u.test(program ?? "")) && args.some((arg) => arg.includes("\\"))) throw new AdapterError("invalid_params", "fish would read a backslash in an argument differently");
+        const line = startLine(shell, command, args);
         // and a plain shell in front now: a program it runs, or one it `exec`ed (same pid, `exec bash -c …` too), would take the line
-        if (!ready.pid || front?.pid !== ready.pid || !plainShell(frontArgv)) throw new AdapterError("agent_pane_busy", `pane ${paneId} has no idle shell in front`);
-        // Ctrl-U first: a line someone left half typed is cleared, not run with the command after it
-        await type(paneId, `\u0015${shellCommandLine("posix", command, args)}\r`);
+        if (!ready.pid || front?.pid !== ready.pid || startShellOf(frontArgv, platform) === null) throw new AdapterError("agent_pane_busy", `pane ${paneId} has no idle shell in front`);
+        // on Windows the shell is in front whatever it runs: what it runs is below it
+        if (platform === "win32") {
+          const programs = await running(ready, AGENT_START_MS);
+          if (programs === null) throw new AdapterError("agent_pane_busy", `what runs in pane ${paneId} could not be read`);
+          if (programs.length > 0) throw new AdapterError("agent_pane_busy", `pane ${paneId} has no idle shell in front`);
+        }
+        await type(paneId, line);
       });
-      // started means the agent itself came up in front (hc samples it about twice a second): a
-      // program or script named for the kind (`claude`, `node …/claude-code/cli.js`,
-      // `codex-x86_64-…`). Not any program: a shell's command-not-found handler runs in front too,
-      // and then the shell is back
+      // started means the agent itself came up in front (hc samples it about twice a second), or
+      // below the shell on Windows: a program or script named for the kind (`claude`,
+      // `node …/claude-code/cli.js`, `codex-x86_64-…`, `claude.exe`). Not any program: a shell's
+      // command-not-found handler runs in front too, and then the shell is back
       const deadline = Date.now() + AGENT_START_MS;
       let left = false;
       for (;;) {
-        const now = await terminal(paneId);
-        const front = now.foreground;
-        if (front && front.pid !== now.pid) {
+        // a table that could not be read answers neither way
+        const programs = await running(await terminal(paneId), Math.max(500, deadline - Date.now()));
+        if (programs?.length) {
           left = true;
-          const parts = [front.name, ...(front.argv ?? []).slice(0, 2)].flatMap((part) => part.split("/"));
-          if (parts.some((part) => part === command || part.startsWith(`${command}-`) || part.startsWith(`${command}.`))) return { type: "agent_started", pane_id: paneId };
-        } else if (left) throw new AdapterError("agent_start_failed", `${kind} did not start in pane ${paneId}`);
+          if (programs.flat().some((part) => part === command || part.startsWith(`${command}-`) || part.startsWith(`${command}.`))) return { type: "agent_started", pane_id: paneId };
+        } else if (programs && left) throw new AdapterError("agent_start_failed", `${kind} did not start in pane ${paneId}`);
         if (Date.now() > deadline) throw new AdapterError("agent_start_failed", `${kind} did not come up in pane ${paneId}`);
         await Bun.sleep(100);
       }

@@ -265,7 +265,7 @@
   .machine-dialog {
     width: 100%;
     max-width: none;
-    max-height: 92%;
+    max-height: min(92%, calc(100% - env(safe-area-inset-top, 0px) - var(--space-2)));
     margin: auto auto 0;
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     padding-bottom: env(safe-area-inset-bottom, 0px);

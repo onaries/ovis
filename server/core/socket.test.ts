@@ -1,4 +1,5 @@
 import { expect, it, spyOn } from "bun:test";
+import { resolve } from "node:path";
 import type { SessionSnapshot } from "../../shared/protocol.ts";
 import { OUTPUT_HARD_BYTES } from "../output-window.ts";
 import { MachineRelay } from "../machine-relay.ts";
@@ -42,6 +43,28 @@ it("tells a new connection its features before its snapshot, which waits on herd
     await opened;
     expect(frames.map((frame) => frame.type)).toEqual(outcome === "read" ? ["features", "snapshot"] : ["features", "error"]);
     if (outcome === "read") expect(frames[1]!.features).toEqual(frames[0]!.features);
+  }
+});
+
+it("names the folder OVIS_PASTE_DIR sends uploads to in the features frame, and none for each pane's .ovis (#2771)", async () => {
+  const previous = process.env["OVIS_PASTE_DIR"];
+  try {
+    // a watch-only connection, which may list no folder, is not told it
+    for (const [override, readOnly, told] of [[" /tmp/shots.png backup ", false, resolve("/tmp/shots.png backup")], [" /tmp/shots.png backup ", true, undefined], [undefined, false, undefined]] as const) {
+      if (override === undefined) delete process.env["OVIS_PASTE_DIR"]; else process.env["OVIS_PASTE_DIR"] = override;
+      const handler = createSocket({
+        clients: new Set(), present: new Set(), stopped: () => false, admit: () => true, setRole() {}, watchable: () => true, terminalHistory: () => false, watchPane() {}, unwatchPane() {},
+        end() {}, holdPending() {}, attachments: new Map(),
+        clientSnapshot: async () => ({ workspaces: [], panes: [], agents: [], layouts: [] }) as unknown as SessionSnapshot, herdrLifetime: () => undefined, browserSnapshot: (snapshot) => snapshot, countVisit() {}, drainOutput() {}, frames: {} as never,
+      });
+      const frames: { type: string; paste_dir?: string }[] = [];
+      const client: Client = { data: connectionData({ deviceId: undefined, readOnly }), readyState: WebSocket.OPEN, getBufferedAmount: () => 0, send: (raw: string) => { frames.push(JSON.parse(raw)); return raw.length; }, close: () => {} };
+      await handler.open!(client);
+      expect(frames[0]).toMatchObject({ type: "features" });
+      expect(frames[0]!.paste_dir).toBe(told);
+    }
+  } finally {
+    if (previous === undefined) delete process.env["OVIS_PASTE_DIR"]; else process.env["OVIS_PASTE_DIR"] = previous;
   }
 });
 

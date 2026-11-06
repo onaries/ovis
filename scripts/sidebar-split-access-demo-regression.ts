@@ -189,7 +189,8 @@ try {
         const appearance = page.locator(".settings-dialog").getByRole("tab", { name: "Appearance", exact: true });
         await appearance.focus();
         await page.keyboard.press("Enter");
-        const grouping = page.getByRole("switch", { name: "Group agents by state", exact: true });
+        // Agents order's By state groups the list, picked from the keyboard
+        const grouping = page.getByRole("group", { name: "Agents order", exact: true }).getByRole("button", { name: "By state", exact: true });
         await grouping.focus();
         await page.keyboard.press("Space");
         await page.keyboard.press("Escape");

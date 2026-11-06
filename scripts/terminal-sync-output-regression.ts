@@ -225,13 +225,19 @@ function installSyncTap({ rowSource, shown }: { rowSource: string; shown: string
     const container = document.querySelector(shown);
     return container ? decode([...container.children].map((row) => (row.textContent ?? "").trimEnd())) : null;
   };
+  let shownText: string | null = null;
   new MutationObserver((records) => {
     const target = records.find((record) => (record.target instanceof Element ? record.target : record.target.parentElement)?.closest(shown));
     if (!target) return;
     const container = (target.target instanceof Element ? target.target : target.target.parentElement)!.closest(shown)!;
     const ack = tap.acks.at(-1);
-    const torn = ack ? openAfter.get(`${ack.stream}:${ack.offset}`) === true : false;
     const rows = [...container.children].map((row) => (row.textContent ?? "").trimEnd());
+    // a render of the same text drew nothing of an open block: libghostty redraws the shown rows when a late font
+    // face (the first Hangul) loads, whenever that is. Every cell changes from frame to frame, so a block's rows never
+    // come out as the text already shown
+    const text = rows.join("\n");
+    const torn = text !== shownText && (ack ? openAfter.get(`${ack.stream}:${ack.offset}`) === true : false);
+    shownText = text;
     const frame = decode(rows);
     tap.last = frame;
     tap.renders.push({ t: Date.now(), torn, frame, ...(tap.keepRows && frame === "mixed" ? { rows } : {}) });

@@ -174,8 +174,24 @@ async function windowsIcon(): Promise<void> {
   writeFileSync(join(here, ".cache", "icon.ico"), Buffer.concat([header, ...images]));
 }
 
+/**
+ * The Linux icons, one PNG per size the hicolor theme lists (16 to 512 pixels), in the folder
+ * electron-builder.yml names: the app's icon is 1024 pixels, a size no hicolor index lists, so
+ * desktops that look only in listed folders showed a generic icon.
+ */
+const LINUX_ICON_SIZES = [16, 24, 32, 48, 64, 128, 256, 512];
+
+async function linuxIcons(): Promise<void> {
+  const source = join(here, "..", "assets", "icon-only.png");
+  const dir = join(here, ".cache", "linux-icons");
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  await Promise.all(LINUX_ICON_SIZES.map(async (size) => writeFileSync(join(dir, `${size}x${size}.png`), await Bun.file(source).image().resize(size, size).png().bytes())));
+}
+
 async function dist(): Promise<void> {
   if (windows) await windowsIcon();
+  if (target.startsWith("linux-")) await linuxIcons();
   const version = (JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { version: string }).version;
   // the app says the release's version, which is also the server's it carries
   const tag = process.env["OVIS_RELEASE_TAG"]?.trim();

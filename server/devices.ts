@@ -13,7 +13,7 @@
 import { createHash, createPublicKey, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { AccountRecordError, parseAccountRecord, type RemoveRecord } from "../shared/account-records.ts";
+import { AccountRecordError, parseAccountRecord, type AddRecord, type RemoveRecord } from "../shared/account-records.ts";
 import { type DevicePairedEvent, type DeviceRemovedEvent, type DevicePairToken, type DeviceRole, type DevicesRevokedAll, type PairedDevice, STREAM_COOKIE_PREFIX } from "../shared/protocol.ts";
 import type { Access } from "./access.ts";
 import { CLEAR_LEGACY_DEVICE_COOKIE, COOKIE_MAX_AGE_SECONDS, DEVICE_COOKIE_CLEARED, deviceCookie, isSecureRequest, noContent, parseCookies } from "./auth.ts";
@@ -64,6 +64,8 @@ export interface StoredDevice {
   added_by?: string;
   /** when a `link` last moved the row to its key: of two copies of a row (state-merge.ts), the later link wins */
   linked_at?: string;
+  /** the signed `add` that let this row in, as received: /api/account/status lists it for a client to hand on */
+  account_add?: unknown;
 }
 
 /**
@@ -174,7 +176,8 @@ export function readDeviceRegistry(path: string): DeviceRegistry {
       && (d.last_seen_at === null || typeof d.last_seen_at === "string")
       && (d.account === undefined || typeof d.account === "string")
       && (d.added_by === undefined || typeof d.added_by === "string")
-      && (d.linked_at === undefined || typeof d.linked_at === "string"))) return { kind: "bad" };
+      && (d.linked_at === undefined || typeof d.linked_at === "string")
+      && (d.account_add === undefined || isJsonObject(d.account_add)))) return { kind: "bad" };
   return { kind: "ok", gateClosedAt: parsed.gate_closed_at, devices: parsed.devices as StoredDevice[], placeholder: parsed.placeholder === true && parsed.devices.length === 0 };
 }
 
@@ -784,6 +787,37 @@ export class DeviceStore {
 
   isTombstoned(key: string): boolean { return this.tombstones.some((t) => t.key === key); }
 
+  /** Every key this PC keeps out, signed removal or not (a Revoke here, a record that no longer parses): /api/account/status `blocked`. */
+  tombstoneKeys(): string[] { return [...new Set(this.tombstones.map((t) => t.key))]; }
+
+  /** The signed `add`s behind this PC's account rows, as received: what /api/account/status lists. One that no longer parses or names another key is left out. */
+  accountAdds(): AddRecord[] {
+    const account = this.account();
+    return this.devices.flatMap((d) => {
+      if (account === null || d.account_add === undefined || this.stale(d)) return [];
+      try {
+        const record = parseAccountRecord(d.account_add);
+        return record.kind === "add" && record.key === d.relay_public_key && record.account === account ? [record] : [];
+      } catch (error) {
+        if (error instanceof AccountRecordError) return [];
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Keeps `record` on the row it is for when that row's approver signed it and none is kept yet: the
+   * approver of a remote approval hands its add to this PC too (an `unchanged` add), so the PC can
+   * list it for a client to pass on.
+   */
+  keepAccountAdd(record: AddRecord, signerId: string): void {
+    const device = this.devices.find((d) => d.relay_public_key === record.key && d.added_by === signerId && (d.account_add === undefined || (d.account_add as { key?: unknown }).key !== d.relay_public_key) && !this.stale(d));
+    if (!device) return;
+    const next = this.devices.map((d) => d === device ? { ...d, account_add: record } : d);
+    this.save(next);
+    this.devices = next;
+  }
+
   /** The signed `remove`s behind this PC's tombstones for its account, as received: what /api/account/status lists. One that no longer parses is left out. */
   accountRemovals(): RemoveRecord[] {
     const account = this.account();
@@ -813,7 +847,7 @@ export class DeviceStore {
   relayKeyOf(id: string): string | undefined { return this.devices.find((d) => d.id === id)?.relay_public_key; }
 
   /** An `add` that verified: a new member row, announced like any other enrollment. Never for a tombstoned key. */
-  addAccountDevice(entry: { id: string; key: string; label: string; role: DeviceRole; account: string; addedBy: string }, now = Date.now()): DeviceMatch {
+  addAccountDevice(entry: { id: string; key: string; label: string; role: DeviceRole; account: string; addedBy: string; record?: AddRecord }, now = Date.now()): DeviceMatch {
     this.assertAccountWritable();
     if (this.isTombstoned(entry.key)) throw new Error("tombstoned key");
     // an id another row holds would merge two devices' authority; a derived id collides only for the same key
@@ -822,6 +856,7 @@ export class DeviceStore {
       id: entry.id, label: normalizeLabel(entry.label, "Device"), role: entry.role,
       token_hash: hash(randomBytes(32).toString("hex")), relay_public_key: entry.key,
       created_at: new Date(now).toISOString(), last_seen_at: null, account: entry.account, added_by: entry.addedBy,
+      ...(entry.record === undefined ? {} : { account_add: entry.record }),
     };
     this.enroll(device, now, [], false);
     return { id: device.id, label: device.label, role: device.role };

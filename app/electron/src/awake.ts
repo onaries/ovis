@@ -6,6 +6,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { desktopText, type TextKey } from "./text.ts";
 
 /** the file the server keeps in its state folder (server/desktop-activity.ts DESKTOP_ACTIVITY_FILE) */
 export const DESKTOP_ACTIVITY_FILE = "desktop-activity.json";
@@ -44,6 +45,6 @@ export function holdAwake({ settings, working, onBattery, serverRunning }: { set
   return settings.whileWorking && serverRunning && working > 0 && (!onBattery || settings.onBattery);
 }
 
-export function awakeLabel(working: number): string {
-  return `Keeping this computer awake: ${working} ${working === 1 ? "agent" : "agents"} working`;
+export function awakeLabel(working: number, text: (key: TextKey, values?: Record<string, number>) => string = desktopText("en")): string {
+  return working === 1 ? text("Keeping this computer awake: 1 agent working") : text("Keeping this computer awake: {count} agents working", { count: working });
 }

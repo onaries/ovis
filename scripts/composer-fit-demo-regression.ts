@@ -24,7 +24,7 @@ const LONG_MODEL = "gpt-5.6-sol-codex-preview-2026-10";
 // ids it names: "GPT-5.6" and "Opus 5.5"; null: the conversation names no model
 const NAMED = ["gpt-5.6", "claude-opus-5-5"] as const;
 
-interface Case { model: string | null; agent?: "claude" | "codex" | "pi" | "omo"; pending?: boolean; effort?: string | null; status?: "working" | "idle"; mic?: boolean; ring?: boolean; chatFontSize?: number | null; showUsage?: boolean; weeklyOnly?: boolean; suggestion?: string | null; contextUsed?: number; stream?: number; freezeConversation?: boolean; language?: "en" | "ko" | "ja" | "zh"; theme?: "light" | "dark"; scale?: number }
+interface Case { model: string | null; agent?: "claude" | "codex" | "pi" | "omo"; provider?: string; pending?: boolean; effort?: string | null; status?: "working" | "idle"; mic?: boolean; ring?: boolean; chatFontSize?: number | null; showUsage?: boolean; weeklyOnly?: boolean; suggestion?: string | null; contextUsed?: number; stream?: number; freezeConversation?: boolean; language?: "en" | "ko" | "ja" | "zh"; theme?: "light" | "dark"; scale?: number }
 type Draw = "full" | "no-effort" | "out";
 interface ComposerScrollGeometry {
   height: number;
@@ -170,7 +170,7 @@ try {
         { name: "plugin:deploy", description: "Deploy through a plugin", source: "plugin" }
       );
       if (window.fitCase.weeklyOnly && value.id === "codex" && Array.isArray(value.windows)) value.windows = value.windows.filter((limit) => limit.kind !== "session");
-      if (Array.isArray(value.turns) && value.metadata) value.metadata = { model: window.fitCase.model, reasoning_effort: window.fitCase.effort, ...(window.fitCase.ring ? { context: { used: window.fitCase.contextUsed ?? 151000, window: 272000 } } : {}) };
+      if (Array.isArray(value.turns) && value.metadata) value.metadata = { model: window.fitCase.model, reasoning_effort: window.fitCase.effort, ...(window.fitCase.provider ? { provider: window.fitCase.provider } : {}), ...(window.fitCase.ring ? { context: { used: window.fitCase.contextUsed ?? 151000, window: 272000 } } : {}) };
       if (Array.isArray(value.turns) && window.fitCase.stream) {
         const turn = value.turns.findLast((turn) => turn.role === "assistant");
         const text = "Streamed update " + window.fitCase.stream;
@@ -926,7 +926,21 @@ try {
         assert.equal(await page.locator(".composer-status .composer-usage").count(), 0, "mobile omits the desktop quota even when sidebar limits are enabled");
         assert.equal(await page.locator(".composer-context").evaluate((node) => node.tagName === "SPAN" && !node.hasAttribute("aria-expanded")), true);
       });
-      console.log("PASS desktop quota is read-only and session-first with weekly fallback; mobile keeps only the inert context ring");
+      // a pi pane draws on the plan of the provider its conversation runs at, and on none without one
+      for (const [agent, provider, text, account] of [["pi", "openai-codex", "5h 22%", /sam@work\.example/], ["omo", "anthropic-subscription", "5h 38%", /Claude · sam@example\.com/]] as const) {
+        await withCard(browser, 1440, { agent, model: "gpt-5.6", provider, showUsage: true }, async (page) => {
+          const usage = page.locator(".composer-status .composer-usage");
+          await usage.waitFor();
+          assert.equal(await usage.locator('span[aria-hidden="true"]').textContent(), text);
+          assert.match(await usage.getAttribute("title") ?? "", account);
+        });
+      }
+      // a plain `anthropic` is recorded the same for a Claude sign-in and an API key
+      for (const provider of [undefined, "zai", "anthropic"]) await withCard(browser, 1440, { agent: "pi", model: "gpt-5.6", ...(provider ? { provider } : {}), showUsage: true }, async (page) => {
+        await page.locator(".composer-status").waitFor();
+        assert.equal(await page.locator(".composer-status .composer-usage").count(), 0, "no plan without a provider that names one");
+      });
+      console.log("PASS desktop quota is read-only and session-first with weekly fallback; mobile keeps only the inert context ring; a pi pane follows its provider's plan");
 
       // The message box is typed at the transcript's size (Settings → Chat font size): with a mouse
       // exactly, on a phone never under 16px, the smallest size iOS does not zoom the page for

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as client from "./herdr/client.ts";
 import { isGjcProcess } from "./gjc-runtime.ts";
-import { loginPathProbe, paneShell, parseLoginPath, shellAgentExecutable, ShellAgentLocator, shellCommandLine, startShellAgent, type LoginPathProbe, type LoginPathResult } from "./shell-agent.ts";
+import { loginPathProbe, paneShell, parseLoginPath, powershellNativeArgs, shellAgentExecutable, ShellAgentLocator, shellCommandLine, startShellAgent, type LoginPathProbe, type LoginPathResult } from "./shell-agent.ts";
 import { descendantArgv, descendantProcesses, parseProcessTable, windowsArgv, windowsProcessTable } from "./windows-processes.ts";
 
 it("tells a pane's shell from the program herdr reports in front", () => {
@@ -25,6 +25,48 @@ it("writes the line each shell runs as a command, not as a string", () => {
   // cmd cannot carry these inside quotes
   expect(() => shellCommandLine("cmd", "C:\\gjc\\gjc.exe", ["%PATH%"])).toThrow();
   expect(() => shellCommandLine("cmd", "C:\\gjc\\gjc.exe", ['say "hi"'])).toThrow();
+});
+
+it("gives a native program its arguments through Windows PowerShell 5.1 as they were, and none 5.1 would split or PowerShell 7 might change", () => {
+  // each as it arrived intact at node.exe from 5.1.26100 (live-verified)
+  expect(powershellNativeArgs("powershell", ['say "hi"', "", "C:\\dir with space\\", "trail\\", "x y\\\\", 'a\\"b', "it's", "a\u00a0b\\", "a\ufeffb\\"])).toEqual([
+    // 5.1 escapes no quote for the program's own parser, and drops an empty argument
+    'say \\"hi\\"',
+    '""',
+    // the backslash ending an argument 5.1 quotes would escape the quote it closes it with; unquoted, it is read as it is
+    "C:\\dir with space\\\\",
+    "trail\\",
+    "x y\\\\\\\\",
+    // the backslashes before a quote are doubled, and one more escapes it
+    'a\\\\\\"b',
+    "it's",
+    // 5.1 quotes for what .NET calls whitespace: a no-break space, not a byte-order mark
+    "a\u00a0b\\\\",
+    "a\ufeffb\\",
+  ]);
+  expect(shellCommandLine("powershell", "codex", powershellNativeArgs("powershell", ["--", 'fix the "x" bug']))).toBe(`& 'codex' '--' 'fix the \\"x\\" bug'`);
+  // 5.1 counts the escaped quotes too: whitespace only after an odd number of them goes unquoted, and the argument arrives split
+  for (const arg of ['"fix the bug"', 'x="a b"', 'a"b c']) expect(() => powershellNativeArgs("powershell", [arg])).toThrow();
+  // one whitespace after an even number of them is enough for 5.1 to quote it
+  expect(powershellNativeArgs("powershell", ['"a b" c', 'say "hi"'])).toEqual(['\\"a b\\" c', 'say \\"hi\\"']);
+  // PowerShell 7 escapes them itself from 7.3, and passes them as 5.1 does before that
+  expect(powershellNativeArgs("pwsh", ["--model", "a b", "trail\\", "it's"])).toEqual(["--model", "a b", "trail\\", "it's"]);
+  for (const arg of ['say "hi"', "", "C:\\dir with space\\"]) expect(() => powershellNativeArgs("pwsh", [arg])).toThrow();
+  // cmd reads an agent's arguments again when PowerShell finds it as a .cmd file: `&` there runs the rest
+  for (const program of ["powershell", "pwsh"] as const) {
+    // and inside its quotes too: % and !NAME! expand, and a shim's `call` doubles a ^
+    for (const arg of ['fix "a&echo ran&b" now', "a&b", "x|y", "a<b", "a>b", "^caret", "%PATH%", "a b %OS%", "a & !OS!", "up ^ caret"]) expect(() => powershellNativeArgs(program, [arg])).toThrow();
+    // unless PowerShell puts it in quotes, for a space, where cmd reads & | < > as text
+    // (live-verified, 5.1.26100 and 7.6 to an npm-style .cmd shim): a profile folder named R&D (#3084)
+    const settings = "C:\\Users\\R&D\\AppData\\Local\\ovis\\claude settings\\a.json";
+    const quoted = [settings, "fix A & B", "x | y", "a < b > c"];
+    expect(powershellNativeArgs(program, quoted)).toEqual(quoted);
+    // but a `"` in any argument of the line toggles cmd's quotes, which run across arguments, and so
+    // does a `!Q!` delayed expansion turns into one (#3092)
+    for (const args of [['x"', "a & calc & rem"], ['"', " & echo INJECTED & rem "], ["--append-system-prompt", 'a 12" screen', "--settings", settings], ["!Q!", "a & calc & rem"]]) {
+      expect(() => powershellNativeArgs(program, args)).toThrow();
+    }
+  }
 });
 
 it("recognizes gjc as Windows reports it", () => {

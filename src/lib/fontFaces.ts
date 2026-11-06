@@ -81,6 +81,11 @@ function start(): void {
   watchFaces(fonts, arrived);
 }
 
+/** A face added already loaded (one made from bytes): the font set fires no event for it. */
+export function faceArrived(): void {
+  arrived();
+}
+
 const subscribe = (listener: () => void): (() => void) => {
   start();
   listeners.add(listener);

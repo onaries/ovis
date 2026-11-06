@@ -86,7 +86,7 @@ export function MachineStats({ machine, active }: { machine: Machine; active: bo
 }
 
 /**
- * Settings → Remote PCs' switch for the line above, on this device only. Until it is flipped it
+ * Settings → Devices and PCs' switch for the line above, on this device only. Until it is flipped it
  * follows the roster: on while two or more PCs are connected, where telling them apart is the point.
  */
 export function PcLoadSetting({ machines }: { machines: readonly Machine[] }) {

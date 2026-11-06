@@ -133,7 +133,7 @@ async function desktop(browser: Browser, theme: "light" | "dark"): Promise<void>
 async function phone(browser: Browser, theme: "light" | "dark"): Promise<void> {
   // the setting, on its Settings page
   {
-    const { page, errors, close } = await open(browser, 390, { theme }, "&settings=chat");
+    const { page, errors, close } = await open(browser, 390, { theme }, "&settings=chat&section=file-viewer-more");
     try {
       const toggle = page.getByRole("switch", { name: "Files beside the pane" });
       await toggle.scrollIntoViewIfNeeded();

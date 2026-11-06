@@ -22,6 +22,7 @@ import type { Machine } from "../../shared/machines.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { capTabLabels, MAX_TAB_LABEL_LENGTH } from "../../shared/preferences.ts";
 import type { ConversationResponse, ConversationTurn, PaneInfo } from "../../shared/protocol.ts";
+import { folderPattern, pasteFolder } from "./pasteFolders.ts";
 
 /** how many columns a tab shows of the line before it is cut with an ellipsis; a wide character (Hangul, CJK, an emoji) takes two */
 export const SHORT_TAB_LABEL_COLUMNS = 24;
@@ -98,11 +99,27 @@ const NOT_A_NAME = /^(?:\/|~\/|\.\.?\/|[A-Za-z]:[\\/]|```|~~~)/;
  * nothing a tab could be told by (#2637). An upload's path may hold spaces (a folder under
  * ~/Library), so one in the shape an upload takes (server/paste.ts: `<name>-<YYYYMMDD>-<HHMMSS>-
  * <8 hex>.<ext>`, a name with no space) is taken whole up to the next path or mention, as
- * lib/chatImages.ts reads it; any other path ends at a space. Only one in an upload folder `.ovis` may
- * run past a word ending in an image's extension, so the words after another mention never read as an
- * upload's path (#2682). A folder's " @" or " ~" followed by a space is part of it.
+ * lib/chatImages.ts reads it; any other path ends at a space. Only one in an upload folder `.ovis` (or
+ * the folder its PC's `OVIS_PASTE_DIR` names, uploadPattern) may run past a word ending in an image's
+ * extension, so the words after another mention never read as an upload's path (#2682). A folder's " @" or " ~" followed by a space is part of it.
  */
 const ATTACHMENT = /(^|\s)@(?:\/|~[\\/]|[A-Za-z]:[\\/])(?:(?:(?!\s(?:@\S|[\\/]|~[\\/]|[A-Za-z]:[\\/])).){0,1024}?[\\/]\.ovis[\\/][\p{L}\p{N}._-]*-\d{8}-\d{6}-[0-9a-f]{8}(?:\.[a-z0-9]{1,10})?(?=\s|$)|(?:(?!\s(?:@\S|[\\/]|~[\\/]|[A-Za-z]:[\\/])|\.(?:png|jpe?g|gif|webp)\s).){0,1024}?[\\/][\p{L}\p{N}._-]*-\d{8}-\d{6}-[0-9a-f]{8}(?:\.[a-z0-9]{1,10})?(?=\s|$)|\S*)/giu;
+
+const uploadsUnder = new Map<string, RegExp>();
+
+/**
+ * An upload's mention right in the folder `OVIS_PASTE_DIR` names on the message's PC (lib/pasteFolders.ts),
+ * taken whole even where that folder holds a word ending in an image's extension (#2771). The folder is
+ * matched as its server wrote it, case and all: ATTACHMENT's `i` would let a different folder in.
+ */
+function uploadPattern(folder: string): RegExp {
+  let pattern = uploadsUnder.get(folder);
+  if (pattern === undefined) {
+    pattern = new RegExp(String.raw`(^|\s)@${folderPattern(folder)}[\\/][\p{L}\p{N}._-]*-\d{8}-\d{6}-[0-9a-f]{8}(?:\.[a-z0-9]{1,10})?(?=\s|$)`, "gu");
+    uploadsUnder.set(folder, pattern);
+  }
+  return pattern;
+}
 
 /**
  * A label an Ovis before #2637 learned with an attachment's mention in it (a label learned now never
@@ -118,8 +135,8 @@ export function attachmentTabLabel(label: string): boolean {
  * the limit, else at the limit (a language written without spaces), with an ellipsis when anything
  * was cut; null for a message with nothing to name a tab by.
  */
-export function shortTabLabel(text: string): string | null {
-  const line = text.split(/\r\n|[\n\r\u2028\u2029]/).map((part) => part.replace(ATTACHMENT, "$1").replace(/\s+/g, " ").trim()).find((part) => part !== "" && !NOT_A_NAME.test(part));
+export function shortTabLabel(text: string, uploadFolder?: string): string | null {
+  const line = text.split(/\r\n|[\n\r\u2028\u2029]/).map((part) => (uploadFolder ? part.replace(uploadPattern(uploadFolder), "$1") : part).replace(ATTACHMENT, "$1").replace(/\s+/g, " ").trim()).find((part) => part !== "" && !NOT_A_NAME.test(part));
   if (line === undefined) return null;
   const head: string[] = [];
   let columns = 0;
@@ -155,7 +172,7 @@ export function learnTabLabel(machineId: string, paneId: string, text: string, s
   const id = paneStorageId(machineId, paneId);
   const held = pending.get(id);
   if (held !== undefined) { if (shared && !held.shared) { held.shared = true; changed(); } return; }
-  const label = shortTabLabel(text);
+  const label = shortTabLabel(text, pasteFolder(machineId));
   if (label === null) return;
   pending.set(id, { label, shared });
   // the roster's settling (App) keys it as soon as it can

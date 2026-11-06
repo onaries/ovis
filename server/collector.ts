@@ -1,5 +1,5 @@
 import type { AgentStatus, HerdrPane } from "../shared/protocol.ts";
-import { HerdrError, sessionSnapshot, subscribeEvents, type EventFrame, type Subscription } from "./herdr/client.ts";
+import { focusFromMove, HerdrError, sessionSnapshot, subscribeEvents, type EventFrame, type Subscription } from "./herdr/client.ts";
 
 /**
  * Collects agent status for EVERY pane in the session, not just the attached ones.
@@ -105,7 +105,8 @@ export interface StatusCollectorHandlers {
    */
   herdrLive?: { identity: () => string | null; onChange: (identity: string | null) => void };
   /** herdr's focus moved onto this pane: whoever is at its terminal has it in front */
-  onFocus?: (paneId: string) => void;
+  /** `passing`: herdr's focus passed over the pane while a move took the focused one out and back (`focusFromMove`). */
+  onFocus?: (paneId: string, passing: boolean) => void;
 }
 
 /** What the collector talks to, and how long it waits: tests swap both. */
@@ -610,12 +611,16 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       (frame) => {
         const paneId = parseFocusFrame(frame);
         if (paneId === null) return;
-        focusedAt.set(paneId, ++statusEvents);
-        // a finish seen at herdr's terminal is no measure for a later snapshot. Work still going on is:
-        // its finish in a gap after this is news
-        const told = heard.get(paneId);
-        if (told !== undefined && told.status !== "working" && told.status !== "blocked") heard.delete(paneId);
-        onFocus(paneId);
+        // nobody looked at a pane herdr's focus only passed over: its finishes stay news
+        const passing = focusFromMove(paneId);
+        if (!passing) {
+          focusedAt.set(paneId, ++statusEvents);
+          // a finish seen at herdr's terminal is no measure for a later snapshot. Work still going on is:
+          // its finish in a gap after this is news
+          const told = heard.get(paneId);
+          if (told !== undefined && told.status !== "working" && told.status !== "blocked") heard.delete(paneId);
+        }
+        onFocus(paneId, passing);
       },
       // a focus change missed meanwhile is gone for good: the next one is heard again
       () => focusStarted.resolve(),

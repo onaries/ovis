@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
-import { ChatRowMemoryContext, type ChatRowMemory } from "../lib/chatRowState.tsx";
+import { ChatRowMemoryContext, chatRowMemory, type ChatRowMemory } from "../lib/chatRowState.tsx";
 import { dropPendingListScroll, listEndPadded } from "../lib/followScroll.ts";
 import { chatSelectionClipboardPayload } from "../lib/markdownClipboard.ts";
 // ChatTimeline.css is imported by ChatView: the frame and the loading state need it before this chunk
@@ -437,12 +437,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
   }, [source, scroller]);
 
   const rendered = useCallback(({ item, index }: { item: Row; index: number }) => {
-    let memory = memories.get(item.key);
-    if (!memory) {
-      memory = { toggles: new Map(), outputs: new Map(), runs: new Map(), dormant: new Map() };
-      memories.set(item.key, memory);
-    }
-    return <ChatRowMemoryContext.Provider value={memory}>
+    return <ChatRowMemoryContext.Provider value={chatRowMemory(memories, item.key)}>
       <div data-chat-row={item.key} className={item.beforeUser ? "chat-virtual-row is-before-user" : "chat-virtual-row"}>{renderRow(item, index)}</div>
     </ChatRowMemoryContext.Provider>;
   }, [memories, renderRow]);

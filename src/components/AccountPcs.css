@@ -175,3 +175,25 @@
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+
+/* a PC new in the account's directory, waiting for this device to add it: one card above the list */
+.account-new-pc {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.account-new-pc .account-fineprint {
+  margin: 0;
+}
+
+.account-new-pc-title {
+  margin: 0;
+  font-weight: var(--fw-semibold);
+  color: var(--text-strong);
+}

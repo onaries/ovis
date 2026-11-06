@@ -22,6 +22,10 @@ describe("updatePlan", () => {
     expect(updatePlan({ ...packaged, builtWithFeed: false })).toEqual({ enabled: false, reason: "this build has no update feed" });
   });
 
+  it("says a Linux package built without a feed has none, since only a build with a feed carries the package-type file", () => {
+    expect(updatePlan({ ...packaged, platform: "linux", builtWithFeed: false, execPath: "/opt/Ovis/ovis" })).toEqual({ enabled: false, reason: "this build has no update feed" });
+  });
+
   it("takes OVIS_UPDATE_URL over the built feed, https only", () => {
     expect(updatePlan({ ...packaged, env: { OVIS_UPDATE_URL: "https://updates.example/desktop" } })).toEqual({ enabled: true, feed: "https://updates.example/desktop", channel: "stable", installer: "default" });
     expect(updatePlan({ ...packaged, env: { OVIS_UPDATE_URL: "http://updates.example/desktop" } }).enabled).toBe(false);

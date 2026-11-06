@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LOCAL_MACHINE } from "../../shared/machines.ts";
-import { WEB_PANEL_KEY as HISTORY_KEY, WEB_PANEL_DOCKED_KEY as DOCKED_KEY, WEB_PANEL_BELOW_KEY as BELOW_KEY, SHEET_HISTORY_KEY, withoutWebPanel } from "./historyKeys.ts";
+import { WEB_PANEL_KEY as HISTORY_KEY, WEB_PANEL_DOCKED_KEY as DOCKED_KEY, WEB_PANEL_BELOW_KEY as BELOW_KEY, SHEET_HISTORY_KEY, webPagesBelow, withoutWebPanel } from "./historyKeys.ts";
 import { backUnderCurrentEntry } from "./historyNavigation.ts";
 import { outsideSettings, settingsEntry } from "./settingsHistory.ts";
 import { panelUrl, wantsPanel } from "./webPanel.ts";
@@ -21,8 +21,7 @@ function isDocked(state: unknown): boolean {
 
 /** How many of the panel's own entries lie right under this one, which closing goes back past too. */
 function pagesBelow(state: unknown): number {
-  const below = outsideSettings(state)[BELOW_KEY];
-  return typeof below === "number" && Number.isInteger(below) && below > 0 ? below : 0;
+  return webPagesBelow(outsideSettings(state));
 }
 
 /**

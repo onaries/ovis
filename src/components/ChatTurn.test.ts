@@ -12,7 +12,7 @@ const text = (value: string): ConversationPart => ({ kind: "text", text: value }
 const tool = (command: string): ConversationPart => ({ kind: "tool", name: "Bash", summary: command, input: JSON.stringify({ command }), output: "" });
 
 /** what Settings → Chat says about the chat's folds: off unless a test turns it on */
-type Folds = { showThinking?: boolean; expandThinking?: boolean; foldWork?: boolean };
+type Folds = { showThinking?: boolean; expandThinking?: boolean; foldWork?: boolean; requestDetails?: boolean };
 
 const render = (parts: ConversationPart[], state: { live: boolean; waiting?: boolean }, role: ConversationTurn["role"] = "assistant", folds: Folds = {}): string => {
   const turn: ConversationTurn = { role, ts: "2026-01-01T12:00:00Z", end_ts: "2026-01-01T12:01:00Z", parts };
@@ -101,6 +101,39 @@ describe("the folds Settings → Chat starts a turn with", () => {
     expect(folded).not.toContain("Weighing it.");
     // reasoning the chat does not show stays out, whatever it would start as
     expect(thoughtsOpen(render(parts, { live: true }, "assistant", { expandThinking: true }))).toEqual([]);
+  });
+});
+
+describe("Compaction and failed requests (Settings → Chat, #901)", () => {
+  const failed = (error: string): ConversationPart => ({ kind: "text", text: `Error: ${error}`, failed: true });
+  const rows = (html: string) => [...html.matchAll(/class="chat-skill is-error chat-failed-requests"><summary>.*?<span class="chat-skill-name">([^<]*)</g)].map((match) => match[1]);
+
+  it("draws each failed request as its error line while off, as before", () => {
+    const html = render([failed("503 overloaded"), failed("Connection error."), text("hello")], { live: false });
+    expect(rows(html)).toEqual([]);
+    expect(html).toContain("Error: 503 overloaded");
+    expect(html).toContain("Error: Connection error.");
+  });
+
+  it("gathers a run of failed requests into one row, saying whether another request followed", () => {
+    const on = { requestDetails: true };
+    const retried = render([failed("503 overloaded"), failed("Connection error."), text("hello")], { live: false }, "assistant", on);
+    expect(rows(retried)).toEqual(["2 requests failed, then tried again"]);
+    // the errors are inside the row, without the prefix the line needed; the answer stays outside it
+    expect(retried).toContain("<li>503 overloaded</li><li>Connection error.</li>");
+    expect(retried).not.toContain("Error: 503");
+    expect(retried).toContain("hello");
+    expect(rows(render([failed("401 unauthorized")], { live: false }, "assistant", on))).toEqual(["Request failed"]);
+    // two runs apart stay two rows
+    expect(rows(render([failed("a"), text("partial"), failed("b")], { live: false }, "assistant", on))).toEqual(["Request failed, then tried again", "Request failed"]);
+  });
+
+  it("names the token counts a compaction recorded only while on", () => {
+    const card: ConversationPart = { kind: "compact", text: "folded", tokens_before: 761969, tokens_saved: 493241 };
+    const summary = (html: string) => html.match(/<summary>(.*?)<\/summary>/)?.[1] ?? "";
+    expect(summary(render([card], { live: false }, "user", { requestDetails: true }))).toContain("Conversation compacted · 762k tokens before · 493k tokens saved");
+    expect(summary(render([card], { live: false }, "user"))).not.toContain("tokens");
+    expect(summary(render([{ kind: "compact", text: "folded" }], { live: false }, "user", { requestDetails: true }))).not.toContain("tokens");
   });
 });
 

@@ -5,7 +5,7 @@
  * the tray; Quit stops the server. The core and its terminals keep running, as for every hc client.
  */
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, session, shell, Tray, type MenuItemConstructorOptions } from "electron";
-import { existsSync, readFileSync, type WriteStream } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, type WriteStream } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ChildProcess } from "node:child_process";
@@ -13,6 +13,8 @@ import { choosePort, coreEnv, endLeftover, installCore, isFile, layout, openLog,
 import { accountServiceOf, startLoopbackSignIn, type LoopbackSignIn } from "./accountSignIn.ts";
 import { awakeLabel, DESKTOP_ACTIVITY_FILE, holdAwake, readAwakeSettings, readWorking, writeAwakeSettings, type AwakeSettings } from "./awake.ts";
 import { checkForUpdates, debInstallCommand, updateChannel, updatePlan } from "./updates.ts";
+import { extractedAppDir, othersRunFrom } from "./appimage.ts";
+import { desktopLocale, desktopText } from "./text.ts";
 
 type StepState = "pending" | "ok" | "failed";
 export interface Status {
@@ -52,6 +54,8 @@ let awake = readAwakeSettings(awakePath);
 /** the powerSaveBlocker held while an agent works (awake.ts), and how many worked when last read */
 let awakeBlocker: number | null = null;
 let awakeWorking = 0;
+/** the tray's and the menu bar's words, in the app's language once it is ready (app.getLocale()) */
+let text = desktopText("en");
 
 const accountService = accountServiceOf(process.env);
 
@@ -260,25 +264,25 @@ function setAwake(next: AwakeSettings): void {
 function rebuildTrayMenu(): void {
   if (!tray) return;
   const url = server?.url ?? null;
-  const holding = awakeBlocker !== null ? awakeLabel(awakeWorking) : null;
+  const holding = awakeBlocker !== null ? awakeLabel(awakeWorking, text) : null;
   tray.setToolTip(holding ? `Ovis: ${holding}` : "Ovis");
   const items: MenuItemConstructorOptions[] = [
     ...(holding ? [{ label: holding, enabled: false }, { type: "separator" as const }] : []),
-    { label: "Open Ovis", click: showWindow },
-    { label: "Open in Browser", enabled: url !== null, click: () => url && openOutside(url) },
+    { label: text("Open Ovis"), click: showWindow },
+    { label: text("Open in Browser"), enabled: url !== null, click: () => url && openOutside(url) },
     { type: "separator" },
     {
-      label: "Keep Computer Awake",
+      label: text("Keep Computer Awake"),
       submenu: [
-        { label: "While an Agent Is Working", type: "checkbox", checked: awake.whileWorking, click: (item) => setAwake({ ...awake, whileWorking: item.checked }) },
-        { label: "Also on Battery", type: "checkbox", checked: awake.onBattery, enabled: awake.whileWorking, click: (item) => setAwake({ ...awake, onBattery: item.checked }) },
+        { label: text("While an Agent Is Working"), type: "checkbox", checked: awake.whileWorking, click: (item) => setAwake({ ...awake, whileWorking: item.checked }) },
+        { label: text("Also on Battery"), type: "checkbox", checked: awake.onBattery, enabled: awake.whileWorking, click: (item) => setAwake({ ...awake, onBattery: item.checked }) },
       ],
     },
     { type: "separator" },
-    { label: "Restart Ovis Server", enabled: busy === null, click: () => void restart() },
-    ...(updateReady ? [{ label: "Restart to Update", click: updateReady }] : []),
+    { label: text("Restart Ovis Server"), enabled: busy === null, click: () => void restart() },
+    ...(updateReady ? [{ label: text("Restart to Update"), click: updateReady }] : []),
     { type: "separator" },
-    { label: "Quit Ovis", click: () => app.quit() },
+    { label: text("Quit Ovis"), click: () => app.quit() },
   ];
   tray.setContextMenu(Menu.buildFromTemplate(items));
 }
@@ -292,11 +296,11 @@ function createTray(): void {
 }
 
 function createMenu(): void {
-  const openInBrowser: MenuItemConstructorOptions = { label: "Open in Browser", click: () => server && openOutside(server.url) };
+  const openInBrowser: MenuItemConstructorOptions = { label: text("Open in Browser"), click: () => server && openOutside(server.url) };
   const view: MenuItemConstructorOptions = {
-    label: "View",
+    label: text("View"),
     submenu: [
-      { label: "Reload", accelerator: "CmdOrCtrl+R", click: () => window?.webContents.reload() },
+      { label: text("Reload"), accelerator: "CmdOrCtrl+R", click: () => window?.webContents.reload() },
       { role: "toggleDevTools" },
       { type: "separator" },
       { role: "resetZoom" },
@@ -307,8 +311,8 @@ function createMenu(): void {
     ],
   };
   const template: MenuItemConstructorOptions[] = process.platform === "darwin"
-    ? [{ role: "appMenu" }, { label: "File", submenu: [openInBrowser, { type: "separator" }, { role: "close" }] }, { role: "editMenu" }, view, { role: "windowMenu" }]
-    : [{ label: "File", submenu: [openInBrowser, { type: "separator" }, { label: "Quit", accelerator: "CmdOrCtrl+Q", click: () => app.quit() }] }, { role: "editMenu" }, view];
+    ? [{ role: "appMenu" }, { label: text("File"), submenu: [openInBrowser, { type: "separator" }, { role: "close" }] }, { role: "editMenu" }, view, { role: "windowMenu" }]
+    : [{ label: text("File"), submenu: [openInBrowser, { type: "separator" }, { label: text("Quit"), accelerator: "CmdOrCtrl+Q", click: () => app.quit() }] }, { role: "editMenu" }, view];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
@@ -330,13 +334,25 @@ function allowPermissions(): void {
   });
 }
 
+/**
+ * An update line, written to the app's log (logs/ovis.log) as well as its output: an app opened from
+ * the desktop has nobody reading its output.
+ */
+function updateLog(line: string): void {
+  console.log(line);
+  try {
+    mkdirSync(logs, { recursive: true });
+    appendFileSync(join(logs, "ovis.log"), `${line}\n`);
+  } catch (error) { console.error(`Writing to ${logs} failed: ${message(error)}`); }
+}
+
 async function startUpdates(): Promise<void> {
   let linuxPackage: string | null = null;
   try { linuxPackage = readFileSync(join(process.resourcesPath, "package-type"), "utf8").trim(); } catch { /* not a Linux package */ }
   const plan = updatePlan({ packaged: app.isPackaged, env: process.env, platform: process.platform, builtWithFeed: existsSync(join(process.resourcesPath, "app-update.yml")),
     channel: updateChannel(process.env, stateDir), linuxPackage, execPath: process.execPath });
   if (!plan.enabled) {
-    console.log(`Updates are off: ${plan.reason}.`);
+    updateLog(`Updates are off: ${plan.reason}.`);
     return;
   }
   const updater = await import("electron-updater");
@@ -366,10 +382,10 @@ async function startUpdates(): Promise<void> {
   autoUpdater.channel = plan.channel === "beta" ? "beta" : "latest";
   autoUpdater.allowPrerelease = plan.channel === "beta";
   autoUpdater.allowDowngrade = false;
-  console.log(`Updates: ${plan.channel} channel.`);
+  updateLog(`Updates: ${plan.channel} channel.`);
   // a .deb installs behind a password prompt: only when asked from the tray, never on a plain quit
   if (plan.installer === "deb") autoUpdater.autoInstallOnAppQuit = false;
-  autoUpdater.on("error", (error) => console.error(`Update failed: ${message(error)}`));
+  autoUpdater.on("error", (error) => updateLog(`Update failed: ${message(error)}`));
   autoUpdater.on("update-downloaded", () => {
     // the .deb installs first and the app quits (stopping the server) only once it did, then starts again;
     // a cancelled prompt leaves the app and its server running. The AppImage starts its new copy at
@@ -377,7 +393,7 @@ async function startUpdates(): Promise<void> {
     updateReady = plan.installer === "deb" ? () => autoUpdater.quitAndInstall() : () => void stopForQuit().then(() => autoUpdater.quitAndInstall());
     rebuildTrayMenu();
   });
-  const check = () => void checkForUpdates(autoUpdater, (line) => console.error(line));
+  const check = () => void checkForUpdates(autoUpdater, updateLog);
   check();
   setInterval(check, 6 * 60 * 60 * 1000);
 }
@@ -419,11 +435,25 @@ if (!app.requestSingleInstanceLock()) {
     // quit again only once this cancelled quit is over: a quit asked for inside it is dropped
     if (!quitting) void stopForQuit().then(() => setImmediate(() => app.quit()));
   });
+  // an AppImage run unpacked (no FUSE) leaves its folder in the temporary folder: the server, the
+  // last user of its files, has stopped by now (the core runs from its own copy). Another copy of the
+  // same AppImage runs from the same folder: then it stays
+  const unpacked = process.platform === "linux" ? extractedAppDir(process.env, process.execPath) : null;
+  if (unpacked) {
+    app.on("quit", () => {
+      try {
+        if (!othersRunFrom(unpacked, process.pid)) rmSync(unpacked, { recursive: true, force: true });
+      } catch (error) {
+        console.error(`Removing ${unpacked} failed: ${message(error)}`);
+      }
+    });
+  }
   app.on("activate", showWindow);
   // the app stays in the tray with its window closed
   app.on("window-all-closed", () => {});
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => app.quit());
   void app.whenReady().then(() => {
+    text = desktopText(desktopLocale(app.getLocale()));
     allowPermissions();
     createMenu();
     createWindow();

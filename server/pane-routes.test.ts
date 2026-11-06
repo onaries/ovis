@@ -134,6 +134,18 @@ it("asks a chat showing a history to wait only when Copilot's rejection may be w
   } finally { warn.mockRestore(); }
 });
 
+it("passes on what the user could change for a Copilot pane to be read, beside a wait", async () => {
+  const pane = crypto.randomUUID();
+  const url = new URL(`http://x/api/pane/conversation?pane_id=${pane}&history_id=shown`);
+  const read = spyOn(conversation, "paneConversation").mockRejectedValue(
+    new conversation.ConversationUnavailable("no_session_path", undefined, "copilot_log_truncated", "copilot_ui_server"));
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(await (await handlePaneRequest(new Request(url), url, "/api/pane/conversation", {}))!.json())
+      .toEqual({ source: "scrollback", turns: [], recovery: "waiting", hint: "copilot_ui_server" });
+  } finally { read.mockRestore(); warn.mockRestore(); }
+});
+
 it("diagnoses pending reads while preserving the retry response", async () => {
   const url = new URL(`http://x/api/pane/conversation?pane_id=${crypto.randomUUID()}`);
   const lines: string[] = [];

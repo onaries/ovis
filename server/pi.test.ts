@@ -154,7 +154,7 @@ describe("pi transcripts render as chat", () => {
     expect(page.source).toBe("pi-transcript");
     // the window pi itself states for the answer, and its totalTokens: the figure pi's own
     // footer divides by a window, so the two views of one session cannot disagree
-    expect(page.metadata).toEqual({ model: "qwen-test", reasoning_effort: "medium", context: { used: 480, window: null } });
+    expect(page.metadata).toEqual({ model: "qwen-test", reasoning_effort: "medium", context: { used: 480, window: null }, provider: "test" });
     expect(page.turns.map((turn) => turn.role)).toEqual(["user", "assistant"]);
 
     const [prompt, answer] = page.turns as [ConversationTurn, ConversationTurn];
@@ -193,7 +193,7 @@ describe("pi transcripts render as chat", () => {
       { type: "message", id: "u1", parentId: null, timestamp: "2026-09-30T00:00:02.000Z", message: { role: "user", content: "hello" } },
       { type: "message", id: "a1", parentId: "u1", timestamp: "2026-09-30T00:00:03.000Z", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "401 unauthorized" } },
     ]));
-    expect(page.turns[1]!.parts).toEqual([{ kind: "text", text: "Error: 401 unauthorized" }]);
+    expect(page.turns[1]!.parts).toEqual([{ kind: "text", text: "Error: 401 unauthorized", failed: true }]);
   });
 
   it("starts a fresh history when /new or /resume moves the pane to another file", () => {
@@ -221,7 +221,7 @@ describe("pi transcripts render as chat", () => {
     expect(page.turns.map((turn) => turn.parts.map((part) => part.kind)))
       .toEqual([["text"], ["compact"], ["text"]]);
     const card = page.turns[1]!.parts[0]!;
-    expect(card).toEqual({ kind: "compact", text: "## Session Goal\n- fold the older turns" });
+    expect(card).toEqual({ kind: "compact", text: "## Session Goal\n- fold the older turns", tokens_before: 178366 });
     expect(page.turns[1]!.role).toBe("user");
   });
 

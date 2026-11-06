@@ -13,6 +13,7 @@ import { paneSendText, tabCreate, workspaceClose, workspaceCreate } from "../ser
 import { UsageService } from "../server/usage.ts";
 import { chromePath } from "./chrome-path.ts";
 import { shownRow, shownRows } from "./shown-rows.ts";
+import { pickTab } from "./tab-pick.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-switch-resize-")));
 const evidence = process.env["UI_EVIDENCE_DIR"];
@@ -70,7 +71,7 @@ try {
   const panes = [target, other.root_pane.pane_id];
   const tabs = new Map([[target, made.root_pane.tab_id], [other.root_pane.pane_id, other.tab.tab_id]]);
   const select = async (page: Page, id: string) => {
-    await page.locator(`.tab-strip [role="tab"][data-tab-id="${tabs.get(id)}"]`).click();
+    await pickTab(page, tabs.get(id)!);
     await page.locator(`[data-layout-pane="${id}"] [data-pane-content]`).waitFor();
   };
   const failures: string[] = [];

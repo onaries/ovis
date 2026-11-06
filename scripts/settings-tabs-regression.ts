@@ -27,19 +27,19 @@ export async function checkSettingsAcrossTabs(browser: Browser, origin: string):
     };
     const settingsOf = (page: Page) => page.evaluate(() => ({
       chatWidth: document.documentElement.dataset["chatWidth"],
-      composerArtifacts: localStorage.getItem("ovis:composer-artifacts"),
+      foldWork: localStorage.getItem("ovis:fold-work"),
       terminalFontSize: (JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as { terminalFontSize?: number }).terminalFontSize,
     }));
     const tabA = await open();
     const tabB = await open();
 
-    // tab A: Chat width Wide and the Artifacts chip on
+    // tab A: Chat width Wide and the Collapse work on
     await tabA.bringToFront();
     await tabA.keyboard.press("ControlOrMeta+Shift+Comma");
     await openSettingsPage(tabA, "Chat");
     await tabA.getByRole("group", { name: "Chat width", exact: true }).getByRole("button", { name: "Wide", exact: true }).click();
-    await tabA.getByRole("switch", { name: "Artifacts chip", exact: true }).click();
-    await tabA.waitForFunction(() => document.documentElement.dataset["chatWidth"] === "wide" && localStorage.getItem("ovis:composer-artifacts") === "true");
+    await tabA.getByRole("switch", { name: "Collapse work", exact: true }).click();
+    await tabA.waitForFunction(() => document.documentElement.dataset["chatWidth"] === "wide" && localStorage.getItem("ovis:fold-work") === "true");
     const fontBefore = (await settingsOf(tabB)).terminalFontSize;
     assert.equal(typeof fontBefore, "number", "tab A's save stored a font size");
 
@@ -59,7 +59,7 @@ export async function checkSettingsAcrossTabs(browser: Browser, origin: string):
     await tabB.locator(".conn-live").waitFor();
     const fresh = await open();
     for (const [name, page] of [["reloaded tab B", tabB], ["a new tab", fresh]] as const) {
-      assert.deepEqual(await settingsOf(page), { chatWidth: "wide", composerArtifacts: "true", terminalFontSize: font }, `${name} keeps tab A's Chat width and Artifacts chip and tab B's font size`);
+      assert.deepEqual(await settingsOf(page), { chatWidth: "wide", foldWork: "true", terminalFontSize: font }, `${name} keeps tab A's Chat width and Collapse work and tab B's font size`);
     }
     assert.deepEqual(errors, []);
     console.log("PASS a tab's settings save keeps another tab's change");

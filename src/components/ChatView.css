@@ -1781,6 +1781,36 @@ ol.markdown-list {
   text-overflow: ellipsis;
 }
 
+/* OmO's goal waiting on background work: the divider's look, one line or wrapped centred, nothing to open */
+.chat-goal-wait {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.chat-goal-wait::before,
+.chat-goal-wait::after {
+  content: "";
+  flex: 1 1 var(--space-4);
+  border-top: var(--hairline) solid var(--border);
+}
+
+.chat-goal-wait svg {
+  width: 12px;
+  height: 12px;
+  margin-inline-end: var(--space-1);
+  vertical-align: -1px;
+}
+
+.chat-goal-wait > span {
+  flex: 0 1 auto;
+  min-width: 0;
+  text-align: center;
+}
+
 /* a runtime notice is job output, not prose: verbatim, wrapped, and bounded like a whole tool output */
 .chat-notice-text {
   margin-bottom: 0;
@@ -1833,6 +1863,11 @@ ol.markdown-list {
 .chat-skill-detail p { margin: 0 0 var(--space-1); color: var(--text-dim); }
 
 .chat-skill[open] .chat-skill-caret { transform: rotate(180deg); }
+
+/* a turn's failed requests (Settings > Compaction and failed requests): one row, their errors on request */
+.chat-failed-requests { width: fit-content; margin: var(--space-2) 0; }
+.chat-failed-requests > summary > svg:first-child { color: var(--status-blocked); }
+.chat-failed-requests-list { margin: 0; padding-inline-start: var(--space-8); font-family: var(--font-mono); white-space: pre-wrap; }
 
 /* omo's goal as the turn left it: one line beside the skills, the whole objective on request */
 .chat-goal {

@@ -10,6 +10,7 @@ import { paneSendText, tabCreate, workspaceClose, workspaceCreate } from "../ser
 import { UsageService } from "../server/usage.ts";
 import { chromePath } from "./chrome-path.ts";
 import { shownRows } from "./shown-rows.ts";
+import { pickTab } from "./tab-pick.ts";
 
 declare global {
   interface Window {
@@ -57,7 +58,7 @@ try {
       const frame = (id: string) => page.locator(`[data-layout-pane="${id}"]`);
       const ready = (id: string) => frame(id).locator("[data-pane-content]").waitFor();
       const select = async (id: string) => {
-        await page.locator(`.tab-strip [role="tab"][data-tab-id="${tabs.get(id)}"]`).click();
+        await pickTab(page, tabs.get(id)!);
         await ready(id);
       };
       await ready(panes[0]!);

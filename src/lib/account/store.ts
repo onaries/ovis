@@ -64,6 +64,13 @@ export interface PlannedEnroll {
   readonly account: string;
   /** ids of the records the PC answered with a final outcome */
   readonly done: readonly string[];
+  /** keys an earlier, unfinished attempt let in, to be introduced once the enrollment ends */
+  readonly admitted?: readonly string[];
+  /**
+   * Once enrolled: the devices it let in, the new PC as this device checked it, and the other PCs
+   * (by server_id) still to tell those devices about it (account/join.ts, introductions)
+   */
+  readonly introduce?: { readonly keys: readonly string[]; readonly pc: { readonly server_id: string; readonly server_public_key: string; readonly relay: string; readonly name: string }; readonly to: readonly string[] };
 }
 
 export interface QueuedAdd {

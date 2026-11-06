@@ -222,6 +222,12 @@
   --z-palette: 35;
   --z-droplet: 40;
 
+  /* the screen's safe-area insets, for script (lib/safeArea.ts): a custom property computes env() */
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+
   /* in-app alert (components/Droplet.css): island black in either theme, so one set */
   --droplet-bg: #000;
   --droplet-text: #f5f5f7;
@@ -2156,6 +2162,56 @@ button {
   color: var(--text-dim);
 }
 
+/* a phone's title lists its workspace's tabs (App.tsx, TabStrip's sheet): the caret after it is the
+   button, and its press area is stretched over the whole title and crumb, so the title is the target.
+   The box grows to a finger's height into the header around it, its line where it was. */
+.context.has-tabs {
+  --tabs-pad: max(0px, calc((var(--touch-target) - var(--context-line)) / 2));
+  position: relative;
+  max-height: calc(var(--context-line) + 2 * var(--tabs-pad));
+  margin-block: calc(-1 * var(--tabs-pad));
+  padding-block: var(--tabs-pad);
+}
+
+.context-tabs {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  margin-left: calc(-1 * var(--space-1));
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.context-tabs svg {
+  width: 16px;
+  height: 16px;
+}
+
+.context-tabs::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+}
+
+/* the ring goes round the whole target, inside the header's clipped box */
+.context-tabs:focus-visible {
+  outline: none;
+}
+
+.context-tabs:focus-visible::after {
+  outline: var(--ring);
+  outline-offset: calc(-1 * var(--ring-offset));
+}
+
+.context-tabs[aria-expanded="true"] {
+  color: var(--text-strong);
+}
+
 /* the PC's sessions by state (components/HeaderSessions.tsx): a figure per state that has any, in the
    sidebar's status colours, tabular so a count that changes moves nothing. They stay whole: the pane
    title is the header's one item that shortens */
@@ -2771,7 +2827,9 @@ button.header-session-count[aria-disabled="true"] {
   line-height: 1;
 }
 
-/* modal dialog: scrim + centered card; mobile: bottom sheet */
+/* modal dialog: scrim + centered card; mobile: bottom sheet. The card keeps clear of the screen's
+   safe-area insets too: a landscape phone puts its notch on the left or right and its home
+   indicator below, where a card filling the scrim (Settings) would otherwise reach */
 .modal-scrim {
   position: fixed;
   inset: 0;
@@ -2779,7 +2837,8 @@ button.header-session-count[aria-disabled="true"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-4);
+  padding: max(var(--space-4), env(safe-area-inset-top, 0px)) max(var(--space-4), env(safe-area-inset-right, 0px))
+    max(var(--space-4), env(safe-area-inset-bottom, 0px)) max(var(--space-4), env(safe-area-inset-left, 0px));
   background: var(--scrim);
 }
 
@@ -2831,9 +2890,10 @@ button.header-session-count[aria-disabled="true"] {
     padding: 0;
   }
 
+  /* the sheet's top stays below the status bar or Dynamic Island, a short screen's (the keyboard up) too */
   .modal {
     width: 100%;
-    max-height: 92%;
+    max-height: min(92%, calc(100% - env(safe-area-inset-top, 0px) - var(--space-2)));
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }

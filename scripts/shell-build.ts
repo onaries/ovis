@@ -15,7 +15,7 @@
  * nothing here runs (src/lib/shellMode.ts).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Plugin } from "vite";
 import { pagePolicy } from "../server/file-view.ts";
 import { IMMUTABLE_CACHE, REVALIDATE, shellContentSecurityPolicy } from "../server/static.ts";
@@ -67,6 +67,40 @@ export function shellManifest(manifest: string): string {
   return `${JSON.stringify({ ...JSON.parse(manifest) as Record<string, unknown>, id: "./", start_url: "./", scope: "./" }, null, 2)}\n`;
 }
 
+/** The phone apps' id: the Android package and the iOS bundle (app/capacitor.config.json). */
+export const APP_ID = "sh.ovis.app";
+
+/**
+ * The certificates an Android app that may open `https://app.ovis.sh/s/` links is signed with:
+ * Google Play's app signing key (Play Console, App integrity), which signs every copy Play
+ * installs, and the upload key (the certificate in a bundle built for upload), which signs a
+ * release build installed by hand.
+ */
+export const ANDROID_APP_FINGERPRINTS = [
+  "7A:F3:97:1A:B8:7A:22:3B:A4:6D:58:13:89:ED:7A:EB:A9:31:3F:97:E5:A1:03:87:63:74:BE:CB:54:1C:1D:63",
+  "BD:49:0B:C8:3D:3F:22:C8:55:9E:57:60:C4:7D:71:63:7D:34:22:92:95:82:C9:B4:05:E3:E6:79:AD:8E:29:C6",
+];
+
+/** The iOS app as Apple names it in a Universal Link: the Apple team, then the bundle id. */
+export const IOS_APP_ID = `5987KT43TJ.${APP_ID}`;
+
+/**
+ * The files that let the phone apps open a PC's page on app.ovis.sh (a pairing link tapped in a
+ * message, or the camera reading the PC's QR code) instead of the browser: Android checks
+ * `assetlinks.json` for the app's `autoVerify` link (app/android/app/src/main/AndroidManifest.xml),
+ * iOS `apple-app-site-association` for an app whose Associated Domains name this host. Only a PC's
+ * scope, `/s/`, is the app's: the front page stays the hosted shell's.
+ */
+export function appLinkFiles(): Record<string, string> {
+  return {
+    ".well-known/assetlinks.json": `${JSON.stringify([{
+      relation: ["delegate_permission/common.handle_all_urls"],
+      target: { namespace: "android_app", package_name: APP_ID, sha256_cert_fingerprints: ANDROID_APP_FINGERPRINTS },
+    }], null, 2)}\n`,
+    ".well-known/apple-app-site-association": `${JSON.stringify({ applinks: { details: [{ appIDs: [IOS_APP_ID], components: [{ "/": "/s/*" }] }] } }, null, 2)}\n`,
+  };
+}
+
 /** Where the hosted shell's render host for a PC's rendered pages answers (todo 17's page); only its policy is reserved here. */
 export const RENDER_PATH = "/s/:id/~render";
 
@@ -105,6 +139,10 @@ export function shellHeaders(): string {
     "",
     "/assets/*",
     `  Cache-Control: ${IMMUTABLE_CACHE}`,
+    "",
+    // the app links' files (appLinkFiles): apple-app-site-association has no extension
+    "/.well-known/*",
+    "  Content-Type: application/json",
     "",
     ...["/", "/index.html", "/sw.js", "/manifest.webmanifest", "/s/*"].flatMap((path) => [path, `  Cache-Control: ${REVALIDATE}`, ""]),
   ].join("\n");
@@ -165,6 +203,7 @@ parent.postMessage({ type: "ovis-render-ready" }, "*");
     "manifest.webmanifest": shellManifest(manifest),
     _redirects: shellRedirects(),
     _headers: shellHeaders(),
+    ...appLinkFiles(),
   };
 }
 
@@ -187,7 +226,10 @@ export function shellBuild(): Plugin {
     writeBundle(options) {
       if (!options.dir) throw new Error("the shell build has no output directory");
       mkdirSync(options.dir, { recursive: true });
-      for (const [name, content] of Object.entries(shellFiles(manifest))) writeFileSync(join(options.dir, name), content);
+      for (const [name, content] of Object.entries(shellFiles(manifest))) {
+        mkdirSync(dirname(join(options.dir, name)), { recursive: true });
+        writeFileSync(join(options.dir, name), content);
+      }
     },
   };
 }

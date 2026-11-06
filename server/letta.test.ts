@@ -108,7 +108,7 @@ describe("Letta conversation binding", () => {
       writeFileSync(join(cwd, ".letta", "settings.local.json"), settings);
       utimesSync(join(cwd, ".letta", "settings.local.json"), at / 1000, at / 1000);
     }
-    return { pid: 4242, cwd, startedAt: started, env: { HOME: root, ...env } };
+    return { pid: 4242, cwd, startedAt: started, identity: started, env: { HOME: root, ...env } };
   };
   const now = Date.now();
 
@@ -179,7 +179,7 @@ describe("Letta conversation binding", () => {
     const other = join(root, "project2");
     mkdirSync(start); mkdirSync(other);
     symlinkSync(start, join(root, "link1"));
-    const at = (pid: number, cwd: string, env: Record<string, string>): LettaProcess => ({ pid, cwd, startedAt: now, env });
+    const at = (pid: number, cwd: string, env: Record<string, string>, startedAt = now): LettaProcess => ({ pid, cwd, startedAt, identity: now, env });
     expect(lettaInStartFolder(at(101, start, { PWD: start }))).toBe(true);
     expect(lettaInStartFolder(at(102, start, { PWD: join(root, "link1") }))).toBe(true);
     // no start folder to compare: its shell set no PWD
@@ -188,6 +188,9 @@ describe("Letta conversation binding", () => {
     // SetWorkingDirectory moved it into project2; a later move back does not make project1's record its own again
     expect(lettaInStartFolder(at(105, other, { PWD: start }))).toBe(false);
     expect(lettaInStartFolder(at(105, start, { PWD: start }))).toBe(false);
+    // the lower bound read differently on its return (a stepped wall clock moves it on Linux): still the same process
+    expect(lettaInStartFolder(at(106, other, { PWD: start }))).toBe(false);
+    expect(lettaInStartFolder(at(106, start, { PWD: start }, now - 1_000))).toBe(false);
   });
 
   test("a closed peer of the same agent that reopened the pane's old conversation binds nothing", () => {

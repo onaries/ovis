@@ -1537,10 +1537,20 @@ describe("GET /api/sessions/history", () => {
       { pid: SHELL, parent: 1, path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", commandLine: "powershell.exe" },
       { pid: PID, parent: SHELL, path: CLAUDE_EXE, commandLine: `"${CLAUDE_EXE}"`, started: STARTED },
     ];
+    // the native claude.exe the shell started runs the session in a child claude.exe, and only that child writes the record
+    const LAUNCHER = 4000;
+    const launched = (shell: number): ProcessRow[] => [
+      { pid: LAUNCHER, parent: shell, path: CLAUDE_EXE, commandLine: `"${CLAUDE_EXE}"`, started: STARTED - 1_000 },
+      { pid: PID, parent: LAUNCHER, path: CLAUDE_EXE, commandLine: `"${CLAUDE_EXE}" --permission-mode auto`, started: STARTED },
+    ];
+    const launchedTable = async (): Promise<ProcessRow[]> => [
+      { pid: SHELL, parent: 1, path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", commandLine: "powershell.exe" },
+      ...launched(SHELL),
+    ];
     const shellOnly = async (): Promise<PaneProcesses> => ({ shell_pid: SHELL, foreground_processes: [{ pid: SHELL, name: "powershell.exe", argv: ["powershell.exe"] }] });
-    const record = (store: string) => {
+    const record = (store: string, pid = PID) => {
       mkdirSync(join(store, "sessions"), { recursive: true });
-      writeFileSync(join(store, "sessions", `${PID}.json`), JSON.stringify({ pid: PID, sessionId: ID(5), procStart: PROC_START, kind: "interactive" }));
+      writeFileSync(join(store, "sessions", `${pid}.json`), JSON.stringify({ pid, sessionId: ID(5), procStart: PROC_START, kind: "interactive" }));
     };
     let serverConfigDir: string | undefined;
     beforeEach(() => { serverConfigDir = process.env["CLAUDE_CONFIG_DIR"]; delete process.env["CLAUDE_CONFIG_DIR"]; forgetClaudeSessions(); });
@@ -1556,6 +1566,45 @@ describe("GET /api/sessions/history", () => {
       record(join(home, ".claude-second"));
       const listed = await list(home);
       expect(listed.sessions.map((row) => [row.firstMessage, row.resume?.source?.pane_id])).toEqual([["second store prompt", "p1"]]);
+    });
+
+    it("lists the store of the child Claude holding the PID record, not the launcher's", async () => {
+      const home = newHome();
+      claudeStore(join(home, ".claude"), ID(1), "default store prompt");
+      claudeStore(join(home, ".claude-second"), ID(1), "second store prompt");
+      record(join(home, ".claude-second"));
+      const listed = await list(home, launchedTable);
+      expect(listed.sessions.map((row) => [row.firstMessage, row.resume?.source?.pane_id])).toEqual([["second store prompt", "p1"]]);
+    });
+
+    it("tells no store while the Claude under the shell has written no record yet, rather than take the default one", async () => {
+      const home = newHome();
+      claudeStore(join(home, ".claude"), ID(1), "default store prompt");
+      expect((await list(home)).error?.code).toBe("claude_store_unknown");
+      expect((await list(home, launchedTable)).error?.code).toBe("claude_store_unknown");
+    });
+
+    it("tells no store when two Claudes under the shell hold records", async () => {
+      const BESIDE = 4300;
+      const home = newHome();
+      claudeStore(join(home, ".claude"), ID(1), "default store prompt");
+      record(join(home, ".claude"));
+      record(join(home, ".claude"), BESIDE);
+      const rows = async (): Promise<ProcessRow[]> => [...await launchedTable(), { pid: BESIDE, parent: SHELL, path: CLAUDE_EXE, commandLine: `"${CLAUDE_EXE}"`, started: STARTED }];
+      expect((await list(home, rows)).error?.code).toBe("claude_store_unknown");
+    });
+
+    it("reads no process table on macOS or Linux, where herdr names the program in front", async () => {
+      const home = newHome();
+      claudeStore(join(home, ".claude"), ID(1), "default store prompt");
+      let read = 0;
+      for (const platform of ["darwin", "linux"]) {
+        const listed = await (await handleSessionHistoryRequest(...request("workspace_id=w1&agent=claude&pane_id=p1"), {
+          readOnly: false, stores: { home, env: {} }, snapshot: async () => snapshot(), paneProcesses: shellOnly, launchSource: launchAbsent, platform, table: async () => { read += 1; return launchedTable(); },
+        })).json() as ClaudeListing;
+        expect(listed.sessions.map((row) => row.firstMessage)).toEqual(["default store prompt"]);
+      }
+      expect(read).toBe(0);
     });
 
     it("offers Resume for the default ~/.claude, as before the store was bound", async () => {
@@ -1575,6 +1624,11 @@ describe("GET /api/sessions/history", () => {
         { pid: NEW_SHELL, parent: 1, path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", commandLine: "powershell.exe" },
         { pid: PID, parent: NEW_SHELL, path: CLAUDE_EXE, commandLine: `"${CLAUDE_EXE}" --resume ${ID(1)}`, started: STARTED },
       ];
+      const launchedRows = async (): Promise<ProcessRow[]> => [
+        { pid: SHELL, parent: 1, path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", commandLine: "powershell.exe" },
+        { pid: NEW_SHELL, parent: 1, path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", commandLine: "powershell.exe" },
+        ...launched(NEW_SHELL),
+      ];
       const paneProcesses = async (paneId: string): Promise<PaneProcesses> => {
         const shell = paneId === "p-new" ? NEW_SHELL : SHELL;
         return { shell_pid: shell, foreground_processes: [{ pid: shell, name: "powershell.exe", argv: ["powershell.exe"] }] };
@@ -1584,11 +1638,11 @@ describe("GET /api/sessions/history", () => {
         start: async () => ({ agent_started: true as const }),
         close: async (tabId: string) => { closed.push(tabId); },
       });
-      const outcome = async (recordedIn: string | readonly string[]) => {
+      const outcome = async (recordedIn: string | readonly string[], tableRows = rows) => {
         const home = newHome();
         claudeStore(join(home, ".claude"), ID(1), "default store prompt");
         claudeStore(join(home, ".claude-second"), ID(1), "second store prompt");
-        const base = { stores: { home, env: {} }, snapshot: async () => snapshot(), paneProcesses, launchSource: launchAbsent, platform: "win32", table: rows, launchCheckMs: 0 };
+        const base = { stores: { home, env: {} }, snapshot: async () => snapshot(), paneProcesses, launchSource: launchAbsent, platform: "win32", table: tableRows, launchCheckMs: 0 };
         const listed = await (await handleSessionHistoryRequest(...request("workspace_id=w1&agent=claude&pane_id=p1"), { readOnly: false, ...base })).json() as ClaudeListing;
         expect(listed.sessions.map((row) => row.firstMessage)).toEqual(["default store prompt"]);
         for (const store of typeof recordedIn === "string" ? [recordedIn] : recordedIn) record(join(home, store));
@@ -1602,6 +1656,8 @@ describe("GET /api/sessions/history", () => {
       expect(await outcome(".claude-second")).toEqual([409, "launch_store_changed", ["t-new"]]);
       // the new Claude's live record in two stores (one copied while it ran): which one it writes cannot be told
       expect(await outcome([".claude", ".claude-second"])).toEqual([409, "launch_store_unknown", ["t-new"]]);
+      // below a launcher with no record: the child holding it is the started Claude, and its tab is kept
+      expect(await outcome(".claude", launchedRows)).toEqual([200, "created", []]);
     });
 
     it("tells no store when the process table says nothing", async () => {

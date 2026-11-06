@@ -343,11 +343,12 @@
     padding-top: 0;
   }
 
-  /* a sheet of one height: the chips and the footer stay where the thumb learnt them while the list changes */
+  /* a sheet of one height: the chips and the footer stay where the thumb learnt them while the list changes.
+     Its top, and the search field there, stays below the status bar or Dynamic Island */
   .command-palette {
     width: 100%;
-    height: calc(100% - var(--space-8));
-    max-height: calc(100% - var(--space-8));
+    height: calc(100% - max(var(--space-8), calc(env(safe-area-inset-top, 0px) + var(--space-2))));
+    max-height: calc(100% - max(var(--space-8), calc(env(safe-area-inset-top, 0px) + var(--space-2))));
     padding-bottom: env(safe-area-inset-bottom, 0px);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   }

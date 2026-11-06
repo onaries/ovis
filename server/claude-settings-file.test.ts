@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import { agentStartArgs, claudeSettingsDir, settingsFile, settingsFileArgs } from "./claude-settings-file.ts";
+import { powershellNativeArgs } from "./shell-agent.ts";
 
 const ULTRACODE = JSON.stringify({ ultracode: true });
 
@@ -59,9 +60,15 @@ describe("claudeSettingsDir", () => {
   it("is a folder of this Windows user's %LOCALAPPDATA%, not of a %TEMP% other accounts may share", () => {
     const home = "C:\\Users\\a b";
     const local = `${home}\\AppData\\Local`;
-    expect(claudeSettingsDir({ LOCALAPPDATA: local, TEMP: "C:\\Temp", TMP: "C:\\Temp" }, home)).toBe(join(local, "ovis", "claude-settings"));
+    expect(claudeSettingsDir({ LOCALAPPDATA: local, TEMP: "C:\\Temp", TMP: "C:\\Temp" }, home)).toBe(join(local, "ovis", "claude settings"));
     // with none set, or an empty one, the profile's own
-    for (const env of [{}, { LOCALAPPDATA: "" }]) expect(claudeSettingsDir(env, home)).toBe(join(home, "AppData", "Local", "ovis", "claude-settings"));
+    for (const env of [{}, { LOCALAPPDATA: "" }]) expect(claudeSettingsDir(env, home)).toBe(join(home, "AppData", "Local", "ovis", "claude settings"));
+  });
+
+  it("gives a path herdr-core's PowerShell start takes from a profile folder cmd would read part of (#3084)", () => {
+    const dir = claudeSettingsDir({ LOCALAPPDATA: "C:\\Users\\R&D\\AppData\\Local" });
+    const path = join(dir, `${"0".repeat(64)}.json`);
+    for (const program of ["powershell", "pwsh"] as const) expect(powershellNativeArgs(program, ["--settings", path])).toEqual(["--settings", path]);
   });
 });
 

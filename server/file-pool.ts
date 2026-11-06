@@ -164,7 +164,7 @@ export function fileTask<T extends FileTaskResult>(task: FileTask, signal?: Abor
   // failed or was ended mid-task) can still be closed (`abandon`)
   if (task.op === "open" || task.op === "describe") task = { ...task, opened: openedCell() };
   return new Promise<T>((done, fail) => {
-    const deadline = task.op === "commands" ? options.scanDeadlineMs : task.op === "render" || task.op === "walk" || task.op === "claude-tasks" || task.op === "agy-catalog" || task.op === "text-read" ? options.longDeadlineMs : options.deadlineMs;
+    const deadline = task.op === "commands" ? options.scanDeadlineMs : task.op === "render" || task.op === "walk" || task.op === "documents" || task.op === "claude-tasks" || task.op === "agy-catalog" || task.op === "text-read" ? options.longDeadlineMs : options.deadlineMs;
     const pending: Pending = { task, done: done as (result: FileTaskResult) => void, fail, settled: false, timer: setTimeout(() => expire(pending, "the file system did not answer in time"), deadline), ...(onRun ? { onRun } : {}) };
     if (signal !== undefined) {
       const cancel = () => expire(pending, "the request was cancelled");
@@ -181,9 +181,12 @@ export function fileTask<T extends FileTaskResult>(task: FileTask, signal?: Abor
 /**
  * A scan only while fewer than `scans` threads run a scan of either kind, and a task list's only
  * while fewer than `taskScans` run one of its own kind (a scan past its deadline keeps its thread,
- * and counts, until it returns); any other task always.
+ * and counts, until it returns); a Markdown listing only while no thread runs another; any other
+ * task always.
  */
 function mayRun(task: FileTask): boolean {
+  // a Markdown listing (GET /api/pane/docs) has one thread of its own: a stuck one never holds a commands scan's
+  if (task.op === "documents") return ![...threads].some((thread) => thread.pending?.task.op === "documents");
   if (task.op !== "commands" && task.op !== "claude-tasks") return true;
   let scanning = 0;
   let taskScanning = 0;

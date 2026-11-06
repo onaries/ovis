@@ -211,8 +211,8 @@ export class HcConnection {
     this.spawn = spawn;
   }
 
-  /** The core's identity, from the hello of the current (or a fresh) line. */
-  hello(): Promise<HelloInfo> {
+  /** The core's identity, from the hello of the current (or a fresh) line; a line that cannot be opened rejects it, as it does a call. */
+  async hello(): Promise<HelloInfo> {
     return this.current().hello;
   }
 

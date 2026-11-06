@@ -27,10 +27,17 @@ linux:
     - AppImage
     - deb
   category: Development
+  # 16 to 512 pixels, made by scripts/build.ts from ../assets/icon-only.png: hicolor lists no 1024 folder
+  icon: .cache/linux-icons
+  synopsis: Your coding agents in one app
   executableName: ovis
   syncDesktopName: true
   maintainer: devswha <devswha@users.noreply.github.com>
 deb:
+  # stops the herdr-core server the app started for the user removing the package (linux/before-remove.sh)
+  fpm:
+    - --before-remove
+    - linux/before-remove.sh
   # electron-builder's own list, which lacks ALSA (Electron needs libasound.so.2), with the t64 names
   # newer Ubuntu and Debian gave some of them first
   depends:

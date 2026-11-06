@@ -7,7 +7,7 @@
 import type { AgentRenameRequest, PaneDirection, PaneMoved, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
 import { mergeCatalogSources } from "./catalog-sources.ts";
 import { rememberPaneCommands, scanPaneCommands } from "./commands.ts";
-import { paneFiles } from "./files.ts";
+import { paneDocuments, paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
 import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput, type ConversationPage } from "./conversation.ts";
 import { copilotRecoverable } from "./conversation-shared.ts";
@@ -133,6 +133,18 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       const limit = limitRaw === null ? 20 : Number(limitRaw);
       if (!Number.isInteger(limit) || limit < 1) return badRequest("invalid_limit", "limit must be a positive integer");
       return jsonResponse({ files: await paneFiles(context.cwd, url.searchParams.get("q") ?? "", Math.min(limit, 100)) });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
+  if (pathname === "/api/pane/docs") {
+    setRequestRoute(pathname);
+    if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+    const paneId = url.searchParams.get("pane_id");
+    if (!paneId) return badRequest("missing_pane_id", "pane_id query parameter is required");
+    try {
+      return jsonResponse(await paneDocuments((await paneContext(paneId)).cwd, request.signal));
     } catch (error) {
       return errorResponse(error);
     }
@@ -330,7 +342,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       if (error instanceof ConversationUnavailable) {
         conversationDiagnostics.unavailable(paneId, error, requestIdContext.getStore()?.id);
         const recovery = page.history_id !== undefined && copilotRecoverable(error.diagnostic) ? { recovery: "waiting" } : {};
-        return jsonResponse({ source: "scrollback", turns: [], ...recovery, ...(error.screen ? { metadata: error.screen, screen: true } : {}) });
+        return jsonResponse({ source: "scrollback", turns: [], ...recovery, ...(error.hint ? { hint: error.hint } : {}), ...(error.screen ? { metadata: error.screen, screen: true } : {}) });
       }
       return errorResponse(error);
     }

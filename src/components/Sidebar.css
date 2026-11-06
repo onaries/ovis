@@ -276,6 +276,47 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   height: 1em;
 }
 
+/* Settings → Background workspaces apart: the workspaces a launcher tagged role=background stand after the
+   rest, under a heading like the Agents list's Background agents one (AgentSidebar.css) that folds them and
+   says how many there are; its caret takes the leading cell */
+.workspace-background-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: var(--side-row);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  line-height: var(--lh-tight);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.workspace-background-caret {
+  flex: none;
+  width: var(--space-4);
+  height: var(--space-4);
+  margin-inline: calc((var(--side-box) - var(--space-4)) / 2);
+}
+
+.workspace-background-count {
+  width: var(--side-box);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+@media (hover: hover) {
+  .workspace-background-toggle:hover { color: var(--text); }
+}
+
 .workspace {
   display: flex;
   flex-direction: column;
@@ -349,6 +390,137 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   top: 50%;
   width: calc(var(--side-box) / 2 - var(--space-1));
   height: var(--hairline);
+}
+
+/* Settings > Appearance > Agents under workspaces (#773): a workspace's agents hang one level under its
+   row on the same dim branch a worktree hangs from, a tee for each and an elbow for the last unless the
+   repository's worktrees go on below them. A worktree's agents sit a level further in, its own branch
+   passing by them to the next worktree. Each is a row's height, its state in the rows' trailing cell. */
+.workspace-agents {
+  --agent-indent: var(--side-box);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.worktree-children .workspace-agents { --agent-indent: calc(2 * var(--side-box)); }
+
+.workspace-agent {
+  position: relative;
+  border-radius: var(--radius-md);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.workspace-agent-select {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: var(--side-row);
+  padding: 0 var(--side-box) 0 var(--agent-indent);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-agent-select > .sidebar-mark { margin-inline-end: calc(-1 * var(--space-2)); }
+.workspace-agent-select:focus-visible { outline-offset: calc(var(--ring-offset) * -1); }
+.workspace-agent-select:disabled { cursor: default; }
+
+.workspace-agent-select > .sidebar-pane-meta {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  justify-content: center;
+  width: var(--side-box);
+}
+
+.workspace-agent-title,
+.workspace-agent-place {
+  min-width: 0;
+  overflow: hidden;
+  line-height: var(--lh-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* the title keeps a few characters in the narrowest sidebar; the tab's name and the counts give way first */
+.workspace-agent-title {
+  flex: 0 1 auto;
+  min-width: calc(4 * var(--space-4));
+  font-size: var(--fs-md);
+}
+
+.workspace-agent-badges {
+  display: inline-flex;
+  flex: 0 1000 auto;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.workspace-agent-place {
+  flex: 0 1000 auto;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.workspace-agent-select::before,
+.workspace-agent-select::after,
+.worktree-children .workspace-group:not(:last-child) .workspace-agent::before {
+  position: absolute;
+  content: "";
+  background: var(--border-strong);
+  pointer-events: none;
+}
+
+.workspace-agent-select::before {
+  top: 0;
+  bottom: 0;
+  left: calc(var(--agent-indent) - var(--side-box) / 2);
+  width: var(--hairline);
+}
+
+.workspace-agents:not([data-more]) > .workspace-agent:last-child > .workspace-agent-select::before { bottom: 50%; }
+
+.workspace-agent-select::after {
+  top: 50%;
+  left: calc(var(--agent-indent) - var(--side-box) / 2);
+  width: calc(var(--side-box) / 2 - var(--space-1));
+  height: var(--hairline);
+}
+
+.worktree-children .workspace-group:not(:last-child) .workspace-agent::before {
+  top: 0;
+  bottom: 0;
+  left: calc(var(--side-box) / 2);
+  width: var(--hairline);
+}
+
+@media (hover: hover) {
+  .workspace-agent:has(> .workspace-agent-select:enabled):hover { background: var(--side-hover); }
+}
+
+/* the selected agent's row carries the selection's fill; its workspace's row keeps the place in its words */
+.workspace-agent.is-selected { background: var(--side-selected); }
+.workspace-agent.is-selected .workspace-agent-title { color: var(--text-strong); }
+
+.workspace-group.is-selected.has-selected-agent > .workspace-header { background: transparent; }
+
+@media (hover: hover) {
+  .workspace-group.has-selected-agent > .workspace-header:hover { background: var(--side-hover); }
+}
+
+.machine-group:not(.is-offline) .workspace-agent.is-filter-context .workspace-agent-title,
+.machine-group:not(.is-offline) .workspace-agent.is-filter-context .sidebar-mark,
+.machine-group:not(.is-offline) .workspace-agent.is-filter-context .sidebar-mark .agent-mark {
+  color: var(--text-dim);
 }
 
 /* The face that leads a workspace row is also the fold when linked worktrees sit under it: under a
@@ -434,6 +606,17 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   .workspace-group.is-selected > .workspace-header:has(> .workspace-select:focus-visible) {
     margin-inline-start: calc(-1 * (var(--ring-offset) + 2 * var(--hairline)));
     border-inline-start-width: calc(var(--ring-offset) + 2 * var(--hairline));
+  }
+
+  /* the tree's selected agent takes the bar from its workspace's row, as it takes the fill */
+  .workspace-group.is-selected.has-selected-agent > .workspace-header {
+    margin-inline-start: 0;
+    border-inline-start: 0;
+  }
+
+  .workspace-agent.is-selected {
+    margin-inline-start: calc(-2 * var(--hairline));
+    border-inline-start: calc(2 * var(--hairline)) solid Highlight;
   }
 }
 

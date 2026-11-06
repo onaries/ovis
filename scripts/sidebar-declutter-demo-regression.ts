@@ -2,7 +2,7 @@
  * Purpose: the sidebar when it shows one PC, and without its filter, on the real client over the demo's fixture
  * transport. A lone Host is drawn without its header and loses nothing: its workspaces start the list, it is never
  * folded (a fold stored before stays harmless), its + is the New workspace row, and its state words stay when it is
- * offline; one PC shown of two (Settings → Remote PCs) looks the same and says the other is hidden; a lone PC that
+ * offline; one PC shown of two (Settings → Devices and PCs) looks the same and says the other is hidden; a lone PC that
  * is not the Host keeps its header (its name and manage menu); two PCs keep both headers. Settings → Appearance →
  * Sidebar filter off leaves the Filter field out, and the command palette's Filter workspaces and agents opens and
  * focuses it, at a phone's and a desktop's width, light and dark. On a desktop, that field's edges (#2079): its close

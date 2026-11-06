@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, runNames, splitTurn, todoGroups, turnSegments, visibleWorkParts, workBlockStartsOpen, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
-import type { ConversationPart } from "../../shared/protocol.ts";
+import { foldedRequestsMatch, formatWorkDuration, runNames, splitTurn, todoGroups, turnSegments, visibleWorkParts, workBlockStartsOpen, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
+import type { ConversationPart, ConversationTurn } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
 const text = (value: string): Extract<ConversationPart, { kind: "text" }> => ({ kind: "text", text: value });
@@ -73,6 +73,31 @@ describe("turnSegments", () => {
       { kind: "answer", start: 3, parts: [text("done")] },
     ]);
     expect(turnSegments([])).toEqual([]);
+  });
+});
+
+describe("foldedRequestsMatch", () => {
+  const failed = (value: string): Extract<ConversationPart, { kind: "text" }> => ({ kind: "text", text: `Error: ${value}`, failed: true });
+  const turn: ConversationTurn = { role: "assistant", ts: "2026-11-06T01:00:00Z", parts: [
+    text("Retrying the request."), failed("401 unauthorized"), failed("Connection error."), tool("bash"), failed("Overloaded"), text("Done: the token was renewed."),
+  ] };
+
+  it("names the folded row of failed requests a search's match is in, by its first part", () => {
+    expect(foldedRequestsMatch(turn, "unauthorized")).toBe(1);
+    expect(foldedRequestsMatch(turn, "connection error")).toBe(1);
+    // the error's own prefix, which the row leaves out of each line, is still in that row
+    expect(foldedRequestsMatch(turn, "Error: 401")).toBe(1);
+    expect(foldedRequestsMatch(turn, "overloaded")).toBe(4);
+  });
+
+  it("names none for a match drawn outside the rows, or none at all", () => {
+    expect(foldedRequestsMatch(turn, "token was renewed")).toBeNull();
+    expect(foldedRequestsMatch(turn, "Retrying")).toBeNull();
+    expect(foldedRequestsMatch(turn, "nowhere")).toBeNull();
+    // the first match decides, as the search's snippet does: here it is in the answer before the rows
+    expect(foldedRequestsMatch({ ...turn, parts: [text("An unauthorized call."), failed("401 unauthorized")] }, "unauthorized")).toBeNull();
+    // a user's words are never a failed request
+    expect(foldedRequestsMatch({ role: "user", ts: null, parts: [failed("401 unauthorized")] }, "unauthorized")).toBeNull();
   });
 });
 

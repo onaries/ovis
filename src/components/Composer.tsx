@@ -12,12 +12,11 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, ClipboardPaste, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, MessageSquarePlus, Minimize2, Package, Plus, Puzzle, Square, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
+import { ArrowUp, ClipboardPaste, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, Minimize2, Package, Plus, Puzzle, Square, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
 
 import "./Composer.css";
 
 import type { AgentStatus, ClientRole, ConversationMetadata, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
-import type { ChatLaunch } from "../lib/agentLaunchMode.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { composerDraftKey, composerDrafts, underSendLock } from "../lib/composerDraft.ts";
@@ -62,7 +61,7 @@ import { useFacesArrived } from "../lib/fontFaces.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "../lib/mentions.ts";
 import { resolveComposerMenuActiveItemId } from "../lib/composerMenuHighlight.ts";
 import { enterSendsOn, quickReplyButtons, useSettings } from "../lib/settings.ts";
-import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, providerForAgent, statusWindows, usageName, useUsage, windowLabel } from "../lib/usage.ts";
+import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, planForPane, statusWindows, usageName, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { Artifacts } from "./Artifacts.tsx";
 import { OmpBtw } from "./OmpBtw.tsx";
@@ -113,7 +112,6 @@ export interface ComposerProps {
   /** opens the New tab dialog on this pane's workspace, to start another agent with its model, effort, skills
    * and first message (NewSessionDialog), on this chat's agent and the model and effort it recorded; none: the pane has no
    * workspace to add a tab to */
-  onOpenNewSession?: (chat: ChatLaunch | null) => void;
   /** the pane's working folder, named in the strip tucked under the card; nothing is drawn for it while absent */
   cwd?: string | null;
   /** the pane's branch, beside the folder in that strip; nothing is drawn for it while absent */
@@ -263,7 +261,6 @@ export function Composer({
   role = "interact",
   inert = false,
   onOpenHistory,
-  onOpenNewSession,
   cwd = null,
   branch = null,
   worktreeRepo = null,
@@ -281,9 +278,9 @@ export function Composer({
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
   // a touch screen's Return breaks the line until this device chooses otherwise; Send (or Mod+Enter) sends
   const enterSends = enterSendsOn(settings, useMediaQuery("(pointer: coarse)"));
-  const usageEnabled = settings.showUsage && !mobile && machineId === "local" && providerForAgent(agent) !== null;
+  const usageEnabled = settings.showUsage && !mobile && machineId === "local" && planForPane(agent, metadata?.provider) !== null;
   const { report: usageReport } = useUsage(usageEnabled);
-  const usage = usageEnabled && usageReport !== null ? composerUsage(usageReport.providers, agent, settings.usageOrder, settings.usageHidden) : undefined;
+  const usage = usageEnabled && usageReport !== null ? composerUsage(usageReport.providers, agent, settings.usageOrder, settings.usageHidden, metadata?.provider) : undefined;
   const usageWindows = usage === undefined ? [] : statusWindows(usage);
   const usageLimit = usageWindows[0];
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1529,20 +1526,6 @@ export function Composer({
             </button>
           )}
           {dictation.shown && <MicButton dictation={dictation} />}
-          {/* only once this device turned it on (Settings → Chat → Composer; the composer's row stays minimal, and
-              the tab menu opens the same dialog), and in a mouse-driven window only, like the usage glance: a phone's
-              card has no row to spare beside the mic and the tasks chip, and its tab menu carries New tab with agent… already */}
-          {onOpenNewSession && settings.composerNewTabButton && role !== "observe" && !mobile && (
-            <button
-              type="button"
-              className="icon-button composer-new-session"
-              aria-label={t("New tab with an agent…")}
-              title={t("New tab with an agent…")}
-              onClick={() => onOpenNewSession(agent ? { agent, model: metadata?.model ?? null, effort: metadata?.reasoning_effort ?? null } : null)}
-            >
-              <MessageSquarePlus aria-hidden="true" />
-            </button>
-          )}
           <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} subagents={agent === "claude" || agent === "opencode" || agent === "codex"} plan={plan} />
           {agent === "claude" && <Artifacts paneId={paneId} status={agentStatus} />}
           {agent === "omp" && <OmpBtw paneId={paneId} />}

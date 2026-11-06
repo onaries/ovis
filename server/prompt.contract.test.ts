@@ -222,17 +222,22 @@ describe("answer buttons on a question's alert (#2916)", () => {
     const alerting = createServer({ port: 0, hostname: "127.0.0.1", stateDir: join(root, "push-buttons"), machines: false, pushLoopbackHttp: true, alertTiming: { short: 0, long: 0, longTurn: 0 } });
     try {
       const subscribe = await fetch(`http://127.0.0.1:${alerting.port}/api/push/subscribe`, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ subscription: device.subscription }),
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ subscription: device.subscription, alerts: { input: true, done: "off" } }),
       });
       expect(subscribe.status).toBe(204);
       writeFileSync(join(root, "approval.js"), APPROVAL);
       const asked = await menu("push-buttons", [], ["Yes", "No"], false, "approval.js");
-      // the server may still be subscribing to the new pane: report it again until its alert arrives
-      const alert = () => device.received.find((push) => push.payload.pane_id === asked.pane);
+      // the server may still be subscribing to the new pane: report it again until its alert arrives.
+      // At rest and blocked again, not working: an agent back at work ends the asking (prompt.ts
+      // promptWaitEnded), so an alert still on its way would carry the id of an asking gone by. At
+      // rest after blocked can read as a finish (completion.ts), whose alert this device has off and
+      // which carries no card: only the question's alert is the one looked for
+      const question = (push: (typeof device.received)[number]) => push.payload.pane_id === asked.pane && push.payload.prompt_id !== undefined;
+      const alert = () => device.received.find(question);
       for (let attempt = 0; attempt < 20 && !alert(); attempt++) {
-        await herdrRpc("pane.report_agent", { pane_id: asked.pane, source: "manual", agent: "claude", state: "working" });
+        await herdrRpc("pane.report_agent", { pane_id: asked.pane, source: "manual", agent: "claude", state: "idle" });
         await herdrRpc("pane.report_agent", { pane_id: asked.pane, source: "manual", agent: "claude", state: "blocked" });
-        await device.waitFor((push) => push.payload.pane_id === asked.pane, "the question's alert", 1_000).catch(() => undefined);
+        await device.waitFor(question, "the question's alert", 1_000).catch(() => undefined);
       }
       const payload = alert()!.payload;
       const shown = await card(asked);

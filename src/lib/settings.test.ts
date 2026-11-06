@@ -11,7 +11,7 @@ import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
 import { SHARED_SETTING_KEYS } from "../../shared/preferences.ts";
 import { NOTICE_VERSION, TELEMETRY_SETTINGS_KEYS, TELEMETRY_THEME_SIDE_KEYS, telemetrySettings } from "../../shared/telemetry.ts";
-import { SETTING_SCOPE, telemetrySettingsSnapshot, alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, DICTATION_LANGUAGES, VOICE_BUTTONS, VOICE_ENGINES, wantsVoiceInput } from "./settings.ts";
+import { SETTING_SCOPE, telemetrySettingsSnapshot, alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, DICTATION_LANGUAGES, VOICE_BUTTONS, VOICE_ENGINES, wantsVoiceInput } from "./settings.ts";
 import { applyToDocument, loadSettings, pcLoadOn, saveSettings } from "./settings.ts";
 import { sanitizeSettings as oldSanitizeSettings, saveSettings as oldSaveSettings } from "./settings.legacy-fixture.ts";
 import { themeFor } from "./themeFor.ts";
@@ -160,19 +160,6 @@ describe("saved theme migration", () => {
     expect(loadSettings().voiceEngine).toBe("auto");
   });
 
-  it("keeps the history page size in its own key, out of an old tab's whole-record save", () => {
-    expect(loadSettings().historyPrompts).toBe(10);
-    saveSettings(sanitizeSettings({ historyPrompts: 50 }));
-    expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("historyPrompts");
-    oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
-    expect(loadSettings().historyPrompts).toBe(50);
-    expect(loadSettings().terminalFontSize).toBe(18);
-    records.set("ovis:history-prompts", "12");
-    expect(loadSettings().historyPrompts).toBe(10);
-    records.set("ovis:history-prompts", "not json");
-    expect(loadSettings().historyPrompts).toBe(10);
-  });
-
   it("keeps the file text size in its own key, out of an old tab's whole-record save", () => {
     expect(loadSettings().fileFontSize).toBeNull();
     saveSettings(sanitizeSettings({ fileFontSize: 20 }));
@@ -285,7 +272,7 @@ describe("saved theme migration", () => {
   });
 
   it("keeps Expand thinking, Collapse work and Files beside the pane in keys of their own, out of an old tab's whole-record save", () => {
-    for (const [key, stored] of [["expandThinking", "ovis:expand-thinking"], ["foldWork", "ovis:fold-work"], ["filesPanel", "ovis:files-panel"]] as const) {
+    for (const [key, stored] of [["expandThinking", "ovis:expand-thinking"], ["foldWork", "ovis:fold-work"], ["chatRequestDetails", "ovis:chat-request-details"], ["filesPanel", "ovis:files-panel"], ["filesDocuments", "ovis:files-documents"]] as const) {
       expect(loadSettings()[key]).toBe(false);
       saveSettings(sanitizeSettings({ [key]: true }));
       expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty(key);
@@ -461,6 +448,15 @@ it("keeps the split view to two halves until this device turns on rows and colum
   expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("splitGrid");
 });
 
+it("keeps a Codex pane's drag Ovis's until this device hands it to Codex, and keeps that choice its own", () => {
+  expect(DEFAULT_SETTINGS.codexDrag).toBe(false);
+  expect(sanitizeSettings({}).codexDrag).toBe(false);
+  expect(sanitizeSettings({ codexDrag: true }).codexDrag).toBe(true);
+  expect(sanitizeSettings({ codexDrag: "true" }).codexDrag).toBe(false);
+  expect(SETTING_SCOPE.codexDrag).toBe("device");
+  expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("codexDrag");
+});
+
 it("keeps the sidebar's hover peek off until this device turns it on, and keeps that choice its own", () => {
   expect(DEFAULT_SETTINGS.sidebarPeek).toBe(false);
   expect(sanitizeSettings({}).sidebarPeek).toBe(false);
@@ -470,11 +466,26 @@ it("keeps the sidebar's hover peek off until this device turns it on, and keeps 
   expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("sidebarPeek");
 });
 
-it("keeps the composer's New tab button off until this device turns it on, and keeps that choice its own", () => {
-  expect(sanitizeSettings({}).composerNewTabButton).toBe(false);
-  expect(sanitizeSettings({ composerNewTabButton: true }).composerNewTabButton).toBe(true);
-  expect(sanitizeSettings({ composerNewTabButton: "true" }).composerNewTabButton).toBe(false);
-  expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("composerNewTabButton");
+it("keeps herdr's prefix keys off until this device turns them on, and keeps that choice its own", () => {
+  expect(sanitizeSettings({}).herdrPrefixKeys).toBe(false);
+  expect(sanitizeSettings({ herdrPrefixKeys: true }).herdrPrefixKeys).toBe(true);
+  expect(sanitizeSettings({ herdrPrefixKeys: "true" }).herdrPrefixKeys).toBe(false);
+  expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("herdrPrefixKeys");
+});
+
+it("keeps background workspaces in place until this device turns their part on, and keeps that choice its own", () => {
+  expect(DEFAULT_SETTINGS.sidebarBackgroundWorkspaces).toBe(false);
+  expect(sanitizeSettings({}).sidebarBackgroundWorkspaces).toBe(false);
+  expect(sanitizeSettings({ sidebarBackgroundWorkspaces: true }).sidebarBackgroundWorkspaces).toBe(true);
+  expect(sanitizeSettings({ sidebarBackgroundWorkspaces: "true" }).sidebarBackgroundWorkspaces).toBe(false);
+  expect(SETTING_SCOPE.sidebarBackgroundWorkspaces).toBe("device");
+  expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("sidebarBackgroundWorkspaces");
+});
+
+it("ignores what was saved for the rows Settings no longer has", () => {
+  const settings = sanitizeSettings({ historyPrompts: 50, composerNewTabButton: true, markdownWidth: "full" });
+  for (const key of ["historyPrompts", "composerNewTabButton", "markdownWidth"]) expect(settings).not.toHaveProperty(key);
+  expect(telemetrySettingsSnapshot(settings).markdownWidth).toBe("readable");
 });
 
 it("shows each PC's load while two or more PCs are connected, until this device chooses", () => {
@@ -507,7 +518,7 @@ it("keeps the composer's Paste and send button off until this device turns it on
 });
 
 it("keeps the chat's folds as they always started until this device chooses Expand thinking or Collapse work, and keeps that choice its own", () => {
-  for (const key of ["expandThinking", "foldWork"] as const) {
+  for (const key of ["expandThinking", "foldWork", "chatRequestDetails"] as const) {
     expect(sanitizeSettings({})[key]).toBe(false);
     expect(sanitizeSettings({ [key]: true })[key]).toBe(true);
     expect(sanitizeSettings({ [key]: "true" })[key]).toBe(false);
@@ -578,7 +589,6 @@ describe("telemetry settings snapshot", () => {
       voiceInput: "on",
       voiceLanguage: "ko-KR",
       wrapCode: true,
-      markdownWidth: "full",
       paletteLight: "catppuccin",
       paletteDark: "amber",
       darkTheme: "amber",
@@ -611,7 +621,7 @@ describe("telemetry settings snapshot", () => {
       voiceInput: "on",
       voiceLanguage: "ko-KR",
       wrapCode: true,
-      markdownWidth: "full",
+      markdownWidth: "readable",
       paletteLight: "catppuccin",
       paletteDark: "amber",
       darkTheme: "amber",
@@ -1382,12 +1392,6 @@ it("keeps the file viewer's wrap setting only when it is a boolean", () => {
   expect(sanitizeSettings({ wrapCode: "yes" }).wrapCode).toBe(false);
 });
 
-it("keeps the Markdown preview's width to readable or full, readable by default", () => {
-  expect(DEFAULT_SETTINGS.markdownWidth).toBe("readable");
-  for (const width of MARKDOWN_WIDTHS) expect(sanitizeSettings({ markdownWidth: width }).markdownWidth).toBe(width);
-  for (const bad of ["narrow", "medium", "wide", "", null, 80]) expect(sanitizeSettings({ markdownWidth: bad }).markdownWidth).toBe("readable");
-});
-
 it("keeps where web links open to a tab or the panel, a tab by default", () => {
   expect(DEFAULT_SETTINGS.webLinks).toBe("tab");
   expect(DEFAULT_SETTINGS.reuseExternalLinkTab).toBe(false);
@@ -1396,6 +1400,10 @@ it("keeps where web links open to a tab or the panel, a tab by default", () => {
   expect(DEFAULT_SETTINGS.filesPanel).toBe(false);
   expect(sanitizeSettings({ filesPanel: true }).filesPanel).toBe(true);
   for (const bad of ["true", 1, null]) expect(sanitizeSettings({ filesPanel: bad }).filesPanel).toBe(false);
+  // so is Files' Documents tab
+  expect(DEFAULT_SETTINGS.filesDocuments).toBe(false);
+  expect(sanitizeSettings({ filesDocuments: true }).filesDocuments).toBe(true);
+  for (const bad of ["true", 1, null]) expect(sanitizeSettings({ filesDocuments: bad }).filesDocuments).toBe(false);
   expect(sanitizeSettings({ fileOpen: "panel" }).fileOpen).toBe("panel");
   for (const bad of ["tab", "", null, true]) expect(sanitizeSettings({ fileOpen: bad }).fileOpen).toBe("popup");
   expect(sanitizeSettings({ webLinks: "panel" }).webLinks).toBe("panel");
@@ -1410,6 +1418,16 @@ it("keeps where web links open to a tab or the panel, a tab by default", () => {
     expect(sanitizeSettings({ claudeLaunchMode: bad }).claudeLaunchMode).toBe("default");
     expect(sanitizeSettings({ codexLaunchMode: bad }).codexLaunchMode).toBe("default");
   }
+  // a new agent's model and effort: none set starts it on its own, and only what its launch takes is kept
+  expect(DEFAULT_SETTINGS).toMatchObject({ claudeLaunchModel: "", claudeLaunchEffort: "", codexLaunchModel: "", codexLaunchEffort: "" });
+  expect(sanitizeSettings({ claudeLaunchModel: "opus", claudeLaunchEffort: "max", codexLaunchModel: "gpt-5-codex", codexLaunchEffort: "ultra" }))
+    .toMatchObject({ claudeLaunchModel: "opus", claudeLaunchEffort: "max", codexLaunchModel: "gpt-5-codex", codexLaunchEffort: "ultra" });
+  for (const bad of ["opus --verbose", "-p", " ", 1, null, ["opus"]]) {
+    expect(sanitizeSettings({ claudeLaunchModel: bad }).claudeLaunchModel).toBe("");
+    expect(sanitizeSettings({ codexLaunchModel: bad }).codexLaunchModel).toBe("");
+  }
+  for (const bad of ["ultra", "ultracode", "High", "", null, 3]) expect(sanitizeSettings({ claudeLaunchEffort: bad }).claudeLaunchEffort).toBe("");
+  for (const bad of ["minimal", "High", null]) expect(sanitizeSettings({ codexLaunchEffort: bad }).codexLaunchEffort).toBe("");
 });
 
 describe("shared settings", () => {

@@ -50,7 +50,7 @@ function answeredBetween(answers: readonly number[], from: number, to: number): 
 }
 
 /** a slash command the user ran, as Claude Code echoes it: a local_command record, or a user one on older versions */
-function claudeCommandEchoRecord(entry: { type?: unknown; subtype?: unknown; isMeta?: unknown; content?: unknown; message?: { content?: unknown } }): boolean {
+export function claudeCommandEchoRecord(entry: { type?: unknown; subtype?: unknown; isMeta?: unknown; content?: unknown; message?: { content?: unknown } }): boolean {
   const text = entry.type === "system" && entry.subtype === "local_command" ? entry.content : entry.type === "user" && !entry.isMeta ? entry.message?.content : undefined;
   return typeof text === "string" && /^\s*(?:<command-message>[^<]*<\/command-message>\s*)?<command-name>\//.test(text);
 }
@@ -119,7 +119,7 @@ const TURN_MARK: Record<StreamSource, Buffer> = {
  * task_started), a Claude or omp prompt (tool results answer the turn before it),
  * and the same for pi, whose prompts are `message` records with a user role.
  */
-function opensTurn(source: StreamSource, line: string, blobs: string | null): boolean | "inline" {
+export function opensTurn(source: StreamSource, line: string, blobs: string | null): boolean | "inline" {
   let entry: { type?: unknown; uuid?: unknown; origin?: unknown; permissionMode?: unknown; data?: { content?: unknown }; isMeta?: unknown; isCompactSummary?: unknown; payload?: { type?: unknown }; message?: { role?: unknown; content?: unknown } };
   try { entry = JSON.parse(line); } catch { return false; }
   if (entry === null || typeof entry !== "object") return false;

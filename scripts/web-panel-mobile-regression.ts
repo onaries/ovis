@@ -110,12 +110,16 @@ try {
     page.setDefaultTimeout(10_000);
     await page.goto(appUrl);
     const reportLink = page.getByRole("link", { name: "same-host report" });
+    // armed before the tap: the popup's frame is attached before its report commits, later on a busy machine
+    const popupReport = page.waitForEvent("framenavigated", { predicate: (navigated) => navigated !== page.mainFrame() && navigated.url() === reportUrl });
+    // a step failing before the await leaves this wait to end with the page: its error is that step's, not this one
+    popupReport.catch(() => undefined);
     await reportLink.tap();
     const dialog = page.getByRole("dialog");
     await dialog.waitFor();
     assert.ok(await page.evaluate(() => document.activeElement?.classList.contains("web-panel-body")), "opening focuses the page content");
-    const reportFrame = page.frame({ url: (url) => url.href === reportUrl });
-    assert.ok(reportFrame, "the report is loaded inside the popup frame");
+    const reportFrame = await popupReport;
+    assert.equal(reportFrame.parentFrame(), page.mainFrame(), "the report is loaded inside the popup frame");
     await reportFrame.getByRole("heading", { name: "Report ready" }).waitFor();
     await reportFrame.getByRole("link", { name: "Details" }).tap();
     await reportFrame.waitForURL(`${reportUrl}#details`);
@@ -201,10 +205,13 @@ try {
     await page.getByRole("dialog").waitFor({ state: "detached" });
     assert.equal(page.url(), conversationUrl, "a second shrink adds a working modal entry");
     await page.setViewportSize({ width: 1280, height: 800 });
+    // armed before the click: the panel's frame is attached before its report commits, later on a busy machine
+    const docked = page.waitForEvent("framenavigated", { predicate: (navigated) => navigated !== page.mainFrame() && navigated.url() === reportUrl });
+    docked.catch(() => undefined);
     await page.getByRole("link", { name: "same-host report" }).click();
     await page.locator(".web-panel").waitFor();
-    const frame = page.frame({ url: (url) => url.href === reportUrl });
-    assert.ok(frame, "docked report frame is loaded");
+    const frame = await docked;
+    assert.equal(frame.parentFrame(), page.mainFrame(), "docked report frame is loaded");
     await frame.getByRole("link", { name: "Details" }).click();
     await frame.waitForURL(`${reportUrl}#details`);
     for (let i = 0; i < 3; i++) {

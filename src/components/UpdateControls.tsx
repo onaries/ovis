@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
-import { CHECKOUT_CHANGED_REASON, SUMMARY_GROUPS, type SummaryGroup, type UpdateNotes, type UpdateStatus } from "../../shared/update.ts";
+import { CHECKOUT_CHANGED_REASON, DESKTOP_APP_UPDATES, SUMMARY_GROUPS, type SummaryGroup, type UpdateNotes, type UpdateStatus } from "../../shared/update.ts";
 import { useHerdrUpdate } from "../lib/herdrUpdate.ts";
 import { runningAppVersion, runningHerdrVersion, staleClientVersion, versionLabel } from "../lib/runningVersion.ts";
 import { useSettings } from "../lib/settings.ts";
@@ -86,7 +86,8 @@ export function UpdateControls({ updates, bridgesFollow = false }: { updates: Up
   const tabVersion = staleClientVersion(status, __APP_VERSION__);
   const restart = needsReload && reload === "restart";
   // the restart line says what the check's own "checkout changed" reason says; other blockers stay
-  const blocked = restart && status?.blocked_reason === CHECKOUT_CHANGED_REASON ? null : status?.blocked_reason ?? null;
+  const reason = status?.blocked_reason === DESKTOP_APP_UPDATES ? t("This server is part of the Ovis app, which updates them together: updates come with the app, not from here.") : status?.blocked_reason ?? null;
+  const blocked = restart && status?.blocked_reason === CHECKOUT_CHANGED_REASON ? null : reason;
   // focusable from code only: a button that points here (the header line's) lands on it
   return <section className="settings-section settings-updates" data-section="updates" tabIndex={-1} aria-labelledby="settings-updates-title">
     <h3 id="settings-updates-title">{t("Updates")}</h3>

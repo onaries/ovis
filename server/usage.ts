@@ -33,6 +33,7 @@ export const MIN_REFRESH_MS = 30_000;
 /** after a failure or an expired sign-in: soon enough to pick up the CLI's next refresh */
 export const RETRY_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+const CODEX_RESETS_TIMEOUT_MS = 5_000;
 const COMMAND_TIMEOUT_MS = 5_000;
 const USER_AGENT = "ovis";
 /** the most a credential file, a command's output or a provider's answer may hold; more is unreadable */
@@ -257,8 +258,8 @@ function retryAfter(header: string | null): number | null {
   return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
 }
 
-async function requestJson(ctx: UsageContext, url: string, init: RequestInit): Promise<Json> {
-  const response = await ctx.fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+async function requestJson(ctx: UsageContext, url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Json> {
+  const response = await ctx.fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) {
     await response.body?.cancel();
     throw new UsageHttpError(response.status, retryAfter(response.headers.get("retry-after")));
@@ -365,21 +366,6 @@ function claudeCredits(value: unknown): UsageCredits | null {
   };
 }
 
-/** The resets Claude lists under `cedar_ember`: those left on grants that are neither paused nor outside their dates. */
-function claudeResets(value: unknown, now: number): UsageResets | null {
-  let available = 0;
-  let soonest: string | null = null;
-  for (const grant of (Array.isArray(record(value)["grants"]) ? record(value)["grants"] as unknown[] : []).map(record)) {
-    const left = number(grant["resets_left"]) ?? 0;
-    const startsAt = epochMs(grant["starts_at"]);
-    const endsAt = isoTime(grant["ends_at"]);
-    if (left <= 0 || grant["paused"] === true || (startsAt !== null && startsAt > now) || (endsAt !== null && Date.parse(endsAt) <= now)) continue;
-    available += left;
-    if (endsAt !== null && (soonest === null || endsAt < soonest)) soonest = endsAt;
-  }
-  return available > 0 ? { available, expires_at: soonest } : null;
-}
-
 const claude: UsageProvider = {
   id: "claude",
   async signIns(ctx) {
@@ -392,8 +378,7 @@ const claude: UsageProvider = {
     return windows.length > 0 ? { plan: signIn.plan ?? null, windows, checkedAt: local.readAt } : null;
   },
   async read(ctx, signIn) {
-    // `cedar_ember=1` has the answer list the limit resets too, as Claude Code asks for them
-    const body = await requestJson(ctx, "https://api.anthropic.com/api/oauth/usage?cedar_ember=1", {
+    const body = await requestJson(ctx, "https://api.anthropic.com/api/oauth/usage", {
       headers: { authorization: `Bearer ${signIn.token}`, accept: "application/json", "anthropic-beta": "oauth-2025-04-20", "user-agent": USER_AGENT },
     });
     const windows = [
@@ -409,7 +394,7 @@ const claude: UsageProvider = {
       if (limit["kind"] !== "weekly_scoped" || !model || used === null || windows.some((window) => window.scope === model)) continue;
       windows.push({ kind: "week", scope: model, used_percent: percent(used), resets_at: isoTime(limit["resets_at"]), starts_at: null });
     }
-    return { plan: null, windows, resets: claudeResets(body["cedar_ember"], ctx.now()), credits: claudeCredits(body["extra_usage"]) };
+    return { plan: null, windows, credits: claudeCredits(body["extra_usage"]) };
   },
 };
 
@@ -462,7 +447,8 @@ function codexCredits(value: unknown): UsageCredits | null {
 
 /**
  * The resets Codex counts in its usage answer; when one is left, when the soonest expires, from the
- * list Codex itself reads. That list is extra: when it cannot be read the count stands alone.
+ * list Codex itself reads, waited on no longer than Codex waits (5 s). That list is extra: when it
+ * cannot be read the count stands alone, and the windows read with it are kept.
  */
 async function codexResets(ctx: UsageContext, signIn: SignIn, summary: unknown): Promise<UsageResets | null> {
   const available = number(record(summary)["available_count"]) ?? 0;
@@ -473,7 +459,7 @@ async function codexResets(ctx: UsageContext, signIn: SignIn, summary: unknown):
         authorization: `Bearer ${signIn.token}`, accept: "application/json", "user-agent": USER_AGENT,
         ...(signIn.chatgptAccount ? { "chatgpt-account-id": signIn.chatgptAccount } : {}),
       },
-    });
+    }, CODEX_RESETS_TIMEOUT_MS);
     const expiries = (Array.isArray(details["credits"]) ? details["credits"] : []).map(record)
       .filter((credit) => credit["status"] === "available")
       .flatMap((credit) => isoTime(credit["expires_at"]) ?? []).sort();

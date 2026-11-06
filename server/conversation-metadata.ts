@@ -26,7 +26,7 @@ const CLAUDE_LONG_WINDOW = 1_000_000;
  * `piProvider` is passed only for pi, and its presence is what asks the catalog: the one in
  * `piAgentDir`, the pane's own, or the bridge's when it is not given. A null dir resolves nothing.
  */
-function contextOf(used: number, model: string | null, window: number | null, before: ConversationMetadata["context"], piProvider?: string | null, piAgentDir?: string | null): ConversationMetadata["context"] {
+export function contextOf(used: number, model: string | null, window: number | null, before: ConversationMetadata["context"], piProvider?: string | null, piAgentDir?: string | null): ConversationMetadata["context"] {
   if (used === 0) return before;
   if (window !== null) return { used, window };
   if (piProvider !== undefined) {
@@ -138,7 +138,7 @@ export function parseConversationMetadata(text: string, source: ConversationResp
   for (const line of text.split("\n")) {
     let entry: RecordValue;
     try { entry = record(JSON.parse(line)); } catch { continue; }
-    if (isContextClear(entry, source)) { metadata.model = null; metadata.reasoning_effort = null; piProvider = null; delete metadata.context; continue; }
+    if (isContextClear(entry, source)) { metadata.model = null; metadata.reasoning_effort = null; piProvider = null; delete metadata.context; delete metadata.provider; continue; }
     if (source === "grok-transcript") {
       const update = record(record(entry.params).update);
       if (entry.method === "session/update" && update.sessionUpdate === "user_message_chunk") {
@@ -171,6 +171,9 @@ export function parseConversationMetadata(text: string, source: ConversationResp
         const slash = named?.indexOf("/") ?? -1;
         metadata.model = label(entry.modelId) ?? (slash > 0 ? named!.slice(slash + 1) : named);
         piProvider = label(entry.provider) ?? (slash > 0 ? named!.slice(0, slash) : null);
+        if (source !== "cmd-transcript") {
+          if (piProvider === null) delete metadata.provider; else metadata.provider = piProvider;
+        }
       }
       if (entry.type === "thinking_level_change") metadata.reasoning_effort = label(entry.thinkingLevel);
       const message = piMessage(entry) ?? {};
@@ -178,7 +181,9 @@ export function parseConversationMetadata(text: string, source: ConversationResp
       if (entry.type === "message" && message.role === "assistant" && label(message.model)) {
         metadata.model = label(message.model);
         if (source === "cmd-transcript") piProvider = "commandcode";
-        else if (label(message.provider)) piProvider = label(message.provider);
+        else if (label(message.provider)) piProvider = metadata.provider = label(message.provider)!;
+        // a model this answer names without its provider: the plan it ran on is not known
+        else delete metadata.provider;
       }
       if (entry.type === "message" && message.role === "assistant") {
         const usage = record(message.usage);

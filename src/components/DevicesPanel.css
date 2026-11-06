@@ -144,3 +144,47 @@
   margin: 0;
   font-size: calc(var(--fs-pairing) * 1.25);
 }
+
+/* what a row is (PC, phone, browser): the same pill as `via relay`, in neutral tones */
+.devices-kind {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  vertical-align: middle;
+}
+
+.devices-kind.is-self {
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+
+/* this PC's relay ID, what a device that typed its code compares */
+.my-device-id {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* My devices: the PCs, then the phones and browsers, as one list */
+.my-devices {
+  display: flex;
+  flex-direction: column;
+}
+
+.my-devices > .my-pcs,
+.my-devices .devices-panel > .devices-list {
+  border-top: 0;
+}
+
+/* the paired devices follow the PCs as one list; what pairing means waits at its end */
+.my-devices .devices-panel > .settings-details {
+  order: 1;
+}
+
+.my-devices .devices-panel > .devices-revoke-all {
+  order: 2;
+}

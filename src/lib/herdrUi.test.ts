@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { copyOnSelect, forgetHerdrUi, herdrUiKnown, loadHerdrUi } from "./herdrUi.ts";
+import { resolveHerdrKeys } from "../../shared/herdr-keys.ts";
+import { copyOnSelect, forgetHerdrUi, herdrKeys, herdrUiKnown, loadHerdrUi } from "./herdrUi.ts";
 import { nativeTransport, setTransport } from "./transport.ts";
 
 const answer = (status: number, body: unknown): typeof fetch => (async () => Response.json(body, { status })) as unknown as typeof fetch;
@@ -33,6 +34,19 @@ describe("herdr's copy_on_select in the browser", () => {
     expect(copyOnSelect()).toBe(true);
     await loadHerdrUi(answer(200, { copy_on_select: false }));
     expect(copyOnSelect()).toBe(false);
+  });
+
+  it("keeps herdr's keys from a whole answer only, and none from an older server's", async () => {
+    const keys = { ...resolveHerdrKeys(undefined), prefix: "ctrl+a", prefixes: ["ctrl+a", "ctrl+b"] };
+    await loadHerdrUi(answer(200, { copy_on_select: true, keys }));
+    expect(herdrKeys()).toEqual(keys);
+    // a server from before prefix lists sends its one prefix
+    await loadHerdrUi(answer(200, { copy_on_select: true, keys: { prefix: "ctrl+a", bindings: keys.bindings } }));
+    expect(herdrKeys()?.prefixes).toEqual(["ctrl+a"]);
+    await loadHerdrUi(answer(200, { copy_on_select: true, keys: { prefix: "ctrl+a", bindings: { ...keys.bindings, zoom: "prefix+z" } } }));
+    expect(herdrKeys()).toBeNull();
+    await loadHerdrUi(answer(200, { copy_on_select: true }));
+    expect(herdrKeys()).toBeNull();
   });
 
   it("takes herdr's default only from an older server that has no such route", async () => {

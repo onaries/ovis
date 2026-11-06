@@ -5,18 +5,12 @@ import { resolveFromDocument } from "../lib/fileReader.ts";
 import type { Lines } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
 import type { MarkdownBlock } from "../../shared/markdown.ts";
-import { useSettings, type MarkdownWidth } from "../lib/settings.ts";
+import { useSettings } from "../lib/settings.ts";
 import { CodeLines } from "./HighlightedCode.tsx";
 import { ProgressiveMarkdown } from "./Markdown.tsx";
 
 // the virtualizer and its highlighter are their own chunk, loaded with the first source that needs them
 const VirtualSource = lazy(() => import("./VirtualSource.tsx"));
-
-/** The stored width is a setting's value, not a class name: a rename of either leaves the other alone. */
-const MARKDOWN_CLASS: Record<MarkdownWidth, string> = {
-  readable: "file-viewer-markdown file-viewer-markdown-readable",
-  full: "file-viewer-markdown",
-};
 
 export interface TextFileViewProps {
   path: string;
@@ -56,7 +50,7 @@ export function TextFileView({ path, blocks, lines, virtual, selectable, onOpen,
   })();
   return <div className={virtual !== null && blocks === null ? "file-viewer-content file-viewer-content-virtual" : "file-viewer-content"}>
     {blocks !== null
-      ? <OpenFileContext.Provider value={openLink}><ProgressiveMarkdown className={MARKDOWN_CLASS[settings.markdownWidth]} blocks={blocks} /></OpenFileContext.Provider>
+      ? <OpenFileContext.Provider value={openLink}><ProgressiveMarkdown className="file-viewer-markdown file-viewer-markdown-readable" blocks={blocks} /></OpenFileContext.Provider>
       : code}
   </div>;
 }

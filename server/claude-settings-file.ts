@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { join, parse, resolve, sep } from "node:path";
 
 /**
- * Where the files go: `ovis\claude-settings` in this Windows user's %LOCALAPPDATA%, the profile's
+ * Where the files go: `ovis\claude settings` in this Windows user's %LOCALAPPDATA%, the profile's
  * own folder for what stays on this PC, which only this user and the administrators can reach.
  * Not %TEMP%: TEMP can name a folder other accounts write to (C:\Temp, or C:\Windows\Temp for a
  * service), where another account could make this folder first and, a file being named by its
@@ -23,10 +23,12 @@ import { join, parse, resolve, sep } from "node:path";
  * OVIS_STATE_DIR or XDG_CONFIG_HOME point. A file holds only the JSON a launch already put on
  * Claude Code's command line (the dialog's is {"ultracode":true}). Claude Code keeps what it read
  * from it at start (2.1.311 pins a settings file's content), so one removed later costs nothing and
- * the next launch writes it again.
+ * the next launch writes it again. The space in the folder's name has PowerShell quote the path for
+ * a `.cmd` agent it starts, so a profile folder holding `&` (`R&D`) reaches it whole and herdr-core's
+ * start takes it (powershellNativeArgs, #3084).
  */
 export function claudeSettingsDir(env: Record<string, string | undefined> = process.env, home: string = homedir()): string {
-  return join(env["LOCALAPPDATA"] || join(home, "AppData", "Local"), "ovis", "claude-settings");
+  return join(env["LOCALAPPDATA"] || join(home, "AppData", "Local"), "ovis", "claude settings");
 }
 
 /** Whether Claude Code reads a `--settings` value as JSON rather than as a file's path: its own test. */

@@ -42,6 +42,7 @@ async function logFixture(held: readonly string[]) {
       if (command === "close") closeSync(fd);
       else if (command === "open") fd = openSync(log, "a");
       else if (command === "extra") openSync(root + "/logs/process-200-" + process.pid + ".log", "w");
+      else if (command === "reread") openSync(log, "r");
       else throw new Error("unexpected fixture command: " + command);
       console.log("ok");
     });
@@ -68,6 +69,32 @@ async function logFixture(held: readonly string[]) {
     },
   };
 }
+
+it.skipIf(process.platform !== "linux")("reads a log Copilot opens a second time to copy it as the one log", async () => {
+  const fixture = await logFixture([]);
+  const { environment, log, pid } = fixture;
+  try {
+    appendFileSync(log, register(session));
+    const before = fixture.binding();
+    expect(before?.sessionId).toBe(session);
+    // Copilot 1.0 reads its open log on a second descriptor while it copies it for a rotation
+    await fixture.command("reread");
+    expect(fixture.binding()).toEqual(before);
+    appendFileSync(log, register(other));
+    expect(fixture.binding()?.sessionId).toBe(other);
+    // another file under the same path, as after a rename between two looks, is another log
+    await fixture.command("extra");
+    const realLink = fs.readlinkSync;
+    const links = spyOn(fs, "readlinkSync").mockImplementation(((path: fs.PathLike) => {
+      const target = realLink(path, "utf8");
+      return target.endsWith(`/process-200-${pid}.log`) ? log : target;
+    }) as typeof fs.readlinkSync);
+    try { expect(readCopilotProcessSession(environment, ["copilot"], pid).diagnostic).toBe("copilot_log_ambiguous"); }
+    finally { links.mockRestore(); }
+    // as does another log of the same process
+    expect(readCopilotProcessSession(environment, ["copilot"], pid).diagnostic).toBe("copilot_log_ambiguous");
+  } finally { await fixture.close(); }
+});
 
 for (const revoked of [false, true]) {
   it.skipIf(process.platform !== "linux")(`keeps ${revoked ? "denied" : "registered"} Copilot ownership when epoch start time changes`, async () => {
@@ -268,6 +295,46 @@ it.skipIf(process.platform !== "linux")("follows a second rotation that comes be
     rotate();
     appendFileSync(log, "after the second rotation\n");
     expect(fixture.binding()?.sessionId).toBe(session);
+  } finally { await fixture.close(); }
+});
+
+for (const between of ["output", "another registration"] as const) {
+  it.skipIf(process.platform !== "linux")(`waits out a rotation moving its copies up after ${between}, then follows it`, async () => {
+    const fixture = await logFixture([session, other]);
+    const { environment, log, pid } = fixture;
+    const copy = (index: number) => log.replace(/\.log$/, `.${index}.log`);
+    const read = () => readCopilotProcessSession(environment, ["copilot"], pid);
+    try {
+      appendFileSync(log, register(session));
+      const before = fixture.binding();
+      expect(before?.sessionId).toBe(session);
+      appendFileSync(log, between === "output" ? "later output\n" : register(other));
+      writeFileSync(copy(1), readFileSync(log));
+      fs.truncateSync(log, 0);
+      appendFileSync(log, "after the first rotation\n");
+      // Copilot 1.0 moves the copies up before it renames the new one into place
+      fs.renameSync(copy(1), copy(2));
+      expect(read().diagnostic).toBe("copilot_log_read_raced");
+      expect(read().diagnostic).toBe("copilot_log_read_raced");
+      writeFileSync(copy(1), readFileSync(log));
+      fs.truncateSync(log, 0);
+      appendFileSync(log, "after the second rotation\n");
+      if (between === "output") expect(fixture.binding()).toEqual(before);
+      else expect(fixture.binding()?.sessionId).toBe(other);
+    } finally { await fixture.close(); }
+  });
+}
+
+it.skipIf(process.platform !== "linux")("binds a registration in the open log while a log copy stays missing", async () => {
+  const fixture = await logFixture([session, other]);
+  const { environment, log, pid } = fixture;
+  try {
+    appendFileSync(log, register(session));
+    expect(fixture.binding()?.sessionId).toBe(session);
+    writeFileSync(log.replace(/\.log$/, ".2.log"), readFileSync(log));
+    fs.truncateSync(log, 0);
+    appendFileSync(log, register(other));
+    expect(readCopilotProcessSession(environment, ["copilot"], pid).session?.sessionId).toBe(other);
   } finally { await fixture.close(); }
 });
 
@@ -1068,6 +1135,34 @@ it.skipIf(process.platform !== "linux")("keeps report-and-marker fallback for a 
     await fixture.command("extra");
     expect(copilotTranscriptFile(session, environment, argv, pid)).toBeNull();
   } finally { await fixture.close(); }
+});
+
+it.skipIf(process.platform !== "linux")("suggests --ui-server for any failure of a single Copilot started without it", async () => {
+  const own = await logFixture([session]);
+  const peer = await logFixture([]);
+  const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({ process_info: { foreground_processes: [] } });
+  const info = spyOn(herdr, "paneProcessInfo").mockImplementation(async (paneId) =>
+    ({ pane_id: paneId, foreground_processes: [{ pid: paneId === "own" ? own.pid : peer.pid, name: "copilot", argv: ["copilot"] }] }));
+  const environment = spyOn(omo, "processEnviron").mockImplementation((pid) => pid === own.pid ? own.environment : peer.environment);
+  const snapshot = { panes: ["own", "peer"].map((pane_id) => ({ pane_id, agent: "copilot", cwd: own.root })), agents: [] } as unknown as SessionSnapshot;
+  const snapshots = spyOn(herdr, "sessionSnapshot").mockResolvedValue(snapshot);
+  try {
+    writeFileSync(join(own.root, "session-state", session, "events.jsonl"), start + prompt("held history"));
+    writeFileSync(own.log, "2026-10-23T00:00:00.000Z [INFO] CLI started\n");
+    appendFileSync(peer.log, register(other));
+    await expect(paneConversation("own")).rejects.toMatchObject({ diagnostic: "copilot_report_missing", hint: "copilot_ui_server" });
+    // a chat whose shown history moved keeps it beside the rejection that says so
+    await expect(paneConversation("own", undefined, { history_id: "moved" })).rejects.toMatchObject({ diagnostic: "copilot_report_mismatch", hint: "copilot_ui_server" });
+    appendFileSync(peer.log, register(session));
+    forgetTranscriptState();
+    await expect(paneConversation("own")).rejects.toMatchObject({ diagnostic: "copilot_report_missing", hint: "copilot_ui_server" });
+    (snapshot.panes[0] as { agent_session?: unknown }).agent_session = { agent: "copilot", kind: "id", source: "herdr:copilot", value: session };
+    await expect(paneConversation("own")).rejects.toMatchObject({ diagnostic: "copilot_peer_conflict", hint: "copilot_ui_server" });
+  } finally {
+    snapshots.mockRestore(); environment.mockRestore(); info.mockRestore(); rpc.mockRestore();
+    forgetTranscriptState();
+    await own.close(); await peer.close();
+  }
 });
 
 it.skipIf(process.platform !== "linux")("keeps marker fallback through ordinary partial lines but rejects pending and completed revocation", async () => {

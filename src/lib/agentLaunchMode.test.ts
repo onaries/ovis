@@ -1,6 +1,6 @@
 import { expect, it } from "bun:test";
 
-import { CLAUDE_EFFORTS, CODEX_EFFORTS, firstPromptDelivery, launchAgent, launchArgs, launchCapabilities, launchChoiceFault, modelSuggestions, recordedChoices } from "./agentLaunchMode.ts";
+import { CLAUDE_EFFORTS, CODEX_EFFORTS, firstPromptDelivery, launchAgent, launchArgs, launchCapabilities, launchChoiceFault, launchDefaults, modelDraftAfterSync, modelSuggestions } from "./agentLaunchMode.ts";
 
 const plain = { claudeLaunchMode: "default", codexLaunchMode: "default" } as const;
 
@@ -108,12 +108,25 @@ it("sends the first prompt as Codex's own argument, and as the bridge's pending 
   expect(firstPromptDelivery("", "Fix it")).toBeNull();
 });
 
-it("carries a chat's recorded model and effort only where the agent's launch takes them (#774)", () => {
-  expect(recordedChoices("claude", { model: "claude-opus-5-5", effort: "xhigh" })).toEqual({ model: "claude-opus-5-5", effort: "xhigh" });
-  expect(recordedChoices("codex", { model: "gpt-6.1-terra", effort: "ultra" })).toEqual({ model: "gpt-6.1-terra", effort: "ultra" });
-  // a record no launch takes: Claude Code's synthetic answers, an effort the agent does not name, nothing recorded
-  expect(recordedChoices("claude", { model: "<synthetic>", effort: "ultra" })).toEqual({ model: "", effort: "" });
-  expect(recordedChoices("codex", { model: null, effort: null })).toEqual({ model: "", effort: "" });
-  // an agent whose command line takes neither
-  expect(recordedChoices("omp", { model: "anthropic/claude-opus-5-5", effort: "high" })).toEqual({ model: "", effort: "" });
+it("starts a new agent on the model and effort Settings > Agents sets for it, and on its own while none is set", () => {
+  const none = { claudeLaunchModel: "", claudeLaunchEffort: "", codexLaunchModel: "", codexLaunchEffort: "" };
+  const set = { claudeLaunchModel: "opus[1m]", claudeLaunchEffort: "high", codexLaunchModel: "gpt-5-codex", codexLaunchEffort: "xhigh" };
+  expect(launchDefaults("claude", none)).toEqual({ model: "", effort: "" });
+  expect(launchAgent("claude", plain, launchDefaults("claude", none))).toEqual({ kind: "claude" });
+  expect(launchDefaults("claude", set)).toEqual({ model: "opus[1m]", effort: "high" });
+  expect(launchAgent("codex", plain, launchDefaults("codex", set))).toEqual({ kind: "codex", args: ["--model", "gpt-5-codex", "-c", "model_reasoning_effort=xhigh"] });
+  // each agent's own: Claude Code's never start Codex, and an agent whose command line takes neither gets none
+  expect(launchDefaults("codex", { ...none, claudeLaunchModel: "opus", claudeLaunchEffort: "max" })).toEqual({ model: "", effort: "" });
+  for (const kind of ["omp", "copilot", "gemini", ""]) expect(launchDefaults(kind, set)).toEqual({ model: "", effort: "" });
+  // what the launch would refuse is no default: a level the agent does not name, a model that is no one name
+  expect(launchDefaults("claude", { ...none, claudeLaunchModel: "opus --dangerously-skip-permissions", claudeLaunchEffort: "ultra" })).toEqual({ model: "", effort: "" });
+});
+
+it("keeps a model being typed that --model would refuse when another device changes the setting, and shows a kept one's change", () => {
+  // the field held the kept name: another device's change shows
+  expect(modelDraftAfterSync("claude", "opus", "sonnet")).toBe("sonnet");
+  // the kept name with spaces around it, as typed, stays as typed
+  expect(modelDraftAfterSync("claude", " sonnet ", "sonnet")).toBe(" sonnet ");
+  // text the reader is still fixing is theirs: it is not replaced under them
+  expect(modelDraftAfterSync("claude", "opus --verbose", "sonnet")).toBe("opus --verbose");
 });

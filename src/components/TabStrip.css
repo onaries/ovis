@@ -109,6 +109,53 @@
 /* waiting on its background work: something still runs, the agent does not */
 .tab-strip-dot[data-status="waiting"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--status-working); }
 
+/* a working agent's dot turns, as the Herdr app's tab does: a ring with a gap, a little larger than
+   the dot so the turn reads, drawn in steps like the other spinners (styles.css --dur-spin). Under
+   reduced motion it is the plain dot. Dots and Symbols keep their glyph, held still. */
+.tab-strip-dot:not(.tab-strip-glyph)[data-status="working"] {
+  width: calc(var(--dot-size) + 3px);
+  height: calc(var(--dot-size) + 3px);
+  background: transparent;
+  border: 1.5px solid var(--status-working);
+  border-top-color: transparent;
+  animation: tab-strip-spin var(--dur-spin) steps(8) infinite;
+}
+
+@keyframes tab-strip-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-strip-dot:not(.tab-strip-glyph)[data-status="working"] {
+    width: var(--dot-size);
+    height: var(--dot-size);
+    background: var(--status-working);
+    border: 0;
+    animation: none;
+  }
+}
+
+/* the tab's agent, as the Herdr app's tabs show the program: its mark before the name */
+.tab-strip-agent {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+/* the header's tab list (a phone's sheet): the state, then the agent, in a column of their own so
+   the names line up; a tab at rest keeps a hollow dot */
+.tab-sheet-marks {
+  display: inline-grid;
+  grid-template-columns: calc(var(--dot-size) + 3px) 18px;
+  align-items: center;
+  justify-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+.tab-sheet-marks > .tab-strip-dot:not(.tab-strip-glyph):is([data-status="idle"], [data-status="unknown"]) {
+  box-shadow: inset 0 0 0 1.5px var(--border-strong);
+}
+
 /* Settings -> Status indicators, Dots or Symbols: the sidebar's herdr glyph and color, held still
    (Sidebar.css .sidebar-status-glyph). Same specificity as the dot's rules, so order wins. */
 .tab-strip-glyph {

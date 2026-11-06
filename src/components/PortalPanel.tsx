@@ -76,7 +76,7 @@ export function PortalPanel({ readOnly = false }: { readOnly?: boolean }) {
       {status.url !== null && (
         <div className="settings-item phone-panel">
           <Address url={status.url} title={t("Portal serves this PC")} />
-          <p className="settings-description">{status.auth.method === "none" ? t("Open it on your phone and sign in with the access token, or pair the phone: Devices, below.") : t("Open it on your phone and sign in the way you chose here. The access token is not asked after it.")}</p>
+          <p className="settings-description">{status.auth.method === "none" ? t("Open it on your phone and sign in with the access token, or pair the phone with a pairing code.") : t("Open it on your phone and sign in the way you chose here. The access token is not asked after it.")}</p>
         </div>
       )}
       {control}

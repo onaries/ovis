@@ -570,9 +570,11 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     // the herdr this server's lifecycle subscription was answered by, while that subscription is open
     herdrLive: { identity: () => finishes.herdrIdentity(), onChange: (identity) => { liveHerdr = identity; } },
     // a finish reported as done, now in front at herdr's terminal: seen, idle again
-    onFocus: (paneId) => {
+    onFocus: (paneId, passing) => {
       // The split canvas follows herdr's focused pane (also the sole visible pane while zoomed).
       broadcastAll({ type: "session-changed" });
+      // a pane herdr's focus passed over while a move took the focused pane out and back: nobody looked at it
+      if (passing) return;
       // a browser set to follow herdr's focus opens the pane (#311)
       broadcastAll({ type: "pane-focused", pane_id: paneId });
       if (!completions.seen(paneId)) return;

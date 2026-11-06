@@ -323,7 +323,7 @@ try {
   assert.equal(await page.locator(".chat-older").count(), 0);
   console.log("PASS held-cursor and older-page 409 recovery discard history and immediately reload");
 
-  // A page size chosen while the chat is open reaches the next older page, not only the newest.
+  // Older pages are asked for at the chat's page size, not only the newest.
   epoch = "eight"; newest = "paged newest"; before = "eight:100"; olderNext = "eight:50";
   await refresh();
   await page.getByText(newest, { exact: true }).waitFor();
@@ -334,13 +334,9 @@ try {
     await response.finished();
     return new URL(response.url()).searchParams.get("prompts");
   };
-  assert.equal(await olderAsked(), "10", "older pages are asked for at the default size");
-  await page.evaluate(() => window.qa.historyPrompts(50));
-  await page.locator(".chat-older").waitFor();
-  assert.equal(await olderAsked(), "50", "the next older page is asked for at the size just chosen");
-  await page.evaluate(() => window.qa.historyPrompts(10));
+  assert.equal(await olderAsked(), "12", "older pages keep the twelve-prompt history window");
   olderNext = null;
-  console.log("PASS a page size changed in a mounted chat applies to the next older page");
+  console.log("PASS an older page is asked for at the chat's page size");
   assert.deepEqual(errors, []);
   console.log("PASS reused tool ids after clear, machine switch and unmount cancellation; no browser errors");
 

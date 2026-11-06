@@ -20,6 +20,8 @@ interface Waiting {
   deviceId: string;
   /** an account join taken outside the pairing window: shown to account members only (docs/account.md, design 5.3) */
   membersOnly: boolean;
+  /** asked while this PC's own screen waited to be added to an account: decided on this PC only, never by a member */
+  localOnly: boolean;
   choices: [string, string, string];
   finish: (decision: PairingDecision) => void;
 }
@@ -46,9 +48,20 @@ export class RelayPairingApprovals {
   private readonly listeners = new Set<(pairings: RelayPairingRequest[]) => void>();
   private readonly remoteListeners = new Set<(pairings: RemotePairingRequest[]) => void>();
   private windowUntil = 0;
+  private localOnlyUntil = 0;
 
-  /** The owner asked for a link without a code: comparisons are taken for PAIRING_WINDOW_MS from now. */
-  openWindow(now = Date.now()): void { this.windowUntil = now + PAIRING_WINDOW_MS; }
+  /**
+   * The owner asked for a link without a code: comparisons are taken for PAIRING_WINDOW_MS from now.
+   * `localOnly`: this PC's own screen waits to be added to an account (docs/account.md, "Adding a PC"),
+   * so what is asked until then is decided here only, even once the PC has members who could approve.
+   */
+  openWindow(now = Date.now(), options: { localOnly?: boolean } = {}): void {
+    this.windowUntil = now + PAIRING_WINDOW_MS;
+    if (options.localOnly) this.localOnlyUntil = now + PAIRING_WINDOW_MS;
+  }
+
+  /** Whether a comparison taken now is this PC's own to decide: asked while its add-me screen waited. */
+  localOnlyOpen(now = Date.now()): boolean { return now < this.localOnlyUntil; }
 
   /** Outside the window a comparison is refused before any prompt, so nobody the owner did not invite can raise one. */
   windowOpen(now = Date.now()): boolean { return now < this.windowUntil; }
@@ -68,7 +81,7 @@ export class RelayPairingApprovals {
   }
 
   remoteList(): RemotePairingRequest[] {
-    return [...this.waiting.values()].map(({ request, choices, key }) => ({
+    return [...this.waiting.values()].filter(({ localOnly }) => !localOnly).map(({ request, choices, key }) => ({
       id: request.id, label: request.label, intent: request.intent, choices, expires_at: request.expires_at, key,
     }));
   }
@@ -87,7 +100,7 @@ export class RelayPairingApprovals {
   }
 
   /** Null when MAX_PENDING_APPROVALS are already waiting. `withdraw` ends it unapproved (the phone left, or time ran out). */
-  ask(label: string, digits: string, expiresAt: number, device: { intent: PairingIntent; key: string; deviceId: string; membersOnly?: boolean } = { intent: "pc", key: "", deviceId: "" }): { decision: Promise<PairingDecision>; withdraw: () => void } | null {
+  ask(label: string, digits: string, expiresAt: number, device: { intent: PairingIntent; key: string; deviceId: string; membersOnly?: boolean; localOnly?: boolean } = { intent: "pc", key: "", deviceId: "" }): { decision: Promise<PairingDecision>; withdraw: () => void } | null {
     if (this.waiting.size >= MAX_PENDING_APPROVALS) return null;
     const id = randomBytes(8).toString("hex");
     const decided = Promise.withResolvers<PairingDecision>();
@@ -96,7 +109,9 @@ export class RelayPairingApprovals {
       this.changed();
       decided.resolve(decision);
     };
-    this.waiting.set(id, { request: { id, label, digits, expires_at: new Date(expiresAt).toISOString(), intent: device.intent }, key: device.key, deviceId: device.deviceId, membersOnly: device.membersOnly ?? false, choices: decoys(digits), finish });
+    this.waiting.set(id, { request: { id, label, digits, expires_at: new Date(expiresAt).toISOString(), intent: device.intent }, key: device.key, deviceId: device.deviceId, membersOnly: device.membersOnly ?? false,
+      // fixed when the phone asked (session.ts), so a window that closes before its digits are shown changes nothing
+      localOnly: !(device.membersOnly ?? false) && (device.localOnly ?? this.localOnlyOpen()), choices: decoys(digits), finish });
     this.changed();
     return { decision: decided.promise, withdraw: () => finish({ approved: false }) };
   }
@@ -116,7 +131,7 @@ export class RelayPairingApprovals {
    */
   decideRemote(id: string, approved: boolean, digits: string, by: DeviceMatch): RemoteDecision {
     const entry = this.waiting.get(id);
-    if (!entry) return { outcome: "gone" };
+    if (!entry || entry.localOnly) return { outcome: "gone" };
     if (!approved) { entry.finish({ approved: false }); return { outcome: "decided", device_id: entry.deviceId }; }
     if (digits !== entry.request.digits) { entry.finish({ approved: false }); return { outcome: "wrong_digits" }; }
     entry.finish({ approved: true, by });

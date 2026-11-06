@@ -1,4 +1,30 @@
 import type { WorkspaceInfo, WorktreeListing, WorktreeOpened } from "../../shared/protocol.ts";
+import { MAX_INVENTORY_WORKSPACES } from "../../shared/workspace-lifecycle.ts";
+
+/** The longest query one inventory read carries: well inside the relay's 4096-character request target (shared/relay-mux.ts). */
+export const MAX_INVENTORY_QUERY_CHARS = 2048;
+
+/**
+ * The workspaces split into GET /api/worktree/inventory reads: at most MAX_INVENTORY_WORKSPACES each, and
+ * no longer than MAX_INVENTORY_QUERY_CHARS of query; one workspace too long for that is read alone.
+ */
+export function inventoryReads(workspaceIds: readonly string[]): string[][] {
+  const reads: string[][] = [];
+  let read: string[] = [];
+  let chars = 0;
+  for (const id of workspaceIds) {
+    const param = `workspace_id=${encodeURIComponent(id)}`.length + 1;
+    if (read.length > 0 && (read.length === MAX_INVENTORY_WORKSPACES || chars + param > MAX_INVENTORY_QUERY_CHARS)) {
+      reads.push(read);
+      read = [];
+      chars = 0;
+    }
+    read.push(id);
+    chars += param;
+  }
+  if (read.length > 0) reads.push(read);
+  return reads;
+}
 
 export interface WorkspaceBranch {
   checkoutPath: string;

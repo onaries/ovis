@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { lockedPinKeys, toggleAgentLock } from "./paneLocks.ts";
+import { lockedPinKeys, locksAfterPinToggle, toggleAgentLock } from "./paneLocks.ts";
 
 describe("locked agent rows", () => {
   it("holds a lock only while its row is pinned", () => {
@@ -12,6 +12,13 @@ describe("locked agent rows", () => {
     expect(toggleAgentLock([], ["pc:p1"], "pc:p1")).toEqual(["pc:p1"]);
     expect(toggleAgentLock(["pc:p1"], ["pc:p1"], "pc:p1")).toEqual([]);
     expect(toggleAgentLock(["gone:p9"], ["pc:p1"], "pc:p1")).toEqual(["pc:p1"]);
+  });
+
+  it("starts a fresh pin unlocked: a lock left behind by an unpin that had not heard of it does not come back (#2977)", () => {
+    // another browser unpinned pc:p1 before this one's lock of it arrived, so the lock stayed in the list
+    expect(locksAfterPinToggle(["pc:p1", "pc:p2"], ["pc:p2", "pc:p1"], "pc:p1")).toEqual(["pc:p2"]);
+    // an unpin takes its lock, and the locks of rows no longer pinned, with it
+    expect(locksAfterPinToggle(["pc:p1", "pc:p2", "gone:p9"], ["pc:p2"], "pc:p1")).toEqual(["pc:p2"]);
   });
 
   it("never locks a row that is not pinned", () => {

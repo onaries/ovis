@@ -52,7 +52,7 @@ export async function handleAgentsRequest(request: Request, pathname: string, sh
         return jsonResponse({ agents });
       }
       // herdr starts these two without a manifest; herdr-core's manifests already name every kind its
-      // panes can start (none on Windows, whose PowerShell the start cannot type into: adapter.ts)
+      // panes can start (adapter.ts)
       if (!servingCore()) {
         kinds.add("omp");
         kinds.add("claude");

@@ -112,6 +112,8 @@ export function MarkdownOutline({ id, entries, scroller, drawer, toggle, onClose
       // beside a docked panel, keeps its own Escape
       const viewer = list.current?.closest("[role=dialog], .file-panel, .file-reader");
       if (!viewer?.contains(document.activeElement)) return;
+      // a menu open over it (the header's More) is the topmost: its Escape closes the menu alone (#3066)
+      if (document.activeElement?.closest("[role=menu]")) return;
       event.stopPropagation();
       onClose(true);
     };

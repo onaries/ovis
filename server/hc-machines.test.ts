@@ -77,7 +77,7 @@ describe("a machine's own server (#2497)", () => {
     const get = (server: ReturnType<typeof served>, path: string) => fetch(`http://127.0.0.1:${server.port}${path}`, { headers: { authorization: `Bearer ${token}` } });
     const ask = `/api/fs/file?path=${encodeURIComponent(file)}`;
     expect((await get(own, ask)).status).toBe(200);
-    for (const path of [ask, `/api/fs/stat?path=${encodeURIComponent(file)}`, `/api/workspace/directories?path=${encodeURIComponent(dir)}`, "/api/workspace/diff/files?pane_id=t1", "/api/workspace/pr?pane_id=t1", "/api/workspace/pr/log?pane_id=t1", "/api/pane/files?pane_id=t1"]) {
+    for (const path of [ask, `/api/fs/stat?path=${encodeURIComponent(file)}`, `/api/workspace/directories?path=${encodeURIComponent(dir)}`, "/api/workspace/diff/files?pane_id=t1", "/api/workspace/git/log?pane_id=t1", "/api/workspace/pr?pane_id=t1", "/api/workspace/pr/log?pane_id=t1", "/api/pane/files?pane_id=t1", "/api/pane/docs?pane_id=t1"]) {
       const answer = await get(machine, path);
       expect({ path, status: answer.status, code: ((await answer.json()) as { error?: { code?: string } }).error?.code }).toEqual({ path, status: 501, code: "unsupported" });
     }

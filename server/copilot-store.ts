@@ -1,4 +1,4 @@
-import { constants, closeSync, fstatSync, lstatSync, openSync, opendirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
+import { constants, closeSync, fstatSync, lstatSync, openSync, opendirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import { readProcessBirth } from "./process-owner.ts";
@@ -16,6 +16,7 @@ const LOG_NAME = /^process-\d+-(\d+)\.log$/;
 const FOREGROUND_PREFIXES = ["Registering foreground session: ", "Unregistering foreground session: "] as const;
 const FOREGROUND_EVENT = new RegExp(String.raw`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z \[INFO\] (${FOREGROUND_PREFIXES.join("|")})([\da-f-]{36})$`);
 const LOG_READ_CHANGED = Symbol("log read changed");
+const ROTATION_GAP = Symbol("rotation gap");
 type StoreDiagnostic = typeof COPILOT_STORE_DIAGNOSTICS[number];
 interface ForegroundBinding { sessionId: string; generation: string }
 type ForegroundState =
@@ -78,9 +79,12 @@ function applyLifecycle(selected: ForegroundState, complete: string, position: n
  * (older copies move to .2, .3, …) and truncates the open file in place. The newest copy that
  * starts with every byte already consumed holds the lines written since; the newer copies, then
  * the truncated file, follow it. Without that copy the lines in between are unknown, so ownership
- * stays rejected until the open file registers a session again.
+ * stays rejected until the open file registers a session again. Copilot 1.0 moves the copies up by
+ * rename, oldest first, before it renames the new copy into place: a missing copy while an older
+ * one is still there is that moment, so only the open log can decide this lookup; without a
+ * lifecycle line there, the next one compares with the same bytes read.
  */
-function rotatedLifecycle(target: string, cached: ForegroundCheckpoint, pid: number): ForegroundState | typeof LOG_READ_CHANGED | null {
+function rotatedLifecycle(target: string, cached: ForegroundCheckpoint, pid: number): ForegroundState | typeof LOG_READ_CHANGED | typeof ROTATION_GAP | null {
   const archives: { fd: number; size: number; dev: bigint; ino: bigint }[] = [];
   try {
     const consumed = cached.hash.copy().digest("hex");
@@ -91,8 +95,9 @@ function rotatedLifecycle(target: string, cached: ForegroundCheckpoint, pid: num
       let fd: number;
       try { fd = openSync(`${target.slice(0, -".log".length)}.${index}.log`, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW); }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
-        throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if (olderLogCopy(target, index)) return ROTATION_GAP;
+        break;
       }
       const archive = { fd, size: 0, dev: 0n, ino: 0n };
       archives.push(archive);
@@ -123,6 +128,18 @@ function rotatedLifecycle(target: string, cached: ForegroundCheckpoint, pid: num
     }
     return selected;
   } finally { for (const { fd } of archives) closeSync(fd); }
+}
+
+function olderLogCopy(target: string, missing: number): boolean {
+  for (let index = missing + 1; index <= MAX_LOG_ARCHIVES; index++) {
+    try {
+      lstatSync(`${target.slice(0, -".log".length)}.${index}.log`);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return false;
 }
 
 /** The latest complete lifecycle event in the CLI's own open log, never the newest transcript. */
@@ -172,6 +189,7 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
   const directory = opendirSync(`/proc/${pid}/fd`);
   let found: ForegroundState = legacy;
   let logFound = false;
+  let logged: { target: string; dev: bigint; ino: bigint } | undefined;
   let count = 0;
   try {
     for (let descriptor = directory.readSync(); descriptor; descriptor = directory.readSync()) {
@@ -194,6 +212,14 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
         return deny("copilot_log_missing");
       }
       if (!logDirectories.some((path) => dirname(target) === path) || LOG_NAME.exec(basename(target))?.[1] !== String(pid)) continue;
+      // Copilot opens its log a second time to copy it when it rotates: that is still the one log,
+      // when it reaches the very file read. A path renamed and reused meanwhile is another log.
+      if (logFound && target === logged?.target) {
+        let twin: BigIntStats | undefined;
+        try { twin = statSync(`/proc/${pid}/fd/${descriptor.name}`, { bigint: true }); }
+        catch { twin = undefined; }
+        if (twin?.dev === logged.dev && twin.ino === logged.ino) continue;
+      }
       observe();
       if (logFound) return deny("copilot_log_ambiguous");
       logFound = true;
@@ -203,6 +229,7 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
         try {
           const checkedAtNs = BigInt(Date.now()) * 1_000_000n;
           const stat = fstatSync(fd, { bigint: true });
+          logged = { target, dev: stat.dev, ino: stat.ino };
           const named = statSync(target, { bigint: true });
           if (!stat.isFile() || stat.dev !== named.dev || stat.ino !== named.ino) return deny("copilot_log_replaced");
           if (stat.size > LOG_HASH_BYTES) return deny("copilot_log_limit");
@@ -227,12 +254,13 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
             : size === cached.size && (stat.mtimeNs !== cached.mtimeNs || stat.ctimeNs !== cached.ctimeNs) ? "copilot_log_metadata_changed" : undefined;
           const same = cached !== undefined && changed === undefined;
           // The open file shrank or no longer starts with what was read: a rotation, when a copy carries on from it.
-          const rotated = cached !== undefined && size <= LOG_WINDOW_BYTES && (changed === "copilot_log_truncated" || changed === "copilot_log_rewritten")
+          const rotation = cached !== undefined && size <= LOG_WINDOW_BYTES && (changed === "copilot_log_truncated" || changed === "copilot_log_rewritten")
             ? rotatedLifecycle(target, cached, pid) : null;
-          if (rotated === LOG_READ_CHANGED) {
+          if (rotation === LOG_READ_CHANGED) {
             cached!.readConflict = true;
             return LOG_READ_CHANGED;
           }
+          const rotated = rotation === ROTATION_GAP ? null : rotation;
           const epoch = same ? cached.epoch : randomUUID();
           const start = same ? cached.size : Math.max(0, size - LOG_WINDOW_BYTES);
           const bytes = Buffer.alloc(size - start);
@@ -268,6 +296,10 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
           const position = start + Buffer.byteLength(text.slice(0, skip));
           const selected = applyLifecycle(previous, complete, position, (at) => `${pid}:${stat.dev}:${stat.ino}:${epoch}:${at}`);
           if (selected === null) return deny("copilot_log_unreadable");
+          if (rotation === ROTATION_GAP && selected === previous) {
+            cached!.readConflict = true;
+            return LOG_READ_CHANGED;
+          }
           const completeBytes = bytes.lastIndexOf(0x0a) + 1;
           hash.update(bytes.subarray(0, completeBytes));
           const tail = text.slice(text.lastIndexOf("\n") + 1);

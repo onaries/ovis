@@ -38,6 +38,32 @@ describe("environments", () => {
     expect(coreEnv({ HC_SOCKET: "/run/user/1000/herdr-core/default.sock" })).not.toHaveProperty("HC_SOCKET");
   });
 
+  it("keeps the AppImage's own settings out of hc and the terminals that outlive the app", () => {
+    const mount = "/tmp/.mount_OvisAb12";
+    const env = coreEnv({
+      APPDIR: mount, APPIMAGE: "/home/u/Ovis.AppImage", ARGV0: "Ovis.AppImage", OWD: "/home/u",
+      PATH: `${mount}:${mount}/usr/sbin:/usr/bin::/bin`,
+      LD_LIBRARY_PATH: `${mount}/usr/lib`,
+      XDG_DATA_DIRS: `${mount}/usr/share/:/usr/local/share:/usr/share:/usr/share/gnome:/usr/local/share/:/usr/share/`,
+      GSETTINGS_SCHEMA_DIR: `${mount}/usr/share/glib-2.0/schemas:/opt/schemas`,
+    }, `${mount}/ovis`);
+    for (const name of ["APPDIR", "APPIMAGE", "ARGV0", "OWD", "LD_LIBRARY_PATH"]) expect(env).not.toHaveProperty(name);
+    // the user's own empty entry (the current folder) stays
+    expect(env["PATH"]).toBe("/usr/bin::/bin");
+    expect(env["XDG_DATA_DIRS"]).toBe("/usr/local/share:/usr/share:/usr/share/gnome:/usr/local/share/:/usr/share/");
+    expect(env["GSETTINGS_SCHEMA_DIR"]).toBe("/opt/schemas");
+  });
+
+  it("leaves the environment alone outside an AppImage", () => {
+    const base = { PATH: "/usr/bin", LD_LIBRARY_PATH: "/opt/lib", XDG_DATA_DIRS: "/usr/share" };
+    expect(coreEnv(base, "/opt/Ovis/ovis")).toMatchObject(base);
+  });
+
+  it("keeps another AppImage's settings the app was only started under", () => {
+    const base = { APPDIR: "/tmp/.mount_Other", APPIMAGE: "/home/u/Other.AppImage", PATH: "/tmp/.mount_Other/usr/bin:/usr/bin", LD_LIBRARY_PATH: "/tmp/.mount_Other/usr/lib" };
+    expect(coreEnv(base, "/opt/Ovis/ovis")).toMatchObject(base);
+  });
+
   it("runs the server on herdr-core through the bundled hc, on loopback, in the app's state folder", () => {
     const env = serverEnv({ PATH: "/bin", HOST: "0.0.0.0", HERDR_PLUGIN_ROOT: "/p", OVIS_MANAGED: "1", HERDR_SOCKET: "/s", OVIS_TOKEN: "t" }, { hc: "/app/bin/herdr-core", stateDir: "/data/server", port: 4321 });
     expect(env).toMatchObject({ PATH: "/bin", OVIS_RUNTIME: "herdr-core", OVIS_HC_BIN: "/app/bin/herdr-core", OVIS_STATE_DIR: "/data/server", HOST: "127.0.0.1", PORT: "4321", HC_SESSION: "ovis", OVIS_DESKTOP_APP: "1" });

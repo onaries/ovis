@@ -52,4 +52,5 @@ export const UPDATES_ZH: Record<string, string> = {
   "Building the app": "正在构建应用",
   "Restarting the app": "正在重启应用",
   "Last checked {when}": "上次检查：{when}",
+  "This server is part of the Ovis app, which updates them together: updates come with the app, not from here.": "此服务器是 Ovis 应用的一部分，会随应用一起更新：更新来自应用，而不是这里。",
 };

@@ -64,9 +64,34 @@ describe("recorded conversation model settings", () => {
     expect(parseConversationMetadata(jsonl(
       { type: "message", message: { role: "assistant", model: "claude-opus-5-5", provider: "anthropic" } },
       { type: "model_change", model: "openai-codex/gpt-5.6-sol" },
-    ), "omp-transcript")).toEqual({ model: "gpt-5.6-sol", reasoning_effort: null });
+    ), "omp-transcript")).toEqual({ model: "gpt-5.6-sol", reasoning_effort: null, provider: "openai-codex" });
     expect(parseConversationMetadata(jsonl({ type: "model_change", model: "local-model" }), "omp-transcript"))
       .toEqual({ model: "local-model", reasoning_effort: null });
+  });
+
+  it("names the provider an omp, omo, gjc or pi conversation runs at, by the rules of its model", () => {
+    const answer = (provider?: string) => ({ type: "message", message: { role: "assistant", model: "m", ...(provider ? { provider } : {}) } });
+    const clear = { type: "custom", customType: "context_clear" };
+    for (const source of ["omp-transcript", "omo-transcript", "gjc-transcript", "pi-transcript"] as const) {
+      const provider = (...entries: unknown[]) => parseConversationMetadata(jsonl(...entries), source).provider;
+      expect(provider({ type: "model_change", provider: "anthropic", modelId: "claude-opus-5-5" })).toBe("anthropic");
+      expect(provider({ type: "model_change", model: "openai-codex/gpt-5.6-sol" })).toBe("openai-codex");
+      // each answer names its own provider; one that names none leaves it as it was
+      expect(provider({ type: "model_change", model: "anthropic/claude-opus-5-5" }, answer("openai-codex"))).toBe("openai-codex");
+      // an answer at a model that names no provider says nothing of the plan it ran on
+      expect(provider({ type: "model_change", model: "anthropic/claude-opus-5-5" }, answer())).toBeUndefined();
+      expect(provider({ type: "model_change", model: "anthropic/claude-opus-5-5" }, { type: "message", message: { role: "assistant" } })).toBe("anthropic");
+      // a model change that names no provider, and a context reset, leave none
+      expect(provider(answer("anthropic"), { type: "model_change", modelId: "local-model" })).toBeUndefined();
+      expect(provider(answer("anthropic"), clear)).toBeUndefined();
+      // the fold keeps it across reads, and a later read can clear it
+      const before = parseConversationMetadata(jsonl(answer("anthropic")), source);
+      expect(parseConversationMetadata(jsonl({ type: "thinking_level_change", thinkingLevel: "high" }), source, before).provider).toBe("anthropic");
+      expect(parseConversationMetadata(jsonl(clear), source, before).provider).toBeUndefined();
+    }
+    // other transcripts never state one
+    expect(parseConversationMetadata(jsonl(answer("anthropic")), "cmd-transcript").provider).toBeUndefined();
+    expect(parseConversationMetadata(jsonl({ type: "assistant", message: { role: "assistant", model: "claude-test", provider: "anthropic" } }), "claude-transcript").provider).toBeUndefined();
   });
 
   it("reads Claude's actual model without deriving effort from thinking content", () => {

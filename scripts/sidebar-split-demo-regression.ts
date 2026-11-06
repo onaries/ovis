@@ -191,7 +191,7 @@ try {
           for (const expected of [!grouped, grouped, !grouped, grouped]) {
             await page.locator(".sidebar-footer-settings").click();
             await openSettingsPage(page, "Appearance");
-            await page.getByRole("switch", { name: "Group agents by state", exact: true }).click();
+            await page.getByRole("group", { name: "Agents order", exact: true }).getByRole("button", { name: expected ? "By state" : "Workspaces", exact: true }).click();
             await page.keyboard.press("Escape"); await open();
             assert.equal(await page.locator(".sidebar-shell").evaluate((shell) => shell.classList.contains("is-agents-first")), expected);
             assert.equal(await page.locator(".agent-section-toggle").getAttribute("aria-expanded"), "true", `${label} changing order preserves the caret's newer fold choice`);

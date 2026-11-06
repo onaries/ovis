@@ -15,6 +15,62 @@
   font-weight: var(--fw-semibold);
 }
 
+/* a page's folded groups (SettingsFold): one quiet line at the page's end, a caption's size and colour, that
+   turns its chevron and shows the groups under it with the page's own spacing */
+.settings-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  list-style: none;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+
+.settings-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-fold > summary:hover,
+.settings-fold > summary:focus-visible {
+  color: var(--text-strong);
+}
+
+.settings-fold-chevron {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.settings-fold[open] > summary .settings-fold-chevron {
+  transform: rotate(90deg);
+}
+
+.settings-fold-changed {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+.settings-fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding-top: var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-fold-chevron {
+    transition: none;
+  }
+}
+
 .settings-note {
   margin: 0;
   padding: 0 var(--space-1);

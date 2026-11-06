@@ -195,6 +195,22 @@ try {
     assert.equal(await page.getByRole("dialog").count(), 1, "the viewer stays open");
     assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Outline");
 
+    // the header's More menu opened over the drawer takes the first Escape alone; the second closes the drawer
+    await toggle.tap();
+    await drawer.waitFor();
+    await page.getByRole("button", { name: "More", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    const menu = page.getByRole("menu", { name: "More" });
+    await menu.waitFor();
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached" });
+    assert.equal(await drawer.count(), 1, "Escape in the More menu leaves the drawer open");
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "More", "the focus goes back to More");
+    await page.keyboard.press("Escape");
+    await drawer.waitFor({ state: "detached" });
+    assert.equal(await page.getByRole("dialog").count(), 1, "the viewer stays open");
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Outline");
+
     // a choice brings its heading up and closes the drawer
     await toggle.tap();
     await drawer.getByRole("button", { name: "Section 5", exact: true }).tap();
@@ -250,7 +266,7 @@ try {
     await drawer.waitFor({ state: "detached" });
     assert.deepEqual(errors, []);
     await close();
-    console.log(`PASS narrow ${theme}: drawer on request, full-width document, centered on open, Escape/choice/outside close it`);
+    console.log(`PASS narrow ${theme}: drawer on request, full-width document, centered on open, Escape/choice/outside close it, the More menu's Escape is its own`);
   }
 
   {

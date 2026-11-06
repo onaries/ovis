@@ -1,6 +1,7 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
+import type { MarkdownDocument, PaneDocuments } from "../shared/files.ts";
 import { fileTask } from "./file-pool.ts";
 
 const CACHE_MS = 5_000;
@@ -100,13 +101,25 @@ async function gitFiles(cwd: string, limit = MAX_GIT_ENTRIES): Promise<string[] 
  * Synchronous: the lookups here run it on a file thread (`file-pool.ts`).
  */
 export function walkFiles(cwd: string): string[] {
+  return walk(cwd).files;
+}
+
+/**
+ * The walk: only the files `keep` names are listed and take a folder's share; `cut` says a cap,
+ * or the time `until`, left some of the tree unread.
+ */
+function walk(cwd: string, keep: (name: string) => boolean = () => true, until = Number.POSITIVE_INFINITY): { files: string[]; cut: boolean } {
   const files: string[] = [];
   let visited = 0;
+  let cut = false;
   let level = [cwd];
   for (let depth = 0; depth <= MAX_DEPTH && level.length > 0 && visited < MAX_ENTRIES; depth += 1) {
     const next: string[] = [];
     for (const directory of level) {
-      if (visited >= MAX_ENTRIES) break;
+      if (visited >= MAX_ENTRIES || Date.now() >= until) {
+        cut = true;
+        break;
+      }
       let entries;
       try {
         entries = readdirSync(directory, { withFileTypes: true });
@@ -116,13 +129,20 @@ export function walkFiles(cwd: string): string[] {
       entries.sort((left, right) => Number(left.isDirectory()) - Number(right.isDirectory()) || left.name.localeCompare(right.name));
       let taken = 0;
       for (const entry of entries) {
-        if (visited >= MAX_ENTRIES) break;
+        if (visited >= MAX_ENTRIES) {
+          cut = true;
+          break;
+        }
         if (SKIP[entry.name]) continue;
         const path = join(directory, entry.name);
         if (entry.isDirectory()) {
           visited += 1;
           next.push(path);
-        } else if (entry.isFile() && taken < MAX_FOLDER_ENTRIES) {
+        } else if (entry.isFile() && keep(entry.name)) {
+          if (taken >= MAX_FOLDER_ENTRIES) {
+            cut = true;
+            continue;
+          }
           visited += 1;
           taken += 1;
           files.push(relative(cwd, path).split(sep).join("/"));
@@ -131,7 +151,8 @@ export function walkFiles(cwd: string): string[] {
     }
     level = next;
   }
-  return files;
+  // folders past the depth or the entry cap were never read
+  return { files, cut: cut || level.length > 0 };
 }
 
 async function inventory(cwd: string): Promise<string[]> {
@@ -175,6 +196,53 @@ export async function paneFiles(cwd: string, query = "", limit = 20): Promise<st
     .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
     .slice(0, boundedLimit)
     .map((item) => item.path);
+}
+
+const MARKDOWN_NAME = /\.(?:md|markdown)$/i;
+/** How many Markdown files one listing answers with, the newest. */
+export const MAX_MARKDOWN_DOCUMENTS = 500;
+/**
+ * How long one listing reads on its file thread (the Markdown walk outside a repository, then a stat
+ * of each file) before it answers with what it read, marked cut: a slow disk holds the thread for
+ * this long at most, well inside the long-task deadline.
+ */
+export const MARKDOWN_READ_MS = 2_000;
+
+/**
+ * The Markdown files of `listed` (paths relative to `cwd`), or of a walk of `cwd` that lists only
+ * Markdown files when there is no listing, each with its size and last change. Synchronous: it runs
+ * on a file thread (`file-pool.ts`). Past `budgetMs` it stops reading and says the list is cut.
+ */
+export function readMarkdownDocuments(cwd: string, listed: string[] | null, budgetMs = MARKDOWN_READ_MS): { documents: MarkdownDocument[]; cut: boolean } {
+  const until = Date.now() + budgetMs;
+  const found = listed === null ? walk(cwd, (name) => MARKDOWN_NAME.test(name), until) : { files: listed, cut: false };
+  const documents: MarkdownDocument[] = [];
+  let cut = found.cut;
+  for (const path of found.files) {
+    if (Date.now() >= until) {
+      cut = true;
+      break;
+    }
+    try {
+      const stat = statSync(join(cwd, path));
+      if (stat.isFile()) documents.push({ path, size: stat.size, modified: stat.mtime.toISOString() });
+    } catch { /* gone since it was listed, or unreadable: not listed */ }
+  }
+  return { documents, cut };
+}
+
+/**
+ * GET /api/pane/docs: the Markdown files under `cwd`, newest first. In a repository, git's listing of
+ * the files it does not ignore, asked afresh (Refresh sees a file made a moment ago); elsewhere a walk
+ * that counts only Markdown files, so a folder of other files does not crowd them out. Every one is
+ * looked at before the newest are kept, and a cap or the read's time limit marks the list cut.
+ */
+export async function paneDocuments(cwd: string, signal?: AbortSignal): Promise<PaneDocuments> {
+  const listed = await gitFiles(cwd, Number.POSITIVE_INFINITY);
+  const { documents, cut } = await fileTask<{ documents: MarkdownDocument[]; cut: boolean }>({ op: "documents", cwd, paths: listed === null ? null : listed.filter((path) => MARKDOWN_NAME.test(path)) }, signal);
+  // ISO times of one form compare as text
+  documents.sort((left, right) => left.modified === right.modified ? left.path.localeCompare(right.path) : left.modified < right.modified ? 1 : -1);
+  return { root: cwd, documents: documents.slice(0, MAX_MARKDOWN_DOCUMENTS), truncated: cut || documents.length > MAX_MARKDOWN_DOCUMENTS };
 }
 
 const walked = new Map<string, { expires: number; files: string[] }>();

@@ -1,7 +1,7 @@
 /** Browser-only regression fixture, bundled by chat-history-browser-qa.ts. */
 import React, { Profiler, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { SettingsProvider, useSettings } from "../src/lib/settings.ts";
+import { HISTORY_PROMPTS, SettingsProvider } from "../src/lib/settings.ts";
 import { PaneTerminal } from "../src/components/PaneTerminal.tsx";
 import { ChatView } from "../src/components/ChatView.tsx";
 import { useWholeOutput } from "../src/lib/useWholeOutput.ts";
@@ -11,9 +11,9 @@ import { observePaneSessions, paneSessionKey, prefetchPaneConversation } from ".
 import { UpdateNotice } from "../src/components/UpdateControls.tsx";
 import "../src/styles.css";
 
-declare global { interface Window { qa: { requests: { url: string; signal: AbortSignal; resolve: (text: string) => void; reject: () => void }[]; commits: string[][]; answered: string[]; target: (url: string, scope: string) => void; chat: (pane: string, machine?: string) => void; view: (chat: boolean) => void; agent: (agent: string | null) => void; select: (pane: string, machine: string, agent?: string) => void; refresh: () => void; historyPrompts: (prompts: number) => void; session: (pane: string, value: string) => void; press: (pane: string) => void; visible: (visible: boolean) => void } } }
+declare global { interface Window { qa: { requests: { url: string; signal: AbortSignal; resolve: (text: string) => void; reject: () => void }[]; commits: string[][]; answered: string[]; target: (url: string, scope: string) => void; chat: (pane: string, machine?: string) => void; view: (chat: boolean) => void; agent: (agent: string | null) => void; select: (pane: string, machine: string, agent?: string) => void; refresh: () => void; session: (pane: string, value: string) => void; press: (pane: string) => void; visible: (visible: boolean) => void } } }
 const nativeFetch = window.fetch;
-window.qa = { requests: [], commits: [], answered: [], target: () => {}, chat: () => {}, view: () => {}, agent: () => {}, select: () => {}, refresh: () => {}, historyPrompts: () => {}, session: () => {}, press: () => {}, visible: () => {} };
+window.qa = { requests: [], commits: [], answered: [], target: () => {}, chat: () => {}, view: () => {}, agent: () => {}, select: () => {}, refresh: () => {}, session: () => {}, press: () => {}, visible: () => {} };
 /** the session the roster last named per pane, as App hands it to PaneTerminal */
 const rosterSessions = new Map<string, string>();
 let rosterChanged = () => {};
@@ -55,9 +55,6 @@ function Fixture() {
   window.qa.agent = setAgent;
   const [visible, setVisible] = useState(true);
   const output = useWholeOutput(target.url, target.scope);
-  const { update } = useSettings();
-  // Settings, Chat, History page size: changed while the chat stays mounted
-  window.qa.historyPrompts = (historyPrompts) => update({ historyPrompts });
   window.qa.target = (url, scope) => setTarget({ url, scope });
   window.qa.chat = (pane, machine = "local") => { setPane(pane); setMachine(machine); };
   window.qa.refresh = () => setRefresh((value) => value + 1);
@@ -67,13 +64,12 @@ function Fixture() {
     <div style={{ position: "relative", height: 600 }}><MachineContext.Provider value={machine}><ChatView key={machine} paneId={pane} active={false} refreshKey={refresh} visible={visible} connected={true} ended={false} agent={agent} agentStatus={null} /></MachineContext.Provider></div></>;
 }
 function Product({ pane, machine, agent }: { pane: string; machine: string; agent: string }) {
-  const { settings } = useSettings();
   const [chat, setChat] = useState(true);
   const [, setRoster] = useState(0);
   window.qa.view = setChat;
   rosterChanged = () => setRoster((value) => value + 1);
-  // a press on a tab or sidebar row (usePaneLens): the chat it opens reads at the page size the setting names
-  window.qa.press = (pressed) => prefetchPaneConversation(pressed, "local", settings.historyPrompts);
+  // a press on a tab or sidebar row (usePaneLens): the chat it opens reads a page of history
+  window.qa.press = (pressed) => prefetchPaneConversation(pressed, "local", HISTORY_PROMPTS);
   return <div style={{ position: "relative", height: 600 }}><MachineContext.Provider value={machine}><Profiler id="product-pane" onRender={() => {
     window.qa.commits.push(Array.from(document.querySelectorAll(".chat-turn"), (turn) => turn.textContent ?? ""));
   }}><PaneTerminal key={machine} paneId={pane} agent={agent} agentSession={rosterSessions.get(pane) ?? null} view={chat ? "chat" : "terminal"} terminalFontSize={14} terminalWheelSpeed={1} terminalFontFamily="" theme="dark" palette="amber" /></Profiler></MachineContext.Provider></div>;

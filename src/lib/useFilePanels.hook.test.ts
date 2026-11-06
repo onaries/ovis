@@ -9,7 +9,7 @@ let renderer: ReactTestRenderer | undefined;
 let panels: ReturnType<typeof useFilePanels>;
 
 beforeEach(() => {
-  for (const key of ["window", "IS_REACT_ACT_ENVIRONMENT"]) {
+  for (const key of ["window", "document", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"]) {
     descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
   }
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
@@ -23,6 +23,85 @@ afterEach(async () => {
     else Reflect.deleteProperty(globalThis, key);
   }
   descriptors.clear();
+});
+
+it("closes a diff's file docked over a file that holds the page count onto that file, not past it (#3095)", async () => {
+  // Given file A docked over two stacked pages (its entry holds their count), with a diff opened over it.
+  const events = new EventTarget();
+  const entries: Array<{ key: string; state: unknown }> = [
+    { key: "pane", state: null },
+    { key: "page", state: { "ovis:web-panel": { url: "http://localhost:3000/a" } } },
+    { key: "a", state: { "ovis:file-preview": { path: "/r/a.md", machineId: "local", paneId: "p1", presentation: "panel" }, "ovis:web-panel-below": 1 } },
+  ];
+  let index = 2;
+  // a docked file gives the focus back to what opened it on closing: nothing had it here
+  Object.defineProperty(globalThis, "document", { configurable: true, value: { activeElement: null } });
+  Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: class {} });
+  const traverseTo = mock((_key: string) => ({ committed: Promise.resolve(undefined) }));
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    location: new URL("http://localhost:7317/"),
+    history: {
+      get state() { return entries[index]!.state; },
+      replaceState: (next: unknown) => { entries[index] = { ...entries[index]!, state: next }; },
+      pushState: (next: unknown) => { entries.splice(index + 1); entries.push({ key: `e${entries.length}`, state: next }); index += 1; },
+    },
+    navigation: { get currentEntry() { return { index }; }, entries: () => entries, traverseTo },
+    addEventListener: events.addEventListener.bind(events),
+    removeEventListener: events.removeEventListener.bind(events),
+  } });
+  function Probe() {
+    panels = useFilePanels({
+      settings: { ...DEFAULT_SETTINGS, fileOpen: "panel" },
+      filePanelAvailable: true, selectedPaneId: "p1", selectedMachineId: "local",
+    });
+    return null;
+  }
+  await act(async () => { renderer = create(createElement(Probe)); });
+  const diff = {
+    machineId: "local", paneId: "p1", directory: "/r", path: "b.md", oldPath: null,
+    scope: "workspace" as const, base: null, head: null, comparison: null,
+  };
+  await act(async () => { panels.openDiff(diff); });
+
+  // When the diff's file docks in the diff's place (App: releaseDiff, then openFile replacing the entry) and closes.
+  await act(async () => { panels.releaseDiff(); panels.openFile({ path: "/r/b.md", paneId: "p1", machineId: "local" }, true); });
+  await act(async () => { panels.closeFile(); });
+
+  // Then the close goes back one entry, onto file A, and not past it onto the page.
+  expect(traverseTo).toHaveBeenCalledWith("a");
+});
+
+it("closes a diff over a copy of its entry (a sheet's, after a reload) back past both (#3101)", async () => {
+  // Given a diff's entry and, over it, the copy a phone sheet left on reload, which counts one more under it.
+  const diff = {
+    machineId: "local", paneId: "p1", directory: "/r", path: "b.md", oldPath: null,
+    scope: "workspace" as const, base: null, head: null, comparison: null,
+  };
+  const entries: Array<{ key: string; state: unknown }> = [
+    { key: "pane", state: null },
+    { key: "diff", state: { "ovis:repo-diff": diff } },
+    { key: "copy", state: { "ovis:repo-diff": diff, "ovis:web-panel-below": 1 } },
+  ];
+  const events = new EventTarget();
+  const traverseTo = mock((_key: string) => ({ committed: Promise.resolve(undefined) }));
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    location: new URL("http://localhost:7317/"),
+    history: { get state() { return entries[2]!.state; }, replaceState: () => {}, pushState: () => {}, back: () => { traverseTo(entries[1]!.key); } },
+    navigation: { currentEntry: { index: 2 }, entries: () => entries, traverseTo },
+    addEventListener: events.addEventListener.bind(events),
+    removeEventListener: events.removeEventListener.bind(events),
+  } });
+  function Probe() {
+    panels = useFilePanels({ settings: DEFAULT_SETTINGS, filePanelAvailable: false, selectedPaneId: "p1", selectedMachineId: "local" });
+    return null;
+  }
+  await act(async () => { renderer = create(createElement(Probe)); });
+
+  // When the diff closes.
+  await act(async () => { panels.closeDiff(); });
+
+  // Then the close goes back to the pane, not onto the diff's own entry.
+  expect(traverseTo).toHaveBeenCalledWith("pane");
 });
 
 it("keeps Files and the diff open without replacing history when the traversal rejects", async () => {

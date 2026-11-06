@@ -15,7 +15,8 @@
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
 import { NO_AGENT_MESSAGE } from "../../shared/submit-outcome.ts";
-import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, DevicePairedEvent, DevicesRevokedAll, HealthAuth, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PairedDevice, PairingCode, PaneBackgroundAgentDetail, PaneDirection, PaneFindMatch, PaneFindRequest, PaneMoved, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, RelayStatus, SecuritySummary, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, TabMovedToWorkspace, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
+import { resolveHerdrKeys } from "../../shared/herdr-keys.ts";
+import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, DevicePairedEvent, DevicesRevokedAll, HealthAuth, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PairedDevice, PairingCode, PaneBackgroundAgentDetail, PaneDirection, PaneFindMatch, PaneFindRequest, PaneMoved, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, RelayStatus, SecuritySummary, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, TabMovedToWorkspace, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeInventory, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
 import type { PushSubscriptionStatus, RepoBranchComparison, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
 import { nextTabLabels, normalizeThemeChange, sharedPreferencesBody, type SharedPreferences } from "../../shared/preferences.ts";
 import type { PullRequestCheckLog, PullRequestView } from "../../shared/pull-request.ts";
@@ -435,7 +436,9 @@ function readSnapshot(machine: Machine): SessionSnapshot | null {
 function readRoster(): Machine[] {
   return machines.map((machine) => {
     const order = orderOf(machine.id);
-    const { source_boot_id: _proof, ...rest } = machine;
+    const { source_boot_id: _proof, ...withoutId } = machine;
+    // with the device routes on, the Host carries the fictional relay ID My devices shows at its top
+    const rest = DEVICE_STATE !== null && machine.kind === "local" ? { ...withoutId, server_id: demoRelayServerId() } : withoutId;
     if (order.legacy) return { ...rest, snapshot: readSnapshot(machine) };
     // a restart its manager has not proved yet: the cache keeps the last accepted server's read
     if (order.epoch !== order.accepted) return { ...rest, snapshot: structuredClone(order.cached), source_boot_id: order.accepted };
@@ -1106,7 +1109,7 @@ function usageReport(): UsageReport {
         { kind: "session", scope: null, used_percent: 38, ...session(2.4) },
         { kind: "week", scope: null, used_percent: 61, ...week(78) },
         ...(demoStatusline ? [] : [{ kind: "week" as const, scope: "Sonnet", used_percent: 12, ...week(78) }]),
-      ], credits: { kind: "spend", currency: "USD", used: 12.19, limit: 15.39, used_percent: 79.2 }, resets: { available: 2, expires_at: at(30) } },
+      ], credits: { kind: "spend", currency: "USD", used: 12.19, limit: 15.39, used_percent: 79.2 } },
     { id: "codex", key: "codex:demo-codex-work", account: "sam@work.example", plan: "pro", problem: null, checked_at: checked, windows: [
       { kind: "session", scope: null, used_percent: 22, ...session(1.2) },
       { kind: "week", scope: null, used_percent: 84, ...week(97) },
@@ -1149,6 +1152,7 @@ function usageReport(): UsageReport {
  * it, the phone enters the code a moment later, as a visitor to the demo expects.
  */
 const DEVICE_STATE = new URLSearchParams(location.search).get("demo_devices");
+const ACCOUNT_MEMBER = new URLSearchParams(location.search).get("demo_account") === "member";
 const CONNECTION_DROPS = new URLSearchParams(location.search).get("demo_connection") === "drops";
 let connectionLost = false;
 /** `?demo_connection=switch`: the page loses the bridge connection with `herdrDemoLoseConnection()` and lets it
@@ -1289,6 +1293,8 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     }
     return json(startDemoPairing(), 200, { "cache-control": "no-store" });
   }
+  // `?demo_account=member`: this PC belongs to an account, so a signed-in Settings offers joining by signing in
+  if (path === "/api/account/status" && ACCOUNT_MEMBER) return json({ account: "demo-account", unlinked: [], removals: [], adds: [], blocked: [] }, 200, { "cache-control": "no-store" });
   // without `?demo_devices=` the demo answers no other device route: its /api/devices stays a 404, as before
   if (DEVICE_STATE !== null) {
     if (path === "/api/devices") {
@@ -1375,7 +1381,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     return json(demoRelayStatus(), 200, { "cache-control": "no-store" });
   }
   if (path === "/api/portal/start" || path === "/api/portal/stop" || path === "/api/portal/invite") return error("portal_unsupported", "The demo opens no public address.", 409);
-  if (path === "/api/herdr-ui") return json({ copy_on_select: true }, 200, { "cache-control": "no-store" });
+  if (path === "/api/herdr-ui") return json({ copy_on_select: true, keys: resolveHerdrKeys(undefined) }, 200, { "cache-control": "no-store" });
   if (path === "/api/access") return json({ port: 7317, relay: demoRelayStatus(), tailscale: { state: "running", dns_name: "workstation.example.ts.net", serving_url: "https://workstation.example.ts.net", serve_command: null, serve_url: null } });
   if (path === "/api/system") return json(systemReport(), 200, { "cache-control": "no-store" });
   if (path === "/api/usage") {
@@ -1502,6 +1508,20 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     const created = await route(new URL("/api/tab/create", url), "POST", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, agent: { kind: "claude", args: ["--resume", sessionId] } }) }, input);
     if (!created.ok) return created;
     return json({ action: "created", ...(await created.json() as { workspace_id: string; pane_id: string; agent_started: boolean }) } satisfies SessionResumeResponse);
+  }
+
+  // the sidebar's one read for every repository (#2661): each workspace answered as the list route answers it
+  if (path === "/api/worktree/inventory") {
+    if (method !== "GET") return error("method_not_allowed", "use GET", 400);
+    const workspaceIds = [...new Set(query.getAll("workspace_id"))];
+    if (workspaceIds.length === 0 || workspaceIds.includes("")) return error("missing_workspace_id", "workspace_id is required", 400);
+    const entries = await Promise.all(workspaceIds.map(async (workspaceId) => {
+      const answer = await route(new URL(`/api/worktree/list?workspace_id=${encodeURIComponent(workspaceId)}`, url), "GET", undefined, input);
+      if (answer.ok) return { workspace_id: workspaceId, listing: await answer.json() as WorktreeListing };
+      const refused = await answer.json() as { error: { code: string; message: string } };
+      return { workspace_id: workspaceId, error: { status: answer.status, code: refused.error.code, message: refused.error.message } };
+    }));
+    return json({ entries } satisfies WorktreeInventory);
   }
 
   if (path === "/api/worktree/list" || path === "/api/worktree/create" || path === "/api/worktree/open" || path === "/api/worktree/remove") {
@@ -1681,6 +1701,13 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/pane/files") {
     const q = (query.get("q") ?? "").toLowerCase();
     return json({ files: DEMO_FILES.filter((file) => file.toLowerCase().includes(q)).slice(0, Number(query.get("limit") ?? 20)) });
+  }
+  // Files' Documents tab (off by default): the demo folder's Markdown files, changed an hour apart
+  if (path === "/api/pane/docs") {
+    const pane = paneOf(paneId);
+    if (!pane) return error("pane_not_found", "no such pane", 404);
+    const documents = DEMO_FILES.filter((file) => file.endsWith(".md")).map((file, index) => ({ path: file, size: 512, modified: new Date(Date.now() - (index + 1) * 3_600_000).toISOString() }));
+    return json({ root: pane.foreground_cwd ?? pane.cwd ?? "", documents, truncated: false });
   }
   if (path === "/api/pane/input" || path === "/api/pane/keys") return json({ ok: true });
   if (path === "/api/plugins/actions") return json({ plugins: PLUGINS } satisfies PluginActionsResponse);

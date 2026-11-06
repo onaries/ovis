@@ -81,7 +81,7 @@ setInterval(() => {}, 1000);
     const preference = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/herdr-ui");
     await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
     await page.locator(shownRows()).first().waitFor();
-    assert.deepEqual(await (await preference).json(), { copy_on_select: true }, "no herdr config: herdr's default copies on release");
+    assert.equal((await (await preference).json()).copy_on_select, true, "no herdr config: herdr's default copies on release");
     await paneSendText(pane, `clear; node ${script}\r`);
     const first = page.locator(shownRow(), { hasText: "DRAGCOPY-first-line" });
     await first.waitFor();

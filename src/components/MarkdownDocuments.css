@@ -1,0 +1,25 @@
+/* Files → Documents: the folder browser's card and rows (DirectoryBrowser.css), each row a file's
+   name, the folder it is in (dim, mono, cut from its start) and when it last changed */
+.md-docs-name {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.md-docs-folder {
+  flex: 1 1 0;
+  min-width: 0;
+  direction: rtl;
+  text-align: left;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
+.md-docs-time {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

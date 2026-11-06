@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { ConversationPart } from "../../shared/protocol.ts";
-import { formatGoalTime, goalOf, turnGoal } from "./goals.ts";
+import { formatGoalTime, goalOf, goalWaitSources, goalWaitUntil, turnGoal } from "./goals.ts";
 
 type Tool = Extract<ConversationPart, { kind: "tool" }>;
 const call = (name: string, output: unknown, extra: Partial<Tool> = {}): Tool => ({
@@ -37,4 +37,12 @@ test("the turn shows the goal as its last goal call left it", () => {
 
 test("time on a goal reads in the largest units that matter", () => {
   expect([formatGoalTime(45), formatGoalTime(540), formatGoalTime(3600), formatGoalTime(7500)]).toEqual(["45s", "9m", "1h", "2h 5m"]);
+});
+
+test("a goal's wait names only what it waits on, and shows until a minute past when it continues", () => {
+  const wait = { kind: "goal_wait" as const, due_at: "2026-10-05T00:06:30.000Z", waiting_on: { tasks: 0, monitors: 3, terminals: 1, dags: 0, cells: 2 } };
+  expect(goalWaitSources(wait)).toEqual([["monitors", 3], ["terminals", 1], ["cells", 2]]);
+  expect(goalWaitSources({ ...wait, waiting_on: { tasks: 0, monitors: 0, terminals: 0, dags: 0, cells: 0 } })).toEqual([]);
+  // OmO writes `resumed` as it continues: a wait long past due outlived the OmO that wrote it
+  expect(goalWaitUntil(wait)).toBe(Date.parse("2026-10-05T00:07:30.000Z"));
 });

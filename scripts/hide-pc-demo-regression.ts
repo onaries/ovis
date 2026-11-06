@@ -8,7 +8,7 @@ import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { openSettingsPage } from "./settings-page.ts";
 
-// Settings → Remote PCs → Show in sidebar on the unmodified app over the demo's fixture transport,
+// Settings → Devices and PCs → Show in sidebar on the unmodified app over the demo's fixture transport,
 // at a phone's and a desktop's width. Only this disposable fixture rewrites the roster into two
 // connected PCs, the Host "Laptop" and "Work PC"; no herdr session is opened. Hiding Work PC takes
 // it out of the sidebar, the Agents list and the command palette on this device, moves the
@@ -155,9 +155,9 @@ try {
           assert.ok(await page.locator('.agent-item[data-machine="work"]').count() > 0, "Work PC's agents are listed");
           await page.waitForFunction(() => JSON.parse(localStorage.getItem("ovis:selection") ?? "null")?.machine_id === "work");
 
-          // as a person does it: the gear, then Remote PCs, on top of the pane open on Work PC
+          // as a person does it: the gear, then Devices and PCs, on top of the pane open on Work PC
           await page.locator(".sidebar-footer-settings").click();
-          await openSettingsPage(page, "Remote PCs");
+          await openSettingsPage(page, "Devices and PCs");
           const dialog = page.locator(".settings-dialog");
           const work = dialog.getByRole("switch", { name: "Show Work PC in sidebar", exact: true });
           const laptop = dialog.getByRole("switch", { name: "Show Laptop in sidebar", exact: true });
@@ -348,7 +348,7 @@ try {
           } finally { await close(); }
         }
 
-        // the menu's other way: Settings → Remote PCs at its Show in sidebar group, where the last PC shown stays on
+        // the menu's other way: Settings → Devices and PCs at its Show in sidebar group, where the last PC shown stays on
         {
           const { page, errors, phone, close } = await open(browser, width, "", { roster: ["local", "work", "lab"], hidden: ["work", "lab"] });
           try {
@@ -357,7 +357,7 @@ try {
             if (phone) await hiddenChoice(page, phone, "Choose PCs in Settings…").tap();
             else await hiddenChoice(page, phone, "Choose PCs in Settings…").click();
             const dialog = page.locator(".settings-dialog");
-            await dialog.getByRole("tabpanel", { name: "Remote PCs", exact: true }).waitFor();
+            await dialog.getByRole("tabpanel", { name: "Devices and PCs", exact: true }).waitFor();
             await page.waitForFunction(() => (document.activeElement as HTMLElement | null)?.dataset.section === "sidebar-pcs");
             const laptop = dialog.getByRole("switch", { name: "Show Laptop in sidebar", exact: true });
             assert.equal(await laptop.getAttribute("aria-checked"), "true");

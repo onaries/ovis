@@ -9,7 +9,7 @@ export function typedCodeFailure(code: string | null): TypedCodeFailure | null {
   return TYPED_CODE_FAILURES.find((known) => known === failure) ?? null;
 }
 
-/** What a code screen (the hosted app's, Settings → Remote PCs) says when the last code gave no PC. */
+/** What a code screen (the hosted app's, Settings → Devices and PCs) says when the last code gave no PC. */
 export function codeFailureText(t: Translate, failure: TypedCodeFailure): string {
   switch (failure) {
     case "not-a-code": return t("A code has ten letters and digits, like 7K3QD-M2XHA.");

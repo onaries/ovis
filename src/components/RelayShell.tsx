@@ -29,11 +29,13 @@ export interface RelayShellProps {
   /** a PC below the shell's minimum version with a managed install: install its latest release */
   onUpdate: () => void;
   /** pairing without a code: the digits on this screen are the ones the PC shows */
-  onMatch: () => void;
+  /** `typed`: the digits typed from the PC's screen, when this phone may not show its own (state.typed) */
+  onMatch: (typed?: string) => void;
   /** the front page's sign-in: off to the provider's pages */
   onSignIn?: (provider: AccountProvider) => void;
   /** a PC of the account this device is not paired with: compare digits with it */
-  onJoin?: (pc: MyPc) => void;
+  /** `typed`: added from the new-PC card, so this device types the number that PC shows */
+  onJoin?: (pc: MyPc, options?: { typed?: boolean }) => void;
   onSignOut?: () => void;
   onLeave?: () => void;
   /** the sign-ins the account service offers (accountProvidersOf); GitHub alone by default */
@@ -44,6 +46,30 @@ export interface RelayShellProps {
   onCodeSubmit: (code: string) => void;
   /** the ID a typed code found is the one the PC's screen shows */
   onCodeMatch: () => void;
+}
+
+/**
+ * Adding a PC listed in the account: the six digits come from that PC's own screen, typed here, so a
+ * PC someone else listed under a familiar name cannot be added with a tap. Kept in the input itself.
+ */
+function TypedDigits({ pc, onSubmit, cancel }: { pc: string; onSubmit: (digits: string) => void; cancel: ReactNode }) {
+  const t = useT();
+  const submit = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    const field = event.currentTarget.elements.namedItem("digits") as HTMLInputElement;
+    onSubmit(field.value.replace(/\s/g, ""));
+  };
+  return (
+    <>
+      <h1 className="relay-shell-title">{t("Type the number {name} shows", { name: pc })}</h1>
+      <p className="relay-shell-copy">{t("{name} shows six digits on its own screen now. Type them here, then approve on {name}.", { name: pc })}</p>
+      <p className="relay-shell-detail">{t("No number on {name}? Cancel, then tap {name} in your list.", { name: pc })}</p>
+      <form className="relay-shell-code-form" onSubmit={submit}>
+        <input name="digits" className="relay-shell-code-input" aria-label={t("Number on {name}", { name: pc })} inputMode="numeric" pattern="[0-9 ]{6,7}" maxLength={7} autoComplete="one-time-code" required autoFocus />
+        <div className="relay-shell-actions"><button type="submit" className="btn btn-primary">{t("Add this PC")}</button>{cancel}</div>
+      </form>
+    </>
+  );
 }
 
 /**
@@ -62,7 +88,7 @@ function CodeEntry({ failure, onSubmit, back }: { failure: TypedCodeFailure | nu
   return (
     <>
       <h1 className="relay-shell-title">{t("Pair with a code")}</h1>
-      <p className="relay-shell-copy">{t("On the PC, open Settings → Phone & devices and choose Show a code to type. Type that code here.")}</p>
+      <p className="relay-shell-copy">{t("On the PC, open Settings → Devices and PCs and choose Connect (Show a code to type on an older Ovis). Type the code it shows here.")}</p>
       <form className="relay-shell-code-form" onSubmit={submit}>
         <input name="code" className="relay-shell-code-input" aria-label={t("Code from the PC")} placeholder="XXXXX-XXXXX"
           autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} maxLength={32} required autoFocus />
@@ -97,7 +123,7 @@ function KeyIds({ mismatch, named }: { mismatch: KeyMismatch; named: "link" | "p
           : <KeyId id={mismatch.received} against={mismatch.expected} label={received} />}
       </dd>
     </dl>
-    <p className="relay-shell-detail">{t("Only the PC itself shows its ID, under Settings → Phone & devices. Marked groups differ.")}</p>
+    <p className="relay-shell-detail">{t("Only the PC itself shows its ID, at the top of My devices in Settings → Devices and PCs (under the code on an older Ovis). Marked groups differ.")}</p>
     </>
   );
 }
@@ -143,7 +169,7 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
             <h1 className="relay-shell-title">{t("Sign in to Ovis")}</h1>
             <p className="relay-shell-copy account-subtitle">{t("See every PC on your account.")}</p>
             {signIn}
-            <button type="button" className="account-link" onClick={() => setQr(true)}>{t("Use a QR code or pairing code instead")}</button>
+            <button type="button" className="account-link" onClick={() => setQr(true)}>{t("Other ways: QR code or pairing code")}</button>
             <AccountFinePrint />
           </>
         )}
@@ -160,15 +186,27 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
                 </li>
               ))}
             </ul>
-            <p className="relay-shell-copy">{t("To add another PC, scan the QR code it shows under Phone & devices.")}</p>
-            <div className="relay-shell-actions"><button type="button" className="btn" onClick={onCodeStart}>{t("Pair with a code")}</button></div>
-            {signIn && <div className="account-or"><p className="relay-shell-copy">{t("Or sign in to see every PC on your account.")}</p>{signIn}<AccountFinePrint /></div>}
+            {signIn ? (
+              <>
+                <div className="account-or"><p className="relay-shell-copy">{t("Sign in to see every PC on your account and add new ones with one approval.")}</p>{signIn}<AccountFinePrint /></div>
+                <details className="relay-shell-other-ways">
+                  <summary>{t("Other ways")}</summary>
+                  <p className="relay-shell-copy">{t("To add another PC, scan the QR code it shows under Devices and PCs (Phone & devices on an older Ovis).")}</p>
+                  <div className="relay-shell-actions"><button type="button" className="btn" onClick={onCodeStart}>{t("Pair with a code")}</button></div>
+                </details>
+              </>
+            ) : (
+              <>
+                <p className="relay-shell-copy">{t("To add another PC, scan the QR code it shows under Devices and PCs (Phone & devices on an older Ovis).")}</p>
+                <div className="relay-shell-actions"><button type="button" className="btn" onClick={onCodeStart}>{t("Pair with a code")}</button></div>
+              </>
+            )}
           </>
         )}
         {state.kind === "empty" && (account === null || (account.kind === "signed-out" && qr)) && (
           <>
             <h1 className="relay-shell-title">{t("Scan the QR code on your PC")}</h1>
-            <p className="relay-shell-copy">{t("On the PC, open Settings → Phone & devices and turn on remote access through the Ovis relay. The QR code there opens this app paired with that PC.")}</p>
+            <p className="relay-shell-copy">{t("On the PC, open Settings → Devices and PCs (Phone & devices on an older Ovis) and turn on remote access through the Ovis relay. The QR code there opens this app paired with that PC.")}</p>
             <div className="relay-shell-actions"><button type="button" className="btn" onClick={onCodeStart}>{t("Pair with a code")}</button>{back}</div>
             {account && <div className="relay-shell-actions"><button type="button" className="btn" onClick={() => setQr(false)}>{t("Sign in instead")}</button></div>}
           </>
@@ -184,7 +222,7 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
         {state.kind === "code-compare" && (
           <>
             <h1 className="relay-shell-title">{t("Does {name}'s screen show this ID?", { name: pc })}</h1>
-            <p className="relay-shell-copy">{t("The PC shows its ID under the code, in Settings → Phone & devices. Pair only if every group matches.")}</p>
+            <p className="relay-shell-copy">{t("The PC shows its ID at the top of My devices in Settings → Devices and PCs (under the code on an older Ovis). Pair only if every group matches.")}</p>
             <p className="relay-shell-code-id"><KeyId id={state.offer.server_id} label={t("ID of the PC this code found")} /></p>
             <div className="relay-shell-actions">
               <button type="button" className="btn btn-primary" onClick={onCodeMatch}>{t("It matches")}</button>
@@ -195,7 +233,7 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
         {state.kind === "confirm" && (
           <>
             <h1 className="relay-shell-title">{t("Pair with {name}?", { name: pc })}</h1>
-            <p className="relay-shell-copy">{t("This phone gets a key of its own for {name}. The PC lists it under Phone & devices, where it can be removed.", { name: pc })}</p>
+            <p className="relay-shell-copy">{t("This phone gets a key of its own for {name}. The PC lists it under Devices and PCs (Phone & devices on an older Ovis), where it can be removed.", { name: pc })}</p>
             <div className="relay-shell-actions">
               <button type="button" className="btn btn-primary" onClick={onPair}>{t("Pair")}</button>
               <button type="button" className="btn" onClick={onCancel}>{t("Not now")}</button>
@@ -209,7 +247,16 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
             <div className="relay-shell-actions"><button type="button" className="btn" onClick={onCancel}>{t("Cancel")}</button></div>
           </>
         )}
-        {state.kind === "compare" && (
+        {state.kind === "compare" && state.typed && !state.confirmed && (
+          state.wrong ? (
+            <>
+              <h1 className="relay-shell-title">{t("That is not the number {name} shows", { name: pc })}</h1>
+              <p className="relay-shell-copy">{t("Nothing was added. Tap the PC again to compare a new number, and type the one its own screen shows.")}</p>
+              <div className="relay-shell-actions"><button type="button" className="btn" onClick={onCancel}>{t("Back")}</button></div>
+            </>
+          ) : <TypedDigits pc={pc} onSubmit={onMatch} cancel={<button type="button" className="btn" onClick={onCancel}>{t("Cancel")}</button>} />
+        )}
+        {state.kind === "compare" && !(state.typed && !state.confirmed) && (
           <>
             <h1 className="relay-shell-title">{t("Does {name} show this number?", { name: pc })}</h1>
             <p className="relay-shell-digits" aria-label={state.digits.split("").join(" ")}>{`${state.digits.slice(0, 3)} ${state.digits.slice(3)}`}</p>
@@ -222,7 +269,7 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
               <p className="relay-shell-copy">{t("If they match, approve this phone on {name}.", { name: pc })}</p>
             )}
             <div className="relay-shell-actions">
-              {!state.confirmed && <button type="button" className="btn btn-primary" onClick={onMatch}>{t("The numbers match")}</button>}
+              {!state.confirmed && <button type="button" className="btn btn-primary" onClick={() => onMatch()}>{t("The numbers match")}</button>}
               <button type="button" className="btn" onClick={onCancel}>{t("Cancel")}</button>
             </div>
           </>

@@ -1,0 +1,23 @@
+/**
+ * Korean for the settings keys of Settings' search and the layout of its pages: the rest of the
+ * settings part (./settings.ko.ts), kept apart so each file stays short. They are all the one settings part,
+ * so a key lives in only one of them; its header lists the settings files and the register.
+ */
+export const SETTINGS_LAYOUT_KO: Record<string, string> = {
+  "Search settings": "설정 검색",
+  "No settings match.": "일치하는 설정이 없습니다.",
+  "Search results": "검색 결과",
+  "Open {page}": "{page} 열기",
+  "Sidebar": "사이드바",
+  "More settings": "설정 더 보기",
+  "Experimental": "실험 기능",
+  "{count} changed": "{count}개 바꿈",
+  "By state": "상태별",
+  "Hidden": "숨김",
+  "Folded": "접어서",
+  "Expanded": "펼쳐서",
+  "Both": "둘 다",
+  "Activity keeps a waiting agent on top, then the one that changed last. By state lists the agents above the workspaces on this device: the ones that need you first, then working, done and idle. herdr's own order is not changed.": "활동순은 응답을 기다리는 에이전트를 맨 위에, 그다음 가장 최근에 바뀐 순서로 놓습니다. 상태별은 이 기기에서 에이전트를 워크스페이스 위에 보여 줍니다. 내 응답이 필요한 에이전트가 먼저, 그다음 작업 중, 완료, 대기 순입니다. herdr 자체의 순서는 바뀌지 않습니다.",
+  "The agent's reasoning blocks: left out, folded to one line, or open. One you open or fold stays that way for its message.": "에이전트의 추론 블록을 빼거나, 한 줄로 접거나, 펼쳐서 보여 줍니다. 직접 펼치거나 접은 블록은 그 메시지에서 그대로 유지됩니다.",
+  "Drops fillers and fixes spacing; code and paths stay as spoken. Where it is off, the text stays exactly as transcribed.": "군말을 빼고 띄어쓰기를 고칩니다. 코드와 경로는 말한 그대로 둡니다. 꺼 둔 곳에서는 받아쓴 그대로 둡니다.",
+};

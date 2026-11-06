@@ -21,6 +21,7 @@ import { descendantArgv, windowsProcessTable } from "./windows-processes.ts";
 import { windowsHost } from "./remote-host.ts";
 import type { SshConnection } from "./ssh.ts";
 import { psQuote } from "./powershell.ts";
+import { powershellNativeArgs, shellCommandLine } from "./shell-agent.ts";
 import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
 import { isAgyProcessName, windowsHolders } from "./agy-store.ts";
 import { ancestorsToRepoRoot } from "./skills/walk.ts";
@@ -424,3 +425,54 @@ it.skipIf(!onWindows)("gives Claude Code a settings file whose path an npm insta
     expect(runs[1]![1]).not.toBe(json);
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30_000);
+
+it.skipIf(!onWindows)("runs nothing an argument holds when herdr-core's PowerShell start reaches a .cmd agent, and passes what it lets through intact (#3084, #3092)", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-cmd-agent-")));
+  try {
+    const seen = join(root, "argv.jsonl");
+    const program = join(root, "argv.ts");
+    writeFileSync(program, `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(seen)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`);
+    // npm's cmd-shim around this Bun, a shim reaching it through `call`, which reads the line once more,
+    // and one doing so with delayed expansion on
+    const npm = join(root, "npm");
+    const called = join(root, "call");
+    const delayed = join(root, "delayed");
+    for (const dir of [npm, called, delayed]) mkdirSync(dir);
+    writeFileSync(join(npm, "claude.cmd"), ["@ECHO off", "GOTO start", ":find_dp0", "SET dp0=%~dp0", "EXIT /b", ":start", "SETLOCAL", "CALL :find_dp0", `SET "_prog=${process.execPath}"`,
+      `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "${program}" %*`, ""].join("\r\n"));
+    writeFileSync(join(called, "claude.cmd"), `@call "${join(npm, "claude.cmd")}" %*\r\n`);
+    writeFileSync(join(delayed, "claude.cmd"), `@setlocal EnableDelayedExpansion\r\n@call "${join(npm, "claude.cmd")}" %*\r\n`);
+    const settings = "C:\\Users\\R&D\\AppData\\Local\\ovis\\claude settings\\a.json";
+    const passed = [["--settings", settings], ["a & echo x> pwned"], ["a | echo x> pwned"], ["a > pwned"], ["a < b > pwned"]];
+    const cases = [...passed, ['x"', "a & echo x> pwned & rem"], ['"', " & echo x> pwned & rem "], ["--append-system-prompt", 'a 12" screen', "--settings", settings],
+      ["a&cd>pwned"], ["a ^& echo x> pwned"], ["a & echo %OS%> pwned"], ["a & !OS!"], ["!Q!", "a & echo x> pwned & rem"]];
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !["path", "psmodulepath"].includes(name.toLowerCase())));
+    const shells = ["powershell", ...(Bun.which("pwsh") ? ["pwsh"] as const : [])] as const;
+    const letThrough: { shell: string; started: string[][] }[] = [];
+    for (const shell of shells) {
+      for (const dir of [npm, called, delayed]) {
+        const lines: string[] = [];
+        const started: string[][] = [];
+        for (const args of cases) {
+          let line: string;
+          try { line = shellCommandLine("powershell", "claude", powershellNativeArgs(shell, args)); }
+          catch { continue; }
+          lines.push(line);
+          started.push(args);
+        }
+        rmSync(seen, { force: true });
+        // typed as the start types it: `& 'claude' …`, the name found on the PATH
+        const child = Bun.spawn([`${shell}.exe`, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(lines.join("\n"), "utf16le").toString("base64")],
+          { cwd: root, stdout: "ignore", stderr: "pipe", env: { ...env, Q: '"', Path: `${dir};${process.env["Path"] ?? process.env["PATH"] ?? ""}` } });
+        const [stderr] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+        const runs = existsSync(seen) ? readFileSync(seen, "utf8").trim().split(/\r?\n/).map((text) => JSON.parse(text) as string[]) : [];
+        // nothing ran but the agent, which got each argument as it was
+        expect({ shell, dir, ran: readdirSync(root).filter((name) => name.startsWith("pwned")) }).toEqual({ shell, dir, ran: [] });
+        expect({ shell, dir, runs, stderr: runs.length === started.length ? "" : stderr }).toEqual({ shell, dir, runs: started, stderr: "" });
+        if (dir === npm) letThrough.push({ shell, started });
+      }
+    }
+    // the start lets through each one cmd reads as text, and no other
+    expect(letThrough).toEqual(shells.map((shell) => ({ shell, started: passed })));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 120_000);

@@ -66,7 +66,7 @@ describe("GET /api/agents", () => {
     expect(located.sort()).toEqual(["gjc", "omo"]);
   });
 
-  it("offers on herdr-core only the kinds its manifests name: none it cannot start, as on Windows", async () => {
+  it("offers on herdr-core only the kinds its manifests name: none of herdr's own beside them", async () => {
     process.env["PATH"] = bin;
     const serving = spyOn(runtime, "servingCore").mockReturnValue(true);
     manifests.mockImplementationOnce(async () => ({ manifests: [] }) as unknown as Awaited<ReturnType<typeof herdr.agentManifests>>);

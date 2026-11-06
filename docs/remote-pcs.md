@@ -1,6 +1,6 @@
 # Remote PCs over SSH
 
-Use **Add PC** in Settings → Remote PCs (the command palette has it too) to connect a Linux or macOS computer (x64 or arm64) or a Windows PC (x64) running OpenSSH Server. Enter an SSH alias or `user@hostname`; the name defaults to that address. Advanced settings accept a port, a key path on the **web server**, and a named herdr session. Each registration selects one herdr socket. The sidebar groups PC → workspace → pane, and the header and new-session dialog show the destination PC. **Settings → Remote PCs → Show in sidebar** keeps a PC out of this device's sidebar, Agents list and command palette; it stays connected, and links and alerts still open its panes. The sidebar's PCs head counts the PCs hidden there; its menu shows each one again.
+Use **Add a PC over SSH**, under **Other ways to connect** in Settings → Devices and PCs → Connect (the command palette has **Add PC** too), to connect a Linux or macOS computer (x64 or arm64) or a Windows PC (x64) running OpenSSH Server. Enter an SSH alias or `user@hostname`; the name defaults to that address. Advanced settings accept a port, a key path on the **web server**, and a named herdr session. Each registration selects one herdr socket. The sidebar groups PC → workspace → pane, and the header and new-session dialog show the destination PC. **Settings → Remote PCs → Show in sidebar** keeps a PC out of this device's sidebar, Agents list and command palette; it stays connected, and links and alerts still open its panes. The sidebar's PCs head counts the PCs hidden there; its menu shows each one again.
 
 **Machines already saved in herdr appear automatically.** The connection server reads its account's
 `herdr machine list --json` at startup and every five seconds after the previous read finishes. Failed reads back off up to five minutes and
@@ -67,13 +67,13 @@ headless server into the desktop session, and Ovis never restarts it or its pane
 An initial connection can be cancelled while waiting; already-started work stays running.
 ## Through the relay
 
-**Settings → Remote PCs → Add a PC through the relay** adds another PC with no SSH and no open
-port: both PCs only connect out to the [Ovis relay](relay.md). On the other PC, turn the relay on
-under **Settings → Phone & devices**, choose **Copy link**, and paste that link here. Or choose
-**Show a code to type** there and type its ten-character code here instead: this PC's server finds
-that PC through the relay as a phone does ([Pairing with a typed code](relay.md)), keeps what it
-found, and shows that PC's ID. Choose **It matches** only if every group matches the ID under the
-code on that PC's screen. This PC's server then pairs with that one exactly as a phone does: the same one-time code, the same
+**Settings → Devices and PCs → Connect → Enter a code from another device** adds another PC with no
+SSH and no open port: both PCs only connect out to the [Ovis relay](relay.md). On the other PC, open
+**Settings → Devices and PCs → Connect** (with the relay on) and type the ten-character code it shows
+beside its QR code here (an older Ovis names it **Show a code to type**; its pairing link works too):
+this PC's server finds that PC through the relay as a phone does ([Pairing with a typed code](relay.md)),
+keeps what it found, and shows that PC's ID. Choose **It matches** only if every group matches the ID
+at the top of **My devices** on that PC's screen (under the code on an older Ovis). This PC's server then pairs with that one exactly as a phone does: the same one-time code, the same
 end-to-end encryption and the same device key, kept on this server in
 `<stateDir>/relay-pcs/<pc id>.json` (mode `0600`). The other PC lists it under Devices as
 `Ovis on <this PC's name>`, with the access any paired device has. The PC itself is saved in

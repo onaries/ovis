@@ -760,10 +760,11 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   `>`, `\` and control characters stripped and names with spaces quoted.
 - Composer Enter behavior and folded thinking visibility are preferences, not typography tokens.
 - File viewer: `wrapCode` (wrap long lines instead of scrolling sideways; default off),
-  `markdownWidth`: `readable` (the chat lane, `--chat-w`, centered; default) or `full`, and
-  `diffStyle`: `unified` (default) or `split` for a repository diff (a phone draws one column
-  whatever it says, and the viewer says so), and `markdownOutline` (off by default, below).
-  These layout choices stay on this device, like chat width.
+  `diffStyle`: `unified` (default) or `split` for a repository diff, set by the diff viewer's own
+  Unified and Split switch (a phone draws one column whatever it says, and the viewer says so), and
+  `markdownOutline` (off by default, below). These layout choices stay on this device, like chat
+  width. A Markdown preview keeps the chat's readable lane (`--chat-w`, centered); Settings no
+  longer offers a full-width preview, and a stored `markdownWidth` is ignored.
 - Markdown outline (`markdownOutline`, #636): a Preview with two headings or more lists the
   document's own headings (not ones inside a quote), levels stepped in, a repeated title one entry
   per heading. It follows Zed's outline panel: the heading being read (the last past a line 32 px
@@ -782,6 +783,15 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   `fullAccess`, each a `--sandbox` and `--ask-for-approval` pair) become the `agent.args` the new
   workspace, tab and worktree dialogs send (src/lib/agentLaunchMode.ts). `default` (the default)
   adds nothing, so the agent's own configuration decides. Both are shared across devices.
+  Beside each mode, the same agent's row has a model and an effort (`claudeLaunchModel`,
+  `claudeLaunchEffort`, `codexLaunchModel`, `codexLaunchEffort`, shared too). They fill the new
+  workspace and tab dialogs' Model and Effort fields as the dialog opens on that agent or the
+  agent is picked, and New worktree passes them as they are (`launchDefaults`). Empty adds no
+  flag. Only what that agent's launch takes is kept (`launchChoiceFault`: one `--model` name,
+  an effort level it names), so a value never reaches another agent's command line, and an
+  effort the reader picked in the dialog stays when the next agent has none set. Codex and the
+  Claude Code app keep a default model and effort per agent the same way; Ovis never writes the
+  agent's own config file for it.
   The viewer loads a Markdown file's first 256 KB through one bounded streaming reader, with abort
   on close or navigation and a 5 s deadline; any other text that fits 256 KB reads whole under the
   same budget, and a larger one reads up to 8 MB and 200 000 lines with a 30 s deadline
@@ -1021,7 +1031,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 ### Modal (`.modal*`)
 - `.modal-scrim` centers an `aria-modal` dialog at `--z-modal`; `.modal` is a capped scrollable
   column with header, body and footer and `--shadow-pop`.
+- The scrim's padding is at least each safe-area inset, so a centered card (Settings on a phone held
+  sideways) keeps clear of the notch on either side and of the home indicator. Popovers placed by
+  script (`RowMenu`) clamp to the same safe area (`lib/safeArea.ts`).
 - At `<=640px`, it becomes a bottom sheet with top `--radius-xl` corners and safe-area padding.
+  As an iPhone's own sheets do, its top never reaches under the status bar or Dynamic Island: its
+  height is capped at `100%` less the top inset and `--space-2`, the search sheet's too.
   Every surface on a `.modal-scrim` (dialogs, the palette, the row sheet) rises from the bottom
   edge as an iPhone's sheet does (`--dur-sheet` on `--ease-spring`, the scrim darkening with it),
   follows a finger dragged down from its head or from a list at its top, and drops
@@ -1172,6 +1187,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   A lone pane beside such a `⋯` draws no second ellipsis (its actions are in the tab's menu), on a
   desktop as on touch. The pane's own context menu carries pane actions; it opens at the pointer
   without changing which pane is focused. The pane header's ellipsis opens the same menu on touch.
+  A phone (at most 640px wide, the sheets' width) draws no tab row for any tab, which gives the pane
+  the row's 44px (header 96 -> 52px). The header's title is the way to the tabs, as the Codex and
+  Claude apps title the open conversation and list the others from it: a `ChevronDown` follows it, and
+  the whole title and crumb, grown to `--touch-target` tall, is one button ("Tabs of {workspace}",
+  `aria-haspopup="dialog"`, `aria-expanded`) that opens the workspace's tabs as a bottom sheet: each
+  tab with its state dot (hollow at rest), its agent's mark and a Close of its own ("Close {tab}",
+  its own stop after the tab in the arrow order), the open tab marked current, its state word for a
+  state; then the open tab's Move tab left / right, then New terminal and New tab with agent…. A
+  pick opens the tab where it was left; Close asks first as the row's does. Such a phone's More
+  carries the open tab's other actions as below, less the two new-tab items its title's list holds.
   A lone tab with no row (a phone at most 700px tall, including the iPhone Duo's 678-point outer
   display, landscape or a screen made short by its keyboard) draws no pane ellipsis either: a second
   `⋯` below the glass header would repeat the header's own. The header's `⋯` is then the one menu,
@@ -1502,6 +1527,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   never off the snapshot, so the row still files. The parts are one list, so a row that changes
   part is moved with its focus and open menu. It follows the Codex
   app, which keeps background and subagent work in a box at the bottom of its sidebar (#1369).
+- Settings > Appearance > Background workspaces apart (a device setting, off by default) does the same
+  for a PC's workspace list: workspaces a launcher tags `role=background` (`herdr workspace
+  report-metadata --token`, any case) stand after the other unpinned rows, under a **Background
+  workspaces** heading styled like the Agents one (`.workspace-background-toggle`), folded at first
+  and kept per PC on this device; its count always shows. Only a group's head files it: a tagged
+  worktree stays under its repository. A folded part still shows the open workspace and one whose
+  agent is blocked; a pinned one stays in the pinned card; under the filter the part opens. Alt+arrows
+  and drags move a row only among the rows of its own part, and not while it is folded. An untagged workspace stays where it is.
+  It follows the Codex app's bottom box for background work, as the Agents list does (#770).
 - Settings > Appearance > **Fold helpers under their agent** (the device setting `foldHelpers`,
   off by default, #772) puts one line under each agent row that has helpers in the same list
   (`.agent-helpers`): it hangs from the agent as a helper does, a helper's height, with a caret
@@ -1741,8 +1775,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   note is dim, red for an expired sign-in or a failed request.
 - Under the limits, only when the provider reports them: **Usage credits** (Claude's extra usage,
   spent against its monthly cap in the provider's currency, over a bar counted like the limits) or
-  **Credits** (Codex's balance, in whole credits), then **Limit resets** (how many are left, and
-  when the soonest expires). Reference: Claude Code's `/usage` (its "Usage credits" row) and
+  **Credits** (Codex's balance, in whole credits), then **Limit resets** (Codex's: how many are
+  left, and when the soonest expires). Reference: Claude Code's `/usage` (its "Usage credits" row) and
   Codex's `/status` (its "Credits" row), whose own readings these are; no code is borrowed.
 
 ### PC load (`.machine-stats`)
@@ -1871,21 +1905,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   route, is said in one hint line. Start sends exactly one create: a ref-held in-flight guard
   (`lib/sessionHistory.ts` inFlightGuard) refuses a second press before the disabled fields have
   rendered.
-- In a mouse-driven window wider than 640px (the composer's own `(max-width: 640px), (pointer:
-  coarse)` query) the chat's composer can show a **New tab with an agent…** icon button
-  (lucide `MessageSquarePlus`, beside Attach) that opens this dialog as New tab on the pane's
-  workspace, as the tab menu does, but on the chat's own agent and the model and effort its
-  transcript recorded last (`ConversationMetadata`, the composer's model pill), each only where
-  the agent's launch takes it (`recordedChoices`); every field stays editable before Start. The tab
-  menu and the shortcuts keep the last agent picked and the agent's own model. This follows the
-  Codex app's new thread, which starts on the model and reasoning effort already shown in its
-  composer rather than resetting them. It is off until this device turns it on (Settings → Chat →
-  Composer, **New tab button**, the device setting `composerNewTabButton`): the composer's row stays
-  minimal, as the Codex and Claude apps keep theirs (attach and the mic; a new thread starts from the
-  sidebar), and the tab menu opens the same dialog either way. A phone's card has no row to spare for
-  it beside the mic and the tasks chip (the model label would lose its pill), so there the tab's own
-  menu keeps **New tab with agent…**, and Settings does not offer the toggle on a touch screen or in
-  a window 640px wide or narrower.
+- The chat's composer has no New tab button: its row stays minimal, as the Codex and Claude apps
+  keep theirs (attach and the mic; a new thread starts from the sidebar). The tab menu's **New tab
+  with agent…**, the command palette and its shortcut open this dialog, and a stored
+  `composerNewTabButton` from an older version is ignored.
   The existing shortcuts are untouched.
 - The design follows the Codex app's new thread screen (the model and reasoning-effort pickers
   under the prompt box, the prompt sent as the thread starts) and Claude Code's own session flags
@@ -1910,7 +1933,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   folder, and opens the new shell pane unless another pane was opened meanwhile; a refusal shows
   in the strip. An agent tab comes from the tab menu's New tab with agent…, which opens the dialog.
   Tabs retain their names, status dots, active underline, keyboard navigation, rename field and
-  close confirmation. A right-click opens tab actions at the pointer, including Move tab left/right
+  close confirmation. As the Herdr app's tabs show the program, each tab carries its agent's mark
+  (the pane it opens on, else its first agent) before its name, hidden from assistive tech so the
+  tab is named by its words; a working tab's dot is a ring with a gap that turns in 8 steps per
+  `--dur-spin`, the plain dot under reduced motion. A right-click opens tab actions at the pointer, including Move tab left/right
   when a neighbouring position exists. Tabs have no close buttons or chevrons. Touch and narrow layouts show a `⋯` beside
   the selected tab for a trimmed menu, and there a tab is at least `--touch-target` tall and wide, so a one- or
   two-character name (탭 1) is still a finger's target with the `⋯` a target of its own beside it; a desktop with a mouse draws the same `⋯` on the selected tab, hidden in its place
@@ -2198,6 +2224,27 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   conversation IDs and never give one to another conversation, so none of them has a draft whose
   owner was replaced, and there is no app precedent to follow. A PC whose server names no herdr (an older bridge) keeps its drafts in the page alone.
 
+### Documents list (`.md-docs`)
+- Settings > Chat > **Documents in Files** (a device setting, off by default) adds a fourth face to
+  Files, **Documents**: the Markdown files (`.md`, `.markdown`) under the pane's folder, newest
+  first (GET /api/pane/docs: git's files that are not ignored, or a Markdown-only walk outside a
+  repository). It is the folder browser's card and
+  rows (`.dir-browser`): the folder in mono cut from its start and a Refresh button on the bar, a
+  **Filter documents** field (Escape clears it before it closes Files), then one row per file: its
+  glyph, its name, the folder it is in (`.md-docs-folder`, dim mono, cut from its start, the first
+  thing to give way) and when it changed (`.md-docs-time`, `lastSeen`'s words, the full time as
+  its tooltip). A row opens the file viewer, which renders it with its outline. Nothing polls:
+  Refresh reads it again. Empty, filtered-out, cut and refused lists say so in the list's own
+  words (`No Markdown files in this folder`, `No matching documents`, `Some Markdown files here
+  are not listed.`, a bridge too old for the route).
+- Four tabs do not fit beside the title and Close on a phone (480px or less) or a panel of 480px
+  or less: there the tabs take the row under them, each a share of it, with tighter padding, and
+  Close keeps the row's end where the narrow panel drops the title. Three tabs keep one row.
+- Reference: Paseo's `paseo-markdown-viewer` plugin (a Markdown list beside the agent that opens
+  each in a reader) and the Codex app's side panel, which opens a `.md` beside Review. Ovis keeps
+  it read only and inside Files, behind its setting, until the safe write route of #771 lands;
+  editing, creating and deleting follow on it (#1196).
+
 ### Changes list and diff viewer (`.repo-changes`, `.repo-diff*`)
 - Like Collie's Settings → Device → Changes, Settings → Chat → Changes offers **Look for
   repos inside this folder** (on) and **How deep to look** (1–4, default 2), saved per device.
@@ -2451,10 +2498,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   At `<=480px` the header's line is the title's, as wide as without these: the figures become one
   pill (waiting, else running, else done, tinted with its state) at the end of the tab row under the
   header (`.tab-strip-sessions`), a full `--touch-target-header` target. Where that row is not drawn
-  (a lone tab on a cramped phone) More carries the jump: **Open the next session waiting for you** is
+  (a phone, whose title lists the tabs, or a lone tab on a cramped screen) More carries the jump: **Open the next session waiting for you** is
   its first item, and its button wears a `--status-blocked` dot (`.header-more-dot.is-waiting`, in
   place of the alerts-off dot) and says the count in its name. Below `420px` the tab's place leaves
-  the header: the tab row shows it.
+  the header: the title's list marks the open tab.
 
 ### Chat turn (`.chat-turn`)
 - Native conversation rows use LegendList 3.3.5, with the chat view as the single
@@ -2818,6 +2865,20 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   shows it for Claude Code and Codex panes, whose transcripts the server already reads for the
   plan. The Codex app, Paseo and T3 Code keep the ring by the composer only, and so does Ovis by
   default; the row ring is opt-in for people who watch several agents' context at once.
+- Settings > Appearance > **Agents under workspaces** (the device setting `sidebarAgentTree`, off by
+  default, #773) turns the PCs list into a PC > workspace > agent tree: each workspace row lists its
+  agents under it (`.workspace-agents`, a list named "Agents in <workspace>"), in the roster's
+  order, one level in on the dim branch a worktree hangs from, and a worktree's agents a level
+  further in. An agent row is a one-line workspace row's height: its mark, the title the Agents list
+  gives it, its live name and its tab's name where the workspace has several, its background and plan
+  counts, the context ring while Context left on agent rows is on, and its state in the rows' trailing
+  cell (NOT RESTORED for a pane herdr could not bring back, as on a workspace row). It opens its pane as the Agents row does; its pin, mute and group
+  stay in the Agents list's menu, which stays as it is. The selected agent's row takes the selection's
+  fill (and the forced-colors bar) from its workspace's row, so one row is filled. Under the filter
+  only the agents it keeps are listed, the selection's as context; a folded worktree group, a folded
+  PC and an offline PC treat them as they treat the rows they hang from. Conductor and the Codex app
+  list a project's sessions under it the same way; Ovis keeps herdr's workspace as the parent and the
+  flat Agents list beside it.
 - The chip opens one list above the card: a **Plan** heading with `N of M done`, the steps in wave
   order (a status glyph, the name, what a running step does now, then a dim state · time · teammate
   line; a waiting step's name is dim), then a **Background tasks** heading over the tasks list when
@@ -3613,6 +3674,26 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   replaces it under a Back to settings control. The dialog's accessible name stays **Settings**
   on every page; the list is a vertical `tablist` with one Tab stop, and the arrows walk it
   (beside an open page they turn the page too). Escape closes the dialog from any page.
+- Each page shows first what people change (set by the install counts of which settings differ
+  from their defaults) and folds the rest under one quiet line at its end, as herdr-app keeps its
+  Settings to a dozen rows and leaves the rest to its settings file: **More settings**, and
+  **Experimental** for what is still being shaped (`SettingsFold`, a native `details`). The line
+  counts the settings in it that this device moved off their defaults ("2 changed", in `--accent`),
+  so a choice never hides without a trace. A search shows the rows inside as if unfolded, a link or
+  the palette naming a group inside opens the fold, and a group there keeps its own name
+  (`typography-more`, `composer-more`, `file-viewer-more`, `chat-experimental`, ...).
+- A search field (`Search settings`) sits over the list of pages, as Zed's and VS Code's settings
+  searches do: typed words (case and full-width forms folded) keep only the settings whose label
+  and description hold every word, or every setting of a group whose title holds them, from all
+  pages at once. Each page that keeps one shows under its name (a button that opens the page and
+  ends the search) and the settings stay live, changed where they are found. A group found by a
+  setting or its title brings its note and the forms and status lines that go with it; what a page
+  holds outside its groups stays there. A row in the middle of a step (a shortcut recording, the
+  relay's ID check) stays whatever its words become, and one a found row opens (Custom interface
+  font) is found by that row's words. Nothing matching says **No settings match.** A
+  phone's results take the list's place under the field. Edit key bar opens over the Terminal
+  page, so Back steps out to it. The first Escape empties the search wherever the focus is in it and
+  gives the field the focus, the next closes Settings. The command palette's Settings entries still land on pages and groups.
 - Each step into Settings is an entry of the browser's history (`lib/settingsHistory.ts`): the
   dialog, the page a phone opens from its list, the key bar editor. The system Back button (and
   an edge swipe) takes one step out and never leaves the app from inside Settings; the Back
@@ -3622,24 +3703,34 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   closed entry (the palette's), stays open: those steps, and the address the app writes on the entry
   left, are no Back of the user's. Its own step that lands over a second after it was asked for is
   taken for one, as Back then may be the user's.
-- Pages, in order: **Appearance** (theme, dark theme, light theme, density, language, sidebar rows; then
-  **Typography**: interface font size and interface font), **Chat**
-  (panes open in, show thinking, chat width, chat font size and family; then
-  **Composer**: Enter sends, send queued messages automatically, in a mouse-driven window wider than
-  640px the New tab button (off by default), the Artifacts chip (off by default, the device setting
-  `composerArtifacts`), the Side conversations chip (experimental, off by default, the device setting
-  `composerBtw`), the Paste and send button (off by default, the device setting
-  `composerPasteSend`), and on a touch screen the suggestion chip (off by default); then
-  **Quick replies**; then **File viewer**: wrap long lines, Markdown width, Markdown outline (off by default, the device setting `markdownOutline`), Diff layout), **Terminal** (font size, font family, wheel
-  speed, input mode, Key bar, Keyboard only from the key bar (off by default, the device setting
-  `terminalKeyboardOnRequest`), Fold the key bar (touch screens, off by default, the device setting
-  `terminalFoldKeyBar`), Clipboard from a pane, Pictures in the terminal (off by default, the
-  device setting `terminalImages`), Use alongside herdr's own window, Follow
-  herdr's focus), **Alerts**, **Voice input**, **Agents**,
-  **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (Connect a phone,
-  Keep screen on, Install; then Portal, where the server offers it; then paired devices; then Access),
-  **Remote PCs** (Add PC, Update PC bridges automatically, PC load in the sidebar; then **Show in sidebar**), **About** (Updates, herdr, the repository links). A button that points at
-  Updates opens the dialog on About.
+- Pages, in order (eight): **Appearance** (theme, dark theme, light theme, density, language;
+  **Typography**: interface font size; **Sidebar**: sidebar rows, agents order), **Chat**
+  (panes open in, show thinking, chat width, chat font size; **Composer**: Enter sends; **Quick
+  replies**, whose list shows only while they are on; **File viewer**: open files, web links;
+  **Voice input**: microphone button), **Terminal** (font size, font family, input mode, Key bar),
+  **Alerts** (the test, sound and other destinations; which alerts come is the **Alert me when**
+  group of its More settings, as almost every install keeps them), **Agents**, **Shortcuts** (the
+  platform-resolved global bindings), **Devices and PCs**
+  (**Account**; **My devices**: Connect a device, this PC with its ID, the other PCs and the paired
+  phones and browsers in one list; its More settings: This device, Ovis relay, Show in sidebar,
+  Access, the PCs' bridge updates and load line), **About** (Updates,
+  herdr, the repository links). Each page's other rows are in its folds (above). Voice input was a
+  page and is Chat's group (its dictation language, speech recognition, tidying and OpenAI key in
+  Chat's More settings);
+  Remote PCs was a page and is a group of Devices and PCs; a link or a history entry naming either
+  old page opens the page it went to (lib/deepLink.ts). A button that points at Updates opens the
+  dialog on About.
+- Three rows each stand for two settings and keep both as they are stored: **Agents order** is
+  Workspaces, Activity (every browser's `agentOrder`) or By state (this device's `agentGroups`,
+  with **Within a state** under it); **Show thinking** is Hidden, Folded or Expanded
+  (`showThinking` and this device's `expandThinking`); **Tidy dictated text** is Off, Chat,
+  Terminal or Both (`voicePolishChat`, `voicePolishTerminal`), so no combination is lost.
+- **Agents** lists the agents on this PC, one row each that opens on its status (version, sign-in,
+  accounts, session resume) and the settings that belong to that agent alone: Claude Code's
+  permission mode, Artifacts chip and (on a touch screen) suggestion chip; Codex's sandbox and
+  approvals; OMP's side conversations chip (experimental). New workspace, New tab and New worktree
+  start the agent in that mode; Ovis never writes the agent's own configuration. A search shows each
+  installed agent's settings in a group of its own. An agent that is not on the PC offers none.
 - Every page is built from the same parts (`components/SettingsControls.tsx`). A group is an
   optional caption (`--fs-sm`, `--fw-semibold`, `--text-dim`, sentence case) over one card:
   `--bg-elevated`, hairline `--border`, `--radius-lg`, its rows parted by hairlines and never
@@ -3682,66 +3773,55 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   held modifiers. Restore defaults returns the original row. The keyboard mode control stays first.
 - A font family is a text field saved when it is left, on Enter or when the dialog closes, not
   per keystroke.
-- Remote PCs: an **Add PC** row (label, one-line description, button) opens the PC
-  setup dialog and closes Settings behind it; when that dialog closes, focus lands on the header's
-  workspace-list toggle. Under the row, once the server has answered, the bridge auto-update switch.
-- Connect a phone (`components/ConnectPhoneDialog.tsx`) is the Phone group's first row: its
-  sentence says where a phone stands in a few words, and names the relay as well as Tailscale
-  wherever the relay is offered, so a user on a tailnet still learns a phone needs no Tailscale
-  (ready through the Ovis relay; ready at the Tailscale address, or the relay with no Tailscale;
-  the relay from anywhere, or Tailscale; Tailscale or a pairing code where no relay is offered),
-  and its one primary **Connect** button opens a `.modal`
-  (a bottom sheet on a phone) titled **Connect a phone**. The settings page itself shows no QR
-  code; every QR code is in this dialog. The ways are choice cards at the top
-  (`.connect-phone-choices`: a grid, one column on a phone), each a pressed/unpressed button with
-  its name and a one-line hint read as its description, the chosen one in the accent: **Ovis
-  relay** ("From anywhere. Nothing to install."; where the server has the route and this is not the
-  hosted shell), **Tailscale** and **Pairing code** (not for a Portal visitor). A tab row hid the
-  relay: an owner who saw Tailscale first took it for the only way. No reference app offers more
-  than one way to reach its host (Paseo's pairing flow has one), so there is no precedent for the
-  choice itself; cards that say in one line what each way needs are the plainest way to show all
-  three at once. It opens on the relay whenever
-  the relay is offered, except with the relay off and Tailscale already serving this PC (or the page
-  on its HTTPS address): then on Tailscale. Until a card is picked the dialog follows that default
-  as the relay's and Tailscale's answers arrive, so one opened before they did does not stay on its
-  guess; using the relay's switch picks the relay. The relay's card carries the relay's one switch
-  in its corner, for the PC's owner where nothing blocks the relay (the gate condition under the
-  cards while it is off): turned on, the dialog moves to the relay's details. With no relay offered
-  the dialog opens on Tailscale. The relay route is the relay's state sentence (Blocked says why),
-  a start that failed with its reason and **Try again**, the pairing offer once it is online, and
-  last, quiet under a hairline, **Reset relay identity** (a ghost button, confirmed in the shared
-  `ConfirmDialog`; Escape there closes the confirmation, not the dialog; a serve-only install is
-  offered none, since the server refuses it, and an unreadable identity keeps it, since the reset
-  mends it). A watching device or Portal visitor gets no switch and no reset, and the relay route
-  says only the PC's owner can control the relay, through a direct connection. The Tailscale route is the address and QR code, or the command to run (plain, in
-  `.phone-command`, with no accent rail: a rail read as a focus ring there) with **Check again**;
-  the pairing code route is one sentence (a phone that can already open this address: the same
-  Wi-Fi, a tunnel, a proxy) and **Get a pairing code**, then the code, its QR code when the
-  address is known, the link with Copy, the countdown and **New code**. All three stay mounted
-  while the dialog is up and only the chosen one shows, so the relay's offer and the pairing code
-  follow each other's New code. The explanations (what the relay sees, who Tailscale lets in, the
-  README links) wait behind one accent **How it works** under a hairline.
-  Devices' **Pair a device** opens the dialog on the pairing code with a code started, as the
-  button always did, and the dialog closes by itself once the Devices group sees the device the
-  code let in, its "Paired" line then in the list. The relay's offer announces its code as well,
-  the first one the server made included, so a phone paired through the relay closes it too. The
-  relay has no group of its own on the page: the row's second line is its state (**Ovis relay:**
-  Off, Connecting…, Online with how many phones, Error, Blocked with the reason), and every relay
-  control is in this dialog, so nothing is said twice. What pairing grants is said once, in
-  Devices. The precedent is Paseo's desktop Settings, where the host's **Pair a device** opens the
-  pairing flow, with Enable relay and the QR code there rather than inline
-  ([docs](https://paseo.sh/docs/connectivity)); this differs in offering Tailscale and a pairing
-  code beside the relay in the same dialog.
-- Install (a row of the Phone group) reflects installed, promptable or browser-instructions state;
+- Devices and PCs follows WhatsApp's **Linked devices**: the account on top, then one list of
+  everything connected (**My devices**) under one **Connect a device** row whose **Connect** button
+  opens every way in, as Tailscale's admin **Add device** does. Devices and other PCs are one list
+  because to the person they are one thing: something connected to this PC. Rows are as short as
+  the page allows; what pairing means is one folded sentence, and what few people change is in
+  More settings. Old links to the Phone, Remote PCs and Portal groups land on My devices.
+- My devices (`MyPcRows` in SettingsDialog.tsx, then `components/DevicesPanel.tsx`): this PC
+  first (its name, a **This PC** pill in the accent and its relay ID in `--font-mono` under it: the
+  ID a device that typed this PC's code compares, so it is shown here and not in the dialog), then
+  the PCs this app shows (a neutral **PC** pill and their state; removing an eligible PC stays in
+  the sidebar's PC menu), then signed in the account's other PCs (their
+  account state, no action), then the paired phones and browsers with a neutral kind pill (Phone,
+  Tablet or Browser, read from the name the app first gave the device), Rename and Revoke as
+  before, then **Revoke every device**. On a touch phone on this PC's own address, with the relay
+  online, the phone's own row carries **Use the relay** (its own offer opens there). **Sign out of
+  this PC** (the browser's own pairing) and the account's **Sign out of GitHub** are named apart.
+- Connect a device (`components/ConnectPhoneDialog.tsx`, a `.modal`, a bottom sheet on a phone):
+  signed in to the account, with this PC in it and the relay online, it asks the new device to
+  sign in with GitHub and be approved once on a device already in the account (the approval is
+  the account's own prompt, picking the number out of three, on that device: never on the PC's
+  own windows) and shows no code until **Connect with a code (no sign-in)**. Otherwise one way
+  first: the Ovis relay's QR code and the code to type side by side (`components/CompactPair.tsx`,
+  132px QR, the code in `--font-mono`), with only **Refresh** and **Copy**; signed out where the
+  account is offered, one bordered line above it says signing in skips the code. While the relay
+  is not online its state sentence shows instead, with its switch for the PC's owner (and the gate
+  condition), a failed start's reason and **Try again**; a watching device or Portal visitor reads
+  the state and that only the owner controls the relay. **Enter a code from another device** opens
+  the typed-code form for a PC that shows its own code (the ID match step as before). **Other ways
+  to connect** folds the rest, one bordered line each that opens under itself: **Same Wi-Fi** (the
+  six-digit pairing code and its QR code, Refresh and Copy), **Tailscale** (the address and QR
+  code, or the command to run), **Portal** (where the server offers it: the whole Portal group as
+  before) and **Add a PC over SSH** (closes Settings and opens the PC setup dialog). With no relay
+  offered the six-digit code is the first way. The dialog closes by itself once My devices sees the
+  device a code let in. A six-digit code started anywhere ends the relay's typed code on the PC,
+  so that code goes and Refresh makes another; it is never asked for on its own, or the two would
+  keep ending each other.
+- The Ovis relay's own group in More settings: its state as the row's sentence with the switch,
+  then **Reset relay identity** (confirmed in the shared `ConfirmDialog`; none for a serve-only
+  install, which refuses it). Not shown in the hosted shell or to a read-only device.
+- Install (a row of More settings' This device, shown only when the browser can install) offers it;
   About links the repository.
-- In the hosted relay shell (app.ovis.sh, `<meta name="ovis-shell">`, lib/shellMode.ts) the Phone
-  group opens with two rows the native build never shows: **Change PC** (a neutral button to the
+- In the hosted relay shell (app.ovis.sh, `<meta name="ovis-shell">`, lib/shellMode.ts) the page
+  opens with a **This app** group of two rows the native build never shows: **Change PC** (a neutral button to the
   shell's front page, which lists every paired PC, the same row the iOS app gets for its own list)
   and **Forget this PC** (a neutral button that asks once in a `ConfirmDialog`, **Forget**, then
   deletes this phone's key for the PC and leaves for the front page). Neither is destructive on the
   PC, which keeps listing the phone until it is revoked there, so neither is a `.btn-danger`.
-- Portal, a group of its own between Phone and Devices where the server offers it: while it runs,
-  the address and QR code as Connect a phone's Tailscale route draws them over a Relay row with Stop; otherwise one
+- Portal, under Connect a device's Other ways to connect where the server offers it: while it runs,
+  the address and QR code as the Tailscale way draws them over a Relay row with Stop; otherwise one
   hint for what blocks it (no token, serve-only, no `portal` or an old one, with a link to get it)
   or a wide Relay row whose text field and Start stack on a phone. Starting and stopping are one
   dim status line, at body size (`--fs-md`, `--fs-lg` under a finger) since it is what Portal is
@@ -3777,8 +3857,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - The Ovis relay's state and pairing offer (`components/RelayPanel.tsx`: `statusText`,
   `RelayPairing`; `lib/useRelay.ts`), shown where the server answers `/api/relay`: the state in
   words is one step above a row's sentence (`--fs-sm`) and never above its label. While the relay
-  is online the pairing offer is a QR code beside its words in Connect a phone's relay route
-  (`.relay-pairing`, stacked on a phone), with a countdown and **New code**. The server keeps one
+  is online the pairing offer is Connect a device's QR code beside the code to type (`.compact-pair`),
+  with **Refresh**; the setup guide keeps the longer `.relay-pairing` with its countdown and **New code**. The server keeps one
   pending pairing code, which this offer and the dialog's pairing code both carry, so the offer is
   asked for when the dialog opens with the relay online, when the pairing code route starts a
   code (`PAIRING_CODE_EVENT`, lib/useRelay.ts: both then show the same code), when its countdown
@@ -3795,7 +3875,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   key and relay in a QR `#offer=` fragment the phone confirms, shown while the relay is up); this
   differs in keeping the state a sentence in the switch's row rather than a status badge, and in
   sharing one pending code with the pairing code route instead of a code of its own.
-- Access, the last group of Phone & devices, is read-only: one row per fact the server reports
+- Access, a group of Devices and PCs' More settings, is read-only: one row per fact the server reports
   (`security` on `/api/health`), each a label, its dim sentence and the value in place of a
   control (`.settings-fact`: `--fs-md`, `--fw-medium`, `--text-strong`, end-aligned, at most 45%
   of the line). Access token Set or Not set; Pairing gate Not yet closed, Closed or Unavailable;

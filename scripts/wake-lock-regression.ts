@@ -2,8 +2,14 @@
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { Browser } from "playwright-core";
+import type { Browser, Page } from "playwright-core";
 import { openSettingsPage } from "./settings-page.ts";
+
+/** Keep screen on is in Devices and PCs' More settings: opened unless it already is. */
+async function openMoreSettings(page: Page): Promise<void> {
+  const more = page.locator('.settings-body:not([hidden]) .settings-fold[data-fold="more"]');
+  if (await more.getAttribute("open") === null) await more.locator(":scope > summary").click();
+}
 
 export async function checkWakeLock(browser: Browser, origin: string, paneId: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -30,7 +36,8 @@ export async function checkWakeLock(browser: Browser, origin: string, paneId: st
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
     await page.locator(".conn-live").waitFor();
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    await openSettingsPage(page, "Phone & devices");
+    await openSettingsPage(page, "Devices and PCs");
+    await openMoreSettings(page);
     const toggle = page.getByRole("switch", { name: "Keep screen on", exact: true });
     assert.equal(await toggle.getAttribute("aria-checked"), "false");
     assert.equal(await page.evaluate(() => (window as any).wakeLockStats.requests), 0);
@@ -38,7 +45,7 @@ export async function checkWakeLock(browser: Browser, origin: string, paneId: st
     await page.waitForFunction(() => (window as any).wakeLockStats.requests === 1);
     if (process.env.UI_EVIDENCE_DIR) {
       mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
-      await page.getByRole("heading", { name: "Phone", exact: true }).evaluate((el) => el.scrollIntoView({ block: "start" }));
+      await page.getByRole("heading", { name: "This device", exact: true }).evaluate((el) => el.scrollIntoView({ block: "start" }));
       await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "keep-screen-on-mobile.png") });
     }
 
@@ -60,7 +67,8 @@ export async function checkWakeLock(browser: Browser, origin: string, paneId: st
     await page.reload();
     await page.waitForFunction(() => (window as any).wakeLockStats.requests === 1);
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    await openSettingsPage(page, "Phone & devices");
+    await openSettingsPage(page, "Devices and PCs");
+    await openMoreSettings(page);
     assert.equal(await toggle.getAttribute("aria-checked"), "true", "setting survives a reload");
     await toggle.click();
     await page.waitForFunction(() => (window as any).wakeLockStats.releases === 1);
@@ -85,7 +93,8 @@ export async function checkWakeLock(browser: Browser, origin: string, paneId: st
     await page.reload();
     await page.locator(".conn-live").waitFor();
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    await openSettingsPage(page, "Phone & devices");
+    await openSettingsPage(page, "Devices and PCs");
+    await openMoreSettings(page);
     await toggle.waitFor();
     assert.equal(await toggle.getAttribute("aria-checked"), "true");
     assert.equal(await page.evaluate(() => (window as any).wakeLockStats.requests), 0, "no pane, no screen lock");

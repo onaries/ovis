@@ -31,9 +31,25 @@ export function providerForAgent(agent: string | null | undefined): UsageProvide
   return (Object.keys(PROVIDER_MARK) as UsageProviderId[]).find((id) => PROVIDER_MARK[id] === agent) ?? null;
 }
 
+/**
+ * The providers a pi-family harness (gjc, omp, omo, pi) names that only a subscription signs in to:
+ * `openai-codex` is ChatGPT's sign-in, `anthropic-subscription` OmO's Claude one (it runs Claude
+ * Code). A plain `anthropic` is recorded the same for a Claude sign-in and an API key, so it, like
+ * any other provider, is no plan.
+ */
+const PLAN_PROVIDER: Readonly<Record<string, UsageProviderId>> = { "anthropic-subscription": "claude", "openai-codex": "codex" };
+
+/**
+ * The plan a pane draws on: its agent's, else the one the provider its conversation runs at
+ * (ConversationMetadata.provider) names. Neither: no plan, rather than one guessed.
+ */
+export function planForPane(agent: string | null | undefined, provider: string | null | undefined): UsageProviderId | null {
+  return providerForAgent(agent) ?? (provider && Object.hasOwn(PLAN_PROVIDER, provider) ? PLAN_PROVIDER[provider]! : null);
+}
+
 /** The first visible account in Settings order supplies the composer's compact reference. */
-export function composerUsage(providers: readonly ProviderUsage[], agent: string | null, order: readonly string[], hidden: readonly string[]): ProviderUsage | undefined {
-  const providerId = providerForAgent(agent);
+export function composerUsage(providers: readonly ProviderUsage[], agent: string | null, order: readonly string[], hidden: readonly string[], provider?: string | null): ProviderUsage | undefined {
+  const providerId = planForPane(agent, provider);
   return orderProviders(providers, order).find((usage) => usage.id === providerId && !hidden.includes(usage.key));
 }
 

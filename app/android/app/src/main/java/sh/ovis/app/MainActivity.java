@@ -26,6 +26,7 @@ import com.getcapacitor.JSObject;
 import com.getcapacitor.WebViewListener;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
+import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -63,6 +64,17 @@ public class MainActivity extends BridgeActivity {
     /** Whether a page has shown in this activity: from then on a user could have followed a link from it. */
     private boolean pageShown;
 
+    /**
+     * Whether the address being opened led to something in front of the PC, such as a sign-in page:
+     * until a page of the PC loads, main-frame navigations (the sign-in's pages, its identity
+     * provider's, the way back to the PC) stay in the WebView, so the sign-in's cookie lands in the
+     * WebView's store, which onPause flushes, rather than in the browser's.
+     */
+    private volatile boolean signingIn;
+
+    /** The origin the sign-in is on, so each of its steps is judged against the one before (PCStore.refusedHop). */
+    private volatile String signInAt;
+
     /** The page's theme-color the system bars took, put back after a configuration change. */
     private Integer barColor;
 
@@ -70,8 +82,11 @@ public class MainActivity extends BridgeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(HerdrShellPlugin.class);
         registerPlugin(OvisAuthPlugin.class);
-        // the PC's key: its origin, or its scope on the hosted shell's origin for a relay PC
-        String pc = PCStore.current(this);
+        String link = takeAppLink(getIntent(), savedInstanceState == null);
+        if (link != null) openAppLink(link);
+        // the PC's key: its origin, or its scope on the hosted shell's origin for a relay PC. An
+        // app link waiting for the connect screen shows that screen first
+        String pc = PCStore.link != null ? null : PCStore.current(this);
         String origin = pc == null ? null : PCStore.origin(pc);
         String host = origin == null ? null : Uri.parse(origin).getHost();
         if (host != null) {
@@ -106,6 +121,11 @@ public class MainActivity extends BridgeActivity {
         String appOrigin = bridge.getScheme() + "://" + bridge.getHost();
         followThemeColor(host == null ? Collections.singleton(appOrigin) : new HashSet<>(Arrays.asList(appOrigin, origin)));
         if (host != null) {
+            // CapacitorCookies is off (not in the plugins configuration), yet its load() still adds a
+            // JavaScript interface whose setCookie writes a cookie for any origin, open to every page
+            // and frame: a sign-in page in front of the PC must not reach it. Capacitor's page script
+            // looks for it before use. Pages loaded from now on no longer see it.
+            bridge.getWebView().removeJavascriptInterface("CapacitorCookiesAndroidInterface");
             // Capacitor injects its bridge only into the PC's origin, so error.html (served from the
             // app while a PC is open) reaches the app through this listener instead. It answers only
             // the app's own origin in the main frame: a PC page or a frame it opens gets nothing.
@@ -153,6 +173,17 @@ public class MainActivity extends BridgeActivity {
                                 return true;
                             }
                         }
+                        // the app's own origin and other schemes stay with Capacitor
+                        if (
+                            signingIn &&
+                            request.isForMainFrame() &&
+                            ("https".equals(url.getScheme()) || "http".equals(url.getScheme())) &&
+                            !appOrigin.equals(url.getScheme() + "://" + url.getHost())
+                        ) {
+                            if (refuseSignInStep(url.toString(), pc)) return true;
+                            signInAt = PCStore.origin(url.toString());
+                            return false;
+                        }
                         // Capacitor gives the browser any other host or scheme, redirects included. Until the
                         // first page shows, a redirect can only come from the address being opened
                         if (!pageShown && request.isForMainFrame() && request.isRedirect()) {
@@ -163,6 +194,28 @@ public class MainActivity extends BridgeActivity {
                             }
                         }
                         return super.shouldOverrideUrlLoading(view, request);
+                    }
+
+                    // WebView does not ask shouldOverrideUrlLoading about a form's POST: a sign-in form
+                    // posting over plain http is held here, before anything is sent, and a POST that goes
+                    // on is where the next step is judged from. WebView follows a POST's redirects with
+                    // no callback, so those stay unchecked (the check is best effort)
+                    @Override
+                    public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                        Uri url = request.getUrl();
+                        if (
+                            signingIn &&
+                            request.isForMainFrame() &&
+                            "POST".equalsIgnoreCase(request.getMethod()) &&
+                            ("https".equals(url.getScheme()) || "http".equals(url.getScheme())) &&
+                            !appOrigin.equals(url.getScheme() + "://" + url.getHost())
+                        ) {
+                            if (refuseSignInStep(url.toString(), pc)) {
+                                return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
+                            }
+                            signInAt = PCStore.origin(url.toString());
+                        }
+                        return super.shouldInterceptRequest(view, request);
                     }
 
                     // Capacitor tells its listeners of every failed request, a picture or a frame
@@ -211,6 +264,7 @@ public class MainActivity extends BridgeActivity {
                         String url = webView.getUrl();
                         if (pageFailed || url == null || !PCStore.belongs(url, pc)) return;
                         // the PC's page is up: a pairing link has done its work, and the PC is one worth keeping
+                        signingIn = false;
                         PCStore.pendingStart = null;
                         PCStore.failure = null;
                         PCStore.redirects = 0;
@@ -316,9 +370,10 @@ public class MainActivity extends BridgeActivity {
     /**
      * A redirect of the address being opened to another origin, held back: when that origin answers as
      * Ovis it becomes the PC and opens as the first page, with the bridge (http to https, an IP address
-     * to the PC's name, another port). Anything else, such as a sign-in page, gets no bridge and the
-     * error page names it: a PC address that leads elsewhere is not a PC. The address's own page would
-     * get the bridge too, so the place it leads to gets nothing more. Once the first page shows,
+     * to the PC's name, another port). Anything else is taken for a sign-in in front of the PC (an
+     * authenticating proxy such as Cloudflare Access): it loads without the bridge and is never saved
+     * or made the PC, and the way back to the PC stays in the WebView (signingIn). The address's own
+     * page would get the bridge too, so the place it leads to gets nothing more. Once the first page shows,
      * Capacitor decides on redirects again: one could then come from a link to a page that is not the
      * PC's (another port on its host), which must not choose the PC. A way that goes over public plain
      * http, or from https to http, does not switch on its own: the connect screen warns before a
@@ -329,23 +384,92 @@ public class MainActivity extends BridgeActivity {
         new Thread(() -> {
             List<String> path = new ArrayList<>();
             String ovis = tooMany ? null : PCStore.ovisOrigin(target, PCStore.PROBE_BUDGET_MS, path);
-            String insecure = ovis == null ? null : PCStore.insecureHop(from, path);
+            String insecure = tooMany ? null : PCStore.refusedHop(from, target, ovis, path);
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
-                if (insecure != null) {
-                    PCStore.failure = "It redirected over plain http to " + insecure + ", which the app does not follow on its own. If " + ovis + " is your PC, open it itself.";
+                if (tooMany) {
+                    PCStore.failure = "Too many redirects";
+                    bridge.getWebView().loadUrl(bridge.getErrorUrl());
+                } else if (insecure != null) {
+                    PCStore.failure = "It redirected over plain http to " + insecure + ", which the app does not follow on its own." + (ovis == null ? "" : " If " + ovis + " is your PC, open it itself.");
                     bridge.getWebView().loadUrl(bridge.getErrorUrl());
                 } else if (ovis != null) {
                     PCStore.redirects++;
                     PCStore.open(this, ovis, PCStore.startOn(ovis, target));
                     reopen();
-                } else {
+                } else if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                    // without it Capacitor's bridge is a JavaScript interface every page can call
                     String place = PCStore.origin(target);
-                    PCStore.failure = tooMany ? "Too many redirects" : "It redirected to " + place + ", which did not answer as Ovis. If that is your PC, open " + place + " itself.";
+                    PCStore.failure = "It redirected to " + place + ", which did not answer as Ovis. If that is your PC, open " + place + " itself.";
                     bridge.getWebView().loadUrl(bridge.getErrorUrl());
+                } else {
+                    signingIn = true;
+                    signInAt = PCStore.origin(target);
+                    bridge.getWebView().loadUrl(target);
                 }
             });
         }, "ovis-redirect").start();
+    }
+
+    /**
+     * Whether the sign-in's next step, to `url`, is refused: over public plain http, or from https to
+     * http (PCStore.refusedHop). The way back to the PC itself is never refused, as the user chose its
+     * address. A refused step ends the sign-in on the error page. Any thread.
+     */
+    private boolean refuseSignInStep(String url, String pc) {
+        if (PCStore.belongs(url, pc)) return false;
+        String insecure = PCStore.refusedHop(signInAt, url, null, null);
+        if (insecure == null) return false;
+        signingIn = false;
+        PCStore.failure = "The sign-in went over plain http to " + insecure + ", which the app does not follow on its own.";
+        runOnUiThread(() -> bridge.getWebView().loadUrl(bridge.getErrorUrl()));
+        return true;
+    }
+
+    /** An app link while the app runs: the connect screen opens it, whatever page is showing. */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        String link = takeAppLink(intent, true);
+        if (link != null && openAppLink(link)) {
+            reopen();
+            return;
+        }
+        super.onNewIntent(intent);
+    }
+
+    /**
+     * Readies an app link for the next first load, or answers false and leaves the open page alone. A
+     * link to pair from waits for the connect screen (PCStore.link); a view of a PC (a file, a pane)
+     * opens that PC at that view when the app has it saved, as the browser would have; for any other
+     * PC the app has nothing to show.
+     */
+    private boolean openAppLink(String link) {
+        if (PCStore.pairingLink(link)) {
+            PCStore.link = link;
+            return true;
+        }
+        String scope = PCStore.appScope(link);
+        if (!PCStore.saved(this).contains(scope)) return false;
+        PCStore.open(this, scope, link);
+        PCStore.failure = null;
+        PCStore.redirects = 0;
+        return true;
+    }
+
+    /**
+     * The app link (PCStore.appLink) `intent` carries, taken out of it so it is opened once: Capacitor's
+     * load() passes the starting intent to onNewIntent again. Null for any other intent, and for a
+     * link the system hands back with the activity restored or started again from Recents, which the
+     * user opened before.
+     */
+    private static String takeAppLink(Intent intent, boolean fresh) {
+        if (intent == null) return null;
+        Uri data = intent.getData();
+        String link = PCStore.appLink(intent.getAction(), data == null ? null : data.toString());
+        if (link == null) return null;
+        intent.setData(null);
+        boolean fromRecents = (intent.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0;
+        return fresh && !fromRecents ? link : null;
     }
 
     /** Opens the current PC again from its first page. */

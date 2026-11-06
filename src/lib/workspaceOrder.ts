@@ -1,4 +1,5 @@
 import type { WorkspaceMoved } from "../../shared/protocol.ts";
+import { isBackgroundRole, ROLE_TOKEN } from "../../shared/pane-tokens.ts";
 import { movedTabOrder } from "./tabOrder.ts";
 
 /**
@@ -71,6 +72,25 @@ export function worktreeGroups<W extends GroupedWorkspace>(ordered: readonly W[]
     childrenOf.set(parent.workspace_id, children);
   }
   return top.map((workspace) => ({ workspace, children: childrenOf.get(workspace.workspace_id) ?? [] }));
+}
+
+/**
+ * A workspace a launcher tagged `role=background` (`herdr workspace report-metadata --token`, any case),
+ * as a pane is tagged for the Agents list's background part (shared/pane-tokens.ts). herdr's fact, never a guess.
+ */
+export function isBackgroundWorkspace(workspace: { tokens?: Record<string, unknown> }): boolean {
+  return isBackgroundRole(workspace.tokens?.[ROLE_TOKEN]);
+}
+
+/**
+ * Settings → Background workspaces apart: the groups whose head is tagged stand after the others, in
+ * the same order. A tagged worktree stays under its repository's workspace, where its fold already is,
+ * and with its repository's part when a pin has set it apart as a row of its own: `worktreeIds`, the
+ * worktrees the repository tree (`worktreeGroups`) hangs under another workspace, never file a group.
+ */
+export function splitBackgroundGroups<G extends { workspace: { workspace_id: string; tokens?: Record<string, unknown> } }>(groups: readonly G[], worktreeIds: ReadonlySet<string> = new Set()): { people: G[]; background: G[] } {
+  const background = (group: G): boolean => isBackgroundWorkspace(group.workspace) && !worktreeIds.has(group.workspace.workspace_id);
+  return { people: groups.filter((group) => !background(group)), background: groups.filter(background) };
 }
 
 /** `base`'s order for the workspaces `ids` still has; the ones it lacks follow, in `ids`' order. */

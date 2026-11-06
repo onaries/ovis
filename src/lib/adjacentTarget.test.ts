@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { HerdrPane, SessionSnapshot, TabInfo, WorkspaceInfo } from "../../shared/protocol.ts";
-import { adjacentTabPane, adjacentWorkspacePane, sidebarWorkspaceSteps } from "./adjacentTarget.ts";
+import { adjacentTabPane, adjacentWorkspacePane, numberedTabPane, sidebarWorkspaceSteps } from "./adjacentTarget.ts";
 
 function workspace(id: string, overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
   return { workspace_id: id, active_tab_id: `${id}:t1`, label: id, number: 1, tab_count: 1, pane_count: 1, focused: false, agent_status: "idle", ...overrides };
@@ -55,6 +55,14 @@ describe("adjacentTabPane", () => {
       [{ tab_id: "w1:t3", focused_pane_id: "dag" }] as SessionSnapshot["layouts"]);
     expect(adjacentTabPane(withViewer, "p1", 1, nothingViewed)).toBe("omo");
   });
+
+  it("numberedTabPane opens the tab at a place in the strip's order, as herdr's prefix+1..9, and nothing past the last", () => {
+    expect(numberedTabPane(snapshot, "p1", 1, nothingViewed)).toBe("p2");
+    expect(numberedTabPane(snapshot, "p2", 3, nothingViewed)).toBe("p3a");
+    expect(numberedTabPane(snapshot, "p1", 4, nothingViewed)).toBeNull();
+    expect(numberedTabPane(snapshot, "q1", 1, nothingViewed)).toBe("q1");
+    expect(numberedTabPane(snapshot, null, 1, nothingViewed)).toBeNull();
+  });
 });
 
 describe("sidebarWorkspaceSteps", () => {
@@ -69,6 +77,15 @@ describe("sidebarWorkspaceSteps", () => {
   it("passes over the worktrees of a folded group, unless the selection is in one", () => {
     expect(sidebarWorkspaceSteps(ordered, [], (key) => key === "r", null)).toEqual(["a", "b", "d"]);
     expect(sidebarWorkspaceSteps(ordered, [], (key) => key === "r", "c")).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("puts tagged background workspaces last while their part is apart, a folded part keeping only the selected one", () => {
+    const tagged = [workspace("x", { tokens: { role: "background" } }), workspace("a"), workspace("y", { tokens: { role: "Background" } }), workspace("d")];
+    expect(sidebarWorkspaceSteps(tagged, [], () => false, null)).toEqual(["x", "a", "y", "d"]);
+    expect(sidebarWorkspaceSteps(tagged, [], () => false, null, false)).toEqual(["a", "d", "x", "y"]);
+    expect(sidebarWorkspaceSteps(tagged, [], () => false, "y", true)).toEqual(["a", "d", "y"]);
+    // one whose agent asks a question stays in a folded part, as the sidebar draws it
+    expect(sidebarWorkspaceSteps(tagged, [], () => false, "a", true, new Set(["x"]))).toEqual(["a", "d", "x"]);
   });
 });
 

@@ -1,9 +1,7 @@
 /**
  * New tab with an agent's model, effort, Ultracode, skills and first message (#774, #1311, #2232) on the
- * unmodified app over the demo's fixture transport: the composer's button, absent until this device turns it
- * on in Settings (Chat, Composer, New tab button), then opens the dialog on the pane's workspace, on the
- * chat's own agent and the model and effort it recorded, where the tab menu keeps the last agent picked;
- * Codex shows its `$` skills before any process exists (GET /api/agent/commands), a chip
+ * unmodified app over the demo's fixture transport: the tab menu opens the dialog on the pane's workspace
+ * (the composer has no New tab button, even where an older version stored it on); Codex shows its `$` skills before any process exists (GET /api/agent/commands), a chip
  * puts its token in the message, and Start sends exactly one tab/create with the agent's own
  * arguments however often it is pressed while the first is in flight (the prompt is Codex's
  * positional argument behind `--`, never queued as well); Claude Code, whose parser would run a
@@ -40,7 +38,7 @@ const settled = (page: Page) => page.evaluate(() => Promise.all(document.getAnim
 const recorded = (page: Page) => page.evaluate(() => (window as unknown as QaWindow).qaRequests);
 const submits = (page: Page) => page.evaluate(() => (window as unknown as QaWindow).qaSubmits);
 
-/** The chat lens of the demo's Claude pane, where the composer's button is. */
+/** The chat lens of the demo's Claude pane. */
 async function openChat(page: Page, url: string): Promise<void> {
   await page.goto(url);
   await page.locator(".conn-live").waitFor({ state: "attached" });
@@ -48,14 +46,17 @@ async function openChat(page: Page, url: string): Promise<void> {
   await page.locator(".pane-frame.is-current .terminal-stack.is-chat").waitFor();
 }
 
-/** The New tab dialog on the pane's workspace: the composer's button with a mouse; on a phone, whose card has no row to spare for it, the tab's own menu. */
-async function openDialog(page: Page, via: "composer" | "tab-menu" = "composer") {
-  if (via === "composer") await page.locator(".pane-frame.is-current .composer-new-session").click();
-  else {
-    assert.equal(await page.locator(".pane-frame.is-current .composer-new-session").count(), 0, "a phone's card carries no new-tab button, even with the setting on");
-    await page.locator(".tab-strip-menu").tap();
+/** The New tab dialog on the pane's workspace: a phone's header title lists the tabs and the ways to a new one (a sheet); with a mouse the tab's own menu. */
+async function openDialog(page: Page) {
+  const phone = (page.viewportSize()?.width ?? 1280) <= 640;
+  if (phone) {
+    await page.locator(".app-header .context-tabs").tap();
     // the menu is a sheet on a phone (RowMenu): its items are buttons there
     await page.getByRole("button", { name: "New tab with agent…", exact: true }).tap();
+  } else {
+    // with a mouse the tab's menu opens on a right-click, as herdr's tab row offers it
+    await page.locator('.tab-strip-item.is-active [role="tab"]').click({ button: "right" });
+    await page.getByRole("menuitem", { name: "New tab with agent…", exact: true }).click();
   }
   const dialog = page.getByRole("dialog", { name: /^New tab · checkout-api/ });
   await dialog.waitFor();
@@ -167,56 +168,39 @@ try {
     return (await body.exists()) ? new Response(body) : new Response("not found", { status: 404 });
   } });
   const url = `http://127.0.0.1:${server.port}/herdr-web-ui/demo/app/?pane=${encodeURIComponent(panes.api)}`;
-  // the composer's button is off by default (the composer stays minimal): every context but the first turns it on as stored
-  const settings = (theme: string): void => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme, composerNewTabButton: true })); };
-  const defaults = (theme: string): void => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme })); };
+  const settings = (theme: string): void => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme })); };
   const phone = (browser: Browser, theme: "dark" | "light") => browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, locale: "en-US", colorScheme: theme });
   const desktop = (browser: Browser, theme: "dark" | "light") => browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US", colorScheme: theme });
   const log: string[] = [];
   try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
-      // a desk with nothing chosen: the composer carries no New tab button; Settings' Chat page offers the toggle in
-      // its Composer group, and once it is on the button is there and opens the dialog on the pane's workspace
-      const optIn = await desktop(browser, "dark");
+      // the composer carries no New tab button and Settings offers none, even where an earlier version stored it on
+      // (composerNewTabButton): New tab with agent… is the tab menu's
+      const noButton = await desktop(browser, "dark");
       try {
-        await optIn.addInitScript(defaults, "dark");
-        const page = await optIn.newPage();
+        await noButton.addInitScript(() => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: "dark", composerNewTabButton: true })); });
+        const page = await noButton.newPage();
         page.setDefaultTimeout(10_000);
         const errors: string[] = [];
         page.on("pageerror", (error) => { errors.push(error.message); console.error(error.stack); });
         await openChat(page, url);
         await page.locator(".pane-frame.is-current .composer-attach").waitFor();
-        assert.equal(await page.locator(".pane-frame.is-current .composer-new-session").count(), 0, "the composer has no New tab button until this device turns it on");
+        assert.equal(await page.locator(".pane-frame.is-current .composer-new-session").count(), 0, "no New tab button in the composer, whatever was stored");
         await settled(page);
-        await page.screenshot({ path: join(evidence, "desktop-dark-composer-default.png") });
+        await page.screenshot({ path: join(evidence, "desktop-dark-composer.png") });
         await page.goto(`${url}&settings=chat&section=composer`);
-        const toggle = page.getByRole("switch", { name: "New tab button", exact: true });
-        assert.equal(await toggle.getAttribute("aria-checked"), "false", "the toggle starts off");
-        await settled(page);
-        await page.screenshot({ path: join(evidence, "desktop-dark-settings-composer.png") });
-        await toggle.setChecked(true);
+        await page.getByRole("dialog", { name: "Settings", exact: true }).waitFor();
+        assert.equal(await page.getByRole("switch", { name: "New tab button", exact: true }).count(), 0, "Settings' Composer group has no New tab button switch");
         await page.getByRole("button", { name: "Close settings", exact: true }).click();
         await page.getByRole("dialog", { name: "Settings", exact: true }).waitFor({ state: "detached" });
-        await page.locator(".pane-frame.is-current .terminal-stack.is-chat").waitFor();
-        const button = page.locator(".pane-frame.is-current .composer-new-session");
-        await button.waitFor();
-        assert.equal(await button.getAttribute("aria-label"), "New tab with an agent\u2026");
-        await settled(page);
-        await page.screenshot({ path: join(evidence, "desktop-dark-composer-opted-in.png") });
         const dialog = await openDialog(page);
-        // the button is the chat's way to another of its agent: Claude Code, on the model and effort its transcript recorded (#774)
-        assert.match(await dialog.locator(".agent-picker-trigger").innerText(), /Claude Code/, "the dialog starts on the chat's agent");
-        assert.equal(await dialog.getByLabel("Model").inputValue(), "claude-opus-5-5", "on the model the chat recorded");
-        assert.equal(await dialog.getByLabel("Effort").inputValue(), "high", "and the effort it recorded");
-        await settled(page);
-        await page.screenshot({ path: join(evidence, "desktop-dark-from-chat.png") });
         await page.keyboard.press("Escape");
         await dialog.waitFor({ state: "detached" });
         assert.equal((await recorded(page)).length, 0, "opening and closing the dialog starts nothing");
         assert.deepEqual(errors, []);
-        console.log("PASS the composer's New tab button is off by default, Settings' Composer group turns it on for this device, and it opens the dialog on the chat's agent, model and effort");
-      } finally { await optIn.close(); }
+        console.log("PASS the composer has no New tab button and Settings no switch for it, even with the old setting stored; the tab menu opens New tab with agent…");
+      } finally { await noButton.close(); }
 
       // the plan's scenario: a phone, Codex, its $ skills, a prompt, Start; a double tap sends one create
       const dark = await phone(browser, "dark");
@@ -227,7 +211,7 @@ try {
         const errors: string[] = [];
         page.on("pageerror", (error) => { errors.push(error.message); console.error(error.stack); });
         await openChat(page, url);
-        const dialog = await openDialog(page, "tab-menu");
+        const dialog = await openDialog(page);
         // the PC is still reading Codex's skill folders: its first answer is a busy 503, and the dialog asks again
         await page.evaluate(() => { (window as unknown as QaWindow).qaSkillsBusy = { codex: 1 }; });
         await pickAgent(page, dialog, "Codex");
@@ -490,7 +474,7 @@ try {
           const page = await context.newPage();
           page.setDefaultTimeout(10_000);
           await openChat(page, url);
-          const dialog = await openDialog(page, make === phone ? "tab-menu" : "composer");
+          const dialog = await openDialog(page);
           await pickAgent(page, dialog, "Codex");
           await dialog.locator(".new-session-skill-chip").first().click();
           await dialog.getByLabel("First message").pressSequentially("the export branch");
@@ -500,7 +484,7 @@ try {
           await page.screenshot({ path: join(evidence, `${name}-filled.png`) });
           await page.keyboard.press("Escape");
           await dialog.waitFor({ state: "detached" });
-          const claude = await openDialog(page, make === phone ? "tab-menu" : "composer");
+          const claude = await openDialog(page);
           await pickAgent(page, claude, "Claude Code");
           await claude.getByLabel("Effort").selectOption("medium");
           const ultracode = claude.getByRole("switch", { name: "Ultracode", exact: true });

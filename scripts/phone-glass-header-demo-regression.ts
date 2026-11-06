@@ -83,7 +83,8 @@ try {
           return others.length;
         }, panes.api);
         assert.ok(closed > 0, "the demo pane's workspace had another tab to close");
-        await page.waitForFunction(() => document.querySelectorAll(".tab-strip-item").length === 1);
+        // the title's place among the workspace's tabs goes with the second tab
+        await page.waitForFunction(() => document.querySelector(".context-position") === null);
 
         await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
         const message = page.getByRole("textbox", { name: "Message", exact: true });
@@ -96,9 +97,9 @@ try {
         assert.notEqual(await page.locator(".app-header").evaluate((node) => getComputedStyle(node).backdropFilter), "none",
           "the Duo outer display gives a lone-tab chat its glass header");
         await checkMenus(page, "duo-outer");
-        // with the row out, its New tab entries stay in reach: the header's own menu carries them
+        // with the row out, its New tab entries stay in reach: a phone's title lists the tabs and them
         const sheet = page.locator(".row-sheet, .row-menu");
-        await openMore(page);
+        await page.locator(".app-header .context-tabs").click();
         await sheet.getByText("New tab with agent\u2026", { exact: true }).click();
         await page.locator("#new-session-title").waitFor();
         await page.keyboard.press("Escape");
@@ -150,7 +151,8 @@ try {
         await destinations.waitFor({ state: "detached" });
         assert.ok(await page.locator(".header-more-button").evaluate((node) => node === document.activeElement), "Escape gives the focus back to the header's More");
 
-        await page.setViewportSize({ width: 390, height: 844 });
+        // a tablet upright (wider than a phone) keeps the lone tab's row, whose menu carries the pane's actions
+        await page.setViewportSize({ width: 700, height: 900 });
         await page.locator(".tab-strip").waitFor();
         await page.locator(".tab-strip-label", { hasText: "Duo tab" }).waitFor();
         assert.equal(await page.locator(".pane-frame.is-single .pane-frame-menu").isVisible(), false,
@@ -163,14 +165,18 @@ try {
         await page.locator(".tab-strip-menu").click();
         await sheet.getByText("Rename tab", { exact: true }).click();
         await tabName.fill("half typed");
-        await page.setViewportSize({ width: 390, height: 650 });
+        await page.setViewportSize({ width: 700, height: 650 });
         await page.waitForFunction(() => window.matchMedia("(max-width: 768px) and (max-height: 700px)").matches);
         await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         assert.equal(await page.locator(".tab-strip-rename").inputValue(), "half typed", "the row's name field keeps what was typed when the row would step out");
         await page.locator(".tab-strip-rename").press("Escape");
         await page.locator(".tab-strip").waitFor({ state: "detached" });
-        await page.setViewportSize({ width: 390, height: 844 });
+        await page.setViewportSize({ width: 700, height: 900 });
         await page.locator(".tab-strip").waitFor();
+        // an upright phone draws no row for any tab: its title lists them
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.locator(".tab-strip").waitFor({ state: "detached" });
+        await checkMenus(page, "phone");
 
         // the report's own moment: the message box focused and the keyboard up. Android shrinks the
         // layout viewport with it, under the 700px that drops a lone tab's row (TabStrip's cramped).
@@ -205,7 +211,9 @@ try {
         await sheet.getByText("Move Duo tab to", { exact: true }).waitFor();
         await sheet.locator(".row-sheet-item:not(.row-sheet-cancel)").first().click();
         await page.waitForFunction((was) => new URL(location.href).searchParams.get("ws") !== was, before);
-        await page.locator(".tab-strip-label", { hasText: "Duo tab" }).waitFor();
+        await page.locator(".app-header .context-tabs").click();
+        await sheet.getByText("Duo tab", { exact: true }).waitFor();
+        await closeMenu(page);
         assert.deepEqual(errors, []);
       } finally { await context.close(); }
     } finally { await browser.close(); }
@@ -226,14 +234,25 @@ async function closeMenu(page: Page): Promise<void> {
   await page.locator(".row-sheet, .row-menu").waitFor({ state: "detached" });
 }
 
-/** With no row, the lone pane draws no ellipsis of its own: the header's is the one menu, and it carries the pane's and the tab's actions. */
+/**
+ * With no row, the lone pane draws no ellipsis of its own: the header's is the one menu, and it carries the pane's and the tab's
+ * actions. On a phone the title lists the tabs, and that list, not More, has the ways to a new tab.
+ */
 async function checkMenus(page: Page, label: string): Promise<void> {
   assert.equal(await page.locator(".pane-frame.is-single .pane-frame-menu").count(), 0, `${label}: the lone pane draws no second ellipsis under the header's`);
-  await openMore(page);
+  const listed = await page.locator(".app-header .context-tabs").isVisible();
   const sheet = page.locator(".row-sheet, .row-menu");
-  for (const item of ["Search panes and actions", "Rename pane", "Close pane", "New terminal", "New tab with agent\u2026", "Rename tab", "Move to workspace\u2026", "Close tab"]) {
+  const newTab = ["New terminal", "New tab with agent\u2026"];
+  if (listed) {
+    await page.locator(".app-header .context-tabs").click();
+    for (const item of newTab) assert.equal(await sheet.getByText(item, { exact: true }).count(), 1, `${label}: the title's list offers ${item}`);
+    await closeMenu(page);
+  }
+  await openMore(page);
+  for (const item of ["Search panes and actions", "Rename pane", "Close pane", ...(listed ? [] : newTab), "Rename tab", "Move to workspace\u2026", "Close tab"]) {
     assert.equal(await sheet.getByText(item, { exact: true }).count(), 1, `${label}: the header's menu offers ${item}`);
   }
+  for (const item of listed ? newTab : []) assert.equal(await sheet.getByText(item, { exact: true }).count(), 0, `${label}: More leaves ${item} to the title's list`);
   assert.equal(await sheet.getByText("Split right", { exact: true }).count(), 0,
     `${label}: a canvas showing one pane at a time offers no split, as the row's menu does`);
   if (evidence) {

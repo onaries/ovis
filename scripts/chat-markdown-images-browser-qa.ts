@@ -15,6 +15,8 @@ const stats: URL[] = [];
 const reads: string[] = [];
 // set, a stat and a byte read wait until the page has seen the frames it needs
 let held: { promise: Promise<void>; release: () => void } | null = null;
+// told of each byte read as it arrives, before it is held
+let onRead: (() => void) | null = null;
 const foreground = "/repo/subproject";
 const foregroundPath = `${foreground}/out/diagram.svg`;
 const image = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="80"><rect width="${width}" height="80" fill="teal"/></svg>`;
@@ -38,6 +40,7 @@ try {
       assert.equal(url.searchParams.get("pane_id"), "w1:p1");
       const path = url.searchParams.get("path")!;
       reads.push(path);
+      onRead?.();
       await held?.promise;
       return new Response(image(path === foregroundPath ? 240 : 16), { headers: { "content-type": "image/svg+xml", "cache-control": "no-store" } });
     }
@@ -127,6 +130,62 @@ try {
   assert.equal(stats.length, statsBefore + 1, "a reopen checks the image again, once");
   held = null;
   console.log("PASS A reopened image holds its final height from the first frame");
+
+  // The iOS app and a home-screen app follow a download link as a page, which replaced the app
+  // (#3118): there Download hands the picture to the share sheet, and the app stays.
+  type ShareQa = { shared: { name: string; type: string; size: number }[]; answer: (next: string) => void };
+  const phone = await browser.newPage({ locale: "en-US", viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  phone.setDefaultTimeout(10_000);
+  phone.on("pageerror", (error) => errors.push(error.message));
+  await phone.addInitScript(() => {
+    const shared: ShareQa["shared"] = [];
+    let answer = "ok";
+    Object.defineProperty(navigator, "standalone", { value: true });
+    Object.defineProperty(navigator, "canShare", { value: () => true });
+    Object.defineProperty(navigator, "share", { value: async (data: ShareData) => {
+      for (const file of data.files ?? []) shared.push({ name: file.name, type: file.type, size: file.size });
+      if (answer !== "ok") throw new DOMException("refused", answer);
+    } });
+    (window as unknown as { shareQa: ShareQa }).shareQa = { shared, answer: (next) => { answer = next; } };
+  });
+  await phone.goto(`http://127.0.0.1:${server.port}/`);
+  await phone.waitForFunction(() => document.querySelector<HTMLImageElement>("img.markdown-image")?.naturalWidth === 240);
+  // document loads only: the viewer's own history entry (a phone's Back closes it) is no load
+  let navigations = 0;
+  phone.on("request", (request) => { if (request.isNavigationRequest()) navigations++; });
+  // the sheet opens only within the tap, so Download waits until the picture's bytes are in hand
+  const reading = Promise.withResolvers<void>();
+  held = { promise: reading.promise, release: reading.resolve };
+  const readArrived = Promise.withResolvers<void>();
+  onRead = readArrived.resolve;
+  await phone.getByRole("button", { name: "Diagram", exact: true }).click();
+  const phoneViewer = phone.getByRole("dialog", { name: "Image viewer", exact: true });
+  const download = phoneViewer.getByRole("button", { name: "Download", exact: true });
+  await readArrived.promise;
+  onRead = null;
+  assert.equal(await download.isDisabled(), true, "Download waits for the picture's bytes");
+  reading.resolve();
+  held = null;
+  await phone.waitForFunction(() => document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Download"]')?.disabled === false);
+  const sharedCount = (count: number) => phone.waitForFunction((count) => (window as unknown as { shareQa: ShareQa }).shareQa.shared.length === count, count);
+  await download.click();
+  await sharedCount(1);
+  const shared = await phone.evaluate(() => (window as unknown as { shareQa: ShareQa }).shareQa.shared);
+  assert.deepEqual(shared.map(({ name, type }) => ({ name, type })), [{ name: "diagram.svg", type: "image/svg+xml" }]);
+  assert.ok(shared[0]!.size > 0, "the shared file holds the picture's bytes");
+  console.log("PASS In a home-screen app Download shares the picture as a file under its name");
+
+  const unsaved = phoneViewer.getByRole("alert").filter({ hasText: "Couldn't save the image." });
+  await phone.evaluate(() => (window as unknown as { shareQa: ShareQa }).shareQa.answer("NotAllowedError"));
+  await download.click();
+  await unsaved.waitFor();
+  await phone.evaluate(() => (window as unknown as { shareQa: ShareQa }).shareQa.answer("AbortError"));
+  await download.click();
+  await unsaved.waitFor({ state: "detached" });
+  await sharedCount(3);
+  assert.ok(await phoneViewer.isVisible(), "the viewer stays open after a refused or cancelled share");
+  assert.equal(navigations, 0, "Download never navigates the app away");
+  console.log("PASS A refused share says so, a cancelled one says nothing, and neither leaves the app");
 
   assert.deepEqual(errors, []);
 } finally {

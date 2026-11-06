@@ -10,10 +10,10 @@ type ConversationProof = { source: ConversationResponse["source"] | undefined; h
 
 function finalAnswer(conversation: ConversationProof): ConversationTurn | undefined {
   let index = conversation.turns.length - 1;
-  // These Claude notices do not start another model turn. Runtime wakes and real prompts do.
+  // These Claude notices, and an OmO goal's wait, do not start another model turn. Runtime wakes and real prompts do.
   while (index >= 0) {
     const turn = conversation.turns[index];
-    if (turn?.role !== "user" || turn.parts.length === 0 || !turn.parts.every((part) =>
+    if (turn?.role !== "user" || turn.parts.length === 0 || !turn.parts.every((part) => part.kind === "goal_wait" ||
       part.kind === "notice" && (part.source === "informational" || part.source === "local-command"))) break;
     index--;
   }

@@ -224,7 +224,8 @@ What is there:
   connection hangs it did not paint the error page either). When a Tailscale address fails to
   load, `error.html` (on Android too) adds the same note. A redirect of the address being opened
   to another origin is handled as on Android (see [The Android app](#the-android-app)), where
-  Capacitor would send another host to Safari.
+  Capacitor would send another host to Safari, except a sign-in in front of the PC: on iOS one
+  that does not answer as Ovis still ends on the error page.
   WebKit has no public mark for a redirect, so until the first page commits,
   `NavigationFailureProxy` takes any main-frame action to another origin that comes while the
   main frame's navigation has not committed for one. Its question to `/api/health` is a
@@ -386,6 +387,20 @@ pieces are the Java twins of the iOS ones, in `app/android/app/src/main/java/sh/
   for Try again and Change PC. For the same reason `error.html` carries its own style and
   script, which `app/scripts/build-web.ts` inlines.
 - The manifest allows cleartext http to any host (see the connect screen's warning above).
+- A PC's link on the hosted shell tapped outside the app (a message, the camera app reading the
+  PC's QR code) opens in the app: the manifest's `autoVerify` intent-filter takes
+  `https://app.ovis.sh/s/`, which Android verifies against
+  `https://app.ovis.sh/.well-known/assetlinks.json` (written by `scripts/shell-build.ts` with Play's
+  app signing certificate and the upload certificate, so it is live once a release deploys the
+  hosted shell). `MainActivity` takes only a link to a PC's scope (`PCStore.appLink`); one to
+  another page of the hosted shell leaves the open page alone. A view of a PC (a file's `#read=`, a
+  pane's `#pane=` or an older `?pane=`) opens that PC at that view when the app has it saved, and
+  otherwise leaves the open page alone too. A link to pair from (the scope alone or with its
+  `#offer=`) is kept in memory (`PCStore.link`) for the connect screen, which takes it once (`HerdrShellPlugin.takeLink`, which an activity showing a PC never answers, as its
+  page has the bridge too) and opens it as a scanned QR code, so `relayLink()` checks the offer the
+  same way. A link handed back when the app is restored or started from Recents is not opened again. Until the link is verified, Android opens such links in the
+  browser as before. The hosted shell also serves `apple-app-site-association` for the iOS app,
+  which still needs the Associated Domains capability (`applinks:app.ovis.sh`) and a handler.
   `minSdkVersion` is 26 (Android 8), which the QR scanner's library needs. The merged manifest
   asks for INTERNET, ACCESS_NETWORK_STATE, CAMERA (the QR scanner) and androidx's own
   `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`.
@@ -428,9 +443,22 @@ pieces are the Java twins of the iOS ones, in `app/android/app/src/main/java/sh/
   lookup, which Android cannot cut short, can add a few). An origin that answers as Ovis
   (http to https, an IP address to the PC's name, another port) becomes the PC and opens again as
   the first page, with the bridge: it gets nothing the address's own page would not have had.
-  Anything else, such as a sign-in page, another site or a loop, gets no bridge and is not saved,
-  and the error page names where the address led. After five PCs in a row made this way, the next
-  redirect ends on the error page too. Once the first page shows, Capacitor decides on redirects
+  Anything else is taken for a sign-in in front of the PC, such as Cloudflare Access or another
+  authenticating proxy: it loads in the WebView without the bridge, is never saved and never
+  becomes the PC. Until a page of the PC loads, `MainActivity` keeps main-frame http and https
+  navigations (the sign-in's pages, its identity provider's, the way back to the PC) in the
+  WebView rather than the browser, so the sign-in's cookie lands in the WebView's store, which
+  `onPause` flushes. A redirect over public plain http or from https to http
+  (`PCStore.refusedHop`), there or at any later step of the sign-in, ends on the error page,
+  which names where it led; the way back to the PC's own address is never refused. This check is
+  best effort: a form's POST to such an address is held in `shouldInterceptRequest` before it is
+  sent, but a 307 or 308 redirect of a POST is followed by the WebView without asking either
+  callback, so a sign-in server that redirects its POST to plain http is not caught. So does a sign-in on a
+  WebView without `WEB_MESSAGE_LISTENER`, where Capacitor's bridge is a JavaScript interface any
+  page could call. An identity provider that refuses embedded web views (Google sign-in answers
+  `disallowed_useragent`) still fails there, and a sign-in kept in a session cookie (one with no
+  expiry) is asked for again whenever the app starts over, as Capacitor's cookie plugin clears
+  session cookies then; Cloudflare Access's cookie has an expiry. After five PCs in a row made this way, the next redirect ends on the error page too. Once the first page shows, Capacitor decides on redirects
   as before: one could then come from a link to a page that is not the PC's (another port on its
   host), which must not choose the PC.
 - `file_paths.xml` shares only the app's external Pictures folder, where Capacitor puts a photo

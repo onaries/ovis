@@ -61,6 +61,15 @@ const patch = `(() => {
       calls.agents.push(machine);
       if (machine === "remote") return json({ agents: [{ kind: "codex", label: "Codex" }, { kind: "letta", label: "Build PC agent" }] });
     }
+    // the branch readers' one read per PC (#2661): each workspace answered by the list below
+    if (path === "/api/worktree/inventory") {
+      const entries = [];
+      for (const id of url.searchParams.getAll("workspace_id")) {
+        const answer = await window.fetch(url.pathname.slice(0, -"inventory".length) + "list?workspace_id=" + encodeURIComponent(id), init);
+        entries.push({ workspace_id: id, listing: await answer.json() });
+      }
+      return json({ entries });
+    }
     if (path === "/api/worktree/list") {
       calls.branches.push(machine);
       const id = url.searchParams.get("workspace_id");

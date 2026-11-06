@@ -8,20 +8,23 @@ import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { KO } from "../src/lib/i18n.ko.ts";
 
-// Settings → Phone & devices on the unmodified app over the demo's fixture transport: revoking
+// Settings → Devices and PCs on the unmodified app over the demo's fixture transport: revoking
 // every paired device, and the line every open window gets when a device pairs. The demo pairs
 // no real device and holds no credential; `?demo_devices=` picks its states (site/demo/transport.ts).
 // What is checked: the row warns the caller that their own pairing goes too and what does not
 // (the access token, this PC, its Tailscale login); the confirmation asks again, with Cancel in
 // focus, and a refused write stays in the dialog with the server's words; a confirmed revocation
 // empties the list; a device that only watches sees the words and no working button; a fictional
-// pairing shows one notice, whose action opens Phone & devices and whose X dismisses it. Nothing
+// pairing (its code started from Connect, Other ways to connect, Same Wi-Fi) shows one notice, whose
+// action opens Devices and PCs and whose X dismisses it. Nothing
 // overflows a 390 px phone, and its touch targets are 44 px. With UI_EVIDENCE_DIR set, each state
 // is captured at 390 (phone emulation) and 1440, light and dark, plus Korean at 390, with a manifest.
 // All files and HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-device-security-demo-"));
 const evidence = process.env.UI_EVIDENCE_DIR || "";
 const NOTICE = '[data-testid="device-paired-notice"]';
+/** the paired devices of My devices: the PCs listed above them are rows too */
+const ROW = ".devices-panel .devices-row";
 const PAIRS_WITHIN_MS = 10_000;
 /** how far under a whole pixel a measured box may fall from layout rounding alone (a fractional offset above the list) */
 const SUBPIXEL = 0.01;
@@ -276,8 +279,16 @@ try {
         try {
           await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), settingsOf(language, theme));
           const press = async (target: Locator): Promise<void> => { if (phone) await target.tap(); else await target.click(); };
+          // Connect, Other ways to connect, Same Wi-Fi: the six-digit code, which that way starts at once
+          const startCode = async (page: Page): Promise<void> => {
+            await press(page.locator('.settings-dialog [data-section="devices"]').getByRole("button", { name: label("Connect"), exact: true }));
+            const sheet = page.locator(".connect-phone-dialog");
+            await press(sheet.locator("details.connect-other > summary"));
+            await press(sheet.locator(".connect-way", { hasText: label("Same Wi-Fi") }));
+          };
+          const shownCode = (page: Page): Locator => page.locator(".connect-phone-dialog .connect-way-body .compact-pair-code");
           const closeSettings = async (page: Page): Promise<void> => {
-            // Pair a device's code is in the Connect a phone dialog, which closes by itself once the device is in
+            // the code is in the Connect a device dialog, which closes by itself once the device is in
             await page.locator(".connect-phone-dialog").waitFor({ state: "detached", timeout: PAIRS_WITHIN_MS });
             await page.keyboard.press("Escape");
             await page.locator(".settings-dialog").waitFor({ state: "detached" });
@@ -292,7 +303,7 @@ try {
             const row = page.locator(".devices-revoke-all");
             await row.waitFor();
             const rowButton = row.getByRole("button", { name: label("Revoke all"), exact: true });
-            assert.equal(await page.locator(".devices-row").count(), 3, "the demo lists its three devices");
+            assert.equal(await page.locator(ROW).count(), 3, "the demo lists its three devices");
             assert.equal(await row.locator(".settings-label").innerText(), label("Revoke every device"));
             const words = await row.locator(".settings-description").innerText();
             assert.equal(words, label("Every paired device, this one included, loses its pairing access at once. The access token, this PC and its Tailscale login are not affected."), "the row warns the caller that their own pairing goes, and names what stays");
@@ -302,18 +313,18 @@ try {
             await reveal(row);
             const rest = await capture(page, `${prefix}-rest`, about("rest"));
             measurements[prefix] = {
-              rowIconButtons: await buttons(page, ".devices-row button"),
+              rowIconButtons: await buttons(page, `${ROW} button`),
               settingsClose: await buttons(page, ".settings-dialog .modal-header button"),
               revokeAllRowCopy: await contrast(page, ".devices-revoke-all .settings-description"),
               revokeAllRowLabel: await contrast(page, ".devices-revoke-all .settings-label"),
               revokeAllButtonText: await contrast(page, ".devices-revoke-all button"),
               // the button's edge, and the glyphs of the row icons beside the list (non-text, 3:1)
               revokeAllButtonEdge: await contrast(page, ".devices-revoke-all button", "border-top-color"),
-              rowIconGlyph: await contrast(page, ".devices-row .icon-button"),
+              rowIconGlyph: await contrast(page, `${ROW} .icon-button`),
               revokeAllButtonUserSelect: await rowButton.evaluate((node) => getComputedStyle(node).userSelect),
             };
             // the longest label wraps inside its row, its rename and revoke buttons still beside it
-            await reveal(page.locator(".devices-row").filter({ hasText: "Kitchen laptop" }));
+            await reveal(page.locator(ROW).filter({ hasText: "Kitchen laptop" }));
             const longLabel = await capture(page, `${prefix}-long-label`, about("long-label"));
             // the true end: the Settings page scrolled as far as it goes, the devices card closed below its last row
             const scroller = await row.evaluateHandle((node) => {
@@ -321,6 +332,8 @@ try {
               while (at && !(at.scrollHeight > at.clientHeight && /auto|scroll/.test(getComputedStyle(at).overflowY))) at = at.parentElement;
               return at ?? document.scrollingElement as HTMLElement;
             });
+            // a page short enough to fit has no other frame to show: the three captures are then one
+            const scrolls = await scroller.evaluate((node) => node.scrollHeight > node.clientHeight + 1);
             await scroller.evaluate((node) => { node.scrollTop = node.scrollHeight; });
             assert.equal(await scroller.evaluate((node) => Math.ceil(node.scrollTop + node.clientHeight) >= node.scrollHeight), true, "Settings is scrolled to its end");
             assert.equal(await page.locator(".devices-panel").evaluate((node, scroller) => {
@@ -328,7 +341,7 @@ try {
               return card.getBoundingClientRect().bottom <= (scroller as HTMLElement).getBoundingClientRect().bottom + 0.5;
             }, scroller), true, "the devices card ends inside the view, its bottom padding included");
             const end = await capture(page, `${prefix}-scrolled-end`, about("scrolled-end"));
-            if (evidence) assert.equal(new Set([rest, longLabel, end]).size, 3, "rest, long label and the end are three different frames");
+            if (evidence && scrolls) assert.equal(new Set([rest, longLabel, end]).size, 3, "rest, long label and the end are three different frames");
             assert.deepEqual(await overflow(page), [], `nothing reaches past the edge at ${width}`);
             if (phone) {
               const targets = await touchTargets(page, ".devices-panel button");
@@ -337,8 +350,8 @@ try {
             if (!phone) {
               await rowButton.hover();
               await capture(page, `${prefix}-hover`, about("hover"));
-              // keyboard focus: Tab from the control before it, so the ring is the keyboard's
-              await page.getByRole("button", { name: label("Pair a device"), exact: true }).focus();
+              // keyboard focus: Tab from the control before it (the last device's revoke button), so the ring is the keyboard's
+              await page.locator(ROW).last().locator("button").last().focus();
               await page.keyboard.press("Tab");
               assert.equal(await rowButton.evaluate((node) => node === document.activeElement && node.matches(":focus-visible")), true, "Tab reaches Revoke all with a visible focus ring");
               const focused = await capture(page, `${prefix}-focus-visible`, about("focus-visible"));
@@ -346,7 +359,7 @@ try {
               measurements[prefix]!.focusRing = { ...await contrast(page, ".devices-revoke-all button", "outline-color"), outline: await rowButton.evaluate((node) => `${getComputedStyle(node).outlineWidth} ${getComputedStyle(node).outlineStyle}, offset ${getComputedStyle(node).outlineOffset}`) };
               // a mouse press draws only on an icon button (styles.css .icon-button:active; a .btn keeps its
               // hover look): the first device's revoke icon, held down, and let go away from it so nothing is clicked
-              const icon = page.locator(".devices-row").first().locator("button").last();
+              const icon = page.locator(ROW).first().locator("button").last();
               await icon.scrollIntoViewIfNeeded();
               const box = (await icon.boundingBox())!;
               await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -400,7 +413,7 @@ try {
             }
             await page.keyboard.press("Escape");
             await dialog.waitFor({ state: "detached" });
-            assert.equal(await page.locator(".devices-row").count(), 3, "Escape revoked nothing");
+            assert.equal(await page.locator(ROW).count(), 3, "Escape revoked nothing");
             // the deed, from the row again: the list empties, the row goes, and the answer is said
             await press(rowButton);
             await dialog.waitFor();
@@ -408,7 +421,7 @@ try {
             await dialog.waitFor({ state: "detached" });
             const revoked = page.getByText(label("Every paired device was revoked. The access token, this PC and its Tailscale login get in as before."), { exact: true });
             await revoked.waitFor();
-            assert.equal(await page.locator(".devices-row").count(), 0, "every device went");
+            assert.equal(await page.locator(ROW).count(), 0, "every device went");
             assert.equal(await row.count(), 0, "with nothing paired there is nothing to revoke");
             await page.getByText(label("No devices paired yet."), { exact: true }).waitFor();
             await reveal(revoked);
@@ -468,7 +481,7 @@ try {
               await frame(page, `${prefix}-confirm-interrupted-mid`, { ...about("confirm-interrupted-mid"), note: "entrance held half way, just before Cancel is pressed" });
               await press(dialog.getByRole("button", { name: label("Cancel"), exact: true }));
               await dialog.waitFor({ state: "detached", timeout: 5000 });
-              assert.equal(await page.locator(".devices-row").count(), 3, "the interrupted dialog answered no");
+              assert.equal(await page.locator(ROW).count(), 3, "the interrupted dialog answered no");
               assert.ok((await dialogAnimations(page)).includes("sheet-out"), "the interrupted sheet drops");
               const dropTop = await holdAt(page, 0);
               await frame(page, `${prefix}-confirm-interrupted-exit-start`, { ...about("confirm-interrupted-exit-start"), note: "first frame of the drop after Cancel was pressed half way up" });
@@ -562,7 +575,7 @@ try {
             assert.equal(await failure.innerText(), label("Nothing was revoked: the PC could not save the change. Try again; if it keeps failing, look up {reference} in the server's log on the PC.").replace("{reference}", "d3m0f41l0001"));
             assert.doesNotMatch(await failure.innerText(), /devices\.json|internal error/, "no file name or machine words");
             assert.equal(await dialog.isVisible(), true, "a refused write keeps the question open");
-            assert.equal(await page.locator(".devices-row").count(), 3, "a refused write revoked nothing");
+            assert.equal(await page.locator(ROW).count(), 3, "a refused write revoked nothing");
             await capture(page, `${prefix}-save-error`, about("save-error"));
             measurements[prefix]!.saveError = await contrast(page, ".confirm-dialog .confirm-error");
             // the dialog's two buttons stay usable after the refusal: their words and edges
@@ -646,10 +659,10 @@ try {
             await page.locator(".devices-panel").evaluate((node) => node.scrollIntoView({ block: "end" }));
             await capture(page, `${prefix}-loading`, about("loading"));
             // the list was held for the whole capture, and only now is let go
-            assert.equal(await page.locator(".devices-row").count(), 0, "no device row was drawn while the loading state was captured");
+            assert.equal(await page.locator(ROW).count(), 0, "no device row was drawn while the loading state was captured");
             assert.equal(await loading.isVisible(), true, "the loading line is still up after the capture");
             await page.evaluate(() => (globalThis as { herdrDemoReleaseDevices?: () => void }).herdrDemoReleaseDevices!());
-            await page.locator(".devices-row").first().waitFor();
+            await page.locator(ROW).first().waitFor();
             assert.equal(await loading.count(), 0, "the loading line goes once the list arrives");
             await page.close();
           }
@@ -662,15 +675,14 @@ try {
             errorsOf.push(errors);
             const notice = page.locator(NOTICE);
             const letPhonePair = async (): Promise<void> => assert.equal(await page.evaluate(() => (globalThis as { herdrDemoReleasePairing?: () => boolean }).herdrDemoReleasePairing!()), true, "a pairing was waiting to be let go");
-            await press(page.getByRole("button", { name: label("Pair a device"), exact: true }));
-            await page.locator(".devices-code").waitFor();
-            assert.equal(await page.locator(".devices-code").innerText(), "482 913", "the code is shown");
+            await startCode(page);
+            await shownCode(page).filter({ hasText: "482 913" }).waitFor();
             assert.equal(await notice.count(), 0, "nothing is announced before the device enrolls");
             await letPhonePair();
             await notice.waitFor({ state: "attached", timeout: PAIRS_WITHIN_MS });
             await page.getByText(label("Paired: {name}.").replace("{name}", "Living-room iPad"), { exact: true }).waitFor();
-            assert.equal(await page.locator(".devices-code").count(), 0, "the code goes once the device paired with it");
             await closeSettings(page);
+            assert.equal(await shownCode(page).count(), 0, "the code goes once the device paired with it");
             await notice.waitFor({ state: "visible" });
             assert.equal(await notice.count(), 1, "one line per enrollment");
             const text = (await notice.innerText()).replace(/\s+/g, " ").trim();
@@ -690,15 +702,16 @@ try {
               const targets = await touchTargets(page, `${NOTICE} button`);
               for (const target of targets) assert.ok(target.width >= 44 - SUBPIXEL && target.height >= 44 - SUBPIXEL, `${target.label}: ${target.width}x${target.height} is a 44 px target`);
             }
-            // its action: Phone & devices opens, and the line is read
-            await press(notice.getByRole("button", { name: label("Phone & devices"), exact: true }));
+            // its action: Devices and PCs opens, and the line is read
+            await press(notice.getByRole("button", { name: label("Devices and PCs"), exact: true }));
             await page.locator(".settings-dialog").waitFor();
-            assert.equal((await page.locator(".settings-dialog .modal-title").innerText()).trim(), label("Phone & devices"));
-            assert.equal(await notice.count(), 0, "opening Phone & devices dismisses the line");
-            assert.equal(await page.locator(".devices-row").count(), 4, "the new device is on the list");
+            assert.equal((await page.locator(".settings-dialog .modal-title").innerText()).trim(), label("Devices and PCs"));
+            assert.equal(await notice.count(), 0, "opening Devices and PCs dismisses the line");
+            await page.locator(ROW).nth(3).waitFor();
+            assert.equal(await page.locator(ROW).count(), 4, "the new device is on the list");
             // a second pairing, dismissed by its X
-            await press(page.getByRole("button", { name: label("Pair a device"), exact: true }));
-            await page.locator(".devices-code").waitFor();
+            await startCode(page);
+            await shownCode(page).filter({ hasText: /^\d{3} \d{3}$/ }).waitFor();
             await letPhonePair();
             await notice.waitFor({ state: "attached", timeout: PAIRS_WITHIN_MS });
             await closeSettings(page);
@@ -712,8 +725,8 @@ try {
             const { page, errors } = await open(context, server.port, "&demo_connection=drops&demo_pairing=held");
             errorsOf.push(errors);
             const notice = page.locator(NOTICE);
-            await press(page.getByRole("button", { name: label("Pair a device"), exact: true }));
-            await page.locator(".devices-code").waitFor();
+            await startCode(page);
+            await shownCode(page).filter({ hasText: /^\d{3} \d{3}$/ }).waitFor();
             assert.equal(await page.evaluate(() => (globalThis as { herdrDemoReleasePairing?: () => boolean }).herdrDemoReleasePairing!()), true, "a pairing was waiting to be let go");
             await notice.waitFor({ state: "attached", timeout: PAIRS_WITHIN_MS });
             await closeSettings(page);

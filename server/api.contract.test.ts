@@ -1109,9 +1109,9 @@ describe("herdr's selection preference", () => {
       const response = await fetch(url, { headers });
       expect(response.status).toBe(200);
       expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(await response.json()).toEqual({ copy_on_select: false });
-      writeFileSync(configPath, "[ui]\ncopy_on_select = true\n");
-      expect(await (await fetch(url, { headers })).json()).toEqual({ copy_on_select: true });
+      expect(await response.json()).toMatchObject({ copy_on_select: false, keys: { prefix: "ctrl+b" } });
+      writeFileSync(configPath, "[ui]\ncopy_on_select = true\n[keys]\nprefix = \"ctrl+a\"\n");
+      expect(await (await fetch(url, { headers })).json()).toMatchObject({ copy_on_select: true, keys: { prefix: "ctrl+a", prefixes: ["ctrl+a"] } });
       expect((await fetch(url, { method: "POST", headers: { ...headers, origin: `http://localhost:${gated.port}` } })).status).toBe(400);
     } finally { gated.stop(); rmSync(state, { recursive: true, force: true }); }
   });

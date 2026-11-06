@@ -55,10 +55,11 @@ async function pinchAcross(context: BrowserContext, page: Page, pane: string, du
   await cdp.detach();
 }
 
-/** Opens the tab's other pane from its menu, by script: the fingers of a pinch may still be down. */
+/** Opens the tab's other pane from the menu that lists its panes, by script: the fingers of a pinch may still be down. A phone's header lists the tabs, so its More carries them; a wider screen's tab has its own menu. */
 async function showOther(page: Page, pane: string): Promise<void> {
-  await page.locator(".tab-strip-menu").evaluate((node) => (node as HTMLElement).click());
-  await page.locator('.row-sheet-item:not([aria-current="true"])').first().evaluate((node) => (node as HTMLElement).click());
+  const menu = await page.locator(".tab-strip-menu").count() > 0 ? ".tab-strip-menu" : ".header-more-button";
+  await page.locator(menu).evaluate((node) => (node as HTMLElement).click());
+  await page.locator(`.row-sheet-item[data-item="pane:${pane}"]`).evaluate((node) => (node as HTMLElement).click());
   await page.locator(`.pane-frame:not(.is-hidden)[data-layout-pane="${pane}"]`).waitFor();
 }
 
@@ -135,10 +136,10 @@ try {
 
       // shown again, the shell fits the phone and takes the pty, at the shown pane's grid
       await sent(page);
-      await page.locator(".tab-strip-menu:visible").tap();
+      await page.locator(".header-more-button").tap();
       const sheet = page.getByRole("dialog");
       await sheet.waitFor();
-      await sheet.locator('.row-sheet-item:not([aria-current="true"])').first().tap();
+      await sheet.locator(`.row-sheet-item[data-item="pane:${shell}"]`).tap();
       await page.locator(`.pane-frame:not(.is-hidden)[data-layout-pane="${shell}"]`).waitFor();
       await page.waitForFunction((id) => (window as unknown as Recorded).sent.some((frame) => frame.pane_id === id && frame.type === "resize"), shell, { timeout: 10_000 });
       const taken = (await lastOf(page, shell, "resize"))!;

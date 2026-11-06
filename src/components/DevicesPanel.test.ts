@@ -53,13 +53,10 @@ describe("how this browser got in", () => {
     expect(render({ required: false, authenticated: true, via: "portal", role: "drive", portal: { user: "me@example.com", method: "oidc" } })).toContain("Signed in as me@example.com with Google or company login.");
   });
 
-  it("lets a visitor Portal signed in read the list and offers it no way to pair or revoke", () => {
+  it("tells a visitor Portal signed in that pairing and revoking are for the token or a paired device", () => {
     const visitor = render({ required: false, authenticated: true, via: "portal", role: "drive", portal: { user: "alice", method: "credential" } });
     expect(visitor).toContain("Pairing and revoking devices are for the access token or a paired device.");
-    expect(visitor).not.toContain("Pair a device");
-    // a browser that holds the token is offered the pairing the server lets it do
     const owner = render({ required: false, authenticated: true, via: "token", role: "drive" });
-    expect(owner).toContain("Pair a device");
     expect(owner).not.toContain("Pairing and revoking devices are for the access token");
   });
 

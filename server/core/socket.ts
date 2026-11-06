@@ -8,6 +8,7 @@ import type { ClientMessage, ClientRole, ServerFeature, SessionSnapshot } from "
 import { ConnectionDiagnostics } from "../connection-diagnostics.ts";
 import { HerdrError, LARGE_REPLY_BYTES } from "../herdr/client.ts";
 import { OUTPUT_HARD_BYTES } from "../output-window.ts";
+import { pasteDirectoryForAll } from "../paste.ts";
 import { type Client, connectionOf, presenceOf, relayClient, send, setMachineEvents, type SocketData } from "./connections.ts";
 import { type AttachmentView, validGeometry } from "./terminals.ts";
 import type { TelemetryIngress, TelemetrySurface } from "../../shared/telemetry.ts";
@@ -139,7 +140,10 @@ export function createSocket({ clients, present, stopped, admit, setRole, watcha
       const features: ServerFeature[] = watchable() ? [...SERVER_FEATURES] : SERVER_FEATURES.filter((feature) => feature !== "watch");
       if (terminalHistory()) features.push("terminal-history");
       if (client.data.machineEvents) features.push("machine-events");
-      send(client, { type: "features", features, connection: client.data.connectionId, ...(lifetime === undefined ? {} : { herdr_lifetime: lifetime }) });
+      // a folder OVIS_PASTE_DIR names lets the page read an upload's path whole through it (#2771); a
+      // watch-only connection, which may list no folder, is not told where it is
+      const pasteDir = client.data.readOnly ? undefined : pasteDirectoryForAll();
+      send(client, { type: "features", features, connection: client.data.connectionId, ...(lifetime === undefined ? {} : { herdr_lifetime: lifetime }), ...(pasteDir === undefined ? {} : { paste_dir: pasteDir }) });
       const snapshot = clientSnapshot();
       countVisit(snapshot, { surface: client.data.surface, ingress: client.data.ingress });
       try {

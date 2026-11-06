@@ -4,7 +4,7 @@
   "desktopName": "ovis.desktop",
   "private": true,
   "version": "0.0.0",
-  "description": "Ovis for the desktop: the Ovis server, herdr-core and Bun in one app (README.md)",
+  "description": "Run your coding agents and follow them from this computer, a browser or your phone",
   "author": "devswha",
   "license": "MIT",
   "homepage": "https://ovis.sh",

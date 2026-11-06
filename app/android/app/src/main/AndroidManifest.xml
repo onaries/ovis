@@ -32,6 +32,16 @@
                 <data android:scheme="ovis" android:host="account" android:path="/callback" />
             </intent-filter>
 
+            <!-- a PC's page on the hosted shell (a relay pairing link, or its QR code read by the
+                 camera) opens in the app: verified against app.ovis.sh/.well-known/assetlinks.json
+                 (scripts/shell-build.ts), and handed to the connect screen (MainActivity.takeAppLink) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="app.ovis.sh" android:pathPrefix="/s/" />
+            </intent-filter>
+
         </activity>
 
         <provider

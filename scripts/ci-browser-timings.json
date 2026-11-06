@@ -110,6 +110,7 @@
   "scripts/keyboard-viewport-regression.ts": 5,
   "scripts/palette-machines-demo-regression.ts": 5,
   "scripts/phone-glass-header-demo-regression.ts": 4,
+  "scripts/phone-safe-area-demo-regression.ts": 5,
   "scripts/context-menu-inputs-demo-regression.ts": 4,
   "scripts/phone-worktree-sheet-regression.ts": 4,
   "scripts/machine-dialog-regression.ts": 4,

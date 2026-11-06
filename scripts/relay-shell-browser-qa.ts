@@ -626,16 +626,16 @@ export async function relayShellQa(tree: RelayServerTree): Promise<void> {
       // A same-carrier relay API round trip is a barrier after the rename, not a timed absence check.
       const statusesBefore = await relayStatuses();
       await page.keyboard.press("ControlOrMeta+Shift+Comma");
-      await openSettingsPage(page, "Phone & devices");
+      await openSettingsPage(page, "Devices and PCs");
       await page.getByRole("button", { name: "Rename Renamed QA phone", exact: true }).waitFor();
       // the hosted shell offers no relay at all (a relayed phone can neither pair nor reset there:
-      // relayOffered in components/ConnectPhoneDialog.tsx): no relay state in the Connect a phone row, checked once the page consumed the relay status the group would follow,
+      // relayOffered in components/ConnectPhoneDialog.tsx): no Ovis relay group in More settings, checked once the page consumed the relay status the group would follow,
       // plus two frames for its render
       await page.waitForFunction((seen) => ((window as unknown as { qaRelayStatuses?: number }).qaRelayStatuses ?? 0) > seen, statusesBefore);
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const settings = page.locator(".settings-dialog");
-      assert.equal(await settings.locator('[data-section="devices"]').count(), 1, "the shell's Phone & devices lists the devices");
-      assert.equal(await settings.locator('[data-section="phone"] .relay-status').count(), 0, "the hosted shell's Connect a phone row names no relay state");
+      assert.equal(await settings.locator('[data-section="devices"]').count(), 1, "the shell's Devices and PCs lists the devices");
+      assert.equal(await settings.locator('[data-section="relay"]').count(), 0, "the hosted shell's Devices and PCs has no Ovis relay group");
       assert.equal(await settings.getByRole("switch", { name: "Ovis relay", exact: true }).count(), 0, "no relay switch under the shell");
       note(`settings: Phone & devices in the shell lists the phone and has no relay group (relay statuses consumed: ${await relayStatuses()})`);
       await inApp(page);

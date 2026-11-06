@@ -12,3 +12,14 @@ export function FilesPanelRow() {
     </SettingsRow>
   );
 }
+
+/** Settings → Chat → Documents in Files: the Documents tab of Files (components/MarkdownDocuments.tsx, #1196), off by default. */
+export function FilesDocumentsRow() {
+  const { settings, update } = useSettings();
+  const t = useT();
+  return (
+    <SettingsRow label={t("Documents in Files")} description={t("Files shows a Documents tab: the Markdown files under the pane's folder, newest first, with a filter. Each one opens in the file viewer to read.")}>
+      <Toggle label={t("Documents in Files")} checked={settings.filesDocuments} onChange={(filesDocuments) => update({ filesDocuments })} />
+    </SettingsRow>
+  );
+}

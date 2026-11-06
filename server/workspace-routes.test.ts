@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { PendingMessage, ServerMessage } from "../shared/protocol.ts";
+import { MAX_INVENTORY_WORKSPACES } from "../shared/workspace-lifecycle.ts";
 import * as agentLaunchModule from "./agent-launch.ts";
 import * as herdr from "./herdr/client.ts";
-import { handleWorkspaceRequest, MAX_ENV_BYTES, MAX_ENV_VARS } from "./workspace-routes.ts";
+import { handleWorkspaceRequest, INVENTORY_BUDGET_MS, MAX_ENV_BYTES, MAX_ENV_VARS } from "./workspace-routes.ts";
 
 /** each herdr create, launch, queued message and broadcast a create makes, in the order made */
 const calls: string[] = [];
@@ -25,6 +26,52 @@ async function post(path: string, body: unknown): Promise<Response> {
   calls.push("answer");
   return response!;
 }
+
+describe("GET /api/worktree/inventory reads several workspaces' checkouts in one request (#2661)", () => {
+  async function inventory(ids: string[]): Promise<Response> {
+    const request = new Request(`http://127.0.0.1/api/worktree/inventory?${ids.map((id) => `workspace_id=${encodeURIComponent(id)}`).join("&")}`);
+    const response = await handleWorkspaceRequest(request, new URL(request.url), "/api/worktree/inventory", { timeout: () => {} },
+      () => {}, async () => ({ id: "m1" }) as PendingMessage, () => ({ order_epoch: "e", moved_seq: 1 }));
+    return response!;
+  }
+
+  it("answers each workspace once, in the order asked, with the error /api/worktree/list would have answered", async () => {
+    const list = spyOn(herdr, "worktreeList").mockImplementation(async (workspaceId) => {
+      if (workspaceId === "w2") throw new herdr.HerdrError("not_git_worktree", "w2 is not a git checkout");
+      if (workspaceId === "w3") throw new herdr.HerdrError("timeout", "herdr did not answer");
+      return { source: { repo_key: workspaceId }, worktrees: [] } as never;
+    });
+    const response = await inventory(["w1", "w2", "w3", "w1"]);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ entries: [
+      { workspace_id: "w1", listing: { source: { repo_key: "w1" }, worktrees: [] } },
+      { workspace_id: "w2", error: { status: 404, code: "not_git_worktree", message: "w2 is not a git checkout" } },
+      { workspace_id: "w3", error: { status: 502, code: "timeout", message: "herdr did not answer" } },
+    ] });
+    expect(list.mock.calls.map(([workspaceId]) => workspaceId).sort()).toEqual(["w1", "w2", "w3"]);
+  });
+
+  it("stops asking herdr once the read's budget is spent, answering the rest as timed out", async () => {
+    let now = 1_000_000;
+    spyOn(Date, "now").mockImplementation(() => now);
+    // a herdr that answers, slowly: each call takes most of the budget
+    const list = spyOn(herdr, "worktreeList").mockImplementation(async (workspaceId) => { now += INVENTORY_BUDGET_MS * 0.6; return { source: { repo_key: workspaceId }, worktrees: [] } as never; });
+    const body = (await (await inventory(["w1", "w2", "w3"])).json()) as { entries: { workspace_id: string; listing?: unknown; error?: { status: number; code: string } }[] };
+    expect(body.entries.map((entry) => [entry.workspace_id, entry.listing ? "listing" : `${entry.error?.status} ${entry.error?.code}`])).toEqual([["w1", "listing"], ["w2", "listing"], ["w3", "502 timeout"]]);
+    expect(list.mock.calls.map(([workspaceId]) => workspaceId)).toEqual(["w1", "w2"]);
+  });
+
+  it.each([
+    ["no workspace", [], "missing_workspace_id"],
+    ["an empty workspace id", ["w1", ""], "missing_workspace_id"],
+    ["more workspaces than the limit", Array.from({ length: MAX_INVENTORY_WORKSPACES + 1 }, (_, at) => `w${at}`), "too_many_workspaces"],
+  ])("refuses %s with 400 before herdr is asked", async (_, ids, code) => {
+    const list = spyOn(herdr, "worktreeList");
+    const response = await inventory(ids);
+    expect([response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([400, code]);
+    expect(list).not.toHaveBeenCalled();
+  });
+});
 
 describe("a create passes the request's env to the new pane (#2745)", () => {
   /** what each herdr create was asked for */

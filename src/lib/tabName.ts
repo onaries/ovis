@@ -1,6 +1,7 @@
 import { paneTitle } from "../../shared/notify-policy.ts";
 import type { HerdrTab, PaneInfo } from "../../shared/protocol.ts";
 import { folderName, shortPathTitle, stripPaneChrome } from "./paneName.ts";
+import { pasteFolder } from "./pasteFolders.ts";
 import { attachmentTabLabel, shortTabLabel, tabLabelKey } from "./tabLabels.ts";
 
 /**
@@ -41,7 +42,7 @@ const CONVERSATION_TITLES: ReadonlySet<string> = new Set(["codex", "claude"]);
  * agent's name or its command line ("Claude Code", "codex --yolo"), a process ("node"), its folder
  * or a path. null for a shell's pane, or for none.
  */
-export function agentPaneName(pane: Partial<TabPane>): string | null {
+export function agentPaneName(pane: Partial<TabPane>, uploadFolder?: string): string | null {
   if (!pane.agent) return null;
   const label = pane.label?.trim();
   if (label) return label;
@@ -60,7 +61,7 @@ export function agentPaneName(pane: Partial<TabPane>): string | null {
     const text = bare.replace(/^[^\p{L}\p{N}@]+/u, "");
     const named = words(text);
     if (named.length === 0 || commandLine(text, pane.agent) || /^[a-z0-9._-]+$/.test(text) || generic(named)) continue;
-    const short = shortTabLabel(text);
+    const short = shortTabLabel(text, uploadFolder);
     if (short !== null) return short;
   }
   return null;
@@ -77,7 +78,7 @@ export function autoTabLabel(tab: Pick<HerdrTab, "label" | "number">, panes: rea
   if (customTabLabel(tab, place) !== null) return null;
   for (const pane of panes) {
     const learned = labels[tabLabelKey(machineId, pane)];
-    const label = agentPaneName(pane) ?? (learned && !attachmentTabLabel(learned) ? learned : null);
+    const label = agentPaneName(pane, pasteFolder(machineId)) ?? (learned && !attachmentTabLabel(learned) ? learned : null);
     if (label) return label;
   }
   return null;

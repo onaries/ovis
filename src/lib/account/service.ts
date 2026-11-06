@@ -179,6 +179,11 @@ export class AccountService {
     await this.call("PUT", `/v1/pcs/${serverId}`, entry);
   }
 
+  /** Takes a PC out of the account's directory (it rings nobody and admits nothing either way). */
+  async deletePc(serverId: string): Promise<void> {
+    await this.call("DELETE", `/v1/pcs/${serverId}`);
+  }
+
   /**
    * Says this signed-in device waits at that PC with its account key: the account's other devices
    * hear of it, and the PC takes a comparison that asks to join the account for 10 minutes.

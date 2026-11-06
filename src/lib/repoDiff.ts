@@ -1,5 +1,6 @@
 import type { RepoBranchComparison, RepoDiffFilePatch, RepoDiffScope, RepoDiffStatus } from "../../shared/protocol.ts";
 import { ApiError, routeMissing } from "./api.ts";
+import { REPO_DIFF_KEY } from "./historyKeys.ts";
 import { formatBytes } from "./bridgeProgress.ts";
 import { canHighlight, countLines, languageForPath } from "./highlight.ts";
 import type { Translate } from "./i18n.ts";
@@ -139,7 +140,7 @@ export function repositoryFilePath(root: string, path: string): string {
   return `${root.replace(/[\\/]+$/, "")}/${path}`;
 }
 
-const HISTORY_KEY = "ovis:repo-diff";
+const HISTORY_KEY = REPO_DIFF_KEY;
 
 /** The viewer's target in a history entry, when the entry holds one of a known shape. */
 export function diffTargetFromState(state: unknown): RepoDiffTarget | null {

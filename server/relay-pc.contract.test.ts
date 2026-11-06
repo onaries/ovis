@@ -52,6 +52,12 @@ async function twoPcs() {
   await bounded(synced.promise);
   const offered = await fetch(`${bBase}/api/relay/offer`, { method: "POST", headers: { origin: bBase, "x-herdr-update": "1" } });
   expect(offered.status).toBe(200);
+  // the add-me screen's window: what it takes is this PC's own to decide
+  const approvals = b.context.services.relay.approvals;
+  expect((await fetch(`${bBase}/api/relay/link`, { method: "POST", headers: { origin: bBase, "x-herdr-update": "1" } })).status).toBe(200);
+  expect(approvals.localOnlyOpen()).toBe(false);
+  expect((await fetch(`${bBase}/api/relay/link`, { method: "POST", headers: { origin: bBase, "x-herdr-update": "1", "x-ovis-local-only": "1" } })).status).toBe(200);
+  expect(approvals.localOnlyOpen()).toBe(true);
   const { url: link } = await offered.json() as { url: string };
   const aState = stateDir();
   const startA = () => {

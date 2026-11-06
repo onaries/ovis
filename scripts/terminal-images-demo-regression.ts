@@ -14,6 +14,7 @@ import { chromium, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { openSettingsFolds } from "./settings-page.ts";
 import { shownRows } from "./shown-rows.ts";
 
 interface ImagesFixture { print(data: string): void }
@@ -54,7 +55,7 @@ function installImagesFixture(): void {
  * A 24x24 PNG square of one colour as an iTerm2 inline image. iTerm2's pictures decode in the browser
  * itself; sixel's WebAssembly decoder starts after the addon loads, so a first sixel could be missed.
  */
-const square = (rgb: [number, number, number]): string => {
+const squarePng = (rgb: [number, number, number]): Buffer => {
   const chunk = (type: string, data: Uint8Array) => {
     const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
     const out = Buffer.alloc(12 + data.length);
@@ -70,10 +71,50 @@ const square = (rgb: [number, number, number]): string => {
   const row = Buffer.concat([Buffer.from([0]), ...Array.from({ length: 24 }, () => Buffer.from(rgb))]);
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", header),
     chunk("IDAT", deflateSync(Buffer.concat(Array.from({ length: 24 }, () => row)))), chunk("IEND", new Uint8Array())]);
+  return png;
+};
+const square = (rgb: [number, number, number]): string => {
+  const png = squarePng(rgb);
   return `\x1b]1337;File=inline=1;size=${png.length}:${png.toString("base64")}\x07`;
 };
 const RED = square([255, 0, 0]);
 const BLUE = square([0, 0, 255]);
+
+/** iTerm2's own imgcat: the picture's arguments, then its base64 in 200-character pieces, then the end (#3147) */
+const multipart = (rgb: [number, number, number]): string => {
+  const png = squarePng(rgb);
+  const base64 = png.toString("base64");
+  let out = `\x1b]1337;MultipartFile=inline=1;size=${png.length};name=c3F1YXJlLnBuZw==\x07`;
+  for (let i = 0; i < base64.length; i += 200) out += `\x1b]1337;FilePart=${base64.slice(i, i + 200)}\x07`;
+  return `${out}\x1b]1337;FileEnd\x07`;
+};
+
+/** `chafa -f iterm`: an uncompressed RGBA TIFF with no size= argument, laid out as chafa writes it (#3147) */
+const chafaTiff = (rgb: [number, number, number]): string => {
+  const side = 24;
+  const pixels = Buffer.concat(Array.from({ length: side * side }, () => Buffer.from([...rgb, 255])));
+  const tags: Array<[number, number, number, number]> = [
+    [256, 4, 1, side], [257, 4, 1, side], [258, 3, 4, 8 + pixels.length + 2 + 11 * 12 + 4], [262, 3, 1, 2], [273, 4, 1, 8],
+    [274, 3, 1, 1], [277, 3, 1, 4], [278, 4, 1, side], [279, 4, 1, pixels.length], [284, 3, 1, 1], [338, 3, 1, 2],
+  ];
+  const tiff = Buffer.alloc(8 + pixels.length + 2 + tags.length * 12 + 4 + 8);
+  tiff.write("II*\0", 0, "latin1");
+  tiff.writeUInt32LE(8 + pixels.length, 4);
+  pixels.copy(tiff, 8);
+  let at = 8 + pixels.length;
+  tiff.writeUInt16LE(tags.length, at);
+  at += 2;
+  for (const [tag, type, count, value] of tags) {
+    tiff.writeUInt16LE(tag, at);
+    tiff.writeUInt16LE(type, at + 2);
+    tiff.writeUInt32LE(count, at + 4);
+    if (type === 3 && count === 1) tiff.writeUInt16LE(value, at + 8);
+    else tiff.writeUInt32LE(value, at + 8);
+    at += 12;
+  }
+  for (let i = 0; i < 4; i++) tiff.writeUInt16LE(8, at + 4 + 2 * i);
+  return `\x1b]1337;File=inline=1;width=3;height=2;preserveAspectRatio=0:${tiff.toString("base64")}\x07`;
+};
 
 /** the picture layer's pixel at a point given in its own pixels, or null where it draws nothing */
 const pixel = (page: Page, x: number, y: number) => page.evaluate(({ x, y }) => {
@@ -92,6 +133,7 @@ const print = async (page: Page, data: string, marker: string) => {
 const setPictures = async (page: Page, on: boolean) => {
   await page.getByRole("button", { name: "Settings", exact: true }).first().click();
   await page.getByRole("navigation", { name: "Settings" }).getByText("Terminal", { exact: true }).click();
+  await openSettingsFolds(page);
   const toggle = page.getByRole("switch", { name: "Pictures in the terminal" });
   if ((await toggle.getAttribute("aria-checked")) !== String(on)) await toggle.click();
   assert.equal(await toggle.getAttribute("aria-checked"), String(on));
@@ -160,8 +202,14 @@ try {
       const held = await page.evaluate(() => (document.querySelector(".pane-frame.is-current .xterm") as HTMLElement & { imageAt?: (col: number, row: number) => number[] | null }).imageAt?.(0, 0));
       assert.notEqual(held, undefined, "the demo build's probe answers");
       assert.equal(held, null, `on again: the top left cell holds no picture (${JSON.stringify(held)})`);
+
+      // imgcat's multipart form and chafa's TIFF without a size, which the addon takes neither of by itself (#3147)
+      await print(page, `\x1b[H\x1b[2J${multipart([0, 255, 0])}`, "IMGCAT-PRINTED");
+      assert.deepEqual(await pixel(page, 4, 4), [0, 255, 0], "imgcat's multipart picture is drawn");
+      await print(page, `\x1b[H\x1b[2J${chafaTiff([255, 0, 255])}`, "CHAFA-PRINTED");
+      assert.deepEqual(await pixel(page, 4, 4), [255, 0, 255], "chafa's TIFF picture is drawn");
       assert.deepEqual(errors, [], "no page errors");
-      console.log("PASS pictures: drawn, gone while off, and on again only where printed");
+      console.log("PASS pictures: drawn, gone while off, and on again only where printed; imgcat's multipart and chafa's TIFF drawn too");
     } finally {
       await browser.close();
     }

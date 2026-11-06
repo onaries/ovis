@@ -29,7 +29,11 @@ async function run(browser: Browser, origin: string, port: number, width: number
   const phone = width === 390;
   const tag = `${width} ${theme}`;
   const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, ...(phone ? { deviceScaleFactor: 3, isMobile: true, hasTouch: true } : {}), locale: "en-US", colorScheme: theme });
-  await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify({ language: "en", theme, webLinks: "panel" }));
+  await context.addInitScript((settings) => {
+    localStorage.setItem("ovis:settings", settings);
+    // Documents in Files is kept in a key of its own (lib/settings.ts): a file to dock from the demo
+    localStorage.setItem("ovis:files-documents", "true");
+  }, JSON.stringify({ language: "en", theme, webLinks: "panel", fileOpen: "panel" }));
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -93,6 +97,93 @@ async function run(browser: Browser, origin: string, port: number, width: number
     await page.waitForFunction(() => window.history.state?.["ovis:web-panel"] === undefined);
     assert.equal(await page.locator(".web-panel-popup").count(), 0, `${tag}: Close page closes the popup over two pages`);
     assert.equal(page.url(), before, `${tag}: Close page goes back to the pane`);
+
+    // the pane's own entry: a close that leaves an entry of the page's behind lands above it
+    const paneEntry = await page.evaluate(() => (window as unknown as { navigation: { currentEntry: { index: number } } }).navigation.currentEntry.index);
+    const closePage = async (what: string): Promise<void> => {
+      await page.getByRole("button", { name: "Close page", exact: true }).click();
+      await page.waitForFunction((index) => (window as unknown as { navigation: { currentEntry: { index: number } } }).navigation.currentEntry.index <= index, paneEntry, { timeout: 5_000 })
+        .catch(() => assert.fail(`${tag}: ${what} goes back to the pane's entry`));
+      await page.locator(".web-panel-popup").waitFor({ state: "detached" });
+      assert.equal(page.url(), before, `${tag}: ${what} goes back to the pane`);
+    };
+
+    // a reload with the palette open over the page: the palette's entry, a copy of the page's, is
+    // one more of the page's, and Close page goes back past it too (#3058)
+    await page.keyboard.press("ControlOrMeta+Shift+K");
+    await search.fill(`localhost:${port}/#/graph`);
+    await search.press("Enter");
+    await page.getByRole("dialog", { name: "Command palette" }).waitFor({ state: "detached" });
+    await page.waitForFunction(() => window.history.state?.["ovis:web-panel"] !== undefined && window.history.state?.["ovis:sheet"] === undefined);
+    await page.keyboard.press("ControlOrMeta+Shift+K");
+    await search.waitFor();
+    await page.waitForFunction(() => typeof window.history.state?.["ovis:sheet"] === "string");
+    await page.reload();
+    await page.locator(".conn-live").waitFor();
+    await page.getByRole("dialog", { name: `127.0.0.1:${port}`, exact: true }).waitFor();
+    await closePage("Close page after a reload under the palette");
+
+    // a file docked over two stacked pages takes their entry over: closing it goes back past both (#3058)
+    for (const path of ["/#/graph", "/second"]) {
+      await page.keyboard.press("ControlOrMeta+Shift+K");
+      await search.fill(`localhost:${port}${path}`);
+      await search.press("Enter");
+      await page.getByRole("dialog", { name: "Command palette" }).waitFor({ state: "detached" });
+      await page.waitForFunction((end) => window.history.state?.["ovis:web-panel"]?.url?.endsWith(end) === true && window.history.state?.["ovis:sheet"] === undefined, path);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.waitForFunction(() => window.history.state?.["ovis:web-panel-docked"] === true);
+    await page.locator(".header-files-button").click();
+    // the demo's folder lists nothing and serves no file: its Documents tab names README.md, served here
+    // as Markdown so it stays docked (files-documents-demo-regression.ts serves its documents the same way)
+    await page.evaluate(() => {
+      const demoFetch = window.fetch;
+      window.fetch = async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+        const asked = url.searchParams.get("path") ?? "";
+        const text = "# README\n\nDocked over the page.\n";
+        if (asked.endsWith("/README.md") && url.pathname.endsWith("/fs/stat")) return Response.json({ path: asked, name: "README.md", kind: "text", mime: "text/markdown", size: text.length, modified: new Date().toISOString() });
+        if (asked.endsWith("/README.md") && url.pathname.endsWith("/fs/file")) return new Response(text, { headers: { "content-type": "text/markdown" } });
+        return demoFetch(input, init);
+      };
+    });
+    await page.locator(".files-dialog-tabs").getByRole("button", { name: "Documents", exact: true }).click();
+    await page.locator(".md-docs .md-docs-item", { hasText: "README.md" }).click();
+    const viewer = page.locator("aside.file-panel .file-viewer-docked");
+    await viewer.waitFor();
+    await page.locator(".web-panel").waitFor({ state: "detached" });
+    await viewer.getByRole("button", { name: "Close" }).click();
+    await page.waitForFunction((index) => (window as unknown as { navigation: { currentEntry: { index: number } } }).navigation.currentEntry.index <= index, paneEntry, { timeout: 5_000 })
+      .catch(() => assert.fail(`${tag}: closing a file docked over two pages goes back to the pane's entry`));
+    await viewer.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".web-panel").count(), 0, `${tag}: no page comes back when the docked file closes`);
+    assert.equal(page.url(), before, `${tag}: closing the docked file goes back to the pane`);
+
+    // a page opened over a file docked over two stacked pages takes the file's entry over: Close page
+    // goes back past both pages too (#3058)
+    await page.setViewportSize({ width, height: 844 });
+    for (const path of ["/#/graph", "/second"]) {
+      await page.keyboard.press("ControlOrMeta+Shift+K");
+      await search.fill(`localhost:${port}${path}`);
+      await search.press("Enter");
+      await page.getByRole("dialog", { name: "Command palette" }).waitFor({ state: "detached" });
+      await page.waitForFunction((end) => window.history.state?.["ovis:web-panel"]?.url?.endsWith(end) === true && window.history.state?.["ovis:sheet"] === undefined, path);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.waitForFunction(() => window.history.state?.["ovis:web-panel-docked"] === true);
+    await page.locator(".header-files-button").click();
+    await page.locator(".files-dialog-tabs").getByRole("button", { name: "Documents", exact: true }).click();
+    await page.locator(".md-docs .md-docs-item", { hasText: "README.md" }).click();
+    await viewer.waitFor();
+    await page.keyboard.press("ControlOrMeta+Shift+K");
+    await search.fill(`localhost:${port}/second`);
+    await search.press("Enter");
+    await page.getByRole("dialog", { name: "Command palette" }).waitFor({ state: "detached" });
+    await page.locator(".web-panel").waitFor();
+    await viewer.waitFor({ state: "detached" });
+    await closePage("Close page over a docked file over two pages");
+    assert.equal(await page.locator(".web-panel").count(), 0, `${tag}: no page comes back when the page over the docked file closes`);
+    await page.setViewportSize({ width, height: 844 });
   } else {
     await page.getByRole("button", { name: "Close page", exact: true }).click();
     await page.locator(".web-panel").waitFor({ state: "detached" });

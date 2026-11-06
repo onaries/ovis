@@ -3,9 +3,9 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 
 import { SettingsProvider } from "../lib/settings.ts";
 import { KeyId } from "./KeyId.tsx";
-import { AddRelayPc } from "./SettingsDialog.tsx";
+import { AddRelayPc } from "./AddRelayPc.tsx";
 
-// Settings → Remote PCs → Add a PC through the relay with the code the other PC shows: this PC's server finds that
+// Settings → Devices and PCs → Connect → Enter a code from another device with the code the other PC shows: this PC's server finds that
 // PC, the person matches its ID, and only then is it added. The code never leaves the input.
 const SERVER_ID = "0123456789abcdef0123456789abcdef";
 

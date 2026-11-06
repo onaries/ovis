@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { pagePolicy } from "../server/file-view.ts";
 import { CONTENT_SECURITY_POLICY, IMMUTABLE_CACHE, REVALIDATE, shellContentSecurityPolicy } from "../server/static.ts";
 import { REGIONAL_APPS } from "../shared/relay-regions.ts";
-import { RENDER_PATH, SHELL_META, shellCaddyfile, shellFiles, shellHeaders, shellIndexHtml, shellManifest, shellRedirects } from "./shell-build.ts";
+import { ANDROID_APP_FINGERPRINTS, APP_ID, IOS_APP_ID, RENDER_PATH, SHELL_META, shellCaddyfile, shellFiles, shellHeaders, shellIndexHtml, shellManifest, shellRedirects } from "./shell-build.ts";
 
 const root = join(import.meta.dir, "..");
 const indexHtml = readFileSync(join(root, "index.html"), "utf8");
@@ -73,6 +73,35 @@ describe("the shell's page", () => {
   it("changes nothing else in the page", () => {
     const html = shellIndexHtml(indexHtml).replace(`  ${SHELL_META}\n  `, "").replace('href="manifest.webmanifest', 'href="/manifest.webmanifest');
     expect(html).toBe(indexHtml);
+  });
+});
+
+describe("the shell's app links", () => {
+  const files = shellFiles(manifest);
+
+  it("let the Android app open a PC's pages, signed with Play's key or the upload key", () => {
+    expect(JSON.parse(files[".well-known/assetlinks.json"] ?? "null")).toEqual([{
+      relation: ["delegate_permission/common.handle_all_urls"],
+      target: { namespace: "android_app", package_name: APP_ID, sha256_cert_fingerprints: ANDROID_APP_FINGERPRINTS },
+    }]);
+    expect(APP_ID).toBe(JSON.parse(readFileSync(join(root, "app", "capacitor.config.json"), "utf8")).appId);
+    for (const fingerprint of ANDROID_APP_FINGERPRINTS) expect(fingerprint).toMatch(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
+  });
+
+  it("name the same app and only a PC's pages for iOS", () => {
+    expect(JSON.parse(files[".well-known/apple-app-site-association"] ?? "null")).toEqual({
+      applinks: { details: [{ appIDs: [IOS_APP_ID], components: [{ "/": "/s/*" }] }] },
+    });
+    expect(IOS_APP_ID).toBe(`5987KT43TJ.${APP_ID}`);
+  });
+
+  it("are sent as JSON, which iOS asks of a file with no extension", () => {
+    expect(headerBlocks(shellHeaders()).get("/.well-known/*")).toEqual(["Content-Type: application/json"]);
+  });
+
+  it("match the Android app's verified link", () => {
+    const androidManifest = readFileSync(join(root, "app", "android", "app", "src", "main", "AndroidManifest.xml"), "utf8");
+    expect(androidManifest).toMatch(/<intent-filter android:autoVerify="true">[^]*?<data android:scheme="https" android:host="app\.ovis\.sh" android:pathPrefix="\/s\/" \/>[^]*?<\/intent-filter>/);
   });
 });
 

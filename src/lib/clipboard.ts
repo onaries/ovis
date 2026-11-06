@@ -29,6 +29,11 @@ async function pngOf(image: HTMLImageElement): Promise<Blob> {
   } catch {
     /* the bytes could not be read again: the decoded picture is drawn instead */
   }
+  return drawnPng(image);
+}
+
+/** A decoded picture drawn on a canvas and encoded as PNG. */
+export async function drawnPng(image: HTMLImageElement): Promise<Blob> {
   if (image.naturalWidth === 0 || image.naturalHeight === 0) throw new Error("image not decoded");
   const canvas = document.createElement("canvas");
   canvas.width = image.naturalWidth;

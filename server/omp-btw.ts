@@ -66,17 +66,31 @@ function readBounded(path: string, limit: number): Bounded {
   }
 }
 
-/** Whether `text` holds more than MAX_JSON_ITEMS objects, arrays and members, counted outside strings in one pass. */
+/**
+ * Whether `text` holds more than MAX_JSON_ITEMS objects, arrays and members, counted outside strings in one pass:
+ * a comma counts the member after it, and a container's first member, which has none, is counted where it starts.
+ */
 function tooManyItems(text: string): boolean {
   let items = 0;
   let inString = false;
+  let opened = false;
   for (let index = 0; index < text.length; index++) {
     const code = text.charCodeAt(index);
     if (inString) {
       if (code === 0x5c) index++;
       else if (code === 0x22) inString = false;
-    } else if (code === 0x22) inString = true;
-    else if ((code === 0x7b || code === 0x5b || code === 0x2c) && ++items > MAX_JSON_ITEMS) return true;
+      continue;
+    }
+    if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) continue;
+    if (opened) {
+      opened = false;
+      if (code !== 0x5d && code !== 0x7d && ++items > MAX_JSON_ITEMS) return true;
+    }
+    if (code === 0x22) inString = true;
+    else if (code === 0x7b || code === 0x5b) {
+      opened = true;
+      if (++items > MAX_JSON_ITEMS) return true;
+    } else if (code === 0x2c && ++items > MAX_JSON_ITEMS) return true;
   }
   return false;
 }

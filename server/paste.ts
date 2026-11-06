@@ -109,6 +109,11 @@ export function pasteDirectory(cwd: string | null | undefined): string {
   return join(cwd ?? join(tmpdir(), "ovis"), ".ovis");
 }
 
+/** The folder `OVIS_PASTE_DIR` sends every pane's attachments to, absolute; undefined when each pane's `.ovis` takes them. */
+export function pasteDirectoryForAll(): string | undefined {
+  return pasteDirectoryOverride() === "" ? undefined : pasteDirectory(null);
+}
+
 function pasteDirectoryOverride(): string {
   return process.env["OVIS_PASTE_DIR"]?.trim() ?? "";
 }

@@ -112,6 +112,7 @@ export function useChatCallbacks(deps: ChatCallbacksDeps) {
     // the same settings keep the same object: every conversation read would otherwise re-render the composer
     setChatMetadata((previous) => previous?.pane === pane && previous.source === source && previous.value?.model === value?.model
       && previous.value?.reasoning_effort === value?.reasoning_effort
+      && previous.value?.provider === value?.provider
       && previous.value?.context?.used === value?.context?.used
       && previous.value?.context?.window === value?.context?.window ? previous : { pane, value, source });
   }, []);

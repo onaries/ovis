@@ -132,7 +132,7 @@ try {
         // a long file's source is virtualized: its rows, in a shadow root, take the size and the row estimate matches
         // them, so its last line is drawn at the end; a size changed while it is open re-measures the rows
         {
-          const { page, errors, close } = await open(browser, width, { fileFontSize: 24 }, "&file=long.log&settings=appearance&section=typography");
+          const { page, errors, close } = await open(browser, width, { fileFontSize: 24 }, "&file=long.log&settings=appearance&section=typography-more");
           try {
             const rowAt = (): Promise<{ host: number; row: number; last: boolean }> => page.evaluate(() => {
               const host = document.querySelector<HTMLElement>(".virtual-source")!;
@@ -200,7 +200,7 @@ try {
             const dialog = page.locator(".settings-dialog");
             for (let step = 0; step < 10; step++) await dialog.getByRole("button", { name: "Increase chat font size", exact: true }).click();
             assert.equal(await lineOf(), before, `${width}px: a chat size change leaves a chosen file size's source as it was`);
-            await page.goto(`${origin}/herdr-web-ui/demo/app/?pane=${encodeURIComponent(panes.web)}&file=long.log&settings=appearance&section=typography`);
+            await page.goto(`${origin}/herdr-web-ui/demo/app/?pane=${encodeURIComponent(panes.web)}&file=long.log&settings=appearance&section=typography-more`);
             await page.waitForFunction(() => (document.querySelector("diffs-container")?.shadowRoot?.querySelectorAll("[data-line]").length ?? 0) > 0);
             const uiScale = (): Promise<string> => page.evaluate(() => document.documentElement.style.getPropertyValue("--ui-scale"));
             const uiBefore = await uiScale();
@@ -217,7 +217,7 @@ try {
         }
 
         // the control: a step sets a size of its own, kept for the device; Reset drops it
-        const { page, errors, close } = await open(browser, width, { chatFontSize: 16 }, "&settings=appearance&section=typography");
+        const { page, errors, close } = await open(browser, width, { chatFontSize: 16 }, "&settings=appearance&section=typography-more");
         try {
           const dialog = page.locator(".settings-dialog");
           const stepper = dialog.getByRole("group", { name: "File text size", exact: true });

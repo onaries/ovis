@@ -130,6 +130,11 @@ export function commandTranscriptRecords(text: string, start = 0): CommandTransc
       if (["system", "user", "message", "response_item", "event_msg", "model_change", "thinking_level_change", "compaction", "compacted"].includes(String(entry.type))
         || (entry.type === "custom" && entry.customType === "context_clear")) {
         records.push({ offset, entry });
+      } else if (entry.type === "custom_message" && entry.customType === "skill-prompt") {
+        // the skill's instructions are not evidence; its name and arguments are
+        const { name, args } = object(entry.details);
+        records.push({ offset, entry: { type: entry.type, customType: entry.customType, id: entry.id, parentId: entry.parentId,
+          timestamp: entry.timestamp, details: { name, args } } });
       } else if (typeof entry.uuid === "string") {
         // Parent chains may pass through ordinary assistant/progress records; retain only links.
         records.push({ offset, entry: { uuid: entry.uuid, parentUuid: entry.parentUuid } });
@@ -150,6 +155,55 @@ function claudeCommand(entry: Readonly<Record<string, unknown>>): string | null 
   // Native local commands put name before message; skill echoes put message first.
   const command = /^(?:<command-name>(\/[^<]+)<\/command-name>\s*<command-message>[^<]*<\/command-message>|<command-message>[^<]*<\/command-message>\s*<command-name>(\/[^<]+)<\/command-name>)(?:\s*<command-args>([\s\S]*)<\/command-args>)?$/u.exec(content.trim());
   return command ? normalize(`${command[1] ?? command[2]} ${command[3] ?? ""}`) : null;
+}
+
+/** The command a gjc skill run records, however it was typed (gjc 0.18.12 writes the same record from its TUI). */
+function gjcSkillCommand(entry: Readonly<Record<string, unknown>>): string | null {
+  if (entry.type !== "custom_message" || entry.customType !== "skill-prompt") return null;
+  const details = object(entry.details);
+  if (typeof details.name !== "string" || !details.name) return null;
+  return gjcSkillText(`/skill:${details.name} ${typeof details.args === "string" ? details.args : ""}`);
+}
+
+/** gjc keeps the spaces inside a skill's arguments (`"a  b"` is not `"a b"`) and trims only their ends. */
+function gjcSkillText(text: string): string {
+  const [, command = "", args = ""] = /^(\S*)\s*([\s\S]*)$/u.exec(text.trim()) ?? [];
+  return args ? `${command} ${args}` : command;
+}
+
+/** The agent's own record of a typed command, which a later record can be told apart from. */
+function commandEcho(agent: string, entry: Readonly<Record<string, unknown>>): string | null {
+  return agent === "claude" ? claudeCommand(entry) : agent === "gjc" ? gjcSkillCommand(entry) : null;
+}
+
+/** The sent text as `commandEcho` records it. */
+const echoText = (agent: string, text: string): string => agent === "gjc" ? gjcSkillText(text) : normalize(text);
+
+/**
+ * The end of the turn a gjc skill record started: its first assistant message off that record's branch that asks
+ * for no tool. Another prompt joining the turn first leaves the end to no one.
+ */
+function gjcSkillTurnEnd(sent: CommandSend, records: readonly CommandTranscriptRecord[], until: number, used: ReadonlySet<number>,
+  echoOffset: number | null | undefined): { offset: number; at: number } | null {
+  const inWindow = (entry: Readonly<Record<string, unknown>>): boolean => {
+    const time = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
+    return time > sent.at && time < until;
+  };
+  const echoes = records.filter(({ entry, offset }) => (echoOffset === undefined || offset === echoOffset)
+    && inWindow(entry) && gjcSkillCommand(entry) === gjcSkillText(sent.text));
+  const echo = echoes.length === 1 ? echoes[0] : undefined;
+  if (!echo || typeof echo.entry.id !== "string") return null;
+  const turn = new Set([echo.entry.id]);
+  for (const { entry, offset } of records) {
+    if (offset <= echo.offset || typeof entry.parentId !== "string" || !turn.has(entry.parentId)) continue;
+    const message = object(entry.message);
+    if (gjcSkillCommand(entry) !== null || message.role === "user") return null;
+    if (message.role === "assistant" && typeof message.stopReason === "string" && message.stopReason !== "toolUse") {
+      return inWindow(entry) && !used.has(offset) ? { offset, at: Date.parse(String(entry.timestamp)) } : null;
+    }
+    if (typeof entry.id === "string") turn.add(entry.id);
+  }
+  return null;
 }
 
 /** Linked output follows its nearest command ancestor. Only unlinked output uses echo FIFO. */
@@ -193,8 +247,9 @@ function claudeOutputEchoes(records: readonly CommandTranscriptRecord[]): Readon
 }
 
 /**
- * The only record types transcriptEvidence takes a pi, omp, gjc or OmO send's result from; a pi branch is resumed
- * only when none was written off it meanwhile (resumedBranch in conversation.ts).
+ * The only record types transcriptEvidence takes a pi, omp, gjc or OmO send's result from, besides the end of a gjc
+ * skill's turn (gjcSkillTurnEnd); a pi branch is resumed only when none was written off it meanwhile (resumedBranch in
+ * conversation.ts).
  */
 export const PI_EVIDENCE_TYPES: ReadonlySet<string> = new Set(["model_change", "thinking_level_change", "compaction"]);
 
@@ -202,6 +257,7 @@ export const PI_EVIDENCE_TYPES: ReadonlySet<string> = new Set(["model_change", "
 function transcriptEvidence(sent: CommandSend, records: readonly CommandTranscriptRecord[], until: number, used: ReadonlySet<number> = new Set(),
   echoOffset?: number | null, outputs?: ReadonlyMap<number, number>): { offset: number; at: number } | null {
   const invocation = sent.invocations[0];
+  if (sent.agent === "gjc" && invocation?.name.startsWith("skill:")) return gjcSkillTurnEnd(sent, records, until, used, echoOffset);
   // A reserved byte offset may now contain another command after an in-place rewrite.
   const matchingEchoes = sent.agent === "claude" ? records.filter(({ entry, offset }) => {
     const time = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
@@ -454,13 +510,14 @@ export class CommandReservations {
     for (const sent of sends) {
       if (sent.transcriptAmbiguous || sent.transcriptEvidence || (sent.transcriptStore !== undefined && sent.transcriptStore !== store)) continue;
       sent.transcriptStore = store;
-      if (sent.agent === "claude") {
+      const echoed = sent.agent === "claude" || (sent.agent === "gjc" && sent.invocations[0]?.name.startsWith("skill:") === true);
+      if (echoed) {
         const candidates = records.filter(({ entry, offset }) => {
           const time = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
           return (!echoes.has(offset) || offset === sent.transcriptEcho)
-            && time > sent.at && time < sent.at + WINDOW_MS && claudeCommand(entry) === normalize(sent.text);
+            && time > sent.at && time < sent.at + WINDOW_MS && commandEcho(sent.agent, entry) === echoText(sent.agent, sent.text);
         });
-        const pending = sends.filter(other => other.agent === sent.agent && normalize(other.text) === normalize(sent.text)
+        const pending = sends.filter(other => other.agent === sent.agent && echoText(other.agent, other.text) === echoText(sent.agent, sent.text)
           && !other.transcriptEvidence && !other.transcriptAmbiguous
           && (other === sent || other.transcriptEcho === undefined)
           && (other.transcriptStore === undefined || other.transcriptStore === store)
@@ -484,7 +541,7 @@ export class CommandReservations {
       // A later unrelated delivery closes observation, not ownership: discard its late record
       // rather than giving it to a newer same-command send.
       const evidence = transcriptEvidence(sent, records, sent.at + WINDOW_MS, used,
-        sent.agent === "claude" ? sent.transcriptEcho ?? null : undefined, outputs);
+        echoed ? sent.transcriptEcho ?? null : undefined, outputs);
       if (!evidence) continue;
       if (this.transcriptClaims.length >= RESULT_RESERVATION_CAP) {
         sent.transcriptAmbiguous = true;

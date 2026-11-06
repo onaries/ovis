@@ -241,6 +241,9 @@ let recordingShortcut = false;
 export function setShortcutRecording(recording: boolean): void {
   recordingShortcut = recording;
 }
+export function isRecordingShortcut(): boolean {
+  return recordingShortcut;
+}
 
 export function useShortcuts(actions: AppActions, enabled: boolean): void {
   const { settings } = useSettings();

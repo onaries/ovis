@@ -36,6 +36,10 @@ it("looks past only informational and local-command notices, never new user work
   expect(conversationFinishPresented({ source: "claude-transcript", turns: [
     answer, { role: "user", ts: null, parts: [{ kind: "notice", text: "Work arrived", source: "async-result" }] },
   ] })).toBe(false);
+  // an OmO goal waiting on background work after its answer starts nothing yet
+  expect(conversationFinishPresented({ source: "omp-transcript", turns: [
+    answer, { role: "user", ts: null, parts: [{ kind: "goal_wait", due_at: "2026-10-19T00:05:00Z", waiting_on: { tasks: 0, monitors: 1, terminals: 0, dags: 0, cells: 0 } }] },
+  ] })).toBe(true);
 });
 
 it("binds a completed answer to one finish and rejects unchanged new-finish responses", () => {

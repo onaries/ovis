@@ -191,3 +191,17 @@
 .relay-shell-code-id {
   margin: var(--space-4) 0;
 }
+
+/* QR code and pairing code, for a device without an account: folded under the sign-in */
+.relay-shell-other-ways {
+  margin-top: var(--space-4);
+}
+
+.relay-shell-other-ways > p {
+  margin-top: var(--space-2);
+}
+
+.relay-shell-other-ways > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+}

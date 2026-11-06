@@ -7,7 +7,7 @@ import type { PaneInfo, SessionSnapshot, WorkspaceInfo } from "../../shared/prot
 import { rosterPanes } from "./dagPane.ts";
 import type { ViewedScope } from "./lastViewedPane.ts";
 import { splitPinnedGroups, type WorkspaceGroup } from "./sidebarPins.ts";
-import { worktreeGroups } from "./workspaceOrder.ts";
+import { splitBackgroundGroups, worktreeGroups } from "./workspaceOrder.ts";
 
 type Roster = Pick<SessionSnapshot, "workspaces" | "tabs" | "panes" | "layouts">;
 /** the pane last seen here in a tab or a workspace (lib/lastViewedPane.ts), for the PC stepped on */
@@ -32,15 +32,31 @@ function step<T>(items: readonly T[], index: number, direction: -1 | 1): T | und
  * click. Null without a selected pane or another tab with a pane.
  */
 export function adjacentTabPane(roster: Roster, selectedPaneId: string | null, direction: -1 | 1, viewed: ViewedPane): string | null {
+  const strip = tabStrip(roster, selectedPaneId);
+  if (!strip || strip.tabs.length < 2) return null;
+  const next = step(strip.tabs, strip.tabs.findIndex((tab) => tab.tab_id === strip.selected.tab_id), direction);
+  return next ? tabPane(roster, strip.panes, next.tab_id, viewed) : null;
+}
+
+/** The pane the tab at `number` (1-based) of the selected pane's tab strip opens, as adjacentTabPane's; null past the last tab. */
+export function numberedTabPane(roster: Roster, selectedPaneId: string | null, number: number, viewed: ViewedPane): string | null {
+  const strip = tabStrip(roster, selectedPaneId);
+  const tab = strip?.tabs[number - 1];
+  return strip && tab ? tabPane(roster, strip.panes, tab.tab_id, viewed) : null;
+}
+
+/** The selected pane's workspace's tabs that have a pane the strip lists, in herdr's order. */
+function tabStrip(roster: Roster, selectedPaneId: string | null) {
   const selected = roster.panes.find((pane) => pane.pane_id === selectedPaneId);
   if (!selected) return null;
   const panes = rosterPanes(roster.panes.filter((pane) => pane.workspace_id === selected.workspace_id), selectedPaneId);
   const tabs = roster.tabs.filter((tab) => tab.workspace_id === selected.workspace_id && panes.some((pane) => pane.tab_id === tab.tab_id));
-  if (tabs.length < 2) return null;
-  const next = step(tabs, tabs.findIndex((tab) => tab.tab_id === selected.tab_id), direction);
-  if (!next) return null;
-  const own = panes.filter((pane) => pane.tab_id === next.tab_id);
-  return firstPane(own, viewed("tab", next.tab_id), roster.layouts?.find((layout) => layout.tab_id === next.tab_id)?.focused_pane_id)?.pane_id ?? null;
+  return { selected, panes, tabs };
+}
+
+function tabPane(roster: Roster, panes: readonly PaneInfo[], tabId: string, viewed: ViewedPane): string | null {
+  const own = panes.filter((pane) => pane.tab_id === tabId);
+  return firstPane(own, viewed("tab", tabId), roster.layouts?.find((layout) => layout.tab_id === tabId)?.focused_pane_id)?.pane_id ?? null;
 }
 
 /**
@@ -57,10 +73,17 @@ export function workspaceRows(groups: readonly WorkspaceGroup<WorkspaceInfo>[], 
 /**
  * The rows a PC's sidebar would draw with no filter, from the order it draws (`ordered`, herdr's or a
  * drag's): pinned rows first in pin order, then the rest. For a PC whose roster is not drawn (folded).
+ * `backgroundFolded`, with Settings → Background workspaces apart on: the tagged ones come last, and a
+ * folded part keeps only the selected one and those with a workspace in `blocked`, as the sidebar
+ * draws them; null while the setting is off.
  */
-export function sidebarWorkspaceSteps(ordered: readonly WorkspaceInfo[], pinnedIds: readonly string[], folded: (repoKey: string) => boolean, selectedWorkspaceId: string | null): string[] {
-  const { pinned, rest } = splitPinnedGroups(worktreeGroups(ordered), pinnedIds, (workspace) => workspace.workspace_id);
-  return workspaceRows([...pinned, ...rest], (group) => folded(group.workspace.worktree?.repo_key ?? ""), selectedWorkspaceId);
+export function sidebarWorkspaceSteps(ordered: readonly WorkspaceInfo[], pinnedIds: readonly string[], folded: (repoKey: string) => boolean, selectedWorkspaceId: string | null, backgroundFolded: boolean | null = null, blocked: ReadonlySet<string> = new Set()): string[] {
+  const tree = worktreeGroups(ordered);
+  const { pinned, rest } = splitPinnedGroups(tree, pinnedIds, (workspace) => workspace.workspace_id);
+  const worktreeIds = new Set(tree.flatMap((group) => group.children.map((child) => child.workspace_id)));
+  const { people, background } = backgroundFolded === null ? { people: rest, background: [] } : splitBackgroundGroups(rest, worktreeIds);
+  const shown = backgroundFolded ? background.filter((group) => [group.workspace, ...group.children].some((member) => member.workspace_id === selectedWorkspaceId || blocked.has(member.workspace_id))) : background;
+  return workspaceRows([...pinned, ...people, ...shown], (group) => folded(group.workspace.worktree?.repo_key ?? ""), selectedWorkspaceId);
 }
 
 /** each drawn sidebar's rows as it last drew them, by PC: its filter and its folds as shown */

@@ -136,7 +136,7 @@ it("serves a pi pane's native transcript over HTTP", async () => {
   expect(first.turns[0]!.parts).toEqual([{ kind: "text", text: "Check chat" }]);
   // the figure pi's own footer shows: input + output + both cache tiers
   // the figure pi's own footer shows: input + output + both cache tiers
-  expect(first.metadata).toEqual({ model: "pi-contract-model", reasoning_effort: null, context: { used: 35, window: null } });
+  expect(first.metadata).toEqual({ model: "pi-contract-model", reasoning_effort: null, context: { used: 35, window: null }, provider: "test" });
 });
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

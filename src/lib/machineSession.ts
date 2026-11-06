@@ -2,6 +2,7 @@ import type { PendingMessage, PendingRemoval, ServerMessage } from "../../shared
 import { paneStorageId } from "../../shared/machines.ts";
 import { afterSend, afterSettled, greetingMemory, rememberGreeting } from "./greeting.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
+import { setPasteFolder } from "./pasteFolders.ts";
 import { pendingMessages, type PendingMessageStore } from "./pendingMessages.ts";
 import { rememberWaitingSend, waitingBaseline, waitingKey, type WaitingBaseline } from "./sentWaiting.ts";
 import { watchPageInUse } from "./presence.ts";
@@ -47,7 +48,7 @@ export class MachineSession {
     // Installed before view subscribers, and kept even while this PC has no mounted pane.
     this.offMessage = this.socket.on((message) => {
       if (this.closed) return;
-      if (message.type === "features") this.announcedLifetime = message.herdr_lifetime;
+      if (message.type === "features") { this.announcedLifetime = message.herdr_lifetime; setPasteFolder(this.machineId, message.paste_dir); }
       // a connection that came back to a replaced herdr, or to one it cannot prove, can say so before
       // the roster does: the earlier herdr's drafts and lenses leave the reused pane IDs before any
       // pane hears of it
@@ -131,6 +132,8 @@ export class MachineSession {
     if (this.currentScope !== null) this.store.suspendScope(this.currentScope);
     this.currentScope = null;
     this.announcedLifetime = undefined;
+    // the next connection's features frame names its own folder; an older bridge's snapshot names none
+    setPasteFolder(this.machineId, undefined);
     this.resumedReceipts = [];
     this.going.clear();
     this.currentConnection = null;

@@ -276,6 +276,11 @@ export class HerdrSocket {
     }));
   }
 
+  /** when the open connection opened (Date.now()); null while none is open. A later time than an earlier reading means it dropped in between */
+  get connectedSince(): number | null {
+    return this.openedAt;
+  }
+
   get connected(): boolean {
     return this.socket?.readyState === SOCKET_OPEN;
   }

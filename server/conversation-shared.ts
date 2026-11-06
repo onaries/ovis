@@ -40,7 +40,8 @@ export const UNAVAILABLE_DIAGNOSTICS = [...COPILOT_UNAVAILABLE_REASONS, "agent_c
 
 export class ConversationUnavailable extends Error {
   /** `screen`: the model and effort the agent's own live status line states (start-screen.ts), for the scrollback standing in */
-  constructor(reason: string, readonly screen?: ConversationMetadata, readonly diagnostic?: typeof UNAVAILABLE_DIAGNOSTICS[number]) {
+  /** `hint`: what the user could change for the pane to be read (ConversationResponse.hint) */
+  constructor(reason: string, readonly screen?: ConversationMetadata, readonly diagnostic?: typeof UNAVAILABLE_DIAGNOSTICS[number], readonly hint?: "copilot_ui_server") {
     super(reason);
     this.name = "ConversationUnavailable";
   }

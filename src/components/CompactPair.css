@@ -1,0 +1,40 @@
+.compact-pair {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.compact-pair > .qr,
+.compact-pair-qr-empty {
+  flex: none;
+  width: 132px;
+  height: 132px;
+  border-radius: var(--radius-sm);
+}
+
+.compact-pair-qr-empty {
+  background: var(--bg-hover);
+}
+
+.compact-pair-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.compact-pair-code {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  overflow-wrap: anywhere;
+}
+
+.compact-pair-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

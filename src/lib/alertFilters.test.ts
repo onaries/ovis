@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { keyedAlertPcs, parseAlertFilters, withAlertFilters } from "./alertFilters.ts";
+import { alertFiltersChanged, keyedAlertPcs, parseAlertFilters, withAlertFilters } from "./alertFilters.ts";
 
 describe("this device's finer alert choices", () => {
   it("reads only known fields, and anything else as the defaults", () => {
@@ -9,6 +9,14 @@ describe("this device's finer alert choices", () => {
     expect(parseAlertFilters("[1]")).toEqual({ pcsOff: [] });
     expect(parseAlertFilters(JSON.stringify({ permission: false, error: true, pcsOff: ["Desk", "Desk", 3] })))
       .toEqual({ permission: false, error: true, pcsOff: ["Desk"] });
+  });
+
+  it("counts a folded choice moved off what it follows: Needs permission off Needs input's value, Stopped on an error on", () => {
+    expect(alertFiltersChanged({ pcsOff: [] }, true)).toBe(0);
+    expect(alertFiltersChanged({ permission: true, pcsOff: [] }, true)).toBe(0);
+    expect(alertFiltersChanged({ permission: false, pcsOff: [] }, true)).toBe(1);
+    expect(alertFiltersChanged({ permission: true, pcsOff: [] }, false)).toBe(1);
+    expect(alertFiltersChanged({ permission: false, error: true, pcsOff: ["Desk"] }, true)).toBe(2);
   });
 
   it("adds the relay ID of a PC turned off by name once the roster names it, and nothing else (#2876)", () => {

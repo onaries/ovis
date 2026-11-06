@@ -6,8 +6,11 @@ export const SOLO_PANE_QUERY = "(max-width: 768px)";
 
 /** A compact-height phone screen (a foldable's outer display, landscape or the keyboard): a lone tab is not drawn there (TabStrip). */
 export const CRAMPED_QUERY = "(max-width: 768px) and (max-height: 700px)";
-/** Whether the tab strip is left out of a workspace's view: a lone tab on a cramped screen. */
-export const loneTabHidden = (cramped: boolean, tabCount: number): boolean => cramped && tabCount === 1;
+/**
+ * Whether the tab strip is left out of a workspace's view: on a phone the header's title lists the
+ * tabs (`inHeader`, App), and a lone tab on a cramped screen needs no row.
+ */
+export const tabRowHidden = (cramped: boolean, tabCount: number, inHeader: boolean): boolean => inHeader || (cramped && tabCount === 1);
 
 /**
  * The pane a tab shows alone, or null when every pane is drawn: herdr's zoomed pane, else on a

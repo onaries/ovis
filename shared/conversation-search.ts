@@ -256,21 +256,27 @@ export function pickAhead(turns: readonly (ConversationTurn | null)[], match: Co
 }
 
 /**
- * The store row (ConversationTurn.text_rows) of the part searchableText's first match of `pattern`
- * begins in: its parts are joined by a blank line, which no match begins in.
+ * The part (its index in turn.parts) searchableText's first match of `pattern` begins in: its parts
+ * are joined by a blank line, which no match begins in.
  */
-function matchRow(turn: ConversationTurn, pattern: RegExp): number | undefined {
-  const rows = turn.text_rows, found = pattern.exec(searchableText(turn));
-  if (rows === undefined || found === null) return undefined;
-  let end = 0, part = -1;
-  for (const each of turn.parts) {
-    if (each.kind !== "text") continue;
-    part++;
-    if (turn.role !== "user" && each.phase === "commentary") continue;
-    end += plainText(each.text).length + 2;
-    if (found.index < end) return rows[part];
+export function matchPart(turn: ConversationTurn, pattern: RegExp): number | undefined {
+  const found = pattern.exec(searchableText(turn));
+  if (found === null) return undefined;
+  let end = 0;
+  for (const [index, part] of turn.parts.entries()) {
+    if (part.kind !== "text" || turn.role !== "user" && part.phase === "commentary") continue;
+    end += plainText(part.text).length + 2;
+    if (found.index < end) return index;
   }
   return undefined;
+}
+
+/** The store row (ConversationTurn.text_rows) of the part searchableText's first match of `pattern` begins in. */
+function matchRow(turn: ConversationTurn, pattern: RegExp): number | undefined {
+  const rows = turn.text_rows;
+  const index = rows === undefined ? undefined : matchPart(turn, pattern);
+  if (rows === undefined || index === undefined) return undefined;
+  return rows[turn.parts.slice(0, index).filter((part) => part.kind === "text").length];
 }
 
 /** The turns that hold the pattern, newest first, each with its first match. */

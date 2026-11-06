@@ -53,7 +53,7 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
 };
 
 /** `activity`: App's live counters per PC and finishes looked at here; both sidebar lists draw from it.
- *  `machines` are the PCs this device shows; `hiddenCount` says how many it keeps out (Settings → Remote PCs) */
+ *  `machines` are the PCs this device shows; `hiddenCount` says how many it keeps out (Settings → Devices and PCs) */
 interface Props { machines: Machine[]; hiddenCount?: number; /** every PC of the roster, the hidden ones too: Manage PC's Hide on this device keeps those hidden, and the PCs head's hidden menu names them (lib/hiddenMachines.ts) */ allMachines?: Machine[]; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; /** whether the Herdr app's window owns a PC's workspaces (lib/machineContext.tsx AppLayoutContext); none without it */ appLayout?: (machineId: string) => LayoutOffer; /** a phone's drawer is out: closing it clears the filter */ drawerOpen?: boolean; /** counts the command palette's Filter workspaces and agents: each new count shows the field and focuses it */ filterRequest?: number;/** each open, connected PC shows its CPU, memory and disk (lib/settings.ts pcLoadOn) */ pcLoad?: boolean; /** the sidebar is on screen (a wide window's that is not hidden, a phone's open drawer): the PC load is asked for only then */ shown?: boolean; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void; /** a sign-in tab the usage popover opened */ onUsageLogin(paneId: string): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
@@ -184,7 +184,7 @@ export function MachineSidebar(props: Props) {
   };
   const drawerOpen = props.drawerOpen === true;
   const hiddenCount = props.hiddenCount ?? 0;
-  // The PCs this device keeps out (Settings → Remote PCs → Show in sidebar) are said in the PCs head: an eye
+  // The PCs this device keeps out (Settings → Devices and PCs → Show in sidebar) are said in the PCs head: an eye
   // crossed out and their count, which opens a menu that shows each again in place or goes to that setting.
   // Showing one follows the setting's rules (lib/hiddenMachines.ts): ids of PCs gone from the roster drop
   // out, and a selection stays where it is.
@@ -213,7 +213,7 @@ export function MachineSidebar(props: Props) {
     focusPcsHead.current = hiddenList.length === 1 && hiddenList[0]!.id === id;
     setHiddenMachines(withMachineHidden(roster, hiddenIds, id, false));
   };
-  const openRemoteSettings = () => { requestSettingsPage({ page: "remote", section: "sidebar-pcs" }); props.actions.openSettings(); };
+  const openRemoteSettings = () => { requestSettingsPage({ page: "devices", section: "sidebar-pcs" }); props.actions.openSettings(); };
   // the PCs section folds to its head as Agents does (AgentSidebar.tsx), kept on this device; while the
   // filter keeps rows in it, it stands open and its caret folds it for the filter's time only
   const listId = useId();
@@ -246,7 +246,7 @@ export function MachineSidebar(props: Props) {
     setPcsFold(sections.includes("pcs"));
     setAgentsFold((last) => ({ folded: sections.includes("agents"), seq: (last?.seq ?? 0) + 1 }));
   };
-  // Manage PC's Hide on this device is Settings → Remote PCs → Show in sidebar turned off, with its rules: the last
+  // Manage PC's Hide on this device is Settings → Devices and PCs → Show in sidebar turned off, with its rules: the last
   // PC shown is not offered, and App moves a selection off the PC. The PC's header goes with it, so the focus goes
   // to the PCs head's count of the PCs hidden here, whose menu shows them again
   const hiddenButton = useRef<HTMLButtonElement>(null);
@@ -270,7 +270,7 @@ export function MachineSidebar(props: Props) {
   const unanswered = props.machines.some((machine) => machine.snapshot === null);
   const noMatchWords = useAnnouncedText(filter.active && filter.matches === 0 && props.machines.length > 0 ? `${t(unanswered ? "No workspaces or agents match on the PCs that answered" : "No workspaces or agents match")}\n${t("Try other words, or clear the filter.")}` : null);
   // no top bar: a workspace starts from its PC's header (the lone Host's New workspace row), and Add PC lives in
-  // Settings → Remote PCs. The filter above the lists is a row of the same grid, one field and its clear, never
+  // Settings → Devices and PCs. The filter above the lists is a row of the same grid, one field and its clear, never
   // taller than a row.
   const agentList = <AgentSidebar key="agents" foldRequest={agentsFold} listId={agentsListId} machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} stateWord={(machine) => t(STATE_WORD[machine.state])} watching={props.watching} onSelect={props.onSelect} />;
   return <SidebarActivityProvider value={activity}><SidebarFilterProvider value={filterView}><div ref={shell} className={`sidebar-shell${order === "agents" ? " is-agents-first" : ""}`} onBlur={onSidebarBlur}>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type MouseEvent, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
-import { ArchiveRestore, Bot, Columns2, Ellipsis, Eraser, Folder, FolderInput, Maximize2, Minimize2, MoveHorizontal, Pencil, Plus, RotateCw, Rows2, ArrowLeftRight, Terminal, TextSearch, TextWrap, X } from "lucide-react";
+import { ArchiveRestore, Bot, Columns2, Ellipsis, Eraser, Folder, FolderInput, LockOpen, Maximize2, Minimize2, MoveHorizontal, Pencil, Plus, RotateCw, Rows2, ArrowLeftRight, Terminal, TextSearch, TextWrap, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { HerdrPane, HerdrTab, PaneLayoutSnapshot, SessionSnapshot } from "../../shared/protocol.ts";
 import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
@@ -14,7 +14,7 @@ import { PaneCachedContext, PanePresentedContext, PaneShownContext, PaneSubmitCo
 import { cachedPaneCells, visitPaneTab } from "../lib/paneTabCache.ts";
 import { ApiError, routeMissing } from "../lib/api.ts";
 import { layoutCells, zoomMode } from "../lib/layoutMap.ts";
-import { CRAMPED_QUERY, layoutTopology, loneTabHidden, paneContextPress, paneFieldTarget, SOLO_PANE_QUERY, soloPane, splitPath, splitRatioAt } from "../lib/paneCanvas.ts";
+import { CRAMPED_QUERY, layoutTopology, paneContextPress, paneFieldTarget, SOLO_PANE_QUERY, soloPane, splitPath, splitRatioAt, tabRowHidden } from "../lib/paneCanvas.ts";
 import { rosterPanes } from "../lib/dagPane.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
@@ -26,6 +26,7 @@ import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import type { RenameRequest } from "../lib/useRenameRequest.ts";
 import { paneLifetimes } from "../lib/paneLifetime.ts";
 import { usePaneLocked } from "../lib/paneLocks.ts";
+import { sidebarPinKey } from "../lib/sidebarPins.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { displayPaneTitle, StatusBadge } from "./Sidebar.tsx";
 import { paneStatus } from "../lib/status.ts";
@@ -49,7 +50,6 @@ interface Props {
   onOpenInHalf?: (paneId: string, side: SplitSide) => void;
   /** the PC's panes are mirrored (no terminal attach there): their grid can be wider than this screen */
   mirrored?: boolean;
-  watching?: boolean;
   /** opens Recover unsent text for the pane, offered while earlier herdrs' panes left some (UnsentText) */
   onRecoverUnsent?: (target: HerdrPane) => void;
   /** Search conversation over the pane's chat (ChatView), or null where it shows no chat to search */
@@ -61,6 +61,10 @@ interface Props {
   onMoveToWorkspace?: (tabId: string, workspaceId: string) => Promise<void>;
   /** the Rename tab shortcut or palette action for the open pane: where the row is left out, its dialog stands in for the row's field (TabStrip clears it) */
   renameRequest?: RenameRequest | null;
+  /** a phone's header title lists the tabs (App): no row is drawn, and its sheet holds New terminal and New tab with agent… */
+  tabsInHeader?: boolean;
+  /** a watching device sends no settings: it sees a locked pane's Unlock and cannot use it, as in the Agents list */
+  watching?: boolean;
 }
 type Menu = { paneId: string; anchor: HTMLElement; point?: { x: number; y: number }; previousFocus: HTMLElement | null };
 type RenameTarget = { kind: "pane"; pane: HerdrPane } | { kind: "agent"; pane: HerdrPane; name: string | null };
@@ -84,7 +88,7 @@ interface Drag {
 }
 
 /** The active tab, drawn from herdr's rectangles. No browser-owned layout or PTY state. */
-export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged, renderPane, actionsRef, onOpenInHalf, mirrored = false, watching = false, onRecoverUnsent, onSearchConversation, onNewTab, onNewTerminal, onMoveToWorkspace, renameRequest = null }: Props) {
+export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged, renderPane, actionsRef, onOpenInHalf, mirrored = false, onRecoverUnsent, onSearchConversation, onNewTab, onNewTerminal, onMoveToWorkspace, renameRequest = null, tabsInHeader = false, watching = false }: Props) {
   const t = useT();
   const { settings, update: updateSettings } = useSettings();
   const narrowScreen = useMediaQuery(MIRROR_WRAP_QUERY);
@@ -138,9 +142,9 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     ?? snapshot?.panes.find((item) => item.tab_id === previousTab)
     ?? null;
   const layout = snapshot?.layouts.find((item) => item.tab_id === presented?.tab_id) ?? null;
-  // the open tab is a lone one with no row (TabStrip's cramped): its lone pane draws no ellipsis
+  // the open tab has no row (a phone's header lists the tabs, or a lone tab on a cramped screen): its lone pane draws no ellipsis
   const loneRowHidden = presented !== null
-    && loneTabHidden(cramped, snapshot?.tabs.filter((tab) => tab.workspace_id === presented.workspace_id).length ?? 0);
+    && tabRowHidden(cramped, snapshot?.tabs.filter((tab) => tab.workspace_id === presented.workspace_id).length ?? 0, tabsInHeader);
   const topology = layout ? layoutTopology(layout) : "";
   const latest = useRef({ topology, tabId: presented?.tab_id, paneId: selectedPaneId, selection: 0 });
   latest.current = { topology, tabId: presented?.tab_id, paneId: selectedPaneId,
@@ -233,12 +237,13 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     ...(!appLayout.arrange ? [] : [{ id: "zoom", label: t(layout && zoomMode(layout, target.pane_id) === "off" ? "Unzoom pane" : "Zoom pane"), icon: Maximize2,
       run: () => zoom(target) }]),
   ];
-  // A lone tab on a cramped phone has no row (TabStrip), so the pane's menu carries what the row's
-  // menu would: the tab's other panes, shown one at a time there, and the way to a new tab. There
-  // the pane draws no ellipsis of its own: the header's More menu offers this menu (App)
+  // A tab with no row (a phone's header lists the tabs, a lone tab on a cramped phone: TabStrip), so
+  // the pane's menu carries what the row's menu would: the tab's other panes, shown one at a time
+  // there, and the way to a new tab unless the header's tab sheet has it. There the pane draws no
+  // ellipsis of its own: the header's More menu offers this menu (App)
   const rowItems = (target: HerdrPane): { panes: RowMenuItem[]; tab: RowMenuItem[] } | null => {
     const tabs = snapshot?.tabs.filter((tab) => tab.workspace_id === target.workspace_id).length ?? 0;
-    if (!loneTabHidden(cramped, tabs)) return null;
+    if (!tabRowHidden(cramped, tabs, tabsInHeader)) return null;
     const tab = snapshot?.tabs.find((entry) => entry.tab_id === target.tab_id);
     const own = rosterPanes(snapshot?.panes.filter((item) => item.tab_id === target.tab_id) ?? [], selectedPaneId);
     return {
@@ -248,7 +253,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
         current: item.pane_id === selectedPaneId, run: () => onSelect(item.pane_id),
       })),
       tab: [
-        ...(onNewTerminal ? [{ id: "new-terminal", label: t("New terminal"), icon: Plus, run: () => {
+        ...(onNewTerminal && !tabsInHeader ? [{ id: "new-terminal", label: t("New terminal"), icon: Plus, run: () => {
           const tabId = latest.current.tabId;
           setError(null);
           void onNewTerminal().catch((reason: unknown) => {
@@ -264,7 +269,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
             const anchor = document.querySelector<HTMLElement>(".header-more-button") ?? canvas.current;
             if (anchor) setMovingTab({ tab, anchor });
           } }] : []),
-        ...(onNewTab ? [{ id: "new-agent-tab", label: t("New tab with agent…"), icon: Bot, run: onNewTab }] : []),
+        ...(onNewTab && !tabsInHeader ? [{ id: "new-agent-tab", label: t("New tab with agent…"), icon: Bot, run: onNewTab }] : []),
         // the row's inline name field is gone with it: the tab is named in a dialog, as a pane is
         ...(!appLayout.rename || !tab ? [] : [{ id: "rename-tab", label: t("Rename tab"), icon: Pencil, run: () => setRenamingTab(tab) }]),
         // the tab's last pane closes it too, but a split tab has no other way to close as one (the row's confirmation: it is the workspace's last tab)
@@ -294,7 +299,13 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
         icon: mirrorWraps ? MoveHorizontal : TextWrap,
         run: () => updateSettings({ terminalMirrorWrap: !mirrorWraps }) }] : []),
       ...(onRecoverUnsent && paneLifetimes.unsent().length > 0 ? [{ id: "recover-unsent", label: t("Recover unsent text"), icon: ArchiveRestore, run: () => onRecoverUnsent(target) }] : []),
-      ...(paneLocked(target.pane_id) ? [] : [{ id: "close", label: t("Close pane"), icon: X, danger: true, run: () => requestClose(target) }]),
+      // a locked pane is unlocked here in place of its Close: an agent that exited leaves the Agents list, and its Unlock with it (#2977)
+      ...(paneLocked(target.pane_id)
+        ? [{ id: "unlock", label: t("Unlock agent"), icon: LockOpen, disabled: watching, run: () => {
+          const key = sidebarPinKey(machineId, target.pane_id);
+          updateSettings(({ lockedAgents }) => ({ lockedAgents: lockedAgents.filter((held) => held !== key) }));
+        } }]
+        : [{ id: "close", label: t("Close pane"), icon: X, danger: true, run: () => requestClose(target) }]),
     ];
   };
   const items = target ? itemsFor(target) : [];

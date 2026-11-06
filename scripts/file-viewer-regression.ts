@@ -448,8 +448,12 @@ try {
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   const settingsOverPreview = page.getByRole("dialog", { name: "Settings", exact: true });
   await settingsOverPreview.waitFor();
-  await openSettingsPage(page, "Remote PCs");
-  await settingsOverPreview.getByRole("button", { name: "Add PC", exact: true }).click();
+  await openSettingsPage(page, "Devices and PCs");
+  // Add PC over SSH is one of Connect a device's other ways
+  await settingsOverPreview.getByRole("button", { name: "Connect", exact: true }).click();
+  const connectDevice = page.getByRole("dialog", { name: "Connect a device", exact: true });
+  await connectDevice.locator(".connect-other > summary").click();
+  await connectDevice.getByRole("button", { name: "Add a PC over SSH", exact: true }).click();
   const addPc = page.locator("dialog.machine-dialog");
   await addPc.waitFor();
   await settingsOverPreview.waitFor({ state: "hidden" });

@@ -43,6 +43,11 @@ let cache: { raw: string | null; filters: AlertFilters } = { raw: null, filters:
 // where storage refuses the write (a full or blocked one), the choice lasts for this page
 let unsaved: AlertFilters | null = null;
 
+/** How many of the folded Alerts choices kept here differ from what they follow by default: Needs permission (Needs input's value) and Stopped on an error (off). */
+export function alertFiltersChanged(filters: AlertFilters, alertInput: boolean): number {
+  return Number(filters.permission !== undefined && filters.permission !== alertInput) + Number(filters.error === true);
+}
+
 export function readAlertFilters(): AlertFilters {
   if (unsaved !== null) return unsaved;
   let raw: string | null = null;

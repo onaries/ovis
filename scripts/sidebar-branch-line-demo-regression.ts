@@ -44,6 +44,16 @@ const patch = `(() => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
     const path = url.pathname.replace(/^\\/api\\/machines\\/[^/]+/, "/api");
     if (path === "/api/machines") return json({ machines: roster((await (await fetchDemo(input, init)).json()).machines) });
+    // the sidebar's one read for every repository (#2661): each workspace answered by the list below
+    if (path === "/api/worktree/inventory") {
+      const entries = [];
+      for (const id of url.searchParams.getAll("workspace_id")) {
+        const answer = await window.fetch(url.pathname.slice(0, -"inventory".length) + "list?workspace_id=" + encodeURIComponent(id), init);
+        const body = await answer.json();
+        entries.push(answer.ok ? { workspace_id: id, listing: body } : { workspace_id: id, error: { status: answer.status, code: "not_git_repository", message: String(body.error) } });
+      }
+      return json({ entries });
+    }
     if (path === "/api/worktree/list") {
       const id = url.searchParams.get("workspace_id");
       const entry = (open, checkout, branch, linked) => ({ path: checkout, branch, label: checkout, is_linked_worktree: linked, is_bare: false, is_detached: false, is_prunable: false, open_workspace_id: open });

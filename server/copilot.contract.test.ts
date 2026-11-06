@@ -250,7 +250,7 @@ const handoffTest = async (initialRegistration: boolean) => {
       await herdrRpc("pane.report_agent_session", { pane_id: duplicate.root_pane.pane_id, agent: "copilot",
         source: "herdr:copilot", seq: Date.now() * 1000 + 1, agent_session_id: handoffId });
       await expect(paneConversation(current)).rejects.toMatchObject({
-        message: "no_session_path", diagnostic: "copilot_peer_conflict",
+        message: "no_session_path", diagnostic: "copilot_peer_conflict", hint: undefined,
       });
       expect((await read()).source).toBe("scrollback");
     } finally { await workspaceClose(duplicate.workspace.workspace_id); }
@@ -755,7 +755,7 @@ it.skipIf(process.platform !== "linux")("never mistakes an explicitly resumed la
   try {
     await startFixture(current, resumed, `--resume=${resumed} --no-proof`);
     const url = `http://127.0.0.1:${app.port}/api/pane/conversation?pane_id=${encodeURIComponent(current)}`;
-    expect((await (await fetch(url)).json()).source).toBe("scrollback");
+    expect(await (await fetch(url)).json()).toEqual({ source: "scrollback", turns: [], hint: "copilot_ui_server" });
     expect((await fetch(`${url}&from=stale`)).status).toBe(409);
   } finally {
     await workspaceClose(created.workspace.workspace_id);

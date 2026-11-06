@@ -40,6 +40,22 @@
   padding: var(--space-3);
 }
 
+/* with Documents on (Settings: Documents in Files), four tabs do not fit beside the title and Close on
+   a phone or a narrow panel: they take the row under them, each an equal share of it */
+@media (max-width: 480px) {
+  .files-dialog .modal-header:has(.files-dialog-tabs > :nth-child(4)) { flex-wrap: wrap; }
+  .files-dialog .files-dialog-tabs:has(> :nth-child(4)) { order: 1; flex: 1 1 100%; display: flex; }
+  .files-dialog .files-dialog-tabs:has(> :nth-child(4)) > button { flex: 1 1 auto; min-width: 0; padding-inline: var(--space-1); overflow: hidden; }
+}
+
+@container file-panel (max-width: 480px) {
+  .files-dialog-docked .modal-header:has(.files-dialog-tabs > :nth-child(4)) { flex-wrap: wrap; padding-block: var(--space-1); }
+  .files-dialog-docked .files-dialog-tabs:has(> :nth-child(4)) { order: 1; flex: 1 1 100%; display: flex; }
+  .files-dialog-docked .files-dialog-tabs:has(> :nth-child(4)) > button { flex: 1 1 auto; min-width: 0; padding-inline: var(--space-1); overflow: hidden; }
+  /* the title gives way below 360px: Close keeps the row's end */
+  .files-dialog-docked .modal-header:has(.files-dialog-tabs > :nth-child(4)) > .icon-button:last-child { margin-left: auto; }
+}
+
 /* the narrowest panel keeps the tabs and Close; the palette's folder search waits for a wider one */
 @container file-panel (max-width: 360px) {
   .files-dialog-docked .modal-title,

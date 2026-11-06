@@ -54,6 +54,9 @@ export function updatePlan(options: { packaged: boolean; env: Env; platform: str
   const channel = options.channel ?? "stable";
   if (["0", "false", "off", "no"].includes(env["OVIS_UPDATES"]?.trim().toLowerCase() ?? "")) return { enabled: false, reason: "turned off with OVIS_UPDATES" };
   if (!options.packaged) return { enabled: false, reason: "a development run" };
+  // without app-update.yml electron-updater finds an update but fails to download it. Asked first:
+  // a Linux package gets its package-type file only from a build with a feed
+  if (!options.builtWithFeed) return { enabled: false, reason: "this build has no update feed" };
   let installer: Installer = "default";
   if (options.platform === "linux") {
     // chosen here, not by electron-updater: it goes by the package-type file alone, and electron-builder
@@ -67,8 +70,6 @@ export function updatePlan(options: { packaged: boolean; env: Env; platform: str
     else if (options.linuxPackage === "deb") installer = "deb";
     else return { enabled: false, reason: "only the AppImage and the .deb install update themselves" };
   }
-  // without app-update.yml electron-updater finds an update but fails to download it
-  if (!options.builtWithFeed) return { enabled: false, reason: "this build has no update feed" };
   const override = env["OVIS_UPDATE_URL"]?.trim();
   if (override) {
     let url: URL;

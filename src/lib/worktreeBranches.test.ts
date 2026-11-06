@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened } from "../../shared/protocol.ts";
-import { normalizeCheckoutPath, WorkspaceBranchCache, worktreeRepositories, worktreeWorkspaceSignature } from "./worktreeBranches.ts";
+import { MAX_INVENTORY_WORKSPACES } from "../../shared/workspace-lifecycle.ts";
+import { inventoryReads, MAX_INVENTORY_QUERY_CHARS, normalizeCheckoutPath, WorkspaceBranchCache, worktreeRepositories, worktreeWorkspaceSignature } from "./worktreeBranches.ts";
 import { branchWords, DETACHED } from "./paneBranch.ts";
 
 function workspace(id: string, path = `/repo/${id}`, repoKey = "repo", linked = true): WorkspaceInfo {
@@ -165,5 +166,23 @@ describe("worktree branch metadata", () => {
     cache.rememberOpened(opened("child", "/repo/child", "feature/new"));
     cache.applyListing("repo", listing([entry(null, "/repo/child", "feature/new")]), cache.generation);
     expect(cache.branchesFor(workspaces).size).toBe(0);
+  });
+});
+
+describe("inventoryReads (#2661)", () => {
+  const query = (ids: string[]) => ids.map((id) => `workspace_id=${encodeURIComponent(id)}`).join("&");
+  it("asks at most MAX_INVENTORY_WORKSPACES workspaces per read, in order", () => {
+    const ids = Array.from({ length: MAX_INVENTORY_WORKSPACES * 2 + 1 }, (_, at) => `w${at}`);
+    expect(inventoryReads(ids).map((read) => read.length)).toEqual([MAX_INVENTORY_WORKSPACES, MAX_INVENTORY_WORKSPACES, 1]);
+    expect(inventoryReads(ids).flat()).toEqual(ids);
+  });
+  it("keeps each read's query inside the relay's request target, reading an oversized workspace alone", () => {
+    const ids = Array.from({ length: 40 }, (_, at) => `ws-${at}-${"é".repeat(20)}`);
+    const reads = inventoryReads([...ids, "x".repeat(MAX_INVENTORY_QUERY_CHARS + 1), "w"]);
+    expect(reads.length).toBeGreaterThan(2);
+    expect(reads.flat()).toEqual([...ids, "x".repeat(MAX_INVENTORY_QUERY_CHARS + 1), "w"]);
+    for (const read of reads) if (read.length > 1) expect(query(read).length).toBeLessThanOrEqual(MAX_INVENTORY_QUERY_CHARS);
+    expect(reads.at(-2)).toEqual(["x".repeat(MAX_INVENTORY_QUERY_CHARS + 1)]);
+    expect(inventoryReads([])).toEqual([]);
   });
 });

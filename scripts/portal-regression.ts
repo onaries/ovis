@@ -55,16 +55,24 @@ const remoteAccess = {
 const portalFetchPage = async (context: BrowserContext): Promise<void> => {
   await context.route("**/api/access", (route) => route.fulfill({ json: remoteAccess }));
 };
-const openPhoneSettings = async (page: Page): Promise<void> => {
+/** Portal is one of Connect a device's other ways: Settings → Devices and PCs → Connect → Other ways to connect → Portal. */
+const openPhoneSettings = async (page: Page, { portal = true } = {}): Promise<void> => {
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   await page.locator(".settings-dialog").waitFor({ timeout: 10_000 });
-  await openSettingsPage(page, "Phone & devices");
+  await openSettingsPage(page, "Devices and PCs");
+  await page.locator('.settings-dialog [data-section="devices"]').getByRole("button", { name: "Connect", exact: true }).click();
+  const connect = settingsOf(page);
+  await connect.waitFor({ timeout: 10_000 });
+  await connect.locator(".connect-other > summary").click();
+  if (portal) await connect.getByRole("button", { name: "Portal", exact: true }).click();
 };
-const settingsOf = (page: Page) => page.locator(".settings-dialog");
-const reopenPhoneSettings = async (page: Page): Promise<void> => {
-  await settingsOf(page).getByRole("button", { name: "Close settings", exact: true }).click();
+const settingsOf = (page: Page) => page.getByRole("dialog", { name: "Connect a device", exact: true });
+const reopenPhoneSettings = async (page: Page, options: { portal?: boolean } = {}): Promise<void> => {
+  await settingsOf(page).getByRole("button", { name: "Close", exact: true }).click();
   await settingsOf(page).waitFor({ state: "detached", timeout: 10_000 });
-  await openPhoneSettings(page);
+  await page.locator(".settings-dialog").getByRole("button", { name: "Close settings", exact: true }).click();
+  await page.locator(".settings-dialog").waitFor({ state: "detached", timeout: 10_000 });
+  await openPhoneSettings(page, options);
 };
 
 const servers: ServerInstance[] = [];
@@ -298,11 +306,11 @@ try {
   answer = "older";
   for (const page of [ownerPage, watchPage]) {
     const asked = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/portal" && response.status() === 404, { timeout: 10_000 });
-    await reopenPhoneSettings(page);
+    await reopenPhoneSettings(page, { portal: false });
     await asked;
     const settings = settingsOf(page);
-    await settings.getByRole("heading", { name: "Devices", exact: true }).waitFor({ timeout: 10_000 });
-    assert.equal(await settings.getByRole("heading", { name: "Portal", exact: true }).count(), 0, "an older server's page has no Portal section");
+    await settings.getByRole("button", { name: "Tailscale", exact: true }).waitFor({ timeout: 10_000 });
+    assert.equal(await settings.getByRole("button", { name: "Portal", exact: true }).count(), 0, "an older server offers no Portal among the other ways");
     assert.equal(await settings.locator("#portal-relay").count(), 0, "an older server's page offers no relay");
   }
   assert.deepEqual(portalPosts, [], "the browser sent no Portal start or stop of its own");

@@ -11,6 +11,7 @@ import { chromium, type Browser } from "playwright-core";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { shownRows } from "./shown-rows.ts";
+import { pickTab } from "./tab-pick.ts";
 
 interface Fixture {
   copies: string[];
@@ -101,7 +102,7 @@ try {
       await frame(a).locator("[data-pane-content]").waitFor();
       const sentSince = (start: number) => page.evaluate((start) => window.viewFixture.sent.slice(start), start);
       // left for the other tab, the first tab watches its pane
-      await page.locator(`.tab-strip [role="tab"][data-tab-id="${tabB}"]`).click();
+      await pickTab(page, tabB!);
       await frame(b).locator("[data-pane-content]").waitFor();
       await page.waitForFunction((pane) => window.viewFixture.sent.some((sent) => sent.type === "watch" && sent.pane_id === pane), a, { timeout: 10_000 });
       await page.evaluate(({ pane, data }) => {
@@ -110,7 +111,7 @@ try {
       assert.equal(await frame(a).locator(shownRows(), { hasText: MARK }).count(), 0, "a hidden tab keeps its view unparsed");
       // back on the first tab: the view is drawn, its query unanswered and its copy request not run
       const back = await page.evaluate(() => window.viewFixture.sent.length);
-      await page.locator(`.tab-strip [role="tab"][data-tab-id="${tabA}"]`).click();
+      await pickTab(page, tabA!);
       await frame(a).locator(shownRows(), { hasText: MARK }).waitFor({ state: "attached" });
       await page.waitForFunction(({ pane, start }) => window.viewFixture.sent.slice(start).some((sent) => sent.type === "attach" && sent.pane_id === pane), { pane: a, start: back }, { timeout: 10_000 });
       // the reply xterm would type is sent as the view parses: the attach's own output, parsed after it, settles that
@@ -136,7 +137,7 @@ try {
       }, a);
       await page.waitForFunction((pane) => document.querySelector(`[data-layout-pane="${pane}"] .xterm`)?.classList.contains("enable-mouse-events"), a, { timeout: 10_000 });
       const leaving = await page.evaluate(() => window.viewFixture.sent.length);
-      await page.locator(`.tab-strip [role="tab"][data-tab-id="${tabB}"]`).click();
+      await pickTab(page, tabB!);
       await frame(b).locator("[data-pane-content]").waitFor();
       await page.waitForFunction(({ pane, start }) => window.viewFixture.sent.slice(start).some((sent) => sent.type === "watch" && sent.pane_id === pane), { pane: a, start: leaving }, { timeout: 10_000 });
       const visibility = (hidden: boolean) => page.evaluate((hide) => {
@@ -149,7 +150,7 @@ try {
       await page.waitForFunction(({ pane, start }) => window.viewFixture.sent.slice(start).some((sent) => sent.type === "unwatch" && sent.pane_id === pane), { pane: a, start: hiding }, { timeout: 10_000 });
       await visibility(false);
       const returning = await page.evaluate(() => window.viewFixture.sent.length);
-      await page.locator(`.tab-strip [role="tab"][data-tab-id="${tabA}"]`).click();
+      await pickTab(page, tabA!);
       await page.waitForFunction(({ pane, start }) => window.viewFixture.sent.slice(start).some((sent) => sent.type === "attach" && sent.pane_id === pane), { pane: a, start: returning }, { timeout: 10_000 });
       await frame(a).locator("[data-pane-content]").waitFor();
       await page.waitForFunction((pane) => document.querySelector(`[data-layout-pane="${pane}"] .xterm`)?.classList.contains("enable-mouse-events") === false, a, { timeout: 10_000 })
@@ -166,12 +167,12 @@ try {
         }, a);
         await page.waitForFunction((pane) => document.querySelector(`[data-layout-pane="${pane}"] .xterm`)?.classList.contains("enable-mouse-events"), a, { timeout: 10_000 });
         const left = await page.evaluate(() => window.viewFixture.sent.length);
-        await page.locator(`.tab-strip [role="tab"][data-tab-id="${tabB}"]`).click();
+        await pickTab(page, tabB!);
         await frame(b).locator("[data-pane-content]").waitFor();
         await page.waitForFunction(({ pane, start }) => window.viewFixture.sent.slice(start).some((sent) => sent.type === "watch" && sent.pane_id === pane), { pane: a, start: left }, { timeout: 10_000 });
         await away();
         const back = await page.evaluate(() => window.viewFixture.sent.length);
-        await page.locator(`.tab-strip [role="tab"][data-tab-id="${tabA}"]`).click();
+        await pickTab(page, tabA!);
         await page.waitForFunction(({ pane, start }) => window.viewFixture.sent.slice(start).some((sent) => sent.type === "attach" && sent.pane_id === pane), { pane: a, start: back }, { timeout: 10_000 });
         await frame(a).locator("[data-pane-content]").waitFor();
         await page.waitForFunction((pane) => document.querySelector(`[data-layout-pane="${pane}"] .xterm`)?.classList.contains("enable-mouse-events") === false, a, { timeout: 10_000 })

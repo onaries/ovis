@@ -13,12 +13,13 @@ import { decodeOffer } from "../../shared/relay-offer.ts";
 import { QrReveal, ShareLink } from "./PhonePanel.tsx";
 import { KeyId } from "./KeyId.tsx";
 import { QrCode } from "./QrCode.tsx";
+import { CompactPair } from "./CompactPair.tsx";
 
 export const failureText = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
 
 export function statusText(t: ReturnType<typeof useT>, status: RelayStatus): string {
   if (status.blocked === "serve_only") return t("Blocked: OVIS_TAILSCALE_SERVE_ONLY says tailscale serve is the only way in. Unset it on this PC and restart the app.");
-  if (status.blocked === "identity_unreadable") return t("Blocked: this PC's relay identity cannot be read. Reset it in Connect a phone to use the relay again.");
+  if (status.blocked === "identity_unreadable") return t("Blocked: this PC's relay identity cannot be read. Reset it under More settings in Devices and PCs to use the relay again.");
   switch (status.phase) {
     case "off": return t("Off. Nothing goes through the relay.");
     case "connecting": return t("Connecting…");
@@ -61,7 +62,7 @@ function announceFromRelay(code: PairingCode): void {
  * again without announcing it (the server's offer reuses its pending code), so the two never keep
  * answering each other.
  */
-export function RelayPairing({ phone = false }: { phone?: boolean }) {
+export function RelayPairing({ phone = false, compact = false }: { phone?: boolean; compact?: boolean }) {
   const t = useT();
   const [offer, setOffer] = useState<RelayOffer | null>(null);
   const [left, setLeft] = useState("");
@@ -81,6 +82,9 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
   const dropTyped = () => setTypedReset((value) => value + 1);
 
   useEffect(() => {
+    // compact: the code to type is asked for first and asks for the offer once it is in (CompactRelay's onMinted).
+    // Asked for together, a new six-digit code the offer starts ends the code being minted on the PC.
+    if (compact && generation === 0) return;
     let cancelled = false;
     const silent = quiet.current;
     quiet.current = false;
@@ -130,7 +134,8 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
         setOffer(null);
         // a code that ran out while shown is replaced by itself; one that arrived already expired
         // (the PC's clock and this one apart) is not, or the asking would never end
-        if (wasLive) again(); else setState("expired");
+        // compact: CompactRelay renews both, the code to type first and then this offer, so the two never race
+        if (wasLive) { if (!compact) again(); } else setState("expired");
         return;
       }
       wasLive = true;
@@ -156,6 +161,8 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
     }
   };
 
+  // Connect a device: the QR code and the code to type side by side, one Refresh for both
+  if (compact) return <CompactRelay qr={offer?.url ?? null} qrExpires={offer?.expires_at ?? null} failure={state === "failed" ? failure : null} reset={typedReset} onMinted={again} />;
   const countdown = (
     <>
       {state === "live" && t("Expires in {time}.", { time: left })}
@@ -206,6 +213,79 @@ export function RelayPairing({ phone = false }: { phone?: boolean }) {
         <TypedCode reset={typedReset} onMinted={(minted) => { setTypedId(minted.server_id); again(); }} />
         {pcId}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The relay's two ways in Connect a device: its QR code (`qr`, the pending offer) and a code to type on the
+ * other device, asked for as the dialog opens, again on Refresh, and again when either runs out while shown:
+ * one renewal for both, the code first. Asking for one starts a new six-digit code, so the offer is asked for
+ * only after it (`onMinted`), never beside it. A code is never kept for the next opening: one looked up by a
+ * device is spent even when its person cancels at the ID comparison, and nothing here would know. A six-digit code started anywhere
+ * else ends this one on the PC (`reset`): it goes, and Refresh asks for another, never on its own, or the two
+ * would keep ending each other.
+ */
+function CompactRelay({ qr, qrExpires, failure, reset, onMinted }: { qr: string | null; qrExpires: string | null; failure: string | null; reset: number; onMinted: () => void }) {
+  const t = useT();
+  const [code, setCode] = useState<RelayCode | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // the latest ask: an answer to an older one is not shown
+  const request = useRef(0);
+  const mint = async () => {
+    const mine = ++request.current;
+    setBusy(true);
+    setError(null);
+    try {
+      const minted = await requestRelayCode();
+      if (mine !== request.current) return;
+      setCode(minted);
+    } catch (reason) {
+      if (mine === request.current) { setCode(null); setError(failureText(reason)); }
+    } finally {
+      if (mine === request.current) {
+        setBusy(false);
+        // the offer after the code, whether it came or not (an older server mints none): its QR code still pairs
+        onMinted();
+      }
+    }
+  };
+  // once as it opens: the effect's own run, not a render
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current) return;
+    opened.current = true;
+    void mint();
+  });
+  const lastReset = useRef(reset);
+  useEffect(() => {
+    if (lastReset.current === reset) return;
+    lastReset.current = reset;
+    request.current++;
+    setCode(null);
+    setBusy(false);
+  }, [reset]);
+  // the code and the offer carry the one pending pairing, so they run out together (server/relay/service.ts): the
+  // code's expiry renews both. Without a code (an older server mints none) the offer's expiry does, so the QR
+  // code still renews; it is read only then, since the offer shown at a renewal is the old one for a moment.
+  const deadline = code !== null ? code.expires_at : qrExpires;
+  useEffect(() => {
+    if (deadline === null) return;
+    const ms = Date.parse(deadline) - Date.now();
+    // one that arrived already expired (the PC's clock and this one apart) says so and waits for Refresh,
+    // rather than asking again and again; one that ran out while shown is renewed
+    if (ms <= 0) {
+      if (code !== null) { setCode(null); setError(t("This code expired.")); }
+      return;
+    }
+    const timer = window.setTimeout(() => void mint(), ms);
+    return () => window.clearTimeout(timer);
+  }, [code, deadline]);
+  return (
+    <div className="relay-pairing-compact" role="status">
+      <CompactPair qr={qr} qrLabel={t("QR code that pairs a phone through the relay")} code={code?.code ?? null} codeLabel={t("Code to type")} busy={busy} onRefresh={() => void mint()} />
+      {(error ?? failure) !== null && <p className="settings-hint relay-error" role="alert">{error ?? failure}</p>}
     </div>
   );
 }

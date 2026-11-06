@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 
 import type { Machine } from "../../shared/machines.ts";
 import { MAX_TAB_LABEL_LENGTH } from "../../shared/preferences.ts";
+import { setPasteFolder } from "./pasteFolders.ts";
 import { autoTabLabel } from "./tabName.ts";
 import { forgetTabLabelsForTests, currentTabLabels, shownTabLabels, firstPromptOf, learnFromConversation, learnFromSend, learnTabLabel, setTabLabelLearning, setTabLabels, settleTabLabels, shortTabLabel } from "./tabLabels.ts";
 
@@ -42,6 +43,26 @@ describe("tab labels from the first message", () => {
     // an OVIS_PASTE_DIR with spaces too, and the words before another mention stay
     for (const upload of ["@/My Uploads/paste-20261104-101500-0a1b2c3d.png", "@C:\\My Uploads\\paste-20261104-101500-0a1b2c3d.png", "@/Users/me/John.Doe Files/paste-20261104-101500-0a1b2c3d.png", "@/tmp/v1.2 build/paste-20261104-101500-0a1b2c3d.png"]) expect(shortTabLabel(`${upload} Fix footer`)).toBe("Fix footer");
     expect(shortTabLabel("@/tmp/a.png check @other docs/.ovis/paste-20261104-101500-0a1b2c3d.png now")).toBe("check @other\u2026");
+  });
+
+  it("leaves out an upload's path through its PC's OVIS_PASTE_DIR named like an image file (#2771)", () => {
+    const message = "@/tmp/shots.png backup/paste-20261104-101500-0a1b2c3d.png Fix footer";
+    expect(shortTabLabel(message, "/tmp/shots.png backup")).toBe("Fix footer");
+    expect(shortTabLabel("@C:\\Shots\\v2.webp old\\paste-20261104-101500-0a1b2c3d.png Fix footer", "C:\\Shots\\v2.webp old")).toBe("Fix footer");
+    // only that folder: the words after another mention stay the user's (#2682)
+    expect(shortTabLabel("@/tmp/a.png Please review docs/paste-20261104-101500-0a1b2c3d.png for me", "/tmp/shots.png backup")).toBe("Please review\u2026");
+    // the folder as its server wrote it: another case is another folder
+    expect(shortTabLabel("@/tmp/a.png Please review docs/paste-20261104-101500-0a1b2c3d.png now", "/tmp/A.png Please review docs")).toBe("Please review\u2026");
+    // the label a message teaches the PC that named the folder, and only that PC
+    setPasteFolder("local", "/tmp/shots.png backup");
+    try {
+      learnTabLabel("local", "w1:p1", message);
+      learnTabLabel("other", "w1:p1", message);
+      settleTabLabels([pc("local", [{ pane_id: "w1:p1", terminal_id: "term_a" }]), pc("other", [{ pane_id: "w1:p1", terminal_id: "term_b" }])]);
+      expect(currentTabLabels()).toEqual({ "w1:p1|term_a": "Fix footer", "remote:other:w1%3Ap1|term_b": "backup/paste-20261104-10\u2026" });
+    } finally {
+      setPasteFolder("local", undefined);
+    }
   });
 
   it("drops a label an earlier version learned from an attachment, and learns the pane's again", () => {

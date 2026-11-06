@@ -61,12 +61,14 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
     }
   });
 
+  let actions: (target: HerdrPane) => RowMenuItem[] = () => [];
   async function draw(offer: LayoutOffer, drawn: SessionSnapshot = snapshot, watching = false): Promise<(target: HerdrPane) => string[]> {
     const actionsRef: { current: ((target: HerdrPane) => RowMenuItem[]) | null } = { current: null };
+    actions = (target) => actionsRef.current!(target);
     await act(async () => {
       renderer = create(createElement(SettingsProvider, null, createElement(AppLayoutContext.Provider, { value: offer },
-        createElement(PaneCanvas, { snapshot: drawn, pane: drawn.panes[0] as HerdrPane, selectedPaneId: "p1", onSelect: () => {}, onChanged: () => {}, renderPane: () => null, actionsRef, watching,
-          onNewTab: () => {}, onNewTerminal: async () => {}, onMoveToWorkspace: async () => {} }))));
+        createElement(PaneCanvas, { snapshot: drawn, pane: drawn.panes[0] as HerdrPane, selectedPaneId: "p1", onSelect: () => {}, onChanged: () => {}, renderPane: () => null, actionsRef,
+          onNewTab: () => {}, onNewTerminal: async () => {}, onMoveToWorkspace: async () => {}, watching }))));
     });
     return (target) => actionsRef.current!(target).map((item) => item.id);
   }
@@ -195,10 +197,37 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
     setSidebarPins(["local:p1"]);
     try {
       const itemsOf = await draw(TUI);
-      expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["pane:p1", "pane:p2", "rename", "clear-name", "rename-agent", "new-terminal", "new-agent-tab", "rename-tab"]);
+      expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["pane:p1", "pane:p2", "rename", "clear-name", "rename-agent", "unlock", "new-terminal", "new-agent-tab", "rename-tab"]);
       // the other pane of the tab still closes on its own; the tab, with the locked agent in it, does not
       expect(itemsOf(snapshot.panes[1] as HerdrPane)).toContain("close");
       expect(itemsOf(snapshot.panes[1] as HerdrPane)).not.toContain("close-tab");
+    } finally {
+      setSidebarPins([]);
+    }
+  });
+
+  it("unlocks a locked pane from its own menu, which stays when its agent left the Agents list (#2977)", async () => {
+    stored.set("ovis:settings", JSON.stringify({ agentLocks: true, lockedAgents: ["local:p1", "local:p9"] }));
+    setSidebarPins(["local:p1", "local:p9"]);
+    try {
+      const itemsOf = await draw(TUI);
+      const unlock = actions(snapshot.panes[0] as HerdrPane).find((item) => item.id === "unlock");
+      expect(unlock?.disabled).toBeFalsy();
+      await act(async () => unlock!.run());
+      // the pane closes again; the other lock stays
+      expect(itemsOf(snapshot.panes[0] as HerdrPane)).toContain("close");
+      expect(JSON.parse(stored.get("ovis:settings") ?? "{}").lockedAgents).toEqual(["local:p9"]);
+    } finally {
+      setSidebarPins([]);
+    }
+  });
+
+  it("shows a watching device the pane's Unlock, which it cannot use", async () => {
+    stored.set("ovis:settings", JSON.stringify({ agentLocks: true, lockedAgents: ["local:p1"] }));
+    setSidebarPins(["local:p1"]);
+    try {
+      await draw(TUI, snapshot, true);
+      expect(actions(snapshot.panes[0] as HerdrPane).find((item) => item.id === "unlock")?.disabled).toBe(true);
     } finally {
       setSidebarPins([]);
     }

@@ -2,12 +2,14 @@ import { useEffect, useRef, type RefObject } from "react";
 import { terminalTheme, type Palette, type ResolvedTheme } from "./settings.ts";
 import { type FontSettled, loadFontStack, measurableFontStack, monoFaceArrived, openingFontStack, terminalFontStack } from "./fontFamily.ts";
 import { modalOpen } from "./focus.ts";
+import { addServedFonts } from "./userFonts.ts";
 import { inUse } from "./paneTerminalShared.ts";
 import { fitLineHeight } from "./terminalLineHeight.ts";
 import type { TerminalPeek } from "./terminalPeek.ts";
 import type { HerdrSocket } from "./ws.ts";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
+import { typeAheadFocused } from "./typeAhead.ts";
 
 export interface TerminalRefitsDeps {
   activeRef: RefObject<boolean>;
@@ -87,8 +89,11 @@ export function useTerminalRefits(deps: TerminalRefitsDeps): void {
       if (!pinching && pane && sizesPty() && inUse()) socketRef.current?.resize(pane, term.cols, term.rows, true);
     };
     // the built-in stack too: its first text font is the bundled face, which the terminal opened without until it loaded.
-    // A face slower than the load's timeout is set when it arrives, however late
-    void loadFontStack(fontFamily, terminalFontSize).then(() => {
+    // A face slower than the load's timeout is set when it arrives, however late. A family this PC serves from its
+    // fonts/ folder is on the page first (lib/userFonts.ts), so the cell is measured from it
+    void addServedFonts(terminalFontFamily).then(() => loadFontStack(fontFamily, terminalFontSize)).then(() => {
+      // a newer font's effect settles the first font once its own faces are in
+      if (superseded) return;
       apply();
       // the first fit and the pty's first size waited for this font (usePaneAttach.ts)
       fontSettledRef.current.settle();
@@ -141,7 +146,8 @@ export function useTerminalRefits(deps: TerminalRefitsDeps): void {
     const pane = paneRef.current;
     if (pane && term && sizesPty() && inUse()) socketRef.current?.resize(pane, term.cols, term.rows, true);
     // a peek opened from what the reader just sent or pressed: its keys (Escape above all) go to the agent
-    if (activeRef.current && (!autoSelected || peekRef.current !== null) && !coarseRef.current && !modalOpen() && !findOpenRef.current) term?.focus();
+    // keys typed ahead for a new tab hold the keyboard until its hand-over gives it to the terminal (lib/typeAhead.ts)
+    if (activeRef.current && (!autoSelected || peekRef.current !== null) && !coarseRef.current && !modalOpen() && !findOpenRef.current && !typeAheadFocused()) term?.focus();
   }, [chatView]);
 
   // hidden behind another pane of its split, the pane keeps the size the pty has; shown again, it

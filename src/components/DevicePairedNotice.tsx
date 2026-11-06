@@ -24,7 +24,7 @@ export function DevicePairedNotice({ events, onOpen, onDismiss }: { events: read
           ? t("A new device joined at {time}: {name}, approved on {approver}. If that was not you, revoke it.", { time, name: event.label, approver: event.approved_by.label })
           : t("A new device was paired at {time}: {name}. If that was not you, revoke it.", { time, name: event.label })}</span>
         <div className="device-paired-actions">
-          <button type="button" className="btn" onClick={() => onOpen(event)}>{t("Phone & devices")}</button>
+          <button type="button" className="btn" onClick={() => onOpen(event)}>{t("Devices and PCs")}</button>
           <button type="button" className="icon-button update-notice-dismiss" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={() => onDismiss(event)}><X /></button>
         </div>
       </div>

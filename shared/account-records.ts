@@ -9,8 +9,10 @@ import { fromBase64Url, toBase64Url } from "./relay-pair-sas.ts";
 
 /** Signing bytes start with this; `AUTH` signs `ovis-relay-auth/1 ...`, which differs at the sixth byte. */
 export const ACCOUNT_RECORD_PREFIX = "ovis-account/1";
-/** Records one `/api/account/records` or `/api/account/enroll` request may carry. */
+/** Records one `/api/account/records` request may carry. */
 export const ACCOUNT_RECORDS_MAX = 32;
+/** Records one `/api/account/enroll` request may carry: the account's removes and adds, in one ordered batch. */
+export const ACCOUNT_ENROLL_MAX = 512;
 export const ACCOUNT_LABEL_MAX = 48;
 
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;

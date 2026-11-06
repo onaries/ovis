@@ -7,6 +7,7 @@
  * when it can hold the focus itself (a dialog whose controls are all disabled while it works).
  */
 import { useEffect, useLayoutEffect, useRef, type MutableRefObject, type RefObject } from "react";
+import { typeAheadFocused } from "./typeAhead.ts";
 
 /** Tab stops in DOM order; what a user reaches with Tab inside the surface. */
 const FOCUSABLE = [
@@ -109,7 +110,8 @@ export function useFocusTrap<T extends HTMLElement>(open: boolean, options: Focu
     const trap = {};
     openTraps.push(trap);
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== "Tab" || openTraps.at(-1) !== trap) return;
+      // keys typed ahead for a tab the dialog is making are that tab's, Tab included (lib/typeAhead.ts)
+      if (event.key !== "Tab" || openTraps.at(-1) !== trap || typeAheadFocused()) return;
       const node = surface.current;
       if (!node || nativeModalOver(node)) return;
       const stops = tabStops(node);

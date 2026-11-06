@@ -5,7 +5,7 @@
  * install, and how the plan limits are shown. It took the place of Subscription usage and Agent
  * integrations: every control of those two pages is here.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, ChevronRight, ChevronUp, Eye, EyeOff, KeyRound, Network, Plus, RotateCw } from "lucide-react";
 
 import type { AgentCatalogRow } from "../../shared/agent-catalog.ts";
@@ -15,7 +15,7 @@ import type { UsageLoginRequest } from "../../shared/usage-login.ts";
 /** A sign-in the page follows in its own dialog, hosted at the page's root so no row or list it came from can take it away. */
 type FollowedSignIn = Extract<UsageLoginRequest, { provider: "claude" | "codex" }>;
 import { agentsPage, signInState, type AgentsPageRow } from "../lib/agentsPage.ts";
-import { CLAUDE_LAUNCH_MODES, CODEX_LAUNCH_MODES, type ClaudeLaunchMode, type CodexLaunchMode } from "../lib/agentLaunchMode.ts";
+import { CLAUDE_EFFORTS, CLAUDE_LAUNCH_MODES, CODEX_EFFORTS, CODEX_LAUNCH_MODES, launchChoiceFault, modelDraftAfterSync, modelSuggestions, type ClaudeLaunchMode, type CodexLaunchMode } from "../lib/agentLaunchMode.ts";
 import { ApiError, cliProxyRequest, fetchAgentCatalog } from "../lib/api.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { useT } from "../lib/i18n.ts";
@@ -28,7 +28,8 @@ import { userErrorMessage, type UserError } from "../lib/userError.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { AgentTile } from "./AgentTile.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
-import { Segmented, SettingsGroup, SettingsRow, SettingsSelect, Toggle } from "./SettingsControls.tsx";
+import { Segmented, SettingsGroup, SettingsQuery, SettingsRow, SettingsSelect, Toggle } from "./SettingsControls.tsx";
+import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { UsageAccountDialog } from "./UsageAccountDialog.tsx";
 import { UsageSignInAgain } from "./UsageLocalLogin.tsx";
 import { UsageSignInDialog } from "./UsageSignInDialog.tsx";
@@ -58,27 +59,90 @@ function codexModeName(mode: CodexLaunchMode, t: Translate): string {
 }
 
 /**
- * The mode New workspace, New tab and New worktree start Claude Code and Codex in
- * (lib/agentLaunchMode.ts): always shown, whether the PC has the agent or its catalog answered.
+ * The model and effort New workspace, New tab and New worktree fill in for a new Claude Code or Codex
+ * (lib/agentLaunchMode.ts launchDefaults), each still changeable there. A model is kept once it is a name the
+ * agent's `--model` takes; until then the field says why and the last one kept stays.
  */
-function LaunchModesGroup() {
+function LaunchDefaultRows({ agent, model, effort, efforts, onModel, onEffort }: { agent: "claude" | "codex"; model: string; effort: string; efforts: readonly string[]; onModel: (model: string) => void; onEffort: (effort: string) => void }) {
+  const t = useT();
+  const [draft, setDraft] = useState(model);
+  // another device's change shows here, but never over text the reader is still fixing
+  useEffect(() => { setDraft((current) => modelDraftAfterSync(agent, current, model)); }, [agent, model]);
+  const invalid = launchChoiceFault(agent, { model: draft }) === "model";
+  const suggestions = modelSuggestions(agent);
+  const modelId = `settings-${agent}-launch-model`;
+  const effortId = `settings-${agent}-launch-effort`;
+  return <>
+    <SettingsRow label={t("Model")} htmlFor={modelId} wide
+      description={invalid ? <span id={`${modelId}-error`} className="settings-condition" role="alert">{t("One model name, without spaces.")}</span> : t("New workspace and New tab fill it in, still changeable there; New worktree starts the agent on it. Empty: the agent's own model.")}>
+      <input id={modelId} className="input settings-font-input" value={draft} placeholder={t("Agent default")}
+        list={suggestions.length > 0 ? `${modelId}-list` : undefined} aria-invalid={invalid || undefined} aria-describedby={invalid ? `${modelId}-error` : undefined}
+        spellCheck={false} autoCapitalize="off" autoCorrect="off" autoComplete="off"
+        onChange={(event) => {
+          const next = event.target.value;
+          setDraft(next);
+          if (launchChoiceFault(agent, { model: next }) === null && next.trim() !== model) onModel(next.trim());
+        }} />
+      {suggestions.length > 0 && <datalist id={`${modelId}-list`}>{suggestions.map((alias) => <option key={alias} value={alias} />)}</datalist>}
+    </SettingsRow>
+    <SettingsRow label={t("Effort")} htmlFor={effortId} description={t("Filled in the same way. Agent default adds no flag; the levels a model takes depend on the model.")}>
+      <SettingsSelect id={effortId} value={effort} onChange={(event) => onEffort(event.target.value)}>
+        <option value="">{t("Agent default")}</option>
+        {efforts.map((level) => <option key={level} value={level}>{level}</option>)}
+      </SettingsSelect>
+    </SettingsRow>
+  </>;
+}
+
+/**
+ * The settings that belong to one agent, in its row on this page (and in its own group while Settings is
+ * searched): the mode New workspace, New tab and New worktree start Claude Code or Codex in
+ * (lib/agentLaunchMode.ts), and the chips its chat's message box can carry. Nothing here writes the agent's
+ * own configuration. An agent with none of them shows none.
+ */
+function AgentOwnRows({ agentId }: { agentId: string }) {
   const { settings, update } = useSettings();
   const t = useT();
-  return (
-    <SettingsGroup title={t("New agents")} section="launch-modes" note={t("Applies to agents started from New workspace, New tab and New worktree. Agent default adds no flag, so the agent's own configuration decides.")}>
-      <SettingsRow label="Claude Code" description={t("Permission mode")} htmlFor="settings-claude-launch-mode">
+  // the suggestion chip is drawn on a touch screen only (Composer.tsx); a keyboard's Tab does the same
+  const touch = useMediaQuery("(pointer: coarse)");
+  const launch = t("Applies to agents started from New workspace, New tab and New worktree. Agent default adds no flag, so the agent's own configuration decides.");
+  switch (agentId) {
+    case "claude": return <>
+      <SettingsRow label={t("Permission mode")} description={launch} htmlFor="settings-claude-launch-mode">
         <SettingsSelect id="settings-claude-launch-mode" value={settings.claudeLaunchMode} onChange={(event) => update({ claudeLaunchMode: event.target.value as ClaudeLaunchMode })}>
           {CLAUDE_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{claudeModeName(mode, t)}</option>)}
         </SettingsSelect>
       </SettingsRow>
-      <SettingsRow label="Codex" description={t("Sandbox and approvals")} htmlFor="settings-codex-launch-mode">
+      <LaunchDefaultRows agent="claude" model={settings.claudeLaunchModel} effort={settings.claudeLaunchEffort} efforts={CLAUDE_EFFORTS}
+        onModel={(claudeLaunchModel) => update({ claudeLaunchModel })} onEffort={(effort) => update({ claudeLaunchEffort: CLAUDE_EFFORTS.find((level) => level === effort) ?? "" })} />
+      <SettingsRow label={t("Artifacts chip")} description={t("A chip in a Claude Code pane's message box lists the pages its session published with the Artifact tool.")}>
+        <Toggle label={t("Artifacts chip")} checked={settings.composerArtifacts} onChange={(composerArtifacts) => update({ composerArtifacts })} />
+      </SettingsRow>
+      {touch && <SettingsRow label={t("Suggestion chip")} description={t("A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.")}>
+        <Toggle label={t("Suggestion chip")} checked={settings.suggestionChip} onChange={(suggestionChip) => update({ suggestionChip })} />
+      </SettingsRow>}
+    </>;
+    case "codex": return <>
+      <SettingsRow label={t("Sandbox and approvals")} description={launch} htmlFor="settings-codex-launch-mode">
         <SettingsSelect id="settings-codex-launch-mode" value={settings.codexLaunchMode} onChange={(event) => update({ codexLaunchMode: event.target.value as CodexLaunchMode })}>
           {CODEX_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{codexModeName(mode, t)}</option>)}
         </SettingsSelect>
       </SettingsRow>
-    </SettingsGroup>
-  );
+      <LaunchDefaultRows agent="codex" model={settings.codexLaunchModel} effort={settings.codexLaunchEffort} efforts={CODEX_EFFORTS}
+        onModel={(codexLaunchModel) => update({ codexLaunchModel })} onEffort={(effort) => update({ codexLaunchEffort: CODEX_EFFORTS.find((level) => level === effort) ?? "" })} />
+    </>;
+    case "omp": return (
+      <SettingsRow label={t("Side conversations chip (experimental)")} description={t("A chip in an OMP pane's message box lists the side conversations its session saved with /btw.")}>
+        <Toggle label={t("Side conversations chip (experimental)")} checked={settings.composerBtw} onChange={(composerBtw) => update({ composerBtw })} />
+      </SettingsRow>
+    );
+    default: return null;
+  }
 }
+
+/** The agents that have settings of their own, and their names where the PC has no row for them. */
+const OWN_NAMES: Readonly<Record<string, string>> = { claude: "Claude Code", codex: "Codex", omp: "Oh My Pi" };
+const OWN_ROWS = new Set(Object.keys(OWN_NAMES));
 
 /**
  * herdr's integration for one agent (`integration.list`), read only: installing one writes into the
@@ -235,6 +299,7 @@ function AgentItem({ entry, open, onToggle, allProviders, removed, read, limitsO
         {provider === null && signIn !== null && (local && signIn.provider === null
           ? <p className="agents-detail-note">{signIn.in_agent !== null ? t("{agent} signs in inside the agent ({how}). Ovis cannot read that sign-in, so it shows none here.", { agent: agent.name, how: signIn.in_agent }) : t("Ovis cannot read {agent}'s sign-in, so it shows none here.", { agent: agent.name })}</p>
           : !local && signIn.provider !== null ? <p className="agents-detail-note">{t("Accounts are read on the PC Ovis runs on: they are under Other accounts.")}</p> : null)}
+        {OWN_ROWS.has(agent.id) && <div className="settings-card agents-detail-card"><AgentOwnRows agentId={agent.id} /></div>}
         {entry.integration !== null
           ? <div className="settings-card agents-detail-card"><IntegrationRow integration={entry.integration} label={t("Session resume")} /></div>
           : integrationsRead && <p className="agents-detail-note">{t("herdr has no session resume for {agent}.", { agent: agent.name })}</p>}
@@ -278,6 +343,8 @@ function SectionHead({ id, title, children }: { id: string; title: string; child
 export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide }: AgentsSettingsProps) {
   const t = useT();
   const { settings } = useSettings();
+  // a search finds an agent's own settings in a group of its own, as its row is shut
+  const searching = useContext(SettingsQuery).length > 0;
   const api = useMachineApi();
   const machineId = useMachineId();
   // the accounts are read on the PC Ovis's server runs on: they are this PC's only when it is shown
@@ -344,6 +411,9 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
   const providers = settings.showUsage ? usage.report?.providers ?? [] : [];
   const page = agents === null && catalogError === null ? null : agentsPage({ agents: agents ?? [], providers, missing: settings.showUsage ? usage.report?.missing_commands ?? [] : [], integrations: integrationOutcome?.kind === "list" ? integrationOutcome.integrations : [], accountsHere: local });
   const removed = settings.showUsage ? usage.report?.removed ?? [] : [];
+  const ownGroups = searching ? [...OWN_ROWS]
+    : page === null ? (catalogError === null ? [] : [...OWN_ROWS])
+      : [...OWN_ROWS].filter((id) => !page.rows.some((entry) => entry.agent.id === id));
   // a provider whose every account was removed keeps its group, for Restore
   const otherProviders = [...new Set([...(page?.otherProviders ?? providers.map((entry) => entry.id)),
     ...removed.map((entry) => entry.id).filter((id) => !page?.rows.some((row) => row.provider === id))])];
@@ -378,6 +448,12 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
               </ul>}
         {integrationNote}
       </section>
+
+      {/* the settings live on this device and start the agent on any PC: one the PC shown has no row for (not
+          installed, or its catalog unread) keeps its own group, and a search finds every one in a group */}
+      {ownGroups.map((id) => <SettingsGroup key={id} title={OWN_NAMES[id]!} section={`agent-${id}`}>
+        <AgentOwnRows agentId={id} />
+      </SettingsGroup>)}
 
       {page !== null && [
         { title: t("Other agents herdr found"), section: "integrations", rows: page.otherIntegrations.filter((integration) => integration.available) },
@@ -430,8 +506,6 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
         </ul>
         {failed.length > 0 && <p className="settings-hint settings-agent-error" role="alert">{failed.join(" ")}</p>}
       </details>}
-
-      <LaunchModesGroup />
 
       <PlanLimits watching={watching} />
 

@@ -300,8 +300,9 @@ the setting for that session only. On a Windows PC the bridge passes the same te
 file holding it ([`claude-settings-file.ts`](../server/claude-settings-file.ts)): Windows
 PowerShell 5.1 strips the JSON's quotes on the way through the `claude.ps1` shim of an npm install,
 and a path arrives intact (if the file cannot be written, the JSON goes as it is). The file is in
-`%LOCALAPPDATA%\ovis\claude-settings`, a folder only that Windows user and the administrators
-reach, where `%TEMP%` can be one other accounts write to. Ultracode needs Claude Code 2.1.284 or
+`%LOCALAPPDATA%\ovis\claude settings`, a folder only that Windows user and the administrators
+reach, where `%TEMP%` can be one other accounts write to; the space in its name has PowerShell
+quote the path, so a profile folder holding `&` (`R&D`) still starts on herdr-core. Ultracode needs Claude Code 2.1.284 or
 later (Claude Code's settings reference says an older one runs the session at xhigh), a model with
 xhigh and dynamic workflows turned on; otherwise Claude Code ignores it without an error, and the
 dialog cannot tell. The bridge still takes `--effort ultracode` from other clients, which Claude

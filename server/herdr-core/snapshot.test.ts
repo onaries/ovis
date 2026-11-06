@@ -62,6 +62,49 @@ describe("buildSnapshot", () => {
     expect(snapshot.tabs[0]!.label).toBe("3");
   });
 
+  // A server can show a Windows PC's terminals from any host (machine-scope.ts): the path's shape decides how it splits
+  const named = (cwd: string, folder?: string) => buildSnapshot([terminal("t1", { cwd })], {
+    spaces: [{ id: "s1", name: "", ...(folder === undefined ? {} : { folder }), tabs: [{ id: "s1t1", name: "", root: block("t1") }] }],
+  }, "0.1.17").workspaces[0]!.label;
+
+  it("names a space with nothing else to go by after the last folder of a Windows path", () => {
+    expect(named("C:\\repos\\ovis-app")).toBe("ovis-app");
+    expect(named("C:\\repos\\ovis-app\\")).toBe("ovis-app");
+    expect(named("C:/repos\\ovis-app")).toBe("ovis-app");
+    expect(named("c:\\work\\web")).toBe("web");
+    expect(named("\\\\server\\share\\site")).toBe("site");
+    expect(named("/home/u", "D:\\work\\web\\")).toBe("web");
+    // a terminal Ovis started in a workspace of its own, before the app adopts it
+    const unplaced = buildSnapshot([terminal("t2", { cwd: "C:\\Users\\u\\api", labels: { "herdr.space": "ovis-s1" } })], null, "0.1.17");
+    expect(unplaced.workspaces.map((w) => [w.workspace_id, w.label])).toEqual([["ovis-s1", "api"]]);
+    // a space of the app's with nothing live in it, named by the first terminal labeled into it: its folder, else that terminal's
+    const adopted = (folder?: string) => buildSnapshot([terminal("t5", { cwd: "C:\\Users\\u\\api", labels: { "herdr.space": "s1" } })], {
+      spaces: [{ id: "s1", name: "", ...(folder === undefined ? {} : { folder }), tabs: [{ id: "s1t1", name: "", root: block("t1") }] }],
+    }, "0.1.17").workspaces[0]!.label;
+    expect(adopted("D:\\work\\web")).toBe("web");
+    expect(adopted()).toBe("api");
+  });
+
+  it("keeps a POSIX folder's name whole, backslash and all, and a forward-slash Windows path's as before", () => {
+    expect(named("/home/u/back\\slash")).toBe("back\\slash");
+    expect(named("/home/u/back\\slash/")).toBe("back\\slash");
+    expect(named("/mnt/c:\\work")).toBe("c:\\work");
+    expect(named("/mnt/c:/")).toBe("c:");
+    expect(named("/home//u/")).toBe("u");
+    expect(named("/")).toBe("/");
+    expect(named("d:/work/web")).toBe("web");
+    // neither a drive with its separator nor a UNC path: it stays whole
+    expect(named("\\foo\\bar")).toBe("\\foo\\bar");
+    expect(named("C:foo\\bar")).toBe("C:foo\\bar");
+  });
+
+  it("leaves a drive root as written, so it still reads as a place", () => {
+    expect(named("C:\\")).toBe("C:\\");
+    expect(named("C:/")).toBe("C:/");
+    expect(named("\\\\?\\C:\\")).toBe("\\\\?\\C:\\");
+    expect(named("\\\\?\\C:\\repos\\ovis-app")).toBe("ovis-app");
+  });
+
   it("leaves out finished terminals and tabs left with none, and gives a terminal no tab holds a tab of its own", () => {
     const layout = { spaces: [
       { id: "s1", name: "a", tabs: [{ id: "s1t1", name: "", root: { type: "row", id: "r", children: [block("t1"), block("t2")] } }] },

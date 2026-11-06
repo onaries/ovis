@@ -186,6 +186,35 @@ describe("MachineRelay stall timer behind a large frame (#2573)", () => {
       upstream.stop(true);
     }
   });
+
+  test("tells a watch-only browser a PC's features without its upload folder, and a driving one with it (#2771)", async () => {
+    const features = JSON.stringify({ type: "features", features: ["submit"], connection: "c1", paste_dir: "/srv/uploads" });
+    const upstream = Bun.serve({
+      port: 0, hostname: "127.0.0.1",
+      fetch(request, server) { return server.upgrade(request) ? undefined : new Response("no", { status: 400 }); },
+      websocket: { open(socket) { socket.send(features); }, message() {} },
+    });
+    const manager = { endpoint: () => ({ url: `http://127.0.0.1:${upstream.port}`, token: "test" }), trackTerminal: () => () => {} } as unknown as MachineManager;
+    try {
+      for (const readOnly of [true, false]) {
+        const relay = new MachineRelay(manager, "pc", readOnly, (read: SessionSnapshot) => read);
+        const told = Promise.withResolvers<string>();
+        const deadline = setTimeout(() => told.reject(new Error("timed out waiting for the relayed features")), 5_000);
+        try {
+          await relay.ready;
+          relay.bind({ getBufferedAmount: () => 0, send: (raw: string) => { told.resolve(raw); return raw.length; }, close: () => {} } as unknown as ServerWebSocket<unknown>);
+          const frame = await told.promise;
+          if (readOnly) expect(JSON.parse(frame)).toEqual({ type: "features", features: ["submit"], connection: "c1" });
+          else expect(frame).toBe(features);
+        } finally {
+          clearTimeout(deadline);
+          relay.close();
+        }
+      }
+    } finally {
+      upstream.stop(true);
+    }
+  });
 });
 
 describe("MachineRelay snapshot frames", () => {

@@ -15,7 +15,7 @@ export interface UsageWindow {
   readonly starts_at: string | null;
 }
 
-/** One-off resets of a plan's limits that the account can still use, as the provider lists them (Claude, Codex). */
+/** One-off resets of a plan's limits that the account can still use, as the provider lists them (Codex). */
 export interface UsageResets {
   /** how many are left to use; sent only when at least one is */
   readonly available: number;
