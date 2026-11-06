@@ -57,7 +57,6 @@ export const USAGE_KO: Record<string, string> = {
   "No limits reported": "보고된 한도 없음",
   "Sign-in expired. Open {name} to renew it.": "로그인이 만료되었습니다. 갱신하려면 {name}에서 다시 로그인하세요.",
   "Sign-in expired.": "로그인이 만료되었습니다.",
-  "Sign in again": "다시 로그인",
   "Sign in again to {name}": "{name}에 다시 로그인",
   "{name} asked to slow down. These are the last numbers.": "{name}에서 요청 속도 제한을 걸었습니다. 마지막으로 읽은 값입니다.",
   "{name} could not be reached.": "{name}에 연결하지 못했습니다.",

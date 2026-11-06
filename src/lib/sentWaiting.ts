@@ -17,7 +17,7 @@ export interface WaitingBaseline {
   takenAt: number;
   /**
    * The PC's last answer to this chat's reads and what this browser's monotonic clock says has passed
-   * since (observeWaitingClock), or the time the PC stamped on a queued row as it went out. null from
+   * since (observeWaitingClock), or the time the PC stamped on a send before typing it (stampedBaseline). null from
    * an older bridge, which says neither: the turns' times alone bound the skew.
    */
   pcFloor: number | null;
@@ -173,6 +173,19 @@ export function waitingBaseline(key: string, now = performance.now(), wall = Dat
 export function observeWaitingClock(key: string, serverTime: string | null | undefined, received = performance.now(), receivedWall = Date.now()): void {
   const pcTime = serverTime == null ? Number.NaN : Date.parse(serverTime);
   if (Number.isFinite(pcTime) && !((clocks.get(key)?.received ?? Number.NEGATIVE_INFINITY) > received)) clocks.set(key, { pcTime, received, receivedWall });
+}
+
+/**
+ * `after` bounded by the PC's own stamp of when it began typing the send (a queued row's
+ * `sending_at`, or a submit-result's): its turn is written after it on the PC's clock alone, whatever
+ * that clock or this browser's did since the chat's last read. A shown turn's time does not bound it
+ * then: a clock set back since writes the send's turn before it. Without a stamp (an older bridge)
+ * `after` stays as it is; `takenAt` (the browser's clock) dates a baseline made from the stamp alone.
+ */
+export function stampedBaseline(after: WaitingBaseline | null, sendingAt: string | undefined, takenAt = Date.now()): WaitingBaseline | null {
+  const stamped = sendingAt === undefined ? Number.NaN : Date.parse(sendingAt);
+  if (!Number.isFinite(stamped)) return after;
+  return { keys: after?.keys ?? new Set(), latest: null, takenAt: after?.takenAt ?? takenAt, pcFloor: stamped };
 }
 
 export function rememberWaitingSend(key: string, text: string, at = Date.now(), after: WaitingBaseline | null = null): void {

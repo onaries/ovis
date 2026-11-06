@@ -20,6 +20,10 @@ import { testShellEnv } from "./test-shell.ts";
 // resolved, so a fixture made under the unresolved path never matches the pane it is for
 process.env["TMPDIR"] = realpathSync(tmpdir());
 
+// the config folder this run started with: the live-herdr guard (server/herdr/client.ts) refuses its
+// herdr socket, in this process and the children tests spawn, whatever XDG_CONFIG_HOME a test sets later
+process.env["OVIS_TEST_USER_XDG_CONFIG_HOME"] ??= process.env["XDG_CONFIG_HOME"] ?? "";
+
 export const TEST_SESSION = process.env["HERDR_TEST_SESSION"] || "ovis-test";
 
 /**
@@ -70,7 +74,11 @@ export async function useTestHerdr(): Promise<string | null> {
   }
   if (process.env["HERDR_TEST_LIVE"] === "1") return null;
   const herdr = herdrBinary();
-  if (!herdr) return null;
+  // no herdr to isolate: a socket that does not exist, never the default one (the user's own session)
+  if (!herdr) {
+    process.env["HERDR_SOCKET"] = join(tmpdir(), "ovis-tests-found-no-herdr.sock");
+    return null;
+  }
   const socket = testSocketPath();
   // an empty ZDOTDIR: a pane's zsh (macOS's login shell) reads none of the user's own files,
   // where a shell integration can start a CLI herdr takes for an agent, ending the agent a test

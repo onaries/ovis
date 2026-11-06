@@ -187,6 +187,46 @@ try {
   assert.equal(navigations, 0, "Download never navigates the app away");
   console.log("PASS A refused share says so, a cancelled one says nothing, and neither leaves the app");
 
+  // The Android app's WebView drops a download link and has no share sheet (#3153): there Download
+  // hands the picture's bytes to the app, which saves them to Downloads.
+  type AppQa = { saved: { plugin: string; method: string; name: string; type: string; size: number }[]; refuse: (next: boolean) => void };
+  const android = await browser.newPage({ locale: "en-US", viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  android.setDefaultTimeout(10_000);
+  android.on("pageerror", (error) => errors.push(error.message));
+  await android.addInitScript(() => {
+    const saved: AppQa["saved"] = [];
+    let refuse = false;
+    (window as unknown as { Capacitor: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      getPlatform: () => "android",
+      PluginHeaders: [{ name: "OvisSave" }],
+      nativePromise: async (plugin: string, method: string, options: { name: string; type: string; data: string }) => {
+        saved.push({ plugin, method, name: options.name, type: options.type, size: atob(options.data).length });
+        if (refuse) throw new Error("Only a picture can be saved.");
+        return { saved: "downloads" };
+      },
+    };
+    (window as unknown as { appQa: AppQa }).appQa = { saved, refuse: (next) => { refuse = next; } };
+  });
+  await android.goto(`http://127.0.0.1:${server.port}/`);
+  await android.waitForFunction(() => document.querySelector<HTMLImageElement>("img.markdown-image")?.naturalWidth === 240);
+  let androidNavigations = 0;
+  android.on("request", (request) => { if (request.isNavigationRequest()) androidNavigations++; });
+  await android.getByRole("button", { name: "Diagram", exact: true }).click();
+  const androidViewer = android.getByRole("dialog", { name: "Image viewer", exact: true });
+  const androidDownload = androidViewer.getByRole("button", { name: "Download", exact: true });
+  await android.waitForFunction(() => document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Download"]')?.disabled === false);
+  await androidDownload.click();
+  await androidViewer.getByRole("status").filter({ hasText: "Saved to Downloads." }).waitFor();
+  const appSaved = await android.evaluate(() => (window as unknown as { appQa: AppQa }).appQa.saved);
+  assert.deepEqual(appSaved, [{ plugin: "OvisSave", method: "saveImage", name: "diagram.svg", type: "image/svg+xml", size: image(240).length }]);
+  await android.evaluate(() => (window as unknown as { appQa: AppQa }).appQa.refuse(true));
+  await androidDownload.click();
+  await androidViewer.getByRole("alert").filter({ hasText: "Couldn't save the image." }).waitFor();
+  assert.equal(await androidViewer.getByText("Saved to Downloads.").count(), 0, "a refusal takes back the saved note");
+  assert.equal(androidNavigations, 0, "Download never navigates the app away");
+  console.log("PASS In the Android app Download hands the picture's bytes to the app, and says whether it saved");
+
   assert.deepEqual(errors, []);
 } finally {
   await browser?.close();

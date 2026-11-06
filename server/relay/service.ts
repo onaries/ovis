@@ -10,6 +10,9 @@ import { isJsonObject } from "../http.ts";
 import { writePrivateState } from "../private-state.ts";
 import { loadRelayIdentity, relayIdentityPath, RelayIdentityError, rotateRelayIdentity, savedServerId } from "./identity.ts";
 import type { RelayIdentity } from "./identity.ts";
+import { SignedInSessions } from "./admissions.ts";
+import { DirectCarrier } from "./direct.ts";
+import type { DirectCarrierOptions } from "./direct.ts";
 import { RelayLink } from "./link.ts";
 import type { RelayLinkOptions } from "./link.ts";
 import { RelayPairingApprovals } from "./pairing-approvals.ts";
@@ -37,6 +40,11 @@ export interface RelayServiceOptions {
    * hosted app looks for them, when this PC is on it; none on a relay of its own. Tests name theirs.
    */
   readonly pairCodeRelay?: string;
+  /**
+   * Direct connections on this PC's networks while the relay is on (server/relay/direct.ts), unless
+   * turned off: the real entrypoint passes `{}`; without it (tests) nothing listens on the network.
+   */
+  readonly direct?: Pick<DirectCarrierOptions, "addresses" | "peerAllowed" | "preferredPort" | "refreshMs" | "advertise">;
 }
 
 /** A regional relay is advertised only when it answers in at most this share of the global one's round trip. */
@@ -102,6 +110,13 @@ export class RelayService {
   /** Phones that compared digits with this PC and wait for the owner's approval. */
   readonly approvals = new RelayPairingApprovals();
   private pairCodes: RelayPairCodes | undefined;
+  private directCarrier: DirectCarrier | undefined;
+  /** the current direct carrier's first bind */
+  private directStarting: Promise<void> = Promise.resolve();
+  /** signed-in sessions over the relay links and the direct carriers alike, against one set of limits */
+  private readonly signedIn = new SignedInSessions();
+  /** whether direct connections are on, read once from `relay/direct.json`: on unless turned off */
+  private directOn: boolean | undefined;
 
   constructor(private readonly options: RelayServiceOptions) {
     const named = options.relay ?? process.env["OVIS_RELAY_URL"];
@@ -150,9 +165,60 @@ export class RelayService {
   /** Phase and error are the global link's: every phone can reach the PC there. */
   status(): RelayStatus {
     return { phase: this.phase, relay: this.advertised, app: this.app,
-      sessions: (this.link?.sessions ?? 0) + (this.regionalLink?.sessions ?? 0),
-      blocked: this.blocked, error: this.error };
+      sessions: (this.link?.sessions ?? 0) + (this.regionalLink?.sessions ?? 0) + (this.directCarrier?.sessions ?? 0),
+      blocked: this.blocked, error: this.error,
+      ...(this.options.direct ? { direct: { on: this.directEnabled(), carriers: this.directCarrier?.advertised() ?? [] } } : {}) };
   }
+
+  private directPath(): string { return join(this.options.stateDir, "relay", "direct.json"); }
+
+  private directEnabled(): boolean {
+    if (this.directOn === undefined) {
+      // on unless turned off; a choice that cannot be read is taken as off, so a damaged file never opens the network
+      let text: string | undefined;
+      try { text = readFileSync(this.directPath(), "utf8"); }
+      catch (error) { if (!(isJsonObject(error) && error.code === "ENOENT")) text = ""; }
+      if (text === undefined) this.directOn = true;
+      else {
+        let saved: unknown;
+        try { saved = JSON.parse(text); } catch { saved = null; }
+        this.directOn = isJsonObject(saved) && saved.on === true;
+        if (!(isJsonObject(saved) && typeof saved.on === "boolean")) console.error("Direct connections are off: relay/direct.json cannot be read; turn them on again in Settings.");
+      }
+    }
+    return this.directOn;
+  }
+
+  /** Whether this server takes direct connections at all (the `direct` option). */
+  get directAvailable(): boolean { return this.options.direct !== undefined; }
+
+  /** Turns direct connections on this PC's networks on or off, kept across restarts; off ends every direct session. */
+  async setDirect(on: boolean): Promise<RelayStatus> {
+    if (!this.options.direct) throw new Error("Direct connections are not available on this server.");
+    writePrivateState(this.directPath(), { on });
+    this.directOn = on;
+    if (!on) await this.stopDirect();
+    else if (this.link && this.identity && this.services) {
+      this.startDirect(this.services, this.identity);
+      await this.directStarting;
+    }
+    return this.status();
+  }
+
+  private startDirect(services: RequestServices, identity: RelayIdentity): void {
+    if (!this.options.direct || this.directCarrier || !this.directEnabled()) return;
+    this.directCarrier = new DirectCarrier({ ...this.options.direct, identity, services, port: this.port, sessions: this.signedIn,
+      ...(this.options.clock ? { clock: this.options.clock } : {}), ...(this.options.serverVersion ? { serverVersion: this.options.serverVersion } : {}) });
+    this.directStarting = this.directCarrier.start();
+  }
+
+  private stopDirect(): Promise<void> {
+    const direct = this.directCarrier;
+    this.directCarrier = undefined;
+    return direct?.stop() ?? Promise.resolve();
+  }
+
+  private directCarriers(): readonly string[] { return this.directCarrier?.advertised() ?? []; }
 
   private regionPath(): string { return join(this.options.stateDir, "relay", "region.json"); }
 
@@ -187,7 +253,7 @@ export class RelayService {
       const regional = new RelayLink({
         relay, identity, services, port: this.port,
         connect: this.options.connect, clock: this.options.clock, random: this.options.random, serverVersion: this.options.serverVersion,
-        relayHints: () => this.relayHints(),
+        relayHints: () => this.relayHints(), directCarriers: () => this.directCarriers(), sessions: this.signedIn,
         onState: (phase) => { if (this.regionalLink === regional) this.regionalPhase = phase; },
       });
       this.regionalLink = regional;
@@ -239,11 +305,12 @@ export class RelayService {
       const link = new RelayLink({
         relay: this.relay, identity: this.identity, services, port: this.port,
         connect: this.options.connect, clock: this.options.clock, random: this.options.random, serverVersion: this.options.serverVersion,
-        relayHints: () => this.relayHints(),
+        relayHints: () => this.relayHints(), directCarriers: () => this.directCarriers(), sessions: this.signedIn,
         onState: (phase, error) => { if (this.link === link) { this.phase = phase; this.error = error; } },
       });
       this.link = link;
       link.start();
+      this.startDirect(services, this.identity);
       this.startRegional(link, services, this.identity);
     } catch (error) { this.failed(error); }
     return this.status();
@@ -265,7 +332,7 @@ export class RelayService {
     this.error = null;
     // a code names this PC's key: it goes with the link
     this.pairCodes?.cancel();
-    this.ending = Promise.all([this.ending, link?.stop(), regional?.stop()]).then(() => undefined);
+    this.ending = Promise.all([this.ending, link?.stop(), regional?.stop(), this.stopDirect()]).then(() => undefined);
     return this.ending;
   }
 

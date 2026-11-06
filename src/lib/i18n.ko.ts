@@ -1,5 +1,6 @@
 import { SETTINGS_KO } from "./i18n/settings.ko.ts";
 import { SETTINGS_ACCESS_KO } from "./i18n/settings-access.ko.ts";
+import { SETTINGS_AGENTS_KO } from "./i18n/settings-agents.ko.ts";
 import { SETTINGS_COMPOSER_KO } from "./i18n/settings-composer.ko.ts";
 import { SETTINGS_LAYOUT_KO } from "./i18n/settings-layout.ko.ts";
 import { TERMINAL_KO } from "./i18n/terminal.ko.ts";
@@ -39,6 +40,7 @@ const BASE: Record<string, string> = {
   "Files edited in this turn": "이 턴에서 편집한 파일",
   "Open working-tree diff for {path}": "{path}의 작업 트리 변경 사항 열기",
   "This file is outside the pane's repository.": "이 파일은 패널의 저장소 밖에 있습니다.",
+  "View only": "보기 전용",
   "Not pasted: the file's path holds a line break, which the terminal would take as Enter.": "붙여넣지 않았습니다: 파일 경로에 줄바꿈이 있어 터미널이 Enter로 받아들입니다.",
   "Attach files": "파일 첨부",
   "Sign out": "로그아웃",
@@ -50,10 +52,20 @@ const BASE: Record<string, string> = {
   "Signed in with {provider}": "{provider}로 로그인함",
   "Signing in…": "로그인하는 중…",
   "The sign-in did not finish. Try again.": "로그인을 끝내지 못했습니다. 다시 시도하세요.",
-  "Open GitHub and enter this code. Enter it only if you started this sign-in on this page.": "GitHub를 열고 이 코드를 입력하세요. 이 페이지에서 직접 시작한 로그인일 때만 입력하세요.",
-  "Waiting for GitHub…": "GitHub 승인을 기다리는 중…",
-  "Open GitHub": "GitHub 열기",
-  "GitHub refused the sign-in.": "GitHub에서 로그인을 거절했습니다.",
+  "Open {provider} and enter this code. Enter it only if you started this sign-in on this page.": "{provider}을(를) 열고 이 코드를 입력하세요. 이 페이지에서 직접 시작한 로그인일 때만 입력하세요.",
+  "Waiting for {provider}…": "{provider} 승인을 기다리는 중…",
+  "Open {provider}": "{provider} 열기",
+  "{provider} refused the sign-in.": "{provider}에서 로그인을 거절했습니다.",
+  "Your account already signs in with {provider}.": "이 계정은 이미 {provider}(으)로 로그인할 수 있습니다.",
+  "This {provider} sign-in already belongs to another Ovis account. Nothing was changed.": "이 {provider} 로그인은 이미 다른 Ovis 계정에 연결되어 있습니다. 아무것도 바뀌지 않았습니다.",
+  "Add another way to sign in before removing this one.": "이 방법을 지우기 전에 다른 로그인 방법을 먼저 추가하세요.",
+  "The sign-in method could not be removed. Try again.": "로그인 방법을 지우지 못했습니다. 다시 시도하세요.",
+  "Ways to sign in": "로그인 방법",
+  "Sign in again": "다시 로그인",
+  "Added {date}": "{date}에 추가됨",
+  "To change how you sign in, sign in again with {provider} first.": "로그인 방법을 바꾸려면 먼저 {provider}(으)로 다시 로그인하세요.",
+  "Add another way to sign in from the Ovis desktop app.": "다른 로그인 방법은 Ovis 데스크톱 앱에서 추가하세요.",
+  "Add {provider}": "{provider} 추가",
   "The code expired. Sign in again to get a new one.": "코드가 만료되었습니다. 다시 로그인해 새 코드를 받으세요.",
   "This account service can't sign in a browser on this PC yet.": "이 계정 서비스는 아직 이 PC의 브라우저 로그인을 지원하지 않습니다.",
   "Your sign-in ended. Sign in again to see every PC of your account.": "로그인이 끝났습니다. 계정의 PC를 모두 보려면 다시 로그인하세요.",
@@ -165,7 +177,6 @@ const BASE: Record<string, string> = {
   "Command palette (⌘⇧K)": "명령 팔레트 (⌘⇧K)",
   "Could not sign out. Try again.": "로그아웃하지 못했습니다. 다시 시도해 주세요.",
   "Retry": "다시 시도",
-  "Notify me when a pane needs input or finishes": "패널이 입력을 기다리거나 끝나면 알려줍니다",
   "On, pushed to this device": "켜짐, 이 기기로 푸시",
   "Alerts on, pushed to this device, even with the app closed. Tap to turn them off": "알림 켜짐, 이 기기로 푸시됩니다. 앱을 닫아도 옵니다. 누르면 꺼집니다",
   "Off on this device": "이 기기에서 꺼짐",
@@ -202,10 +213,7 @@ const BASE: Record<string, string> = {
   "Via Tailscale, or Funnel from the internet": "Tailscale을 거쳐 연결, 또는 인터넷에서 Funnel로 연결",
   "Via the local network": "로컬 네트워크를 거쳐 연결",
   "Straight to this address": "이 주소로 바로 연결",
-  "Sessions on this PC": "이 PC의 세션",
-  "{count} working": "작업 중 {count}개",
   "{count} waiting for you": "내 응답 대기 {count}개",
-  "{count} done": "완료 {count}개",
   "Open the next session waiting for you": "응답을 기다리는 다음 세션 열기",
   "Tab {index} of {count}": "탭 {count}개 중 {index}번째",
   "Tabs of {workspace}": "{workspace}의 탭",
@@ -437,9 +445,6 @@ const BASE: Record<string, string> = {
   "No group": "그룹 없음",
   "Context {percent}% left": "컨텍스트 {percent}% 남음",
   "{used} of {window} tokens": "{window} 토큰 중 {used}",
-  "Suggestion chip": "제안 칩",
-  "Artifacts chip": "아티팩트 칩",
-  "Side conversations chip (experimental)": "곁가지 대화 칩 (실험적)",
   "Permission mode": "권한 모드",
   "Model": "모델",
   "One model name, without spaces.": "띄어쓰기 없는 모델 이름 하나를 적으세요.",
@@ -463,12 +468,15 @@ const BASE: Record<string, string> = {
   "Phones paired through the relay will need to scan a new code.": "릴레이로 페어링된 폰은 새 코드를 다시 스캔해야 합니다.",
   "Pairs this phone through the relay, so Ovis keeps working away from home.": "이 폰을 릴레이로 페어링해 집 밖에서도 Ovis를 쓸 수 있게 합니다.",
   "This PC": "이 PC",
+  "Paste and send": "붙여넣고 보내기",
+  "Conversation": "대화",
+  "Off": "끄기",
 };
 
 /** The parts KO is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const KO_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
-  settings: { ...SETTINGS_KO, ...SETTINGS_ACCESS_KO, ...SETTINGS_COMPOSER_KO, ...SETTINGS_LAYOUT_KO },
+  settings: { ...SETTINGS_KO, ...SETTINGS_ACCESS_KO, ...SETTINGS_COMPOSER_KO, ...SETTINGS_LAYOUT_KO, ...SETTINGS_AGENTS_KO },
   terminal: TERMINAL_KO,
   composer: COMPOSER_KO,
   chat: CHAT_KO,

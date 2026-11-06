@@ -57,7 +57,6 @@ export const USAGE_JA: Record<string, string> = {
   "No limits reported": "上限の報告なし",
   "Sign-in expired. Open {name} to renew it.": "サインインの有効期限が切れました。{name} を開いて更新してください。",
   "Sign-in expired.": "サインインの有効期限が切れました。",
-  "Sign in again": "もう一度サインイン",
   "Sign in again to {name}": "{name} にもう一度サインイン",
   "{name} asked to slow down. These are the last numbers.": "{name} からリクエストの制限を受けました。最後に取得した値です。",
   "{name} could not be reached.": "{name} に接続できませんでした。",

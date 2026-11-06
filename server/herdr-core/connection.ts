@@ -13,6 +13,9 @@
  * Calls are typed by hc's own schema (hc-api.generated.ts, `bun run generate:types`).
  */
 
+import { homedir } from "node:os";
+import { liveSessionsRefused, sameSocket } from "../herdr/client.ts";
+import { coreSocket } from "./discovery.ts";
 import type { HcMethod, HcMethods } from "./hc-api.generated.ts";
 
 /** The calls that answer with a stream of their own. */
@@ -153,10 +156,21 @@ export interface HcTransport {
   kill: () => void;
 }
 
+/** Whether hc in `env` would reach the user's default core: the one this process's environment, or its owner's home, names when no HC_SOCKET or HC_SESSION does. */
+function userCore(env: Record<string, string | undefined>): boolean {
+  const unnamed = { ...process.env, HC_SOCKET: undefined, HC_SESSION: undefined };
+  const defaults = [coreSocket({ env: unnamed }).path, coreSocket({ env: unnamed, home: homedir() }).path].map(sameSocket);
+  return defaults.includes(sameSocket(coreSocket({ env }).path));
+}
+
 /** `hc connect` as a child process (in `env`, else this process's); a program that cannot be started is an HcError (`closed`). */
 export function spawnHcConnect(bin: string, env?: Record<string, string | undefined>): HcTransport {
   // runtime.ts hands out this path that cannot exist while a moved hc is found again
   if (bin === "/dev/null/herdr-core-moved") throw new HcError("closed", "herdr-core moved (an update?), and Ovis is looking for it again: try again in a moment");
+  // a process that asked for an isolated herdr never reaches the user's default core, however it is named
+  if (liveSessionsRefused(process.env) && userCore(env ?? process.env)) {
+    throw new HcError("live_core_refused", "HERDR_TEST_SESSION is set, but hc would reach the user's own herdr-core: give it HC_SOCKET or an HC_SESSION of its own, or set OVIS_ALLOW_LIVE_HERDR=1");
+  }
   let child: Bun.Subprocess<"pipe", "pipe", "ignore">;
   try {
     child = Bun.spawn([bin, "connect"], { stdin: "pipe", stdout: "pipe", stderr: "ignore", ...(env ? { env } : {}) });

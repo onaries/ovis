@@ -13,7 +13,7 @@ import type { UpdateStatus } from "../../../shared/update.ts";
 import { RelayShell } from "../../components/RelayShell.tsx";
 import { myPcs } from "../account/myPcs.ts";
 import type { MyPc } from "../account/myPcs.ts";
-import { accountProvidersOf, accountServiceOf, AccountService, SignedOutError } from "../account/service.ts";
+import { accountProvidersOf, accountServiceOf, AccountService, offeredProviders, SignedOutError } from "../account/service.ts";
 import { beginSignIn, finishSignIn, SignInError, signInReturn } from "../account/signin.ts";
 import { enrollOnPc, keepRemovals, PEER_STATUS_MS, linkThisDevice, needsLink, pcAccountStatus, planEnroll, sendQueuedAdds, takeIntroduction } from "../account/join.ts";
 import { leaveAccount } from "../account/leave.ts";
@@ -140,7 +140,7 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
   const store = mount.store ?? indexedDeviceStore;
   const accountStore = mount.accountStore ?? indexedAccountStore;
   const accountService = mount.accountService === undefined ? accountServiceOf(document) : mount.accountService;
-  const accountProviders = mount.accountProviders ?? accountProvidersOf(document);
+  let accountProviders = mount.accountProviders ?? accountProvidersOf(document);
   const account = new AccountService({ store: accountStore, ...(mount.accountFetch ? { fetch: mount.accountFetch } : {}) });
   const openSignIn = mount.openSignIn ?? ((url: string) => { window.location.assign(url); });
   let accountView: AccountView | null = accountService === null ? null : { kind: "signed-out", error: null };
@@ -200,7 +200,19 @@ export async function mountRelayShell(mount: RelayShellMount): Promise<void> {
 
   const toFront = (): void => navigate("/");
 
+  let shown: RelayShellState | null = null;
+  // the build's list shows at once; the service's own answer replaces it, so a Google button
+  // appears only once the service says it is set up for Google
+  if (accountService !== null && mount.accountProviders === undefined) {
+    offeredProviders(accountService, accountProviders, mount.accountFetch ? { fetch: mount.accountFetch } : {}).then((offered) => {
+      if (offered.providers.join() === accountProviders.join()) return;
+      accountProviders = offered.providers;
+      if (shown !== null) show(shown);
+    }, (error: unknown) => console.warn("Ovis: the account service's sign-ins could not be read", error instanceof Error ? error.name : error));
+  }
+
   const show = (state: RelayShellState): void => {
+    shown = state;
     shell ??= createRoot(mount.container);
     shell.render(createElement(StrictMode, null, createElement(SettingsProvider, null,
       createElement(RelayShell, { state, scoped, iosTab, onPair: pair, onRetry: retry, onCancel: cancel, onBack: toFront, onForget: forget, onUpdate: update, onMatch: match, onCodeStart: codeStart, onCodeSubmit: codeSubmit, onCodeMatch: codeMatch, ...(accountService === null ? {} : { onSignIn: signIn, accountProviders, onJoin: joinPc, onSignOut: signOut, onLeave: leave }) }))));

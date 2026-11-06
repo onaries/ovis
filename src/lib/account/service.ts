@@ -55,6 +55,45 @@ export function accountProvidersOf(document: { querySelector(selector: string): 
   return offered.length > 0 ? offered : ["github"];
 }
 
+/** The providers with a device flow a PC's own page can start (lib/account/deviceSignIn.ts). */
+export const DEVICE_PROVIDERS = ["github", "google"] as const;
+export type DeviceProvider = (typeof DEVICE_PROVIDERS)[number];
+
+export interface OfferedProviders {
+  readonly providers: AccountProvider[];
+  readonly device: DeviceProvider[];
+}
+
+/**
+ * The sign-ins the service is set up for (`GET /v1/providers`), so a Google button shows only where
+ * Google can finish. A service that cannot say leaves the build's own list (`fallback`), and a PC's
+ * page GitHub alone, as before the service could be asked.
+ */
+export async function offeredProviders(service: string, fallback: readonly AccountProvider[], options: { fetch?: Fetch } = {}): Promise<OfferedProviders> {
+  const before: OfferedProviders = { providers: [...fallback], device: ["github"] };
+  let body: unknown;
+  try {
+    const response = await (options.fetch ?? fetch)(new URL("/v1/providers", service));
+    if (!response.ok) return before;
+    body = await response.json();
+  } catch (error) {
+    if (error instanceof TypeError || error instanceof SyntaxError) return before;
+    throw error;
+  }
+  if (!isRecord(body) || !Array.isArray(body.providers) || !Array.isArray(body.device)) return before;
+  const named = new Set<unknown>(body.providers);
+  const providers = ACCOUNT_PROVIDERS.filter((provider) => named.has(provider));
+  if (providers.length === 0) return before;
+  const device = new Set<unknown>(body.device);
+  return { providers, device: DEVICE_PROVIDERS.filter((provider) => device.has(provider) && named.has(provider)) };
+}
+
+/** One way the account signs in (`GET /v1/identities`); the service keeps no email or login to name it by. */
+export interface AccountIdentity {
+  readonly provider: AccountProvider;
+  readonly added_at: string;
+}
+
 /** A refresh this long before the access token runs out, so a request never leaves with one about to. */
 const REFRESH_EARLY_MS = 60_000;
 
@@ -125,11 +164,11 @@ export function sessionOf(body: unknown, service: string, now: number): AccountS
   return { service, account, provider: provider as AccountProvider, access_token, refresh_token, expires_at: now + expires_in * 1000 };
 }
 
-/** `POST /v1/token`: a code, a refresh token or a native Apple token for a session. */
-export async function requestToken(service: string, grant: Record<string, string>, options: { fetch?: Fetch; now?: () => number } = {}): Promise<AccountSession> {
+/** `POST /v1/token`: a code, a refresh token or a native Apple token for a session; `bearer` redeems a linking sign-in. */
+export async function requestToken(service: string, grant: Record<string, string>, options: { fetch?: Fetch; now?: () => number; bearer?: string } = {}): Promise<AccountSession> {
   const now = options.now ?? Date.now;
   const response = await (options.fetch ?? fetch)(new URL("/v1/token", service), {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(grant),
+    method: "POST", headers: { "content-type": "application/json", ...(options.bearer === undefined ? {} : { authorization: `Bearer ${options.bearer}` }) }, body: JSON.stringify(grant),
   });
   if (!response.ok) throw await failure(response);
   return sessionOf(await response.json(), service, now());
@@ -198,6 +237,71 @@ export class AccountService {
     const list = isRecord(body) && Array.isArray(body.admissions) ? body.admissions : [];
     return list.filter((entry): entry is { key: string; label: string; server_id: string; at: string } => isRecord(entry)
       && typeof entry.key === "string" && typeof entry.label === "string" && typeof entry.server_id === "string" && typeof entry.at === "string");
+  }
+
+  /** The account's sign-in methods, one per provider. */
+  async identities(): Promise<AccountIdentity[]> {
+    const body = await this.call("GET", "/v1/identities");
+    const list = isRecord(body) && Array.isArray(body.identities) ? body.identities : [];
+    return list.filter((entry): entry is AccountIdentity => isRecord(entry) && ACCOUNT_PROVIDERS.includes(entry.provider as AccountProvider)
+      && typeof entry.added_at === "string")
+      .map(({ provider, added_at }) => ({ provider, added_at }));
+  }
+
+  /**
+   * Adds `provider` to the signed-in account on purpose, through a redirect sign-in only (a device
+   * code can be phished): the service hands a one-time link token, `signIn` runs that provider's
+   * sign-in with it and redeems the code with this account's access token (`bearer`), and only then
+   * does the service link it. Its session replaces the one this client had, which then ends at the
+   * service. An answer for any other account is ended and refused, and the session stays as it was;
+   * an identity another account already has is refused (SignInError `in_use`) and nothing changes.
+   * A sign-in older than ten minutes gets 403 `reauth_required` before anything starts: the caller
+   * asks the person to sign in again, then repeats. The link is redeemed by this same sign-in.
+   */
+  async addMethod(provider: AccountProvider, signIn: (linkToken: string, bearer: string) => Promise<AccountSession>): Promise<AccountSession> {
+    const body = await this.call("POST", "/v1/identities/link", { provider });
+    const linkToken = isRecord(body) && typeof body.link_token === "string" && body.link_token !== "" ? body.link_token : null;
+    if (linkToken === null) throw new AccountServiceError(502, "invalid_answer", "The account service sent no link");
+    const before = await this.session();
+    if (before === undefined) return this.signedOut();
+    const after = await signIn(linkToken, before.access_token);
+    const end = (session: AccountSession, what: string) => this.fetch(new URL("/v1/signout", session.service), { method: "POST", headers: { authorization: `Bearer ${session.access_token}` } })
+      .catch((error: unknown) => console.warn(`Ovis: ${what} was not ended at the account service`, error instanceof Error ? error.name : error));
+    if (after.account !== before.account) {
+      await end(after, "a sign-in for another account");
+      throw new AccountServiceError(502, "invalid_answer", "The account service answered for another account");
+    }
+    // under the lock sign-out and refresh take: the answer replaces only the sign-in that asked for it
+    const outcome = await this.lock(async () => {
+      let result: "kept" | "moved-on" | "signed-out" = "signed-out";
+      await this.options.store.update("session", (current) => {
+        if (current?.refresh_token === before.refresh_token) { result = "kept"; return after; }
+        // refreshed by another tab, or signed in again there: the link holds at the service, and that session stays
+        if (current !== undefined && current.account === before.account) result = "moved-on";
+        return current;
+      });
+      return result;
+    });
+    if (outcome === "signed-out") {
+      // signed out (or into another account) meanwhile: the new sign-in must not outlive that
+      await end(after, "a link that finished after a sign-out");
+      throw new SignedOutError();
+    }
+    if (outcome === "moved-on") {
+      await end(after, "a link's sign-in no tab keeps");
+      return (await this.session()) ?? after;
+    }
+    // the old sign-in's tokens would otherwise live on at the service until they expire
+    await end(before, "the replaced sign-in");
+    return after;
+  }
+
+  /**
+   * Removes a sign-in method; the service refuses the account's last one (409 `last_identity`), and
+   * like a link wants a sign-in made in the last ten minutes (403 `reauth_required`).
+   */
+  async removeIdentity(provider: AccountProvider): Promise<void> {
+    await this.call("DELETE", `/v1/identities/${provider}`);
   }
 
   /** Leaves a signed record in the mailbox of each listed PC of the account (at most 32 at a time). */

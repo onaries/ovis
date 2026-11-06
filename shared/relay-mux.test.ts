@@ -367,3 +367,22 @@ describe("relay hints", () => {
     }
   });
 });
+
+describe("direct carriers", () => {
+  const authOk = (direct: unknown) => ({ type: FrameType.AUTH_OK, flags: 0, stream_id: 0,
+    payload: { session_id: "a".repeat(32), device_id: "b".repeat(16), role: "drive", direct } }) as MuxFrame;
+
+  it("carries a PC's private addresses in AUTH_OK", () => {
+    const direct = ["ws://192.168.0.10:7319", "ws://10.1.2.3:7319", "ws://172.31.255.1:40000", "ws://169.254.3.4:1"];
+    expect(decodeFrame(encodeFrame(authOk(direct))).payload).toEqual(authOk(direct).payload);
+  });
+
+  it("takes only ws://<private IPv4>:<port>, at most four", () => {
+    for (const direct of [["wss://192.168.0.10:7319"], ["ws://192.168.0.10"], ["ws://192.168.0.10:7319/v1/ws"], ["ws://8.8.8.8:7319"],
+      ["ws://127.0.0.1:7319"], ["ws://100.64.0.1:7319"], ["ws://172.32.0.1:7319"], ["ws://192.168.0.010:7319"], ["ws://192.168.0.10:65536"],
+      ["ws://pc.local:7319"], ["ws://[fe80::1]:7319"], "ws://192.168.0.10:7319",
+      ["ws://10.0.0.1:1", "ws://10.0.0.2:1", "ws://10.0.0.3:1", "ws://10.0.0.4:1", "ws://10.0.0.5:1"]]) {
+      expect(() => encodeFrame(authOk(direct))).toThrow(MuxProtocolError);
+    }
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { clearMachineWaitingSends, currentWaitingSends, expireWaitingSends, forgetMachineWaitingSends, forgetWaitingBaseline, forgetWaitingSends, observeWaitingClock, pruneWaitingSends, rememberWaitingSend, settleWaitingSends, WAITING_SEND_MS, waitingBaseline, waitingKey } from "./sentWaiting.ts";
+import { clearMachineWaitingSends, currentWaitingSends, expireWaitingSends, forgetMachineWaitingSends, forgetWaitingBaseline, forgetWaitingSends, observeWaitingClock, pruneWaitingSends, rememberWaitingSend, settleWaitingSends, stampedBaseline, WAITING_SEND_MS, waitingBaseline, waitingKey } from "./sentWaiting.ts";
 import type { ConversationTurn } from "../../shared/protocol.ts";
 import type { Machine } from "../../shared/machines.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
@@ -250,6 +250,38 @@ describe("waitingText", () => {
       observeWaitingClock(key, new Date(pc + 600_000).toISOString(), 0);
       rememberWaitingSend(key, "an hour later", pc + 4_200_000, waitingBaseline(key, 3_600_000));
       settleWaitingSends(key, [earlier, user("an hour later", pc + 4_199_900)], pc + 4_200_300, true);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("settles an immediate send by the PC's stamp though the PC's clock was set back since the chat's last read", () => {
+    const key = waitingKey("local", "pc-set-back");
+    const pc = Date.parse("2026-11-05T10:00:00Z");
+    try {
+      const earlier = user("earlier", pc + 37);
+      settleWaitingSends(key, [earlier], pc + 10_100, true);
+      observeWaitingClock(key, new Date(pc + 10_037).toISOString(), 100);
+      // the PC's clock was set back 30 s; 2 s after the read the send goes, and the PC stamps it before typing
+      const sent = stampedBaseline(waitingBaseline(key, 2_100), new Date(pc - 17_963).toISOString(), pc + 12_100);
+      rememberWaitingSend(key, "after the correction", pc + 12_100, sent);
+      settleWaitingSends(key, [earlier, user("after the correction", pc - 17_800)], pc + 12_400, true);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("keeps an immediate send past an identical turn written just before it an hour after the chat's last read", () => {
+    const key = waitingKey("local", "stamped-late");
+    const pc = Date.parse("2026-11-05T10:00:00Z");
+    try {
+      const earlier = user("earlier", pc + 37);
+      settleWaitingSends(key, [earlier], pc + 600_000, true);
+      observeWaitingClock(key, new Date(pc + 600_000).toISOString(), 0);
+      // a hidden tab sends an hour later; the terminal wrote the same words a second before the PC stamped the send
+      const sent = stampedBaseline(waitingBaseline(key, 3_600_000), new Date(pc + 4_199_037).toISOString(), pc + 4_200_000);
+      rememberWaitingSend(key, "repeat", pc + 4_200_000, sent);
+      settleWaitingSends(key, [earlier, user("repeat", pc + 4_198_037)], pc + 4_200_300, true);
+      expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["repeat"]);
+      settleWaitingSends(key, [earlier, user("repeat", pc + 4_198_037), user("repeat", pc + 4_199_237)], pc + 4_200_500, true);
       expect(currentWaitingSends(key)).toEqual([]);
     } finally { forgetWaitingSends(key); }
   });

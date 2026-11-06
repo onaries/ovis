@@ -14,7 +14,7 @@ export interface AccountKey {
   readonly public_spki: string;
 }
 
-export const ACCOUNT_PROVIDERS = ["github", "apple"] as const;
+export const ACCOUNT_PROVIDERS = ["github", "google", "apple"] as const;
 export type AccountProvider = (typeof ACCOUNT_PROVIDERS)[number];
 
 export interface AccountSession {

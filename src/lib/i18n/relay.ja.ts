@@ -54,6 +54,7 @@ export const RELAY_JA: Record<string, string> = {
   "ID of the key this link carries": "このリンクの鍵のID",
   "ID of the key this phone saved": "このスマホに保存された鍵のID",
   "Continue with GitHub": "GitHubで続ける",
+  "Continue with Google": "Googleで続ける",
   "Continue with Apple": "Appleで続ける",
   "Loading your PCs…": "PC を読み込み中…",
   "The sign-in was cancelled.": "サインインはキャンセルされました。",

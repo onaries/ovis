@@ -60,7 +60,7 @@ let text = desktopText("en");
 const accountService = accountServiceOf(process.env);
 
 /** The sign-ins that service offers: OVIS_ACCOUNT_PROVIDERS (GitHub alone without it), so Apple shows only once it is set up. */
-const accountProviders = (process.env["OVIS_ACCOUNT_PROVIDERS"] ?? "").split(",").map((name) => name.trim()).filter((name) => name === "github" || name === "apple");
+const accountProviders = (process.env["OVIS_ACCOUNT_PROVIDERS"] ?? "").split(",").map((name) => name.trim()).filter((name) => name === "github" || name === "google" || name === "apple");
 
 function serverOrigin(): string | null {
   return server ? new URL(server.url).origin : null;

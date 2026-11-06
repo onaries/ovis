@@ -54,6 +54,7 @@ export const RELAY_ZH: Record<string, string> = {
   "ID of the key this link carries": "此链接所带密钥的 ID",
   "ID of the key this phone saved": "此手机保存的密钥的 ID",
   "Continue with GitHub": "使用 GitHub 继续",
+  "Continue with Google": "使用 Google 继续",
   "Continue with Apple": "使用 Apple 继续",
   "Loading your PCs…": "正在加载你的 PC…",
   "The sign-in was cancelled.": "登录已取消。",

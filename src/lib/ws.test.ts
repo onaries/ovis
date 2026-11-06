@@ -230,8 +230,9 @@ it("sends a chat message and an Insert once the server's features frame came, it
     const sent = socket.nextSubmission();
     const result = client.submit("w1:p1", "chat message", "chat message");
     const frame = await sent;
-    socket.receive({ type: "submit-result", id: frame.id, pane_id: "w1:p1", ok: true });
-    expect(await result).toEqual({ ok: true });
+    // the PC's clock before it typed, for the chat's waiting copy (lib/sentWaiting.ts)
+    socket.receive({ type: "submit-result", id: frame.id, pane_id: "w1:p1", ok: true, sending_at: "2026-11-06T09:00:00.000Z" });
+    expect(await result).toEqual({ ok: true, sendingAt: "2026-11-06T09:00:00.000Z" });
     const insertSent = new Promise<{ id: number }>((resolve) => socket.addEventListener("sent", (candidate) => { if (candidate.type === "insert") resolve(candidate); }));
     const inserted = client.insert("w1:p1", "one line");
     const insert = await insertSent;

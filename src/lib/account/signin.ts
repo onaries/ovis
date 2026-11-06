@@ -1,18 +1,19 @@
 /**
- * Signing in with GitHub or Apple through the account service: OAuth's authorization code with
+ * Signing in with GitHub, Google or Apple through the account service: OAuth's authorization code with
  * PKCE, the service standing between this client and the provider. The service sends the browser
  * back with the code in the fragment, which no request carries, so the code never reaches the
  * host that serves the app.
  */
 import { toBase64Url } from "../../../shared/relay-pair-sas.ts";
-import { requestToken } from "./service.ts";
+import { AccountServiceError, requestToken } from "./service.ts";
 import type { AccountProvider, AccountSession, AccountStore, PendingSignIn } from "./store.ts";
 
 /** A sign-in left at the provider's pages longer than this is not finished: its return is refused. */
 export const SIGN_IN_MS = 10 * 60_000;
 
 export class SignInError extends Error {
-  constructor(readonly code: "no_sign_in" | "expired" | "denied" | "unsupported", message: string) {
+  /** `in_use`: a sign-in that was to add a method found an identity another account already has */
+  constructor(readonly code: "no_sign_in" | "expired" | "denied" | "unsupported" | "in_use", message: string) {
     super(message);
     this.name = "SignInError";
   }
@@ -24,8 +25,11 @@ function random(bytes: number): string {
   return toBase64Url(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
-/** Where to send the browser to sign in; the verifier and state wait in the store for the return. */
-export async function beginSignIn(provider: AccountProvider, options: { store: AccountStore; service: string; redirectUri: string; now?: () => number }): Promise<string> {
+/**
+ * Where to send the browser to sign in; the verifier and state wait in the store for the return.
+ * `linkToken` (AccountService.addMethod) adds the provider to the signed-in account instead.
+ */
+export async function beginSignIn(provider: AccountProvider, options: { store: AccountStore; service: string; redirectUri: string; now?: () => number; linkToken?: string }): Promise<string> {
   const verifier = random(32);
   const state = random(16);
   const challenge = toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
@@ -41,6 +45,7 @@ export async function beginSignIn(provider: AccountProvider, options: { store: A
   url.searchParams.set("state", state);
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
+  if (options.linkToken !== undefined) url.searchParams.set("link_token", options.linkToken);
   return url.href;
 }
 
@@ -62,7 +67,18 @@ export function signInReturn(params: string): SignInReturn | null {
  * transaction, so a return opened twice does nothing, and one this client never started touches no
  * sign-in that is still waiting.
  */
-export async function finishSignIn(returned: SignInReturn, options: { store: AccountStore; fetch?: Fetch; now?: () => number }): Promise<AccountSession> {
+export interface FinishOptions {
+  readonly store: AccountStore;
+  readonly fetch?: Fetch;
+  readonly now?: () => number;
+  /**
+   * the signed-in session's access token: a linking sign-in is redeemed by the sign-in that asked for
+   * it, and is not stored here; AccountService.addMethod keeps it only if that sign-in is still current
+   */
+  readonly bearer?: string;
+}
+
+export async function finishSignIn(returned: SignInReturn, options: FinishOptions): Promise<AccountSession> {
   const now = options.now ?? Date.now;
   let pending: PendingSignIn | undefined;
   await options.store.update("pending", (current) => {
@@ -73,11 +89,18 @@ export async function finishSignIn(returned: SignInReturn, options: { store: Acc
   });
   if (pending === undefined) throw new SignInError("no_sign_in", "This sign-in was not started here, or has finished");
   if (now() - pending.started_at > SIGN_IN_MS) throw new SignInError("expired", "The sign-in took too long");
+  if ("error" in returned && returned.error === "invalid_link") throw new SignInError("expired", "The link to add a sign-in method ran out");
   if ("error" in returned) throw new SignInError("denied", "The sign-in was cancelled or refused");
-  const session = await requestToken(pending.service, {
-    grant_type: "authorization_code", code: returned.code, code_verifier: pending.verifier, redirect_uri: pending.redirect_uri,
-  }, { ...(options.fetch ? { fetch: options.fetch } : {}), now });
-  await options.store.set("session", session);
+  let session: AccountSession;
+  try {
+    session = await requestToken(pending.service, {
+      grant_type: "authorization_code", code: returned.code, code_verifier: pending.verifier, redirect_uri: pending.redirect_uri,
+    }, { ...(options.fetch ? { fetch: options.fetch } : {}), now, ...(options.bearer === undefined ? {} : { bearer: options.bearer }) });
+  } catch (error) {
+    if (error instanceof AccountServiceError && error.code === "identity_in_use") throw new SignInError("in_use", "That sign-in already belongs to another account");
+    throw error;
+  }
+  if (options.bearer === undefined) await options.store.set("session", session);
   return session;
 }
 
@@ -86,7 +109,7 @@ export async function finishSignIn(returned: SignInReturn, options: { store: Acc
  * state (an older one, or one never started here) is refused before anything is consumed, and the
  * sign-in this call started is dropped whatever the outcome, so it cannot be finished later.
  */
-export async function finishOwnSignIn(started: string, back: string, options: { store: AccountStore; fetch?: Fetch; now?: () => number }): Promise<AccountSession> {
+export async function finishOwnSignIn(started: string, back: string, options: FinishOptions): Promise<AccountSession> {
   const state = new URL(started).searchParams.get("state") ?? "";
   const returned = signInReturn(back);
   if (returned === null || returned.state !== state) {

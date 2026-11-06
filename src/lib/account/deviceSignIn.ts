@@ -1,13 +1,13 @@
 /**
  * Signing in from a PC's own page (docs/account.md, "Signing in"): the account service cannot send
- * a sign-in back to an address it does not know, so the page uses GitHub's device flow (RFC 8628).
- * It shows GitHub's code, the person types it at github.com/login/device, and the page polls the
- * service until GitHub says yes. The sign-in is bound to a verifier that never leaves this page's
+ * a sign-in back to an address it does not know, so the page uses the provider's device flow (RFC
+ * 8628). It shows the provider's code, the person types it at the provider's device page
+ * (github.com/login/device, google.com/device), and the page polls the service until it says yes. The sign-in is bound to a verifier that never leaves this page's
  * memory, so the device code alone redeems nothing, and a service that does not say it bound the
  * sign-in is not used.
  */
 import { toBase64Url } from "../../../shared/relay-pair-sas.ts";
-import { failure, sessionOf } from "./service.ts";
+import { failure, sessionOf, type DeviceProvider } from "./service.ts";
 import { SignInError } from "./signin.ts";
 import { accountLock } from "./store.ts";
 import type { AccountLock, AccountSession, AccountStore } from "./store.ts";
@@ -18,11 +18,13 @@ const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 /** RFC 8628 section 3.5: each slow_down adds five seconds to the interval. */
 const SLOW_DOWN_MS = 5_000;
 export const GITHUB_DEVICE_PAGE = "https://github.com/login/device";
+/** Each provider's own device page: the only address the page links to for typing the code. */
+export const DEVICE_PAGES: Readonly<Record<DeviceProvider, string>> = { github: GITHUB_DEVICE_PAGE, google: "https://www.google.com/device" };
 
 export interface DeviceSignIn {
   /** the code the person types at GitHub */
   readonly userCode: string;
-  /** GitHub's device page, and never another address */
+  /** the provider's device page, and never another address */
   readonly verificationUri: string;
   /** when the code runs out, in ms since the epoch */
   readonly expiresAt: number;
@@ -38,6 +40,8 @@ export interface DeviceSignInOptions {
   /** waits between polls; aborting `signal` ends the wait */
   readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
   readonly lock?: AccountLock;
+  /** GitHub unless named */
+  readonly provider?: DeviceProvider;
 }
 
 function waitFor(ms: number, signal: AbortSignal): Promise<void> {
@@ -50,15 +54,16 @@ function waitFor(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-/** GitHub's own device page, parsed: a service that names another address is not followed there. */
-function devicePage(value: unknown): string {
-  if (typeof value !== "string") return GITHUB_DEVICE_PAGE;
+/** The provider's own device page, parsed: a service that names another address is not followed there. */
+function devicePage(value: unknown, provider: DeviceProvider): string {
+  const own = new URL(DEVICE_PAGES[provider]);
+  if (typeof value !== "string") return own.href;
   // new URL in a try: an older WebView has no URL.canParse
   try {
     const url = new URL(value);
-    return url.origin === "https://github.com" && url.pathname === "/login/device" ? url.href : GITHUB_DEVICE_PAGE;
+    return url.origin === own.origin && url.pathname === own.pathname ? url.href : own.href;
   } catch (error) {
-    if (error instanceof TypeError) return GITHUB_DEVICE_PAGE;
+    if (error instanceof TypeError) return own.href;
     throw error;
   }
 }
@@ -77,10 +82,12 @@ export async function startDeviceSignIn(options: DeviceSignInOptions): Promise<D
   const now = options.now ?? Date.now;
   const wait = options.wait ?? waitFor;
   const lock = options.lock ?? accountLock;
+  const provider = options.provider ?? "github";
   const verifier = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
-  const response = await fetchImpl(new URL("/v1/signin/github/device", options.service), {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code_challenge: challenge, code_challenge_method: "S256" }),
+  const response = await fetchImpl(new URL(`/v1/signin/${provider}/device`, options.service), {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code_challenge: challenge, code_challenge_method: "S256" }),
   });
   if (!response.ok) throw await failure(response);
   const started: unknown = await response.json();
@@ -96,7 +103,7 @@ export async function startDeviceSignIn(options: DeviceSignInOptions): Promise<D
 
   return {
     userCode,
-    verificationUri: devicePage(body["verification_uri"]),
+    verificationUri: devicePage(body["verification_uri"], provider),
     expiresAt,
     async finish(signal) {
       let interval = firstInterval;
@@ -140,7 +147,7 @@ export async function startDeviceSignIn(options: DeviceSignInOptions): Promise<D
         switch (refused.code) {
           case "authorization_pending": continue;
           case "slow_down": interval += SLOW_DOWN_MS; pause = interval; continue;
-          case "access_denied": throw new SignInError("denied", "The sign-in was refused at GitHub");
+          case "access_denied": throw new SignInError("denied", "The sign-in was refused at the provider");
           case "expired_token": throw new SignInError("expired", "The code ran out");
           default: throw refused;
         }

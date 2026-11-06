@@ -1,3 +1,6 @@
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve, win32 } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { ConnectionDiagnostics, transportFailureCode } from "../connection-diagnostics.ts";
 import type {
@@ -28,10 +31,51 @@ export function herdrSocketPath(): string {
 }
 
 /**
+ * Whether this process asked for an isolated herdr (HERDR_TEST_SESSION) and did not say the user's own
+ * session is meant (OVIS_ALLOW_LIVE_HERDR=1, or the tests' HERDR_TEST_LIVE=1): its herdr and herdr-core
+ * connections then never reach the user's own sessions.
+ */
+export function liveSessionsRefused(env: Record<string, string | undefined> = process.env): boolean {
+  return Boolean(env["HERDR_TEST_SESSION"]) && env["OVIS_ALLOW_LIVE_HERDR"] !== "1" && env["HERDR_TEST_LIVE"] !== "1";
+}
+
+/** One spelling of a socket: absolute, through the links of its folder, and on Windows the pipe's name in one case. */
+export function sameSocket(path: string): string {
+  // Windows resolves `..` and `.` in a \\.\ device path, a pipe's too: one name, in one case
+  if (process.platform === "win32") return win32.normalize(path.replace(/^\\\\\.\\pipe\\/i, "")).toLowerCase();
+  const absolute = resolve(path);
+  try { return join(realpathSync(dirname(absolute)), basename(absolute)); } catch { return absolute; }
+}
+
+/**
+ * A process that names a test session never reaches herdr's default socket, the user's own session:
+ * a script whose scripts/test-herdr.ts import Bun dropped (its binding unused) would otherwise create,
+ * type into and close panes there. Both homes count (HOME may be changed for a fixture after the
+ * socket was chosen), and every spelling of the same socket.
+ * The XDG_CONFIG_HOME that counts is the one the test run started with (scripts/test-herdr.ts records
+ * it in OVIS_TEST_USER_XDG_CONFIG_HOME, and children inherit it), not one a test gave a child of its
+ * own: refusing that would refuse the test's own herdr. Without the record, this process's own counts.
+ */
+function refuseLiveHerdr(socketPath: string, env: Record<string, string | undefined> = process.env): void {
+  if (!liveSessionsRefused(env)) return;
+  const homes = [...new Set([env["HOME"], homedir()].filter((home): home is string => Boolean(home)))];
+  const config = env["OVIS_TEST_USER_XDG_CONFIG_HOME"] ?? env["XDG_CONFIG_HOME"];
+  const defaults = [
+    ...homes.map((home) => join(home, ".config", "herdr", "herdr.sock")),
+    ...(config ? [join(config, "herdr", "herdr.sock")] : []),
+    ...(process.platform === "win32" && env["APPDATA"] ? [`${env["APPDATA"]}\\herdr\\herdr.sock`] : []),
+  ].map(sameSocket);
+  if (defaults.includes(sameSocket(socketPath))) {
+    throw new HerdrError("live_herdr_refused", `HERDR_TEST_SESSION=${env["HERDR_TEST_SESSION"]} is set, but this call would reach the user's own herdr at ${socketPath}: import scripts/test-herdr.ts for its effect (import "./test-herdr.ts"), or set OVIS_ALLOW_LIVE_HERDR=1`);
+  }
+}
+
+/**
  * On Windows herdr.sock is a marker file (`pid:start`), and the server listens on a named
  * pipe of the same name: `\\.\pipe\C:\Users\…\herdr.sock` (live-verified, herdr 0.9.3).
  */
 export function socketAddress(socketPath: string): string {
+  refuseLiveHerdr(socketPath);
   return process.platform === "win32" && !socketPath.startsWith("\\\\.\\pipe\\") ? `\\\\.\\pipe\\${socketPath}` : socketPath;
 }
 

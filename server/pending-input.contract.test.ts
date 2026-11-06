@@ -1427,10 +1427,14 @@ describe("connection-owned pending input", () => {
   it("marks a queued send typed at once as typed now, and never its replay or a discarded row's", async () => {
     const f = await setup("typed-now");
     await f.state("idle");
+    const asked = Date.now();
     f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "typed at once", payload: "unused\r", delivery: "queue" });
     const fresh = await f.socket.result(1);
     expect(fresh).toMatchObject({ ok: true, typed_now: true });
     expect(fresh.pending).toBeUndefined();
+    // the PC's clock before it typed: the message's turn is written after it (src/lib/sentWaiting.ts)
+    expect(Date.parse(fresh.sending_at)).toBeGreaterThanOrEqual(asked);
+    expect(Date.parse(fresh.sending_at)).toBeLessThanOrEqual(Date.now());
     await f.waitBytes(`${paste("typed at once")}\r`);
     // the same id again: its answer is replayed and nothing is typed twice
     const bytes = f.bytes(), from = f.socket.seen.length;
@@ -1438,6 +1442,7 @@ describe("connection-owned pending input", () => {
     const replay = await f.socket.wait((frame) => frame.type === "submit-result" && frame.id === 1, from);
     expect(replay.ok).toBe(true);
     expect(replay.typed_now).toBeUndefined();
+    expect(replay.sending_at).toBeUndefined();
     expect(f.bytes()).toBe(bytes);
     // queued while the agent works, then discarded: its replay answers ok with no row, and was never typed
     await f.state("working");
@@ -1451,7 +1456,20 @@ describe("connection-owned pending input", () => {
     expect(discarded.ok).toBe(true);
     expect(discarded.pending).toBeUndefined();
     expect(discarded.typed_now).toBeUndefined();
+    expect(discarded.sending_at).toBeUndefined();
     expect(f.bytes()).toBe(bytes);
+  }, 30_000);
+
+  it("stamps an immediate send's result with the PC's clock before it typed", async () => {
+    const f = await setup("immediate-stamp");
+    await f.state("idle");
+    const asked = Date.now();
+    f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "sent at once", payload: paste("sent at once") });
+    const answer = await f.socket.result(1);
+    expect(answer.ok).toBe(true);
+    expect(Date.parse(answer.sending_at)).toBeGreaterThanOrEqual(asked);
+    expect(Date.parse(answer.sending_at)).toBeLessThanOrEqual(Date.now());
+    await f.waitBytes(`${paste("sent at once")}\r`);
   }, 30_000);
 
   it("takes no colors from a scrolled viewport: an older grey box with the typed words holds the message", async () => {

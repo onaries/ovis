@@ -46,7 +46,7 @@ export function accountMetas(env: Record<string, string | undefined>): string[] 
     if (url.protocol === "https:") origin = url.origin;
   } catch { origin = null; }
   if (origin === null) return [];
-  const providers = (env["OVIS_ACCOUNT_PROVIDERS"] ?? "").split(",").map((name) => name.trim()).filter((name) => name === "github" || name === "apple");
+  const providers = (env["OVIS_ACCOUNT_PROVIDERS"] ?? "").split(",").map((name) => name.trim()).filter((name) => name === "github" || name === "google" || name === "apple");
   return [`<meta name="ovis-account-service" content="${origin}" />`, ...(providers.length > 0 ? [`<meta name="ovis-account-providers" content="${providers.join(",")}" />`] : [])];
 }
 

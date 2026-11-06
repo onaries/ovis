@@ -225,6 +225,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   /** OpenCode panes count their subagents too: child sessions in OpenCode's store (server/opencode-subagents.ts) */
   const opencodeAgents = new OpencodeSubagentStatus({
     store: () => options.opencodeDb ?? opencodeDatabasePath(),
+    // Settings -> Read OpenCode subagent ends from their session (experimental)
+    parentEnds: () => preferences.get().settings.opencodeParentEnds === true,
     // the runs are its service's: one that started since took what ran before it
     serviceStart: () => {
       const found = readOpenCodeService(options.openCodeStateDir ?? openCodeServiceOptions.stateDir);
@@ -243,7 +245,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       return service.started;
     },
     onReset: (paneId, first) => { if (owns(paneId, "opencode")) newLifetime(paneId, first ? "opencode" : null); },
-    onChange: (paneId, running, turnRunning, promptAt) => { if (owns(paneId, "opencode")) claudeAgentsChanged(paneId, running, turnRunning, promptAt); },
+    // a count that fell only because that setting was turned off ended no work: no grace is held for it
+    onChange: (paneId, running, turnRunning, promptAt, toggled) => { if (owns(paneId, "opencode")) claudeAgentsChanged(paneId, running, turnRunning, promptAt, false, null, toggled); },
   });
   /**
    * Whether a subagent tracker's word on a pane's count and wait stands: not once OmO runs there, nor
@@ -428,8 +431,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
    * the alerts took it for working meanwhile, so a wait that ends with no turn after it is that
    * turn's finish, told then.
    */
-  function claudeAgentsChanged(paneId: string, running: number, turnRunning: number, promptAt: number | null, resetHold = false, agent: string | null = null): void {
-    const changed = waits.running(paneId, turnRunning, promptAt) || resetHold;
+  function claudeAgentsChanged(paneId: string, running: number, turnRunning: number, promptAt: number | null, resetHold = false, agent: string | null = null, settled = false): void {
+    const changed = waits.running(paneId, turnRunning, promptAt, true, settled) || resetHold;
     if (paneId === settling) return;
     // a pane herdr reads as working: its session's turn came to rest under its subagents' spinner, or moved on again
     if (agent === "claude" && agentNow.get(paneId) === "claude" && !gjc.runs(paneId) && heard.get(paneId) === "working" && (completions.current(paneId) === "working") === claudeAgents.restsOn(paneId)) {

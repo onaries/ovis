@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { IDisposable, Terminal } from "@xterm/xterm";
 import type { IImageAddonOptions, ImageAddon } from "@xterm/addon-image";
-import { itermPictures, type PictureFeed, type PictureLimits } from "./itermPictures.ts";
+import { itermPictures, type OscStreamHandler, type PictureFeed, type PictureLimits } from "./itermPictures.ts";
 
 /**
  * Caps on what a pane's pictures may hold in this tab. Decoded pictures are RGBA in memory, four bytes
@@ -25,11 +25,18 @@ interface Loaded {
   resetPictures(): void;
 }
 
-interface OscStreamHandler {
-  start(): void;
-  put(data: Uint32Array, start: number, end: number): void;
-  end(success: boolean): boolean | Promise<boolean>;
+/**
+ * Registers an OSC handler that is fed a payload piece by piece on xterm's own parser, as the addon does.
+ * xterm's public handlers take the payload as one string and are not called for one past 10,000,000
+ * characters: such a picture went past them. Null where the parser is not where xterm 6 keeps it.
+ */
+export function registerOscStream(terminal: Terminal, ident: number, handler: OscStreamHandler): IDisposable | null {
+  type Parser = { registerOscHandler?(ident: number, handler: OscStreamHandler): IDisposable };
+  const parser = (terminal as unknown as { _core?: { _inputHandler?: { _parser?: Parser } } })._core?._inputHandler?._parser;
+  return typeof parser?.registerOscHandler === "function" ? parser.registerOscHandler(ident, handler) : null;
 }
+
+const SWALLOW: OscStreamHandler = { start() {}, put() {}, end: () => true };
 
 /**
  * The addon's own iTerm2 decoder, fed a whole `File=` payload as the parser would feed it: the addon has
@@ -106,7 +113,7 @@ export function useTerminalImages(terminal: Terminal | null, enabled: boolean, c
       terminal.options.windowOptions = present.windowOptions;
       const swallowed: IDisposable[] = [
         terminal.parser.registerDcsHandler({ final: "q" }, () => true),
-        terminal.parser.registerOscHandler(1337, () => true),
+        registerOscStream(terminal, 1337, SWALLOW) ?? terminal.parser.registerOscHandler(1337, () => true),
       ];
       return () => { for (const handler of swallowed) handler.dispose(); };
     }
@@ -128,12 +135,21 @@ export function useTerminalImages(terminal: Terminal | null, enabled: boolean, c
       const feed = iipFeed(addon);
       const limits: PictureLimits = { sizeLimit: options.iipSizeLimit ?? 20_000_000, pixelLimit: options.pixelLimit ?? 16_777_216 };
       const pictures = feed && itermPictures(feed, () => limits);
-      if (pictures) terminal.parser.registerOscHandler(1337, pictures.handle);
+      const entry: Loaded = { addon, windowOptions, enabled: true, resetPictures: () => pictures?.reset() };
+      // xterm feeds every handler each piece and asks only at the end who takes it: while off, a payload
+      // that began then is not held here
+      let taking = false;
+      const stream: OscStreamHandler | null = pictures && {
+        start: () => { taking = entry.enabled; pictures.stream.start(); },
+        put: (data, start, end) => { if (taking) pictures.stream.put(data, start, end); },
+        end: (success) => pictures.stream.end(success && taking),
+      };
+      if (pictures && stream && !registerOscStream(terminal, 1337, stream)) terminal.parser.registerOscHandler(1337, pictures.handle);
       // XTSMGRAPHICS goes unanswered, as without the addon: hc leaves it to its viewers, and two
       // browsers on one pane answered it late, into the program's next read (measured on hc 0.1.17).
       // xterm disposes the handler with the terminal, as it does the addon.
       terminal.parser.registerCsiHandler({ prefix: "?", final: "S" }, () => true);
-      loaded.set(terminal, { addon, windowOptions, enabled: true, resetPictures: () => pictures?.reset() });
+      loaded.set(terminal, entry);
       if (typeof __HERDR_TEST_HOOKS__ === "boolean" && __HERDR_TEST_HOOKS__ && terminal.element) {
         // browser scripts ask which picture a cell holds (never in a release build)
         Object.assign(terminal.element, { imageAt: (col: number, row: number) => pictureColour(addon.getImageAtBufferCell(col, row)) });

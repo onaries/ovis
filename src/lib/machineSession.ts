@@ -4,7 +4,7 @@ import { afterSend, afterSettled, greetingMemory, rememberGreeting } from "./gre
 import { paneLifetimes } from "./paneLifetime.ts";
 import { setPasteFolder } from "./pasteFolders.ts";
 import { pendingMessages, type PendingMessageStore } from "./pendingMessages.ts";
-import { rememberWaitingSend, waitingBaseline, waitingKey, type WaitingBaseline } from "./sentWaiting.ts";
+import { rememberWaitingSend, stampedBaseline, waitingBaseline, waitingKey, type WaitingBaseline } from "./sentWaiting.ts";
 import { watchPageInUse } from "./presence.ts";
 import { currentSurface } from "./telemetrySurface.ts";
 import { HerdrSocket } from "./ws.ts";
@@ -87,9 +87,8 @@ export class MachineSession {
             // that frame can come after the row's Enter (replayed after a reconnect, or handled late): the
             // PC's clock now would bound it too tightly, but the PC stamped the row before typing it, which
             // bounds it though the chat never read the pane. An older bridge does not: only the turns' times do then
-            const after = waitingBaseline(key), stamped = item.sending_at === undefined ? Number.NaN : Date.parse(item.sending_at);
-            const pcFloor = Number.isFinite(stamped) ? stamped : null;
-            this.going.set(item.id, { at: Date.now(), after: after !== null ? { ...after, pcFloor } : pcFloor === null ? null : { keys: new Set(), latest: null, takenAt: Date.now(), pcFloor } });
+            const after = waitingBaseline(key);
+            this.going.set(item.id, { at: Date.now(), after: stampedBaseline(after !== null ? { ...after, pcFloor: null } : null, item.sending_at) });
           }
           else if (item.state === "queued" || item.state === "held") this.going.delete(item.id);
         }

@@ -90,9 +90,9 @@ const multipart = (rgb: [number, number, number]): string => {
 };
 
 /** `chafa -f iterm`: an uncompressed RGBA TIFF with no size= argument, laid out as chafa writes it (#3147) */
-const chafaTiff = (rgb: [number, number, number]): string => {
-  const side = 24;
-  const pixels = Buffer.concat(Array.from({ length: side * side }, () => Buffer.from([...rgb, 255])));
+const chafaTiff = (rgb: [number, number, number], side = 24): string => {
+  const pixels = Buffer.alloc(side * side * 4);
+  for (let i = 0; i < pixels.length; i += 4) pixels.set([...rgb, 255], i);
   const tags: Array<[number, number, number, number]> = [
     [256, 4, 1, side], [257, 4, 1, side], [258, 3, 4, 8 + pixels.length + 2 + 11 * 12 + 4], [262, 3, 1, 2], [273, 4, 1, 8],
     [274, 3, 1, 1], [277, 3, 1, 4], [278, 4, 1, side], [279, 4, 1, pixels.length], [284, 3, 1, 1], [338, 3, 1, 2],
@@ -165,7 +165,7 @@ try {
       const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US" });
       await context.addInitScript(() => {
         localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", terminalInputMode: "direct", alertsOn: false }));
-        localStorage.setItem("ovis:terminal-images", "true");
+        localStorage.setItem("ovis:terminal-pictures", "true");
       });
       const page = await context.newPage();
       page.setDefaultTimeout(10000);
@@ -208,8 +208,11 @@ try {
       assert.deepEqual(await pixel(page, 4, 4), [0, 255, 0], "imgcat's multipart picture is drawn");
       await print(page, `\x1b[H\x1b[2J${chafaTiff([255, 0, 255])}`, "CHAFA-PRINTED");
       assert.deepEqual(await pixel(page, 4, 4), [255, 0, 255], "chafa's TIFF picture is drawn");
+      // 1700 x 1700 RGBA: about 15 million base64 characters, past the 10,000,000 xterm holds for a string handler (#3154)
+      await print(page, `\x1b[H\x1b[2J${chafaTiff([0, 255, 255], 1700)}`, "CHAFA-LARGE-PRINTED");
+      assert.deepEqual(await pixel(page, 4, 4), [0, 255, 255], "a TIFF past xterm's string handler cap is drawn");
       assert.deepEqual(errors, [], "no page errors");
-      console.log("PASS pictures: drawn, gone while off, and on again only where printed; imgcat's multipart and chafa's TIFF drawn too");
+      console.log("PASS pictures: drawn, gone while off, and on again only where printed; imgcat's multipart and chafa's TIFF drawn too, also past 10M characters");
     } finally {
       await browser.close();
     }

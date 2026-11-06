@@ -57,7 +57,6 @@ export const USAGE_ZH: Record<string, string> = {
   "No limits reported": "未报告限额",
   "Sign-in expired. Open {name} to renew it.": "登录已过期。请打开 {name} 续期。",
   "Sign-in expired.": "登录已过期。",
-  "Sign in again": "重新登录",
   "Sign in again to {name}": "重新登录 {name}",
   "{name} asked to slow down. These are the last numbers.": "{name} 要求降低请求频率。显示的是上次读取的数值。",
   "{name} could not be reached.": "无法连接 {name}。",

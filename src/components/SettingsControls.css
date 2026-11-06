@@ -132,6 +132,292 @@
   font-weight: var(--fw-medium);
 }
 
+.settings-label-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* the ↺ beside a label whose value moved off its default */
+.settings-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.settings-reset:hover {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.settings-reset svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* one row of theme cards that scrolls sideways (ThemePicker): never more than a card tall */
+.theme-cards {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: 4px 2px;
+  margin: -4px -2px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+
+.theme-cards::-webkit-scrollbar {
+  display: none;
+}
+
+/* the other kind of themes after the side's own */
+.theme-cards-rule {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: var(--hairline);
+  margin: 6px 0 22px;
+  background: var(--border-strong);
+}
+
+.theme-card {
+  display: flex;
+  flex: 0 0 96px;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+  scroll-snap-align: start;
+}
+
+.theme-card[aria-checked="true"] {
+  color: var(--text-strong);
+  font-weight: var(--fw-medium);
+}
+
+/* a sidebar beside a pane, in the theme's own colours */
+.theme-card-art {
+  position: relative;
+  display: flex;
+  gap: 4px;
+  aspect-ratio: 16 / 10;
+  padding: 4px;
+  overflow: hidden;
+  border: var(--hairline) solid;
+  border-radius: var(--radius-md);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.theme-card:hover .theme-card-art {
+  outline-color: var(--border-strong);
+}
+
+.theme-card[aria-checked="true"] .theme-card-art,
+.theme-card:focus-visible .theme-card-art {
+  outline-color: var(--accent);
+}
+
+.theme-card:focus-visible {
+  outline: none;
+}
+
+.theme-card-side,
+.theme-card-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px;
+  border: var(--hairline) solid;
+  border-radius: 3px;
+}
+
+.theme-card-side {
+  flex: 0 0 30%;
+}
+
+.theme-card-pane {
+  flex: 1 1 auto;
+}
+
+.theme-card-art i {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.theme-card-side i:nth-child(2),
+.theme-card-pane i:nth-child(2) {
+  width: 70%;
+  opacity: 0.7;
+}
+
+.theme-card-side i:nth-child(3) {
+  width: 55%;
+  opacity: 0.7;
+}
+
+.theme-card-art b {
+  width: 8px;
+  height: 8px;
+  margin-top: auto;
+  margin-left: auto;
+  border-radius: 50%;
+}
+
+.theme-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* the cards sit right under their row, inside the same block */
+.settings-card > .settings-item.theme-strip {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.theme-strip-frame {
+  position: relative;
+  min-width: 0;
+}
+
+.theme-strip-arrow {
+  position: absolute;
+  top: 30px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+}
+
+.theme-strip-arrow.is-start {
+  left: -8px;
+}
+
+.theme-strip-arrow.is-end {
+  right: -8px;
+}
+
+/* a touch screen swipes instead */
+@media (hover: none) {
+  .theme-strip-arrow {
+    display: none;
+  }
+}
+
+/* the picture before a row's name */
+.settings-row-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-right: var(--space-1);
+  color: var(--text-dim);
+}
+
+/* a tiny drawing of what the choice does, beside its control */
+.settings-row-preview {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+/* Wrap long lines, drawn: a line of code in a box two lines high, wrapped or running past the edge */
+.settings-wrap-preview {
+  display: block;
+  width: 88px;
+  height: 30px;
+  padding: 2px var(--space-1);
+  overflow: hidden;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 9px;
+  line-height: 12px;
+  white-space: pre;
+  position: relative;
+}
+
+/* off, the line runs past the edge: it fades there */
+.settings-wrap-preview::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 18px;
+  background: linear-gradient(to right, transparent, var(--bg));
+}
+
+.settings-wrap-preview.is-wrapped {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.settings-wrap-preview.is-wrapped::after {
+  display: none;
+}
+
+.settings-chip svg {
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+
+/* several on/off choices in one row: a chip each, pressed when on */
+.settings-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+.settings-chip {
+  padding: 2px var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* a font list and its size on one line, wrapping the size under the list when the row has no room */
+.settings-row > .settings-font-size {
+  flex: 0 1 auto;
+}
+
+.settings-font-size {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .settings-description,
 .settings-hint {
   margin: 0;
@@ -347,6 +633,22 @@
   .settings-row.is-wide > .settings-font-input {
     flex: 0 0 auto;
   }
+
+  /* a little narrower than three to a line, so the next card shows at the edge */
+  .theme-card {
+    flex-basis: 84px;
+  }
+
+  /* on a phone the list takes the line and its size sits under it, at the end */
+  .settings-row.is-wide > .settings-font-size {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .settings-row.is-wide > .settings-font-size > .settings-font-field {
+    flex: 1 1 100%;
+    width: auto;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -354,4 +656,69 @@
   .settings-toggle-thumb {
     transition: none;
   }
+}
+
+/* several on/off choices of one decision on one line */
+.settings-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.settings-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.92em;
+  cursor: pointer;
+}
+
+.settings-chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--text-strong);
+}
+
+/* sections read as one card: herdr-app's About list */
+.settings-joined {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-joined > .settings-section:not(:first-child) > .settings-card {
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.settings-joined > .settings-section:not(:last-child) > .settings-card {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+
+.settings-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-chip svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* a row of chips keeps its name on one line and wraps its chips beside it */
+.settings-row:has(> .settings-chips) > .settings-row-text {
+  flex: none;
+  white-space: nowrap;
+}
+
+.settings-row > .settings-chips {
+  flex: 1 1 0;
 }

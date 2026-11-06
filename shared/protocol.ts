@@ -175,6 +175,8 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *  POST   /api/relay/pairing             -> { ok: true }; JSON { id, decision: "approve" | "decline" } for a phone
  *         waiting with the same digits (`relay-pairings` on /api/machines/events); 400 invalid_relay_pairing,
  *         404 relay_pairing_gone once it left, was decided or ran out of time
+ *  POST   /api/relay/direct              -> RelayStatus; JSON { on: boolean }: direct connections on this PC's
+ *         networks while the relay is on (on unless turned off; off ends every direct session); 400 invalid_relay_direct, 409 direct_unavailable on a server without them
  *  POST   /api/relay/reset-identity      -> RelayStatus; revokes relay devices and reconnects if enabled
  *         Relay mutations require drive role, same origin and X-Herdr-Update: 1, and a direct connection
  *         (403 local_required over the relay); a Portal visitor gets 403 owner_only (see Access).
@@ -560,6 +562,11 @@ export interface RelayStatus {
   readonly sessions: number;
   readonly blocked: null | "serve_only" | "identity_unreadable";
   readonly error: string | null;
+  /**
+   * Direct connections on this PC's networks (docs/relay.md): whether they are on, and the carriers
+   * listened on now (none while the relay is off). Absent from a server without them.
+   */
+  readonly direct?: { readonly on: boolean; readonly carriers: readonly string[] };
 }
 
 /** POST /api/devices/pair's answer to a request that accepts JSON: the device's own credential. */
@@ -1305,8 +1312,11 @@ export type ServerMessage =
    * `typed_now`: on a queued send, this request typed the message at once (the turn had ended
    * before it arrived); on a held copy's resend (`resend_id`), this request typed it. A replayed id, a
    * row sent or discarded since, or a copy another connection sent answers ok without it; an older
-   * server never sends it. */
-  | { type: "submit-result"; id: number; pane_id: string; ok: boolean; pending?: PendingMessage; typed_now?: true; code?: string; message?: string; draft?: string; box?: string }
+   * server never sends it.
+   * `sending_at`: on an ok for a message this request typed (an immediate send, or one with
+   * `typed_now`), the PC's clock (ISO 8601) before it typed anything, as a queued row's `sending_at`:
+   * the message's turn is written after it on that clock. An older server never sends it. */
+  | { type: "submit-result"; id: number; pane_id: string; ok: boolean; pending?: PendingMessage; typed_now?: true; sending_at?: string; code?: string; message?: string; draft?: string; box?: string }
   | { type: "pending-result"; id: number; pane_id: string; pending_id: string; ok: boolean; code?: string; message?: string }
   /** ok once herdr accepted the inserted bytes (`pane.send_text` answered), never that the program
    * took or ran them; a refusal names why and nothing was typed, except `insert_failed`, whose bytes

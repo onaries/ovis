@@ -387,6 +387,12 @@ pieces are the Java twins of the iOS ones, in `app/android/app/src/main/java/sh/
   for Try again and Change PC. For the same reason `error.html` carries its own style and
   script, which `app/scripts/build-web.ts` inlines.
 - The manifest allows cleartext http to any host (see the connect screen's warning above).
+- The WebView has no download handler and no Web Share, so a download link does nothing there.
+  Download in the chat's image viewer hands the picture's bytes, read by the page (relay pictures
+  through the relay), to `SaveImagePlugin` (`OvisSave`), which writes them to Downloads through
+  MediaStore with no storage permission, as Chrome saves a download. Android 8 and 9 give an app
+  that without the storage permission, so there it opens the share sheet with the picture instead.
+  An app built before the plugin makes the viewer say it couldn't save.
 - A PC's link on the hosted shell tapped outside the app (a message, the camera app reading the
   PC's QR code) opens in the app: the manifest's `autoVerify` intent-filter takes
   `https://app.ovis.sh/s/`, which Android verifies against

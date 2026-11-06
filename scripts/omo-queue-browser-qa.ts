@@ -97,7 +97,7 @@ try {
         const previews = card.locator(".chat-codex-queue");
         await previews.waitFor();
         assert.deepEqual(await previews.locator("li").allTextContents(), ["First queued preview\nwrapped detail", "Second queued preview"]);
-        assert.match(await previews.innerText(), /Queued messages · Codex · Preview/);
+        assert.equal(await previews.locator("p").textContent(), "Queued messages");
         const watcher = await page.evaluate(async (paneId) => (await fetch(`/api/pane/prompt?pane_id=${encodeURIComponent(paneId)}&plan=0`)).json(), pane);
         assert.equal(watcher.codex_queue_preview, undefined, "a watching device receives no queued text");
       }

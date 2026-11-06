@@ -54,6 +54,7 @@ export const RELAY_KO: Record<string, string> = {
   "ID of the key this link carries": "이 링크가 가진 키의 ID",
   "ID of the key this phone saved": "이 폰에 저장된 키의 ID",
   "Continue with GitHub": "GitHub로 계속하기",
+  "Continue with Google": "Google로 계속하기",
   "Continue with Apple": "Apple로 계속하기",
   "Loading your PCs…": "PC 목록을 불러오는 중…",
   "The sign-in was cancelled.": "로그인이 취소되었습니다.",

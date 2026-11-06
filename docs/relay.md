@@ -400,7 +400,7 @@ oversized frame ends the session before anything in it is parsed.
 
 | Type | Name | From | Carries |
 | --- | --- | --- | --- |
-| `0x01` | `HELLO` | phone | `protocol: "ovis-mux"`, the versions and features it offers (`relay-hints`, from 0.5.0, which the PC answers in `AUTH_OK`) |
+| `0x01` | `HELLO` | phone | `protocol: "ovis-mux"`, the versions and features it offers (`relay-hints`, from 0.5.0, and `direct-carrier`, both answered in `AUTH_OK`) |
 | `0x02` | `WELCOME` | PC | version 1, the limits, `nonce` (32 random bytes), `server_version`, `relay_protocol`, `min_supported_client`; `provisional` on the one sent before `HELLO` |
 | `0x03` | `AUTH` | phone | `scheme: "device-key"`, `device_id`, `signature` (64 bytes, P-256 `r` and `s`, base64url) |
 | `0x0A` | `PAIR` | phone | the six-digit `code`, a `label` of up to 64 characters, `public_key` (P-256 SPKI, base64url) |
@@ -408,7 +408,7 @@ oversized frame ends the session before anything in it is parsed.
 | `0x0C` | `PAIR_CHALLENGE` | PC | `nonce`: the PC's 32 random bytes |
 | `0x0D` | `PAIR_REVEAL` | phone | `nonce`: the 32 bytes the commitment was made with |
 | `0x0E` | `PAIR_CONFIRM` | phone | `confirmed: true`: the person said both screens show the same digits |
-| `0x04` | `AUTH_OK` | PC | `session_id`, `device_id`, `role` (`drive` or `watch`), and with `relay-hints` `relays`: up to two `wss:` origins, the one new connections should use first |
+| `0x04` | `AUTH_OK` | PC | `session_id`, `device_id`, `role` (`drive` or `watch`), and with `relay-hints` `relays`: up to two `wss:` origins, the one new connections should use first; with `direct-carrier` `direct`: up to four `ws://<private IPv4>:<port>` ([Direct on the same network](#direct-on-the-same-network)) |
 | `0x05` | `SESSION_ERROR` | either | a `code` from [Errors](#errors-and-close-codes) and a short `message` |
 | `0x06` | `GOAWAY` | either | `shutdown` or `id_exhausted`, the last stream ID taken, how long to drain (up to 5 seconds) |
 | `0x07`, `0x08` | `PING`, `PONG` | either | a 64-bit number, echoed |
@@ -685,8 +685,8 @@ them; the list is `REGIONAL_RELAYS` in [`shared/relay-regions.ts`](../shared/rel
 - **It stays on both.** The PC keeps its link to `relay.ovis.sh` and opens a second one, with the
   same key and proof, to the regional relay. New pairing QR codes and pairing links without a code
   name the regional relay while its link is online (the global one otherwise), and the relay status
-  is the global link's. Each link
-  has its own session limits.
+  is the global link's. Signed-in sessions share one limit across both links (and the
+  [direct carriers](#direct-on-the-same-network)): eight at once and four per device key.
 - **It tells phones paired before.** A phone that offers `relay-hints` is told in `AUTH_OK` the
   relay new offers name, then `relay.ovis.sh`, and saves the first for that PC; the app uses it from
   the next time it opens that PC. This comes inside the encrypted channel from the PC the phone authenticated,
@@ -716,6 +716,51 @@ them; the list is `REGIONAL_RELAYS` in [`shared/relay-regions.ts`](../shared/rel
 Which relay carries a connection changes nothing about its protection: the phone and the PC
 encrypt end to end whichever relay passes the frames on, and each relay sees what
 [What the relay sees](#what-the-relay-sees) says.
+
+## Direct on the same network
+
+While the relay is on, the PC also listens on its private IPv4 addresses (RFC 1918 and link-local,
+port 7319, or another one when that is taken): the one its default route leaves from first, then the
+others, leaving out container, VM and VPN adapters, at most four for the same channel without the relay
+([`server/relay/direct.ts`](../server/relay/direct.ts)). A phone that can reach one of them opens
+it there instead of through `relay.ovis.sh`. Not yet started by `bun run server`: it is turned on together
+with the apps that open it.
+
+- **Same channel, same trust.** The listener speaks to a phone what the relay does (`/v1/ws`, an
+  `assigned` frame, then the phone's Noise records) and hands the socket to the same session a
+  relay data socket gets. The phone runs Noise against the PC key it pinned at pairing and signs in
+  with its device key, as over the relay; a host at that address that is not the PC cannot finish
+  the handshake, so an address is only a hint where to try. There is no TLS: Noise already proves
+  the PC and protects the records. Someone on the network sees the records' sizes and timing.
+- **Signing in only.** Nothing pairs there: a code or a comparison of digits sent on a direct
+  carrier is refused with `auth_failed`, and the code stays unspent. Pairing stays on the relay.
+- **Told inside the channel.** A phone that offers `direct-carrier` in `HELLO` is told in
+  `AUTH_OK` `direct`: up to four `ws://<private IPv4>:<port>` addresses, checked on both ends. It
+  comes from the PC the phone authenticated, so the relay cannot add an address. An older phone or
+  PC offers or answers nothing, and nothing changes for it.
+- **Bounded.** At most two clients that have not signed in per source address and eight in all,
+  refused at upgrade beyond that, apart from the relay's places; 5 s to finish the handshake and
+  15 s to sign in, and no message larger than one protected mux frame. Signed-in sessions count
+  against one set of limits whichever way they came (relay links and direct carriers together):
+  eight at once and four per device key, whose oldest gives way. Peers outside private IPv4 are refused before upgrade. Removing a device, stopping
+  the relay, resetting its identity or turning direct connections off ends them.
+- **The app moves on its own.** An app with a socket for it (`RelayTransport` `directSocket`)
+  tries the PC's direct carriers first, one at a time within 1.5 s, whenever it connects or
+  reconnects, then the relay. While the relay carries it, it probes them (a socket, `assigned` and
+  the Noise handshake to the pinned key, closed before `HELLO`, so the PC holds no session) after
+  each admission (at most every 5 minutes, the next one due even across a reconnect), on `online`
+  and when the page comes back to the foreground; once one proves to be the PC, no request is under
+  way (uploads still being read included) and no WebSocket sent anything for 3 s, it closes the
+  relay channel and the reconnect lands on that carrier, which nobody is told of as a lost carrier. A
+  stream is never moved: the switch is a reconnect like any other. A failure before the PC answers
+  falls back to the relay silently; a refusal by the PC (a removed device) is final as over the
+  relay. The carriers are saved with the pairing for the next start. A browser has no such socket
+  and always uses the relay.
+- **On unless turned off.** `POST /api/relay/direct` with `{ "on": false }` turns it off (kept in
+  `relay/direct.json`; a file that cannot be read counts as off); `GET /api/relay` says whether it is on and where it listens. Addresses are
+  read again every 30 s, and the listener follows them on the same port. On Windows the first
+  bind of a network address shows Windows' own firewall prompt; declining it leaves the relay as
+  the only way in.
 
 ## Code
 

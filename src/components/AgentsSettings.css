@@ -2,12 +2,8 @@
 .agents-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--space-3);
-}
-
-.agents-head > h3 {
-  margin: 0;
 }
 
 .agents-head .btn,
@@ -237,4 +233,28 @@
   .agents-row-action-label {
     display: none;
   }
+}
+
+/* what New tab starts the agent with, on its row */
+.agents-defaults {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* herdr's install command for a session resume, beside its Copy */
+.settings-integration-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.settings-integration-action .settings-integration-command {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

@@ -67,8 +67,11 @@ export class BackgroundWait {
     if (!this.panes.get(paneId)?.statusSeen) this.status(paneId, status);
   }
 
-  /** How many of the pane's running subagents and commands its turn started. True when that changed whether it waits. */
-  running(paneId: string, turnRunning: number, promptAt: number | null = null, capped = true): boolean {
+  /**
+   * How many of the pane's running subagents and commands its turn started. True when that changed whether it waits.
+   * `settled`: a count that fell did so with no work ending (a setting changed how it is read), so no grace follows.
+   */
+  running(paneId: string, turnRunning: number, promptAt: number | null = null, capped = true, settled = false): boolean {
     const pane = this.pane(paneId);
     pane.capped = capped;
     const newPrompt = promptAt !== null && promptAt !== pane.promptAt;
@@ -76,7 +79,7 @@ export class BackgroundWait {
       pane.promptAt = promptAt;
       pane.endedAt = null;
     }
-    if (!newPrompt && turnRunning === 0 && pane.turnRunning > 0 && !pane.busy) pane.endedAt = this.now();
+    if (!newPrompt && turnRunning === 0 && pane.turnRunning > 0 && !pane.busy && !settled) pane.endedAt = this.now();
     pane.turnRunning = turnRunning;
     return this.settle(pane);
   }

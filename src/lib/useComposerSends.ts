@@ -5,7 +5,7 @@ import { composerDelivery, pendingActionUncertain, submitNote, submitNotTyped, s
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import { pendingMessages, UNCONFIRMED_SEND } from "./pendingMessages.ts";
 import { paneStorageId } from "../../shared/machines.ts";
-import { rememberWaitingSend, waitingBaseline, waitingKey } from "./sentWaiting.ts";
+import { rememberWaitingSend, stampedBaseline, waitingBaseline, waitingKey } from "./sentWaiting.ts";
 import { composerDrafts } from "./composerDraft.ts";
 import type { AgentStatus, InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
@@ -156,7 +156,8 @@ export function useComposerSends(deps: ComposerSendsDeps) {
           if (paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
             setChatLocalSend((current) => ({ key: current.key + 1, navigationGeneration: navigation }));
           }
-          if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text, sentAt, sentAfter);
+          // the PC's stamp before it typed bounds the send's turn on its clock alone (lib/sentWaiting.ts)
+          if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text, sentAt, stampedBaseline(sentAfter, answer.sendingAt, sentAt));
         }
         if (pane !== null && typedNow) showSentCommand(pane, text, known, seen);
         // Ctrl+Enter: the row it was queued as goes now, by the same steer as its Send now. A refused steer
@@ -253,7 +254,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
             pendingMessages.removeCopy(owner, id);
             if (action === "steer" && answer.pending === undefined) {
               // typed by this resend: a replay of a send another connection made has its own turn already
-              if (answer.typedNow === true) rememberWaitingSend(waitingKey(machineId, pane), message.text, sentAt, sentAfter);
+              if (answer.typedNow === true) rememberWaitingSend(waitingKey(machineId, pane), message.text, sentAt, stampedBaseline(sentAfter, answer.sendingAt, sentAt));
               showSentCommand(pane, message.text, known, seen);
             }
           }

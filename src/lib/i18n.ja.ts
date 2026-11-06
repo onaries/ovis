@@ -1,5 +1,6 @@
 import { SETTINGS_JA } from "./i18n/settings.ja.ts";
 import { SETTINGS_ACCESS_JA } from "./i18n/settings-access.ja.ts";
+import { SETTINGS_AGENTS_JA } from "./i18n/settings-agents.ja.ts";
 import { SETTINGS_COMPOSER_JA } from "./i18n/settings-composer.ja.ts";
 import { SETTINGS_LAYOUT_JA } from "./i18n/settings-layout.ja.ts";
 import { TERMINAL_JA } from "./i18n/terminal.ja.ts";
@@ -41,6 +42,7 @@ const BASE: Record<string, string> = {
   "Files edited in this turn": "このターンで編集したファイル",
   "Open working-tree diff for {path}": "{path} の作業ツリーの差分を開く",
   "This file is outside the pane's repository.": "このファイルはペインのリポジトリ外にあります。",
+  "View only": "表示のみ",
   "Not pasted: the file's path holds a line break, which the terminal would take as Enter.": "貼り付けていません: ファイルのパスに改行があり、ターミナルが Enter として受け取ります。",
   "Attach files": "ファイルを添付",
   "Sign out": "サインアウト",
@@ -52,10 +54,20 @@ const BASE: Record<string, string> = {
   "Signed in with {provider}": "{provider} でサインイン中",
   "Signing in…": "サインイン中…",
   "The sign-in did not finish. Try again.": "サインインが完了しませんでした。もう一度お試しください。",
-  "Open GitHub and enter this code. Enter it only if you started this sign-in on this page.": "GitHub を開いてこのコードを入力してください。このページで自分で始めたサインインのときだけ入力してください。",
-  "Waiting for GitHub…": "GitHub の承認を待っています…",
-  "Open GitHub": "GitHub を開く",
-  "GitHub refused the sign-in.": "GitHub でサインインが拒否されました。",
+  "Open {provider} and enter this code. Enter it only if you started this sign-in on this page.": "{provider} を開いてこのコードを入力してください。このページで自分で始めたサインインのときだけ入力してください。",
+  "Waiting for {provider}…": "{provider} の承認を待っています…",
+  "Open {provider}": "{provider} を開く",
+  "{provider} refused the sign-in.": "{provider} でサインインが拒否されました。",
+  "Your account already signs in with {provider}.": "このアカウントはすでに {provider} でサインインできます。",
+  "This {provider} sign-in already belongs to another Ovis account. Nothing was changed.": "この {provider} のサインインはすでに別の Ovis アカウントに使われています。何も変更されていません。",
+  "Add another way to sign in before removing this one.": "この方法を削除する前に、別のサインイン方法を追加してください。",
+  "The sign-in method could not be removed. Try again.": "サインイン方法を削除できませんでした。もう一度お試しください。",
+  "Ways to sign in": "サインイン方法",
+  "Sign in again": "もう一度サインイン",
+  "Added {date}": "{date} に追加",
+  "To change how you sign in, sign in again with {provider} first.": "サインイン方法を変更するには、先に {provider} でもう一度サインインしてください。",
+  "Add another way to sign in from the Ovis desktop app.": "別のサインイン方法は Ovis デスクトップアプリから追加してください。",
+  "Add {provider}": "{provider} を追加",
   "The code expired. Sign in again to get a new one.": "コードの有効期限が切れました。もう一度サインインして新しいコードを受け取ってください。",
   "This account service can't sign in a browser on this PC yet.": "このアカウントサービスは、この PC のブラウザーでのサインインにまだ対応していません。",
   "Your sign-in ended. Sign in again to see every PC of your account.": "サインインが終了しました。アカウントのすべての PC を表示するには、もう一度サインインしてください。",
@@ -167,7 +179,6 @@ const BASE: Record<string, string> = {
   "Command palette (⌘⇧K)": "コマンドパレット (⌘⇧K)",
   "Could not sign out. Try again.": "サインアウトできませんでした。もう一度お試しください。",
   "Retry": "再試行",
-  "Notify me when a pane needs input or finishes": "ペインが入力を待っているときや完了したときに通知します",
   "On, pushed to this device": "オン、この端末にプッシュ",
   "Alerts on, pushed to this device, even with the app closed. Tap to turn them off": "通知オン。このデバイスにプッシュされます。アプリを閉じていても届きます。タップするとオフになります",
   "Off on this device": "この端末ではオフ",
@@ -204,10 +215,7 @@ const BASE: Record<string, string> = {
   "Via Tailscale, or Funnel from the internet": "Tailscale 経由、またはインターネットから Funnel 経由",
   "Via the local network": "ローカルネットワーク経由",
   "Straight to this address": "このアドレスへ直接",
-  "Sessions on this PC": "この PC のセッション",
-  "{count} working": "作業中 {count} 件",
   "{count} waiting for you": "応答待ち {count} 件",
-  "{count} done": "完了 {count} 件",
   "Open the next session waiting for you": "応答を待っている次のセッションを開く",
   "Tab {index} of {count}": "タブ {index}/{count}",
   "Tabs of {workspace}": "{workspace} のタブ",
@@ -439,9 +447,6 @@ const BASE: Record<string, string> = {
   "No group": "グループなし",
   "Context {percent}% left": "コンテキスト残り {percent}%",
   "{used} of {window} tokens": "{used} / {window} トークン",
-  "Suggestion chip": "提案チップ",
-  "Artifacts chip": "アーティファクトチップ",
-  "Side conversations chip (experimental)": "サイド会話チップ（実験的）",
   "Permission mode": "権限モード",
   "Model": "モデル",
   "One model name, without spaces.": "空白を含まないモデル名を一つ指定してください。",
@@ -465,12 +470,15 @@ const BASE: Record<string, string> = {
   "Phones paired through the relay will need to scan a new code.": "リレー経由でペアリングしたスマートフォンは、新しいコードを読み取り直す必要があります。",
   "Pairs this phone through the relay, so Ovis keeps working away from home.": "このスマートフォンをリレー経由でペアリングし、外出先でも Ovis を使えるようにします。",
   "This PC": "この PC",
+  "Paste and send": "貼り付けて送信",
+  "Conversation": "会話",
+  "Off": "オフ",
 };
 
 /** The parts JA is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const JA_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
-  settings: { ...SETTINGS_JA, ...SETTINGS_ACCESS_JA, ...SETTINGS_COMPOSER_JA, ...SETTINGS_LAYOUT_JA },
+  settings: { ...SETTINGS_JA, ...SETTINGS_ACCESS_JA, ...SETTINGS_COMPOSER_JA, ...SETTINGS_LAYOUT_JA, ...SETTINGS_AGENTS_JA },
   terminal: TERMINAL_JA,
   composer: COMPOSER_JA,
   chat: CHAT_JA,

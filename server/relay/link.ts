@@ -9,13 +9,12 @@ import type { RelaySocketHandlers } from "./virtual-socket.ts";
 import { version } from "../../package.json";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { answerServerChallenge, PERMANENT_SERVER_PROOF_REFUSALS, SERVER_PROOF_CLOSE } from "../../shared/relay-server-proof.ts";
+import { SignedInSessions } from "./admissions.ts";
 
 /** Signed-in sessions this PC serves at once, as many as the relay lets in (relay/core.ts MAX_CLIENTS). */
 const MAX_SESSIONS = 8;
 /** Clients still signing in beyond those, as many as the relay holds waiting (relay/core.ts MAX_PENDING). */
 const MAX_PENDING = 4;
-/** One device key cannot take every place: its oldest session gives way. */
-const MAX_PER_DEVICE = 4;
 /** A relay control message is a short JSON object (a sync names at most 8 ids). */
 const CONTROL_MESSAGE_BYTES = 4096;
 /** A client whose sign-in or pairing is being verified at its deadline gets this long to finish. */
@@ -35,6 +34,10 @@ export interface RelayLinkOptions {
   readonly onState: (phase: "connecting" | "online" | "error", error: string | null) => void;
   /** The relays a phone is told to reach this PC through (RelaySession relayHints). */
   readonly relayHints?: () => readonly string[];
+  /** This PC's direct carriers (RelaySession directCarriers). */
+  readonly directCarriers?: () => readonly string[];
+  /** The PC's signed-in sessions over every way in (admissions.ts); this link's own when not given. */
+  readonly sessions?: SignedInSessions;
 }
 
 interface DataConnection {
@@ -45,8 +48,8 @@ interface DataConnection {
   cancelKeepalive?: () => void;
   /** Set once the client signed in or paired; until then the connection holds no session place. */
   deviceId?: string;
-  /** Sign-in order, for evicting a device's oldest session. */
-  signedIn?: number;
+  /** Gives its signed-in place back (SignedInSessions.admit). */
+  release?: () => void;
 }
 
 /** The relay's word on a warm socket that a client took: `{"type":"bound","connection_id":"<32 hex>"}`. */
@@ -75,13 +78,14 @@ export class RelayLink {
   private readonly data = new Map<string, DataConnection>();
   private stopped = false;
   private attempts = 0;
-  private signIns = 0;
+  private readonly signedIn: SignedInSessions;
   private cancelRetry: (() => void) | undefined;
   private cancelKeepalive: (() => void) | undefined;
   private readonly clock: MuxClock;
 
   constructor(private readonly options: RelayLinkOptions) {
     this.clock = options.clock ?? relayClock;
+    this.signedIn = options.sessions ?? new SignedInSessions(MAX_SESSIONS);
   }
 
   get sessions(): number { return [...this.data.values()].filter((entry) => entry.deviceId && entry.session?.mux.active).length; }
@@ -309,6 +313,7 @@ export class RelayLink {
       entry.cancelTimeout();
       entry.cancelKeepalive?.();
       transport.onclose?.(event.code, event.reason);
+      entry.release?.();
       if (this.data.get(id) === entry) this.data.delete(id);
     };
     const heartbeat = () => {
@@ -334,6 +339,7 @@ export class RelayLink {
         routingOverhead: 0, maxWireMessageBytes: 64 * 1024,
         onAuthenticated: (deviceId) => this.authenticated(id, entry, deviceId),
         ...(this.options.relayHints ? { relayHints: this.options.relayHints } : {}),
+        ...(this.options.directCarriers ? { directCarriers: this.options.directCarriers } : {}),
         websocket: {
           ...handlers,
           open: (peer) => { entry.sockets.add(peer); return handlers.open(peer); },
@@ -347,11 +353,7 @@ export class RelayLink {
     if (this.data.get(id) !== entry) return;
     entry.cancelTimeout();
     entry.deviceId = deviceId;
-    entry.signedIn = ++this.signIns;
-    const signedIn = [...this.data.values()].filter((other) => other.deviceId);
-    if (signedIn.length > MAX_SESSIONS) { entry.session?.close("resource_exhausted"); return; }
-    const own = signedIn.filter((other) => other.deviceId === deviceId).sort((a, b) => a.signedIn! - b.signedIn!);
-    for (const other of own.slice(0, Math.max(0, own.length - MAX_PER_DEVICE))) other.session?.close("resource_exhausted");
+    entry.release = this.signedIn.admit(deviceId, () => entry.session?.close("resource_exhausted"));
   }
 
   /** Cancel retries synchronously; finish queued policy closes before ending protected carriers. */
@@ -373,6 +375,7 @@ export class RelayLink {
         await entry.session.mux.flush();
       }
       entry.socket.close();
+      entry.release?.();
     }));
     control?.close();
     this.data.clear();

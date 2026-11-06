@@ -232,6 +232,16 @@ describe("BackgroundWait", () => {
     expect(waits.waiting("p")).toBe(false);
   });
 
+  it("lets go at once when a count falls without its work ending (a setting turned off)", () => {
+    const waits = new BackgroundWait(clock().now);
+    waits.status("p1", "working");
+    waits.running("p1", 1);
+    waits.status("p1", "done");
+    expect(waits.waiting("p1")).toBe(true);
+    expect(waits.running("p1", 0, null, true, true)).toBe(true);
+    expect(waits.waiting("p1")).toBe(false);
+  });
+
   it("forgets a pane", () => {
     const waits = new BackgroundWait(clock().now);
     waits.running("p1", 1);
