@@ -149,6 +149,7 @@ export async function attachGhosttyOverlay(term: Terminal, host: HTMLElement, ta
   const rowRuns: GhosttyRun[][] = [];
   let cellW = 0;
   let cellH = 0;
+  let perCell = false;
   let frameQueued = false;
   const decoded = new Map<string, HTMLCanvasElement>();
 
@@ -164,10 +165,13 @@ export async function attachGhosttyOverlay(term: Terminal, host: HTMLElement, ta
     // each cell is xterm's width: a font whose advance differs is spaced to it
     const probe = document.createElement("span");
     probe.textContent = "W".repeat(50);
-    probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre";
+    probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;letter-spacing:0";
     text.append(probe);
     const advance = probe.getBoundingClientRect().width / 50;
+    probe.textContent = "i".repeat(50);
+    const narrow = probe.getBoundingClientRect().width / 50;
     probe.remove();
+    perCell = Math.abs(advance - narrow) > 0.5;
     layer.style.letterSpacing = `${cellW - advance}px`;
   };
 
@@ -207,7 +211,7 @@ export async function attachGhosttyOverlay(term: Terminal, host: HTMLElement, ta
   const fit = (): void => {
     metrics();
     // a new grid redraws every row; a cell-size change alone redraws none, so the rebuilt rows refill from rowHtml
-    const now = `${term.cols}x${term.rows}@${cellW}x${cellH}`;
+    const now = `${term.cols}x${term.rows}@${cellW}x${cellH}:${perCell}`;
     if (now === grid) return;
     grid = now;
     vt.resize(term.cols, term.rows, cellW, cellH);
@@ -246,7 +250,10 @@ export async function attachGhosttyOverlay(term: Terminal, host: HTMLElement, ta
   };
   /** a cell drawn in a box of its own, or null for plain text; `glyph` is the inherited style its glyph takes (runHtml) */
   const fittedCell = ({ text, wide }: GhosttyRun["cells"][number], flags: number, glyph: string): string | null => {
-    if (!wide && !PRIVATE_USE.test(text)) return null;
+    const bold = flags & STYLE_BOLD ? " xterm-bold" : "";
+    if (!wide && !PRIVATE_USE.test(text)) {
+      return perCell ? `<span class="ghostty-cell${bold}"${glyph ? ` style="${glyph}"` : ""}>${escapeHtml(text)}</span>` : null;
+    }
     // each character asks for its faces once a font, as xterm's rows do
     if (!asked.has(text)) {
       if (asked.size >= MEASURED_MAX) asked.clear();
@@ -257,7 +264,6 @@ export async function attachGhosttyOverlay(term: Terminal, host: HTMLElement, ta
     const size = term.options.fontSize ?? 13;
     const own = (...css: string[]): string => [...css, glyph].filter(Boolean).join(";");
     // xterm's `span:not(.xterm-bold)` rule sets every span's weight under its screen: a bold cell's box says it is bold
-    const bold = flags & STYLE_BOLD ? " xterm-bold" : "";
     if (!wide) {
       if (!oversizedIcon(text, width, cellW)) return null;
       // a separator keeps its height and is narrowed to its cell, as xterm's rows draw it

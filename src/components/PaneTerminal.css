@@ -543,6 +543,7 @@
 .pane-terminal .ghostty-layer > * { position: absolute; inset: 0; }
 .pane-terminal .ghostty-row { position: relative; height: var(--ghostty-ch); line-height: var(--ghostty-ch); white-space: pre; font-variant-ligatures: none; }
 .pane-terminal .ghostty-row > span { position: absolute; top: 0; height: 100%; }
+.pane-terminal .ghostty-cell { display: inline-block; width: var(--ghostty-cw); text-align: left; letter-spacing: 0; text-decoration: inherit; }
 .pane-terminal .ghostty-wide { display: inline-block; width: calc(var(--ghostty-cw) * 2); text-align: center; letter-spacing: 0; text-decoration: inherit; }
 /* an inline-block takes no underline or strikethrough from the run around it: each asks for its own (terminalGlyphs.ts) */
 .pane-terminal .ghostty-fit { display: inline-block; text-decoration: inherit; }

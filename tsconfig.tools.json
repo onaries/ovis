@@ -20,6 +20,8 @@
     "scripts/check.ts",
     "scripts/typecheck.ts",
     "scripts/typecheck.test.ts",
+    "scripts/ghostty-font-fixture.ts",
+    "scripts/ghostty-font-browser-regression.ts",
     "scripts/pi-questionnaire-browser-regression.ts",
     "scripts/cliproxy-settings-regression.ts",
     "scripts/build-site.ts",

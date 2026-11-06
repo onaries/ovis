@@ -3946,6 +3946,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   drawing moves. The layer takes no pointer events; pictures keep the layer Kitty gave them (below
   the text, or above it). xterm draws by itself only where the layer cannot: a module that does not load
   or fails, and an iTerm2 or sixel picture, so a pane never goes blank.
+  Width probes exclude the layer's previous letter spacing, as xterm's own width cache does.
+  Proportional device fonts keep libghostty: their narrow glyphs are boxed individually at the
+  grid's cell width, like xterm's per-cell layout. Monospaced text stays grouped in runs.
 - **Find in terminal** in the header's More menu and Mod+Shift+F opens a find bar above the
   grid. It uses the existing input and icon-button primitives: a query, match ordinal,
   previous/next and close controls, with a dim note that scrolling is shared by all clients.
