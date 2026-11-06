@@ -175,9 +175,32 @@ describe("a Codex tool's pictures reach the chat", () => {
     const path = rollout(ROLLOUT);
     // one picture: the ImageView event beside the output is no second copy
     expect(pictures(path)).toEqual([`image/png codex-tool:${VIEWED}:0`]);
+    const tool = transcriptPage("codex-transcript", path, {}, home).turns[2]?.parts.find((p) => p.kind === "tool");
+    expect(tool).toMatchObject({ name: "view_image", summary: "shot.png" });
     expect(JSON.stringify(transcriptPage("codex-transcript", path, {}, home))).not.toContain("iVBORw0KGgo");
     expect(await sha(path, `codex-tool:${VIEWED}:0`)).toBe(`image/png ${SHOT}`);
     for (const ref of [`codex-tool:${VIEWED}:1`, `codex-tool:${VIEWED}`, "codex-tool:call_other:0", `codex-tool:../${VIEWED}:0`, `pi:${VIEWED}:0`]) expect(await codexToolImage(path, ref, home)).toBeNull();
+  });
+
+  it.each([true, false])("keeps both viewed images in their own rows, with an exec command: %s", async (withCommand) => {
+    const callEntry = call("call_multi", `${withCommand ? 'await tools.exec_command({cmd: "ls"}); ' : ''}await tools.view_image({path: "a.png"}); await tools.view_image({path: "b.png"});`);
+    const imageA = { type: "event_msg", timestamp: at, payload: { type: "item_completed", turn_id: "t1", item: { type: "ImageView", id: "img-a", path: "file:///repo/a.png" } } };
+    const imageB = { type: "event_msg", timestamp: at, payload: { type: "item_completed", turn_id: "t1", item: { type: "ImageView", id: "img-b", path: "file:///repo/b.png" } } };
+    const outputEntry = output("call_multi", [
+      { type: "input_text", text: "done" },
+      picture(png, "image/png"),
+      picture(gif, "image/gif"),
+    ]);
+    const path = rollout(records(started, callEntry, imageA, imageB, outputEntry));
+    const parts = transcriptPage("codex-transcript", path, {}, home).turns[0]?.parts.filter((p) => p.kind === "tool");
+    expect(parts).toHaveLength(withCommand ? 3 : 2);
+    if (withCommand) {
+      expect(parts?.[0]).toMatchObject({ name: "exec", summary: "ls" });
+      expect(parts?.[0]?.images).toBeUndefined();
+    }
+    const viewed = parts?.filter(part => part.name === "view_image");
+    expect(viewed?.[0]).toMatchObject({ name: "view_image", summary: "a.png", images: [{ media_type: "image/png", ref: "codex-tool:call_multi:0" }] });
+    expect(viewed?.[1]).toMatchObject({ name: "view_image", summary: "b.png", images: [{ media_type: "image/gif", ref: "codex-tool:call_multi:1" }] });
   });
 
   it("numbers only the pictures the chat shows, by declared type and bytes, up to 8 MiB", async () => {

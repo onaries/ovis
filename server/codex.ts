@@ -206,6 +206,9 @@ interface CodexParseState {
   startedAt?: string;
   skillEvents?: Set<string>;
   activeTurnId?: string;
+  imageEvents?: Set<string>;
+  callImages?: Map<string, Extract<ConversationPart, { kind: "tool" }>[]>;
+  activeCallId?: string;
 }
 
 /** Complete records are folded once; snapshots detach mutable tools from prior HTTP answers. */
@@ -262,6 +265,32 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
               const existing = [...turn.parts].reverse().find((part) => part.kind === "tool" && part.skill?.path === skill.path);
               if (existing?.kind === "tool" && existing.skill) existing.skill.status = skill.status;
               else turn.parts.push({ kind: "skill", skill });
+            }
+          }
+          if (id && item.type === "ImageView" && typeof item.path === "string" && !state.imageEvents?.has(id)) {
+            (state.imageEvents ??= new Set()).add(id);
+            if (state.imageEvents.size > 512) state.imageEvents.delete(state.imageEvents.values().next().value!);
+            const rawPath = item.path.startsWith("file://") ? decodeURI(item.path.slice("file://".length)) : item.path;
+            const fileName = nodePath.basename(rawPath) || rawPath;
+            const turn = assistant(ts);
+            const lastTool = [...turn.parts].reverse().find((p): p is Extract<ConversationPart, { kind: "tool" }> => p.kind === "tool");
+            let part: Extract<ConversationPart, { kind: "tool" }>;
+            if (lastTool && lastTool.name === "exec" && lastTool.summary === "view_image") {
+              part = lastTool;
+              part.name = "view_image";
+              part.summary = fileName;
+              part.input = JSON.stringify({ path: rawPath }, null, 2);
+            } else {
+              part = {
+                kind: "tool", name: "view_image", summary: fileName,
+                input: JSON.stringify({ path: rawPath }, null, 2), output: "", call_id: id,
+              };
+              turn.parts.push(part);
+            }
+            if (state.activeCallId) {
+              const list = (state.callImages ??= new Map()).get(state.activeCallId) ?? [];
+              list.push(part);
+              state.callImages.set(state.activeCallId, list);
             }
           }
         }
@@ -332,7 +361,11 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         const skill = codexReadCall(name, args);
         if (skill) part.skill = skill;
         // the native id, and pending until an output record answers it
-        if (typeof payload.call_id === "string" && payload.call_id.length > 0) { part.call_id = payload.call_id; part.state = "pending"; }
+        if (typeof payload.call_id === "string" && payload.call_id.length > 0) {
+          part.call_id = payload.call_id;
+          part.state = "pending";
+          state.activeCallId = payload.call_id;
+        }
         assistant(ts).parts.push(part);
         if (typeof payload.call_id === "string") tools.set(payload.call_id, part);
       } else if (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") {
@@ -364,7 +397,14 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         // the call this output answers and fetched only when shown; the generation event's copy is not read
         const pictures = codexOutputPictures(payload.output).map(({ mediaType }, index) => ({ media_type: mediaType, ref: `codex-tool:${string(payload.call_id)}:${index}` }))
           .filter(({ ref }) => CODEX_TOOL_IMAGE_REF.test(ref));
-        if (pictures.length > 0) tool.images = pictures;
+        const subImages = state.callImages?.get(callId);
+        if (subImages && subImages.length > 0) {
+          subImages.forEach((imagePart, index) => {
+            if (pictures[index]) imagePart.images = [pictures[index]];
+          });
+        } else if (pictures.length > 0) tool.images = pictures;
+        state.callImages?.delete(callId);
+        if (state.activeCallId === callId) state.activeCallId = undefined;
         if (tool.skill) tool.skill.status = tool.error ? "failed" : "loaded";
         // done, outcome unknown: Codex records no failure flag, and the output text is no verdict
         delete tool.state;
