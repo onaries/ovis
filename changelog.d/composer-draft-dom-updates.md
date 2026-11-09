@@ -1,0 +1,1 @@
+Keep textarea edits in native values and synchronize external draft changes without rewriting textarea child text on every keystroke. This avoids expensive relational CSS invalidation across long live conversations while preserving draft storage and automatic input height.

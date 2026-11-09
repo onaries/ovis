@@ -439,12 +439,18 @@ export function Composer({
     const element = textareaRef.current;
     const measurement = measurementRef.current;
     if (!element || !measurement) return;
+    measurement.value = element.value;
     // Measuring the live field at auto height enlarges the transcript and clamps its scroll.
     element.style.height = `${measurement.scrollHeight}px`;
   }, []);
 
   // A suggestion or prompt hint changes only the placeholder of a populated draft.
-  useLayoutEffect(sizeTextarea, [sizeTextarea, text, text.length === 0 ? placeholder : null, boxWidth, facesLoaded]);
+  // Native values avoid controlled textarea defaultValue writes invalidating the long transcript's styles.
+  useLayoutEffect(() => {
+    const element = textareaRef.current;
+    if (element && element.value !== text) element.value = text;
+    sizeTextarea();
+  }, [sizeTextarea, text, text.length === 0 ? placeholder : null, boxWidth, facesLoaded]);
 
   // SettingsProvider writes --chat-scale in a passive effect. Measure on the next frame,
   // after that CSS is applied, so a draft rewraps without waiting for another keystroke.
@@ -1458,7 +1464,6 @@ export function Composer({
           className={`composer-text${settings.suggestionChip && offered !== null && text === "" ? " has-suggestion" : ""}`}
           rows={1}
           maxLength={MAX_COMPOSER_CHARS}
-          value={text}
           placeholder={placeholder}
           aria-label={t("Message")}
           aria-controls={menuOpen ? menuId : undefined}
@@ -1501,7 +1506,6 @@ export function Composer({
           ref={measurementRef}
           className="composer-measure"
           rows={1}
-          value={text}
           placeholder={placeholder}
           readOnly
           tabIndex={-1}

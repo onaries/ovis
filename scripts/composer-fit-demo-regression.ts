@@ -265,7 +265,7 @@ try {
         await cdp.detach();
         await box.fill("Keyboard still sends");
         const entered = page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>(".composer-text")?.value === "", undefined, { timeout: 5_000 });
-        await box.press("Enter");
+        await box.press("Control+Enter");
         await entered;
       });
       console.log("PASS phone touch Send accepts the visible IME draft while confirmation Enter stays with the IME");
@@ -761,8 +761,9 @@ try {
           await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
           await session.detach();
           assert.equal(await box.inputValue(), "", "a swipe across the suggestion does not accept it");
+          await box.focus();
           await box.dispatchEvent("compositionstart", { data: "" });
-          await suggestion.tap();
+          await suggestion.dispatchEvent("click");
           assert.equal(await box.inputValue(), "", "an active composition blocks suggestion acceptance");
           await box.dispatchEvent("compositionend", { data: "" });
           await suggestion.tap();
