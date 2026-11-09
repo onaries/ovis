@@ -15,6 +15,7 @@ import { homedir, hostname } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import type { ConversationPart, ConversationTurn } from "../shared/protocol.ts";
 import type { HerdrPane } from "../shared/protocol.ts";
+import { openBound } from "./conversation-shared.ts";
 import { paneProcessInfo } from "./herdr/client.ts";
 import { processAlive, processStartedAt, processStartUpperBound } from "./process-start.ts";
 import { trimOutput } from "./tool-output.ts";
@@ -424,7 +425,8 @@ const RECORD_BYTES = 64 * 1024 * 1024;
 export function kimiToolOutput(path: string, ref: string, max: number): string | null {
   const id = Buffer.from(JSON.stringify(ref));
   let fd: number;
-  try { fd = openSync(path, "r"); } catch { return null; }
+  // another file than the one the lookup is bound to (openBound) holds none of its calls
+  try { fd = openBound(path); } catch { return null; }
   /** The output if the line at [start, end) is this call's result. */
   const result = (start: number, end: number): string | undefined => {
     if (end - start > RECORD_BYTES) return undefined;

@@ -33,7 +33,12 @@ are ([Ovis Mux v1](relay.md#ovis-mux-v1)).
 6. **A signer adds only keys it checked itself**, by comparing digits or from a QR code, never a key
    the account service handed it.
 7. **The account service can hide records, never forge them.** It stores the PC directory
-   (`server_id` and a name, no keys), a mailbox of signed records per PC, and admission requests.
+   (`server_id`, a name, the PC's relay public key and the relay it is reached through; no account
+   or device keys), a mailbox of signed records per PC, and admission requests.
+8. **Tailscale is not membership.** A PC found on your Tailscale is added over SSH (Add a connection →
+   SSH, [remote-pcs.md](remote-pcs.md)), and one an older Ovis added through the relay with a code that
+   PC handed over to your own Tailscale login is a paired device of that PC. Neither is an account member by itself: membership comes only from the
+   rules here (a device linking its own pairing, or an approval by a member).
 
 ## Account members
 
@@ -213,6 +218,13 @@ With `?fresh=1` the PC first pulls its mailbox (a pull that starts after the req
 waiting there is counted, and adds `fresh`: true only when that pull read the whole mailbox
 without an error, for the PC's current account and relay identity. A PC whose account service is
 turned off (`off`) has no mailbox and answers `fresh: true`; one whose address is unusable does not.
+
+`POST /api/account/relay-account` `{ "account" }`: the account this PC asks its relay pass under while it
+has no members ([relay.md](relay.md#relay-pass)): over a direct connection with drive access (the PC's own
+screen, after it listed the PC), or through the relay only from a drive account member of that same
+account (`account_required` otherwise). Kept in `relay/account.json`; a
+name that is not an account id answers 400 `invalid_account`. Answers 204. Naming an account grants
+nothing: the service gives a pass only when that account lists the PC.
 
 `POST /api/account/link` `{ "record": <link> }`: the request's own device must be the record's
 `device_id`, with `old_key` its current key, `server_id` this PC's. The row's key becomes `key` and it
@@ -479,11 +491,27 @@ OAuth's authorization code flow with PKCE, `S256` only:
    `https://www.google.com/device`), waits `Retry-After` on a
    429, and keeps no session from a sign-in cancelled meanwhile (it is stored under the same
    lock as a refresh or a sign-out).
+   Where the service has the Ovis link page (`device_page` below), the page and `link` start with
+   `POST /v1/signin/ovis/device` instead (the S256 challenge is required): the answer's `user_code`
+   is the service's own (`XXXX-XXXX`), `verification_uri` is exactly `<service>/link`, and
+   `verification_uri_complete` that page with `?code=` filled in, shown as a QR code. The person
+   types or scans it on any device, chooses GitHub or Google there, signs in, and confirms on the
+   page in the same browser; the polls are the same. A client refuses an answer naming any other
+   page, and shows no QR code for a link carrying another code. Signing in this way adds no PC and
+   no device: adding still needs an approval on a device already in the account. The start may
+   carry `label` (1-48 characters, no control characters) and `os`, which the page's confirmation
+   shows (Who is asking, below); a provider's own device start takes neither.
+   The relay tab of Add a connection signs in this way too, from its own Sign in rather than Settings:
+   it opens `verification_uri_complete` (else `verification_uri`) in a new tab, opened blank in the
+   click so no popup blocker takes it (the desktop app hands it to the system browser), shows the code
+   beside it, or the page's link and code alone when the tab was blocked, and stops polling when the
+   sheet closes. Where the link page cannot start a sign-in it falls back to GitHub's device page.
 6. `POST /v1/signout` (Bearer) answers 204 and ends that sign-in's family.
 
 `GET /v1/providers` (no sign-in) answers `{ "providers": ["github", "google"], "device": ["github",
-"google"] }`: the sign-ins this service is set up for, and those of them a PC's own page can start
-(step 5). A provider that is not listed has no button anywhere; a client that cannot read the answer
+"google"], "device_page": ["github", "google"] }`: the sign-ins this service is set up for, those of
+them a PC's own page can start at the provider (step 5), and those its Ovis link page offers (an
+empty or missing `device_page`: no link page). A provider that is not listed has no button anywhere; a client that cannot read the answer
 keeps the sign-ins its build names (GitHub alone by default), so a Google button never leads to a
 service that has no Google client.
 
@@ -529,7 +557,7 @@ not the one it sent.
 `redirect_uri` is compared exactly against three forms: `https://app.ovis.sh/`,
 `ovis://account/callback`, and `http://127.0.0.1:<port>/callback` on any port (a loopback redirect
 for the desktop app, RFC 8252). Anything else answers 400 `invalid_redirect_uri` before any
-sign-in. The hosted shell's Content-Security-Policy lets it reach `https://account.ovis.sh` (`connect-src`), and no other account service yet. The PC's own pages may reach `https://account.ovis.sh` when `OVIS_ACCOUNT_SERVICE_URL` is unset, exactly the origin it names when it is https with a host name or IPv4 address, and no account service when it is `off` or not https.
+sign-in. The hosted shell is built with `https://account.ovis.sh` unless `OVIS_ACCOUNT_SERVICE_URL` names another https service (none when it is `off`), and its Content-Security-Policy lets it reach `https://account.ovis.sh` (`connect-src`), and no other account service yet. In a browser it offers sign-in only on `https://app.ovis.sh`, the one page the service sends a browser back to: the regional copy beside a relay, a preview or a local run offers none, and the phone app signs in through its own scheme anywhere. The PC's own pages may reach `https://account.ovis.sh` when `OVIS_ACCOUNT_SERVICE_URL` is unset, exactly the origin it names when it is https with a host name or IPv4 address, and no account service when it is `off` or not https.
 
 The desktop app offers sign-in in **Settings → Phone & devices** with `https://account.ovis.sh`
 unless `OVIS_ACCOUNT_SERVICE_URL` names another https service. `OVIS_ACCOUNT_SERVICE_URL=off`
@@ -553,8 +581,8 @@ Clients:
 | `PUT /v1/pcs/{server_id}` | `{ "label", "public_key", "relay" }` | `{ "pc": … }`: adds or renames a PC in the directory. 400 `server_key_mismatch` unless `public_key` (X25519, 64 hex) gives `server_id` (`deriveServerId`), 400 `invalid_relay` unless `relay` is a `wss:` origin |
 | `DELETE /v1/pcs/{server_id}` | | `204` |
 | `POST /v1/records` | `{ "server_ids": [...], "record" }` | `{ "queued": n }`: puts a signed record of the caller's account in that account's mailbox for each listed PC; the service checks only its shape and signature. 429 `mailbox_full` past 1000 records waiting for one PC |
-| `GET /v1/admissions` | | `{ "admissions": [{ "key", "label", "server_id", "at" }] }`: this account's admissions of the last 10 minutes. Before it signs an `add` for a device a PC showed it, the approving client checks that PC and key are listed here |
-| `POST /v1/admissions` | `{ "server_id", "label", "key" }` | `{ "id" }`: the signed-in device says it waits at that PC with its account key (`key`); rings the account's other clients (push), and reaches that PC's mailbox for 10 minutes |
+| `GET /v1/admissions` | | `{ "admissions": [{ "key", "label", "server_id", "at", "os", "country", "city" }] }`: this account's admissions of the last 10 minutes, with who is asking (below). Before it signs an `add` for a device a PC showed it, the approving client checks that PC and key are listed here |
+| `POST /v1/admissions` | `{ "server_id", "label", "key", "os"? }` | `{ "id" }`: the signed-in device says it waits at that PC with its account key (`key`); rings the account's other clients (push), and reaches that PC's mailbox for 10 minutes |
 | `POST /v1/signout` | | `204`: ends this sign-in's tokens |
 
 Push (the doorbell), per signed-in device:
@@ -596,6 +624,36 @@ belongs to an account.
 The `account` role keeps the two proofs apart: the relay verifies `control` and `data` only, so an
 answer the PC gave the account service is no use to the relay, and a relay's challenge passed on by
 the account service gets an answer the relay refuses.
+
+### Who is asking
+
+A device code can be phished: someone starts a sign-in on their own device and talks a person into
+typing its code (RFC 8628 section 5.4). Signing in admits nothing by itself, but a device of the
+account may then ask to join it, so every approval for a device the person cannot see says what it
+is and roughly where it asked from:
+
+- `os`: what the device says it runs, one of `ios`, `android`, `macos`, `windows`, `linux`,
+  `chromeos`; anything else is kept as unknown (`null`). A browser sends it from its user agent
+  (`src/lib/phone.ts` `deviceOs`), `link` from the PC's platform. With `label`, it is what the
+  device says, so it tells a mistake apart, not a liar.
+- `country` (ISO 3166-1 alpha-2) and `city`: where Cloudflare saw the request come from. Never the
+  address. Unknown, Tor and a city without a country are `null`.
+
+The service keeps these on the admission or link page request itself: they are served for that
+row's ten minutes and deleted with it by the daily cleanup, so kept at most about a day. The
+privacy policy ([ovis.sh/privacy](https://ovis.sh/privacy/#account)) lists them with everything
+else the service stores.
+
+The approval card (`AccountApprovalPrompt`) shows the admission's (`GET /v1/admissions`, the newest
+one for this PC and key, read from the account service and not from the PC) as "iOS · Network near
+Seoul, South Korea", or "Network location unknown", says that the name and system are what the
+device says and the place is where its network connects from, and asks to approve only a request
+the person started. Names are read as one plain line (no control or bidi characters, single spaces,
+48 UTF-16 units: the form a signed `add` takes). Approval goes ahead only for the admission the card
+showed: when the device asked again with another name, system or place, nothing is answered and the
+card shows the new details first.
+The link page's confirmation shows the PC's ("Asked by Desk (Linux), near Seoul, South Korea")
+with "continue only if you started this on your own PC".
 
 ## Errors
 

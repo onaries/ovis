@@ -1,5 +1,5 @@
 import { afterEach, expect, it, mock, spyOn } from "bun:test";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -224,7 +224,8 @@ it.each(["blocked", "working", "queue held", "foreground changed", "foreground d
         if (allowed && !allowed()) throw new client.HerdrError("cancelled", "Input guard refused the key");
         writes.push(...keys);
       });
-      spyOn(pi, "piTranscriptPath").mockResolvedValue({ path, agentDir: null });
+      const written = statSync(path, { bigint: true });
+      spyOn(pi, "piTranscriptPath").mockResolvedValue({ path, agentDir: null, identity: `${written.dev}:${written.ino}` });
       const capture = piDelivery.capturePiDeliveryAnchorRetrying;
       let waits = 0;
       spyOn(piDelivery, "capturePiDeliveryAnchorRetrying").mockImplementation((file, allowMissing, expected) =>

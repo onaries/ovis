@@ -1299,6 +1299,49 @@ describe("limits and liveness", () => {
     await e.engine.flush();
     expect(e.errors[0]?.code).toBe("timeout");
   });
+  it("measures its keepalive's round trip from the matching PONG only", async () => {
+    const e = endpoint("server");
+    expect(e.engine.rttMs).toBeUndefined();
+    e.clock.advance(20_000);
+    await e.engine.flush();
+    const ping = required(e.sent.find((f) => f.type === FrameType.PING));
+    if (ping.type !== FrameType.PING) throw new Error("Missing PING");
+    e.clock.advance(20);
+    e.engine.receive(frame({ ...ping, type: FrameType.PONG, payload: ping.payload ^ 1n }));
+    expect(e.engine.rttMs).toBeUndefined();
+    e.clock.advance(17);
+    e.engine.receive(frame({ ...ping, type: FrameType.PONG }));
+    expect(e.engine.rttMs).toBe(37);
+  });
+  it("measures on demand: pings at once and resolves with the round trip, or undefined once closed", async () => {
+    const e = endpoint("server");
+    const measured = e.engine.measure();
+    await e.engine.flush();
+    const ping = required(e.sent.find((f) => f.type === FrameType.PING));
+    if (ping.type !== FrameType.PING) throw new Error("Missing PING");
+    e.clock.advance(12);
+    e.engine.receive(frame({ ...ping, type: FrameType.PONG }));
+    expect(await measured).toBe(12);
+    const pending = e.engine.measure();
+    e.engine.carrierLost();
+    expect(await pending).toBeUndefined();
+    expect(await e.engine.measure()).toBeUndefined();
+  });
+  it("measures with one probe: a keepalive due meanwhile and a second measure share it, never replace it", async () => {
+    const e = endpoint("server");
+    e.clock.advance(19_000);
+    const first = e.engine.measure();
+    await e.engine.flush();
+    e.clock.advance(1_000);
+    const second = e.engine.measure();
+    await e.engine.flush();
+    const pings = e.sent.filter((f) => f.type === FrameType.PING);
+    expect(pings).toHaveLength(1);
+    const ping = required(pings[0]);
+    if (ping.type !== FrameType.PING) throw new Error("Missing PING");
+    e.engine.receive(frame({ ...ping, type: FrameType.PONG }));
+    expect([await first, await second]).toEqual([1_000, 1_000]);
+  });
   it("invalidates hidden probes and stale PONGs on wake", async () => {
     const e = endpoint();
     e.engine.ping();

@@ -84,6 +84,27 @@ export async function checkKeyBarKeepsKeyboardDown(browser: Browser, origin: str
         await page.locator(shownRows(), { hasText: marker }).waitFor({ timeout: 10_000 }).catch(async (error) => {
           throw new Error(`${tag}: the key bar's Enter did not run the typed command (${marker}); screen: ${JSON.stringify((await page.locator(shownRows()).first().textContent())?.slice(-300))}`, { cause: error });
         });
+        if (!touch) continue;
+        // Android's Back puts the keyboard away but leaves the field focused, and Chrome raises the
+        // keyboard again on any tap while a text field has the focus (#3274): at the key's click, the
+        // tap's end, the field must ask for no keyboard (inputmode=none), and get its own back after
+        const field = mode === "line" ? ".terminal-input-text" : ".xterm-helper-textarea";
+        await page.locator(field).focus();
+        await page.evaluate(() => {
+          (window as unknown as { atClick_: (string | null)[] }).atClick_ = [];
+          document.addEventListener("click", () => (window as unknown as { atClick_: (string | null)[] }).atClick_.push(document.activeElement?.getAttribute("inputmode") ?? null), { capture: true });
+        });
+        const modeBefore = await page.locator(field).getAttribute("inputmode");
+        const sentBefore = await page.evaluate(() => (window as unknown as InputWindow).typed_.length);
+        await page.locator('.key-bar [data-key="Escape"]').tap();
+        assert.deepEqual(await page.evaluate(() => (window as unknown as { atClick_: (string | null)[] }).atClick_), ["none"], `${tag}: at a key tap's click the focused field asks for no keyboard`);
+        assert.equal(await page.evaluate((field) => document.activeElement?.matches(field) === true, field), true, `${tag}: the field keeps the focus`);
+        await page.waitForFunction(([pane, from]) => (window as unknown as InputWindow).typed_.slice(from).some((frame) => frame.pane === pane && frame.text === "\x1b"), [pane, sentBefore] as const, { timeout: 10_000 });
+        await page.waitForFunction(([field, before]) => document.querySelector(field)?.getAttribute("inputmode") === before, [field, modeBefore] as const, { timeout: 10_000 });
+        // More keys only opens the second row: its tap holds the keyboard down as a key's does
+        await page.locator('.key-bar [data-key="more"]').tap();
+        assert.deepEqual(await page.evaluate(() => (window as unknown as { atClick_: (string | null)[] }).atClick_), ["none", "none"], `${tag}: at More keys' click the focused field asks for no keyboard`);
+        await page.waitForFunction(([field, before]) => document.querySelector(field)?.getAttribute("inputmode") === before, [field, modeBefore] as const, { timeout: 10_000 });
       } finally { await context.close(); }
     }
     console.log("PASS key-bar taps on a touch screen send their keys without taking the focus (the keyboard stays down), in Direct typing and Input line modes; a fine pointer's click still focuses the grid");

@@ -75,4 +75,6 @@ export const SETUP_JA: Record<string, string> = {
   "Filled in the same way. Agent default adds no flag; the levels a model takes depend on the model.": "同じようにあらかじめ入ります。エージェントの既定ではフラグを付けません。選べるレベルはモデルによって異なります。",
   "Other agents herdr knows ({count})": "herdr が知る他のエージェント ({count})",
   "Accounts are read on the PC Ovis runs on.": "アカウントは Ovis が動いている PC で読み取ります。",
+  "Show {name}": "{name} を表示",
+  "Check again": "再確認",
 };

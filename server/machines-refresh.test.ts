@@ -79,7 +79,7 @@ function responses() {
   };
 }
 
-async function fixture(options: { bootId?: string; now?: () => number; serverId?: () => string | undefined } = {}) {
+async function fixture(options: { bootId?: string; now?: () => number; serverId?: () => string | undefined; moveOfferMs?: { idle: number; active: number } } = {}) {
   const root = mkdtempSync(join(tmpdir(), "herdr-machine-refresh-"));
   const path = join(root, "herdr.sock");
   const local = responses();
@@ -139,10 +139,12 @@ type TestRuntime = {
   retry?: ReturnType<typeof setTimeout>;
 };
 
-async function remoteFixture(options: { bootId?: string; now?: () => number; serverId?: () => string | undefined } = {}) {
+async function remoteFixture(options: { bootId?: string; now?: () => number; serverId?: () => string | undefined; moveOfferMs?: { idle: number; active: number } } = {}) {
   const local = await fixture(options);
   /** the bridge's own /api/health; without one it answers as before (a snapshot, so no boot id) */
   let health: ((request: Request) => Response | Promise<Response>) | null = null;
+  /** its GET /api/runtime/move; without one it is an Ovis that has no such route */
+  let move: (() => Response | Promise<Response>) | null = null;
   const remote = responses();
   let observer: { send(data: string): unknown } | undefined;
   let observing = false;
@@ -160,6 +162,7 @@ async function remoteFixture(options: { bootId?: string; now?: () => number; ser
         return new Response(null, { status: 400 });
       }
       if (health && new URL(request.url).pathname === "/api/health") return health(request);
+      if (new URL(request.url).pathname === "/api/runtime/move") return move ? move() : Response.json({ error: { code: "not_found", message: "unknown endpoint /api/runtime/move" } }, { status: 404 });
       const status = httpStatus;
       const captured = await remote.read();
       const answer = answerNext;
@@ -181,6 +184,7 @@ async function remoteFixture(options: { bootId?: string; now?: () => number; ser
     send: (message: ServerMessage) => observer!.send(JSON.stringify(message)),
     setHttpStatus: (status: number) => { httpStatus = status; },
     setHealth: (answer: typeof health) => { health = answer; },
+    setMove: (answer: typeof move) => { move = answer; },
     /** the next /api/session answer, built from the snapshot the PC had when asked */
     answerNext: (answer: (captured: SessionSnapshot) => Promise<Response>) => { answerNext = answer; },
     /** settles once the next observer connection asked to observe: its frames reach the manager from then on */
@@ -1228,4 +1232,62 @@ describe("saving a remote PC's snapshot", () => {
     expect(temporaries).toHaveLength(2);
     expect(saved()[0]!.snapshot?.panes[0]?.agent_status).toBe("done");
   });
+});
+
+it("shows a connected PC's move to herdr-core on its roster, one read at a time, often while it runs, and drops it when the PC goes", async () => {
+  const f = await remoteFixture({ moveOfferMs: { idle: 60_000, active: 1 } });
+  // an Ovis without the move routes cannot tell
+  await until(() => f.runtime.machine.runtime_move === null);
+  const told: unknown[] = [];
+  f.manager.subscribe((event) => { if (event.type === "machines") told.push(event.machines.find((machine) => machine.id === "remote")?.runtime_move); });
+  let answer: unknown = { available: true, plan: { workspaces: [], panes: [], ready: true, revision: "r1" }, status: { state: "idle" } };
+  let failing = false;
+  let reads = 0;
+  let open = 0;
+  let most = 0;
+  let held: ReturnType<typeof Promise.withResolvers<void>> | null = Promise.withResolvers<void>();
+  f.setMove(async () => {
+    reads++; open++; most = Math.max(most, open);
+    if (held) await held.promise;
+    open--;
+    return failing ? Response.json({ error: { code: "connect_failed", message: "herdr did not answer" } }, { status: 502 }) : Response.json(answer);
+  });
+  f.manager.moveOfferSoon("remote");
+  await until(() => open === 1);
+  f.manager.moveOfferSoon("remote");
+  held.resolve(); held = null;
+  // the read asked for meanwhile follows the one under way, never beside it
+  await until(() => reads === 2 && open === 0);
+  expect(most).toBe(1);
+  expect(f.runtime.machine.runtime_move).toEqual({ serving: "herdr", offered: true, reason: null, status: { state: "idle" } });
+  expect(told).toContainEqual({ serving: "herdr", offered: true, reason: null, status: { state: "idle" } });
+  // a move that waits is read again every few seconds
+  answer = { available: true, plan: { workspaces: [], panes: [], ready: false, revision: "r1" }, status: { state: "waiting", revision: "r1" } };
+  f.manager.moveOfferSoon("remote");
+  await until(() => reads >= 6);
+  expect(f.runtime.machine.runtime_move?.status).toEqual({ state: "waiting" });
+  // a PC whose herdr does not answer for a moment keeps its badge, and is still read often
+  failing = true;
+  const before = reads;
+  await until(() => reads >= before + 3);
+  expect(f.runtime.machine.runtime_move?.status).toEqual({ state: "waiting" });
+  failing = false;
+  // a move that could not finish names folders and agents' words: the roster tells only how it ended
+  const secret = "/home/someone/secret-project";
+  answer = { available: true, plan: { workspaces: [], panes: [], ready: true, revision: "r2" }, status: { state: "rolled_back", reason: `could not start ${secret}`, left: [{ pane_id: "w1:p1", agent: "claude", why: `${secret} is gone` }] } };
+  await until(() => f.runtime.machine.runtime_move?.status.state === "rolled_back");
+  expect(f.runtime.machine.runtime_move?.status).toEqual({ state: "rolled_back", left: 1 });
+  const watched = await handleMachineRequest(new Request("http://127.0.0.1/api/machines"), f.manager, undefined, undefined, true);
+  expect(await watched.text()).not.toContain("secret-project");
+  // a move that ended is read every minute; a change sent from here reads it at once
+  // a reason this version does not know is not carried: it could be any words of that PC's
+  answer = { available: false, reason: `cannot move ${secret}`, status: { state: "idle" } };
+  f.manager.moveOfferSoon("remote");
+  await until(() => f.runtime.machine.runtime_move === null);
+  answer = { available: false, reason: "not_herdr", status: { state: "idle" } };
+  f.manager.moveOfferSoon("remote");
+  await until(() => f.runtime.machine.runtime_move?.serving === "herdr-core");
+  expect(f.runtime.machine.runtime_move).toEqual({ serving: "herdr-core", offered: false, reason: "not_herdr", status: { state: "idle" } });
+  f.drive.disconnect(f.runtime);
+  expect(f.runtime.machine.runtime_move).toBeUndefined();
 });

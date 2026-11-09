@@ -1,0 +1,36 @@
+.connection-line {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.connection-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-idle);
+}
+
+[data-connection="connected"] .connection-dot,
+[data-connection="answered"] .connection-dot { background: var(--status-done); }
+[data-connection="checking"] .connection-dot { background: var(--notice); }
+
+.connection-slow {
+  color: var(--notice);
+  font-weight: var(--fw-semibold);
+}
+
+.connection-reason {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}

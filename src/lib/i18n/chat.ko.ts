@@ -268,4 +268,6 @@ export const CHAT_KO: Record<string, string> = {
   "Searched the whole conversation.": "대화 전체를 검색했습니다.",
   "This message is no longer in the conversation.": "이 메시지는 더 이상 대화에 없습니다.",
   "Couldn't load the earlier messages.": "이전 메시지를 불러오지 못했습니다.",
+  "Manually connected conversation": "수동으로 연결한 대화",
+  "Can't recognize this Codex conversation?": "Codex 대화를 인식하지 못하나요?",
 };

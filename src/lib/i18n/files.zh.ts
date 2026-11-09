@@ -67,7 +67,6 @@ export const FILES_ZH: Record<string, string> = {
   "This comparison is not one the list answered; refresh the list.": "此比较并非列表给出的结果；请刷新列表。",
   "Refresh changes": "刷新更改",
   "No commits yet": "尚无提交",
-  "Added": "新增",
   "Deleted": "已删除",
   "Modified": "已修改",
   "Renamed": "已重命名",

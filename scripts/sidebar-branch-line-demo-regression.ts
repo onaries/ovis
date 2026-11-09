@@ -7,7 +7,7 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 
-// The demo roster as herdr's sidebar would draw it: checkout-api is a repository with export-guard
+// The demo roster in the compact rows (herdr-app's list): checkout-api is a repository with export-guard
 // and flaky-retry-test as its linked worktrees, cli-tools is rewritten into a git folder herdr has
 // not marked, and retry-flag and changelog into folders with no git at all. Only this disposable demo
 // fixture is rewritten; no live session is read.
@@ -102,19 +102,26 @@ try {
           page.on("pageerror", (error) => errors.push(error.message));
           await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(panes.api)}`);
           if (phone) await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
-          const branchOf = (id: string) => row(page, id).locator(":scope > .workspace-header .workspace-branch");
-          await branchOf("w1C").waitFor();
-          await branchOf("w1J").waitFor();
-          assert.equal(await branchOf("w1C").textContent(), "main", "a repository says its branch under its name");
-          assert.equal(await branchOf("w1J").textContent(), "develop", "a git folder herdr has not marked says its branch too");
-          for (const id of ["w1D", "w1H"]) {
-            assert.equal(await row(page, id).locator(".is-branch-line").count(), 0, `${id}, an indented worktree, stays one line`);
-            assert.equal(await page.locator(`.worktree-children .workspace-group[data-workspace="${id}"]`).count(), 1, `${id} sits under its repository`);
-          }
-          assert.equal(await row(page, "w1K").locator(".is-branch-line").count(), 0, "a folder outside git stays one line");
+          // one line per row, as herdr-app's list: a branch other than the default dim at the row's end, without its
+          // feature/-style prefix; the default branch says nothing
+          const branchOf = (id: string) => row(page, id).locator(":scope > .workspace-header .workspace-branch-tail");
+          // a mouse's row keeps its branch out of sight until the pointer or the focus is on it; a finger's shows it
+          const shown = async (id: string) => {
+            if (!phone) {
+              await branchOf(id).waitFor({ state: "attached" });
+              assert.equal(await branchOf(id).isVisible(), false, `${id} at rest hides its branch under a mouse`);
+              await row(page, id).locator(":scope > .workspace-header").hover();
+            }
+            await branchOf(id).waitFor();
+          };
+          await shown("w1J");
+          await shown("w1D");
+          assert.equal(await branchOf("w1C").count(), 0, "a repository on its default branch says no branch");
+          assert.equal(await branchOf("w1J").textContent(), "develop", "a git folder herdr has not marked says its branch");
+          assert.equal(await branchOf("w1D").textContent(), "web", "a worktree says its branch without the feature/ prefix");
+          for (const id of ["w1D", "w1H"]) assert.equal(await page.locator(`.worktree-children .workspace-group[data-workspace="${id}"]`).count(), 1, `${id} sits under its repository`);
           const one = await height(page, "w1K");
-          assert.ok(await height(page, "w1C") > one, "a branch line makes the row taller");
-          assert.equal(await height(page, "w1D"), one, "a worktree row keeps one line's height");
+          for (const id of ["w1C", "w1J", "w1D"]) assert.equal(await height(page, id), one, `${id} keeps one line's height, its branch beside its name`);
           // herdr's tree: the first worktree's branch runs on (a tee), the last one's stops halfway (an elbow)
           const branch = (id: string) => row(page, id).locator(":scope > .workspace-header").evaluate((header) => {
             const stem = getComputedStyle(header, "::before"), arm = getComputedStyle(header, "::after");
@@ -130,7 +137,7 @@ try {
             await page.locator(".machine-workspaces").first().screenshot({ path: join(evidence, `branch-line-${phone ? "phone" : "desktop"}-${theme}.png`) });
           }
           assert.deepEqual(errors, []);
-          console.log(`PASS ${phone ? "phone" : "desktop"} ${theme}: repositories and unmarked git folders say their branch on a second line; worktrees and folders outside git stay one line`);
+          console.log(`PASS ${phone ? "phone" : "desktop"} ${theme}: every row is one line, a non-default branch dim at its end`);
         } finally { await context.close(); }
       }
       const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US" });
@@ -139,8 +146,8 @@ try {
         const page = await context.newPage();
         await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(panes.api)}`);
         await page.locator(".workspace-copy.is-two-line").first().waitFor();
-        assert.equal(await page.locator(".workspace-copy.is-branch-line").count(), 0, "Two lines keeps its own task rows");
-        console.log("PASS Two lines keeps its task rows and draws no branch line");
+        assert.equal(await page.locator(".workspace-branch-tail").count(), 0, "Two lines keeps its own task rows");
+        console.log("PASS Two lines keeps its task rows and draws no branch at the row's end");
       } finally { await context.close(); }
     } finally { await browser.close(); }
   } finally { server.stop(true); }

@@ -62,7 +62,10 @@ function isWorkspaceMissing(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "workspace_not_found";
 }
 
-export async function runUiContextChecks(): Promise<void> {
+/** main: every check but the two slowest; layout: those two (split view, a background tab's size). */
+export type UiContextGroup = "main" | "layout";
+
+export async function runUiContextChecks(group: UiContextGroup): Promise<void> {
   const tempBase = existsSync("/tmp") ? "/tmp" : tmpdir();
   const root = realpathSync(mkdtempSync(join(tempBase, "hwc-")));
   const workspaces: string[] = [];
@@ -94,41 +97,44 @@ export async function runUiContextChecks(): Promise<void> {
       args: ["--no-sandbox", "--accept-lang=en-US"],
     });
 
-    await timed("checkPushSettings", () => checkPushSettings(browser!, origin));
-    await timed("checkWakeLock", () => checkWakeLock(browser!, origin, paneA));
-    await timed("checkSecretInput", () => checkSecretInput(browser!, origin));
-    await timed("checkTerminalCopy", () => checkTerminalCopy(browser!, origin));
-    await timed("checkTerminalCopyOff", () => checkTerminalCopyOff(browser!));
-    await timed("checkPaneFind", () => checkPaneFind(browser!, origin));
-    await timed("checkUsageMeters", () => checkUsageMeters(browser!, origin));
-    await timed("checkUsageSignInAgain", () => checkUsageSignInAgain(browser!, origin));
-    await timed("checkNotificationStartup", () => checkNotificationStartup(browser!, origin, paneA, paneB));
-    await timed("checkNotificationView", () => checkNotificationView(browser!, origin));
-    await timed("checkMobileViewport", () => checkMobileViewport(browser!, origin, paneB));
-    await timed("checkTerminalPinch", () => checkTerminalPinch(browser!, origin, paneB));
-    await timed("checkKeyBarKeepsKeyboardDown", () => checkKeyBarKeepsKeyboardDown(browser!, origin));
-    await timed("checkMobileTabs", () => checkMobileTabs(browser!, origin));
-    await timed("checkHeaderLensSwitch", () => checkHeaderLensSwitch(browser!, origin));
-    await timed("checkTerminalComposition", () => checkTerminalComposition(browser!, origin));
-    await timed("checkTabMenu", () => checkTabMenu(browser!, origin));
-    await timed("checkNewTabTypeAhead", () => checkNewTabTypeAhead(browser!, origin));
-    await timed("checkDefaultView", () => checkDefaultView(browser!, origin));
-    await timed("checkSettingSurvivesReload", () => checkSettingSurvivesReload(browser!, origin));
-    await timed("checkSettingsAcrossTabs", () => checkSettingsAcrossTabs(browser!, origin));
-    await timed("checkTerminalInputSpacing", () => checkTerminalInputSpacing(browser!, origin));
-    await timed("checkComposerReconnect", () => checkComposerReconnect(browser!, origin, paneB));
-    await timed("checkDroplet", () => checkDroplet(browser!, origin));
-    await timed("checkTerminalKeyboardSuggestions", () => checkTerminalKeyboardSuggestions(browser!, origin));
-    await timed("checkSplitView", () => checkSplitView(browser!, origin));
-    await timed("checkTakeOver", () => checkTakeOver(browser!, origin));
-    await timed("checkTabOverflow", () => checkTabOverflow(browser!, origin));
-    await timed("checkAlertSound", () => checkAlertSound(browser!, origin));
-    await timed("checkChatKeepsTerminalSize", () => checkChatKeepsTerminalSize(browser!, origin));
-    await timed("checkPaneSwitchKeepsTerminalSize", () => checkPaneSwitchKeepsTerminalSize(browser!, origin));
-    await timed("checkBackgroundTabKeepsTerminalSize", () => checkBackgroundTabKeepsTerminalSize(browser!, origin));
-    await timed("checkFocusedWindowReclaimsTerminalSize", () => checkFocusedWindowReclaimsTerminalSize(browser!, origin));
-    await timed("checkUpdateNotice", () => checkUpdateNotice(browser!, origin));
-    await timed("checkTelemetrySettings", () => checkTelemetrySettings(browser!));
+    if (group === "layout") {
+      await timed("checkSplitView", () => checkSplitView(browser!, origin));
+      await timed("checkBackgroundTabKeepsTerminalSize", () => checkBackgroundTabKeepsTerminalSize(browser!, origin));
+    } else {
+      await timed("checkPushSettings", () => checkPushSettings(browser!, origin));
+      await timed("checkWakeLock", () => checkWakeLock(browser!, origin, paneA));
+      await timed("checkSecretInput", () => checkSecretInput(browser!, origin));
+      await timed("checkTerminalCopy", () => checkTerminalCopy(browser!, origin));
+      await timed("checkTerminalCopyOff", () => checkTerminalCopyOff(browser!));
+      await timed("checkPaneFind", () => checkPaneFind(browser!, origin));
+      await timed("checkUsageMeters", () => checkUsageMeters(browser!, origin));
+      await timed("checkUsageSignInAgain", () => checkUsageSignInAgain(browser!, origin));
+      await timed("checkNotificationStartup", () => checkNotificationStartup(browser!, origin, paneA, paneB));
+      await timed("checkNotificationView", () => checkNotificationView(browser!, origin));
+      await timed("checkMobileViewport", () => checkMobileViewport(browser!, origin, paneB));
+      await timed("checkTerminalPinch", () => checkTerminalPinch(browser!, origin, paneB));
+      await timed("checkKeyBarKeepsKeyboardDown", () => checkKeyBarKeepsKeyboardDown(browser!, origin));
+      await timed("checkMobileTabs", () => checkMobileTabs(browser!, origin));
+      await timed("checkHeaderLensSwitch", () => checkHeaderLensSwitch(browser!, origin));
+      await timed("checkTerminalComposition", () => checkTerminalComposition(browser!, origin));
+      await timed("checkTabMenu", () => checkTabMenu(browser!, origin));
+      await timed("checkNewTabTypeAhead", () => checkNewTabTypeAhead(browser!, origin));
+      await timed("checkDefaultView", () => checkDefaultView(browser!, origin));
+      await timed("checkSettingSurvivesReload", () => checkSettingSurvivesReload(browser!, origin));
+      await timed("checkSettingsAcrossTabs", () => checkSettingsAcrossTabs(browser!, origin));
+      await timed("checkTerminalInputSpacing", () => checkTerminalInputSpacing(browser!, origin));
+      await timed("checkComposerReconnect", () => checkComposerReconnect(browser!, origin, paneB));
+      await timed("checkDroplet", () => checkDroplet(browser!, origin));
+      await timed("checkTerminalKeyboardSuggestions", () => checkTerminalKeyboardSuggestions(browser!, origin));
+      await timed("checkTakeOver", () => checkTakeOver(browser!, origin));
+      await timed("checkTabOverflow", () => checkTabOverflow(browser!, origin));
+      await timed("checkAlertSound", () => checkAlertSound(browser!, origin));
+      await timed("checkChatKeepsTerminalSize", () => checkChatKeepsTerminalSize(browser!, origin));
+      await timed("checkPaneSwitchKeepsTerminalSize", () => checkPaneSwitchKeepsTerminalSize(browser!, origin));
+      await timed("checkFocusedWindowReclaimsTerminalSize", () => checkFocusedWindowReclaimsTerminalSize(browser!, origin));
+      await timed("checkUpdateNotice", () => checkUpdateNotice(browser!, origin));
+      await timed("checkTelemetrySettings", () => checkTelemetrySettings(browser!));
+    }
   } catch (error) {
     failed = true;
     failure = error;

@@ -68,9 +68,12 @@ try {
 
   await paneScroll(pane, 0);
   await until(async () => (await text()).includes("P".repeat(100)), "native prompt returns before resizing");
+  // The desktop viewport holds the whole grid, so the mount rests at its top: only the follow after
+  // the short mount settles can bring the prompt's rows into view. A position written once
+  // setViewportSize returns raced that follow, which may already have run (a slow resize on a VM).
+  assert.equal(await host.evaluate((element) => element.scrollTop), 0, "the whole grid fits before resizing");
   await page.setViewportSize({ width: 390, height: 500 });
   await until(async () => await host.evaluate((element) => element.scrollWidth > element.clientWidth), "the native grid at its original width overflows a phone");
-  await host.evaluate((element) => { element.scrollTop = 80; });
   await until(async () => await host.evaluate((element) => element.scrollTop > 100), "settled short mount follows the native prompt");
   const beforeWheelPan = await host.evaluate((element) => element.scrollTop);
   await host.hover();

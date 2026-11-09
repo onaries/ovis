@@ -134,6 +134,12 @@ try {
       await machineToggles.nth(1).waitFor();
       if (empty) await page.locator(".agents-sidebar.is-empty .agent-empty").waitFor({ state: "attached" });
       if (await agentToggle.getAttribute("aria-expanded") !== "true") await agentToggle.click();
+      // the one-line list folds its idle agents under one resting line: open it, so Agents has all its rows
+      if (!empty) {
+        const resting = page.locator(".agents-sidebar .agent-resting-label .agent-background-toggle");
+        await resting.click();
+        assert.equal(await resting.getAttribute("aria-expanded"), "true", `${label} the resting line opens`);
+      }
       const before = await page.locator(".agents-sidebar .agent-title").allTextContents();
       assert.equal(before.length > 0, !empty, `${label} ${empty ? "has no agent rows" : "has agent rows"} before folding`);
       assert.equal(await machineToggle.getAttribute("aria-expanded"), "true");

@@ -45,6 +45,19 @@
   text-align: center;
 }
 
+/* the folded list still says how many of its agents wait for the reader (G-016), in the state's colour,
+   inside the head's own text: the caret and the head keep their place */
+.agent-section-waiting {
+  min-width: 0;
+  margin-inline-start: var(--space-2);
+  overflow: hidden;
+  color: var(--status-blocked);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-list {
   margin: 0;
   padding: 0;
@@ -226,7 +239,8 @@
   cursor: pointer;
 }
 
-.agent-row:focus-visible { outline-offset: calc(var(--ring-offset) * -1); }
+/* the common ring, 2px outside the row (G-034); scroll-margin keeps it in view at the list's edges */
+.agent-row:focus-visible { outline-offset: var(--ring-offset); scroll-margin-block: calc(var(--ring-offset) + var(--space-1)); }
 .agent-row:disabled { cursor: default; }
 
 @media (hover: hover) {
@@ -253,8 +267,9 @@
   }
 }
 
-/* As a workspace row's: the ⋯ takes no room until the row is hovered, focused, selected or its
-   menu is open, and stays in the focus order, since the menu hands the focus back to it. */
+/* As a workspace row's: the ⋯ takes no room until the row is hovered, focused or its menu is open, and
+   stays in the focus order, since the menu hands the focus back to it. On touch and in the drawer the
+   selected row keeps it too; a desktop shows it under the pointer and the keyboard alone (G-021). */
 .agent-actions {
   display: flex;
   align-items: center;
@@ -262,14 +277,16 @@
   width: 0;
   overflow: hidden;
   opacity: 0;
+  /* out of the accessibility tree and the tab order while unseen: the row's selector is its one stop */
+  visibility: hidden;
 }
 
 .agent-item:focus-within > .agent-actions,
-.agent-item.is-selected > .agent-actions,
 .agent-actions:has([aria-expanded="true"]) {
   width: auto;
   overflow: visible;
   opacity: 1;
+  visibility: visible;
 }
 
 @media (hover: hover) {
@@ -277,12 +294,17 @@
     width: auto;
     overflow: visible;
     opacity: 1;
+    visibility: visible;
   }
 }
 
-/* as a workspace row's (Sidebar.css): no "..." button where there is a mouse and room for a right-click */
-@media (pointer: fine) and (min-width: 769px) {
-  .agent-actions { display: none; }
+@media (pointer: coarse), (max-width: 768px) {
+  .agent-item.is-selected > .agent-actions {
+    width: auto;
+    overflow: visible;
+    opacity: 1;
+    visibility: visible;
+  }
 }
 
 .agent-copy {
@@ -305,8 +327,10 @@
   white-space: nowrap;
 }
 
+/* an agent's name is navigation: a step back from its state (G-042); the selected row's in the strong ink and
+   a heavier weight, so the selection is not colour alone (G-035) */
 .agent-title {
-  color: var(--text);
+  color: var(--text-dim);
   font-size: var(--fs-md);
   font-weight: var(--fw-regular);
 }
@@ -480,6 +504,7 @@
     width: auto;
     overflow: visible;
     opacity: 1;
+    visibility: visible;
   }
 }
 
@@ -491,4 +516,31 @@
 @media (hover: none) and (pointer: coarse) {
   .agent-row:enabled:active { opacity: 1; }
   .agent-item:has(> .agent-row:enabled:active) { background: var(--side-hover); }
+}
+
+/* Settings → Sidebar rows → One line (the default), as herdr-app's list: a row's counts, marks and the agent's own
+   words show under the pointer or the focus (what the user turned on, the context ring and plugin values, stays) (a finger, which cannot point, keeps them); a waiting row says how long it has waited, dim before its state */
+@media (pointer: fine) {
+  .agents-sidebar.is-compact { --side-row: calc(var(--control-h) - var(--space-1) - var(--hairline) * 2); }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .agents-sidebar.is-compact .agent-item:not(:hover, :focus-within) :is(.agent-row-status > :not(.sidebar-filter-note, .context-count), .agent-blocked, .agent-progress) {
+    /* out of sight, still read by a screen reader */
+    position: absolute;
+    width: var(--hairline);
+    height: var(--hairline);
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+.agent-since {
+  flex: 0 0 auto;
+  padding-inline: var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }

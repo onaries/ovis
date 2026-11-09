@@ -332,6 +332,36 @@ describe("ovis-site/_redirects", () => {
   });
 });
 
+describe("ovis.sh download links", () => {
+  // The names a release attaches: the desktop app's builds, which .github/workflows/desktop.yml checks
+  // for by name before it uploads them, and the older apps' Ovis.dmg and Ovis.exe.
+  const desktopYml = read(".github/workflows/desktop.yml");
+  const checked = /every name a download page links[\s\S]*?for name in ([\s\S]*?); do/.exec(desktopYml)?.[1] ?? "";
+  const desktop = checked.replace(/\\\n/g, " ").split(/\s+/).filter((name) => /^Ovis-[\w-]+\.(dmg|exe|deb|AppImage)$/.test(name));
+  const older = ["mac-dmg.yml", "windows-app.yml"].flatMap((file) => [...read(`.github/workflows/${file}`).matchAll(/\bOvis\.(?:dmg|exe)\b/g)].map(([name]) => name));
+  const released = new Set([...desktop, ...older]);
+  const rules = new Map(read("ovis-site/_redirects").split("\n").filter((line) => line.trim() && !line.startsWith("#")).map((line) => line.trim().split(/\s+/) as [string, string]));
+  const sources = [...PAGES, "ovis-site/assets/platform.js", "README.md", "README.ko.md", "README.ja.md", "README.zh-CN.md"];
+  const linked = new Map<string, string>();
+  for (const file of sources) for (const [, name] of read(file).matchAll(/https:\/\/ovis\.sh\/(Ovis[\w.${}-]*\.(?:dmg|exe|deb|AppImage))\b/g)) linked.set(name!, file);
+
+  it("reads the desktop app's builds from the release workflow", () => {
+    fail(desktop.length ? [] : [".github/workflows/desktop.yml"], "The test reads the desktop app's file names from the loop after \"every name a download page links\" in .github/workflows/desktop.yml; keep that loop, or point the test at where the names went:");
+  });
+
+  it("link only files a release attaches, each through a rule to the newest release", () => {
+    const names = [...linked.keys()].flatMap((name) => name.includes("${") ? ["x64", "arm64"].map((cpu) => name.replace(/\$\{\w+\}/, cpu)) : [name]);
+    fail(names.flatMap((name) => [
+      ...(released.has(name) ? [] : [`${name} (${linked.get(name) ?? "platform.js"}): no release attaches it; .github/workflows/desktop.yml checks for ${desktop.join(", ")}`]),
+      ...(rules.get(`/${name}`) === `https://github.com/devswha/ovis/releases/latest/download/${name}` ? [] : [`${name}: no rule /${name} -> releases/latest/download/${name} in ovis-site/_redirects`]),
+    ]), "Download links must name a file the release uploads, under the same name, through ovis-site/_redirects:");
+  });
+
+  it("offer every installer the desktop app ships", () => {
+    fail(desktop.filter((name) => !rules.has(`/${name}`)).map((name) => `${name}: no rule in ovis-site/_redirects`), "Give each desktop installer the release uploads an ovis.sh address in ovis-site/_redirects:");
+  });
+});
+
 describe("ovis-site/_headers", () => {
   const rules = read("ovis-site/_headers").split(/\n(?=\S)/).map((block) => block.split("\n").filter((line) => line.trim() && !line.startsWith("#")))
     .filter((lines) => lines.length).map(([url, ...headers]) => ({ url: url!.trim(), headers: headers.map((line) => line.trim()) }));

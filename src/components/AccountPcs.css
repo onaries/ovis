@@ -238,3 +238,9 @@
   align-items: center;
   gap: var(--space-2);
 }
+
+/* Check now: a quiet link above the list's right edge, over the rows it refreshes */
+.relay-shell-check {
+  display: flex;
+  justify-content: flex-end;
+}

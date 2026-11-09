@@ -1,30 +1,37 @@
 /* The sidebar's right edge, a grip centred on its seam. Only where the sidebar is a column
-   (from 769px): a phone's drawer keeps its own width. */
+   (from 769px): a phone's drawer keeps its own width. The grip is a pointer's --pointer-target
+   wide by its own box (G-033): most of it over the sidebar's own gutter, --space-2 of it over the
+   pane's edge (the pane's first column stays clickable); the seam it draws stays where it was. */
 .sidebar-resizer {
   position: absolute;
   top: 0;
-  right: calc(var(--space-1) * -1);
+  right: calc(var(--space-2) * -1);
   bottom: 0;
   z-index: var(--z-banner);
   display: none;
-  width: var(--space-2);
+  width: var(--pointer-target);
   cursor: col-resize;
   touch-action: none;
 }
 
-/* the seam itself lights up: stronger under a pointer, amber while it is held or focused */
+/* the seam itself lights up: stronger under a pointer, amber while it is held or focused; drawn over the
+   sidebar's border, --space-2 in from the grip's pane-side edge */
 .sidebar-resizer::after {
   content: "";
   position: absolute;
   top: 0;
   bottom: 0;
-  left: calc(50% - var(--hairline));
+  left: calc(100% - var(--space-2) - var(--hairline));
   width: calc(var(--hairline) * 2);
   background: transparent;
   transition: background-color var(--dur-fast) var(--ease-out);
 }
 
-.sidebar-resizer:focus-visible { outline: none; }
+/* the keyboard's ring, inside the grip's box so neither column clips it (G-034), with the seam lit under it */
+.sidebar-resizer:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-inset-offset);
+}
 
 @media (hover: hover) {
   .sidebar-resizer:hover::after { background: var(--border-strong); }

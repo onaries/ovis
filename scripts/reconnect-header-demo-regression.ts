@@ -119,6 +119,10 @@ async function desktopStatusBar(page: Page, width: number): Promise<void> {
   assert.equal(await page.locator(".chat-turn-user", { hasText: DRAFT }).count(), 0, `${width}: and no message was sent`);
   // another pane on the same, connected PC: its terminal connecting is no reconnect either
   await page.locator(".status-bar-conn[data-state='live']").waitFor();
+  // that pane's agent is idle: the one-line list folds it under its resting line until that line is opened
+  const resting = page.locator(".agents-sidebar .agent-resting-label .agent-background-toggle");
+  await resting.click();
+  assert.equal(await resting.getAttribute("aria-expanded"), "true", `${width}: the resting line opens`);
   await page.locator(".sidebar").getByText("Plan the config file", { exact: true }).click();
   await page.locator(".conn-live").waitFor({ state: "attached" });
   await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));

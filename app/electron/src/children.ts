@@ -7,6 +7,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, cpSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync, type WriteStream } from "node:fs";
 import { createServer } from "node:net";
+import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { ovisName } from "../../../server/legacy-env.ts";
 
@@ -154,10 +155,13 @@ function sameBytes(a: string, b: string): boolean {
 /**
  * Starts the app's core (`hc server start`, which returns once the core runs, or at once when it
  * already does). The core runs apart from the app, as hc runs it for every client: its terminals
- * outlive the window, and the next start finds them.
+ * outlive the window, and the next start finds them. It starts in the home folder: a workspace
+ * made without a folder opens in the core's, and the app's own (where the installer and the Start
+ * menu start it on Windows) is replaced by an update and removed with the app. A home folder that
+ * is not there leaves it in the app's: a missing folder would keep the core from starting at all.
  */
-export async function startCore(hc: string, env: Env, log: WriteStream, timeoutMs = 30_000): Promise<void> {
-  const { code, output } = await run(hc, ["server", "start"], env, log, timeoutMs);
+export async function startCore(hc: string, env: Env, log: WriteStream, timeoutMs = 30_000, home = homedir()): Promise<void> {
+  const { code, output } = await run(hc, ["server", "start"], env, log, timeoutMs, isDirectory(home) ? home : undefined);
   if (code !== 0) throw new Error(`herdr-core did not start (${code === null ? "timed out" : `exit code ${code}`})\n${tail(output)}`);
 }
 
@@ -341,11 +345,11 @@ export async function processStart(pid: number): Promise<string | null> {
   return code === 0 && output.trim() !== "" ? output.trim() : null;
 }
 
-async function run(command: string, args: string[], env: Env, log: WriteStream | null, timeoutMs: number): Promise<{ code: number | null; output: string }> {
+async function run(command: string, args: string[], env: Env, log: WriteStream | null, timeoutMs: number, cwd?: string): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve) => {
     let output = "";
     const [program, argv] = withoutInherited(command, args);
-    const child = spawn(program, argv, { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(program, argv, { cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     const take = (chunk: Buffer) => {
       log?.write(chunk);
       output += chunk.toString("utf8");
@@ -366,4 +370,8 @@ async function run(command: string, args: string[], env: Env, log: WriteStream |
 
 export function isFile(path: string): boolean {
   try { return statSync(path).isFile(); } catch { return false; }
+}
+
+function isDirectory(path: string): boolean {
+  try { return statSync(path).isDirectory(); } catch { return false; }
 }

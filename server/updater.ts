@@ -213,6 +213,14 @@ export class Updater {
   /** What the last update brought; set with the release that runs. */
   installed: InstalledNotes = noInstalledNotes();
   private busy = false;
+  /** the install running now, which cancel() stops while it builds */
+  private installing: AbortController | null = null;
+  /** the revision a cancel stopped: the timer's automatic install leaves it until it is asked for again, or a newer one comes */
+  private cancelledRevision: string | null = null;
+  /** a cancel asked for while the run still checked: honoured before anything is built */
+  private cancelPending = false;
+  /** the id the install running now was asked for with, or null (the timer's, or no id given) */
+  private runId: string | null = null;
   private timer?: ReturnType<typeof setInterval>;
   private initialTimer?: ReturnType<typeof setTimeout>;
   private sourceRevision = "";
@@ -236,6 +244,7 @@ export class Updater {
     channel?: () => UpdateChannel;
   }) {
     this.status.auto_update = options.autoUpdate; this.status.error = options.notice ?? null;
+    this.status.install_cancellable = true;
     this.status.channel = this.channel();
   }
 
@@ -357,9 +366,13 @@ export class Updater {
 
   private async discover(byUser = false) {
     const channel = this.channel();
-    this.patch({ phase: "checking", error: this.options.notice ?? null, error_code: null, available: false, blocked_reason: null, channel });
+    // an offer already made stays up while this check runs, and changes only with its answer: the
+    // page polls this status, and an offer withdrawn for the check's length blinks its line (#3325).
+    // An offer made on another channel is not this one's: it goes at once
+    const kept = channel === this.status.channel ? {} : { available: false };
+    this.patch({ phase: "checking", error: this.options.notice ?? null, error_code: null, blocked_reason: null, channel, ...kept });
     const reason = await this.sourceBlock();
-    if (reason) { this.patch({ blocked_reason: reason, checked_at: new Date().toISOString() }); return; }
+    if (reason) { this.patch({ blocked_reason: reason, checked_at: new Date().toISOString(), available: false }); return; }
     // Only published releases update installs: commits pushed to main without a tag stay put. The
     // beta channel also takes the beta tags CI makes on green main.
     const betas = channel === "beta" ? ["+refs/tags/beta/*:refs/tags/beta/*"] : [];
@@ -456,17 +469,33 @@ export class Updater {
     return run(this.options.root, ["git", "fetch", "--no-tags", "--unshallow", "origin"], this.controller.signal, timeout);
   }
 
+  /**
+   * Stops the install running now, only when `installId` names it (the id its install request carried): true when it did.
+   * Another's install (another device's, or this PC's own Settings') is never stopped. Once it restarts, false.
+   */
+  cancel(installId: string): boolean {
+    if (!this.runId || installId !== this.runId) return false;
+    if (this.installing && this.status.phase === "building") { this.installing.abort(new Error("Update cancelled")); return true; }
+    // asked while it still checks what is on offer: it stops before it builds anything
+    if (this.busy && this.status.phase === "checking") { this.cancelPending = true; return true; }
+    return false;
+  }
+
   /** `byUser`: the request came from the settings' Check or Update (through the supervisor), not
    * from the 5-minute timer; only the timer waits a failed unshallow fetch's backoff out.
    * `expectedRevision`: the release a manual install was offered; the install goes ahead only
    * while the check it starts with still offers exactly that one. */
-  async request(command: UpdateCommand, byUser = false, expectedRevision?: string): Promise<void> {
+  async request(command: UpdateCommand, byUser = false, expectedRevision?: string, installId?: string): Promise<void> {
     if (this.busy || !this.status.managed || this.controller.signal.aborted) return;
     this.busy = true;
+    // the id of the install this run is (its request's): what a cancel must name
+    this.runId = command === "install" ? installId ?? null : null;
     let stage: string | null = null;
     let attempted: string | null = null;
+    let checked = false;
     try {
       await this.discover(byUser);
+      checked = true;
       // a release published since the person said yes is not the one they said yes to: nothing is
       // installed, the new offer stays to be read, and nothing tries again by itself
       // (a blocked checkout says why itself, and installs nothing either)
@@ -477,15 +506,25 @@ export class Updater {
       }
       if ((command === "install" || this.options.autoUpdate) && this.status.available) {
         const revision = this.status.latest_revision!;
+        // a revision cancelled here is installed again only when asked for, never by the timer
+        if (command === "check" && revision === this.cancelledRevision) { this.patch({ phase: "idle", step: null }); return; }
+        if (command === "install") this.cancelledRevision = null;
         if (command === "check" && revision === this.failedRevision) {
           this.patch({ phase: "error", error: "Automatic installation of this revision previously failed. Use Update and restart to retry, or wait for a newer revision." });
           return;
         }
         attempted = revision;
+        if (this.cancelPending) {
+          this.cancelledRevision = revision;
+          this.patch({ phase: "error", step: null, error_code: "update_cancelled", error: "The update was cancelled before it was installed." });
+          return;
+        }
+        this.installing = new AbortController();
+        const signal = AbortSignal.any([this.controller.signal, this.installing.signal]);
         this.patch({ phase: "building", step: "download" });
         stage = mkdtempSync(join(this.options.stateDir, "release-"));
         // Network filesystems and low-memory builds can take minutes even without a network fetch.
-        const run = (args: string[], timeout = 10 * 60_000) => runCommand(stage!, args, this.controller.signal, timeout);
+        const run = (args: string[], timeout = 10 * 60_000) => runCommand(stage!, args, signal, timeout);
         await run(["git", "clone", "--quiet", "--no-checkout", "--no-hardlinks", this.options.root, "."]);
         await run(["git", "fetch", "--quiet", this.options.root, revision]);
         await run(["git", "checkout", "--quiet", "--detach", revision]);
@@ -505,8 +544,14 @@ export class Updater {
           catch (error) { console.error("Rust PTY host install failed; the release uses the Node PTY sidecar", error); }
         }
         const reason = await this.sourceBlock();
-        if (reason) throw new Error(reason);
-        this.controller.signal.throwIfAborted();
+        // the checkout changed while the release built: the offer ends with the block, as a check's would
+        if (reason) {
+          this.patch({ blocked_reason: reason, available: false });
+          throw new Error(reason);
+        }
+        signal.throwIfAborted();
+        // from here it restarts onto the new release: too late to cancel
+        this.installing = null;
         const previous = this.release;
         // what it replaces, on record for the supervisor the release starts: that one was not here for the install
         const next: Release = { directory: stage, revision, source_revision: this.sourceRevision,
@@ -540,15 +585,25 @@ export class Updater {
       }
       this.patch({ phase: "idle", step: null });
     } catch (error) {
+      // cancelled while it built: nothing was installed, its offer stays, and it is no failed release
+      if (this.installing?.signal.aborted && !this.controller.signal.aborted) {
+        this.cancelledRevision = attempted;
+        this.patch({ phase: "error", step: null, error_code: "update_cancelled", error: "The update was cancelled before it was installed." });
+        return;
+      }
       if (attempted && !this.controller.signal.aborted) {
         this.failedRevision = attempted;
         try {
           writeFileSync(join(this.options.stateDir, "failed.json"), JSON.stringify({ revision: attempted }), { mode: 0o600 });
         } catch { /* the in-memory guard still prevents repeated automatic restarts */ }
       }
-      this.patch({ phase: "error", step: null, error: error instanceof Error ? error.message : String(error) });
+      // a check that failed ends the offer it kept while it ran; a failed install keeps it to retry
+      this.patch({ phase: "error", step: null, error: error instanceof Error ? error.message : String(error), ...(checked ? {} : { available: false }) });
     } finally {
       if (stage) rmSync(stage, { recursive: true, force: true });
+      this.installing = null;
+      this.cancelPending = false;
+      this.runId = null;
       this.busy = false;
     }
   }

@@ -1,7 +1,7 @@
 {
   "name": "ovis",
   "private": true,
-  "version": "0.4.22",
+  "version": "0.5.1",
   "type": "module",
   "description": "Ovis, the browser and phone client for herdr - live herdr workspaces, panes and agents in a web UI",
   "license": "MIT",
@@ -20,7 +20,7 @@
     "test": "bun test",
     "test:unit": "bun scripts/ci-tests.ts unit",
     "test:integration": "bun scripts/ci-tests.ts integration",
-    "test:ui": "bun run build && bun scripts/ui-regression.ts && bun scripts/ui-contexts-regression.ts && bun scripts/sticky-modifiers-regression.ts",
+    "test:ui": "bun run build && bun scripts/ui-regression.ts && bun scripts/ui-contexts-regression.ts && bun scripts/ui-contexts-layout-regression.ts && bun scripts/sticky-modifiers-regression.ts",
     "generate:types": "bun run scripts/generate-protocol-types.ts",
     "generate:themes": "bun run scripts/generate-themes.ts",
     "generate:case-folding": "bun run scripts/generate-case-folding.ts",

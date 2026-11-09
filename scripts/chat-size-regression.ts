@@ -10,6 +10,7 @@ import { PtySession } from "../server/pty/session.ts";
 import { herdrRpc, herdrSocketPath, type WorkspaceCreateResult, paneRead, paneSendKeys, paneSendText, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
 import { shownRow, shownRows } from "./shown-rows.ts";
+import { clickTab } from "./tab-pick.ts";
 
 /** how long a resize that should not happen gets to show up */
 const NO_RESIZE_WAIT_MS = 400;
@@ -936,7 +937,7 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
           const extra = await tabCreate({ workspaceId: workspaces[0]!, label: "Mirror cache" });
           const before = wire.length;
           // When it becomes cached, presentation effects must not release the mirror.
-          await page.locator(`[role="tab"][data-tab-id="${extra.tab.tab_id}"]`).evaluate((button: HTMLElement) => button.click());
+          await clickTab(page, extra.tab.tab_id, true);
           await page.locator(`.pane-frame.is-hidden[data-layout-pane="${first}"]`).waitFor({ state: "attached" });
           await page.clock.runFor(0);
           await waitWire("in", "input-ready", 2);
@@ -1017,7 +1018,7 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
               assert.ok(page);
               const tab = tabs.get(pane);
               assert.ok(tab);
-              await page.locator(`[role="tab"][data-tab-id="${tab}"]`).evaluate((button: HTMLElement) => button.click());
+              await clickTab(page, tab, true);
               await page.locator(`.pane-frame.is-current[data-layout-pane="${pane}"]`).waitFor();
               await page.clock.runFor(0);
             };

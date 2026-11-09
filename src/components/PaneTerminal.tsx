@@ -15,6 +15,7 @@ import { pageAddress, reloadOnPlainClick } from "../lib/pageQuery.ts";
 import { PaneCachedContext, PaneWatchedContext, PanePresentedContext, PaneFollowContext, PaneShownContext, PaneSubmitContext } from "../lib/paneSubmitContext.ts";
 import { NO_MODIFIER_LATCH, NO_STICKY_MODIFIERS, releaseLatched, type ModifierLatch, type StickyModifiers } from "../lib/keys.ts";
 import { EMPTY_DRAFT, draftIsEmpty, restoreDraft, type InputDraft } from "../lib/draft.ts";
+import { useReconnectGrace } from "../lib/reconnectGrace.ts";
 import { looksLikeKey } from "../../shared/secret-prompt.ts";
 import { messageQueues } from "../lib/messageQueue.ts";
 import { pendingMessages } from "../lib/pendingMessages.ts";
@@ -121,6 +122,7 @@ export interface PaneTerminalProps {
   view: PaneView;
   /** switches this pane to its terminal lens, and saves it (Keep Terminal) */
   onOpenTerminal?: () => void;
+  onOpenFile?: ((path: string) => void) | null;
   /** the terminal command's peek this pane shows (lib/terminalPeek.ts): its terminal over its chat */
   peek?: TerminalPeek | null;
   /** opens a peek over this pane's chat; none: this pane cannot show one (not the selected pane, no terminal) */
@@ -203,6 +205,7 @@ export function PaneTerminal({
   palette,
   role = "interact",
   onOpenTerminal,
+  onOpenFile,
   peek: peekProp = null,
   onPeek,
   onEndPeek,
@@ -215,9 +218,11 @@ export function PaneTerminal({
   const t = useT();
   const activeRef = useRef(active);
   activeRef.current = active;
-  const openFile = useContext(OpenFileContext);
+  const contextualOpenFile = useContext(OpenFileContext);
+  const openFile = onOpenFile === undefined ? contextualOpenFile : onOpenFile;
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
+  const openPaneFile = useCallback((path: string) => openFileRef.current?.(path), []);
   const openWebPage = useContext(WebPanelContext);
   const machineId = useMachineId();
   const [chatMetadata, setChatMetadata] = useState<{ pane: string; value: ConversationMetadata | null; source?: string } | null>(null);
@@ -467,6 +472,8 @@ export function PaneTerminal({
   // Pictures in the terminal not chosen on this device: on where the server passes pictures (herdr-core)
   const [terminalHistory, setTerminalHistory] = useState(false);
   useTerminalImages(terminal, settings.terminalImages ?? terminalHistory, coarse);
+  const picturesChoiceRef = useRef(settings.terminalImages);
+  picturesChoiceRef.current = settings.terminalImages;
   // a wide mirror folds on a narrow screen until the pane menu's Wrap to screen / Original width says otherwise
   const narrowScreen = useMediaQuery(MIRROR_WRAP_QUERY);
   const mirrorWrap = settings.terminalMirrorWrap ?? narrowScreen;
@@ -495,7 +502,25 @@ export function PaneTerminal({
   // input typed while disconnected, held for the user to review and send
   const [draftState, setDraftState] = useState<{ owner: string | null; value: InputDraft }>({ owner: null, value: EMPTY_DRAFT });
   const draft = draftState.value;
+  // a drop the connection is back from within the grace is not said (lib/reconnectGrace.ts); held input,
+  // a key, a press or typed text (dictation, an IME) anywhere in the window meanwhile (the active pane's),
+  // stopped output, or a pane another app held say it at once: the drop clears that warning (useTerminalMount),
+  // and the pane must not look ready to type in while nothing it is sent can reach it
+  const [actedWhileDropped, setActedWhileDropped] = useState(false);
+  if (connected && actedWhileDropped) setActedWhileDropped(false);
+  const heldWhileUp = useRef(false);
+  if (connected) heldWhileUp.current = held;
+  const connectionShown = useReconnectGrace(connected, connectedBefore, !draftIsEmpty(draft) || outputError !== null || actedWhileDropped || heldWhileUp.current, socketRef.current?.lostSince ?? null);
+  const waitingOnGrace = active && connectionShown && !connected;
+  useEffect(() => {
+    if (!waitingOnGrace) return;
+    const acted = () => setActedWhileDropped(true);
+    const actions = ["keydown", "pointerdown", "beforeinput", "compositionstart"] as const;
+    for (const action of actions) window.addEventListener(action, acted, true);
+    return () => { for (const action of actions) window.removeEventListener(action, acted, true); };
+  }, [waitingOnGrace]);
   const onPeekRef = useRef(onPeek); onPeekRef.current = onPeek;
+  const onOpenTerminalRef = useRef(onOpenTerminal); onOpenTerminalRef.current = onOpenTerminal;
   const onEndPeekRef = useRef(onEndPeek); onEndPeekRef.current = onEndPeek;
   // The outcome ids this pane's chat last read (its prompt poll). A send notes them as it leaves, so
   // its own outcome is the newest unread one with its text, whenever a later poll lists it
@@ -552,9 +577,9 @@ export function PaneTerminal({
   // pane's tile, a PC with no terminal) the terminal lens opens, as it did before.
   const peekOutcome = useCallback((text: string) => {
     const open = onPeekRef.current;
-    if (open === undefined || heldRef.current || unsupportedRef.current) { onOpenTerminal?.(); return; }
+    if (open === undefined || heldRef.current || unsupportedRef.current) { onOpenTerminalRef.current?.(); return; }
     open({ command: outcomeCommand(text), text: null, knownOutcomeIds: null, auto: false, watch: null, inputRowSeen: inputRowNow() === "ready" });
-  }, [onOpenTerminal, inputRowNow]);
+  }, [inputRowNow]);
   const setDraft = useCallback((value: InputDraft | ((previous: InputDraft) => InputDraft)) => {
     const owner = paneRef.current ? paneStorageId(machineId, paneRef.current) : null;
     setDraftState((previous) => ({ owner, value: typeof value === "function" ? value(previous.owner === owner ? previous.value : EMPTY_DRAFT) : value }));
@@ -706,8 +731,8 @@ export function PaneTerminal({
   useEffect(() => {
     if (connected && socketRef.current !== null) connectedSockets.add(socketRef.current);
     if (connected && !connectedBefore) setConnectedBefore(true);
-    if (active) onConnectionChangeRef.current?.(connected, connectedBefore || connected);
-  }, [connected, connectedBefore, active]);
+    if (active) onConnectionChangeRef.current?.(connectionShown, connectedBefore || connected);
+  }, [connected, connectionShown, connectedBefore, active]);
 
   // what opens outside the pane (a diff's line notes) reads whether this window only watches it
   const observingMount = useRef(Symbol("pane-terminal")).current;
@@ -735,7 +760,7 @@ export function PaneTerminal({
     }, 2500);
   }, []);
 
-  useTerminalMount({ setTerminalHistory, typeAheadRef, activeRef, agentRef, barKeyRef, baseFontRef, pinchingRef, cachedRef, watchedRef, cachedReleaseRef, cancelLeaveRef, cancelTouchRef, chatMountedRef, chatOutputRef, chatViewRef, clearModifiers, clipboardTimerRef, coarseRef, commitPendingText, composingRef, compositionCommitPendingRef, consumeModifiers, deferAttachRef, draftHeldForRef, draftPaneRef, endedRef, findOpenRef, fitRef, fittedRef, fixedGridRef, followCursorRef, followRef, frameGateRef, heldRef, hostRef, hyperlinksRef, keyboardHoldsRef, keyboardToggleFocusRef, leaveRef, lineScroll, machineId, machineSessions, mirroredRef, mirrorWrapRef, modifiersRef, modifyOtherKeysRef, narrowFontRef, noteClipboard, observeRef, onChatSuggestion, onInputRowFrameRef, onRoleAckRef, onServerMessageRef, openFileRef, openWebRef, reuseExternalLinkTabRef, osc52AllowedRef, codexDragRef, outputTargetRef, palette, paneRef, pendingEpochRef, pendingScopeRef, pendingSubmissionsRef, pinchBadgeRef, pinchStatusRef, presentationRef, presentedRef, reassertIfStaleRef, reattachRef, redrawGreeting, releaseAwayRef, idleReleaseRef, setIdleView, releaseRef, releasedRef, retireOutputRef, secretRef, sessionRef, setChatInvalidation, setChatRefresh, setChatSent, setComposing, setConnected, setConnectedBefore, setConversationPushes, setDraft, setEnded, setHeld, setInputError, setInputReady, setObserving, setOutputError, setOutputReady, setParsedTarget, setReleased, setSecret, setSelectionQuote, setTerminal, setUnsupported, setViewHeld, setWatching, sharedGridRef, shortcutSettings, shownRef, sizesPty, socketRef, stackRef, stalledRef, stopKeyRef, submitRetention, t, tRef, termRef, terminalFontSize, theme, updateSettings, uploadFileRef, attachFilesRef, watchingRef, wheelStateRef });
+  useTerminalMount({ setTerminalHistory, picturesChoiceRef, typeAheadRef, activeRef, agentRef, barKeyRef, baseFontRef, pinchingRef, cachedRef, watchedRef, cachedReleaseRef, cancelLeaveRef, cancelTouchRef, chatMountedRef, chatOutputRef, chatViewRef, clearModifiers, clipboardTimerRef, coarseRef, commitPendingText, composingRef, compositionCommitPendingRef, consumeModifiers, deferAttachRef, draftHeldForRef, draftPaneRef, endedRef, findOpenRef, fitRef, fittedRef, fixedGridRef, followCursorRef, followRef, frameGateRef, heldRef, hostRef, hyperlinksRef, keyboardHoldsRef, keyboardToggleFocusRef, leaveRef, lineScroll, machineId, machineSessions, mirroredRef, mirrorWrapRef, modifiersRef, modifyOtherKeysRef, narrowFontRef, noteClipboard, observeRef, onChatSuggestion, onInputRowFrameRef, onRoleAckRef, onServerMessageRef, openFileRef, openWebRef, reuseExternalLinkTabRef, osc52AllowedRef, codexDragRef, outputTargetRef, palette, paneRef, pendingEpochRef, pendingScopeRef, pendingSubmissionsRef, pinchBadgeRef, pinchStatusRef, presentationRef, presentedRef, reassertIfStaleRef, reattachRef, redrawGreeting, releaseAwayRef, idleReleaseRef, setIdleView, releaseRef, releasedRef, retireOutputRef, secretRef, sessionRef, setChatInvalidation, setChatRefresh, setChatSent, setComposing, setConnected, setConnectedBefore, setConversationPushes, setDraft, setEnded, setHeld, setInputError, setInputReady, setObserving, setOutputError, setOutputReady, setParsedTarget, setReleased, setSecret, setSelectionQuote, setTerminal, setUnsupported, setViewHeld, setWatching, sharedGridRef, shortcutSettings, shownRef, sizesPty, socketRef, stackRef, stalledRef, stopKeyRef, submitRetention, t, tRef, termRef, terminalFontSize, theme, updateSettings, uploadFileRef, attachFilesRef, watchingRef, wheelStateRef });
 
   useTerminalRefits({ activeRef, autoSelected, baseFontRef, pinchingRef, fontSettledRef, chatView, chatViewRef, coarseRef, findOpenRef, fitRef, fittedRef, fixedGridRef, follow, followCursorRef, keyboardHoldsRef, narrowFont, narrowFontFitted, observeRef, palette, paneRef, peekRef, sharedGridRef, shown, sizesPty, socketRef, termRef, terminalFontFamily, terminalFontSize, theme });
 
@@ -1142,7 +1167,7 @@ export function PaneTerminal({
     // is-peek: a terminal command's peek shows the grid over the still-mounted chat (PaneTerminal.css)
     // A press on the peek's dimmed, inert composer lands on the stack itself: it keeps the keyboard
     // in the grid, so Escape still reaches the agent, instead of handing focus to the pane frame
-    <div ref={stackRef} className={`terminal-stack${chatMounted ? " is-chat" : ""}${peek !== null ? " is-peek" : ""}${greeted ? " is-greeted" : ""}`} data-pane-owner={paneId === null ? undefined : paneStorageId(machineId, paneId)} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined}
+    <OpenFileContext.Provider value={openFile === null ? null : openPaneFile}><div ref={stackRef} className={`terminal-stack${chatMounted ? " is-chat" : ""}${peek !== null ? " is-peek" : ""}${greeted ? " is-greeted" : ""}`} data-pane-owner={paneId === null ? undefined : paneStorageId(machineId, paneId)} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined}
       onMouseDown={peek !== null && !coarse ? (event) => {
         if (event.target !== event.currentTarget) return;
         event.preventDefault();
@@ -1199,7 +1224,7 @@ export function PaneTerminal({
             {t("Terminal ended")}
           </div>
         )}
-        {paneId !== null && !chatView && !ended && !connected && (
+        {paneId !== null && !chatView && !ended && !connectionShown && (
           <div className="terminal-banner terminal-banner-warning" role="status">
             {t(connectedBefore ? "Reconnecting to Ovis…" : "Connecting to Ovis…")}
             {/* one line, cut with an ellipsis: a command is never broken inside a word; the title holds it whole */}
@@ -1504,6 +1529,6 @@ export function PaneTerminal({
           note: pasteGuidance ? t("Tap Input line to paste.") : null, onNoteDismiss: dismissPasteGuidance,
           onToggleKeyboard: toggleKeyboard, keyboardOwner, keyboardDisabled: !connected || !inputReady || held || ended, keyboardRefused: composing || lineComposing || linePasting } : {})}
         {...(coarse && directTyping && settings.terminalAttachButton ? { onAttach: attachTarget } : {})} />}
-    </div>
+    </div></OpenFileContext.Provider>
   );
 }

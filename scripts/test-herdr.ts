@@ -24,6 +24,13 @@ process.env["TMPDIR"] = realpathSync(tmpdir());
 // herdr socket, in this process and the children tests spawn, whatever XDG_CONFIG_HOME a test sets later
 process.env["OVIS_TEST_USER_XDG_CONFIG_HOME"] ??= process.env["XDG_CONFIG_HOME"] ?? "";
 
+// under bun test, no test runs the account's ssh -G or reads its SSH config: addresses resolve as written, and a test that
+// needs another answer replaces the resolver itself (server/ssh-address.ts)
+if (process.env["NODE_ENV"] === "test") {
+  const { literalAddress, sshAddresses } = await import("../server/ssh-address.ts");
+  sshAddresses.resolve = async (target) => literalAddress(target);
+}
+
 export const TEST_SESSION = process.env["HERDR_TEST_SESSION"] || "ovis-test";
 
 /**
@@ -63,13 +70,32 @@ export function agentStandIns(dir: string): string {
   return dir;
 }
 
+/** where HERDR_TEST_MODE=unit points HERDR_SOCKET: a socket that does not exist */
+const UNIT_SOCKET = (): string => join(tmpdir(), "ovis-unit-tests-have-no-herdr.sock");
+
+/**
+ * HERDR_TEST_MODE=unit for one server-backed unit test file, however it is run: a file run alone
+ * (`bun test <file>`) shares this process with the test herdr the preload started, so its servers would
+ * reach it. Until the returned call, no herdr answers; that call puts back what was there.
+ */
+export function unitHerdrOnly(): () => void {
+  const before = { mode: process.env["HERDR_TEST_MODE"], socket: process.env["HERDR_SOCKET"] };
+  process.env["HERDR_TEST_MODE"] = "unit";
+  process.env["HERDR_SOCKET"] = UNIT_SOCKET();
+  return () => {
+    for (const [name, value] of [["HERDR_TEST_MODE", before.mode], ["HERDR_SOCKET", before.socket]] as const) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  };
+}
+
 /** Point this process (and what it spawns) at the test session, starting its server if needed. */
 export async function useTestHerdr(): Promise<string | null> {
   // Unit tests must not discover or start herdr, even on a developer's PC. Nor may they fall back
   // to the default socket: a bare `HERDR_TEST_MODE=unit bun test` also loads the contract files,
   // and those would open their workspaces and stand-in agents in the herdr the user works in.
   if (process.env["HERDR_TEST_MODE"] === "unit") {
-    process.env["HERDR_SOCKET"] = join(tmpdir(), "ovis-unit-tests-have-no-herdr.sock");
+    process.env["HERDR_SOCKET"] = UNIT_SOCKET();
     return null;
   }
   if (process.env["HERDR_TEST_LIVE"] === "1") return null;

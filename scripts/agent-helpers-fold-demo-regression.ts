@@ -66,7 +66,8 @@ try {
           ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US", colorScheme: theme }
           : { viewport: { width: 1280, height: 900 }, locale: "en-US", colorScheme: theme });
         try {
-          await context.addInitScript((value) => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: value })), theme);
+          // the sidebar's Filter field is off until chosen (Settings → Sidebar filter); this check types in it
+          await context.addInitScript((value) => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: value })); localStorage.setItem("ovis:sidebar-filter-shown", "true"); }, theme);
           const page = await context.newPage();
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
@@ -79,6 +80,10 @@ try {
               if (await agents.getAttribute("aria-expanded") === "false") await agents.click();
             }
             await row(page, AGENT).waitFor();
+            // one-line rows (the default) fold the resting agents under "+N resting": the idle helpers this check
+            // reads are among them, so the fold is opened first (this device then keeps it open)
+            const resting = page.locator(".agent-resting-label .agent-background-toggle");
+            if (await resting.count() > 0 && await resting.getAttribute("aria-expanded") === "false") await resting.click();
           };
           const shot = async (name: string) => {
             if (!evidence) return;

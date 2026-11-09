@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync } from "node:fs";
+import { closeSync, constants, type Dir, fstatSync, lstatSync, opendirSync, openSync, readlinkSync, readSync, realpathSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
 import { commandHistory, resetCommandHistory, sameHistory, vouchedEnds, watchCommandHistory, type CommandEnd, type HistoryEvidence, type HistoryVersion } from "./claude-command-history.ts";
 import type { HerdrPane, OmoTask, PaneBackgroundAgentDetail } from "../shared/protocol.ts";
@@ -39,7 +39,8 @@ import type { HerdrPane, OmoTask, PaneBackgroundAgentDetail } from "../shared/pr
  * when it ran past its timeout), by the session or by a subagent. One ends with the
  * `<task-notification>` of its task id, in any transcript of the session, or with the answer
  * of the `TaskStop` (`KillShell` in older Claude Code) that stopped it, which no notice follows.
- * It lives in the Claude process that started it, as a running agent does.
+ * It lives in the Claude process that started it, as a running agent does. A `Workflow` run counts
+ * as one such command: its call answers at once with a task id, and the same notice ends it.
  */
 const READ_BUDGET = 8 * 1024 * 1024;
 /** how much of a parent transcript is read the first time: older notices are not found */
@@ -130,11 +131,12 @@ export function lineNotifications(line: string): TaskNotification[] {
  * begins inside a line that is not wanted (a window's start, or a line too long to take), which
  * is passed over to its end. A line that does not fit `limit` waits for a call with more, and
  * one that does not fit READ_BUDGET is skipped, not waited for. `more`: the file goes on past
- * what this read looked at.
+ * what this read looked at. `file`: the plain file `plain` looked at, which the open must still be.
  */
-export function readLines(path: string, from: number, size: number, limit: number, each: (line: string, end: number) => void, skipping: boolean): { offset: number; skipping: boolean; more: boolean; failed?: true } {
-  let fd: number;
-  try { fd = openSync(path, "r"); } catch { return { offset: from, skipping, more: true, failed: true }; }
+export function readLines(path: string, from: number, file: { size: number; exact: string }, limit: number, each: (line: string, end: number) => void, skipping: boolean): { offset: number; skipping: boolean; more: boolean; failed?: true } {
+  const size = file.size;
+  const fd = openPlain(path, file.exact)?.fd;
+  if (fd === undefined) return { offset: from, skipping, more: true, failed: true };
   try {
     const length = Math.min(size - from, limit);
     const buffer = Buffer.alloc(length);
@@ -167,11 +169,37 @@ export function readLines(path: string, from: number, size: number, limit: numbe
   } catch { return { offset: from, skipping, more: true, failed: true }; } finally { closeSync(fd); }
 }
 
-export function plain(path: string, max = Infinity): { size: number; mtimeMs: number; id: string } | null {
+/**
+ * A plain file at `path` as one look sees it: `id`, `size` and `mtimeMs` in the number form the versions share
+ * (historyVersion), and `exact`, its identity as BigInt, which a read's open must find (openPlain): two NTFS file IDs
+ * can round to one number.
+ */
+export function plain(path: string, max = Infinity): { size: number; mtimeMs: number; id: string; exact: string } | null {
   try {
-    const stat = lstatSync(path);
-    return stat.isFile() && stat.size <= max ? { size: stat.size, mtimeMs: stat.mtimeMs, id: `${stat.dev}:${stat.ino}` } : null;
+    const stat = lstatSync(path, { bigint: true });
+    const size = Number(stat.size);
+    if (!stat.isFile() || size > max) return null;
+    // as a number Stats gives it: seconds in milliseconds, then the nanoseconds
+    const mtimeMs = Number(stat.mtimeNs / 1_000_000_000n) * 1000 + Number(stat.mtimeNs % 1_000_000_000n) / 1e6;
+    return { size, mtimeMs, id: `${Number(stat.dev)}:${Number(stat.ino)}`, exact: identity(stat) };
   } catch { return null; }
+}
+
+/**
+ * `path` opened as the plain file whose identity `plain` looked at (`exact`), of at most `max` bytes: its descriptor
+ * and size, or null. Not waited on, not followed: a FIFO or a link put in the file's place after the look neither hangs
+ * the read nor leads elsewhere, and another file put there is not the one looked at.
+ */
+function openPlain(path: string, exact: string, max = Infinity): { fd: number; size: number } | null {
+  let fd: number;
+  try { fd = detailIo.openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0)); } catch { return null; }
+  try {
+    const opened = fstatSync(fd, { bigint: true });
+    const size = Number(opened.size);
+    if (opened.isFile() && size <= max && identity(opened) === exact) return { fd, size };
+  } catch { /* refused below */ }
+  closeSync(fd);
+  return null;
 }
 
 /** What one transcript says of background commands: those it started, by task id, and how those it heard of ended. */
@@ -192,7 +220,7 @@ const noCommands = (): Commands => ({ calls: new Map(), launches: new Map(), end
 const TITLE_LENGTH = 120;
 
 /** Whether a line may say something of a background command, before it is parsed: the answers of every other call are passed over. */
-const commandLine = (line: string): boolean => line.includes('"name":"Bash"') || line.includes('"backgroundTaskId"') || line.includes('"task_id"') || line.includes('"shell_id"');
+const commandLine = (line: string): boolean => line.includes('"name":"Bash"') || line.includes('"backgroundTaskId"') || line.includes('"local_workflow"') || line.includes('"task_id"') || line.includes('"shell_id"');
 
 function commandEnds(result: Row | null, at: number, notices: readonly TaskNotification[]): CommandEnd[] {
   const ends: CommandEnd[] = [];
@@ -217,10 +245,12 @@ function scanCommands(commands: Commands, entry: Row, at: number | null, notices
   }
   const failed = blocks.some((block) => block["type"] === "tool_result" && block["is_error"] === true);
   const result = failed ? null : row(entry["toolUseResult"]);
-  const launched = result?.["backgroundTaskId"];
+  const workflow = result?.["taskType"] === "local_workflow" && result["status"] === "async_launched";
+  const launched = workflow ? result["taskId"] : result?.["backgroundTaskId"];
   if (typeof launched === "string" && AGENT_ID.test(launched)) {
     const call = blocks.find((block) => block["type"] === "tool_result" && typeof block["tool_use_id"] === "string")?.["tool_use_id"] as string | undefined;
-    remember(commands.launches, launched, { at, title: (call === undefined ? undefined : commands.calls.get(call)) ?? "Background command", call: call ?? null, seq }, MAX_NAMES);
+    const title = workflow ? text(result["workflowName"]) : call === undefined ? undefined : commands.calls.get(call);
+    remember(commands.launches, launched, { at, title: title ?? "Background command", call: call ?? null, seq }, MAX_NAMES);
     if (call !== undefined) commands.calls.delete(call);
   }
   for (const end of commandEnds(result, at, notices)) {
@@ -334,7 +364,7 @@ function scanParent(path: string): Parent | null {
   // the first read takes the whole window, a chunk at a time; after that a call reads what was appended
   for (let left = PARENT_WINDOW; state.offset < stat.size && left > 0;) {
     if (state.skipping) state.restAt = null;
-    const read = readLines(path, state.offset, stat.size, READ_BUDGET, (line, end) => {
+    const read = readLines(path, state.offset, stat, READ_BUDGET, (line, end) => {
       if (state.firstAt === null) state.firstAt = stamp(line.match(/"timestamp":"([^"]+)"/)?.[1]);
       scanParentLine(state, line, end);
     }, state.skipping);
@@ -518,17 +548,21 @@ function scanStop(parent: Parent, entry: Row, block: Row, at: number | null): vo
 interface Meta { title: string | null; name: string | null; agent: string | null; toolUseId: string | null }
 const metas = new Map<string, { key: string; meta: Meta | null }>();
 
-function readMeta(path: string): Meta | null {
-  const stat = plain(path, MAX_META_BYTES);
+/** `where`: the file in the folder held open (claudeSubagentState); `path` names it in the cache. */
+function readMeta(path: string, where: string): Meta | null {
+  const stat = plain(where, MAX_META_BYTES);
   if (stat === null) return null;
   const key = `${stat.id}:${stat.mtimeMs}:${stat.size}`;
   const known = metas.get(path);
   if (known?.key === key) return known.meta;
   let meta: Meta | null = null;
+  const opened = openPlain(where, stat.exact, MAX_META_BYTES);
+  if (opened === null) return null;
+  const fd = opened.fd;
   try {
-    const record = row(JSON.parse(readFileSync(path, "utf8")));
+    const record = row(JSON.parse(readAt(fd, 0, opened.size).toString("utf8")));
     if (record !== null) meta = { title: text(record["description"]) ?? text(record["name"]), name: text(record["name"]), agent: text(record["agentType"]), toolUseId: text(record["toolUseId"]) };
-  } catch { return null; } // being written
+  } catch { return null; } finally { closeSync(fd); } // being written
   remember(metas, path, { key, meta }, 4096);
   return meta;
 }
@@ -556,8 +590,8 @@ interface Work {
 }
 const works = new Map<string, Work>();
 
-function scanWork(path: string, budget: { left: number }): Work | null {
-  const stat = plain(path);
+function scanWork(path: string, where: string, budget: { left: number }): Work | null {
+  const stat = plain(where);
   if (stat === null) return null;
   let work = works.get(path);
   if (!work || work.id !== stat.id || work.offset > stat.size) {
@@ -569,7 +603,7 @@ function scanWork(path: string, budget: { left: number }): Work | null {
   if (budget.left <= 0) { work.behind = true; work.hungry = true; return work; }
   const state = work;
   const limit = Math.min(budget.left, READ_BUDGET);
-  const read = readLines(path, state.offset, stat.size, limit, (line) => {
+  const read = readLines(where, state.offset, stat, limit, (line) => {
     let entry: Row | null;
     try { entry = row(JSON.parse(line)); } catch { return; }
     if (entry === null) return;
@@ -629,9 +663,9 @@ function turnAfter(entry: Row, at: number | null, turnEndedAt: number | null): n
   return row(row(entry["message"]))?.["stop_reason"] === "end_turn" ? at : null;
 }
 
-function readBytes(path: string, from: number, length: number): Buffer | null {
-  let fd: number;
-  try { fd = openSync(path, "r"); } catch { return null; }
+function readBytes(path: string, exact: string, from: number, length: number): Buffer | null {
+  const fd = openPlain(path, exact)?.fd;
+  if (fd === undefined) return null;
   try {
     const buffer = Buffer.alloc(length);
     let got = 0;
@@ -654,14 +688,14 @@ const tails = new Map<string, { id: string; key: string; tail: Tail }>();
  * first line its start. Read again only when the file changed; not counted against any budget.
  * `known` false: the tail holds no whole line of it (one very long entry, or a file being written).
  */
-function readTail(path: string, stat: { size: number; mtimeMs: number; id: string }): Tail {
+function readTail(path: string, where: string, stat: { size: number; mtimeMs: number; id: string; exact: string }): Tail {
   const key = `${stat.size}:${stat.mtimeMs}`;
   const kept = tails.get(path);
   if (kept?.id === stat.id && kept.key === key) return kept.tail;
   const tail: Tail = { known: false, firstAt: kept?.id === stat.id ? kept.tail.firstAt : null, lastAt: null, dispatchAt: null, turnEndedAt: null };
   if (stat.size === 0) { tail.known = true; return tail; }
   const from = Math.max(0, stat.size - TAIL_BYTES);
-  const chunk = readBytes(path, from, stat.size - from);
+  const chunk = readBytes(where, stat.exact, from, stat.size - from);
   if (chunk === null) return tail;
   const end = chunk.lastIndexOf(0x0a) + 1;
   const start = from === 0 ? 0 : chunk.indexOf(0x0a) + 1;
@@ -682,7 +716,7 @@ function readTail(path: string, stat: { size: number; mtimeMs: number; id: strin
   }
   tail.known = (from === 0 && end > 0) || decisive;
   if (tail.firstAt === null && from > 0) {
-    const head = readBytes(path, 0, TAIL_BYTES);
+    const head = readBytes(where, stat.exact, 0, TAIL_BYTES);
     const newline = head?.indexOf(0x0a) ?? -1;
     if (head !== null && newline !== -1) { try { tail.firstAt = stamp(row(JSON.parse(head.subarray(0, newline).toString("utf8")))?.["timestamp"]); } catch { /* a long first line: no start yet */ } }
   }
@@ -695,6 +729,8 @@ const subagentsDir = (parentPath: string): string => join(parentPath.replace(/\.
 function folderVersion(dir: string): { sig: string; latestMs: number } {
   try {
     const stat = lstatSync(dir);
+    // a link leads to another session's folder, whose agents are none of this one's
+    if (!stat.isDirectory()) return { sig: "-", latestMs: 0 };
     return { sig: `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`, latestMs: Math.max(stat.mtimeMs, stat.ctimeMs) };
   } catch { return { sig: "-", latestMs: 0 }; }
 }
@@ -704,21 +740,31 @@ function folderVersion(dir: string): { sig: string; latestMs: number } {
  * that changed within a second of the read may have changed again with the same time, so only a
  * listing read after the folder had been quiet for a second is kept.
  */
-const listings = new Map<string, { sig: string; readAt: number; ids: string[] }>();
-function agentIds(parentPath: string): string[] {
+const listings = new Map<string, { sig: string; readAt: number; ids: string[]; chain: Folder["chain"] }>();
+function agentIds(parentPath: string, folder: Folder | null): string[] {
   const dir = subagentsDir(parentPath);
   const { sig, latestMs } = folderVersion(dir);
-  if (sig === "-") { listings.delete(dir); return []; }
+  // the session's own folder only, as the detail read opens it: a link on the way, or one swapped in, lists nothing
+  if (sig === "-" || folder === null) { listings.delete(dir); return []; }
   const known = listings.get(dir);
-  if (known?.sig === sig && known.readAt - latestMs >= 1000) return known.ids;
-  let ids: string[];
+  // and only while each folder on the way is still the one listed: a session folder moved and replaced with a link to it
+  // leaves the subagents folder as it was, and lists nothing as the detail read opens nothing
+  if (known?.sig === sig && known.readAt - latestMs >= 1000 && known.chain.every((step) => folderId(step.path) === step.id)) return known.ids;
+  const ids: string[] = [];
+  let listing: Dir | undefined;
+  // read entry by entry, inside the folder opened where the kernel allows: a folder of any size costs at most MAX_NAMES names
   try {
-    ids = readdirSync(dir).slice(0, MAX_NAMES).flatMap((name) => {
-      const id = /^agent-(.+)\.meta\.json$/.exec(name)?.[1];
-      return id !== undefined && AGENT_ID.test(id) ? [id] : [];
-    });
-  } catch { return []; }
-  remember(listings, dir, { sig, readAt: Date.now(), ids }, 256);
+    listing = opendirSync(folder.fd === null ? folder.path : `${FD_DIR}/${folder.fd}`);
+    for (let read = 0; read < MAX_NAMES; read += 1) {
+      const entry = listing.readSync();
+      if (entry === null) break;
+      const id = /^agent-(.+)\.meta\.json$/.exec(entry.name)?.[1];
+      if (id !== undefined && AGENT_ID.test(id)) ids.push(id);
+    }
+    // a folder on the way swapped while it was listed: what was listed may be another folder's
+    if (!intact(folder)) return [];
+  } catch { return []; } finally { listing?.closeSync(); }
+  remember(listings, dir, { sig, readAt: Date.now(), ids, chain: folder.chain }, 256);
   return ids;
 }
 
@@ -755,13 +801,21 @@ export interface SubagentDetail {
 /** The subagents named, by agent id, as their meta files say. An id that is not a plain word is none. */
 export function subagentDetails(parentPath: string, ids: Iterable<string>): Map<string, SubagentDetail> {
   const found = new Map<string, SubagentDetail>();
-  const dir = subagentsDir(parentPath);
-  for (const id of new Set(ids)) {
-    if (!AGENT_ID.test(id)) continue;
-    const meta = readMeta(join(dir, `agent-${id}.meta.json`));
-    if (meta !== null) found.set(id, { title: meta.title, agent: meta.agent });
-  }
-  return found;
+  const wanted = [...new Set(ids)].filter((id) => AGENT_ID.test(id));
+  if (wanted.length === 0) return found;
+  // opened as the detail read opens them: another session's folder, linked or swapped in, titles nothing
+  const folder = sessionFolder(parentPath);
+  if (typeof folder === "string") return found;
+  try {
+    for (const id of wanted) {
+      const meta = openIn(folder, `agent-${id}.meta.json`, MAX_META_BYTES);
+      if (typeof meta === "string") continue;
+      let record: Row | null;
+      try { record = stillThere(meta) ? row(JSON.parse(readAt(meta.fd, 0, meta.size).toString("utf8"))) : null; } catch { record = null; } finally { closeSync(meta.fd); }
+      if (record !== null) found.set(id, { title: text(record["description"]) ?? text(record["name"]), agent: text(record["agentType"]) });
+    }
+    return intact(folder) ? found : new Map();
+  } finally { if (folder.fd !== null) closeSync(folder.fd); }
 }
 
 /**
@@ -877,6 +931,20 @@ function openFolder(store: string, sessionId: string): Folder | DetailRefusal {
   return "unavailable";
 }
 
+/** The subagents folder of the session whose transcript is `parentPath`, opened by openFolder in the store's real place. */
+function sessionFolder(parentPath: string): Folder | DetailRefusal {
+  let store: string;
+  try { store = realpathSync(dirname(parentPath)); } catch { return "unavailable"; }
+  return openFolder(store, basename(parentPath, ".jsonl"));
+}
+
+/** The session's subagents folder opened by sessionFolder for one read, closed with it; null when it cannot be. */
+function heldFolder(parentPath: string): { folder: Folder | null; [Symbol.dispose](): void } {
+  const opened = sessionFolder(parentPath);
+  const folder = typeof opened === "string" ? null : opened;
+  return { folder, [Symbol.dispose]: () => { if (folder !== null && folder.fd !== null) closeSync(folder.fd); } };
+}
+
 /** Whether the folder is still the one looked at: every folder on the way the same, and the open one where it was. */
 function intact(folder: Folder): boolean {
   return folder.chain.every((step) => folderId(step.path) === step.id) && (folder.fd === null || fdPath(folder.fd) === folder.path);
@@ -897,8 +965,9 @@ function openIn(folder: Folder, name: string, max = Infinity): Opened | DetailRe
   if (looked === "error") return "unavailable";
   if (looked === "other" || looked.kind !== "file" || looked.size > max) return "not_found";
   let fd: number;
-  // O_NOFOLLOW: a link put in the file's place after the look is refused by the open itself where the platform has it
-  try { fd = detailIo.openSync(where, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)); } catch { return "unavailable"; }
+  // O_NOFOLLOW: a link put in the file's place after the look is refused by the open itself where the platform has it;
+  // O_NONBLOCK: a FIFO put there is opened without waiting for a writer, and refused as no plain file
+  try { fd = detailIo.openSync(where, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)); } catch { return "unavailable"; }
   try {
     const opened = fstatSync(fd, { bigint: true });
     const size = Number(opened.size);
@@ -1029,9 +1098,7 @@ function readDetailRecords(fd: number, size: number, sessionId: string, agentId:
 export function backgroundAgentDetail(parentPath: string, agentId: string): { detail: Omit<PaneBackgroundAgentDetail, "server_time"> } | { refusal: DetailRefusal } {
   if (!validDetailId(agentId) || plain(parentPath) === null) return { refusal: "unavailable" };
   const sessionId = basename(parentPath, ".jsonl");
-  let store: string;
-  try { store = realpathSync(dirname(parentPath)); } catch { return { refusal: "unavailable" }; }
-  const folder = openFolder(store, sessionId);
+  const folder = sessionFolder(parentPath);
   if (typeof folder === "string") return { refusal: folder };
   try {
     const meta = openIn(folder, `agent-${agentId}.meta.json`, MAX_META_BYTES);
@@ -1119,12 +1186,17 @@ const previous = new Map<string, Map<string, OmoTask>>();
 
 export function claudeSubagentState(parentPath: string, live: boolean, now = Date.now(), since: number | null = null, history?: HistoryEvidence | null): { tasks: OmoTask[]; historyNeeded: boolean; historyPending: boolean; settled: boolean; behind: boolean; watch: string[]; running: number; turnRunning: number; promptAt: number | null; resting: boolean } {
   const dir = subagentsDir(parentPath);
+  // every file is read inside the folder listed, held open for the whole read (where the kernel names a descriptor's
+  // file): a folder on the way swapped after the listing leads nowhere else. Elsewhere the look after the read stands for it
+  using held = heldFolder(parentPath);
+  const folder = held.folder;
+  const inFolder = (name: string): string => folder === null ? join(dir, name) : folder.fd === null ? join(folder.path, name) : `${FD_DIR}/${folder.fd}/${name}`;
   const known = staleAgents.get(dir);
   const skip = staleFresh(known, now) ? known!.ids : null;
   const stale = new Set<string>();
-  const files = agentIds(parentPath).flatMap((id) => {
+  const files = agentIds(parentPath, folder).flatMap((id) => {
     if (skip?.has(id)) { stale.add(id); return []; }
-    const stat = plain(join(dir, `agent-${id}.jsonl`));
+    const stat = plain(inFolder(`agent-${id}.jsonl`));
     if (stat !== null && now - stat.mtimeMs > RECENT_MS) stale.add(id);
     return stat !== null && now - stat.mtimeMs <= RECENT_MS ? [{ id, mtimeMs: stat.mtimeMs, stat }] : [];
   }).sort((a, b) => Number(works.get(join(dir, `agent-${b.id}.jsonl`))?.hungry ?? false) - Number(works.get(join(dir, `agent-${a.id}.jsonl`))?.hungry ?? false) || b.mtimeMs - a.mtimeMs).slice(0, MAX_AGENTS);
@@ -1145,15 +1217,15 @@ export function claudeSubagentState(parentPath: string, live: boolean, now = Dat
   const halts = new Map<Commands, number>();
   let settled = parent !== null && !parent.behind;
   for (const { id, stat } of files) {
-    const meta = readMeta(join(dir, `agent-${id}.meta.json`));
-    const work = scanWork(join(dir, `agent-${id}.jsonl`), budget);
+    const meta = readMeta(join(dir, `agent-${id}.meta.json`), inFolder(`agent-${id}.meta.json`));
+    const work = scanWork(join(dir, `agent-${id}.jsonl`), inFolder(`agent-${id}.jsonl`), budget);
     if (work?.behind) behind = true;
     if (work !== null) sources.push(work.commands);
     // a file caught while it is written says nothing yet, and what was worked out without it is not final
     if (meta === null || work === null) { settled = false; continue; }
     if (work.behind) settled = false;
     // its status from the end of its file, which no budget holds back; the whole file only when that tells nothing
-    const tail = readTail(join(dir, `agent-${id}.jsonl`), stat);
+    const tail = readTail(join(dir, `agent-${id}.jsonl`), inFolder(`agent-${id}.jsonl`), stat);
     const view = tail.known ? tail : work.behind ? null : work;
     // not told yet: neither running nor ended
     if (view === null) { settled = false; continue; }
@@ -1208,6 +1280,14 @@ export function claudeSubagentState(parentPath: string, live: boolean, now = Dat
       detail_kind: "claude-subagent",
     };
     keep(task, Math.max(tail.dispatchAt ?? 0, work.dispatchAt ?? 0, firstAt ?? 0));
+  }
+  // a folder on the way swapped while its files were read: what was read, and kept, may be another folder's, and an
+  // agent found old there may be a recent one here
+  if (folder !== null && !intact(folder)) {
+    listings.delete(dir);
+    staleAgents.delete(dir);
+    for (const kept of [works, metas, tails]) for (const path of kept.keys()) if (path.startsWith(`${dir}${sep}`)) kept.delete(path);
+    return { tasks: [], historyNeeded: false, historyPending: false, settled: false, behind: false, watch: [], running: 0, turnRunning: 0, promptAt: null, resting: false };
   }
   // every end any transcript was told of, by id. A launch ends at the first one after it, in
   // whichever transcript was told first: an end no later than it (one in its very millisecond too:
@@ -1331,6 +1411,8 @@ interface Tracked {
   /** when its transcript, and its process, were last looked for */
   at: number; pidAt: number;
   live: boolean; running: number; turnRunning: number; promptAt: number | null; resting: boolean; holding?: boolean; sig: string | null;
+  /** the session's turn has rested since background work last ran: herdr's working from then is still that work's */
+  restedOnWork?: boolean;
   reset?: boolean;
   /** the turns of the transcript read, and the busy signals matched to them */
   turns?: Turns;
@@ -1443,11 +1525,12 @@ export class ClaudeSubagentStatus {
 
   /**
    * The session's own turn ended while subagents or commands still run: Claude keeps its busy
-   * title up while a background subagent works, and herdr reads that as `working` (#2069).
+   * title up while a background subagent works, and herdr reads that as `working` (#2069). The
+   * last of that work ending keeps the rest until a turn begins: herdr's working may be from before.
    */
   restsOn(paneId: string): boolean {
     const tracked = this.panes.get(paneId);
-    return tracked !== undefined && tracked.resting && tracked.running > 0;
+    return tracked !== undefined && tracked.resting && (tracked.running > 0 || tracked.restedOnWork === true);
   }
 
   /**
@@ -1563,6 +1646,8 @@ export class ClaudeSubagentStatus {
     if (this.lookups.get(pane.pane_id) !== claim) return;
     const current = this.panes.get(pane.pane_id);
     const same = current?.key === key;
+    // the same transcript of the same process under another key (its cwd changed, or its session id became known): the same lifetime
+    const sameLife = current !== undefined && (same || (!!found && current.path === found.path));
     const reset = !!(found && current && ((current.path !== null && current.path !== found.path)
       || (current.pid !== null && found.pid != null && current.pid !== found.pid)
       || (current.startedAt !== null && found.startedAt !== null && current.startedAt !== found.startedAt)));
@@ -1570,7 +1655,7 @@ export class ClaudeSubagentStatus {
     // another process's transcript: what it holds is that process's, and a rest in it ends no turn of this one
     if (reset && found) this.deferred.set(pane.pane_id, [...this.deferred.get(pane.pane_id) ?? [], { source: "herdr", at: this.now() }]);
     // the count it had goes on from here: another session with none says so at the next poll
-    this.panes.set(pane.pane_id, { read: same && !reset ? current.read : ++taskReadSequence, key, path: found?.path ?? (same ? current.path : null), startedAt: found ? found.startedAt : same ? current.startedAt : null, pid: found ? found.pid ?? null : same ? current.pid : null, at: this.now(), pidAt: this.now(), live: true, running: current?.running ?? 0, turnRunning: current?.turnRunning ?? 0, promptAt: current?.promptAt ?? null, resting: current?.resting ?? false, turns: reset ? undefined : current?.turns, sig: null, watch: same && !found ? current.watch : [], reset });
+    this.panes.set(pane.pane_id, { read: same && !reset ? current.read : ++taskReadSequence, key, path: found?.path ?? (same ? current.path : null), startedAt: found ? found.startedAt : same ? current.startedAt : null, pid: found ? found.pid ?? null : same ? current.pid : null, at: this.now(), pidAt: this.now(), live: true, running: current?.running ?? 0, turnRunning: current?.turnRunning ?? 0, promptAt: current?.promptAt ?? null, resting: current?.resting ?? false, restedOnWork: sameLife && !reset ? current.restedOnWork : false, turns: reset ? undefined : current?.turns, sig: null, watch: same && !found ? current.watch : [], reset });
   }
 
   private observeSession(pane: HerdrPane): void {
@@ -1588,6 +1673,7 @@ export class ClaudeSubagentStatus {
     tracked.read = ++taskReadSequence;
     tracked.live = false;
     tracked.reset = true;
+    tracked.restedOnWork = false;
     // Leaving Claude retains the old transcript for the lost-task list, but a new Claude session cannot read it.
     if (session !== null) {
       tracked.path = null;
@@ -1653,6 +1739,10 @@ export class ClaudeSubagentStatus {
       const holding = this.holdsQueue(paneId);
       if (!tracked.reset && running === tracked.running && turnRunning === tracked.turnRunning && promptAt === tracked.promptAt && resting === tracked.resting && holding === (tracked.holding ?? false)) continue;
       tracked.holding = holding;
+      // the last of its work ending keeps the rest: herdr's working may be the busy title it had, said before
+      // that work ended, until a turn begins (a busy signal, or one written) and the rest is gone
+      // read together with its rest, the last of that work ending keeps it too: the rest and the end came before this read
+      tracked.restedOnWork = resting && (running > 0 || (!tracked.reset && (tracked.running > 0 || (tracked.resting && tracked.restedOnWork === true))));
       tracked.reset = false;
       tracked.running = running;
       tracked.turnRunning = turnRunning;

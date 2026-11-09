@@ -67,7 +67,6 @@ export const FILES_KO: Record<string, string> = {
   "This comparison is not one the list answered; refresh the list.": "이 비교는 목록이 답한 것이 아닙니다. 목록을 새로 고치세요.",
   "Refresh changes": "변경 사항 새로 고침",
   "No commits yet": "아직 커밋이 없습니다",
-  "Added": "추가됨",
   "Deleted": "삭제됨",
   "Modified": "수정됨",
   "Renamed": "이름 변경됨",

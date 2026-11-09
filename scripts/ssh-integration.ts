@@ -41,7 +41,7 @@ async function until<T>(read: () => Promise<T>, done: (value: T) => boolean, lab
   throw new Error(`Timed out ${label}: ${JSON.stringify(last)}`);
 }
 async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const r = await fetch(`http://127.0.0.1:${server!.port}${path}`, { method, headers: { "x-herdr-machine": "1", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const r = await fetch(`http://127.0.0.1:${server!.port}${path}`, { method, headers: { "x-herdr-machine": "1", "x-herdr-update": "1", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   assert.ok(r.ok, `${path}: ${r.status} ${r.ok ? "" : await r.text()}`);
   return r.json() as Promise<T>;
 }

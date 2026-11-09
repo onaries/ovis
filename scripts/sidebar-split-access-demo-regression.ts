@@ -56,25 +56,23 @@ try {
         } finally { await context.close(); }
       };
 
-      await check("a no-match filter reveals selection context without changing the saved PCs fold", { storage: { "ovis:pcs-collapsed": "1" } }, async (page) => {
+      await check("a no-match filter reveals selection context", { storage: { "ovis:sidebar-filter-shown": "true" } }, async (page) => {
         await page.locator(".sidebar-filter-input").fill("zzzz-unmatched-review");
         await page.locator(".machine-list .workspace-group").first().waitFor({ state: "attached" });
-        assert.equal(await page.locator(".sidebar-section-toggle").getAttribute("aria-expanded"), "true");
         assert.ok(await page.locator(".machine-list .workspace-group").first().isVisible());
-        assert.equal(await page.evaluate(() => localStorage.getItem("ovis:pcs-collapsed")), "1");
         await page.locator(".sidebar-filter-clear").click();
-        assert.equal(await page.locator(".sidebar-section-toggle").getAttribute("aria-expanded"), "false");
+        assert.ok(await page.locator(".machine-list .workspace-group").first().isVisible());
       });
-      await check("closing the temporary filter returns focus to the PCs heading when its opener is hidden", { storage: { "ovis:sidebar-filter": "false" } }, async (page) => {
-        await page.locator(".machine-list .workspace-select").first().focus();
+      await check("closing the temporary filter returns focus to the row that opened it", {}, async (page) => {
+        const row = page.locator(".machine-list .workspace-select").first();
+        await row.focus();
         await page.keyboard.press("ControlOrMeta+Shift+k");
         const search = page.getByRole("searchbox", { name: "Search panes and actions", exact: true });
         await search.fill("Filter workspaces and agents");
         await search.press("Enter");
-        await page.getByRole("button", { name: "Close filter", exact: true }).waitFor();
-        await page.locator(".sidebar-section-toggle").click();
         await page.getByRole("button", { name: "Close filter", exact: true }).click();
-        assert.ok(await page.locator(".sidebar-section-toggle").evaluate((button) => document.activeElement === button));
+        await page.locator(".sidebar-filter").waitFor({ state: "detached" });
+        assert.ok(await row.evaluate((element) => document.activeElement === element));
       });
       await check("the divider has a visible keyboard focus outline in forced colors", { forcedColors: true }, async (page) => {
         const line = page.getByRole("separator", { name: "Resize PCs and Agents", exact: true });
@@ -87,8 +85,8 @@ try {
         assert.notEqual(focus.outline, "none");
         assert.ok(focus.width >= 1);
       });
-      for (const [pcs, agents] of [["1", "1"], ["1", "0"], ["0", "1"]]) {
-        await check(`short phone window keeps the footer reachable with folds ${pcs}/${agents}`, { viewport: { width: 390, height: 300 }, touch: true, storage: { "ovis:pcs-collapsed": pcs!, "ovis:agents-collapsed": agents! } }, async (page) => {
+      for (const agents of ["1", "0"]) {
+        await check(`short phone window keeps the footer reachable with Agents fold ${agents}`, { viewport: { width: 390, height: 300 }, touch: true, storage: { "ovis:agents-collapsed": agents } }, async (page) => {
           const fits = await page.evaluate(() => {
             const shell = document.querySelector(".sidebar-shell")!.getBoundingClientRect();
             const footer = document.querySelector(".sidebar-footer")!.getBoundingClientRect();
@@ -97,7 +95,7 @@ try {
           assert.ok(fits, "folded headings share the available room rather than pushing the footer out");
         });
       }
-      await check("a click focuses the divider so the next arrow key resizes it", {}, async (page) => {
+      await check("a click focuses the divider so the next arrow key resizes it", { storage: { "ovis:sidebar-filter-shown": "true" } }, async (page) => {
         await page.locator(".sidebar-filter-input").focus();
         const line = page.getByRole("separator", { name: "Resize PCs and Agents", exact: true });
         await line.click();
@@ -137,26 +135,43 @@ try {
         await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
         assert.notEqual(await page.evaluate(() => localStorage.getItem("ovis:sidebar-split")), null);
       });
-      for (const [pcs, agents] of [["0", "0"], ["1", "0"], ["0", "1"], ["1", "1"]]) {
-        await check(`cancelling a snap restores folds ${pcs}/${agents} and the saved split`, { viewport: { width: 390, height: 844 }, touch: true, storage: { "ovis:pcs-collapsed": pcs!, "ovis:agents-collapsed": agents!, "ovis:sidebar-split": "260" } }, async (page) => {
+      // the PCs have no head to fold to: a drag to their top stops at their minimum and never snaps or folds them
+      await check("a drag to the PCs' top never folds the PCs", {}, async (page) => {
+        const line = page.getByRole("separator", { name: "Resize PCs and Agents", exact: true });
+        const box = (await line.boundingBox())!;
+        const pcs = (await page.locator(".pcs-sidebar").boundingBox())!;
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width / 2, pcs.y + 2, { steps: 8 });
+        assert.equal(await page.locator(".sidebar-split.is-snapping, .will-fold").count(), 0, "no snap preview over the PCs");
+        await page.mouse.up();
+        assert.equal(await page.locator(".pcs-sidebar.is-collapsed").count(), 0);
+        assert.ok(await page.locator(".machine-list .workspace-group").first().isVisible(), "a PC row stays in view");
+        assert.notEqual(await page.evaluate(() => localStorage.getItem("ovis:sidebar-split")), null, "the drag keeps the height it reached");
+        await line.focus();
+        await page.keyboard.press("Home");
+        assert.equal(await page.locator(".pcs-sidebar.is-collapsed").count(), 0, "Home takes the PCs to their minimum, not a fold");
+        assert.ok(await page.locator(".machine-list .workspace-group").first().isVisible());
+      });
+      for (const agents of ["0", "1"]) {
+        await check(`cancelling a snap restores Agents fold ${agents} and the saved split`, { viewport: { width: 390, height: 844 }, touch: true, storage: { "ovis:agents-collapsed": agents, "ovis:sidebar-split": "260" } }, async (page) => {
           const line = page.getByRole("separator", { name: "Resize PCs and Agents", exact: true });
           const box = (await line.boundingBox())!;
-          const top = await page.locator(".pcs-sidebar").boundingBox();
+          const footer = (await page.locator(".sidebar-footer").boundingBox())!;
           const finger = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
           const cdp = await page.context().newCDPSession(page);
           await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [finger] });
-          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ ...finger, y: top!.y + 10 }] });
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ ...finger, y: footer.y - 4 }] });
           await page.locator(".sidebar-split.is-snapping").waitFor();
           await cdp.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
           await page.locator(".sidebar-split.is-dragging").waitFor({ state: "hidden" });
-          assert.equal(await page.locator(".sidebar-section-toggle").getAttribute("aria-expanded"), pcs === "0" ? "true" : "false");
           assert.equal(await page.locator(".agent-section-toggle").getAttribute("aria-expanded"), agents === "0" ? "true" : "false");
           assert.equal(await page.evaluate(() => localStorage.getItem("ovis:sidebar-split")), "260");
           assert.equal(await page.locator(".will-fold").count(), 0);
           assert.ok(Math.abs((await line.boundingBox())!.y - box.y) <= 1, "cancel restores the previous allocation");
         });
       }
-      await check("a cancellation in the first drag task restores the saved PCs fold", { viewport: { width: 390, height: 844 }, touch: true, storage: { "ovis:pcs-collapsed": "1" } }, async (page) => {
+      await check("a cancellation in the first drag task restores the saved Agents fold", { viewport: { width: 390, height: 844 }, touch: true, storage: { "ovis:agents-collapsed": "1" } }, async (page) => {
         const line = page.getByRole("separator", { name: "Resize PCs and Agents", exact: true });
         await line.evaluate((element) => {
           document.addEventListener("pointerdown", (event) => {
@@ -174,17 +189,17 @@ try {
         await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
         await cdp.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
         await page.locator(".sidebar-split.is-dragging").waitFor({ state: "hidden" });
-        assert.equal(await page.locator(".sidebar-section-toggle").getAttribute("aria-expanded"), "false");
-        assert.equal(await page.evaluate(() => localStorage.getItem("ovis:pcs-collapsed")), "1");
+        assert.equal(await page.locator(".agent-section-toggle").getAttribute("aria-expanded"), "false");
+        assert.equal(await page.evaluate(() => localStorage.getItem("ovis:agents-collapsed")), "1");
       });
       await check("changing order during a held snap removes its dimmed preview", {}, async (page) => {
         const line = page.getByRole("separator", { name: "Resize PCs and Agents", exact: true });
         const box = (await line.boundingBox())!;
-        const pcs = (await page.locator(".pcs-sidebar").boundingBox())!;
+        const footer = (await page.locator(".sidebar-footer").boundingBox())!;
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
         await page.mouse.down();
-        await page.mouse.move(box.x + box.width / 2, pcs.y + 10, { steps: 8 });
-        await page.locator(".pcs-sidebar.will-fold").waitFor();
+        await page.mouse.move(box.x + box.width / 2, footer.y - 4, { steps: 8 });
+        await page.locator(".agents-sidebar.will-fold").waitFor();
         await page.keyboard.press("ControlOrMeta+Shift+Comma");
         const appearance = page.locator(".settings-dialog").getByRole("tab", { name: "Appearance", exact: true });
         await appearance.focus();
@@ -198,8 +213,23 @@ try {
         await page.mouse.up();
         assert.equal(await page.locator(".will-fold").count(), 0);
         assert.equal(await page.locator(".sidebar-shell.is-splitting").count(), 0);
-        await page.waitForFunction(() => getComputedStyle(document.querySelector(".pcs-sidebar")!).opacity === "1");
+        await page.waitForFunction(() => getComputedStyle(document.querySelector(".agents-sidebar")!).opacity === "1");
       });
+      // the PCs have no heading: their minimum is the section's top padding and their first row, whole, also two lines tall
+      for (const grouped of [false, true]) {
+        await check(`the PCs minimum holds their first row whole (${grouped ? "agents" : "pcs"} first)`, { settings: { sidebarRows: "two" }, storage: { "ovis:agent-groups": String(grouped) } }, async (page) => {
+          const line = page.getByRole("separator", { name: "Resize PCs and Agents", exact: true });
+          await line.focus();
+          await page.keyboard.press(grouped ? "End" : "Home");
+          await page.waitForFunction((key) => localStorage.getItem(key) !== null, grouped ? "ovis:sidebar-split-agents-first" : "ovis:sidebar-split");
+          const fit = await page.evaluate(() => {
+            const section = document.querySelector(".pcs-sidebar")!.getBoundingClientRect();
+            const row = document.querySelector(".machine-list .workspace-group")!.getBoundingClientRect();
+            return { section: { top: section.top, bottom: section.bottom }, row: { top: row.top, bottom: row.bottom, height: row.height } };
+          });
+          assert.ok(fit.row.height > 0 && fit.row.top >= fit.section.top - 0.5 && fit.row.bottom <= fit.section.bottom + 0.5, `the first PC row is whole inside the PCs: ${JSON.stringify(fit)}`);
+        });
+      }
       for (const density of ["comfortable", "compact"]) for (const grouped of [false, true]) {
         await check(`the Agents minimum holds a two-line row (${density}, ${grouped ? "agents" : "pcs"} first)`, { settings: { sidebarRows: "two", density }, storage: { "ovis:agent-groups": String(grouped), "ovis:sidebar-split": "2000", "ovis:sidebar-split-agents-first": "1" } }, async (page) => {
           const heights = await page.evaluate(() => ({

@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, constants, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { herdrRpc, paneGet, paneProcessInfo, paneRead, workspaceClose, workspaceCreate } from "./herdr/client.ts";
@@ -15,6 +15,8 @@ export async function codexRestartFixture(serverFactory = createServer) {
   const bin = join(root, "codex-bin");
   mkdirSync(join(home, "sessions"), { recursive: true });
   mkdirSync(bin, { recursive: true });
+  const runtime = join(bin, "bun");
+  copyFileSync(process.execPath, runtime, constants.COPYFILE_FICLONE);
   const path = join(home, "sessions", `rollout-2026-11-02T00-00-00-${RESTART_SESSION}.jsonl`);
   const answer = "This fixture conversation keeps the original migration request and the exact final answer while its Codex terminal client is restarted in place.";
   writeFileSync(path, [
@@ -28,7 +30,7 @@ export async function codexRestartFixture(serverFactory = createServer) {
   db.close();
   const log = join(root, "clients.jsonl");
   const cli = join(bin, "codex");
-  writeFileSync(cli, `#!${process.execPath}\nimport {appendFileSync,openSync,closeSync,existsSync} from 'node:fs';
+  writeFileSync(cli, `#!${runtime}\nimport {appendFileSync,openSync,closeSync,existsSync} from 'node:fs';
 const args=process.argv.slice(2),root=${JSON.stringify(root)},path=${JSON.stringify(path)},log=${JSON.stringify(log)};
 if(args[0]==='app-server'){setInterval(()=>{},1000);process.on('SIGTERM',()=>process.exit(0));}
 else {
@@ -53,7 +55,7 @@ setInterval(()=>{},1000);
   };
   const clear = async () => { for (const id of owned.splice(0)) await workspaceClose(id); rmSync(join(root, "steering"), { force: true }); };
   return {
-    app, root, home, path, daemon, records, clear,
+    app, root, home, path, runtime, daemon, records, clear,
     async pane(label: string, shellHome?: string, fish = false) {
       const created = await workspaceCreate({ cwd: root, label });
       owned.push(created.workspace.workspace_id);

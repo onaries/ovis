@@ -33,7 +33,6 @@ export const WORKSPACE_JA: Record<string, string> = {
   "Earlier sessions · {name}": "以前のセッション · {name}",
   "Close session list": "セッション一覧を閉じる",
   "Sessions started in {folder}": "{folder} で開始したセッション",
-  "Reading sessions…": "セッションを読み込み中…",
   "No earlier {agent} sessions in this folder.": "このフォルダーには以前の {agent} セッションがありません。",
   "Earlier sessions": "以前のセッション",
   "Open the pane showing {title}": "{title} を表示しているペインを開く",

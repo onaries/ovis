@@ -125,7 +125,7 @@ export function planState(source: PlanSource, path: string, budget: { left: numb
   const each = (line: string) => { readers[source](read, line); contextLine(read, source, line); };
   read.behind = read.offset < stat.size;
   while (read.offset < stat.size && budget.left > 0) {
-    const done = readLines(path, read.offset, stat.size, LINE_BUDGET, each, read.skipping);
+    const done = readLines(path, read.offset, stat, LINE_BUDGET, each, read.skipping);
     // a line given up may have been a prompt that forked the session
     if (done.skipping && read.claude) read.claude = { since: null, forked: {}, last: null, count: 0, places: new Map(), figures: [] };
     // the file could not be read this time (gone, out of descriptors): not caught up, tried again at the next poll

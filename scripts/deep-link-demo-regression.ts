@@ -118,6 +118,10 @@ try {
         await waitSelected(page, INFRA);
         assert.equal(await page.locator('.view-switch button[aria-pressed="true"]').innerText(), "Chat", "the linked lens is the one shown");
         const start = await page.evaluate(() => history.length);
+        const resting = page.locator(".agents-sidebar .agent-resting-label .agent-background-toggle");
+        await resting.waitFor();
+        if (await resting.getAttribute("aria-expanded") === "false") await resting.click();
+        await page.locator('.agents-sidebar .agent-resting-label .agent-background-toggle[aria-expanded="true"]').waitFor();
         await page.locator(`.agents-sidebar .agent-item[data-pane="${DOCS}"] .agent-select`).click();
         await waitQuery(page, "pane", DOCS);
         assert.equal(await page.evaluate(() => history.length), start + 1, "opening another pane is an entry");
@@ -565,6 +569,10 @@ try {
       // the app picked becomes one the user picked must leave it in the modal (#675 review)
       await withPage(browser, `?ws=${wsOf(INFRA)}&pane=${encodeURIComponent(INFRA)}&view=terminal`, async (page) => {
         await waitSelected(page, INFRA);
+        const resting = page.locator(".agents-sidebar .agent-resting-label .agent-background-toggle");
+        await resting.waitFor();
+        if (await resting.getAttribute("aria-expanded") === "false") await resting.click();
+        await page.locator('.agents-sidebar .agent-resting-label .agent-background-toggle[aria-expanded="true"]').waitFor();
         await page.locator(`.agents-sidebar .agent-item[data-pane="${DOCS}"] .agent-select`).click();
         await waitQuery(page, "pane", DOCS);
         // the selected pane closes: the app picks the pane herdr has in front (autoSelected)

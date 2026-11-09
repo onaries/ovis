@@ -8,6 +8,7 @@ export const GUIDE_JA: Record<string, string> = {
   "I'm new to Ovis": "初めてです",
   "I've used Ovis before": "使ったことがあります",
   "Skip the setup and go straight in": "セットアップを飛ばしてすぐに始める",
+  "Sign in to use this PC from your phone and your other PCs.": "サインインすると、スマホやほかの PC からもこの PC を使えます。",
   "You can open this again any time from Settings → Agents.": "設定 → エージェント からいつでも開き直せます。",
   "Skip setup": "セットアップをスキップ",
   "Already installed one?": "もうインストールしましたか?",
@@ -38,4 +39,5 @@ export const GUIDE_JA: Record<string, string> = {
   "The workspace opened, but {agent} did not start. Open it to see why in its terminal.": "ワークスペースは開きましたが、{agent} が起動しませんでした。開いてターミナルで理由を確認してください。",
   "Open the workspace": "ワークスペースを開く",
   "{agent} is not signed in yet.": "{agent} はまだログインしていません。",
+  "Open this address on your phone": "スマートフォンでこのアドレスを開いてください",
 };

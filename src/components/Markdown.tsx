@@ -435,8 +435,7 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
   );
 }
 
-function Blocks({ blocks }: { blocks: MarkdownBlock[] }) {
-  return <>{blocks.map((block, index): ReactNode => {
+const MarkdownBlockView = memo(function MarkdownBlockView({ block, index }: { readonly block: MarkdownBlock; readonly index: number }): ReactNode {
     const key = `${block.type}-${index}`;
     switch (block.type) {
       case "heading":
@@ -466,7 +465,10 @@ function Blocks({ blocks }: { blocks: MarkdownBlock[] }) {
         </div>
       );
     }
-  })}</>;
+}, (previous, next) => previous.index === next.index && (previous.block === next.block || JSON.stringify(previous.block) === JSON.stringify(next.block)));
+
+function Blocks({ blocks }: { blocks: MarkdownBlock[] }) {
+  return <>{blocks.map((block, index) => <MarkdownBlockView key={`${block.type}-${index}`} block={block} index={index} />)}</>;
 }
 
 /**

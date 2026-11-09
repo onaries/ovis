@@ -1,0 +1,40 @@
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠷⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                    Available Skills                                                  │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⠑⢶⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                    autonomous-ai-agents: claude-code, codex, +2 more                 │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠁⢰⡆⠈⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                    creative: architecture-diagram, ascii-video, +7 more              │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠳⠈⣡⠞⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                    devops: sdlc-review                                               │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                    email: email-inbox-triage, himalaya                               │
+│                                                    media: youtube-content                                            │
+│  fixture-model · Nous Research                     note-taking: obsidian                                             │
+│  /home/user/project  productivity: document-to-action-items, +8 more                   │
+│  Session: 5bf87f1e                                 research: arxiv, competitor-news-monitor, grounded-citations      │
+│                                                    social-media: xurl                                                │
+│                                                    software-development: codebase-inspection, dogfood, +6 more       │
+│                                                    web: blocked-page-recovery                                        │
+│                                                                                                                      │
+│                                                    21 tools · 40 skills · /help for commands                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+Welcome to Hermes Agent! Type your message or /help for commands.
+✦ Tip: /paste checks your clipboard for an image and attaches it to your next message.
+
+
+
+────────────────────────────────────────
+❯ clean up the scratch folder
+────────────────────────────────────────
+╭────────────────────────────────────────────────╮
+│ ⚠️  Dangerous Command                          │
+│                                                │
+│ rm -rf ./scratch                               │
+│                                                │
+│ ❯ 1. Allow once                                │
+│   2. Deny                                      │
+│                                                │
+│ recursive delete                               │
+╰────────────────────────────────────────────────╯
+
+  ↑/↓ to select, Enter to confirm  (3598s)
+── ⠦ 💻 rm -rf ./scratch · 3s · ↓ 5 tok ────────────────────────────────────────────────── clean up the scratch folder ─
+⚠ ❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☤ fixture-model · 10/128K · [░░░░░░░░░░] 0% · ◷ 0.6s · ↑ 9 t/s · 11s · ⏱ 3s · …ha/user/project

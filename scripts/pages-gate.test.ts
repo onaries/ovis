@@ -200,6 +200,7 @@ describe("Browser lane script lists", () => {
     expect(serial).toEqual(runs);
     expect(serial).toContain("scripts/ui-regression.ts");
     expect(serial).toContain("scripts/ui-contexts-regression.ts");
+    expect(serial).toContain("scripts/ui-contexts-layout-regression.ts");
     expect(serial).toContain("scripts/sidebar-spacing-demo-regression.ts");
     expect(new Set(serial).size).toBe(serial.length);
   });
@@ -244,11 +245,11 @@ describe("Browser lane script lists", () => {
   it("runs both isolated UI flows in browser-main and keeps the local UI command complete", () => {
     const main = ciJob("browser-main");
     expect(selectBrowserScripts(serial, env(main, "BROWSER_SCRIPTS"))).toEqual([
-      "scripts/ui-regression.ts", "scripts/ui-contexts-regression.ts",
+      "scripts/ui-regression.ts", "scripts/ui-contexts-regression.ts", "scripts/ui-contexts-layout-regression.ts",
     ]);
     expect(env(main, "BROWSER_WORKERS")).toBe("2");
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-    for (const script of ["ui-regression.ts", "ui-contexts-regression.ts", "sticky-modifiers-regression.ts"]) {
+    for (const script of ["ui-regression.ts", "ui-contexts-regression.ts", "ui-contexts-layout-regression.ts", "sticky-modifiers-regression.ts"]) {
       expect(pkg.scripts["test:ui"]).toContain(`bun scripts/${script}`);
     }
   });
@@ -276,13 +277,14 @@ describe("Extracted UI checks", () => {
     expect(result.stderr).toContain("HERDR_TEST_MODE=unit");
   });
 
+  // the layout group (ui-contexts-layout-regression.ts) comes first in ui-contexts-checks.ts
   const moved = [
+    "checkSplitView", "checkBackgroundTabKeepsTerminalSize",
     "checkPushSettings", "checkWakeLock", "checkSecretInput", "checkTerminalCopy", "checkPaneFind",
     "checkUsageMeters", "checkNotificationStartup", "checkNotificationView", "checkMobileViewport",
     "checkTerminalPinch", "checkMobileTabs", "checkTabMenu", "checkDefaultView",
-    "checkComposerReconnect", "checkDroplet", "checkSplitView", "checkTakeOver", "checkAlertSound",
-    "checkChatKeepsTerminalSize", "checkPaneSwitchKeepsTerminalSize",
-    "checkBackgroundTabKeepsTerminalSize", "checkFocusedWindowReclaimsTerminalSize",
+    "checkComposerReconnect", "checkDroplet", "checkTakeOver", "checkAlertSound",
+    "checkChatKeepsTerminalSize", "checkPaneSwitchKeepsTerminalSize", "checkFocusedWindowReclaimsTerminalSize",
     "checkUpdateNotice", "checkTelemetrySettings",
   ];
   const calls = (source: string) => [...source.matchAll(/\b(check[A-Z]\w*)\(/g)].map((match) => match[1]!);
@@ -298,14 +300,14 @@ describe("Extracted UI checks", () => {
     }
   });
 
-  for (const mode of ["unit", "live"] as const) {
-    it(`refuses ${mode} execution before touching a herdr daemon`, () => {
+  for (const [script, mode] of ["ui-contexts-regression.ts", "ui-contexts-layout-regression.ts"].flatMap((script) => (["unit", "live"] as const).map((mode) => [script, mode] as const))) {
+    it(`${script} refuses ${mode} execution before touching a herdr daemon`, () => {
       const root = mkdtempSync(join(tmpdir(), "ui-context-guard-"));
       try {
         const invoked = join(root, "invoked");
         const herdr = join(root, "herdr");
         writeFileSync(herdr, '#!/bin/sh\nprintf called > "$HERDR_GUARD_LOG"\nexit 1\n', { mode: 0o700 });
-        const result = spawnSync(process.execPath, [fileURLToPath(new URL("./ui-contexts-regression.ts", import.meta.url))], {
+        const result = spawnSync(process.execPath, [fileURLToPath(new URL(`./${script}`, import.meta.url))], {
           encoding: "utf8", timeout: 5_000,
           env: {
             ...process.env, TMPDIR: root, XDG_CONFIG_HOME: root,

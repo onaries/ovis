@@ -43,6 +43,11 @@ import { windowsArgv, windowsProcessTable } from "./windows-processes.ts";
 
 /** the first release with `--strip-request-header` and an address tied to the identity */
 const PORTAL_VERSION = "v2.6.1";
+/**
+ * The first release that binds a sign-in to the hosts it was made on. Before it, a session cookie
+ * from the short address passes for whoever holds the same `--name` once Portal registers again.
+ */
+const SIGN_IN_VERSION = "v2.7.3";
 /** a relay that answers but will not take the tunnel is only ever retried, never refused */
 const READY_TIMEOUT_MS = 60_000;
 /** Portal unregisters from the relay on SIGTERM; one still running after this is killed, within the 6 s the supervisor gives this server to stop */
@@ -126,6 +131,25 @@ export function atLeast(version: string, minimum: string): boolean {
   if (have === null || need === null) return false;
   for (let i = 0; i < 3; i++) if (have[i] !== need[i]) return have[i]! > need[i]!;
   return true;
+}
+
+/**
+ * A whole semver version with an optional leading v: no leading zeros, at most 9 digits a part (so
+ * each is a safe integer), dot-separated pre-release identifiers that are neither empty nor
+ * zero-led numbers, and build identifiers that are not empty.
+ */
+const SEMVER = /^v?(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})(-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+/**
+ * Whether `version` is the release `minimum` or later by semver: a pre-release comes before its
+ * release, build metadata counts for nothing, and anything that is not a whole semver version is too old.
+ */
+function releaseAtLeast(version: string, minimum: string): boolean {
+  const have = SEMVER.exec(version);
+  const need = SEMVER.exec(minimum);
+  if (have === null || need === null) return false;
+  for (let i = 1; i <= 3; i++) if (Number(have[i]) !== Number(need[i])) return Number(have[i]) > Number(need[i]);
+  return have[4] === undefined;
 }
 
 /** A relay as the user gave it, as an https origin; null for anything with a path, a query, credentials or a second host. */
@@ -334,13 +358,19 @@ function lastWords(lines: readonly string[]): string {
   return line === undefined ? "" : ` Portal said: ${line}`;
 }
 
-async function readVersion(bin: string): Promise<string | null> {
+/** What `portal version` said: its tag, or that there is no such program, or that it gave none. */
+type VersionRead = { tag: string } | { problem: "missing" | "unreadable" };
+const NO_PORTAL_BIN: VersionRead = { problem: "missing" };
+
+async function readVersion(bin: string): Promise<VersionRead> {
   try {
     const proc = Bun.spawn([bin, "version"], { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: portalEnv(), windowsHide: true, timeout: VERSION_TIMEOUT_MS, killSignal: "SIGKILL" });
     const [text, code] = await Promise.all([new Response(proc.stdout as ReadableStream<Uint8Array>).text(), proc.exited]);
     const tag = /\bv?\d+\.\d+\.\d+\S*/.exec(text)?.[0];
-    return code === 0 && tag !== undefined ? tag : null;
-  } catch { return null; }
+    return code === 0 && tag !== undefined ? { tag } : { problem: "unreadable" };
+  } catch (error) {
+    return processErrorCode(error) === "ENOENT" ? NO_PORTAL_BIN : { problem: "unreadable" };
+  }
 }
 
 /**
@@ -392,7 +422,7 @@ export class PortalService {
   private cleanup: Promise<void> | null = null;
   /** a child asked to end, once: its exit is no failure */
   private ending: Child | null = null;
-  private versionRead: Probe<string | null> | null = null;
+  private versionRead: Probe<VersionRead> | null = null;
   private signInsRead: Probe<PortalSignIn[]> | null = null;
   /** who may open the address: the running Portal's, else the saved choice the next start uses */
   private auth: PortalAuth = NO_PORTAL_AUTH;
@@ -439,8 +469,8 @@ export class PortalService {
     return this.options.bin ?? Bun.which("portal");
   }
 
-  private version(fresh = false): Promise<string | null> {
-    this.versionRead = ask(this.versionRead, this.bin(), fresh, readVersion, null);
+  private version(fresh = false): Promise<VersionRead> {
+    this.versionRead = ask(this.versionRead, this.bin(), fresh, readVersion, NO_PORTAL_BIN);
     return this.versionRead.value;
   }
 
@@ -450,9 +480,11 @@ export class PortalService {
   }
 
   async status(guards: Guards): Promise<PortalStatus> {
-    const version = await this.version();
+    const read = await this.version();
+    const version = "tag" in read ? read.tag : null;
     const usable = version !== null && atLeast(version, PORTAL_VERSION);
-    const methods = usable ? await this.signIns() : [];
+    // a sign-in the start would refuse is not offered either
+    const methods = usable && releaseAtLeast(version, SIGN_IN_VERSION) ? await this.signIns() : [];
     return {
       supported: true,
       version,
@@ -663,11 +695,17 @@ export class PortalService {
     const { relay, port, auth } = request;
     if (recovery !== null) this.checkRecovery(request, recovery);
     const bin = this.bin();
-    const version = bin === null ? null : await this.version(true);
+    const read = bin === null ? NO_PORTAL_BIN : await this.version(true);
     if (!this.isCurrentStart(operation)) return;
-    if (bin === null || version === null) throw new Error("Portal is not installed on this PC.");
+    if (bin === null || "problem" in read) {
+      throw new Error("problem" in read && read.problem === "unreadable"
+        ? "Could not read the Portal version on this PC. Check that `portal version` works, or install Portal again."
+        : "Portal is not installed on this PC.");
+    }
+    const version = read.tag;
     if (!atLeast(version, PORTAL_VERSION)) throw new Error(`This PC has Portal ${version}; the app needs ${PORTAL_VERSION} or later.`);
     if (auth.method !== "none") {
+      if (!releaseAtLeast(version, SIGN_IN_VERSION)) throw new Error(`This PC has Portal ${version}; a sign-in needs Portal ${SIGN_IN_VERSION} or later. Update Portal, or start without a sign-in.`);
       const offered = await this.signIns(true);
       if (!this.isCurrentStart(operation)) return;
       if (!offered.includes(auth.method)) throw new Error(`The Portal on this PC does not support --auth ${auth.method} yet. Update it, or choose another sign-in.`);

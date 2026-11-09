@@ -5,7 +5,7 @@
 <h1 align="center">Ovis</h1>
 
 <p align="center">
-  <strong>在手机和浏览器中使用 Herdr。</strong>
+  <strong>你的编程智能体，在桌面、手机和浏览器上。</strong>
 </p>
 
 <p align="center">
@@ -26,7 +26,7 @@
   <a href="#docs">文档</a>
 </p>
 
-Ovis 把你电脑上的编程智能体带到手机、任意浏览器和 Mac 应用上：大多数智能体都是一段点击或轻点即可回答的聊天，支持的请求和审批以卡片呈现，打开通知后，有智能体需要你时会收到推送通知。它是 [herdr](https://github.com/herdrdev/herdr) 和 [Herdr 桌面应用终端](docs/guide.md#herdr-app-terminals) 的客户端，原名 herdr web UI。
+在桌面应用、手机或任意浏览器上与你电脑上的编程智能体聊天，轻点一下即可回答请求。它是 [herdr](https://github.com/herdrdev/herdr) 和 [Herdr 桌面应用终端](docs/guide.md#herdr-app-terminals) 的客户端。
 
 <p align="center">
   <a href="https://ovis.sh/demo/"><img src="docs/media/readme/hero.webp" alt="在演示中录制的 Ovis 画面：在桌面浏览器中向 Claude Code 发送后续消息后，它的这一轮逐步展开；接着桌面和手机并排出现，Codex 通过 Allow command? 卡片询问是否运行 git push origin feat/export-guard，在手机上点按 Yes 后两个屏幕上的卡片同时关闭；最后点击 release 标签页，一个 shell 窗格作为运行 git log 和 bun test 的真正终端打开。"></a>
@@ -40,14 +40,23 @@ Ovis 把你电脑上的编程智能体带到手机、任意浏览器和 Mac 应�
 
 **在电脑上**
 
-- **Mac：** 下载 [Ovis.dmg](https://ovis.sh/Ovis.dmg)，打开后点击 **Install**。
-- **Windows：** 下载 [Ovis.exe](https://ovis.sh/Ovis.exe)，运行后点击 **Install**。
-- **Linux：** 在终端中运行：
-  ```bash
-  curl -fsSL https://ovis.sh/install.sh | sh
-  ```
+- **Mac：** 把 [Apple 芯片版](https://ovis.sh/Ovis-mac-arm64.dmg) 或 [Intel 版](https://ovis.sh/Ovis-mac-x64.dmg) 桌面应用拖到 **应用程序**。
+- **Windows：** 运行桌面应用 [Ovis-win-x64.exe](https://ovis.sh/Ovis-win-x64.exe)。如果 Windows 显示 **Windows 已保护你的电脑**，请选择 **更多信息** → **仍要运行**。
+- **Linux：** Debian、Ubuntu 用桌面应用 [x64](https://ovis.sh/Ovis-linux-x64.deb) 或 [arm64](https://ovis.sh/Ovis-linux-arm64.deb)（`sudo apt install ./Ovis-linux-*.deb`）；其他发行版用 AppImage [x64](https://ovis.sh/Ovis-linux-x64.AppImage) 或 [arm64](https://ovis.sh/Ovis-linux-arm64.AppImage)（`chmod +x Ovis-linux-*.AppImage`）。
 
-三种方式都会在缺少时一并安装 herdr 和 Bun，无需 Node。其他安装方式和分步说明：见 [INSTALL.md](INSTALL.md)。
+桌面应用无需其他安装，并使用自己的终端。若要使用你的 herdr 会话，在 Linux 或 macOS 上运行：
+
+```bash
+curl -fsSL https://ovis.sh/install.sh | sh
+```
+
+在 Windows 上，在 PowerShell 中运行：
+
+```powershell
+irm https://ovis.sh/install.ps1 | iex
+```
+
+其他安装方式和分步说明：[INSTALL.md](INSTALL.md)。
 
 **在手机上**
 
@@ -55,22 +64,21 @@ Ovis 把你电脑上的编程智能体带到手机、任意浏览器和 Mac 应�
 - **Android：** Google Play 公测版，见 [ovis.sh/zh/beta](https://ovis.sh/zh/beta/)。
 - **浏览器：** 无需应用，把页面添加到主屏幕即可。
 
-要连接，在 **Settings → Phone & devices** 中打开端到端加密的 **Ovis 中继**，用 Ovis 应用扫描它的二维码，或用手机相机扫描，在手机浏览器中打开 Ovis：在任何地方都能用，手机上无需任何设置。[工作原理 →](docs/guide.md#through-the-ovis-relay) 如果你在用 Tailscale，也可以在电脑和手机上都开启 Tailscale，然后扫描电脑上显示的二维码。
+要连接手机，在 **Settings → Phone & devices** 中打开端到端加密的 **Ovis 中继**，然后扫描二维码。[工作原理 →](docs/guide.md#through-the-ovis-relay)
 
 ## 能做什么
 
-- **智能体变成聊天。** Claude Code、Codex、OpenCode、pi、omp、Gajae Code、Hermes、Grok 等，大多以聊天形式显示，在电脑前或手机上都能用。[支持的智能体 →](docs/guide.md#supported-agents)
-- **请求和审批变成卡片。** 支持的请求点击或轻点即可回答，发送前会先确认请求仍然有效。
-- **推送通知。** 智能体提问或完成任务时提醒你，即使应用已关闭。
-- **真正的终端，一键即达。** 就是 herdr 显示的那个窗格，手机上还有按键栏。
-- **所有工作区，一个列表。** 标签页、分屏和通过 SSH 添加的其他电脑，等你处理的会做标记。
-- **免费，MIT 许可。** 运行在你自己的电脑上，无需注册账号。
+- **智能体变成聊天。** Claude Code、Codex、OpenCode 等。[支持的智能体 →](docs/guide.md#supported-agents)
+- **请求和审批变成卡片。** 轻点即可回答。
+- **推送通知。** 即使应用已关闭。
+- **真正的终端，一键即达。** 手机上还有按键栏。
+- **所有工作区，一个列表。** 包括通过 SSH 添加的其他电脑。
 
 [全部功能 →](docs/guide.md#features)
 
-**限制：** Ovis 需要 [herdr](https://github.com/herdrdev/herdr) 和你自己开着的电脑，手机也要能访问这台电脑（Ovis 中继、Tailscale、VPN 或 SSH 隧道）。Herdr 桌面应用的终端仅支持 Linux 和 macOS。
+**限制：** 你的电脑需要开着并且能被访问（Ovis 中继、Tailscale、VPN 或 SSH 隧道）。Herdr 桌面应用的终端仅支持 Linux 和 macOS。
 
-**隐私：** 会话保留在运行各个智能体的电脑上，Ovis 没有账号。可选的 Ovis 中继默认关闭；开启后，它能看到哪部手机从哪个地址连接哪台电脑、何时传输、传了多少，但无法读取内容（[信任模型](docs/relay.md#trust-model)）。匿名使用计数默认启用，可在 **Settings → About → Anonymous usage counts** 中查看发送内容并关闭，也可设置 `OVIS_TELEMETRY=0` 关闭。[发送哪些内容 →](docs/guide.md#anonymous-usage-counts)
+**隐私：** 会话留在你的电脑上，没有账号。可选的中继无法读取内容（[信任模型](docs/relay.md#trust-model)）。匿名使用计数默认启用，可在 **Settings → About** 或用 `OVIS_TELEMETRY=0` 关闭（[发送哪些内容](docs/guide.md#anonymous-usage-counts)）。
 
 <a id="docs"></a>
 

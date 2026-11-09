@@ -113,7 +113,7 @@ export function UpdateControls({ updates, bridgesFollow = false }: { updates: Up
   }
   // focusable from code only: a button that points here (the header line's) lands on it
   return <section className="settings-section settings-updates" data-section="updates" tabIndex={-1} aria-labelledby="settings-updates-title">
-    <h3 id="settings-updates-title">{t("Updates")}</h3>
+    <h3 id="settings-updates-title" className={bare === true ? "visually-hidden" : undefined}>{t("Updates")}</h3>
     <div className="settings-card"><div className="settings-item">
     {/* always a version: the sidebar no longer carries one */}
     <p className="settings-hint">{t("Running {version}", { version: runningAppVersion(status, __APP_VERSION__) })}</p>

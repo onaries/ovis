@@ -735,6 +735,13 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   agent's row shows what New tab starts it with (model and effort), as T3 Code's provider rows show
   their state, herdr's integrations for other agents fold under one line, and Plan limits is one row
   (Off, Used, Remaining).
+- Every page shares one grid, as Apple's System Settings and herdr-app lay their lists out: a row is
+  at least one control tall (a row of words alone too), a row's picture takes a column of its own so
+  every name of a card starts on one line and its sentence starts under the name, every control ends
+  on the card's inner edge (a switch's track, not its finger-sized box), and a group's caption, its
+  note and a page's More settings line start where the rows' content does. On a phone a stacked
+  stepper ends on that edge and a row's drawing stays at the end of its name's line
+  (`SettingsControls.css`).
 - `theme`: `dark`, `light`, or `system`; default `dark`.
 - `palette`: the legacy mirror of the drawn side's theme for older app versions; default `codex`.
   A record with no palette (saved before palettes) or a removed one (`report`, `lilac`, `forest`)
@@ -954,7 +961,13 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   into `--bg-panel` in a light theme, 5% in a dark one, so it stays near the pane's colour); each
   tab is its agent's mark (a shell's glyph when it has none) and its name, a working agent's ring
   turning round the mark, tabs at rest parted by short `--divider` rules and sharing the width
-  evenly (220px each at most, 44px at least); the open tab takes the pane's surface (`--bg` under
+  evenly (220px each at most, 120px at least, so a name stays readable and the close is a small part
+  of the tab). Tabs that do not fit at 120px wait behind a More button after `+` (`.tab-strip-more`:
+  a chevron and how many), whose list holds each with its agent's mark and state, as Firefox's
+  List all tabs and VS Code's tab overflow do, rather than Chrome's tabs shrinking to their icon:
+  an Ovis tab is told apart by its name, and a tab too narrow for it is a close button to
+  misclick. The open tab is always in the row (the last place when it is past the others), and
+  one picked from the list opens there; `lib/tabOverflow.ts` picks them. The open tab takes the pane's surface (`--bg` under
   the chat lens, `--term-bg` otherwise) with rounded top corners and no line under it, so it runs
   on into the pane; its close (×) shows on the open tab and a hovered one. A split view keeps a
   strip per half and the title in the header. The Herdr app's Changes button is not carried over:
@@ -1326,8 +1339,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   drawer closing. Escape in a field with words clears them and leaves the drawer open; the empty
   field's Escape is the drawer's. Nothing focuses the field by itself, and nothing typed elsewhere reaches it, so a
   terminal keeps every keystroke; the command palette's **Filter workspaces and agents** opens the drawer or the
-  sidebar and focuses it. Settings → Appearance → **Sidebar filter** (on by default, this device's choice, kept in its own
-  `ovis:sidebar-filter` key as the PC fold is) leaves the row out, so the lists start at the top, as the Codex and
+  sidebar and focuses it. Settings → Appearance → **Sidebar filter** (off by default, this device's choice, kept in its own
+  `ovis:sidebar-filter-shown` key, a new one: the earlier `ovis:sidebar-filter` held the old default on every device that saved any setting, so it is not read) leaves the row out, so the lists start at the top, as the Codex and
   Claude apps keep search in the palette alone; that palette entry then draws the row, focused, for the filter's time.
   It stays while it holds words, and goes on its **Close filter** (its X while it is empty), Escape in it empty (that
   Escape goes no further), leaving the sidebar while it is empty: a press outside it, or the keyboard's focus going
@@ -1389,15 +1402,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (`ovis:agents-collapsed`) and wins over that default on the next launch; a filter's fold does
   not persist. Until the PCs are in and each connected PC's panes have come, an empty list says
   **Loading agents…**, never "No agents running".
-- The resize line needs a fixed target to fold PCs to, so their roster gets a **PCs** head, also
-  for a lone Host. It folds only this section, not its Agents, and keeps the fold on this device
-  (`ovis:pcs-collapsed`); under a filter the fold is temporary. Its rows stay mounted while hidden
-  so their branch labels remain searchable. This head comes out of the PCs' allocation; it does
-  not shrink Agents' default allocation. The **PCs** and **Agents** heads are drawn alike
-  (`.sidebar-section-label`): the fold's caret in the leading cell, always in view, open or
-  folded, so a head reads as a fold at rest; the dim words; and in the trailing cell how many PCs
-  this device shows or how many agents run, open or folded, as VS Code's view heads count theirs. The PCs count says its words (**2 PCs shown**) to a screen
-  reader and in its tooltip, never a bare number. The first PC starts right under the head.
+- The PCs' list has no head of its own: it starts right under the logo, as the Codex and Claude
+  apps' sidebars start with their threads, and with two PCs or more each PC's own header names it.
+  So the PCs never fold as a section (each PC still folds by its header); the resize line stops at
+  their minimum instead (below). The **Agents** head (`.sidebar-section-label`) keeps the fold's
+  caret in the leading cell, always in view, open or folded, so it reads as a fold at rest; the dim
+  words; and in the trailing cell how many agents run, open or folded, as VS Code's view heads count theirs.
 - Between the lists is a resize line (`SidebarSplit.tsx`, `role="separator"`): a `--border`
   hairline in its own hit area, `--border-strong` on hover, `--accent` while held or focused.
   A grip shows on hover and always under a finger. Dragging gives the upper section its chosen
@@ -1405,10 +1415,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   The default layout and saved-split clamp share measured minimums: both sections keep a heading
   and a row when they fit. In a very short window they share the available room instead, with
   overflow clipped inside each section so neither its controls nor its rows cover the divider
-  or footer. A drag-to-fold preview can still shrink either section to its heading.
-  Double-click or Enter resets to today's default split. ↑/↓ moves the line a row; Home folds
-  the upper section and End the lower. Dragging a section below about one row snaps it to its
-  heading and dims it; release folds it with the same fold as its caret. Reopening restores its
+  or footer. A drag-to-fold preview can still shrink Agents to its heading.
+  Double-click or Enter resets to today's default split. ↑/↓ moves the line a row; Home and End fold
+  Agents on its side, and on the PCs' side take the PCs to their minimum. Dragging Agents below about one row snaps it to its
+  heading and dims it; release folds it with the same fold as its caret. The PCs, with no heading, stop at a row and never snap. Reopening restores its
   saved height. A drag opens a folded section first. The reset follows [Zed's Agent panel](https://zed.dev/docs/reference/all-settings#flexible-sizing),
   whose resize handle restores the default proportion on double-click. The fold follows VS Code's
   resizable sidebar views and macOS split views (Mail, Finder); Ovis's width divider is the local
@@ -1448,15 +1458,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   its own `ovis:hidden-pcs` key, like the fold): it leaves the PC groups, the Agents list and the
   command palette, stays connected, and a link or an alert to its pane still opens that pane. The
   list shows when there are two PCs or more, the Host first; the last PC shown cannot be hidden, and
-  hiding the PC the selection is on moves it to the Host, else the first PC shown. The PCs head says
-  how many are hidden here, after its words: a quiet `--text-dim` pill (`.sidebar-hidden-pcs`), an eye
-  crossed out and the count, named in words (**1 PC hidden on this device**), a touch target on a phone.
-  It opens a menu, a sheet on a phone, headed **Hidden on this device** with a note that a hidden PC
-  stays connected, that shows each PC again in place (**Show Work PC**), in the roster's order, or goes
-  to that Settings group (**Choose PCs in Settings…**). Showing one follows the switch's rules and moves
-  no selection; showing the last takes the pill away, and the focus it held goes to the PCs head's fold,
-  not the page; so does the focus of an open menu whose last PC the roster or another tab takes away.
-  VS Code's view heads list the views hidden there to show again the same way. The banner of
+  hiding the PC the selection is on moves it to the Host, else the first PC shown. The sidebar says
+  nothing of the PCs hidden here (it has no PCs head to say it in): that Settings group lists them, switched off,
+  and shows one again in place. Showing one moves no selection. The banner of
   a PC that needs setup or a bridge update still shows for a hidden PC: it asks for an action. herdr's
   TUI shows one session at a time and Orca hides other clients' workspaces; Ovis shows every PC of
   the roster, so the choice is per PC and per device, not a sidebar switch.
@@ -1773,8 +1777,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   for a field (up to 100 characters, its text selected): Enter saves, and Escape or a click away keeps the old name;
   Enter and Escape give the focus back to the manage button, and on a phone that Escape leaves the drawer out. Remove PC… asks in the dialog a workspace's Close asks
   in (`ConfirmDialog`), which says only the registration goes and shows a failure in place. Hide on this device
-  follows Show in sidebar's rules: the last PC shown has no such item, and the focus goes to the line under the PCs
-  that says how many are hidden. A PC herdr manages keeps herdr's limits: no Rename…, Disconnect or Remove PC…, and
+  follows Show in sidebar's rules: the last PC shown has no such item, and the focus goes to the PC list's first row
+  that takes it, not the page. A PC herdr manages keeps herdr's limits: no Rename…, Disconnect or Remove PC…, and
   the head says to do those in herdr. A machine of herdr-core (`kind: "hc"`) offers only Hide on this device, and its
   head says to add, rename or remove it with `hc machine` or in the Herdr app. A PC added through the relay has no Reconnect / setup or Update bridge…, and its
   Remove PC… dialog says to revoke its access under Phone & devices on that PC too. Reconnect / setup is left out while the PC's own notice offers setup or
@@ -2044,6 +2048,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   call name; a duplicate keeps the input and explains how to retry. Names come from the matching
   pane and terminal in `snapshot.agents`, and disappear when the agent exits or is replaced.
   Watching devices and PCs whose layout the Herdr app owns do not offer this action.
+  On local Linux and macOS Herdr Core, Ovis stores call names in a versioned Core document,
+  bound to the terminal creation and the agent process's kernel start identity. The Ovis
+  compatibility socket resolves these names for agent lookup and prompts; raw `hc` commands
+  do not resolve them. Another machine's processes and Windows process identities cannot be
+  verified this way, so naming there is refused.
 - Split selects the new pane (`focus:true`), like the TUI. Swap exchanges the right-clicked
   pane with the previously selected pane and retains the browser's selection. On a desktop,
   dragging a pane's title onto another pane's title in the same tab on the same PC exchanges
@@ -2088,9 +2097,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   A close confirms when
   the pane is busy or is the last pane of the workspace. Rename is herdr's label; clearing it
   returns to its automatic title. Herdr owns every resulting layout and name.
-- The browser's own split view (`lib/split.ts`, part of #1158) takes more than two panes with
-  Settings → Terminal → Split into rows and columns (`splitGrid`, per device, off by default:
-  off, it keeps the two halves of #861 and #1176). The layout is a tree of row and column splits
+- The browser's own split view (`lib/split.ts`, part of #1158) takes more than two panes, in rows and
+  columns (always: the `splitGrid` setting that kept the two halves of #861 and #1176 is gone, and a
+  stored value is ignored). The layout is a tree of row and column splits
   whose leaves are slots, at most four (each slot but `a` is one more set of connections, and a
   laptop's screen leaves a quarter of it per terminal). Every slot keeps a one-letter id and is
   drawn in one container at the rectangle the tree gives it (`position: absolute`), so a slot
@@ -2105,8 +2114,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (PaneFollowContext). Closing the active slot gives its place and the selection to the slot it
   shared a split with. Two slots side by side are the two halves again (`data-side`, Close this
   half); the split is kept in `ovis:split` for a reload, and a split saved by the two-half
-  version opens as before. Turned off, the setting leaves two halves: the active slot and the
-  first other one in reading order, each keeping its terminals, at half each. This follows VS Code's editor groups (split right or down into a
+  version opens as before. This follows VS Code's editor groups (split right or down into a
   grid, draggable boundaries, the drop overlay by edge or centre), with the grid's tree model
   from bricks-8's fork; moving a pane to a window of its own and stepping slots from the
   keyboard are left for later.
@@ -2680,6 +2688,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   popup toggle and Close alone. The panel is its pane's (its paths are read from the pane's
   folder): selecting another pane or PC closes it (a file in the popup too), and the move takes the
   file's history entry over, so Back returns to the pane the file was open on, without the file.
+  With Settings → Chat → Reopen files on return (`reopenFileOnReturn`, per device,
+  off by default) the file's entry keeps it and the move is pushed over it: Back to that pane
+  shows the file again, and so does a later switch back to the pane from the tab strip, the
+  sidebar or a shortcut, the file opening over the move's entry as its own (Close and Back drop
+  just the file). A file closed on its pane is not shown again; the ten panes left last are kept.
   Closed from inside itself (Close file, Escape) the panel gives the focus back to what opened the
   file, as the dialog does; a focus already elsewhere (the composer, a sidebar row) stays there.
   A link keeps `--accent` and a file chip reads in `--text-strong` with a dotted underline; both
@@ -3591,6 +3604,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   collecting the note for the next message instead of posting a review thread.
 
 ### Voice input
+- The Speech recognition API group reuses Ovis's labeled inputs for the API address and STT
+  model rather than a fixed model picker: compatible providers define their own model IDs.
+  The existing key row saves them together. Changing a saved key's destination requires key
+  reentry; environment-managed keys lock the destination while leaving the model editable.
+  Audio disclosure names the configured API rather than assuming OpenAI.
 - A mic button sits beside the add button in the composer and beside Send in the terminal input line; it
   fills with `--accent` while recording. Dictated text is inserted at the caret, never sent.
 - `voiceInput`: `auto`, `on` or `off`; default `auto`. Auto puts the mic in the composer only, not on
@@ -3818,33 +3836,30 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - My devices (`MyPcRows` in SettingsDialog.tsx, then `components/DevicesPanel.tsx`): this PC
   first (its name, a **This PC** pill in the accent and its relay ID in `--font-mono` under it: the
   ID a device that typed this PC's code compares, so it is shown here and not in the dialog), then
-  the PCs this app shows (a neutral **PC** pill and their state; removing an eligible PC stays in
-  the sidebar's PC menu), then signed in the account's other PCs (their
-  account state, no action), then the paired phones and browsers with a neutral kind pill (Phone,
+  the PCs this app shows (a neutral **PC** pill and their state; one that is not connected is
+  dimmed, and one this app added over SSH or the relay carries a **Remove PC** trash button that asks
+  once, as the sidebar's PC menu does), then signed in the account's other PCs (their
+  account state, dimmed unless ready, no action), then the paired phones and browsers with a neutral kind pill (Phone,
   Tablet or Browser, read from the name the app first gave the device), Rename and Revoke as
   before, then **Revoke every device**. On a touch phone on this PC's own address, with the relay
   online, the phone's own row carries **Use the relay** (its own offer opens there). **Sign out of
   this PC** (the browser's own pairing) and the account's **Sign out of GitHub** are named apart.
-- Connect a device (`components/ConnectPhoneDialog.tsx`, a `.modal`, a bottom sheet on a phone):
-  signed in to the account, with this PC in it and the relay online, it asks the new device to
-  sign in with GitHub and be approved once on a device already in the account (the approval is
-  the account's own prompt, picking the number out of three, on that device: never on the PC's
-  own windows) and shows no code until **Connect with a code (no sign-in)**. Otherwise one way
-  first: the Ovis relay's QR code and the code to type side by side (`components/CompactPair.tsx`,
-  132px QR, the code in `--font-mono`), with only **Refresh** and **Copy**; signed out where the
-  account is offered, one bordered line above it says signing in skips the code. While the relay
-  is not online its state sentence shows instead, with its switch for the PC's owner (and the gate
-  condition), a failed start's reason and **Try again**; a watching device or Portal visitor reads
-  the state and that only the owner controls the relay. **Enter a code from another device** opens
-  the typed-code form for a PC that shows its own code (the ID match step as before). **Other ways
-  to connect** folds the rest, one bordered line each that opens under itself: **Same Wi-Fi** (the
-  six-digit pairing code and its QR code, Refresh and Copy), **Tailscale** (the address and QR
-  code, or the command to run), **Portal** (where the server offers it: the whole Portal group as
-  before) and **Add a PC over SSH** (closes Settings and opens the PC setup dialog). With no relay
-  offered the six-digit code is the first way. The dialog closes by itself once My devices sees the
-  device a code let in. A six-digit code started anywhere ends the relay's typed code on the PC,
-  so that code goes and Refresh makes another; it is never asked for on its own, or the two would
-  keep ending each other.
+- Add a connection (`components/ConnectPhoneDialog.tsx`, a `.modal`, a bottom sheet on a phone) follows
+  herdr's own **Add a machine** sheet: one tab per way across the top (the `.segmented` primitive,
+  as FilesDialog's tabs), and under each the things that way found, each with one action, then a
+  field to type one. **SSH** (only for the PC's owner on its own page) lists the PCs saved in herdr
+  (**Connect**), the server's ssh config hosts and its Tailscale login's PCs, one row each: the name,
+  the address dim and ellipsized (under the name on a phone), a neutral pill for where it was found
+  (herdr, ssh config, Tailscale), then **Add** or a quiet **Added** in the done green; **Add** and the
+  typed address close Settings and open the PC setup dialog with the address filled in. **Phones and
+  devices** stacks, under a hairline each, the Tailscale address and QR code, the six-digit pairing
+  code (`components/CompactPair.tsx`, started when the tab first opens) and Portal where the server
+  offers it. **Ovis relay** is the account's: signed out one sentence and **Sign in to Ovis** (which
+  opens the account's sign-in in More settings), signed in how a new device joins, or the relay's
+  switch and **Open the account** while this PC cannot admit one yet. Relay pairing without the
+  account, a code from another PC and Tailscale PCs added through the relay are gone from it. A phone
+  opens on Phones and devices, a PC's window on SSH; a tab once opened stays mounted, so its code
+  is not minted again. The dialog closes by itself once My devices sees the device a code let in.
 - The Ovis relay's own group in More settings: its state as the row's sentence with the switch,
   then **Reset relay identity** (confirmed in the shared `ConfirmDialog`; none for a serve-only
   install, which refuses it). Not shown in the hosted shell or to a read-only device.
@@ -3856,7 +3871,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   and **Forget this PC** (a neutral button that asks once in a `ConfirmDialog`, **Forget**, then
   deletes this phone's key for the PC and leaves for the front page). Neither is destructive on the
   PC, which keeps listing the phone until it is revoked there, so neither is a `.btn-danger`.
-- Portal, under Connect a device's Other ways to connect where the server offers it: while it runs,
+- Portal, in Add a connection's Phones and devices tab where the server offers it: while it runs,
   the address and QR code as the Tailscale way draws them over a Relay row with Stop; otherwise one
   hint for what blocks it (no token, serve-only, no `portal` or an old one, with a link to get it)
   or a wide Relay row whose text field and Start stack on a phone. Starting and stopping are one
@@ -4523,8 +4538,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   phone that pairs through the relay and one that pairs with a code see the same room. Neither
   the Codex nor the Claude app has a hosted relay shell to follow.
 - Account part (components/AccountPcs.tsx, lib/account/), only on the front page and only when
-  the page names an account service (`<meta name="ovis-account-service">`); without one the front
-  page is the saved-PC list above, unchanged. Signed out: **Continue with GitHub** and **Continue
+  the page names an account service (`<meta name="ovis-account-service">`, account.ovis.sh unless
+  the build names another) and, in a browser, it is app.ovis.sh, the one page a sign-in comes back
+  to; otherwise the front page is the saved-PC list above, unchanged. Signed out: **Continue with GitHub** and **Continue
   with Apple**, two equal neutral `.btn`s (App Review 4.8 wants Apple wherever another provider
   is, and neither is the one to pick), a `--fs-xs` dim line on what the account service learns,
   then the QR route under a hairline (an `h2`, the page keeps one `h1`). With saved PCs the list
@@ -4747,3 +4763,34 @@ app whichever PC is selected, and it goes through the same `panelUrl` checks: th
 and pages the panel refuses get no row. Nothing is proxied: the browser reaches the page under the
 app's hostname, as for a clicked link. This follows VS Code's Simple Browser, which a palette
 command opens on a typed address; no code is copied.
+
+## Touch prompt suggestions
+
+The empty composer follows Claude Code's [prompt suggestion model](https://code.claude.com/docs/en/interactive-mode): accept into an editable draft, then send separately. On a touch screen with Settings → Chat → Composer buttons → Suggestion on (off by default), the grey words also accept a tap; with it off, a tap there only focuses the box, so a user who taps the words to write their own reply never gets the suggestion inserted. Only the words receive taps; the surrounding input keeps native focus and scrolling. Tab and the optional suggestion chip share the same acceptance function. A focused inline suggestion also accepts Enter and Space. A suggestion that exceeds the message limit leaves the draft unchanged and shows the limit in the existing alert. No code or visual assets are copied.
+
+### Manually connecting Codex chat
+
+An unrecognized Codex chat offers **Connect conversation…** in its fallback notice and in the
+pane actions menu. The dialog follows Ovis's Earlier sessions row layout and the Codex CLI
+resume picker's title/time list, but selecting a row only fills the session ID. **Connect**
+explicitly assigns displayed history to the current pane; it sends no terminal input and does
+not switch or restart Codex. A full UUID can identify a session outside the recent list.
+
+The dialog uses the existing modal focus trap, Escape/Back cancellation and themed controls.
+The recent list scrolls inside the bounded dialog on a phone. Cancel leaves the previous
+connection untouched; errors retain the choice for correction. An active manual connection is
+marked beside the chat, and the same dialog offers **Use automatic detection**.
+
+Manual connections are display recovery only. Native input, prompt-answer and restart checks
+retain their independent ownership proofs. The connection is bound to the terminal and Codex
+process, is dropped when that identity changes or native evidence contradicts it, and is held
+only for this Ovis process lifetime. Another pane's conversation cannot be assigned again.
+
+## Streaming Markdown rendering
+
+Updating a reply preserves the existing paragraph, heading, code, image and table DOM. Each parsed
+block reuses its rendering when its structure is unchanged; changed text and context still update.
+This extends Ovis's existing memoized `BlockChunk` pattern to individual streaming blocks. The
+[T3 Code performance audit](https://github.com/pingdotgg/t3code/issues/9661) was considered for its
+repeated streaming Markdown work; no source or visual design was copied. This change adds no
+display setting and does not truncate replies or defer their visible updates.

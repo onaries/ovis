@@ -130,10 +130,13 @@ describe("demo transport", () => {
    */
   const DEMO_404: Record<string, string> = {
     "/api/account/enroll": "account linking: no screen of the app asks for it yet (the account screens come with their own demo answers)",
+    "/api/updates/cancel": "a connection server asks a PC's own Ovis to stop its update; the demo's browser never does",
     "/api/account/introduce": "account linking: no screen of the app asks for it yet (the account screens come with their own demo answers)",
     "/api/account/introduction": "account linking: no screen of the app asks for it yet (the account screens come with their own demo answers)",
     "/api/account/link": "account linking: no screen of the app asks for it yet (the account screens come with their own demo answers)",
     "/api/account/records": "account linking: no screen of the app asks for it yet (the account screens come with their own demo answers)",
+    "/api/account/relay-account": "relay pass: named by a signed-in owner's account screen, which the demo never reaches (no sign-in there)",
+    "/api/devices/pair/cancel": "called by the plugin's terminal `link --code` only (scripts/plugin-link.ts); no screen of the app asks for it",
     "/api/auth": "the demo is never locked (/api/health says authenticated), so neither the token form nor sign-out runs",
     "/api/bridge": "a remote PC's bridge endpoint, asked by another server, never by the browser",
     "/api/runtime": "switching the runtime: the demo's health carries no herdr_runtime, so Settings offers no Switch",

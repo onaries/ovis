@@ -15,6 +15,7 @@ import { join } from "node:path";
 import type { Browser, Page } from "playwright-core";
 import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
+import terminalFixture from "../site/demo/fixtures/terminal.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { shownRow, shownRows } from "./shown-rows.ts";
@@ -39,6 +40,8 @@ interface Hook {
   releaseInsert(): void;
   releaseClipboard(): void;
   closeSockets(): void;
+  /** every open socket has attached the shell and delivered its recording's last frame */
+  replayed(): boolean;
   push(message: unknown): void;
   hideClipboard(hidden: boolean): void;
 }
@@ -53,6 +56,7 @@ const HOOK = `<script>(() => {
     releaseInsert() { for (const release of this.heldInsert.splice(0)) release(); },
     releaseClipboard() { const held = this.held; this.held = null; if (held) held(); },
     closeSockets() { for (const socket of [...sockets]) socket.close(1006, "test"); },
+    replayed() { return sockets.size > 0 && [...sockets].every((socket) => socket.replayed === true); },
     push(message) { for (const socket of sockets) socket.push(message); },
     hideClipboard(hidden) { navigator.clipboard.readText = hidden ? undefined : readText; navigator.clipboard.read = hidden ? undefined : read; },
   };
@@ -65,12 +69,15 @@ const HOOK = `<script>(() => {
       if (message.type === "snapshot" && test.olderBridge) message = { ...message, features: message.features.filter((feature) => feature !== "terminal-insert") };
       if (message.type === "insert-result" && test.holdInsert) { test.heldInsert.push(() => push(message)); return; }
       push(message);
+      if (message.type === "pty-data" && message.pane_id === ${JSON.stringify(panes.shell)} && message.data === ${JSON.stringify(terminalFixture.frames.at(-1)!.data)}) socket.replayed = true;
     };
     const send = socket.send.bind(socket);
     socket.send = (raw) => {
       let frame = null;
       try { frame = JSON.parse(raw); } catch {}
       if (frame) test.sent.push(frame);
+      // an attach replays the shell's recording from a cleared screen (site/demo/transport.ts attach)
+      if (frame && frame.type === "attach" && frame.pane_id === ${JSON.stringify(panes.shell)}) socket.replayed = false;
       if (frame && frame.type === "insert" && test.forceInsert) { socket.push({ type: "insert-result", id: frame.id, pane_id: frame.pane_id, ok: false, ...test.forceInsert }); return; }
       send(raw);
     };
@@ -125,6 +132,11 @@ const hook = (page: Page) => ({
 const lineValue = (page: Page, expected: string) => page.waitForFunction((value) => document.querySelector<HTMLTextAreaElement>(".pane-frame.is-current .terminal-input-text")?.value === value, expected, { timeout: 10_000 });
 const noteText = (page: Page, expected: string) => page.waitForFunction((value) => document.querySelector(".pane-frame.is-current .terminal-input-note")?.textContent === value, expected, { timeout: 10_000 });
 const screenShows = (page: Page, text: string) => page.waitForFunction(({ value, shown }) => document.querySelector(shown)?.textContent?.includes(value) === true, { value: text, shown: shownRows(".pane-frame.is-current") }, { timeout: 10_000 });
+/**
+ * A reconnect's attach plays the shell's recording again from a cleared screen, while the old screen
+ * still shows its end: output pushed before the last frame lands is wiped by the replay (#3335).
+ */
+const replayed = (page: Page) => page.waitForFunction(() => window.pasteInsertTest.replayed());
 const screenText = (page: Page) => page.locator(shownRows(".pane-frame.is-current")).evaluate((rows) => rows.textContent ?? "");
 const drafts = (page: Page) => page.evaluate(() => Object.fromEntries(Object.keys(localStorage).filter((key) => key.startsWith("ovis:terminal-line:")).map((key) => [key, localStorage.getItem(key)])));
 const settled = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
@@ -487,7 +499,7 @@ async function checkOlderBridgeAndUncertainty(page: Page): Promise<void> {
   await h.closeSockets();
   await page.locator(".conn-live").waitFor({ state: "attached" });
   await ready(page);
-  await screenShows(page, "parses amounts to cents");
+  await replayed(page);
   await setLine(page, "git log");
   await insert.tap();
   await noteText(page, "Update this PC to insert without Enter. Nothing was sent.");
@@ -497,7 +509,7 @@ async function checkOlderBridgeAndUncertainty(page: Page): Promise<void> {
   await h.closeSockets();
   await page.locator(".conn-live").waitFor({ state: "attached" });
   await ready(page);
-  await screenShows(page, "parses amounts to cents");
+  await replayed(page);
   // the connection drops while the bridge's answer is on its way: not confirmed, kept, never sent again
   await h.set({ holdInsert: true });
   const before = (await h.inserts()).length;
@@ -508,7 +520,7 @@ async function checkOlderBridgeAndUncertainty(page: Page): Promise<void> {
   await noteText(page, "Not confirmed: the terminal did not confirm the text. Check it before inserting again.");
   await page.locator(".conn-live").waitFor({ state: "attached" });
   await ready(page);
-  await screenShows(page, "parses amounts to cents");
+  await replayed(page);
   check("the unconfirmed line stays", await line.inputValue() === "git log", await line.inputValue());
   check("nothing is sent again on the new connection", (await h.inserts()).length === before + 1, (await h.inserts()).length - before);
   await h.set({ holdInsert: false });
@@ -650,7 +662,7 @@ async function captureStates(page: Page, variant: Variant, phone: boolean): Prom
   await capture(page, variant, "disconnected-under-tap");
   await page.locator(".conn-live").waitFor({ state: "attached" });
   await ready(page);
-  await screenShows(page, "parses amounts to cents");
+  await replayed(page);
   if (phone) {
     await setLine(page, "git status");
     await page.evaluate(() => { window.pasteInsertTest.closeSockets(); document.querySelector<HTMLButtonElement>('.pane-frame.is-current .key-bar [data-key="paste"]')!.click(); });
@@ -664,7 +676,7 @@ async function captureStates(page: Page, variant: Variant, phone: boolean): Prom
   await h.closeSockets();
   await page.locator(".conn-live").waitFor({ state: "attached" });
   await ready(page);
-  await screenShows(page, "parses amounts to cents");
+  await replayed(page);
   await setLine(page, "git status");
   await press(insert);
   await page.locator(".pane-frame.is-current .terminal-input-note").waitFor();
@@ -673,7 +685,7 @@ async function captureStates(page: Page, variant: Variant, phone: boolean): Prom
   await h.closeSockets();
   await page.locator(".conn-live").waitFor({ state: "attached" });
   await ready(page);
-  await screenShows(page, "parses amounts to cents");
+  await replayed(page);
   // the connection drops before the answer: not confirmed
   await h.set({ holdInsert: true });
   await setLine(page, "git status");
@@ -686,7 +698,7 @@ async function captureStates(page: Page, variant: Variant, phone: boolean): Prom
   await h.set({ holdInsert: false });
   await page.locator(".conn-live").waitFor({ state: "attached" });
   await ready(page);
-  await screenShows(page, "parses amounts to cents");
+  await replayed(page);
   // a password prompt on screen: the masked input stands in, no Paste or Insert
   await h.push({ type: "pty-data", pane_id: panes.shell, data: "\r\nPassword:" });
   await page.locator(".pane-frame.is-current .secret-input").waitFor();
@@ -710,7 +722,7 @@ async function captureStates(page: Page, variant: Variant, phone: boolean): Prom
   await h.set({ blockConnections: false });
   await page.locator(".conn-live").waitFor({ state: "attached", timeout: 20_000 });
   await ready(page);
-  await screenShows(page, "parses amounts to cents");
+  await replayed(page);
   await setLine(page, "");
   check("no horizontal scroll", await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), label(variant));
 }

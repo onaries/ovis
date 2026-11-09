@@ -1,6 +1,8 @@
 # Remote PCs over SSH
 
-Use **Add a PC over SSH**, under **Other ways to connect** in Settings → Devices and PCs → Connect (the command palette has **Add PC** too), to connect a Linux or macOS computer (x64 or arm64) or a Windows PC (x64) running OpenSSH Server. Enter an SSH alias or `user@hostname`; the name defaults to that address. Advanced settings accept a port, a key path on the **web server**, and a named herdr session. Each registration selects one herdr socket. The sidebar groups PC → workspace → pane, and the header and new-session dialog show the destination PC. **Settings → Remote PCs → Show in sidebar** keeps a PC out of this device's sidebar, Agents list and command palette; it stays connected, and links and alerts still open its panes. The sidebar's PCs head counts the PCs hidden there; its menu shows each one again.
+Use **Settings → Devices and PCs → Add a connection → SSH** (the command palette has **Add PC** too) to connect a Linux or macOS computer (x64 or arm64) or a Windows PC (x64) running OpenSSH Server. Enter an SSH alias or `user@hostname`; the name defaults to that address. Advanced settings accept a port, a key path on the **web server**, and a named herdr session. Each registration selects one herdr socket. The sidebar groups PC → workspace → pane, and the header and new-session dialog show the destination PC. **Settings → Remote PCs → Show in sidebar** keeps a PC out of this device's sidebar, Agents list and command palette; it stays connected, and links and alerts still open its panes. The sidebar's PCs head counts the PCs hidden there; its menu shows each one again.
+
+The **SSH** tab lists the PCs it can find, each with **Add**, which opens the setup dialog with that address filled in: the PCs saved in herdr that wait for **Connect**, the hosts of the connection server's own ssh config (`~/.ssh/config` and the files its `Include` lines name, a wildcard `Include`'s folders listed through their open handle on Linux with glibc, what they match opened through it too, and by path elsewhere, where a listing gives names only (a folder swapped after its check can redirect it, so a name from outside home can be listed and a file can be missed): any host those files name or set an option for, and any host after that `Include`, is listed but never claims a Tailscale PC; on Linux the folders are read synchronously, so a home on a stalled network mount can freeze the server while the list is built; hosts named only by a pattern and everything under `Match` are left out), and the other online, untagged PCs of its own Tailscale login, by their MagicDNS name. The list stops at 200 rows, and each Tailscale PC it lists keeps its row within them (the first 32 of the login, as for the other Tailscale lists): config hosts fill only the rows left. A Tailscale PC is reached over SSH like any other address, never through the relay, and a PC a config host already names (by alias or HostName) is listed once. A PC already added shows **Added**. Below the list, type any other SSH address. The list is read from `GET /api/machines/ssh-candidates`, which reads both sources and connects to nothing; a watching device, an open LAN window, a Portal visitor and a device on the relay are refused (`read_only`, `owner_only`), and then see only the field.
 
 **Machines already saved in herdr appear automatically.** The connection server reads its account's
 `herdr machine list --json` at startup and every five seconds after the previous read finishes. Failed reads back off up to five minutes and
@@ -67,8 +69,9 @@ headless server into the desktop session, and Ovis never restarts it or its pane
 An initial connection can be cancelled while waiting; already-started work stays running.
 ## Through the relay
 
-**Settings → Devices and PCs → Connect → Enter a code from another device** adds another PC with no
-SSH and no open port: both PCs only connect out to the [Ovis relay](relay.md). On the other PC, open
+Add a connection no longer offers adding a PC through the relay: the relay is used through the Ovis
+account ([relay.md](relay.md)), and a PC on your Tailscale is added over SSH (above). A PC added through
+the relay before keeps working as described here. Such a PC was added with no SSH and no open port: both PCs only connect out to the [Ovis relay](relay.md). On the other PC, open
 **Settings → Devices and PCs → Connect** (with the relay on) and type the ten-character code it shows
 beside its QR code here (an older Ovis names it **Show a code to type**; its pairing link works too):
 this PC's server finds that PC through the relay as a phone does ([Pairing with a typed code](relay.md)),
@@ -79,11 +82,47 @@ end-to-end encryption and the same device key, kept on this server in
 `Ovis on <this PC's name>`, with the access any paired device has. The PC itself is saved in
 `<stateDir>/relay-pcs.json`, apart from `machines.json`, so going back to an older release still starts.
 
+**PCs on your Tailscale**, in the dialog of an older Ovis, saved typing the code: it lists
+the other PCs of this PC's own Tailscale login whose Ovis already lets this PC in as you (served by
+`tailscale serve`, no token), and **Add PC** adds one through the relay in one tap. This PC reads
+`tailscale status`, asks only online, untagged peers of its own login that do not report iOS or
+Android (the first 32 of them in that list; type a code for one past that), asks the
+chosen PC for its code over Tailscale, and checks that the relay found the same PC (`server_id`)
+before it pairs; on a mismatch nothing is added. A PC whose relay is off shows **Turn the relay on
+on that PC first**. PCs of another login, tagged nodes and iOS or Android devices are never asked, and Tailscale
+alone never adds a PC to your account (`GET` and `POST /api/machines/tailnet`; the `POST` takes only
+an address the latest look found in the last 10 minutes, including a PC it left off the list because
+it was already added).
+
 Its workspaces then join the sidebar as an SSH PC's do. Nothing is installed on that PC: it runs
-its own Ovis, which updates itself, so it has no bridge controls. Its connection carries the PC's
+its own Ovis, which updates itself, so it has no bridge controls; its update can still be started
+from here ([Updating PCs from here](#updating-pcs-from-here)). Its connection carries the PC's
 status, its API routes and its terminals as streams of one relay session, which holds at most 8
 WebSockets, so about 7 of its terminals can be open at once. A dropped connection comes back with
 the same backoff as an SSH PC's and signs in with the saved key; nothing typed is sent again.
+
+The connection takes the best route it can, as the phone apps do ([Direct on the same
+network](relay.md#direct-on-the-same-network)): that PC's direct carriers first (addresses on its own
+network before Tailscale ones), then the relay. The carriers come from that PC inside the encrypted
+channel on each sign-in (this server always offers `direct-tailnet`, so a Tailscale address is named
+too) and are kept with the key, so they follow it to another network. This server dials only those on
+a private network or Tailscale's, on the direct listener's port 7319: never link-local or another port,
+whatever that PC names (a PC whose listener had to take another port is reached through the relay). A sign-in
+tries them within 1.5 s, then the relay. A try through the relay that found none answering, at a sign-in or a
+check, holds the next one back for that PC across reconnects until the check is due again (5 minutes,
+longer after a carrier that answered but could not carry a session), unless this PC is on another
+network or slept meanwhile. A route that works (Tailscale, say, while the PC's own network does not
+answer from here) is always tried first. While a later route carries it, this server checks the
+earlier ones (a Noise handshake to the pinned key, no session) after each sign-in, then at most every
+5 minutes, and at once when its own addresses change or a read comes a minute or more late (it slept);
+it reads its addresses every 30 s and sends nothing for that. Once one proves to be that PC and no request or terminal input
+is under way for 3 s, it signs in there first and only then closes the old session: requests that
+start meanwhile wait for it and go on the new route, and input on an open terminal in that window
+keeps the old session for a later try. The PC stays connected (unless that PC already holds as many
+sessions of this key as it allows, when letting the new one in can end the old one first and the PC
+shows `reconnecting` for a moment), its status socket reopens on the new route, and open terminals
+reconnect as after any drop. `GET /api/machines` names the route of a connected relay PC as `route`:
+`direct` or `relay`.
 
 **Revoke** under Phone & devices on the other PC ends this PC's access: the PC turns to an error
 that says so and is not tried again. **Remove PC** here forgets the PC and its key; revoke it on
@@ -96,6 +135,150 @@ code, `POST /api/machines/relay/code` with `{ "code": "<code>" }` runs one excha
 10 minutes, under that random ticket), or `typed_code_<failure>` (`not-a-code`, `no-pc`, `wrong`, `expired`, `busy`,
 `unreachable`, `forged`); then `POST /api/machines/relay` with `{ "found": "<ticket>" }` adds
 that PC, once.
+
+## Updating PCs from here
+
+Every PC added here, through the relay (direct or relayed) or over SSH, is updated from the PC in
+use, without going to it. Each PC in `GET /api/machines` (and the machine events) carries
+`ovis_update` when it has an update it can take from here, unasked:
+
+- `how: "own"`: the PC runs its own Ovis (a relay PC, or an SSH PC's own server) and its updater
+  offers a newer release. A connected PC is asked through its connection (`GET /api/updates`
+  there) when it connects and every 5 minutes; an SSH PC whose own Ovis is older than this app
+  says so on its connect.
+- `how: "bridge"`: an SSH PC's bridge from this app is of another version.
+- `updatable: false` with `reason`, in plain words, when an update is on offer but cannot run from
+  here (not started by its updater, blocked there, too old to install by revision, a saved herdr
+  machine whose bridge was never approved). An SSH PC's own Ovis is never updated from here to a
+  release newer than this app, beta builds included (`0.6.0-beta.2` is newer than `0.5.1` and older
+  than `0.6.0`), nor to one whose version it does not tell: this app would then refuse to connect
+  to it. Absent or null: up to date, or not known yet.
+
+`POST /api/machines/:id/update` starts that update (202 `{ job_id }`), whichever way the PC is
+reached, and refuses one that cannot run with 409 `update_unavailable` and the same words. A
+PC's own offer names its release as `revision` (a connected PC's, or the one an SSH PC's own
+Ovis older than this app told at its last connect); a body `{ "revision": … }` with the one shown
+makes sure only that release is installed: one the PC offers instead by then is refused, never installed
+unseen. Update all installs each PC's release as this server last read it when it was asked, also for
+a PC that waits its turn. The 409 comes from the offer this server holds; when the PC itself offers
+another release by the time it is asked (or already installs one), the 202 job ends with
+`update_error` saying so, and nothing is installed. A
+connected PC's own Ovis is asked to install the release it offers, by revision, through its
+connection (no redirect is followed); its connection drops while it restarts, the PC reconnects as
+any PC does, and the update ends once it answers on that release (at most 15 minutes, or a minute
+for the install to start). Anything else runs the bridge update above. While it runs, the PC's
+`updating` shows its steps; a failed one leaves `update_error`, in plain words, until the next try
+starts or one succeeds. `DELETE /api/machines/:id/update` ends the wait (an install already running
+there runs on).
+
+`POST /api/machines/update-all` starts every PC's update at once: 202 `{ started, queued, skipped }`.
+Own updates run side by side; bridge updates run one after another, sharing one bundle download,
+and show `updating.queued` until their turn; a PC with an update it cannot take is `skipped` with
+why (a PC whose update is an install over SSH is always skipped: it is started for that PC alone,
+once its `steps` are read). Up-to-date PCs are not listed. At most four PCs' own updates run at once; the others show
+`updating.queued` and start as one ends.
+
+### Who may change PCs from here
+
+One rule covers every change to this PC's PCs: every `POST`, `PATCH` and `DELETE` under
+`/api/machines/` except a PC's own routes (its panes, workspaces and files, which are driven as this
+PC's are). That covers adding a PC (SSH setup, relay, Tailscale), answering, approving or cancelling a
+setup, its settings, renaming, turning on or off and removing a PC, and every update
+(`/:id/update`, `update-all`, `/:id/update-bridge`, which takes `{ "revision" }` and otherwise uses
+the release its card shows). The same rule covers installing an update on this PC itself:
+`POST /api/updates/install` and `POST /api/herdr/update`. The one exception is the connection
+server's bridge token, which asks for its own install by revision.
+
+| May | Who |
+|---|---|
+| Yes | a driving sign-in on this PC, its token, its Tailscale login |
+| Yes | a driving device paired with this install, directly or over the relay (the owner's phone, his other PCs) |
+| No | a visitor of an open install, with nothing paired |
+| No | a Portal visitor, whatever role Portal gives |
+| No | any device that only watches |
+
+The request must also come from this app's own page: the `X-Herdr-Update: 1` header, same origin,
+no query. Anything else gets 403 `forbidden`. The app sends the header on every PC request.
+
+### Installing Ovis on a PC over SSH
+
+Where a PC's own Ovis cannot update itself, or a PC has none yet, Ovis is installed there from
+here over SSH with the official installer (the `install.sh` the [guide](guide.md) pipes from
+`https://ovis.sh/install.sh`), taken from this app's own release tag on GitHub and run with
+`OVIS_REF=v<version>`, so the script and what it installs are that release's and both ends run one
+version. SSH uses keys only (`BatchMode`): a PC that wants a password, or whose host key is not
+known here yet, is refused with what to do (add its key with `ssh-copy-id`, or add it once with
+**Add PC**, which checks the fingerprint and can register a key). Linux and macOS PCs (x64 or arm64)
+and herdr's default session only.
+
+- An SSH PC whose own Ovis was started by hand (`bun run server`, not its updater) offers
+  `ovis_update.how: "install"`: its `steps` name the process it stops; Ovis is installed as a herdr
+  plugin that updates itself (`OVIS_RUNTIME=herdr`), started (herdr is started headless when it is
+  not running, which starts the plugin), and the PC connected again. As when it is run by hand, the
+  installer adds what is missing for that account (herdr, Bun, which may add itself to the shell's
+  startup file) and serves Ovis to the tailnet when Tailscale runs there; the steps say so first. An
+  Ovis already installed there (a herdr plugin or its user service) is started that way instead, since
+  the installer would keep its release. When its bridge is older than this app's, the install updates
+  it before it ends; otherwise it connects as it is, and its own update is offered on its card, never
+  installed unseen. Its settings and data stay; herdr and its sessions
+  keep running. The desktop app's own server is never replaced: it updates with the app.
+- One whose supervisor is too old to install an update by revision is restarted through its own
+  launcher (the herdr plugin's stop and start actions, or the `ovis` user service of Ovis on
+  herdr-core), then asked to install the release its card showed. The install ends once that update has
+  installed, or fails with its words. Without a launcher nothing is stopped (`no_launcher`). A release before 0.4.13 cannot be updated from here this way.
+  When the launcher stopped it but failed to start it again, Update asks the launcher once more.
+- The installer sets Ovis up for herdr's default session only: a PC added with a named session is
+  offered no install (`updatable: false`, with why).
+- `POST /api/machines/:id/update` runs that install as any update; `POST /api/machines/install`
+  with `{ "machine_id": … }` does the same, and with an SSH address (`destination`, `port`,
+  `identity_file`, `name`) installs on a PC not added here and adds it once Ovis answers there
+  (refused when Ovis or this app's bridge already runs there).
+- The job (`GET /api/machines/install/:id`, `DELETE` to cancel) goes `connecting`, `checking`,
+  `stopping`, `installing`, `starting`, `connecting_pc`, then `connected`, `failed` or `cancelled`.
+  A failure carries `error_code` and words: `ssh_refused`, `ssh_host_key`, `ssh_unreachable`,
+  `unsupported`, `missing_tool` (no curl, git or tar), `disk` (under 1 GB free in the home folder),
+  `permission`, `bridge_there`, `ovis_there`, `changed` (the process to stop is no longer the one
+  shown, or its pid now runs another program: nothing is stopped), `not_stopped`, `installer_failed` (with the installer's last words),
+  `no_launcher`, `not_started`, `connect_failed`. Experimental, off by default (Settings → Experimental → PCs → Start a replaced server again): when it is off, a failed or cancelled replacement leaves the server started by hand stopped, as before, and nothing of it is copied. When it is on and the install fails or is cancelled after the server started by
+  hand was stopped, before anything was installed or launched in its place (the installer could not be
+  downloaded, or never ran), that server is started again as it was. Just before it is stopped, its program, arguments,
+  environment (its `OVIS_TOKEN` with the rest) and folder are copied from `/proc` into a folder only
+  that account can read. The stop goes ahead only while that pid is still the very server its bridge
+  registration recorded (its birth: this boot's id and start ticks on Linux, `ps`'s start time on macOS),
+  so another Ovis that took the pid after it ended is never stopped (`changed`), whether or not the
+  restore is on. A registration that recorded no birth (every 0.5.x server's) is stopped only if its
+  process started no later than its registration file was written (2 s of slack): one that took the
+  pid later is refused in plain words. The copy and the stop each go ahead only while that pid is still the process
+  shown (on Linux its start in clock ticks since boot from `/proc/<pid>/stat` and its owner; on macOS `ps`'s start time to the second and owner, where a pid reused within that second stays a residual; checked in the same command): one that took
+  its pid since is never copied or signalled (`changed`). A copy cut short removes itself. Nothing is stopped when copying fails this time (try again). When no faithful
+  copy can be made (its environment unreadable, its program or folder deleted since it started, as after
+  a Bun upgrade, or a byte that would not survive being started again, not UTF-8), it is replaced as on macOS:
+  without a copy, and the job says it stays stopped if the install then fails.
+  To start it again, its own Bun first binds the server's own address (`HOST`, `PORT`): one already
+  taken means a live server is there, its replacement among them, and nothing is started beside it; so does any live Ovis registered for that herdr session, managed or not, on any port. It
+  then reads the copy and starts the program with exactly that environment,
+  given to the process directly (never on a command line another account could read), in its own
+  session, its output in `~/.local/state/ovis/restored-server.log` (opened without following a link, this
+  account's own file, made readable by this account alone). A new SSH
+  connection does it, tried twice, after waiting for a server that is still stopping, and the PC stays
+  busy until then. Once something was installed or launched in its place, it is not started again (a
+  start of their own may still be on its way, and would come up beside it): the copy is then only
+  removed, and the words say what may be running. The copy is removed once read, once the new Ovis
+  answers, or after two hours whatever becomes of the job (`systemd-run` where it can, so it outlives the
+  SSH session; each later capture also sweeps older ones). Where there is no `/proc` (macOS) nothing is
+  copied, and the server is never started again with a guessed environment; the job then says it stays
+  stopped. The words say which happened. These routes are this PC's owner's only, with the
+  `X-Herdr-Update: 1` header on a change, as updates are ([Updating PCs from here](#updating-pcs-from-here)). Only the process named is ever stopped, only after
+  it is checked to be that PC's own Ovis server. While an install or setup runs, no other setup or
+  install connects to that PC from here: the same PC as ssh resolves it (`ssh -G`: an alias, or its
+  default port given, is the same one), for any herdr session there or another PC saved at that
+  address. The install's final connect uses keys only too. A cancelled install keeps the PC busy until its own run
+  has ended. Stopping an installer already running there is best effort: beside it, a watcher writes
+  an empty line to the SSH connection every two seconds, and once nobody reads there (the connection
+  was closed) it stops the installer's whole process group, and the command writes once more right
+  before the installer starts. The PC's SSH server can take a moment to notice a closed connection,
+  longer when the network between is cut, so an installer may still start or finish its changes there
+  after the job says `cancelled`.
 
 ## Runtime and endpoints
 
@@ -116,9 +299,14 @@ The current server keeps one status-only WebSocket per remote PC without attachi
 | `GET /api/machines/events` | SSE roster and machine-scoped status events |
 | `POST /api/machines/setup` | Create an interactive setup job |
 | `GET/POST/DELETE /api/machines/setup/:id` | Inspect, answer/approve, cancel |
+| `POST/DELETE /api/machines/:id/update` | Start or stop waiting for the PC's update ([Updating PCs from here](#updating-pcs-from-here)) |
+| `POST /api/machines/update-all` | Start every PC's update |
+| `POST /api/machines/install`, `GET/DELETE /api/machines/install/:id` | Install Ovis on a PC over SSH ([Installing Ovis on a PC over SSH](#installing-ovis-on-a-pc-over-ssh)) |
 | `PATCH /api/machines/:id` | Rename or change `enabled` |
 | `DELETE /api/machines/:id` | Forget the PC and remove its local private key |
 | `/api/machines/:id/{session,agents,pane/*,workspace/*}` | Allowlisted target API routes |
+| `GET/POST/DELETE /api/machines/:id/runtime/move`, `POST .../runtime/move/{stop,stop-all,install}` | That PC's move to herdr-core, for the owner only: this PC, the token, a Tailscale login, a paired or relay device that drives; never an open LAN visitor, a Portal visitor or a device that watches ([runtime-move.md](runtime-move.md#on-another-pc)); 409 `pc_update_required` from an Ovis too old for it |
+| `POST /api/machines/runtime/move-all` | Starts every previewed PC's move at once, for the owner only (as above): 202 `{ started, refused, unknown }` |
 | `/ws?machine_id=…` | Immutable terminal destination |
 
 Legacy HTTP paths, `/ws` without a machine, and old stored preferences/notification links mean **local**. Machine mutations require `X-Herdr-Machine: 1`, the existing token gate and same-origin browser requests. The proxy passes a bridge credential read through SSH; browser cookies, bearer tokens, forwarded headers and remote cookies are not forwarded. Authentication, push devices, VAPID keys and app updates belong to the current connection server.

@@ -372,7 +372,7 @@ jobs:
       - name: Browser regression (UI suites)
         if: needs.changes.outputs.draft != 'true'
         env:
-          BROWSER_SCRIPTS: scripts/ui-regression.ts,scripts/ui-contexts-regression.ts
+          BROWSER_SCRIPTS: scripts/ui-regression.ts,scripts/ui-contexts-regression.ts,scripts/ui-contexts-layout-regression.ts
           BROWSER_WORKERS: 2
         run: bun run check run -- bun scripts/ci-browser-parallel.ts
       - name: Preserve browser logs and evidence
@@ -450,8 +450,8 @@ jobs:
       - name: Browser regression (parallel)
         if: needs.changes.outputs.draft != 'true'
         env:
-          # Every script of scripts/ci-browser.sh except the two browser-main runs.
-          BROWSER_EXCLUDE: scripts/ui-regression.ts,scripts/ui-contexts-regression.ts
+          # Every script of scripts/ci-browser.sh except the browser-main runs.
+          BROWSER_EXCLUDE: scripts/ui-regression.ts,scripts/ui-contexts-regression.ts,scripts/ui-contexts-layout-regression.ts
           BROWSER_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           BROWSER_WORKERS: ${{ runner.environment == 'self-hosted' && '6' || '3' }}
         run: bun run check run -- bun scripts/ci-browser-parallel.ts

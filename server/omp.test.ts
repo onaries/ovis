@@ -7,8 +7,11 @@ import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 
 import { forgetTranscriptState, paneConversation } from "./conversation.ts";
 import * as herdr from "./herdr/client.ts";
+import { darwinProcess } from "./claude-store.ts";
+import * as darwinKernel from "./darwin-process.ts";
+import * as runtime from "./herdr-core/runtime.ts";
 import { terminalBreadcrumb } from "./gjc-runtime.ts";
-import { isOmpHelper, isOmpProcess, ompAgentDir, ompHeldTranscript, ompLaunch, ompLaunchDir, ompLoadsIntegration, ompStoreLayout } from "./omp.ts";
+import { isOmpHelper, isOmpProcess, ompAgentDir, ompHeldOpen, ompHeldTranscript, ompLaunch, ompLaunchDir, ompLoadsIntegration, ompPaneRoute, ompRouteTranscript, ompStoreLayout, readOmpHeldFilesSetting } from "./omp.ts";
 import layouts from "./fixtures/omp-18.8.7-store-layouts.json";
 import * as ompProbe from "./omp-process.ts";
 import * as omo from "./omo.ts";
@@ -567,6 +570,447 @@ describe("an omp pane's chat", () => {
         ]);
       }
     } finally { child.kill(); await child.exited; }
+  });
+
+  // #3365: omp leaves a breadcrumb whose content is unchanged alone, so `omp -c` keeps the earlier run's.
+  // On macOS herdr-core only the files an omp holds open (lsof) prove its session
+  describe("on macOS herdr-core", () => {
+    const pid = 99_999_999; // above any pid_max: nothing of this host is read for it
+    const startedAt = Date.now() - 60_000;
+    let listing: string | null = "";
+    let lsofCalls: string[][] = [];
+    let kills: unknown[] = [];
+    /** The lsof child the fake spawn hands out; by default it lists `listing` and exits (1 for none). */
+    let lsof: () => unknown;
+    /** The kernel's start of `asked` in microseconds on its nth read (1-based); none for a pid no test names. */
+    let startOf: (asked: number, read: number) => bigint | null;
+    /** performance.now as the lsof listings' freshness reads it: each test starts long after the last one's. */
+    let clock = 0;
+    let core = true;
+    /** the experimental setting ompHeldFiles, as the server's shared preferences hold it */
+    let heldFiles = true;
+    /** The HOME the omp's own environment names (the test's home unless a test reaches it through a link). */
+    let ompHome = "";
+    /** Called as each omp's environment is read, the step right after herdr names the pane's processes. */
+    let onEnviron = () => {};
+    /** lsof's `-FpDin` listing of `files` for the omp: each file's device and inode as lsof prints them, when the name stats. */
+    const listed = (files: string[]) => `p${pid}\nfcwd\nn${pane.cwd}\n${files.map((file, at) => `f${23 + at}\n${fileFields(file)}n${file}\n`).join("")}`;
+    const fileFields = (file: string) => { try { const stat = fs.statSync(file); return `D0x${stat.dev.toString(16)}\ni${stat.ino}\n`; } catch { return ""; } };
+    /** The breadcrumb an earlier omp in this terminal left, naming `session`, written `at`. */
+    const breadcrumb = (session: string, at: number) => {
+      const marker = join(home, ".omp/agent/terminal-sessions/ttys000");
+      mkdirSync(join(home, ".omp/agent/terminal-sessions"), { recursive: true });
+      writeFileSync(marker, `${pane.cwd}\n${session}\n`);
+      fs.utimesSync(marker, at / 1000, at / 1000);
+    };
+    /** The held transcript read past any earlier listing's freshness, so lsof lists again. */
+    const held = () => { clock += 10_000; return ompHeldTranscript(pane.pane_id, pane.cwd!, true); };
+    beforeEach(() => {
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      listing = ""; lsofCalls = []; kills = []; core = true; ompHome = home; onEnviron = () => {};
+      lsof = () => ({ stdout: new Response(listing ?? "").body, exited: Promise.resolve(listing === null ? 1 : 0), kill: (signal: unknown) => kills.push(signal) });
+      startOf = (asked) => asked === pid ? 1_000_000n : null;
+      clock += 1_000_000;
+      const reads = new Map<number, number>();
+      const now = spyOn(performance, "now").mockImplementation(() => clock);
+      const terminal = spyOn(darwinKernel, "darwinTerminal").mockImplementation((asked) => asked === pid ? { tty: "ttys000", startedAt } : null);
+      const start = spyOn(darwinKernel, "darwinStartTime").mockImplementation((asked) => {
+        reads.set(asked, (reads.get(asked) ?? 0) + 1);
+        return startOf(asked, reads.get(asked)!);
+      });
+      const environment = spyOn(darwinProcess, "environment").mockImplementation(() => { onEnviron(); return `HOME=${ompHome}\0`; });
+      const serving = spyOn(runtime, "servingCore").mockImplementation(() => core);
+      const spawned = spyOn(Bun, "spawn").mockImplementation(((argv: string[]) => { lsofCalls.push(argv); return lsof(); }) as unknown as typeof Bun.spawn);
+      processes = [{ pid, name: "omp", argv: ["omp", "-c"] }];
+      // Settings -> Experimental -> OMP on macOS herdr-core: on for these tests unless one turns it off
+      heldFiles = true;
+      readOmpHeldFilesSetting(() => heldFiles);
+      restores.push(() => {
+        readOmpHeldFilesSetting(() => false);
+        now.mockRestore(); spawned.mockRestore(); serving.mockRestore(); environment.mockRestore(); start.mockRestore(); terminal.mockRestore();
+        Object.defineProperty(process, "platform", platform);
+      });
+    });
+
+    it("proves an omp -c by the session it holds open, never by the breadcrumb's session being written", async () => {
+      const continued = storeTranscript(pane.cwd!), own = storeTranscript(pane.cwd!, "2026-10-02_own.jsonl");
+      // the session the breadcrumb names is written after this start
+      breadcrumb(continued, startedAt - 3_600_000);
+      // `omp -c` holds the session it continues open from its first write
+      listing = listed([continued]);
+      expect(await held()).toBe(continued);
+      // another omp appending to the breadcrumb's session proves nothing for this process
+      listing = listed([]);
+      expect(await held()).toBeNull();
+      // nor does it once this process writes a session of its own
+      listing = listed([own]);
+      expect(await held()).toBe(own);
+      // no listing proves nothing
+      listing = null;
+      expect(await held()).toBeNull();
+      expect(lsofCalls).toEqual(Array(4).fill(["/usr/sbin/lsof", "-nPbw", "-a", "-p", String(pid), "-FpDin"]));
+    });
+
+    it("places a held session under the configured or the canonical store root, and binds nothing for a .jsonl under neither", async () => {
+      // the omp's HOME is a link to the real one, so its configured store is reached through it, while lsof lists resolved paths
+      const linked = join(home, "linked-home");
+      symlinkSync(home, linked);
+      ompHome = linked;
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      expect(await held()).toBe(continued);
+      // a name under the configured root reads as the session it resolves to
+      listing = listed([continued.replace(home, linked)]);
+      expect(await held()).toBe(continued);
+      // a .jsonl under neither root may be the session itself, placed where nothing proves it
+      const elsewhere = join(home, "elsewhere", "2026-10-02_s2.jsonl");
+      mkdirSync(join(home, "elsewhere"));
+      writeFileSync(elsewhere, transcript(pane.cwd!));
+      listing = listed([elsewhere, continued]);
+      expect(await held()).toBeNull();
+      // and a session under the configured root that does not resolve proves nothing either way
+      const gone = join(linked, ".omp/agent/sessions", pane.cwd!.replaceAll("/", "-"), "2026-10-02_gone.jsonl");
+      listing = listed([gone, continued]);
+      expect(await held()).toBeNull();
+    });
+
+    it("binds nothing when the pid is reused between herdr's sample and the first start read", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      // herdr named the omp a moment ago; it exits, and another process takes its pid before its start is read for lsof
+      let reused = false;
+      onEnviron = () => { reused = true; };
+      startOf = (asked) => asked === pid ? (reused ? 2_000_000n : 1_000_000n) : null;
+      expect(await held()).toBeNull();
+      // an omp whose start stays the one sampled is read
+      onEnviron = () => {};
+      startOf = (asked) => asked === pid ? 1_000_000n : null;
+      expect(await held()).toBe(continued);
+    });
+
+    it("drops a listing when the pid's start differs after lsof from before it", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      // another omp took the pid while lsof listed it (its start is read with herdr's sample and before lsof)
+      startOf = (asked, read) => asked === pid ? (read <= 2 ? 1_000_000n : 2_000_000n) : null;
+      expect(await held()).toBeNull();
+      startOf = (asked) => asked === pid ? 1_000_000n : null;
+      expect(await held()).toBe(continued);
+    });
+
+    it("binds nothing when lsof fails or lists nothing, even with a fresh, valid breadcrumb", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      breadcrumb(continued, Date.now());
+      listing = "";
+      await expect(paneConversation(pane.pane_id)).rejects.toThrow("no_session_path");
+      listing = null;
+      await expect(paneConversation(pane.pane_id)).rejects.toThrow("no_session_path");
+      expect(lsofCalls).toHaveLength(2);
+    });
+
+    it("refuses a held name that decodes to control characters, and reads a plain one", async () => {
+      // a session file whose name holds a newline, a tab and a DEL, which lsof's -F n writes as \n, \t and \x7f
+      const control = storeTranscript(pane.cwd!, "2026-10-01_s\n1\t\x7f.jsonl");
+      listing = listed([control.replaceAll("\n", "\\n").replaceAll("\t", "\\t").replaceAll("\x7f", "\\x7f")]);
+      expect(await held()).toBeNull();
+      const plain = storeTranscript(pane.cwd!, "2026-10-01_s 1 é.jsonl");
+      listing = listed([plain]);
+      expect(await held()).toBe(plain);
+    });
+
+    it("binds nothing when another pid of the pane has no listing that proves anything, even beside a valid one", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      const other = pid + 1;
+      processes = [{ pid, name: "omp", argv: ["omp", "-c"] }, { pid: other, name: "omp", argv: ["omp"] }];
+      // lsof leaves the other omp out, its start cannot be read, or lsof cannot start: it may hold another session
+      for (const [otherStart, run] of [
+        [5_000_000n, () => listed([continued])],
+        [null, () => listed([continued])],
+        [5_000_000n, () => { throw new Error("spawn failed"); }],
+      ] as const) {
+        startOf = (asked) => asked === pid ? 1_000_000n : asked === other ? otherStart : null;
+        lsof = () => ({ stdout: new Response(run()).body, exited: Promise.resolve(0), kill: (signal: unknown) => kills.push(signal) });
+        expect(await held()).toBeNull();
+      }
+    });
+
+    it("maps a held subagent file to the parent its listed directory names, and binds nothing through a linked one", async () => {
+      const parentA = storeTranscript(pane.cwd!, "2026-10-01_A.jsonl");
+      const parentB = storeTranscript(pane.cwd!, "2026-10-01_B.jsonl");
+      mkdirSync(parentB.replace(/\.jsonl$/, ""));
+      writeFileSync(join(parentB.replace(/\.jsonl$/, ""), "task.jsonl"), "");
+      // A's subagent directory is a link to B's: the listed A/task.jsonl resolves under B
+      symlinkSync(parentB.replace(/\.jsonl$/, ""), parentA.replace(/\.jsonl$/, ""));
+      listing = listed([join(parentA.replace(/\.jsonl$/, ""), "task.jsonl")]);
+      expect(await held()).toBeNull();
+      // B's own subagent file, in a real directory, names B
+      listing = listed([join(parentB.replace(/\.jsonl$/, ""), "task.jsonl")]);
+      expect(await held()).toBe(parentB);
+    });
+
+    it("compares a held session's cwd with the pane's by the directories they resolve to", async () => {
+      // the pane's directory reached through a link, named so by one session's header
+      const alias = join(home, "alias");
+      symlinkSync(pane.cwd!, alias);
+      const aliased = storeTranscript(alias);
+      const plain = storeTranscript(pane.cwd!, "2026-10-02_plain.jsonl");
+      listing = listed([aliased]);
+      expect(await held()).toBe(aliased);
+      // both name the pane's directory: two sessions, so neither is bound
+      listing = listed([aliased, plain]);
+      expect(await held()).toBeNull();
+      // a header whose directory does not resolve cannot be told from the pane's
+      const gone = storeTranscript(join(home, "gone"));
+      listing = listed([gone, plain]);
+      expect(await held()).toBeNull();
+    });
+
+    it("drops a reused listing whose held session path names another file now", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      expect(await held()).toBe(continued);
+      // within the freshness window the session file is replaced by another under the same name
+      const replacement = `${continued}.new`;
+      writeFileSync(replacement, transcript(pane.cwd!));
+      fs.renameSync(replacement, continued);
+      expect(await ompHeldTranscript(pane.pane_id, pane.cwd!, true)).toBeNull();
+      expect(lsofCalls).toHaveLength(1);
+      // the stale listing is forgotten: the next read lists the omp again
+      listing = listed([continued]);
+      expect(await ompHeldTranscript(pane.pane_id, pane.cwd!, true)).toBe(continued);
+      expect(lsofCalls).toHaveLength(2);
+    });
+
+    it("binds nothing for a pid whose process started after herdr was asked for the pane", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      // the omp herdr named exited and its pid was taken before its start was first read
+      const later = BigInt(Date.now() + 60_000) * 1000n;
+      startOf = (asked) => asked === pid ? later : null;
+      expect(await held()).toBeNull();
+      expect(lsofCalls).toEqual([]);
+    });
+
+    it("times a caller's earlier sample by its own ask, not by when it is read", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      const asked = Date.now() - 60_000;
+      const now = spyOn(Date, "now").mockReturnValue(asked);
+      try {
+        // the caller's poll asked herdr then; its answer is read here a minute later
+        const known = await herdr.paneProcessInfo(pane.pane_id);
+        now.mockReturnValue(asked + 60_000);
+        const heldBy = async () => {
+          clock += 10_000;
+          const route = await ompPaneRoute(pane.pane_id, known);
+          return route === null || route === "unproved" ? null : ompRouteTranscript(await ompHeldOpen(route, true), pane.cwd!);
+        };
+        // an omp started after that ask is not the one herdr named
+        startOf = (asking) => asking === pid ? BigInt(asked + 30_000) * 1000n : null;
+        expect(await heldBy()).toBeNull();
+        // one started before it is
+        startOf = (asking) => asking === pid ? BigInt(asked - 30_000) * 1000n : null;
+        expect(await heldBy()).toBe(continued);
+      } finally { now.mockRestore(); }
+    });
+
+    it("refuses a process that started in the very instant herdr was asked", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      const asked = Date.now();
+      const now = spyOn(Date, "now").mockReturnValue(asked);
+      try {
+        startOf = (asking) => asking === pid ? BigInt(asked) * 1000n : null;
+        expect(await held()).toBeNull();
+        // a microsecond before the ask's millisecond counts
+        startOf = (asking) => asking === pid ? BigInt(asked) * 1000n - 1n : null;
+        expect(await held()).toBe(continued);
+      } finally { now.mockRestore(); }
+    });
+
+    it("binds nothing for a held subagent file whose parent transcript is a link", async () => {
+      storeTranscript(pane.cwd!, "2026-10-01_A.jsonl");
+      const parentB = storeTranscript(pane.cwd!, "2026-10-01_B.jsonl");
+      const parentA = parentB.replace("_B.jsonl", "_A.jsonl");
+      // A's own subagent directory is real, but A's transcript is a link to B's
+      fs.rmSync(parentA);
+      symlinkSync(parentB, parentA);
+      mkdirSync(parentA.replace(/\.jsonl$/, ""));
+      const task = join(parentA.replace(/\.jsonl$/, ""), "task.jsonl");
+      writeFileSync(task, "");
+      listing = listed([task]);
+      expect(await held()).toBeNull();
+    });
+
+    it("binds nothing when the held session's cwd and the pane's are the same directory that is gone", async () => {
+      const removed = join(home, "removed");
+      const session = storeTranscript(removed);
+      listing = listed([session]);
+      clock += 10_000;
+      expect(await ompHeldTranscript(pane.pane_id, removed, true)).toBeNull();
+    });
+
+    it("checks a held file's inode as lsof prints it, past 2^53", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      // an inode a double cannot hold: a numeric stat rounds it to ...992
+      const inode = 9_007_199_254_740_993n;
+      listing = `p${pid}\nfcwd\nn${pane.cwd}\nf23\nD0x1\ni${inode}\nn${continued}\n`;
+      const realStat = fs.statSync;
+      const stat = spyOn(fs, "statSync").mockImplementation(((path: fs.PathLike, options?: { bigint?: boolean }) => {
+        const real = realStat(path, options as never);
+        if (path !== continued || real === undefined) return real;
+        const big = options?.bigint === true;
+        return Object.assign(Object.create(Object.getPrototypeOf(real) as object) as object, real, { dev: big ? 1n : 1, ino: big ? inode : Number(inode) });
+      }) as unknown as typeof fs.statSync);
+      try { expect(await held()).toBe(continued); } finally { stat.mockRestore(); }
+    });
+
+    it("binds nothing when a held session's header cannot be read as one", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      const malformed = storeTranscript(pane.cwd!, "2026-10-02_bad.jsonl");
+      writeFileSync(malformed, "not a session header\n");
+      listing = listed([malformed, continued]);
+      expect(await held()).toBeNull();
+      listing = listed([continued]);
+      expect(await held()).toBe(continued);
+    });
+
+    it("binds nothing when another pid is gone while lsof lists and lsof exits 1", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      const gone = pid + 1;
+      processes = [{ pid, name: "omp", argv: ["omp", "-c"] }, { pid: gone, name: "omp", argv: ["omp"] }];
+      // the other omp exits while lsof lists: its start is read with herdr's sample and before lsof, and gone after
+      startOf = (asked, read) => asked === pid ? 1_000_000n : asked === gone && read <= 2 ? 5_000_000n : null;
+      lsof = () => ({ stdout: new Response(listed([continued])).body, exited: Promise.resolve(1), kill: (signal: unknown) => kills.push(signal) });
+      // the gone pid has no listing that proves anything: it is no proof it held nothing of the pane's
+      expect(await held()).toBeNull();
+      expect(lsofCalls).toEqual([["/usr/sbin/lsof", "-nPbw", "-a", "-p", `${pid},${gone}`, "-FpDin"]]);
+    });
+
+    it("lists a process again only once its listing is stale or its start differs", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      expect(await held()).toBe(continued);
+      // read again within the freshness window under the same start: the listing stands, lsof does not run
+      listing = listed([]);
+      expect(await ompHeldTranscript(pane.pane_id, pane.cwd!, true)).toBe(continued);
+      expect(lsofCalls).toHaveLength(1);
+      // the pid now names a process started later: it is listed again
+      startOf = (asked) => asked === pid ? 3_000_000n : null;
+      expect(await ompHeldTranscript(pane.pane_id, pane.cwd!, true)).toBeNull();
+      expect(lsofCalls).toHaveLength(2);
+      // and once the window has passed
+      listing = listed([continued]);
+      expect(await held()).toBe(continued);
+      expect(lsofCalls).toHaveLength(3);
+    });
+
+    it("drops a reused listing whose pid's start changed by the time it is returned", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      expect(await held()).toBe(continued);
+      // within the freshness window an omp the pane started since is listed: the first pid's listing is reused,
+      // and that pid is taken by another process while lsof runs (each read is sampled, before and after lsof)
+      const added = pid + 1;
+      processes = [{ pid, name: "omp", argv: ["omp", "-c"] }, { pid: added, name: "omp", argv: ["omp"] }];
+      startOf = (asked, read) => asked === added ? 7_000_000n : asked === pid ? (read <= 5 ? 1_000_000n : 2_000_000n) : null;
+      listing = `p${added}\nfcwd\nn${pane.cwd}\n`;
+      expect(await ompHeldTranscript(pane.pane_id, pane.cwd!, true)).toBeNull();
+      expect(lsofCalls.at(-1)).toEqual(["/usr/sbin/lsof", "-nPbw", "-a", "-p", String(added), "-FpDin"]);
+    });
+
+    it("binds nothing when any held name is refused, even beside a valid session", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      const missing = join(home, ".omp/agent/sessions", pane.cwd!.replaceAll("/", "-"), "2026-10-02_gone.jsonl");
+      // a name decoding to a control character, one lsof could not have printed, and a store session that does not resolve
+      for (const refused of [`${pane.cwd}/a\\x01b`, `${pane.cwd}/a\\qb`, missing]) {
+        listing = listed([refused, continued]);
+        expect(await held()).toBeNull();
+      }
+      listing = listed([continued]);
+      expect(await held()).toBe(continued);
+    });
+
+    it("re-checks a reused listing's start when lsof cannot be spawned", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      expect(await held()).toBe(continued);
+      // within the freshness window an omp the pane started since needs lsof, which cannot start; meanwhile
+      // the first pid is taken by another process
+      const added = pid + 1;
+      processes = [{ pid, name: "omp", argv: ["omp", "-c"] }, { pid: added, name: "omp", argv: ["omp"] }];
+      startOf = (asked, read) => asked === added ? 7_000_000n : asked === pid ? (read <= 5 ? 1_000_000n : 2_000_000n) : null;
+      lsof = () => { throw new Error("spawn failed"); };
+      expect(await ompHeldTranscript(pane.pane_id, pane.cwd!, true)).toBeNull();
+      expect(lsofCalls).toHaveLength(2);
+    });
+
+    it("with the experimental setting off never runs lsof, and falls back as before", async () => {
+      heldFiles = false;
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]);
+      // the breadcrumb an earlier omp left in this terminal: older than this omp, so the chat stays on the terminal
+      breadcrumb(continued, startedAt - 3_600_000);
+      await expect(paneConversation(pane.pane_id)).rejects.toThrow("no_session_path");
+      // one written since this omp started is taken, as it was before lsof was read
+      breadcrumb(continued, Date.now());
+      expect(await chat()).toEqual(synthetic);
+      expect(lsofCalls).toEqual([]);
+    });
+
+    it("kills lsof and binds nothing when its listing passes the byte cap", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      listing = listed([continued]) + "n/dev/null\n".repeat(110_000);
+      expect(await held()).toBeNull();
+      expect(kills).toEqual(["SIGKILL"]);
+    });
+
+    it("SIGKILLs lsof at its deadline and binds nothing", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      let close = () => {};
+      let exit = (_code: number) => {};
+      lsof = () => ({
+        stdout: new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(listed([continued]))); close = () => controller.close(); } }),
+        exited: new Promise<number>((resolve) => { exit = resolve; }),
+        kill: (signal: unknown) => { kills.push(signal); close(); exit(137); },
+      });
+      // the deadline set once lsof is spawned is held here, and fired by the test instead of the clock
+      const realSetTimeout = globalThis.setTimeout;
+      let fire: (() => void) | null = null;
+      let armed: () => void = () => {};
+      const deadlineSet = new Promise<void>((resolve) => { armed = resolve; });
+      const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms?: number) => {
+        if (lsofCalls.length === 1 && fire === null) { fire = callback; armed(); return 0; }
+        return realSetTimeout(callback, ms);
+      }) as unknown as typeof setTimeout);
+      try {
+        const pending = held();
+        await deadlineSet;
+        fire!();
+        expect(await pending).toBeNull();
+        expect(kills).toEqual(["SIGKILL"]);
+      } finally { timer.mockRestore(); }
+    });
+
+    it("runs lsof only on herdr-core, and only when herdr's report gives no usable session path", async () => {
+      const continued = storeTranscript(pane.cwd!);
+      breadcrumb(continued, Date.now());
+      listing = listed([continued]);
+      // herdr's report in the omp's store is taken as it is: no lsof
+      agentSession = { agent: "omp", kind: "path", value: continued };
+      expect(await chat()).toEqual(synthetic);
+      expect(lsofCalls).toEqual([]);
+      // a report outside the omp's store is rejected: lsof finds the session the omp holds
+      agentSession = { agent: "omp", kind: "path", value: join(home, "elsewhere.jsonl") };
+      expect(await chat()).toEqual(synthetic);
+      expect(lsofCalls).toHaveLength(1);
+      // herdr's own TUI keeps its breadcrumb, without lsof
+      agentSession = undefined;
+      core = false;
+      expect(await chat()).toEqual(synthetic);
+      expect(lsofCalls).toHaveLength(1);
+    });
   });
 
   for (const [profile, includeArgv] of [["personal", true], [null, false], ["personal", false]] as const) it.skipIf(process.platform !== "linux")(`reads the open ${profile ?? "default"} omp transcript when herdr ${includeArgv ? "supplies" : "omits"} argv`, async () => {

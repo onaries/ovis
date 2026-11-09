@@ -268,4 +268,6 @@ export const CHAT_JA: Record<string, string> = {
   "Searched the whole conversation.": "会話全体を検索しました。",
   "This message is no longer in the conversation.": "このメッセージはもう会話にありません。",
   "Couldn't load the earlier messages.": "以前のメッセージを読み込めませんでした。",
+  "Manually connected conversation": "手動で接続した会話",
+  "Can't recognize this Codex conversation?": "Codexの会話を認識できませんか？",
 };

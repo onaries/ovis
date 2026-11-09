@@ -7,13 +7,15 @@
  * focus (TabStrip.css), so the menu is never only behind a right-click. Where the canvas shows a
  * split tab's panes one at a time (SOLO_PANE_QUERY), that menu lists them first.
  * That menu also carries the open pane's actions, so a lone pane shows no ellipsis of its own.
- * A strip whose tabs do not fit scrolls sideways by touch, a trackpad or a mouse wheel.
+ * A strip whose tabs do not fit scrolls sideways by touch, a trackpad or a mouse wheel; the header's
+ * row (`browserTabs`) instead draws no tab under TAB_MIN_WIDTH and lists the rest behind a More
+ * button after the +, the open tab always in the row (lib/tabOverflow.ts).
  * Each tab carries its agent's mark, and a working one a turning ring in its dot's place.
  * On a phone (the sheets' width) the row is not drawn (`inHeader`): the header's title opens
  * `sheet`, the tabs listed with their state, agent and a Close each, and the ways to a new tab.
  */
 import { useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Bot, Ellipsis, Folder, FolderInput, Pencil, Plus, Terminal, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, ChevronDown, Ellipsis, Folder, FolderInput, Pencil, Plus, Terminal, X } from "lucide-react";
 
 import "./TabStrip.css";
 
@@ -27,6 +29,7 @@ import type { RenameRequest } from "../lib/useRenameRequest.ts";
 import { autoTabLabel, customTabLabel, tabLabel } from "../lib/tabName.ts";
 import { shownTabLabels, subscribeTabLabels } from "../lib/tabLabels.ts";
 import { STRIP_AT_REST, stripPlaced, stripScrolled, stripSelected, type StripScroll } from "../lib/tabStripScroll.ts";
+import { TAB_MIN_WIDTH, tabsInRow } from "../lib/tabOverflow.ts";
 import { PANE_TABPANEL_ID, paneTabPanelLabel } from "../lib/paneRegion.ts";
 import { CRAMPED_QUERY, SOLO_PANE_QUERY, tabRowHidden } from "../lib/paneCanvas.ts";
 import { rosterPanes } from "../lib/dagPane.ts";
@@ -115,6 +118,9 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
   const [sent, setSent] = useState<{ tabId: string; label: string } | null>(null);
   const [confirm, setConfirm] = useState<{ tab: HerdrTab; title: string; body: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // the header's row: the room its tabs and + have, and the More list of the tabs left out of it, while open
+  const [room, setRoom] = useState<{ width: number; add: number; open: number } | null>(null);
+  const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   // the tab whose name field just went: its button takes the focus back in the same commit, so the next key lands on it
   const refocus = useRef<string | null>(null);
   // tabs whose close is on its way: a second press, or a held Delete, does not send another
@@ -286,6 +292,23 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
   useLayoutEffect(() => {
     if (tabsHidden && editing === null) setPicker(null);
   }, [tabsHidden, editing]);
+  // the header's row is as wide as the header leaves it, whatever its tabs need (styles.css .header-tabs)
+  useLayoutEffect(() => {
+    const row = strip.current;
+    if (!browserTabs || !row) { setRoom(null); return; }
+    const measure = (): void => {
+      const add = row.querySelector<HTMLElement>(".tab-strip-add");
+      const addWidth = add ? add.getBoundingClientRect().width + (Number.parseFloat(getComputedStyle(add).marginLeft) || 0) : 0;
+      // the open tab is wider at its narrowest on a touch screen (styles.css)
+      const openTab = row.querySelector<HTMLElement>(".tab-strip-item.is-active");
+      const openWidth = (openTab && Number.parseFloat(getComputedStyle(openTab).minWidth)) || TAB_MIN_WIDTH;
+      setRoom((was) => was?.width === row.clientWidth && was.add === addWidth && was.open === openWidth ? was : { width: row.clientWidth, add: addWidth, open: openWidth });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [browserTabs, shown, tabsHidden]);
   useEffect(() => {
     const row = strip.current;
     if (!row) return;
@@ -322,6 +345,14 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
   // a name being typed keeps its row: a keyboard that shortens the screen past the cutoff leaves the field in place
   if (!shown) return null;
   const rowShown = !tabsHidden || editing !== null;
+  const openIndex = Math.max(0, tabs.findIndex((tab) => tab.tab_id === selectedPane.tab_id));
+  // a name being typed keeps its tab in the row, as a window narrowed under it would take the field away
+  const editingIndex = editing ? tabs.findIndex((tab) => tab.tab_id === editing.tabId) : -1;
+  const inRow = room === null ? null : new Set(tabsInRow(tabs.length, openIndex, room.width, room.add, room.open, editingIndex));
+  const leftOut = inRow === null ? [] : tabs.filter((_, index) => !inRow.has(index));
+  const drawnNext = (index: number): boolean => inRow === null ? index + 1 < tabs.length : inRow.has(index + 1);
+  // a window grown wide enough for every tab takes the More list with its button
+  if (moreAnchor && leftOut.length === 0) setMoreAnchor(null);
 
   const panesOf = (tab: HerdrTab): PaneInfo[] => panes.filter((pane) => pane.tab_id === tab.tab_id);
   const paneFor = (tab: HerdrTab): PaneInfo | undefined => {
@@ -510,6 +541,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
         onFocus={(event) => { if (event.target.getAttribute("role") === "tab") focusedTab.current = event.target; }}
         onBlur={(event) => { if (event.relatedTarget !== null) focusedTab.current = null; }}>
         {tabs.map((tab, index) => {
+          if (inRow !== null && !inRow.has(index)) return null;
           const active = tab.tab_id === selectedPane.tab_id;
           const own = panesOf(tab);
           // Settle each pane's wait before rolling up, so a sibling's RUN or DONE stays visible.
@@ -519,7 +551,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
           const pickerOpen = picker?.tab.tab_id === tab.tab_id;
           const name = nameOf(tab);
           return (
-            <div className={`tab-strip-item${active ? " is-active" : ""}${own.length > 1 ? " has-panes" : ""}${editing?.tabId === tab.tab_id ? " is-editing" : ""}${reorder.drag?.tabId === tab.tab_id ? " is-dragging" : ""}${reorder.drag?.boundary === index ? " is-drop-before" : ""}${reorder.drag?.boundary === tabs.length && index === tabs.length - 1 ? " is-drop-after" : ""}`} key={tab.tab_id}>
+            <div className={`tab-strip-item${active ? " is-active" : ""}${own.length > 1 ? " has-panes" : ""}${editing?.tabId === tab.tab_id ? " is-editing" : ""}${reorder.drag?.tabId === tab.tab_id ? " is-dragging" : ""}${reorder.drag?.boundary === index ? " is-drop-before" : ""}${reorder.drag?.boundary === index + 1 && !drawnNext(index) ? " is-drop-after" : ""}`} key={tab.tab_id} data-tab-index={index}>
               {editing?.tabId === tab.tab_id ? (
                 <input
                   className="input tab-strip-rename"
@@ -595,29 +627,35 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
         <button type="button" className="tab-strip-add" aria-label={t("New terminal")} title={t("New terminal")} onClick={newTerminal}>
           <Plus aria-hidden="true" />
         </button>
+        {leftOut.length > 0 && <button type="button" className="tab-strip-more" aria-label={t("{n} more tabs", { n: leftOut.length })} title={t("{n} more tabs", { n: leftOut.length })}
+          aria-haspopup="menu" aria-expanded={moreAnchor !== null} onClick={(event) => setMoreAnchor(moreAnchor ? null : event.currentTarget)}>
+          <ChevronDown aria-hidden="true" />{leftOut.length}
+        </button>}
         {error && <span className="tab-strip-error" role="alert">{error}</span>}
       </div>
   );
   // the header's list of the tabs: each opens where it was left, and closes as the row's menu closes it.
   // The open tab's moves come under them, as the row's menu has them; its other actions are in More (App)
   const openTab = tabs.find((tab) => tab.tab_id === selectedPane.tab_id);
+  const tabItem = (tab: HerdrTab): RowMenuItem => {
+    const status = statusOf(tab);
+    const agent = agentOf(tab);
+    return {
+      id: `tab:${tab.tab_id}`, label: nameOf(tab), icon: Terminal,
+      glyph: <span className="tab-sheet-marks" aria-hidden="true">{statusMark(status)}{agent ? <AgentMark agent={agent} size={18} /> : <Terminal aria-hidden="true" />}</span>,
+      ...(busyStatus(status) ? { hint: t(STATUS_WORD[status]) } : {}),
+      current: tab.tab_id === selectedPane.tab_id,
+      run: () => {
+        const pane = paneFor(tab);
+        if (pane && pane.pane_id !== selectedPane.pane_id) onSelectPane(pane.pane_id);
+      },
+    };
+  };
   const sheetItems = (): RowMenuItem[] => [
-    ...tabs.map((tab): RowMenuItem => {
-      const status = statusOf(tab);
-      const agent = agentOf(tab);
-      const name = nameOf(tab);
-      return {
-        id: `tab:${tab.tab_id}`, label: name, icon: Terminal,
-        glyph: <span className="tab-sheet-marks" aria-hidden="true">{statusMark(status)}{agent ? <AgentMark agent={agent} size={18} /> : <Terminal aria-hidden="true" />}</span>,
-        ...(busyStatus(status) ? { hint: t(STATUS_WORD[status]) } : {}),
-        current: tab.tab_id === selectedPane.tab_id,
-        run: () => {
-          const pane = paneFor(tab);
-          if (pane && pane.pane_id !== selectedPane.pane_id) onSelectPane(pane.pane_id);
-        },
-        ...(tabLocked(tab) ? {} : { aside: { label: t("Close {tab}", { tab: name }), icon: X, run: () => requestClose(tab) } }),
-      };
-    }),
+    ...tabs.map((tab): RowMenuItem => ({
+      ...tabItem(tab),
+      ...(tabLocked(tab) ? {} : { aside: { label: t("Close {tab}", { tab: nameOf(tab) }), icon: X, run: () => requestClose(tab) } }),
+    })),
     ...(openTab ? tabActions(openTab).filter((item) => item.id === "move-left" || item.id === "move-right") : [])
       .map((item, index) => index === 0 ? { ...item, divider: true } : item),
     { id: "new-terminal", label: t("New terminal"), icon: Plus, divider: true, run: newTerminal },
@@ -630,6 +668,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
       {picker && <RowMenu key={picker.workspaces ? "workspaces" : "tab"} anchor={picker.anchor} point={picker.point} restoreFocusTo={picker.previousFocus}
         title={picker.workspaces ? t("Move {tab} to", { tab: nameOf(picker.tab) }) : nameOf(picker.tab)}
         items={picker.workspaces ? workspaceItems(picker.tab) : pickerItems(picker.tab, picker.touch)} align="start" onClose={() => setPicker(null)} />}
+      {moreAnchor && leftOut.length > 0 && <RowMenu anchor={moreAnchor} restoreFocusTo={moreAnchor} title={t("More tabs")} items={leftOut.map(tabItem)} align="start" onClose={() => setMoreAnchor(null)} />}
       {sheet && onSheetClose && <RowMenu anchor={sheet} title={t("Tabs of {workspace}", { workspace: workspace.label })} items={sheetItems()} onClose={onSheetClose} />}
       {confirm && <ConfirmDialog title={confirm.title} body={confirm.body} confirmLabel={t("Close tab")} onConfirm={async () => { await close(confirm.tab); setConfirm(null); }} onClose={() => setConfirm(null)} />}
     </>

@@ -8,7 +8,7 @@ import { createServer } from "./index.ts";
 import { DEVICE_COOKIE } from "./auth.ts";
 import { DeviceStore } from "./devices.ts";
 import { UsageLoginService } from "./usage-login.ts";
-import { UsageService, USAGE_PROVIDERS, type UsageContext } from "./usage.ts";
+import { FRESH_MS, UsageService, USAGE_PROVIDERS, type UsageContext, type UsageProvider } from "./usage.ts";
 
 const roots: string[] = [];
 const servers: ReturnType<typeof createServer>[] = [];
@@ -198,4 +198,86 @@ it("sets a damaged removed-accounts list aside instead of failing the usage repo
     method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: "claude:work" }),
   })).status).toBe(204);
   expect(keys(await (await fetch(`${host.origin}/api/usage`)).json())).toEqual(["claude:expired", "claude:home"]);
+});
+
+it("stops looking up a provider's sign-ins once its accounts are hidden in Settings or removed from Ovis", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ovis-account-list-"));
+  roots.push(root);
+  let now = 1_000;
+  let searches = 0;
+  const copilot: UsageProvider = {
+    id: "copilot",
+    async signIns() {
+      searches += 1;
+      return ["kept", "gone"].map((id) => ({ source: id, token: `token-${id}`, expiresAt: null, account: { id, label: id } }));
+    },
+    async read() { return { plan: "pro", windows: [] }; },
+  };
+  const ctx: UsageContext = {
+    home: root, env: {}, platform: "linux", now: () => now,
+    fetch: async () => { throw new Error("no request expected"); },
+    keychain: async () => ({ status: "missing" }), run: async () => null, has: () => true,
+  };
+  const server = createServer({
+    port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"),
+    machines: false, registerBridge: false, sidecar: false, terminalAttach: false,
+    herdrConfigPath: join(root, "herdr.toml"), usage: new UsageService(ctx, [copilot]),
+  });
+  servers.push(server);
+  const origin = `http://127.0.0.1:${server.port}`;
+  const json = { "content-type": "application/json" };
+  expect((await fetch(`${origin}/api/usage`)).status).toBe(200);
+  expect((await fetch(`${origin}/api/usage/accounts`, { method: "DELETE", headers: json, body: JSON.stringify({ account: "copilot:gone" }) })).status).toBe(204);
+  expect((await fetch(`${origin}/api/preferences`, { method: "PUT", headers: json, body: JSON.stringify({ settings: { usageHidden: ["copilot:kept"] } }) })).status).toBe(200);
+  const before = searches;
+  now += FRESH_MS;
+  const report: UsageReport = await (await fetch(`${origin}/api/usage?refresh=1`)).json();
+  expect(searches).toBe(before);
+  expect([report.providers.map((usage) => usage.key), report.removed?.map((usage) => usage.key)]).toEqual([["copilot:kept"], ["copilot:gone"]]);
+});
+
+it("reads usage after a Settings change only with Plan limits on, and only once an account is shown again", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ovis-account-list-"));
+  roots.push(root);
+  let now = 1_000;
+  let searches = 0;
+  let searched = Promise.withResolvers<void>();
+  const copilot: UsageProvider = {
+    id: "copilot",
+    async signIns() {
+      searches += 1;
+      searched.resolve();
+      return ["a", "b"].map((id) => ({ source: id, token: `token-${id}`, expiresAt: null, account: { id, label: id } }));
+    },
+    async read() { return { plan: "pro", windows: [] }; },
+  };
+  const ctx: UsageContext = {
+    home: root, env: {}, platform: "linux", now: () => now,
+    fetch: async () => { throw new Error("no request expected"); },
+    keychain: async () => ({ status: "missing" }), run: async () => null, has: () => true,
+  };
+  const server = createServer({
+    port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"),
+    machines: false, registerBridge: false, sidecar: false, terminalAttach: false,
+    herdrConfigPath: join(root, "herdr.toml"), usage: new UsageService(ctx, [copilot]),
+  });
+  servers.push(server);
+  const origin = `http://127.0.0.1:${server.port}`;
+  const share = (settings: Record<string, unknown>) => fetch(`${origin}/api/preferences`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings }) });
+  // Plan limits off: no change of the hidden accounts reads anything
+  expect((await share({ showUsage: false })).status).toBe(200);
+  expect((await share({ usageHidden: ["copilot:a"] })).status).toBe(200);
+  expect((await share({ usageHidden: [] })).status).toBe(200);
+  expect(searches).toBe(0);
+  // Plan limits on: hiding one reads nothing, showing it again reads at once
+  expect((await share({ showUsage: true })).status).toBe(200);
+  expect((await fetch(`${origin}/api/usage`)).status).toBe(200);
+  expect(searches).toBe(1);
+  now += FRESH_MS;
+  expect((await share({ usageHidden: ["copilot:a"] })).status).toBe(200);
+  expect(searches).toBe(1);
+  searched = Promise.withResolvers<void>();
+  expect((await share({ usageHidden: [] })).status).toBe(200);
+  await searched.promise;
+  expect(searches).toBe(2);
 });

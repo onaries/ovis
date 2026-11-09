@@ -1,0 +1,14 @@
+╭────────────────────────────────────────────────╮
+│ ⚠️  Dangerous Command                          │
+│ rm -rf ./scratch                               │
+│ ❯ 1. Allow once                                │
+│   2. Allow for this session                    │
+│   3. Add to permanent allowlist                │
+│   4. Deny                                      │
+╰────────────────────────────────────────────────╯
+
+  ↑/↓ to select, Enter to confirm  (3551s)
+── ⠇ 💻 rm -rf ./scratch · 51s · ↓ 5 tok ───────────────────────────────────────────────── clean up the scratch folder ─
+⚠ ❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☤ fixture-model · 10/128K · [░░░░░░░░░░] 0% · ◷ 0.9s · ↑ 5 t/s · 1m · ⏱ 50s · …ha/user/project

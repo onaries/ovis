@@ -412,5 +412,5 @@ export function createInputLane({ TYPED_SETTLE_MS, KEY_SETTLE_MS, clients, sight
   };
 
   // `lastTyped` stays the server's to read: a composer message and a pending one wait out the last keystroke too
-  return { serialize, lastTyped, inputFrames };
+  return { serialize, settleAfterTyping, lastTyped, inputFrames };
 }

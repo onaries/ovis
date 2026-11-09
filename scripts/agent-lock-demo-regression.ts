@@ -53,7 +53,10 @@ async function run(browser: Browser, origin: string, width: number, theme: "ligh
   await item("Pin agent").click();
   await menu();
   await item("Lock agent").click();
-  await row.locator('[data-testid="agent-locked"]').waitFor();
+  await row.locator('[data-testid="agent-locked"]').waitFor({ state: "attached" });
+  // drawn at rest on a phone, under the pointer on a desktop (the compact rows)
+  if (!phone) await row.hover();
+  await row.locator('[data-testid="agent-locked"]').waitFor({ state: "visible" });
   await menu();
   await item("Unlock agent").waitFor();
   assert.equal(await item("Unpin agent").count(), 0, `${tag}: a locked row keeps its pin`);

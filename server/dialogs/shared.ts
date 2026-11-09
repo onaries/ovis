@@ -87,6 +87,8 @@ type Responder =
   | "claude-model"
   | "claude-effort"
   | "codex-model"
+  | "letta-model"
+  | "letta-effort"
   | "omo-question"
   | "omo-review"
   | "omo-typing"
@@ -105,6 +107,7 @@ type Responder =
   | "omp-model"
   | "hermes-question"
   | "hermes-input"
+  | "hermes-approval"
   | "hermes-help"
   | "hermes-status"
   | "hermes-version"
@@ -157,6 +160,12 @@ export type ParsedPrompt = InteractivePrompt & {
   ompCall?: string;
   /** Claude's /effort: the state its Ultracode switch shows, null without one; checked before `s`, never sent */
   claudeUltracode?: boolean | null;
+  /** Letta's /model: what its search line shows (letta.ts), the search each key of a typed one is checked against */
+  lettaSearch?: string;
+  /** Letta's /model: the tab it shows (letta.ts), part of a row's identity */
+  lettaTab?: string;
+  /** Letta's /model: the tabs its tab bar draws, which a search can empty (letta.ts lettaSearchShown) */
+  lettaTabs?: string[];
   menuLabels: string[];
   selectedIndex: number;
   checkedOptionIndices: number[];

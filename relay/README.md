@@ -27,7 +27,10 @@ upgrade, and a request that is not an upgrade is `426`.
 
 `GET /v1/pair?nameplate=<3 Crockford base32>&role=host|guest&v=1`, a WebSocket upgrade: the
 rendezvous for pairing with a typed code (`pair-room.ts`, [docs/relay.md](../docs/relay.md#who-gets-in), "Pairing with a typed code").
-The PC holds a nameplate (`host`, one per nameplate, else `4409`; at most 11 minutes); a device
+The PC holds a nameplate (`host`, one per nameplate, else `4409`; at most 11 minutes). A host that
+adds its PC's key (`&server_id=<id>&public_key=<64 hex>`) answers a server challenge for it first
+(role `pair-host`, `connection_id` the nameplate; `4401` otherwise) and holds the nameplate only
+once it has; while it proves, another host gets `4409` and a device `4404`. A device
 joins it (`guest`: `4404` with no host, `1013` while another guest is there, past 12 guests in the
 room's life or within 2 seconds of the last). Each guest gets a random attempt id the host hears in
 `{"type":"guest","attempt"}` and `{"type":"gone","attempt"}`; a guest's binary frames reach the
@@ -91,6 +94,79 @@ the PC with `4000` and retried. Refusing a data socket does not stop the control
   30 s without an answer. On Cloudflare the runtime answers it (`setWebSocketAutoResponse`)
   without waking the Durable Object, so an idle PC costs nothing.
 
+## Relay pass
+
+A relay may let in only PCs that hold a relay pass (`relay/pass.ts`, `shared/relay-pass.ts`): a
+short-lived token the Ovis account service signs for a PC that proved its relay key to it and that a
+signed-in account lists. Phones and browsers never need one, and the frames stay end-to-end encrypted
+whatever the pass says. The setting is off unless the relay's operator turns it on; a relay you run
+yourself stays open.
+
+**Keep it off on Ovis's relays for now.** Nothing issues passes yet and no PC sends one: turning on
+`grace` would only add a notice, but `enforce` would refuse every PC. It stays `off` until the
+account service issues passes, and PCs fetch and renew them, and send them with their typed-code
+pairing hosts, in a release most PCs run.
+
+- **The pass.** `ovp1.<payload>.<signature>`, base64url. The payload is JSON with exactly `v` (1),
+  `kid`, `aud` (`ovis-relay`), `sid` (the PC's `server_id`), `iat` and `exp` (seconds; 48 hours
+  apart, and a relay refuses one good for longer); the signature is Ed25519 over `ovis-relay-pass/1.` followed by the payload's text. It names
+  no account. A v2 payload has the same fields with `v` 2 and one more, `new`: 1 when new client
+  sessions to the PC are allowed, 0 when they are not for the pass's lifetime; a v1 pass allows
+  them. The prefix stays `ovp1.`: the signature covers the payload, `v` and `new` included. The
+  relay accepts both forms and parses `new`, but does not act on it yet: that is enforced by a
+  later relay change.
+- **Sending it.** The PC puts it in the `x-ovis-relay-pass` header of every PC socket's upgrade
+  (control, data, warm), never in the URL. A pass alone opens nothing: the socket still answers the
+  server challenge for that `server_id`'s key, so a copied pass is no use without the PC's secret key.
+- **Checking it.** Once per socket, before any room: its shape, a known `kid`, `sid` equal to the
+  socket's `server_id`, `iat` at most 5 minutes ahead and `exp` at most 5 minutes behind, then the
+  signature. Never per frame. On Cloudflare the Worker checks it and hands only the result to the
+  Durable Object.
+- **Limits for a PC with a pass.** Every socket counts against its address's budget first. Once that
+  is spent (others behind the same NAT, an office's, say), a PC socket whose pass holds still gets in
+  on a budget of its own, keyed by its `server_id`. Only then is the pass checked before admission:
+  first everything but the signature (a pass for another PC, or one that cannot hold, is refused for
+  nothing), then the signature, which takes one of the address's pass checks (30 a minute) and one
+  place of the backstop's, so forged passes cost a bounded number of signature checks (about 150 us
+  each). It is relief at best, never a guarantee: on Cloudflare these limits count per location and
+  approximately, someone behind the same address can spend its pass checks, and a copied pass (no
+  use without the PC's key) can spend that PC's own budget. A PC then stands where it would without
+  its pass: on its address's budget.
+- **The room.** A proven PC socket's pass authorizes its room until the pass expires; the expiry is
+  kept in the Durable Object's storage, so it outlives an eviction. The PC renews it on its proven
+  control socket with `{"type":"relay_pass","pass":"..."}`, which only ever moves the expiry later; a
+  relay without passes drops that frame like any other.
+- **Modes**, from `RELAY_PASS_MODE` (`--pass-mode`): `off` (the default) lets every PC in as
+  before. `grace` lets every PC in, and adds `"relay_pass":{"state","enforce_at"}` to the control
+  socket's `sync` (`state` `ok`, `missing`, `invalid` or `expired`) and, while the room has no pass
+  that holds, to a client's `assigned` (`missing`), so the app can say so; older PCs read neither.
+  `enforce` closes a PC socket without a pass that holds `4402` (on Cloudflare in the Worker, before
+  any Durable Object), and a room whose pass ran out closes its PC sockets `4402` (its clients with
+  them), warm sockets first, so each hears why. A frame that arrives after the room's pass ran out goes
+  nowhere: the room's PC sockets close first, without waiting for the sweep. `grace` turns into
+  `enforce` at `RELAY_PASS_ENFORCE_AT` (`--pass-enforce-at`, an ISO 8601 UTC instant such as
+  `2027-01-01T00:00:00Z`), and the room wakes then. `RELAY_PASS_KEYS` (`--pass-keys`) is `kid:hex[,kid:hex]`, the Ed25519 public keys;
+  `RELAY_PASS_REVOKED` (`--pass-revoked`) lists `server_id`s refused whatever their pass. An unknown
+  mode is `off`, with a log line. Other settings that do not parse stop the Bun relay from starting;
+  the Worker logs them and runs with passes off, so it never stops routing.
+- **Typed-code pairing hosts.** A `/v1/pair` host offers the PC's key and sends the pass in the same
+  header. The pass is checked as a PC socket's is, for the `server_id` of that key, and the host
+  proves the key for its nameplate before it holds it, so a pass alone holds no nameplate and a proof
+  opens no other nameplate or PC socket. While enforced, a host without a pass that holds for the key
+  it offers (or offering none) closes `4402`, on Cloudflare in the Worker; a device that types a code
+  never needs one. A host keeps its nameplate only while that holds: once enforcement begins, or its
+  pass runs out (5 minutes allowed for clocks), it closes `4402` with its device, at the alarm set for
+  that moment or at the next frame or arrival in the room, whichever comes first; once the relay
+  revokes its PC or no longer trusts its pass's key, at the next frame, arrival or alarm that the new
+  settings reach: after a deploy, a Durable Object may run the previous version and its settings for
+  a few minutes, and a host admitted by a version older than this check names no pass key or PC. Any
+  revocation in the settings closes it the same way (nothing on it says which PC was revoked); a key
+  removed from the settings cannot be matched against one, so without a revocation it is held to its
+  pass's expiry and its 11-minute deadline. The PC then opens the nameplate again with the pass it
+  holds now.
+- **Storage.** With passes off, and for pairing rooms always, the Durable Object never reads its
+  storage.
+
 ## Limits and close codes
 
 | Limit | Value | Past it |
@@ -104,6 +180,8 @@ the PC with `4000` and retried. Refusing a data socket does not stop the control
 | frames held for a waiting client | 200 frames or 1 MiB, whichever comes first | the client closes `1013` |
 | idle | 120 s without a frame or keepalive | the socket closes `1001` |
 | connections per address | Cloudflare Worker: 30 a minute; Bun: 120 a minute | `429`, `Retry-After: 60` |
+| connections per PC whose relay pass holds, once its address's budget is spent (passes on) | Cloudflare Worker: 30 a minute; Bun: as per address | `429`, `Retry-After: 60` |
+| relay passes checked per address past its own budget | Cloudflare Worker: 30 a minute; Bun: as per address | `429`, `Retry-After: 60` |
 | connections from all addresses | 600 a minute | `429`, `Retry-After: 60` |
 | total sockets (Bun, including pending upgrades/proofs) | 1024 | `503`, `Retry-After: 60` |
 | rooms (Bun, including pending upgrades) | 256 | `503`, `Retry-After: 60` |
@@ -117,7 +195,8 @@ the PC with `4000` and retried. Refusing a data socket does not stop the control
 | `1009` | a frame over 64 KiB |
 | `1012` | to a client: its data socket (the PC's side) went away, or the relay lost the frames it held (a Durable Object evicted mid-wait, noticed when the data socket attaches or the client sends again; each such close is counted in the room's `heldFramesLost`); reconnect |
 | `1013` | a limit above; try again later |
-| `4401` | to a PC socket: proof missing, a key that does not derive the `server_id`, or a wrong or late answer |
+| `4401` | to a PC socket, or a pairing host that offers a key: proof missing, a key that does not derive the `server_id`, or a wrong or late answer |
+| `4402` | to a PC socket or a pairing host: no relay pass that holds while the relay asks for one (`relay pass required`, `relay pass expired`, `relay pass invalid`) |
 
 A socket that closes itself has its close answered at once, with its own code when that is `1000`
 or `3000`-`4999` (`1000` otherwise, such as for `1001` or `1005`), and its partner is closed as above. On Cloudflare the
@@ -139,7 +218,7 @@ and counts from 30 s after it, so such a socket closes at most 150 s after its l
 
 It sees, per socket: the `server_id`, the role, the `connection_id`, the PC's public key and its
 answer to the challenge, when frames pass and how
-large they are, and the connecting address (as the key of the per-address rate limiter only). It
+large they are, and the connecting address (as the key of the per-address rate limiters only). It
 does not see what a frame says: frames are encrypted end to end, and the relay neither parses nor
 logs them.
 
@@ -196,7 +275,7 @@ A deploy drops every socket; the PC and clients reconnect. Without the two secre
 with a notice naming the missing one and deploys nothing. It needs the `ovis.sh` zone on the deploying
 account: the route in `wrangler.toml` makes `relay.ovis.sh` a custom domain of the Worker, and
 `workers_dev = false` leaves no second address. The deploy creates the Durable Object class
-(`[[migrations]]`) and the two rate limiters (`[[ratelimits]]`, whose `namespace_id` only has to
+(`[[migrations]]`) and the rate limiters (`[[ratelimits]]`, whose `namespace_id` only has to
 be unique among the account's limiters). The Worker itself has no secrets.
 
 One-time setup by the owner:
@@ -218,6 +297,28 @@ wire version changes (`v=1`); there is none in v1. To check the bundle without d
 cd relay
 bunx wrangler@4.156.0 deploy --dry-run --outdir /tmp/relay-dist
 ```
+
+### Staging
+
+`[env.staging]` in `wrangler.toml` is a copy of the relay for end-to-end checks of passes and pairing
+before a change reaches `relay.ovis.sh`: the Worker `ovis-relay-staging`, at its workers.dev address
+only (`routes = []`: an environment inherits the routes above otherwise), with Durable Objects,
+limiters and a usage dataset (`ovis_relay_usage_staging`) of its own, and passes enforced. CI never deploys it; it is deployed by
+hand, and that deploy never touches `relay.ovis.sh`:
+
+```sh
+cd relay
+bunx wrangler@4.156.0 deploy --env staging
+```
+
+Put the staging account service's public key in `RELAY_PASS_KEYS` under `[env.staging.vars]` first:
+without one the Worker logs `relay.pass.settings_invalid` and lets every PC in. A test PC reaches it
+with `OVIS_RELAY_URL=wss://ovis-relay-staging.<workers.dev subdomain>.workers.dev`,
+`OVIS_ACCOUNT_SERVICE_URL=https://account-staging.devswha.workers.dev` (Ovis's staging account
+service) and `OVIS_RELAY_STAGING=1`: the PC then uses that relay alone (no regional one beside it),
+asks the staging service for its pass and sends it there and nowhere else. With any other account
+service the setting does nothing but log `relay.staging.ignored`, and a pass only ever goes to the
+relays of the service that signed it (the production one's to Ovis's production relays).
 
 ## Running your own
 

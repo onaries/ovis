@@ -123,7 +123,8 @@ serve_port() {
   return 1
 }
 
-[ -f "$repo/dist-shell/index.html" ] || (cd "$repo" && bun run build:shell)
+# no account service: the simulator's WebView has the sign-in plugin, and this run must not reach account.ovis.sh
+[ -f "$repo/dist-shell/index.html" ] || (cd "$repo" && OVIS_ACCOUNT_SERVICE_URL=off bun run build:shell)
 shell_local="$(local_port)"
 relay_local="$(local_port)"
 wda_local="$(local_port)"

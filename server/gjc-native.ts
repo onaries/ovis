@@ -96,7 +96,8 @@ function canonicalDirectory(path: string): string | null {
   }
 }
 
-function readSessionHeader(path: string): { id: unknown; cwd: unknown; type: unknown } | null {
+/** The session file's header, with `identity`: the exact dev:ino of the descriptor it was read through. */
+function readSessionHeader(path: string): { id: unknown; cwd: unknown; type: unknown; identity: string } | null {
   let fd: number | undefined;
   try {
     const noFollow = process.platform === "win32" ? 0 : (fsConstants.O_NOFOLLOW ?? 0);
@@ -106,13 +107,13 @@ function readSessionHeader(path: string): { id: unknown; cwd: unknown; type: unk
     const bytes = readBytes(fd, GJC_TRANSCRIPT_HEADER_BYTES);
     const newline = bytes.indexOf(0x0a);
     if (newline < 0) return null;
-    const after = fstatSync(fd);
-    const pathStat = lstatSync(path);
+    const after = fstatSync(fd, { bigint: true });
+    const pathStat = lstatSync(path, { bigint: true });
     if (!pathStat.isFile() || pathStat.isSymbolicLink() || after.dev !== pathStat.dev || after.ino !== pathStat.ino
       || !samePath(realpathSync(path), path, process.platform)) return null;
     const value: unknown = JSON.parse(bytes.subarray(0, newline).toString("utf8"));
     if (!isRecord(value)) return null;
-    return { id: value.id, cwd: value.cwd, type: value.type };
+    return { id: value.id, cwd: value.cwd, type: value.type, identity: `${after.dev}:${after.ino}` };
   } catch {
     return null;
   } finally {
@@ -127,6 +128,16 @@ export function validateGjcNativeTranscript(
   home: string,
   platform: string = process.platform,
 ): string | null {
+  return validatedGjcNativeTranscript(binding, cwd, home, platform)?.path ?? null;
+}
+
+/** validateGjcNativeTranscript, with the exact dev:ino of the file whose header it read (`identity`). */
+export function validatedGjcNativeTranscript(
+  binding: GjcNativeBinding,
+  cwd: string,
+  home: string,
+  platform: string = process.platform,
+): { path: string; identity: string } | null {
   const session = binding?.session;
   if (!session || typeof session.id !== "string" || session.id === ""
     || typeof session.path !== "string" || typeof session.cwd !== "string"
@@ -148,5 +159,5 @@ export function validateGjcNativeTranscript(
   const header = readSessionHeader(path);
   if (!header || header.type !== "session" || header.id !== session.id || typeof header.cwd !== "string") return null;
   const headerCwd = canonicalDirectory(header.cwd);
-  return headerCwd && samePath(headerCwd, expectedCwd, platform) ? path : null;
+  return headerCwd && samePath(headerCwd, expectedCwd, platform) ? { path, identity: header.identity } : null;
 }

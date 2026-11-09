@@ -1,0 +1,40 @@
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠁⢰⡆⠈⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                    creative: architecture-diagram, ascii-video, +7 more              │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠳⠈⣡⠞⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                    devops: sdlc-review                                               │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                    email: email-inbox-triage, himalaya                               │
+│                                                    media: youtube-content                                            │
+│  fixture-model · Nous Research                     note-taking: obsidian                                             │
+│  /home/user/project  productivity: document-to-action-items, +8 more                   │
+│  Session: 9e66b34c                                 research: arxiv, competitor-news-monitor, grounded-citations      │
+│                                                    social-media: xurl                                                │
+│                                                    software-development: codebase-inspection, dogfood, +6 more       │
+│                                                    web: blocked-page-recovery                                        │
+│                                                                                                                      │
+│                                                    21 tools · 40 skills · /help for commands                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+Welcome to Hermes Agent! Type your message or /help for commands.
+✦ Tip: API_SERVER_MODEL_NAME customizes the model name on /v1/models — essential for multi-profile Open WebUI setups.
+
+
+
+────────────────────────────────────────
+❯ clean up the scratch folder
+────────────────────────────────────────
+╭────────────────────────────────────────────────╮
+│ ⚠️  Dangerous Command                          │
+│                                                │
+│ rm -rf ./scratch                               │
+│                                                │
+│   1. Allow once                                │
+│ ❯ 2. Allow for this session                    │
+│   3. Add to permanent allowlist                │
+│   4. Deny                                      │
+│                                                │
+│ recursive delete                               │
+╰────────────────────────────────────────────────╯
+
+  ↑/↓ to select, Enter to confirm  (3563s)
+── ⠴ 💻 rm -rf ./scratch · 39s · ↓ 5 tok ───────────────────────────────────────────────── clean up the scratch folder ─
+⚠ ❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☤ fixture-model · 10/128K · [░░░░░░░░░░] 0% · ◷ 0.9s · ↑ 5 t/s · 59s · ⏱ 38s · …a/user/project

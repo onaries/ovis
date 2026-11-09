@@ -357,6 +357,7 @@ async function main(): Promise<void> {
       const shouldDisableEvidence = baseEvidenceDir && (
         script === "scripts/ui-regression.ts" ||
         script === "scripts/ui-contexts-regression.ts" ||
+        script === "scripts/ui-contexts-layout-regression.ts" ||
         script === "scripts/key-bar-customization-demo-regression.ts"
       );
 

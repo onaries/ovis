@@ -12,7 +12,6 @@ import { PortalInvite } from "./PortalInvite.tsx";
 import { Address } from "./PhonePanel.tsx";
 import { SettingsGroup, SettingsRow } from "./SettingsControls.tsx";
 
-const PORTAL_INSTALL = "https://github.com/gosuda/portal-tunnel#quick-start";
 
 /**
  * Settings → Phone & devices → Portal: a public HTTPS address for this PC through a relay the
@@ -46,18 +45,8 @@ export function PortalPanel({ readOnly = false }: { readOnly?: boolean }) {
         </SettingsRow>
       </>
     );
-  } else if (status.blocked !== null) {
-    control = <p className="settings-item settings-hint">{status.blocked === "token_required" ? t("Set OVIS_TOKEN on this PC and restart the app to start Portal.") : t("Portal is a second way in: unset OVIS_TAILSCALE_SERVE_ONLY on this PC and restart the app first.")}</p>;
-  } else if (!status.usable) {
-    control = (
-      <div className="settings-item">
-        <p className="settings-hint">
-          {status.version === null ? t("Portal is not installed on this PC.") : t("This PC has Portal {version}; the app needs {min} or later.", { version: status.version, min: status.min_version })}{" "}
-          <a className="settings-link" href={PORTAL_INSTALL} target="_blank" rel="noreferrer">{t("Get Portal")}</a>
-        </p>
-      </div>
-    );
   } else {
+    // Add a connection shows an idle Portal only where it can start (usable, nothing blocking it)
     control = (
       <>
         <PortalAuthChoice status={status} draft={draft} disabled={readOnly || busy} onChange={setEdited} />

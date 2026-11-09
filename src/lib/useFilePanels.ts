@@ -15,10 +15,25 @@ export interface FilePanelsParams {
   selectedMachineId: string;
 }
 
+type Preview = Parameters<ReturnType<typeof useFileViewer>["openFile"]>[0];
+const LEFT_FILES_KEPT = 10;
+const paneKey = (machineId: string, paneId: string): string => `${machineId}\n${paneId}`;
+
+/**
+ * The viewer's React key: a path is read from its pane's folder, so two panes' files of the same path
+ * are two files, and a switch from one to the other must not keep the first one's loaded content.
+ */
+export const fileViewerKey = (preview: { machineId: string; paneId: string | null; path: string }): string =>
+  `${preview.machineId}\n${preview.paneId ?? ""}\n${preview.path}`;
+
+/**
+ * The Files dialog, the file viewer, a repository diff and the web panel, which share the place beside
+ * the pane and the history entries over it; and, with Reopen files on return, the files tab switches left.
+ */
 export function useFilePanels({ settings, filePanelAvailable, selectedPaneId, selectedMachineId }: FilePanelsParams) {
   // the Files dialog, and the file open in the viewer (a path as the chat or the dialog gave it)
   const [filesOpen, setFilesOpen] = useState(false);
-  const { viewing, openFile: openPreview, closeFile, setPresentation, releaseFile } = useFileViewer();
+  const { viewing, openFile: openPreview, closeFile, setPresentation, releaseFile, hideFile, fileFromPop } = useFileViewer();
   // a repository diff from the Files dialog's Changes tab, an entry of its own like a file
   const { viewing: diffViewing, openDiff, closeDiff, releaseDiff } = useRepoDiffViewer();
   const presentation = viewing?.presentation ?? openPresentation(viewing?.path ?? "", settings.fileOpen);
@@ -122,6 +137,49 @@ export function useFilePanels({ settings, filePanelAvailable, selectedPaneId, se
     const wanted = settings.fileOpen === "panel" ? kind : "popup";
     if (viewing !== null && viewing.presentation === undefined && wanted !== openPresentation(viewing.path, settings.fileOpen)) presentFile(wanted);
   }, [viewing, presentFile, settings.fileOpen]);
+  // Settings > File viewer > Reopen files on return (#3179): the file a tab switch left behind, by its
+  // pane, shown again when an in-app switch comes back to that pane. Back needs none of it: the file's
+  // own entry stays under the switch and shows the file again.
+  const leftFiles = useRef(new Map<string, Preview>());
+  // a file showing is no longer waiting: closed there, it must not come back on the next return
+  useEffect(() => {
+    if (viewing?.paneId) leftFiles.current.delete(paneKey(viewing.machineId, viewing.paneId));
+  }, [viewing]);
+  /** Forgets the files of remembered panes `paneLive` no longer finds: a later pane with the same id is another tab. */
+  const forgetLeftFiles = useCallback((paneLive: (machineId: string, paneId: string) => boolean) => {
+    const left = leftFiles.current;
+    for (const [key, file] of left) if (file.paneId !== null && !paneLive(file.machineId, file.paneId)) left.delete(key);
+  }, []);
+  /**
+   * Leaves the file behind on a move to another pane or PC; true when its entry keeps it for Back.
+   * `paneLive` says whether a pane is still in its PC's roster: a closed tab's file gives its place up
+   * before the cap is applied, and the file of a tab that just closed is released, not kept. `wasShown`
+   * is false for a file opened for a pane other than the one shown, which is released as well.
+   */
+  const leaveFile = useCallback((paneLive: (machineId: string, paneId: string) => boolean = () => true, wasShown = true) => {
+    if (!settings.reopenFileOnReturn || viewing?.paneId == null || !wasShown || !paneLive(viewing.machineId, viewing.paneId)) {
+      releaseFile();
+      return false;
+    }
+    const left = leftFiles.current;
+    forgetLeftFiles(paneLive);
+    const key = paneKey(viewing.machineId, viewing.paneId);
+    // the oldest left beyond the cap is forgotten (a Map keeps insertion order)
+    left.delete(key);
+    left.set(key, viewing);
+    for (const oldest of left.keys()) if (left.size > LEFT_FILES_KEPT) left.delete(oldest);
+    hideFile();
+    return true;
+  }, [settings.reopenFileOnReturn, viewing, releaseFile, hideFile, forgetLeftFiles]);
+  /** After a move's entry is pushed: the file left on that pane opens over it again, as its own entry. */
+  const restoreFile = useCallback((machineId: string, paneId: string) => {
+    if (!settings.reopenFileOnReturn) return;
+    const key = paneKey(machineId, paneId);
+    const left = leftFiles.current.get(key);
+    if (left === undefined) return;
+    leftFiles.current.delete(key);
+    openFile(left);
+  }, [settings.reopenFileOnReturn, openFile]);
   const toggleFilePresentation = filePanelAvailable && viewing !== null
     ? () => presentFile(fileDocked ? "popup" : "panel")
     : undefined;
@@ -130,5 +188,5 @@ export function useFilePanels({ settings, filePanelAvailable, selectedPaneId, se
     if (!filesDocked && filePanelAvailable && openPresentation(path, settings.fileOpen) === "panel") setFilesOpen(false);
     openFile({ path, paneId: selectedPaneId, machineId: selectedMachineId });
   }, [openFile, selectedPaneId, selectedMachineId, filePanelAvailable, settings.fileOpen, filesDocked]);
-  return { filesOpen, setFilesOpen, filesDocked, filesCovered, revealFiles, viewing, openFile, closeFile, setPresentation, releaseFile, diffViewing, openDiff, closeDiff, releaseDiff, presentation, fileDocked, webPage, closeWebPage, openWebPage, collapsing, presentFile, openDiffFile, reportFileKind, toggleFilePresentation, viewFile };
+  return { filesOpen, setFilesOpen, filesDocked, filesCovered, revealFiles, viewing, openFile, closeFile, setPresentation, releaseFile, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, diffViewing, openDiff, closeDiff, releaseDiff, presentation, fileDocked, webPage, closeWebPage, openWebPage, collapsing, presentFile, openDiffFile, reportFileKind, toggleFilePresentation, viewFile };
 }

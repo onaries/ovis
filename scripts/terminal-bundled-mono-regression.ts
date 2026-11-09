@@ -151,8 +151,9 @@ setInterval(() => {}, 1 << 30);
     await page.waitForFunction(([family, shown]) => getComputedStyle(document.querySelector(shown)!).fontFamily.includes(family), [FAMILY, shownRows()] as const);
     await page.locator(shownRows(), { hasText: ROWS[1]! }).waitFor();
 
-    // Then: the grid is measured from the face, its rows are the face's, and it fits its host
-    const drawn = await page.evaluate(([family, shown]) => {
+    // Then: the grid is measured from the face, its rows are the face's, and it fits its host. Its rows are
+    // drawn again in a later frame after a face or grid change, so it is measured in a frame whose first rows show the rows written
+    const drawn = await (await page.waitForFunction(([family, shown, written]) => {
       const rows = document.querySelector<HTMLElement>(shown)!;
       const screen = document.querySelector<HTMLElement>(".pane-terminal .xterm-screen")!;
       const size = Number.parseFloat(getComputedStyle(rows).fontSize);
@@ -173,6 +174,8 @@ setInterval(() => {}, 1 << 30);
         }
         return found;
       });
+      const texts = [...rows.children].slice(0, 2).map((row) => row.textContent!.replace(/\s/g, ""));
+      if (texts.join("\n") !== written.join("\n") || bars.some((found) => found.length !== 2)) return null;
       // the screen's width is set in the resize itself; a row's text is drawn again in a later frame
       const cols = Math.round(Number.parseFloat(screen.style.width) / metrics.width);
       return {
@@ -190,7 +193,7 @@ setInterval(() => {}, 1 << 30);
         dpr: devicePixelRatio,
         renderer: document.querySelector<HTMLElement>(".pane-terminal")?.dataset["renderer"] ?? "xterm",
       };
-    }, [FAMILY, shownRows()] as const);
+    }, [FAMILY, shownRows(), ROWS] as const)).jsonValue();
     const [latin, korean] = drawn.bars;
     // |abcdefghijklmn|: the closing bar stands 15 cells after the opening one
     const cell = (latin!.at(-1)! - latin![0]!) / (ROWS[0]!.length - 1);

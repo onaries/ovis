@@ -78,7 +78,7 @@ const MATRIX: readonly (readonly ["en" | "ko" | "ja" | "zh", string, string, str
   ["en", "notifications", "alerts", "-"],
   ["en", "shortcuts", "shortcuts", "-"],
   ["en", "phone", "devices", "-"],
-  ["en", "OpenAI API key", "chat", "openai-key"],
+  ["en", "Speech recognition API", "chat", "openai-key"],
   ["en", "Return inserts a new line", "chat", "composer"],
   ["en", "Send queued messages automatically", "chat", "composer-more"],
   ["en", "Suggestion chip", "chat", "composer"],
@@ -399,7 +399,7 @@ async function heldGroupLanding(browser: import("playwright-core").Browser, url:
       await page.goto(url);
       await page.locator(".conn-live").waitFor({ state: "attached" });
       const asked = await page.evaluate(() => (window as unknown as HeldVoice).voiceAsked());
-      await openPalette(page, "OpenAI API key");
+      await openPalette(page, "Speech recognition API");
       await page.locator(".palette-section[data-section='settings-pages'] [role='option']").first().click();
       await page.waitForFunction((asked) => (document.activeElement as HTMLElement | null)?.dataset.section === "openai-key" && (window as unknown as HeldVoice).voiceAsked() > asked, asked);
       assert.equal(await page.locator(".voice-key").count(), 0, "the key's form waits for the held answer");
@@ -499,8 +499,8 @@ async function dialogSearch(browser: import("playwright-core").Browser, url: str
       // a group named by the words shows each of its settings, and one with a form but no setting row shows the form
       await search.fill("quick replies");
       assert.deepEqual(await shown(), [["Chat", ["Show above the message box"]]], `${width}px: the Quick replies group's setting is found by the group's name`);
-      await search.fill("openai api key");
-      await results.locator('input[aria-label="OpenAI API key"]').waitFor();
+      await search.fill("speech recognition api");
+      await results.locator('input[aria-label="API key"]').waitFor();
 
       // Escape empties a search from a result too, not only from the field
       await search.fill("sound");
@@ -848,6 +848,8 @@ async function accountGoogle(browser: import("playwright-core").Browser, url: st
           }
           await openSettings(page);
           await openSettingsPage(page, "Devices and PCs");
+          // the account waits in More settings
+          await openSettingsFolds(page);
           const account = page.locator("[data-section='account']");
           const shot = async (name: string) => {
             if (!process.env.UI_EVIDENCE_DIR) return;
@@ -882,6 +884,116 @@ async function accountGoogle(browser: import("playwright-core").Browser, url: st
     }
   }
   console.log("PASS Continue with Google shows under GitHub only while the service offers it, and the account lists its ways to sign in, at 390 and 1280px");
+}
+
+/**
+ * Sign-in on the first-run welcome (components/SetupGuide.tsx): Continue with each provider the account
+ * service lists for this page (`GET /v1/providers`), none without an account service, Not now folds it
+ * away and leaves the two choices, and a sign-in this page already holds is the one Settings shows.
+ * The account service is a route of this context: nothing reaches GitHub, Google or account.ovis.sh.
+ */
+async function welcomeSignIn(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  const service = "https://account.ovis.sh";
+  const cases = [
+    { offered: ["github", "google"], signedIn: false },
+    { offered: ["github"], signedIn: false },
+    { offered: ["google"], signedIn: false },
+    { offered: null, signedIn: false },
+    { offered: ["github", "google"], signedIn: true },
+  ] as const;
+  for (const width of [390, 1280] as const) {
+    for (const { offered, signedIn } of cases) {
+      const at = `(${width}px, ${offered === null ? "no account service" : offered.join("+")}${signedIn ? ", signed in" : ""})`;
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 800 }, isMobile: width === 390, hasTouch: width === 390, locale: "en" });
+      try {
+        await context.addInitScript((settings) => {
+          localStorage.setItem("ovis:settings", settings);
+          localStorage.setItem("ovis:setup-guide", JSON.stringify({ status: "open", state: { step: "welcome" } }));
+        }, JSON.stringify({ ...SETTINGS, theme: "light" }));
+        if (offered !== null) {
+          await context.route((address) => address.href.startsWith(url) && (address.pathname.endsWith("/") || address.pathname.endsWith("/index.html")), async (route) => {
+            const response = await route.fetch();
+            await route.fulfill({ response, body: (await response.text()).replace("</head>", `<meta name="ovis-pc-account-service" content="${service}" />\n</head>`) });
+          });
+          await context.route(`${service}/**`, (route) => {
+            const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type", "access-control-allow-methods": "GET, POST, PUT, DELETE" };
+            if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
+            switch (new URL(route.request().url()).pathname) {
+              case "/v1/providers": return route.fulfill({ headers: cors, json: { providers: offered, device: offered } });
+              case "/v1/pcs": return route.fulfill({ headers: cors, json: { pcs: [] } });
+              case "/v1/identities": return route.fulfill({ headers: cors, json: { identities: [{ provider: "google", added_at: "2026-11-06T00:00:00Z" }] } });
+              // a device sign-in that stays pending: the code shows until someone approves it elsewhere
+              case "/v1/signin/github/device": return route.fulfill({ headers: cors, json: { code_challenge_method: "S256", device_code: "fixture-device", user_code: "ABCD-1234", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 5 } });
+              case "/v1/token": return route.fulfill({ status: 400, headers: cors, json: { error: { code: "authorization_pending" } } });
+              default: return route.fulfill({ status: 404, headers: cors, json: { error: { code: "not_found" } } });
+            }
+          });
+        }
+        if (signedIn) {
+          await context.addInitScript((service) => {
+            const request = indexedDB.open("ovis-account", 1);
+            request.onupgradeneeded = () => { request.result.createObjectStore("account"); };
+            request.onsuccess = () => {
+              const tx = request.result.transaction("account", "readwrite");
+              tx.objectStore("account").put({ service, account: "fixture", provider: "google", access_token: "fixture-access", refresh_token: "fixture-refresh", expires_at: Date.now() + 3_600_000 }, "session");
+              tx.oncomplete = () => request.result.close();
+            };
+          }, service);
+        }
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(url);
+        const guide = page.getByRole("region", { name: "Setup guide", exact: true });
+        await guide.getByRole("button", { name: /I've used Ovis before/ }).waitFor();
+        const signIn = guide.locator(".setup-signin");
+        const shot = async (name: string) => {
+          if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `${name}-${width}.png`), animations: "disabled" });
+        };
+        if (offered === null) {
+          // whether this page has an account service is known on first render (its meta tag), with the welcome
+          assert.equal(await signIn.count(), 0, `no sign-in without an account service ${at}`);
+          assert.equal(await guide.locator(".account-provider").count(), 0, `no provider button without an account service ${at}`);
+        } else if (!signedIn) {
+          await signIn.locator("[data-offer='service'] .account-provider").first().waitFor();
+          const expected = offered.map((provider) => provider === "github" ? "Continue with GitHub" : "Continue with Google");
+          assert.deepEqual(await signIn.locator(".account-provider").allTextContents(), expected, `one button for each provider the service lists ${at}`);
+          await shot(`welcome-signin-${offered.join("-")}`);
+          if (offered.length === 1 && offered[0] === "github") {
+            // a code on screen: only its Cancel ends it, Not now cannot fold it away unnoticed
+            await signIn.getByRole("button", { name: "Continue with GitHub", exact: true }).click();
+            await signIn.locator(".account-device-code").filter({ hasText: "ABCD-1234" }).waitFor();
+            assert.equal(await signIn.getByRole("button", { name: "Not now", exact: true }).count(), 0, `no Not now while a device code waits ${at}`);
+            await signIn.getByRole("button", { name: "Cancel", exact: true }).click();
+            await signIn.locator("[data-offer='service'] .account-provider").first().waitFor();
+          }
+          // by keyboard: the box goes and the keyboard's place moves to the first choice, not the page
+          await signIn.getByRole("button", { name: "Not now", exact: true }).focus();
+          await page.keyboard.press("Enter");
+          await signIn.waitFor({ state: "detached" });
+          assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("setup-choice") ?? false), true, `Not now hands the keyboard to the first choice ${at}`);
+          assert.equal(await guide.getByRole("button", { name: /I'm new to Ovis/ }).count(), 1, `Not now leaves the welcome's choices ${at}`);
+          assert.equal(await guide.getByRole("button", { name: /I've used Ovis before/ }).count(), 1, `Not now leaves the welcome's choices ${at}`);
+        } else {
+          // the account's id is the service's own, never shown: the line names the way in, as Settings does
+          await signIn.getByText("Signed in with Google", { exact: true }).waitFor();
+          assert.equal(await signIn.getByRole("button", { name: "Not now", exact: true }).count(), 0, `no Not now once signed in ${at}`);
+          assert.equal(await signIn.locator(".account-provider").count(), 0, `no provider buttons once signed in ${at}`);
+          await shot("welcome-signin-signed-in");
+          await guide.getByRole("button", { name: /I've used Ovis before/ }).click();
+          await guide.waitFor({ state: "detached" });
+          await openSettings(page);
+          await openSettingsPage(page, "Devices and PCs");
+          await openSettingsFolds(page);
+          await page.locator("[data-section='account']").getByText("Signed in with Google", { exact: true }).waitFor();
+        }
+        assert.deepEqual(errors, [], `no page errors ${at}`);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+  console.log("PASS the welcome offers Continue with each provider the account service lists, none without one, Not now keeps the choices, and its sign-in is the one Settings shows, at 390 and 1280px");
 }
 
 /**
@@ -1054,7 +1166,7 @@ try {
             await openSettingsPage(page, label(name), label("Back to settings"));
             // what a page asks the server for (devices, the phone address, the accounts) has arrived
             await page.waitForFunction((loading) => ![...document.querySelectorAll(".settings-body [role='status']")].some((node) => loading.includes(node.textContent?.trim() ?? "")),
-              [label("Loading…"), label("Asking this PC about Tailscale…")]);
+              [label("Loading…")]);
             if (name === "Appearance" && process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `select-arrows-${width}-${language}.png`), animations: "disabled" });
             await checkSelectArrows(page);
             if (name === "Agents") await page.locator(".usage-accounts-row").first().waitFor();
@@ -1615,6 +1727,7 @@ try {
       await rowResets(browser, url);
       await accountPcList(browser, url);
       await accountGoogle(browser, url);
+      await welcomeSignIn(browser, url);
       await runtimeInUse(browser, url);
       await alertChipsReset(browser, url);
       await installedNotes(browser, url);

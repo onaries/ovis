@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Plugin } from "vite";
 import { pagePolicy } from "../server/file-view.ts";
-import { IMMUTABLE_CACHE, REVALIDATE, shellContentSecurityPolicy } from "../server/static.ts";
+import { accountServiceOrigin, DEFAULT_ACCOUNT_SERVICE, IMMUTABLE_CACHE, REVALIDATE, shellContentSecurityPolicy } from "../server/static.ts";
 import { REGIONAL_APPS } from "../shared/relay-regions.ts";
 
 /** Vite's `--mode` that builds the shell; the build's output directory. */
@@ -35,16 +35,13 @@ const MANIFEST_LINK = /<link rel="manifest" href="\/manifest\.webmanifest(\?[^"]
  * and the front page from `/manifest.webmanifest`.
  */
 /**
- * The account metas the shell is built with: `ovis-account-service` from OVIS_ACCOUNT_SERVICE_URL
- * (an https origin, or none and the shell offers no sign-in) and `ovis-account-providers` from
- * OVIS_ACCOUNT_PROVIDERS (GitHub alone without it).
+ * The account metas the shell is built with: `ovis-account-service`, account.ovis.sh unless
+ * OVIS_ACCOUNT_SERVICE_URL names another https origin (none when it is `off` or not https, and the
+ * shell offers no sign-in), as on the PC's own pages; and `ovis-account-providers` from
+ * OVIS_ACCOUNT_PROVIDERS (GitHub alone without it, until the service's own list answers).
  */
 export function accountMetas(env: Record<string, string | undefined>): string[] {
-  let origin: string | null = null;
-  try {
-    const url = new URL(env["OVIS_ACCOUNT_SERVICE_URL"] ?? "");
-    if (url.protocol === "https:") origin = url.origin;
-  } catch { origin = null; }
+  const origin = accountServiceOrigin(env["OVIS_ACCOUNT_SERVICE_URL"] ?? DEFAULT_ACCOUNT_SERVICE);
   if (origin === null) return [];
   const providers = (env["OVIS_ACCOUNT_PROVIDERS"] ?? "").split(",").map((name) => name.trim()).filter((name) => name === "github" || name === "google" || name === "apple");
   return [`<meta name="ovis-account-service" content="${origin}" />`, ...(providers.length > 0 ? [`<meta name="ovis-account-providers" content="${providers.join(",")}" />`] : [])];

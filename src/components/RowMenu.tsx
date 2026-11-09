@@ -67,6 +67,8 @@ interface Props {
 
 const GAP = 4;
 const EDGE = 8;
+/** letters typed within this long of each other look for one item together (a menu's type-ahead) */
+const TYPE_AHEAD_MS = 500;
 const POPOVER_ITEMS = '[role="menuitem"], [role="menuitemcheckbox"]';
 // the sheet is modal: its Cancel is one of the stops
 const SHEET_ITEMS = '.row-sheet-item, .row-sheet-aside, .row-sheet-cancel';
@@ -84,6 +86,9 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   const t = useT();
   const sheet = useMediaQuery(SHEET_QUERY);
   const surface = useRef<HTMLDivElement>(null);
+  // the letters typed so far and when the last came: a long list (a tab strip's More) is searched by its
+  // items' first letters, as a native menu is (G-160)
+  const typed = useRef<{ text: string; at: number }>({ text: "", at: 0 });
   useSheetSwipe(surface, sheet ? onClose : null);
   // Back closes the sheet, not the pane under it
   useSheetHistory(sheet, onClose);
@@ -200,6 +205,20 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
     // Tab stays inside the sheet, which is modal; it leaves the popover, which then goes
     else if (event.key === "Tab" && sheet) move(index + (event.shiftKey ? -1 : 1));
     else if (event.key === "Tab") { event.preventDefault(); onClose(); }
+    // a letter: the next item whose words start with what was typed; the same letter again walks the items that
+    // start with it. Space and the modifiers are left to the item (Space presses it)
+    else if (event.key.length === 1 && event.key !== " " && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      const now = event.timeStamp;
+      const last = typed.current;
+      const text = now - last.at <= TYPE_AHEAD_MS ? last.text + event.key : event.key;
+      typed.current = { text, at: now };
+      const wanted = (text.length > 1 && [...text].every((letter) => letter === text[0]) ? text[0]! : text).toLocaleLowerCase();
+      const words = (button: HTMLElement): string => (button.getAttribute("aria-label") ?? button.textContent ?? "").trim().toLocaleLowerCase();
+      // from the item after the focused one, round to it; a new word searches from the focused one itself
+      const from = wanted === text.toLocaleLowerCase() && text.length > 1 ? index : index + 1;
+      const found = buttons.map((_, offset) => buttons[(from + offset + buttons.length) % buttons.length]!).find((button) => words(button).startsWith(wanted));
+      if (found) { event.preventDefault(); found.focus(); }
+    }
   };
 
   const onBlur = (event: FocusEvent<HTMLDivElement>): void => {
@@ -230,7 +249,8 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
       <div className={`modal-scrim${overModal ? " is-over-modal" : ""}`}>
         <div ref={surface} className="modal row-sheet" role="dialog" aria-modal="true" aria-label={title} onKeyDown={onKeyDown} onBlur={onBlur}>
           <span className="row-sheet-grip" aria-hidden="true" />
-          {header ? <div className="row-sheet-head">{header}</div> : (
+          {/* a header of the menu's own stands in for the title and subtitle; the detail still follows it */}
+          {header ? <div className="row-sheet-head">{header}{detail && <span className="row-sheet-detail">{detail}</span>}</div> : (
             <div className="row-sheet-head">
               <span className="row-sheet-title">{title}</span>
               {subtitle && <span className="row-sheet-subtitle">{subtitle}</span>}

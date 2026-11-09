@@ -67,7 +67,8 @@ async function post(link: Link, target: string, body: unknown) {
   const request = link.open(target, { method: "POST", headers: guard, body: "stream" });
   void request.stream.sendBody(new Response(JSON.stringify(body)).body ?? new ReadableStream()).catch(() => {});
   const response = await request.response;
-  return { status: response.status, body: await response.json() as Record<string, unknown> & { error?: { code: string }; results?: { outcome: string; code?: string }[] } };
+  const text = await response.text();
+  return { status: response.status, body: (text === "" ? {} : JSON.parse(text)) as Record<string, unknown> & { error?: { code: string }; results?: { outcome: string; code?: string }[] } };
 }
 
 async function status(link: Link) {
@@ -207,6 +208,15 @@ test("a member removed from the account signs nothing more here", async () => {
   await post(second.link, "/api/account/records", { records: [await remove(second.key, first.key.spki)] });
   const late = await add(first.key, (await accountKey()).spki);
   expect((await post(second.link, "/api/account/records", { records: [late] })).body.results?.[0]).toMatchObject({ outcome: "refused", code: "signer_not_member" });
+});
+
+test("through the relay only a member of this PC's own account names the account its relay pass is asked under", async () => {
+  const f = fixture();
+  const { link } = await member(f);
+  const outsider = await signedIn(f, await relayDevice(f));
+  expect((await post(outsider, "/api/account/relay-account", { account: ACCOUNT })).body.error?.code).toBe("account_required");
+  expect((await post(link, "/api/account/relay-account", { account: "acct_2" })).body.error?.code).toBe("account_required");
+  expect((await post(link, "/api/account/relay-account", { account: ACCOUNT })).status).toBe(204);
 });
 
 test("only a member enrolls this PC, and the PC applies an enrollment's removes before its adds, whatever the order sent", async () => {

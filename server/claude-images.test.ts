@@ -396,7 +396,10 @@ it("a lookup that sees the file rewritten drops the boundary it kept, even when 
     const at = args as unknown as [number, Uint8Array, number, number, number];
     if (!changed && at[4] === 0) {
       changed = true;
-      writeFileSync(path, broken + same + padding);
+      // a coarse file clock (WSL2 ticks at 250 Hz) can stamp a rewrite within the same tick with the old
+      // times; rewrite until the change time moves, as it has for any later real rewrite
+      const before = fs.statSync(path, { bigint: true }).ctimeNs;
+      do writeFileSync(path, broken + same + padding); while (fs.statSync(path, { bigint: true }).ctimeNs === before);
     }
     return value;
   }) as typeof fs.readSync);
@@ -441,6 +444,42 @@ it.skipIf(process.platform === "win32")("a filesystem exception revokes a reject
   expect(await transcriptImageAsync(path, `${id(1)}:0`)).toBeNull();
 });
 
+it("serves no picture from another transcript that a folder swap holds at the path from the lease's open on", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-image-swap-"));
+  const elsewhere = mkdtempSync(join(tmpdir(), "ovis-image-swap-other-"));
+  roots.push(dir, elsewhere);
+  const path = join(dir, "session.jsonl");
+  // the same record and length: only the picture's bytes tell the files apart
+  const foreign = Buffer.from(png);
+  foreign[foreign.length - 1]! ^= 1;
+  writeFileSync(path, line({ type: "user", uuid: id(1), message: { content: [picture] } }));
+  writeFileSync(join(elsewhere, "session.jsonl"), line({ type: "user", uuid: id(1), message: { content: [{ ...picture, source: { ...picture.source, data: foreign.toString("base64") } }] } }));
+  exact(await transcriptImageAsync(path, `${id(1)}:0`));
+  forgetTranscriptState();
+  // the path names the pane's own file when the lookup begins; from the lease's open until it closes the
+  // other folder is in place, so the lease's own checks of the path against what it pinned agree
+  const away = `${dir}.away`;
+  const held = new Set<number>();
+  let swaps = 0;
+  const { openSync, closeSync } = fs;
+  const opens = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+    if (args[0] !== path) return openSync(...args);
+    if (held.size === 0) { swaps++; renameSync(dir, away); renameSync(elsewhere, dir); }
+    const fd = openSync(...args);
+    held.add(fd);
+    return fd;
+  }) as typeof fs.openSync);
+  const closes = spyOn(fs, "closeSync").mockImplementation(((fd: number) => {
+    closeSync(fd);
+    if (held.delete(fd) && held.size === 0) { renameSync(dir, elsewhere); renameSync(away, dir); }
+  }) as typeof fs.closeSync);
+  let image: Awaited<ReturnType<typeof transcriptImageAsync>>;
+  try { image = await transcriptImageAsync(path, `${id(1)}:0`); } finally { opens.mockRestore(); closes.mockRestore(); }
+  expect(swaps).toBeGreaterThan(0);
+  expect(held.size).toBe(0);
+  expect(image !== null && Buffer.from(image.bytes).equals(foreign) ? "FOREIGN" : image).toBeNull();
+});
+
 it("rejects an image when the path's last check sees a same-size rewrite that put the modification time back", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ovis-image-ctime-"));
   roots.push(dir);
@@ -455,7 +494,11 @@ it("rejects an image when the path's last check sees a same-size rewrite that pu
   let checks = 0;
   const stat = fs.statSync;
   const watch = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
-    if (args[0] === path && ++checks === 3) { writeFileSync(path, text(other)); utimesSync(path, time, time); }
+    if (args[0] === path && ++checks === 3) {
+      // a coarse file clock (WSL2 ticks at 250 Hz) can leave the change time where it was; rewrite until it moves
+      const before = stat(path, { bigint: true }).ctimeNs;
+      do { writeFileSync(path, text(other)); utimesSync(path, time, time); } while (stat(path, { bigint: true }).ctimeNs === before);
+    }
     return stat(...args);
   }) as typeof fs.statSync);
   try { expect(await transcriptImageAsync(path, `${id(1)}:0`)).toBeNull(); } finally { watch.mockRestore(); }

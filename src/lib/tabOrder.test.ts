@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { adjacentTabBoundary, movedTabOrder, tabDropBoundary } from "./tabOrder.ts";
+import { adjacentTabBoundary, drawnTabBoundary, movedTabOrder, tabDropBoundary } from "./tabOrder.ts";
 
 describe("native tab insertion boundaries", () => {
   const ids = ["a", "b", "c", "d"];
@@ -28,5 +28,19 @@ describe("native tab insertion boundaries", () => {
     expect(tabDropBoundary(rects, 0)).toBe(1);
     expect(tabDropBoundary(rects, 85)).toBe(2);
     expect(tabDropBoundary(rects, 208)).toBe(3);
+  });
+});
+
+describe("a drop among the drawn tabs of a row that leaves some out", () => {
+  it("goes right after the drawn tab before the line, past the tabs left out", () => {
+    // A B F drawn of A B C D E F: F dropped after B moves to after B
+    expect(drawnTabBoundary([0, 1, 5], 2)).toBe(2);
+    expect(movedTabOrder(["A", "B", "C", "D", "E", "F"], "F", drawnTabBoundary([0, 1, 5], 2))).toEqual(["A", "B", "F", "C", "D", "E"]);
+    expect(drawnTabBoundary([0, 1, 5], 3)).toBe(6);
+    expect(drawnTabBoundary([0, 1, 5], 0)).toBe(0);
+  });
+
+  it("is the drawn place where every tab is drawn", () => {
+    expect([0, 1, 2, 3].map((at) => drawnTabBoundary([0, 1, 2], at))).toEqual([0, 1, 2, 3]);
   });
 });

@@ -137,6 +137,22 @@ describe("the fake account service", () => {
     expect(((await pull(service, machine, null)).body as { admissions?: unknown[] }).admissions).toEqual([]);
   });
 
+  test("an admission lists the system the device sent and the place its request came from; an unknown system is kept as unknown", async () => {
+    const service = new FakeAccountService(() => Date.parse("2026-11-05T00:00:00.000Z"));
+    service.requestPlace = { country: "KR", city: "Seoul" };
+    const token = service.issueToken("acct_1");
+    const machine = pc();
+    await service.fetch(new Request(`${BASE}/v1/pcs/${machine.serverId}`, { method: "PUT", body: JSON.stringify({ label: "pc", public_key: machine.publicKey, relay: "wss://relay.ovis.sh" }), headers: { authorization: `Bearer ${token}` } }));
+    const [phone, tablet] = [await client(), await client()];
+    await service.fetch(post("/v1/admissions", { server_id: machine.serverId, label: "iPhone", key: phone.spki, os: "ios" }, token));
+    await service.fetch(post("/v1/admissions", { server_id: machine.serverId, label: "Tablet", key: tablet.spki, os: "plan9" }, token));
+    const listed = await (await service.fetch(new Request(`${BASE}/v1/admissions`, { headers: { authorization: `Bearer ${token}` } }))).json() as { admissions: { label: string; os: unknown; country: unknown; city: unknown }[] };
+    expect(listed.admissions.map(({ label, os, country, city }) => ({ label, os, country, city }))).toEqual([
+      { label: "iPhone", os: "ios", country: "KR", city: "Seoul" },
+      { label: "Tablet", os: null, country: "KR", city: "Seoul" },
+    ]);
+  });
+
   test("a member lists its own account's admissions of the last ten minutes, and no other account's", async () => {
     let now = Date.parse("2026-11-05T00:00:00.000Z");
     const service = new FakeAccountService(() => now);
@@ -147,7 +163,7 @@ describe("the fake account service", () => {
     await service.fetch(post("/v1/admissions", { server_id: machine.serverId, label: "Mac", key: waiting.spki }, mine));
     await service.fetch(post("/v1/admissions", { server_id: machine.serverId, label: "Other", key: (await client()).spki }, other));
     const list = async () => (await (await service.fetch(new Request(`${BASE}/v1/admissions`, { headers: { authorization: `Bearer ${mine}` } }))).json()) as { admissions: unknown[] };
-    expect((await list()).admissions).toEqual([{ key: waiting.spki, label: "Mac", server_id: machine.serverId, at: "2026-11-05T00:00:00.000Z" }]);
+    expect((await list()).admissions).toEqual([{ key: waiting.spki, label: "Mac", server_id: machine.serverId, at: "2026-11-05T00:00:00.000Z", os: null, country: null, city: null }]);
     now += ADMISSION_TTL_MS;
     expect((await list()).admissions).toEqual([]);
     expect((await service.fetch(new Request(`${BASE}/v1/admissions`))).status).toBe(401);

@@ -12,6 +12,8 @@ export interface WalkRules {
   readonly ignoreFiles: boolean;
   readonly requireDescription: boolean;
   readonly skipNames?: (name: string) => boolean;
+  /** Look on below a folder whose SKILL.md was loaded, for skills nested in it (Letta's discovery does). */
+  readonly belowSkills?: boolean;
   /** Only when a sibling alias cannot change a skill's name or ignore rules. */
   readonly uniqueFolders?: boolean;
   /** Work remaining, shared by every walk given the same object. */
@@ -244,7 +246,7 @@ export function* walkSkillSteps(root: string, rules: WalkRules): Generator<Walke
             // A missing name falls back to this alias's directory, so those rows stay distinct.
             if (rules.requireDescription && skill && typeof skill.fields.name === "string" && skill.fields.name) visited?.add(canonical);
             yield skill;
-            return;
+            if (!rules.belowSkills) return;
           }
         } catch { /* a broken SKILL.md link does not hide other entries */ }
       }

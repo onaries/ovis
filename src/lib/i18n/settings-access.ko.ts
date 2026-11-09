@@ -5,6 +5,9 @@
  */
 export const SETTINGS_ACCESS_KO: Record<string, string> = {
   "Access": "접근",
+  "Connected to this PC": "이 PC에 연결된 것",
+"phone browser PC pair pairing code QR relay Tailscale Wi-Fi SSH Portal add PC remote PCs": "폰 브라우저 PC 페어링 코드 QR 릴레이 Tailscale Wi-Fi SSH Portal PC 추가 원격 PC",
+  "Devices and access": "기기와 접속",
   "The server did not answer, so these facts are unavailable. Nothing from an earlier check is shown. This page asks again by itself; if this message stays, check that the server is running and that this device can reach it.": "서버가 응답하지\u00a0않아 이 정보를 볼\u00a0수\u00a0없습니다. 이전 확인 결과는 숨깁니다. 이 페이지가 알아서 다시 확인합니다. 이 메시지가 계속 보이면 서버가 켜져\u00a0있는지, 이 기기에서 서버에 접속되는지 확인하세요.",
   "This server does not report these facts. Updating it adds them.": "이 서버는 이 정보를 알려\u00a0주지\u00a0않습니다. 서버를 업데이트하면 표시됩니다.",
   "What this server reports about how it is reached. Each line is one fact, not a safety rating.": "이 서버에 어떻게 접속하는지 서버가 알려\u00a0주는 정보입니다. 각 줄은 하나의 사실이며 안전 등급이 아닙니다.",
@@ -40,16 +43,11 @@ export const SETTINGS_ACCESS_KO: Record<string, string> = {
   "Split the Agents list into groups you name, such as Agents, Replies or Tasks. New workspace and New tab offer them, and an agent's menu moves it. Every browser shares them.": "에이전트 목록을 Agents, Replies, Tasks처럼 직접 이름 붙인 그룹으로 나눕니다. 새 워크스페이스와 새 탭에서 그룹을 고를 수 있고, 에이전트 메뉴에서 옮길 수 있습니다. 모든 브라우저가 함께 씁니다.",
   "Agents under workspaces": "워크스페이스 아래에 에이전트",
   "On this device, list each workspace's agents under it in the PCs list, so every PC shows its workspaces and the agents running in them. The Agents list stays as it is.": "이 기기에서 PC 목록의 각 워크스페이스 아래에 그 워크스페이스의 에이전트를 보여 줍니다. PC마다 워크스페이스와 그 안에서 실행 중인 에이전트를 한눈에 볼 수 있습니다. 에이전트 목록은 그대로 남습니다.",
-  "Code from another PC": "다른 PC의 코드",
-  "Compare it with the ID at the top of My devices on {name}. Pair only if every group matches.": "{name}의 내 기기 맨 위 ID와 비교하세요. 모든 묶음이 같을 때만 페어링하세요.",
-  "The code that PC shows under Connect a device.": "그 PC의 기기 연결에 보이는 코드입니다.",
   "ID {id}": "ID {id}",
-  "My devices": "내 기기",
   "Sign out of this PC": "이 PC에서 로그아웃",
   "This app": "이 앱",
   "Use the relay": "릴레이 사용",
   "Tablet": "태블릿",
-  "phone browser PC pair pairing code QR relay Tailscale Wi-Fi SSH Portal add PC remote PCs": "폰 브라우저 PC 페어링 코드 QR 릴레이 Tailscale Wi-Fi SSH Portal PC 추가 원격 PC",
   "machines computers ssh bridge plugins phone pair relay QR code Remote PCs": "기기 컴퓨터 ssh 브리지 플러그인 폰 페어링 릴레이 QR 코드 원격 PC",
 "While a terminal or chat pane is open.": "터미널이나 채팅 패널을 보는 동안 화면을 켜 둡니다.",
 };

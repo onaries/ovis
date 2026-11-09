@@ -39,7 +39,7 @@ import { shellContentSecurityPolicy } from "../server/static.ts";
 import { REGIONAL_APPS } from "../shared/relay-regions.ts";
 import type { UpdateService } from "../server/update-api.ts";
 import { MIN_SERVER_VERSION } from "../shared/relay-mux.ts";
-import { noInstalledNotes, noUpdateNotes } from "../shared/update.ts";
+import { noInstalledNotes, noUpdateNotes, INSTALL_ID } from "../shared/update.ts";
 import type { UpdateRequest, UpdateStatus } from "../shared/update.ts";
 import { version as shellVersion } from "../package.json";
 import { exportPublicKey, generateKeyPair, openDaemonSecureChannel } from "../shared/relay-e2ee.ts";
@@ -772,12 +772,13 @@ export async function relayShellQa(tree: RelayServerTree): Promise<void> {
     {
       const { context, page, bridge } = await open({ theme: "light" });
       const forged: RelayOffer = { ...(await serverOffer()), server_public_key: exportPublicKey(generateKeyPair().publicKey) };
-      const refused = async (attempt: string): Promise<void> => {
+      /** `from`: sockets before the link, such as the front page's check of the saved PC, which are not the link's */
+      const refused = async (attempt: string, from = 0): Promise<void> => {
         await state(page, "identity-changed").waitFor();
         await page.getByRole("heading", { name: "This link is not Desk PC's" }).waitFor();
         assert.equal(await page.getByRole("button", { name: "Pair", exact: true }).count(), 0, `no Pair on a forged link (${attempt})`);
         assert.equal(await page.getByRole("button", { name: "Forget this PC" }).count(), 0, `nothing to forget on a forged link (${attempt})`);
-        assert.deepEqual(bridge.sockets, [], `a forged link opens no socket (${attempt})`);
+        assert.deepEqual(bridge.sockets.slice(from), [], `a forged link opens no socket (${attempt})`);
       };
       await page.goto(offerUrl(forged));
       await refused("opened");
@@ -793,15 +794,18 @@ export async function relayShellQa(tree: RelayServerTree): Promise<void> {
       // from another page, so the link is a fresh load and not a hash change on this one
       await page.goto(`${origin}/`);
       await state(page, "list").waitFor();
+      // the front page checks the saved PC once, with no session (pcStatus.ts): its socket is the list's, not the link's
+      await page.locator('[data-connection]:not([data-connection="checking"])').first().waitFor();
+      const listed = bridge.sockets.length;
       await page.goto(offerUrl(forged));
-      await refused("with the PC's key saved");
+      await refused("with the PC's key saved", listed);
       assert.notEqual(await saved(page, ID), null, "the key saved from the PC's own pairing stays");
       // a key saved from a forged link by an earlier build: this PC's page warns instead of connecting, and Forget removes it
       await seed(page, [{ server_id: ID, server_public_key: forged.server_public_key, name: "Desk PC", device_id: "forged-device" }]);
       await page.goto(scope);
       await state(page, "identity-changed").waitFor();
       await page.getByRole("heading", { name: "Desk PC has a new identity" }).waitFor();
-      assert.deepEqual(bridge.sockets, [], "a forged saved key never connects");
+      assert.deepEqual(bridge.sockets.slice(listed), [], "a forged saved key never connects");
       await page.getByRole("button", { name: "Forget this PC" }).click();
       await state(page, "forgotten").waitFor();
       assert.equal(await saved(page, ID), null, "Forget removed the forged saved key");
@@ -1136,7 +1140,11 @@ export async function relayShellQa(tree: RelayServerTree): Promise<void> {
           assert.deepEqual(updates.requests, [], "nothing is installed before the tap");
           await page.getByRole("button", { name: "Update now" }).click();
           await bounded(updates.installed, "the PC's update service received the install");
-          assert.deepEqual(updates.requests, [{ command: "install", expected_revision: "b".repeat(40) }], "one install of the release on offer, no check first");
+          // one install of the release on offer, named by it, with the install_id its 202 gave (a cancel names that id)
+          assert.equal(updates.requests.length, 1, "one install of the release on offer, no check first");
+          const [asked] = updates.requests as { command?: string; expected_revision?: string; install_id?: string }[];
+          assert.deepEqual([asked?.command, asked?.expected_revision], ["install", "b".repeat(40)], "one install of the release on offer, no check first");
+          assert.match(asked?.install_id ?? "", INSTALL_ID, "the install carries the id its 202 gave");
           await page.getByText("Step 4 of 5: Building the app").waitFor();
           await shot19(page, "update");
           note(`pc-outdated (managed): WELCOME ${below} < ${MIN_SERVER_VERSION} -> update screen; Update now -> POST /api/updates/install over the relay -> fake service recorded ${JSON.stringify(updates.requests)}; progress from GET /api/updates`);

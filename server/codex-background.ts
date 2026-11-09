@@ -40,7 +40,7 @@ export class CodexBackgroundTasks {
     }
     if (read.offset < stat.size) {
       const state = read;
-      const done = readLines(path, read.offset, stat.size, READ_BYTES, (line) => this.line(state, line), read.skipping);
+      const done = readLines(path, read.offset, stat, READ_BYTES, (line) => this.line(state, line), read.skipping);
       read.offset = done.offset;
       read.skipping = done.skipping;
       read.behind = done.failed === true || done.more;

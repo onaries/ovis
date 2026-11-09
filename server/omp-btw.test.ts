@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -104,8 +104,13 @@ describe("ompBtwTopics", () => {
     save(history, { ...topic("r1", 1), answer: "first" });
     utimesSync(join(history, "entry-r1.json"), when, when);
     expect(ompBtwTopics(transcript).topics[0]?.answer).toBe("first");
-    save(history, { ...topic("r1", 1), answer: "again" });
-    utimesSync(join(history, "entry-r1.json"), when, when);
+    // a kernel stamping files from a coarse clock (WSL2 ticks at 250 Hz) gives a rewrite within the same
+    // tick the old change time too; rewrite until it moves, as it has for any later real rewrite
+    const before = statSync(join(history, "entry-r1.json"), { bigint: true }).ctimeNs;
+    do {
+      save(history, { ...topic("r1", 1), answer: "again" });
+      utimesSync(join(history, "entry-r1.json"), when, when);
+    } while (statSync(join(history, "entry-r1.json"), { bigint: true }).ctimeNs === before);
     expect(ompBtwTopics(transcript).topics[0]?.answer).toBe("again");
   });
 

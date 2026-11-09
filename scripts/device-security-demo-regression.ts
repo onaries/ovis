@@ -15,7 +15,7 @@ import { KO } from "../src/lib/i18n.ko.ts";
 // (the access token, this PC, its Tailscale login); the confirmation asks again, with Cancel in
 // focus, and a refused write stays in the dialog with the server's words; a confirmed revocation
 // empties the list; a device that only watches sees the words and no working button; a fictional
-// pairing (its code started from Connect, Other ways to connect, Same Wi-Fi) shows one notice, whose
+// pairing (its code started from Add a connection, Phones and devices) shows one notice, whose
 // action opens Devices and PCs and whose X dismisses it. Nothing
 // overflows a 390 px phone, and its touch targets are 44 px. With UI_EVIDENCE_DIR set, each state
 // is captured at 390 (phone emulation) and 1440, light and dark, plus Korean at 390, with a manifest.
@@ -53,6 +53,9 @@ async function open(context: BrowserContext, port: number, search: string): Prom
   await page.goto(`http://127.0.0.1:${port}/herdr-web-ui/demo/app/?settings=devices${devices}${search}`);
   await page.locator(".conn-live").waitFor();
   await page.locator(".settings-dialog").waitFor();
+  // Revoke every device and how this browser got in wait in More settings, under the list: open, as a reader who goes there
+  const more = page.locator('.settings-dialog .settings-fold[data-fold="more"]');
+  if (await more.count() > 0) await more.evaluate((fold) => { (fold as HTMLDetailsElement).open = true; });
   return { page, errors };
 }
 
@@ -279,16 +282,14 @@ try {
         try {
           await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), settingsOf(language, theme));
           const press = async (target: Locator): Promise<void> => { if (phone) await target.tap(); else await target.click(); };
-          // Connect, Other ways to connect, Same Wi-Fi: the six-digit code, which that way starts at once
+          // Add a connection, Phones and devices: the six-digit code, which that tab starts once it first opens
           const startCode = async (page: Page): Promise<void> => {
-            await press(page.locator('.settings-dialog [data-section="devices"]').getByRole("button", { name: label("Connect"), exact: true }));
-            const sheet = page.locator(".connect-phone-dialog");
-            await press(sheet.locator("details.connect-other > summary"));
-            await press(sheet.locator(".connect-way", { hasText: label("Same Wi-Fi") }));
+            await press(page.locator('.settings-dialog [data-section="devices"]').getByRole("button", { name: label("Add a connection"), exact: true }));
+            await press(page.locator('.connect-phone-dialog .connect-tabs [data-tab="devices"]'));
           };
-          const shownCode = (page: Page): Locator => page.locator(".connect-phone-dialog .connect-way-body .compact-pair-code");
+          const shownCode = (page: Page): Locator => page.locator('.connect-phone-dialog [data-tab-panel="devices"] .compact-pair-code');
           const closeSettings = async (page: Page): Promise<void> => {
-            // the code is in the Connect a device dialog, which closes by itself once the device is in
+            // the code is in the Add a connection dialog, which closes by itself once the device is in
             await page.locator(".connect-phone-dialog").waitFor({ state: "detached", timeout: PAIRS_WITHIN_MS });
             await page.keyboard.press("Escape");
             await page.locator(".settings-dialog").waitFor({ state: "detached" });
@@ -341,7 +342,9 @@ try {
               return card.getBoundingClientRect().bottom <= (scroller as HTMLElement).getBoundingClientRect().bottom + 0.5;
             }, scroller), true, "the devices card ends inside the view, its bottom padding included");
             const end = await capture(page, `${prefix}-scrolled-end`, about("scrolled-end"));
-            if (evidence && scrolls) assert.equal(new Set([rest, longLabel, end]).size, 3, "rest, long label and the end are three different frames");
+            // Revoke every device sits in More settings, out of the devices card these frames were made to show; on a short
+            // page two of them may be one picture, so they are kept as evidence without asserting that they differ
+            void [rest, longLabel, end, scrolls];
             assert.deepEqual(await overflow(page), [], `nothing reaches past the edge at ${width}`);
             if (phone) {
               const targets = await touchTargets(page, ".devices-panel button");
@@ -350,8 +353,12 @@ try {
             if (!phone) {
               await rowButton.hover();
               await capture(page, `${prefix}-hover`, about("hover"));
-              // keyboard focus: Tab from the control before it (the last device's revoke button), so the ring is the keyboard's
-              await page.locator(ROW).last().locator("button").last().focus();
+              // keyboard focus: Tab from the control before it (in More settings, under the list), so the ring is the keyboard's
+              await rowButton.evaluate((button) => {
+                const focusable = [...document.querySelectorAll<HTMLElement>("button, a[href], input, select, summary, [tabindex]:not([tabindex='-1'])")]
+                  .filter((node) => !node.matches(":disabled") && node.getClientRects().length > 0);
+                focusable[focusable.indexOf(button as HTMLElement) - 1]?.focus();
+              });
               await page.keyboard.press("Tab");
               assert.equal(await rowButton.evaluate((node) => node === document.activeElement && node.matches(":focus-visible")), true, "Tab reaches Revoke all with a visible focus ring");
               const focused = await capture(page, `${prefix}-focus-visible`, about("focus-visible"));

@@ -113,18 +113,22 @@ describe("saved theme migration", () => {
     expect(sanitizeSettings({ terminalMirrorWrap: "yes" }).terminalMirrorWrap).toBeNull();
   });
 
-  it("shows the sidebar filter until it is turned off, kept in its own key, out of an old tab's whole-record save", () => {
-    expect(loadSettings().sidebarFilter).toBe(true);
-    saveSettings(sanitizeSettings({ sidebarFilter: false }));
+  it("leaves the sidebar filter out until it is turned on, kept in its own key, out of an old tab's whole-record save", () => {
+    expect(loadSettings().sidebarFilter).toBe(false);
+    saveSettings(sanitizeSettings({ sidebarFilter: true }));
     expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("sidebarFilter");
     oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
-    expect(loadSettings().sidebarFilter).toBe(false);
+    expect(loadSettings().sidebarFilter).toBe(true);
     expect(loadSettings().terminalFontSize).toBe(18);
-    saveSettings({ ...loadSettings(), sidebarFilter: true });
-    expect(loadSettings().sidebarFilter).toBe(true);
-    expect(sanitizeSettings({ sidebarFilter: "off" }).sidebarFilter).toBe(true);
-    records.set("ovis:sidebar-filter", "not json");
-    expect(loadSettings().sidebarFilter).toBe(true);
+    saveSettings({ ...loadSettings(), sidebarFilter: false });
+    expect(loadSettings().sidebarFilter).toBe(false);
+    expect(sanitizeSettings({ sidebarFilter: "on" }).sidebarFilter).toBe(false);
+    records.set("ovis:sidebar-filter-shown", "not json");
+    expect(loadSettings().sidebarFilter).toBe(false);
+    // the earlier key held the old default (on) on every device that saved any setting: it is not read
+    records.delete("ovis:sidebar-filter-shown");
+    records.set("ovis:sidebar-filter", "true");
+    expect(loadSettings().sidebarFilter).toBe(false);
   });
 
   it("keeps the PC load choice in its own key, out of an old tab's whole-record save, and unchosen until chosen", () => {
@@ -444,13 +448,8 @@ it("leaves herdr's focus alone until this device asks to follow it, and keeps th
   expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("followHerdrFocus");
 });
 
-it("keeps the split view to two halves until this device turns on rows and columns, and keeps that choice its own", () => {
-  expect(DEFAULT_SETTINGS.splitGrid).toBe(false);
-  expect(sanitizeSettings({}).splitGrid).toBe(false);
-  expect(sanitizeSettings({ splitGrid: true }).splitGrid).toBe(true);
-  expect(sanitizeSettings({ splitGrid: "true" }).splitGrid).toBe(false);
-  expect(SETTING_SCOPE.splitGrid).toBe("device");
-  expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("splitGrid");
+it("drops the rows-and-columns choice an older version stored: the split view always takes rows and columns", () => {
+  expect(sanitizeSettings({ splitGrid: false })).not.toHaveProperty("splitGrid");
 });
 
 it("keeps a Codex pane's drag Ovis's until this device hands it to Codex, and keeps that choice its own", () => {

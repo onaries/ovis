@@ -7,7 +7,8 @@
  * Parents always precede their children (verified against every session in a real
  * store), so the last line is the leaf and one forward pass indexes the tree.
  */
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, readSync, statSync } from "node:fs";
+import { ConversationReadPending, openBound } from "./conversation-shared.ts";
 
 /** Bound work/retention, not cumulative history bytes: pages already bound transcript reads. */
 export const MAX_PI_INDEX_ENTRIES = 100_000;
@@ -77,7 +78,7 @@ const INDEX_CHUNK_BYTES = 4 * 1024 * 1024;
  */
 function extendIndex(index: PiIndex, path: string, size: number): void {
   if (index.scanned >= size) return;
-  const fd = openSync(path, "r");
+  const fd = openBound(path);
   try {
     let end = index.scanned; // absolute offset just past the bytes held in `bytes`
     let carry = Buffer.alloc(0);
@@ -119,7 +120,7 @@ function extendIndex(index: PiIndex, path: string, size: number): void {
 function readBefore(path: string, offset: number, bytes: number): string {
   const from = Math.max(0, offset - bytes);
   if (from >= offset) return "";
-  const fd = openSync(path, "r");
+  const fd = openBound(path);
   try {
     const buffer = Buffer.alloc(offset - from);
     return buffer.subarray(0, readSync(fd, buffer, 0, buffer.length, from)).toString("latin1");
@@ -162,7 +163,11 @@ export function piEntryIndex(path: string): PiIndex | null {
       total -= item.retainedBytes;
     }
     return fresh;
-  } catch { return null; }
+  } catch (error) {
+    // another file than the one the read is bound to: the read is pending, not an unreadable tree
+    if (error instanceof ConversationReadPending) throw error;
+    return null;
+  }
 }
 
 /** Drops one file's index: the next read rebuilds it from the file, which is all it ever was. */
@@ -212,10 +217,12 @@ export function piBranchSegments(path: string, size: number): TranscriptSegment[
 
 /** Read active-branch records with their immutable append ranges, one at a time. */
 export function* piBranchRecordRanges(path: string, size: number): Generator<{ line: string; start: number; end: number }> {
-  const branch = piBranchSegments(path, size), index = piEntryIndex(path);
+  let branch: TranscriptSegment[] | null, index: PiIndex | null;
+  // another file than the one the read is bound to holds no records of it
+  try { branch = piBranchSegments(path, size); index = piEntryIndex(path); } catch { return; }
   if (!branch || !index || (index.entries.at(-1)?.end ?? 0) > size) return;
   let fd: number;
-  try { fd = openSync(path, "r"); } catch { return; } // moved or removed since it was indexed: nothing to read
+  try { fd = openBound(path); } catch { return; } // moved or removed since it was indexed, or another file: nothing to read
   try {
     for (const segment of branch) {
       let low = 0, high = index.entries.length;

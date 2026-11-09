@@ -148,7 +148,7 @@ try {
                 return box.top >= 0 && box.bottom <= innerHeight && !!hit && element.contains(hit);
               };
               const scroller = document.querySelector(".row-sheet .row-sheet-detail")!;
-              return { title: hittable(".row-sheet .row-sheet-title"), pin: hittable(".row-sheet .row-sheet-item"), cancel: hittable(".row-sheet .row-sheet-cancel"), scrolls: scroller.scrollHeight > scroller.clientHeight };
+              return { title: hittable(".row-sheet .row-menu-target-name"), pin: hittable(".row-sheet .row-sheet-item"), cancel: hittable(".row-sheet .row-sheet-cancel"), scrolls: scroller.scrollHeight > scroller.clientHeight };
             });
             assert.deepEqual(reach, { title: true, pin: true, cancel: true, scrolls: true }, "long tokens scroll in the sheet and leave its title and actions in reach");
             if (evidence && rows === "one") await page.screenshot({ path: join(evidence, "tokens-phone-sheet-many.png") });

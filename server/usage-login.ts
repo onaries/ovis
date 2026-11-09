@@ -154,7 +154,8 @@ function processAlive(pid: number): boolean {
 
 /** Only panes this service launched invalidate usage when their login process exits. */
 export class UsageLoginService {
-  private readonly panes = new Set<string>();
+  /** by pane, the provider it signs in to */
+  private readonly panes = new Map<string, UsageProviderId>();
   /**
    * The sign-ins the browser follows, by the random id only the browser that started one is given: each
    * runs in this server's own PTY, so no herdr pane (read, attached, streamed or listed by any device) ever
@@ -172,11 +173,11 @@ export class UsageLoginService {
     const secret = Buffer.from(login.secret);
     return sent.length === secret.length && timingSafeEqual(sent, secret) ? login : undefined;
   }
-  private readonly endedListeners: ((account: string | null) => void)[] = [];
+  private readonly endedListeners: ((account: string | null, provider: UsageProviderId) => void)[] = [];
   private stopped = false;
 
-  /** Called once a followed sign-in's CLI exits, with the key of the account it signed in (null when none): the usage it may have changed is read again. */
-  onLoginEnded(listener: (account: string | null) => void): void { this.endedListeners.push(listener); }
+  /** Called once a followed sign-in's CLI exits, with the key of the account it signed in (null when none) and its provider: the usage it may have changed is read again. */
+  onLoginEnded(listener: (account: string | null, provider: UsageProviderId) => void): void { this.endedListeners.push(listener); }
   /**
    * One login at a time per credential home, Add account and Sign in again alike: two CLIs writing
    * one home race each other's tokens. By home, the login or launch of this server holding it.
@@ -208,9 +209,12 @@ export class UsageLoginService {
     await Promise.all(running.map((login) => login.done));
   }
 
-  ended(paneId: string): boolean {
+  /** The provider a sign-in pane of this service signed in to, once that pane is gone; undefined for any other pane. */
+  ended(paneId: string): UsageProviderId | undefined {
     for (const [home, holder] of this.logins) if (isTab(holder) && holder.pane === paneId) this.release(home, holder);
-    return this.panes.delete(paneId);
+    const provider = this.panes.get(paneId);
+    this.panes.delete(paneId);
+    return provider;
   }
 
   persistTo(stateDir: string): void { this.file = join(stateDir, "usage-logins.json"); }
@@ -296,7 +300,7 @@ export class UsageLoginService {
         }
       }
       for (const [home, holder] of this.logins) if (isPrivate(holder) && holder.launch === login.lock) this.release(home, holder);
-      for (const listener of this.endedListeners) listener(login.signedIn?.key ?? null);
+      for (const listener of this.endedListeners) listener(login.signedIn?.key ?? null, login.provider);
       login.ended = true;
       login.changed.resolve();
       const ended = [...this.privates].filter(([, entry]) => entry.ended);
@@ -634,7 +638,7 @@ export class UsageLoginService {
       };
       const created = workspace ? await tabCreate({ ...options, workspaceId: workspace.workspace_id }) : await workspaceCreate(options);
       const paneId = created.root_pane.pane_id;
-      this.panes.add(paneId);
+      this.panes.set(paneId, id);
       trackPane?.(paneId);
       // the tab is open: from here on its terminal holds the home, also for a server started again. The
       // login is sent only once the file says so: run under a launch entry that expires, or one another

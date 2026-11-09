@@ -122,6 +122,33 @@ export function machineErrorText(words: string, translateIn: Translate): string 
   return known.reduce((text, [english, local]) => text.replaceAll(english, local), words);
 }
 
+/** What ssh itself said when a PC could not be reached: the kind of refusal, and the host and port it named. */
+export interface SshFailure {
+  reason: "refused" | "unreachable" | "timeout" | "unknown-host" | "auth";
+  host: string | null;
+  port: string | null;
+}
+
+const SSH_REASONS: ReadonlyArray<[RegExp, SshFailure["reason"]]> = [
+  [/connection refused/i, "refused"],
+  [/could not resolve hostname|name or service not known|nodename nor servname/i, "unknown-host"],
+  [/timed out|timeout/i, "timeout"],
+  [/no route to host|network is unreachable|host is down/i, "unreachable"],
+  [/permission denied|authentication failed|too many authentication failures/i, "auth"],
+];
+
+/**
+ * The sidebar's one-line reading of an SSH failure (G-031): ssh's own words name the host and port it tried
+ * (`ssh: connect to host old-desktop port 22: Connection refused`), and a few reasons are common enough to
+ * say in plain words. Null for any other failure, which is shown as written.
+ */
+export function sshFailure(words: string): SshFailure | null {
+  const reason = SSH_REASONS.find(([pattern]) => pattern.test(words))?.[1];
+  if (reason === undefined) return null;
+  const target = /connect to host (\S+) port (\d+)/i.exec(words) ?? /hostname (\S+?):?\s/i.exec(words);
+  return { reason, host: target?.[1] ?? null, port: target?.[2] ?? null };
+}
+
 /** The failure's parts: the cause when the status or the server's words name one, the advice, the words. */
 export function userFailure(cause: unknown): UserFailure {
   const kind = kindOf(cause);

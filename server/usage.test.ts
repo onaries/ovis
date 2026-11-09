@@ -1144,6 +1144,444 @@ describe("the service", () => {
     expect((await service.report()).providers.map((usage) => usage.account)).toEqual(["other@example.com"]);
   });
 
+  it("stops looking up a provider's sign-ins once every account it lists is hidden or removed, until one is shown again", async () => {
+    let searches = 0;
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() {
+        searches += 1;
+        return ["a", "b", "none"].map((id) => ({ source: id, token: `token-${id}`, expiresAt: null, account: { id, label: id } }));
+      },
+      // "none" has no plan, so it is never listed and cannot be hidden
+      async read(_ctx, signIn) { return signIn.token === "token-none" ? null : { plan: "pro", windows: [] }; },
+    };
+    let skipped = new Set(["copilot:a"]);
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => skipped);
+    await service.report();
+    now += FRESH_MS;
+    await service.report();
+    expect(searches).toBe(2);
+
+    skipped = new Set(["copilot:a", "copilot:b"]);
+    now += FRESH_MS;
+    const report = await service.report(true);
+    expect(searches).toBe(2);
+    expect(report.providers.map((usage) => usage.key)).toEqual(["copilot:a", "copilot:b"]);
+
+    skipped = new Set(["copilot:a"]);
+    await service.report(true);
+    expect(searches).toBe(3);
+  });
+
+  it("still finds a provider's accounts the first time, whatever the hidden list names", async () => {
+    let searches = 0;
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { searches += 1; return [{ source: "new", token: "token-new", expiresAt: null, account: { id: "new", label: "new" } }]; },
+      async read() { return { plan: "pro", windows: [] }; },
+    };
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => new Set(["copilot:old"]));
+    expect((await service.report()).providers.map((usage) => usage.key)).toEqual(["copilot:new"]);
+    expect(searches).toBe(1);
+  });
+
+  it("keeps a fully hidden Copilot unread when another provider's sign-in ends", async () => {
+    commands.set("gh auth status --hostname github.com --json hosts", JSON.stringify({ hosts: { "github.com": [{ state: "success", login: "alice" }] } }));
+    commands.set("gh auth token --hostname github.com --user alice", "gho_alice");
+    replies.set("https://api.github.com/copilot_internal/user", { body: { login: "alice", copilot_plan: "individual", quota_snapshots: { chat: { entitlement: 50, percent_remaining: 50 } } } });
+    let claudeSearches = 0;
+    const claude: UsageProvider = { id: "claude", async signIns() { claudeSearches += 1; return []; }, async read() { return null; } };
+    const service = new UsageService(context(), [...only("copilot"), claude]);
+    service.skipAccounts(() => new Set(["copilot:alice"]));
+    const tokenReads = () => commandCalls.filter((argv) => argv.slice(0, 3).join(" ") === "gh auth token").length;
+    await service.report();
+    expect(tokenReads()).toBe(1);
+    service.invalidate("claude");
+    await service.report();
+    expect([tokenReads(), claudeSearches]).toEqual([1, 2]);
+  });
+
+  it("asks the usage endpoint nothing for a provider's hidden accounts when its own sign-in ends", async () => {
+    const reads: string[] = [];
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { return ["a", "b"].map((id) => ({ source: id, token: `token-${id}`, expiresAt: null, account: { id, label: id } })); },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => new Set(["copilot:a"]));
+    await service.report();
+    service.invalidate("copilot");
+    const report = await service.report();
+    // a hidden account is listed but never read, not even by the first report (#3423)
+    expect(reads).toEqual(["token-b", "token-b"]);
+    expect(report.providers.map((usage) => usage.key)).toEqual(["copilot:a", "copilot:b"]);
+  });
+
+  it("asks the usage endpoint nothing for an account hidden since the last report when its provider's sign-in ends", async () => {
+    const reads: string[] = [];
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { return ["a", "b"].map((id) => ({ source: id, token: `token-${id}`, expiresAt: null, account: { id, label: id } })); },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    let skipped = new Set<string>();
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => skipped);
+    await service.report();
+    skipped = new Set(["copilot:a"]);
+    service.invalidate("copilot");
+    await service.report();
+    expect(reads).toEqual(["token-a", "token-b", "token-b"]);
+  });
+
+  it.each([
+    ["fails", () => { throw new Error("gh did not answer"); }],
+    ["leaves the hidden account out", () => ["b"]],
+  ])("asks the usage endpoint nothing for a hidden account after its provider's search %s once", async (_name, failed) => {
+    const reads: string[] = [];
+    let failing = false;
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { return (failing ? failed() : ["a", "b"]).map((id) => ({ source: id, token: `token-${id}`, expiresAt: null, account: { id, label: id } })); },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => new Set(["copilot:a"]));
+    await service.report();
+    service.invalidate("copilot");
+    failing = true;
+    await service.report();
+    failing = false;
+    now += FRESH_MS;
+    const report = await service.report();
+    expect(reads.filter((token) => token === "token-a")).toEqual([]);
+    expect(report.providers.map((usage) => usage.key)).toEqual(["copilot:a", "copilot:b"]);
+  });
+
+  it("asks the usage endpoint nothing for a hidden account found at a new place, keeping one entry for it", async () => {
+    let place = 0;
+    const reads: string[] = [];
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { return [{ source: `place-${place}`, token: `token-${place}`, expiresAt: null, account: { id: "a", label: "a" } }]; },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => new Set(["copilot:a"]));
+    await service.report();
+    for (place = 1; place <= 3; place++) {
+      service.invalidate("copilot");
+      await service.report();
+    }
+    expect(reads).toEqual([]);
+    expect([...service["entries"].keys()]).toEqual(["copilot|place-3"]);
+  });
+
+  it("drops a hidden account's kept reading once a search has not found it for a report (#3391)", async () => {
+    let account = 0;
+    const reads: string[] = [];
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { return [{ source: `place-${account}`, token: `token-${account}`, expiresAt: null, account: { id: `a${account}`, label: `a${account}` } }]; },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    const hidden = new Set<string>();
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => hidden);
+    await service.report();
+    // read, hide, then another account signs in at a new place: each gone hidden account used to keep a reading for good
+    for (account = 1; account <= 50; account++) {
+      hidden.add(`copilot:a${account - 1}`);
+      service.invalidate("copilot");
+      await service.report();
+    }
+    expect(reads).toHaveLength(51);
+    // the one gone since the last search is kept for this report; every older one is dropped
+    expect([...service["entries"].keys()].sort()).toEqual(["copilot|place-49", "copilot|place-50"]);
+  });
+
+  it("keeps a hidden account unread when it is found again the search after it went missing", async () => {
+    let present = true;
+    const reads: string[] = [];
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { return present ? [{ source: "a", token: "token-a", expiresAt: null, account: { id: "a", label: "a" } }] : []; },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    const service = new UsageService(context(), [copilot]);
+    await service.report();
+    service.skipAccounts(() => new Set(["copilot:a"]));
+    present = false;
+    service.invalidate("copilot");
+    await service.report();
+    present = true;
+    service.invalidate("copilot");
+    await service.report();
+    // found again: not read, and its reading is no longer one gone for a report
+    present = false;
+    service.invalidate("copilot");
+    await service.report();
+    present = true;
+    service.invalidate("copilot");
+    await service.report();
+    expect(reads).toEqual(["token-a"]);
+  });
+
+  it("keeps a hidden sign-in that names no account unread when it comes back the search after it went missing", async () => {
+    let present = true;
+    const reads: string[] = [];
+    const opencode: UsageProvider = {
+      id: "copilot",
+      async signIns() { return present ? [{ source: "auth", token: "token-auth", expiresAt: null }] : []; },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    const service = new UsageService(context(), [opencode]);
+    const [first] = (await service.report()).providers;
+    service.skipAccounts(() => new Set([first!.key]));
+    for (const found of [false, true, false, true]) {
+      present = found;
+      service.invalidate("copilot");
+      await service.report();
+    }
+    expect(reads).toEqual(["token-auth"]);
+  });
+
+  it("looks a provider up at once when an account it dropped while hidden is shown again", async () => {
+    let present = true;
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() {
+        const visible = { source: "b", token: "token-b", expiresAt: null, account: { id: "b", label: "b" } };
+        return present ? [{ source: "a", token: "token-a", expiresAt: null, account: { id: "a", label: "a" } }, visible] : [visible];
+      },
+      async read() { return { plan: "pro", windows: [] }; },
+    };
+    let skipped = new Set(["copilot:a"]);
+    const service = new UsageService(context(), [copilot]);
+    await service.report();
+    service.skipAccounts(() => skipped);
+    present = false;
+    for (let round = 0; round < 2; round++) {
+      service.invalidate("copilot");
+      await service.report();
+    }
+    expect([...service["entries"].keys()]).toEqual(["copilot|b"]);
+    // signed in again and shown again within the last search's time: found now, not at the next search
+    present = true;
+    skipped = new Set();
+    now += MIN_REFRESH_MS;
+    expect((await service.report()).providers.map((usage) => usage.account).sort()).toEqual(["a", "b"]);
+  });
+
+  it.each([
+    ["names its account", true],
+    ["names no account (the reading does)", false],
+  ])("never reads a hidden account that returns after another took its place, when the sign-in %s", async (_name, named) => {
+    const people = { alice: { token: "token-alice", id: "alice" }, bob: { token: "token-bob", id: "bob" } };
+    let at: keyof typeof people = "alice";
+    const reads: string[] = [];
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() {
+        const person = people[at];
+        return [{ source: "place", token: person.token, expiresAt: null, ...(named ? { account: { id: person.id, label: person.id } } : {}) }];
+      },
+      async read(_ctx, signIn) {
+        reads.push(signIn.token);
+        const person = Object.values(people).find((candidate) => candidate.token === signIn.token)!;
+        return { plan: "pro", windows: [], account: { id: person.id, label: person.id } };
+      },
+    };
+    const service = new UsageService(context(), [copilot]);
+    await service.report();
+    service.skipAccounts(() => new Set(["copilot:alice"]));
+    let report: UsageReport | undefined;
+    for (const next of ["bob", "alice", "bob", "alice"] as const) {
+      at = next;
+      service.invalidate("copilot");
+      report = await service.report();
+    }
+    // Bob is read each time he takes the place; Alice only before she was hidden
+    expect(reads).toEqual(["token-alice", "token-bob", "token-bob"]);
+    expect(report!.providers.map((usage) => [usage.key, usage.checked_at])).toEqual([["copilot:alice", null]]);
+  });
+
+  it("reads another sign-in found at a hidden place when neither names an account", async () => {
+    let token = "token-alice";
+    const reads: string[] = [];
+    const opencode: UsageProvider = {
+      id: "opencode",
+      async signIns() { return [{ source: "x", token, expiresAt: null }]; },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    const service = new UsageService(context(), [opencode]);
+    const [alice] = (await service.report()).providers;
+    service.skipAccounts(() => new Set([alice!.key]));
+    token = "token-bob";
+    service.invalidate("opencode");
+    await service.report();
+    expect(reads).toEqual(["token-alice", "token-bob"]);
+  });
+
+  it("never reads a hidden account that names none when it moves as another takes its old place", async () => {
+    let round = 0;
+    const reads: string[] = [];
+    const copilot: UsageProvider = {
+      id: "copilot",
+      // Alice's sign-in is judged at its new place before the old one, now Bob's
+      async signIns() { return round === 0 ? [{ source: "x", token: "token-alice", expiresAt: null }] : [{ source: "y", token: "token-alice", expiresAt: null }, { source: "x", token: "token-bob", expiresAt: null }]; },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [], account: { id: signIn.token, label: signIn.token } }; },
+    };
+    const service = new UsageService(context(), [copilot]);
+    await service.report();
+    service.skipAccounts(() => new Set(["copilot:token-alice"]));
+    round = 1;
+    service.invalidate("copilot");
+    await service.report();
+    expect(reads).toEqual(["token-alice", "token-bob"]);
+  });
+
+  it("never reads an account the hidden list names, even with no reading kept for it", async () => {
+    const reads: string[] = [];
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { return [{ source: "a", token: "token-a", expiresAt: null, account: { id: "a", label: "a" } }, { source: "b", token: "token-b", expiresAt: null, account: { id: "b", label: "b" } }]; },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    // a server started with the hidden list already saved
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => new Set(["copilot:a"]));
+    expect((await service.report()).providers.map((usage) => usage.key).sort()).toEqual(["copilot:a", "copilot:b"]);
+    expect(reads).toEqual(["token-b"]);
+  });
+
+  it("does not look a fully hidden provider up when an account of the same name elsewhere is shown again", async () => {
+    let searches = 0;
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { searches += 1; return [{ source: "a", token: "token-a", expiresAt: null, account: { id: "a", label: "a" } }]; },
+      async read() { return { plan: "pro", windows: [] }; },
+    };
+    // a Hub account's key starts with its provider's id too
+    let skipped = new Set(["copilot:a", "copilot:cliproxy:hub"]);
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => skipped);
+    await service.report();
+    skipped = new Set(["copilot:a"]);
+    now += MIN_REFRESH_MS;
+    await service.report();
+    expect(searches).toBe(1);
+  });
+
+  it("ages no hidden reading on a search a missing command left incomplete", async () => {
+    let present = true;
+    let missing: string | null = null;
+    const reads: string[] = [];
+    const copilot: UsageProvider = {
+      id: "copilot",
+      missingCommand: () => missing,
+      // a visible account keeps the provider searched
+      async signIns() {
+        const visible = { source: "b", token: "token-b", expiresAt: null, account: { id: "b", label: "b" } };
+        return present ? [{ source: "a", token: "token-a", expiresAt: null, account: { id: "a", label: "a" } }, visible] : [visible];
+      },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    const service = new UsageService(context(), [copilot]);
+    await service.report();
+    service.skipAccounts(() => new Set(["copilot:a"]));
+    // the keychain tool is missing, so the account cannot be found: these searches are incomplete
+    present = false;
+    missing = "secret-tool";
+    for (let round = 0; round < 3; round++) {
+      now += MIN_REFRESH_MS;
+      await service.report();
+    }
+    // installed again, but the account still gone for one complete search: kept for that one, not marked before it
+    missing = null;
+    now += MIN_REFRESH_MS;
+    await service.report();
+    present = true;
+    service.invalidate("copilot");
+    await service.report();
+    expect(reads.filter((token) => token === "token-a")).toEqual(["token-a"]);
+  });
+
+  it("looks a provider up again and reads it anew as soon as one of its accounts is shown again", async () => {
+    let searches = 0;
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { searches += 1; return [{ source: "a", token: "token-a", expiresAt: null, account: { id: "a", label: "a" } }]; },
+      async read() { return { plan: "pro", windows: [] }; },
+    };
+    let skipped = new Set(["copilot:a"]);
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => skipped);
+    await service.report();
+    skipped = new Set();
+    now += MIN_REFRESH_MS;
+    const [shown] = (await service.report()).providers;
+    expect(searches).toBe(2);
+    expect(shown!.checked_at).toBe(new Date(now).toISOString());
+  });
+
+  it("reads only the account shown again, not its provider's accounts still hidden", async () => {
+    const reads: string[] = [];
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { return ["a", "b"].map((id) => ({ source: id, token: `token-${id}`, expiresAt: null, account: { id, label: id } })); },
+      async read(_ctx, signIn) { reads.push(signIn.token); return { plan: "pro", windows: [] }; },
+    };
+    let skipped = new Set(["copilot:a", "copilot:b"]);
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => skipped);
+    await service.report();
+    skipped = new Set(["copilot:b"]);
+    now += FRESH_MS;
+    await service.report();
+    expect(reads).toEqual(["token-a"]);
+  });
+
+  it("searches a provider with one hidden and one visible account once per FRESH_MS", async () => {
+    let searches = 0;
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { searches++; return ["a", "b"].map((id) => ({ source: id, token: `token-${id}`, expiresAt: null, account: { id, label: id } })); },
+      async read() { return { plan: "pro", windows: [] }; },
+    };
+    let skipped = new Set<string>();
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => skipped);
+    await service.report();
+    skipped = new Set(["copilot:a"]);
+    now += FRESH_MS;
+    await service.report();
+    now += 1000;
+    await service.report();
+    now += 1000;
+    await service.report();
+    expect(searches).toBe(2);
+  });
+
+  it("reads a hidden account's place anew once it holds another account's sign-in", async () => {
+    const holders = new Map([["x", "alice"], ["y", "carol"]]);
+    const copilot: UsageProvider = {
+      id: "copilot",
+      async signIns() { return [...holders].map(([source, id]) => ({ source, token: `token-${id}`, expiresAt: null, account: { id, label: `${id}@example.test` } })); },
+      async read() { return { plan: "pro", windows: [] }; },
+    };
+    const service = new UsageService(context(), [copilot]);
+    service.skipAccounts(() => new Set(["copilot:alice"]));
+    await service.report();
+    holders.set("x", "bob");
+    now += FRESH_MS;
+    const report = await service.report();
+    expect(report.providers.map((usage) => usage.account)).toEqual(["bob@example.test", "carol@example.test"]);
+  });
+
   it("marks a failed request and asks again after RETRY_MS", async () => {
     signInCodex(NOW / 1000 + 24 * 3600);
     replies.set(CODEX_USAGE, { status: 500 });

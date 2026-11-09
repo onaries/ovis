@@ -8,6 +8,13 @@ import { commandInvocations } from "./outcome.ts";
 import { handlePromptRequest, noteSubmitted } from "./prompt.ts";
 import type { PanePromptResponse } from "../shared/protocol.ts";
 
+// taken before any test spies on fs: a Claude resolver proves the file its path names when it is asked (#3402)
+const realStat = fs.statSync;
+const claudeAt = (path: string) => async () => {
+  const proven = realStat(path, { bigint: true });
+  return { source: "claude-transcript" as const, path, claudeFile: `${proven.dev}:${proven.ino}` };
+};
+
 const bytesRead = (reads: ReturnType<typeof spyOn<typeof fs, "readSync">>) => reads.mock.results.reduce((sum, result) =>
   sum + (result.type === "return" && typeof result.value === "number" ? result.value : 0), 0);
 
@@ -403,7 +410,7 @@ it("parses only appended records after validating the entire retained tail", asy
   const path = join(root, "session.jsonl");
   const record = (modelId: string) => JSON.stringify({ type: "model_change", modelId }) + "\n";
   fs.writeFileSync(path, record("old").repeat(1000));
-  const binding = spyOn(conversation, "paneTranscript").mockResolvedValue({ source: "claude-transcript", path });
+  const binding = spyOn(conversation, "paneTranscript").mockImplementation(claudeAt(path));
   const reads = spyOn(fs, "readSync");
   const parses = spyOn(JSON, "parse");
   try {
@@ -456,7 +463,7 @@ it("validates the full overlapping tail within budget when the window slides", a
   const path = join(root, "session.jsonl");
   const record = (modelId: string) => JSON.stringify({ type: "model_change", modelId, padding: "x".repeat(64 * 1024) }) + "\n";
   fs.writeFileSync(path, record("old").repeat(260));
-  const binding = spyOn(conversation, "paneTranscript").mockResolvedValue({ source: "claude-transcript", path });
+  const binding = spyOn(conversation, "paneTranscript").mockImplementation(claudeAt(path));
   const reads = spyOn(fs, "readSync");
   const parses = spyOn(JSON, "parse");
   try {

@@ -31,6 +31,7 @@ import { agentRows, checkList, foundAgents, installedHere, phoneBoxMode, phoneBo
 import { inRelayShell, useRelay, type RelayState } from "../lib/useRelay.ts";
 import { useSignedInUsage } from "../lib/useSetupGuide.ts";
 import { userErrorMessage } from "../lib/userError.ts";
+import { AccountSection } from "./AccountSection.tsx";
 import { AgentMark } from "./AgentMark.tsx";
 import { AgentTile } from "./AgentTile.tsx";
 import { UsageSignInDialog } from "./UsageSignInDialog.tsx";
@@ -155,6 +156,10 @@ export function SetupGuide(props: SetupGuideProps) {
 
 function Welcome({ dispatch, onClose, hidden }: Pick<SetupGuideProps, "dispatch" | "onClose" | "hidden">) {
   const t = useT();
+  // Not now folds the sign-in away for this welcome; Settings → Devices and PCs keeps it
+  const [later, setLater] = useState(false);
+  // Not now takes its box away: the keyboard's place goes to the first choice, not to the page
+  const firstChoice = useRef<HTMLButtonElement>(null);
   return (
     <div className="setup-guide" role="region" aria-label={t("Setup guide")} hidden={hidden}>
       <div className="setup-guide-inner setup-welcome">
@@ -162,7 +167,7 @@ function Welcome({ dispatch, onClose, hidden }: Pick<SetupGuideProps, "dispatch"
         <h2>{t("Welcome to Ovis")}</h2>
         <p className="setup-lead">{t("Is this your first time using Ovis?")}</p>
         <div className="setup-choices">
-          <button type="button" className="setup-choice" onClick={() => dispatch({ type: "begin" })}>
+          <button ref={firstChoice} type="button" className="setup-choice" onClick={() => dispatch({ type: "begin" })}>
             <span className="setup-choice-icon"><Sparkles aria-hidden="true" /></span>
             <span className="setup-choice-text"><strong>{t("I'm new to Ovis")}</strong><span>{t("Ovis finds or installs an AI coding helper and opens your first project.")}</span></span>
             <ChevronRight aria-hidden="true" />
@@ -173,6 +178,11 @@ function Welcome({ dispatch, onClose, hidden }: Pick<SetupGuideProps, "dispatch"
             <ChevronRight aria-hidden="true" />
           </button>
         </div>
+        {/* the account's sign-in, as Settings → Devices and PCs has it; none where this page has no account service */}
+        {!later && <AccountSection welcome={{
+          lead: <p className="setup-muted">{t("Sign in to use this PC from your phone and your other PCs.")}</p>,
+          later: <button type="button" className="setup-link" onClick={() => { setLater(true); firstChoice.current?.focus(); }}>{t("Not now")}</button>,
+        }} />}
         <p className="setup-note"><Info aria-hidden="true" />{t("You can open this again any time from Settings → Agents.")}</p>
       </div>
     </div>

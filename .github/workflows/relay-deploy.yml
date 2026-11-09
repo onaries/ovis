@@ -7,7 +7,7 @@ on:
   push:
     branches: [main]
     # the Worker's code: relay/ and the shared module it imports
-    paths: ['relay/**', 'shared/relay-server-proof.ts']
+    paths: ['relay/**', 'shared/relay-server-proof.ts', 'shared/relay-pass.ts']
   workflow_dispatch:
 permissions:
   contents: read

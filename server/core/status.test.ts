@@ -398,10 +398,11 @@ describe("Claude rest evidence regressions (#2072)", () => {
     appendFileSync(h.child, line({ type: "assistant", isSidechain: true, timestamp: new Date(at + 500).toISOString(), message: { role: "assistant", stop_reason: "end_turn", content: [] } }));
     // When the snapshot discovers the child end instead of the timer (omo M1).
     const snapshot = await h.snapshot();
-    // Then the old BG frame is replaced and alerts use the current status.
-    expect(h.last()).toEqual({ status: "working", tasks: 0, bg: false });
-    expect(snapshot.panes[0]).toMatchObject({ agent_status: "working" });
-    expect(h.pending.current(h.pane.pane_id)).toBe("working");
+    // Then the old BG frame is replaced, the transcript's rest stands over herdr's working from before
+    // the child ended (#3348), and the alerts take the wait for the child's notice for working.
+    expect(h.last()).toEqual({ status: "done", tasks: 0, bg: true });
+    expect(snapshot.panes[0]).toMatchObject({ agent_status: "done" });
+    expect(h.pending.current(h.pane.pane_id)).toBe("done");
     expect(h.alerts.at(-1)).toBe("working");
   });
 
@@ -849,6 +850,108 @@ describe("the status hub's Claude turn at rest under its background subagent", (
     appendFileSync(path, line({ type: "user", origin: { kind: "human" }, timestamp: ts(5000), permissionMode: "default", message: { role: "user", content: "next" } }));
     h.poll();
     expect(h.last().status).toBe("working");
+  });
+});
+
+describe("the status hub's Claude turn at rest when its last background task ends (#3348)", () => {
+  const ts = (ms: number) => new Date(at + ms).toISOString();
+  let fixtures = 0;
+  afterEach(() => { setSystemTime(); });
+
+  /**
+   * A turn at rest under its background subagent, herdr still reading Claude's busy title as working; then the
+   * subagent's own turn ends before herdr says anything new, read by a poll unless `read` is false. `together`: the
+   * turn's rest and the subagent's end are both written before a poll reads either.
+   */
+  async function endedUnderRest({ read = true, together = false }: { read?: boolean; together?: boolean } = {}) {
+    const id = `55555555-5555-4555-8555-${String(++fixtures).padStart(12, "0")}`;
+    const path = join(root, `${id}.jsonl`);
+    const agentFile = join(root, id, "subagents", "agent-b1.jsonl");
+    mkdirSync(join(root, id, "subagents"), { recursive: true });
+    writeFileSync(path, line({ type: "user", origin: { kind: "human" }, timestamp: ts(-1000), permissionMode: "default", message: { role: "user", content: "go" } }));
+    writeFileSync(join(root, id, "subagents", "agent-b1.meta.json"), JSON.stringify({ agentType: "general-purpose", description: "essays", toolUseId: "toolu_b1", requestShape: "background" }));
+    writeFileSync(agentFile, line({ isSidechain: true, sessionId: id, agentId: "b1", type: "user", timestamp: ts(0), message: { role: "user", content: "write" } }));
+    const pane = { ...claude, agent_session: { ...claude.agent_session, value: id } };
+    const h = hub(path);
+    h.herdrSays(pane);
+    handlers.onBaseline([pane]);
+    await h.snapshot();
+    h.herdrSays({ ...pane, agent_status: "working" });
+    handlers.onStatus("w1:p1", "working", "claude");
+    appendFileSync(path, line({ type: "assistant", isSidechain: false, timestamp: ts(200), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "OK" }] } })
+      + line({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: ts(300), pendingBackgroundAgentCount: 1 }));
+    if (!together) {
+      h.poll();
+      expect(h.last()).toEqual({ status: "done", tasks: 1, bg: true });
+    }
+    appendFileSync(agentFile, line({ isSidechain: true, sessionId: id, agentId: "b1", type: "assistant", timestamp: ts(400), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } }));
+    if (read) h.poll();
+    return { ...h, session: pane, next: () => appendFileSync(path, line({ type: "user", origin: { kind: "human" }, timestamp: ts(5000), permissionMode: "default", message: { role: "user", content: "next" } })) };
+  }
+
+  it("keeps the transcript's rest when the last one ends while herdr's last word is still working", async () => {
+    const h = await endedUnderRest();
+    expect(h.last()).toEqual({ status: "done", tasks: 0, bg: true });
+    // a snapshot repeating herdr's stale word answers the rest, and emits it so
+    const snapshot = await h.snapshot();
+    expect(snapshot.panes[0]).toMatchObject({ agent_status: "done" });
+    expect(snapshot.panes[0]?.background_tasks ?? 0).toBe(0);
+    expect(h.last()).toEqual({ status: "done", tasks: 0, bg: true });
+  });
+
+  it("keeps the rest when a later refresh looks the same session up again", async () => {
+    const h = await endedUnderRest();
+    // past the refresh interval: a pane with no known process start is looked up again, finding the same session
+    setSystemTime(Date.now() + 6000);
+    await h.snapshot();
+    const snapshot = await h.snapshot();
+    expect(snapshot.panes[0]).toMatchObject({ agent_status: "done" });
+    expect(h.last().status).toBe("done");
+  });
+
+  it("keeps the rest when the same session is looked up again under another key (its cwd changed)", async () => {
+    const h = await endedUnderRest();
+    h.herdrSays({ ...h.session, agent_status: "working", cwd: "/elsewhere" });
+    // the first snapshot starts the lookup under the new key; the second answers after it
+    await h.snapshot();
+    const snapshot = await h.snapshot();
+    expect(snapshot.panes[0]).toMatchObject({ agent_status: "done" });
+    expect(h.last().status).toBe("done");
+  });
+
+  it("keeps the rest when the turn's rest and the last task's end are read by the same poll", async () => {
+    const h = await endedUnderRest({ together: true });
+    expect(h.last()).toMatchObject({ status: "done", tasks: 0 });
+    expect((await h.snapshot()).panes[0]).toMatchObject({ agent_status: "done" });
+  });
+
+  it("reads working again on herdr's working event after the end, read by a poll first or not", async () => {
+    for (const read of [true, false]) {
+      const h = await endedUnderRest({ read });
+      handlers.onStatus("w1:p1", "working", "claude");
+      expect([read, h.last()]).toEqual([read, { status: "working", tasks: 0, bg: false }]);
+      expect([read, (await h.snapshot()).panes[0]?.agent_status]).toEqual([read, "working"]);
+    }
+  });
+
+  it("reads working again for a next turn written late, after herdr's working event or with none", async () => {
+    const told = await endedUnderRest();
+    handlers.onStatus("w1:p1", "working", "claude");
+    // the event's turn is not written within the busy hold: the rest it broke is not taken back
+    setSystemTime(Date.now() + 6000);
+    told.poll();
+    expect((await told.snapshot()).panes[0]).toMatchObject({ agent_status: "working" });
+    told.next();
+    told.poll();
+    expect(told.last().status).toBe("working");
+    expect((await told.snapshot()).panes[0]).toMatchObject({ agent_status: "working" });
+    setSystemTime();
+    // herdr never left working, so no event tells the next turn: its prompt written is enough
+    const untold = await endedUnderRest();
+    untold.next();
+    untold.poll();
+    expect(untold.last().status).toBe("working");
+    expect((await untold.snapshot()).panes[0]).toMatchObject({ agent_status: "working" });
   });
 });
 

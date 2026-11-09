@@ -93,6 +93,8 @@ export const TERMINAL_ZH: Record<string, string> = {
   "Tab name": "标签页名称",
   "Actions for {tab}": "{tab} 的操作",
   "Close {tab}": "关闭 {tab}",
+  "{n} more tabs": "另外 {n} 个标签页",
+  "More tabs": "其他标签页",
   "Close tab {name}?": "关闭标签页 {name}？",
   "Close failed: {reason}": "关闭失败：{reason}",
   "Split right": "向右拆分",

@@ -29,6 +29,7 @@ import { filterWorkspaceGroups, machineFilter } from "../lib/sidebarFilter.ts";
 import { useSidebarFilter } from "../lib/sidebarFilterContext.ts";
 import { useSettings } from "../lib/settings.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
+import { SHEET_QUERY } from "../lib/sheets.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { useWorktreeBranches } from "../lib/useWorktreeBranches.ts";
 import { useSessionHistoryOffered } from "../lib/useSessionHistoryOffered.ts";
@@ -112,7 +113,9 @@ export function StatusBadge({ status, compact = false, detail = null }: { status
   const { settings } = useSettings();
   const value = knownStatus(status);
   const label = t(STATUS_WORD[value]);
-  const stateWords = value === "waiting" ? t("Agent waiting on background work") : t("Agent {status}", { status: label });
+  // the description names the state in words a reader knows (G-020): "waiting" is said whole, and a state nobody
+  // reported (an agent that said nothing yet, a PC that is away) is said to be unknown, not read as a dash
+  const stateWords = value === "waiting" ? t("Agent waiting on background work") : value === "unknown" ? t("Agent state unknown") : t("Agent {status}", { status: label });
   const description = detail ? `${stateWords} — ${detail}` : stateWords;
   // classic (the default): a compact cell draws only the states that ask for a look: a red question
   // mark while the agent waits for an answer, a green dot once it has finished and was not looked
@@ -185,6 +188,34 @@ export function ContextBadge({ context }: { context?: PaneContext | undefined })
       </svg>{left}%
     </span>
   );
+}
+
+/**
+ * A worktree workspace's name without what herdr adds to it: the `worktree-` prefix and the four-digit hash after
+ * it, only when both are there (`worktree-brave-valley-7fc6`); any other name is kept whole.
+ */
+export function compactWorktreeName(label: string): string {
+  const generated = /^worktree-(.+)-[0-9a-f]{4}$/.exec(label);
+  return generated ? generated[1]! : label;
+}
+
+/**
+ * Whether a branch only repeats a workspace's name: the same text, or for a worktree herdr named
+ * (`worktree-brave-valley-7fc6`) its branch `worktree/brave-valley-7fc6` or `brave-valley`, herdr's prefix and hash aside.
+ */
+export function sameName(branch: string, name: string): boolean {
+  if (branch === name) return true;
+  const short = compactWorktreeName(name);
+  return short !== name && branch.replace(/^worktree[-/]/, "").replace(/-[0-9a-f]{4}$/, "") === short;
+}
+
+/** the kind-of-change prefixes a branch drops on a compact row; any other prefix (`team-a/`) says something and stays */
+const BRANCH_KIND = /^(?:feat|feature|fix|bugfix|hotfix|chore|docs|refactor|perf|test|tests|ci|build|style|release)\//;
+
+/** The branch a compact row says at its end: none for the default branch, and without a `feat/`-style prefix. */
+export function compactBranch(branch: string | null): string | null {
+  if (branch === null || branch === "main" || branch === "master") return null;
+  return branch.replace(BRANCH_KIND, "") || branch;
 }
 
 function cwdBasename(cwd: string | null | undefined): string {
@@ -359,6 +390,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
   const [touchDrag, setTouchDrag] = useState<{ source: string; over: string | null } | null>(null);
   // the browser's drag and drop is a mouse's: on a touch screen a long press lifts the row instead
   const coarsePointer = useMediaQuery("(pointer: coarse)");
+  // a row's ⋯ opens a sheet at a phone's width and a popover above it (RowMenu): the button says which (G-037)
+  const sheet = useMediaQuery(SHEET_QUERY);
   const [inlineError, setInlineError] = useState<InlineError | null>(null);
   const rosterId = useId();
   const workspaceRoot = useRef<HTMLDivElement>(null);
@@ -833,10 +866,13 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     // branch itself is the tooltip's and the menu's, where the name does not already say it
     const rowTitle = workspace.label;
     const secondaryBranch = linked && branchTitle && workspace.label !== branchTitle && workspace.label !== worktreeLabel(branchTitle) ? branchTitle : null;
-    // as herdr's own sidebar: a top-level git workspace says its branch on a second line, while an
-    // indented worktree (its name already the branch's), a pinned row (the card stays compact; the
-    // branch is in its tooltip and menu) and a folder outside git keep one line
-    const branchLine = !twoLine && !nested && !pinnedIds.includes(workspace.workspace_id) && branchTitle ? branchTitle : null;
+    // the compact rows (the default), as herdr-app's Spaces list: one line, the name without herdr's worktree prefix and
+    // hash, and a branch other than the default one dim at its end, unless it only repeats the name
+    const compact = !twoLine;
+    // only a worktree herdr opened has a name it made: a name the user chose is drawn whole
+    const shownTitle = compact && linked ? compactWorktreeName(rowTitle) : rowTitle;
+    const tailBranch = compact ? compactBranch(branchTitle) : null;
+    const branchTail = tailBranch !== null && branchTitle !== null && !sameName(branchTitle, rowTitle) && tailBranch !== worktreeLabel(shownTitle) ? tailBranch : null;
     // the tooltip and the menu keep the exact branch (its slashes) even where the row does not repeat it
     const branchNote = branchTitle && branchTitle !== workspace.label ? branchTitle : null;
     const paths = [...new Set([workspace.worktree?.checkout_path, pane.cwd].filter((path): path is string => Boolean(path)))];
@@ -907,7 +943,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
             actions.selectPane(pane.pane_id);
           }}
         >
-          {rowMark(pane, workspace.worktree?.is_linked_worktree === true)}
+          {/* a compact top-level row keeps its face alone; a worktree, which has none, keeps its mark */}
+          {(!compact || nested) && rowMark(pane, workspace.worktree?.is_linked_worktree === true)}
           {editingWorkspace ? <input
             className="input workspace-rename-input"
             aria-label={t("Workspace name")}
@@ -930,16 +967,10 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
               {filterNote}
             </span>
             {lines.place && <span className="workspace-place">{lines.place}</span>}
-          </span> : branchLine ? <span className="workspace-copy is-branch-line">
-            <span className="workspace-line">
-              <span className="workspace-name">{rowTitle}</span>
-              {foldedCount > 0 && <span className="workspace-fold-count" aria-hidden="true">+{foldedCount}</span>}
-              {filterNote}
-            </span>
-            <span className="workspace-place workspace-branch">{branchLine}</span>
           </span> : <span className="workspace-copy">
-            <span className="workspace-name">{rowTitle}</span>
-            {secondaryBranch && <span className="worktree-workspace-label">{secondaryBranch}</span>}
+            <span className="workspace-name">{shownTitle}</span>
+            {!compact && secondaryBranch && <span className="worktree-workspace-label">{secondaryBranch}</span>}
+            {branchTail && <span className="workspace-branch-tail">{branchTail}</span>}
             {foldedCount > 0 && <span className="workspace-fold-count" aria-hidden="true">+{foldedCount}</span>}
             {filterNote}
           </span>}
@@ -949,7 +980,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
           </span>
         </div>
         <div className="workspace-actions">
-          <button type="button" className="sidebar-row-action row-menu-toggle" aria-label={t("More for {title}", { title: rowTitle })} aria-haspopup="menu" aria-expanded={menuOpen} onClick={(event) => toggleMenu(event.currentTarget)}>
+          <button type="button" className="sidebar-row-action row-menu-toggle" aria-label={t("More for {title}", { title: rowTitle })} aria-haspopup={sheet ? "dialog" : "menu"} aria-expanded={menuOpen} onClick={(event) => toggleMenu(event.currentTarget)}>
             <Ellipsis aria-hidden="true" />
           </button>
         </div>
@@ -1009,7 +1040,9 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
           )}
         </>
       </nav>
-      {menu && <RowMenu anchor={menu.anchor} point={menu.point} restoreFocusTo={menu.previousFocus} title={menu.title} subtitle={menu.place} items={menuItems(menu)} onClose={closeMenu} />}
+      {/* the menu names the workspace it is for above its items (G-022): the popover covers the row */}
+      {menu && <RowMenu anchor={menu.anchor} point={menu.point} restoreFocusTo={menu.previousFocus} title={menu.title} subtitle={menu.place} items={menuItems(menu)} onClose={closeMenu}
+        header={<span className="row-menu-target"><span className="row-menu-target-name" title={menu.title}>{menu.title}</span>{menu.place && <span className={`row-menu-target-place${menu.place === menu.workspace.label ? "" : " is-literal"}`} title={menu.place}>{menu.place}</span>}</span>} />}
       {confirm && <ConfirmDialog title={confirm.title} body={confirm.body} confirmLabel={confirm.action ?? t("Close")} onConfirm={confirm.run} escalation={confirm.escalation} onClose={() => setConfirm(null)} />}
       {worktreeDialog && <WorktreeDialog mode={worktreeDialog.mode} workspace={worktreeDialog.workspace} onClose={() => setWorktreeDialog(null)} onOpenPane={(paneId) => { setWorktreeDialog(null); actions.selectPane(paneId); }} onOpened={(opened) => {
         rememberOpened(opened);

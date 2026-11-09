@@ -132,10 +132,10 @@ export function opensTurn(source: StreamSource, line: string, blobs: string | nu
     const message = piMessage(entry);
     if (message?.role !== "user") return false;
     if ((message.content as Record<string, unknown>[]).some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0)) return true;
-    // a pi or omp prompt that is only pictures is drawn as a turn of its own, so it opens one (omp's
+    // a pi, omp or omo prompt that is only pictures is drawn as a turn of its own, so it opens one (omp's
     // pictures in its blob store `blobs`, as the parser names them)
     if (source === "omp-transcript") return piPromptImages(entry, message, blobs).length > 0;
-    return (source === "pi-transcript" || source === "cmd-transcript") && piPromptImages(entry, message).length > 0;
+    return (source === "pi-transcript" || source === "cmd-transcript" || source === "omo-transcript") && piPromptImages(entry, message).length > 0;
   }
   // another session's message opens a turn in either of its forms, the meta entry and the queued attachment
   if (claudePeerNotice(entry) !== null) return true;

@@ -47,7 +47,7 @@ export function claudeArtifacts(path: string): ClaudeArtifact[] {
   remember(reads, path, read, MAX_FILES);
   const state = read;
   while (state.offset < stat.size) {
-    const done = readLines(path, state.offset, stat.size, LINE_BUDGET, (line) => artifactLine(state, line), state.skipping);
+    const done = readLines(path, state.offset, stat, LINE_BUDGET, (line) => artifactLine(state, line), state.skipping);
     // a failed read is tried again at the next ask; what is left unread is a line still being written
     if (done.failed || done.offset === state.offset) break;
     state.offset = done.offset;

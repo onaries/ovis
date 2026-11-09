@@ -2,7 +2,7 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, opendirSync, read
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import { readProcessBirth } from "./process-owner.ts";
-import type { COPILOT_STORE_DIAGNOSTICS } from "./conversation-shared.ts";
+import { checkBound, type COPILOT_STORE_DIAGNOSTICS } from "./conversation-shared.ts";
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEADER_BYTES = 64 * 1024;
@@ -345,6 +345,8 @@ export function openCopilotFile(file: string): number {
     if (!stat.isFile() || pathStat.dev !== stat.dev || pathStat.ino !== stat.ino) {
       throw new Error("Copilot transcript is not a regular canonical file");
     }
+    // the file a read is bound to as it was authorized, not only the one the path names now
+    checkBound(file, fd);
     const session = basename(dirname(file));
     if (SESSION_ID.test(session)) {
       const bytes = Buffer.alloc(Math.min(stat.size, HEADER_BYTES));

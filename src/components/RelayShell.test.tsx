@@ -48,6 +48,27 @@ describe("the front page's account part", () => {
     expect(render({ ...props({ kind: "list", devices: [device] }), scoped: false })).not.toContain("<details");
   });
 
+  it("says how each saved PC answered the latest check, with Check now above the list", () => {
+    const device = (server_id: string, name: string) => ({ server_id, server_public_key: "k", relay: "wss://relay.example", name, device_id: "0".repeat(16), label: "Phone" }) as unknown as Extract<RelayShellProps["state"], { kind: "list" }>["devices"][number];
+    const pcStatus = new Map([
+      ["a".repeat(32), { kind: "answered", route: "lan", rttMs: 9 }],
+      ["b".repeat(32), { kind: "answered", route: "relay", relay: "wss://relay-ap.ovis.sh", rttMs: 148 }],
+      ["c".repeat(32), { kind: "offline", reason: "pc" }],
+    ] as const);
+    const html = render({ ...props({ kind: "list", devices: [device("a".repeat(32), "home"), device("b".repeat(32), "office"), device("c".repeat(32), "laptop")] }), scoped: false, pcStatus, onCheckPcs: none });
+    const text = html.replace(/<[^>]+>/g, "");
+    expect(text).toContain("homeAnswers · Same Wi-Fi, direct · 9 ms");
+    expect(text).toContain("officeAnswers · Seoul relay · 148 ms");
+    expect(html).toContain('<span class="connection-slow">148 ms</span>');
+    expect(text).toContain("laptopOfflineThe PC is off, or Ovis is not running on it.");
+    expect(html.indexOf("Check now")).toBeLessThan(html.indexOf("home"));
+    // a check stops before signing in: the PC answering is all it knows, never that this device is connected
+    expect(text).not.toContain("Connected");
+    // signed in, a paired PC's row says the same, in place of what the account's directory says of it
+    const signedIn = render({ ...props({ kind: "list", devices: [], account: { kind: "signed-in", provider: "github", error: null, pcs: [pc("a".repeat(32), "home", "offline", true)] } }), scoped: false, onSignIn: none, pcStatus, onCheckPcs: none });
+    expect(signedIn.replace(/<[^>]+>/g, "")).toContain("homeAnswers · Same Wi-Fi, direct · 9 ms");
+  });
+
   it("offers a PC new in the account as a card to add, which opens the typed comparison", () => {
     const fresh = { ...pc("b".repeat(32), "desk2", "needs-approval"), added_at: new Date().toISOString(), join: { server_public_key: "k", relay: "wss://relay.example" } };
     const old = { ...fresh, server_id: "c".repeat(32), name: "nuc", added_at: new Date(Date.now() - 3_600_000).toISOString() };

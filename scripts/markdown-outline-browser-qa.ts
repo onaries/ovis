@@ -1,4 +1,4 @@
-/** The Markdown outline (#636), always on, in the real viewer, built with the app's CSP: column, drawer, docked, and a stored old "off" ignored. */
+/** The Markdown outline (#636), always on, in the real viewer, built with the app's CSP: column, drawer, docked, and a stored old "off" ignored; on a phone a stroke begun on a table or code still scrolls the document (#3287). */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +12,10 @@ import { sheetsSettled } from "./sheets-settled.ts";
 // a title, then sections that each end in a "Notes" heading: the same title thirty times
 const SECTIONS = 30;
 const prose = "A paragraph long enough to wrap over a few lines of the preview, so each section takes room. ".repeat(4);
-const markdown = ["# Guide", prose, ...Array.from({ length: SECTIONS }, (_, index) => [
+// a table and a code block: boxes that scroll sideways only, in the document's first screens
+const table = ["| Name | Value |", "| --- | --- |", ...Array.from({ length: 12 }, (_, index) => `| row ${index + 1} | value ${index + 1} |`)].join("\n");
+const code = ["```ts", ...Array.from({ length: 12 }, (_, index) => `const line${index + 1} = ${index + 1};`), "```"].join("\n");
+const markdown = ["# Guide", prose, table, code, ...Array.from({ length: SECTIONS }, (_, index) => [
   `## Section ${index + 1}`, prose, prose, "### Notes", prose,
 ].join("\n\n"))].join("\n\n") + "\n";
 const ENTRIES = 1 + SECTIONS * 2;
@@ -265,6 +268,29 @@ try {
     assert.deepEqual(errors, []);
     await close();
     console.log(`PASS narrow ${theme}: drawer on request, full-width document, centered on open, Escape/choice/outside close it, the More menu's Escape is its own`);
+  }
+
+  {
+    // a phone: an upward stroke begun on a table or a code block scrolls the document; the box,
+    // which scrolls only sideways, does not keep the stroke to itself (#3287)
+    const { page, errors, close } = await open(390, 844, { outline: true });
+    const cdp = await page.context().newCDPSession(page);
+    for (const selector of [".markdown-table-wrap", ".markdown-code .hl-code"]) {
+      const before = await page.locator(".file-viewer-body").evaluate((body, selector) => {
+        const box = document.querySelector<HTMLElement>(selector)!;
+        body.scrollTop += box.getBoundingClientRect().top - body.getBoundingClientRect().top - 40;
+        return body.scrollTop;
+      }, selector);
+      const box = (await page.locator(selector).first().boundingBox())!;
+      const x = box.x + box.width / 2, y = box.y + Math.min(box.height / 2, 120);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+      for (let step = 1; step <= 8; step++) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y - step * 20 }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await page.waitForFunction(([before]) => document.querySelector<HTMLElement>(".file-viewer-body")!.scrollTop >= before! + 60, [before]);
+    }
+    assert.deepEqual(errors, []);
+    await close();
+    console.log("PASS narrow: a stroke begun on a table or a code block scrolls the document");
   }
 
   {

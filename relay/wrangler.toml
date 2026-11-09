@@ -44,3 +44,77 @@ namespace_id = "1698"
   [ratelimits.simple]
   limit = 600
   period = 60
+
+# While passes are on, a PC whose relay pass holds gets this budget of its own, keyed by its
+# server_id, once its address's 30 a minute are spent: PCs behind one address (an office's NAT) are
+# not held to that address's budget.
+[[ratelimits]]
+name = "RELAY_PC_LIMITER"
+namespace_id = "1703"
+
+  [ratelimits.simple]
+  limit = 30
+  period = 60
+
+# Passes an address past its own budget may have checked a minute (each also takes a place of the
+# backstop's): roughly what bounds the signature checks (about 150 us each) forged passes can cost.
+[[ratelimits]]
+name = "RELAY_PASS_CHECK_LIMITER"
+namespace_id = "1704"
+
+  [ratelimits.simple]
+  limit = 30
+  period = 60
+
+# A staging copy for end-to-end checks, deployed by hand with `--env staging` (README.md, "Staging").
+# It takes its workers.dev address only: an environment inherits the routes above unless it names
+# its own. No binding is inherited, so each is named again, with limiters and a usage dataset apart
+# from production's: nothing it carries counts toward relay.ovis.sh's limits or usage.
+[env.staging]
+name = "ovis-relay-staging"
+workers_dev = true
+routes = []
+
+# RELAY_PASS_KEYS, the staging account service's public key, is added before the first deploy.
+[env.staging.vars]
+RELAY_PASS_MODE = "enforce"
+
+[[env.staging.durable_objects.bindings]]
+name = "RELAY"
+class_name = "RelayRoom"
+
+[[env.staging.analytics_engine_datasets]]
+binding = "USAGE"
+dataset = "ovis_relay_usage_staging"
+
+[[env.staging.ratelimits]]
+name = "RELAY_LIMITER"
+namespace_id = "1699"
+
+  [env.staging.ratelimits.simple]
+  limit = 30
+  period = 60
+
+[[env.staging.ratelimits]]
+name = "RELAY_GLOBAL_LIMITER"
+namespace_id = "1700"
+
+  [env.staging.ratelimits.simple]
+  limit = 600
+  period = 60
+
+[[env.staging.ratelimits]]
+name = "RELAY_PC_LIMITER"
+namespace_id = "1705"
+
+  [env.staging.ratelimits.simple]
+  limit = 30
+  period = 60
+
+[[env.staging.ratelimits]]
+name = "RELAY_PASS_CHECK_LIMITER"
+namespace_id = "1706"
+
+  [env.staging.ratelimits.simple]
+  limit = 30
+  period = 60

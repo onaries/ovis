@@ -1,13 +1,15 @@
 import { afterAll, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pickedTurn, searchPattern, searchTurns } from "../shared/conversation-search.ts";
 import type { ConversationPart } from "../shared/protocol.ts";
 import { codexImageParts, codexOutputPicture, codexTranscriptImage, DataUrlPictureScan, imageType, inlineImageType, InlinePictureScan } from "./codex-images.ts";
-import { parseCodexTranscript } from "./codex.ts";
-import { codexToolImage, forgetTranscriptState, transcriptPage } from "./conversation.ts";
+import { forgetHistoryChains, parseCodexTranscript } from "./codex.ts";
+import { codexPromptImage, codexToolImage, forgetTranscriptState, transcriptPage } from "./conversation.ts";
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH1sAAAAASUVORK5CYII=", "base64");
 const data = `data:image/png;base64,${png.toString("base64")}`;
@@ -132,6 +134,43 @@ it("fetches only referenced raster images within the retained history and bounds
     expect(await codexTranscriptImage([segment], ref, root)).toBeNull();
     rmSync(join(root, "assets", "shot.png"));
     expect(await codexTranscriptImage([segment], ref, root)).toBeNull();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("serves no picture from another rollout that a folder swap puts at a later rollout's path once the lookup has begun", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-codex-images-swap-"));
+  try {
+    // the same record and length: only the picture's bytes, and so its ref, tell the rollouts apart
+    const foreign = Buffer.from(png);
+    foreign[foreign.length - 1]! ^= 1;
+    const own = jsonl(response("", data));
+    const other = jsonl(response("", `data:image/png;base64,${foreign.toString("base64")}`));
+    const ownRef = codexImageParts(response("", data))[0]!.ref;
+    const otherRef = codexImageParts(response("", `data:image/png;base64,${foreign.toString("base64")}`))[0]!.ref;
+    const parent = join(root, "parent.jsonl");
+    writeFileSync(parent, jsonl(event("before", [])));
+    const folder = join(root, "live");
+    const elsewhere = join(root, "other");
+    mkdirSync(folder);
+    mkdirSync(elsewhere);
+    const path = join(folder, "rollout.jsonl");
+    writeFileSync(path, own);
+    writeFileSync(join(elsewhere, "rollout.jsonl"), other);
+    const segments = [{ path: parent, end: Buffer.byteLength(jsonl(event("before", []))) }, { path, end: Buffer.byteLength(own) }];
+    expect((await codexTranscriptImage(segments, ownRef, root))?.mediaType).toBe("image/png");
+    expect(await codexTranscriptImage(segments, otherRef, root)).toBeNull();
+    // the live rollout is the pane's own as the lookup begins; the other folder is put in place before the
+    // lookup's first await, so the live rollout is opened only after it, and put back once the lookup answers
+    const pending = codexTranscriptImage(segments, otherRef, root);
+    renameSync(folder, join(root, "away"));
+    renameSync(elsewhere, folder);
+    let image: Awaited<ReturnType<typeof codexTranscriptImage>>;
+    try { image = await pending; }
+    finally {
+      renameSync(folder, elsewhere);
+      renameSync(join(root, "away"), folder);
+    }
+    expect(image !== null && Buffer.from(image.bytes).equals(foreign) ? "FOREIGN" : image).toBeNull();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -310,6 +349,42 @@ describe("a Codex tool's pictures reach the chat", () => {
       expect(Math.max(...alloc.mock.calls.map(([size]) => Number(size)))).toBeLessThanOrEqual(1024 * 1024);
     } finally { alloc.mockRestore(); }
   });
+
+  it("serves no picture from another rollout that a folder swap puts at the path around the scan's opens after its first", async () => {
+    // the same records and length: only the picture's bytes tell the rollouts apart
+    const foreign = Buffer.from(png);
+    foreign[foreign.length - 1]! ^= 1;
+    const folder = join(root, "swap-own");
+    const elsewhere = join(root, "swap-other");
+    const away = join(root, "swap-away");
+    mkdirSync(folder);
+    mkdirSync(elsewhere);
+    const name = "rollout-2026-10-26T18-01-48-01a17771-c993-7f01-9f21-0000000000ff.jsonl";
+    const path = join(folder, name);
+    writeFileSync(path, records(started, call("call_a"), output("call_a", [picture(png)])));
+    writeFileSync(join(elsewhere, name), records(started, call("call_a"), output("call_a", [picture(foreign)])));
+    expect(Buffer.from((await codexToolImage(path, "codex-tool:call_a:0", home))!.bytes).equals(png)).toBe(true);
+    forgetTranscriptState();
+    // the path names the pane's own rollout when the lookup begins and at the scan's first open; every later
+    // open, after the scan's awaits, meets the other folder
+    const counts = { opens: 0, swaps: 0 };
+    const real = fs.openSync;
+    const spy = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+      if (args[0] !== path || counts.opens++ === 0) return real(...args);
+      counts.swaps++;
+      renameSync(folder, away);
+      renameSync(elsewhere, folder);
+      try { return real(...args); }
+      finally {
+        renameSync(folder, elsewhere);
+        renameSync(away, folder);
+      }
+    }) as typeof fs.openSync);
+    let image: Awaited<ReturnType<typeof codexToolImage>>;
+    try { image = await codexToolImage(path, "codex-tool:call_a:0", home); } finally { spy.mockRestore(); }
+    expect(counts.swaps).toBeGreaterThan(0);
+    expect(image !== null && Buffer.from(image.bytes).equals(foreign) ? "FOREIGN" : image).toBeNull();
+  });
 });
 
 it("checks a picture's text a piece at a time exactly as it checks the whole", () => {
@@ -359,4 +434,175 @@ it("checks a picture's text a piece at a time exactly as it checks the whole", (
   }
   expect(inlineImageType("image/png", edge)).toBe("image/png");
   expect(inlineImageType("image/png", `${edge.slice(0, -2)}A=`)).toBeNull();
+});
+
+/**
+ * A live rollout with no parent, and another session's file of the same name whose header continues a parent
+ * rollout in the store holding `parentRecords`. The other file is put in place of the live one's folder around
+ * the first open of the live rollout only: the header read that discovers its chain.
+ */
+async function coldChainSwap<T>(parentRecords: readonly unknown[], lookup: (path: string, home: string) => Promise<T>): Promise<{ answered: T; swaps: number }> {
+  const root = mkdtempSync(join(tmpdir(), "herdr-codex-chain-swap-"));
+  try {
+    const home = join(root, "codex");
+    const thread = "01a0a337-19e8-7712-92f5-aa0883392afd";
+    const meta = (extra = {}) => JSON.stringify({ type: "session_meta", payload: { source: "cli", thread_source: "user", ...extra } });
+    const parentDay = join(home, "sessions", "2026", "09", "15");
+    const folder = join(home, "sessions", "2026", "09", "23");
+    const elsewhere = join(root, "23");
+    mkdirSync(parentDay, { recursive: true });
+    mkdirSync(folder, { recursive: true });
+    mkdirSync(elsewhere);
+    const kept = [meta(), ...parentRecords.map((record) => JSON.stringify(record))].join("\n") + "\n";
+    writeFileSync(join(parentDay, `rollout-2026-09-15T12-58-12-${thread}.jsonl`), kept);
+    const name = `rollout-2026-09-23T10-46-43-${thread}_01a0cbf1-9b0e-7383-a345-80974b279c68.jsonl`;
+    const path = join(folder, name);
+    const turn = jsonl(response("the pane's own", data));
+    writeFileSync(path, `${meta()}\n${turn}\n`);
+    const base = { thread_id: thread, end_ordinal_exclusive: parentRecords.length + 1, end_byte_offset: Buffer.byteLength(kept) };
+    writeFileSync(join(elsewhere, name), `${meta({ history_base: base })}\n${turn}\n`);
+    forgetHistoryChains();
+    forgetTranscriptState();
+    const away = join(root, "away");
+    let opens = 0;
+    let swaps = 0;
+    const real = fs.openSync;
+    const spy = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+      if (args[0] !== path || opens++ > 0) return real(...args);
+      swaps++;
+      renameSync(folder, away);
+      renameSync(elsewhere, folder);
+      try { return real(...args); }
+      finally {
+        renameSync(folder, elsewhere);
+        renameSync(away, folder);
+      }
+    }) as typeof fs.openSync);
+    try { return { answered: await lookup(path, home), swaps }; }
+    finally { spy.mockRestore(); forgetHistoryChains(); forgetTranscriptState(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+/** The PNG with its last byte changed: the same length, other bytes. */
+const otherPng = (() => { const bytes = Buffer.from(png); bytes[bytes.length - 1]! ^= 1; return bytes; })();
+const otherUrl = `data:image/png;base64,${otherPng.toString("base64")}`;
+
+it("serves no prompt picture from a parent rollout another session's header names, swapped in around the chain's discovery", async () => {
+  const ref = codexImageParts(response("", otherUrl))[0]!.ref;
+  const { answered, swaps } = await coldChainSwap([response("", otherUrl)], (path, home) => codexPromptImage(path, ref, "/", home));
+  expect(swaps).toBe(1);
+  expect(answered !== null && Buffer.from(answered.bytes).equals(otherPng) ? "FOREIGN" : answered).toBeNull();
+});
+
+it("serves no tool picture from a parent rollout another session's header names, swapped in around the chain's discovery", async () => {
+  const at = "2026-10-26T09:07:06.240Z";
+  const records = [
+    { type: "response_item", timestamp: at, payload: { type: "custom_tool_call", call_id: "call_p", name: "exec", input: "view" } },
+    { type: "response_item", timestamp: at, payload: { type: "custom_tool_call_output", call_id: "call_p", output: [{ type: "input_image", image_url: otherUrl }] } },
+  ];
+  const { answered, swaps } = await coldChainSwap(records, (path, home) => codexToolImage(path, "codex-tool:call_p:0", home));
+  expect(swaps).toBe(1);
+  expect(answered !== null && Buffer.from(answered.bytes).equals(otherPng) ? "FOREIGN" : answered).toBeNull();
+});
+
+it("serves no local attachment from another folder swapped in around the attachment's own open", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-codex-attachment-swap-"));
+  try {
+    const assets = join(root, "cwd", "assets");
+    const elsewhere = join(root, "elsewhere");
+    mkdirSync(assets, { recursive: true });
+    mkdirSync(elsewhere);
+    // the same name and length: only the bytes tell the attachments apart
+    writeFileSync(join(assets, "shot.png"), png);
+    writeFileSync(join(elsewhere, "shot.png"), otherPng);
+    const path = join(root, "rollout.jsonl");
+    const record = event("", ["assets/shot.png"]);
+    writeFileSync(path, `${jsonl(record)}\n`);
+    const segments = [{ path, end: Buffer.byteLength(`${jsonl(record)}\n`) }];
+    const ref = codexImageParts(record)[0]!.ref;
+    const cwd = join(root, "cwd");
+    expect(Buffer.from((await codexTranscriptImage(segments, ref, cwd))!.bytes).equals(png)).toBe(true);
+    // the attachment's path names the pane's own file whenever it is looked at, except around its open
+    const attachment = join(assets, "shot.png");
+    const away = join(root, "away");
+    let swaps = 0;
+    const swapIn = () => { swaps++; renameSync(assets, away); renameSync(elsewhere, assets); };
+    const swapBack = () => { renameSync(assets, elsewhere); renameSync(away, assets); };
+    const { openSync } = fs;
+    const { open } = fsp;
+    const opens = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+      if (args[0] !== attachment) return openSync(...args);
+      swapIn();
+      try { return openSync(...args); } finally { swapBack(); }
+    }) as typeof fs.openSync);
+    const asyncOpens = spyOn(fsp, "open").mockImplementation((async (...args: Parameters<typeof fsp.open>) => {
+      if (args[0] !== attachment) return open(...args);
+      swapIn();
+      try { return await open(...args); } finally { swapBack(); }
+    }) as typeof fsp.open);
+    let image: Awaited<ReturnType<typeof codexTranscriptImage>>;
+    try { image = await codexTranscriptImage(segments, ref, cwd); } finally { opens.mockRestore(); asyncOpens.mockRestore(); }
+    expect(swaps).toBe(1);
+    expect(image !== null && Buffer.from(image.bytes).equals(otherPng) ? "FOREIGN" : image).toBeNull();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("serves a local attachment only whole: short reads are read on, and an early end serves nothing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-codex-attachment-short-"));
+  try {
+    mkdirSync(join(root, "assets"));
+    writeFileSync(join(root, "assets", "shot.png"), png);
+    const path = join(root, "rollout.jsonl");
+    const record = event("", ["assets/shot.png"]);
+    writeFileSync(path, `${jsonl(record)}\n`);
+    const segments = [{ path, end: Buffer.byteLength(`${jsonl(record)}\n`) }];
+    const ref = codexImageParts(record)[0]!.ref;
+    // the attachment's reads (into a buffer its size) answer 16 bytes at most; `ending`: none after the first
+    const shortReads = (ending: boolean) => {
+      let reads = 0;
+      const real = fs.read;
+      return spyOn(fs, "read").mockImplementation(((...args: unknown[]) => {
+        const [fd, buffer, offset, length, position, done] = args as [number, Buffer, number, number, number, (error: Error | null, got: number) => void];
+        if (!Buffer.isBuffer(buffer) || buffer.length !== png.length) return (real as (...rest: unknown[]) => void)(...args);
+        if (ending && reads++ > 0) { done(null, 0); return; }
+        real(fd, buffer, offset, Math.min(length, 16), position, done);
+      }) as typeof fs.read);
+    };
+    const short = shortReads(false);
+    let whole: Awaited<ReturnType<typeof codexTranscriptImage>>;
+    try { whole = await codexTranscriptImage(segments, ref, root); } finally { short.mockRestore(); }
+    expect(whole === null ? null : Buffer.from(whole.bytes).length).toBe(png.length);
+    const ended = shortReads(true);
+    let cut: Awaited<ReturnType<typeof codexTranscriptImage>>;
+    try { cut = await codexTranscriptImage(segments, ref, root); } finally { ended.mockRestore(); }
+    expect(cut === null ? null : Buffer.from(cut.bytes).length).toBeNull();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("serves no prompt picture from the parent a replaced rollout's remembered chain still names", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-codex-chain-replaced-"));
+  try {
+    const home = join(root, "codex");
+    const thread = "01a0a337-19e8-7712-92f5-aa0883392afd";
+    const meta = (extra = {}) => JSON.stringify({ type: "session_meta", payload: { source: "cli", thread_source: "user", ...extra } });
+    const parentDay = join(home, "sessions", "2026", "09", "15");
+    const liveDay = join(home, "sessions", "2026", "09", "23");
+    mkdirSync(parentDay, { recursive: true });
+    mkdirSync(liveDay, { recursive: true });
+    const kept = `${meta()}\n${jsonl(response("", otherUrl))}\n`;
+    writeFileSync(join(parentDay, `rollout-2026-09-15T12-58-12-${thread}.jsonl`), kept);
+    const path = join(liveDay, `rollout-2026-09-23T10-46-43-${thread}_01a0cbf1-9b0e-7383-a345-80974b279c68.jsonl`);
+    const turn = jsonl(response("the live turn", data));
+    writeFileSync(path, `${meta({ history_base: { thread_id: thread, end_ordinal_exclusive: 2, end_byte_offset: Buffer.byteLength(kept) } })}\n${turn}\n`);
+    const ref = codexImageParts(response("", otherUrl))[0]!.ref;
+    forgetHistoryChains();
+    // the rollout continues the parent: its picture is the conversation's
+    expect((await codexPromptImage(path, ref, "/", home))?.mediaType).toBe("image/png");
+    // another rollout replaces it at the same path, continuing nothing
+    writeFileSync(`${path}.new`, `${meta()}\n${turn}\n`);
+    renameSync(`${path}.new`, path);
+    let image: Awaited<ReturnType<typeof codexPromptImage>>;
+    try { image = await codexPromptImage(path, ref, "/", home); } finally { forgetHistoryChains(); }
+    expect(image !== null && Buffer.from(image.bytes).equals(otherPng) ? "FROM THE OLD PARENT" : image).toBeNull();
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

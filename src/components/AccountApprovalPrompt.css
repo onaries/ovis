@@ -40,6 +40,40 @@
   color: var(--text-dim);
 }
 
+.account-approval-via:has(+ .account-approval-asker) {
+  margin-bottom: var(--space-1);
+}
+
+/* who is asking: what the account service saw, the line a phished request gives itself away on */
+.account-approval-asker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-5);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.account-approval-asker:has(+ .account-approval-hint) {
+  margin-bottom: var(--space-1);
+}
+
+.account-approval-hint {
+  margin: 0 0 var(--space-5);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.account-approval-asker svg {
+  flex: none;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--text-dim);
+}
+
 .account-approval-ask {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-sm);

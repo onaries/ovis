@@ -78,23 +78,17 @@ const app = mkdtempSync(join(tmpdir(), "ovis-sidebar-heads-"));
 const evidence = process.env["UI_EVIDENCE_DIR"];
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length);
 
-/** What both section heads show: their carets' paint, their counts and folds. */
+/** What the section heads show: Agents' caret, count and fold, and that the PCs have none. */
 const heads = (page: Page) => page.evaluate(() => {
   const shown = (element: Element | null) => element !== null && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden" && Number(getComputedStyle(element).opacity) > 0.99;
   // the number in view, and the words a screen reader and the tooltip say for it (one and the same)
   const number = (count: Element | null) => shown(count) ? (count!.querySelector('[aria-hidden="true"]') ?? count)!.textContent!.trim() : null;
-  const words = (count: Element | null) => {
-    const said = count?.querySelector(".visually-hidden")?.textContent ?? null;
-    return said !== null && said === count!.getAttribute("title") ? said : null;
-  };
   const pcs = document.querySelector(".pcs-sidebar")!, agents = document.querySelector(".agents-sidebar")!;
   return {
-    pcsFolded: pcs.classList.contains("is-collapsed"),
+    // the PCs list has no head: nothing above its PCs, so it starts right under the logo
+    pcsHead: pcs.querySelectorAll(":scope > :not(.machine-list)").length,
     agentsFolded: agents.classList.contains("is-collapsed"),
-    pcsCaret: shown(pcs.querySelector(".sidebar-section-head .sidebar-section-caret")),
     agentsCaret: shown(agents.querySelector(".agent-section-toggle .agent-section-caret")),
-    pcsCount: number(pcs.querySelector(".sidebar-section-head .sidebar-section-count")),
-    pcsCountName: words(pcs.querySelector(".sidebar-section-head .sidebar-section-count")),
     agentsCount: number(agents.querySelector(".agent-section-toggle .agent-section-count")),
     machines: document.querySelectorAll(".machine-list .machine-group:not([hidden])").length,
     agentRows: document.querySelectorAll(".agents-sidebar .agent-item").length,
@@ -216,26 +210,23 @@ try {
       for (const width of [1280, 390]) for (const mode of ["light", "dark"] as const) {
         for (const grouped of [false, true]) {
           const scene: Scene = { width, mode, twoPcs: true, grouped };
-          await check("section heads count and show their carets", scene, async (page, label) => {
+          await check("section heads show their carets, with no count", scene, async (page, label) => {
             // the drawer starts Agents folded on a phone; open both for the first look
             const agentsToggle = page.locator(".agent-section-toggle");
             if (await agentsToggle.getAttribute("aria-expanded") !== "true") await agentsToggle.click();
             const open = await heads(page);
             assert.ok(open.agentRows > 0 && open.machines === 2, `${label}: the fixture shows two PCs and agents`);
-            assert.equal(open.pcsCaret, true, `${label}: the open PCs head shows its caret at rest`);
+            assert.equal(open.pcsHead, 0, `${label}: the PCs have no head, no caret and no count`);
             assert.equal(open.agentsCaret, true, `${label}: the open Agents head shows its caret at rest`);
-            assert.equal(open.pcsCount, "2", `${label}: the open PCs head counts the PCs shown`);
-            assert.equal(open.pcsCountName, "2 PCs shown", `${label}: the PCs count says what it counts`);
-            assert.equal(open.agentsCount, String(open.agentRows), `${label}: the open Agents head counts its agents`);
+            // the compact list (the default) is herdr-app's: its head says no count, open or folded
+            assert.equal(open.agentsCount, null, `${label}: the open Agents head says no count`);
             if (!grouped) await shot(page, "open", scene);
-            await page.locator(".pcs-sidebar .sidebar-section-toggle").click();
             await agentsToggle.click();
             const folded = await heads(page);
-            assert.ok(folded.pcsFolded && folded.agentsFolded, `${label}: both heads fold`);
-            assert.equal(folded.pcsCaret, true, `${label}: the folded PCs head shows its caret`);
+            assert.ok(folded.agentsFolded, `${label}: the Agents head folds`);
+            assert.equal(folded.machines, 2, `${label}: the PCs stay listed`);
             assert.equal(folded.agentsCaret, true, `${label}: the folded Agents head shows its caret`);
-            assert.equal(folded.pcsCount, "2", `${label}: the folded PCs head still counts`);
-            assert.equal(folded.agentsCount, String(open.agentRows), `${label}: the folded Agents head still counts`);
+            assert.equal(folded.agentsCount, null, `${label}: the folded Agents head says no count either`);
           });
         }
         await check("a PC header trades its agent count for its actions", { width, mode, twoPcs: true }, async (page, label) => {
@@ -246,7 +237,8 @@ try {
           await page.locator('section.machine-group[aria-label="PC Work PC"] .machine-header').scrollIntoViewIfNeeded();
           if (!phone) await page.mouse.move(width - 8, 600);
           const rest = await pcHeader(page, "Work PC");
-          assert.equal(rest.countWords, `${agentsOnWork} agents running`, `${label}: the count's words say what it counts`);
+          // the words count the PC's agents whatever they are doing: a resting one is not "running"
+          assert.equal(rest.countWords, `${agentsOnWork} agents`, `${label}: the count's words say what it counts`);
           // no tooltip: a pointer never reaches the count (it lets presses through to the + under it, and a hover hides it)
           assert.equal(rest.countTitle, null, `${label}: the count claims no tooltip a pointer cannot reach`);
           if (phone) {
@@ -268,10 +260,9 @@ try {
             assert.deepEqual(hovered.name, rest.name, `${label}: the name never moves`);
             await page.mouse.move(width - 8, 600);
             assert.equal((await pcHeader(page, "Work PC")).count, String(agentsOnWork), `${label}: the count comes back when the pointer leaves`);
-            // the keyboard: Tab from the PCs head into the first PC's header shows its actions
-            await page.locator(".pcs-sidebar .sidebar-section-toggle").focus();
-            await page.keyboard.press("Tab");
-            assert.equal(await page.evaluate(() => document.activeElement?.closest("section.machine-group")?.getAttribute("aria-label")), "PC Laptop", `${label}: Tab goes on into the first PC's header`);
+            // the keyboard: the focus coming into the first PC's header shows its actions
+            await page.locator('section.machine-group[aria-label="PC Laptop"] .machine-header').locator(':is(button, [role="button"][tabindex="0"])').first().focus();
+            assert.equal(await page.evaluate(() => document.activeElement?.closest("section.machine-group")?.getAttribute("aria-label")), "PC Laptop", `${label}: the focus is in the first PC's header`);
             const focused = await pcHeader(page, "Laptop");
             assert.equal(focused.count, null, `${label}: the focus in a header takes its count away`);
             assert.ok(focused.toggle && focused.add, `${label}: the focus in a header shows its fold and +`);
@@ -291,7 +282,7 @@ try {
             const [laptop, work] = [...document.querySelectorAll(".machine-list section.machine-group")];
             const lastRow = laptop!.querySelector(".machine-workspaces");
             return {
-              head: box(document.querySelector(".pcs-sidebar .sidebar-section-head")!).bottom,
+              head: box(document.querySelector(".machine-list")!).top,
               first: box(laptop!).top,
               laptop: { top: box(laptop!).top, bottom: box(laptop!).bottom, header: box(laptop!.querySelector(".machine-header")!).height, lastRow: lastRow ? box(lastRow).bottom : null },
               work: { top: box(work!).top, bottom: box(work!).bottom, header: box(work!.querySelector(".machine-header")!).height },
@@ -300,7 +291,7 @@ try {
             };
           });
           const open = await rows();
-          assert.ok(Math.abs(open.first - open.head) <= 1, `${label}: the first PC starts right under the PCs head (${open.first - open.head}px)`);
+          assert.ok(Math.abs(open.first - open.head) <= 1, `${label}: the first PC starts the list, with no PCs head above it (${open.first - open.head}px)`);
           assert.ok(open.clippedState <= 1, `${label}: a clipped state line is ${open.clippedState}px tall`);
           assert.ok(open.laptop.lastRow !== null && Math.abs(open.work.top - open.laptop.lastRow - 8) <= 1, `${label}: an open PC ends a --space-2 gap before the next PC (${open.laptop.lastRow === null ? "no rows" : open.work.top - open.laptop.lastRow}px)`);
           for (const pc of ["Laptop", "Work PC"]) await page.getByRole("button", { name: `Collapse ${pc}`, exact: true }).click();
@@ -313,6 +304,9 @@ try {
         await check("each list fades only at an edge with rows past it", { width, mode, twoPcs: true, height: 640 }, async (page, label) => {
           const agentsToggle = page.locator(".agent-section-toggle");
           if (await agentsToggle.getAttribute("aria-expanded") !== "true") await agentsToggle.click();
+          // Resting agents now start folded; this scenario needs their rows to exercise real overflow.
+          await page.locator(".agent-resting-label button").click();
+          assert.equal(await page.locator(".agent-resting-label button").getAttribute("aria-expanded"), "true");
           for (const list of [".machine-list", ".agent-list-contents"]) {
             const start = await fades(page, list);
             assert.ok(start.max > 40, `${label}: ${list} holds more rows than it shows (${start.max}px to scroll)`);
@@ -330,7 +324,7 @@ try {
           await page.waitForFunction(() => { const list = document.querySelector(".machine-list")!; return list.scrollHeight - list.clientHeight <= 1; });
           await expectFades(page, ".machine-list", null, { top: false, bottom: false }, `${label}: a PC list that holds all its rows fades neither edge`);
         });
-        await check("a short Agents list fades neither edge", { width, mode, height: 1000, storage: { "ovis:pcs-collapsed": "1" } }, async (page, label) => {
+        await check("a short Agents list fades neither edge", { width, mode, height: 1000 }, async (page, label) => {
           const agentsToggle = page.locator(".agent-section-toggle");
           if (await agentsToggle.getAttribute("aria-expanded") !== "true") await agentsToggle.click();
           assert.ok((await fades(page, ".agent-list-contents")).max <= 1, `${label}: the demo's agents fit their list`);
@@ -352,11 +346,10 @@ try {
           const opacity = Number(await add.evaluate((element) => getComputedStyle(element).opacity));
           assert.ok(opacity > 0.3 && opacity < 0.9, `${label}: the shown disabled + keeps its dim (${opacity})`);
         });
-        await check("a lone Host's head counts one PC", { width, mode }, async (page, label) => {
+        await check("a lone Host has no head at all", { width, mode }, async (page, label) => {
           const lone = await heads(page);
           assert.equal(await page.locator(".machine-group .machine-header").count(), 0, `${label}: the lone Host has no header`);
-          assert.equal(lone.pcsCount, "1", `${label}: the PCs head counts the lone Host`);
-          assert.equal(lone.pcsCountName, "1 PC shown", `${label}: the singular count says what it counts`);
+          assert.equal(lone.pcsHead, 0, `${label}: and no PCs head above it`);
         });
       }
       // a fine pointer with a touch screen beside it: a finger may come next, so the actions never hide
@@ -369,7 +362,7 @@ try {
         const manage = await page.locator('section.machine-group[aria-label="PC Work PC"] .machine-manage').evaluate((button) => { const box = button.getBoundingClientRect(); return { width: box.width, opacity: getComputedStyle(button).opacity }; });
         assert.ok(manage.width > 0 && manage.opacity === "1", `${label}: at rest Manage shows too: ${JSON.stringify(manage)}`);
         assert.equal(rest.count, null, `${label}: no count in view over the actions`);
-        assert.equal(rest.countWords, `${await agentRowsOn(page, "work")} agents running`, `${label}: a screen reader still hears the count`);
+        assert.equal(rest.countWords, `${await agentRowsOn(page, "work")} agents`, `${label}: a screen reader still hears the count`);
       });
       // forced colors paint every edge in full: a fade there is only lost text
       await check("forced colors fade no edge", { width: 1280, mode: "dark", twoPcs: true, height: 640, forcedColors: true }, async (page, label) => {

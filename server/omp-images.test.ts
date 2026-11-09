@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
+import * as fs from "node:fs";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { ConversationPart } from "../shared/protocol.ts";
 import { aroundBlobOpenForTests, blobPlatformForTests, ompBlobAnchor, ompBlobPicture } from "./codex-images.ts";
 import { betweenAuthorizationForTests, forgetTranscriptState, ompAuthorizedTranscript, ompTranscriptImage, transcriptPage } from "./conversation.ts";
@@ -365,6 +366,41 @@ describe.skipIf(!heldOpenPlatform(process.platform))("omp's pictures reach the c
       expect(await ompTranscriptImage(path, "pi-prompt:u1:1")).toBeNull();
     } finally { blobPlatformForTests(null); forgetTranscriptState(); }
     expect(refs(path)).toEqual([["image/png pi-prompt:u1:0", "image/webp pi-prompt:u1:1"], []]);
+  });
+
+  it("serves no picture from another session that a folder swap puts at the path around the scan's opens after its first", async () => {
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH1sAAAAASUVORK5CYII=", "base64");
+    // the same records and length: only the picture's bytes tell the files apart
+    const foreign = Buffer.from(png);
+    foreign[foreign.length - 1]! ^= 1;
+    const text = (bytes: Buffer) => jsonl(prompt("u1", [{ type: "text", text: "look" }, { type: "image", mimeType: "image/png", data: bytes.toString("base64") }]), answer("a1", "seen"));
+    const { path } = store("swapped-scan", text(png));
+    const folder = join(path, "..");
+    const elsewhere = join(root, "swapped-scan-elsewhere");
+    const away = join(root, "swapped-scan-away");
+    mkdirSync(elsewhere);
+    writeFileSync(join(elsewhere, basename(path)), text(foreign));
+    expect(Buffer.from((await ompTranscriptImage(path, "pi-prompt:u1:0"))!.bytes).equals(png)).toBe(true);
+    forgetTranscriptState();
+    // the path names the pane's own file when the lookup begins and at the scan's first open; every later
+    // open, after the scan's awaits, meets the other folder
+    const counts = { opens: 0, swaps: 0 };
+    const real = fs.openSync;
+    const spy = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+      if (args[0] !== path || counts.opens++ === 0) return real(...args);
+      counts.swaps++;
+      renameSync(folder, away);
+      renameSync(elsewhere, folder);
+      try { return real(...args); }
+      finally {
+        renameSync(folder, elsewhere);
+        renameSync(away, folder);
+      }
+    }) as typeof fs.openSync);
+    let image: Awaited<ReturnType<typeof ompTranscriptImage>>;
+    try { image = await ompTranscriptImage(path, "pi-prompt:u1:0"); } finally { spy.mockRestore(); }
+    expect(counts.swaps).toBeGreaterThan(0);
+    expect(image !== null && Buffer.from(image.bytes).equals(foreign) ? "FOREIGN" : image).toBeNull();
   });
 
   it("never holds the event loop for more than a few windows, however many small records it judges", async () => {

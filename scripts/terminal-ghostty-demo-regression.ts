@@ -15,10 +15,12 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { readableColor } from "../src/lib/terminalFold.ts";
+import { openSettingsPage } from "./settings-page.ts";
 
 interface Frame { type: string; pane_id?: string; data?: string; text?: string; features?: string[] }
 interface GhosttyFixture { inputs: Frame[]; print(data: string): void }
-declare global { interface Window { ghosttyFixture: GhosttyFixture } }
+interface RulerColumns { latin: number; hangul: number; after: number }
+declare global { interface Window { ghosttyFixture: GhosttyFixture; ghosttyRuler?: () => RulerColumns } }
 
 /** The demo serves the pane; its features and the pane's bytes are the test's. */
 function installGhosttyFixture(): void {
@@ -225,6 +227,16 @@ try {
         assert.deepEqual(zwj.wide, ["\u{1F468}\u200D\u{1F469}\u200D\u{1F467}"], "core: the ZWJ family is one wide cell");
         assert.ok(Math.abs(zwj.column - 5) < 0.1, `core: the text after a ZWJ family starts at xterm's column 5 (${zwj.column})`);
 
+        // an arrow key moves the cursor and changes no row: the drawn cursor follows it (#3266)
+        const cursorLeft = () => page.evaluate(() => parseFloat(document.querySelector<HTMLElement>(".pane-frame.is-current .ghostty-cursor")!.style.left));
+        await page.evaluate(() => window.ghosttyFixture.print("ab"));
+        await page.waitForFunction(() => parseFloat(document.querySelector<HTMLElement>(".pane-frame.is-current .ghostty-cursor")!.style.left) > 0);
+        const afterText = await cursorLeft();
+        await page.evaluate(() => window.ghosttyFixture.print("\x1b[D"));
+        await page.waitForFunction((left) => parseFloat(document.querySelector<HTMLElement>(".pane-frame.is-current .ghostty-cursor")!.style.left) < left, afterText);
+        assert.ok(Math.abs(await cursorLeft() - afterText / 2) < 0.5, `core: a Left arrow moves the drawn cursor back one cell (${afterText} -> ${await cursorLeft()})`);
+        await print(page, "\r\n", "ARROWS");
+
         // glyphs fit their cells as xterm's rows fit them (terminalGlyphs.ts): an underlined Hangul syllable fills its two
         // cells and keeps its underline, and a Nerd Font icon stays in its one cell, so the text after both keeps its column
         await print(page, "\x1b[4m\uD55C\x1b[24m\ue0a0Q|\ue0b0\r\nPLAIN-Q\r\n", "GLYPHS");
@@ -284,6 +296,63 @@ try {
 
         await print(page, "\x1b_Ga=d,d=I,i=7,q=2\x1b\\", "RED-DELETED");
         assert.equal(await picture(page), null, "core: a picture the program deletes goes");
+
+        // Latin keeps xterm's cell through a narrower grid and every font size: each fit spaces the layer from the font's
+        // own advance, so a spacing measured while xterm's screen was still the old width is not carried on (Latin drawn
+        // squashed over itself or spread apart, Hangul in its boxes untouched)
+        await print(page, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\uAC00~\r\n", "RULER");
+        // the column each ruler character is drawn at, in xterm's cells: `j` is the 36th Latin letter, then a Hangul syllable and `~`
+        await page.evaluate(() => { window.ghosttyRuler = () => {
+          const layer = document.querySelector(".pane-frame.is-current .ghostty-layer")!;
+          const cw = parseFloat(getComputedStyle(layer).getPropertyValue("--ghostty-cw"));
+          const row = [...layer.querySelectorAll<HTMLElement>(".ghostty-row")].find((r) => r.textContent?.startsWith("ABCDEFGHIJ"))!;
+          const at = (char: string) => {
+            const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              const index = node.textContent?.indexOf(char) ?? -1;
+              if (index < 0) continue;
+              const range = document.createRange();
+              range.setStart(node, index);
+              range.setEnd(node, index + 1);
+              return (range.getBoundingClientRect().left - row.getBoundingClientRect().left) / cw;
+            }
+            throw new Error(`no ${char} in the ruler`);
+          };
+          return { latin: at("j"), hangul: at("\uAC00"), after: at("~") };
+        }; });
+        // the fits that follow a change land within a few frames: the columns must come right by then. Spaced from what an
+        // earlier fit left, they never do, the error only changing sign at each fit
+        const columnsKept = async (when: string) => {
+          const kept = await page.waitForFunction(() => {
+            const columns = window.ghosttyRuler!();
+            return Math.abs(columns.latin - 35) < 0.2 && Math.abs(columns.hangul - 36) < 0.2 && Math.abs(columns.after - 38) < 0.2;
+          }, undefined, { timeout: 5000 }).then(() => true, () => false);
+          assert.ok(kept, `core, ${when}: Latin keeps xterm's cells, and the Hangul and Latin after it their columns (${JSON.stringify(await page.evaluate(() => window.ghosttyRuler!()))})`);
+        };
+        // the spacing a fit taken against xterm's old screen leaves behind (the cell read as 928px over 110 columns instead of
+        // 119): the next fit, at the new grid, must space the layer from the font alone, not from what is left
+        const staleFit = () => page.evaluate(() => { document.querySelector<HTMLElement>(".pane-frame.is-current .ghostty-layer")!.style.letterSpacing = "0.64px"; });
+        for (const width of [1100, 1137, 1174, 1211]) {
+          await staleFit();
+          await page.setViewportSize({ width, height: 900 });
+          await columnsKept(`a ${width}px window after a fit against the old screen`);
+        }
+        for (const view of ["Chat", "Terminal", "Chat", "Terminal"]) {
+          await page.getByRole("radio", { name: view, exact: true }).or(page.getByRole("button", { name: view, exact: true })).first().click();
+          if (view === "Terminal") {
+            await page.locator(".pane-frame.is-current .pane-terminal[data-renderer='ghostty']").waitFor();
+            await columnsKept("back from Chat");
+          }
+        }
+        await page.getByRole("button", { name: "Settings", exact: true }).first().click();
+        await openSettingsPage(page, "Appearance");
+        for (const step of ["Increase", "Increase", "Increase", "Decrease", "Decrease"]) {
+          await staleFit();
+          await page.getByRole("button", { name: `${step} terminal font size`, exact: true }).click();
+          await columnsKept(`${step} terminal font size after a fit against the old screen`);
+        }
+        await page.keyboard.press("Escape");
+        await page.locator(".settings-dialog").waitFor({ state: "detached" });
 
         // typing still goes through xterm, to the pane
         await page.locator(".pane-frame.is-current .pane-terminal").click();

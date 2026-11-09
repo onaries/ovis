@@ -1,4 +1,5 @@
 import type { Limiters, RateLimiter } from "./core.ts";
+import type { PassSettings } from "./pass.ts";
 
 export const DEFAULT_RELAY_LIMITS = {
   perAddressPerMinute: 120,
@@ -41,6 +42,21 @@ export function relayLimitsFromArgs(args: readonly string[], env: Readonly<Recor
   });
 }
 
+/** The relay pass settings (pass.ts) from `--pass-mode`, `--pass-enforce-at`, `--pass-keys` and `--pass-revoked`, else the environment. */
+export function relayPassFromArgs(args: readonly string[], env: Readonly<Record<string, string | undefined>>): PassSettings {
+  const value = (flag: string, variable: keyof PassSettings) => {
+    const index = args.indexOf(`--${flag}`);
+    if (index >= 0 && args[index + 1] === undefined) throw new Error(`--${flag} needs a value`);
+    return index >= 0 ? args[index + 1] : env[variable];
+  };
+  return {
+    RELAY_PASS_MODE: value("pass-mode", "RELAY_PASS_MODE"),
+    RELAY_PASS_ENFORCE_AT: value("pass-enforce-at", "RELAY_PASS_ENFORCE_AT"),
+    RELAY_PASS_KEYS: value("pass-keys", "RELAY_PASS_KEYS"),
+    RELAY_PASS_REVOKED: value("pass-revoked", "RELAY_PASS_REVOKED"),
+  };
+}
+
 /** Token buckets refill continuously; full idle buckets are forgotten, active ones never evicted. */
 export function memoryLimiters(limits: BunRelayLimits, now: () => number = Date.now): Limiters {
   const bucket = (capacity: number, maxKeys: number): RateLimiter => {
@@ -63,5 +79,8 @@ export function memoryLimiters(limits: BunRelayLimits, now: () => number = Date.
   return {
     perAddress: bucket(limits.perAddressPerMinute, limits.maxAddresses),
     global: bucket(limits.globalPerMinute, 1),
+    // once its address's budget is spent, a PC whose relay pass holds gets one of its own (core.ts Limiters.perPc)
+    perPc: bucket(limits.perAddressPerMinute, limits.maxAddresses),
+    passChecks: bucket(limits.perAddressPerMinute, limits.maxAddresses),
   };
 }

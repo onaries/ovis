@@ -167,6 +167,8 @@ export class GhosttyVt {
   private input = 0;
   private inputCap = 0;
   private placementsGeneration = -1;
+  /** the cursor the last frame() saw: libghostty marks no row dirty when only the cursor moves */
+  private lastCursor = "";
   private readonly bit: Record<"codepoint" | "content_tag" | "wide" | "style_id", Bits>;
   private readonly flagsOffset: number;
   private readonly encoder = new TextEncoder();
@@ -382,13 +384,17 @@ export class GhosttyVt {
 
   /**
    * Snapshot the terminal and call `draw` for each row that changed since the last frame.
-   * Returns false when nothing changed.
+   * Returns false when nothing changed, the cursor included (an arrow key moves only the cursor, #3266).
    */
   frame(draw: (y: number, runs: GhosttyRun[]) => void): boolean {
     const x = this.x;
     this.check(x.ghostty_render_state_update(this.state, this.terminal), "render_state_update");
+    const c = this.cursor();
+    const cursor = `${c.visible} ${c.x} ${c.y} ${c.style}`;
+    const cursorMoved = cursor !== this.lastCursor;
+    this.lastCursor = cursor;
     this.check(x.ghostty_render_state_get(this.state, RS_DATA_DIRTY, this.scratch), "dirty");
-    if (this.view().getInt32(this.scratch, true) === 0) return false;
+    if (this.view().getInt32(this.scratch, true) === 0) return cursorMoved;
 
     const iterSlot = this.scratch + 16;
     const cellsSlot = this.scratch + 24;

@@ -1616,7 +1616,9 @@ ol.markdown-list {
   letter-spacing: var(--tracking-caps);
 }
 
-/* a file a tool call names opens in the viewer: a link in look, a button underneath */
+/* a file a tool call names opens in the viewer: a link in look, a button underneath. Its name stays
+   text a touch screen can select, as a link's is: a button's label is not, so a phone's selection of
+   it copied nothing. A tap still opens the file. */
 .chat-tool-file-link {
   padding: 0;
   border: 0;
@@ -1628,6 +1630,9 @@ ol.markdown-list {
   text-underline-offset: 0.2em;
   overflow-wrap: anywhere;
   cursor: pointer;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 .chat-tool-file-link:hover {

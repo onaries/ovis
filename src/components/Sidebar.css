@@ -430,7 +430,8 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 }
 
 .workspace-agent-select > .sidebar-mark { margin-inline-end: calc(-1 * var(--space-2)); }
-.workspace-agent-select:focus-visible { outline-offset: calc(var(--ring-offset) * -1); }
+/* the common ring, outside the row (G-034); scroll-margin keeps it in view when the keyboard lands here */
+.workspace-agent-select:focus-visible { outline-offset: var(--ring-offset); scroll-margin-block: calc(var(--ring-offset) + var(--space-1)); }
 .workspace-agent-select:disabled { cursor: default; }
 
 .workspace-agent-select > .sidebar-pane-meta {
@@ -454,6 +455,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 .workspace-agent-title {
   flex: 0 1 auto;
   min-width: calc(4 * var(--space-4));
+  color: var(--text-dim);
   font-size: var(--fs-md);
 }
 
@@ -584,14 +586,13 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   background: var(--side-selected);
 }
 
-/* keyboard focus draws the ring on the whole row and no fill */
-@supports selector(:has(*)) {
-  .workspace-header:has(> .workspace-select:focus-visible) {
-    outline: var(--ring);
-    outline-offset: calc(var(--ring-offset) * -1);
-  }
-
-  .workspace-select:focus-visible { outline: none; }
+/* keyboard focus draws the common ring around the row's selector, 2px outside it (G-034), on the element
+   that holds the focus; scroll-margin keeps the ring in view when the keyboard lands on a row at the list's
+   edge */
+.workspace-select:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+  scroll-margin-block: calc(var(--ring-offset) + var(--space-1));
 }
 
 /* forced colors (Windows high contrast) repaint fills as Canvas, which would erase the selection: there it keeps a
@@ -628,10 +629,11 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   min-width: 0;
 }
 
+/* a row's name is navigation: a step back from the state beside it (G-042), AA in both themes */
 .workspace-name {
   min-width: 0;
   overflow: hidden;
-  color: var(--text);
+  color: var(--text-dim);
   font-size: var(--fs-md);
   font-weight: var(--fw-regular);
   line-height: var(--lh-tight);
@@ -645,12 +647,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
    on the height and in the type of an agent's row. */
 .machine-workspaces.is-two-line .workspace-header { min-height: var(--side-row-2); }
 
-/* One line: as in herdr's sidebar, a top-level git workspace says its branch under its name, on
-   the same height as a two-line row; worktrees and folders outside git stay one line. */
-.workspace-header:has(.workspace-copy.is-branch-line) { min-height: var(--side-row-2); }
-
-.workspace-copy.is-two-line,
-.workspace-copy.is-branch-line {
+.workspace-copy.is-two-line {
   flex-direction: column;
   align-items: stretch;
   justify-content: center;
@@ -761,10 +758,11 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   .sidebar-row-action:hover:not(:disabled) { color: var(--text-strong); }
 }
 
-/* A row's menu button is for touch and narrow layouts, where it takes no room until the row is
-   hovered, focused, selected or its menu is open; only the name gives way to it. A desktop draws
-   none: a right-click or the context-menu key opens the same menu at the row, and hands the
-   focus back where it was. */
+/* A row's menu button takes no room until the row is hovered, focused or its menu is open; only the
+   name gives way to it. A right-click or the context-menu key opens the same menu at the row and
+   hands the focus back where it was. On touch and in the drawer the selected row keeps its ⋯ too; a
+   desktop shows it under the pointer and the keyboard alone (G-021), so the menu can be found without
+   knowing the right-click. */
 .workspace-actions {
   display: flex;
   align-items: center;
@@ -772,14 +770,16 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   width: 0;
   overflow: hidden;
   opacity: 0;
+  /* out of the accessibility tree and the tab order while unseen: the row's selector is its one stop */
+  visibility: hidden;
 }
 
 .workspace-header:focus-within > .workspace-actions,
-.workspace-group.is-selected > .workspace-header > .workspace-actions,
 .workspace-actions:has([aria-expanded="true"]) {
   width: auto;
   overflow: visible;
   opacity: 1;
+  visibility: visible;
 }
 
 @media (hover: hover) {
@@ -787,12 +787,17 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
     width: auto;
     overflow: visible;
     opacity: 1;
+    visibility: visible;
   }
 }
 
-/* as the tab strip's (TabStrip.css): no "..." button where there is a mouse and room for a right-click */
-@media (pointer: fine) and (min-width: 769px) {
-  .workspace-actions { display: none; }
+@media (pointer: coarse), (max-width: 768px) {
+  .workspace-group.is-selected > .workspace-header > .workspace-actions {
+    width: auto;
+    overflow: visible;
+    opacity: 1;
+    visibility: visible;
+  }
 }
 
 /* The status cell belongs to the selector (a click or a drag on it is the row's) and is drawn at
@@ -837,7 +842,8 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 
 /* Running breathes rather than spins: the dot holds full for most of the cycle and dims in a few
    steps, so it reads as alive at a glance without tugging at the eye, and the browser draws only
-   those steps. Every dot shares one phase (alignBreath), so several runs breathe together. */
+   those steps. Every dot shares one phase (alignBreath), so several runs breathe together. Under
+   reduced motion the dot holds still, its shape and colour the state's as ever (G-027). */
 .sidebar-status[data-status="working"] .sidebar-status-dot {
   animation: sidebar-breathe var(--dur-breathe) steps(6) infinite;
 }
@@ -880,6 +886,12 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 
 .sidebar-status[data-status="working"] .sidebar-status-glyph {
   animation: sidebar-breathe var(--dur-breathe) steps(6) infinite;
+}
+
+/* under reduced motion the dot and the glyph hold still, their shape and colour the state's as ever (G-027) */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-status[data-status="working"] .sidebar-status-dot,
+  .sidebar-status[data-status="working"] .sidebar-status-glyph { animation: none; }
 }
 
 .sidebar-status.badge-restore-error { color: var(--status-blocked); }
@@ -943,7 +955,6 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   min-height: var(--split-agents-min, 0px);
   max-height: var(--section-max, max-content);
 }
-.sidebar-shell > .pcs-sidebar.is-collapsed,
 .sidebar-shell > .agents-sidebar:is(.is-collapsed, .is-empty) { flex: 0 1 auto; min-height: 0; }
 
 /* When neither list fills its allocation, keep Agents docked to the footer as before. Grouped
@@ -1019,14 +1030,20 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
     --side-action: var(--touch-target);
   }
 
-  /* The folder that folds a worktree group takes a finger's width, centered on its column so the
-     marks beside it do not move; it lies over the row it would otherwise hand the tap to. */
+  /* The folder that folds a worktree group takes a finger's width: its icon stays on its column, and the
+     extra width lies in the row's gutter at its start, never over the selector after it, so the first
+     letters of the name select the row and the folder folds it (G-025). */
   .sidebar-row-action.workspace-toggle {
     position: relative;
     z-index: 1;
     flex-basis: var(--touch-target);
     width: var(--touch-target);
-    margin-inline: calc((var(--side-box) - var(--touch-target)) / 2);
+    margin-inline: calc(var(--side-box) - var(--touch-target)) 0;
+    padding-inline-start: calc(var(--touch-target) - var(--side-box));
+  }
+
+  .sidebar-row-action.workspace-toggle .workspace-toggle-fold {
+    inset-inline-start: calc(var(--touch-target) - var(--side-box));
   }
 
   /* The gear stays its --side-box column and takes a finger's --touch-target width through an
@@ -1048,6 +1065,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
     width: auto;
     overflow: visible;
     opacity: 1;
+    visibility: visible;
   }
 }
 
@@ -1098,4 +1116,42 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 
 .context-count.is-low {
   color: var(--status-blocked);
+}
+
+/* Compact rows, the default (Settings → Sidebar rows → Two lines keeps the tall ones), as herdr-app's list: one line
+   a little lower than a control under a pointer (a finger keeps its touch target), the name, and a branch other than the default dim at the row's end */
+@media (pointer: fine) {
+  .machine-workspaces:not(.is-two-line) {
+    --side-row: calc(var(--control-h) - var(--space-1) - var(--hairline) * 2);
+  }
+}
+
+.workspace-branch-tail {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  margin-inline-start: auto;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* a workspace row's branch shows under the pointer or the focus; a finger keeps it */
+@media (hover: hover) and (pointer: fine) {
+  .machine-workspaces:not(.is-two-line) .workspace-header:not(:hover, :focus-within) .workspace-branch-tail { visibility: hidden; }
+}
+
+/* state by shape as well as colour (HIG): working a dot, waiting a ?, an unread finish a check, in the same cell */
+.sidebar-status[data-status="done"] .sidebar-status-dot {
+  width: calc(var(--space-1) + 1px);
+  height: calc(var(--space-2) + 1px);
+  margin-top: calc(-1 * var(--hairline) * 2);
+  border: solid var(--status-done);
+  border-width: 0 2px 2px 0;
+  border-radius: 0;
+  background: transparent;
+  transform: rotate(45deg);
 }

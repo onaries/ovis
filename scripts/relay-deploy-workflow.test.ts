@@ -14,7 +14,7 @@ export const loadWorkflow = (path = process.env.RELAY_DEPLOY_WORKFLOW ?? new URL
 test("relay deploy runs on a push to main touching relay/ and by hand", () => {
   const { on } = loadWorkflow();
   expect(on.push.branches).toEqual(["main"]);
-  expect(on.push.paths).toEqual(["relay/**", "shared/relay-server-proof.ts"]);
+  expect(on.push.paths).toEqual(["relay/**", "shared/relay-server-proof.ts", "shared/relay-pass.ts"]);
   expect("workflow_dispatch" in on).toBe(true);
 });
 

@@ -54,6 +54,24 @@ describe("startScreenMetadata", () => {
     expect(startScreenMetadata("codex-transcript", CODEX.replace("GPT-6-Luna medium fast", "GPT-5.6 xhigh"))).toEqual({ model: "gpt-5.6", reasoning_effort: "xhigh" });
   });
 
+  it("reads the model a custom provider names in Codex's footer, as written (#3263)", () => {
+    for (const [footer, model, effort] of [
+      ["DeepSeek4.1flash(OpenCode) low fast", "DeepSeek4.1flash(OpenCode)", "low"],
+      ["gpt-6.1-terra high", "gpt-6.1-terra", "high"],
+      ["opus5.5(AG) medium", "opus5.5(AG)", "medium"],
+      ["qwen3-coder:30b xhigh", "qwen3-coder:30b", "xhigh"],
+    ] as const) {
+      const screen = CODEX.replace("GPT-6-Luna medium fast", footer);
+      expect(startScreenMetadata("codex-transcript", screen)).toEqual({ model, reasoning_effort: effort });
+      // a new pane's start screen, so its chat is an empty new conversation (regression: fails on main)
+      expect(codexStartScreenUnused(screen)).toBeTrue();
+    }
+    // still no model without an effort, and none from a line that is no footer
+    expect(startScreenMetadata("codex-transcript", CODEX.replace("GPT-6-Luna medium fast", "DeepSeek4.1flash(OpenCode)"))).toEqual({ model: null, reasoning_effort: null });
+    expect(startScreenMetadata("codex-transcript", CODEX.replace("GPT-6-Luna medium fast", "some words high"))).toEqual({ model: null, reasoning_effort: null });
+    expect(codexStartScreenUnused(CODEX.replace("GPT-6-Luna medium fast", "DeepSeek4.1flash(OpenCode) low").replace("  \u2190 for agents \u00b7 ? for shortcuts", ""))).toBeFalse();
+  });
+
   it("reads nothing of a Codex screen without its header or its status line", () => {
     expect(startScreenMetadata("codex-transcript", "  GPT-6-Luna medium fast · /tmp/test-project")).toEqual({ model: null, reasoning_effort: null });
     expect(startScreenMetadata("codex-transcript", "  >_ OpenAI Codex (v0.162.1)\n  Trust this folder?\n› 1. Trust and continue")).toEqual({ model: null, reasoning_effort: null });

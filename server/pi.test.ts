@@ -472,7 +472,7 @@ it("reads a resumed transcript from this pane's Pi profile store", async () => {
       home: root,
     });
     // the model catalogs are the pane's too, not those of the bridge's own PI_CODING_AGENT_DIR
-    expect(result).toEqual({ path: customTranscript, agentDir: profile });
+    expect(result).toEqual({ path: customTranscript, agentDir: profile, identity: expect.any(String) });
   } finally {
     if (old === undefined) delete process.env["PI_CODING_AGENT_DIR"];
     else process.env["PI_CODING_AGENT_DIR"] = old;
@@ -494,7 +494,7 @@ it("resolves profile and session-directory overrides from each pane's Pi process
       processes: [{ pid: name === "profile-a" ? 790 : 791, argv: [name === "profile-a" ? "pi.exe" : "bun", ...(name === "profile-a" ? [] : ["/opt/pi.cjs"])] }],
       environOf: () => [`PI_CODING_AGENT_DIR=${profile}`],
       home: root,
-    })).toEqual({ path: target, agentDir: profile });
+    })).toEqual({ path: target, agentDir: profile, identity: expect.any(String) });
   }
   const sessionDir = join(root, "direct-session-dir");
   mkdirSync(sessionDir, { recursive: true });
@@ -505,7 +505,7 @@ it("resolves profile and session-directory overrides from each pane's Pi process
     processes: [{ pid: 792, argv: ["/usr/bin/pi"] }],
     environOf: () => [`PI_CODING_AGENT_SESSION_DIR=${sessionDir}`],
     home: root,
-  })).toEqual({ path: target, agentDir: join(root, ".pi", "agent") });
+  })).toEqual({ path: target, agentDir: join(root, ".pi", "agent"), identity: expect.any(String) });
 });
 
 it("recognizes Pi's official npm bundle entry and renamed runtime argv", async () => {
@@ -519,15 +519,15 @@ it("recognizes Pi's official npm bundle entry and renamed runtime argv", async (
   expect(await piTranscriptPath("pane", undefined, {
     agent, processes: [{ pid: 810, argv: ["/usr/bin/node", officialEntry] }],
     environOf: () => [`PI_CODING_AGENT_DIR=${profile}`], home: root,
-  })).toEqual({ path: target, agentDir: profile });
+  })).toEqual({ path: target, agentDir: profile, identity: expect.any(String) });
   expect(await piTranscriptPath("pane", undefined, {
     agent, processes: [{ pid: 811, argv: ["pi", "--offline"] }],
     environOf: () => [`PI_CODING_AGENT_DIR=${profile}`], home: root,
-  })).toEqual({ path: target, agentDir: profile });
+  })).toEqual({ path: target, agentDir: profile, identity: expect.any(String) });
   expect(await piTranscriptPath("pane", undefined, {
     agent, processes: [{ pid: 812, argv: ["/usr/bin/pi"] }],
     environOf: () => [`USERPROFILE=${root}`, "PI_CODING_AGENT_DIR=~/npm-profile"], home: join(root, "bridge-home"),
-  })).toEqual({ path: target, agentDir: profile });
+  })).toEqual({ path: target, agentDir: profile, identity: expect.any(String) });
 });
 
 it.skipIf(process.platform !== "linux")("recovers Pi argv and process HOME from a live PID when Herdr omits argv", async () => {
@@ -557,7 +557,7 @@ it.skipIf(process.platform !== "linux")("recovers Pi argv and process HOME from 
       processes: [{ pid: child.pid, name: "pi", cwd: root }],
       home: bridgeHome,
     });
-    expect(result).toEqual({ path: target, agentDir: profile });
+    expect(result).toEqual({ path: target, agentDir: profile, identity: expect.any(String) });
   } finally {
     child.kill();
     await child.exited;
@@ -577,8 +577,8 @@ it("keeps a custom Pi profile scoped to its current process and canonical store"
     const defaultSession = session("default-profile");
     const defaultAgent = { agent: "pi", agent_session: { agent: "pi", source: "herdr:pi", kind: "path", value: defaultSession } } as never;
     // an environment that cannot be read names no profile: the bridge's store here is not its agent dir's own
-    expect(await piTranscriptPath("pane", store, { agent: defaultAgent, processes, environOf: () => null, home: root })).toEqual({ path: defaultSession, agentDir: null });
-    expect(await piTranscriptPath("pane", undefined, { agent, processes, environOf, home: root })).toEqual({ path: target, agentDir: profile });
+    expect(await piTranscriptPath("pane", store, { agent: defaultAgent, processes, environOf: () => null, home: root })).toEqual({ path: defaultSession, agentDir: null, identity: expect.any(String) });
+    expect(await piTranscriptPath("pane", undefined, { agent, processes, environOf, home: root })).toEqual({ path: target, agentDir: profile, identity: expect.any(String) });
     const ompAgent = { agent: "pi", agent_session: { agent: "omp", source: "herdr:omp", kind: "path", value: target } } as never;
     expect(await piTranscriptPath("pane", undefined, { agent: ompAgent, processes, environOf, home: root })).toBeNull();
     expect(await piTranscriptPath("pane", undefined, { agent, processes: [{ pid: 782, argv: ["shell"] }], environOf, home: root })).toBeNull();
@@ -598,11 +598,11 @@ it("keeps a custom Pi profile scoped to its current process and canonical store"
       processes: [{ pid: 781, argv: ["pi"] }, { pid: 783, argv: ["pi"] }],
       environOf: (pid) => [`PI_CODING_AGENT_SESSION_DIR=${profileStore}`, `PI_CODING_AGENT_DIR=${pid === 781 ? profile : otherProfile}`],
       home: root,
-    })).toEqual({ path: target, agentDir: null });
+    })).toEqual({ path: target, agentDir: null, identity: expect.any(String) });
     // pi decodes a file: URL, and one directory named through a link is still one directory
     expect(await piTranscriptPath("pane", undefined, {
       agent, processes, environOf: () => [`PI_CODING_AGENT_DIR=${pathToFileURL(profile).href}`], home: root,
-    })).toEqual({ path: target, agentDir: profile });
+    })).toEqual({ path: target, agentDir: profile, identity: expect.any(String) });
     if (canSymlink) {
       const alias = join(root, "profile-alias");
       symlinkSync(profile, alias, "dir");
@@ -612,7 +612,7 @@ it("keeps a custom Pi profile scoped to its current process and canonical store"
           processes: [{ pid: 781, argv: ["pi"] }, { pid: 783, argv: ["pi"] }],
           environOf: (pid) => [`PI_CODING_AGENT_DIR=${pid === 781 ? profile : alias}`],
           home: root,
-        })).toEqual({ path: target, agentDir: profile });
+        })).toEqual({ path: target, agentDir: profile, identity: expect.any(String) });
       } finally { rmSync(alias, { force: true }); }
     }
     if (canSymlink) {
@@ -665,7 +665,7 @@ it("keeps native default-store reports when process argv is unavailable", async 
   // the store is shared (PI_CODING_AGENT_SESSION_DIR), not the one inside the bridge's agent dir: no catalog is the pane's
   expect(await piTranscriptPath("pane", store, {
     ...options, agent: reported(target),
-  })).toEqual({ path: target, agentDir: null });
+  })).toEqual({ path: target, agentDir: null, identity: expect.any(String) });
   expect(await piTranscriptPath("pane", store, {
     ...options, agent: reported(customTarget),
   })).toBeNull();
@@ -673,8 +673,8 @@ it("keeps native default-store reports when process argv is unavailable", async 
   const old = process.env["PI_CODING_AGENT_DIR"];
   process.env["PI_CODING_AGENT_DIR"] = root;
   try {
-    expect(await piTranscriptPath("pane", store, { ...options, agent: reported(target) })).toEqual({ path: target, agentDir: piAgentDir() });
-    expect(await piTranscriptPath("pane", store, { ...options, processes: [], agent: reported(target) })).toEqual({ path: target, agentDir: root });
+    expect(await piTranscriptPath("pane", store, { ...options, agent: reported(target) })).toEqual({ path: target, agentDir: piAgentDir(), identity: expect.any(String) });
+    expect(await piTranscriptPath("pane", store, { ...options, processes: [], agent: reported(target) })).toEqual({ path: target, agentDir: root, identity: expect.any(String) });
   } finally {
     if (old === undefined) delete process.env["PI_CODING_AGENT_DIR"]; else process.env["PI_CODING_AGENT_DIR"] = old;
   }
@@ -766,7 +766,7 @@ it.skipIf(process.platform === "win32")("reads the session the pane's pi names t
   const processes = [{ pid: 830, argv: ["/usr/bin/pi"] }];
   const options = { agent, processes, processesAfter: async () => processes, environOf: () => [`PI_CODING_AGENT_DIR=${profile}`], home: root };
   try {
-    expect(await piTranscriptPath("core-pane", undefined, options)).toEqual({ path: written, agentDir: profile });
+    expect(await piTranscriptPath("core-pane", undefined, options)).toEqual({ path: written, agentDir: profile, identity: expect.any(String) });
     // a session pi has named and not written yet
     const fresh = join(sessions, "2026-11-05T09-01-00-000Z_1b0e7f1c-3c62-4a51-9b5e-5d1f2a3b4c5d.jsonl");
     state = { pid: 830, sessionFile: fresh };

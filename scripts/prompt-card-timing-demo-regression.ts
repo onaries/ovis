@@ -114,8 +114,9 @@ try {
 
     // a socket that drops and reconnects: the screen did not change, the card stays
     from = await paintCount(page);
-    await page.evaluate(() => { (window as unknown as { keptSockets: WebSocket[] }).keptSockets.at(-1)!.close(); });
-    await page.locator(".conn-reconnecting").waitFor({ state: "attached" });
+    // a drop this short is not said (src/lib/reconnectGrace.ts): the new socket's open is what shows the reconnect
+    const sockets = await page.evaluate(() => { const kept = (window as unknown as { keptSockets: WebSocket[] }).keptSockets; kept.at(-1)!.close(); return kept.length; });
+    await page.waitForFunction((before) => { const kept = (window as unknown as { keptSockets: WebSocket[] }).keptSockets; return kept.length > before && kept.at(-1)!.readyState === WebSocket.OPEN; }, sockets, { timeout: 15_000 });
     await page.locator(".conn-live").waitFor({ state: "attached", timeout: 15_000 });
     // fixed wait: the frames after the reconnect are watched for a card that goes, which nothing announces
     await page.waitForTimeout(PROMPT_READ_MS * 3);

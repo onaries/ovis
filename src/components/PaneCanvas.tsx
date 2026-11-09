@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type MouseEvent, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
-import { ArchiveRestore, Bot, Columns2, Ellipsis, Eraser, Folder, FolderInput, LockOpen, Maximize2, Minimize2, MoveHorizontal, Pencil, Plus, RotateCw, Rows2, ArrowLeftRight, Terminal, TextSearch, TextWrap, X } from "lucide-react";
+import { ArchiveRestore, Bot, Columns2, Ellipsis, Eraser, Folder, FolderInput, Link2, LockOpen, Maximize2, Minimize2, MoveHorizontal, Pencil, Plus, RotateCw, Rows2, ArrowLeftRight, Terminal, TextSearch, TextWrap, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { HerdrPane, HerdrTab, PaneLayoutSnapshot, SessionSnapshot } from "../../shared/protocol.ts";
 import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
@@ -33,6 +33,7 @@ import { paneStatus } from "../lib/status.ts";
 import { RowMenu, type RowMenuItem } from "./RowMenu.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { CodexRestartDialog } from "./CodexRestartDialog.tsx";
+import { CodexManualDialog } from "./CodexManualDialog.tsx";
 import "./PaneCanvas.css";
 
 type PaneLayoutSplit = PaneLayoutSnapshot["splits"][number];
@@ -122,6 +123,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   const [renamingAgent, setRenamingAgent] = useState<Extract<RenameTarget, { kind: "agent" }> | null>(null);
   const [closing, setClosing] = useState<HerdrPane | null>(null);
   const [restarting, setRestarting] = useState<string | null>(null);
+  const [matching, setMatching] = useState<string | null>(null);
   const [error, setError] = useState<UserError | null>(null);
   // a locked pinned agent (lib/paneLocks.ts) is closed from no menu here, nor is the tab it is in
   const paneLocked = usePaneLocked(machineId);
@@ -291,7 +293,10 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
       // the chat's own search: a menu item, so a phone's screen gains no button for it (#2018)
       ...(search ? [{ id: "search-conversation", label: t("Search conversation"), icon: TextSearch, run: search }] : []),
       ...layoutItems(target),
-      ...(!watching && !paneLocked(target.pane_id) && (target.agent ?? target.agent_session?.agent) === "codex" ? [{ id: "restart-codex", label: t("Restart Codex"), icon: RotateCw, danger: true, run: () => setRestarting(target.pane_id) }] : []),
+      ...(!watching && !paneLocked(target.pane_id) && (target.agent ?? target.agent_session?.agent) === "codex" ? [
+        { id: "connect-conversation", label: t("Connect conversation…"), icon: Link2, run: () => setMatching(target.pane_id) },
+        { id: "restart-codex", label: t("Restart Codex"), icon: RotateCw, danger: true, run: () => setRestarting(target.pane_id) },
+      ] : []),
       // a mirror, or a pane watched at another device's grid, wider than the screen is folded to it
       // (lib/terminalFold.ts); a full-screen program reads better at its own width, panned sideways.
       // This device's choice, for every such pane
@@ -486,6 +491,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     {renamingAgent && <RenameDialog key={renamingAgent.pane.pane_id} title={t("Change agent call name")} field={t("Agent call name")} initial={renamingAgent.name ?? ""} maxLength={AGENT_NAME_MAX_LENGTH} callName
       onClose={() => setRenamingAgent(null)} onSave={async (name) => { await api.renameAgent(renamingAgent.pane.pane_id, name || null); onChanged(); }} />}
     {restarting && <CodexRestartDialog key={restarting} paneId={restarting} onClose={() => setRestarting(null)} onRestarted={onChanged} />}
+    {matching && <CodexManualDialog key={matching} paneId={matching} onClose={() => setMatching(null)} />}
     {renaming && <RenameDialog title={t("Rename pane")} field={t("Pane name")} initial={renaming.label ?? ""} maxLength={80} onClose={() => setRenaming(null)} onSave={async (label) => { await api.renamePane(renaming.pane_id, label); onChanged(); }} />}
     {renamingTab && <RenameDialog title={t("Rename tab")} field={t("Tab name")} initial={customTabLabel(renamingTab, 1) ?? ""} maxLength={MAX_LABEL_CHARS} required={t("A tab needs a name.")}
       onClose={() => setRenamingTab(null)} onSave={async (label) => { await api.renameTab(renamingTab.tab_id, label); onChanged(); }} />}

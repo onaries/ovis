@@ -39,6 +39,10 @@ export function ChatMinimap({ turns, rowKeys, scroller, onJump, onWheel }: ChatM
     const measure = (): void => {
       frame = 0;
       const view = node.getBoundingClientRect();
+      const column = node.querySelector<HTMLElement>(".chat-transcript");
+      const nextFits = column !== null && minimapFits(view.width, column.getBoundingClientRect().width);
+      setFits((previous) => previous === nextFits ? previous : nextFits);
+      if (!nextFits) return;
       let first = Infinity, last = -1;
       for (const row of node.querySelectorAll<HTMLElement>("[data-chat-row]")) {
         const box = row.getBoundingClientRect();
@@ -48,9 +52,6 @@ export function ChatMinimap({ turns, rowKeys, scroller, onJump, onWheel }: ChatM
       }
       const next = last < 0 ? null : minimapCurrent(turnRows, first, last);
       setCurrent((previous) => previous === next ? previous : next);
-      const column = node.querySelector<HTMLElement>(".chat-transcript");
-      const nextFits = column !== null && minimapFits(view.width, column.getBoundingClientRect().width);
-      setFits((previous) => previous === nextFits ? previous : nextFits);
       const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       const nextRail = Math.max(0, Math.min((turns.length - 1) * SPACING_PX, view.height - MARGIN_REM * rem));
       setRailPx((previous) => previous === nextRail ? previous : nextRail);

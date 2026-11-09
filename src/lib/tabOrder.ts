@@ -18,6 +18,15 @@ export function adjacentTabBoundary(ids: readonly string[], tabId: string, direc
 }
 
 /** DOM hit rectangles stay in snapshot order, including the source tab. */
+/**
+ * The boundary among all the tabs for a drop at `at` among the drawn ones, whose places among all
+ * are `places` (a row that leaves tabs out behind More, TabStrip): right after the drawn tab before
+ * the line, or the first drawn tab's place when the line is before them all.
+ */
+export function drawnTabBoundary(places: readonly number[], at: number): number {
+  return at === 0 ? places[0]! : places[at - 1]! + 1;
+}
+
 export function tabDropBoundary(rects: readonly { left: number; right: number }[], x: number): number {
   const before = rects.findIndex((rect) => x < (rect.left + rect.right) / 2);
   return before < 0 ? rects.length : before;

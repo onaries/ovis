@@ -191,6 +191,8 @@ export interface OmoStatusDeps {
   background?: (cwd: string) => Map<string, number>;
   /** how often the session files are looked at, and the panes found anew */
   pollMs?: number;
+  /** what else about a pane finds it anew before `refreshMs` is up when it changes (Letta: its title's name and mark) */
+  refreshKey?: (pane: HerdrPane) => string;
   refreshMs?: number;
   now?: () => number;
 }
@@ -319,7 +321,7 @@ export class OmoStatus {
    */
   async refresh(panes: HerdrPane[]): Promise<void> {
     const generation = this.generation;
-    const key = panes.map((pane) => `${pane.pane_id}\0${pane.agent ?? ""}\0${pane.cwd ?? ""}`).join("\n");
+    const key = panes.map((pane) => `${pane.pane_id}\0${pane.agent ?? ""}\0${pane.cwd ?? ""}\0${this.deps.refreshKey?.(pane) ?? ""}`).join("\n");
     if (key === this.refreshedFor && this.now() - this.refreshedAt < this.refreshMs) {
       await Promise.all(this.reading.values());
       return;

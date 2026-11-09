@@ -232,7 +232,7 @@ describe("a Portal that signs its visitors in", () => {
   writeFileSync(bin, [
     "#!/bin/sh",
     'case "$1" in',
-    "  version) echo v2.6.1 ;;",
+    "  version) echo v2.7.3 ;;",
     "  expose)",
     `    [ "$2" = --help ] && { printf '%s\\n' '  -auth string' '  -auth-allow value' '  -auth-identity-headers' '  -auth-identity-proof string'; exit 0; }`,
     `    printf '%s' "\${AUTH_IDENTITY_PROOF-}" > '${noted}'`,

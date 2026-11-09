@@ -9,8 +9,10 @@ import { newPcs, type MyPc } from "../lib/account/myPcs.ts";
 import type { AccountProvider } from "../lib/account/store.ts";
 import { useT } from "../lib/i18n.ts";
 import { lastSeen } from "../lib/lastSeen.ts";
+import type { PcStatus } from "../lib/relay/pcStatus.ts";
 import type { AccountView } from "../lib/relay/shellState.ts";
 import { serverScopePath } from "../lib/shellMode.ts";
+import { ConnectionLine } from "./ConnectionLine.tsx";
 
 export const PROVIDER_NAMES: Record<AccountProvider, string> = { github: "GitHub", google: "Google", apple: "Apple" };
 
@@ -76,8 +78,24 @@ export function accountPcStateText(pc: MyPc, t: ReturnType<typeof useT>): string
   }
 }
 
-/** The account's PCs: a paired one opens; the others say what they wait for. */
-export function AccountPcList({ pcs, onJoin }: { pcs: readonly MyPc[]; onJoin?: (pc: MyPc) => void }) {
+/** How a saved PC answered the latest check (pcStatus.ts): its way and round trip, or why it did not. */
+export function PcStatusLine({ status, lastSeenAt = null }: { status: PcStatus; lastSeenAt?: string | null }) {
+  const t = useT();
+  if (status.kind === "answered") return <ConnectionLine state={{ kind: "answered", route: status.route, ...(status.relay === undefined ? {} : { relay: status.relay }), rttMs: status.rttMs }} />;
+  if (status.kind === "checking") return <ConnectionLine state={{ kind: "checking" }} />;
+  return <ConnectionLine state={{ kind: "offline", text: lastSeenAt === null ? t("Offline") : t("Offline · {when}", { when: lastSeen(lastSeenAt) }) }}
+    reason={status.reason === "pc" ? t("The PC is off, or Ovis is not running on it.") : t("The relay did not answer. Check this device's network.")} />;
+}
+
+/** Check now, beside a list of PCs: probes each saved one again. */
+export function CheckPcsButton({ status, onCheck }: { status: ReadonlyMap<string, PcStatus>; onCheck: () => void }) {
+  const t = useT();
+  const checking = [...status.values()].some((one) => one.kind === "checking");
+  return <div className="relay-shell-check"><button type="button" className="account-link" onClick={onCheck} disabled={checking}>{checking ? t("Checking…") : t("Check now")}</button></div>;
+}
+
+/** The account's PCs: a paired one opens and says how it answered the latest check; the others say what they wait for. */
+export function AccountPcList({ pcs, onJoin, status }: { pcs: readonly MyPc[]; onJoin?: (pc: MyPc) => void; status?: ReadonlyMap<string, PcStatus> }) {
   const t = useT();
   return (
     <ul className="relay-shell-pcs">
@@ -85,7 +103,9 @@ export function AccountPcList({ pcs, onJoin }: { pcs: readonly MyPc[]; onJoin?: 
         const body = (
           <span className="account-pc-text">
             <span className="relay-shell-pc-name">{pc.name}</span>
-            <span className="account-pc-state"><span className="account-pc-dot" aria-hidden="true" />{accountPcStateText(pc, t)}</span>
+            {pc.paired && status?.get(pc.server_id)
+              ? <PcStatusLine status={status.get(pc.server_id)!} lastSeenAt={pc.last_seen_at} />
+              : <span className="account-pc-state"><span className="account-pc-dot" aria-hidden="true" />{accountPcStateText(pc, t)}</span>}
           </span>
         );
         return (
@@ -103,8 +123,11 @@ export function AccountPcList({ pcs, onJoin }: { pcs: readonly MyPc[]; onJoin?: 
 }
 
 /** The front page once signed in: the account's PCs, then how another one joins. */
-export function AccountPcs({ view, onJoin, onSignOut, onLeave }: {
+export function AccountPcs({ view, onJoin, onSignOut, onLeave, status, onCheck }: {
   view: Extract<AccountView, { kind: "signed-in" }>; onJoin?: (pc: MyPc, options?: { typed?: boolean }) => void;
+  /** how each saved PC answered the latest check, and Check now */
+  status?: ReadonlyMap<string, PcStatus>;
+  onCheck?: () => void;
   /** ends the sign-in; every pairing stays */
   onSignOut?: () => void;
   /** removes this device from every PC of the account, then signs out */
@@ -125,7 +148,10 @@ export function AccountPcs({ view, onJoin, onSignOut, onLeave }: {
       ))}
       {view.pcs === null
         ? <div className="relay-shell-wait" role="status"><div className="boot-spinner" aria-hidden="true" /><span className="visually-hidden">{t("Loading your PCs…")}</span></div>
-        : <AccountPcList pcs={view.pcs} {...(onJoin ? { onJoin } : {})} />}
+        : <>
+          {onCheck && view.pcs.some((pc) => pc.paired) && <CheckPcsButton status={status ?? new Map()} onCheck={onCheck} />}
+          <AccountPcList pcs={view.pcs} {...(onJoin ? { onJoin } : {})} {...(status ? { status } : {})} />
+        </>}
       {view.error !== null && <p className="relay-shell-detail" role="alert">{view.error}</p>}
       <p className="account-fineprint">{t("To add a PC, sign in on it or scan its QR code.")}</p>
       {(onSignOut || onLeave) && (

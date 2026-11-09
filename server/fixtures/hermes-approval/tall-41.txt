@@ -1,0 +1,40 @@
+connections, cronjob, delegation,
+file, image_gen, memory,
+session_search, skills, terminal,
+todo, tts, vision, web · provider:
+
+──────────────────────────────────────
+──
+● clean up the scratch folder
+Initializing agent...
+──────────────────────────────────────
+──
+
+  ┊ 💻 preparing terminal…
+╭─────────────────────────────────────╮
+│ ⚠️  Dangerous Command               │
+│                                     │
+│ rm -rf ./scratch                    │
+│                                     │
+│ ❯ 1. Allow once                     │
+│   2. Allow for this session         │
+│   3. Add to permanent allowlist     │
+│   4. Deny                           │
+│                                     │
+│ recursive delete                    │
+╰─────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+  ↑/↓ to select, Enter to confirm  (3459s
+ ☤ fixture-model · 3m
+─────────────────────────────────────────
+⚠

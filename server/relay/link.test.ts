@@ -21,7 +21,7 @@ for (const refusal of [
     const fixture = relayFixture();
     fixtures.push(fixture);
     const clock = new TestClock();
-    const failed = deferred<string>();
+    const failed = deferred<{ error: string; code: string | undefined }>();
     const states: string[] = [];
     let attempts = 0;
     const server = Bun.serve({
@@ -39,14 +39,15 @@ for (const refusal of [
       relay: `ws://127.0.0.1:${server.port}`, identity: loadRelayIdentity(fixture.stateDir),
       services: fixture.app.context.services, port: fixture.app.port, clock, random: () => 0.5,
       connect: (url) => { attempts++; return new WebSocket(url); },
-      onState: (phase, error) => {
+      onState: (phase, error, code) => {
         states.push(phase);
-        if (phase === "error" && error) failed.resolve(error);
+        if (phase === "error" && error) failed.resolve({ error, code });
       },
     });
     try {
       link.start();
-      const error = await bounded(failed.promise);
+      const { error, code } = await bounded(failed.promise);
+      expect(code).toBe(refusal.permanent ? "server_key_refused" : "relay_unreachable");
       if (refusal.permanent) {
         expect(error).toContain(String(SERVER_PROOF_CLOSE));
         clock.advance(60_000);

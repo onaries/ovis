@@ -2,10 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEVICE_CODE_TTL_S, FakeAccountService, WEB_REDIRECT } from "../../../shared/account-service-fake.ts";
-import { startDeviceSignIn } from "./deviceSignIn.ts";
+import { startDeviceSignIn, startLinkPageSignIn } from "./deviceSignIn.ts";
 import type { RelayDevice } from "../relay/device.ts";
 import { myPcs, OFFLINE_AFTER_MS } from "./myPcs.ts";
-import { accountProvidersOf, AccountService, AccountServiceError, accountServiceOf, pcAccountServiceOf, SignedOutError } from "./service.ts";
+import { accountProvidersOf, AccountService, AccountServiceError, accountServiceOf, pcAccountServiceOf, shellAccountServiceOf, SignedOutError } from "./service.ts";
 import { beginSignIn, finishOwnSignIn, finishSignIn, SignInError, signInReturn } from "./signin.ts";
 import { memoryAccountStore, memoryLock } from "./store.ts";
 import { desktopProviders } from "./desktop.ts";
@@ -277,6 +277,111 @@ describe("signing in on a PC's own page, with GitHub's device flow", () => {
   });
 });
 
+describe("signing in on a PC's own page, with the Ovis link page", () => {
+  function setup() {
+    let now = 1_000_000;
+    const fake = new FakeAccountService(() => now);
+    fake.offerLinkPage(["github", "google"]);
+    const store = memoryAccountStore();
+    const wait = async (ms: number) => { now += ms; };
+    return { fake, store, options: { service: SERVICE, store, fetch: fake.fetch, wait, now: () => now, lock: memoryLock(), provider: "ovis" as const } };
+  }
+
+  it("tells the link page which PC is asking, and a provider's own device page nothing it would refuse", async () => {
+    const { fake, options } = setup();
+    const started = await startDeviceSignIn({ ...options, requester: { label: "Desk", os: "linux" } });
+    expect(fake.linkRequester(started.userCode)).toEqual({ label: "Desk", os: "linux" });
+    // GitHub's device start takes only the challenge: a name sent there would be refused
+    expect((await startDeviceSignIn({ ...options, provider: "github", requester: { label: "Desk", os: "linux" } })).userCode).not.toBe("");
+  });
+
+  it("starts without the name on an account service that does not take one yet", async () => {
+    const { fake, options } = setup();
+    fake.linkPageTakesRequester = false;
+    const started = await startDeviceSignIn({ ...options, requester: { label: "Desk", os: "linux" } });
+    expect(started.verificationUri).toBe(`${SERVICE}/link`);
+    expect(fake.linkRequester(started.userCode)).toEqual({ label: null, os: null });
+  });
+
+  it("shows the Ovis code with the service's own link page, and keeps the session the page approved", async () => {
+    const { fake, store, options } = setup();
+    const started = await startDeviceSignIn(options);
+    expect(started.verificationUri).toBe(`${SERVICE}/link`);
+    expect(started.verificationUriComplete).toBe(`${SERVICE}/link?code=${started.userCode}`);
+    const finishing = started.finish(new AbortController().signal);
+    fake.approveOnLinkPage(started.userCode, "acct_page", "google");
+    expect(await finishing).toMatchObject({ account: "acct_page", provider: "google" });
+    expect((await store.get("session"))?.provider).toBe("google");
+  });
+
+  it("falls back to the provider's device page when the link page is busy or down", async () => {
+    const { fake, options } = setup();
+    for (const answer of [
+      () => Response.json({ error: { code: "rate_limited", message: "" } }, { status: 429, headers: { "retry-after": "60" } }),
+      () => Response.json({ error: { code: "internal", message: "" } }, { status: 503 }),
+      () => { throw new TypeError("offline"); },
+    ]) {
+      const fetch = async (input: Request | string | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(input, init);
+        return new URL(request.url).pathname === "/v1/signin/ovis/device" ? answer() : fake.fetch(request);
+      };
+      const started = await startLinkPageSignIn({ ...options, fetch }, "google");
+      expect(started.provider).toBe("google");
+      expect(started.verificationUri).toBe("https://www.google.com/device");
+    }
+    const working = await startLinkPageSignIn(options, "google");
+    expect(working.provider).toBe("ovis");
+  });
+
+  it("does not fall back when the link page answers with a binding it cannot take: a bad answer cannot force the provider's page", async () => {
+    const { fake, options } = setup();
+    const evil = async (input: Request | string | URL, init?: RequestInit) => {
+      const answer = await fake.fetch(input instanceof Request ? input : new Request(input, init));
+      const body = await answer.json() as Record<string, unknown>;
+      return Response.json({ ...body, verification_uri: "https://evil.example/link" }, { status: answer.status });
+    };
+    await expect(startLinkPageSignIn({ ...options, fetch: evil }, "google")).rejects.toMatchObject({ code: "unsupported" });
+  });
+
+  it("follows no redirect: the device code and verifier never go to another address", async () => {
+    const { fake, options } = setup();
+    const elsewhere: string[] = [];
+    // as fetch does: a 307 is followed with the same body unless the call says redirect "manual" or "error"
+    const redirecting = async (input: Request | string | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const path = new URL(request.url).pathname;
+      if (path === "/v1/token" || path === "/v1/signin/ovis/device") {
+        if (init?.redirect === "manual") return new Response(null, { status: 307, headers: { location: "https://evil.example/collect" } });
+        if (init?.redirect === "error") throw new TypeError("redirect refused");
+        elsewhere.push(await request.text());
+        return Response.json({ error: { code: "authorization_pending", message: "" } }, { status: 400 });
+      }
+      return fake.fetch(request);
+    };
+    await expect(startDeviceSignIn({ ...options, fetch: redirecting })).rejects.toBeDefined();
+    const tokenOnly = async (input: Request | string | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      return new URL(request.url).pathname === "/v1/token" ? redirecting(input, init) : fake.fetch(request);
+    };
+    const started = await startDeviceSignIn({ ...options, fetch: tokenOnly });
+    await expect(started.finish(new AbortController().signal)).rejects.toBeDefined();
+    expect(elsewhere).toEqual([]);
+  });
+
+  it("refuses a link page on another address, and shows no QR code for a link carrying another code", async () => {
+    const { fake, options } = setup();
+    const rewrite = (fields: Record<string, string>) => async (input: Request | string | URL, init?: RequestInit) => {
+      const answer = await fake.fetch(input instanceof Request ? input : new Request(input, init));
+      const body = await answer.json() as Record<string, unknown>;
+      return Response.json({ ...body, ...fields }, { status: answer.status });
+    };
+    await expect(startDeviceSignIn({ ...options, fetch: rewrite({ verification_uri: "https://account.evil.example/link" }) })).rejects.toMatchObject({ code: "unsupported" });
+    const other = await startDeviceSignIn({ ...options, fetch: rewrite({ verification_uri_complete: `${SERVICE}/link?code=BBBB-BBBB` }) });
+    expect(other.verificationUri).toBe(`${SERVICE}/link`);
+    expect(other.verificationUriComplete).toBeNull();
+  });
+});
+
 describe("which account service a page signs in with", () => {
   const page = (content: string | null) => ({ querySelector: () => content === null ? null : { getAttribute: () => content } });
 
@@ -300,6 +405,16 @@ describe("which account service a page signs in with", () => {
   it("takes an https origin, or http on loopback, without its path", () => {
     expect(accountServiceOf(page("https://account.example/v1/"))).toBe("https://account.example");
     expect(accountServiceOf(page("http://127.0.0.1:8787"))).toBe("http://127.0.0.1:8787");
+  });
+
+  it("signs a browser in from app.ovis.sh alone, the one page the service sends it back to, and the phone app anywhere", () => {
+    const hosted = page("https://account.ovis.sh");
+    expect(shellAccountServiceOf(hosted, "https://app.ovis.sh", false)).toBe("https://account.ovis.sh");
+    for (const copy of ["https://app-ap.ovis.sh", "https://preview.ovis-app.pages.dev", "http://127.0.0.1:7421"]) {
+      expect(shellAccountServiceOf(hosted, copy, false)).toBeNull();
+      expect(shellAccountServiceOf(hosted, copy, true)).toBe("https://account.ovis.sh");
+    }
+    expect(shellAccountServiceOf(page(null), "https://app.ovis.sh", true)).toBeNull();
   });
   it("offers GitHub alone unless the page names Apple too", () => {
     const named = (content: string | null) => ({ querySelector: () => (content === null ? null : { getAttribute: () => content }) });

@@ -546,17 +546,21 @@ const CONTINUED_TAIL_BYTES = 64 * 1024;
  * user or assistant turn after it. Only the file's tail is read, since this runs on every lookup.
  * A file that cannot be read names no continuation: its own reader reports the failure.
  */
-async function transcriptTail(path: string): Promise<string | null> {
+/** A transcript's tail and the exact `dev:ino` of the file it was read from (#3402). */
+async function transcriptTail(path: string): Promise<{ text: string; identity: string } | null> {
   try {
-    const file = await open(path, constants.O_RDONLY);
+    // no links and no blocking: a FIFO in its place must not hold the lookup (as branchedFrom)
+    const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
     try {
-      const size = (await file.stat()).size;
+      const info = await file.stat({ bigint: true });
+      if (!info.isFile()) return null;
+      const size = Number(info.size);
       const start = Math.max(0, size - CONTINUED_TAIL_BYTES);
       const buffer = Buffer.alloc(size - start);
       const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
       const text = buffer.subarray(0, bytesRead).toString("utf8");
       // a tail that starts mid-line drops that partial line
-      return start > 0 ? text.slice(text.indexOf("\n") + 1) : text;
+      return { text: start > 0 ? text.slice(text.indexOf("\n") + 1) : text, identity: `${info.dev}:${info.ino}` };
     } finally {
       await file.close();
     }
@@ -565,11 +569,12 @@ async function transcriptTail(path: string): Promise<string | null> {
   }
 }
 
-async function continuedInSession(path: string): Promise<string | null> {
-  const text = await transcriptTail(path);
-  if (text === null) return null;
+/** The session a transcript continues in (or null), and the exact identity of the file whose tail said so (#3402). */
+async function continuedInSession(path: string): Promise<{ next: string | null; identity: string | null }> {
+  const tail = await transcriptTail(path);
+  if (tail === null) return { next: null, identity: null };
   let continued: string | null = null;
-  for (const line of text.split("\n")) {
+  for (const line of tail.text.split("\n")) {
     // every record is read as JSON reads it, however its keys are written (#2130)
     if (line.trim() === "") continue;
     try {
@@ -580,7 +585,7 @@ async function continuedInSession(path: string): Promise<string | null> {
       }
     } catch { /* a torn tail line cannot name the active session */ }
   }
-  return continued;
+  return { next: continued, identity: tail.identity };
 }
 
 /**
@@ -590,7 +595,7 @@ async function continuedInSession(path: string): Promise<string | null> {
  * single match is taken, and the job's state.json, when it names a transcript, must agree.
  */
 async function backgroundJobTranscript(path: string, configDir: string): Promise<string | null> {
-  const text = await transcriptTail(path);
+  const text = (await transcriptTail(path))?.text ?? null;
   if (text === null) return null;
   // each continued-in record claims only the output printed since the previous record, so an
   // earlier /resume's job id never names a later continuation
@@ -1193,6 +1198,8 @@ export async function claudeForegroundSession(
  */
 export async function claudeTranscriptFile(
   home: string, session: string, cwds: readonly (string | null | undefined)[], configDir = join(home, ".claude"), live: string | null = null,
+  /** filled with each file whose tail was read, by path: the exact identity it was proven through (#3402) */
+  proofs?: Map<string, string>,
 ): Promise<string | null> {
   const projects = join(configDir, "projects");
   const locate = async (id: string): Promise<string | null> => {
@@ -1222,19 +1229,29 @@ export async function claudeTranscriptFile(
   };
 
   /** `from`: the file checked to be a branch, whose continuations are taken beside it first (#2130) */
-  const follow = async (start: string, seen: Set<string>, from?: string): Promise<string | null> => {
+  /** `prove`: whether the tail it reads proves the path it returns; a branch walk's own evidence is read apart (#3402) */
+  const follow = async (start: string, seen: Set<string>, from?: string, prove = true): Promise<string | null> => {
+    // this walk's own reads: the path it returns carries this walk's proof, or none, never another walk's
+    const walk = new Map<string, string>();
+    const settle = (found: string): string => {
+      proofs?.delete(found);
+      const identity = walk.get(found);
+      if (prove && identity !== undefined) proofs?.set(found, identity);
+      return found;
+    };
     seen.add(start);
     let path = from ?? await locate(start);
     while (path !== null) {
-      const next = await continuedInSession(path);
-      if (next === null || seen.has(next)) return path;
+      const { next, identity } = await continuedInSession(path);
+      if (identity !== null) walk.set(path, identity);
+      if (next === null || seen.has(next)) return settle(path);
       seen.add(next);
       // a branch's continuation goes on beside it: the same id in a project an earlier cwd names is another
       // conversation (#2130). One whose file is not there keeps the transcript that named it, unless a
       // /resume of a background session names that job's own transcript
       const beside = join(dirname(path), `${next}.jsonl`);
       const nextPath = (from !== undefined && await isFile(beside) ? beside : await locate(next)) ?? await backgroundJobTranscript(path, configDir);
-      if (nextPath === null) return path;
+      if (nextPath === null) return settle(path);
       path = nextPath;
     }
     return null;
@@ -1242,6 +1259,14 @@ export async function claudeTranscriptFile(
 
   const seen = new Set<string>();
   const path = await follow(session, seen);
+  // a Claude started inside the pane inherits HERDR_PANE_ID and can take Herdr's report of the pane: a session
+  // with no transcript, or one print mode wrote, is no conversation of the pane's own Claude (#3260)
+  // the live session is looked for only where the pane's conversation can be: beside the report, or with no
+  // report in the folders of the pane's own cwds, never in another project
+  const folders = path !== null ? [dirname(path)]
+    : cwds.flatMap((cwd) => cwd ? [join(projects, claudeProjectDir(cwd))] : []);
+  const own = await ownSessionInstead(path, live, seen, folders, follow);
+  if (own !== null) return own;
   if (path === null || live === null || !SESSION_ID.test(live) || seen.has(live)) return path;
   // a branch stays in its project: only that folder is looked in, and what cannot be read there is no evidence of one
   const inProject = async (id: string): Promise<string | null> => {
@@ -1255,11 +1280,82 @@ export async function claudeTranscriptFile(
     if (parent === null) return path;
     if (seen.has(parent)) {
       // from the very file found to be the branch: the same id may name another file elsewhere
-      try { return await follow(live, seen, livePath!) ?? path; } catch { return path; }
+      // the branch was told by branchedFrom's own read, not this tail's: the path it gives carries no proof (#3402)
+      try { return await follow(live, seen, livePath!, false) ?? path; } catch { return path; }
     }
     branch = await inProject(parent);
   }
   return path;
+}
+
+/** How much of a transcript's end `lastEntrypoint` reads. */
+const ENTRYPOINT_TAIL_BYTES = 256 * 1024;
+
+/**
+ * The `entrypoint` the newest record within a transcript's last ENTRYPOINT_TAIL_BYTES names ("cli", "sdk-cli"),
+ * or null when none does or the file cannot be read. Whole records only, read as JSON reads them (#2130).
+ * Non-blocking and no symlinks, as branchedFrom.
+ */
+async function lastEntrypoint(path: string): Promise<string | null> {
+  let file;
+  try { file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW); } catch { return null; }
+  try {
+    const info = await file.stat();
+    if (!info.isFile()) return null;
+    const length = Math.min(info.size, ENTRYPOINT_TAIL_BYTES);
+    const bytes = Buffer.alloc(length);
+    let read = 0;
+    while (read < length) {
+      const { bytesRead } = await file.read(bytes, read, length - read, info.size - length + read);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    const lines = bytes.subarray(0, read).toString("utf8").split("\n");
+    // the first line may be cut by the read, the last one may still be being written: neither parses, and is passed by
+    for (let index = lines.length - 1; index >= 0; index--) {
+      const line = lines[index]!.trim();
+      if (line === "") continue;
+      let entry: { entrypoint?: unknown };
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (typeof entry?.entrypoint === "string") return entry.entrypoint;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally { await file.close(); }
+}
+
+/** Whether print mode or the SDK (`claude -p`) wrote a transcript's newest records: an `sdk-…` entrypoint, as claude-transcript.ts tells an SDK prompt. */
+async function printModeTranscript(path: string): Promise<boolean> {
+  return (await lastEntrypoint(path))?.startsWith("sdk") === true;
+}
+
+/**
+ * The transcript of the session the pane's Claude process names in its PID record (`live`), in place of the one
+ * Herdr reports, when that report cannot be the pane's conversation: no project holds its transcript, or print
+ * mode or the SDK wrote its newest records. A Claude started inside the pane (`claude -p` from a hook, a script or
+ * the agent itself) inherits HERDR_PANE_ID, and its SessionStart can take the pane's report (#3260). Null keeps
+ * the answer as it was: no PID record, a live session the report's chain already holds, a live session with no
+ * transcript either or, beside a print-mode report, one print mode wrote too; an interactive report always stands,
+ * as after a /resume back (#2020).
+ */
+async function ownSessionInstead(
+  reported: string | null, live: string | null, seen: ReadonlySet<string>, folders: readonly string[],
+  follow: (start: string, seen: Set<string>, from?: string) => Promise<string | null>,
+): Promise<string | null> {
+  if (live === null || !SESSION_ID.test(live) || seen.has(live)) return null;
+  if (reported !== null && !await printModeTranscript(reported)) return null;
+  let found: string | null = null;
+  for (const folder of folders) {
+    const candidate = join(folder, `${live}.jsonl`);
+    // a regular file of its own, not a link to something else
+    try { if ((await lstat(candidate)).isFile()) { found = candidate; break; } } catch { /* not there */ }
+  }
+  if (found === null) return null;
+  const path = await follow(live, new Set<string>(), found);
+  if (path === null || reported === null) return path;
+  // beside a print-mode report, a live session print mode wrote too tells neither apart
+  return await printModeTranscript(path) ? null : path;
 }
 
 /** Where `claudeSessionTempDir` looks for this user's `claude-<uid>` folder. */

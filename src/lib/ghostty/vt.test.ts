@@ -61,6 +61,32 @@ const ascii = ({ cells, cursor }: Layout): Layout => ({
   cursor,
 });
 
+describe("GhosttyVt frame", () => {
+  // the layer redraws its cursor only on a frame that changed: an arrow key or a space typed onto a blank cell
+  // moves the cursor and changes no row (#3266, #3268)
+  it("tells a frame that only moved, hid or showed the cursor", async () => {
+    const vt = await GhosttyVt.create(80, 5);
+    try {
+      const step = (bytes: string) => {
+        vt.write(bytes);
+        const changed = vt.frame(() => {});
+        const c = vt.cursor();
+        return { changed, x: c.x, y: c.y, visible: c.visible };
+      };
+      expect(step("ab")).toEqual({ changed: true, x: 2, y: 0, visible: true });
+      expect(step("\x1b[D")).toEqual({ changed: true, x: 1, y: 0, visible: true });
+      expect(step("\x1b[C")).toEqual({ changed: true, x: 2, y: 0, visible: true });
+      expect(step(" ")).toEqual({ changed: true, x: 3, y: 0, visible: true });
+      expect(step("\x1b[3;5H")).toEqual({ changed: true, x: 4, y: 2, visible: true });
+      expect(step("")).toEqual({ changed: false, x: 4, y: 2, visible: true });
+      expect(step("\x1b[?25l")).toEqual({ changed: true, x: 0, y: 0, visible: false });
+      expect(step("\x1b[?25h")).toEqual({ changed: true, x: 4, y: 2, visible: true });
+    } finally {
+      vt.dispose();
+    }
+  });
+});
+
 describe("GhosttyVt widths", () => {
   for (const [name, text] of [
     ["ZWJ family", "ABC👨‍👩‍👧XYZ"],

@@ -61,7 +61,7 @@ function standIn(options: { version?: string; ready?: boolean; says?: string; ig
   writeFileSync(path, [
     "#!/bin/sh",
     'case "$1" in',
-    `  version) echo '${options.version ?? "v2.6.1"}' ;;`,
+    `  version) echo '${options.version ?? "v2.7.3"}' ;;`,
     "  expose)",
     // a question about its flags, not a service
     `    [ "$2" = --help ] && { printf '%s\\n' 'Flags:' ${(options.flags ?? [...SIGN_IN_FLAGS, ...OIDC_FLAGS]).map((flag) => `'  -${flag}' '    \t'`).join(" ")}; exit 0; }`,
@@ -860,6 +860,113 @@ describe("who may open the address", () => {
       expect(watch.exposes).toHaveLength(2);
       expect(portal.seen()).toEqual(expect.arrayContaining(authArgs(OIDC)));
       expect(envOf(portal.seen())).toBe(`token=unset identity=unset secret=${SECRET} ovis=unset`);
+    } finally {
+      watch.dispose();
+      await bounded(service.shutdown(), "Portal shutdown settled");
+    }
+  });
+
+  it("starts a sign-in only on a Portal that binds it to its hosts (v2.7.3 or later, by semver)", async () => {
+    // malformed versions fail closed: leading zeros, junk after it, a fourth part, a huge part, an empty or zero-led pre-release
+    for (const [version, runs] of [
+      ["v2.7.2", false], ["v2.7.3-rc.1", false], ["v2.7.3junk", false],
+      ["v02.7.3", false], ["v2.07.3", false], ["v2.7.3x", false], ["v2.7.3.4", false], ["v2.7.3+foo..bar", false],
+      ["v2.7.1234567890", false], ["v2.7.4-", false], ["v2.7.4-rc.01", false],
+      ["v2.7.3", true], ["v2.7.4-rc.1", true], ["v2.7.3+build.5", true], ["2.8.0", true],
+    ] as const) {
+      const portal = standIn({ version });
+      const service = new PortalService({ stateDir: mkdtempSync(join(root, "state-")), bin: portal.path, fetch: relay() });
+      try {
+        service.start({ relay: RELAY, port: 7317, auth: credential(), ...open });
+        const status = await until(service, (s) => s.phase !== "starting", `the start on ${version} ended`);
+        if (runs) {
+          expect(status.phase).toBe("running");
+        } else {
+          expect(status).toMatchObject({ phase: "error", url: null });
+          expect(status.error).toBe(`This PC has Portal ${version}; a sign-in needs Portal v2.7.3 or later. Update Portal, or start without a sign-in.`);
+          expect(portal.pids()).toEqual([]);
+        }
+      } finally {
+        await bounded(service.shutdown(), "Portal shutdown settled");
+      }
+    }
+  });
+
+  it("offers no sign-in in the panel on a Portal older than v2.7.3, and the panel's start of one never runs it", async () => {
+    const portal = standIn({ version: "v2.7.2" });
+    const service = new PortalService({ stateDir: mkdtempSync(join(root, "state-")), bin: portal.path, fetch: relay() });
+    expect(await service.status(open)).toMatchObject({ version: "v2.7.2", usable: true, auth_methods: [] });
+    const own = { "x-herdr-update": "1", origin: "http://127.0.0.1:7317", "sec-fetch-site": "same-origin", "content-type": "application/json" };
+    const response = await handlePortalRequest(new Request("http://127.0.0.1:7317/api/portal/start", { method: "POST", headers: own, body: JSON.stringify({ relay: "relay.example", auth: credential() }) }), "/api/portal/start", service, { port: 7317, ...open });
+    expect(response.status).toBe(202);
+    const status = await until(service, (s) => s.phase !== "starting", "the start ended");
+    expect(status).toMatchObject({ phase: "error", url: null });
+    expect(status.error).toContain("a sign-in needs Portal v2.7.3 or later");
+    expect(portal.pids()).toEqual([]);
+  });
+
+  it("says it could not read the Portal version when `portal version` gives none, and not installed only when there is no Portal", async () => {
+    for (const [bin, said] of [
+      [standIn({ version: "devel" }).path, "Could not read the Portal version on this PC."],
+      [standIn({ version: "v2.7" }).path, "Could not read the Portal version on this PC."],
+      [join(root, "no-such-portal"), "Portal is not installed on this PC."],
+    ] as const) {
+      for (const auth of [credential(), undefined]) {
+        const service = new PortalService({ stateDir: mkdtempSync(join(root, "state-")), bin, fetch: relay() });
+        service.start({ relay: RELAY, port: 7317, auth, ...open });
+        const status = await until(service, (s) => s.phase !== "starting", "the start ended");
+        expect(status.phase).toBe("error");
+        expect(status.error).toStartWith(said);
+      }
+    }
+  });
+
+  it("still starts an older Portal without a sign-in", async () => {
+    const portal = standIn({ version: "v2.6.1" });
+    const service = new PortalService({ stateDir: mkdtempSync(join(root, "state-")), bin: portal.path, fetch: relay() });
+    try {
+      service.start({ relay: RELAY, port: 7317, ...open });
+      expect((await until(service, (s) => s.phase !== "starting", "the start ended")).phase).toBe("running");
+    } finally {
+      await bounded(service.shutdown(), "Portal shutdown settled");
+    }
+  });
+
+  it("refuses the boot's resume of a saved sign-in on an older Portal once, without trying again", async () => {
+    const stateDir = mkdtempSync(join(root, "state-"));
+    mkdirSync(join(stateDir, "portal"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(stateDir, "portal", "state.json"), JSON.stringify({ enabled: true, relay: RELAY, port: 7317, pid: process.pid, auth: credential("alice") }));
+    const portal = standIn({ version: "v2.7.2" });
+    const service = new PortalService({ stateDir, bin: portal.path, fetch: relay() });
+    const starts = spyOn(service, "start");
+    try {
+      await service.resume({ port: 7317, ...open });
+      const status = await until(service, (s) => s.phase !== "starting", "the resume ended");
+      expect(status.phase).toBe("error");
+      expect(status.error).toContain("a sign-in needs Portal v2.7.3 or later");
+      expect(starts).toHaveBeenCalledTimes(1);
+      expect(portal.pids()).toEqual([]);
+    } finally {
+      starts.mockRestore();
+      await bounded(service.shutdown(), "Portal shutdown settled");
+    }
+  });
+
+  it("does not relaunch a sign-in on a Portal that was replaced by an older one meanwhile", async () => {
+    const portal = standIn();
+    const service = new PortalService({ stateDir: mkdtempSync(join(root, "state-")), bin: portal.path, fetch: relay() });
+    service.authorize(() => open);
+    const watch = observe(service);
+    try {
+      const ready = watch.when(() => watch.internals.url !== null, "Portal was ready");
+      service.start({ relay: RELAY, port: 7317, auth: credential(), ...open });
+      await ready;
+      writeFileSync(portal.path, readFileSync(portal.path, "utf8").replace("echo 'v2.7.3'", "echo 'v2.7.2'"));
+      const ended = watch.when(() => watch.internals.phase === "error", "the relaunch was refused");
+      process.kill(watch.exposes[0]!, "SIGUSR1");
+      await ended;
+      expect(watch.exposes).toHaveLength(1);
+      expect((await service.status(open)).error).toContain("It was not restarted: This PC has Portal v2.7.2; a sign-in needs Portal v2.7.3 or later.");
     } finally {
       watch.dispose();
       await bounded(service.shutdown(), "Portal shutdown settled");

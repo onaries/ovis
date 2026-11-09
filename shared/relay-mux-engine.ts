@@ -593,6 +593,11 @@ export class MuxEngine {
   private idleTimer: CancelTimer | undefined;
   private probeTimer: CancelTimer | undefined;
   private probe: bigint | undefined;
+  /** when the PING carrying `probe` was queued, on the injected clock */
+  private probeSentAt = 0;
+  private readonly rttWaiters: ((ms: number | undefined) => void)[] = [];
+  /** The latest keepalive's round trip in ms, PING queued to its matching PONG: undefined before one came back. */
+  rttMs: number | undefined;
   private hidden = false;
 
   constructor(readonly options: MuxOptions) {
@@ -1013,7 +1018,13 @@ export class MuxEngine {
       case FrameType.SESSION_ERROR: this.shutdown(new MuxProtocolError(frame.payload.code, frame.payload.message)); return;
       case FrameType.PING: this.enqueueControl({ ...frame, type: FrameType.PONG }); return;
       case FrameType.PONG:
-        if (frame.payload === this.probe) { this.probe = undefined; this.probeTimer?.(); this.refreshIdle(); }
+        if (frame.payload === this.probe) {
+          this.probe = undefined;
+          this.probeTimer?.();
+          this.rttMs = this.options.clock.now() - this.probeSentAt;
+          for (const resolve of this.rttWaiters.splice(0)) resolve(this.rttMs);
+          this.refreshIdle();
+        }
         return;
       case FrameType.GOAWAY:
         check(frame.payload.last_open_id <= this.lastOpenId, "Future GOAWAY watermark");
@@ -1241,17 +1252,30 @@ export class MuxEngine {
   }
   ping(): void {
     if (!this.active || this.hidden) return;
+    // the idle keepalive is this probe now: left armed, it would replace the probe before its PONG came back
+    this.idleTimer?.();
     this.probeTimer?.();
     const random = crypto.getRandomValues(new Uint32Array(2));
     this.probe = (BigInt(random[0] ?? 0) << 32n) | BigInt(random[1] ?? 0);
+    this.probeSentAt = this.options.clock.now();
     this.enqueueControl({ type: FrameType.PING, flags: 0, stream_id: 0, payload: this.probe });
     this.probeTimer = this.timer(() => this.fail("timeout", "PONG timed out"), 60_000);
+  }
+  /** Pings now (or joins the probe already out) and resolves with the round trip once its PONG is back; undefined when no probe can go out or the engine closes first. */
+  measure(): Promise<number | undefined> {
+    if (!this.active || this.hidden) return Promise.resolve(undefined);
+    const answer = new Promise<number | undefined>((resolve) => { this.rttWaiters.push(resolve); });
+    // a probe already out is shared, never replaced: replacing it would restart its PONG deadline
+    if (this.probe === undefined) this.ping();
+    return answer;
   }
   setHidden(hidden: boolean): void {
     check(this.options.role === "client", "Only clients suspend liveness");
     const changed = this.hidden !== hidden;
     this.hidden = hidden;
     this.probe = undefined;
+    // a probe dropped here is never answered
+    for (const resolve of this.rttWaiters.splice(0)) resolve(undefined);
     this.probeTimer?.();
     this.idleTimer?.();
     if (changed) for (const timer of this.timers.values()) {
@@ -1276,6 +1300,7 @@ export class MuxEngine {
     this.state = "closed";
     this.generation++;
     for (const resolve of this.idleWaiters.splice(0)) resolve();
+    for (const resolve of this.rttWaiters.splice(0)) resolve(undefined);
     for (const stop of this.timers.keys()) stop();
     for (const stream of this.streams) this.reset(stream, "upstream_lost", false);
     this.urgent.length = 0;

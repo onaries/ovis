@@ -12,9 +12,14 @@
  * code. A host socket that drops reopens on the same nameplate with the same tries left. M1 for the
  * next device is worked out ahead of time, so the relay cannot time it against a device's arrival.
  */
+import { bytesToHex } from "@noble/hashes/utils.js";
+import { importPublicKey, importSecretKey } from "../../shared/relay-e2ee.ts";
 import { PairCodeHost, PairCodeProtocolError, PAIR_ATTEMPT_BYTES as ATTEMPT_BYTES, PAIR_CLOSE, PAIR_CODE_TRIES, formatPairCode, randomPairCode, splitPairCode } from "../../shared/relay-pair-code.ts";
+import { RELAY_PASS_HEADER } from "../../shared/relay-pass.ts";
 import type { RelayOffer } from "../../shared/relay-offer.ts";
+import { answerServerChallenge } from "../../shared/relay-server-proof.ts";
 import type { DeviceStore } from "../devices.ts";
+import type { RelayIdentity } from "./identity.ts";
 
 /** how long one device has, from M1, to answer */
 export const PAIR_CODE_ATTEMPT_MS = 20_000;
@@ -36,7 +41,11 @@ export interface RelayPairCodesOptions {
   readonly devices: DeviceStore;
   /** the offer a QR code would show for `code`, the six-digit code this typed code is bound to */
   readonly offer: (code: string) => RelayOffer;
-  readonly connect?: (url: string) => WebSocket;
+  /** this PC's relay key, which it proves to hold a nameplate (relay/pair-room.ts) */
+  readonly identity: () => RelayIdentity;
+  /** this PC's relay pass, sent in a header on Ovis's relays only */
+  readonly pass?: () => string | null;
+  readonly connect?: (url: string, headers?: Record<string, string>) => WebSocket;
   readonly attemptMs?: number;
   readonly keepaliveMs?: number;
 }
@@ -78,10 +87,11 @@ export class RelayPairCodes {
     options.devices.onPairingStarted(() => { if (!this.binding) this.cancel(); });
   }
 
-  private url(nameplate: string): string {
+  private url(nameplate: string, identity: RelayIdentity): string {
     const url = new URL("/v1/pair", this.options.relay.replace(/^wss:/, "https:"));
     url.protocol = "wss:";
-    url.search = new URLSearchParams({ nameplate, role: "host", v: "1" }).toString();
+    // the PC's key, which a relay that binds the nameplate to it asks this socket to prove; an older relay reads neither
+    url.search = new URLSearchParams({ nameplate, role: "host", v: "1", server_id: identity.server_id, public_key: bytesToHex(importPublicKey(identity.public_key)) }).toString();
     return url.href;
   }
 
@@ -142,7 +152,11 @@ export class RelayPairCodes {
     return new Promise((resolve) => {
       let settled = false;
       const settle = (value: "held" | "taken" | "failed") => { if (!settled) { settled = true; resolve(value); } };
-      const socket = (this.options.connect ?? ((address) => new WebSocket(address)))(this.url(current.nameplate));
+      const identity = this.options.identity();
+      const pass = this.options.pass?.() ?? null;
+      // Bun's WebSocket takes headers (never the URL: a pass is good for hours)
+      const connect = this.options.connect ?? ((address, extra) => new WebSocket(address, (extra ? { headers: extra } : undefined) as unknown as string[]));
+      const socket = connect(this.url(current.nameplate, identity), pass === null ? undefined : { [RELAY_PASS_HEADER]: pass });
       socket.binaryType = "arraybuffer";
       current.socket = socket;
       socket.addEventListener("message", (event) => {
@@ -151,7 +165,11 @@ export class RelayPairCodes {
           let message: { type?: unknown; attempt?: unknown };
           try { message = JSON.parse(event.data) as typeof message; } catch { return; }
           if (typeof message !== "object" || message === null || Array.isArray(message)) return;
-          if (message.type === "waiting") {
+          if (message.type === "server_challenge" && !settled) {
+            const answer = answerServerChallenge(event.data, importSecretKey(identity.secret_key), { server_id: identity.server_id, role: "pair-host", connection_id: current.nameplate });
+            if (answer !== null) this.send(current, answer);
+          }
+          else if (message.type === "waiting") {
             settle("held");
             if (current.keepalive) clearInterval(current.keepalive);
             current.keepalive = setInterval(() => { if (current.socket === socket) this.send(current, KEEPALIVE_PING); }, this.options.keepaliveMs ?? KEEPALIVE_MS);

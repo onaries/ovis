@@ -22,8 +22,8 @@ terminal (`hc label`, `terminal.label`; a label set to the empty string is remov
 | `ovis.tab` | the tab's name | Ovis, on each terminal of a renamed tab |
 | `ovis.pane` | the pane's name (else the terminal's own `name`) | Ovis, on a renamed pane |
 
-`ovis.*` labels hold only small facts about one terminal. Nothing else Ovis keeps (approvals,
-prompt answers, conversations) is stored in hc.
+`ovis.*` labels hold only small facts about one terminal. Approvals, prompt answers and
+conversations stay outside hc. Agent call names use the document described below.
 
 ## The `ovis-layout` document
 
@@ -69,3 +69,22 @@ terminals' sizes. A viewer then sizes each terminal to its pane.
 
 A document whose `schema` is not one a client knows is neither read nor overwritten by it: Ovis
 then lays tabs out from the labels and refuses layout changes.
+
+## Agent call names
+
+Core 0.1.17 cannot rename its native terminal names after launch. Ovis's compatibility socket
+implements `agent.rename`, `agent.list`, `agent.get` and `agent.prompt` using the separate
+`ovis.agent-names` document. These aliases work through that socket, not in raw `hc get` or
+`hc send` commands. Display names in `ovis.pane` remain independent.
+
+The schema-1 document stores `bindings`, each with `terminal`, `created` (terminal creation
+time), `pid`, `start` (kernel process start identity), `agent` and `name`. Names use Herdr's
+lowercase-name rules. A rename reads the document before the terminal list, drops stale
+bindings, rejects duplicate names and terminal addresses, then writes at the version it read.
+Conflicts are retried twice with the original agent identity pinned. Unknown schemas are never
+overwritten. Snapshot reads validate each binding again; prompts validate the same owner after
+waiting for earlier input and refuse while that agent is suspended behind its shell.
+
+Process identities are verified only on local Linux and macOS. A bridged machine or Windows
+cannot use this naming implementation. Core has no conditional send tied to a process identity,
+so validation cannot eliminate a process replacement between the final check and the native send.

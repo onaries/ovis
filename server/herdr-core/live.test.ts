@@ -102,6 +102,35 @@ describe.skipIf(!bin)("hc client against a real hc", () => {
     expect(hello.core.id).not.toBe("");
   }, TEST_MS);
 
+  it("renames a real Core agent and resolves its name across adapter restarts", async () => {
+    const agy = join(dir, "agy");
+    symlinkSync("/bin/bash", agy);
+    const record = await hc.call("terminal.run", { cwd: dir, argv: [agy, "--noprofile", "--norc", "-c", "printf '\\033]7501;state=idle:app=agy\\033\\\\'; while IFS= read -r line; do printf 'got:%s\\n' \"$line\"; done"] });
+    let adapter: Awaited<ReturnType<typeof startHerdrCoreAdapter>> | undefined;
+    const socket = join(dir, "names.sock");
+    try {
+      const deadline = Date.now() + WAIT_MS;
+      while (!(await hc.call("terminal.get", { terminal: record.address })).foreground?.argv?.includes(agy)) {
+        if (Date.now() >= deadline) throw new Error(`Core did not report the fixture agent process: ${JSON.stringify(await hc.call("terminal.get", { terminal: record.address }))}`);
+        await Bun.sleep(25);
+      }
+      adapter = await startHerdrCoreAdapter(hc, socket);
+      await herdrRpc("agent.rename", { target: record.address, name: "live-agy" }, socket);
+      expect((await sessionSnapshot(socket)).agents.find((entry) => entry.pane_id === record.address)?.name).toBe("live-agy");
+      adapter.stop();
+      adapter = await startHerdrCoreAdapter(hc, socket);
+      expect(await herdrRpc("agent.get", { target: "live-agy" }, socket)).toMatchObject({ agent: { pane_id: record.address, name: "live-agy" } });
+      await herdrRpc("agent.prompt", { target: "live-agy", text: "named-fixture-input" }, socket);
+      expect((await paneRead({ paneId: record.address, source: "visible", format: "text" }, socket)).text).toContain("named-fixture-input");
+      await herdrRpc("agent.rename", { target: "live-agy", name: null }, socket);
+      await expect(herdrRpc("agent.get", { target: "live-agy" }, socket)).rejects.toMatchObject({ code: "agent_not_found" });
+    } finally {
+      adapter?.stop();
+      await hc.call("terminal.kill", { terminal: record.address });
+      await hc.call("terminal.rm", { terminal: record.address });
+    }
+  }, TEST_MS);
+
   it("attaches, resizes, types, and hears the program's OSC 7501 status as events", async () => {
     const events: { type: string; terminal?: string; data?: Record<string, unknown> }[] = [];
     let pending = "";

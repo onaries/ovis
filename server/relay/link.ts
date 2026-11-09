@@ -9,7 +9,12 @@ import type { RelaySocketHandlers } from "./virtual-socket.ts";
 import { version } from "../../package.json";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { answerServerChallenge, PERMANENT_SERVER_PROOF_REFUSALS, SERVER_PROOF_CLOSE } from "../../shared/relay-server-proof.ts";
+import { RELAY_PASS_CLOSE, RELAY_PASS_HEADER } from "../../shared/relay-pass.ts";
 import { SignedInSessions } from "./admissions.ts";
+import type { RelayErrorCode } from "../../shared/protocol.ts";
+
+/** The fixed codes a link's own errors carry. */
+export type LinkErrorCode = Extract<RelayErrorCode, "relay_unreachable" | "server_key_refused" | "pass_required">;
 
 /** Signed-in sessions this PC serves at once, as many as the relay lets in (relay/core.ts MAX_CLIENTS). */
 const MAX_SESSIONS = 8;
@@ -19,6 +24,8 @@ const MAX_PENDING = 4;
 const CONTROL_MESSAGE_BYTES = 4096;
 /** A client whose sign-in or pairing is being verified at its deadline gets this long to finish. */
 const SIGN_IN_GRACE_MS = 5_000;
+/** How long a PC the relay refused for its pass waits before trying again with no new pass. */
+const PASS_REFUSED_RETRY_MS = 30 * 60_000;
 
 export interface RelayLinkOptions {
   readonly relay: string;
@@ -26,18 +33,36 @@ export interface RelayLinkOptions {
   readonly services: RequestServices;
   /** The server's listening port, resolved after binding (including port: 0). */
   readonly port: number;
-  readonly connect?: (url: string) => WebSocket;
+  /** Opens a socket; `headers` carries the relay pass on Ovis's relays. */
+  readonly connect?: (url: string, headers?: Record<string, string>) => WebSocket;
+  /** This PC's relay pass for this relay, or null: sent with every PC socket (shared/relay-pass.ts). */
+  readonly pass?: () => string | null;
+  /** What the relay said of the pass in `sync` (relay/README.md, "Relay pass"). */
+  /** Every `sync`: what the relay said of the pass, or null when it said nothing (it asks for none). */
+  readonly onPassNotice?: (notice: RelayPassNotice | null) => void;
+  /** The relay refused this PC's pass (4402): a new one is asked for. */
+  readonly onPassRefused?: () => void;
   readonly clock?: MuxClock;
   readonly random?: () => number;
   /** The version WELCOME tells the shell (src/lib/relay/skew.ts); package.json's by default. */
   readonly serverVersion?: string;
-  readonly onState: (phase: "connecting" | "online" | "error", error: string | null) => void;
+  /** `code` is the error as a fixed code (shared/protocol.ts RelayErrorCode); a pass refusal is `pass_required`, which the service makes more exact */
+  readonly onState: (phase: "connecting" | "online" | "error", error: string | null, code?: LinkErrorCode) => void;
   /** The relays a phone is told to reach this PC through (RelaySession relayHints). */
   readonly relayHints?: () => readonly string[];
   /** This PC's direct carriers (RelaySession directCarriers). */
-  readonly directCarriers?: () => readonly string[];
+  readonly directCarriers?: (tailnet: boolean) => readonly string[];
   /** The PC's signed-in sessions over every way in (admissions.ts); this link's own when not given. */
   readonly sessions?: SignedInSessions;
+}
+
+export interface RelayPassNotice { readonly state: "ok" | "missing" | "invalid" | "expired"; readonly enforce_at: string | null }
+
+function passNotice(value: unknown): RelayPassNotice | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { state, enforce_at: at } = value as { state?: unknown; enforce_at?: unknown };
+  if (state !== "ok" && state !== "missing" && state !== "invalid" && state !== "expired") return null;
+  return { state, enforce_at: typeof at === "string" && Number.isFinite(Date.parse(at)) ? at : null };
 }
 
 interface DataConnection {
@@ -50,6 +75,8 @@ interface DataConnection {
   deviceId?: string;
   /** Gives its signed-in place back (SignedInSessions.admit). */
   release?: () => void;
+  /** counts the session as its device's for good: its client opened a stream on it */
+  chosen?: () => void;
 }
 
 /** The relay's word on a warm socket that a client took: `{"type":"bound","connection_id":"<32 hex>"}`. */
@@ -82,6 +109,12 @@ export class RelayLink {
   private cancelRetry: (() => void) | undefined;
   private cancelKeepalive: (() => void) | undefined;
   private readonly clock: MuxClock;
+  /** The control socket once it answered its challenge: the one a renewed pass goes to. */
+  private proven: WebSocket | undefined;
+  /** The relay refused this PC for its pass (4402): no retry until a pass comes. */
+  private passRefused = false;
+  /** The pass the current control socket was opened with. */
+  private controlPass: string | null = null;
 
   constructor(private readonly options: RelayLinkOptions) {
     this.clock = options.clock ?? relayClock;
@@ -101,7 +134,22 @@ export class RelayLink {
     url.searchParams.set("public_key", bytesToHex(importPublicKey(this.options.identity.public_key)));
     if (connectionId) url.searchParams.set("connection_id", connectionId);
     if (warm) url.searchParams.set("warm", warm);
-    return (this.options.connect ?? ((address) => new WebSocket(address)))(url.href);
+    const pass = this.options.pass?.() ?? null;
+    if (!connectionId && !warm) this.controlPass = pass;
+    const headers = pass === null ? undefined : { [RELAY_PASS_HEADER]: pass };
+    // Bun's WebSocket takes headers (never the URL: a pass is good for hours)
+    return (this.options.connect ?? ((address, extra) => new WebSocket(address, (extra ? { headers: extra } : undefined) as unknown as string[])))(url.href, headers);
+  }
+
+  /** A new pass: sent on the proven control socket, or, after a refusal for the pass, a new control socket opens with it. */
+  renewPass(pass: string): void {
+    if (this.stopped) return;
+    if (this.passRefused) {
+      this.passRefused = false;
+      if (!this.control) this.openControl();
+      return;
+    }
+    if (this.proven && this.proven === this.control) this.proven.send(JSON.stringify({ type: "relay_pass", pass }));
   }
 
   private openControl(): void {
@@ -133,6 +181,7 @@ export class RelayLink {
       if (event.data.length > CONTROL_MESSAGE_BYTES) { socket.close(); return; }
       if (!proofAnswered) {
         proofAnswered = this.prove(socket, event.data, "control", null);
+        if (proofAnswered) this.proven = socket;
         return;
       }
       let value: unknown;
@@ -143,6 +192,7 @@ export class RelayLink {
         && value.connection_ids.length <= 8 && value.connection_ids.every((id) => typeof id === "string" && /^[0-9a-f]{32}$/.test(id))) {
         this.attempts = 0;
         this.options.onState("online", null);
+        this.options.onPassNotice?.("relay_pass" in value ? passNotice(value.relay_pass) : null);
         for (const id of value.connection_ids) this.openData(id);
         if ("warm" in value && typeof value.warm === "string" && /^[0-9a-f]{32}$/.test(value.warm)) {
           this.warmControl = { socket, generation: value.warm };
@@ -158,12 +208,25 @@ export class RelayLink {
     socket.onclose = (event) => {
       if (this.control !== socket) return;
       this.control = undefined;
+      if (this.proven === socket) this.proven = undefined;
       this.cancelKeepalive?.();
       this.endWarm();
       // The relay also uses 4401 for late answers. Only an explicit key mismatch is permanent.
       if (event.code === SERVER_PROOF_CLOSE && PERMANENT_SERVER_PROOF_REFUSALS.includes(event.reason)) {
         console.error(JSON.stringify({ event: "relay.server_proof.failed", code: event.code, reason: event.reason }));
-        this.options.onState("error", `Relay refused the server proof (${event.code}): ${event.reason}`);
+        this.options.onState("error", `Relay refused the server proof (${event.code}): ${event.reason}`, "server_key_refused");
+        return;
+      }
+      // refused for the pass: asking again without a new one would be refused again (renewPass reopens)
+      if (event.code === RELAY_PASS_CLOSE) {
+        // a pass came while this socket was being let in: try again with it, it was not the one refused
+        const held = this.options.pass?.() ?? null;
+        if (held !== null && held !== this.controlPass) { if (!this.stopped) this.retry(); return; }
+        this.passRefused = true;
+        this.options.onPassRefused?.();
+        // a relay moved back to grace or off lets the PC in without a pass: look again now and then
+        this.cancelRetry = this.clock.setTimeout(() => { if (this.passRefused && !this.control) { this.passRefused = false; this.openControl(); } }, PASS_REFUSED_RETRY_MS);
+        this.options.onState("error", `The Ovis relay needs a signed-in account (${event.reason || "relay pass required"}).`, "pass_required");
         return;
       }
       if (!this.stopped) this.retry();
@@ -181,7 +244,7 @@ export class RelayLink {
 
   private retry(): void {
     if (this.stopped) return;
-    this.options.onState("error", "Relay connection lost; reconnecting.");
+    this.options.onState("error", "Relay connection lost; reconnecting.", "relay_unreachable");
     const delay = Math.round(Math.min(++this.attempts, 30) * 1000 * (0.8 + (this.options.random ?? Math.random)() * 0.4));
     this.cancelRetry = this.clock.setTimeout(() => this.openControl(), delay);
   }
@@ -338,6 +401,7 @@ export class RelayLink {
         serverVersion: this.options.serverVersion ?? version, minSupportedClient: "0.4.20",
         routingOverhead: 0, maxWireMessageBytes: 64 * 1024,
         onAuthenticated: (deviceId) => this.authenticated(id, entry, deviceId),
+        onChosen: () => entry.chosen?.(),
         ...(this.options.relayHints ? { relayHints: this.options.relayHints } : {}),
         ...(this.options.directCarriers ? { directCarriers: this.options.directCarriers } : {}),
         websocket: {
@@ -353,7 +417,11 @@ export class RelayLink {
     if (this.data.get(id) !== entry) return;
     entry.cancelTimeout();
     entry.deviceId = deviceId;
-    entry.release = this.signedIn.admit(deviceId, () => entry.session?.close("resource_exhausted"));
+    const line = entry.session ? { route: "relay" as const, relay: this.options.relay, since: Date.now(), mux: entry.session.mux } : undefined;
+    // an app racing its carriers drops all but one: only the one it uses makes its device's older sessions give way
+    const admission = this.signedIn.candidate(deviceId, () => entry.session?.close("resource_exhausted"), line);
+    entry.release = admission.release;
+    entry.chosen = admission.chosen;
   }
 
   /** Cancel retries synchronously; finish queued policy closes before ending protected carriers. */

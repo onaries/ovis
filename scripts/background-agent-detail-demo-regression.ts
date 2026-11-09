@@ -339,6 +339,11 @@ try {
               await page.locator(`.agents-sidebar .agent-item[data-pane="${pane}"] .agent-select`).click();
               await page.waitForFunction((pane) => new URL(location.href).searchParams.get("pane") === pane, pane);
             };
+            // the demo's Claude panes have ended by now, and an ended agent rests folded under the one-line list's
+            // "+N resting" line: open it, as a reader would, so both rows can be picked
+            const resting = page.locator(".agents-sidebar .agent-resting-label .agent-background-toggle");
+            if (await resting.getAttribute("aria-expanded") === "false") await resting.click();
+            assert.equal(await resting.getAttribute("aria-expanded"), "true", "the resting line opens");
             await select(panes.api);
             await select(panes.flaky);
             await openList(page);

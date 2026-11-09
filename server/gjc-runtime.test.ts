@@ -34,7 +34,10 @@ it("validates breadcrumbs against process age, canonical cwd and the native sess
     expect(terminalBreadcrumb(agent, "/", "ttys003", 0)).toBeNull();
     expect(terminalBreadcrumb(agent, home, "../sessions/session.jsonl", 0)).toBeNull();
     utimesSync(marker, new Date(0), new Date(0));
-    expect(terminalBreadcrumb(agent, home, "ttys003", Date.now())).toBeNull();
+    // a session written after the start, by whichever process, does not refresh a breadcrumb older than it
+    const startedAt = Date.now() - 60_000;
+    utimesSync(path, new Date(), new Date());
+    expect(terminalBreadcrumb(agent, home, "ttys003", startedAt)).toBeNull();
     const outside = join(home, "outside.jsonl"), escape = join(store, "escape.jsonl");
     writeFileSync(outside, `${JSON.stringify({ type: "session", cwd: home })}\n`); symlinkSync(outside, escape);
     writeFileSync(marker, `${home}\n${escape}\n`);

@@ -57,8 +57,9 @@ export function sectionAt(side: SplitSide, order: SplitOrder): SplitFold {
  */
 export function splitSnap(height: number, { topHead, bottomHead, room, row }: SplitRoom): SplitSide | null {
   const slack = row * 0.6;
-  const top = height < topHead + slack;
-  const bottom = height > room - bottomHead - slack;
+  // a section with no head (the PCs) has nothing to fold to: the line stops at its minimum instead
+  const top = topHead > 0 && height < topHead + slack;
+  const bottom = bottomHead > 0 && height > room - bottomHead - slack;
   if (top && bottom) return Math.abs(height - topHead) <= Math.abs(room - bottomHead - height) ? "top" : "bottom";
   return top ? "top" : bottom ? "bottom" : null;
 }
@@ -73,14 +74,14 @@ export function splitDrag(raw: number, room: SplitRoom): { snap: SplitSide | nul
   return { snap, height, shown: snap === "top" ? room.topHead : snap === "bottom" ? room.room - room.bottomHead : height };
 }
 
-/** What a key does on the focused line: move it a row, fold a section, or go back to the shared height. */
+/** What a key does on the focused line: move it a row, fold a section (or, one with no head, take it to its minimum), or go back to the shared height. */
 export type SplitKey = { split: number } | { fold: SplitSide } | { reset: true };
 
 export function keyedSplit(current: number, key: string, room: SplitRoom): SplitKey | null {
   if (key === "ArrowUp") return { split: clampSplit(current - room.row, room) };
   if (key === "ArrowDown") return { split: clampSplit(current + room.row, room) };
-  if (key === "Home") return { fold: "top" };
-  if (key === "End") return { fold: "bottom" };
+  if (key === "Home") return room.topHead > 0 ? { fold: "top" } : { split: clampSplit(0, room) };
+  if (key === "End") return room.bottomHead > 0 ? { fold: "bottom" } : { split: clampSplit(room.room, room) };
   if (key === "Enter") return { reset: true };
   return null;
 }

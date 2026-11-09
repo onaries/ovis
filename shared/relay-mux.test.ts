@@ -377,9 +377,14 @@ describe("direct carriers", () => {
     expect(decodeFrame(encodeFrame(authOk(direct))).payload).toEqual(authOk(direct).payload);
   });
 
-  it("takes only ws://<private IPv4>:<port>, at most four", () => {
+  it("carries a PC's Tailscale address in AUTH_OK, from either end of Tailscale's range", () => {
+    const direct = ["ws://192.168.0.10:7319", "ws://100.64.0.1:7319", "ws://100.127.255.255:7319"];
+    expect(decodeFrame(encodeFrame(authOk(direct))).payload).toEqual(authOk(direct).payload);
+  });
+
+  it("takes only ws://<private or Tailscale IPv4>:<port>, at most four", () => {
     for (const direct of [["wss://192.168.0.10:7319"], ["ws://192.168.0.10"], ["ws://192.168.0.10:7319/v1/ws"], ["ws://8.8.8.8:7319"],
-      ["ws://127.0.0.1:7319"], ["ws://100.64.0.1:7319"], ["ws://172.32.0.1:7319"], ["ws://192.168.0.010:7319"], ["ws://192.168.0.10:65536"],
+      ["ws://127.0.0.1:7319"], ["ws://100.63.255.255:7319"], ["ws://100.128.0.1:7319"], ["ws://172.32.0.1:7319"], ["ws://192.168.0.010:7319"], ["ws://192.168.0.10:65536"],
       ["ws://pc.local:7319"], ["ws://[fe80::1]:7319"], "ws://192.168.0.10:7319",
       ["ws://10.0.0.1:1", "ws://10.0.0.2:1", "ws://10.0.0.3:1", "ws://10.0.0.4:1", "ws://10.0.0.5:1"]]) {
       expect(() => encodeFrame(authOk(direct))).toThrow(MuxProtocolError);

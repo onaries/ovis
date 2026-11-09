@@ -8,7 +8,8 @@ import type { MyPc } from "../lib/account/myPcs.ts";
 import type { AccountProvider } from "../lib/account/store.ts";
 import { useT } from "../lib/i18n.ts";
 import type { AccountView, KeyMismatch } from "../lib/relay/shellState.ts";
-import { AccountFinePrint, AccountPcs, AccountSignIn } from "./AccountPcs.tsx";
+import { AccountFinePrint, AccountPcs, AccountSignIn, CheckPcsButton, PcStatusLine } from "./AccountPcs.tsx";
+import type { PcStatus } from "../lib/relay/pcStatus.ts";
 import { KeyId } from "./KeyId.tsx";
 import { describeUpdate } from "../lib/updateProgress.ts";
 import type { RelayShellState } from "../lib/relay/shellState.ts";
@@ -17,6 +18,10 @@ import { serverScopePath } from "../lib/shellMode.ts";
 
 export interface RelayShellProps {
   state: RelayShellState;
+  /** how each saved PC answered the front page's latest check (pcStatus.ts), by server id */
+  pcStatus?: ReadonlyMap<string, PcStatus>;
+  /** Check now: probe the saved PCs again */
+  onCheckPcs?: () => void;
   /** on a PC's own page (`/s/<id>/`), where Back leads to the front page; the front page has no Back */
   scoped: boolean;
   /** an iPhone or iPad browser tab, where the pairing may not survive a week unvisited */
@@ -88,7 +93,7 @@ function CodeEntry({ failure, onSubmit, back }: { failure: TypedCodeFailure | nu
   return (
     <>
       <h1 className="relay-shell-title">{t("Pair with a code")}</h1>
-      <p className="relay-shell-copy">{t("On the PC, open Settings → Devices and PCs and choose Connect (Show a code to type on an older Ovis). Type the code it shows here.")}</p>
+      <p className="relay-shell-copy">{t("On the PC, open Settings → Devices and PCs → Add a connection → Ovis relay (Connect, or Show a code to type, on an older Ovis). Type the code it shows here. Where the PC uses the Ovis account, sign in to the same account instead.")}</p>
       <form className="relay-shell-code-form" onSubmit={submit}>
         <input name="code" className="relay-shell-code-input" aria-label={t("Code from the PC")} placeholder="XXXXX-XXXXX"
           autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} maxLength={32} required autoFocus />
@@ -123,7 +128,7 @@ function KeyIds({ mismatch, named }: { mismatch: KeyMismatch; named: "link" | "p
           : <KeyId id={mismatch.received} against={mismatch.expected} label={received} />}
       </dd>
     </dl>
-    <p className="relay-shell-detail">{t("Only the PC itself shows its ID, at the top of My devices in Settings → Devices and PCs (under the code on an older Ovis). Marked groups differ.")}</p>
+    <p className="relay-shell-detail">{t("Only the PC itself shows its ID, at the top of Settings → Devices and PCs (My devices, or under the code, on an older Ovis). Marked groups differ.")}</p>
     </>
   );
 }
@@ -138,7 +143,7 @@ export const PLUGIN_COMMANDS = "herdr plugin install devswha/ovis\nherdr plugin 
  * `data-relay-state` for scripts. One card in the token gate's frame (AccessGate.css), so a phone
  * that pairs through the relay and one that pairs with a code see the same room.
  */
-export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, onBack, onForget, onUpdate, onMatch, onCodeStart, onCodeSubmit, onCodeMatch, onSignIn, onJoin, onSignOut, onLeave, accountProviders }: RelayShellProps) {
+export function RelayShell({ state, pcStatus, onCheckPcs, scoped, iosTab, onPair, onRetry, onCancel, onBack, onForget, onUpdate, onMatch, onCodeStart, onCodeSubmit, onCodeMatch, onSignIn, onJoin, onSignOut, onLeave, accountProviders }: RelayShellProps) {
   const t = useT();
   const account: AccountView | null = (state.kind === "list" || state.kind === "empty") && onSignIn ? state.account ?? null : null;
   const signIn = account?.kind === "signed-out" && onSignIn ? <AccountSignIn onSignIn={onSignIn} error={account.error} {...(accountProviders ? { providers: accountProviders } : {})} /> : null;
@@ -157,7 +162,7 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
     <main className="relay-shell-screen" data-relay-state={stateName} {...(account ? { "data-account-state": account.kind } : {})}>
       <div className={signInFirst || state.kind === "compare" ? "relay-shell account-centered" : "relay-shell"}>
         <img src="/icons/icon-192.png?v=sheep1" alt="" width="44" height="44" className="relay-shell-mark" />
-        {account?.kind === "signed-in" && <AccountPcs view={account} {...(onJoin ? { onJoin } : {})} {...(onSignOut ? { onSignOut } : {})} {...(onLeave ? { onLeave } : {})} />}
+        {account?.kind === "signed-in" && <AccountPcs view={account} {...(pcStatus ? { status: pcStatus } : {})} {...(onCheckPcs ? { onCheck: onCheckPcs } : {})} {...(onJoin ? { onJoin } : {})} {...(onSignOut ? { onSignOut } : {})} {...(onLeave ? { onLeave } : {})} />}
         {account?.kind === "signing-in" && (
           <>
             <h1 className="relay-shell-title">{t("Signing in…")}</h1>
@@ -176,11 +181,15 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
         {state.kind === "list" && (account === null || account.kind === "signed-out") && (
           <>
             <h1 className="relay-shell-title">{t("Your PCs")}</h1>
+            {onCheckPcs && <CheckPcsButton status={pcStatus ?? new Map()} onCheck={onCheckPcs} />}
             <ul className="relay-shell-pcs">
               {state.devices.map((device) => (
                 <li key={device.server_id}>
                   <a className="relay-shell-pc" href={serverScopePath(device.server_id)}>
-                    <span className="relay-shell-pc-name">{device.name ?? t("Unnamed PC")}</span>
+                    <span className="account-pc-text">
+                      <span className="relay-shell-pc-name">{device.name ?? t("Unnamed PC")}</span>
+                      {pcStatus?.get(device.server_id) && <PcStatusLine status={pcStatus.get(device.server_id)!} />}
+                    </span>
                     <ChevronRight className="relay-shell-pc-glyph" aria-hidden="true" />
                   </a>
                 </li>
@@ -222,7 +231,7 @@ export function RelayShell({ state, scoped, iosTab, onPair, onRetry, onCancel, o
         {state.kind === "code-compare" && (
           <>
             <h1 className="relay-shell-title">{t("Does {name}'s screen show this ID?", { name: pc })}</h1>
-            <p className="relay-shell-copy">{t("The PC shows its ID at the top of My devices in Settings → Devices and PCs (under the code on an older Ovis). Pair only if every group matches.")}</p>
+            <p className="relay-shell-copy">{t("The PC shows its ID at the top of Settings → Devices and PCs (My devices, or under the code, on an older Ovis). Pair only if every group matches.")}</p>
             <p className="relay-shell-code-id"><KeyId id={state.offer.server_id} label={t("ID of the PC this code found")} /></p>
             <div className="relay-shell-actions">
               <button type="button" className="btn btn-primary" onClick={onCodeMatch}>{t("It matches")}</button>

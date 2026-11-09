@@ -1,5 +1,5 @@
-import { basename } from "node:path";
-import { accessSync, constants, readFileSync, readlinkSync } from "node:fs";
+import { basename, isAbsolute } from "node:path";
+import { accessSync, constants, readFileSync, readlinkSync, statSync } from "node:fs";
 import type { CodexRestartResponse, CodexRestartTarget } from "../shared/codex-restart.ts";
 import { shellCommandLine } from "./shell-agent.ts";
 import { certainProcessCodexHome, codexProcessesOf, codexTranscriptPath, paneCodexHomePlaced, readRange, sameDirectory } from "./codex.ts";
@@ -77,8 +77,18 @@ async function inspect(paneId: string, configured?: string) {
   }
   const args = codexRestartArgs(chosen.argv ?? [], id);
   if (args === null) throw new RestartError("codex_restart_unsupported", "This Codex launch command cannot be resumed safely.");
-  const executable = readlinkSync(`/proc/${chosen.pid}/exe`);
-  accessSync(executable, constants.X_OK);
+  let executable = readlinkSync(`/proc/${chosen.pid}/exe`);
+  try { accessSync(executable, constants.X_OK); }
+  catch {
+    const installed = chosen.argv?.[0];
+    const unavailable = () => new RestartError("codex_restart_unsupported", "The Codex executable was removed and no installed replacement is available. Reinstall Codex before restarting this session.");
+    if (!executable.endsWith(" (deleted)") || !installed || !isAbsolute(installed)) throw unavailable();
+    try {
+      if (!statSync(installed).isFile()) throw unavailable();
+      accessSync(installed, constants.X_OK);
+    } catch { throw unavailable(); }
+    executable = installed;
+  }
   accessSync("/usr/bin/env", constants.X_OK);
   const script = /(?:^|\/)(?:node|bun|sh|bash|dash|zsh)$/.test(chosen.argv?.[0] ?? "") ? chosen.argv?.[1] : undefined;
   if (script !== undefined && !script.startsWith("/")) throw new RestartError("codex_restart_unsupported", "This Codex script has no certain absolute path. Resume it in Terminal.");
@@ -98,7 +108,7 @@ async function restart(expected: CodexRestartTarget, configured?: string): Promi
     if (Object.keys(current.target).some((key) => Reflect.get(current.target, key) !== Reflect.get(expected, key))) throw new RestartError("codex_restart_stale", "The pane or conversation changed. Cancel and open Restart Codex again.");
     const live = await paneGet(expected.pane_id);
     const liveCwd = live.foreground_cwd ?? live.cwd;
-    const livePath = liveCwd ? await codexTranscriptPath(expected.pane_id, liveCwd, current.home, undefined, false, false, false) : null;
+    const livePath = liveCwd ? await codexTranscriptPath(expected.pane_id, liveCwd, current.home, undefined, false, false, undefined, false) : null;
     if (live.terminal_id !== expected.terminal_id || livePath === null || sessionId(livePath) !== expected.session_id) throw new RestartError("codex_restart_stale", "The conversation changed before Codex could be restarted.");
     if (processStartedAt(expected.process_id) !== expected.process_started_at) throw new RestartError("codex_restart_stale", "The Codex process changed before it could be restarted.");
     process.kill(expected.process_id, "SIGTERM");

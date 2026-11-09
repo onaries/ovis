@@ -308,7 +308,7 @@ function expiredHome(provider: "claude" | "codex", dir: string, email: string): 
 
 /** `fixture`: a home was just written here, which a refresh within a minute would not look for */
 const listed = async (fixture = false): Promise<{ key: string; account: string | null; problem: string | null }[]> => {
-  if (fixture) usage.invalidate();
+  if (fixture) { usage.invalidate("claude"); usage.invalidate("codex"); }
   return (await (await fetch(`http://127.0.0.1:${server.port}/api/usage`)).json()).providers;
 };
 

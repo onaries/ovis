@@ -93,6 +93,8 @@ export const TERMINAL_JA: Record<string, string> = {
   "Tab name": "タブ名",
   "Actions for {tab}": "{tab} の操作",
   "Close {tab}": "{tab} を閉じる",
+  "{n} more tabs": "ほか {n} 個のタブ",
+  "More tabs": "ほかのタブ",
   "Close tab {name}?": "タブ {name} を閉じますか？",
   "Close failed: {reason}": "閉じられませんでした: {reason}",
   "Split right": "右に分割",

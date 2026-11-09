@@ -13,7 +13,8 @@ import type { UsageService } from "./usage.ts";
 export class UsageAccountList {
   private readonly path: string;
 
-  constructor(stateDir: string, private readonly usage: Pick<UsageService, "report">) {
+  /** `changed`: told after the list changes, so what depends on it (the Hub's hidden accounts) need not wait for a report */
+  constructor(stateDir: string, private readonly usage: Pick<UsageService, "report">, private readonly changed: () => void = () => {}) {
     this.path = join(stateDir, "usage-removed.json");
   }
 
@@ -41,6 +42,12 @@ export class UsageAccountList {
       const changed = next(held);
       if (changed.length !== held.length) writeStateDocument(this.path, JSON.stringify({ accounts: changed }), false);
     });
+    this.changed();
+  }
+
+  /** The removed keys, read under the guard as `report` reads them; throws when the list cannot be read. */
+  removed(): string[] {
+    return withOwnerGuard(this.path, () => this.read());
   }
 
   restore(key: string): void {
@@ -52,7 +59,7 @@ export class UsageAccountList {
     const report = await this.usage.report(refresh);
     let removed: Set<string>;
     // under the guard too: a damaged file is set aside only while no other server can have replaced it
-    try { removed = new Set(withOwnerGuard(this.path, () => this.read())); }
+    try { removed = new Set(this.removed()); }
     catch (error) {
       // an unreadable list hides nothing: every meter stays rather than none
       console.warn("Could not read the removed accounts list", error instanceof Error ? error.message : String(error));

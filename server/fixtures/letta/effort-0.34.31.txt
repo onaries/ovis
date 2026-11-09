@@ -1,0 +1,10 @@
+[0m[2m> /model[0m
+[0m[2m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+
+[0m[1m[38;2;190;190;238mSet your model's reasoning settings[0m
+
+ openai-codex/gpt-6.1-sol
+
+ [0m[38;2;140;140;249m▌▌▌[0m[2m▌▌▌[0m [0m[1mMedium[0m[1m[2m reasoning effort[0m
+
+ [0m[2mEnter select · ←→/Tab switch · Esc back[0m

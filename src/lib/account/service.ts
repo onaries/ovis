@@ -3,8 +3,10 @@
  * directory of the account's PCs, and the tokens a sign-in gives. Answers are parsed here, at the
  * edge; a token is never logged or put in an error's text.
  */
+import { accountLabel, accountOsOf, type AccountAsker, type AccountOs } from "../../../shared/account-asker.ts";
 import type { AccountRecord } from "../../../shared/account-records.ts";
 import { isWssOrigin } from "../../../shared/relay-offer.ts";
+import { GLOBAL_APP } from "../../../shared/relay-regions.ts";
 import type { AccountLock, AccountProvider, AccountSession, AccountStore } from "./store.ts";
 import { ACCOUNT_PROVIDERS, accountLock } from "./store.ts";
 
@@ -23,6 +25,16 @@ export function accountServiceOf(document: { querySelector(selector: string): { 
   }
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
   return url.protocol === "https:" || (url.protocol === "http:" && loopback) ? url.origin : null;
+}
+
+/**
+ * The account service the hosted shell signs in with: the page's (accountServiceOf), but in a browser
+ * only on app.ovis.sh. The service sends a browser back to `<origin>/` for that origin alone, so a
+ * copy served anywhere else (the regional app beside a relay, a preview, a local test run) offers
+ * no sign-in rather than one the service refuses; the phone app comes back through its own scheme.
+ */
+export function shellAccountServiceOf(document: { querySelector(selector: string): { getAttribute(name: string): string | null } | null }, origin: string, nativeApp: boolean): string | null {
+  return nativeApp || origin === GLOBAL_APP ? accountServiceOf(document) : null;
 }
 
 /**
@@ -62,6 +74,8 @@ export type DeviceProvider = (typeof DEVICE_PROVIDERS)[number];
 export interface OfferedProviders {
   readonly providers: AccountProvider[];
   readonly device: DeviceProvider[];
+  /** the sign-ins the Ovis link page finishes (`device_page`); empty when the service has no link page */
+  readonly page: DeviceProvider[];
 }
 
 /**
@@ -70,7 +84,7 @@ export interface OfferedProviders {
  * page GitHub alone, as before the service could be asked.
  */
 export async function offeredProviders(service: string, fallback: readonly AccountProvider[], options: { fetch?: Fetch } = {}): Promise<OfferedProviders> {
-  const before: OfferedProviders = { providers: [...fallback], device: ["github"] };
+  const before: OfferedProviders = { providers: [...fallback], device: ["github"], page: [] };
   let body: unknown;
   try {
     const response = await (options.fetch ?? fetch)(new URL("/v1/providers", service));
@@ -85,7 +99,12 @@ export async function offeredProviders(service: string, fallback: readonly Accou
   const providers = ACCOUNT_PROVIDERS.filter((provider) => named.has(provider));
   if (providers.length === 0) return before;
   const device = new Set<unknown>(body.device);
-  return { providers, device: DEVICE_PROVIDERS.filter((provider) => device.has(provider) && named.has(provider)) };
+  const page = new Set<unknown>(Array.isArray(body.device_page) ? body.device_page : []);
+  return {
+    providers,
+    device: DEVICE_PROVIDERS.filter((provider) => device.has(provider) && named.has(provider)),
+    page: DEVICE_PROVIDERS.filter((provider) => page.has(provider) && named.has(provider)),
+  };
 }
 
 /** One way the account signs in (`GET /v1/identities`); the service keeps no email or login to name it by. */
@@ -112,6 +131,12 @@ export class SignedOutError extends Error {
     this.name = "SignedOutError";
   }
 }
+
+/** The name an admission is shown and signed under when its own has nothing left once made plain. */
+export const UNNAMED_DEVICE = "Device";
+
+/** A device of the account waiting at a PC (`GET /v1/admissions`), and who is asking. */
+export interface Admission extends AccountAsker { readonly key: string; readonly label: string; readonly server_id: string; readonly at: string }
 
 export interface DirectoryPc {
   readonly server_id: string;
@@ -227,16 +252,28 @@ export class AccountService {
    * Says this signed-in device waits at that PC with its account key: the account's other devices
    * hear of it, and the PC takes a comparison that asks to join the account for 10 minutes.
    */
-  async postAdmission(serverId: string, label: string, key: string): Promise<void> {
-    await this.call("POST", "/v1/admissions", { server_id: serverId, label, key });
+  async postAdmission(serverId: string, label: string, key: string, os: AccountOs | null = null): Promise<void> {
+    await this.call("POST", "/v1/admissions", { server_id: serverId, label, key, ...(os === null ? {} : { os }) });
   }
 
-  /** The account's admissions of the last 10 minutes, straight from the account service: what a PC passes on cannot change them. */
-  async recentAdmissions(): Promise<{ key: string; label: string; server_id: string; at: string }[]> {
+  /**
+   * The account's admissions of the last 10 minutes, straight from the account service: what a PC
+   * passes on cannot change them. Each says who is asking, as far as the service knows (null each).
+   */
+  async recentAdmissions(): Promise<Admission[]> {
     const body = await this.call("GET", "/v1/admissions");
     const list = isRecord(body) && Array.isArray(body.admissions) ? body.admissions : [];
-    return list.filter((entry): entry is { key: string; label: string; server_id: string; at: string } => isRecord(entry)
-      && typeof entry.key === "string" && typeof entry.label === "string" && typeof entry.server_id === "string" && typeof entry.at === "string");
+    return list.flatMap((entry) => {
+      if (!isRecord(entry) || typeof entry.key !== "string" || typeof entry.label !== "string" || typeof entry.server_id !== "string" || typeof entry.at !== "string") return [];
+      // shown on the approval card and signed into the add: one plain line; a name with nothing left
+      // keeps its row (it may be the newest) under a plain stand-in
+      const label = accountLabel(entry.label) || UNNAMED_DEVICE;
+      const city = typeof entry.city === "string" ? accountLabel(entry.city) : "";
+      const place = typeof entry.country === "string" && /^[A-Z]{2}$/.test(entry.country)
+        ? { country: entry.country, city: city === "" ? null : city }
+        : { country: null, city: null };
+      return [{ key: entry.key, label, server_id: entry.server_id, at: entry.at, os: accountOsOf(entry.os), ...place }];
+    });
   }
 
   /** The account's sign-in methods, one per provider. */

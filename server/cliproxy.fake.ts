@@ -3,6 +3,7 @@ import { isJsonObject } from "./http.ts";
 
 export function startFakeCLIProxy(key = "test-management-key") {
   let acceptedKey = key;
+  let down = false;
   const files = [
     { name: "claude-a.json", provider: "claude", email: "claude-a@example.test", status: "ready", disabled: false, unavailable: false, auth_index: "a", id_token: null },
     { name: "codex-b.json", provider: "codex", email: "codex-b@example.test", status: "ready", disabled: false, unavailable: false, auth_index: "b", id_token: { chatgpt_account_id: "workspace-b" } },
@@ -25,6 +26,7 @@ export function startFakeCLIProxy(key = "test-management-key") {
       }
     };
     if (path === "/complete") { finish(url.searchParams.get("state") ?? ""); return new Response("Signed in. Return to Settings."); }
+    if (down) return json({ error: "unavailable" }, 503);
     if (request.headers.get("authorization") !== `Bearer ${acceptedKey}`) return json({ error: `invalid management key ${acceptedKey}` }, 401);
     if (path === "/credentials") return json({ files });
     if (path === "/requests/api-call") {
@@ -47,5 +49,5 @@ export function startFakeCLIProxy(key = "test-management-key") {
     }
     return json({ error: "not found" }, 404);
   } });
-  return { server, calls, files, sessions, setKey: (value: string) => { acceptedKey = value; } };
+  return { server, calls, files, sessions, setKey: (value: string) => { acceptedKey = value; }, setDown: (value: boolean) => { down = value; } };
 }

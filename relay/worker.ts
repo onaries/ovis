@@ -12,7 +12,8 @@
  */
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
-import { CLOSE, IDLE_MS, KEEPALIVE_PING, KEEPALIVE_PONG, Room, admit, parseSocketRequest, type Frame, type RateLimiter, type RoomHost, type SocketInfo, type UsageReport } from "./core.ts";
+import { CLOSE, IDLE_MS, KEEPALIVE_PING, KEEPALIVE_PONG, Room, admit, parseSocketRequest, passRefusal, type Frame, type RateLimiter, type RoomAuthorization, type RoomHost, type SocketInfo, type UsageReport } from "./core.ts";
+import { PASS_OFF, passPolicy, type PassPolicy, type PassResult, type PassSettings } from "./pass.ts";
 import { PairRoom, isPairInfo, parsePairRequest, type PairInfo } from "./pair-room.ts";
 
 /** the part of a Cloudflare server-side WebSocket the relay uses */
@@ -29,18 +30,58 @@ export interface RelayState {
   getWebSockets(tag?: string): HibernatableSocket[];
   setWebSocketAutoResponse(pair?: unknown): void;
   getWebSocketAutoResponseTimestamp(socket: HibernatableSocket): Date | null;
-  storage: { getAlarm(): Promise<number | null>; setAlarm(time: number): Promise<void> };
+  blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
+  storage: {
+    getAlarm(): Promise<number | null>;
+    setAlarm(time: number): Promise<void>;
+    get<T>(key: string): Promise<T | undefined>;
+    put<T>(key: string, value: T): Promise<void>;
+  };
 }
 
 interface DurableObjectStub { fetch(request: Request): Promise<Response> }
-export interface Env {
+export interface Env extends PassSettings {
   RELAY: { idFromName(name: string): unknown; get(id: unknown): DurableObjectStub };
   /** Cloudflare's Rate Limiting binding (wrangler.toml), keyed by the connecting address */
   RELAY_LIMITER: RateLimiter;
   /** the backstop over all addresses together */
   RELAY_GLOBAL_LIMITER: RateLimiter;
+  /** keyed by server_id, for a PC whose relay pass holds (core.ts Limiters.perPc); without it and RELAY_PASS_CHECK_LIMITER every PC counts under its address */
+  RELAY_PC_LIMITER?: RateLimiter;
+  /** keyed by the address: the passes it may have checked before its own limit */
+  RELAY_PASS_CHECK_LIMITER?: RateLimiter;
   /** Workers Analytics Engine dataset for usage counters (wrangler.toml); without it nothing is counted */
   USAGE?: { writeDataPoint(point: { indexes: string[]; blobs: string[]; doubles: number[] }): void };
+}
+
+/**
+ * The pass check's result, from the Worker to the Durable Object it hands the socket to. The Worker
+ * sets it after checking the pass and drops any copy the request came with; the Durable Object is
+ * reached only through the Worker, so it trusts it and checks no signature again.
+ */
+const PASS_CHECKED = "x-ovis-relay-pass-checked";
+/** the key the room's pass authorization is kept under in Durable Object storage */
+const PASS_UNTIL = "pass_until";
+
+let policyCache: { key: string; policy: Promise<PassPolicy> } | undefined;
+/** The pass policy of these settings, read once per isolate. */
+export function policyOf(env: PassSettings): Promise<PassPolicy> {
+  const key = JSON.stringify([env.RELAY_PASS_MODE, env.RELAY_PASS_ENFORCE_AT, env.RELAY_PASS_KEYS, env.RELAY_PASS_REVOKED]);
+  // settings that do not parse turn passes off rather than stop the relay routing anything
+  if (policyCache?.key !== key) policyCache = { key, policy: passPolicy(env).catch((error: unknown) => {
+    console.error(JSON.stringify({ event: "relay.pass.settings_invalid", error: error instanceof Error ? error.message : String(error) }));
+    return PASS_OFF;
+  }) };
+  return policyCache.policy;
+}
+
+function isPassResult(value: unknown): value is PassResult {
+  if (typeof value !== "object" || value === null) return false;
+  const result = value as Record<string, unknown>;
+  return ["ok", "missing", "invalid", "expired"].includes(result["state"] as string)
+    && (result["reason"] === undefined || typeof result["reason"] === "string")
+    && (result["exp"] === undefined || typeof result["exp"] === "number")
+    && (result["kid"] === undefined || typeof result["kid"] === "string");
 }
 
 /** the key a PC's usage is kept under: not its server_id itself */
@@ -81,6 +122,9 @@ function isInfo(value: unknown): value is SocketInfo {
     && (info["server_id"] === undefined || typeof info["server_id"] === "string")
     && (info["generation"] === undefined || typeof info["generation"] === "string")
     && (info["usage"] === undefined || isUsage(info["usage"]))
+    && (info["pass_exp"] === undefined || typeof info["pass_exp"] === "number")
+    && (info["pass_kid"] === undefined || typeof info["pass_kid"] === "string")
+    && (info["pass_state"] === undefined || ["ok", "missing", "invalid", "expired"].includes(info["pass_state"] as string))
     && (info["ended"] === undefined || info["ended"] === true);
 }
 
@@ -90,8 +134,26 @@ export class RelayRoom {
   private readonly pairRoom: PairRoom<HibernatableSocket>;
   /** alarm reads and writes, one after another, so a later one never undoes an earlier one */
   private alarmWrites: Promise<void> = Promise.resolve();
+  /** the pass policy and this room's authorization, read before the first event reaches the object */
+  private policy: PassPolicy | undefined;
+  private passUntil: RoomAuthorization | null = null;
+  /** the saved authorization, read once and only for a PC's room while passes are on: off, and pairing rooms, never touch storage */
+  private passLoad: Promise<void> | undefined;
+  private passLoaded = false;
 
-  constructor(private readonly state: RelayState, env?: Pick<Env, "USAGE">) {
+  private loadPass(): Promise<void> | undefined {
+    if (this.passLoaded || !this.policy || this.policy.mode === "off") return undefined;
+    this.passLoad ??= this.state.storage.get<unknown>(PASS_UNTIL).then((saved) => {
+      const value = typeof saved === "object" && saved !== null ? saved as Partial<RoomAuthorization> : {};
+      this.passUntil = typeof value.until === "number" && typeof value.kid === "string" ? { until: value.until, kid: value.kid } : null;
+      this.passLoaded = true;
+    });
+    return this.passLoad;
+  }
+
+  constructor(private readonly state: RelayState, env?: Pick<Env, "USAGE"> & PassSettings) {
+    void state.blockConcurrencyWhile(async () => { this.policy = env ? await policyOf(env) : undefined; });
+    const room = this;
     state.setWebSocketAutoResponse(new (runtime().WebSocketRequestResponsePair)(KEEPALIVE_PING, KEEPALIVE_PONG));
     const infos = new WeakMap<HibernatableSocket, SocketInfo>();
     const host: RoomHost<HibernatableSocket> = {
@@ -126,6 +188,18 @@ export class RelayRoom {
       usage: (report) => env?.USAGE?.writeDataPoint(usagePoint(report)),
       wake: (at) => { void this.armBy(at); },
       now: () => Date.now(),
+      get pass() {
+        const policy = room.policy;
+        if (!policy || policy.mode === "off") return undefined;
+        return {
+          policy,
+          until: () => room.passUntil,
+          setUntil: (value: RoomAuthorization) => {
+            room.passUntil = value;
+            void state.storage.put(PASS_UNTIL, value);
+          },
+        };
+      },
     };
     this.room = new Room(host);
     const pairInfos = new WeakMap<HibernatableSocket, PairInfo>();
@@ -152,6 +226,7 @@ export class RelayRoom {
       wake: host.wake,
       keepaliveAt: host.keepaliveAt,
       now: host.now,
+      get pass() { return room.policy; },
     });
   }
 
@@ -161,8 +236,14 @@ export class RelayRoom {
     if ("error" in socket) return new Response(socket.error, { status: 400 });
     const pair = new (runtime().WebSocketPair)();
     this.state.acceptWebSocket(pair[1]);
-    if ("kind" in socket) this.pairRoom.open(pair[1], socket);
-    else this.room.open(pair[1], socket);
+    let pass: unknown;
+    try { pass = JSON.parse(request.headers.get(PASS_CHECKED) ?? "null"); } catch { pass = null; }
+    const checked = isPassResult(pass) ? { pass } : {};
+    if ("kind" in socket) this.pairRoom.open(pair[1], { ...socket, ...checked });
+    else {
+      await this.loadPass();
+      this.room.open(pair[1], { ...socket, ...checked });
+    }
     await this.armBy(Date.now() + IDLE_MS);
     return new Response(null, { status: 101, webSocket: pair[0] } as ResponseInit);
   }
@@ -182,9 +263,10 @@ export class RelayRoom {
     return this.alarmWrites;
   }
 
-  webSocketMessage(socket: HibernatableSocket, message: string | ArrayBuffer): void {
-    if (this.pairRoom.owns(socket)) this.pairRoom.message(socket, message);
-    else this.room.message(socket, message);
+  webSocketMessage(socket: HibernatableSocket, message: string | ArrayBuffer): void | Promise<void> {
+    if (this.pairRoom.owns(socket)) return this.pairRoom.message(socket, message);
+    const loading = this.loadPass();
+    return loading ? loading.then(() => this.room.message(socket, message)) : this.room.message(socket, message);
   }
 
   webSocketClose(socket: HibernatableSocket, code?: number, reason?: string, _wasClean?: boolean): void {
@@ -203,6 +285,7 @@ export class RelayRoom {
   }
 
   async alarm(): Promise<void> {
+    if (!this.room.empty) await this.loadPass();
     const roomNext = this.room.sweep();
     const pairNext = this.pairRoom.sweep();
     const next = roomNext === null ? pairNext : pairNext === null ? roomNext : Math.min(roomNext, pairNext);
@@ -212,10 +295,24 @@ export class RelayRoom {
 }
 
 export async function handle(request: Request, env: Env): Promise<Response> {
-  const admitted = await admit(request, request.headers.get("cf-connecting-ip") ?? "", { perAddress: env.RELAY_LIMITER, global: env.RELAY_GLOBAL_LIMITER });
+  const policy = await policyOf(env);
+  const limiters = { perAddress: env.RELAY_LIMITER, global: env.RELAY_GLOBAL_LIMITER,
+    ...(env.RELAY_PC_LIMITER && env.RELAY_PASS_CHECK_LIMITER ? { perPc: env.RELAY_PC_LIMITER, passChecks: env.RELAY_PASS_CHECK_LIMITER } : {}) };
+  const admitted = await admit(request, request.headers.get("cf-connecting-ip") ?? "", limiters, policy);
   if (admitted instanceof Response) return admitted;
+  // a PC socket refused for its pass closes here, so it wakes no Durable Object (an HTTP refusal would reach the PC as a bare 1006)
+  const refused = passRefusal(admitted, policy, Date.now());
+  if (refused !== null) {
+    const pair = new (runtime().WebSocketPair)();
+    (pair[1] as HibernatableSocket & { accept?(): void }).accept?.();
+    pair[1].close(CLOSE.RELAY_PASS, refused);
+    return new Response(null, { status: 101, webSocket: pair[0] } as ResponseInit);
+  }
+  const headers = new Headers(request.headers);
+  headers.delete(PASS_CHECKED);
+  if (admitted.pass) headers.set(PASS_CHECKED, JSON.stringify(admitted.pass));
   // a pairing room's name cannot be a server_id, which is 32 hex digits
-  return env.RELAY.get(env.RELAY.idFromName("kind" in admitted ? `pair:${admitted.nameplate}` : admitted.server_id)).fetch(request);
+  return env.RELAY.get(env.RELAY.idFromName("kind" in admitted ? `pair:${admitted.nameplate}` : admitted.server_id)).fetch(new Request(request, { headers }));
 }
 
 export default {

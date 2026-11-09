@@ -16,9 +16,10 @@
  * reader takes in another shape, throws MuseUnavailable: Chat then uses Terminal rather than show
  * part of the conversation.
  */
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, readSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import type { ConversationPart, ConversationTurn } from "../shared/protocol.ts";
+import { openBound } from "./conversation-shared.ts";
 import { trimOutput } from "./tool-output.ts";
 import { toolSummary } from "./transcript-records.ts";
 
@@ -221,7 +222,8 @@ export function museToolOutput(path: string, ref: string): string | null {
   const id = JSON.stringify(ref);
   const session = museSession(path);
   let fd: number;
-  try { fd = openSync(path, "r"); } catch { return null; }
+  // another file than the one the lookup is bound to (openBound) holds none of its calls
+  try { fd = openBound(path); } catch { return null; }
   try {
     const chunk = Buffer.alloc(1024 * 1024);
     let carry = Buffer.alloc(0);

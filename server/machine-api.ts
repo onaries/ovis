@@ -1,18 +1,28 @@
 import { subscribeMachineEvents } from "./machine-events.ts";
-import type { DevicePairedEvent, DeviceRemovedEvent, MachineRoster, RelayPairingsEvent, RemotePairingsEvent, SetupAction, SetupRequest } from "../shared/machines.ts";
+import type { DevicePairedEvent, DeviceRemovedEvent, MachineRoster, PcInstallJob, PcInstallRequest, PcUpdateAll, PcUpdateStarted, RelayPairingsEvent, RemotePairingsEvent, SetupAction, SetupRequest } from "../shared/machines.ts";
 import type { AgentRowTokens } from "../shared/pane-tokens.ts";
 import type { SharedPreferences } from "../shared/preferences.ts";
 import type { PanePromptResponse, SessionSnapshot } from "../shared/protocol.ts";
 import type { SeenFinish } from "../shared/seen.ts";
-import { MachineManager } from "./machines.ts";
+import { MachineActionRequired, MachineManager, PcUpdateRefused } from "./machines.ts";
 import { TypedCodeError, type TypedCodeFailure } from "../shared/relay-code-offer.ts";
+import { TailnetPcError } from "./tailnet-pcs.ts";
 import { canSendSecret, sameOrigin } from "./machine-security.ts";
 import { isJsonObject, jsonResponse, setRequestRoute } from "./http.ts";
+import { updateRequestAllowed } from "./update-api.ts";
 import { crossSiteFileRead } from "./file-view.ts";
 import { snapshotWithoutHiddenTokens, withoutHiddenTokens } from "./herdr-sidebar.ts";
 import { parseJson, readCapped, REMOTE_LIMITS, RemoteResponseInvalid, RemoteResponseTooLarge } from "./remote-json.ts";
+import { answerCode, moveAll, moveAllPlans, PC_MOVE_PATH, PC_UPDATE_REQUIRED, tooOldToMove } from "./remote-move.ts";
 
 const fail = (code: string, message: string, status: number) => jsonResponse({ error: { code, message } }, status);
+/**
+ * Updating this PC's PCs, as switching its own runtime (dispatch.ts): only its owner, from this app's own page (the
+ * update header, same origin, no query).
+ */
+const OWNER_ONLY = "Only the owner's own signed-in or paired devices can change this PC's PCs, from this app's own page.";
+const MOVE_OWNER_ONLY = "Only the owner, from a device signed in or paired to drive this PC, can move another PC";
+const MOVE_FROM_PAGE = "A move must come from this app's own page";
 
 /** POST /api/machines/relay/code: why a typed code found no PC, as `typed_code_<failure>` (the app words each one). */
 const CODE_FAILURES: Record<TypedCodeFailure, [string, number]> = {
@@ -91,7 +101,8 @@ export const machineEventsQueuedBytes = (): number => {
  * A PC route whose answer can take longer than the proxy's usual 75 s: a worktree's creation waits on
  * git and then an agent's start, and a resume on the agent's start and then the check of its store.
  */
-export const slowMachinePath = (path: string): boolean => path === "worktree/create" || path === "sessions/resume" || path === "pane/codex-restart";
+// runtime/move/install waits 200 s here: that PC holds the request up to 180 s (dispatch.ts), so an install that ends late is still told
+export const slowMachinePath = (path: string): boolean => path === "worktree/create" || path === "sessions/resume" || path === "runtime/move/install" || path === "pane/codex-restart";
 
 /**
  * A path no route is spelled as: an empty segment (`//`, or a trailing `/`) or an encoded separator.
@@ -132,7 +143,9 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
   seen?: { list(): SeenFinish[]; subscribe(listener: (finish: SeenFinish) => void): () => void },
   /** durable device enrollments (server/devices.ts), already without the ones this stream's own device made, and relay pairings waiting for approval */
   pairings?: { subscribe(listener: (event: DevicePairedEvent | DeviceRemovedEvent | RelayPairingsEvent | RemotePairingsEvent) => void): () => void },
-  relayBudget?: EventStreamBudget): Promise<Response> {
+  relayBudget?: EventStreamBudget,
+  /** this PC's owner (access.ts ownerAccess): only they may start or stop updates of its PCs */
+  owner = false): Promise<Response> {
   const url = new URL(request.url);
   // A PC's file opens as this PC's /api/fs/file does, from any navigation: reading it changes
   // nothing, and Chrome on Android shows a PDF in the viewer's frame as an "Open" button whose
@@ -145,6 +158,11 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
   // an empty segment is never a route: dropping it would forward `<id>//fs/file` as `fs/file`
   if (nonCanonicalPath(url.pathname)) return fail("not_found", "not found", 404);
   const parts = url.pathname.slice("/api/machines".length).split("/").filter(Boolean);
+  // one rule for every change to this PC's PCs (adding, setting up, approving, updating, turning on or off, removing,
+  // its settings): the owner from any device he signed in or paired himself, from this app's own page. A PC's own
+  // routes (its panes, workspaces and files, MACHINE_PROXY_PATH) are driven as this PC's are, and keep their rules
+  const managing = !["GET", "HEAD", "OPTIONS"].includes(request.method) && !(parts.length >= 2 && MACHINE_PROXY_PATH.test(parts.slice(1).join("/")));
+  if (managing && !(owner && updateRequestAllowed(request))) return fail("forbidden", OWNER_ONLY, 403);
   try {
     if (!parts.length && request.method === "GET") {
       setRequestRoute("/api/machines");
@@ -282,14 +300,46 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
         return fail(`typed_code_${error.failure}`, message, status);
       }
     }
+    if (parts[0] === "ssh-candidates" && parts.length === 1) {
+      setRequestRoute("/api/machines/ssh-candidates");
+      // adding a PC is a driving device's; a watching one is not told which hosts this PC knows either
+      if (readOnly) return fail("read_only", "this device can only watch", 403);
+      if (request.method !== "GET") return fail("method_not_allowed", "Use GET", 405);
+      return jsonResponse({ pcs: await manager.listSshCandidates() }, 200, { "cache-control": "no-store" });
+    }
+    if (parts[0] === "tailnet" && parts.length === 1) {
+      setRequestRoute("/api/machines/tailnet");
+      // adding a PC is a driving device's; a watching one is not told which PCs are there either
+      if (readOnly) return fail("read_only", "this device can only watch", 403);
+      if (request.method === "GET") return jsonResponse({ pcs: await manager.listTailnet() }, 200, { "cache-control": "no-store" });
+      if (request.method !== "POST") return fail("method_not_allowed", "Use GET or POST", 405);
+      const body: unknown = await request.json().catch(() => null);
+      if (!isJsonObject(body)) return fail("invalid_body", "Expected the address of a PC found on Tailscale", 400);
+      try { return jsonResponse({ machine: await manager.addTailnet(body.url) }, 201); }
+      catch (error) {
+        if (error instanceof TypedCodeError) {
+          const [message, status] = CODE_FAILURES[error.failure];
+          return fail(`typed_code_${error.failure}`, message, status);
+        }
+        if (!(error instanceof TailnetPcError)) throw error;
+        return fail(`tailnet_${error.failure}`, error.message, error.failure === "not_found" ? 404 : error.failure === "unreachable" ? 502 : 409);
+      }
+    }
     if (parts[0] === "setup") {
-      if (parts.length === 1 && request.method === "POST") { setRequestRoute("/api/machines/setup"); return jsonResponse(manager.setup(await request.json() as SetupRequest), 202); }
+      if (parts.length === 1 && request.method === "POST") {
+        setRequestRoute("/api/machines/setup");
+        const body = await request.json() as SetupRequest;
+        // a setup that updates what runs there is an update of that PC: the owner's only, as above
+        // the addresses its one-job-per-PC check compares, resolved first (ssh -G, off the event loop, 3 s at most)
+        await manager.resolveFor(body);
+        return jsonResponse(manager.setup(body), 202);
+      }
       if (parts.length === 2) {
         setRequestRoute("/api/machines/setup/:job_id");
+        const action = request.method === "POST" ? await request.json().catch(() => null) as SetupAction | null : null;
         const job = manager.job(parts[1]!);
         if (!job) return fail("job_not_found", "Setup job not found", 404);
         if (request.method === "POST") {
-          const action = await request.json() as SetupAction;
           if (!isJsonObject(action)) return fail("invalid_body", "Expected a setup action", 400);
           if (action.action === "answer" && job.challenge?.kind === "secret" && !canSendSecret(request)) return fail("https_required", "Passwords and key passphrases require HTTPS or localhost", 403);
           manager.action(parts[1]!, action);
@@ -306,8 +356,70 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       if (!isJsonObject(patch)) return fail("invalid_body", "Expected PC settings", 400);
       return jsonResponse(manager.updateSettings(patch));
     }
+    if (parts[0] === "install" && parts.length <= 2) {
+      // its jobs name SSH addresses and PCs: read by the owner only (the change itself takes the guard above)
+      if (!owner) return fail("forbidden", OWNER_ONLY, 403);
+      if (parts.length === 1) {
+        setRequestRoute("/api/machines/install");
+        if (request.method !== "POST") return fail("method_not_allowed", "Use POST", 405);
+        const body: unknown = await request.json().catch(() => null);
+        if (!isJsonObject(body)) return fail("invalid_body", "Expected an SSH address, or the machine_id of a PC added here", 400);
+        await manager.resolveFor(body);
+        try { return jsonResponse(manager.install(body as unknown as PcInstallRequest) satisfies PcInstallJob, 202); }
+        catch (error) {
+          if (error instanceof PcUpdateRefused) return fail("install_unavailable", error.message, 409);
+          throw error;
+        }
+      }
+      setRequestRoute("/api/machines/install/:job_id");
+      if (request.method === "DELETE") manager.cancelInstall(parts[1]!);
+      else if (request.method !== "GET") return fail("method_not_allowed", "Use GET or DELETE", 405);
+      const job = manager.installJob(parts[1]!);
+      return job ? jsonResponse(job) : fail("job_not_found", "Install job not found", 404);
+    }
+    if (parts[0] === "update-all" && parts.length === 1) {
+      setRequestRoute("/api/machines/update-all");
+      if (request.method !== "POST") return fail("method_not_allowed", "Use POST", 405);
+      return jsonResponse(manager.updateAll() satisfies PcUpdateAll, 202);
+    }
+    if (parts[0] === "runtime" && parts[1] === "move-all" && parts.length === 2) {
+      setRequestRoute("/api/machines/runtime/move-all");
+      if (readOnly) return fail("read_only", "this device can only watch", 403);
+      if (!owner) return fail("forbidden", MOVE_OWNER_ONLY, 403);
+      if (request.method !== "POST") return fail("method_not_allowed", "Use POST", 405);
+      if (!updateRequestAllowed(request)) return fail("forbidden", MOVE_FROM_PAGE, 403);
+      const plans = moveAllPlans(await request.json().catch(() => null), manager.list().length);
+      if (!plans) return fail("invalid_body", "Expected { plans: [{ machine_id, revision }] }, each PC once", 400);
+      return jsonResponse(await moveAll(manager, plans), 202);
+    }
     const id = parts[0]!;
-    if (parts.length === 2 && parts[1] === "update-bridge" && request.method === "POST") { setRequestRoute("/api/machines/:machine_id/update-bridge"); return jsonResponse(manager.updateBridge(id), 202); }
+    if (parts.length === 2 && parts[1] === "update") {
+      setRequestRoute("/api/machines/:machine_id/update");
+      if (request.method === "DELETE") return jsonResponse({ cancelled: manager.cancelUpdate(id) });
+      if (request.method !== "POST") return fail("method_not_allowed", "Use POST or DELETE", 405);
+      const text = await request.text();
+      let body: unknown = {};
+      if (text.trim() !== "") { try { body = JSON.parse(text); } catch { body = null; } }
+      const shown = isJsonObject(body) ? body.revision : undefined;
+      if (!isJsonObject(body) || shown !== undefined && typeof shown !== "string") return fail("invalid_body", "Expected nothing, or { revision } of the offer shown", 400);
+      try { return jsonResponse(manager.update(id, shown as string | undefined) satisfies PcUpdateStarted, 202); }
+      catch (error) {
+        // one that cannot run now, whatever stopped it, is told the same way (docs/remote-pcs.md)
+        if (error instanceof PcUpdateRefused || error instanceof MachineActionRequired) return fail("update_unavailable", error.message, 409);
+        throw error;
+      }
+    }
+    if (parts.length === 2 && parts[1] === "update-bridge" && request.method === "POST") {
+      setRequestRoute("/api/machines/:machine_id/update-bridge");
+      // the release the card showed, when the client names it; otherwise the PC's last read offer (MachineManager.updateBridge)
+      const text = await request.text();
+      const body: unknown = text.trim() === "" ? {} : (() => { try { return JSON.parse(text); } catch { return null; } })();
+      const shown = isJsonObject(body) ? body.revision : undefined;
+      if (!isJsonObject(body) || shown !== undefined && typeof shown !== "string") return fail("invalid_body", "Expected nothing, or { revision } of the offer shown", 400);
+      // its address and those of the running jobs, resolved first, as for a setup
+      await manager.resolveFor({ machine_id: id });
+      return jsonResponse(manager.updateBridge(id, false, shown as string | undefined), 202);
+    }
     if (parts.length === 1 && request.method === "PATCH") {
       setRequestRoute("/api/machines/:machine_id");
       const patch = await request.json();
@@ -320,7 +432,14 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
     // dialog's agent commands, a pane's command rows), as do the paths under a pane's folder and a plugin run's
     // output, and a repository's checkouts: never asked for a watching device with the PC's credential
     if (readOnly && (path === "sessions/history" || path === "agent/commands" || path === "pane/commands" || path === "pane/files" || path === "pane/docs" || path === "plugin/action" || path === "worktree/list" || path === "worktree/inventory")) return fail("read_only", "this device can only watch", 403);
-    if (MACHINE_PROXY_PATH.test(path)) {
+    const movePath = PC_MOVE_PATH.test(path);
+    // a move's plan names every pane's folder and conversation, and the rest move or end them: a driving device's only
+    if (readOnly && movePath) return fail("read_only", "this device can only watch", 403);
+    if (movePath && !owner) return fail("forbidden", MOVE_OWNER_ONLY, 403);
+    // that PC refuses a move route with a query (updateRequestAllowed), which would read as an Ovis too old below
+    if (movePath && url.search !== "") return fail("invalid_query", "The move routes take no query", 400);
+    if (movePath && request.method !== "GET" && !updateRequestAllowed(request)) return fail("forbidden", MOVE_FROM_PAGE, 403);
+    if (MACHINE_PROXY_PATH.test(path) || movePath) {
       // `path` is a finite endpoint literal, never the machine id or an arbitrary suffix.
       setRequestRoute(`/api/machines/:machine_id/${path}`);
       // a connection that may only watch is refused here as well as at the access check, by the same rule
@@ -340,6 +459,8 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       // a remote conversation answers 304 when unchanged, as a local one does
       const ifNoneMatch = request.headers.get("if-none-match");
       if (ifNoneMatch) headers.set("if-none-match", ifNoneMatch);
+      // what that PC asks of a move from its own page; this server's own guards already passed it here
+      if (movePath) headers.set("x-herdr-update", "1");
       const abort = new AbortController();
       if (path === "fs/file") {
         // a file (a video, say) streams through, with its ranges, never held here; it can
@@ -365,8 +486,10 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       // a move's PC reads its roster again once the move is confirmed, so its receipt is soon shown
       const moved = path === "workspace/move" && request.method === "POST" ? manager.refreshAfterMove(id) : null;
       try {
-        const response = await fetch(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body, redirect: "error", signal: AbortSignal.any([request.signal, abort.signal, AbortSignal.timeout(slowMachinePath(path) ? 165_000 : 75_000)]) });
+        const response = await fetch(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body, redirect: "error", signal: AbortSignal.any([request.signal, abort.signal, AbortSignal.timeout(path === "runtime/move/install" ? 200_000 : slowMachinePath(path) ? 165_000 : 75_000)]) });
         if (moved && response.ok) moved();
+        // a start, cancel or stop shows on the PC's badge soon, not at its next slow read
+        if (movePath && request.method !== "GET" && response.ok) manager.moveOfferSoon(id);
         const etag = response.headers.get("etag");
         // that PC's clock as it answered a conversation read, a 304 too (src/lib/sentWaiting.ts)
         const serverTime = response.headers.get("x-server-time");
@@ -374,6 +497,7 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
         const retryAfter = response.status === 503 ? response.headers.get("retry-after") : null;
         // held whole before it is passed on (and parsed, for a watcher's prompt), so only up to a size
         let body: Uint8Array<ArrayBuffer> | null = response.status === 304 ? null : await readCapped(response, watchedPrompt ? REMOTE_LIMITS.watchedPrompt : REMOTE_LIMITS.proxy);
+        if (movePath && tooOldToMove(manager.list().find((machine) => machine.id === id)?.kind, response.status, answerCode(body))) return fail("pc_update_required", PC_UPDATE_REQUIRED, 409);
         if (watchedPrompt && response.ok && body) {
           const answer = parseJson<PanePromptResponse>(body);
           if (answer.prompt?.plan_file !== undefined) {

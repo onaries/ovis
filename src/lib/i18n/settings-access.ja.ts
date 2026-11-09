@@ -5,6 +5,9 @@
  */
 export const SETTINGS_ACCESS_JA: Record<string, string> = {
   "Access": "アクセス",
+  "Connected to this PC": "このPCにつながっているもの",
+"phone browser PC pair pairing code QR relay Tailscale Wi-Fi SSH Portal add PC remote PCs": "スマートフォン ブラウザー PC ペアリング コード QR リレー Tailscale Wi-Fi SSH Portal PC を追加 リモート PC",
+  "Devices and access": "デバイスとアクセス",
   "The server did not answer, so these facts are unavailable. Nothing from an earlier check is shown. This page asks again by itself; if this message stays, check that the server is running and that this device can reach it.": "サーバーが応答しないため、この情報は表示できません。以前の確認結果は表示しません。このページは自動でもう一度確認します。このメッセージが消えない場合は、サーバーが動いているか、このデバイスからサーバーに接続できるかを確認してください。",
   "This server does not report these facts. Updating it adds them.": "このサーバーはこの情報を返しません。サーバーを更新すると表示されます。",
   "What this server reports about how it is reached. Each line is one fact, not a safety rating.": "このサーバーへの接続方法についてサーバーが報告する情報です。各行は一つの事実で、安全性の評価ではありません。",
@@ -40,16 +43,11 @@ export const SETTINGS_ACCESS_JA: Record<string, string> = {
   "Split the Agents list into groups you name, such as Agents, Replies or Tasks. New workspace and New tab offer them, and an agent's menu moves it. Every browser shares them.": "エージェント一覧を Agents、Replies、Tasks など自分で名前を付けたグループに分けます。新しいワークスペースと新しいタブでグループを選べ、エージェントのメニューから移動できます。すべてのブラウザで共有されます。",
   "Agents under workspaces": "ワークスペースの下にエージェント",
   "On this device, list each workspace's agents under it in the PCs list, so every PC shows its workspaces and the agents running in them. The Agents list stays as it is.": "このデバイスで、PC 一覧の各ワークスペースの下にそのエージェントを表示します。PC ごとにワークスペースと、その中で動いているエージェントがわかります。エージェント一覧はそのまま残ります。",
-  "Code from another PC": "別の PC のコード",
-  "Compare it with the ID at the top of My devices on {name}. Pair only if every group matches.": "{name} の「マイデバイス」の一番上にある ID と比べてください。すべてのまとまりが一致する場合だけペアリングしてください。",
-  "The code that PC shows under Connect a device.": "その PC の「デバイスを接続」に表示されるコードです。",
   "ID {id}": "ID {id}",
-  "My devices": "マイデバイス",
   "Sign out of this PC": "この PC からサインアウト",
   "This app": "このアプリ",
   "Use the relay": "リレーを使う",
   "Tablet": "タブレット",
-  "phone browser PC pair pairing code QR relay Tailscale Wi-Fi SSH Portal add PC remote PCs": "スマートフォン ブラウザー PC ペアリング コード QR リレー Tailscale Wi-Fi SSH Portal PC を追加 リモート PC",
   "machines computers ssh bridge plugins phone pair relay QR code Remote PCs": "マシン コンピューター ssh ブリッジ プラグイン スマートフォン ペアリング リレー QR コード リモート PC",
 "While a terminal or chat pane is open.": "ターミナルやチャットのペインを開いている間、画面をオンに保ちます。",
 };

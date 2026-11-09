@@ -59,9 +59,9 @@ describe("the shell's page", () => {
     expect(() => shellIndexHtml("<html><head></head></html>")).toThrow(/manifest/);
   });
 
-  it("names the account service and its sign-ins only when the build is given an https one", () => {
-    expect(shellIndexHtml(indexHtml)).not.toContain("ovis-account");
-    expect(shellIndexHtml(indexHtml, { OVIS_ACCOUNT_SERVICE_URL: "http://account.example" })).not.toContain("ovis-account");
+  it("names account.ovis.sh unless the build names another https service or none", () => {
+    expect(shellIndexHtml(indexHtml)).toContain('<meta name="ovis-account-service" content="https://account.ovis.sh" />');
+    for (const off of ["off", "", "http://account.example"]) expect(shellIndexHtml(indexHtml, { OVIS_ACCOUNT_SERVICE_URL: off })).not.toContain("ovis-account");
     const github = shellIndexHtml(indexHtml, { OVIS_ACCOUNT_SERVICE_URL: "https://account.example/v1/" });
     expect(github).toContain('<meta name="ovis-account-service" content="https://account.example" />');
     expect(github).not.toContain("ovis-account-providers");
@@ -71,7 +71,7 @@ describe("the shell's page", () => {
   });
 
   it("changes nothing else in the page", () => {
-    const html = shellIndexHtml(indexHtml).replace(`  ${SHELL_META}\n  `, "").replace('href="manifest.webmanifest', 'href="/manifest.webmanifest');
+    const html = shellIndexHtml(indexHtml, { OVIS_ACCOUNT_SERVICE_URL: "off" }).replace(`  ${SHELL_META}\n  `, "").replace('href="manifest.webmanifest', 'href="/manifest.webmanifest');
     expect(html).toBe(indexHtml);
   });
 });

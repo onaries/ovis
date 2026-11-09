@@ -24,7 +24,7 @@ export type Density = "compact" | "comfortable";
 /** One line names the workspace; two lines say what its pane is doing, with the workspace under it. */
 export type SidebarRows = "one" | "two";
 /** the Agents list's order: herdr's workspace order, or a waiting agent first and then the latest change */
-export type AgentOrder = "workspace" | "activity";
+export type AgentOrder = "waiting" | "workspace" | "activity";
 /** Settings → Within a state: how each state group of the Agents list is ordered (lib/agentRoster.ts) */
 export const AGENT_GROUP_SORTS = ["wait", "recent", "name"] as const;
 export type AgentGroupSort = (typeof AGENT_GROUP_SORTS)[number];
@@ -89,7 +89,7 @@ export interface Settings {
   density: Density;
   /** How much a workspace row says: its name, or its pane's title over its place. */
   sidebarRows: SidebarRows;
-  /** the Filter field above the sidebar's lists (components/MachineSidebar.tsx); off, the command palette's
+  /** the Filter field above the sidebar's lists (components/MachineSidebar.tsx), off until chosen; off, the command palette's
    *  Filter workspaces and agents still opens it for the time it holds words or the focus */
   sidebarFilter: boolean;
   /** the composer's context ring on each agent row of the sidebar (components/Sidebar.tsx ContextBadge); off until chosen */
@@ -113,6 +113,10 @@ export interface Settings {
   agentLocks: boolean;
   /** Settings -> Experimental -> OpenCode: subagent ends from their session: the server ends an OpenCode subagent where its parent session's record does (server/opencode-subagents.ts); off, by its own rows */
   opencodeParentEnds: boolean;
+  /** Settings -> Experimental -> OMP on macOS herdr-core: the server reads an omp pane's chat from the session its omp holds open, through lsof (server/omp.ts ompHeldOpen); off, the chat there falls back to the terminal */
+  ompHeldFiles: boolean;
+  /** Settings -> Experimental -> PCs: start a replaced server again: an install over SSH that replaced a server started by hand, and failed or was cancelled, starts that one again as it was (server/pc-install.ts); off, it stays stopped */
+  restoreReplacedServer: boolean;
   /** pinned agent rows this app does not close (lib/paneLocks.ts), by their pin key; a lock holds only while its row is pinned */
   lockedAgents: string[];
   /** Settings -> Named agent groups: the Agents list splits into the groups below, which New workspace and New tab offer (lib/namedAgentGroups.ts); off, none is drawn or offered */
@@ -164,9 +168,6 @@ export interface Settings {
   /** a desktop tab out of use for a moment detaches its pane (PaneTerminal's release) and only watches it, so herdr's own
    *  window keeps the pane at its size; paused where the server cannot watch. Off: the tab keeps the pane and its size. */
   releasePaneAway: boolean;
-  /** the split view takes more than two panes, in rows and columns, and its boundaries move (lib/split.ts);
-   *  off: two halves side by side, as before */
-  splitGrid: boolean;
   /** a plain drag in a Codex pane is Codex's, which selects and scrolls its own history (lib/useTerminalMount.ts);
    *  off: Ovis's selection, which stops at the screen's edge but copies on every device */
   codexDrag: boolean;
@@ -262,6 +263,8 @@ export interface Settings {
   wrapCode: boolean;
   /** off by default: the file viewer offers Edit for a text file in the pane's folder, saved after a confirm (#771) */
   editTextFiles: boolean;
+  /** off by default: a file a tab switch leaves behind shows again when an in-app switch comes back to its tab (#3179) */
+  reopenFileOnReturn: boolean;
   /** a repository diff as one column of old and new lines, or the two side by side (a phone shows one column either way) */
   diffStyle: DiffStyle;
   /** Search for independent repositories below the pane's folder, on this device. */
@@ -294,16 +297,16 @@ export type DiffStyle = (typeof DIFF_STYLES)[number];
 
 /** Raw custom text, key combinations and account keys are never copied. Requiring every other
  * Settings field in the projection makes a new field require an explicit collection decision.
- * keyBarExpanded, herdrPrefixKeys, agentLocks, lockedAgents, opencodeParentEnds, the named agent groups, fileOpen, webLinks, reuseExternalLinkTab, the launch modes, followHerdrFocus, sidebarPeek, sidebarBackgroundWorkspaces, splitGrid, codexDrag, autoTabNames, composerArtifacts, composerPasteSend, composerBtw, terminalMirrorWrap, terminalImages, terminalAttachButton, terminalKeyboardOnRequest, terminalFoldKeyBar, sidebarFilter, sidebarContext, sidebarAgentTree, foldHelpers, pcLoad, voiceEngine, the agent groups, the
+ * keyBarExpanded, herdrPrefixKeys, agentLocks, lockedAgents, opencodeParentEnds, ompHeldFiles, restoreReplacedServer, the named agent groups, fileOpen, reopenFileOnReturn, webLinks, reuseExternalLinkTab, the launch modes, followHerdrFocus, sidebarPeek, sidebarBackgroundWorkspaces, codexDrag, autoTabNames, composerArtifacts, composerPasteSend, composerBtw, terminalMirrorWrap, terminalImages, terminalAttachButton, terminalKeyboardOnRequest, terminalFoldKeyBar, sidebarFilter, sidebarContext, sidebarAgentTree, foldHelpers, pcLoad, voiceEngine, the agent groups, the
  * interface font, the file text size and the folds its blocks start in are not collected: the telemetry schema
  * (shared/telemetry.ts) does not carry them. */
 type TelemetrySourceSettings = Omit<Settings,
   "keyBarExtras" | "keyBarItems" | "keyBarExpanded" | "shortcutOverrides" | "herdrPrefixKeys" | "terminalFontFamily" | "chatFontFamily" | "uiFontFamily"
-  | "quickReplies" | "agentLocks" | "lockedAgents" | "opencodeParentEnds" | "agentNamedGroups" | "agentGroupNames" | "agentGroupOf" | "usageOrder" | "usageHidden" | "fileOpen" | "filesPanel" | "webLinks" | "reuseExternalLinkTab" | "claudeLaunchMode" | "codexLaunchMode"
+  | "quickReplies" | "agentLocks" | "lockedAgents" | "opencodeParentEnds" | "ompHeldFiles" | "restoreReplacedServer" | "agentNamedGroups" | "agentGroupNames" | "agentGroupOf" | "usageOrder" | "usageHidden" | "fileOpen" | "filesPanel" | "webLinks" | "reuseExternalLinkTab" | "claudeLaunchMode" | "codexLaunchMode"
   | "claudeLaunchModel" | "claudeLaunchEffort" | "codexLaunchModel" | "codexLaunchEffort"
   | "followHerdrFocus" | "sidebarPeek" | "sidebarBackgroundWorkspaces" | "changesChildRepos" | "changesRepoDepth" | "splitGrid" | "codexDrag" | "composerArtifacts" | "composerPasteSend" | "composerBtw" | "terminalMirrorWrap" | "sidebarFilter" | "sidebarContext" | "sidebarAgentTree" | "foldHelpers" | "pcLoad"
   | "expandThinking" | "foldWork" | "autoTabNames" | "voiceEngine" | "agentGroups" | "agentGroupSort" | "terminalImages" | "terminalAttachButton"
-  | "terminalKeyboardOnRequest" | "terminalFoldKeyBar" | "fileFontSize" | "fileFontBase" | "editTextFiles">;
+  | "terminalKeyboardOnRequest" | "terminalFoldKeyBar" | "fileFontSize" | "fileFontBase" | "editTextFiles" | "reopenFileOnReturn">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
 function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
@@ -317,7 +320,9 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
     theme: settings.theme,
     density: settings.density,
     sidebarRows: settings.sidebarRows,
-    agentOrder: settings.agentOrder,
+    // Waiting first is herdr's workspace order with the waiting agents lifted: reported as that order, so the
+    // receiver's schema (shared/telemetry.ts, changed only with its deploy) keeps accepting the snapshot
+    agentOrder: settings.agentOrder === "waiting" ? "workspace" : settings.agentOrder,
     agentMarks: settings.agentMarks,
     statusIndicators: settings.statusIndicators,
     palette: settings.palette,
@@ -376,7 +381,7 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
  */
 export const SETTING_SCOPE = {
   theme: "shared", palette: "shared", darkTheme: "shared", lightTheme: "shared", language: "shared", sidebarRows: "shared", agentOrder: "shared",
-  agentMarks: "shared", agentLocks: "shared", lockedAgents: "shared", opencodeParentEnds: "shared", agentNamedGroups: "shared", agentGroupNames: "shared", agentGroupOf: "shared", autoSendQueued: "shared", autoTabNames: "shared", showThinking: "shared", quickReplies: "shared",
+  agentMarks: "shared", agentLocks: "shared", lockedAgents: "shared", opencodeParentEnds: "shared", ompHeldFiles: "shared", restoreReplacedServer: "shared", agentNamedGroups: "shared", agentGroupNames: "shared", agentGroupOf: "shared", autoSendQueued: "shared", autoTabNames: "shared", showThinking: "shared", quickReplies: "shared",
   showQuickReplies: "shared", showUsage: "shared", usageCount: "shared",
   usageGlance: "shared", usageOrder: "shared", usageHidden: "shared", defaultView: "device", suggestionChip: "device",
   terminalInputMode: "device", keyBarExtras: "device", keyBarItems: "device", keyBarExpanded: "device", shortcutOverrides: "device", herdrPrefixKeys: "device", density: "device",
@@ -394,8 +399,6 @@ export const SETTING_SCOPE = {
   terminalMirrorWrap: "device",
   // a desk that follows herdr's focus must not move a phone open on another pane
   followHerdrFocus: "device",
-  // a wide desk splits its pane area into rows and columns where a laptop keeps two halves
-  splitGrid: "device",
   // a desk's mouse, where Codex's copy reaches or not
   codexDrag: "device",
   // a desk's mouse, which a phone has not
@@ -426,7 +429,7 @@ export const SETTING_SCOPE = {
   paletteLight: "device", paletteDark: "device", statusIndicators: "device",
   voiceInput: "device", voiceLanguage: "device", voiceEngine: "device", voicePolishChat: "device", voicePolishTerminal: "device",
   // Viewer layout follows this screen, as chatWidth does.
-  wrapCode: "device", editTextFiles: "device", diffStyle: "device", fileOpen: "device", filesPanel: "device", webLinks: "device", reuseExternalLinkTab: "device",
+  wrapCode: "device", editTextFiles: "device", reopenFileOnReturn: "device", diffStyle: "device", fileOpen: "device", filesPanel: "device", webLinks: "device", reuseExternalLinkTab: "device",
   changesChildRepos: "device", changesRepoDepth: "device",
   // a new agent starts the same way whichever device opened it
   claudeLaunchMode: "shared", codexLaunchMode: "shared",
@@ -448,17 +451,20 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   density: "comfortable",
   sidebarRows: "one",
-  sidebarFilter: true,
+  sidebarFilter: false,
   sidebarContext: false,
   foldHelpers: false,
   sidebarAgentTree: false,
   pcLoad: null,
-  agentOrder: "workspace",
+  // the Agents list's order (the workspace list keeps herdr's): the agents that need you first, the resting ones folded
+  agentOrder: "waiting",
   agentGroups: false,
   agentGroupSort: "wait",
   agentMarks: "color",
   agentLocks: false,
   opencodeParentEnds: false,
+  ompHeldFiles: false,
+  restoreReplacedServer: false,
   lockedAgents: [],
   agentNamedGroups: false,
   agentGroupNames: [],
@@ -480,7 +486,6 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalMirrorWrap: null,
   releasePaneAway: false,
   followHerdrFocus: false,
-  splitGrid: false,
   codexDrag: false,
   sidebarPeek: false,
   sidebarBackgroundWorkspaces: false,
@@ -522,6 +527,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voicePolishTerminal: false,
   wrapCode: false,
   editTextFiles: false,
+  reopenFileOnReturn: false,
   diffStyle: "unified",
   changesChildRepos: true,
   changesRepoDepth: 2,
@@ -678,12 +684,14 @@ export function sanitizeSettings(raw: unknown): Settings {
     foldHelpers: typeof record["foldHelpers"] === "boolean" ? record["foldHelpers"] : DEFAULT_SETTINGS.foldHelpers,
     sidebarAgentTree: typeof record["sidebarAgentTree"] === "boolean" ? record["sidebarAgentTree"] : DEFAULT_SETTINGS.sidebarAgentTree,
     pcLoad: typeof record["pcLoad"] === "boolean" ? record["pcLoad"] : null,
-    agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
+    agentOrder: record["agentOrder"] === "waiting" || record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
     agentGroups: typeof record["agentGroups"] === "boolean" ? record["agentGroups"] : DEFAULT_SETTINGS.agentGroups,
     agentGroupSort: AGENT_GROUP_SORTS.includes(record["agentGroupSort"] as AgentGroupSort) ? record["agentGroupSort"] as AgentGroupSort : DEFAULT_SETTINGS.agentGroupSort,
     agentMarks: record["agentMarks"] === "color" || record["agentMarks"] === "mono" ? record["agentMarks"] : DEFAULT_SETTINGS.agentMarks,
     agentLocks: typeof record["agentLocks"] === "boolean" ? record["agentLocks"] : DEFAULT_SETTINGS.agentLocks,
     opencodeParentEnds: typeof record["opencodeParentEnds"] === "boolean" ? record["opencodeParentEnds"] : DEFAULT_SETTINGS.opencodeParentEnds,
+    ompHeldFiles: typeof record["ompHeldFiles"] === "boolean" ? record["ompHeldFiles"] : DEFAULT_SETTINGS.ompHeldFiles,
+    restoreReplacedServer: typeof record["restoreReplacedServer"] === "boolean" ? record["restoreReplacedServer"] : DEFAULT_SETTINGS.restoreReplacedServer,
     lockedAgents: Array.isArray(record["lockedAgents"])
       ? [...new Set(record["lockedAgents"].filter((key): key is string => typeof key === "string" && key.length > 0))].slice(0, MAX_PINS)
       : [...DEFAULT_SETTINGS.lockedAgents],
@@ -718,7 +726,6 @@ export function sanitizeSettings(raw: unknown): Settings {
     terminalMirrorWrap: typeof record["terminalMirrorWrap"] === "boolean" ? record["terminalMirrorWrap"] : null,
     releasePaneAway: typeof record["releasePaneAway"] === "boolean" ? record["releasePaneAway"] : DEFAULT_SETTINGS.releasePaneAway,
     followHerdrFocus: typeof record["followHerdrFocus"] === "boolean" ? record["followHerdrFocus"] : DEFAULT_SETTINGS.followHerdrFocus,
-    splitGrid: record["splitGrid"] === true,
     codexDrag: record["codexDrag"] === true,
     sidebarPeek: record["sidebarPeek"] === true,
     sidebarBackgroundWorkspaces: record["sidebarBackgroundWorkspaces"] === true,
@@ -758,6 +765,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     voicePolishTerminal: typeof record["voicePolishTerminal"] === "boolean" ? record["voicePolishTerminal"] : DEFAULT_SETTINGS.voicePolishTerminal,
     wrapCode: typeof record["wrapCode"] === "boolean" ? record["wrapCode"] : DEFAULT_SETTINGS.wrapCode,
     editTextFiles: typeof record["editTextFiles"] === "boolean" ? record["editTextFiles"] : DEFAULT_SETTINGS.editTextFiles,
+    reopenFileOnReturn: record["reopenFileOnReturn"] === true,
     diffStyle: DIFF_STYLES.find((style) => style === record["diffStyle"]) ?? DEFAULT_SETTINGS.diffStyle,
     changesChildRepos: typeof record["changesChildRepos"] === "boolean" ? record["changesChildRepos"] : DEFAULT_SETTINGS.changesChildRepos,
     changesRepoDepth: typeof record["changesRepoDepth"] === "number" && Number.isInteger(record["changesRepoDepth"]) && record["changesRepoDepth"] >= 1 && record["changesRepoDepth"] <= 4 ? record["changesRepoDepth"] : DEFAULT_SETTINGS.changesRepoDepth,
@@ -804,8 +812,10 @@ function readMirrorWrap(): boolean | null {
   }
 }
 
-/** Settings → Appearance → Sidebar filter, kept in a key of its own for the same reason: shown until chosen off. */
-export const SIDEBAR_FILTER_STORAGE_KEY = "ovis:sidebar-filter";
+/** Settings → Appearance → Sidebar filter, kept in a key of its own for the same reason: out until chosen on. A new key:
+ *  the earlier `ovis:sidebar-filter` held the old default (on) on every device that saved any setting, which no
+ *  choice can be told from, so it is not read. */
+export const SIDEBAR_FILTER_STORAGE_KEY = "ovis:sidebar-filter-shown";
 
 function readSidebarFilter(): boolean {
   try {

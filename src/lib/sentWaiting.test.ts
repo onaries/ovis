@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { clearMachineWaitingSends, currentWaitingSends, expireWaitingSends, forgetMachineWaitingSends, forgetWaitingBaseline, forgetWaitingSends, observeWaitingClock, pruneWaitingSends, rememberWaitingSend, settleWaitingSends, stampedBaseline, WAITING_SEND_MS, waitingBaseline, waitingKey } from "./sentWaiting.ts";
+import { clearMachineWaitingSends, currentWaitingSends, expireWaitingSends, forgetMachineWaitingSends, forgetWaitingBaseline, forgetWaitingSends, observeWaitingClock, pruneWaitingSends, rememberWaitingSend, settleWaitingSends, stampedBaseline, WAITING_SEND_MS, waitingBaseline, waitingKey, waitingSendsOutsideQueue, type WaitingSend } from "./sentWaiting.ts";
 import type { ConversationTurn } from "../../shared/protocol.ts";
 import type { Machine } from "../../shared/machines.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
@@ -20,6 +20,33 @@ function transcriptHolds(send: { text: string; at: number }, turns: readonly Con
 }
 const waitingText = (send: { text: string; at: number } | null, turns: readonly ConversationTurn[]): string | null =>
   send === null || transcriptHolds(send, turns) ? null : send.text;
+
+describe("waiting sends already visible in a native queue", () => {
+  const send = (text: string, id = 1): WaitingSend => ({ id, pane: "local:p1", text, at: 1, after: null });
+
+  it("shows the native queue copy once, without consuming the provisional send", () => {
+    const text = "내일 오전8시에 백업이 실행될 수 있도록 예약하고싶어.";
+    const sends = [send(text)];
+    expect(waitingSendsOutsideQueue(sends, [text])).toEqual([]);
+    expect(waitingSendsOutsideQueue(sends, [])).toBe(sends);
+    expect(sends).toEqual([send(text)]);
+  });
+
+  it("pairs identical messages one for one and keeps other pending sends", () => {
+    const sends = [send("repeat"), send("repeat", 2), send("different", 3)];
+    expect(waitingSendsOutsideQueue(sends, ["repeat"])).toEqual([sends[1]!, sends[2]!]);
+    expect(waitingSendsOutsideQueue(sends, ["repeat", "repeat"])).toEqual([sends[2]!]);
+    expect(waitingSendsOutsideQueue([sends[0]!], ["repeat", "repeat"])).toEqual([]);
+  });
+
+  it("matches known terminal whitespace but keeps distinct or shortened messages", () => {
+    const sends = [send("ask @alice\none more")];
+    expect(waitingSendsOutsideQueue(sends, ["ask @alice \r\none more "])).toEqual([]);
+    for (const text of ["ask @alice", "ask @alice…", "ask@alice\none more"]) {
+      expect(waitingSendsOutsideQueue(sends, [text])).toEqual(sends);
+    }
+  });
+});
 
 describe("waitingText", () => {
   const send = { pane: "p1", text: "还有发消息提示：未确认。重新发送前请检查终端。", at: 1 };
@@ -447,6 +474,33 @@ describe("waitingText", () => {
       settleWaitingSends(key, older, second + 800, true);
       expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["repeat"]);
       settleWaitingSends(key, [...older, user("repeat", second), { ...assistant("ok"), ts: new Date(second + 1_000).toISOString() }], second + 1_400, true);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("keeps a send the PC stamped before the chat's first read waiting past an older identical turn of the stamp's second", () => {
+    const key = waitingKey("local", "unread-second-stamped");
+    const second = Date.parse("2026-10-29T10:00:02Z");
+    const older = [user("repeat", second), { ...assistant("ok"), ts: new Date(second).toISOString() }];
+    try {
+      // the PC stamps the send at 02.700, after the older "repeat" and its answer of the same second
+      rememberWaitingSend(key, "repeat", second + 700, stampedBaseline(waitingBaseline(key), new Date(second + 700).toISOString(), second + 700));
+      settleWaitingSends(key, older, second + 800, true);
+      expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["repeat"]);
+      settleWaitingSends(key, [...older, user("repeat", second), { ...assistant("ok"), ts: new Date(second + 1_000).toISOString() }], second + 1_400, true);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("settles a stamped send after the chat's read by its own whole-second turn though the answer began in that second", () => {
+    const key = waitingKey("local", "read-second-stamped");
+    const second = Date.parse("2026-10-29T10:00:02Z");
+    const earlier = user("earlier", second - 60_000);
+    try {
+      settleWaitingSends(key, [earlier], second, true);
+      // stamped at 02.400, written at 02.600 and answered from 02.800: Grok keeps both as 02
+      rememberWaitingSend(key, "next", second + 400, stampedBaseline(waitingBaseline(key), new Date(second + 400).toISOString(), second + 400));
+      settleWaitingSends(key, [earlier, user("next", second), { ...assistant("ok"), ts: new Date(second).toISOString() }], second + 900, true);
       expect(currentWaitingSends(key)).toEqual([]);
     } finally { forgetWaitingSends(key); }
   });

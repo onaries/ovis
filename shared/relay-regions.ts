@@ -7,7 +7,10 @@
  */
 export const GLOBAL_RELAY = "wss://relay.ovis.sh";
 
-export const REGIONAL_RELAYS: readonly string[] = ["wss://relay-ap.ovis.sh"];
+/** Ovis's relay in Seoul: shown by its place where a connection names its way (src/components/ConnectionLine.tsx). */
+export const SEOUL_RELAY = "wss://relay-ap.ovis.sh";
+
+export const REGIONAL_RELAYS: readonly string[] = [SEOUL_RELAY];
 
 /** The relay to try when `relay` does not get through, or null: only Ovis's regional relays fall back. */
 export function relayFallback(relay: string, regional: readonly string[] = REGIONAL_RELAYS): string | null {

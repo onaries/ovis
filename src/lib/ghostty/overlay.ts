@@ -162,7 +162,9 @@ export async function attachGhosttyOverlay(term: Terminal, host: HTMLElement, ta
     Object.assign(layer.style, { fontFamily: font, fontSize: `${size}px`, width: `${box.width}px`, height: `${box.height}px` });
     layer.style.setProperty("--ghostty-cw", `${cellW}px`);
     layer.style.setProperty("--ghostty-ch", `${cellH}px`);
-    // each cell is xterm's width: a font whose advance differs is spaced to it
+    // each cell is xterm's width: a font whose advance differs is spaced to it. The probe measures the font's own
+    // advance, not the spacing the last fit gave the layer: inherited, a wrong spacing flipped sign at every fit and
+    // never healed, and Latin was drawn squashed over itself or spread apart
     const probe = document.createElement("span");
     probe.textContent = "W".repeat(50);
     probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;letter-spacing:0";

@@ -6,6 +6,10 @@
 
 import type { SplitPaneDirection } from "../../shared/protocol.ts";
 import type { ZoomMode } from "./layoutMap.ts";
+import type { Machine } from "../../shared/machines.ts";
+
+/** what Add a connection → SSH fills the Add PC dialog with: the address to connect to and, where known, a name */
+export interface AddPcPreset { destination: string; name?: string }
 
 export type PaneView = "chat" | "terminal";
 
@@ -64,8 +68,10 @@ export interface AppActions {
   agentStarted: (machineId: string, paneId: string) => void;
   openFind: () => void;
   openSettings: () => void;
-  /** the Add PC dialog, from Settings → Devices and PCs and the palette; Settings closes first */
-  openAddPc: () => void;
+  /** the Add PC dialog, from Settings → Devices and PCs and the palette; Settings closes first. `preset` fills its address (Add a connection → SSH) */
+  openAddPc: (preset?: AddPcPreset) => void;
+  /** a PC's own setup dialog (Connect on a PC saved in herdr), from Settings → Devices and PCs; Settings closes first */
+  connectPc: (machine: Machine) => void;
   toggleSidebar: () => void;
   /** the sidebar's Filter field, focused, with the drawer or the sidebar opened first: drawn even where Settings → Appearance leaves it out */
   openSidebarFilter: () => void;

@@ -1,9 +1,9 @@
 import { afterEach, expect, it, mock, spyOn } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findHc } from "./discovery.ts";
-import { HC_MOVED, hcBin, hcRecovery, startRuntime } from "./runtime.ts";
+import { coreConnection, HC_MOVED, hcBin, hcRecovery, startRuntime } from "./runtime.ts";
 import { socketAddress } from "../herdr/client.ts";
 
 /** an hc stand-in found, so no test looks at the developer's own PATH, shell or hc */
@@ -128,6 +128,32 @@ it.skipIf(platform === "win32")("tightens an existing state directory and socket
     } finally {
       adapter.stop();
     }
+  }
+});
+
+it.skipIf(platform === "win32")("runs hc connect with HERDR_SOCKET as it was before the adapter took it", async () => {
+  // regression (#3336 follow-up): a core hc connect starts would aim every pane's herdr at Ovis's own adapter
+  const dir = mkdtempSync(join(tmpdir(), "ovis-hc-herdr-socket-"));
+  const previousHcSocket = process.env["HC_SOCKET"];
+  cleanup = () => {
+    if (previousHcSocket === undefined) delete process.env["HC_SOCKET"]; else process.env["HC_SOCKET"] = previousHcSocket;
+    rmSync(dir, { recursive: true, force: true });
+  };
+  const out = join(dir, "connect-env");
+  const bin = join(dir, "herdr-core");
+  writeFileSync(bin, `#!/bin/sh\nif [ "$1" = --version ]; then echo 'hc 0.1.17'; else env > '${out}'; fi\n`, { mode: 0o755 });
+  process.env["OVIS_RUNTIME"] = "herdr-core";
+  process.env["HC_SOCKET"] = join(dir, "hc.sock");
+  process.env["HERDR_SOCKET"] = join(dir, "herdr.sock");
+  const adapter = await startRuntime(join(dir, "state"), async () => ({ bin, version: "0.1.17" }));
+  if (!adapter) throw new Error("runtime did not start");
+  try {
+    expect(process.env["HERDR_SOCKET"]).toBe(adapter.socketPath);
+    await coreConnection().hello().catch(() => null);
+    const env = readFileSync(out, "utf8").split("\n");
+    expect(env.filter((line) => line.startsWith("HERDR_SOCKET="))).toEqual([`HERDR_SOCKET=${join(dir, "herdr.sock")}`]);
+  } finally {
+    adapter.stop();
   }
 });
 

@@ -74,7 +74,7 @@ import {
   ERROR_NOTIFICATION_BODY,
   PERMISSION_NOTIFICATION_BODY,
   paneNotificationTag,
-  paneTitle,
+  pushPaneTitle,
   parseAlerts,
   shouldNotifyStatus,
   statusNotificationBody,
@@ -960,7 +960,7 @@ export function createPushService(options: PushServiceOptions): PushService {
       for (const pane of panes) {
         // only fill gaps: an event already seen is newer than any snapshot
         const key = paneStorageId(machineId, pane.pane_id);
-        titles.set(key, `${machineName ? machineName + " · " : ""}${paneTitle(pane)}`);
+        titles.set(key, `${machineName ? machineName + " · " : ""}${pushPaneTitle(pane)}`);
         workspaces.set(key, pane.workspace_id);
         if (pane.agent_kind) kinds.set(key, pane.agent_kind); else kinds.delete(key);
         if (!lastStatus.has(key)) lastStatus.set(key, pane.agent_status);

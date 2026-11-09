@@ -47,6 +47,16 @@ describe("shared preferences", () => {
     expect(await (await put(store, JSON.stringify({ settings: {}, pins: ["local:t1"] }))).json()).toEqual(named({ revision: 1, settings: {}, pins: ["local:t1"], muted_panes: [] }));
   });
 
+  it("fails a save whose listener fails, after every other listener has heard of it (#3428)", async () => {
+    const store = new PreferenceStore(root());
+    const heard: number[] = [];
+    store.subscribe(() => { throw new Error("Could not save which Hub accounts are hidden"); });
+    store.subscribe((preferences) => heard.push(preferences.revision));
+    const response = await put(store, JSON.stringify({ settings: { usageHidden: ["claude:cliproxy:a.json"] } }));
+    expect(response.status).toBe(500);
+    expect(heard).toEqual([1]);
+  });
+
   it("takes the id another server on its folder wrote since it started, rather than writing over it", async () => {
     const dir = root();
     const first = new PreferenceStore(dir);

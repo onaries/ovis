@@ -20,13 +20,24 @@
   transition: background-color var(--dur-fast) var(--ease-out);
 }
 
-.sidebar-split:focus-visible { outline: none; }
+/* the keyboard's ring, inside the band (the lists beside it clip anything outside), with the line lit
+   under it (G-034): the common focus contract, not a lit line alone */
+.sidebar-split:focus-visible {
+  outline: var(--ring);
+  outline-offset: calc(var(--ring-offset) * -1);
+}
 
 @media (forced-colors: active) {
   .sidebar-split:focus-visible {
     outline: var(--hairline) solid Highlight;
     outline-offset: calc(var(--hairline) * -1);
   }
+}
+
+/* a pointer's floor (G-033): the band is --pointer-target tall by its own box, the hairline still centred in it;
+   the PCs' list gives the 13px, so the Agents head and the footer keep their place */
+@media (pointer: fine) {
+  .sidebar-split { height: var(--pointer-target); }
 }
 
 @media (hover: hover) {
@@ -81,8 +92,7 @@
   .sidebar-split-grip { opacity: 1; }
 }
 
-/* the section a drag is about to fold dims as it would go */
-.pcs-sidebar.will-fold,
+/* the section a drag is about to fold dims as it would go (Agents: the PCs have no head to fold to) */
 .agents-sidebar.will-fold { opacity: 0.4; }
 
 .pcs-sidebar,
@@ -96,15 +106,15 @@
 .sidebar-shell.is-splitting > .agents-sidebar { min-height: 0; }
 
 /* A kept split, with both lists open, gives the upper list its height (clamped to the window, SidebarSplit.tsx)
-   and the lower one the rest; so does a drag in progress. Folded or empty, a section takes its head alone (Sidebar.css). */
-.sidebar-shell.has-split:not(:has(> .pcs-sidebar.is-collapsed)):not(:has(> .agents-sidebar:is(.is-collapsed, .is-empty))),
+   and the lower one the rest; so does a drag in progress. Folded or empty, Agents takes its head alone (Sidebar.css). */
+.sidebar-shell.has-split:not(:has(> .agents-sidebar:is(.is-collapsed, .is-empty))),
 .sidebar-shell.is-splitting {
   --pcs-flex: 0 0 var(--split-top);
   --agents-flex: 1 1 0;
   --section-max: none;
 }
 
-.sidebar-shell.is-agents-first.has-split:not(:has(> .pcs-sidebar.is-collapsed)):not(:has(> .agents-sidebar:is(.is-collapsed, .is-empty))),
+.sidebar-shell.is-agents-first.has-split:not(:has(> .agents-sidebar:is(.is-collapsed, .is-empty))),
 .sidebar-shell.is-agents-first.is-splitting {
   --pcs-flex: 1 1 0;
   --agents-flex: 0 0 var(--split-top);

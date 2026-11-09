@@ -37,6 +37,13 @@ async function select(name: string) {
   await page.getByRole("button", { name: "Chat", exact: true }).click();
   await page.getByRole("textbox", { name: "Message", exact: true }).waitFor();
 }
+/** Add PC from Add a connection's SSH tab (a phone opens the sheet on Phones and devices): an address typed, then Add */
+async function addPcOverSsh() {
+  const sheet = page.getByRole("dialog", { name: "Add a connection", exact: true });
+  await sheet.locator('.connect-tabs [data-tab="ssh"]').click();
+  await sheet.getByLabel("Or type an SSH address", { exact: true }).fill("qa@pc.invalid");
+  await sheet.locator(".connect-ssh-form").getByRole("button", { name: "Add", exact: true }).click();
+}
 const composer = page.getByRole("textbox", { name: "Message", exact: true });
 let releaseUpload = () => {};
 const socket = join(fixture.remoteHome, ".config/herdr/sessions/ssh-qa/herdr.sock");
@@ -137,12 +144,11 @@ try {
   await page.getByRole("button", { name: "New workspace on QA second PC", exact: true }).click();
   const create = page.getByRole("dialog", { name: "New workspace · QA second PC", exact: true });
   await create.waitFor(); await create.getByRole("button", { name: "Close dialog", exact: true }).click();
-  // Add PC lives in Settings → Devices and PCs → Connect → Other ways to connect; opening it closes Settings
+  // Add PC lives in Settings → Devices and PCs → Add a connection → SSH: a typed address opens it filled in, and Settings closes
   await page.locator(".sidebar-footer").getByRole("button", { name: "Settings", exact: true }).click();
   await openSettingsPage(page, "Devices and PCs");
-  await page.getByRole("dialog", { name: "Settings", exact: true }).getByRole("button", { name: "Connect", exact: true }).click();
-  await page.getByRole("dialog", { name: "Connect a device", exact: true }).locator(".connect-other > summary").click();
-  await page.getByRole("dialog", { name: "Connect a device", exact: true }).getByRole("button", { name: "Add a PC over SSH", exact: true }).click();
+  await page.getByRole("dialog", { name: "Settings", exact: true }).getByRole("button", { name: "Add a connection", exact: true }).click();
+  await addPcOverSsh();
   const dialog = page.getByRole("dialog", { name: "Add PC", exact: true }); await dialog.waitFor();
   await page.screenshot({ path: join(evidence, "desktop-add-pc-dark.png") });
   await dialog.getByRole("button", { name: "Close PC setup" }).click();
@@ -157,9 +163,8 @@ try {
   await page.screenshot({ path: join(evidence, "mobile-light.png") });
   await page.locator(".sidebar-footer").getByRole("button", { name: "Settings", exact: true }).click();
   await openSettingsPage(page, "Devices and PCs");
-  await page.getByRole("dialog", { name: "Settings", exact: true }).getByRole("button", { name: "Connect", exact: true }).click();
-  await page.getByRole("dialog", { name: "Connect a device", exact: true }).locator(".connect-other > summary").click();
-  await page.getByRole("dialog", { name: "Connect a device", exact: true }).getByRole("button", { name: "Add a PC over SSH", exact: true }).click();
+  await page.getByRole("dialog", { name: "Settings", exact: true }).getByRole("button", { name: "Add a connection", exact: true }).click();
+  await addPcOverSsh();
   await page.getByRole("dialog", { name: "Add PC", exact: true }).waitFor();
   await page.screenshot({ path: join(evidence, "mobile-add-pc-light.png") });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);

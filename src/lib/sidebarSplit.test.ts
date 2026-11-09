@@ -62,6 +62,12 @@ describe("splitSnap", () => {
     expect(splitSnap(300, ROOM)).toBeNull();
     expect(splitSnap(540, ROOM)).toBe("bottom");
   });
+
+  it("never folds a section with no head (the PCs)", () => {
+    expect(splitSnap(5, { ...ROOM, topHead: 0 })).toBeNull();
+    expect(splitSnap(595, { ...ROOM, bottomHead: 0 })).toBeNull();
+    expect(splitSnap(595, { ...ROOM, topHead: 0 })).toBe("bottom");
+  });
 });
 
 describe("sectionAt", () => {
@@ -81,6 +87,11 @@ describe("keyedSplit", () => {
     expect(keyedSplit(300, "End", ROOM)).toEqual({ fold: "bottom" });
     expect(keyedSplit(300, "Enter", ROOM)).toEqual({ reset: true });
     expect(keyedSplit(300, "a", ROOM)).toBeNull();
+  });
+
+  it("takes a section with no head (the PCs) to its minimum on Home or End instead of folding it", () => {
+    expect(keyedSplit(300, "Home", { ...ROOM, topHead: 0 })).toEqual({ split: 34 });
+    expect(keyedSplit(300, "End", { ...ROOM, bottomHead: 0 })).toEqual({ split: 566 });
   });
 });
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import { appendFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +6,7 @@ import { basename, dirname, join } from "node:path";
 
 import type { HerdrPane, OmoTask } from "../shared/protocol.ts";
 import { BackgroundWait, WAIT_LIMIT_MS } from "./background-wait.ts";
-import { ClaudeSubagentStatus, DETAIL_LIMITS, backgroundAgentDetail, backgroundCommand, claudeSubagentState, detailIo, claudeSubagents, forgetSubagents, lineNotifications, readLines, remember, subagentDetails, taskNotification, validDetailId, wholeClaudeSubagents, within } from "./claude-subagents.ts";
+import { ClaudeSubagentStatus, DETAIL_LIMITS, backgroundAgentDetail, backgroundCommand, claudeSubagentState, detailIo, claudeSubagents, forgetSubagents, lineNotifications, plain, readLines, remember, subagentDetails, taskNotification, validDetailId, wholeClaudeSubagents, within } from "./claude-subagents.ts";
 import { scanClaudeTasks } from "./claude-task-scan.ts";
 import { commandHistory, commandHistorySize, holdCommandHistory, waitCommandHistory, watchCommandHistory } from "./claude-command-history.ts";
 import { runFileTask } from "./file-tasks.ts";
@@ -430,6 +430,305 @@ describe("backgroundAgentDetail", () => {
     expect(backgroundAgentDetail(join(s.path, "..", "none.jsonl"), "a1")).toEqual({ refusal: "not_found" });
   });
 
+  it("counts and titles nothing through a subagents or session folder that is a link to another session's (#3348)", () => {
+    const s = session();
+    s.agent("a1");
+    expect(claudeSubagentState(s.path, true, NOW).running).toBe(1);
+    const project = join(s.path, "..");
+    const linked = (id: string, link: string, target: string): string => {
+      writeFileSync(join(project, `${id}.jsonl`), json({ type: "user", timestamp: at(0), message: { role: "user", content: "go" } }));
+      symlinkSync(target, link);
+      return join(project, `${id}.jsonl`);
+    };
+    mkdirSync(join(project, "22222222-2222-4222-8222-222222222222"));
+    const viaSubagents = linked("22222222-2222-4222-8222-222222222222", join(project, "22222222-2222-4222-8222-222222222222", "subagents"), join(project, SESSION, "subagents"));
+    const viaSession = linked("33333333-3333-4333-8333-333333333333", join(project, "33333333-3333-4333-8333-333333333333"), join(project, SESSION));
+    for (const parent of [viaSubagents, viaSession]) {
+      expect([parent, claudeSubagentState(parent, true, NOW)]).toMatchObject([parent, { tasks: [], running: 0 }]);
+      expect([parent, [...subagentDetails(parent, ["a1"])]]).toEqual([parent, []]);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("lists and titles nothing of a folder swapped for a link to another session's while it is opened (#3348)", () => {
+    const s = session();
+    const project = join(s.path, "..");
+    const sessionDir = join(project, SESSION);
+    const subagents = join(sessionDir, "subagents");
+    s.agent("a1", { description: "inside" });
+    const outside = mkdtempSync(join(tmpdir(), "herdr-subagents-swap-"));
+    roots.push(outside);
+    const outsideSession = join(outside, SESSION);
+    mkdirSync(join(outsideSession, "subagents"), { recursive: true });
+    for (const id of ["a1", "o1"]) {
+      writeFileSync(join(outsideSession, "subagents", `agent-${id}.meta.json`), JSON.stringify({ agentType: "x", description: "outside title", toolUseId: `toolu_${id}` }));
+      writeFileSync(join(outsideSession, "subagents", `agent-${id}.jsonl`), json({ isSidechain: true, sessionId: SESSION, agentId: id, type: "user", timestamp: at(1), message: { role: "user", content: "outside" } }));
+    }
+    const restore = (): void => {
+      for (const folder of [subagents, sessionDir]) {
+        try { if (lstatSync(folder).isSymbolicLink()) { rmSync(folder); renameSync(`${folder}.moved`, folder); } } catch { /* not swapped */ }
+      }
+    };
+    const swap = (folder: string, target: string) => (): void => { renameSync(folder, `${folder}.moved`); symlinkSync(target, folder); };
+    // before the folder's open (where the kernel names a descriptor's file, Linux; elsewhere the folder is not opened, and
+    // the first call after the look is its listing or a title's open), or once it is open and checked: before its listing,
+    // or before a title's file is opened
+    const cases: Array<[string, "open" | "read", () => void]> = [
+      ["the subagents folder, before its open", "open", swap(subagents, join(outsideSession, "subagents"))],
+      ["the session folder, before its open", "open", swap(sessionDir, outsideSession)],
+      ["the subagents folder, after its open", "read", swap(subagents, join(outsideSession, "subagents"))],
+      ["the session folder, after its open", "read", swap(sessionDir, outsideSession)],
+    ];
+    const { openSync } = detailIo;
+    const opendir = fs.opendirSync;
+    for (const read of ["list", "titles"] as const) {
+      for (const [label, at, act] of cases) {
+        forgetSubagents();
+        let swapped = false;
+        const once = (): void => { if (!swapped) { swapped = true; act(); } };
+        detailIo.openSync = ((path: string, flags: number) => {
+          if (at === "open" || (read === "titles" && path.endsWith("agent-a1.meta.json"))) once();
+          return openSync(path, flags);
+        }) as typeof openSync;
+        const listing = spyOn(fs, "opendirSync").mockImplementation((path, options) => { once(); return opendir(path, options); });
+        let answer: string;
+        try {
+          answer = read === "list"
+            ? JSON.stringify(claudeSubagentState(s.path, true, NOW).tasks.map((task) => `${task.id}:${task.title}`))
+            : JSON.stringify([...subagentDetails(s.path, ["a1", "o1"])]);
+        } finally { detailIo.openSync = openSync; listing.mockRestore(); restore(); }
+        expect([read, label, swapped]).toEqual([read, label, true]);
+        expect([read, label, answer]).not.toEqual([read, label, expect.stringContaining("outside")]);
+        expect([read, label, answer.includes("o1")]).toEqual([read, label, false]);
+      }
+    }
+    forgetSubagents();
+    expect(claudeSubagentState(s.path, true, NOW).tasks.map((task) => task.title)).toEqual(["inside"]);
+  });
+
+  it.skipIf(process.platform === "win32")("counts nothing of a session folder moved and replaced with a link to it once its listing is kept (#3348)", () => {
+    const s = session();
+    const sessionDir = join(s.path, "..", SESSION);
+    s.agent("a1");
+    // read a while after the folder was written: its listing is kept
+    setSystemTime(new Date(Date.now() + 5000));
+    try {
+      expect(claudeSubagentState(s.path, true, NOW).running).toBe(1);
+      renameSync(sessionDir, `${sessionDir}.moved`);
+      symlinkSync(`${sessionDir}.moved`, sessionDir);
+      expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ tasks: [], running: 0 });
+    } finally { setSystemTime(); }
+  });
+
+  it.skipIf(process.platform === "win32")("reads no meta file swapped for a FIFO before its open, and does not wait on it", () => {
+    const s = session();
+    const meta = join(s.path, "..", SESSION, "subagents", "agent-a1.meta.json");
+    const { openSync } = detailIo;
+    for (const read of ["titles", "list"] as const) {
+      forgetSubagents();
+      s.agent("a1");
+      let swapped = false;
+      detailIo.openSync = ((path: string, flags: number) => {
+        if (!swapped && path.endsWith("agent-a1.meta.json")) {
+          swapped = true;
+          rmSync(meta);
+          expect(Bun.spawnSync(["mkfifo", meta]).exitCode).toBe(0);
+        }
+        return openSync(path, flags);
+      }) as typeof openSync;
+      let answer: unknown[];
+      try {
+        answer = read === "list" ? claudeSubagentState(s.path, true, NOW).tasks.map((task) => task.id) : [...subagentDetails(s.path, ["a1"])];
+      } finally { detailIo.openSync = openSync; rmSync(meta, { force: true }); }
+      expect([read, swapped, answer]).toEqual([read, true, []]);
+    }
+  });
+
+  /**
+   * `before` runs once, just before the `nth` open of a file named `name`, and `after` just after it: whichever way the
+   * read opens it, through `detailIo` or straight through `fs`.
+   */
+  function onOpen(name: string, nth: number, before: () => void, after: () => void = () => undefined): { acted: () => boolean; restore: () => void } {
+    const { openSync } = detailIo;
+    let seen = 0;
+    let acted = false;
+    const hooked = ((path: string, flags: number, mode?: number) => {
+      if (acted || !String(path).endsWith(`/${name}`) || ++seen !== nth) return openSync(path, flags, mode);
+      acted = true;
+      before();
+      try { return openSync(path, flags, mode); } finally { after(); }
+    }) as typeof openSync;
+    detailIo.openSync = hooked;
+    const spy = spyOn(fs, "openSync").mockImplementation(hooked);
+    return { acted: () => acted, restore: () => { detailIo.openSync = openSync; spy.mockRestore(); } };
+  }
+
+  it.skipIf(process.platform === "win32")("reads no transcript swapped for a FIFO before its open, and does not wait on it (#3363)", () => {
+    const s = session();
+    const file = s.agent("a1");
+    // in a process of its own, with a deadline: a read that waits on the FIFO never returns, and would hold this one
+    const script = `
+      const fs = require("node:fs");
+      const open = fs.openSync;
+      let swapped = false;
+      const hooked = (path, ...rest) => {
+        if (!swapped && String(path).endsWith("/agent-a1.jsonl")) { swapped = true; fs.rmSync(process.env.SCAN_FILE); Bun.spawnSync(["mkfifo", process.env.SCAN_FILE]); }
+        return open(path, ...rest);
+      };
+      fs.openSync = hooked;
+      const { claudeSubagentState, detailIo } = await import(process.env.SCAN_MODULE);
+      detailIo.openSync = hooked;
+      const { tasks } = claudeSubagentState(process.env.SCAN_PARENT, true, Number(process.env.SCAN_NOW));
+      console.log(JSON.stringify({ swapped, tasks }));
+    `;
+    const child = Bun.spawnSync([process.execPath, "-e", script], {
+      env: { ...process.env, SCAN_MODULE: join(import.meta.dir, "claude-subagents.ts"), SCAN_PARENT: s.path, SCAN_FILE: file, SCAN_NOW: String(NOW) },
+      timeout: 4_000,
+    });
+    expect([child.exitCode, child.stdout.toString().trim()]).toEqual([0, JSON.stringify({ swapped: true, tasks: [] })]);
+  });
+
+  it.skipIf(process.platform === "win32")("reads no transcript replaced before its open: a link, even to itself, or another file (#3363)", () => {
+    const s = session();
+    const outside = mkdtempSync(join(tmpdir(), "herdr-subagents-link-"));
+    roots.push(outside);
+    const elsewhere = join(outside, "agent-a1.jsonl");
+    // what the outside transcript would say: it ended its turn at minute 30
+    const ended = own({ type: "assistant", timestamp: at(30), message: { id: "m30", model: "outside-model", stop_reason: "end_turn", content: [] } });
+    writeFileSync(elsewhere, ended);
+    const cases: Array<[string, 1 | 2, (file: string) => void]> = [
+      ["a link to another file", 1, (file) => { rmSync(file); symlinkSync(elsewhere, file); }],
+      // the same file, so only the refusal to follow a link stops it
+      ["a link to the file itself, moved aside", 1, (file) => { renameSync(file, `${file}.aside`); symlinkSync(`${file}.aside`, file); }],
+      // no link, so only the file's identity stops it
+      ["another plain file", 1, (file) => { writeFileSync(`${file}.new`, ended); renameSync(`${file}.new`, file); }],
+      ["a link to another file, before the tail's read", 2, (file) => { rmSync(file); symlinkSync(elsewhere, file); }],
+    ];
+    for (const [label, nth, act] of cases) {
+      forgetSubagents();
+      const file = join(s.path, "..", SESSION, "subagents", "agent-a1.jsonl");
+      rmSync(file, { force: true });
+      rmSync(`${file}.aside`, { force: true });
+      s.agent("a1");
+      const hook = onOpen("agent-a1.jsonl", nth, () => act(file));
+      let tasks: OmoTask[];
+      try { tasks = claudeSubagentState(s.path, true, NOW).tasks; } finally { hook.restore(); }
+      const said = JSON.stringify(tasks);
+      // replaced before the whole read, nothing is told of it; before the tail's, only what the whole read found
+      expect([label, hook.acted(), said.includes(at(30)), nth === 1 ? tasks : tasks.map((task) => task.status)]).toEqual([label, true, false, nth === 1 ? [] : ["running"]]);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("reads nothing of a folder swapped for a link to another session's after its listing (#3363)", () => {
+    const s = session();
+    const sessionDir = join(s.path, "..", SESSION);
+    const subagents = join(sessionDir, "subagents");
+    const outside = mkdtempSync(join(tmpdir(), "herdr-subagents-after-"));
+    roots.push(outside);
+    const outsideSession = join(outside, SESSION);
+    mkdirSync(join(outsideSession, "subagents"), { recursive: true });
+    writeFileSync(join(outsideSession, "subagents", "agent-a1.meta.json"), JSON.stringify({ agentType: "x", description: "outside title", toolUseId: "toolu_a1" }));
+    writeFileSync(join(outsideSession, "subagents", "agent-a1.jsonl"), own({ type: "assistant", timestamp: at(30), message: { id: "m30", model: "outside-model", stop_reason: "end_turn", content: [] } }));
+    const swap = (folder: string, target: string) => (): void => { renameSync(folder, `${folder}.moved`); symlinkSync(target, folder); };
+    const back = (folder: string) => (): void => { if (lstatSync(folder).isSymbolicLink()) { rmSync(folder); renameSync(`${folder}.moved`, folder); } };
+    const restore = (): void => { for (const folder of [subagents, sessionDir]) { try { back(folder)(); } catch { /* not swapped */ } } };
+    const folders: Array<[string, string, string]> = [["the subagents folder", subagents, join(outsideSession, "subagents")], ["the session folder", sessionDir, outsideSession]];
+    s.agent("a1", { description: "inside" });
+    for (const [what, folder, target] of folders) {
+      // after the listing, before the transcript is looked at; and before it is opened
+      type Hook = { acted: () => boolean; restore: () => void };
+      // swapped at the transcript's first look, the one after the listing
+      const atLook = (): Hook => {
+        const { lstatSync: look } = fs;
+        let acted = false;
+        const spy = spyOn(fs, "lstatSync").mockImplementation(((path: string, options?: object) => {
+          if (!acted && String(path).endsWith("/agent-a1.jsonl")) { acted = true; swap(folder, target)(); }
+          return look(path, options);
+        }) as typeof look);
+        return { acted: () => acted, restore: () => spy.mockRestore() };
+      };
+      const cases: Array<[string, () => Hook]> = [
+        [`${what}, before the transcript's look`, atLook],
+        [`${what}, before the transcript's open`, () => onOpen("agent-a1.jsonl", 1, swap(folder, target))],
+        // and swapped back once it is open: no look after the read can tell, so only a folder held open can
+        ...(process.platform === "linux" ? [[`${what}, from the transcript's look until its open`, (): Hook => {
+          const looked = atLook();
+          const opened = onOpen("agent-a1.jsonl", 1, () => undefined, back(folder));
+          return { acted: () => looked.acted() && opened.acted(), restore: () => { looked.restore(); opened.restore(); } };
+        }] as [string, () => Hook]] : []),
+      ];
+      for (const [label, hook] of cases) {
+        forgetSubagents();
+        const hooked = hook();
+        let said: string;
+        try { said = JSON.stringify(claudeSubagentState(s.path, true, NOW).tasks); } finally { hooked.restore(); restore(); }
+        expect([label, hooked.acted(), said.includes("outside"), said.includes(at(30))]).toEqual([label, true, false, false]);
+      }
+    }
+    forgetSubagents();
+    expect(claudeSubagentState(s.path, true, NOW).tasks.map((task) => task.title)).toEqual(["inside"]);
+  });
+
+  it("reads no file whose identity is the one looked at only once rounded to a number (#3363)", () => {
+    const s = session();
+    const file = s.agent("a1");
+    const { lstatSync: look, fstatSync: opened } = fs;
+    // an NTFS file ID can pass 2^53: looked at as 2^53 + 1 and opened as 2^53, two files read as one number
+    const big = 2n ** 53n;
+    const as = <T extends object>(stat: T, ino: bigint): T => Object.assign(Object.create(Object.getPrototypeOf(stat) as object) as T, stat, { ino: typeof (stat as { ino: unknown }).ino === "bigint" ? ino : Number(ino) });
+    // the file opened as 2^53; replaced only after the first look, every later look sees it too
+    for (const replaced of [false, true]) {
+      let looked = big + 1n;
+      const looks = spyOn(fs, "lstatSync").mockImplementation(((path: string, options?: object) => { const stat = look(path, options); return path === file && stat ? as(stat, looked) : stat; }) as typeof look);
+      const opens = spyOn(fs, "fstatSync").mockImplementation(((fd: number, options?: object) => as(opened(fd, options), big)) as typeof opened);
+      let read: ReturnType<typeof readLines>;
+      try {
+        const seen = plain(file)!;
+        if (replaced) looked = big;
+        read = readLines(file, 0, seen, seen.size, () => undefined, false);
+      } finally { looks.mockRestore(); opens.mockRestore(); }
+      expect([replaced, read]).toEqual([replaced, { offset: 0, skipping: false, more: true, failed: true }]);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("lists afresh after a folder swapped while it was read by its path, and skips none of its agents as old (#3363)", () => {
+    const s = session();
+    const subagents = join(s.path, "..", SESSION, "subagents");
+    s.agent("a1", { description: "inside" });
+    const outside = mkdtempSync(join(tmpdir(), "herdr-subagents-stale-"));
+    roots.push(outside);
+    mkdirSync(join(outside, "subagents"));
+    writeFileSync(join(outside, "subagents", "agent-a1.meta.json"), JSON.stringify({ agentType: "x", description: "outside title", toolUseId: "toolu_a1" }));
+    const old = join(outside, "subagents", "agent-a1.jsonl");
+    writeFileSync(old, own({ type: "user", timestamp: at(1), message: { role: "user", content: "outside" } }));
+    // last written two days before the read: an agent the read would skip as old for a while
+    utimesSync(old, (NOW - 48 * 60 * 60 * 1000) / 1000, (NOW - 48 * 60 * 60 * 1000) / 1000);
+    // in a process of its own where no descriptor names its file, as off Linux: the files are read by their path, and
+    // the subagents folder is swapped for a link to the outside one at the first look at a transcript, then put back
+    const script = `
+      const fs = require("node:fs");
+      const look = fs.lstatSync;
+      const folder = process.env.SCAN_FOLDER;
+      let swapped = false;
+      fs.lstatSync = (path, ...rest) => {
+        if (path === "/proc/self/fd") throw Object.assign(new Error("no such folder"), { code: "ENOENT" });
+        if (!swapped && String(path).endsWith("/agent-a1.jsonl")) { swapped = true; fs.renameSync(folder, folder + ".moved"); fs.symlinkSync(process.env.SCAN_OUTSIDE, folder); }
+        return look(path, ...rest);
+      };
+      const { claudeSubagentState } = await import(process.env.SCAN_MODULE);
+      const now = Number(process.env.SCAN_NOW);
+      const first = claudeSubagentState(process.env.SCAN_PARENT, true, now).tasks.map((task) => task.title);
+      fs.rmSync(folder);
+      fs.renameSync(folder + ".moved", folder);
+      const next = claudeSubagentState(process.env.SCAN_PARENT, true, now).tasks.map((task) => task.title);
+      console.log(JSON.stringify({ swapped, first, next }));
+    `;
+    const child = Bun.spawnSync([process.execPath, "-e", script], {
+      env: { ...process.env, SCAN_MODULE: join(import.meta.dir, "claude-subagents.ts"), SCAN_PARENT: s.path, SCAN_FOLDER: subagents, SCAN_OUTSIDE: join(outside, "subagents"), SCAN_NOW: String(NOW) },
+      timeout: 4_000,
+    });
+    expect([child.exitCode, child.stdout.toString().trim() || child.stderr.toString()]).toEqual([0, JSON.stringify({ swapped: true, first: [], next: ["inside"] })]);
+  });
+
   it("an unreadable dispatch is no prompt, and no later instruction is taken for it", () => {
     const s = session();
     const file = s.agent("a1", { steps: [] });
@@ -844,7 +1143,9 @@ describe("claudeSubagents reading", () => {
   it("keeps a failed open or read unfinished instead of reporting the end of the file", () => {
     const s = session();
     for (const path of [join(s.path, "..", "missing.jsonl"), join(s.path, "..")]) {
-      expect(readLines(path, 0, 10, 10, () => { throw new Error("no line should be read"); }, false)).toEqual({ offset: 0, skipping: false, more: true, failed: true });
+      // the identity of what is there, if anything: each is refused for what it is
+      const exact = ((): string => { try { const stat = lstatSync(path, { bigint: true }); return `${stat.dev}:${stat.ino}`; } catch { return "0:0"; } })();
+      expect(readLines(path, 0, { size: 10, exact }, 10, () => { throw new Error("no line should be read"); }, false)).toEqual({ offset: 0, skipping: false, more: true, failed: true });
     }
   });
 
@@ -1429,6 +1730,19 @@ describe("claudeSubagents, background commands", () => {
     expect(claudeSubagentState(s.path, true, NOW).resting).toBe(false);
   });
 
+  it("holds a turn at rest while its Workflow run goes on, until the run's notice", () => {
+    const s = session();
+    s.prompt(1);
+    s.parent({ type: "assistant", timestamp: at(2), message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "toolu_wm1", name: "Workflow", input: { name: "sweep" } }] } });
+    s.parent({ type: "user", timestamp: at(2), toolUseResult: { status: "async_launched", taskId: "wm1", taskType: "local_workflow", workflowName: "sweep", runId: "wf_1" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_wm1", content: "Workflow launched in background. Task ID: wm1" }] } });
+    s.parent({ type: "assistant", timestamp: at(3), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "OK" }] } });
+    s.parent({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: at(3) });
+    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 1, resting: true });
+    expect(claudeSubagents(s.path, true, NOW)[0]).toMatchObject({ status: "running", title: "sweep" });
+    s.notify("wm1", 4, { summary: 'Background workflow "sweep" (run wf_1) completed' });
+    expect(claudeSubagentState(s.path, true, NOW).running).toBe(0);
+  });
+
   it("takes a skill's echo for a prompt, and a local command's output back from its echo (#2072)", () => {
     const s = session();
     s.prompt(1);
@@ -1997,6 +2311,27 @@ describe("claudeSubagents, a long-lived session's old history (#2510)", () => {
       expect(stats.mock.calls.filter(([path]) => basename(String(path)).startsWith("agent-old"))).toEqual([]);
       expect(claudeSubagents(s.path, true, NOW + 60_000).map((task) => `${task.id}:${task.status}`)).toContain("old7:running");
     } finally { stats.mockRestore(); }
+  });
+
+  it("lists a folder of any size reading at most MAX_NAMES of its names (#3348)", () => {
+    const s = session();
+    const dir = dirname(s.agent("a1"));
+    for (let i = 0; i < 6000; i += 1) writeFileSync(join(dir, `junk-${i}`), "");
+    const open = fs.opendirSync;
+    let names = 0;
+    const listed = spyOn(fs, "readdirSync");
+    const opened = spyOn(fs, "opendirSync").mockImplementation((path, options) => {
+      const folder = open(path, options);
+      const next = folder.readSync.bind(folder);
+      folder.readSync = () => { const entry = next(); if (entry !== null) names += 1; return entry; };
+      return folder;
+    });
+    try {
+      claudeSubagentState(s.path, true, NOW);
+      expect(listed.mock.calls.filter(([path]) => String(path) === dir)).toEqual([]);
+      expect(opened).toHaveBeenCalledTimes(1);
+      expect(names).toBe(5000);
+    } finally { opened.mockRestore(); listed.mockRestore(); }
   });
 
   it("counts an old agent resumed while the session's transcript stays quiet, once its minute is up", async () => {

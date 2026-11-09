@@ -1,5 +1,15 @@
 /* Settings is built from these: a group (caption + card), a row, and the four controls. */
 
+/* one grid for every page: a row's content starts this far in from its card's edge, and a caption, a
+   note and a fold line start there too; a row's picture takes the first column, its name the next */
+.settings-section,
+.settings-fold,
+.settings-row {
+  --settings-inset: calc(var(--space-4) + var(--hairline));
+  --settings-icon: 16px;
+  --settings-icon-column: calc(var(--settings-icon) + var(--space-2));
+}
+
 .settings-section {
   display: flex;
   flex-direction: column;
@@ -9,7 +19,7 @@
 
 .settings-section h3 {
   margin: 0;
-  padding: 0 var(--space-1);
+  padding: 0 var(--settings-inset);
   color: var(--text-dim);
   font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
@@ -22,7 +32,7 @@
   align-items: center;
   gap: var(--space-2);
   min-height: var(--control-h);
-  padding: 0 var(--space-1);
+  padding: 0 var(--settings-inset);
   color: var(--text-dim);
   font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
@@ -42,8 +52,8 @@
 
 .settings-fold-chevron {
   flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
+  width: var(--settings-icon);
+  height: var(--settings-icon);
   transition: transform var(--dur-fast) var(--ease-out);
 }
 
@@ -73,7 +83,7 @@
 
 .settings-note {
   margin: 0;
-  padding: 0 var(--space-1);
+  padding: 0 var(--settings-inset);
 }
 
 /* one surface per group: its rows are parted by hairlines, never by boxes of their own */
@@ -89,6 +99,11 @@
 .settings-card > .settings-row,
 .settings-card > .settings-item {
   padding: var(--space-3) var(--space-4);
+}
+
+/* every row of a card is at least one control tall, a row of words alone too, so the hairlines keep one rhythm */
+.settings-card > .settings-row {
+  min-height: calc(var(--control-h) + var(--space-3) * 2);
 }
 
 .settings-card > * + * {
@@ -137,6 +152,11 @@
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
+}
+
+/* the sentence and condition under a name start where the name does, not under its picture */
+.settings-row-text:has(> .settings-label-line > .settings-row-icon) > :not(.settings-label-line) {
+  padding-inline-start: var(--settings-icon-column);
 }
 
 /* the ↺ beside a label whose value moved off its default */
@@ -325,12 +345,12 @@
   }
 }
 
-/* the picture before a row's name */
+/* the picture before a row's name, in a column of its own: every name of a page starts on one line */
 .settings-row-icon {
   flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  margin-right: var(--space-1);
+  width: var(--settings-icon);
+  height: var(--settings-icon);
+  margin-inline-end: calc(var(--settings-icon-column) - var(--settings-icon) - var(--space-1));
   color: var(--text-dim);
 }
 
@@ -374,34 +394,34 @@
   display: none;
 }
 
-.settings-chip svg {
-  width: 14px;
-  height: 14px;
-  margin-right: 4px;
-  vertical-align: -2px;
-}
-
-/* several on/off choices in one row: a chip each, pressed when on */
-.settings-chips {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--space-1);
-}
-
-.settings-chip {
-  padding: 2px var(--space-3);
+/* Sidebar rows, drawn: two workspace rows, each one line or two */
+.sidebar-rows-preview {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 34px;
+  padding: 3px;
   border: var(--hairline) solid var(--border);
-  border-radius: 999px;
-  background: none;
-  color: var(--text-dim);
-  font: inherit;
-  cursor: pointer;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
 }
 
-.settings-chip[aria-pressed="true"] {
-  border-color: var(--accent);
-  color: var(--accent);
+.sidebar-rows-preview-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-rows-preview-item i {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--text-dim);
+}
+
+.sidebar-rows-preview.is-two .sidebar-rows-preview-item i + i {
+  width: 65%;
+  opacity: 0.55;
 }
 
 /* a font list and its size on one line, wrapping the size under the list when the row has no room */
@@ -435,6 +455,11 @@
 .settings-condition {
   display: block;
   color: var(--text);
+}
+
+/* under a row's name it takes the sentence's size; elsewhere (a dialog's warning) it keeps its own */
+.settings-row-text > .settings-condition {
+  font-size: var(--fs-xs);
 }
 
 /* one sentence at rest; its conditions and exceptions open under it (DESIGN.md: messages say
@@ -506,6 +531,17 @@
   border-radius: var(--radius-md);
 }
 
+/* a mouse's stepper is one control tall, border included, as a select and the segments are */
+@media (pointer: fine) {
+  .settings-stepper {
+    height: var(--control-h);
+  }
+
+  .settings-stepper > .icon-button {
+    height: calc(var(--control-h) - var(--hairline) * 2);
+  }
+}
+
 .settings-stepper output {
   min-width: 3.5em;
   color: var(--text-strong);
@@ -568,12 +604,14 @@
   min-width: 0;
 }
 
-/* the switch keeps a finger-sized box; the negative margin keeps that box from growing its row */
+/* the switch keeps a finger-sized box; the negative margins keep that box from growing its row past
+   one control's height, and put the track's end on the edge every other control ends on */
 .settings-toggle {
   position: relative;
   width: calc(var(--touch-target) + var(--space-2));
   height: var(--touch-target);
-  margin-block: calc(var(--space-1) * -1);
+  margin-block: calc((var(--control-h) - var(--touch-target)) / 2);
+  margin-inline-end: calc(var(--space-1) * -1);
   padding: var(--space-2) var(--space-1);
   background: transparent;
   border: 0;
@@ -634,6 +672,28 @@
     flex: 0 0 auto;
   }
 
+  /* a stepper under its name ends on the card's edge, as the font rows' steppers do */
+  .settings-row.is-wide > .settings-stepper,
+  .settings-row.is-wide > .settings-file-size {
+    align-self: flex-end;
+  }
+
+  /* a row's drawing stays on its name's line, at the end; the control takes the line under both */
+  .settings-row.is-wide:has(> .settings-row-preview) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .settings-row.is-wide > .settings-row-preview {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .settings-row.is-wide:has(> .settings-row-preview) > :not(.settings-row-text, .settings-row-preview) {
+    grid-column: 1 / -1;
+  }
+
   /* a little narrower than three to a line, so the next card shows at the edge */
   .theme-card {
     flex-basis: 84px;
@@ -658,7 +718,8 @@
   }
 }
 
-/* several on/off choices of one decision on one line */
+/* several on/off choices of one decision on one line: a chip each, pressed when on, a little under a
+   control's height so a wrapped set stays light */
 .settings-chips {
   display: flex;
   flex-wrap: wrap;
@@ -668,13 +729,17 @@
 }
 
 .settings-chip {
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: calc(var(--control-h) - var(--space-1));
+  padding: 0 var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
   background: var(--bg-input);
   color: var(--text-dim);
   font: inherit;
-  font-size: 0.92em;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 
@@ -701,16 +766,10 @@
   border-bottom-right-radius: 0;
 }
 
-
-.settings-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
 .settings-chip svg {
-  width: 13px;
-  height: 13px;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
 }
 
 /* a row of chips keeps its name on one line and wraps its chips beside it */

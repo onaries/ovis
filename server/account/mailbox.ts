@@ -36,6 +36,14 @@ export class AccountServiceOff extends Error {
   }
 }
 
+/** The account service a relay pass is asked of: none when it is turned off, the reason when its address cannot be used. */
+export function passAccountService(value?: string): string | Error | undefined {
+  try { return accountServiceUrl(value); } catch (error) {
+    if (error instanceof AccountServiceOff) return undefined;
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}
+
 export function accountServiceUrl(value = process.env["OVIS_ACCOUNT_SERVICE_URL"] ?? DEFAULT_ACCOUNT_SERVICE): string {
   if (value.trim().toLowerCase() === "off") throw new AccountServiceOff();
   const url = new URL(value);

@@ -10,8 +10,9 @@
  * and a turn still running is written only when it ends. A whole line that does not parse or is in
  * another shape throws LettaUnavailable: Chat then uses Terminal rather than show part of it.
  */
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, readSync } from "node:fs";
 import type { ConversationPart, ConversationTurn } from "../shared/protocol.ts";
+import { openBound } from "./conversation-shared.ts";
 import { trimOutput } from "./tool-output.ts";
 import { toolSummary } from "./transcript-records.ts";
 
@@ -89,6 +90,9 @@ export function parseLettaTranscript(text: string): ConversationTurn[] {
   return turns;
 }
 
+/** How far into a transcript a call's whole result is looked for: past this, it is not offered. */
+const TOOL_OUTPUT_SCAN_BYTES = 256 * 1024 * 1024;
+
 /**
  * The whole result of one call, by the `source_line_id` of its entry. ponytail: reads the
  * transcript from the start on each request; read backwards from the end if they grow large.
@@ -96,11 +100,14 @@ export function parseLettaTranscript(text: string): ConversationTurn[] {
 export function lettaToolOutput(path: string, ref: string): string | null {
   const id = JSON.stringify(ref);
   let fd: number;
-  try { fd = openSync(path, "r"); } catch { return null; }
+  // never through a link put where the transcript was, never waiting on a FIFO
+  // nor another file than the one the lookup is bound to (openBound)
+  try { fd = openBound(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)); } catch { return null; }
   try {
+    if (!fstatSync(fd).isFile()) return null;
     const chunk = Buffer.alloc(1024 * 1024);
     let carry = Buffer.alloc(0);
-    for (let position = 0, got = 0; (got = readSync(fd, chunk, 0, chunk.length, position)) > 0; position += got) {
+    for (let position = 0, got = 0; position < TOOL_OUTPUT_SCAN_BYTES && (got = readSync(fd, chunk, 0, chunk.length, position)) > 0; position += got) {
       const bytes = Buffer.concat([carry, chunk.subarray(0, got)]);
       const end = bytes.lastIndexOf(0x0a) + 1;
       carry = Buffer.from(bytes.subarray(end));

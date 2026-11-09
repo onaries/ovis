@@ -1,5 +1,5 @@
 /**
- * Korean for the settings keys of Settings → Chat → Composer's optional buttons and chips (and their one row of chips), of Settings → Agents → Other agents herdr knows, of Settings → Chat → Compaction and failed requests, of Settings → Terminal → Split into rows and columns and Codex panes, of Settings → Appearance → Background workspaces apart, and of Settings → Shortcuts → herdr prefix keys: the rest of the
+ * Korean for the settings keys of Settings → Chat → Composer's optional buttons and chips (and their one row of chips), of Settings → Agents → Other agents herdr knows, of Settings → Chat → Compaction and failed requests, of Settings → Terminal → Codex panes, of Settings → Appearance → Background workspaces apart, and of Settings → Shortcuts → herdr prefix keys: the rest of the
  * settings part (./settings.ko.ts), kept apart so each file stays short. Both files are the one settings part,
  * so a key lives in only one of them; its header lists the settings files and the register.
  */
@@ -30,5 +30,4 @@ export const SETTINGS_COMPOSER_KO: Record<string, string> = {
   "A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.": "입력창 위의 칩을 누르면 Claude Code가 제안한 다음 프롬프트가 입력창에 들어갑니다. 키보드에서는 Tab으로 넣습니다.",
   "A chip in a Claude Code pane's message box lists the pages its session published with the Artifact tool.": "Claude Code 패널의 입력창에 세션이 Artifact 도구로 게시한 페이지 목록을 여는 칩을 표시합니다.",
   "The site in that tab can see and navigate this Ovis tab.": "그 탭의 사이트가 이 Ovis 탭을 보고 이동시킬 수 있습니다.",
-  "Split into rows and columns": "행과 열로 나누기",
 };

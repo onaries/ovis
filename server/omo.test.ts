@@ -101,7 +101,7 @@ it("reads session identity from bounded headers and rejects foreign cwd and esca
     session(join(home, "outside.jsonl"), "/project");
     symlinkSync(join(home, "outside.jsonl"), join(dir, "escaped.jsonl"));
     writeFileSync(join(dir, "broken.jsonl"), "{");
-    expect(omoCandidates("/project", home)).toEqual([{ path: join(dir, "valid.jsonl"), id: "session-1", createdAt: Date.parse("2026-09-27T00:00:00Z"), store: join(home, ".omo", "agent", "sessions") }]);
+    expect(omoCandidates("/project", home)).toEqual([{ path: join(dir, "valid.jsonl"), id: "session-1", createdAt: Date.parse("2026-09-27T00:00:00Z"), store: join(home, ".omo", "agent", "sessions"), identity: expect.any(String) }]);
     expect(omoCandidates("/missing", home)).toEqual([]);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

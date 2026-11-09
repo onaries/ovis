@@ -45,6 +45,17 @@ export async function handleAccountRequest(request: Request, pathname: string, c
   if (body instanceof Response) return body;
   const serverId = peer.kind === "relay" ? peer.serverId : context.services.relay.currentIdentity()?.server_id ?? null;
   switch (pathname) {
+    case "/api/account/relay-account": {
+      setRequestRoute(pathname);
+      // the account this PC asks its relay pass under (docs/relay.md, "Relay pass"): named over a direct
+      // connection with drive access (the PC's own screen, after listing it), or through the relay only by a
+      // member of this PC's own account
+      const account = body.account;
+      if (typeof account !== "string") return fail("invalid_account", "Name the account", 400);
+      if (peer.kind === "relay" && !(devices.isAccountApproverSession(peer.device.id, peer.key) && devices.account() === account)) return fail("account_required", "Name this PC's account from a device linked to it", 403);
+      if (!context.services.relay.setRelayAccount(account)) return fail("invalid_account", "Name the account", 400);
+      return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+    }
     case "/api/account/introduce": {
       setRequestRoute(pathname);
       if (peer.kind !== "relay" || !devices.isAccountApproverSession(peer.device.id, peer.key)) return fail("account_required", "Introduce devices from a device linked to the account", 403);

@@ -19,12 +19,17 @@ describe("slow structural roster refreshes", () => {
       let manager: MachineManager | undefined;
       let bridge: ReturnType<typeof Bun.serve> | undefined;
       let pending: { snapshot: SessionSnapshot; resolve: (snapshot: SessionSnapshot) => void } | undefined;
-      let started = Promise.withResolvers<void>();
+      // each held read from the moment it begins (the request's arrival, or the local read's call), and each held response's publication
+      const order: string[] = [];
+      let entered = Promise.withResolvers<void>();
+      let parked = Promise.withResolvers<void>();
       let held = false;
       const read = async (): Promise<SessionSnapshot> => {
+        if (!held) return sessionSnapshot();
+        order.push("read");
+        entered.resolve();
         const snapshot = await sessionSnapshot();
-        if (!held) return snapshot;
-        return new Promise((resolve) => { pending = { snapshot, resolve }; started.resolve(); });
+        return new Promise((resolve) => { pending = { snapshot, resolve }; parked.resolve(); });
       };
       try {
         const ready = Promise.withResolvers<void>();
@@ -48,7 +53,10 @@ describe("slow structural roster refreshes", () => {
           bridge = Bun.serve({
             port: 0, hostname: "127.0.0.1",
             async fetch(request, server) {
-              if (new URL(request.url).pathname === "/ws" && server.upgrade(request, { data: undefined })) return;
+              const { pathname } = new URL(request.url);
+              if (pathname === "/ws" && server.upgrade(request, { data: undefined })) return;
+              // only the roster read is held: the move badge's read (watchMove) would otherwise take its place
+              if (pathname !== "/api/session") return new Response(null, { status: 404 });
               return Response.json({ snapshot: await read() });
             },
             websocket: {
@@ -65,19 +73,22 @@ describe("slow structural roster refreshes", () => {
         held = true;
         const loading = remote ? drive.refresh(runtime) : manager.refreshLocal();
         for (let pass = 0; pass < 4; pass++) {
-          await started.promise;
+          await parked.promise;
           const response = pending;
           if (!response) throw new Error("held roster missing");
           pending = undefined;
-          started = Promise.withResolvers<void>();
-          let publishedRoster = false;
+          parked = Promise.withResolvers<void>();
+          entered = Promise.withResolvers<void>();
+          // only this response names the workspace so: the cached roster, or another read's, does not
+          const marker = `ovis-test-slow-roster-held-${pass}`;
+          const marked = { ...response.snapshot, workspaces: response.snapshot.workspaces.map((item) => item.workspace_id === workspace.workspace.workspace_id ? { ...item, label: marker } : item) };
+          let published = false;
           const stopListening = manager.subscribe((event) => {
-            if (event.type !== "machines") return;
+            if (event.type !== "machines" || published) return;
             const snapshot = remote ? runtime.machine.snapshot : event.machines[0]?.snapshot;
-            if (snapshot?.workspaces.some((item) => item.workspace_id === workspace.workspace.workspace_id)) publishedRoster = true;
+            if (snapshot?.workspaces.some((item) => item.label === marker)) { published = true; order.push(marker); }
           });
-          // subscribe() sends the current roster synchronously; only the held load counts.
-          publishedRoster = false;
+          const since = order.length;
           // Structural invalidations only queue another read; they must not obsolete this one.
           if (remote) {
             const invalidated = Promise.withResolvers<void>();
@@ -89,14 +100,15 @@ describe("slow structural roster refreshes", () => {
             await invalidated.promise;
             stopWaiting();
           } else manager.localMessage({ type: "session-changed" });
-          const nextRead = started.promise;
-          response.resolve(response.snapshot);
-          // The next read starts whether or not the previous response was published.
+          const nextRead = entered.promise;
+          response.resolve(marked);
           await nextRead;
           stopListening();
-          expect(publishedRoster).toBe(true);
+          // the held response was published before the next read began
+          expect(order.slice(since)).toEqual([marker, "read"]);
         }
         held = false;
+        await parked.promise;
         if (!pending) throw new Error("follow-up roster missing");
         pending.resolve(pending.snapshot);
         await loading;

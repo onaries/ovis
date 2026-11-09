@@ -109,6 +109,29 @@
   text-align: left;
 }
 
+/* the welcome's sign-in: the account's buttons, Not now under them */
+.setup-signin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  align-self: stretch;
+  padding: var(--space-4);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-panel);
+}
+
+.setup-signin > .settings-item {
+  align-self: stretch;
+}
+
+.setup-signin-done {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+}
+
 /* the big choices: I'm new, I've used Ovis before */
 .setup-choices {
   display: flex;

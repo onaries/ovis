@@ -1,8 +1,9 @@
-import { type Dispatch, type RefObject, type SetStateAction, useEffect, useRef } from "react";
+import { type Dispatch, type RefObject, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import type { HerdrPane, HerdrWorkspace } from "../../shared/protocol.ts";
 import type { Machine } from "../../shared/machines.ts";
 import type { PaneView } from "./actions.ts";
 import { isNavigation, linkSearch, NAV_KEY, readLink, resolveLink, slugOf, type AppLink, type LinkNote } from "./deepLink.ts";
+import { withoutFile } from "./historyKeys.ts";
 import { pageAddress, pageSearch } from "./pageQuery.ts";
 import type { SelectionMark } from "./selectionMark.ts";
 import { settingsEntry, settingsSteppedOff } from "./settingsHistory.ts";
@@ -12,14 +13,22 @@ import type { useNewSessionState } from "./useNewSessionDialog.ts";
 import type { usePaneLens } from "./usePaneLens.ts";
 import type { useSettingsDialog } from "./useSettingsDialog.ts";
 
-export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, releaseFile, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, setHeaderNote, selectionRef }: {
+/**
+ * Keeps the address and the history in step with the selection (lib/deepLink.ts): a move between
+ * panes is an entry, Back and Forward select the entry's pane, and a file open over a pane is left
+ * behind, or kept for Back and shown again on return (#3179), when another pane is selected.
+ */
+export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, selectedWorkspace, viewing, selectedMachineId, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, locked, machines, snapshot, linkLanded, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, wideScreen, sidebarCollapsed, newTab, newFields, autoSelected, pendingFile, selectedMachine, openFile, machinesRef, selectTargetRef, pendingLink, setLinkLanded, linkSince, rosterSeq, setNewSessionOpen, pendingCreate, setHeaderNote, selectionRef }: {
   newSessionOpen: boolean;
   selectedPane: HerdrPane | null;
   selectedPaneId: string | null;
   selectedWorkspace: HerdrWorkspace | null;
   viewing: ReturnType<typeof useFilePanels>["viewing"];
   selectedMachineId: string;
-  releaseFile: ReturnType<typeof useFilePanels>["releaseFile"];
+  leaveFile: ReturnType<typeof useFilePanels>["leaveFile"];
+  restoreFile: ReturnType<typeof useFilePanels>["restoreFile"];
+  fileFromPop: ReturnType<typeof useFilePanels>["fileFromPop"];
+  forgetLeftFiles: ReturnType<typeof useFilePanels>["forgetLeftFiles"];
   locked: boolean | null;
   machines: Machine[];
   snapshot: Machine["snapshot"];
@@ -61,16 +70,49 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
   const linkFile = viewing && viewing.machineId === selectedMachineId && (viewing.paneId === null || viewing.paneId === selectedPaneId) ? viewing.path : null;
   // the file is its pane's (its paths are read from the pane's folder): another pane or PC
   // selected leaves it behind, and the move takes the file's entry over (below), so Back returns
-  // to the pane the file was open on, without the file
+  // to the pane the file was open on, without the file. With Reopen files on return (#3179) the file's
+  // entry keeps it instead, the move is pushed over it, and Back shows the file again on its pane.
   const fileLeft = viewing !== null && linkFile === null;
+  // A Back or Forward onto an entry that kept its file shows the file one render before the
+  // entry's handler (below) selects its pane. While the entry's address names the file's own pane
+  // and the selection has not moved since, the file is landing with its pane, not left behind:
+  // neither it nor the address is touched until it lands. A pop the handler finds moves nothing (its
+  // pane is already shown or closed, or Settings closed onto the entry) renders again and lands
+  // nothing: its file is left behind at once, as any other.
+  const shownSelection = useRef({ machineId: selectedMachineId, paneId: selectedPaneId });
+  // set by the handler when the pop it handles selects a pane or PC
+  const popMoving = useRef(false);
+  // the last pop (lib/useFileViewer.ts numbers them) the handler found moves nothing
+  const popStill = useRef(0);
+  const [, setPopSettled] = useState(0);
+  const filePop = fileFromPop();
+  const entryLink = fileLeft && filePop !== 0 && popStill.current !== filePop ? readLink(pageSearch()) : null;
+  const fileLanding = entryLink !== null && viewing !== null && entryLink.machine === viewing.machineId && entryLink.pane === viewing.paneId &&
+    shownSelection.current.machineId === selectedMachineId && shownSelection.current.paneId === selectedPaneId;
+  const fileFromPopRef = useRef(fileFromPop); fileFromPopRef.current = fileFromPop;
+  const fileKept = useRef(false);
+  const restoreFileRef = useRef(restoreFile); restoreFileRef.current = restoreFile;
+  // a pane its PC's roster no longer lists is closed; a PC with no roster read yet keeps its panes
+  const paneLive = useCallback((machineId: string, paneId: string) => {
+    const panes = machinesRef.current.find((machine) => machine.id === machineId)?.snapshot?.panes;
+    return panes === undefined || panes.some((pane) => pane.pane_id === paneId);
+  }, [machinesRef]);
   useEffect(() => {
-    if (fileLeft) releaseFile();
-  }, [fileLeft, releaseFile]);
+    if (!fileLeft || fileLanding || viewing === null) return;
+    // only the file shown on its own pane until this move is kept for the return; one opened for
+    // another pane than the one shown (a split's other slot) is left as before
+    const shown = shownSelection.current;
+    fileKept.current = leaveFile(paneLive, shown.machineId === viewing.machineId && shown.paneId === viewing.paneId);
+  }, [fileLeft, fileLanding, viewing, leaveFile, paneLive]);
+  // a tab that closed takes its remembered file with it, so a later pane with its id never shows it
+  useEffect(() => { forgetLeftFiles(paneLive); }, [machines, forgetLeftFiles, paneLive]);
   useEffect(() => {
     if (locked !== false || machines.length === 0 || snapshot === null || linkWorkspaceId === undefined || !linkLanded) return;
     // A popped entry's PC can land before its fallback pane. Keep Forward until that pane is known.
     // An offline PC never picks one, so its entry is written as it stands.
     if (poppedTo.current && selectedPaneId === null && snapshot.panes.length > 0 && selectedMachine?.state === "connected") return;
+    // a file shown again by a popped entry, before its pane is selected: the place is written once it lands
+    if (fileLanding) return;
     const link: AppLink = {
       machine: selectedMachineId, workspace: linkWorkspaceId, workspaceSlug: linkSlug, pane: selectedPaneId, view: selectedPaneId ? view : null, file: linkFile,
       settings: settingsOpen ? settingsPage : null, section: settingsOpen && settingsPage === settingsLinkPage ? settingsLinkSection : null,
@@ -85,12 +127,19 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
     // Back and Forward land where the address already says: nothing to write
     if (search === pageSearch()) return;
     const url = pageAddress(window.location.pathname, search, window.location.hash);
+    const kept = fileKept.current;
+    fileKept.current = false;
     if (previous !== null && !popped && !autoSelected && !settingsOpen && !newSessionOpen && isNavigation(previous, link)) {
       // a move that leaves the open file behind takes the file's entry: no entry is left between
-      if (fileLeft) window.history.replaceState({ [NAV_KEY]: true }, "", url);
+      if (fileLeft && !kept) window.history.replaceState({ [NAV_KEY]: true }, "", url);
       else window.history.pushState({ [NAV_KEY]: true }, "", url);
-    } else window.history.replaceState(window.history.state, "", url);
+      // a file left on the pane moved to opens over the move's entry, as its own (#3179)
+      if (selectedPaneId !== null) restoreFileRef.current(selectedMachineId, selectedPaneId);
+    } else window.history.replaceState(kept && !popped ? withoutFile(window.history.state) : window.history.state, "", url);
   }, [locked, machines.length, snapshot, linkLanded, selectedMachine?.state, selectedMachineId, selectedPaneId, linkWorkspaceId, linkSlug, linkFile, fileLeft, view, settingsOpen, settingsPage, settingsLinkPage, settingsLinkSection, newSessionOpen, newTab, newFields, wideScreen, sidebarCollapsed, autoSelected]);
+  useEffect(() => {
+    shownSelection.current = { machineId: selectedMachineId, paneId: selectedPaneId };
+  }, [selectedMachineId, selectedPaneId]);
 
 
   // a file a link named opens over its pane once the pane is shown, as the chat's file links do
@@ -125,6 +174,7 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
         pendingCreate.current = link.create ?? null;
         selectTargetRef.current(link.machine, link.pane, link.view ?? undefined);
         poppedTo.current = true;
+        popMoving.current = true;
         // a creation-only entry names no place to settle: as when the page opens with one, its PC is
         // the selection, which the first roster checks, connected or not
         if (!link.pane && !link.workspace) return;
@@ -145,13 +195,13 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
         const pane = machine?.snapshot ? resolveLink(machine.snapshot, link).pane : link.pane;
         if (pane === null) {
           // the dialog opens over the pane already shown on its PC; another PC's fallback pane is picked
-          if (link.create && selectionRef.current.machineId !== link.machine) { poppedTo.current = true; selectTargetRef.current(link.machine, null); }
+          if (link.create && selectionRef.current.machineId !== link.machine) { poppedTo.current = true; popMoving.current = true; selectTargetRef.current(link.machine, null); }
           return;
         }
         const current = selectionRef.current;
         // the entry's lens is drawn over the pane's own, as a tapped notification's is. Where it
         // lands is written over the entry, so Forward keeps the entries after it
-        if (current.machineId !== link.machine || current.paneId !== pane) { poppedTo.current = true; selectTargetRef.current(link.machine, pane, link.pane === pane ? link.view ?? undefined : undefined); return; }
+        if (current.machineId !== link.machine || current.paneId !== pane) { poppedTo.current = true; popMoving.current = true; selectTargetRef.current(link.machine, pane, link.pane === pane ? link.view ?? undefined : undefined); return; }
       }
       // the same pane, or no PC to go to: the entry landed on may still say what is no longer shown
       // (the address a link to Settings opened the page with, under the dialog's own entries), so it says it now
@@ -162,7 +212,15 @@ export function useAddressBar({ newSessionOpen, selectedPane, selectedPaneId, se
       const search = shown ? linkSearch(shown, pageSearch()) : pageSearch();
       if (search !== pageSearch()) window.history.replaceState(window.history.state, "", pageAddress(window.location.pathname, search, window.location.hash));
     };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    // the file viewer's listener has shown the entry's file by now: a pop that moves nothing says so,
+    // and the render that follows leaves its file behind
+    const decidePop = (event: PopStateEvent): void => {
+      popMoving.current = false;
+      onPop(event);
+      const pop = fileFromPopRef.current();
+      if (pop !== 0 && !popMoving.current) { popStill.current = pop; setPopSettled((count) => count + 1); }
+    };
+    window.addEventListener("popstate", decidePop);
+    return () => window.removeEventListener("popstate", decidePop);
   }, []);
 }

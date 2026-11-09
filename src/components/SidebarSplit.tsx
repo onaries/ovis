@@ -21,9 +21,9 @@ export interface SidebarSplitProps {
 
 interface Parts { top: HTMLElement; bottom: HTMLElement; footer: HTMLElement }
 
-/** what a section's head is, by the section's name */
-const HEAD: Record<SplitFold, { section: string; head: string }> = {
-  pcs: { section: ".pcs-sidebar", head: ".sidebar-section-head" },
+/** what a section's head is, by the section's name: the PCs have none, so they never fold (lib/sidebarSplit.ts) */
+const HEAD: Record<SplitFold, { section: string; head: string | null }> = {
+  pcs: { section: ".pcs-sidebar", head: null },
   agents: { section: ".agents-sidebar", head: ".agent-section-toggle" },
 };
 
@@ -43,7 +43,8 @@ function allocation({ top }: Parts, line: HTMLElement): number {
 /** Each section's head and minimum row, their shared room, and the PCs-row keyboard/snap distance. */
 function measure({ top, bottom, footer }: Parts, line: HTMLElement, order: SplitOrder): SplitRoom {
   const head = (section: HTMLElement, side: SplitSide) => {
-    const box = section.querySelector(HEAD[sectionAt(side, order)].head)?.getBoundingClientRect();
+    const selector = HEAD[sectionAt(side, order)].head;
+    const box = selector === null ? undefined : section.querySelector(selector)?.getBoundingClientRect();
     const from = section.getBoundingClientRect().top;
     return { height: Math.round((box?.bottom ?? from) - from), row: box?.height ?? 0 };
   };
@@ -51,9 +52,17 @@ function measure({ top, bottom, footer }: Parts, line: HTMLElement, order: Split
   const under = head(bottom, "bottom");
   const foot = footer.getBoundingClientRect();
   const end = footer.parentElement?.getBoundingClientRect().bottom ?? foot.bottom;
-  const row = Math.round(order === "pcs" ? above.row : under.row) || 1;
+  // the keyboard step and snap distance: a head's row, Agents' since the PCs have no head
+  const row = Math.round(above.row || under.row) || 1;
   const rowHeight = (section: HTMLElement, side: SplitSide) => {
-    const agent = sectionAt(side, order) === "agents" ? section.querySelector(".agent-row") : null;
+    if (sectionAt(side, order) === "pcs") {
+      // no heading: the minimum is the section's top padding and its first row whole, a two-line row too
+      const list = section.querySelector(".machine-list");
+      const first = list?.querySelector(":is(.machine-header, .workspace-header, .machine-new-row)");
+      if (!list || !first) return row;
+      return Math.ceil(list.getBoundingClientRect().top - section.getBoundingClientRect().top + first.getBoundingClientRect().height);
+    }
+    const agent = section.querySelector(".agent-row");
     return agent ? parseFloat(getComputedStyle(agent).minHeight) || row : row;
   };
   return {
@@ -72,7 +81,7 @@ function measure({ top, bottom, footer }: Parts, line: HTMLElement, order: Split
  * it (or Enter) to restore the default allocation. Dragged to within about a row of a section's head,
  * that section snaps to its head and dims, and folds when let go, as VS Code's views and a macOS split
  * view's panes do, with no words of their own to say so; ↑/↓ move it a
- * row, Home and End fold a section. A finger gets a grip and a target of its own size, and only the line
+ * row, Home and End fold Agents on its side and take the PCs (no heading to fold to) to their minimum on theirs. A finger gets a grip and a target of its own size, and only the line
  * keeps the browser from scrolling under it, so a swipe on either list still scrolls it.
  */
 export function SidebarSplit({ shell, order, split, controls, onSplit, onFold }: SidebarSplitProps) {

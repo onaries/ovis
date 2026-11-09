@@ -254,7 +254,13 @@ export class PreferenceStore {
     // settled only once the whole save is on disk: after a put-back the file is read again first
     this.unsettled = false;
     this.current = next;
-    for (const listener of [...this.listeners]) listener(this.current);
+    // every listener hears of the saved change; the first one that fails then fails the save's caller, so a
+    // change that could not be followed through (a Hub account's hide not saved, #3428) is not taken as done
+    let failure: { error: unknown } | null = null;
+    for (const listener of [...this.listeners]) {
+      try { listener(this.current); } catch (error) { failure ??= { error }; }
+    }
+    if (failure !== null) throw failure.error;
     return this.current;
   }
 

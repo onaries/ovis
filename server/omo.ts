@@ -53,7 +53,8 @@ function isPathList(word: string): boolean {
   return word.replace(/^[A-Za-z]:\//, "").includes(":");
 }
 
-export interface OmoCandidate { path: string; id: string; createdAt: number | null; store?: string }
+/** `identity`: the exact dev:ino of the descriptor the header was read through (candidate) */
+export interface OmoCandidate { path: string; id: string; createdAt: number | null; store?: string; identity?: string }
 export interface OmoRuntime {
   paneId: string;
   startedAt: number | null;
@@ -128,13 +129,14 @@ function candidate(path: string, roots: readonly string[], cwd: string): OmoCand
     const root = roots.find((root) => inStore(canonical, root));
     if (!canonical.endsWith(".jsonl") || root === undefined) return null;
     fd = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK);
-    if (!fstatSync(fd).isFile()) return null;
+    const opened = fstatSync(fd, { bigint: true });
+    if (!opened.isFile()) return null;
     const bytes = Buffer.alloc(4096);
     const length = readSync(fd, bytes, 0, bytes.length, 0);
     const header = JSON.parse(bytes.subarray(0, length).toString("utf8").split("\n")[0]!);
     if (header?.type !== "session" || header.cwd !== cwd || typeof header.id !== "string") return null;
     const timestamp = typeof header.timestamp === "string" ? Date.parse(header.timestamp) : NaN;
-    return { path: canonical, id: header.id, createdAt: Number.isFinite(timestamp) ? timestamp : null, store: root };
+    return { path: canonical, id: header.id, createdAt: Number.isFinite(timestamp) ? timestamp : null, store: root, identity: `${opened.dev}:${opened.ino}` };
   } catch { return null; }
   finally { if (fd !== undefined) closeSync(fd); }
 }
@@ -458,7 +460,7 @@ const inCwdGroup = (resolved: PaneResolution, cwd: string): boolean =>
  * canonical stores that pane's own processes resolved; another store's file of the same
  * id is a different session, and a pending holder never borrows it.
  */
-function omoTranscriptsResolved(cwd: string, panes: readonly PaneResolution[], home: string, startOf: (pid: number) => number | null = processStartedAt): Map<string, { path: string | null; pending: string | null; startedAt: number | null }> {
+function omoTranscriptsResolved(cwd: string, panes: readonly PaneResolution[], home: string, startOf: (pid: number) => number | null = processStartedAt): Map<string, { path: string | null; pending: string | null; startedAt: number | null; identity?: string }> {
   const runtimes: OmoRuntime[] = [];
   // Each process's own store: the default one, and wherever its environment moved it.
   const agentDirs = new Set([defaultOmoAgentDir(home)]);
@@ -533,7 +535,10 @@ function omoTranscriptsResolved(cwd: string, panes: readonly PaneResolution[], h
   };
   return new Map(current.map((runtime) => {
     const pending = runtime.ambiguous ? null : unwritten(runtime.paneId);
-    return [runtime.paneId, { path: pending === null ? selectOmoTranscript(runtime.paneId, files, current) : null, pending, startedAt: runtime.startedAt ?? since.get(runtime.paneId) ?? null }];
+    const path = pending === null ? selectOmoTranscript(runtime.paneId, files, current) : null;
+    // the file chosen is a candidate, read through its own descriptor: its identity goes with it
+    const identity = path === null ? undefined : files.find((file) => file.path === path)?.identity;
+    return [runtime.paneId, { path, pending, startedAt: runtime.startedAt ?? since.get(runtime.paneId) ?? null, ...(identity === undefined ? {} : { identity }) }];
   }));
 }
 
@@ -547,7 +552,8 @@ export function omoTranscriptsOfCwd(cwd: string, panes: HerdrPane[], infos: Read
  * but omo has not written yet (before its first message, or right after /new). The folder
  * is the pane's resolved runtime cwd, and its peers are the panes resolving to the same one.
  */
-export async function omoSessionForPane(paneId: string, cwd: string, panes: HerdrPane[], home = userHome()): Promise<{ path: string | null; pending: string | null }> {
+/** `identity`: the exact dev:ino of the session file as its header was read, with a path. */
+export async function omoSessionForPane(paneId: string, cwd: string, panes: HerdrPane[], home = userHome()): Promise<{ path: string | null; pending: string | null; identity?: string }> {
   // A child model can change herdr's agent label: inspect each pane's processes once.
   const candidates = panes;
   const infos = new Map(await Promise.all(candidates.map(async (pane) => [pane.pane_id, await processInfo(pane.pane_id)] as const)));
@@ -557,7 +563,7 @@ export async function omoSessionForPane(paneId: string, cwd: string, panes: Herd
   // two holder-owning cwds fail closed: the pane cannot be bound to either
   if (target?.ambiguous) return { path: null, pending: null };
   const session = omoTranscriptsResolved(target?.cwd ?? cwd, resolved, home, startOf).get(paneId);
-  return { path: session?.path ?? null, pending: session?.pending ?? null };
+  return { path: session?.path ?? null, pending: session?.pending ?? null, ...(session?.identity === undefined ? {} : { identity: session.identity }) };
 }
 
 export async function omoTranscriptForPane(paneId: string, cwd: string, panes: HerdrPane[], home = userHome()): Promise<string | null> {

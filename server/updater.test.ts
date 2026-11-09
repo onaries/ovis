@@ -352,6 +352,69 @@ describe("managed source updates with real Git repositories and builds", () => {
     expect(launcherSupervisor(root, stateDir)).toBe(join(saved.directory, "server", "supervisor.ts"));
   });
 
+  it("keeps an offer up while a later check runs, and ends it only with a check's answer (#3325)", async () => {
+    const target = await release("second", "v0.2.0");
+    // the page polls the published status: a check that withdrew the offer while it ran made the
+    // app-wide line blink out, and the terminal under it resize
+    const published: Array<{ phase: string; available: boolean }> = [];
+    const watched = new Updater({ ...updater.options, publish(status) { published.push({ phase: status.phase, available: status.available }); } });
+    await watched.initialize();
+    await watched.request("check");
+    expect(watched.status).toMatchObject({ available: true, latest_revision: target });
+    published.length = 0;
+    await watched.request("check");
+    expect(published.at(0)).toEqual({ phase: "checking", available: true });
+    expect(published.filter((status) => !status.available)).toEqual([]);
+
+    // a check that cannot reach the releases ends the offer: the server refuses an install then
+    await git(root, "remote", "set-url", "origin", join(directory, "missing"));
+    await watched.request("check");
+    expect(watched.status).toMatchObject({ phase: "error", available: false });
+    await git(root, "remote", "set-url", "origin", upstream);
+    await watched.request("check");
+    expect(watched.status).toMatchObject({ phase: "idle", available: true });
+
+    // so does a check that finds the checkout blocked
+    writeFileSync(join(root, "local-change.txt"), "x");
+    await watched.request("check");
+    expect(watched.status.blocked_reason).not.toBeNull();
+    expect(watched.status.available).toBe(false);
+    watched.stop();
+  });
+
+  it("ends the offer when the checkout becomes blocked while the release builds (#3325)", async () => {
+    await release("second", "v0.2.0");
+    // the checkout changes while the release builds: the check after the build finds it blocked
+    const building = new Updater({ ...updater.options, publish(status) {
+      if (status.step === "build" && !existsSync(join(root, "local-change.txt"))) writeFileSync(join(root, "local-change.txt"), "x");
+    } });
+    await building.initialize();
+    await building.request("install");
+    expect(building.status.phase).toBe("error");
+    expect(building.status.blocked_reason).toContain("local changes");
+    expect(building.status.available).toBe(false);
+    building.stop();
+  });
+
+  it("never shows an offer under a channel it was not made on while the check runs (#3325)", async () => {
+    const appState = join(directory, "app-state");
+    mkdirSync(appState);
+    writeFileSync(join(appState, UPDATE_CHANNEL_FILE), "beta\n");
+    const published: Array<{ phase: string; channel: string | undefined; available: boolean }> = [];
+    const switched = new Updater({ root, stateDir, autoUpdate: false, activate: async (_next, persist) => persist(),
+      publish(status) { published.push({ phase: status.phase, channel: status.channel, available: status.available }); },
+      channel: () => updateChannel({}, appState) });
+    await switched.initialize();
+    await release("beta", "beta/v0.2.0-beta.1");
+    await switched.request("check");
+    expect(switched.status).toMatchObject({ channel: "beta", available: true });
+    writeFileSync(join(appState, UPDATE_CHANNEL_FILE), "stable\n");
+    published.length = 0;
+    await switched.request("check");
+    expect(published.filter((status) => status.channel === "stable" && status.available)).toEqual([]);
+    switched.stop();
+  });
+
   it("tells what an update brings from the release's own changelog, every release since the running one", async () => {
     const manifest = JSON.parse(readFileSync(join(upstream, "package.json"), "utf8")) as Record<string, unknown>;
     writeFileSync(join(upstream, "package.json"), JSON.stringify({ ...manifest, version: "0.1.0" }));
@@ -1476,4 +1539,54 @@ describe("update channels", () => {
       expect(updateChannel({ OVIS_UPDATE_CHANNEL: "beta" }, appState)).toBe("beta");
     } finally { rmSync(appState, { recursive: true, force: true }); }
   });
+});
+
+it("cancels an install while it builds: nothing is installed, its offer stays, and it is not taken for a failed release", async () => {
+  const running = updater.status.current_revision;
+  // a release whose build never ends on its own
+  writeFileSync(join(upstream, "build-fixture.ts"), "await new Promise(() => {});");
+  await git(upstream, "add", ".");
+  await git(upstream, "commit", "-qm", "slow build");
+  await git(upstream, "tag", "v9.0.0");
+  const building = Promise.withResolvers<void>();
+  const watched = new Updater({ ...updater.options, publish(status) { if (status.step === "build") building.resolve(); } });
+  await watched.initialize();
+  try {
+    // nothing to cancel before an install runs
+    expect(watched.cancel("11111111-2222-4333-8444-555555555555")).toBe(false);
+    const install = watched.request("install", true, undefined, "11111111-2222-4333-8444-555555555555");
+    await building.promise;
+    // another's id (another device's install, or this PC's own Settings') never stops it
+    expect(watched.cancel("99999999-2222-4333-8444-555555555555")).toBe(false);
+    expect(watched.cancel("11111111-2222-4333-8444-555555555555")).toBe(true);
+    await install;
+    expect(watched.status).toMatchObject({ phase: "error", error_code: "update_cancelled", current_revision: running, available: true, install_cancellable: true });
+    expect(existsSync(join(stateDir, "failed.json"))).toBe(false);
+    // the 5-minute timer's check (auto-update on) leaves the cancelled release alone: it would build it again otherwise
+    (watched.options as { autoUpdate: boolean }).autoUpdate = true;
+    await watched.request("check");
+    expect(watched.status.phase).toBe("idle");
+    expect(watched.status.current_revision).toBe(running);
+  } finally { watched.stop(); }
+});
+
+it("stops an install cancelled while it still checks what is on offer, before anything is built", async () => {
+  writeFileSync(join(upstream, "build-fixture.ts"), "await new Promise(() => {});");
+  await git(upstream, "add", ".");
+  await git(upstream, "commit", "-qm", "slow build");
+  await git(upstream, "tag", "v9.0.1");
+  const seen: Array<string | null> = [];
+  const watched: Updater = new Updater({ ...updater.options, publish(status) {
+    seen.push(status.step ?? null);
+    // asked as soon as the run starts checking
+    if (status.phase === "checking" && !asked) asked = watched.cancel("11111111-2222-4333-8444-555555555555");
+  } });
+  let asked = false;
+  await watched.initialize();
+  try {
+    await watched.request("install", true, undefined, "11111111-2222-4333-8444-555555555555");
+    expect(asked).toBe(true);
+    expect(watched.status).toMatchObject({ phase: "error", error_code: "update_cancelled", available: true });
+    expect(seen).not.toContain("build");
+  } finally { watched.stop(); }
 });

@@ -240,6 +240,90 @@
   --droplet-mark-bg: rgba(255, 255, 255, 0.1);
   --droplet-ring: rgba(255, 255, 255, 0.1);
   --droplet-shadow: rgba(0, 0, 0, 0.35);
+
+  /* semantic surface & navigation hierarchy roles (G-152, G-162) */
+  --surface-canvas: var(--bg);
+  --surface-chrome: var(--bg-panel);
+  --surface-raised: var(--bg-elevated);
+  --surface-overlay: var(--bg-elevated);
+  --bg-nav: var(--bg);
+
+  /* control edge, status & marker contrast roles >= 3:1 (G-028, G-074, G-148, G-194) */
+  --border-input: color-mix(in srgb, var(--text-dim) 78%, var(--border-strong));
+  --border-contrast: var(--border-strong);
+  --status-reconnecting: var(--notice);
+  --status-marker-idle: var(--text-dim);
+  --status-ink: var(--bg-panel);
+  --minimap-tick: var(--text-dim);
+  --switch-thumb-on: var(--primary);
+  --switch-track-bg: color-mix(in srgb, var(--text) 9%, transparent);
+  --breathe-min-opacity: 0.68;
+
+  /* overlay & control shadows without double border ring (G-153, G-157) */
+  --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow-thumb: 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 var(--hairline) color-mix(in srgb, var(--text) 10%, transparent);
+
+  /* browser surface roles: selection, caret, scrollbar (G-156) */
+  --selection-bg: color-mix(in srgb, var(--accent) 28%, transparent);
+  --selection-text: var(--text-strong);
+  --caret-color: var(--accent);
+  --scrollbar-thumb: var(--border-strong);
+  --scrollbar-track: transparent;
+
+  /* type hierarchy, reading floor & numeric roles (G-035, G-039, G-053, G-155, G-163) */
+  --fs-meta: calc(12px * var(--ui-scale));
+  --fs-reading: var(--fs-chat);
+  --fs-dense-row: var(--fs-md);
+  --fs-section-title: calc(17px * var(--ui-scale));
+  --fs-h3: calc(19px * var(--ui-scale));
+  --fs-h2: calc(24px * var(--ui-scale));
+  --fs-h1: calc(30px * var(--ui-scale));
+  --lh-heading: 1.25;
+  --fw-selected: var(--fw-semibold);
+  --font-numeric: tabular-nums;
+
+  /* sub-grid spacing, radius, component size & focus/motion roles (G-051, G-076, G-133, G-153) */
+  --space-half: 2px;
+  --space-px-3: 3px;
+  --space-1-5: 6px;
+  --space-2-5: 10px;
+  --radius-xs: 4px;
+  --bar-control-h: 28px;
+  --tab-h: calc(var(--control-h) - 5px);
+  --tab-min-w: 120px;
+  --tab-max-w: 220px;
+  --tab-more-w: 52px;
+  --status-bar-h: 28px;
+  --pane-bar-h: 30px;
+  --split-hit-w: 8px;
+  --menu-w-sm: 208px;
+  --menu-w: 280px;
+  --menu-w-wide: 420px;
+  --popover-w: 360px;
+  --sheet-row-h: 48px;
+  --sheet-grip-w: 36px;
+  --sheet-grip-h: 4px;
+  --icon-size-xs: 12px;
+  --icon-size-sm: 14px;
+  --icon-size-md: 16px;
+  --dot-size-sm: 6px;
+  --thumb-w: 40px;
+  --thumb-h: 24px;
+  --dialog-w-sm: 360px;
+  --dialog-w-md: 420px;
+  --dialog-w-form: 525px;
+  --dialog-w: 560px;
+  --dialog-w-lg: 1100px;
+  --dialog-w-xl: 1400px;
+  --dialog-max-h: 720px;
+  --outline-w: 240px;
+  --file-panel-min-w: 320px;
+  --qr-size: 132px;
+  --guide-w: 552px;
+  --voice-wave-h: 20px;
+  --kbd-h: 18px;
+  --btn-submit-min-w: 88px;
+  --ring-inset-offset: -2px;
 }
 
 [data-theme="light"] {
@@ -2306,11 +2390,13 @@ button {
   background: var(--strip-bg);
 }
 
+/* no tab is drawn narrower than its name and close need (lib/tabOverflow.ts TAB_MIN_WIDTH): the ones
+   that do not fit wait behind the More button after the + (TabStrip) */
 .header-tabs .tab-strip-item {
   position: relative;
   align-items: center;
   flex: 0 1 220px;
-  min-width: 44px;
+  min-width: 120px;
   height: 36px;
   margin-bottom: 0;
   border-radius: 10px 10px 0 0;
@@ -2321,7 +2407,6 @@ button {
 }
 
 .header-tabs .tab-strip-item.is-active {
-  min-width: 120px;
   background: var(--tab-open-bg);
   box-shadow: none;
 }
@@ -2416,6 +2501,39 @@ button {
   margin-left: var(--space-1);
   border-radius: var(--radius-pill);
   box-shadow: none;
+}
+
+/* as wide as lib/tabOverflow.ts TAB_MORE_WIDTH reserves, with its gap */
+.header-tabs .tab-strip-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  align-self: center;
+  flex: 0 0 auto;
+  width: 52px;
+  height: 28px;
+  margin-left: var(--space-1);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.header-tabs .tab-strip-more:hover,
+.header-tabs .tab-strip-more:focus-visible,
+.header-tabs .tab-strip-more[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.header-tabs .tab-strip-more svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* a touch screen wide enough for the header's row (a tablet): each tab is a finger tall, and its menu,
@@ -3138,6 +3256,14 @@ button {
 
   .modal-scrim * {
     overscroll-behavior: contain;
+  }
+
+  /* A box that scrolls only sideways (a table, code, a formula, a row of cards or chips) is a
+     scroll container on both axes, always at its vertical ends: contained, it would swallow a
+     vertical stroke begun on it, so the list around it never scrolls. Its vertical overscroll
+     goes on (#3287). */
+  .modal-scrim :is(.markdown-table-wrap, .markdown-math-display, .hl-code, .theme-cards, .new-session-folder-chips) {
+    overscroll-behavior-y: auto;
   }
 
   .modal-scrim.is-leaving {

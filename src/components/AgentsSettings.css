@@ -187,12 +187,17 @@
   gap: var(--space-2);
 }
 
-/* Install another agent: shut until asked, then the setup guide's tiles (AgentTile.css) */
+/* Install another agent: shut until asked, then the setup guide's tiles (AgentTile.css); its line is
+   drawn as a page's More settings line is (SettingsControls.css .settings-fold) */
 .agents-more > summary {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 calc(var(--space-4) + var(--hairline));
   color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
   cursor: pointer;
   list-style: none;
 }

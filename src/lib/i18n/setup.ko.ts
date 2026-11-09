@@ -75,4 +75,6 @@ export const SETUP_KO: Record<string, string> = {
   "Filled in the same way. Agent default adds no flag; the levels a model takes depend on the model.": "같은 방식으로 미리 채워집니다. 에이전트 기본값은 플래그를 붙이지 않으며, 고를 수 있는 수준은 모델에 따라 다릅니다.",
   "Other agents herdr knows ({count})": "herdr가 아는 다른 에이전트 ({count})",
   "Accounts are read on the PC Ovis runs on.": "계정은 Ovis가 실행되는 PC에서 읽습니다.",
+  "Show {name}": "{name} 표시",
+  "Check again": "다시 확인",
 };

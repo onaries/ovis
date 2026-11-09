@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, constants, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { forgetTranscriptState, paneTranscript, transcriptPage, transcriptToolOutput } from "./conversation.ts";
@@ -113,6 +114,35 @@ describe("Muse session log", () => {
     appendFileSync(path, batch.replace('"call_02"', '"call_big"').replace("one\\ntwo\\nthree\\n", "x".repeat(2_000_001)));
     expect(transcriptToolOutput("muse-transcript", path, "call_big")).toBe(`${"x".repeat(2_000_000)}\n… trimmed`);
     expect(transcriptToolOutput("muse-transcript", path, "call_05")).toBe(museToolOutput(path, "call_05"));
+  });
+
+  test("serves no tool output from another log that a folder swap puts at the path around the lookup's open", () => {
+    const path = logAt(FICTION, fixture);
+    const folder = join(root, FICTION);
+    const elsewhere = join(root, "elsewhere");
+    const away = join(root, "away");
+    mkdirSync(elsewhere);
+    // the same records and length: only the result's bytes tell the logs apart
+    writeFileSync(join(elsewhere, "session.jsonl"), fixture.replace("cat: missing.txt: No such", "cat: FOREIGN.txt: No such"));
+    expect(transcriptToolOutput("muse-transcript", path, "call_03")).toBe("cat: missing.txt: No such file or directory\n");
+    // the path names the pane's own log when the lookup begins; its open meets the other folder
+    let swaps = 0;
+    const real = fs.openSync;
+    const spy = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+      if (args[0] !== path) return real(...args);
+      swaps++;
+      renameSync(folder, away);
+      renameSync(elsewhere, folder);
+      try { return real(...args); }
+      finally {
+        renameSync(folder, elsewhere);
+        renameSync(away, folder);
+      }
+    }) as typeof fs.openSync);
+    let answered: string | null;
+    try { answered = transcriptToolOutput("muse-transcript", path, "call_03"); } finally { spy.mockRestore(); }
+    expect(swaps).toBeGreaterThan(0);
+    expect(answered).toBeNull();
   });
 
   test("reads a session Muse 1.4.13 recorded, with its records as Muse wrote them", () => {
@@ -253,6 +283,43 @@ describe("Muse session log", () => {
     // read before again only as far as that read went
     expect(digested).toBeGreaterThanOrEqual(readFileSync(path).length);
     expect(digested).toBeLessThanOrEqual(readFileSync(path).length + 64 * 1024);
+  });
+
+  test("a window read that opens another file than the one stat saw keeps no digest of it", () => {
+    const path = logAt(RECORDED, recorded);
+    // the same length, other bytes: what a file put in the log's place between its stat and the window's open holds
+    const other = join(root, "other.jsonl");
+    writeFileSync(other, recorded.replaceAll("tell me in one sentence", "tell me in two sentence"));
+    const open = fs.openSync;
+    let replaced = false;
+    // a cold read's first open of the log by number flags is its window's
+    const opens = spyOn(fs, "openSync").mockImplementation(((...[file, ...rest]: Parameters<typeof fs.openSync>) => {
+      if (!replaced && file === path && typeof rest[0] === "number") { replaced = true; return open(other, ...rest); }
+      return open(file, ...rest);
+    }) as typeof fs.openSync);
+    let before: ReturnType<typeof transcriptPage>;
+    try { before = transcriptPage("muse-transcript", path); } finally { opens.mockRestore(); }
+    expect(replaced).toBe(true);
+    appendFileSync(path, `${recorded.split("\n").find((line) => line.includes('"payload_type":"session.name.changed"'))}\n`);
+    // a plain append: no digest of the other file stands in for the log's own window
+    expect(transcriptPage("muse-transcript", path).history_id).toBe(before.history_id);
+  });
+
+  // A link can be made here (Windows wants a privilege for one) and an open can refuse it (O_NOFOLLOW, which Windows lacks)
+  const linksRefused = constants.O_NOFOLLOW !== undefined && (() => {
+    const probe = mkdtempSync(join(tmpdir(), "ovis-muse-link-probe-"));
+    try { symlinkSync(probe, join(probe, "link")); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "EPERM") return false; throw error; }
+    finally { rmSync(probe, { recursive: true, force: true }); }
+  })();
+  test.skipIf(!linksRefused)("a log reached through a link is never read for its window, so its touch counts as a rewrite", () => {
+    const path = logAt(RECORDED, recorded);
+    const target = join(root, "target.jsonl");
+    renameSync(path, target);
+    symlinkSync(target, path);
+    const before = transcriptPage("muse-transcript", path);
+    utimesSync(target, new Date(), new Date(Date.now() + 1000));
+    expect(transcriptPage("muse-transcript", path).history_id).not.toBe(before.history_id);
   });
 
   test("a log read while empty keeps its history when Muse writes it", () => {

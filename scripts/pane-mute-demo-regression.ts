@@ -206,6 +206,8 @@ async function newContext(browser: Browser, phone: boolean, settings: Record<str
   const context = await browser.newContext(phone ? { ...devices["iPhone 14"], locale: settings["language"] === "ko" ? "ko-KR" : "en-US" } : { viewport: { width: 1440, height: 900 }, locale: "en-US" });
   await context.addInitScript((stored) => {
     localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "chat", alertsOn: true, alertInput: true, alertDone: "always", alertSound: true, ...stored }));
+    // the muted agent is idle: the one-line list folds it under its resting line, opened on this device as its toggle keeps it
+    localStorage.setItem("ovis:agents-resting-open", "1");
   }, settings);
   return context;
 }
@@ -363,7 +365,7 @@ try {
         assert.match(savedId ?? "", /^[0-9a-f]{32}$/, "the first save names the state folder");
         assert.deepEqual(savedRest, { revision: 4, settings: {}, pins: [], muted_panes: [key] }, "the first mute is saved over the pre-feature document");
         await page.waitForFunction((revision) => window.muteFixture.documents.some((document) => document.revision === revision), saved.revision);
-        await row(page, "local", P).locator('[data-testid="alerts-muted"]').waitFor();
+        await row(page, "local", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
         assert.deepEqual(errorsOf(page), []);
         await context.close();
         checks.push("pre-feature document: GET and the opening stream say muted_panes: [], and the first mute is saved and broadcast");
@@ -394,8 +396,8 @@ try {
       assert.equal(muted.revision, 1);
       // tab B hears the revision on its stream and draws the row muted
       await b.waitForFunction((revision) => window.muteFixture.documents.some((document) => document.revision === revision), muted.revision);
-      await row(b, "local", P).locator('[data-testid="alerts-muted"]').waitFor();
-      await row(a, "local", P).locator('[data-testid="alerts-muted"]').waitFor();
+      await row(b, "local", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
+      await row(a, "local", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
       checks.push("tab B received tab A's mute as preference revision 1 and draws the indicator");
       // a second PC with the same pane: the mute keys the pane with its PC
       await a.evaluate(() => window.muteFixture.roster({ secondPc: "connected" }));
@@ -483,9 +485,9 @@ try {
       assert.deepEqual(kept.muted_panes, [theirs], "a PC that is away keeps its mute");
       await a.evaluate(() => window.muteFixture.roster({ secondPc: "connected" }));
       await row(a, "pc-2", P).and(a.locator(":not(.is-offline)")).waitFor({ state: "attached" });
-      await row(a, "pc-2", P).locator('[data-testid="alerts-muted"]').waitFor();
+      await row(a, "pc-2", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
       await b.evaluate(() => window.muteFixture.roster({ secondPc: "connected" }));
-      await row(b, "pc-2", P).locator('[data-testid="alerts-muted"]').waitFor();
+      await row(b, "pc-2", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
       assert.deepEqual(errorsOf(a), []);
       assert.deepEqual(errorsOf(b), []);
       checks.push("a PC missing from the roster or away keeps its mute through this page's changes, and shows it again when back");
@@ -519,7 +521,7 @@ try {
       {
         const context = await newContext(browser, false, {});
         const page = await openTab(context, "&mute-fixture=watch");
-        await row(page, "local", P).locator('[data-testid="alerts-muted"]').waitFor();
+        await row(page, "local", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
         await openMenu(page, false, "local", P);
         assert.equal(await muteItem(page).getAttribute("aria-checked"), "true", "a watching device sees the shared state");
         assert.equal(await muteItem(page).getAttribute("aria-disabled"), "true", "and cannot flip it");
@@ -582,8 +584,11 @@ try {
             await closeMenu(page);
           }
           await toggleMute(page, phone, "local", P);
-          await row(page, "local", P).locator('[data-testid="alerts-muted"]').waitFor();
+          await row(page, "local", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
           if (phone) await openDrawer(page);
+          // the mark is drawn at rest on a phone, and under the pointer on a desktop (the compact rows)
+          if (!phone) await row(page, "local", P).hover();
+          await row(page, "local", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "visible" });
           await capture(page, theme, language, "rest-muted");
           await openMenu(page, phone, "local", P);
           await capture(page, theme, language, "menu-muted");
@@ -597,7 +602,7 @@ try {
             await row(page, "pc-2", P).waitFor({ state: "attached" });
             await page.locator(".droplet").waitFor({ state: "detached" });
             await toggleMute(page, phone, "pc-2", P);
-            await row(page, "pc-2", P).locator('[data-testid="alerts-muted"]').waitFor();
+            await row(page, "pc-2", P).locator('[data-testid="alerts-muted"]').waitFor({ state: "attached" });
             await page.evaluate(() => window.muteFixture.roster({ secondPc: "disconnected" }));
             await row(page, "pc-2", P).and(page.locator(".is-offline")).waitFor({ state: "attached" });
             if (phone) await openDrawer(page);

@@ -202,9 +202,13 @@ const rowsWhole = async (page: Page, label: string): Promise<Visible> => {
   return seen;
 };
 /** Picks `label` from the pane's actions: a phone's header More (a bottom sheet of buttons; its title lists the tabs), a desktop's tab menu (a popover of menu items, RowMenu). */
-const choose = async (page: Page, label: string): Promise<void> => {
-  if (await page.locator(".app-header .context-tabs").isVisible()) await page.locator(".header-more-button").click();
-  else {
+const choose = async (page: Page, label: string, phone: boolean): Promise<void> => {
+  // a phone layout is waited for, not sampled: just after a resize from a desktop-wide window the header
+  // still holds the desktop's tab row, which the phone layout then takes away
+  if (phone) {
+    await page.locator(".app-header .context-tabs").waitFor();
+    await page.locator(".header-more-button").click();
+  } else {
     // a desktop's tab strip shows the selected tab's actions button under the pointer (ui-regression.ts)
     await page.locator(".tab-strip").first().hover();
     const button = page.locator(".tab-strip-item.is-active .tab-strip-menu").first();
@@ -506,7 +510,7 @@ try {
         // the pane menu's way back, for a full-screen program: the grid at its width, panned sideways
         await page.setViewportSize({ width: 390, height: 844 });
         await foldState(page, true);
-        await choose(page, "Original width");
+        await choose(page, "Original width", true);
         await foldState(page, false);
         seen = await visibleMarkers(page);
         assert.ok(seen.hostScrollWidth > seen.hostClientWidth, "Original width: the grid is as wide as on the PC, and pans");
@@ -519,7 +523,7 @@ try {
           return host !== null && host.hasAttribute("data-adopted-grid") && !host.hasAttribute("data-folded") && host.scrollWidth > host.clientWidth;
         });
         assert.equal(await page.locator(".pane-frame.is-current .pane-terminal[data-folded]").count(), 0, "a reload keeps the original width");
-        await choose(page, "Wrap to screen");
+        await choose(page, "Wrap to screen", true);
         await foldState(page, true);
         assert.equal(await savedWrap(page), true, "Wrap to screen is kept too");
 
@@ -555,7 +559,7 @@ try {
         });
         const unfolded = await visibleMarkers(desk.page);
         assert.ok(!unfolded.folded && unfolded.hostScrollWidth > unfolded.hostClientWidth, `a desktop draws a wide mirror at its width by default ${JSON.stringify(unfolded)}`);
-        await choose(desk.page, "Wrap to screen");
+        await choose(desk.page, "Wrap to screen", false);
         await foldState(desk.page, true);
         await rowsWhole(desk.page, "a desktop that chose Wrap to screen");
         assert.deepEqual(desk.errors, []);
@@ -637,7 +641,7 @@ try {
         }
 
         // Original width: the pty's grid as the other device sized it, panned sideways; a full-screen program's boxes whole
-        await choose(phone, "Original width");
+        await choose(phone, "Original width", true);
         await foldState(phone, false);
         assert.equal(await savedWrap(phone), false, "the choice is the same device setting as a mirror's");
         await pushScreen(phone, TUI);
@@ -667,7 +671,7 @@ try {
         assert.ok(corner.scrollWidth > corner.clientWidth && corner.scrollLeft > 0, `Original width: the watched grid pans sideways ${JSON.stringify(corner)}`);
         assert.ok(corner.glyph === "┐" && corner.left >= corner.viewLeft - 1 && corner.right <= corner.viewRight + 1, `a TUI's right edge comes into view when panned ${JSON.stringify(corner)}`);
         // Wrap to screen again: the boxes fold with the text, nothing cut off or panned
-        await choose(phone, "Wrap to screen");
+        await choose(phone, "Wrap to screen", true);
         await foldState(phone, true);
         await phone.waitForFunction(() => document.querySelector(".pane-frame.is-current .terminal-fold")?.textContent?.includes("┌"));
         assert.equal(await savedWrap(phone), true);

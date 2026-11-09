@@ -264,6 +264,8 @@ const API = "Idempotent payments";        // claude, working, finishes by itself
 const WEB = "Guard the export button";    // codex, blocked
 const INFRA = "Plan the config file";     // omp, idle: the agent a message is sent from
 const AGENTS_HERDR_ORDER = [API, WEB, "Fix the flaky retry test", INFRA, "Ship the retry flag", "Draft the changelog"];
+// the list on one line (the default): the waiting agent leads, the rest keep herdr's order
+const AGENTS_LIST_ORDER = [WEB, ...AGENTS_HERDR_ORDER.filter((title) => title !== WEB)];
 
 const agents = (page: Page) => page.locator(".agents-sidebar .agent-item");
 const agentTitles = (page: Page) => agents(page).locator(".agent-title").allTextContents();
@@ -287,6 +289,8 @@ async function withPage(browser: Browser, settings: object, run: (page: Page) =>
   try {
     await context.addInitScript((stored) => {
       localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "chat", ...stored }));
+      // idle agents are picked here: the one-line list folds them under its resting line, opened on this device as its toggle keeps it
+      localStorage.setItem("ovis:agents-resting-open", "1");
     }, settings);
     const page = await context.newPage();
     const errors: string[] = [];
@@ -914,7 +918,7 @@ try {
       // Workspace menus no longer mix in pane operations; header More keeps pane movement.
       // herdr's order in a flat list, each row naming its own workspace, with its row and its ⋯
       await withPage(browser, {}, async (page) => {
-        assert.deepEqual(await agentTitles(page), AGENTS_HERDR_ORDER);
+        assert.deepEqual(await agentTitles(page), AGENTS_LIST_ORDER);
         assert.match(await agent(page, API).locator(".agent-context").textContent() ?? "", /checkout-api/, "a row names its workspace");
         // a desktop draws no row ⋯: a right-click or the context-menu key opens the menu
         assert.equal(await agent(page, API).getByRole("button").count(), 1, "a desktop row is its selector alone");
@@ -973,7 +977,7 @@ try {
             if (mobile) await page.locator(`.workspace-group[data-workspace="${headId}"] > .workspace-header .row-menu-toggle`).tap();
             else await head.click({ button: "right" });
             const label = pin ? "Pin workspace" : "Unpin workspace";
-            const panel = page.getByRole(mobile ? "dialog" : "menu");
+            const panel = page.locator(mobile ? ".row-sheet" : ".row-menu");
             if (mobile) await panel.getByRole("button", { name: label, exact: true }).tap();
             else await panel.getByRole("menuitem", { name: label, exact: true }).click();
             await panel.waitFor({ state: "detached" });
@@ -1063,7 +1067,7 @@ try {
         assert.deepEqual(await agentMenu.getByRole("menuitem").allTextContents(), ["Pin agent"], "an agent's right-click menu offers its pin");
         await agentMenu.getByRole("menuitem", { name: "Pin agent" }).click();
         await page.waitForFunction((key) => JSON.parse(localStorage.getItem("ovis:sidebar-agent-pins") ?? "[]").includes(key), `local:${panes.omp}`);
-        assert.deepEqual(await agentTitles(page), [INFRA, ...AGENTS_HERDR_ORDER.filter((title) => title !== INFRA)], "a pinned agent moves to the top, the rest keep herdr's order");
+        assert.deepEqual(await agentTitles(page), [INFRA, ...AGENTS_LIST_ORDER.filter((title) => title !== INFRA)], "a pinned agent moves to the top, the rest keep the list's order");
         assert.equal(await page.evaluate(() => sessionStorage.getItem("ovis:selection")), selected, "pinning does not select the agent");
         assert.equal(await page.locator(".header-more-button").evaluate((button) => document.activeElement === button), true, "the menu hands focus back where it was");
         await page.reload();
@@ -1080,7 +1084,7 @@ try {
         await page.keyboard.press("Enter");
         await page.waitForFunction(() => JSON.parse(localStorage.getItem("ovis:sidebar-agent-pins") ?? "[]").length === 0);
         assert.deepEqual(await pins(), []);
-        assert.deepEqual(await agentTitles(page), AGENTS_HERDR_ORDER, "unpin restores the source order");
+        assert.deepEqual(await agentTitles(page), AGENTS_LIST_ORDER, "unpin restores the source order");
         assert.equal(await infraSelect.evaluate((button) => document.activeElement === button), true, "focus returns to the row as it moves back");
         assert.equal(await page.locator(".row-menu, .row-sheet").count(), 0, "the menu closes after its item runs");
         // pinned, an agent stands first, in a list named Pinned under the Agents head alone
@@ -1095,10 +1099,12 @@ try {
         await apiMenu.getByRole("menuitem", { name: "Unpin agent" }).click();
         await page.waitForFunction(() => JSON.parse(localStorage.getItem("ovis:sidebar-agent-pins") ?? "[]").length === 0);
         assert.equal(await page.locator(".agents-sidebar .agent-list-pinned").count(), 0, "the pinned list goes with the last pin");
-        assert.deepEqual(await agentTitles(page), AGENTS_HERDR_ORDER);
+        assert.deepEqual(await agentTitles(page), AGENTS_LIST_ORDER);
         console.log("PASS workspace right-click scope, pointer anchor and focus; the context-menu key opens the same menu; a workspace pins into a card and returns to herdr's order; an agent pins and unpins from its right-click menu and the key");
         await waitStatus(page, API, "done");
-        assert.deepEqual(await agentTitles(page), AGENTS_HERDR_ORDER, "a finish does not move an agent");
+        // the classic style's unread-finish dot stays drawn on the compact rows
+        assert.ok(await agent(page, API).locator('.sidebar-status[data-status="done"] .sidebar-status-dot').isVisible(), "an unread finish keeps its dot");
+        assert.deepEqual(await agentTitles(page), AGENTS_LIST_ORDER, "a finish does not move an agent");
         await agentSelect.click();
         await page.waitForFunction((paneId) => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "{}").pane_id === paneId, panes.api, { timeout: 5_000 });
         assert.equal(await agentSelect.getAttribute("aria-current"), "true", "ordinary click still selects the agent");
@@ -1106,7 +1112,7 @@ try {
         await waitStatus(page, API, "idle");
         const rollUp = () => page.locator(`.workspace-select[data-pane="${panes.api}"] .sidebar-status`).getAttribute("data-status");
         assert.notEqual(await rollUp(), "done", "the workspace row's roll-up drops the opened finish too");
-        assert.deepEqual(await agentTitles(page), AGENTS_HERDR_ORDER, "reading a finish does not move an agent");
+        assert.deepEqual(await agentTitles(page), AGENTS_LIST_ORDER, "reading a finish does not move an agent");
       });
       console.log("PASS the Agents list keeps herdr's order through a finish, and an opened DONE reads as ready");
 
@@ -1147,6 +1153,8 @@ try {
 
         // a message sent from an agent takes it to the top while it runs ...
         await agent(page, INFRA).locator(".agent-select").click();
+        // Rows keep their order while the pointer is over Agents; leave it before checking activity order.
+        await page.locator(".composer-text").click();
         await page.locator(".composer-text").fill("Check the plan again");
         await page.locator(".composer-text").press("Enter");
         await waitStatus(page, INFRA, "working");

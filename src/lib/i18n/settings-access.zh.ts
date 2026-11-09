@@ -5,6 +5,9 @@
  */
 export const SETTINGS_ACCESS_ZH: Record<string, string> = {
   "Access": "访问",
+  "Connected to this PC": "已连接到此电脑的设备",
+"phone browser PC pair pairing code QR relay Tailscale Wi-Fi SSH Portal add PC remote PCs": "手机 浏览器 PC 配对 配对码 QR 中继 Tailscale Wi-Fi SSH Portal 添加 PC 远程 PC",
+  "Devices and access": "设备与访问",
   "The server did not answer, so these facts are unavailable. Nothing from an earlier check is shown. This page asks again by itself; if this message stays, check that the server is running and that this device can reach it.": "服务器没有响应，因此无法显示这些信息。不会显示之前检查的结果。此页面会自动重新检查；如果此消息一直存在，请确认服务器正在运行，并且此设备可以连接到它。",
   "This server does not report these facts. Updating it adds them.": "此服务器不提供这些信息。更新服务器后即可显示。",
   "What this server reports about how it is reached. Each line is one fact, not a safety rating.": "此服务器报告的访问方式信息。每一行都是一项事实，而不是安全评级。",
@@ -40,16 +43,11 @@ export const SETTINGS_ACCESS_ZH: Record<string, string> = {
   "Split the Agents list into groups you name, such as Agents, Replies or Tasks. New workspace and New tab offer them, and an agent's menu moves it. Every browser shares them.": "将代理列表分成你命名的分组，例如 Agents、Replies 或 Tasks。新建工作区和新建标签页时可选择分组，代理的菜单可移动它。所有浏览器共享。",
   "Agents under workspaces": "在工作区下显示代理",
   "On this device, list each workspace's agents under it in the PCs list, so every PC shows its workspaces and the agents running in them. The Agents list stays as it is.": "在此设备上，于电脑列表中每个工作区下方列出其代理，让每台电脑显示其工作区以及在其中运行的代理。代理列表保持不变。",
-  "Code from another PC": "其他 PC 的代码",
-  "Compare it with the ID at the top of My devices on {name}. Pair only if every group matches.": "请与 {name} 上“我的设备”顶部的 ID 对比。只有每一组都一致时才配对。",
-  "The code that PC shows under Connect a device.": "该 PC 在“连接设备”中显示的代码。",
   "ID {id}": "ID {id}",
-  "My devices": "我的设备",
   "Sign out of this PC": "从此 PC 退出登录",
   "This app": "此应用",
   "Use the relay": "使用中继",
   "Tablet": "平板",
-  "phone browser PC pair pairing code QR relay Tailscale Wi-Fi SSH Portal add PC remote PCs": "手机 浏览器 PC 配对 配对码 QR 中继 Tailscale Wi-Fi SSH Portal 添加 PC 远程 PC",
   "machines computers ssh bridge plugins phone pair relay QR code Remote PCs": "机器 电脑 ssh 桥接 插件 手机 配对 中继 QR 代码 远程 PC",
 "While a terminal or chat pane is open.": "打开终端或聊天窗格时保持屏幕常亮。",
 };

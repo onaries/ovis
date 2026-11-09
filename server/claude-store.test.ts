@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
@@ -572,6 +572,15 @@ describe("claudeTranscriptFile", () => {
     }
   });
 
+  it("records the exact identity of the transcript whose tail it read, for the file it returns (#3402)", async () => {
+    const { home: dir, projects } = home();
+    const path = transcript(projects, claudeProjectDir("/w/project"));
+    const proofs = new Map<string, string>();
+    expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], undefined, null, proofs)).toBe(path);
+    const proven = statSync(path, { bigint: true });
+    expect(proofs.get(path)).toBe(`${proven.dev}:${proven.ino}`);
+  });
+
   it("tries each cwd in turn, then finds the session in whichever project holds it", async () => {
     const { home: dir, projects } = home();
     const started = transcript(projects, claudeProjectDir("/w/started-here"));
@@ -780,6 +789,18 @@ describe("claudeTranscriptFile", () => {
       expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], join(dir, ".claude"), DEEPER)).toBe(deeper);
     });
 
+    it("gives a branch it follows no proof, while the session it was copied from keeps its own (#3402)", async () => {
+      const { dir, folder, original } = setup();
+      const plain = new Map<string, string>();
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], join(dir, ".claude"), null, plain)).toBe(original);
+      expect(plain.has(original)).toBe(true);
+      const branch = branched(folder, BRANCH, SESSION);
+      const proofs = new Map<string, string>();
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], join(dir, ".claude"), BRANCH, proofs)).toBe(branch);
+      // the branch was told by its own head, read apart from any tail: it falls back to the outcome read's exact stat
+      expect(proofs.has(branch)).toBe(false);
+    });
+
     it("keeps the reported session when the live one is no branch of it (control)", async () => {
       const { dir, projects, folder, original } = setup();
       const store = join(dir, ".claude");
@@ -877,6 +898,84 @@ describe("claudeTranscriptFile", () => {
       // once the line is whole, it is followed
       writeFileSync(branch, `${record}\n`);
       expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, BRANCH)).toBe(branch);
+    });
+  });
+
+  describe("a session a Claude started inside the pane reported (#3260)", () => {
+    const OWN = "0c4d2a6e-3b1f-4e8a-9d27-5f6a7b8c9d01";
+    const CHILD = "1d5e3b7f-4c2a-4f9b-8e38-6a7b8c9d0e12";
+    const STORE = (dir: string) => join(dir, ".claude");
+    /** a transcript as Claude Code writes it: interactive (`cli`) or print mode (`sdk-cli`) */
+    const written = (folder: string, id: string, entrypoint: string): string => {
+      mkdirSync(folder, { recursive: true });
+      const path = join(folder, `${id}.jsonl`);
+      writeFileSync(path, [
+        { type: "user", message: { role: "user", content: "Reply OK" }, sessionId: id, entrypoint },
+        { type: "assistant", message: { content: [{ type: "text", text: "OK" }] }, sessionId: id, entrypoint },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+      return path;
+    };
+
+    it("reads the pane's own Claude when the reported session has no transcript (regression: fails on main)", async () => {
+      const { home: dir, projects } = home();
+      const own = written(join(projects, claudeProjectDir("/w/project")), OWN, "cli");
+      expect(await claudeTranscriptFile(dir, CHILD, ["/w/project"], STORE(dir), OWN)).toBe(own);
+    });
+
+    it("reads the pane's own Claude when print mode wrote the reported transcript (regression: fails on main)", async () => {
+      const { home: dir, projects } = home();
+      const folder = join(projects, claudeProjectDir("/w/project"));
+      written(folder, CHILD, "sdk-cli");
+      const own = written(folder, OWN, "cli");
+      expect(await claudeTranscriptFile(dir, CHILD, ["/w/project"], STORE(dir), OWN)).toBe(own);
+      // its newest record decides: once the session is used interactively again, the report stands
+      appendFileSync(join(folder, `${CHILD}.jsonl`), JSON.stringify({ type: "user", message: { content: "again" }, sessionId: CHILD, entrypoint: "cli" }) + "\n");
+      forgetClaudeSessions();
+      expect(await claudeTranscriptFile(dir, CHILD, ["/w/project"], STORE(dir), OWN)).toBe(join(folder, `${CHILD}.jsonl`));
+    });
+
+    it("never takes the live session from another project", async () => {
+      const { home: dir, projects } = home();
+      // the pane's project holds no transcript of the live id; another project does
+      written(join(projects, claudeProjectDir("/w/other")), OWN, "cli");
+      expect(await claudeTranscriptFile(dir, CHILD, ["/w/project"], STORE(dir), OWN)).toBeNull();
+      // beside a print-mode report too: only the report's own folder is looked in
+      const reported = written(join(projects, claudeProjectDir("/w/project")), CHILD, "sdk-cli");
+      expect(await claudeTranscriptFile(dir, CHILD, ["/w/project"], STORE(dir), OWN)).toBe(reported);
+    });
+
+    it.skipIf(process.platform === "win32")("never follows a link in place of the live transcript", async () => {
+      const { home: dir, projects } = home();
+      const folder = join(projects, claudeProjectDir("/w/project"));
+      const outside = written(join(dir, "elsewhere"), OWN, "cli");
+      mkdirSync(folder, { recursive: true });
+      symlinkSync(outside, join(folder, `${OWN}.jsonl`));
+      expect(await claudeTranscriptFile(dir, CHILD, ["/w/project"], STORE(dir), OWN)).toBeNull();
+    });
+
+    it("keeps the answer it gave when the PID record tells nothing better (control)", async () => {
+      const { home: dir, projects } = home();
+      const folder = join(projects, claudeProjectDir("/w/project"));
+      // no PID record, or one with no transcript either: the report has not written its first message yet
+      expect(await claudeTranscriptFile(dir, CHILD, ["/w/project"], STORE(dir), null)).toBeNull();
+      expect(await claudeTranscriptFile(dir, CHILD, ["/w/project"], STORE(dir), OWN)).toBeNull();
+      // an interactive report stands, as after a /resume back to it
+      const reported = written(folder, CHILD, "cli");
+      written(folder, OWN, "cli");
+      expect(await claudeTranscriptFile(dir, CHILD, ["/w/project"], STORE(dir), OWN)).toBe(reported);
+      // print mode beside print mode: neither is told apart
+      const { home: other, projects: otherProjects } = home();
+      const otherFolder = join(otherProjects, claudeProjectDir("/w/project"));
+      const printed = written(otherFolder, CHILD, "sdk-cli");
+      written(otherFolder, OWN, "sdk-cli");
+      expect(await claudeTranscriptFile(other, CHILD, ["/w/project"], STORE(other), OWN)).toBe(printed);
+      // a record that names no entrypoint is no print mode
+      const { home: plain, projects: plainProjects } = home();
+      const plainFolder = join(plainProjects, claudeProjectDir("/w/project"));
+      mkdirSync(plainFolder, { recursive: true });
+      writeFileSync(join(plainFolder, `${CHILD}.jsonl`), JSON.stringify({ type: "user", message: { content: "hi" }, sessionId: CHILD }) + "\n");
+      written(plainFolder, OWN, "cli");
+      expect(await claudeTranscriptFile(plain, CHILD, ["/w/project"], STORE(plain), OWN)).toBe(join(plainFolder, `${CHILD}.jsonl`));
     });
   });
 

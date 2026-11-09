@@ -831,7 +831,9 @@ describe("update API", () => {
       status = { ...status, latest_revision: offered };
       const accepted = await install(JSON.stringify({ expected_revision: offered }));
       expect(accepted.status).toBe(202);
-      expect(requests).toEqual([{ command: "install", expected_revision: offered }]);
+      // with its own id, which only its 202 tells: a cancel must name it
+      const { install_id } = await accepted.json() as { install_id: string };
+      expect(requests).toEqual([{ command: "install", expected_revision: offered, install_id }]);
       // a release that moves after the 202 is told by the status, not by the request that finished
       status = { ...status, phase: "error", latest_revision: moved, error_code: "update_offer_changed", error: "A different release is on offer than the one asked for, so nothing was installed. Review it, then update again." };
       expect(await (await fetch(`${origin}/api/updates`)).json()).toMatchObject({ phase: "error", error_code: "update_offer_changed", latest_revision: moved });
@@ -842,7 +844,7 @@ describe("update API", () => {
       expect(await code(older)).toBe("update_restart_required");
       // a check stays bodyless
       expect((await fetch(`${origin}/api/updates/check`, { method: "POST", headers: { "x-herdr-update": "1" } })).status).toBe(202);
-      expect(requests).toEqual([{ command: "install", expected_revision: offered }, { command: "check" }]);
+      expect(requests).toEqual([{ command: "install", expected_revision: offered, install_id }, { command: "check" }]);
     } finally { managed.stop(); rmSync(managedState, { recursive: true, force: true }); }
   });
 
@@ -850,9 +852,9 @@ describe("update API", () => {
     const protectedState = mkdtempSync(join(tmpdir(), "herdr-update-auth-"));
     const protectedServer = createServer({ port: 0, stateDir: protectedState, token: "test-update-token" });
     try {
-      for (const path of ["/api/updates", "/api/updates/notes", "/api/updates/installed", "/api/updates/check", "/api/updates/install"]) {
+      for (const path of ["/api/updates", "/api/updates/notes", "/api/updates/installed", "/api/updates/check", "/api/updates/install", "/api/updates/cancel"]) {
         const response = await fetch(`http://localhost:${protectedServer.port}${path}`, {
-          method: path === "/api/updates/check" || path === "/api/updates/install" ? "POST" : "GET", headers: { "x-herdr-update": "1" },
+          method: path === "/api/updates/check" || path === "/api/updates/install" || path === "/api/updates/cancel" ? "POST" : "GET", headers: { "x-herdr-update": "1" },
         });
         expect(response.status).toBe(401);
       }
@@ -889,8 +891,20 @@ describe("update API", () => {
       // the install still names the offer, as from the app's own controls
       expect((await call("/api/updates/install", `Bearer ${bridge}`, "{}")).status).toBe(400);
       expect(requests).toEqual([]);
-      expect((await call("/api/updates/install", `Bearer ${bridge}`, JSON.stringify({ expected_revision: offered }))).status).toBe(202);
-      expect(requests).toEqual([{ command: "install", expected_revision: offered }]);
+      const granted = await call("/api/updates/install", `Bearer ${bridge}`, JSON.stringify({ expected_revision: offered }));
+      expect(granted.status).toBe(202);
+      const { install_id } = await granted.json() as { install_id: string };
+      expect(requests).toEqual([{ command: "install", expected_revision: offered, install_id }]);
+      // and stop that install while it builds (POST /api/updates/cancel), once its supervisor can
+      status.phase = "building";
+      expect((await call("/api/updates/cancel", `Bearer ${bridge}`, JSON.stringify({ install_id }))).status).toBe(409);
+      status.install_cancellable = true;
+      // a cancel that names no install is refused; the one it names is passed on, for the supervisor to stop that one only
+      expect((await call("/api/updates/cancel", `Bearer ${bridge}`, "{}")).status).toBe(400);
+      expect((await call("/api/updates/cancel", `Bearer ${bridge}`, JSON.stringify({ install_id }))).status).toBe(202);
+      expect(requests.at(-1)).toEqual({ command: "cancel", install_id });
+      status.phase = "idle";
+      requests.splice(1);
       // a wrong bridge token is refused like any other, and the token opens no other update route
       expect((await call("/api/updates", `Bearer ${"c".repeat(64)}`)).status).toBe(401);
       for (const path of ["/api/updates/notes", "/api/updates/installed", "/api/updates/check", "/api/herdr/update"]) expect((await call(path, `Bearer ${bridge}`)).status).toBe(401);
@@ -900,7 +914,8 @@ describe("update API", () => {
       });
       const install = JSON.stringify({ expected_revision: offered });
       for (const [method, path, body] of [["GET", "/api/updates?anything=1"], ["HEAD", "/api/updates"], ["POST", "/api/updates", install], ["DELETE", "/api/updates"],
-        ["GET", "/api/updates/install"], ["PUT", "/api/updates/install", install], ["POST", "/api/updates/install?anything=1", install]] as const) {
+        ["GET", "/api/updates/install"], ["PUT", "/api/updates/install", install], ["POST", "/api/updates/install?anything=1", install],
+        ["GET", "/api/updates/cancel"], ["POST", "/api/updates/cancel?anything=1", ""]] as const) {
         expect({ method, path, status: (await send(method, path, body)).status }).toEqual({ method, path, status: 401 });
       }
       expect(requests).toHaveLength(1);
@@ -1518,7 +1533,7 @@ describe("agent rename", () => {
       const settings = await (await fetch(url)).json() as MachineSettings;
       expect(settings).toEqual({ auto_update_bridges: true, set_aside: [expect.stringMatching(/^machines\.json\.corrupt-\S+$/)] });
       expect(readdirSync(state)).toContain(settings.set_aside![0]!);
-      const patched = await fetch(url, { method: "PATCH", headers: { "content-type": "application/json", "x-herdr-machine": "1" }, body: JSON.stringify({ auto_update_bridges: false, set_aside: [] }) });
+      const patched = await fetch(url, { method: "PATCH", headers: { "content-type": "application/json", "x-herdr-machine": "1", "x-herdr-update": "1" }, body: JSON.stringify({ auto_update_bridges: false, set_aside: [] }) });
       expect(patched.status).toBe(200);
       expect(await patched.json()).toEqual({ auto_update_bridges: false, set_aside: settings.set_aside });
     } finally {
@@ -4732,7 +4747,7 @@ describe("PC management API", () => {
       const response = await fetch(`${base()}/api/machines/setup`, { method: "POST", headers, body: JSON.stringify({ destination: "host" }) });
       expect(response.status).toBe(403);
     }
-    const bad = await fetch(`${base()}/api/machines/setup`, { method: "POST", headers: { "x-herdr-machine": "1" }, body: JSON.stringify({ destination: "-oProxyCommand=bad" }) });
+    const bad = await fetch(`${base()}/api/machines/setup`, { method: "POST", headers: { "x-herdr-machine": "1", "x-herdr-update": "1" }, body: JSON.stringify({ destination: "-oProxyCommand=bad" }) });
     expect(bad.status).toBe(400);
     expect((await fetch(`${base()}/api/machines/missing/pane/read?pane_id=p1`)).status).toBe(503);
     expect((await fetch(`${base()}/api/machines/missing/auth`)).status).toBe(404);
@@ -5795,10 +5810,10 @@ describe("access facts on /api/health", () => {
   const guard = { "content-type": "application/json", "x-herdr-machine": "1" };
   /** a server of its own: a temp state dir, an empty token unless one is given, nothing from the runner's environment */
   const CORE_FACTS: HerdrCoreFacts = { version: "0.1.17", session: "default", running: false };
-  const serve = (options: { hostname?: string; token?: string; serveOnly?: boolean; owner?: string | null; seed?: (stateDir: string) => void; runtime?: RuntimeService; accepted?: () => boolean } = {}) => {
+  const serve = (options: { hostname?: string; token?: string; serveOnly?: boolean; owner?: string | null; seed?: (stateDir: string) => void; runtime?: RuntimeService; accepted?: () => boolean; bridgeToken?: string } = {}) => {
     const stateDir = mkdtempSync(join(tmpdir(), "herdr-security-summary-"));
     options.seed?.(stateDir);
-    const instance = createServer({ port: 0, hostname: options.hostname ?? "127.0.0.1", token: options.token ?? "", stateDir, tailscaleOwner: options.owner ?? null, tailscaleServeOnly: options.serveOnly ?? false, herdrCoreFacts: () => CORE_FACTS, ...(options.runtime ? { runtimeService: options.runtime } : {}), ...(options.accepted ? { launchAccepted: options.accepted } : {}) });
+    const instance = createServer({ port: 0, hostname: options.hostname ?? "127.0.0.1", token: options.token ?? "", stateDir, ...(options.bridgeToken ? { bridgeToken: options.bridgeToken } : {}), tailscaleOwner: options.owner ?? null, tailscaleServeOnly: options.serveOnly ?? false, herdrCoreFacts: () => CORE_FACTS, ...(options.runtime ? { runtimeService: options.runtime } : {}), ...(options.accepted ? { launchAccepted: options.accepted } : {}) });
     const read = async (headers: Record<string, string> = {}, scope = "") => {
       const response = await fetch(`http://127.0.0.1:${instance.port}/api/health${scope}`, { headers });
       const text = await response.text();
@@ -5904,7 +5919,7 @@ describe("access facts on /api/health", () => {
     let answer: SwitchAnswer = { ok: true };
     const runtime: RuntimeService = { facts: () => facts, request: (target) => { asked.push(target); return answer; } };
     let token = "";
-    const secured = serve({ token: SECRET, runtime, seed: (stateDir) => {
+    const secured = serve({ token: SECRET, runtime, bridgeToken: "fictional-bridge-token", seed: (stateDir) => {
       const store = new DeviceStore(stateDir);
       token = store.pair(store.startPairing().code, "Watch", "watch")!.token;
       store.match(token);
@@ -5920,6 +5935,8 @@ describe("access facts on /api/health", () => {
       expect((await secured.read(bearer, "?scope=bridge")).body.herdr_runtime).toEqual(facts);
       expect((await secured.read({ cookie: `ovis_device=${token}`, "x-forwarded-for": "192.168.0.20" }, "?scope=bridge")).body.herdr_runtime).toBeUndefined();
       expect((await secured.read({}, "?scope=bridge")).body.herdr_runtime).toBeUndefined();
+      // the connection server reaching this PC with its bridge token shows its move badge from them
+      for (const scope of ["", "?scope=bridge"]) expect((await secured.read({ authorization: "Bearer fictional-bridge-token" }, scope)).body.herdr_runtime).toEqual(facts);
       // nobody but a driving owner, and only through the app's own request header
       expect((await post({})).status).toBe(401);
       expect((await post({ cookie: `ovis_device=${token}`, "x-forwarded-for": "192.168.0.20", "x-herdr-update": "1" })).status).toBe(403);

@@ -14,6 +14,12 @@ export const RELAY_HINTS = "relay-hints";
  * go out before HELLO is read. The address is a hint: Noise against the pinned PC key proves the PC.
  */
 export const DIRECT_CARRIER = "direct-carrier";
+/**
+ * Offered beside DIRECT_CARRIER by a client that can also open a direct carrier on the PC's Tailscale
+ * address (100.64.0.0/10): only then does AUTH_OK name one. A client without it would refuse the whole
+ * AUTH_OK over an address its older isDirectCarrier does not take.
+ */
+export const DIRECT_TAILNET = "direct-tailnet";
 /** At most this many direct carriers in one AUTH_OK. */
 export const MAX_DIRECT_CARRIERS = 4;
 /**
@@ -304,17 +310,37 @@ function directOrigin(value: unknown): string {
   return result;
 }
 
-const PRIVATE_IPV4: readonly (readonly [number, number, number])[] = [[10, 0, 8], [172, 16, 12], [192, 168, 16], [169, 254, 16]];
+type Subnet = readonly [number, number, number];
+const PRIVATE_IPV4: readonly Subnet[] = [[10, 0, 8], [172, 16, 12], [192, 168, 16], [169, 254, 16]];
+/** Tailscale's IPv4 range (shared CGNAT space, which Tailscale assigns its nodes from). */
+const TAILNET_IPV4: readonly Subnet[] = [[100, 64, 10]];
 
-/** Exactly `ws://<private IPv4>:<port>`: an RFC 1918 or link-local address, a port written out, nothing else. */
-export function isDirectCarrier(text: string): boolean {
+function carrierIn(text: string, subnets: readonly Subnet[]): boolean {
   const match = /^ws:\/\/((?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}):([1-9]\d{0,4})$/.exec(text);
   if (!match) return false;
   const octets = match[1]!.split(".").map(Number);
   const port = Number(match[2]);
   if (port > 65535 || octets.some((octet) => octet > 255)) return false;
   const address = ((octets[0]! << 24) | (octets[1]! << 16) | (octets[2]! << 8) | octets[3]!) >>> 0;
-  return PRIVATE_IPV4.some(([a, b, bits]) => address >>> (32 - bits) === (((a << 24) | (b << 16)) >>> 0) >>> (32 - bits));
+  return subnets.some(([a, b, bits]) => address >>> (32 - bits) === (((a << 24) | (b << 16)) >>> 0) >>> (32 - bits));
+}
+
+/** Exactly `ws://<Tailscale IPv4>:<port>`: an address in 100.64.0.0/10, a port written out, nothing else. */
+export function isTailnetCarrier(text: string): boolean {
+  return carrierIn(text, TAILNET_IPV4);
+}
+
+/** Whether `address` (dotted IPv4, nothing else) is in Tailscale's range, as isTailnetCarrier reads it. */
+export function isTailnetAddress(address: string): boolean {
+  return isTailnetCarrier(`ws://${address}:1`);
+}
+
+/**
+ * Exactly `ws://<private IPv4>:<port>`: an RFC 1918, link-local or Tailscale (isTailnetCarrier) address, a
+ * port written out, nothing else.
+ */
+export function isDirectCarrier(text: string): boolean {
+  return carrierIn(text, PRIVATE_IPV4) || isTailnetCarrier(text);
 }
 
 function protocol(value: unknown): string {

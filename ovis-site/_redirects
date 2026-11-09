@@ -8,6 +8,15 @@
 /Ovis.dmg https://github.com/devswha/ovis/releases/latest/download/Ovis.dmg 302
 # Ovis for Windows: the newest release's Ovis.exe (.github/workflows/windows-app.yml attaches it).
 /Ovis.exe https://github.com/devswha/ovis/releases/latest/download/Ovis.exe 302
+# The desktop app: the newest release's build for each OS and CPU (.github/workflows/release.yml
+# attaches them under these names). Ovis.dmg and Ovis.exe above stay for links to the apps before it.
+/Ovis-mac-arm64.dmg https://github.com/devswha/ovis/releases/latest/download/Ovis-mac-arm64.dmg 302
+/Ovis-win-x64.exe https://github.com/devswha/ovis/releases/latest/download/Ovis-win-x64.exe 302
+/Ovis-mac-x64.dmg https://github.com/devswha/ovis/releases/latest/download/Ovis-mac-x64.dmg 302
+/Ovis-linux-x64.deb https://github.com/devswha/ovis/releases/latest/download/Ovis-linux-x64.deb 302
+/Ovis-linux-arm64.deb https://github.com/devswha/ovis/releases/latest/download/Ovis-linux-arm64.deb 302
+/Ovis-linux-x64.AppImage https://github.com/devswha/ovis/releases/latest/download/Ovis-linux-x64.AppImage 302
+/Ovis-linux-arm64.AppImage https://github.com/devswha/ovis/releases/latest/download/Ovis-linux-arm64.AppImage 302
 # Addresses people guess for the docs, which live in the repository.
 /docs https://github.com/devswha/ovis/blob/main/docs/guide.md 302
 /docs/* https://github.com/devswha/ovis/blob/main/docs/guide.md 302

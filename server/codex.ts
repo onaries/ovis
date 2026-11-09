@@ -1,7 +1,7 @@
 /** Native Codex rollouts contain both display events and model context. Only
  * conversation records belong in chat; developer prompts and terminal chrome do not. */
 import { constants as sqliteConstants, Database } from "bun:sqlite";
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import nodePath, { isAbsolute, join, type PlatformPath } from "node:path";
@@ -16,6 +16,7 @@ import { CODEX_TOOL_IMAGE_REF, codexImageParts, codexOutputPictures } from "./co
 import { codexReadCall, codexReadSkills, selectedSkill } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
 import type { TranscriptParser } from "./transcript-records.ts";
+import { ConversationReadPending, type FileIdentity, openBound, readBound } from "./conversation-shared.ts";
 import type { AgentInfo } from "../shared/herdr-api.generated.ts";
 import { agentGet, HerdrError, paneGet, paneProcessInfo, paneRead, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
 import { kiroCodexProcess, kiroNested, kiroWrapper } from "./kiro-terminal.ts";
@@ -622,7 +623,8 @@ export async function paneCodexHomePlaced(paneId: string, configured?: string, k
  * full read): what it holds past the read cannot be checked, even when the part read parses.
  */
 function rolloutMetaLine(path: string): RecordValue | null {
-  const fd = openSync(path, "r");
+  // refused where a read bound the path to another file (openBound)
+  const fd = openBound(path);
   try {
     const buffer = Buffer.alloc(256 * 1024);
     const length = readSync(fd, buffer, 0, buffer.length, 0);
@@ -778,12 +780,17 @@ export function codexRolloutPath(path: string, codexHome: string): string | null
     // is not the conversation of the parent TUI.
     if (header === null || !interactiveCodexRollout(header.payload, nodePath.basename(canonical))) return null;
     return canonical;
-  } catch { return null; }
+  } catch (error) {
+    // another file than the one the read is bound to: pending, not a file that is no rollout
+    if (error instanceof ConversationReadPending) throw error;
+    return null;
+  }
 }
 
 /** Bytes [start, end) of a file as text; a cut first line is dropped. */
 export function readRange(path: string, start: number, end: number): string {
-  const fd = openSync(path, "r");
+  // refused where a read bound the path to another file (openBound)
+  const fd = openBound(path);
   try {
     const buffer = Buffer.alloc(Math.max(0, end - start));
     const length = readSync(fd, buffer, 0, buffer.length, start);
@@ -869,15 +876,17 @@ async function scanQuestions(path: string): Promise<QueuedQuestion[]> {
 
 const readdir = (path: string): string[] => { try { return readdirSync(path); } catch { return []; } };
 
-/** A byte range of rollout history: the file's first `end` bytes. */
-export interface HistorySegment { path: string; end: number }
+/** A byte range of rollout history: the file's first `end` bytes; an earlier rollout's `identity` as its chain was resolved. */
+export interface HistorySegment { path: string; end: number; identity?: FileIdentity }
 
 /**
- * Chains per rollout, newest first. A header never changes, so a complete chain is
- * kept for good; one that stops at a cut no file holds yet is kept a short while,
- * so every append does not walk sessions/ again, and then looked up afresh.
+ * Chains per rollout, newest first, with the rollout they were resolved from (`live`). A header never
+ * changes, so a complete chain is kept for as long as that file is the one its path names (another
+ * rollout put at the path, continuing something else or nothing, resolves its own); one that stops at a
+ * cut no file holds yet is kept a short while, so every append does not walk sessions/ again, and then
+ * looked up afresh.
  */
-const historyChains = new Map<string, { chain: HistorySegment[]; complete: boolean; at: number }>();
+const historyChains = new Map<string, { chain: HistorySegment[]; complete: boolean; at: number; live: FileIdentity | undefined }>();
 const INCOMPLETE_CHAIN_MS = 30_000;
 
 /** Drops every remembered chain: the next read resolves each one again. */
@@ -913,7 +922,7 @@ function countLines(path: string, end: number): number {
   const key = `${stat.dev}:${stat.ino}:${end}`;
   const known = linesBeforeCut.get(key);
   if (known !== undefined) return known;
-  const fd = openSync(path, "r");
+  const fd = openBound(path);
   let lines = 0;
   try {
     const buffer = Buffer.alloc(16 * 1024 * 1024);
@@ -930,7 +939,7 @@ function countLines(path: string, end: number): number {
 }
 
 function byteAt(path: string, offset: number): number | null {
-  const fd = openSync(path, "r");
+  const fd = openBound(path);
   try {
     const buffer = Buffer.alloc(1);
     return readSync(fd, buffer, 0, 1, offset) === 1 ? buffer[0]! : null;
@@ -951,7 +960,7 @@ function firstOrdinal(header: RecordValue): number {
  */
 function holdsCut(path: string, ordinal: number, end: number): boolean {
   let header: RecordValue | null;
-  try { header = rolloutHeader(path); } catch { return false; }
+  try { header = rolloutHeader(path); } catch (error) { if (error instanceof ConversationReadPending) throw error; return false; }
   if (header === null) return false;
   const lines = ordinal - firstOrdinal(header);
   if (lines <= 0 || (statSync(path, { throwIfNoEntry: false })?.size ?? 0) < end || byteAt(path, end - 1) !== 0x0a) return false;
@@ -978,11 +987,14 @@ function threadRollouts(home: string, threadId: string): string[] {
  * less history rather than the wrong one, and is looked up again next time.
  */
 function historyChain(path: string, home: string): HistorySegment[] {
+  const now = statSync(path, { throwIfNoEntry: false });
+  const live = now === undefined ? undefined : { dev: now.dev, ino: now.ino };
   const cached = historyChains.get(path);
-  if (cached && (cached.complete || Date.now() - cached.at < INCOMPLETE_CHAIN_MS)) return cached.chain;
+  const same = cached?.live !== undefined && cached.live.dev === live?.dev && cached.live.ino === live.ino;
+  if (cached && same && (cached.complete || Date.now() - cached.at < INCOMPLETE_CHAIN_MS)) return cached.chain;
   const remember = (chain: HistorySegment[], complete: boolean): HistorySegment[] => {
     historyChains.delete(path);
-    historyChains.set(path, { chain, complete, at: Date.now() });
+    historyChains.set(path, { chain, complete, at: Date.now(), live });
     if (historyChains.size > 64) historyChains.delete(historyChains.keys().next().value!);
     return chain;
   };
@@ -990,21 +1002,30 @@ function historyChain(path: string, home: string): HistorySegment[] {
   let current = path;
   for (let depth = 0; depth < 32; depth++) {
     let base: RecordValue;
-    try { base = record(rolloutHeader(current)?.history_base); } catch { return remember(chain, false); }
+    // an earlier rollout's header is read from the file it was when it was weighed below
+    const weighed = chain.at(-1);
+    try { base = record((weighed?.identity ? readBound([[current, weighed.identity]], () => rolloutHeader(current)) : rolloutHeader(current))?.history_base); }
+    catch (error) { if (error instanceof ConversationReadPending) throw error; return remember(chain, false); }
     const threadId = string(base.thread_id);
     const ordinal = base.end_ordinal_exclusive;
     const end = base.end_byte_offset;
     if (Object.keys(base).length === 0) return remember(chain, true);
     if (!UUID.test(threadId) || typeof ordinal !== "number" || !Number.isSafeInteger(ordinal)
       || typeof end !== "number" || !Number.isSafeInteger(end) || end <= 0) return remember(chain, false);
+    // Each candidate is weighed as the file its path names now: an open finding another there (a folder
+    // swapped in around it) leaves the chain unresolved and unremembered, pending (openBound).
     const holders = threadRollouts(home, threadId).flatMap((candidate) => {
-      const resolved = codexRolloutPath(candidate, home);
-      return resolved !== null && resolved !== current && !chain.some((segment) => segment.path === resolved)
-        && holdsCut(resolved, ordinal, end) ? [resolved] : [];
+      let identity: FileIdentity, canonical: string;
+      try { identity = statSync(candidate); canonical = realpathSync(candidate); } catch { return []; }
+      return readBound([[candidate, identity], [canonical, identity]], () => {
+        const resolved = codexRolloutPath(candidate, home);
+        return resolved !== null && resolved !== current && !chain.some((segment) => segment.path === resolved)
+          && holdsCut(resolved, ordinal, end) ? [{ path: resolved, identity }] : [];
+      });
     });
     if (holders.length !== 1) return remember(chain, false);
-    chain.push({ path: holders[0]!, end });
-    current = holders[0]!;
+    chain.push({ path: holders[0]!.path, end, identity: { dev: holders[0]!.identity.dev, ino: holders[0]!.identity.ino } });
+    current = holders[0]!.path;
   }
   return remember(chain, false);
 }
@@ -1016,7 +1037,11 @@ function historyChain(path: string, home: string): HistorySegment[] {
  */
 function liveChain(path: string, home: string): HistorySegment[] {
   const chain = historyChain(path, home);
-  if (chain.every((segment) => statSync(segment.path, { throwIfNoEntry: false }))) return chain;
+  // a rollout replaced since it was weighed (another file at its path) is weighed again, as one gone is
+  if (chain.every((segment) => {
+    const now = statSync(segment.path, { throwIfNoEntry: false });
+    return now !== undefined && now.dev === segment.identity?.dev && now.ino === segment.identity.ino;
+  })) return chain;
   forgetHistoryChain(path);
   return historyChain(path, home);
 }
@@ -1930,7 +1955,10 @@ function titledCandidate(agent: Pick<AgentInfo, "terminal_title" | "terminal_tit
       `instr(lower(replace(${column}, ' ', '')), ?) > 0 OR ${column} GLOB '*[^ -~]*' OR instr(CAST(${column} AS BLOB), X'00') > 0`).join(" OR ")}`,
   ).all(...named.map(() => id));
   if (texts.some((row) => named.some((column) => shows(row[column])))) return null;
-  // ids are lowercase hex and dashes, all before "g": the range is every id that starts with this one
+  return titledIdRollout(id, db, home);
+}
+
+function titledIdRollout(id: string, db: Database, home: string): string | null {
   const rows = db.query<{ rollout_path: string }, [string, string]>(
     "SELECT rollout_path FROM threads WHERE id >= ? AND id < ? AND archived = 0 LIMIT 2",
   ).all(id, `${id}g`);
@@ -1988,13 +2016,14 @@ async function threadTitleRollout(paneId: string, cwd: string | null | undefined
     const pane = await paneGet(paneId);
     const title = pane.terminal_title_stripped ?? pane.terminal_title;
     if (!pane.terminal_id || typeof title !== "string" || !TITLE_ID.test(title.trim())) return null;
+    const id = titledThread(title);
+    if (id === null) return null;
     opened = openCodexStore(home);
-    const path = titledCandidate(pane, processes, opened.db, home);
+    const path = titledIdRollout(id, opened.db, home);
     opened.settled();
     if (path === null) return null;
-    const id = titledThread(title);
     const storedId = rolloutHeader(path)?.id;
-    if (id === null || typeof storedId !== "string" || !UUID.test(storedId) || !storedId.toLowerCase().startsWith(id)) return null;
+    if (typeof storedId !== "string" || !UUID.test(storedId) || !storedId.toLowerCase().startsWith(id)) return null;
     const after = await paneGet(paneId);
     const current = await codexProcessesOf(paneId);
     // Titles are unauthenticated terminal metadata; a changed occupant must never inherit a binding.
@@ -3156,9 +3185,12 @@ async function freshReportedThread(
 }
 
 /** The pane's Codex processes, and the rollouts they hold open (lsof on macOS, /proc elsewhere): one alone is the pane's. */
-async function openRollouts(paneId: string, home: string, known?: ProcessInfo | null): Promise<{ codexProcesses: Awaited<ReturnType<typeof codexProcessesOf>>["list"]; processes: string; open: Set<string> }> {
+async function openRollouts(paneId: string, home: string, known?: ProcessInfo | null): Promise<{ codexProcesses: Awaited<ReturnType<typeof codexProcessesOf>>["list"]; processes: string; open: Set<string>; held: Map<string, string> }> {
   const { list: codexProcesses, key: processes } = await codexProcessesOf(paneId, known);
   const open = new Set<string>();
+  // the exact dev:ino of the file each held rollout is, as the process holds it: a rename over its path cannot change it (#3402)
+  const held = new Map<string, string>();
+  const conflicted = new Set<string>();
   if (globalThis.process.platform === "darwin" && codexProcesses.length > 0) {
     // lsof is available on macOS, where /proc does not exist. Keep the same
     // canonical-store and unambiguous-open-file checks as the Linux path. One run
@@ -3166,15 +3198,31 @@ async function openRollouts(paneId: string, home: string, known?: ProcessInfo | 
     // -b keeps lsof off the stat calls it does not need for a name: a chat reads this up
     // to every 2 s while its transcript changes, the conversation monitor every 5 s, and
     // each run costs about 20 ms of process start and kernel walk
-    const child = Bun.spawn(["/usr/sbin/lsof", "-nPbw", "-a", "-p", codexProcesses.map((process) => process.pid).join(","), "-Fn"], { stdout: "pipe", stderr: "ignore" });
+    // D and i (device and inode of each file) come from the open file itself, as with -b lsof makes no stat call (#3402)
+    const child = Bun.spawn(["/usr/sbin/lsof", "-nPbw", "-a", "-p", codexProcesses.map((process) => process.pid).join(","), "-FfnDi"], { stdout: "pipe", stderr: "ignore" });
     const timer = setTimeout(() => child.kill(), 3000);
     try {
       const text = await new Response(child.stdout).text();
       await child.exited;
+      // each file's D and i lines come before its name; a new descriptor or process starts a new file
+      let device: bigint | null = null;
+      let inode: bigint | null = null;
       for (const line of text.split("\n")) {
-        if (!line.startsWith("n") || !line.endsWith(".jsonl")) continue;
+        if (line.startsWith("f") || line.startsWith("p")) { device = null; inode = null; continue; }
+        if (line.startsWith("D")) { try { device = BigInt(line.slice(1)); } catch { device = null; } continue; }
+        if (line.startsWith("i")) { try { inode = BigInt(line.slice(1)); } catch { inode = null; } continue; }
+        if (!line.startsWith("n")) continue;
+        // a name ends its file: its D and i never carry over to the next one
+        const identity = device !== null && inode !== null ? `${device}:${inode}` : null;
+        device = null;
+        inode = null;
+        if (!line.endsWith(".jsonl")) continue;
         const path = codexRolloutPath(line.slice(1), home);
-        if (path) open.add(path);
+        if (!path) continue;
+        open.add(path);
+        // a file lsof named without both, or two files under one path, prove nothing
+        if (identity === null || conflicted.has(path) || (held.has(path) && held.get(path) !== identity)) { held.delete(path); conflicted.add(path); }
+        else held.set(path, identity);
       }
     } finally { clearTimeout(timer); }
   }
@@ -3184,14 +3232,26 @@ async function openRollouts(paneId: string, home: string, known?: ProcessInfo | 
     try { descriptors = readdirSync(`/proc/${process.pid}/fd`); } catch { continue; }
     for (const descriptor of descriptors.slice(0, 512)) {
       try {
-        const target = readlinkSync(`/proc/${process.pid}/fd/${descriptor}`);
+        const link = `/proc/${process.pid}/fd/${descriptor}`;
+        const target = readlinkSync(link);
         if (!target.endsWith(".jsonl")) continue;
         const path = codexRolloutPath(target, home);
-        if (path) open.add(path);
+        if (!path) continue;
+        open.add(path);
+        // stat through the descriptor link names the open file itself, not what its path names now; the name read
+        // again after it must be the same, or the descriptor was closed and reused in between and proves nothing
+        let identity: string | null = null;
+        try {
+          const proven = statSync(link, { bigint: true });
+          if (readlinkSync(link) === target) identity = `${proven.dev}:${proven.ino}`;
+        } catch { /* closed meanwhile: no proof */ }
+        // two files held under one path, or one whose identity could not be read, prove nothing
+        if (identity === null || conflicted.has(path) || (held.has(path) && held.get(path) !== identity)) { held.delete(path); conflicted.add(path); }
+        else held.set(path, identity);
       } catch { /* A descriptor may close while enumerating it. */ }
     }
   }
-  return { codexProcesses, processes, open };
+  return { codexProcesses, processes, open, held };
 }
 
 /**
@@ -3253,7 +3313,9 @@ export async function codexOpenRollout(paneId: string, cwd: string | null | unde
  * conversation a TUI shows: when nothing of this folder tells, the screen is matched against
  * all of them (loadedConversation).
  */
-export async function codexTranscriptPath(paneId: string, cwd: string, home = defaultCodexHome(), panes?: HerdrPane[], homeUnplaced = false, homeFromEarlierRead = false, rememberMatch = true): Promise<string | null> {
+export async function codexTranscriptPath(paneId: string, cwd: string, home = defaultCodexHome(), panes?: HerdrPane[], homeUnplaced = false, homeFromEarlierRead = false,
+  /** filled with the exact identity a returned rollout was proven through, where one is (#3402) */
+  proofs?: Map<string, string>, rememberMatch = true): Promise<string | null> {
   if (panes !== undefined) {
     const open = new Set(panes.map((pane) => pane.pane_id));
     for (const pane of [...boundRollouts.keys()]) if (!open.has(pane)) boundRollouts.delete(pane);
@@ -3267,7 +3329,7 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   // binds the rollout to these processes, and one read before a Codex left (or before its pid came back) would
   // bind a conversation to the wrong one
   // (an answer without process facts is asked again, as before: a nested Codex may yet be proven from the next one)
-  const { codexProcesses, processes, open } = await openRollouts(paneId, home, agent.processRead?.info);
+  const { codexProcesses, processes, open, held } = await openRollouts(paneId, home, agent.processRead?.info);
   // no Codex process of the pane proven now: what its screen still shows (an earlier occupant's, or
   // a Codex gone since) ties it to no conversation, and the terminal stands in
   if (codexProcesses.length === 0) return null;
@@ -3280,8 +3342,17 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   // conversation (#2774)
   if (homeFromEarlierRead && first !== undefined && ((await processCodexHome(first.pid, first.argv)) ?? defaultCodexHome()) !== home) return null;
   const titled = await threadTitleRollout(paneId, cwd, home, codexProcesses);
-  if (titled !== undefined) return titled;
-  if (open.size === 1) return [...open][0]!;
+  if (titled !== undefined) {
+    if (titled !== null && open.has(titled)) proofs?.set(titled, held.get(titled) ?? "");
+    return titled;
+  }
+  if (open.size === 1) {
+    const only = [...open][0]!;
+    // held, but its file not provable (a conflict, a closed descriptor, lsof without D or i): an empty proof, which
+    // the outcome read never matches, rather than the unchecked read a rollout chosen by other means keeps (#3402)
+    proofs?.set(only, held.get(only) ?? "");
+    return only;
+  }
   const resumed = resumedThread(codexProcesses.map((process) => process.argv ?? []));
 
   let db: Database | undefined;

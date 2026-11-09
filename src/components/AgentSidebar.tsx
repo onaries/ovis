@@ -14,7 +14,10 @@ import { assignAgentGroup, liveGroupKeys, loadFoldedAgentGroups, rowAgentGroup, 
 import { currentPaneMutes, paneMuteKey, prunePaneMutes, setPaneMutes, subscribePaneMutes, togglePaneMute } from "../lib/paneMutes.ts";
 import { lockedPinKeys, locksAfterPinToggle, toggleAgentLock } from "../lib/paneLocks.ts";
 import { agentContext, agentTabName, paneMark } from "../lib/sidebarAgents.ts";
+import { customTabLabel } from "../lib/tabName.ts";
 import { useSettings } from "../lib/settings.ts";
+import { SHEET_QUERY } from "../lib/sheets.ts";
+import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { useSidebarActivity } from "../lib/sidebarActivity.tsx";
 import { machineFilter } from "../lib/sidebarFilter.ts";
 import { useSidebarFilter } from "../lib/sidebarFilterContext.ts";
@@ -24,7 +27,7 @@ import { PANE_DRAG_TYPE, paneDragData } from "../lib/split.ts";
 import { PanePressContext } from "../lib/paneSubmitContext.ts";
 import { AgentMark, hasAgentMark } from "./AgentMark.tsx";
 import { RowMenu } from "./RowMenu.tsx";
-import { BackgroundBadge, ContextBadge, displayPaneTitle, onRowContextMenu, PlanBadge, StatusBadge } from "./Sidebar.tsx";
+import { BackgroundBadge, compactWorktreeName, ContextBadge, displayPaneTitle, onRowContextMenu, PlanBadge, StatusBadge } from "./Sidebar.tsx";
 import "./AgentSidebar.css";
 
 interface AgentRowBodyProps {
@@ -57,6 +60,17 @@ interface AgentRowBodyProps {
   progress?: number;
   /** a helper under the agent that started it: one line, its place and plugin values left to the tooltip */
   helper?: boolean;
+  /** how long a waiting row has waited (Settings → Sidebar rows → One line), dim before its state */
+  since?: string | null;
+}
+
+/** How long a row has been in its state, as herdr-app's agent rows say it: under a minute, minutes, hours, days. */
+export function stateAge(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 }
 
 /**
@@ -82,7 +96,7 @@ export function blockedLabel(pane: Pick<HerdrPane, "agent_kind" | "agent_message
  * One agent in a list: the coding agent's mark, what it is working on, who and where it is, what
  * its plugins report, and how it is doing.
  */
-function AgentRowBody({ mark, markKind, title, name, context, tokens, backgroundTasks, plan, paneContext, status, note = null, muted, locked = false, blockedNote: blocked = null, blockedLabel: blockedShort = null, progress, helper = false }: AgentRowBodyProps) {
+function AgentRowBody({ mark, markKind, title, name, context, tokens, backgroundTasks, plan, paneContext, status, note = null, muted, locked = false, blockedNote: blocked = null, blockedLabel: blockedShort = null, progress, helper = false, since = null }: AgentRowBodyProps) {
   const t = useT();
   const showProgress = progress !== undefined && (status === "working" || status === "blocked");
   return <>
@@ -116,6 +130,7 @@ function AgentRowBody({ mark, markKind, title, name, context, tokens, background
       {locked && <span className="agent-muted" title={t("Locked")} data-testid="agent-locked"><Lock aria-hidden="true" /><span className="visually-hidden">{t("Locked")}</span></span>}
       {muted && <span className="agent-muted" title={t("Alerts muted")} data-testid="alerts-muted"><BellOff aria-hidden="true" /><span className="visually-hidden">{t("Alerts muted")}</span></span>}
     </span>
+    {since !== null && <span className="agent-since">{since}</span>}
     {/* drawn at the row's right edge, after its ⋯, as a workspace row's state is (AgentSidebar.css) */}
     <span className="agent-row-state"><StatusBadge status={status} compact detail={status === "blocked" ? blocked : null} /></span>
   </>;
@@ -157,17 +172,26 @@ const DRAWER_QUERY = "(max-width: 768px)";
 /** the reader's fold of the list, kept on this device as a PC's fold is (MachineSidebar.tsx): a phone and a desktop each keep their own */
 const FOLD_KEY = "ovis:agents-collapsed";
 
+/** the one-line list's resting agents (idle, finished), folded under one line on this device; it starts folded */
+const RESTING_OPEN_KEY = "ovis:agents-resting-open";
+
 /** the fold of the background agents' part, kept the same way; it starts folded on every screen */
 const BACKGROUND_FOLD_KEY = "ovis:agents-background-collapsed";
 
 /** Settings → Fold helpers under their agent: the agents whose helpers this device lists in full, each by its pin key; every other agent's start folded */
 const HELPERS_OPEN_KEY = "ovis:agents-helpers-open";
 
-/** The fold that hides a row: the nearest line above it in sight that folds rows (an agent's helpers, a named group, the background part). */
+/**
+ * The fold that hides a row: the nearest folded line above it in sight (an agent's helpers, a named group, the
+ * background part, the one-line list's resting fold). A line that is open hides nothing under it: a resting
+ * helper folded under its agent's line sits after the open resting line, and it is the helpers line that hides it.
+ */
 function foldControlAbove(item: Element): HTMLButtonElement | null {
   for (let above = item.previousElementSibling; above; above = above.previousElementSibling) {
     if (above.hasAttribute("hidden")) continue;
-    if (above.matches(".agent-helpers, .agent-named-group-label, .agent-background-label")) return above.querySelector("button");
+    if (!above.matches(".agent-helpers, .agent-named-group-label, .agent-background-label")) continue;
+    const button = above.querySelector("button");
+    if (button?.getAttribute("aria-expanded") !== "true") return button;
   }
   return null;
 }
@@ -214,6 +238,17 @@ interface PinMenu { key: string; anchor: HTMLElement; point?: { x: number; y: nu
  */
 export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stateWord, watching = false, foldRequest = null, listId: givenListId, onSelect }: AgentSidebarProps) {
   const t = useT();
+  // a waiting row says how long it has waited, only when this page saw the wait begin: herdr reports no time of change,
+  // so a row already waiting when the page opened (a reload, another device) says nothing rather than a wrong "<1m"
+  const [waitStarts, setWaitStarts] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const lastStatus = useRef<Map<string, AgentStatus | undefined> | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [ticking, setTicking] = useState(false);
+  useEffect(() => {
+    if (!ticking) return;
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, [ticking]);
   const ownListId = useId();
   const listId = givenListId ?? ownListId;
   const [collapsed, setCollapsed] = useState(initialFold);
@@ -261,6 +296,67 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     .map(({ name, rows: groupRows }) => ({ name, rows: settings.agentGroups ? byState(groupRows).flatMap((group) => group.rows) : groupRows })),
   [groupNames, settings.agentGroupOf, settings.agentGroups, parts, allRows, byState]);
   const groups = useMemo(() => !settings.agentGroups || named !== null ? null : byState(parts.people), [settings.agentGroups, named, parts, byState]);
+  // Settings → Sidebar rows → One line (the default): no headings, each waiting row with how long it has waited.
+  // With Agents order → Waiting first it is herdr-app's list: the waiting rows first, the resting ones folded
+  const compact = settings.sidebarRows === "one";
+  const restingFold = compact && settings.agentOrder === "waiting";
+  const [restingOpen, setRestingOpen] = useState(() => { try { return window.localStorage.getItem(RESTING_OPEN_KEY) === "1"; } catch { return false; } });
+  const toggleResting = (): void => {
+    setRestingOpen(!restingOpen);
+    try { window.localStorage.setItem(RESTING_OPEN_KEY, restingOpen ? "0" : "1"); } catch { /* private mode: this page keeps it */ }
+  };
+  const people = useMemo(() => {
+    // Settings → Agents order → Waiting first (the default); a saved Workspaces or Activity order is kept as it is
+    if (settings.agentOrder !== "waiting" || groups !== null || named !== null) return parts.people;
+    // an agent moves with the helpers drawn under it (lib/agentRoster.ts nestHelpers): one waits when any of them does
+    const families: AgentRow[][] = [];
+    for (const row of parts.people) {
+      const family = families.at(-1);
+      const parent = row.entry.pane.parent_pane_id;
+      if (family && parent !== undefined && family.some((member) => member.machine.id === row.machine.id && member.entry.pane.pane_id === parent)) family.push(row);
+      else families.push([row]);
+    }
+    const waits = (family: AgentRow[]) => family.some((row) => rowStatus(row) === "blocked");
+    return [...families.filter(waits), ...families.filter((family) => !waits(family))].flat();
+  }, [settings.agentOrder, groups, named, parts, rowStatus]);
+  // read from every row, the filtered-out ones too, so a wait that ended out of sight starts again when it returns
+  const statuses = allRows.map((row) => [sidebarPinKey(row.machine.id, row.entry.pane.pane_id), rowStatus(row)] as const);
+  const statusSignature = statuses.map(([key, status]) => `${key}=${status ?? ""}`).join("\n");
+  useEffect(() => {
+    const seen = lastStatus.current;
+    const at = Date.now();
+    setWaitStarts((starts) => {
+      const next = new Map<string, number>();
+      for (const [key, status] of statuses) {
+        // a PC that is away says no state: a start already seen is kept, and none is made from it on its return
+        if (status === undefined) { const kept = starts.get(key); if (kept !== undefined) next.set(key, kept); continue; }
+        if (status !== "blocked") continue;
+        const before = seen?.get(key);
+        const start = starts.get(key) ?? (before !== undefined && before !== "blocked" ? at : undefined);
+        if (start !== undefined) next.set(key, start);
+      }
+      return next.size === starts.size && [...next].every(([key, start]) => starts.get(key) === start) ? starts : next;
+    });
+    setNow(at);
+    lastStatus.current = new Map(statuses);
+  }, [statusSignature]);
+  // the wait times tick only while one is drawn
+  const shouldTick = compact && waitStarts.size > 0;
+  useEffect(() => { setTicking(shouldTick); }, [shouldTick]);
+  const [pointerIn, setPointerIn] = useState(false);
+  const [focusIn, setFocusIn] = useState(false);
+  const [touchHeld, setTouchHeld] = useState(false);
+  const touchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdAfterTouch = (): void => {
+    if (touchTimer.current !== null) clearTimeout(touchTimer.current);
+    setTouchHeld(true);
+    touchTimer.current = setTimeout(() => { touchTimer.current = null; setTouchHeld(false); }, 1000);
+  };
+  useEffect(() => () => { if (touchTimer.current !== null) clearTimeout(touchTimer.current); }, []);
+  const waitedFor = (key: string, status: AgentStatus | undefined): string | null => {
+    const since = waitStarts.get(key);
+    return compact && status === "blocked" && since !== undefined ? stateAge(Math.max(0, now - since)) : null;
+  };
   // the named groups this device folds; the ungrouped rows fold under ""
   const [groupFolds, setGroupFolds] = useState(loadFoldedAgentGroups);
   // a folded list (a phone's starts so) opens while the filter keeps rows in it, so a match or the selection is
@@ -268,13 +364,36 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   const [filterFold, setFilterFold] = useState<boolean | null>(null);
   // the background part opens for the filter's time the same way: a match in it is seen
   const [backgroundFilterFold, setBackgroundFilterFold] = useState<boolean | null>(null);
+  // and the one-line list's resting fold: a resting agent the filter matched is seen, not only kept (a filter
+  // that hid its own matches would say "no match" with the match a fold away)
+  const [restingFilterOpen, setRestingFilterOpen] = useState<boolean | null>(null);
   useEffect(() => {
     if (filter.active) return;
     setFilterFold(null);
     setBackgroundFilterFold(null);
+    setRestingFilterOpen(null);
   }, [filter.active]);
   const folded = filter.active ? filterFold ?? (collapsed && rows.length === 0) : collapsed;
   const backgroundFolded = filter.active ? backgroundFilterFold ?? false : backgroundCollapsed;
+  const restingShown = filter.active ? restingFilterOpen ?? true : restingOpen;
+  // a state change never moves a row under the pointer or the focus (HIG): while either is in the list, rows keep
+  // the order and the part they were drawn in, and a row waking from the resting fold waits until it leaves. Only
+  // what changes by itself waits: the reader's own doing (the filter, the resting fold, a selection, a pin) draws
+  // the rows as they are at once, and that drawing is the one held from then on
+  const readerKey = [filter.query, restingShown, selectedMachineId, selectedPaneId, ...pinned].join("\n");
+  const held = useRef<{ readerKey: string; order: readonly string[]; active: ReadonlySet<string> } | null>(null);
+  const holding = (pointerIn || focusIn || touchHeld) && held.current?.readerKey === readerKey;
+  const rowKey = (row: AgentRow) => sidebarPinKey(row.machine.id, row.entry.pane.pane_id);
+  const busy = (row: AgentRow) => { const status = rowStatus(row); return status === "blocked" || status === "working" || status === "waiting"; };
+  useEffect(() => {
+    if (holding) return;
+    held.current = { readerKey, order: people.map(rowKey), active: new Set(people.filter(busy).map(rowKey)) };
+  });
+  const heldOrder = holding ? held.current?.order ?? [] : [];
+  const shownPeople = !holding ? people : [...people].sort((a, b) => {
+    const at = (row: AgentRow) => { const index = heldOrder.indexOf(rowKey(row)); return index < 0 ? Number.MAX_SAFE_INTEGER : index; };
+    return at(a) - at(b);
+  });
   // a drag or a key on the line above folds or opens the list as its caret does: for the filter's time
   // under a filter, else kept on this device
   useEffect(() => {
@@ -323,7 +442,13 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     if (menu && (menuRow === undefined || !menu.anchor.isConnected)) setMenu(null);
   }, [menu, menuRow]);
   // herdr names a PC only beside another: the rows' line does the same
-  const machineName = (machine: Machine): string | null => machines.length > 1 ? machine.name : null;
+  // and on one line never names this PC: a row with no PC is on this one
+  const machineName = (machine: Machine): string | null => machines.length > 1 && !(settings.sidebarRows === "one" && machine.kind === "local") ? machine.name : null;
+  // the row's tooltip and its menu name the PC whenever there is more than one, this one included (G-019): the
+  // line may leave it out, the places a reader goes for the whole do not
+  const wholePlace = (machine: Machine, parts: readonly (string | null)[]): string => [...new Set([machines.length > 1 ? machine.name : null, ...parts])].filter((part): part is string => part !== null && part !== "").join(" · ");
+  // a row's ⋯ opens a sheet at a phone's width and a popover above it (RowMenu): the button says which (G-037)
+  const sheet = useMediaQuery(SHEET_QUERY);
 
   // what a row says of its agent, for the row and for its open menu
   const describe = ({ machine, entry }: AgentRow) => {
@@ -345,7 +470,19 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const markKind = kind && kind !== title.trim() && !contextParts.includes(kind) ? kind : null;
     // a PC that is away says nothing of its agents now, its plugins' words included
     const tokens = online ? paneTokenValues(rowTokens, entry.canonicalAgent, pane.tokens ?? agent?.tokens) : [];
-    return { online, title, name, mark, context, markKind, kind, tokens };
+    // on one line a row leads with what the agent is on (its own label, else its tab's name) and says its workspace once
+    if (settings.sidebarRows === "one") {
+      // a tab herdr only numbers ("Tab 2") never stands in for what the agent is on: only one the user named does
+      const place = tabs.findIndex((candidate) => candidate.tab_id === tab?.tab_id) + 1 || tab?.number;
+      const named = pane.label?.trim() || (tab ? customTabLabel(tab, place) : null) || title;
+      // a row titled by its worktree's own name, as herdr made it, says that name as the workspace row does
+      const lead = workspace.worktree?.is_linked_worktree && named === workspace.label ? compactWorktreeName(named) : named;
+      // a named tab that leads keeps the agent's own title after it, so two agents of one tab never read the same
+      const own = title !== lead && title !== workspace.label ? title : null;
+      const leadParts = [...new Set([own, ...agentContext({ ...parts, title: lead, tabName: parts.tabName === lead ? null : parts.tabName, workspaceLabel: workspace.worktree?.is_linked_worktree ? compactWorktreeName(workspace.label) : workspace.label })])].filter((part): part is string => part !== null && part !== lead);
+      return { online, title: lead, name, mark, context: leadParts.join(" · "), place: wholePlace(machine, leadParts), markKind: kind && kind !== lead && !leadParts.includes(kind) ? kind : null, kind, tokens };
+    }
+    return { online, title, name, mark, context, place: wholePlace(machine, contextParts), markKind, kind, tokens };
   };
 
   // a helper reads under the agent that started it when that row is just above it in the same list (lib/agentRoster.ts)
@@ -392,7 +529,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     // each agent row with the helpers drawn right under it, and the helpers its fold hides
     const helpersOf = new Map<AgentRow, AgentRow[]>();
     const foldedHelpers = new Set<AgentRow>();
-    for (const list of [...named ? named.map((group) => group.rows) : groups ? groups.map((group) => group.rows) : [parts.people], parts.background]) {
+    for (const list of [...named ? named.map((group) => group.rows) : groups ? groups.map((group) => group.rows) : [people], parts.background]) {
       const listDepths = depths(list);
       for (const [row, depth] of listDepths) restDepths.set(row, depth);
       if (foldHelpers) {
@@ -411,7 +548,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
       for (const [row, line] of treeLines(shown, listDepths)) restLines.set(row, line);
     }
     return { restDepths, restLines, helpersOf, foldedHelpers };
-  }, [parts, groups, named, foldHelpers, openHelpers, selectedMachineId, selectedPaneId, rowStatus]);
+  }, [parts, people, groups, named, foldHelpers, openHelpers, selectedMachineId, selectedPaneId, rowStatus]);
   // a helper with the focus that folds away (it stopped needing the reader, or the selection moved) hands it to its line
   useLayoutEffect(() => {
     const active = document.activeElement;
@@ -464,14 +601,16 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const selected = machine.id === selectedMachineId && pane.pane_id === selectedPaneId;
     // under the filter a row it did not match is there for the selection: drawn as context, and said so
     const filterContext = filter.active && machineFilter(filter, machine.id)?.matchedPanes.has(pane.pane_id) !== true;
-    const { online, title, name, mark, context, markKind, kind, tokens } = describe(row);
+    const { online, title, name, mark, context, place, markKind, kind, tokens } = describe(row);
+    const spoken = [title, markKind, ...(depth > 0 ? [] : [name, ...context.split(" · ")])];
+    const missingContext = [entry.canonicalAgent, entry.workspace.label, machine.name].filter((part) => part && !spoken.includes(part)).join(" · ");
     // the row cuts a long value: the tooltip, and a phone's menu sheet, say each in full
     const blocked = online ? blockedNote(pane, t) : null;
     const blockedShort = online ? blockedLabel(pane, t) : null;
     const startedBy = parentRow ? t("Started by {name}", { name: describe(parentRow).title }) : null;
     const status = online ? activity.status(machine.id, pane) : undefined;
     const progress = online && pane.agent_progress !== undefined && (status === "working" || status === "blocked") ? t("Progress {percent}%", { percent: pane.agent_progress }) : null;
-    const tooltip = [...new Set([pane.pane_id, title, context, startedBy, blocked, progress, ...tokens, markKind, name, kind, pane.cwd, online ? null : stateWord(machine)].filter(Boolean))].join("\n");
+    const tooltip = [...new Set([pane.pane_id, title, rowTitle(entry), place, machines.length === 1 ? machine.name : null, startedBy, blocked, progress, ...tokens, markKind, name, kind, pane.cwd, online ? null : stateWord(machine)].filter(Boolean))].join("\n");
     const pinKey = sidebarPinKey(machine.id, pane.pane_id);
     const menuOpen = menu?.key === pinKey;
     // one menu for the ⋯ and a right-click, which opens it at the pointer and leaves the focus where it was
@@ -488,11 +627,12 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
           event.dataTransfer.effectAllowed = "move";
           event.dataTransfer.setData(PANE_DRAG_TYPE, paneDragData({ machineId: machine.id, paneId: pane.pane_id }));
         }}>
+        {missingContext && <span className="visually-hidden">{missingContext} · </span>}
         {/* a saved roster's state is not news: a PC that is away says nothing about its agents */}
-        <AgentRowBody mark={mark} markKind={markKind} title={title} name={name} context={context} tokens={tokens} backgroundTasks={online ? pane.background_tasks : 0} plan={online ? pane.plan : undefined} paneContext={online && settings.sidebarContext ? pane.context : undefined} status={status} note={filterContext && selected ? t("Selected") : null} muted={muted?.includes(paneMuteKey(machine.id, pane.pane_id)) === true} locked={locked.has(pinKey)} blockedNote={blocked} blockedLabel={blockedShort} progress={online ? pane.agent_progress : undefined} helper={depth > 0} />
+        <AgentRowBody mark={mark} markKind={markKind} title={title} name={name} context={context} tokens={tokens} backgroundTasks={online ? pane.background_tasks : 0} plan={online ? pane.plan : undefined} paneContext={online && settings.sidebarContext ? pane.context : undefined} status={status} note={filterContext && selected ? t("Selected") : null} muted={muted?.includes(paneMuteKey(machine.id, pane.pane_id)) === true} locked={locked.has(pinKey)} blockedNote={blocked} blockedLabel={blockedShort} progress={online ? pane.agent_progress : undefined} helper={depth > 0} since={waitedFor(pinKey, status)} />
       </button>
       <div className="agent-actions">
-        <button type="button" className="sidebar-row-action row-menu-toggle" aria-label={t("More for {title}", { title })} aria-haspopup="menu" aria-expanded={menuOpen} onClick={(event) => toggleMenu(event.currentTarget)}>
+        <button type="button" className="sidebar-row-action row-menu-toggle" aria-label={t("More for {title}", { title })} aria-haspopup={sheet ? "dialog" : "menu"} aria-expanded={menuOpen} onClick={(event) => toggleMenu(event.currentTarget)}>
           <Ellipsis aria-hidden="true" />
         </button>
       </div>
@@ -558,7 +698,27 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     : groups ? groups.flatMap(({ group, rows: groupRows }) => [
       <li className="agent-group-label" key={`group:${group}`} data-group={group} aria-hidden="true"><span>{groupLabel(group, t)}</span><span className="agent-group-count">{groupRows.length}</span></li>,
       ...listItems(groupRows),
-    ]) : listItems(parts.people);
+    ]) : restingFold && named === null && groups === null ? (() => {
+      // one line, waiting first: the agents that wait or work stay; the resting ones (idle, finished) fold under one line, a selected one in sight
+      const inActive = (row: AgentRow) => holding ? held.current?.active.has(rowKey(row)) === true : busy(row);
+      const active = shownPeople.filter(inActive);
+      const resting = shownPeople.filter((row) => !inActive(row));
+      const restingCount = shownPeople.filter((row) => !busy(row)).length;
+      if (resting.length === 0) return listItems(shownPeople);
+      const isSelected = (row: AgentRow) => row.machine.id === selectedMachineId && row.entry.pane.pane_id === selectedPaneId;
+      return [...listItems(active),
+        <li className="agent-background-label agent-resting-label" key="resting">
+          <button type="button" className="agent-background-toggle" aria-expanded={restingShown} onClick={() => {
+            // under the filter the fold is the filter's, for its time; else the reader's own, kept on this device
+            if (filter.active) { setRestingFilterOpen(!restingShown); return; }
+            toggleResting();
+          }}>
+            {restingShown ? <ChevronDown className="agent-section-caret" aria-hidden="true" /> : <ChevronRight className="agent-section-caret" aria-hidden="true" />}
+            <span>{t("+{n} resting", { n: restingCount })}</span>
+          </button>
+        </li>,
+        ...resting.flatMap((row) => listItems([row], !restingShown && !isSelected(row)))];
+    })() : listItems(shownPeople);
   const runPin = (state: PinMenu): void => {
     // where the menu hands the focus back (lib RowMenu): the ⋯ itself unless the right-click said otherwise
     const back = state.previousFocus === undefined ? state.anchor : state.previousFocus;
@@ -568,7 +728,9 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   };
   // Settings -> Sidebar rows -> One line: an agent row is one line too, its place dim after its title
   const oneLine = settings.sidebarRows === "one";
-  return <section ref={sectionRef} className={`agents-sidebar${folded ? " is-collapsed" : ""}${rows.length === 0 ? " is-empty" : ""}${oneLine ? " is-one-line" : ""}`} aria-label={t("Agents")}>
+  // the folded list still says how many of its agents wait for the reader (G-016), in the head's own words
+  const waiting = allRows.filter((row) => rowStatus(row) === "blocked").length;
+  return <section ref={sectionRef} onPointerEnter={() => setPointerIn(true)} onPointerLeave={() => setPointerIn(false)} onTouchEnd={holdAfterTouch} onTouchCancel={holdAfterTouch} onFocus={() => setFocusIn(true)} onBlur={(event) => { if (!(typeof Node === "function" && event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setFocusIn(false); }} className={`agents-sidebar${folded ? " is-collapsed" : ""}${rows.length === 0 ? " is-empty" : ""}${oneLine ? " is-one-line is-compact" : ""}`} aria-label={t("Agents")}>
     <button type="button" className="agent-section-toggle sidebar-section-label" aria-expanded={!folded} aria-controls={listId} onClick={() => {
       // the filter's fold lasts for the filter's time and is never kept; the reader's own is
       if (filter.active) { setFilterFold(!folded); return; }
@@ -577,8 +739,9 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     }}>
       {folded ? <ChevronRight className="agent-section-caret" aria-hidden="true" /> : <ChevronDown className="agent-section-caret" aria-hidden="true" />}
       <span>{t("Agents")}</span>
+      {folded && waiting > 0 && <span className="agent-section-waiting">{t("{count} need you", { count: waiting })}</span>}
       {/* the count is of the agents running, filter or not, open or folded */}
-      {allRows.length > 0 && <span className="agent-section-count">{allRows.length}</span>}
+      {allRows.length > 0 && !compact && <span className="agent-section-count">{allRows.length}</span>}
     </button>
     <div ref={listRef} className="agent-list-contents" id={listId} hidden={folded}>
       <p className={shownEmpty === null ? "visually-hidden" : "agent-empty"} role="status">{shownEmpty}</p>
@@ -599,7 +762,8 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
                 try { window.localStorage.setItem(BACKGROUND_FOLD_KEY, backgroundCollapsed ? "0" : "1"); } catch { /* private mode: this page keeps it */ }
               }}>
                 {backgroundFolded ? <ChevronRight className="agent-section-caret" aria-hidden="true" /> : <ChevronDown className="agent-section-caret" aria-hidden="true" />}
-                <span>{t("Background agents")}</span><span className="agent-section-count">{parts.background.length}</span>
+                {compact ? <span>{t("+{n} background", { n: parts.background.length })}</span>
+                  : <><span>{t("Background agents")}</span><span className="agent-section-count">{parts.background.length}</span></>}
               </button>
             </li>,
             ...listItems(parts.background, backgroundFolded),
@@ -607,7 +771,10 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
         </ul>}
       </>}
     </div>
-    {menu && menuShown && <RowMenu anchor={menu.anchor} point={menu.point} restoreFocusTo={menu.previousFocus} title={menuShown.title} subtitle={menuShown.context} detail={[menuBlocked, ...menuShown.tokens].filter(Boolean).join(" · ") || undefined} onClose={closeMenu} items={[
+    {/* the menu names the agent it is for above its items (G-022): the popover covers the row */}
+    {menu && menuShown && <RowMenu anchor={menu.anchor} point={menu.point} restoreFocusTo={menu.previousFocus} title={menuShown.title} subtitle={menuShown.place} detail={[menuBlocked, ...menuShown.tokens].filter(Boolean).join(" · ") || undefined} onClose={closeMenu}
+      header={<span className="row-menu-target"><span className="row-menu-target-name" title={menuShown.title}>{menuShown.title}</span>{menuShown.place && <span className="row-menu-target-place" title={menuShown.place}>{menuShown.place}</span>}</span>}
+      items={[
       // a locked row keeps its pin until it is unlocked
       ...(menuLocked ? [] : [menuPinned
         ? { id: "unpin", label: t("Unpin agent"), icon: PinOff, run: () => runPin(menu) }

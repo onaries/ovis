@@ -67,7 +67,6 @@ export const FILES_JA: Record<string, string> = {
   "This comparison is not one the list answered; refresh the list.": "この比較は一覧が返したものではありません。一覧を更新してください。",
   "Refresh changes": "変更を更新",
   "No commits yet": "まだコミットがありません",
-  "Added": "追加",
   "Deleted": "削除",
   "Modified": "変更",
   "Renamed": "名前変更",

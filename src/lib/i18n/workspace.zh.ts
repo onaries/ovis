@@ -33,7 +33,6 @@ export const WORKSPACE_ZH: Record<string, string> = {
   "Earlier sessions · {name}": "之前的会话 · {name}",
   "Close session list": "关闭会话列表",
   "Sessions started in {folder}": "在 {folder} 开始的会话",
-  "Reading sessions…": "正在读取会话…",
   "No earlier {agent} sessions in this folder.": "此文件夹没有之前的 {agent} 会话。",
   "Earlier sessions": "之前的会话",
   "Open the pane showing {title}": "打开显示 {title} 的面板",

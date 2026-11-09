@@ -89,61 +89,146 @@
   color: var(--text);
 }
 
-/* the other ways: one line each, the chosen one opened under its line */
-.connect-ways {
+/* Add a connection's ways, one tab each across the top, as herdr's Add a machine */
+.connect-tabs {
+  align-self: stretch;
+}
+
+.connect-tabs > button {
+  flex: 1;
+}
+
+.connect-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.connect-tab p {
+  margin: 0;
+}
+
+/* a tab not chosen stays mounted (its pairing code is kept), hidden: the flex above would show it */
+.connect-tab[hidden] {
+  display: none;
+}
+
+.connect-section {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  margin-top: var(--space-2);
 }
 
-.connect-way {
+.connect-section + .connect-section {
+  padding-top: var(--space-3);
+  border-top: var(--hairline) solid var(--border);
+}
+
+/* the PCs a way found: its name, how it is reached, where it was found, then Add, Connect or Added */
+.connect-found {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.connect-found-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.connect-found-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
+  gap: var(--space-2);
   min-height: var(--row-h);
-  padding: var(--space-2) var(--space-3);
-  border: var(--hairline) solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
+}
+
+.connect-found-name {
   color: var(--text-strong);
-  font: inherit;
-  text-align: start;
-  cursor: pointer;
+  font-weight: var(--fw-medium);
 }
 
-.connect-way:hover {
-  border-color: var(--border-strong);
-}
-
-.connect-way-chevron {
-  width: 16px;
-  height: 16px;
+.connect-found-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-dim);
-  transition: transform var(--dur-fast) var(--ease-out);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.connect-way[aria-expanded="true"] .connect-way-chevron {
-  transform: rotate(90deg);
+.connect-found-name + .connect-found-source {
+  margin-inline-start: auto;
 }
 
-.connect-way-body {
-  padding: var(--space-3) var(--space-1) var(--space-1);
+.connect-found-source {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
 }
 
-.connect-typed {
-  margin-top: var(--space-2);
+.connect-found-added {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--status-done);
+  font-size: var(--fs-sm);
 }
 
-/* in the dialog's width the typed-code row stacks: its words, then the field and its button */
-.connect-typed .settings-row {
+.connect-found-added svg {
+  width: 14px;
+  height: 14px;
+}
+
+.connect-ssh-form {
+  display: flex;
   flex-direction: column;
-  align-items: stretch;
   gap: var(--space-2);
 }
 
-/* the fold's toggle stands alone here, with no sentence before it to hang its dot on */
-.connect-other .settings-details-toggle::before {
-  content: none;
+.connect-ssh-field {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.connect-found-failed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.connect-ssh-field > .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.connect-signin-button {
+  align-self: flex-start;
+}
+
+/* on a phone the address goes under the name, so the name, its source and its button keep one line */
+@media (max-width: 480px) {
+  .connect-found-row {
+    flex-wrap: wrap;
+    row-gap: 0;
+    padding-block: var(--space-1);
+  }
+
+  .connect-found-detail {
+    order: 1;
+    flex-basis: 100%;
+  }
+
+  .connect-found-source {
+    margin-inline-start: auto;
+  }
 }

@@ -11,7 +11,7 @@ it("publishes inherited rows on the existing authenticated roster and refuses co
   const profile: HerdrMachineProfile = { id: "catalog-test", label: "Saved PC", enabled: true, target: { destination: "fixture-host", session: "named-session" } };
   const server = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "test-token", tailscaleOwner: null, herdrProfiles: async () => [profile] });
   const base = `http://127.0.0.1:${server.port}`;
-  const headers = { authorization: "Bearer test-token", "x-herdr-machine": "1", "content-type": "application/json" };
+  const headers = { authorization: "Bearer test-token", "x-herdr-machine": "1", "x-herdr-update": "1", "content-type": "application/json" };
   try {
     expect((await fetch(`${base}/api/machines`)).status).toBe(401);
     const response = await fetch(`${base}/api/machines`, { headers });

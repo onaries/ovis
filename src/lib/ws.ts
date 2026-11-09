@@ -161,6 +161,8 @@ export class HerdrSocket {
   private retries = 0;
   /** When this connection opened; a brief open must not restart a flapping connection's retries. */
   private openedAt: number | null = null;
+  /** when the last open connection ended; null while one is open or none ever was. Failed attempts since leave it */
+  private lostAt: number | null = null;
   private reconnectTimer: number | null = null;
   /** the deadline of the attempt still in CONNECTING */
   private connectTimer: number | null = null;
@@ -282,6 +284,11 @@ export class HerdrSocket {
     return this.openedAt;
   }
 
+  /** when the open connection this one had ended (Date.now()), however many attempts failed since; null while open or before any */
+  get lostSince(): number | null {
+    return this.lostAt;
+  }
+
   get connected(): boolean {
     return this.socket?.readyState === SOCKET_OPEN;
   }
@@ -366,6 +373,7 @@ export class HerdrSocket {
       this.connectionState = "open";
       this.trace.record("open", { elapsed_ms: Date.now() - started });
       this.openedAt = Date.now();
+      this.lostAt = null;
       this.lastFrameAt = this.openedAt;
       this.watchIdle(socket);
       // the path is back: reads sent on the lost one would hold the browser's connections to the server
@@ -567,6 +575,7 @@ export class HerdrSocket {
     this.machineEventsOffered = null;
     if (this.submits.size > 0) this.trace.record("submit_disconnect", { pending: this.submits.size }, true);
     if (this.openedAt !== null && Date.now() - this.openedAt >= STABLE_CONNECTION_MS) this.retries = 0;
+    if (this.openedAt !== null) this.lostAt = Date.now();
     this.openedAt = null;
     this.socket = null;
     this.clearConnectTimer();

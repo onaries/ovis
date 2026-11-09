@@ -317,6 +317,8 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { foreign,
   view.setAttribute("aria-hidden", "true");
   const rows: HTMLDivElement[] = [];
   const drawn: string[] = [];
+  const widths = new Map<string, number>();
+  let measuredFont = "";
   const scratch = term.buffer.active.getNullCell();
   let active = false;
 
@@ -381,6 +383,9 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { foreign,
     const grid = screen();
     view.style.fontFamily = term.options.fontFamily ?? "";
     view.style.fontSize = `${term.options.fontSize ?? 13}px`;
+    const font = `${view.style.fontFamily}:${view.style.fontSize}:${term.options.fontWeight}:${term.options.fontWeightBold}:${devicePixelRatio}`;
+    if (font !== measuredFont) { widths.clear(); measuredFont = font; }
+    const cellWidth = (grid?.offsetWidth ?? 0) / term.cols;
     // a row's own height in the grid, so the folded rows stand as far apart as the grid's
     if (grid && term.rows > 0) view.style.setProperty("--fold-line", `${grid.offsetHeight / term.rows}px`);
     view.style.color = theme.foreground ?? "";
@@ -389,7 +394,6 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { foreign,
     const probe = document.createElement("span");
     probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;letter-spacing:0";
     view.append(probe);
-    const widths = new Map<string, number>();
     const spacing = (cell: IBufferCell): number => {
       const chars = cell.getChars() || " ";
       const weight = cell.isBold() ? term.options.fontWeightBold ?? "bold" : term.options.fontWeight ?? "normal";
@@ -401,9 +405,10 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { foreign,
         probe.style.fontStyle = style;
         probe.textContent = chars;
         width = probe.getBoundingClientRect().width;
+        if (widths.size >= 4096) widths.clear();
         widths.set(key, width);
       }
-      return Math.max(1, cell.getWidth()) * (grid?.offsetWidth ?? 0) / term.cols - width;
+      return Math.max(1, cell.getWidth()) * cellWidth - width;
     };
     while (rows.length < term.rows) {
       const row = document.createElement("div");
@@ -529,6 +534,8 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { foreign,
   };
   view.addEventListener("click", tap);
   view.addEventListener("wheel", wheel, { passive: false });
+  const fontsChanged = (): void => { widths.clear(); sync(); };
+  document.fonts.addEventListener("loadingdone", fontsChanged);
   return {
     get active() { return active; },
     sync,
@@ -537,6 +544,7 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { foreign,
       rendered.dispose();
       resized.dispose();
       measured.disconnect();
+      document.fonts.removeEventListener("loadingdone", fontsChanged);
       view.removeEventListener("click", tap);
       view.removeEventListener("wheel", wheel);
       view.remove();

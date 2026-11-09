@@ -5,6 +5,8 @@ import { appendFileSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, st
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { asCodexTitle, codexOpenRollout, codexTranscriptPath, limitCodexHistoryForTests, paneRunsCodex } from "./codex.ts";
+import * as codexModule from "./codex.ts";
+import * as conversationModule from "./conversation.ts";
 import * as processStart from "./process-start.ts";
 import { processStartedAt } from "./process-start.ts";
 import * as kiro from "./kiro-terminal.ts";
@@ -597,6 +599,60 @@ async function runningCodex(resume = false, env = process.env): Promise<ReturnTy
   return child;
 }
 
+/** As runningCodex, but holding `rollout` open, as a running Codex holds the one it writes. */
+async function codexHolding(rollout: string): Promise<ReturnType<typeof Bun.spawn>> {
+  const node = Bun.which("node");
+  if (node === null) throw new Error("node is required for the Codex process fixture");
+  const child = Bun.spawn([
+    "/bin/bash", "-c", 'exec -a "$1" "$2" -e \'globalThis.held = require("node:fs").openSync(process.argv[1], "r"); process.stdout.write("READY\\n"); process.stdin.resume()\' "$3"',
+    "fixture", join(root, "codex"), node, rollout,
+    // its store is the one it writes in, as a real Codex's environment names it
+  ], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, CODEX_HOME: home } });
+  children.push(child);
+  expect(await firstLine(child.stdout)).toBe("READY\n");
+  return child;
+}
+
+// /proc on Linux, lsof -FnDi on macOS: both name the held file itself
+for (const idTitle of [false, true]) {
+it.skipIf(process.platform === "win32")(`records the exact identity of the rollout its Codex holds open, for the file it returns (#3402), ID title: ${idTitle}`, async () => {
+  if (idTitle) idOnlyTitle();
+  const child = await codexHolding(path);
+  // macOS has no /proc to read argv from: herdr's foreground metadata carries it there
+  foreground = [{ pid: child.pid, name: "codex", argv: [join(root, "codex")] }];
+  const proofs = new Map<string, string>();
+  expect(await codexTranscriptPath(root, root, home, [{
+    pane_id: root, workspace_id: root, tab_id: root, terminal_id: root,
+    agent: "codex", agent_status: "working", cwd: root, focused: false, revision: 0,
+  }], false, false, proofs)).toBe(path);
+  const proven = statSync(path, { bigint: true });
+  expect(proofs.get(path)).toBe(`${proven.dev}:${proven.ino}`);
+});
+
+it.skipIf(process.platform === "win32")(`does not read a rollout renamed over the one its Codex was proven to hold, from resolver to outcome (#3402), ID title: ${idTitle}`, async () => {
+  if (idTitle) idOnlyTitle();
+  const child = await codexHolding(path);
+  foreground = [{ pid: child.pid, name: "codex", argv: [join(root, "codex")] }];
+  const foreign = join(root, "foreign.jsonl");
+  writeFileSync(foreign, JSON.stringify({ type: "session_meta", payload: { id: "foreign", cwd: root } }) + "\n");
+  // the real resolver proves the held rollout; another file is renamed over it before the outcome read's stat
+  // first without the swap: the real resolver's proof matches the file it proved, so the read goes on (not an
+  // empty proof that refuses everything)
+  expect(await conversationModule.readCommandTranscript(root)).not.toBeNull();
+  const resolver = codexModule.codexTranscriptPath;
+  let swapped = false;
+  const swap = spyOn(codexModule, "codexTranscriptPath").mockImplementation(async (...args: Parameters<typeof resolver>) => {
+    const chosen = await resolver(...args);
+    if (chosen === path) { fs.renameSync(foreign, path); swapped = true; }
+    return chosen;
+  });
+  try {
+    expect(await conversationModule.readCommandTranscript(root)).toBeNull();
+    expect(swapped).toBe(true);
+  } finally { swap.mockRestore(); }
+});
+}
+
 it.skipIf(process.platform !== "linux")("selects the resumed rollout when Linux foreground metadata omits argv", async () => {
   const child = await runningCodex(true);
   foreground = [{ pid: child.pid, name: "codex" }];
@@ -606,6 +662,22 @@ it.skipIf(process.platform !== "linux")("selects the resumed rollout when Linux 
 it("selects the resumed rollout for the observed native executable alias", async () => {
   foreground = [{ pid: 2147483647, argv: ["/home/user/.local/bin/codex.opencodex-real", "resume", thread] }];
   expect(await resolve()).toBe(path);
+});
+
+// a screen match proves no file (the maintainer's decision): the outcome read keeps the exact stat for it
+it("records no proof for the rollout its screen matched (#3402)", async () => {
+  foreground = [{ pid: 2147483647, argv: ["/usr/bin/codex"] }];
+  writeFileSync(path, [
+    { type: "session_meta", payload: { id: thread, cwd: root } },
+    { type: "event_msg", payload: { type: "agent_message", message: answer } },
+  ].map((entry) => JSON.stringify(entry)).join("\n"));
+  screen = `• ${answer}`;
+  const proofs = new Map<string, string>();
+  expect(await codexTranscriptPath(root, root, home, [{
+    pane_id: root, workspace_id: root, tab_id: root, terminal_id: root,
+    agent: "codex", agent_status: "working", cwd: root, focused: false, revision: 0,
+  }], false, false, proofs)).toBe(path);
+  expect(proofs.has(path)).toBe(false);
 });
 
 it("binds a conversation with a spaced local file link and keeps it when its screen no longer tells", async () => {
@@ -705,6 +777,16 @@ it("reads an explicitly configured thread-id title without a visible answer or r
   idOnlyTitle();
   expect(await codexTranscriptPath(root, root, home)).toBe(path);
   expect(await codexOpenRollout(root, root, home)).toBe(path);
+});
+
+it("reads an ID-only title when another conversation's prompt mentions that thread ID", async () => {
+  idOnlyTitle();
+  otherFolderThread();
+  const db = new Database(join(home, "state_5.sqlite"));
+  db.exec("ALTER TABLE threads ADD COLUMN title TEXT");
+  db.query("UPDATE threads SET title = ? WHERE id = ?").run(`Investigate the pane resumed on ${thread}`, other);
+  db.close();
+  expect(await codexTranscriptPath(root, root, home)).toBe(path);
 });
 
 it("follows ID-only titles through A-B-A and clears the old conversation when the title disappears", async () => {

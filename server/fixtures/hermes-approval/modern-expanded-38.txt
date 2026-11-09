@@ -1,0 +1,40 @@
+mand — it did not run.]
+
+──────────────────────────────────────
+──
+☤ Hermes
+Done.
+──────────────────────────────────────
+──
+
+─ 16.0s · 1:06 PM
+
+
+──────────────────────────────────────
+──
+❯ clean up the cut scratch folder
+──────────────────────────────────────
+──
+╭──────────────────────────────────╮
+│ ⚠️  Dangerous Command            │
+│                                  │
+│ rm -rf ./scratch/first-build-    │
+│ output ./scratch/second-build-   │
+│ output ./scratch/third-build-    │
+│ output ./scratch/fourth-build-   │
+│ output ./scratch/fifth-build-    │
+│ output ./scratch/sixth-build-    │
+│ output                           │
+│                                  │
+│   1. Allow once                  │
+│   2. Allow for this session      │
+│   3. Add to permanent allowlist  │
+│ ❯ 4. Deny                        │
+│                                  │
+│ recursive delete                 │
+╰──────────────────────────────────╯
+
+  ↑/↓ to select, Enter to confirm  (35
+── ⠴ 💻 rm -rf ./scratch/first-buil...
+⚠
+ ☤ fixture-model · 2m

@@ -1,4 +1,160 @@
 {
+  "0.5.1": {
+    "en": {
+      "new": [
+        "Sign in with GitHub or Google right from the first-run welcome."
+      ],
+      "improved": [
+        "Add a connection is now three tabs: SSH, Phones and devices, relay.",
+        "A Tailscale PC with an older Ovis shows a hint to update it.",
+        "The same-Wi-Fi direct connection notice can be dismissed."
+      ],
+      "fixed": [
+        "The terminal cursor moves again with arrow keys and after a space.",
+        "A Claude pane whose hook ran claude -p shows its own chat again.",
+        "Safari shows the sidebar's workspace list at full height again.",
+        "On a phone, a swipe on a table or code block scrolls the file.",
+        "On Android, key-bar keys no longer reopen a hidden keyboard."
+      ]
+    },
+    "ko": {
+      "new": [
+        "첫 화면에서 바로 GitHub나 Google로 로그인할 수 있어요."
+      ],
+      "improved": [
+        "연결 추가가 SSH, 휴대폰과 기기, 릴레이 세 탭으로 바뀌었어요.",
+        "옛 Ovis를 쓰는 Tailscale PC에는 업데이트 안내가 떠요.",
+        "같은 Wi-Fi 직접 연결 안내를 닫을 수 있어요."
+      ],
+      "fixed": [
+        "터미널 커서가 방향키와 띄어쓰기 뒤에 다시 제대로 움직여요.",
+        "훅이 claude -p를 실행한 Claude 창도 자기 대화를 다시 보여 줘요.",
+        "Safari에서 사이드바 워크스페이스 목록이 다시 다 보여요.",
+        "휴대폰에서 표나 코드 블록 위를 밀어도 파일이 스크롤돼요.",
+        "Android에서 키 바를 눌러도 내려 둔 키보드가 다시 뜨지 않아요."
+      ]
+    },
+    "ja": {
+      "new": [
+        "初回の案内画面から GitHub か Google でサインインできます。"
+      ],
+      "improved": [
+        "接続を追加が SSH・スマホと端末・リレーの 3 タブになりました。",
+        "古い Ovis の Tailscale PC には更新の案内が出ます。",
+        "同じ Wi-Fi の直接接続の案内を閉じられます。"
+      ],
+      "fixed": [
+        "ターミナルのカーソルが矢印キーとスペースの後に再び動きます。",
+        "フックが claude -p を実行した Claude ペインも自分の会話を表示します。",
+        "Safari でサイドバーのワークスペース一覧が再び全部見えます。",
+        "スマホで表やコードブロックの上をスワイプしてもファイルが動きます。",
+        "Android でキーバーを押しても、閉じたキーボードが再び開きません。"
+      ]
+    },
+    "zh": {
+      "new": [
+        "首次欢迎页即可用 GitHub 或 Google 登录。"
+      ],
+      "improved": [
+        "添加连接改为 SSH、手机和设备、中继三个标签页。",
+        "运行旧版 Ovis 的 Tailscale 电脑会提示更新。",
+        "同一 Wi-Fi 直连提示可以关闭。"
+      ],
+      "fixed": [
+        "终端光标在方向键和空格之后又能正确移动。",
+        "钩子运行过 claude -p 的 Claude 窗格会重新显示自己的对话。",
+        "Safari 中侧边栏的工作区列表重新完整显示。",
+        "在手机上滑动表格或代码块时文件会正常滚动。",
+        "在 Android 上点按键栏不会再弹出已收起的键盘。"
+      ]
+    }
+  },
+  "0.5.0": {
+    "en": {
+      "new": [
+        "Ovis now comes as a desktop app for macOS, Windows and Linux.",
+        "Sign in with GitHub or Google to see your PCs; new devices ask first.",
+        "Pair a phone through the relay by comparing six digits, no code.",
+        "Ovis also runs on herdr-core, the terminals of the Herdr app.",
+        "Add another PC through the relay, with no SSH or open port."
+      ],
+      "improved": [
+        "Phones nearby connect through a regional relay, with far less wait.",
+        "A phone reconnects within about a second after its PC restarts.",
+        "Chat shows a reply at once after a silent network drop.",
+        "On a phone, Return adds a new line and the Send button sends."
+      ],
+      "fixed": [
+        "Typing sent just before a connection drops is kept, not lost.",
+        "A long Antigravity chat no longer stalls other requests.",
+        "Pictures in a long Claude conversation load quickly.",
+        "The app loads again on Safari and iOS 16.0 to 16.3."
+      ]
+    },
+    "ko": {
+      "new": [
+        "Ovis를 macOS, Windows, Linux용 데스크톱 앱으로 쓸 수 있습니다.",
+        "GitHub이나 Google로 로그인하면 내 PC가 모두 보이고, 새 기기는 승인을 받습니다.",
+        "코드 없이 여섯 자리 숫자를 비교해 릴레이로 휴대폰을 연결합니다.",
+        "Herdr 앱의 터미널인 herdr-core에서도 Ovis가 돌아갑니다.",
+        "SSH나 열린 포트 없이 릴레이로 다른 PC를 추가합니다."
+      ],
+      "improved": [
+        "가까운 지역 릴레이로 휴대폰이 훨씬 빨리 연결됩니다.",
+        "PC가 다시 켜지면 휴대폰이 1초 안팎으로 다시 연결됩니다.",
+        "네트워크가 조용히 끊겼다 돌아오면 Chat이 답을 바로 보여 줍니다.",
+        "휴대폰에서 Return은 줄을 바꾸고, 보내기 버튼이 보냅니다."
+      ],
+      "fixed": [
+        "연결이 끊기기 직전에 친 입력이 사라지지 않고 남습니다.",
+        "긴 Antigravity 대화가 다른 요청을 더 이상 멈추지 않습니다.",
+        "긴 Claude 대화의 그림이 빨리 뜹니다.",
+        "Safari와 iOS 16.0~16.3에서 앱이 다시 열립니다."
+      ]
+    },
+    "ja": {
+      "new": [
+        "Ovis を macOS、Windows、Linux のデスクトップアプリで使えます。",
+        "GitHub か Google でサインインすると PC が見え、新しい端末は承認が必要です。",
+        "コードなしで6桁の数字を見比べ、リレー経由でスマホをペアリングします。",
+        "Herdr アプリのターミナル herdr-core でも Ovis が動きます。",
+        "SSH や開いたポートなしで、リレー経由で別の PC を追加できます。"
+      ],
+      "improved": [
+        "近くの地域リレーを使い、スマホがずっと速くつながります。",
+        "PC の再起動後、スマホが1秒ほどで再接続します。",
+        "通信が黙って切れて戻ると、チャットが返答をすぐ表示します。",
+        "スマホでは Return で改行し、送信ボタンで送ります。"
+      ],
+      "fixed": [
+        "接続が切れる直前の入力が失われず残ります。",
+        "長い Antigravity のチャットがほかのリクエストを止めなくなりました。",
+        "長い Claude の会話の画像がすぐ読み込まれます。",
+        "Safari と iOS 16.0〜16.3 でアプリが再び開きます。"
+      ]
+    },
+    "zh": {
+      "new": [
+        "Ovis 推出适用于 macOS、Windows 和 Linux 的桌面应用。",
+        "用 GitHub 或 Google 登录即可看到你的电脑；新设备需经你批准。",
+        "无需代码，比对六位数字即可经中继配对手机。",
+        "Ovis 也可运行在 Herdr 应用的终端 herdr-core 上。",
+        "无需 SSH 或开放端口，经中继添加另一台电脑。"
+      ],
+      "improved": [
+        "附近的手机经区域中继连接，等待大大缩短。",
+        "电脑重启后，手机约一秒内重新连接。",
+        "网络无声断开又恢复后，聊天立即显示回复。",
+        "在手机上 Return 换行，发送按钮发送。"
+      ],
+      "fixed": [
+        "连接断开前刚输入的内容会保留，不再丢失。",
+        "很长的 Antigravity 聊天不再卡住其他请求。",
+        "长 Claude 对话中的图片加载很快。",
+        "应用在 Safari 和 iOS 16.0 至 16.3 上可再次打开。"
+      ]
+    }
+  },
   "0.4.22": {
     "en": {
       "new": [

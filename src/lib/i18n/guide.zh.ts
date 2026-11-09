@@ -8,6 +8,7 @@ export const GUIDE_ZH: Record<string, string> = {
   "I'm new to Ovis": "我是新用户",
   "I've used Ovis before": "我用过 Ovis",
   "Skip the setup and go straight in": "跳过设置,直接开始",
+  "Sign in to use this PC from your phone and your other PCs.": "登录后，可以在手机和其他电脑上使用这台电脑。",
   "You can open this again any time from Settings → Agents.": "随时可以从 设置 → 代理 再次打开。",
   "Skip setup": "跳过设置",
   "Already installed one?": "已经装好了一个?",
@@ -38,4 +39,5 @@ export const GUIDE_ZH: Record<string, string> = {
   "The workspace opened, but {agent} did not start. Open it to see why in its terminal.": "工作区已打开,但 {agent} 没有启动。打开它,在终端里查看原因。",
   "Open the workspace": "打开工作区",
   "{agent} is not signed in yet.": "{agent} 尚未登录。",
+  "Open this address on your phone": "在手机上打开此地址",
 };

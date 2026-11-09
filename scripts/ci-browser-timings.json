@@ -1,5 +1,6 @@
 {
-  "scripts/ui-contexts-regression.ts": 395,
+  "scripts/ui-contexts-regression.ts": 300,
+  "scripts/ui-contexts-layout-regression.ts": 120,
   "scripts/ui-regression.ts": 290,
   "scripts/background-agent-detail-demo-regression.ts": 273,
   "scripts/security-summary-demo-regression.ts": 219,

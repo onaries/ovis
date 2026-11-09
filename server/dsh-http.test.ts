@@ -36,7 +36,7 @@ for (const mode of ["mixed", "gjc-only", "gjc-under-shell", "dsh-only"] as const
   }) as typeof herdr.herdrRpc);
   const memory = spyOn(processProbe, "ompProcessMemory").mockResolvedValue({ argv: [], environ: [`DSH_HOME=${root}`] });
   // Keep real routing and dsh binding; isolate only GJC's separate native-record resolver.
-  const nativeGjc = spyOn(gjc, "gjcTranscriptForPane").mockResolvedValue(gjcPath);
+  const nativeGjc = spyOn(gjc, "gjcTranscriptFileForPane").mockResolvedValue({ path: gjcPath, identity: "fixture" });
   const underShell = spyOn(gjc, "gjcPidUnderShell").mockResolvedValue(mode === "gjc-under-shell" ? { pid: process.ppid, started: null } : null);
   try {
     const route = await paneTranscript(pane.pane_id, undefined, { panes: [pane], agents: [] } as unknown as SessionSnapshot);

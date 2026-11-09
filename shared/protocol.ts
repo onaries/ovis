@@ -184,7 +184,13 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *  GET    /api/updates                   -> UpdateStatus (shared/update.ts), no-store; to the bridge
  *         token (which cannot read /api/access) also `port` and `serving_url`, where it answers
  *  POST   /api/updates/check             -> 202 { accepted: true }
- *  POST   /api/updates/install           -> 202 { accepted: true }; UpdateInstallRequest JSON body
+ *  POST   /api/updates/install           -> 202 { accepted: true, install_id }; UpdateInstallRequest JSON body
+ *  POST   /api/updates/cancel            -> 202 { accepted: true }; { install_id } JSON body, as the install's 202 gave it: stops that
+ *                                            install only, while it checks or builds (install_cancellable); 400 invalid_update_cancel,
+ *                                            409 update_restart_required, or 409 update_not_cancellable alike for a wrong or expired
+ *                                            install_id and for no update running (supervisor IPC: update-cancel-v2)
+ *                                            (the bridge token may cancel only an install it asked for, by the install_id its
+ *                                            202 gave: never another device's, nor one the PC's own Settings started)
  *         (at most 1 KiB): 400 invalid_update_install for a missing or malformed revision,
  *         409 update_restart_required where the supervisor does not advertise
  *         revision_bound_install, 409 update_offer_changed when the offer is no longer that
@@ -468,7 +474,8 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *         dirty_worktree_requires_force)
  *  POST   /api/auth        { token }     -> 204 + Set-Cookie ovis_token (401 invalid_token on mismatch)
  *  DELETE /api/auth                      -> 204, clears the token and the device cookies
- *  GET    /api/devices                   -> { devices: PairedDevice[] } (the paired devices; `current` marks the caller's)
+ *  GET    /api/devices                   -> { devices: PairedDevice[] } (the paired devices; `current` marks the caller's,
+ *         `connection` how one with an encrypted session up reaches the PC; `?check=1` measures their round trips first, within 3 s)
  *  POST   /api/devices/pair/start        -> PairingCode: a six-digit code good for ten minutes, replacing any pending one
  *         (X-Herdr-Machine: 1 + same origin, from a client with full access)
  *  POST   /api/devices/pair { code, label? } -> 204 + Set-Cookie ovis_device (public, like /api/auth;
@@ -522,7 +529,7 @@ export type { UsageProviderId, UsageWindow, UsageResets, UsageCredits, UsageProb
 
 export type { CLIProxyStatus, CLIProxyProvider, CLIProxyLogin, CLIProxyLoginStatus } from "./cliproxy.ts";
 
-export type { AccessVia, AccessRefusal, DeviceRole, HealthAuth, LanExposure, BindScope, ObservedIngress, SecuritySummary, PairedDevice, PairingCode, PortalLogin, TailscaleAccess } from "./access.ts";
+export type { AccessVia, AccessRefusal, DeviceRole, HealthAuth, LanExposure, DirectExposure, BindScope, ObservedIngress, SecuritySummary, PairedDevice, DeviceConnection, DeviceRoute, PairingCode, PortalLogin, TailscaleAccess } from "./access.ts";
 /** Older servers and the Tailscale-only builder omit relay state. */
 export type RemoteAccess = import("./access.ts").RemoteAccess & { readonly relay?: RelayStatus };
 
@@ -554,6 +561,25 @@ export const STREAM_COOKIE_PREFIX = "ovis_stream_";
 
 export type { PortalAuth, PortalAuthMethod, PortalInvite, PortalSignIn, PortalStatus } from "./portal.ts";
 
+/**
+ * Why the relay is not online, as a fixed code a client puts in its own words (RelayStatus.error_code;
+ * docs/relay.md, "Why it is not online"). Each says whether the PC tries again by itself:
+ * - `start_failed`: the relay did not start; starting it again may work.
+ * - `identity_unreadable`: this PC's relay identity cannot be read (`blocked` says so too); nothing retries.
+ * - `relay_unreachable`: the relay did not answer or the connection dropped; the PC tries again.
+ * - `server_key_refused`: the relay refused this PC's key for good; the PC does not try again.
+ * - `pass_required`: an Ovis relay needs a relay pass and no account names this PC: sign in on it and add it.
+ * - `pass_not_listed`: the account this PC names does not list it: add it to that account.
+ * - `pass_limit`: that account has as many PCs on the Ovis relay as it may: remove one from it.
+ * - `pass_unavailable`: the relay needs a pass the account service has not given yet; the PC keeps asking.
+ * - `pass_refused`: the relay refused the pass this PC holds (a key it does not trust, a PC it revoked); the PC asks
+ *   for another now and then.
+ * - `pass_unsupported`: the relay needs a pass and this PC asks no account service for one (turned off or
+ *   unusable, or a relay that is not Ovis's): waiting brings none; use the same Wi-Fi, Tailscale or another relay.
+ */
+export type RelayErrorCode = "start_failed" | "identity_unreadable" | "relay_unreachable" | "server_key_refused"
+  | "pass_required" | "pass_not_listed" | "pass_limit" | "pass_unavailable" | "pass_refused" | "pass_unsupported";
+
 /** GET /api/relay; relay and app are configured secure origins, never pairing credentials. */
 export interface RelayStatus {
   readonly phase: "off" | "connecting" | "online" | "error";
@@ -562,11 +588,27 @@ export interface RelayStatus {
   readonly sessions: number;
   readonly blocked: null | "serve_only" | "identity_unreadable";
   readonly error: string | null;
+  /** why, as a fixed code, whenever `error` says something (null otherwise); absent from an older server */
+  readonly error_code?: RelayErrorCode | null;
   /**
    * Direct connections on this PC's networks (docs/relay.md): whether they are on, and the carriers
    * listened on now (none while the relay is off). Absent from a server without them.
    */
   readonly direct?: { readonly on: boolean; readonly carriers: readonly string[] };
+  /**
+   * This PC's relay pass, on Ovis's own relays only (docs/relay.md, "Relay pass"): `state` is where
+   * getting one stands (server/relay/pass.ts), `relay` what the relay last said of it (null before it
+   * said anything, or on a relay that asks for none) and `enforce_at` from when it will be needed.
+   */
+  readonly pass?: {
+    readonly state: "ok" | "no_account" | "not_listed" | "limit" | "unavailable";
+    readonly relay: "ok" | "missing" | "invalid" | "expired" | null;
+    readonly enforce_at: string | null;
+    /** the relay refused this PC for its pass (4402) and it has not been let in since */
+    readonly refused: boolean;
+    /** false while the pass in use says new client sessions to this PC are not allowed and the relay says it holds; absent otherwise */
+    readonly new_sessions?: false;
+  };
 }
 
 /** POST /api/devices/pair's answer to a request that accepts JSON: the device's own credential. */
@@ -757,6 +799,7 @@ export interface PlanSummary {
  * A refresh may echo history_id as a query parameter to identify the view it would retain on failure.
  */
 export interface ConversationResponse {
+  manual_session_id?: string;
   /** Grok/Agy latest native turn; display feedback only, never input-delivery authority. */
   activity?: "thinking" | "working" | "idle";
   /** Stable across appends; changes on transcript replacement or native context clear. */
@@ -1363,6 +1406,7 @@ export type ServerMessage =
   | { type: "error"; code: string; message: string; pane_id?: string };
 
 export type { SessionHistoryAgent, SessionResumeSource, SessionHistoryRow, SessionResumeRequest, SessionResumeResponse, SessionHistoryResponse } from "./session-history.ts";
+export type { CodexManualTarget, CodexManualState, CodexManualSelection } from "./codex-manual.ts";
 export type { CodexRestartTarget, CodexRestartResponse } from "./codex-restart.ts";
 
 /** herdr's default socket, under XDG_CONFIG_HOME when set, as herdr itself resolves it. */

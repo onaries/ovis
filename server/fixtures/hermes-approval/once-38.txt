@@ -1,0 +1,38 @@
+file, image_gen, memory,
+session_search, skills, terminal,
+todo, tts, vision, web · provider:
+custom
+
+Welcome to Hermes Agent! Type your
+message or /help for commands.
+✦ Tip:
+HERMES_OPTIONAL_SKILLS=name1,name2
+auto-installs extra optional-catalog
+skills on first run per profile.
+
+
+──────────────────────────────────────
+──
+● clean up the scratch folder
+Initializing agent...
+──────────────────────────────────────
+──
+
+  ┊ 💻 preparing terminal…
+╭──────────────────────────────────╮
+│ ⚠️  Dangerous Command            │
+│                                  │
+│ rm -rf ./scratch                 │
+│                                  │
+│ ❯ 1. Allow once                  │
+│   2. Allow for this session      │
+│   3. Add to permanent allowlist  │
+│   4. Deny                        │
+│                                  │
+│ recursive delete                 │
+╰──────────────────────────────────╯
+
+  ↑/↓ to select, Enter to confirm  (35
+ ☤ fixture-model · 27s
+──────────────────────────────────────
+⚠

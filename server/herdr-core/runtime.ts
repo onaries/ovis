@@ -92,7 +92,7 @@ export function hcMachine(): { name: string; id: string } | null {
  * What `hc connect` runs in: a machine's server runs with a home of its own (machine-bridge.ts), and
  * OVIS_HC_ENV holds what finds the core (HOME, HC_*, XDG_*) as the server that started it has them.
  */
-function hcEnv(): Record<string, string | undefined> | undefined {
+export function hcEnv(): Record<string, string | undefined> | undefined {
   const kept = process.env["OVIS_HC_ENV"];
   return kept ? { ...process.env, ...(JSON.parse(kept) as Record<string, string>) } : undefined;
 }
@@ -101,6 +101,11 @@ function hcEnv(): Record<string, string | undefined> | undefined {
 export function coreSocketPath(): string {
   return coreSocket({ env: hcEnv() ?? process.env }).path;
 }
+
+/** HERDR_SOCKET as this process had it before startRuntime pointed it at the adapter (null until then): a core `hc connect` starts hands its env to every pane */
+let herdrSocketBefore: { HERDR_SOCKET: string | undefined } | null = null;
+/** the adapter socket startRuntime last put in HERDR_SOCKET: a later start in this process finds it there, not the one from before */
+let adapterSocket: string | null = null;
 
 let connection: HcConnection | null = null;
 /** whether this process serves herdr-core (startRuntime ran): a remote bridge inheriting OVIS_RUNTIME does not */
@@ -120,7 +125,7 @@ export function coreSeenMarker(): SeenMarker {
 
 /** The server's one line to hc, which the adapter answers through and live terminals stream on. */
 export function coreConnection(): HcConnection {
-  const spawn = () => spawnHcConnect(hcBin(), hcEnv());
+  const spawn = () => spawnHcConnect(hcBin(), { ...(hcEnv() ?? process.env), ...herdrSocketBefore });
   const machine = hcMachine();
   connection ??= machine === null ? new HcConnection(spawn) : new MachineScopedConnection(spawn, machine.name, machine.id);
   return connection;
@@ -157,6 +162,8 @@ export async function startRuntime(stateDir: string, find: () => Promise<FoundHc
     // another machine's OpenCode keeps its sessions there: none of its panes is bound to one here
     hcMachine() !== null ? { otherMachine: true } : { opencodeTitled: (title) => opencodeSessionsTitled(opencodeDatabasePath(), title) });
   if (unix) chmodSync(adapter.socketPath, 0o600);
+  if (herdrSocketBefore === null || process.env["HERDR_SOCKET"] !== adapterSocket) herdrSocketBefore = { HERDR_SOCKET: process.env["HERDR_SOCKET"] };
+  adapterSocket = adapter.socketPath;
   process.env["HERDR_SOCKET"] = adapter.socketPath;
   serving = true;
   return {

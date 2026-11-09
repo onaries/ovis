@@ -474,11 +474,11 @@ it("fails closed on corrupt saved state and on an unreadable identity", async ()
   writeFileSync(join(f.stateDir, "relay", "state.json"), "{bad");
   await f.restart();
   // nothing goes through the relay: off, with the reason
-  expect(f.service.status()).toMatchObject({ phase: "off", error: "Could not start the relay." });
+  expect(f.service.status()).toMatchObject({ phase: "off", error: "Could not start the relay.", error_code: "start_failed" });
   expect(f.attempts).toBe(0);
   writeFileSync(relayIdentityPath(f.stateDir), "{bad");
   expect((await f.request("/start", "POST")).status).toBe(409);
-  expect(f.service.status().blocked).toBe("identity_unreadable");
+  expect(f.service.status()).toMatchObject({ blocked: "identity_unreadable", error_code: "identity_unreadable" });
   expect(readFileSync(relayIdentityPath(f.stateDir), "utf8")).toBe("{bad");
   expect(f.attempts).toBe(0);
 });
@@ -612,13 +612,18 @@ it("keeps at most four relay sessions per device, closing its oldest", async () 
   const f = await fixture();
   await f.start();
   const offer = await f.offer();
+  // each session is used (a stream opened) before the next: only then does it count as the device's for good
   const first = await client(f, offer);
+  expect((await first.http("/api/relay")).status).toBe(200);
   const later = [];
-  for (let index = 0; index < 3; index += 1) later.push(await client(f, offer, false, first.device));
+  for (let index = 0; index < 3; index += 1) {
+    later.push(await client(f, offer, false, first.device));
+    expect((await later.at(-1)!.http("/api/relay")).status).toBe(200);
+  }
   expect(f.service.status().sessions).toBe(4);
   const fifth = await client(f, offer, false, first.device);
-  await bounded(first.closed);
   expect((await fifth.http("/api/relay")).status).toBe(200);
+  await bounded(first.closed);
   expect((await later[0]!.http("/api/relay")).status).toBe(200);
   expect(f.service.status().sessions).toBe(4);
 });
@@ -665,8 +670,13 @@ it("never evicts a signed-in session to make room", async () => {
   const f = await fixture(false, { clock: new TestClock() });
   await f.start();
   const first = await client(f, await f.offer());
+  // each used before the next: used, a session counts as the device's for good; one never used could give way to a later racing carrier
+  expect((await first.http("/api/relay")).status).toBe(200);
   const signedIn = [first];
-  for (let index = 0; index < 3; index += 1) signedIn.push(await client(f, await f.offer(), false, first.device));
+  for (let index = 0; index < 3; index += 1) {
+    signedIn.push(await client(f, await f.offer(), false, first.device));
+    expect((await signedIn.at(-1)!.http("/api/relay")).status).toBe(200);
+  }
   const squatters = [];
   for (let index = 0; index < 8; index += 1) squatters.push(await squatter(f, await f.offer()));
   const second = await client(f, await f.offer());

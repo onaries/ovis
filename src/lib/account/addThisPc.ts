@@ -30,5 +30,15 @@ export async function listThisPc(service: AccountService, options: { relistMs: n
   const name = (offer.name ?? offer.server_id.slice(0, 8)).slice(0, 48);
   const publicKey = Array.from(importPublicKey(offer.server_public_key), (byte) => byte.toString(16).padStart(2, "0")).join("");
   await service.putPc(offer.server_id, { label: name, public_key: publicKey, relay: offer.relay });
+  // the account this PC now asks its relay pass under (docs/relay.md, "Relay pass"); an older PC has no such route
+  const session = await service.session();
+  if (session) {
+    // never in the way of pairing, so not awaited: a failing or hanging setup never holds the pairing wait, and the
+    // relay status says when this PC has no pass (404: an Ovis from before relay passes)
+    void apiFetch("/api/account/relay-account", { method: "POST", headers: { "content-type": "application/json", "x-herdr-machine": "1" }, body: JSON.stringify({ account: session.account }) }).then(
+      (named) => { if (!named.ok && named.status !== 404) console.warn("Ovis: this PC did not take the account for its relay pass", named.status); },
+      (error: unknown) => console.warn("Ovis: this PC did not take the account for its relay pass", error instanceof Error ? error.name : error),
+    );
+  }
   return name;
 }

@@ -1,9 +1,9 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
-import { AppWindow, ArrowLeft, AudioLines, Bell, Bot, Box, Brain, CheckCheck, ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Command, CornerDownLeft, ExternalLink, FilePen, FlaskConical, Globe, Image as ImageIcon, Info, Keyboard, Languages, Layers, LayoutGrid, ListCollapse, Lock, MessageCircleQuestionMark, MessageSquare, MessageSquareReply, MessagesSquare, Mic, Monitor, Mouse, MousePointer2, MoveHorizontal, OctagonX, Palette, PanelRight, Plus, Puzzle, Search, Send, ShieldAlert, Smartphone, Sparkles, SquareTerminal, Star, Tags, TextCursorInput, Timer, Volume2, WandSparkles, WrapText, X, type LucideIcon } from "lucide-react";
+import { ALargeSmall, AppWindow, ArrowDownUp, ArrowLeft, AudioLines, Bell, Bot, Box, Brain, CheckCheck, ChevronLeft, ChevronRight, CircleDot, ClipboardCopy, ClipboardPaste, Command, CornerDownLeft, ExternalLink, FileClock, FilePen, Filter, FlaskConical, Gauge, Globe, Image as ImageIcon, Info, Keyboard, Languages, Layers, ListCollapse, ListTree, Lock, MessageCircleQuestionMark, MessageSquare, MessageSquareReply, MessagesSquare, Mic, Monitor, Mouse, MousePointer2, MoveHorizontal, OctagonX, Palette, PanelLeft, PanelRight, Plus, Puzzle, Rows3, Search, Send, Server, Shapes, ShieldAlert, Smartphone, Sparkles, SquareTerminal, Star, SunMoon, Tag, Tags, TextCursorInput, Timer, Trash2, Type, Volume2, WandSparkles, WrapText, X, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
 
-import type { AppActions } from "../lib/actions.ts";
+import type { AddPcPreset, AppActions } from "../lib/actions.ts";
 import { useInstallPrompt } from "../lib/install.ts";
 import { changePc, inNativeApp } from "../lib/nativeApp.ts";
 import { canReuseExternalLinkTab } from "../lib/terminalFileLinks.ts";
@@ -45,13 +45,14 @@ import type { PushActionResult } from "../lib/pushHealth.ts";
 import type { HealthAuth, PluginActions, RemoteAccess } from "../../shared/protocol.ts";
 import type { SecurityFacts } from "../lib/useAccess.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
-import type { VoiceStatus } from "../../shared/voice.ts";
+import type { VoiceConfigUpdate, VoiceStatus } from "../../shared/voice.ts";
 import { dictationLocale, VOICE_CONFIG_EVENT } from "../lib/voice.ts";
 import { DevicesPanel } from "./DevicesPanel.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
+import { RuntimeMove } from "./RuntimeMove.tsx";
 import { SignOutRow } from "./SignOutRow.tsx";
-import { failureText, openOwnOffer, statusText } from "./RelayPanel.tsx";
-import { AccountSection, accountOffered, type AccountState } from "./AccountSection.tsx";
+import { failureText, openOwnOffer, RelayDirectRow, statusText } from "./RelayPanel.tsx";
+import { AccountSection, accountServiceHere, type AccountState } from "./AccountSection.tsx";
 import { accountPcStateText } from "./AccountPcs.tsx";
 import { STATE_WORD } from "./MachineSidebar.tsx";
 import { pcAccountStatus } from "../lib/account/join.ts";
@@ -349,6 +350,15 @@ function ThemeCard({ id, side, checked, onPick }: { id: ThemeId; side: Mode; che
   );
 }
 
+/** Sidebar rows, drawn: a workspace on one line, or its agent's line above it */
+function SidebarRowsPreview({ rows }: { rows: "one" | "two" }) {
+  return (
+    <span className={rows === "two" ? "sidebar-rows-preview is-two" : "sidebar-rows-preview"}>
+      {[0, 1].map((item) => <span key={item} className="sidebar-rows-preview-item"><i />{rows === "two" && <i />}</span>)}
+    </span>
+  );
+}
+
 /**
  * The themes of one side in one row of cards that scrolls sideways (a trackpad, Shift and the wheel, a
  * swipe, or the arrows at its ends), the chosen one brought into view: the row stays one card tall
@@ -407,7 +417,7 @@ function ThemePicker() {
   const scroll = (direction: 1 | -1): void => strip.current?.scrollBy({ left: direction * strip.current.clientWidth * 0.8, behavior: "smooth" });
   return (
     <>
-      <SettingsRow label={label} keywords={`${t("Dark theme")} ${t("Light theme")} ${t("Shown in dark mode")} ${t("Shown in light mode")}`} reset={[side === "dark" ? "darkTheme" : "lightTheme"]}>
+      <SettingsRow icon={Palette} label={label} keywords={`${t("Dark theme")} ${t("Light theme")} ${t("Shown in dark mode")} ${t("Shown in light mode")}`} reset={[side === "dark" ? "darkTheme" : "lightTheme"]}>
         <Segmented label={`${t("Dark theme")} · ${t("Light theme")}`} value={side} onChange={setPicked} options={[{ value: "dark", label: t("Dark"), name: t("Show dark themes") }, { value: "light", label: t("Light"), name: t("Show light themes") }]} />
       </SettingsRow>
       <div className="settings-item theme-strip">
@@ -444,7 +454,7 @@ function InterfaceFontRows() {
   };
   return (
     <>
-      <SettingsRow label={t("Interface font")} description={interfaceFontDescription} htmlFor="settings-ui-font" reset={["uiFontFamily"]}>
+      <SettingsRow icon={Type} label={t("Interface font")} description={interfaceFontDescription} htmlFor="settings-ui-font" reset={["uiFontFamily"]}>
         <SettingsSelect id="settings-ui-font" value={custom ? "custom" : preset} onChange={(event) => choose(event.target.value as UiFontPreset | "custom")}>
           <option value="default">{t("Default")}</option>
           <option value="system">{t("System")}</option>
@@ -453,7 +463,7 @@ function InterfaceFontRows() {
         </SettingsSelect>
       </SettingsRow>
       {custom && (
-        <SettingsRow label={t("Custom interface font")} description={t("Comma-separated, tried in order, in front of the default. A font this device does not have falls back to the default.")} keywords={`${t("Interface font")} ${interfaceFontDescription}`} wide>
+        <SettingsRow icon={Type} label={t("Custom interface font")} description={t("Comma-separated, tried in order, in front of the default. A font this device does not have falls back to the default.")} keywords={`${t("Interface font")} ${interfaceFontDescription}`} wide>
           <FontFamilyInput value={settings.uiFontFamily} label={t("Custom interface font")} placeholder={UI_FONT_PLACEHOLDER} onCommit={(uiFontFamily) => update({ uiFontFamily })} />
         </SettingsRow>
       )}
@@ -468,24 +478,24 @@ function AppearancePage() {
   return (
     <SettingsBare.Provider value={true}>
     <SettingsGroup>
-      <SettingsRow label={t("Theme")} wide reset={["theme"]}>
+      <SettingsRow icon={SunMoon} label={t("Theme")} wide reset={["theme"]}>
         <Segmented label={t("Theme")} value={settings.theme} onChange={(theme) => update({ theme })} options={[{ value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }, { value: "system", label: t("System") }]} />
       </SettingsRow>
       <ThemePicker />
     </SettingsGroup>
 
     <SettingsGroup title={t("Typography")} section="typography">
-      <SettingsRow label={t("Interface font size")} description={t("Menus, lists, dialogs and the sidebar. The chat follows it until it has a size of its own; the terminal keeps its own.")} reset={["uiFontSize"]}>
+      <SettingsRow icon={ALargeSmall} label={t("Interface font size")} description={t("Menus, lists, dialogs and the sidebar. The chat follows it until it has a size of its own; the terminal keeps its own.")} reset={["uiFontSize"]}>
         <Stepper label={t("Interface font size")} value={uiFontSize(settings)} text={`${uiFontSize(settings)}px`} min={UI_FONT_MIN} max={UI_FONT_MAX} decreaseLabel={t("Decrease interface font size")} increaseLabel={t("Increase interface font size")} onChange={(size) => update({ uiFontSize: size })} />
       </SettingsRow>
       <InterfaceFontRows />
-      <SettingsRow label={t("Terminal font")} description={t("Comma-separated, tried in order. A font this device does not have falls back to the default.")} keywords={`${t("Terminal font size")} ${t("Applied to every terminal pane")}`} wide reset={["terminalFontFamily", "terminalFontSize"]}>
+      <SettingsRow icon={SquareTerminal} label={t("Terminal font")} description={t("Comma-separated, tried in order. A font this device does not have falls back to the default.")} keywords={`${t("Terminal font size")} ${t("Applied to every terminal pane")}`} wide reset={["terminalFontFamily", "terminalFontSize"]}>
         <span className="settings-font-size">
           <FontFamilyInput value={settings.terminalFontFamily} label={t("Terminal font")} fixedWidthFor="terminal" onCommit={(terminalFontFamily) => update({ terminalFontFamily })} />
           <Stepper label={t("Terminal font size")} value={settings.terminalFontSize} text={`${settings.terminalFontSize}px`} min={TERMINAL_FONT_MIN} max={TERMINAL_FONT_MAX} decreaseLabel={t("Decrease terminal font size")} increaseLabel={t("Increase terminal font size")} onChange={(terminalFontSize) => update({ terminalFontSize })} />
         </span>
       </SettingsRow>
-      <SettingsRow label={t("Chat font")} description={t("Message text; code stays monospace. Comma-separated, tried in order. A font this device does not have falls back to the default.")} keywords={`${t("Chat font size")} ${t("Messages, code, prompt cards and the message box in the chat view")}`} wide reset={["chatFontFamily", "chatFontSize"]}>
+      <SettingsRow icon={MessageSquare} label={t("Chat font")} description={t("Message text; code stays monospace. Comma-separated, tried in order. A font this device does not have falls back to the default.")} keywords={`${t("Chat font size")} ${t("Messages, code, prompt cards and the message box in the chat view")}`} wide reset={["chatFontFamily", "chatFontSize"]}>
         <span className="settings-font-size">
           <FontFamilyInput value={settings.chatFontFamily} label={t("Chat font")} onCommit={(chatFontFamily) => update({ chatFontFamily })} />
           <Stepper label={t("Chat font size")} value={chatFontSize(settings)} text={`${chatFontSize(settings)}px`} min={CHAT_FONT_MIN} max={CHAT_FONT_MAX} decreaseLabel={t("Decrease chat font size")} increaseLabel={t("Increase chat font size")} onChange={(size) => update({ chatFontSize: size })} />
@@ -494,10 +504,10 @@ function AppearancePage() {
     </SettingsGroup>
 
     <SettingsGroup>
-      <SettingsRow label={t("Density")} reset={["density"]}>
+      <SettingsRow icon={Rows3} label={t("Density")} wide reset={["density"]}>
         <Segmented label={t("Density")} value={settings.density} onChange={(density) => update({ density })} options={[{ value: "comfortable", label: t("Comfortable") }, { value: "compact", label: t("Compact") }]} />
       </SettingsRow>
-      <SettingsRow label={t("Language")} description={t("Follows the browser unless you choose one")} htmlFor="settings-language" reset={["language"]}>
+      <SettingsRow icon={Languages} label={t("Language")} description={t("Follows the browser unless you choose one")} htmlFor="settings-language" reset={["language"]}>
         <SettingsSelect id="settings-language" value={settings.language} onChange={(event) => update({ language: event.target.value as typeof settings.language })}>
           {LANGUAGE_SETTINGS.map((language) => <option key={language} value={language}>{language === "system" ? t("System") : LANGUAGE_NAMES[language]}</option>)}
         </SettingsSelect>
@@ -505,44 +515,45 @@ function AppearancePage() {
     </SettingsGroup>
 
     <SettingsGroup title={t("Sidebar")} section="sidebar">
-      <SettingsRow label={t("Sidebar rows")} description={t("Name each workspace on one line, or show what its agent is doing with the workspace under it")} wide reset={["sidebarRows"]}>
+      <SettingsRow icon={PanelLeft} preview={<SidebarRowsPreview rows={settings.sidebarRows} />} label={t("Sidebar rows")} description={t("Name each workspace on one line, or show what its agent is doing with the workspace under it")} wide reset={["sidebarRows"]}>
         <Segmented label={t("Sidebar rows")} value={settings.sidebarRows} onChange={(sidebarRows) => update({ sidebarRows })} options={[{ value: "one", label: t("One line") }, { value: "two", label: t("Two lines") }]} />
       </SettingsRow>
-      <SettingsRow label={t("Agents order")} description={t("Activity keeps a waiting agent on top, then the one that changed last. By state lists the agents above the workspaces on this device: the ones that need you first, then working, done and idle. herdr's own order is not changed.")} wide reset={["agentOrder", "agentGroups"]}>
+      {/* the scope differs within the one control: said on the row, where the sentences are not (G-097) */}
+      <SettingsRow icon={ArrowDownUp} label={t("Agents order")} description={t("Waiting first keeps herdr's order with the agents that need you on top, and folds the resting ones under one line. Activity keeps a waiting agent on top, then the one that changed last. By state lists the agents above the workspaces on this device: the ones that need you first, then working, done and idle. herdr's own order is not changed.")} condition={<span className="settings-condition">{t("By state applies to this device; the other orders to every browser.")}</span>} wide reset={["agentOrder", "agentGroups"]}>
         {/* By state is this device's grouping (agentGroups); Workspaces and Activity are every browser's order (agentOrder), the grouping off */}
-        <Segmented label={t("Agents order")} value={settings.agentGroups ? "state" : settings.agentOrder} onChange={(order) => update(order === "state" ? { agentGroups: true } : { agentOrder: order, agentGroups: false })} options={[{ value: "workspace", label: t("Workspaces") }, { value: "activity", label: t("Activity") }, { value: "state", label: t("By state") }] as const} />
+        <Segmented label={t("Agents order")} value={settings.agentGroups ? "state" : settings.agentOrder} onChange={(order) => update(order === "state" ? { agentGroups: true } : { agentOrder: order, agentGroups: false })} options={[{ value: "waiting", label: t("Waiting first") }, { value: "workspace", label: t("Workspaces") }, { value: "activity", label: t("Activity") }, { value: "state", label: t("By state") }] as const} />
       </SettingsRow>
-      {settings.agentGroups && <SettingsRow label={t("Within a state")} wide>
+      {settings.agentGroups && <SettingsRow icon={ArrowDownUp} label={t("Within a state")} wide>
         <Segmented label={t("Within a state")} value={settings.agentGroupSort} onChange={(agentGroupSort) => update({ agentGroupSort })} options={[{ value: "wait", label: t("Longest wait") }, { value: "recent", label: t("Recent") }, { value: "name", label: t("Name") }]} />
       </SettingsRow>}
     </SettingsGroup>
 
     <SettingsFold kind="more" keys={["autoTabNames", "sidebarFilter", "sidebarPeek", "sidebarBackgroundWorkspaces", "sidebarContext", "sidebarAgentTree", "foldHelpers", "agentMarks", "statusIndicators", "fileFontSize"]}>
       <SettingsGroup title={t("Sidebar")} section="sidebar-more">
-        <SettingsRow label={t("Name tabs from the first message")} description={t("A tab still named by its number shows a few words of the first message sent to it, in every browser. A name you gave a tab is kept, and herdr's own tab names do not change. Only those words are kept, on this server, until the tab closes; turning this off deletes them.")}
+        <SettingsRow icon={Tag} label={t("Name tabs from the first message")} description={t("A tab still named by its number shows a few words of the first message sent to it, in every browser. A name you gave a tab is kept, and herdr's own tab names do not change. Only those words are kept, on this server, until the tab closes; turning this off deletes them.")}
           condition={<span className="settings-condition">{t("Only those words are kept, on this server, until the tab closes; turning this off deletes them.")}</span>} reset={["autoTabNames"]}>
           <Toggle label={t("Name tabs from the first message")} checked={settings.autoTabNames} onChange={(autoTabNames) => update({ autoTabNames })} />
         </SettingsRow>
-        <SettingsRow label={t("Sidebar filter")} description={t("Show the Filter field above the sidebar's lists on this device. When off, Filter workspaces and agents in the command palette opens it.")}>
+        <SettingsRow icon={Filter} label={t("Sidebar filter")} description={t("Show the Filter field above the sidebar's lists on this device. When off, Filter workspaces and agents in the command palette opens it.")}>
           <Toggle label={t("Sidebar filter")} checked={settings.sidebarFilter} onChange={(sidebarFilter) => update({ sidebarFilter })} />
         </SettingsRow>
-        <SettingsRow label={t("Show the sidebar on hover")} description={t("On this device, while the sidebar is hidden, resting the mouse on its button shows it over the pane until the mouse leaves. Click the button to keep it open.")}>
+        <SettingsRow icon={MousePointer2} label={t("Show the sidebar on hover")} description={t("On this device, while the sidebar is hidden, resting the mouse on its button shows it over the pane until the mouse leaves. Click the button to keep it open.")}>
           <Toggle label={t("Show the sidebar on hover")} checked={settings.sidebarPeek} onChange={(sidebarPeek) => update({ sidebarPeek })} />
         </SettingsRow>
-        <SettingsRow label={t("Background workspaces apart")} description={t("On this device, workspaces a tool tagged role=background (herdr workspace report-metadata --token role=background) stand after the others under a folded Background workspaces heading. The open one, and one whose agent asks a question, stay in sight.")}>
+        <SettingsRow icon={Layers} label={t("Background workspaces apart")} description={t("On this device, workspaces a tool tagged role=background (herdr workspace report-metadata --token role=background) stand after the others under a folded Background workspaces heading. The open one, and one whose agent asks a question, stay in sight.")}>
           <Toggle label={t("Background workspaces apart")} checked={settings.sidebarBackgroundWorkspaces} onChange={(sidebarBackgroundWorkspaces) => update({ sidebarBackgroundWorkspaces })} />
         </SettingsRow>
-        <SettingsRow label={t("Context left on agent rows")} description={t("On this device, show the context ring from the chat's composer on each agent row, for the agents whose context window is known (Claude Code and Codex). It turns red at 20% left or less.")}>
+        <SettingsRow icon={Gauge} label={t("Context left on agent rows")} description={t("On this device, show the context ring from the chat's composer on each agent row, for the agents whose context window is known (Claude Code and Codex). It turns red at 20% left or less.")}>
           <Toggle label={t("Context left on agent rows")} checked={settings.sidebarContext} onChange={(sidebarContext) => update({ sidebarContext })} />
         </SettingsRow>
-        <SettingsRow label={t("Agents under workspaces")} description={t("On this device, list each workspace's agents under it in the PCs list, so every PC shows its workspaces and the agents running in them. The Agents list stays as it is.")}>
+        <SettingsRow icon={ListTree} label={t("Agents under workspaces")} description={t("On this device, list each workspace's agents under it in the PCs list, so every PC shows its workspaces and the agents running in them. The Agents list stays as it is.")}>
           <Toggle label={t("Agents under workspaces")} checked={settings.sidebarAgentTree} onChange={(sidebarAgentTree) => update({ sidebarAgentTree })} />
         </SettingsRow>
         <FoldHelpersRow />
-        <SettingsRow label={t("Agent logos")} description={t("Draw each agent's logo in its brand colors, or without color")} wide>
+        <SettingsRow icon={Shapes} label={t("Agent logos")} description={t("Draw each agent's logo in its brand colors, or without color")} wide>
           <Segmented label={t("Agent logos")} value={settings.agentMarks} onChange={(agentMarks) => update({ agentMarks })} options={[{ value: "color", label: t("Color") }, { value: "mono", label: t("Mono") }]} />
         </SettingsRow>
-        <SettingsRow label={t("Status indicators")} description={t("Classic marks only the states that ask for a look; Dots and Symbols draw every state as herdr's TUI does")} wide>
+        <SettingsRow icon={CircleDot} label={t("Status indicators")} description={t("Classic marks only the states that ask for a look; Dots and Symbols draw every state as herdr's TUI does")} wide>
           <Segmented label={t("Status indicators")} value={settings.statusIndicators} onChange={(statusIndicators) => update({ statusIndicators })} options={[{ value: "classic", label: t("Classic") }, { value: "dots", label: t("Dots") }, { value: "symbols", label: t("Symbols") }]} />
         </SettingsRow>
       </SettingsGroup>
@@ -656,7 +667,7 @@ function ChatPage() {
 
       <VoiceMain />
 
-      <SettingsFold kind="more" keys={["autoSendQueued", "wrapCode", "editTextFiles", "filesPanel", "reuseExternalLinkTab", ...(settings.voiceInput === "off" ? [] : ["voiceLanguage", "voiceEngine", "voicePolishChat", "voicePolishTerminal"] as const)]}>
+      <SettingsFold kind="more" keys={["autoSendQueued", "wrapCode", "editTextFiles", "reopenFileOnReturn", "filesPanel", "reuseExternalLinkTab", ...(settings.voiceInput === "off" ? [] : ["voiceLanguage", "voiceEngine", "voicePolishChat", "voicePolishTerminal"] as const)]}>
         <SettingsGroup title={t("Composer")} section="composer-more">
           <SettingsRow icon={Send} label={t("Send queued messages automatically")} description={t("A message sent while the agent works goes by itself when the turn ends. When off, it waits until you press Send now.")} reset={["autoSendQueued"]}>
             <Toggle label={t("Send queued messages automatically")} checked={settings.autoSendQueued} onChange={(autoSendQueued) => update({ autoSendQueued })} />
@@ -668,6 +679,9 @@ function ChatPage() {
           </SettingsRow>
           <SettingsRow icon={FilePen} label={t("Edit text files")} description={t("Adds Edit to the file viewer for a text file in the pane's folder. Saving asks first, and stops if the file changed since you opened it.")} reset={["editTextFiles"]}>
             <Toggle label={t("Edit text files")} checked={settings.editTextFiles} onChange={(editTextFiles) => update({ editTextFiles })} />
+          </SettingsRow>
+          <SettingsRow icon={FileClock} label={t("Reopen files on return")} description={t("A file open when you switch to another tab shows again when you come back to that tab. Back to the tab shows it too.")} reset={["reopenFileOnReturn"]}>
+            <Toggle label={t("Reopen files on return")} checked={settings.reopenFileOnReturn} onChange={(reopenFileOnReturn) => update({ reopenFileOnReturn })} />
           </SettingsRow>
           <FilesPanelRow />
           {canReuseExternalLinkTab() && <SettingsRow icon={ExternalLink} label={t("Reuse tab for external links")} description={t("External links reuse one browser tab instead of opening a new tab each time. The site in that tab can see and navigate this Ovis tab, so this is off by default.")} reset={["reuseExternalLinkTab"]}
@@ -709,16 +723,13 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar, picturesByDefault }: { ke
     </SettingsGroup>
     {/* the key bar's own rows live in its editor; a search here still finds them */}
     {searching && <KeyBarToggles />}
-    <SettingsFold kind="more" keys={["paneClipboard", "terminalImages", "splitGrid"]}>
+    <SettingsFold kind="more" keys={["paneClipboard", "terminalImages"]}>
       <SettingsGroup section="terminal-more">
         <SettingsRow label={t("Clipboard from a pane")} icon={ClipboardCopy} reset={["paneClipboard"]}>
           <Toggle label={t("Clipboard from a pane")} checked={settings.paneClipboard} onChange={(paneClipboard) => update({ paneClipboard })} />
         </SettingsRow>
         <SettingsRow label={t("Pictures in the terminal")} icon={ImageIcon} reset={["terminalImages"]}>
           <Toggle label={t("Pictures in the terminal")} checked={settings.terminalImages ?? picturesByDefault} onChange={(terminalImages) => update({ terminalImages })} />
-        </SettingsRow>
-        <SettingsRow label={t("Split into rows and columns")} icon={LayoutGrid} reset={["splitGrid"]}>
-          <Toggle label={t("Split into rows and columns")} checked={settings.splitGrid} onChange={(splitGrid) => update({ splitGrid })} />
         </SettingsRow>
       </SettingsGroup>
     </SettingsFold>
@@ -795,6 +806,14 @@ function ExperimentalPage() {
       </SettingsRow>
       <SettingsRow label={t("OpenCode: subagent ends from their session")} icon={Bot} description={t("An OpenCode subagent counts as running, and holds its turn's BG wait, until the session that started it is told it ended, not as soon as the subagent goes idle. Its own background work may still run then. When off, the subagent's own rows tell.")} reset={["opencodeParentEnds"]}>
         <Toggle label={t("OpenCode: subagent ends from their session")} checked={settings.opencodeParentEnds} onChange={(opencodeParentEnds) => update({ opencodeParentEnds })} />
+      </SettingsRow>
+      <SettingsRow label={t("OMP on macOS herdr-core: chat from the session it holds open")} icon={MessageSquare} description={t("On a Mac running herdr-core, an OMP pane's chat comes from the session file its omp holds open, read with lsof, so omp -c and resumed sessions show their chat. When off, the chat there falls back to the terminal.")} reset={["ompHeldFiles"]}>
+        <Toggle label={t("OMP on macOS herdr-core: chat from the session it holds open")} checked={settings.ompHeldFiles} onChange={(ompHeldFiles) => update({ ompHeldFiles })} />
+      </SettingsRow>
+    </SettingsGroup>
+    <SettingsGroup title={t("PCs")} section="experimental-pcs" heading>
+      <SettingsRow label={t("Start a replaced server again")} icon={Server} description={t("When installing Ovis over SSH in place of one started by hand fails or is cancelled, start that one again as it was. When off, it stays stopped, as before.")} reset={["restoreReplacedServer"]}>
+        <Toggle label={t("Start a replaced server again")} checked={settings.restoreReplacedServer} onChange={(restoreReplacedServer) => update({ restoreReplacedServer })} />
       </SettingsRow>
     </SettingsGroup>
     </SettingsBare.Provider>
@@ -873,28 +892,40 @@ function VoiceMain() {
   );
 }
 
-/** Chat's folded part for voice input: the dictation language, the speech recognition, tidying dictated text, and the OpenAI key. */
 function VoiceMore() {
   const { settings, update } = useSettings();
   const t = useT();
   // the server only says whether it holds a key; the key typed here is never kept past a save
   const [voice, setVoice] = useState<VoiceStatus | null>(null);
-  const [voiceKey, setVoiceKey] = useState("");
+  const voiceKeyRef = useRef<HTMLInputElement>(null);
+  const [hasVoiceKey, setHasVoiceKey] = useState(false);
+  const [voiceBaseUrl, setVoiceBaseUrl] = useState("");
+  const [voiceModel, setVoiceModel] = useState("");
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
-  useEffect(() => { fetchVoiceStatus().then(setVoice, () => setVoice(null)); }, []);
-  const changeVoiceKey = async (api_key: string | null) => {
+  useEffect(() => { fetchVoiceStatus().then((status) => {
+    setVoice(status);
+    setVoiceBaseUrl(status.base_url);
+    setVoiceModel(status.transcribe_model);
+  }, () => setVoice(null)); }, []);
+  const changeVoiceConfig = async (change: VoiceConfigUpdate) => {
     setVoiceBusy(true);
     try {
       // the save answers the new status itself: no second request that could fail after it
-      const saved = await saveVoiceConfig({ api_key });
-      setVoiceKey("");
+      const saved = await saveVoiceConfig(change);
+      if (voiceKeyRef.current) voiceKeyRef.current.value = "";
+      setHasVoiceKey(false);
       setVoiceError(null);
       setVoice(saved);
+      setVoiceBaseUrl(saved.base_url);
+      setVoiceModel(saved.transcribe_model);
       window.dispatchEvent(new Event(VOICE_CONFIG_EVENT));
     } catch (e) { setVoiceError(e instanceof Error ? e.message : String(e)); }
     finally { setVoiceBusy(false); }
   };
+  const baseChanged = voice !== null && voiceBaseUrl.trim() !== voice.base_url;
+  const modelChanged = voice !== null && voiceModel.trim() !== voice.transcribe_model;
+  const needsKey = baseChanged && voice?.configured && !hasVoiceKey;
   return (
     <>
       {settings.voiceInput !== "off" && <>
@@ -914,36 +945,58 @@ function VoiceMore() {
           </SettingsGroup>
         )}
       </>}
-      <SettingsGroup title={t("OpenAI API key")} section="openai-key">
+      <SettingsGroup title={t("Speech recognition API")} section="openai-key">
         <div className="settings-item">
           {voice && (
             <p className="settings-label voice-status">
-              {voice.configured ? t(voice.source === "env" ? "OpenAI key set by OVIS_OPENAI_API_KEY" : "OpenAI key saved on this PC") : t(settings.voiceEngine === "server" ? "No OpenAI key saved" : "No OpenAI key: the browser's speech recognition is used")}
+              {voice.configured ? t(voice.source === "env" ? "API key set by OVIS_OPENAI_API_KEY" : "API key saved on this PC") : t(settings.voiceEngine === "server" ? "No API key saved" : "No API key: the browser's speech recognition is used")}
             </p>
           )}
-          {voice && voice.source !== "env" && (
-            <form className="voice-key" onSubmit={(event) => { event.preventDefault(); if (voiceKey.trim()) void changeVoiceKey(voiceKey.trim()); }}>
-              <input
+          {voice && (
+            <form className="voice-provider" onSubmit={(event) => {
+              event.preventDefault();
+              if (voiceBusy || needsKey || !voiceBaseUrl.trim() || !voiceModel.trim()) return;
+              const key = voiceKeyRef.current?.value.trim();
+              void changeVoiceConfig({
+                transcribe_model: voiceModel.trim(),
+                ...(baseChanged ? { base_url: voiceBaseUrl.trim() } : {}),
+                ...(key ? { api_key: key } : {}),
+              });
+            }}>
+              <label className="voice-provider-field">
+                <span className="settings-label">{t("API address")}</span>
+                <input className="input" type="url" value={voiceBaseUrl} required disabled={voiceBusy || voice.source === "env"} autoComplete="off" spellCheck={false} autoCapitalize="off" onChange={(event) => setVoiceBaseUrl(event.target.value)} />
+              </label>
+              <p className="settings-hint">{t(voice.source === "env" ? "The API address is set by OVIS_OPENAI_BASE_URL on this PC." : "Use an OpenAI-compatible API address, including /v1 when required.")}</p>
+              <label className="voice-provider-field">
+                <span className="settings-label">{t("STT model")}</span>
+                <input className="input" value={voiceModel} required disabled={voiceBusy} autoComplete="off" spellCheck={false} autoCapitalize="off" onChange={(event) => setVoiceModel(event.target.value)} />
+              </label>
+              {needsKey && <p className="settings-hint">{t("Re-enter the API key when changing the API address.")}</p>}
+              <div className="voice-key">
+              {voice.source !== "env" && <input
+                ref={voiceKeyRef}
                 className="input voice-key-input"
                 type="password"
-                value={voiceKey}
-                placeholder="sk-..."
-                aria-label={t("OpenAI API key")}
+                placeholder={t("API key")}
+                aria-label={t("API key")}
+                disabled={voiceBusy}
                 autoComplete="off"
                 spellCheck={false}
                 autoCapitalize="off"
                 autoCorrect="off"
-                onChange={(event) => setVoiceKey(event.target.value)}
-              />
-              <button type="submit" className="btn voice-key-save" disabled={voiceBusy || !voiceKey.trim()}>{t("Save key")}</button>
-              <button type="button" className="btn btn-ghost voice-key-remove" disabled={voiceBusy || !voice.configured} onClick={() => void changeVoiceKey(null)}>{t("Remove key")}</button>
+                onChange={(event) => setHasVoiceKey(event.target.value.trim().length > 0)}
+              />}
+              <button type="submit" className="btn voice-key-save" disabled={voiceBusy || !voiceBaseUrl.trim() || !voiceModel.trim() || needsKey || !(baseChanged || modelChanged || hasVoiceKey)}>{t("Save")}</button>
+              {voice.source !== "env" && <button type="button" className="btn btn-ghost voice-key-remove" disabled={voiceBusy || !voice.configured} onClick={() => void changeVoiceConfig({ api_key: null })}>{t("Remove key")}</button>}
+              </div>
             </form>
           )}
           {voiceError && <p className="settings-hint voice-error" role="alert">{voiceError}</p>}
           <p className="settings-hint voice-privacy">
             {settings.voiceEngine === "browser" || (voice && !voice.configured && settings.voiceEngine === "auto")
               ? t("Without a key the browser recognizes the speech: Chrome and Edge send the audio to Google or Microsoft. Nothing is recorded until you press the mic.")
-              : t("Audio is sent to OpenAI with your key. Nothing is recorded until you press the mic.")}
+              : t("Audio is sent to the configured API with your key. Nothing is recorded until you press the mic.")}
           </p>
         </div>
       </SettingsGroup>
@@ -1214,9 +1267,9 @@ const groupedId = (id: string): string => id.match(/.{1,4}/g)?.join(" ") ?? id;
  * then the paired phones and browsers), with one Connect a device whose dialog holds every way in. What few
  * people change waits in More settings.
  */
-function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSettings, pcSettingsError, onPcSettings, openAddPc }: {
+function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSettings, pcSettingsError, onPcSettings, openAddPc, connectPc }: {
   auth: HealthAuth | null; security: SecurityFacts; onSignOut: (() => Promise<void>) | null; onRevokedAll: () => void;
-  machines: readonly Machine[]; pcSettings: MachineSettings | null; pcSettingsError: string | null; onPcSettings: (patch: Partial<MachineSettings>) => void; openAddPc: () => void;
+  machines: readonly Machine[]; pcSettings: MachineSettings | null; pcSettingsError: string | null; onPcSettings: (patch: Partial<MachineSettings>) => void; openAddPc: (preset?: AddPcPreset) => void; connectPc: (machine: Machine) => void;
 }) {
   const { settings, update } = useSettings();
   const t = useT();
@@ -1243,11 +1296,17 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
   const relayReadOnly = auth?.role === "watch" || auth?.via === "portal";
   const closesGate = security.state === "known" && security.summary.pairing_gate === "open" && !security.summary.token_configured;
   const [connecting, setConnecting] = useState(false);
+  // each opening of Add a connection asks the account service again, so a service back from an outage signs in there,
+  // and a sign-in its relay tab finished is read again
+  const [accountChecks, setAccountChecks] = useState(0);
+  const searching = useContext(SettingsQuery).length > 0;
+  /** More settings' place for the device list's notes and Revoke every device (DevicesPanel `more`) */
+  const [devicesMore, setDevicesMore] = useState<HTMLDivElement | null>(null);
   const closeConnect = useCallback(() => setConnecting(false), []);
   // a reset relay identity is a new ID for this PC: My devices reads it again
   const [identityResets, setIdentityResets] = useState(0);
   // the account as AccountSection reads it: signed in or not, and the account's PCs for the list
-  const [account, setAccount] = useState<AccountState>({ signedIn: false, account: null, pcs: null });
+  const [account, setAccount] = useState<AccountState>({ signedIn: false, account: null, pcs: null, reachable: true });
   // a new device joins by signing in only to a PC in the account this browser is signed in to (docs/account.md
   // "Joining through the account"): read again each time the dialog opens, since this PC may have joined meanwhile
   const [pcAccount, setPcAccount] = useState<string | null>(null);
@@ -1258,59 +1317,77 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
     return () => { live = false; };
   }, [account.account, connecting]);
   const joinBySignIn = account.account !== null && pcAccount === account.account && relay.status?.phase === "online";
-  const signIn = useCallback(() => {
+  const openAccount = useCallback(() => {
     setConnecting(false);
-    // the account's own sign-in, at the top of this page
+    // the account's own group, at the top of this page: Add this PC is there
     const group = document.querySelector<HTMLElement>('.settings-dialog [data-section="account"]');
+    // the account waits in More settings: opened first, so the sign-in shows
+    const fold = group?.closest("details");
+    if (fold) fold.open = true;
     group?.scrollIntoView({ block: "start" });
     group?.querySelector<HTMLElement>("button")?.focus();
   }, []);
+  const accountService = accountServiceHere();
+  const readAccountAgain = useCallback(() => setAccountChecks((count) => count + 1), []);
   // a touch phone on this PC's own address pairs itself through the relay in one tap: beside its own row
   const touchPhone = useMediaQuery("(pointer: coarse)");
   const selfRelay = touchPhone && relayOffered(relay) && relay.status?.phase === "online" && !relayReadOnly ? <UseRelayHere /> : null;
   return (
     <>
-      {(nativeApp || relayPc !== null) && (
-        <SettingsGroup title={t("This app")} section="this-app">
-          {nativeApp && (
-            <SettingsRow label={t("Change PC")} description={window.location.protocol === "capacitor:" ? t("This is the demo. Go back to the app's list of PCs to open yours.") : t("This app shows {address}. Go back to its list of PCs to open another.", { address: window.location.host })}>
-              <button type="button" className="btn" onClick={() => void changePc()}>{t("Change PC")}</button>
-            </SettingsRow>
-          )}
-          {relayPc !== null && (
-            <>
-              <SettingsRow label={t("Change PC")} description={t("This page shows one PC. The front page lists every PC this phone is paired with.")}>
-                <button type="button" className="btn" onClick={() => window.location.assign("/")}>{t("Change PC")}</button>
-              </SettingsRow>
-              <SettingsRow label={t("Forget this PC")} description={t("Deletes this phone's key for this PC. Pairing again takes a new QR code from the PC.")}>
-                <button type="button" className="btn" onClick={() => setConfirmForget(true)}>{t("Forget this PC")}</button>
-              </SettingsRow>
-              {confirmForget && (
-                <ConfirmDialog title={t("Forget this PC?")}
-                  body={t("This phone's key for it is deleted here, and the PC keeps listing this phone until it is revoked there. Pairing again takes a new QR code from the PC.")}
-                  confirmLabel={t("Forget")} onClose={() => setConfirmForget(false)}
-                  onConfirm={async () => { await (await loadRelayShell()).forgetSavedPc(relayPc); window.location.assign("/"); }} />
-              )}
-            </>
-          )}
-        </SettingsGroup>
-      )}
-
-      <AccountSection onAccount={setAccount} />
-
-      <SettingsGroup title={t("My devices")} section="devices">
-        <SettingsRow label={t("Connect a device")} keywords={t("phone browser PC pair pairing code QR relay Tailscale Wi-Fi SSH Portal add PC remote PCs")}>
-          <button type="button" className="btn btn-primary" onClick={() => setConnecting(true)}><Plus aria-hidden="true" />{t("Connect")}</button>
-        </SettingsRow>
+      {/* what is connected to this PC: its name atop one list of the other PCs, phones and browsers, the one in use first */}
+      <SettingsGroup section="devices">
         <div className="settings-item my-devices">
-          <MyPcRows machines={machines} accountPcs={account.pcs} relayKey={`${relay.status?.phase ?? ""}:${identityResets}`} />
-          <DevicesPanel onDevicePaired={closeConnect} auth={auth} onRevokedAll={onRevokedAll} kindOf={(label) => deviceKind(label, t)} currentAction={selfRelay} />
+          <MyPcRows machines={machines} accountPcs={account.pcs} watching={auth?.role === "watch"} relayKey={`${relay.status?.phase ?? ""}:${identityResets}`}>
+            <DevicesPanel onDevicePaired={closeConnect} auth={auth} onRevokedAll={onRevokedAll} kindOf={(label) => deviceKind(label, t)} currentAction={selfRelay} more={devicesMore} />
+          </MyPcRows>
         </div>
+        {/* how anything else gets connected: one button, its sheet picks the way; a search finds it as a row by every way it holds */}
+        {searching ? (
+          <SettingsRow label={t("Add a connection")} keywords={t("phone browser PC pair pairing code QR relay Tailscale Wi-Fi SSH Portal add PC remote PCs")}>
+            <button type="button" className="btn btn-primary" onClick={() => { setConnecting(true); setAccountChecks((count) => count + 1); }}><Plus aria-hidden="true" />{t("Add a connection")}</button>
+          </SettingsRow>
+        ) : (
+          <div className="settings-item devices-add">
+            <button type="button" className="btn btn-primary" onClick={() => { setConnecting(true); setAccountChecks((count) => count + 1); }}><Plus aria-hidden="true" />{t("Add a connection")}</button>
+          </div>
+        )}
         <DamagedPcFiles pcSettings={pcSettings} />
-        {onSignOut && <SignOutRow viaPortal={auth?.via === "portal"} oidc={auth?.portal?.method === "oidc"} onSignOut={onSignOut} label={t("Sign out of this PC")} />}
       </SettingsGroup>
 
       <SettingsFold kind="more" keys={["keepScreenOn", "pcLoad"]}>
+        {(nativeApp || relayPc !== null) && (
+          <SettingsGroup title={t("This app")} section="this-app">
+            {nativeApp && (
+              <SettingsRow label={t("Change PC")} description={window.location.protocol === "capacitor:" ? t("This is the demo. Go back to the app's list of PCs to open yours.") : t("This app shows {address}. Go back to its list of PCs to open another.", { address: window.location.host })}>
+                <button type="button" className="btn" onClick={() => void changePc()}>{t("Change PC")}</button>
+              </SettingsRow>
+            )}
+            {relayPc !== null && (
+              <>
+                <SettingsRow label={t("Change PC")} description={t("This page shows one PC. The front page lists every PC this phone is paired with.")}>
+                  <button type="button" className="btn" onClick={() => window.location.assign("/")}>{t("Change PC")}</button>
+                </SettingsRow>
+                <SettingsRow label={t("Forget this PC")} description={t("Deletes this phone's key for this PC. Pairing again takes a new QR code from the PC.")}>
+                  <button type="button" className="btn" onClick={() => setConfirmForget(true)}>{t("Forget this PC")}</button>
+                </SettingsRow>
+                {confirmForget && (
+                  <ConfirmDialog title={t("Forget this PC?")}
+                    body={t("This phone's key for it is deleted here, and the PC keeps listing this phone until it is revoked there. Pairing again takes a new QR code from the PC.")}
+                    confirmLabel={t("Forget")} onClose={() => setConfirmForget(false)}
+                    onConfirm={async () => { await (await loadRelayShell()).forgetSavedPc(relayPc); window.location.assign("/"); }} />
+                )}
+              </>
+            )}
+          </SettingsGroup>
+        )}
+
+        <AccountSection onAccount={setAccount} recheck={accountChecks} />
+        <SettingsGroup title={t("Devices and access")} section="devices-more">
+          {/* in the hosted shell too (a phone reaching this PC through the relay or directly), there without the switch */}
+          {(relayOffered(relay) || inRelayShell()) && <RelayDirectRow relay={relay} readOnly={relayReadOnly || inRelayShell()} />}
+          <div className="settings-item" ref={setDevicesMore} />
+          {onSignOut && <SignOutRow viaPortal={auth?.via === "portal"} oidc={auth?.portal?.method === "oidc"} onSignOut={onSignOut} label={t("Sign out of this PC")} />}
+        </SettingsGroup>
         <SettingsGroup title={t("This device")} section="phone-more">
           <SettingsRow label={t("Keep screen on")} description={<>{t("While a terminal or chat pane is open.")}{wakeLockProblem !== null && <span className="settings-condition">{wakeLockProblem}</span>}</>}>
             <Toggle label={t("Keep screen on")} checked={settings.keepScreenOn} onChange={(keepScreenOn) => update({ keepScreenOn })} />
@@ -1327,10 +1404,12 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
       </SettingsFold>
 
       {connecting && (
-        <ConnectPhoneDialog plan={plan} loading={access === undefined} onRefresh={loadAccess} pairUrl={pairUrl}
+        <ConnectPhoneDialog plan={plan} pairUrl={pairUrl}
           relay={relay} readOnly={relayReadOnly} closesGate={closesGate} canPair={auth?.via !== "portal"}
-          joinBySignIn={joinBySignIn} onSignIn={accountOffered() && !account.signedIn ? signIn : null}
-          onAddPcSsh={() => { setConnecting(false); openAddPc(); }} onClose={closeConnect} />
+          signedIn={account.signedIn} joinBySignIn={joinBySignIn}
+          account={accountService !== null && account.reachable ? { service: accountService, onOpen: openAccount, onSignedIn: readAccountAgain } : null}
+          onAddPc={(preset) => { setConnecting(false); openAddPc(preset); }} machines={machines}
+          onConnectMachine={(machine) => { setConnecting(false); connectPc(machine); }} onClose={closeConnect} />
       )}
     </>
   );
@@ -1393,6 +1472,9 @@ function RelayControls({ relay, closesGate, onReset }: { relay: RelayState; clos
   );
 }
 
+/** a PC this app added (over SSH or the relay) that is not connected now: removable from the list; herdr's and herdr-core's own are managed there */
+const removablePc = (machine: Machine): boolean => machine.state !== "connected" && machine.herdr_profile_id === undefined && (machine.kind === "ssh" || machine.kind === "relay");
+
 /**
  * The PCs at the top of My devices: this PC with its relay ID (what a device that typed this PC's code compares,
  * AddRelayPc and the hosted app's code screen), the PCs this app shows (SSH, relay, herdr-core machines), and,
@@ -1402,8 +1484,14 @@ function RelayControls({ relay, closesGate, onReset }: { relay: RelayState; clos
  * (a reset in another window) is read again too. Removing a PC stays
  * in the sidebar's PC menu, which moves the selection off it first and knows the PCs herdr manages.
  */
-function MyPcRows({ machines, accountPcs, relayKey }: { machines: readonly Machine[]; accountPcs: readonly MyPc[] | null; relayKey: string }) {
+function MyPcRows({ machines, accountPcs, relayKey, watching, children }: { machines: readonly Machine[]; accountPcs: readonly MyPc[] | null; relayKey: string;
+  /** a watching device: the server refuses it the removal, so it is not offered */
+  watching: boolean;
+  /** the paired phones and browsers, the one in use first: right under this PC, above the other PCs */
+  children?: ReactNode }) {
   const t = useT();
+  // a PC that is not connected, offered for removal from its own row (the sidebar's PC menu removes it too)
+  const [removing, setRemoving] = useState<Machine | null>(null);
   const local = machines.find((machine) => machine.kind === "local");
   const [ownId, setOwnId] = useState<string | null>(null);
   useEffect(() => {
@@ -1416,25 +1504,34 @@ function MyPcRows({ machines, accountPcs, relayKey }: { machines: readonly Machi
   const shown = new Set<string>([id, local?.server_id, ...others.map((machine) => machine.server_id ?? machine.relay?.server_id)].filter((id): id is string => id !== undefined));
   const fromAccount = (accountPcs ?? []).filter((pc) => !shown.has(pc.server_id));
   return (
-    <ul className="devices-list my-pcs">
-      {local !== undefined && (
+    <>
+    {local !== undefined && (
+      <ul className="devices-list my-pc-self">
         <li className="devices-row my-device-self" data-testid="this-pc">
           <div className="devices-name">
             <span className="settings-label">{local.name}<span className="devices-kind is-self">{t("This PC")}</span></span>
             {id !== undefined && <span className="settings-description my-device-id">{t("ID {id}", { id: groupedId(id) })}</span>}
           </div>
         </li>
-      )}
+      </ul>
+    )}
+    {children}
+    <ul className="devices-list my-pcs">
       {others.map((machine) => (
-        <li key={machine.id} className="devices-row">
+        <li key={machine.id} className={machine.state === "connected" ? "devices-row" : "devices-row is-away"}>
           <div className="devices-name">
             <span className="settings-label">{machine.name}<span className="devices-kind">PC</span></span>
             <span className="settings-description">{t(STATE_WORD[machine.state])}</span>
           </div>
+          {!watching && removablePc(machine) && (
+            <div className="devices-actions">
+              <button type="button" className="icon-button" aria-label={t("Remove PC {name}", { name: machine.name })} onClick={() => setRemoving(machine)}><Trash2 aria-hidden="true" /></button>
+            </div>
+          )}
         </li>
       ))}
       {fromAccount.map((pc) => (
-        <li key={pc.server_id} className="devices-row" data-pc-state={pc.state}>
+        <li key={pc.server_id} className={pc.state === "paired" ? "devices-row" : "devices-row is-away"} data-pc-state={pc.state}>
           <div className="devices-name">
             <span className="settings-label">{pc.name}<span className="devices-kind">PC</span></span>
             <span className="settings-description">{accountPcStateText(pc, t)}</span>
@@ -1442,6 +1539,9 @@ function MyPcRows({ machines, accountPcs, relayKey }: { machines: readonly Machi
         </li>
       ))}
     </ul>
+    {removing !== null && <ConfirmDialog title={t("Remove PC {name}?", { name: removing.name })} body={t(removing.kind === "relay" ? "Removes this PC here. To end its access too, revoke it under Phone & devices on that PC." : "Removes this registration. Remote sessions keep running.")} confirmLabel={t("Remove PC")}
+      onConfirm={async () => { await machineRequest(`/${encodeURIComponent(removing.id)}`, "DELETE"); setRemoving(null); }} onClose={() => setRemoving(null)} />}
+    </>
   );
 }
 
@@ -1543,9 +1643,10 @@ function PluginsGroup() {
  * Which runtime this PC's terminals come from, and the switch between herdr's TUI and the Herdr
  * app when this PC has both and nothing else decides it. A switch asks first, saves the choice and
  * restarts Ovis on it; once a new server answers, the app reads it again in place (no reload). Where the switch cannot run,
- * one quiet line says why, or how to switch by hand.
+ * one quiet line says why, or how to switch by hand. The move of the whole herdr session to herdr-core
+ * (RuntimeMove) is one more row, whose dialog outlives the restart its own switch starts.
  */
-function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onServerRestarted }: { version: string | null; runtime: "herdr" | "herdr-core" | null; core: HerdrCoreFacts | null; facts: HerdrRuntimeFacts | null; bootId: string | null; onServerRestarted?: () => void }) {
+function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onServerRestarted, onOpenPane }: { version: string | null; runtime: "herdr" | "herdr-core" | null; core: HerdrCoreFacts | null; facts: HerdrRuntimeFacts | null; bootId: string | null; onServerRestarted?: () => void; onOpenPane: (machineId: string, paneId: string) => void }) {
   const t = useT();
   const [confirming, setConfirming] = useState(false);
   // the wait for the restarted server outlives this page of Settings (lib/runtimeSwitch.ts)
@@ -1562,18 +1663,22 @@ function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onSe
     const timer = setInterval(() => void read(), 10_000);
     return () => { live = false; clearInterval(timer); };
   }, [restarting, bootId]);
+  const facts = bridgeFacts ?? healthFacts;
+  // the runtime the bridge serves now; the last health answer's version only when it was about that runtime
+  const served = facts?.serving ?? runtime;
+  const known = served === runtime ? version : null;
+  // the move's row goes with the rows while the page waits for the restarted server; its dialog stays:
+  // the key keeps the one element across both lists below
+  const move = <RuntimeMove key="move" bootId={bootId} hidden={restarting !== null} onServerRestarted={onServerRestarted} onOpenPane={onOpenPane} />;
   if (restarting !== null) {
     return (
       <SettingsGroup title={t("Terminals")} section="runtime">
         <p className="settings-item settings-hint" role="status">{restarting.lost ? t("Ovis has not answered since the restart. Reload this page in a moment; if it stays away, start Ovis again on this PC.")
           : restarting.to === "herdr-core" ? t("Restarting Ovis on the Herdr app…") : t("Restarting Ovis on herdr TUI…")}</p>
+        {move}
       </SettingsGroup>
     );
   }
-  const facts = bridgeFacts ?? healthFacts;
-  // the runtime the bridge serves now; the last health answer's version only when it was about that runtime
-  const served = facts?.serving ?? runtime;
-  const known = served === runtime ? version : null;
   if (served === null || (known === null && facts === null)) return null;
   const onCore = served === "herdr-core";
   const vars = { version: core?.version ?? "", setting: "OVIS_RUNTIME=herdr-core", command: "herdr plugin config-dir devswha.ovis" };
@@ -1610,6 +1715,7 @@ function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onSe
         </SettingsRow>
       ))}
       {hint && <p className="settings-item settings-hint">{hint}</p>}
+      {move}
       {confirming && target !== null && (
         <ConfirmDialog
           title={toCore ? t("Show the Herdr app's terminals?") : t("Show herdr TUI's terminals?")}
@@ -1638,14 +1744,14 @@ function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onSe
   );
 }
 
-function AboutPage({ updates, herdrVersion, herdrRuntime, herdrCore, herdrRuntimeFacts, bootId, onServerRestarted, bridgesFollow }: { updates: UpdatesModel; herdrVersion: string | null; herdrRuntime: "herdr" | "herdr-core" | null; herdrCore: HerdrCoreFacts | null; herdrRuntimeFacts: HerdrRuntimeFacts | null; bootId: string | null; onServerRestarted?: () => void; bridgesFollow: boolean }) {
+function AboutPage({ updates, herdrVersion, herdrRuntime, herdrCore, herdrRuntimeFacts, bootId, onServerRestarted, onOpenPane, bridgesFollow }: { updates: UpdatesModel; herdrVersion: string | null; herdrRuntime: "herdr" | "herdr-core" | null; herdrCore: HerdrCoreFacts | null; herdrRuntimeFacts: HerdrRuntimeFacts | null; bootId: string | null; onServerRestarted?: () => void; onOpenPane: (machineId: string, paneId: string) => void; bridgesFollow: boolean }) {
   const t = useT();
   // herdr-app's About: each line a name and its value or action, no group captions or sentences
   return (
     <SettingsBare.Provider value={true}>
       {/* the facts read as one list, as herdr-app's About */}
       <div className="settings-joined">
-      <RuntimeFacts version={herdrVersion} runtime={herdrRuntime} core={herdrCore} facts={herdrRuntimeFacts} bootId={bootId} onServerRestarted={onServerRestarted} />
+      <RuntimeFacts version={herdrVersion} runtime={herdrRuntime} core={herdrCore} facts={herdrRuntimeFacts} bootId={bootId} onServerRestarted={onServerRestarted} onOpenPane={onOpenPane} />
       <UpdateControls updates={updates} bridgesFollow={bridgesFollow} />
       {/* herdr's own version and update: on herdr-core there is no herdr TUI here, and Terminals names the core */}
       {herdrRuntime !== "herdr-core" && <HerdrUpdateControls enabled herdrVersion={herdrVersion} showVersion={(herdrRuntimeFacts?.serving ?? herdrRuntime) === null} />}
@@ -1910,10 +2016,10 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       case "agents": return <AgentsSettings watching={auth?.role === "watch"} onLocalLogin={onUsageLogin} onOpenPane={onOpenPane} onOpenGuide={onClose} />;
       case "shortcuts": return <ShortcutsPage />;
       // after every device went, its own pairing included, a browser asks the server where it stands: the roster answers, or the gate does
-      case "devices": return <DevicesPage auth={auth} security={security} onSignOut={actions.lock} onRevokedAll={actions.refresh} openAddPc={actions.openAddPc}
+      case "devices": return <DevicesPage auth={auth} security={security} onSignOut={actions.lock} onRevokedAll={actions.refresh} openAddPc={actions.openAddPc} connectPc={actions.connectPc}
         machines={machines} pcSettings={pcSettings} pcSettingsError={pcSettingsError} onPcSettings={(patch) => void updatePcSettings(patch)} />;
       case "experimental": return <ExperimentalPage />;
-      case "about": return <AboutPage updates={updates} herdrVersion={herdrVersion} herdrRuntime={herdrRuntime} herdrCore={herdrCore} herdrRuntimeFacts={herdrRuntimeFacts} bootId={bootId} onServerRestarted={onServerRestarted} bridgesFollow={pcSettings?.auto_update_bridges === true} />;
+      case "about": return <AboutPage updates={updates} herdrVersion={herdrVersion} herdrRuntime={herdrRuntime} herdrCore={herdrCore} herdrRuntimeFacts={herdrRuntimeFacts} bootId={bootId} onServerRestarted={onServerRestarted} onOpenPane={onOpenPane} bridgesFollow={pcSettings?.auto_update_bridges === true} />;
       default: return null;
     }
   };

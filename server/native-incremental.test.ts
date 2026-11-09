@@ -205,10 +205,10 @@ test("large OMO and GJC live tasks make room among themselves, never by evicting
 });
 
 for (const source of ["omo-transcript", "gjc-transcript"] as const) {
-  test(`${source}: a turn reads the same live and once settled, with no pictures and call ids only for gjc`, () => {
+  test(`${source}: a turn reads the same live and once settled, with pictures only for omo and call ids only for gjc`, () => {
     const png = { type: "image", mimeType: "image/png", data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64") };
     const path = fixture(jsonl(
-      message(source, "user", [{ type: "text", text: "Look at this" }, png]),
+      { ...message(source, "user", [{ type: "text", text: "Look at this" }, png]), id: "look" },
       call(source, "shot"),
       { type: "message", message: { role: "toolResult", toolCallId: "shot", content: [{ type: "text", text: "shot" }, png] } },
       { type: "message", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Seen it" }] } },
@@ -217,11 +217,12 @@ for (const source of ["omo-transcript", "gjc-transcript"] as const) {
     appendFileSync(path, jsonl(prompt(source, "Next")));
     const settled = transcriptPage(source, path).turns;
     expect(settled.slice(0, live.length)).toEqual(live);
-    // omo and gjc would name pictures nothing answers, so neither path names one
+    // omo's pictures are answered from its file (#3420); gjc's would name pictures nothing answers, so it names none
+    const pictured = source === "omo-transcript";
     for (const turns of [live, settled]) {
-      expect(turns.flatMap(turn => turn.parts).some(part => part.kind === "image")).toBe(false);
+      expect(turns.flatMap(turn => turn.parts).filter(part => part.kind === "image")).toEqual(pictured ? [{ kind: "image", media_type: "image/png", ref: "pi-prompt:look:0" }] : []);
       expect(toolParts(turns)[0]).toMatchObject({ output: "shot" });
-      expect(toolParts(turns)[0] && "images" in toolParts(turns)[0]!).toBe(false);
+      expect(toolParts(turns)[0]?.images).toEqual(pictured ? [{ media_type: "image/png", ref: "pi:shot:0" }] : undefined);
       expect(toolParts(turns)[0]?.call_id).toBe(source === "gjc-transcript" ? "shot" : undefined);
     }
   });

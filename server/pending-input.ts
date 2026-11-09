@@ -204,6 +204,9 @@ export class PendingInputs<Owner, Lease> {
   /** The pending message `id`, still held here, was accepted for an agent alone: a saved copy's resend keeps that whatever it says. */
   agentOnly(paneId: string, id: string): boolean { const item = this.records.get(id); return item?.paneId === paneId && item.message.agent_only === true; }
 
+  /** Whether any message for the pane is still here, queued, held or going: a runtime move waits for none. */
+  holds(paneId: string): boolean { return [...this.records.values()].some((item) => item.paneId === paneId); }
+
   next(paneId: string): PendingRecord<Owner, Lease> | null {
     if (!ready(this.statuses.get(paneId)) || this.gates.has(paneId)
       || [...this.records.values()].some((item) => item.paneId === paneId && (item.inFlight || item.message.state === "uncertain"))) return null;

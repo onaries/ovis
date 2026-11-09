@@ -169,6 +169,33 @@ test("on herdr's own server, the screen herdr repaints for a wheel is not announ
   }
 });
 
+test("the cursor follows a write that only moves it: a space herdr sends as a cursor move, an arrow key (#3266, #3268)", async () => {
+  screen.box = { width: 40 * 8, height: 4 * 16 };
+  screen.children = [];
+  const render: (() => void)[] = [];
+  const term: any = {
+    cols: 40, rows: 4, element: screen, buffer: { active: { baseY: 0, viewportY: 0 } },
+    options: { fontFamily: "monospace", fontSize: 13, theme: {}, scrollback: 0 },
+    write: () => {}, reset: () => {}, refresh: () => {},
+    onResize: () => ({ dispose: () => {} }), onRender: (listener: () => void) => { render.push(listener); return { dispose: () => {} }; }, onScroll: () => ({ dispose: () => {} }),
+  };
+  const overlay = await attachGhosttyOverlay(term, new FakeElement() as unknown as HTMLElement, () => ["$ a"]);
+  try {
+    const cursor = screen.children[0]!.children.find((child) => child.className === "ghostty-cursor")!;
+    const frame = (): unknown => { for (const callback of render) callback(); flush(); return cursor.style.left; };
+    flush();
+    expect(cursor.style.left).toBe("24px");
+    term.write("\x1b[C");
+    expect(frame()).toBe("32px");
+    term.write("\x1b[1;9H");
+    expect(frame()).toBe("64px");
+    term.write("\x1b[D");
+    expect(frame()).toBe("56px");
+  } finally {
+    overlay?.dispose();
+  }
+});
+
 test("colours as xterm draws them: readable at its minimum contrast except a Powerline glyph, faint text dimmed by half, a bold box bold", async () => {
   screen.box = { width: 40 * 8, height: 4 * 16 };
   screen.children = [];

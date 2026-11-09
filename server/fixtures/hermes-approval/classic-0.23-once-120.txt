@@ -1,0 +1,40 @@
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                    email: email-inbox-triage, himalaya                               │
+│                                                    media: youtube-content                                            │
+│  fixture-model · Nous Research                     note-taking: obsidian                                             │
+│  /home/user/project  productivity: document-to-action-items, +8 more                   │
+│  Session: 424eb602                                 research: arxiv, competitor-news-monitor, grounded-citations      │
+│                                                    social-media: xurl                                                │
+│                                                    software-development: codebase-inspection, dogfood, +6 more       │
+│                                                    web: blocked-page-recovery                                        │
+│                                                                                                                      │
+│                                                    21 tools · 40 skills · /help for commands                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+Welcome to Hermes Agent! Type your message or /help for commands.
+✦ Tip: HERMES_STREAM_RETRIES (default 3) controls mid-stream reconnect attempts on transient network errors.
+
+
+────────────────────────────────────────
+● clean up the scratch folder
+────────────────────────────────────────
+
+  ┊ 💻 preparing terminal…
+╭────────────────────────────────────────────────╮
+│ ⚠️  Dangerous Command                          │
+│                                                │
+│ rm -rf ./scratch                               │
+│                                                │
+│ ❯ 1. Allow once                                │
+│   2. Allow for this session                    │
+│   3. Add to permanent allowlist                │
+│   4. Deny                                      │
+│                                                │
+│ recursive delete                               │
+╰────────────────────────────────────────────────╯
+
+  💻 rm -rf ./scratch  (  3.0s · ↓ 5 tok)
+  ↑/↓ to select, Enter to confirm  (3598s)
+ ☤ fixture-model │ 10/128K │ [░░░░░░░░░░] 0% │ ◷ 0.8s │ ↑ 7 t/s │ 24s │ ⏱ 5s              ─ clean up the scratch folder
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+⚠ ❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

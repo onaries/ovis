@@ -149,7 +149,8 @@ export async function runSupervisor(root = resolve(import.meta.dir, "..")) {
         if (request) {
           // a browser's Check or Update is a user's own request: it does not wait the unshallow
           // backoff out, the 5-minute timer does
-          void started.promise.then(() => updater.request(request.command, true, request.command === "install" ? request.expected_revision : undefined));
+          if (request.command === "cancel") updater.cancel(request.install_id);
+          else void started.promise.then(() => updater.request(request.command, true, request.command === "install" ? request.expected_revision : undefined, request.command === "install" ? request.install_id : undefined));
         }
       },
       onExit(proc, code) {

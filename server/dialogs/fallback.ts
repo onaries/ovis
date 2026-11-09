@@ -51,6 +51,18 @@ const NOT_PROMPT_TEXT_RE = /^(?:[❯›>"'“]|\$ )/;
 const WORKING_LINE_RE = /^[·✢✳✶✻✽*] (\S(?:.*\S)?…) \((?:\d+h )?(?:\d+m )?\d+s · [↑↓] [\d.,]+[kKmM]? tokens( · esc to interrupt)?\)$/u;
 
 /**
+ * The ticking start of omp's status row under its panel while a question waits, in every status-line preset its fixtures
+ * hold (omp 18.12-18.13): a spinner frame, braille or the ascii preset's `/-\|`, and the elapsed time, or `π` at rest.
+ * The separator and segments after it are the user's choice (" · ⬢ …", " > ⬢ … ▶──6%", " > [M] …", Nerd Font gaps)
+ * and stay in the id, as do the model, folder and context they name (#3412, #3416). It may follow the Nerd Font
+ * band's powerline cap or the box shape's top border (`╭── `). A braille frame and a time is omp's alone and needs nothing
+ * more, as the user may have turned the context segment off; the ascii preset's frame or the resting `π` also needs
+ * the context gauge every preset draws (`◫ 5.7%`, `▶──6%`, `>--6%`, `──6%`), so a question's "- 5s delay" or
+ * "| 30s timeout" is no status row.
+ */
+const OMP_STATUS_ROW_RE = /^((?:[\ue0b0-\ue0d4] |╭─+ )?)(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] (?:\d+h )?(?:\d+m )?\d+s( +\S.*)|(?:[/\\|-] (?:\d+h )?(?:\d+m )?\d+s|π)( +\S.*(?:◫ |[─-])\d+(?:\.\d+)?%.*))$/u;
+
+/**
  * How a fallback card's id reads a line of the screen. Claude Code keeps its working line on the
  * screen while it waits on a prompt, and the line's spinner, time and token count change every
  * second or so. An id that took them in refused each answer tapped after a tick as stale (#365).
@@ -64,11 +76,20 @@ const WORKING_LINE_RE = /^[·✢✳✶✻✽*] (\S(?:.*\S)?…) \((?:\d+h )?(?:\
  * "Deleting production…".
  */
 function steadyReader(agent: string, shown: string[]): SteadyReader {
-  const working = agent === "claude" ? shown.flatMap((line, at) => WORKING_LINE_RE.test(line) ? [at] : []) : [];
+  const pattern = agent === "claude" ? WORKING_LINE_RE : agent === "omp" ? OMP_STATUS_ROW_RE : null;
+  // omp draws its status row last, under the panel: a status-shaped line anywhere else is read as written, and a
+  // row whose exact text another shown line also has is not blanked at all, as `read` goes by the text (#3412)
+  const last = shown.at(-1);
+  const working = pattern === null ? []
+    : agent === "omp" ? (last !== undefined && pattern.test(last) && shown.indexOf(last) === shown.length - 1 ? [shown.length - 1] : [])
+    : shown.flatMap((line, at) => pattern.test(line) ? [at] : []);
   const [at] = working;
   if (working.length !== 1 || at === undefined) return { read: (other) => other, working: null };
   const line = shown[at]!;
-  const steady = line.replace(WORKING_LINE_RE, (_all, doing: string, hint: string | undefined) => `* ${doing} (<time> · <tokens>${hint ?? ""})`);
+  const steady = agent === "omp"
+    // the spinner and the elapsed time, or the resting π, are omp's ticking part; the model, folder and context stay (#3412)
+    ? line.replace(OMP_STATUS_ROW_RE, (_all, lead: string, braille: string | undefined, gauged: string | undefined) => `${lead}<status>${braille ?? gauged}`)
+    : line.replace(WORKING_LINE_RE, (_all, doing: string, hint: string | undefined) => `* ${doing} (<time> · <tokens>${hint ?? ""})`);
   return { read: (other) => other === line ? steady : other, working: at };
 }
 

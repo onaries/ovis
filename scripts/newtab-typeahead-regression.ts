@@ -91,7 +91,8 @@ async function typeAhead(browser: Browser, origin: string, item: Case): Promise<
   const workspaceId = created.workspace.workspace_id;
   const first = created.root_pane.pane_id;
   const context = await browser.newContext({ viewport: item.viewport, hasTouch: item.touch === true, isMobile: item.touch === true, locale: "en-US" });
-  await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })));
+  // the away case clicks the sidebar's Filter field, which is off until chosen (Settings → Sidebar filter)
+  await context.addInitScript(() => { localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "terminal", alertsOn: false })); localStorage.setItem("ovis:sidebar-filter-shown", "true"); });
   try {
     const page = await context.newPage();
     page.setDefaultTimeout(10_000);

@@ -1,85 +1,15 @@
-/* The sidebar's two sections, PCs and Agents (MachineSidebar.tsx, AgentSidebar.tsx): each a head that
-   stays put and a list that scrolls under it. */
+/* The sidebar's two sections, PCs and Agents (MachineSidebar.tsx, AgentSidebar.tsx): the PCs a list that
+   starts right under the logo, Agents a head that stays put and a list that scrolls under it. */
 
+/* The rows keep their own scroll viewport, the section's one grid row. A grid, not a column flexbox:
+   Safari sizes a column flexbox's max-content (Sidebar.css caps the section at it) from its 0 flex
+   basis, which left the list one row tall (issue 3267). */
 .pcs-sidebar {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   padding-top: var(--space-2);
 }
-
-/* the PCs head is the Agents head's twin: the caret in the leading cell, always in view, the words, and the
-   count in the trailing cell */
-.sidebar-section-head {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  min-width: 0;
-  padding: 0 var(--side-gutter);
-}
-
-.sidebar-section-toggle {
-  flex: 1 1 auto;
-  width: 100%;
-  cursor: pointer;
-}
-
-.sidebar-section-caret {
-  flex: none;
-  width: var(--space-4);
-  height: var(--space-4);
-  margin-inline: calc((var(--side-box) - var(--space-4)) / 2);
-}
-
-/* positioned: its words for a screen reader are clipped absolute, and must not size the page instead */
-.sidebar-section-count {
-  position: relative;
-  flex: none;
-  width: var(--side-box);
-  color: var(--text-dim);
-  font-size: var(--fs-xs);
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-
-/* the PCs this device hides, in the PCs head after its words: an eye crossed out and their count, a quiet
-   pill that opens the menu that shows them again (MachineSidebar.tsx) */
-.sidebar-hidden-pcs {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: var(--space-1);
-  height: var(--space-6);
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--text-dim);
-  font: inherit;
-  font-size: var(--fs-xs);
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-}
-
-.sidebar-hidden-pcs svg {
-  width: var(--space-4);
-  height: var(--space-4);
-}
-
-.sidebar-hidden-pcs[aria-expanded="true"] { background: var(--bg-hover); color: var(--text); }
-
-.sidebar-hidden-pcs:focus-visible { outline-offset: calc(var(--ring-offset) * -1); }
-
-@media (hover: hover) {
-  .sidebar-hidden-pcs:hover { background: var(--bg-hover); color: var(--text); }
-}
-
-@media (pointer: coarse) {
-  .sidebar-hidden-pcs { min-width: var(--touch-target); height: var(--touch-target); justify-content: center; padding: 0 var(--space-3); }
-}
-
-/* The rows keep their own scroll viewport under the fixed fold target. */
-.pcs-sidebar > .machine-list { flex: 1 1 auto; }
 
 /* A list fades at an edge only while rows lie past it (lib/useEdgeFades.ts): at its top it fades its foot
    alone, scrolled to its end its head alone, and a list that holds all its rows fades neither. A mask,

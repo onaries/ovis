@@ -29,9 +29,9 @@ describe("approved bridge replacement", () => {
     const request = async (path: string, body?: unknown) => {
       const response = await handleMachineRequest(new Request(`http://localhost:7317/api/machines/setup${path}`, {
         method: body === undefined ? "GET" : "POST",
-        headers: { origin: "http://localhost:7317", "x-herdr-machine": "1", "content-type": "application/json" },
+        headers: { origin: "http://localhost:7317", "x-herdr-machine": "1", "x-herdr-update": "1", "content-type": "application/json" },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      }), manager);
+      }), manager, undefined, undefined, false, undefined, undefined, undefined, undefined, true);
       expect(response.ok).toBe(true);
       return response.json() as Promise<SetupJob>;
     };

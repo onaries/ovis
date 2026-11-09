@@ -44,8 +44,11 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
   const focusedTab = (label: string) => herdrRpc<{ tab: { tab_id: string }; root_pane: { pane_id: string } }>(
     "tab.create", { workspace_id: fixture.workspaceId, label, focus: true });
 
+  // the tabs listed here: those in the row and those behind its More, a full row's last ones (TabStrip)
+  const tabsListed = () => page.evaluate(() => document.querySelectorAll('.tab-strip [role="tab"]').length
+    + Number(document.querySelector(".tab-strip-more")?.textContent?.replace(/\D/g, "") || 0));
   // the tab herdr opened is listed here: its pane-focused frame, sent before that, has been handled
-  const listed = (label: string) => page.locator(".tab-strip").getByRole("tab").filter({ hasText: label }).first().waitFor();
+  const listed = (label: string, was: number) => until(async () => await tabsListed() > was, `${label} is listed`);
 
   const before = await selectedPaneId();
   assert.ok(before, "a pane is selected before the check");
@@ -77,18 +80,20 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     await page.bringToFront();
     await page.locator(".xterm-helper-textarea").first().focus();
     assert.ok(await page.evaluate(() => document.hasFocus()), "this window is in front while typing");
+    const beforeTyping = await tabsListed();
     const typing = await focusedTab("follow focus typing");
     tabs.push(typing.tab.tab_id);
-    await listed("follow focus typing");
+    await listed("follow focus typing", beforeTyping);
     assert.equal(await selectedPaneId(), followed.root_pane.pane_id, "herdr's focus does not take the view while this device types");
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
     // a dialog open here: the same
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
     await page.locator('[aria-modal="true"]').first().waitFor();
+    const beforeDialog = await tabsListed();
     const dialog = await focusedTab("follow focus dialog");
     tabs.push(dialog.tab.tab_id);
-    await listed("follow focus dialog");
+    await listed("follow focus dialog", beforeDialog);
     assert.equal(await selectedPaneId(), followed.root_pane.pane_id, "herdr's focus does not take the view while a dialog is open here");
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -113,9 +118,10 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     await palette.getByRole("option", { name: "Split pane right and open it", exact: true }).click();
     await until(async () => made !== undefined, "herdr made the split");
     // a tab made after the split is listed here: herdr's frame for the split, sent before it, has been handled
+    const beforeMarker = await tabsListed();
     const marker = await herdrRpc<{ tab: { tab_id: string } }>("tab.create", { workspace_id: fixture.workspaceId, label: "follow focus split marker", focus: false });
     tabs.push(marker.tab.tab_id);
-    await listed("follow focus split marker");
+    await listed("follow focus split marker", beforeMarker);
     assert.equal(await selectedPaneId(), splitFrom, "herdr's frame for this device's own split is left to the split's answer");
     releaseSplit();
     await until(async () => await selectedPaneId() === made, "the split's answer opens its new pane");

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, it, spyOn } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { codexRestartFixture, RESTART_SESSION } from "./codex-restart.fake.ts";
 import { paneGet, paneProcessInfo } from "./herdr/client.ts";
@@ -41,6 +41,42 @@ it("reopens the same conversation in the same terminal with its model and withou
   expect([repeated.status, await repeated.json()]).toEqual([200, { pane_id: pane.pane_id, session_id: RESTART_SESSION }]);
   expect((await paneGet(pane.pane_id)).terminal_id).toBe(pane.terminal_id);
 }, 85_000);
+
+it("restarts through the installed launch path after an update deletes the running executable", async () => {
+  const pane = await fixture.pane("restart-replaced-runtime");
+  const target = await prepare(pane.pane_id);
+  const before = await conversation(pane.pane_id);
+  const moved = `${fixture.runtime}.old`;
+  renameSync(fixture.runtime, moved);
+  copyFileSync(process.execPath, fixture.runtime, constants.COPYFILE_FICLONE);
+  unlinkSync(moved);
+  expect(readlinkSync(`/proc/${target.process_id}/exe`).endsWith(" (deleted)")).toBe(true);
+  const response = await restart(await prepare(pane.pane_id));
+  expect([response.status, await response.json()]).toEqual([200, { pane_id: pane.pane_id, session_id: RESTART_SESSION }]);
+  expect((await paneGet(pane.pane_id)).terminal_id).toBe(pane.terminal_id);
+  const after = await conversation(pane.pane_id);
+  expect(after.turns).toEqual(before.turns);
+  expect(after.metadata.model).toBe("fixture-sol");
+  expect(fixture.daemon.exitCode).toBeNull();
+}, 30_000);
+
+for (const replacement of ["missing", "directory"] as const) it(`refuses a deleted executable with a ${replacement} replacement before stopping the client`, async () => {
+  const pane = await fixture.pane("restart-missing-runtime");
+  const target = await prepare(pane.pane_id);
+  const stops = fixture.records().filter((record) => record.event === "stopped").length;
+  unlinkSync(fixture.runtime);
+  if (replacement === "directory") mkdirSync(fixture.runtime);
+  try {
+    expect(readlinkSync(`/proc/${target.process_id}/exe`).endsWith(" (deleted)")).toBe(true);
+    const response = await call(`/api/pane/codex-restart?pane_id=${encodeURIComponent(pane.pane_id)}`);
+    expect([response.status, (await response.json()).error?.code]).toEqual([409, "codex_restart_unsupported"]);
+    expect(fixture.records().filter((record) => record.event === "stopped").length).toBe(stops);
+    expect((await paneProcessInfo(pane.pane_id))?.foreground_processes?.some((entry) => entry.pid === target.process_id)).toBe(true);
+  } finally {
+    if (replacement === "directory") rmSync(fixture.runtime, { recursive: true });
+    copyFileSync(process.execPath, fixture.runtime, constants.COPYFILE_FICLONE);
+  }
+}, 30_000);
 
 it("refuses a stale conversation confirmation without stopping its client", async () => {
   const pane = await fixture.pane("restart-stale");

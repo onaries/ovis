@@ -130,9 +130,6 @@ async function open(context: BrowserContext, variant: string, settings = true, l
   // the Devices group beside it has its list: the two fictional devices, or none where nothing is paired
   if (PAIRED.includes(variant)) await page.locator(".settings-body:not([hidden]) .devices-row").nth(1).waitFor();
   else await page.locator(".settings-body:not([hidden]) .devices-panel").getByText(label("No devices paired yet.")).waitFor();
-  // the page's own requests (devices, the phone address) have landed: nothing moves under a capture
-  await page.waitForFunction((loading) => ![...document.querySelectorAll(".settings-body [role='status']")].some((node) => loading.includes(node.textContent?.trim() ?? "")),
-    [label("Asking this PC about Tailscale…")]);
   return page;
 }
 

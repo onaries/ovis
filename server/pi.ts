@@ -10,7 +10,7 @@ import { agentGet, paneProcessInfo } from "./herdr/client.ts";
 import { runsAgent } from "./gjc-runtime.ts";
 import { processEnviron } from "./omo.ts";
 import { piAgentDir } from "./pi-models.ts";
-import { transcriptInStore as piTranscriptInStore, unwrittenSession } from "./transcript-store.ts";
+import { authorizedTranscript, unwrittenSession } from "./transcript-store.ts";
 import { source as piCatalog } from "./skills/pi.ts";
 import { userHome } from "./user-home.ts";
 export { transcriptInStore as piTranscriptInStore, unwrittenSession } from "./transcript-store.ts";
@@ -276,7 +276,7 @@ export async function piTranscriptPath(
   paneId: string,
   sessionDir = defaultPiSessionDir(),
   options: PiTranscriptOptions = {},
-): Promise<{ path: string; agentDir: string | null } | { unwritten: { id: string; path: string } } | null> {
+): Promise<{ path: string; agentDir: string | null; identity: string } | { unwritten: { id: string; path: string } } | null> {
   const agent = options.agent === undefined ? await agentGet(paneId).catch(() => null) : options.agent;
   if (agent?.agent !== "pi") return null;
   const session = agent.agent_session;
@@ -338,12 +338,14 @@ export async function piTranscriptPath(
   }
   // Preserve default-store behavior on platforms where process_info names only the shell or
   // process environments cannot be read. A custom store is never guessed in those cases.
-  const matches = [...canonicalStores].filter((store) => piTranscriptInStore(reported, store) !== null || unwrittenSession(reported, store) !== null);
+  // each store's proof is taken once: the file it opened is the one returned, with its exact dev:ino (`identity`)
+  const proofs = new Map([...canonicalStores].map((store) => [store, authorizedTranscript(reported, store)]));
+  const matches = [...canonicalStores].filter((store) => proofs.get(store) !== null || unwrittenSession(reported, store) !== null);
   if (matches.length !== 1) return null;
-  const path = piTranscriptInStore(reported, matches[0]!);
+  const authorized = proofs.get(matches[0]!) ?? null;
   const named = piProcesses.length === 0 ? UNREAD : agentDirs.size === 1 ? [...agentDirs.values()][0] ?? null : null;
   const agentDir = named === UNREAD ? bridgeAgentDirOwning(matches[0]!) : named;
-  if (path !== null) return { path, agentDir };
+  if (authorized !== null) return { path: authorized.path, agentDir, identity: authorized.identity };
   const unwritten = unwrittenSession(reported, matches[0]!);
   return unwritten === null ? null : { unwritten };
 }

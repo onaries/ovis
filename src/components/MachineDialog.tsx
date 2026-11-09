@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Monitor, X } from "lucide-react";
 import type { Machine, SetupAction, SetupJob } from "../../shared/machines.ts";
+import type { AddPcPreset } from "../lib/actions.ts";
 import { answerMachineSetup, fetchMachineSetup, startMachineSetup } from "../lib/api.ts";
 import { hostKeyFingerprints } from "../lib/hostKey.ts";
 import { sshOutputParts } from "../lib/sshOutput.ts";
@@ -10,12 +11,12 @@ import { BridgeUpdateProgress, OwnOvisAddress, ownOvisAction } from "./MachineSi
 import "./Machines.css";
 import { useT } from "../lib/i18n.ts";
 
-export function MachineDialog({ machine, updateRemote = false, onClose, onConnected }: { machine?: Machine; updateRemote?: boolean; onClose(): void; onConnected(id: string): void }) {
+export function MachineDialog({ machine, preset, updateRemote = false, onClose, onConnected }: { machine?: Machine; /** a new PC's address and name, picked under Add a connection → SSH */ preset?: AddPcPreset; updateRemote?: boolean; onClose(): void; onConnected(id: string): void }) {
   const t = useT();
   const dialog = useRef<HTMLDialogElement>(null);
   const destinationField = useRef<HTMLInputElement>(null);
-  const [destination, setDestination] = useState(machine?.target?.destination ?? "");
-  const [name, setName] = useState(machine?.name ?? "");
+  const [destination, setDestination] = useState(machine?.target?.destination ?? preset?.destination ?? "");
+  const [name, setName] = useState(machine?.name ?? (preset?.name !== undefined && preset.name !== preset.destination ? preset.name : ""));
   const [port, setPort] = useState(String(machine?.target?.port ?? ""));
   const [key, setKey] = useState(machine?.target?.identity_file ?? "");
   const [session, setSession] = useState(machine?.target?.session ?? "");

@@ -33,7 +33,6 @@ export const WORKSPACE_KO: Record<string, string> = {
   "Earlier sessions · {name}": "이전 세션 · {name}",
   "Close session list": "세션 목록 닫기",
   "Sessions started in {folder}": "{folder}에서 시작한 세션",
-  "Reading sessions…": "세션 읽는 중…",
   "No earlier {agent} sessions in this folder.": "이 폴더에 이전 {agent} 세션이 없습니다.",
   "Earlier sessions": "이전 세션",
   "Open the pane showing {title}": "{title}을(를) 보여주는 패널 열기",

@@ -970,7 +970,8 @@ async function captureSet(browser: Browser, dir: string): Promise<Capture[]> {
       await socket(page, { type: "input-ready", pane_id: panes.shell });
       await ready(page);
       // offline, held through its capture: the clock stops before the socket goes, so the reconnect it
-      // schedules waits until resumed, and the state is read on both sides of the screenshot
+      // schedules waits until resumed, and the state is read on both sides of the screenshot. The header still
+      // says live: a drop is said only once it outlasts the grace (src/lib/reconnectGrace.ts), whose clock stopped too
       await page.clock.pauseAt(await page.evaluate(() => Date.now()) + FLUSH_MS);
       await page.evaluate(() => { (window as unknown as QaWindow).recordedSockets.at(-1)!.close(); });
       await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.pane-frame:not(.is-hidden) .key-bar [data-key="keyboard"]')?.disabled === true);
@@ -979,9 +980,14 @@ async function captureSet(browser: Browser, dir: string): Promise<Capture[]> {
         document.querySelector(".conn-reconnecting") !== null,
         document.querySelector(".conn-live") !== null,
       ]);
-      assert.deepEqual(await offlineNow(), [true, true, false], "offline before the capture: control disabled, header reconnecting");
-      await shot(page, `390-${theme}-disabled-offline`, meta("direct typing, the connection dropped (reconnect held): the bar and the control disabled, the header reconnecting"), true);
-      assert.deepEqual(await offlineNow(), [true, true, false], "still offline after the capture: the screenshot shows the offline state");
+      assert.deepEqual(await offlineNow(), [true, false, true], "offline before the capture: control disabled, header not yet saying it within the grace");
+      await shot(page, `390-${theme}-disabled-offline`, meta("direct typing, the connection dropped (reconnect held, inside the grace): the bar and the control disabled"), true);
+      assert.deepEqual(await offlineNow(), [true, false, true], "still offline after the capture: the screenshot shows the offline state");
+      // a key pressed meanwhile ends the grace at once, the clock still stopped: the person acting is told the
+      // connection is down (a bare Shift, so nothing is typed into the held draft)
+      await page.keyboard.press("Shift");
+      await page.waitForFunction(() => document.querySelector(".conn-reconnecting") !== null && document.querySelector(".conn-live") === null);
+      await page.getByText("Reconnecting to Ovis…").waitFor();
       await page.clock.resume();
       await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.pane-frame:not(.is-hidden) .key-bar [data-key="keyboard"]')?.disabled === false, undefined, { timeout: 20_000 });
       await role(page, "observe");

@@ -7,6 +7,7 @@ import { imageType, inlineImageType } from "./codex-images.ts";
 import { skillDocument } from "./skill-activity.ts";
 import { grokPromptSkill } from "./skill-invocations/grok.ts";
 import { toolSummary } from "./transcript-records.ts";
+import { openBound } from "./conversation-shared.ts";
 import { trimOutput } from "./tool-output.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -128,7 +129,11 @@ export function grokProjection(path: string, stat: { dev: number; ino: number; s
   // Known limitation: one malformed or unreconstructable record keeps this file on the
   // terminal view until it is replaced or shrinks. Skipping the line could misplace a rewind.
   if (index.failed) throw new GrokUnavailable();
-  const fd = openSync(path, "r");
+  // the file a page read is bound to, never another a folder swapped in around this open puts there; and,
+  // bound or not, the file `stat` saw: another file's bytes never mark this one's index failed
+  const fd = openBound(path);
+  const opened = fstatSync(fd);
+  if (opened.dev !== stat.dev || opened.ino !== stat.ino) { closeSync(fd); throw new GrokUnavailable(); }
   let position = index.scanned;
   let carry: Buffer[] = [];
   let carried = 0;
@@ -292,7 +297,8 @@ export function grokToolOutput(path: string, ref: string): string | null {
       if (outputRef(path, id) !== ref) continue;
       const length = call.owner.end - call.owner.start;
       if (length > 64 * 1024 * 1024) return null;
-      const fd = openSync(path, "r");
+      // the file a lookup is bound to (readBound), never another a folder swapped in around this open puts there
+      const fd = openBound(path);
       try {
         const bytes = Buffer.alloc(length);
         if (readSync(fd, bytes, 0, length, call.owner.start) !== length) return null;

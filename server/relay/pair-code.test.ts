@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DeviceStore } from "../devices.ts";
 import { PAIR_CLOSE } from "../../relay/pair-room.ts";
 import { RelayPairCodes } from "./pair-code.ts";
+import { loadRelayIdentity } from "./identity.ts";
 
 /** A host socket the test drives: what the PC sends is kept, and the relay's frames and close are the test's to deliver. */
 class FakeSocket extends EventTarget {
@@ -22,8 +23,9 @@ function codes(keepaliveMs?: number) {
   const dir = mkdtempSync(join(tmpdir(), "ovis-pair-code-"));
   const sockets: FakeSocket[] = [];
   const devices = new DeviceStore(dir);
+  const identity = loadRelayIdentity(dir);
   const pairCodes = new RelayPairCodes({
-    relay: "wss://relay.test", devices, keepaliveMs,
+    relay: "wss://relay.test", devices, keepaliveMs, identity: () => identity,
     offer: (code) => ({ v: 1, server_id: "0".repeat(32), server_public_key: "k", relay: "wss://relay.test", code }),
     connect: (url) => { const socket = new FakeSocket(url); sockets.push(socket); return socket as unknown as WebSocket; },
   });

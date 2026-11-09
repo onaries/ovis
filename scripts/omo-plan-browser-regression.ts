@@ -183,6 +183,8 @@ try {
         }
         const row = page.locator(`.agents-sidebar .agent-item[data-pane="${paneId}"]`);
         const badge = row.getByTestId("plan-progress");
+        // a desktop shows a row's counts under the pointer (the compact rows); a phone keeps them
+        if (width !== 390) await row.hover();
         await badge.waitFor({ state: "visible" });
         assert.equal(await badge.textContent(), "1/3");
         await page.screenshot({ path: join(evidence, `${width}-${theme}-sidebar.png`), fullPage: true });

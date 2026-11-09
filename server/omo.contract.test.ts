@@ -166,7 +166,7 @@ it("tells a held session omo has not written yet from an older one", async () =>
   expect(await omoSessionForPane(started, root, panes, root)).toEqual({ path: null, pending: "unwritten-first" });
   expect(await omoSessionForPane(afterNew, root, panes, root)).toEqual({ path: null, pending: "unwritten-after-new" });
   const written = session("unwritten-first");
-  expect(await omoSessionForPane(started, root, panes, root)).toEqual({ path: realpathSync(written), pending: null });
+  expect(await omoSessionForPane(started, root, panes, root)).toEqual({ path: realpathSync(written), pending: null, identity: expect.any(String) });
 });
 
 it("serves a held omo session as an empty conversation until its file is written", async () => {
@@ -191,6 +191,36 @@ it("serves a held omo session as an empty conversation until its file is written
     expect(written.source).toBe("omo-transcript");
     expect(written.history_id).not.toBe("unwritten:unwritten-http");
     expect(written.turns.map((turn) => turn.role)).toEqual(["user"]);
+  } finally {
+    process.env["HOME"] = home;
+    server.stop();
+  }
+});
+
+it("serves the picture an omo tool showed through the pane's image endpoint (#3420)", async () => {
+  const paneId = await pane();
+  await hold(paneId, "pictured-http");
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const at = new Date().toISOString();
+  writeFileSync(join(dir, "2026-10-04T00-00-00-000Z_pictured-http.jsonl"), [
+    { type: "session", id: "pictured-http", cwd: root, timestamp: at },
+    { type: "message", id: "u1", parentId: null, timestamp: at, message: { role: "user", content: [{ type: "text", text: "show it" }] } },
+    { type: "message", id: "a1", parentId: "u1", timestamp: at, message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "call-eval", name: "eval", arguments: { code: "display(png)" } }] } },
+    { type: "message", id: "r1", parentId: "a1", timestamp: at, message: { role: "toolResult", toolCallId: "call-eval", toolName: "eval", content: [{ type: "text", text: "shown" }, { type: "image", data: png.toString("base64"), mimeType: "image/png" }] } },
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  const server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "server-state-pictured"), machines: false });
+  const home = process.env["HOME"];
+  process.env["HOME"] = root;
+  const url = (route: string, query: Record<string, string>) => `http://127.0.0.1:${server.port}${route}?${new URLSearchParams({ pane_id: paneId, ...query })}`;
+  try {
+    const page = await (await fetch(url("/api/pane/conversation", {}))).json() as ConversationResponse;
+    const tool = page.turns.flatMap((turn) => turn.parts).find((part) => part.kind === "tool");
+    expect(tool !== undefined && tool.kind === "tool" && tool.images).toEqual([{ media_type: "image/png", ref: "pi:call-eval:0" }]);
+    const image = await fetch(url("/api/pane/conversation/image", { ref: "pi:call-eval:0" }));
+    expect(image.status).toBe(200);
+    expect(image.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await image.arrayBuffer()).equals(png)).toBe(true);
+    expect((await fetch(url("/api/pane/conversation/image", { ref: "pi:call-eval:1" }))).status).toBe(404);
   } finally {
     process.env["HOME"] = home;
     server.stop();

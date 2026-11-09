@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, jest } from "bun:test";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 
@@ -91,6 +91,32 @@ describe("AgentSidebar phone sheet live row", () => {
     <AgentSidebar machines={machines} selectedMachineId="local" selectedPaneId={paneId} stateWord={(machine) => machine.state} onSelect={() => {}} />
   </SettingsProvider>;
 
+  it("says how long an agent has waited only for a wait this page saw begin, never a reload's guess", async () => {
+    const at = (status: AgentStatus) => roster().map((machine) => ({ ...machine, snapshot: machine.snapshot && {
+      ...machine.snapshot, panes: machine.snapshot.panes.map((pane) => pane.pane_id === paneId ? { ...pane, agent_status: status } : pane),
+    } }));
+    const since = () => renderer!.root.findByProps({ "data-machine": "local", "data-pane": paneId }).findAll((node) => node.props.className === "agent-since").map((node) => node.children.join(""));
+    // already waiting when the page opened: herdr says nothing of when it began, so the row says no time
+    await act(async () => { renderer = create(view(at("blocked"))); });
+    expect(since()).toEqual([]);
+    // a wait this page sees begin says how long it has lasted
+    await act(async () => { renderer!.update(view(at("working"))); });
+    expect(since()).toEqual([]);
+    await act(async () => { renderer!.update(view(at("blocked"))); });
+    expect(since()).toEqual(["<1m"]);
+  });
+
+  it("makes no wait time from a PC's return: a wait it finds there began out of sight", async () => {
+    const at = (status: AgentStatus, state: Machine["state"] = "connected") => roster().map((machine) => ({ ...machine, ...(machine.id === "local" ? { state } : {}), snapshot: machine.snapshot && {
+      ...machine.snapshot, panes: machine.snapshot.panes.map((pane) => pane.pane_id === paneId ? { ...pane, agent_status: status } : pane),
+    } }));
+    const since = () => renderer!.root.findByProps({ "data-machine": "local", "data-pane": paneId }).findAll((node) => node.props.className === "agent-since").map((node) => node.children.join(""));
+    await act(async () => { renderer = create(view(at("working"))); });
+    await act(async () => { renderer!.update(view(at("working", "disconnected"))); });
+    await act(async () => { renderer!.update(view(at("blocked"))); });
+    expect(since()).toEqual([]);
+  });
+
   async function open() {
     await act(async () => {
       renderer = create(view(roster()), { createNodeMock: () => anchor });
@@ -100,6 +126,8 @@ describe("AgentSidebar phone sheet live row", () => {
     const row = () => mounted.root.findByProps({ "data-machine": "local", "data-pane": paneId });
     await act(async () => { row().findByProps({ className: "sidebar-row-action row-menu-toggle" }).props.onClick({ currentTarget: anchor }); });
     expect(mounted.root.findAllByProps({ role: "dialog" })).toHaveLength(1);
+    expect(mounted.root.findByProps({ className: "row-menu-target-name" }).children).toEqual(["Idempotent payments"]);
+    expect(mounted.root.findByProps({ className: "row-menu-target-place" }).children).toEqual(["checkout-api"]);
     expect(mounted.root.findByProps({ className: "row-sheet-detail" }).children).toEqual(["95%"]);
     return {
       mounted,
@@ -548,5 +576,145 @@ describe("AgentSidebar fold memory", () => {
     };
     // Then Activity, which puts w1F first by its later change, does not leak into the grouped order.
     expect(await order("activity")).toEqual(await order("workspace"));
+  });
+
+  it("a resting row turning blocked while the pointer or focus is in the list does not enter until it leaves", async () => {
+    // Waiting first: the order that moves a row by its state, and its resting fold
+    stored.set("ovis:settings", JSON.stringify({ agentOrder: "waiting" }));
+    const withStatuses = (overrides: Record<string, AgentStatus>) => roster().map((machine) => ({
+      ...machine,
+      snapshot: machine.snapshot === null ? null : {
+        ...machine.snapshot,
+        panes: machine.snapshot.panes.map((pane) => overrides[pane.pane_id] ? { ...pane, agent_status: overrides[pane.pane_id] } : pane),
+      },
+    }));
+    const renderList = (machines: Machine[]) => <SettingsProvider>
+      <SidebarFilterProvider value={{ filter: inactive, reportBranches: () => {} }}>
+        <AgentSidebar machines={machines} selectedMachineId="local" selectedPaneId={paneId} stateWord={(machine) => machine.state} onSelect={() => {}} />
+      </SidebarFilterProvider>
+    </SettingsProvider>;
+    await act(async () => { renderer = create(renderList(roster())); });
+    if (!renderer) throw new Error("sidebar did not mount");
+    const mounted = renderer;
+    const section = () => mounted.root.findByType("section");
+    const drawnEntries = () => mounted.root.findAll((node) => node.type === "li" && !node.props.hidden && (node.props["data-pane"] !== undefined || node.props.className === "agent-background-label agent-resting-label"))
+      .map((node) => node.props["data-pane"] ?? "RESTING");
+    const restingLabel = () => mounted.root.findByProps({ className: "agent-background-label agent-resting-label" }).findByType("span").children.join("");
+    // Initially w1D:p1 (blocked) and w1C:p1 (working) are drawn above the resting line; w1E:p1 and w1F:p1 are resting (+2 resting).
+    expect(drawnEntries()).toEqual(["w1D:p1", "w1C:p1", "RESTING"]);
+    expect(restingLabel()).toBe("+2 resting");
+
+    // When the pointer enters the list and a resting row (w1E:p1) turns blocked:
+    await act(async () => { section().props.onPointerEnter(); });
+    await act(async () => { mounted.update(renderList(withStatuses({ "w1E:p1": "blocked" }))); });
+    // Then the drawn rows do not change, the resting count updates, and the row joins only after the pointer leaves.
+    expect(drawnEntries()).toEqual(["w1D:p1", "w1C:p1", "RESTING"]);
+    expect(restingLabel()).toBe("+1 resting");
+    await act(async () => { section().props.onPointerLeave(); });
+    expect(drawnEntries()).toEqual(["w1D:p1", "w1E:p1", "w1C:p1", "RESTING"]);
+
+    // Continuing from that state, while keyboard focus is inside the list, another resting row (w1F:p1) turning blocked also waits until focus leaves:
+    await act(async () => { section().props.onFocus(); });
+    await act(async () => { mounted.update(renderList(withStatuses({ "w1E:p1": "blocked", "w1F:p1": "blocked" }))); });
+    expect(drawnEntries()).toEqual(["w1D:p1", "w1E:p1", "w1C:p1", "RESTING"]);
+    await act(async () => { section().props.onBlur({ currentTarget: { contains: () => false }, relatedTarget: null }); });
+    expect(drawnEntries()).toEqual(["w1D:p1", "w1E:p1", "w1F:p1", "w1C:p1"]);
+  });
+
+  it("an active row turning idle while the pointer or focus is in the list keeps its place above the resting line until both leave", async () => {
+    // Waiting first: the order that moves a row by its state, and its resting fold
+    stored.set("ovis:settings", JSON.stringify({ agentOrder: "waiting" }));
+    const withStatuses = (overrides: Record<string, AgentStatus>) => roster().map((machine) => ({
+      ...machine,
+      snapshot: machine.snapshot === null ? null : {
+        ...machine.snapshot,
+        panes: machine.snapshot.panes.map((pane) => overrides[pane.pane_id] ? { ...pane, agent_status: overrides[pane.pane_id] } : pane),
+      },
+    }));
+    const renderList = (machines: Machine[]) => <SettingsProvider>
+      <SidebarFilterProvider value={{ filter: inactive, reportBranches: () => {} }}>
+        <AgentSidebar machines={machines} selectedMachineId="local" selectedPaneId={paneId} stateWord={(machine) => machine.state} onSelect={() => {}} />
+      </SidebarFilterProvider>
+    </SettingsProvider>;
+    await act(async () => { renderer = create(renderList(roster())); });
+    if (!renderer) throw new Error("sidebar did not mount");
+    const mounted = renderer;
+    const section = () => mounted.root.findByType("section");
+    const drawnEntries = () => mounted.root.findAll((node) => node.type === "li" && !node.props.hidden && (node.props["data-pane"] !== undefined || node.props.className === "agent-background-label agent-resting-label"))
+      .map((node) => node.props["data-pane"] ?? "RESTING");
+    const restingLabel = () => mounted.root.findByProps({ className: "agent-background-label agent-resting-label" }).findByType("span").children.join("");
+    expect(drawnEntries()).toEqual(["w1D:p1", "w1C:p1", "RESTING"]);
+    expect(restingLabel()).toBe("+2 resting");
+
+    // When both pointer and focus are in the list, and the selected working row (w1C:p1) and the nonselected blocked row (w1D:p1) turn idle:
+    await act(async () => { section().props.onPointerEnter(); section().props.onFocus(); });
+    await act(async () => { mounted.update(renderList(withStatuses({ [paneId]: "idle", "w1D:p1": "idle" }))); });
+    // Then both stay in place above the resting heading (neither jumps below RESTING nor disappears), while the resting count updates at once:
+    expect(drawnEntries()).toEqual(["w1D:p1", "w1C:p1", "RESTING"]);
+    expect(restingLabel()).toBe("+4 resting");
+
+    // Leaving pointer alone keeps the hold while focus remains:
+    await act(async () => { section().props.onPointerLeave(); });
+    expect(drawnEntries()).toEqual(["w1D:p1", "w1C:p1", "RESTING"]);
+
+    // Once focus leaves too, the idle rows move into the resting fold (the selected w1C:p1 stays visible below the heading):
+    await act(async () => { section().props.onBlur({ currentTarget: { contains: () => false }, relatedTarget: null }); });
+    expect(drawnEntries()).toEqual(["RESTING", "w1C:p1"]);
+  });
+
+  it("keeps rows still for one second after a touch ends, then applies the new order without changing selection", async () => {
+    // Waiting first: the order that moves a row by its state, and its resting fold
+    stored.set("ovis:settings", JSON.stringify({ agentOrder: "waiting" }));
+    jest.useFakeTimers();
+    try {
+      const renderList = (blocked: boolean) => <SettingsProvider>
+        <SidebarFilterProvider value={{ filter: inactive, reportBranches: () => {} }}>
+          <AgentSidebar machines={roster().map((machine) => ({ ...machine, snapshot: machine.snapshot && {
+            ...machine.snapshot, panes: machine.snapshot.panes.map((pane) => pane.pane_id === "w1E:p1" && blocked ? { ...pane, agent_status: "blocked" } : pane),
+          } }))} selectedMachineId="local" selectedPaneId={paneId} stateWord={(machine) => machine.state} onSelect={() => {}} />
+        </SidebarFilterProvider>
+      </SettingsProvider>;
+      await act(async () => { renderer = create(renderList(false)); });
+      if (!renderer) throw new Error("sidebar did not mount");
+      const mounted = renderer;
+      const section = () => mounted.root.findByType("section");
+      const order = () => mounted.root.findAll((node) => node.type === "li" && !node.props.hidden && node.props["data-pane"] !== undefined).map((node) => node.props["data-pane"]);
+      await act(async () => { section().props.onPointerEnter(); });
+      await act(async () => { section().props.onTouchEnd?.(); section().props.onPointerLeave(); });
+      await act(async () => { mounted.update(renderList(true)); jest.advanceTimersByTime(999); });
+      expect(order()).toEqual(["w1D:p1", paneId]);
+      await act(async () => { jest.advanceTimersByTime(1); });
+      expect(order()).toEqual(["w1D:p1", "w1E:p1", paneId]);
+      expect(mounted.root.findAll((node) => node.type === "li" && node.props.className.includes("is-selected")).map((node) => node.props["data-pane"])).toEqual([paneId]);
+    } finally {
+      await act(async () => { renderer?.unmount(); });
+      renderer = undefined;
+      jest.useRealTimers();
+    }
+  });
+
+  it("clearing the filter while the pointer is in the list shows the rows in their normal order", async () => {
+    // Waiting first: the order that moves a row by its state, and its resting fold
+    stored.set("ovis:settings", JSON.stringify({ agentOrder: "waiting" }));
+    const keepsWorking: SidebarFilter = { query: "pay", active: true, matches: 1, machines: new Map([["local", {
+      shown: true, matched: false, workspaces: new Set(), matchedWorkspaces: new Set(), revealedWorkspaces: new Set(), panes: new Set([paneId]), matchedPanes: new Set([paneId]),
+    }]]) };
+    const renderList = (filter: SidebarFilter) => <SettingsProvider>
+      <SidebarFilterProvider value={{ filter, reportBranches: () => {} }}>
+        <AgentSidebar machines={roster()} selectedMachineId="local" selectedPaneId={null} stateWord={(machine) => machine.state} onSelect={() => {}} />
+      </SidebarFilterProvider>
+    </SettingsProvider>;
+    // Given a filter that keeps only the working row (w1C:p1), and the pointer moving into the list.
+    await act(async () => { renderer = create(renderList(keepsWorking)); });
+    if (!renderer) throw new Error("sidebar did not mount");
+    const mounted = renderer;
+    const drawnEntries = () => mounted.root.findAll((node) => node.type === "li" && !node.props.hidden && (node.props["data-pane"] !== undefined || node.props.className === "agent-background-label agent-resting-label"))
+      .map((node) => node.props["data-pane"] ?? "RESTING");
+    expect(drawnEntries()).toEqual([paneId]);
+    await act(async () => { mounted.root.findByType("section").props.onPointerEnter(); });
+    // When the reader clears the filter with the pointer still there:
+    await act(async () => { mounted.update(renderList(inactive)); });
+    // Then every row is back where it stands without a filter: the blocked one first, the resting ones folded.
+    expect(drawnEntries()).toEqual(["w1D:p1", paneId, "RESTING"]);
   });
 });

@@ -2,8 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { startBunRelay, type BunRelay } from "./bun.ts";
 import { KEEPALIVE_PING, KEEPALIVE_PONG } from "./core.ts";
 import { PAIR_CLOSE, PAIR_GUESTS_PER_ROOM, PAIR_MAX_FRAME, ATTEMPT_BYTES } from "./pair-room.ts";
-import { Peer } from "./relay-test-client.ts";
+import { Peer, newServer, type TestServer } from "./relay-test-client.ts";
 import { PAIR_ATTEMPT_BYTES, PAIR_CLOSE as SHARED_PAIR_CLOSE } from "../shared/relay-pair-code.ts";
+import { SERVER_KEY_MISMATCH, SERVER_PROOF_CLOSE, answerServerChallenge, type ProofRoute } from "../shared/relay-server-proof.ts";
 
 let relay: BunRelay;
 let base: string;
@@ -140,6 +141,39 @@ describe("pairing rendezvous", () => {
     const next = await open(plate, "host");
     expect(await next.json("waiting")).toEqual({ type: "waiting" });
     next.socket.close();
+  });
+});
+
+describe("a pairing host's PC key", () => {
+  const hostOf = (plate: string, pc: TestServer, key = pc.publicKey) => Peer.open(`${base}/v1/pair?nameplate=${plate}&role=host&v=1&server_id=${pc.serverId}&public_key=${key}`);
+  const answer = async (host: Peer, pc: TestServer, route: Partial<ProofRoute>) =>
+    host.socket.send(answerServerChallenge(await host.next("server_challenge"), pc.secretKey, { server_id: pc.serverId, role: "pair-host", connection_id: null, ...route })!);
+
+  test("a host that offers its PC key holds the nameplate only once it proves the key for that nameplate", async () => {
+    const plate = nameplate();
+    const pc = newServer();
+    const host = await hostOf(plate, pc);
+    // while it proves, no device finds the code and no other host takes it
+    expect(await (await open(plate, "guest")).closeCode()).toBe(PAIR_CLOSE.NO_HOST);
+    expect(await (await open(plate, "host")).closeCode()).toBe(PAIR_CLOSE.TAKEN);
+    await answer(host, pc, { connection_id: plate });
+    expect(await host.json("waiting")).toEqual({ type: "waiting" });
+    const guest = await open(plate, "guest");
+    expect((await host.json("guest")).type).toBe("guest");
+    guest.socket.close();
+    host.socket.close();
+  });
+
+  test("a proof for another nameplate or another role, or a key that is not its server_id's, is refused 4401", async () => {
+    const pc = newServer();
+    for (const route of [{ connection_id: "ZZZ" }, { role: "control" as const, connection_id: null }]) {
+      const plate = nameplate();
+      const host = await hostOf(plate, pc);
+      await answer(host, pc, route);
+      expect(await host.closeCode()).toBe(SERVER_PROOF_CLOSE);
+    }
+    const borrowed = await hostOf(nameplate(), pc, newServer().publicKey);
+    expect(await borrowed.closed).toEqual({ code: SERVER_PROOF_CLOSE, reason: SERVER_KEY_MISMATCH });
   });
 });
 

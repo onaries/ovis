@@ -268,4 +268,6 @@ export const CHAT_ZH: Record<string, string> = {
   "Searched the whole conversation.": "已搜索整个对话。",
   "This message is no longer in the conversation.": "此消息已不在对话中。",
   "Couldn't load the earlier messages.": "无法加载更早的消息。",
+  "Manually connected conversation": "手动连接的对话",
+  "Can't recognize this Codex conversation?": "无法识别此Codex对话？",
 };

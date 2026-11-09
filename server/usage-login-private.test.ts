@@ -192,9 +192,9 @@ describe("a sign-in the browser follows", () => {
 
   it("types a pasted code into the CLI's own terminal, ends with it, and has the usage read again", async () => {
     noHerdr();
-    let ended = 0;
+    const ended: string[] = [];
     const service = new UsageLoginService(root, { PATH: `${bin}:/usr/bin:/bin` });
-    service.onLoginEnded(() => { ended += 1; });
+    service.onLoginEnded((_account, provider) => { ended.push(provider); });
     const { login_id: login } = (await (await start(service, { provider: "claude", name: `work-${++names}` })).json()) as { login_id: string };
     const prompt = await promptWhen(service, login, (shown) => shown["wants_code"] === true);
     expect(prompt["url"]).toStartWith("https://claude.com/cai/oauth/authorize?");
@@ -202,7 +202,7 @@ describe("a sign-in the browser follows", () => {
     expect((await post(service, "code", { login, code: "abc123#state-xyz" })).status).toBe(204);
     await promptWhen(service, login, (shown) => shown["ended"] === true);
     expect(readFileSync(receipt("claude-code"), "utf8")).toBe("abc123#state-xyz");
-    expect(ended).toBe(1);
+    expect(ended).toEqual(["claude"]);
   });
 
   it("stops the CLI when the browser cancels, and frees its home for the next sign-in", async () => {

@@ -12,6 +12,7 @@ import { adapterAddress } from "./pipe.ts";
 import type { HerdrPane } from "../../shared/protocol.ts";
 import type { ProcessRow } from "../windows-processes.ts";
 import type { HcTerminal } from "./snapshot.ts";
+import { AGENT_NAMES_DOC } from "./agent-names.ts";
 
 type Handler = (params: Record<string, unknown>) => unknown;
 
@@ -23,6 +24,7 @@ class FakeCore implements HcTransport {
   readonly typed: { channel: number; text: string }[] = [];
   readonly closed: number[] = [];
   readonly calls: { method: string; params: Record<string, unknown> }[] = [];
+  holdReply?: (method: string, params: Record<string, unknown>, deliver: () => void) => boolean;
   /** Stream frames bundled with the next RPC response in one pipe read. */
   replyTail: Uint8Array = new Uint8Array(0);
   killed = false;
@@ -84,8 +86,10 @@ class FakeCore implements HcTransport {
     const reply = handler
       ? (() => { try { return { result: handler(message.params) }; } catch (error) { return { error: { code: -32000, message: String(error), data: { kind: (error as { kind?: string }).kind ?? "not_found" } } }; } })()
       : { error: { code: -32601, message: `no ${message.method}`, data: { kind: "unknown_method" } } };
-    this.controller.enqueue(Buffer.concat([encodeFrame(0, FRAME_DATA, JSON.stringify({ jsonrpc: "2.0", id: message.id, ...reply })), this.replyTail]));
+    const bytes = Buffer.concat([encodeFrame(0, FRAME_DATA, JSON.stringify({ jsonrpc: "2.0", id: message.id, ...reply })), this.replyTail]);
     this.replyTail = new Uint8Array(0);
+    const deliver = () => this.controller.enqueue(bytes);
+    if (!this.holdReply?.(message.method, message.params, deliver)) deliver();
   }
 }
 
@@ -162,6 +166,151 @@ async function setup(terminals: HcTerminal[], extra: Record<string, Handler> = {
 }
 
 describe("herdr-core adapter", () => {
+  async function nameSetup() {
+    const terminals = [
+      terminal("t1", { created_ms: 1, foreground: { pid: process.pid, name: "agy", argv: ["agy"] } }),
+      terminal("t2", { created_ms: 2, foreground: { pid: process.pid, name: "codex", argv: ["codex"] } }),
+    ];
+    let value: unknown = null;
+    let version = 0;
+    let conflict: (() => void) | undefined;
+    const fixture = await setup(terminals, {
+      "doc.get": (params) => params["name"] === AGENT_NAMES_DOC ? { value, version } : { value: LAYOUT, version: 1 },
+      "doc.set": (params) => {
+        if (conflict) { const run = conflict; conflict = undefined; run(); }
+        if (params["version"] !== version) throw Object.assign(new Error("document changed"), { kind: "conflict" });
+        value = params["value"];
+        return { version: ++version };
+      },
+      "terminal.send": () => ({ turn: 1 }),
+    });
+    return { ...fixture, terminals, race: (run: () => void) => { conflict = run; }, overwrite: (next: unknown) => { value = next; version++; }, doc: () => value };
+  }
+
+  it("renames a Core agent, shares its call name between adapters, prompts by name and clears it", async () => {
+    const { socket, hc, cores } = await nameSetup();
+    const renamed = await herdrRpc("agent.rename", { target: "t1", name: "project-agy" }, socket);
+    expect(renamed).toMatchObject({ type: "agent_info", agent: { pane_id: "t1", name: "project-agy" } });
+    expect((await sessionSnapshot(socket)).agents.find((agent) => agent.pane_id === "t1")?.name).toBe("project-agy");
+    expect(await herdrRpc("agent.list", {}, socket)).toMatchObject({ agents: [expect.objectContaining({ pane_id: "t1", name: "project-agy" }), expect.anything()] });
+    const dir = mkdtempSync(join(tmpdir(), "ovis-name-"));
+    const second = await startHerdrCoreAdapter(hc, join(dir, "second.sock"));
+    cleanups.push(() => { second.stop(); rmSync(dir, { recursive: true, force: true }); });
+    expect(await herdrRpc("agent.get", { target: "project-agy" }, second.socketPath)).toMatchObject({ agent: { pane_id: "t1", name: "project-agy" } });
+    await herdrRpc("agent.prompt", { target: "project-agy", text: "fixture prompt" }, second.socketPath);
+    expect(cores.flatMap((core) => core.calls).filter((call) => call.method === "terminal.send")).toEqual([
+      { method: "terminal.send", params: { terminal: "t1", text: "fixture prompt" } },
+    ]);
+    await expect(herdrRpc("agent.rename", { target: "t2", name: "project-agy" }, socket)).rejects.toMatchObject({ code: "agent_name_taken" });
+    await herdrRpc("agent.rename", { target: "project-agy", name: null }, socket);
+    expect((await sessionSnapshot(second.socketPath)).agents.find((agent) => agent.pane_id === "t1")?.name).toBeNull();
+    await expect(herdrRpc("agent.get", { target: "project-agy" }, socket)).rejects.toMatchObject({ code: "agent_not_found" });
+  });
+
+  it("does not inherit a call name after process replacement, terminal reuse or an unreadable process", async () => {
+    const { socket, terminals } = await nameSetup();
+    await herdrRpc("agent.rename", { target: "t1", name: "project-agy" }, socket);
+    terminals[0]!.status = { app: "agy", state: "idle" };
+    terminals[0]!.foreground = { pid: process.ppid, name: "bash", argv: ["bash"] };
+    expect(await herdrRpc("agent.get", { target: "project-agy" }, socket)).toMatchObject({ agent: { name: "project-agy" } });
+    await expect(herdrRpc("agent.prompt", { target: "project-agy", text: "must not send to shell" }, socket)).rejects.toMatchObject({ code: "agent_not_ready" });
+    terminals[0]!.foreground = { pid: process.ppid, name: "agy", argv: ["agy"] };
+    await expect(herdrRpc("agent.prompt", { target: "project-agy", text: "must not send" }, socket)).rejects.toMatchObject({ code: "agent_not_found" });
+    terminals[0]!.foreground = { pid: process.pid, name: "agy", argv: ["agy"] };
+    terminals[0]!.created_ms = 3;
+    await expect(herdrRpc("agent.get", { target: "project-agy" }, socket)).rejects.toMatchObject({ code: "agent_not_found" });
+    terminals[0]!.foreground.pid = 2147483647;
+    await expect(herdrRpc("agent.rename", { target: "t1", name: "new-agy" }, socket)).rejects.toMatchObject({ code: "agent_not_ready" });
+    terminals[0]!.status = { app: "agy", state: "idle" };
+    terminals[0]!.foreground = { pid: process.pid, name: "sh", argv: ["sh"] };
+    await expect(herdrRpc("agent.rename", { target: "t1", name: "new-agy" }, socket)).rejects.toMatchObject({ code: "agent_not_ready" });
+  });
+
+  it("rechecks duplicate names after a document race and preserves another writer's binding", async () => {
+    const { socket, race, overwrite, doc } = await nameSetup();
+    await herdrRpc("agent.rename", { target: "t2", name: "taken" }, socket);
+    const before = doc();
+    await herdrRpc("agent.rename", { target: "t2", name: null }, socket);
+    race(() => overwrite(before));
+    await expect(herdrRpc("agent.rename", { target: "t1", name: "taken" }, socket)).rejects.toMatchObject({ code: "agent_name_taken" });
+    expect(await herdrRpc("agent.get", { target: "taken" }, socket)).toMatchObject({ agent: { pane_id: "t2", name: "taken" } });
+  });
+
+  it("refuses terminal addresses as call names and refuses a name that later collides with an address", async () => {
+    const { socket, terminals, cores } = await nameSetup();
+    await expect(herdrRpc("agent.rename", { target: "t1", name: "t2" }, socket)).rejects.toMatchObject({ code: "agent_name_taken" });
+    await herdrRpc("agent.rename", { target: "t1", name: "t3" }, socket);
+    terminals.push(terminal("t3", { created_ms: 3, foreground: { pid: process.pid, name: "codex", argv: ["codex"] } }));
+    await expect(herdrRpc("agent.prompt", { target: "t3", text: "must not send" }, socket)).rejects.toMatchObject({ code: "agent_name_taken" });
+    expect(cores.flatMap((core) => core.calls).filter((call) => call.method === "terminal.send")).toEqual([]);
+    await herdrRpc("agent.rename", { target: "t1", name: "project-agy" }, socket);
+    expect(await herdrRpc("agent.get", { target: "t3" }, socket)).toMatchObject({ agent: { pane_id: "t3", name: null } });
+  });
+
+  it("does not transfer a rename to a replacement agent after a document conflict", async () => {
+    const { socket, terminals, race, overwrite, doc } = await nameSetup();
+    race(() => {
+      terminals[0]!.foreground!.pid = process.ppid;
+      overwrite(doc());
+    });
+    await expect(herdrRpc("agent.rename", { target: "t1", name: "project-agy" }, socket)).rejects.toMatchObject({ code: "agent_not_found" });
+    expect((await sessionSnapshot(socket)).agents.every((agent) => agent.name !== "project-agy")).toBe(true);
+  });
+
+  it("refuses a queued prompt when the same call name was reassigned to a replacement in the same terminal", async () => {
+    const { socket, terminals, cores } = await nameSetup();
+    await herdrRpc("agent.rename", { target: "t1", name: "project-agy" }, socket);
+    const held = Promise.withResolvers<() => void>();
+    const queuedRead = Promise.withResolvers<void>();
+    let holding = false;
+    cores[0]!.holdReply = (method, params, deliver) => {
+      if (method === "terminal.send" && !holding) { holding = true; held.resolve(deliver); return true; }
+      if (holding && method === "doc.get" && params["name"] === AGENT_NAMES_DOC) queuedRead.resolve();
+      return false;
+    };
+    const first = herdrRpc("agent.prompt", { target: "project-agy", text: "first fixture prompt" }, socket);
+    const release = await held.promise;
+    const second = herdrRpc("agent.prompt", { target: "project-agy", text: "must not send" }, socket).then(() => null, (error: unknown) => error);
+    await queuedRead.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    terminals[0]!.foreground!.pid = process.ppid;
+    await herdrRpc("agent.rename", { target: "t1", name: "project-agy" }, socket);
+    release();
+    await first;
+    expect(await second).toMatchObject({ code: "agent_not_found" });
+    expect(cores.flatMap((core) => core.calls).filter((call) => call.method === "terminal.send").map((call) => call.params["text"])).toEqual(["first fixture prompt"]);
+  });
+
+  it("validates call names and refuses unknown document schemas without overwriting them", async () => {
+    const { socket, overwrite, doc } = await nameSetup();
+    for (const name of ["", "Invalid", "a b", "a".repeat(33), 1]) {
+      await expect(herdrRpc("agent.rename", { target: "t1", name }, socket)).rejects.toMatchObject({ code: "invalid_agent_name" });
+    }
+    const newer = { schema: 2, bindings: [] };
+    overwrite(newer);
+    await expect(herdrRpc("agent.rename", { target: "t1", name: "project-agy" }, socket)).rejects.toMatchObject({ code: "unsupported" });
+    expect(doc()).toEqual(newer);
+  });
+
+  it("emits a snapshot refresh for call names changed by another adapter", async () => {
+    let channel = 0;
+    const { socket, cores } = await setup([terminal("t1")], {
+      "events.subscribe": () => { channel = cores.at(-1)!.channel(); return { channel, seq: 1, terminals: [] }; },
+    });
+    const frames: EventFrame[] = [];
+    const started = Promise.withResolvers<void>();
+    const ended = Promise.withResolvers<void>();
+    const subscription = subscribeEvents([{ type: "layout.updated" }], {
+      onStarted: () => started.resolve(), onEvent: (frame) => frames.push(frame), onClose: () => ended.resolve(),
+    }, socket);
+    cleanups.push(() => subscription.close());
+    await started.promise;
+    cores[0]!.notify(channel, "event", { seq: 2, type: "doc", data: { name: AGENT_NAMES_DOC, version: 1 } });
+    cores[0]!.notify(channel, "missed", { seq: 3, terminals: [] });
+    await ended.promise;
+    expect(frames).toEqual([{ event: "layout.updated", data: { type: "layout_updated" } }]);
+  });
+
   it("refuses a second adapter on a live socket and leaves the first serving", async () => {
     const { socket, hc } = await setup([terminal("t1")]);
     await sessionSnapshot(socket);
@@ -396,6 +545,77 @@ describe("herdr-core adapter", () => {
     ]);
     // the subscription that ended lets go of hc's stream too
     expect(core.closed).toContain(channel);
+  });
+
+  // hc 0.1.17 on old-desktop, 2026-11-08: Letta Code reports nothing, and hc tells each new program in front as a `foreground` event
+  it("names an agent that reports nothing from the process in front, in its status and as that process changes", async () => {
+    let channel = 0;
+    const letta = { pid: 11, name: "node", argv: ["node", "/home/u/npm/node_modules/.bin/letta"] };
+    const { socket, cores } = await setup([terminal("t1")], {
+      "events.subscribe": () => {
+        channel = cores.at(-1)!.channel();
+        return { channel, seq: 1, terminals: [terminal("t1", { argv: ["bash"], foreground: letta })] };
+      },
+    });
+    const frames: EventFrame[] = [];
+    const started = Promise.withResolvers<void>();
+    const ended = Promise.withResolvers<void>();
+    const subscription = subscribeEvents([{ type: "pane.updated" }, { type: "pane.agent_status_changed", pane_id: "t1" }], {
+      onEvent: (frame) => frames.push(frame),
+      onStarted: () => started.resolve(),
+      onClose: () => ended.resolve(),
+    }, socket);
+    cleanups.push(() => subscription.close());
+    await started.promise;
+    const core = cores[0]!;
+    core.notify(channel, "event", { seq: 2, type: "status", terminal: "t1", data: { status: { state: "working" } } });
+    core.notify(channel, "event", { seq: 3, type: "foreground", terminal: "t1", data: { ...letta, pid: 12 } });
+    core.notify(channel, "event", { seq: 4, type: "foreground", terminal: "t1", data: { pid: 13, name: "bash", argv: ["bash"] } });
+    core.notify(channel, "event", { seq: 5, type: "foreground", terminal: "t1", data: { pid: 14, name: "devin", argv: ["devin"] } });
+    core.notify(channel, "missed", { seq: 9, terminals: [] });
+    await ended.promise;
+    expect(frames).toEqual([
+      { event: "pane.agent_status_changed", data: { pane_id: "t1", agent_status: "working", agent: "letta" } },
+      { event: "pane.updated", data: { type: "pane_updated", pane_id: "t1" } },
+      { event: "pane.updated", data: { type: "pane_updated", pane_id: "t1" } },
+      { event: "pane.agent_status_changed", data: { pane_id: "t1", agent_status: "working", agent: null } },
+      { event: "pane.updated", data: { type: "pane_updated", pane_id: "t1" } },
+      { event: "pane.agent_status_changed", data: { pane_id: "t1", agent_status: "working", agent: "devin" } },
+    ]);
+  });
+
+  // letta-code 0.34.44 on old-desktop, 2026-11-08: its title carries a spinner frame while a turn runs
+  it("asks for a fresh snapshot when a Letta that reports nothing starts or stops its spinner title, and only then", async () => {
+    let channel = 0;
+    const letta = { pid: 11, name: "letta", argv: ["letta"] };
+    const { socket, cores } = await setup([terminal("t1"), terminal("t2")], {
+      "events.subscribe": () => {
+        channel = cores.at(-1)!.channel();
+        return { channel, seq: 1, terminals: [terminal("t1", { foreground: letta, title: "Tutor" }), terminal("t2", { foreground: letta, title: "Tutor", status: { app: "letta", state: "idle" } }), terminal("t3", { foreground: letta, title: "Tutor", status: { app: "letta", state: "error" } })] };
+      },
+    });
+    const frames: EventFrame[] = [];
+    const started = Promise.withResolvers<void>();
+    const ended = Promise.withResolvers<void>();
+    const subscription = subscribeEvents([{ type: "pane.updated" }], { onEvent: (frame) => frames.push(frame), onStarted: () => started.resolve(), onClose: () => ended.resolve() }, socket);
+    cleanups.push(() => subscription.close());
+    await started.promise;
+    const core = cores[0]!;
+    const title = (seq: number, terminal: string, value: string) => core.notify(channel, "event", { seq, type: "title", terminal, data: { title: value } });
+    title(2, "t1", "⠋ Tutor");
+    title(3, "t1", "⠙ Tutor");
+    title(4, "t1", "Tutor");
+    // a Letta that reports its own status keeps it: its title asks for nothing
+    title(5, "t2", "⠋ Tutor");
+    // a report whose word says nothing (an error) gives no status: the title still speaks
+    title(6, "t3", "⠋ Tutor");
+    core.notify(channel, "missed", { seq: 9, terminals: [] });
+    await ended.promise;
+    expect(frames).toEqual([
+      { event: "pane.updated", data: { type: "pane_updated", pane_id: "t1" } },
+      { event: "pane.updated", data: { type: "pane_updated", pane_id: "t1" } },
+      { event: "pane.updated", data: { type: "pane_updated", pane_id: "t3" } },
+    ]);
   });
 
 it("asks for a fresh snapshot when a report's kind, message or progress changes, and only then", async () => {
@@ -1535,6 +1755,42 @@ describe("another machine of the core, as its own PC (#2497)", () => {
       await agentStart({ name: "x", kind: "claude", paneId: "t1" }, ready.socket);
       expect(ready.cores[0]!.typed.map((write) => write.text).join("")).toBe("\u0015'claude'\r");
     }
+  });
+
+  // hc names no platform: that machine's is read off its folders, the process in front's first (#3319)
+  it("names that machine's process in front by its own platform, and again as a foreground event tells a new folder", async () => {
+    let channel = 0;
+    const shim = { pid: 42, name: "letta.cmd", argv: ["letta.cmd"] };
+    const { socket, cores } = await setup(listed(), {
+      "events.subscribe": () => {
+        channel = cores.at(-1)!.channel();
+        return { channel, seq: 1, terminals: [terminal("lab/t1", { cwd: "", foreground: shim })] };
+      },
+    }, undefined, "lab");
+    const frames: EventFrame[] = [];
+    const started = Promise.withResolvers<void>();
+    const ended = Promise.withResolvers<void>();
+    const subscription = subscribeEvents([{ type: "pane.updated" }, { type: "pane.agent_status_changed", pane_id: "t1" }], {
+      onEvent: (frame) => frames.push(frame),
+      onStarted: () => started.resolve(),
+      onClose: () => ended.resolve(),
+    }, socket);
+    cleanups.push(() => subscription.close());
+    await started.promise;
+    const core = cores.at(-1)!;
+    // no folder yet: a shim names no one
+    core.notify(channel, "event", { seq: 2, type: "status", terminal: "lab/t1", data: { status: { state: "working" } } });
+    core.notify(channel, "event", { seq: 3, type: "foreground", terminal: "lab/t1", data: { ...shim, pid: 43, cwd: "C:\\Users\\u" } });
+    core.notify(channel, "event", { seq: 4, type: "foreground", terminal: "lab/t1", data: { pid: 44, name: "cmd", argv: ["cmd"], cwd: "/home/u" } });
+    core.notify(channel, "missed", { seq: 9, terminals: [] });
+    await ended.promise;
+    expect(frames).toEqual([
+      { event: "pane.agent_status_changed", data: { pane_id: "t1", agent_status: "working", agent: null } },
+      { event: "pane.updated", data: { type: "pane_updated", pane_id: "t1" } },
+      { event: "pane.agent_status_changed", data: { pane_id: "t1", agent_status: "working", agent: "letta" } },
+      { event: "pane.updated", data: { type: "pane_updated", pane_id: "t1" } },
+      { event: "pane.agent_status_changed", data: { pane_id: "t1", agent_status: "working", agent: "cmd" } },
+    ]);
   });
 
   it("streams that machine's events as its own, and none of this PC's or another machine's", async () => {

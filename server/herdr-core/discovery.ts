@@ -98,7 +98,7 @@ function isFile(path: string): boolean {
 }
 
 /** `0.1.17` when `bin --version` exits 0 and its output starts `hc 0.1.17`; null for anything else. The only hc command run here. */
-async function hcVersion(bin: string, env: Env, timeoutMs: number): Promise<string | null> {
+export async function hcVersion(bin: string, env: Env, timeoutMs: number): Promise<string | null> {
   const text = await probe([bin, "--version"], env, timeoutMs);
   const match = text === null ? null : /^hc (\d+\.\d+\.\d+[0-9A-Za-z.+-]*)(?:\s|$)/.exec(text);
   return match ? match[1]! : null;
@@ -235,6 +235,12 @@ export function discoverHc(options: Omit<FindHcOptions, "loginShellPath"> = {}):
     return hc;
   }).finally(() => { finding = null; });
   return finding;
+}
+
+/** Looks for hc afresh once any look under way has ended: one started before an install would miss it. */
+export async function rediscoverHc(options: Omit<FindHcOptions, "loginShellPath"> = {}): Promise<FoundHc | null> {
+  await finding?.catch(() => null);
+  return discoverHc(options);
 }
 
 /**

@@ -51,7 +51,7 @@ async function pullImage(): Promise<string> {
   throw refusal;
 }
 async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const response = await fetch(`http://127.0.0.1:${server!.port}${path}`, { method, headers: { "x-herdr-machine": "1", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const response = await fetch(`http://127.0.0.1:${server!.port}${path}`, { method, headers: { "x-herdr-machine": "1", "x-herdr-update": "1", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   assert.ok(response.ok, `${path}: ${response.status} ${response.ok ? "" : await response.text()}`);
   return response.json();
 }

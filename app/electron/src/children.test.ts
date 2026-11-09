@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { legacyName } from "../../../server/legacy-env.ts";
-import { choosePort, compareVersions, coreEnv, endLeftover, installCore, layout, openLog, portFree, processCommand, processStart, processStartSync, readSaved, serverEnv, startServer, stopServer, withoutInherited, writeSaved } from "./children.ts";
+import { choosePort, compareVersions, coreEnv, endLeftover, installCore, layout, openLog, portFree, processCommand, processStart, processStartSync, readSaved, serverEnv, startCore, startServer, stopServer, withoutInherited, writeSaved } from "./children.ts";
 
 const dirs: string[] = [];
 const listeners: Server[] = [];
@@ -109,6 +109,30 @@ describe("layout", () => {
 
 // the stand-ins below are POSIX shell scripts, which Windows cannot run
 const posix = process.platform !== "win32";
+
+describe.skipIf(!posix)("startCore", () => {
+  it("starts the core in the home folder, where a workspace with no folder opens, not in the app's", async () => {
+    const root = tempDir();
+    const hc = join(root, "herdr-core");
+    writeFileSync(hc, `#!/bin/sh\npwd > "$(dirname "$0")/cwd"\n`);
+    chmodSync(hc, 0o755);
+    const log = openLog(join(root, "ovis.log"));
+    await startCore(hc, process.env, log);
+    expect(realpathSync(readFileSync(join(root, "cwd"), "utf8").trim())).toBe(realpathSync(homedir()));
+    await new Promise<void>((resolve) => log.end(resolve));
+  });
+
+  it("still starts the core when the home folder is not there", async () => {
+    const root = tempDir();
+    const hc = join(root, "herdr-core");
+    writeFileSync(hc, `#!/bin/sh\npwd > "$(dirname "$0")/cwd"\n`);
+    chmodSync(hc, 0o755);
+    const log = openLog(join(root, "ovis.log"));
+    await startCore(hc, process.env, log, 30_000, join(root, "gone"));
+    expect(realpathSync(readFileSync(join(root, "cwd"), "utf8").trim())).toBe(realpathSync(process.cwd()));
+    await new Promise<void>((resolve) => log.end(resolve));
+  });
+});
 
 describe.skipIf(!posix)("startServer", () => {
   it("resolves with the address the server says it listens on, and stops it", async () => {

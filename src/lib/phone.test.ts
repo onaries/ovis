@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { deviceLabel, isLoopbackHost, phonePlan } from "./phone.ts";
+import { deviceLabel, deviceOs, isLoopbackHost, phonePlan } from "./phone.ts";
 import type { RemoteAccess } from "../../shared/protocol.ts";
 
 const local = { protocol: "http:", hostname: "localhost", origin: "http://localhost:7317", secure: true };
@@ -42,6 +42,22 @@ describe("phonePlan", () => {
   it("knows the loopback names", () => {
     for (const host of ["localhost", "app.localhost", "127.0.0.1", "127.1.2.3", "[::1]"]) expect(isLoopbackHost(host)).toBe(true);
     for (const host of ["pc.example.ts.net", "192.168.0.10", "localhost.example.com"]) expect(isLoopbackHost(host)).toBe(false);
+  });
+});
+
+describe("deviceOs", () => {
+  it("names the system as the account service does, an iPad asking as a Mac included", () => {
+    const cases: [string, number, string | null][] = [
+      ["Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 Version/17.4 Mobile/15E148 Safari/604.1", 5, "ios"],
+      ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.4 Safari/605.1.15", 5, "ios"],
+      ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/128.0 Safari/537.36", 0, "macos"],
+      ["Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/128.0 Mobile Safari/537.36", 5, "android"],
+      ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36", 0, "windows"],
+      ["Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 Chrome/128.0 Safari/537.36", 0, "chromeos"],
+      ["Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0", 0, "linux"],
+      ["curl/8.0", 0, null],
+    ];
+    for (const [ua, touch, os] of cases) expect<string | null>(deviceOs(ua, touch)).toBe(os);
   });
 });
 

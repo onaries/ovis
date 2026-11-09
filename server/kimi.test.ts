@@ -1,9 +1,10 @@
-import { afterEach, expect, it } from "bun:test";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, openSync, closeSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { afterEach, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, openSync, closeSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { forgetTranscriptState, MAX_PAGE_PROMPTS, TRANSCRIPT_WINDOW_BYTES, transcriptPage } from "./conversation.ts";
+import { forgetTranscriptState, MAX_PAGE_PROMPTS, TRANSCRIPT_WINDOW_BYTES, transcriptPage, transcriptToolOutput } from "./conversation.ts";
 import { kimiWireForPane, parseKimiTranscript } from "./kimi.ts";
 import { processStartedAt } from "./process-start.ts";
 import { TOOL_OUTPUT_CHARS } from "./tool-output.ts";
@@ -63,6 +64,38 @@ it("parses wire.jsonl into user and assistant turns", () => {
   expect(turns[2]!.parts).toEqual([{ kind: "text", text: "Und Tschau" }]);
   expect(turns[3]!.role).toBe("assistant");
   expect(turns[3]!.parts).toEqual([{ kind: "text", text: "Tschau!" }]);
+});
+
+it("serves no tool output from another wire log that a folder swap puts at the path around the lookup's open", () => {
+  const root = mkdtempSync(join(tmpdir(), "kimi-swap-")); roots.push(root);
+  const folder = join(root, "main");
+  const elsewhere = join(root, "elsewhere");
+  const away = join(root, "away");
+  mkdirSync(folder);
+  mkdirSync(elsewhere);
+  const path = join(folder, "wire.jsonl");
+  writeFileSync(path, WIRE);
+  // the same records and length: only the result's bytes tell the logs apart
+  writeFileSync(join(elsewhere, "wire.jsonl"), WIRE.replace('"kaputt"', '"FRGNDT"'));
+  expect(transcriptToolOutput("kimi-transcript", path, "tool_2")).toBe("kaputt");
+  // the path names the pane's own log when the lookup begins; its open meets the other folder
+  let swaps = 0;
+  const real = fs.openSync;
+  const spy = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+    if (args[0] !== path) return real(...args);
+    swaps++;
+    renameSync(folder, away);
+    renameSync(elsewhere, folder);
+    try { return real(...args); }
+    finally {
+      renameSync(folder, elsewhere);
+      renameSync(away, folder);
+    }
+  }) as typeof fs.openSync);
+  let answered: string | null;
+  try { answered = transcriptToolOutput("kimi-transcript", path, "tool_2"); } finally { spy.mockRestore(); }
+  expect(swaps).toBeGreaterThan(0);
+  expect(answered).toBeNull();
 });
 
 it("leaves a tool call pending when no result followed it", () => {

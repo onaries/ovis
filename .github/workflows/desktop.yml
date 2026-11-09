@@ -63,7 +63,7 @@ jobs:
           - { target: darwin-x64, os: macos-15-intel }
           - { target: win32-x64, os: windows-2025 }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 75
     # the steps are bash on every runner (Git Bash on Windows)
     defaults:
       run:
@@ -169,7 +169,18 @@ jobs:
           for name in CSC_LINK CSC_KEY_PASSWORD WIN_CSC_LINK WIN_CSC_KEY_PASSWORD; do
             [ -n "${!name}" ] || unset "$name"
           done
-          bun run dist
+          # Apple's ticket service sometimes drops the connection while a notarized app or dmg is
+          # stapled (NSURLErrorDomain -1005): only that failure builds again, at most three times
+          set -o pipefail
+          log=$(mktemp)
+          for attempt in 1 2 3; do
+            if bun run dist 2>&1 | tee "$log"; then exit 0; fi
+            if [ "$RUNNER_OS" != macOS ] || [ "$attempt" = 3 ] || ! grep -q -E 'stapler staple .* failed|staple and validate action failed' "$log"; then
+              exit 1
+            fi
+            echo "::warning::Stapling failed on attempt $attempt; building again in $((attempt * 120)) s."
+            sleep $((attempt * 120))
+          done
       - name: Remove the notary key
         if: always() && steps.sign.outputs.key != ''
         env:

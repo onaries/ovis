@@ -44,6 +44,13 @@ export function overCopiedEntry(state: Record<string, unknown>, overlays: boolea
   return { ...state, [WEB_PANEL_BELOW_KEY]: webPagesBelow(state) + 1 };
 }
 
+/** An entry that a move to another pane takes over in place: the file left behind is no longer on it. */
+export function withoutFile(state: unknown): unknown {
+  if (state === null || typeof state !== "object") return state;
+  const { [FILE_PREVIEW_KEY]: _file, ...rest } = state as Record<string, unknown>;
+  return rest;
+}
+
 /** A different panel's entry must not inherit the web panel's ownership marks. */
 export function withoutWebPanel(state: Record<string, unknown>): Record<string, unknown> {
   const { [WEB_PANEL_KEY]: _page, [WEB_PANEL_DOCKED_KEY]: _docked, [WEB_PANEL_BELOW_KEY]: _below, ...rest } = state;

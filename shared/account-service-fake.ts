@@ -6,6 +6,7 @@
  * on something the service would refuse.
  */
 import { ACCOUNT_RECORDS_MAX, AccountRecordError, isAccountKey, readAccountRecord, type AccountRecord } from "./account-records.ts";
+import { accountOsOf, type AccountOs, type AccountPlace } from "./account-asker.ts";
 import { isWssOrigin } from "./relay-offer.ts";
 import { deriveServerId, proofKey, serverChallenge, verifyServerProof } from "./relay-server-proof.ts";
 
@@ -64,7 +65,7 @@ interface Session { account: string; provider: SignInProvider | "test"; family: 
 /** `public_key`: the PC's relay key (X25519, 64 hex), from which `server_id` derives; `relay`: the wss origin it is reached through. */
 export interface FakePc { server_id: string; label: string; public_key: string; relay: string; added_at: string; last_seen_at: string | null }
 /** `key`: the waiting device's account key, which the PC matches against the comparison it is asked for. */
-export interface FakeAdmission { id: string; server_id: string; account: string; label: string; key: string; at: string }
+export interface FakeAdmission { id: string; server_id: string; account: string; label: string; key: string; at: string; os: AccountOs | null; country: string | null; city: string | null }
 /** How long an admission reaches its PC's mailbox: the PC lets a waiting account device compare digits only within it. */
 export const ADMISSION_TTL_MS = 10 * 60_000;
 
@@ -78,13 +79,13 @@ export class FakeAccountService {
   private readonly revokedFamilies = new Set<string>();
   private readonly appleTokens = new Map<string, { account: string; nonce: string }>();
   private readonly signIns = new Map<SignInProvider, string>();
-  private readonly deviceSignIns = new Map<string, { provider: SignInProvider; userCode: string; account: string | null; denied: boolean; interval: number; nextPoll: number; expires: number; challenge: string | null }>();
+  private readonly deviceSignIns = new Map<string, { provider: SignInProvider; userCode: string; account: string | null; denied: boolean; interval: number; nextPoll: number; expires: number; challenge: string | null; page?: boolean; requester?: { label: string | null; os: AccountOs | null } }>();
   /** by account: its sign-in methods, one per provider */
   private readonly identityList = new Map<string, Map<SignInProvider, { added_at: string }>>();
   private readonly linkTokens = new Map<string, { account: string; family: string; provider: SignInProvider; expires: number }>();
   /** by refresh family: when that sign-in was made (a refresh keeps it), for what needs a recent one */
   private readonly signedInAt = new Map<string, number>();
-  private offered: { providers: SignInProvider[]; device: SignInProvider[] } = { providers: ["github", "google", "apple"], device: ["github", "google"] };
+  private offered: { providers: SignInProvider[]; device: SignInProvider[]; device_page?: SignInProvider[] } = { providers: ["github", "google", "apple"], device: ["github", "google"] };
   private readonly pushes = new Map<string, { account: string; endpoint: string }>();
   private readonly counters = new Map<string, { start: number; count: number }>();
   private readonly ringList: FakeRing[] = [];
@@ -92,6 +93,10 @@ export class FakeAccountService {
   private readonly mailboxes = new Map<string, Mail[]>();
   private readonly challenges = new Map<string, { server_id: string; expected: string; expires: number }>();
   private readonly admissionList: FakeAdmission[] = [];
+  /** Where the service sees every request come from (Cloudflare's `request.cf`); unknown unless a test says. */
+  requestPlace: AccountPlace = { country: null, city: null };
+  /** False acts as an account service from before "Who is asking", whose link page start refuses `label` and `os`. */
+  linkPageTakesRequester = true;
   private seq = 0;
   /** Every request the fake answered, oldest first: `METHOD /path`. */
   readonly requests: string[] = [];
@@ -112,6 +117,23 @@ export class FakeAccountService {
 
   /** What `GET /v1/providers` answers: the sign-ins this service is set up for. */
   offer(providers: SignInProvider[], device: SignInProvider[]): void { this.offered = { providers, device }; }
+
+  /** Says the service has the link page (`device_page`), finishing `/v1/signin/ovis/device` with these sign-ins. */
+  offerLinkPage(providers: SignInProvider[]): void { this.offered = { ...this.offered, device_page: providers }; }
+
+  /** What the PC that started the link page sign-in showing `userCode` said it is; undefined for no such sign-in. */
+  linkRequester(userCode: string): { label: string | null; os: AccountOs | null } | undefined {
+    for (const entry of this.deviceSignIns.values()) if (entry.page && entry.userCode === userCode) return entry.requester;
+    return undefined;
+  }
+
+  /** The person typed `userCode` on the link page and confirmed a sign-in with `provider`. */
+  approveOnLinkPage(userCode: string, account: string, provider: SignInProvider): void {
+    // one approval, as the service: an approved request's code names nothing any more
+    for (const entry of this.deviceSignIns.values()) {
+      if (entry.userCode === userCode && entry.page && entry.account === null && this.now() < entry.expires) { entry.account = account; entry.provider = provider; entry.userCode = ""; }
+    }
+  }
 
 
   private addIdentity(account: string, provider: SignInProvider): void {
@@ -288,6 +310,24 @@ export class FakeAccountService {
       if (provider !== undefined && request.method === "GET") return this.signIn(url, provider);
       if (url.pathname === "/v1/token" && request.method === "POST") return await this.token(request);
       if (url.pathname === "/v1/providers" && request.method === "GET") return json(this.offered);
+      if (url.pathname === "/v1/signin/ovis/device" && request.method === "POST" && (this.offered.device_page ?? []).length > 0) {
+        const body = JSON.parse(await request.text()) as Record<string, unknown>;
+        const label = body.label;
+        if (body.code_challenge_method !== "S256" || typeof body.code_challenge !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(body.code_challenge)
+          || (label !== undefined && (typeof label !== "string" || label.length < 1 || label.length > 48 || /[\p{Cc}\p{Cs}]/u.test(label)))
+          || Object.keys(body).some((name) => !["code_challenge", "code_challenge_method", ...(this.linkPageTakesRequester ? ["label", "os"] : [])].includes(name))) {
+          return problem(400, "invalid_request", "Start a sign-in on the link page with an S256 code_challenge, and a label of 1-48 characters if any");
+        }
+        const deviceCode = randomHex(32);
+        const letters = "BCDFGHJKLMNPQRSTVWXZ";
+        const pick = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), (byte) => letters[byte % letters.length]).join("");
+        const userCode = `${pick()}-${pick()}`;
+        this.deviceSignIns.set(deviceCode, { provider: "github", userCode, account: null, denied: false, interval: DEVICE_POLL_S, nextPoll: this.now(), expires: this.now() + 600_000, challenge: body.code_challenge, page: true, requester: { label: typeof label === "string" ? label : null, os: accountOsOf(body.os) } });
+        const page = new URL("/link", url.origin);
+        const complete = new URL(page);
+        complete.searchParams.set("code", userCode);
+        return json({ device_code: deviceCode, user_code: userCode, verification_uri: page.href, verification_uri_complete: complete.href, expires_in: 600, interval: DEVICE_POLL_S, code_challenge_method: "S256" });
+      }
       const deviceProvider = /^\/v1\/signin\/([a-z]+)\/device$/.exec(url.pathname)?.[1];
       if (deviceProvider !== undefined && DEVICE_PAGES[deviceProvider] !== undefined && request.method === "POST") {
         const text = await request.text();
@@ -404,15 +444,15 @@ export class FakeAccountService {
       // what the approving client checks the key PC X shows it against, before it signs an add
       const admissions = this.admissionList
         .filter((a) => a.account === account && this.now() - Date.parse(a.at) < ADMISSION_TTL_MS)
-        .map(({ key, label, server_id, at }) => ({ key, label, server_id, at }));
+        .map(({ key, label, server_id, at, os, country, city }) => ({ key, label, server_id, at, os, country, city }));
       return json({ admissions });
     }
     if (path === "/v1/admissions" && request.method === "POST") {
-      const body = await request.json() as { server_id?: unknown; label?: unknown; key?: unknown };
+      const body = await request.json() as { server_id?: unknown; label?: unknown; key?: unknown; os?: unknown };
       if (typeof body.server_id !== "string" || !directory.has(body.server_id) || typeof body.label !== "string") return problem(400, "unknown_pc", "List PCs of this account only");
       if (!isAccountKey(body.key)) return problem(400, "invalid_key", "Name the waiting device's account key");
       if (!this.spend(`admissions:${account}`, ADMISSIONS_PER_WINDOW)) return problem(429, "too_many_admissions", "Too many requests; try again later");
-      const admission = { id: randomHex(16), server_id: body.server_id, account, label: body.label, key: body.key, at: this.iso() };
+      const admission = { id: randomHex(16), server_id: body.server_id, account, label: body.label, key: body.key, at: this.iso(), os: accountOsOf(body.os), ...this.requestPlace };
       this.admissionList.push(admission);
       this.ring(account, session.family);
       return json({ id: admission.id });
