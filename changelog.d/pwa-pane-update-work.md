@@ -1,1 +1,4 @@
-Reduce repeated conversation rendering during pane updates by keeping terminal and file actions stable. Reuse folded-terminal glyph widths until the font changes, while preserving pane ownership and font calibration.
+### Fixed
+- Reduce repeated conversation rendering during pane updates by keeping terminal and file actions
+  stable. Reuse folded-terminal glyph widths until the font changes, while preserving pane
+  ownership and font calibration.
