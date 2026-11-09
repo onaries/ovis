@@ -490,7 +490,6 @@ const BASE: Record<string, string> = {
   "Conversation": "대화",
   "Off": "끄기",
   "Connect conversation": "대화 연결",
-  "Connect conversation…": "대화 연결…",
   "Choose the conversation running in this pane. This only connects its chat history; it does not switch the terminal.": "이 pane에서 실행 중인 대화를 고르세요. 채팅 기록을 연결하며 터미널의 대화는 전환하지 않습니다.",
   "Session ID": "세션 ID",
   "Paste a full session ID": "전체 세션 ID 붙여넣기",

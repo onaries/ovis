@@ -6,6 +6,7 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const TERMINAL_JA: Record<string, string> = {
+  "Connect conversation…": "会話を接続…",
   "Searching…": "検索中…",
   "Pane changed. Search again.": "ペインの内容が変わりました。再検索してください。",
   "Search moves the pane for every client.": "検索すると接続中の全クライアントのペイン画面が移動します。",

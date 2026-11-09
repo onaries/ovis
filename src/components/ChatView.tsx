@@ -12,7 +12,6 @@ import "./ChatTimeline.css";
 
 import { AgentMark } from "./AgentMark.tsx";
 import { CapacityRetry } from "./CapacityRetry.tsx";
-import { CodexManualDialog } from "./CodexManualDialog.tsx";
 import { AnimatedHeight } from "./AnimatedHeight.tsx";
 import { ChatDiffContext, TurnChangedFiles } from "./TurnChangedFiles.tsx";
 import type { RepoDiffTarget } from "../lib/repoDiff.ts";
@@ -1610,8 +1609,6 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const olderGeneration = useRef(0);
   const history = useRef<string | undefined>(undefined);
   const [historyId, setHistoryId] = useState<string | undefined>(undefined);
-  const [manualSessionId, setManualSessionId] = useState<string | null>(null);
-  const [matching, setMatching] = useState(false);
   const shownPane = useRef(paneId);
   const prependAnchor = useRef<{ key: string; offset: number } | null>(null);
   /** where the reader left this pane before (lib/chatScrollMemory.ts), until the first answer puts it back */
@@ -1668,7 +1665,6 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
 
   /** What an answer says beside its turns: where older pages start, its metadata, abandoned turns. */
   const showAnswerDetails = (conversation: ConversationResponse): void => {
-    setManualSessionId(conversation.manual_session_id ?? null);
     if (heldFrom.current === null) setOlderCursor(conversation.source === "scrollback" ? undefined : conversation.cursor);
     // a scrollback stand-in carries metadata only as the agent's own status line states it
     onMetadataRef.current?.(paneId, conversation.metadata ?? null, conversation.source);
@@ -2814,14 +2810,13 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const changed = (event: Event): void => {
       if (event instanceof CustomEvent && event.detail?.paneId === paneId && event.detail?.machineId === machineId) {
         history.current = undefined; dropOlder(); lastAnswer.current = null; signature.current = "";
-        setState(EMPTY_STATE); setLoaded(false); setHistoryId(undefined); setManualSessionId(null);
+        setState(EMPTY_STATE); setLoaded(false); setHistoryId(undefined);
         retryRead();
       }
     };
     window.addEventListener(CODEX_MANUAL_CHANGED, changed);
     return () => window.removeEventListener(CODEX_MANUAL_CHANGED, changed);
   }, [paneId, machineId, retryRead]);
-  useEffect(() => { setManualSessionId(null); setMatching(false); }, [paneId, machineId]);
   const footer = <>
       {!ended && !connected && <p className="chat-inline-state" role="status">{t("Reconnecting…")}</p>}
       {modelCapacity && connected && !ended && <div className="chat-inline-error chat-failure" role="alert">
@@ -2842,10 +2837,6 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       {stale && error === null && <p className="chat-inline-state" role="status">{t("Updates paused — waiting for the agent's next activity")}</p>}
       {loaded && error === null && agent === "grok" && state.source !== "conversation" && <p className="chat-inline-state" role="status">{t("Grok chat is unavailable. Open Terminal to see activity and tool calls.")}</p>}
       {loaded && error === null && agent === "agy" && state.source !== "conversation" && <p className="chat-inline-state" role="status">{t("Antigravity chat is unavailable. Open Terminal to see activity and tool calls.")}</p>}
-      {loaded && agent === "codex" && interactive && connected && !ended && (state.source !== "conversation" || manualSessionId !== null) && <div className="chat-inline-state chat-failure">
-        <span>{t(manualSessionId ? "Manually connected conversation" : "Can't recognize this Codex conversation?")}</span>
-        <button type="button" className="btn chat-failure-retry" onClick={() => setMatching(true)}>{t("Connect conversation…")}</button>
-      </div>}
       {loaded && error === null && agent === "copilot" && state.source === "scrollback" && state.hint === "copilot_ui_server" && <p className="chat-inline-state" role="status">{t("Copilot chat is unavailable. On Linux, starting Copilot with copilot --ui-server --port=0 may help. Its local API has no authentication: any program on this PC can control that session.")}</p>}
       {/* The agent's activity, where no open work block says it: before the turn has an assistant or
           tool row (Claude Code's spinner writes nothing to the transcript), and while a native turn
@@ -2930,6 +2921,5 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     }} />, promptDock)}
   {viewer !== null && <ImageLightbox images={viewer.images} index={viewer.index} onClose={closeViewer} />}
   {searching && <ConversationSearch paneId={paneId} agent={agent} historyId={historyId} onClose={closeSearch} onPick={revealTurn} />}
-  {matching && <CodexManualDialog key={paneStorageId(machineId, paneId)} paneId={paneId} onClose={() => setMatching(false)} />}
   </ToolPathRootContext.Provider></ImageViewerContext.Provider></ChatHistoryContext.Provider></ChatPaneContext.Provider></FileNameLookupContext.Provider></ChatDiffContext.Provider></ChatMarkdownImages>;
 });

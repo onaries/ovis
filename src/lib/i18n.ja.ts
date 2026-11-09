@@ -492,7 +492,6 @@ const BASE: Record<string, string> = {
   "Conversation": "会話",
   "Off": "オフ",
   "Connect conversation": "会話を接続",
-  "Connect conversation…": "会話を接続…",
   "Choose the conversation running in this pane. This only connects its chat history; it does not switch the terminal.": "このペインで実行中の会話を選んでください。チャット履歴を接続し、ターミナルの会話は切り替えません。",
   "Session ID": "セッションID",
   "Paste a full session ID": "完全なセッションIDを貼り付け",

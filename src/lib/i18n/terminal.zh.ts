@@ -6,6 +6,7 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const TERMINAL_ZH: Record<string, string> = {
+  "Connect conversation…": "连接对话…",
   "Searching…": "搜索中…",
   "Pane changed. Search again.": "窗格内容已更改，请重新搜索。",
   "Search moves the pane for every client.": "搜索会移动所有已连接客户端的窗格视图。",

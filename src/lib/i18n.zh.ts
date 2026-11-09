@@ -494,7 +494,6 @@ const BASE: Record<string, string> = {
   "Conversation": "对话",
   "Off": "关闭",
   "Connect conversation": "连接对话",
-  "Connect conversation…": "连接对话…",
   "Choose the conversation running in this pane. This only connects its chat history; it does not switch the terminal.": "选择此窗格正在运行的对话。此操作连接聊天记录，不会切换终端中的对话。",
   "Session ID": "会话ID",
   "Paste a full session ID": "粘贴完整会话ID",

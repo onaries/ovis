@@ -6,6 +6,7 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const TERMINAL_KO: Record<string, string> = {
+  "Connect conversation…": "대화 연결…",
   "Searching…": "검색 중…",
   "Pane changed. Search again.": "패널 내용이 변경되었습니다. 다시 검색하세요.",
   "Search moves the pane for every client.": "검색하면 연결된 모든 클라이언트의 패널 화면이 이동합니다.",
