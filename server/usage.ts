@@ -896,7 +896,57 @@ const opencode: UsageProvider = {
   },
 };
 
-export const USAGE_PROVIDERS: readonly UsageProvider[] = [claude, codex, cursor, copilot, grok, antigravity, opencode];
+const deeprelay: UsageProvider = {
+  id: "deeprelay",
+  async signIns(ctx) {
+    const token = text(ctx.env["DEEPRELAY_API_KEY"]);
+    if (token) return [{ token, expiresAt: null, source: "env" }];
+    const configured = ctx.env["OPENCODEX_HOME"]?.trim();
+    const dir = configured === "~" ? ctx.home : configured?.startsWith("~/") ? join(ctx.home, configured.slice(2)) : configured || join(ctx.home, ".opencodex");
+    const path = join(dir, "config.json");
+    const providers = record(record(parseJson(readText(path)))["providers"]);
+    return Object.entries(providers).flatMap(([name, value]) => {
+      const provider = record(value);
+      const base = text(provider["baseUrl"])?.replace(/\/+$/, "");
+      if (base !== "https://api.deeprelay.ai/v1" && base !== "https://api.deeprelay.ai") return [];
+      const key = text(provider["apiKey"]);
+      if (!key || key.startsWith("keychain:")) return [];
+      const variable = /^\$\{(\w+)\}$/.exec(key);
+      const resolved = variable ? text(ctx.env[variable[1]!]) : key.startsWith("$") ? text(ctx.env[key.slice(1)]) : key;
+      return resolved ? [{ token: resolved, expiresAt: null, source: `${path}:${name}` }] : [];
+    });
+  },
+  async read(ctx, signIn) {
+    const body = await requestJson(ctx, "https://api.deeprelay.ai/v1/billing/subscription", {
+      redirect: "error",
+      headers: { authorization: `Bearer ${signIn.token}`, accept: "application/json", "user-agent": USER_AGENT },
+    });
+    if (body["subscribed"] === false) return null;
+    if (body["subscribed"] !== true || !body["usage"] || !body["quota"]) throw new Error("DeepRelay usage unavailable");
+    const usage = record(body["usage"]);
+    const quota = record(body["quota"]);
+    const windows: UsageWindow[] = [];
+    for (const [kind, scope, usedKey, limitKey] of [
+      ["month", "Input tokens", "weighted_input_tokens", "input_tokens_monthly"],
+      ["month", "Output tokens", "weighted_output_tokens", "output_tokens_monthly"],
+      ["week", "Input tokens", "weekly_weighted_input_tokens", "weekly_input_tokens"],
+      ["week", "Output tokens", "weekly_weighted_output_tokens", "weekly_output_tokens"],
+      ["month", "Metered usage", "cost_micro_cents", "max_usage_micro_cents"],
+      ["month", "Searches", "searches", "searches_monthly"],
+    ] as const) {
+      const used = number(usage[usedKey]);
+      const limit = number(quota[limitKey]);
+      if (used === null || used < 0 || limit === null || limit <= 0) continue;
+      windows.push({ kind, scope, used_percent: percent(used / limit * 100),
+        resets_at: kind === "month" ? isoTime(usage["period_end"]) : null,
+        starts_at: kind === "month" ? isoTime(usage["period_start"]) : null });
+    }
+    if (!windows.length) throw new Error("DeepRelay usage unavailable");
+    return { plan: text(record(body["plan"])["name"]), windows };
+  },
+};
+
+export const USAGE_PROVIDERS: readonly UsageProvider[] = [claude, codex, cursor, copilot, grok, antigravity, opencode, deeprelay];
 
 /** Keychain services whose read hung (an access prompt nobody answered): not asked again. */
 const promptedServices = new Set<string>();

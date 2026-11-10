@@ -1002,8 +1002,17 @@ it("lists every provider in discovery order without requesting upstream usage", 
   const response = await local.handle(new Request("http://localhost/api/usage/login"));
   const result = await response.json();
   // Then
-  expect(result.providers.map((provider: { id: string }) => provider.id)).toEqual(["claude", "codex", "cursor", "copilot", "grok", "antigravity", "opencode"]);
+  expect(result.providers.map((provider: { id: string }) => provider.id)).toEqual(["claude", "codex", "cursor", "copilot", "grok", "antigravity", "opencode", "deeprelay"]);
   expect(result.providers.filter((provider: { separate_home: boolean }) => provider.separate_home).map((provider: { id: string }) => provider.id)).toEqual(["claude", "codex"]);
+});
+
+it("keeps DeepRelay credential editing in OpenCodex without starting a terminal login", async () => {
+  const local = new UsageLoginService(root, { PATH: bin }, ctx);
+  const response = await local.handle(new Request("http://localhost/api/usage/login", {
+    method: "POST", body: JSON.stringify({ provider: "deeprelay" }),
+  }));
+  expect(response.status).toBe(409);
+  expect((await response.json()).error).toMatchObject({ code: "login_not_supported", message: "Manage the DeepRelay API key in OpenCodex on the server PC" });
 });
 
 it("reports an unavailable CLI instead of opening a dead sign-in tab", async () => {

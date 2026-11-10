@@ -80,7 +80,9 @@ export function UsageAccountDialog({ editHub, provider: preset = null, hub, onHu
       switch (step.method) {
         case "choose":
           title = t("How do you want to sign in?"); current = 1;
-          local = !step.provider.installed
+          local = step.provider.id === "deeprelay"
+            ? <p className="settings-hint">{t("Manage this API key in OpenCodex on the server PC.")}</p>
+            : !step.provider.installed
             ? <p className="settings-hint">{t("Install {cli} on the server PC first.", { cli: step.provider.cli })}</p>
             : step.provider.local
               ? <button type="button" className="account-choice" onClick={() => setStep({ ...step, method: "local" })}><SquareTerminal size={24} aria-hidden="true" /><span><strong>{t("On this PC")}</strong><span className="settings-hint">{t("Official CLI in a new tab")}</span></span></button>

@@ -6,6 +6,9 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const USAGE_KO: Record<string, string> = {
+  "Manage this API key in OpenCodex on the server PC.": "서버 PC의 OpenCodex에서 API 키를 관리하세요.",
+  "Cost cap": "과금 한도",
+  "Searches": "검색",
   "Remove {name}?": "{name} 계정을 제거할까요?",
   "Remove this account from Ovis? Its CLI sign-in and credentials stay on this PC, and Restore under Removed from Ovis brings it back.": "Ovis에서 이 계정을 제거할까요? CLI 로그인과 인증 정보는 이 PC에 그대로 남고, \"Ovis에서 제거됨\"의 복원으로 되돌릴 수 있습니다.",
   "Removed from Ovis": "Ovis에서 제거됨",

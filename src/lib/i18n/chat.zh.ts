@@ -48,8 +48,6 @@ export const CHAT_ZH: Record<string, string> = {
   "Show all {size} characters": "显示全部 {size} 个字符",
   "Empty task": "空任务",
   "Couldn't copy. Select the text and copy it manually.": "无法复制。请选中文本并手动复制。",
-  "Input": "输入",
-  "Output": "输出",
   "Arguments omitted (too large)": "参数过大，已省略",
   "thinking": "思考",
   "Working…": "正在工作…",

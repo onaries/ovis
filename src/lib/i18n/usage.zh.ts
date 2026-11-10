@@ -6,6 +6,9 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const USAGE_ZH: Record<string, string> = {
+  "Manage this API key in OpenCodex on the server PC.": "请在服务器电脑的 OpenCodex 中管理 API 密钥。",
+  "Cost cap": "计费上限",
+  "Searches": "搜索",
   "Remove {name}?": "移除 {name}？",
   "Remove this account from Ovis? Its CLI sign-in and credentials stay on this PC, and Restore under Removed from Ovis brings it back.": "要从 Ovis 移除此账号吗？CLI 登录状态和凭据会保留在这台电脑上，可在“已从 Ovis 移除”中点击“恢复”找回。",
   "Removed from Ovis": "已从 Ovis 移除",

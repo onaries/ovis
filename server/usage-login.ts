@@ -25,6 +25,7 @@ const LOGIN = {
   grok: { cli: "grok", binaries: ["grok"], args: ["login"] },
   antigravity: { cli: "Antigravity CLI (agy)", binaries: ["agy"], args: null },
   opencode: { cli: "opencode", binaries: ["opencode"], args: ["auth", "login"] },
+  deeprelay: { cli: "OpenCodex", binaries: ["opencodex"], args: null },
 } as const;
 
 /**
@@ -469,7 +470,9 @@ export class UsageLoginService {
       return badRequest("invalid_account_name", "Use 1–32 lowercase letters, numbers or hyphens for the account name");
     }
     const login = LOGIN[id];
-    if (login.args === null) return conflictResponse("login_not_supported", "Sign in interactively in Antigravity on the server PC");
+    if (login.args === null) return conflictResponse("login_not_supported", id === "deeprelay"
+      ? "Manage the DeepRelay API key in OpenCodex on the server PC"
+      : "Sign in interactively in Antigravity on the server PC");
     // POSIX exec lets herdr's pane-ended event identify completion, without a second watcher.
     const executable = executableFor(id);
     if (!executable) return conflictResponse("cli_unavailable", "Install the official CLI on this PC before signing in");

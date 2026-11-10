@@ -11,12 +11,12 @@ const POLL_MS = 60_000;
 export const HIGH_PERCENT = 80;
 
 export const PROVIDER_NAME: Readonly<Record<UsageProviderId, string>> = {
-  claude: "Claude", codex: "Codex", cursor: "Cursor", copilot: "GitHub Copilot", grok: "Grok", antigravity: "Antigravity", opencode: "OpenCode",
+  claude: "Claude", codex: "Codex", cursor: "Cursor", copilot: "GitHub Copilot", grok: "Grok", antigravity: "Antigravity", opencode: "OpenCode", deeprelay: "DeepRelay",
 };
 
 /** AgentMark's name for each provider's logo */
 export const PROVIDER_MARK: Readonly<Record<UsageProviderId, string>> = {
-  claude: "claude", codex: "codex", cursor: "cursor", copilot: "copilot", grok: "grok", antigravity: "agy", opencode: "opencode",
+  claude: "claude", codex: "codex", cursor: "cursor", copilot: "copilot", grok: "grok", antigravity: "agy", opencode: "opencode", deeprelay: "deeprelay",
 };
 
 export const WINDOW_LABEL: Readonly<Record<UsageWindow["kind"], string>> = {
@@ -44,6 +44,7 @@ const PLAN_PROVIDER: Readonly<Record<string, UsageProviderId>> = { "anthropic-su
  * (ConversationMetadata.provider) names. Neither: no plan, rather than one guessed.
  */
 export function planForPane(agent: string | null | undefined, provider: string | null | undefined): UsageProviderId | null {
+  if (provider?.toLowerCase() === "deeprelay") return "deeprelay";
   return providerForAgent(agent) ?? (provider && Object.hasOwn(PLAN_PROVIDER, provider) ? PLAN_PROVIDER[provider]! : null);
 }
 
@@ -76,7 +77,9 @@ export function glanceWindow(usage: ProviderUsage, glance: UsageGlance): UsageWi
 export function windowLabel(window: UsageWindow): string {
   const kind = t(WINDOW_LABEL[window.kind]);
   if (window.scope === null) return kind;
-  const scope = window.scope === "Other models" ? t("Other models") : window.scope === "Cursor models" ? t("Cursor models") : window.scope;
+  const scope = window.scope === "Other models" ? t("Other models") : window.scope === "Cursor models" ? t("Cursor models")
+    : window.scope === "Input tokens" ? t("Input") : window.scope === "Output tokens" ? t("Output")
+      : window.scope === "Metered usage" ? t("Cost cap") : window.scope === "Searches" ? t("Searches") : window.scope;
   return `${kind} · ${scope}`;
 }
 

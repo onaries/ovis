@@ -28,6 +28,13 @@ describe("usage meters", () => {
     expect(providerForAgent("opencode")).toBe("opencode");
   });
 
+  it("shows DeepRelay limits for a conversation explicitly using DeepRelay", () => {
+    const accounts = [provider("codex", [window(20)]), provider("deeprelay", [window(60, "week", "Input tokens")])];
+    expect(composerUsage(accounts, "codex", [], [], "Deeprelay")?.id).toBe("deeprelay");
+    expect(composerUsage(accounts, "codex", [], [], "openai")?.id).toBe("codex");
+    expect(composerUsage(accounts, "pi", [], [], "deeprelay")?.id).toBe("deeprelay");
+  });
+
   it("looks up a pi-family pane's plan by the provider its conversation runs at", () => {
     const accounts = [provider("claude", [window(40)], "c@x"), provider("codex", [window(20)], "a@x"), provider("codex", [window(80)], "b@x")];
     for (const agent of ["gjc", "omp", "omo", "pi"]) {
@@ -128,6 +135,9 @@ describe("usage meters", () => {
     expect(windowLabel(window(1, "session"))).toBe("Session");
     expect(windowLabel(window(1, "week", "Sonnet"))).toBe("Weekly · Sonnet");
     expect(windowLabel(window(1, "month", "Premium"))).toBe("Monthly · Premium");
+    expect(windowLabel(window(1, "month", "Input tokens"))).toBe("Monthly · Input");
+    expect(windowLabel(window(1, "week", "Output tokens"))).toBe("Weekly · Output");
+    expect(windowLabel(window(1, "month", "Metered usage"))).toBe("Monthly · Cost cap");
     expect(windowLabel(window(1, "month", "Cursor models"))).toBe("Monthly · Cursor models");
   });
 });

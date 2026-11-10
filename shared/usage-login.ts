@@ -1,6 +1,6 @@
 import type { UsageProviderId } from "./protocol.ts";
 
-export type LocalUsageProvider = Exclude<UsageProviderId, "antigravity">;
+export type LocalUsageProvider = Exclude<UsageProviderId, "antigravity" | "deeprelay">;
 
 /** Local account sign-in never accepts a command or a credential path from the browser. A Claude or Codex
  * request with `follow: true` runs in the server's own PTY for the browser to follow (UsageLoginFollowed). */

@@ -34,6 +34,8 @@ import { RUNTIME_MOVE_ZH } from "./i18n/runtime-move.zh.ts";
  * Placeholders in braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "Input": "输入",
+  "Output": "输出",
   "Send to agent": "发送给代理",
   "Agent waiting on background work": "Agent 正在等待后台工作",
   "Agent {status}": "Agent 状态：{status}",

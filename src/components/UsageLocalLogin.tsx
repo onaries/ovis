@@ -52,7 +52,7 @@ export function UsageLocalLogin({ provider, onStarted, onFollowed }: { readonly 
     event.preventDefault();
     const name = new FormData(event.currentTarget).get("name");
     const id = provider.id;
-    if (id === "antigravity") return;
+    if (id === "antigravity" || id === "deeprelay") return;
     if ((id === "claude" || id === "codex") && typeof name !== "string") return;
     // Claude and Codex are followed in the browser (UsageSignInDialog), which starts the login itself
     if (id === "claude" || id === "codex") { setFollowing({ provider: id, name: String(name) }); return; }

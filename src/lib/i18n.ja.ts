@@ -32,6 +32,8 @@ import { RUNTIME_MOVE_JA } from "./i18n/runtime-move.ja.ts";
  * in English. Placeholders in braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "Input": "入力",
+  "Output": "出力",
   "Send to agent": "エージェントへ送信",
   "Agent waiting on background work": "エージェントがバックグラウンドの作業を待っています",
   "Agent {status}": "エージェント {status}",

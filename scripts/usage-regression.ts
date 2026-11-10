@@ -437,6 +437,51 @@ export async function checkUsageSignInAgain(browser: Browser, origin: string): P
   console.log("PASS Sign in again: offered only for an expired account on this PC, in the popover and its Settings row, refusal shown, tab handed over, phone fit, none on a watching device");
 }
 
+export async function checkDeepRelayUsage(browser: Browser, origin: string): Promise<void> {
+  for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as const) {
+    const context = await usageContext(browser, { viewport: { width, height: 900 }, colorScheme, locale: "en-US" });
+    try {
+      await staged(context);
+      await context.route("**/api/usage*", (route) => route.fulfill({ json: { providers: [{
+        id: "deeprelay", key: "deeprelay:qa", account: null, plan: "Plus", problem: null, checked_at: at(0),
+        windows: [
+          { kind: "month", scope: "Input tokens", used_percent: 10, resets_at: at(300), starts_at: null },
+          { kind: "month", scope: "Output tokens", used_percent: 20, resets_at: at(300), starts_at: null },
+          { kind: "week", scope: "Input tokens", used_percent: 30, resets_at: null, starts_at: null },
+          { kind: "week", scope: "Output tokens", used_percent: 40, resets_at: null, starts_at: null },
+          { kind: "month", scope: "Metered usage", used_percent: 50, resets_at: at(300), starts_at: null },
+          { kind: "month", scope: "Searches", used_percent: 0, resets_at: at(300), starts_at: null },
+        ],
+      }] } }));
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(origin);
+      if (width === 390) await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
+      await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
+      await openSettingsPage(page, "Agents");
+      await page.locator('.segmented[aria-label="Plan limits"]').getByRole("button", { name: "Used", exact: true }).click();
+      await page.keyboard.press("Escape");
+      if (width === 390) await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
+      await page.locator(".usage-strip").click();
+      const popover = page.getByRole("dialog", { name: "Subscription usage", exact: true });
+      await popover.waitFor();
+      assert.match(await popover.textContent() ?? "", /DeepRelay/);
+      assert.equal(await popover.locator(".usage-row").count(), 6);
+      assert.deepEqual(await popover.locator(".usage-row-value").allTextContents(), ["10%", "20%", "30%", "40%", "50%", "0%"]);
+      assert.equal(await popover.locator(".usage-row-label").evaluateAll((labels) => labels.every((label) => label.scrollWidth <= label.clientWidth)), true);
+      const box = await popover.boundingBox();
+      assert.ok(box && box.x >= 0 && box.x + box.width <= width);
+      assert.deepEqual(errors, []);
+      if (process.env.UI_EVIDENCE_DIR) {
+        mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
+        await popover.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `deeprelay-${width}-${colorScheme}.png`) });
+      }
+    } finally { await context.close(); }
+  }
+  console.log("PASS DeepRelay: six independent meters fit phone and desktop in both themes");
+}
+
 if (import.meta.main) {
   await import("./test-herdr.ts");
   const { mkdtempSync, rmSync } = await import("node:fs");
@@ -456,6 +501,7 @@ if (import.meta.main) {
     browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     await checkUsageMeters(browser, `http://127.0.0.1:${server.port}`);
     await checkUsageSignInAgain(browser, `http://127.0.0.1:${server.port}`);
+    await checkDeepRelayUsage(browser, `http://127.0.0.1:${server.port}`);
   } finally {
     await browser?.close();
     server?.stop();

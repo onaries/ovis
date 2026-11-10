@@ -6,6 +6,9 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const USAGE_JA: Record<string, string> = {
+  "Manage this API key in OpenCodex on the server PC.": "サーバーPCのOpenCodexでAPIキーを管理してください。",
+  "Cost cap": "従量上限",
+  "Searches": "検索",
   "Remove {name}?": "{name}を削除しますか？",
   "Remove this account from Ovis? Its CLI sign-in and credentials stay on this PC, and Restore under Removed from Ovis brings it back.": "このアカウントをOvisから削除しますか？CLIのログインと認証情報はこのPCに残り、「Ovisから削除済み」の「復元」で戻せます。",
   "Removed from Ovis": "Ovisから削除済み",

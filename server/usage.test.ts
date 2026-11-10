@@ -94,6 +94,107 @@ beforeEach(() => {
 
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
+describe("DeepRelay", () => {
+  const endpoint = "https://api.deeprelay.ai/v1/billing/subscription";
+  const subscription = () => ({
+    subscribed: true, status: "past_due", plan: { name: "Plus" },
+    quota: { input_tokens_monthly: 1000, output_tokens_monthly: 500, weekly_input_tokens: 250,
+      weekly_output_tokens: 125, max_usage_micro_cents: 10000, searches_monthly: 10 },
+    usage: { period_start: "2026-09-01T00:00:00Z", period_end: "2026-10-01T00:00:00Z",
+      weighted_input_tokens: 100, weighted_output_tokens: 50, weekly_weighted_input_tokens: 75,
+      weekly_weighted_output_tokens: 25, cost_micro_cents: 5000, searches: 0 },
+  });
+
+  it("reads the existing OpenCodex key and the six enforced meters without exposing credentials", async () => {
+    write(join(home, ".opencodex", "config.json"), { providers: {
+      Deeprelay: { baseUrl: "https://api.deeprelay.ai/v1/", apiKey: "private-deeprelay-key" },
+      other: { baseUrl: "https://example.com/v1", apiKey: "not-for-deeprelay" },
+    } });
+    replies.set(endpoint, { body: subscription() });
+    const report = await new UsageService(context(), only("deeprelay")).report();
+    expect(report.providers).toHaveLength(1);
+    expect(report.providers[0]).toMatchObject({ id: "deeprelay", plan: "Plus", problem: null, windows: [
+      { kind: "month", scope: "Input tokens", used_percent: 10, resets_at: "2026-10-01T00:00:00.000Z", starts_at: "2026-09-01T00:00:00.000Z" },
+      { kind: "month", scope: "Output tokens", used_percent: 10 },
+      { kind: "week", scope: "Input tokens", used_percent: 30, resets_at: null, starts_at: null },
+      { kind: "week", scope: "Output tokens", used_percent: 20, resets_at: null, starts_at: null },
+      { kind: "month", scope: "Metered usage", used_percent: 50 },
+      { kind: "month", scope: "Searches", used_percent: 0 },
+    ] });
+    expect(requests).toHaveLength(1);
+    expect(new Headers(requests[0]!.init.headers).get("authorization")).toBe("Bearer private-deeprelay-key");
+    expect(requests[0]!.init.redirect).toBe("error");
+    expect(JSON.stringify(report)).not.toContain("private-deeprelay-key");
+  });
+
+  it("uses the environment key before OpenCodex and reports unreadable usage as failure", async () => {
+    replies.set(endpoint, { body: { ...subscription(), usage: null } });
+    const ctx = context();
+    ctx.env["DEEPRELAY_API_KEY"] = "env-key";
+    const report = await new UsageService(ctx, only("deeprelay")).report();
+    expect(report.providers[0]).toMatchObject({ windows: [], problem: "failed", checked_at: null });
+    expect(new Headers(requests[0]!.init.headers).get("authorization")).toBe("Bearer env-key");
+  });
+
+  it("follows subscribed rather than the billing status", async () => {
+    replies.set(endpoint, { body: { ...subscription(), subscribed: false, status: "active" } });
+    const ctx = context();
+    ctx.env["DEEPRELAY_API_KEY"] = "env-key";
+    expect((await new UsageService(ctx, only("deeprelay")).report()).providers).toEqual([]);
+  });
+
+  it("resolves an OpenCodex environment reference in its configured home", async () => {
+    const ctx = context();
+    ctx.env["OPENCODEX_HOME"] = "~/custom-ocx";
+    ctx.env["MY_DEEPRELAY_KEY"] = "resolved-key";
+    write(join(home, "custom-ocx", "config.json"), { providers: { Deeprelay: {
+      baseUrl: "https://api.deeprelay.ai", apiKey: "${MY_DEEPRELAY_KEY}",
+    } } });
+    replies.set(endpoint, { body: subscription() });
+    expect((await new UsageService(ctx, only("deeprelay")).report()).providers[0]?.problem).toBeNull();
+    expect(new Headers(requests[0]!.init.headers).get("authorization")).toBe("Bearer resolved-key");
+  });
+
+  it("never sends unrelated keys, keychain references or unresolved variables", async () => {
+    write(join(home, ".opencodex", "config.json"), { providers: {
+      wrong: { baseUrl: "https://api.deeprelay.ai.evil/v1", apiKey: "wrong-key" },
+      reference: { baseUrl: "https://api.deeprelay.ai/v1", apiKey: "keychain:Deeprelay" },
+      missing: { baseUrl: "https://api.deeprelay.ai/v1", apiKey: "${UNSET_KEY}" },
+    } });
+    expect((await new UsageService(context(), only("deeprelay")).report()).providers).toEqual([]);
+    expect(requests).toEqual([]);
+  });
+
+  it("omits invalid or unlimited meters and clamps exhausted ones", async () => {
+    const ctx = context();
+    ctx.env["DEEPRELAY_API_KEY"] = "env-key";
+    const body = subscription();
+    body.quota.output_tokens_monthly = 0;
+    body.usage.weighted_input_tokens = 1200;
+    body.usage.weekly_weighted_input_tokens = -1;
+    replies.set(endpoint, { body });
+    const windows = (await new UsageService(ctx, only("deeprelay")).report()).providers[0]!.windows;
+    expect(windows).toHaveLength(4);
+    expect(windows[0]?.used_percent).toBe(100);
+    expect(windows.some((window) => window.kind === "month" && window.scope === "Output tokens")).toBe(false);
+    expect(windows.some((window) => window.kind === "week" && window.scope === "Input tokens")).toBe(false);
+  });
+
+  it("keeps the last reading through an authorization failure without leaking an upstream error", async () => {
+    const ctx = context();
+    ctx.env["DEEPRELAY_API_KEY"] = "env-key";
+    replies.set(endpoint, { body: subscription() });
+    const service = new UsageService(ctx, only("deeprelay"));
+    await service.report();
+    now += FRESH_MS;
+    replies.set(endpoint, { status: 403, body: { message: "env-key billing scope required" } });
+    const report = await service.report();
+    expect(report.providers[0]?.problem).toBe("expired");
+    expect(report.providers[0]?.windows).toHaveLength(6);
+    expect(JSON.stringify(report)).not.toContain("env-key");
+  });
+});
+
 describe("providers", () => {
   it("lists nothing when no CLI is signed in, and asks no one", async () => {
     const report = await new UsageService(context("darwin")).report();

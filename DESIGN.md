@@ -1,5 +1,12 @@
 # Ovis Design System
 
+## DeepRelay usage
+
+DeepRelay reuses Ovis's existing subscription percentage meters, following the Codex app's
+usage and reset presentation. Monthly input, output, metered cost and searches are independent
+limits; rolling seven-day input and output have no fixed reset time. OpenCodex remains the
+credential editor. Missing readings are unavailable, never a full unused allowance.
+
 ## Pane title activity
 
 The selected pane header and split pane titles reuse the sidebar's compact status indicator,
