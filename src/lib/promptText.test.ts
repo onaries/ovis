@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import type { ConversationTurn, InteractivePrompt } from "../../shared/protocol.ts";
 import { type Language, translate } from "./i18n.ts";
-import { polledPrompt, promptWords, screenWordsToShow } from "./promptText.ts";
+import { approvalScope, polledPrompt, promptWords, screenWordsToShow } from "./promptText.ts";
 
 const inLanguage = (language: Language) => (key: string, vars?: Record<string, string | number>) => translate(language, key, vars);
 
@@ -149,5 +149,28 @@ describe("Claude's words read off the screen over its question (#2088)", () => {
   it("shows nothing for a card without them", () => {
     const { screen_words: _, ...plain } = asked;
     expect(screenWordsToShow(plain, [asking])).toBeNull();
+  });
+});
+
+describe("what an approval option grants, read off its own words (G-071)", () => {
+  const approval = (agent: string, ...labels: string[]): InteractivePrompt => ({
+    id: "p", agent, kind: "approval", title: "Allow command?", question: "Allow command?", body: "git push",
+    options: labels.map((label) => ({ label, description: null })), multi_select: false, custom_option_index: null,
+  });
+  const scopes = (prompt: InteractivePrompt) => prompt.options.map((_, index) => approvalScope(prompt, index));
+
+  it("reads Codex's, Claude's and pi's menus as they are drawn", () => {
+    expect(scopes(approval("codex", "Yes", "Yes, and don't ask again for git push", "No, and tell Codex what to do differently"))).toEqual(["once", "always", "deny"]);
+    expect(scopes(approval("codex", "Yes, proceed (y)", "Yes, and don't ask again for commands that start with curl", "No, and tell Codex what to do differently (esc)"))).toEqual(["once", "always", "deny"]);
+    expect(scopes(approval("claude", "Yes", "Yes, allow all edits this session [shift+tab]", "No, and tell Claude what to do differently (esc)"))).toEqual(["once", "always", "deny"]);
+    expect(scopes(approval("claude", "Yes", "Yes, don't ask again for `printf` commands in this project", "No"))).toEqual(["once", "always", "deny"]);
+    expect(scopes(approval("pi", "Allow once", "Always allow", "Block"))).toEqual(["once", "always", "deny"]);
+  });
+
+  it("states no scope a label does not: a lone Yes, other wording, another kind of card", () => {
+    expect(scopes(approval("codex", "Yes, proceed (y)", "No, and tell Codex what to do differently (esc)"))).toEqual([null, "deny"]);
+    expect(scopes(approval("gemini", "Yes, allow once", "Yes, allow always", "Modify with external editor", "No, suggest changes (esc)"))).toEqual(["once", "always", null, "deny"]);
+    expect(scopes(approval("codex", "Yes, and run it in the sandbox", "Yes, and don't ask again", "Abort"))).toEqual([null, "always", null]);
+    expect(scopes({ ...approval("claude", "Yes", "Yes, allow all edits this session", "No"), kind: "question" })).toEqual([null, null, null]);
   });
 });

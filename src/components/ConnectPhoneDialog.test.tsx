@@ -34,9 +34,12 @@ describe("Connect a phone on a phone", () => {
   let extraCandidates: object[];
   /** the server's pending six-digit code; minting a typed code starts a new one, as server/relay/pair-code.ts does */
   let pending: string;
+  /** the next answers of POST /api/devices/pair/start, each held until its gate opens (none: the pending code at once) */
+  let pairStarts: { code: string; gate: Promise<void> }[];
 
   beforeEach(() => {
     pending = "482913";
+    pairStarts = [];
     requests = [];
     assigned = [];
     shellMeta = false;
@@ -64,7 +67,12 @@ describe("Connect a phone on a phone", () => {
       requests.push(path);
       const expires_at = new Date(Date.now() + 600_000).toISOString();
       if (path === "/api/relay/offer") return Response.json({ url: pending === "482913" ? OFFER_URL : encodeOffer({ ...decodeOffer(OFFER_URL)!, code: pending }, APP), expires_at });
-      if (path === "/api/devices/pair/start") return Response.json({ code: pending, expires_at });
+      if (path === "/api/devices/pair/start") {
+        const held = pairStarts.shift();
+        if (held === undefined) return Response.json({ code: pending, expires_at });
+        await held.gate;
+        return Response.json({ code: held.code, expires_at });
+      }
       if (path === "/api/machines/tailnet") { await tailnetAnswer; return Response.json({ pcs: [{ name: "winvm", url: "https://winvm.tail.ts.net:8443", relay: "online", outdated: tailnetOutdated }] }); }
       if (path === "/api/machines/ssh-candidates") return Response.json({ pcs: [
         { name: "nuc12", destination: "nuc12", detail: "rise@100.127.218.1", source: "ssh_config" },
@@ -120,6 +128,23 @@ describe("Connect a phone on a phone", () => {
     expect(code.map((node) => [node.props.className, text(node)])).toEqual([["devices-code devices-code-large", "482 913"]]);
     await act(async () => { button("Show QR code").props.onClick(); });
     expect(qrCodes()).toHaveLength(1);
+  });
+
+  it("a code asked for by a dialog closed meanwhile never replaces the newer code the reopened one shows", async () => {
+    let answerOld: () => void = () => {};
+    pairStarts = [{ code: "111111", gate: new Promise<void>((resolve) => { answerOld = resolve; }) }, { code: "222222", gate: Promise.resolve() }];
+    const shown = () => renderer!.root.findAll((node) => node.type === "p" && typeof node.props.className === "string" && node.props.className.includes("devices-code")).map(text);
+    // opened: its code request is still out when the dialog closes
+    await mount(<CodeRoute pairUrl="https://workstation.example.ts.net" startAtOnce />);
+    await act(async () => { renderer!.unmount(); });
+    // reopened: the server's newer code (the one that pairs now) shows
+    await mount(<CodeRoute pairUrl="https://workstation.example.ts.net" startAtOnce />);
+    for (let flush = 0; flush < 3; flush += 1) await act(async () => {});
+    expect(shown()).toEqual(["222 222"]);
+    // the closed dialog's answer arrives last
+    await act(async () => { answerOld(); });
+    for (let flush = 0; flush < 3; flush += 1) await act(async () => {});
+    expect(shown()).toEqual(["222 222"]);
   });
 
   it("keeps the desktop's pairing code QR code up front", async () => {

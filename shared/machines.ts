@@ -14,6 +14,11 @@ export interface SshTarget {
   port?: number;
   identity_file?: string;
   session?: string;
+  herdr_socket?: string;
+  /** Socket identity of this account's own Ovis registration; reverified over SSH on every connection. */
+  own_ovis?: string;
+  /** Explicitly chosen on this PC; permits starting its configured session when absent. */
+  start_new_herdr?: boolean;
 }
 export interface Machine {
   /** Read-only identity inherited from the local herdr catalog. */
@@ -40,6 +45,11 @@ export interface Machine {
   error: string | null;
   /** Attention needed; windows_login retries, windows_start_failed waits for a startup decision. */
   action_required?: MachineAction | null;
+  /** herdr daemons found on the PC before this bridge was started */
+  found_herdr_sessions?: FoundHerdrSession[];
+  found_ovis?: FoundOvis[];
+  /** Runtime proved by the server's HerdrIdentity, absent until it answers. */
+  runtime?: "herdr" | "herdr-core";
   /** a bridge update running for this PC right now (in the background, or from its dialog) */
   updating?: MachineUpdate | null;
   /** the PC's latest roster as its server read it, with that read's order_epoch/read_seq copied unchanged */
@@ -286,7 +296,9 @@ export interface HerdrCoreFacts {
   session: string | null;
   running: boolean;
 }
-export type MachineAction = "connect" | "update_bridge" | "setup" | "bridge_conflict" | "windows_login" | "windows_start_failed";
+export interface FoundHerdrSession { socket_path: string; session?: string; label: string }
+export interface FoundOvis { socket_path: string; runtime: "herdr-core" }
+export type MachineAction = "connect" | "update_bridge" | "setup" | "bridge_conflict" | "windows_login" | "windows_start_failed" | "choose_herdr";
 /** `ovis`: the PC's own Ovis updates itself (Machine.remote_ovis); absent for a bridge this app installs */
 export interface MachineUpdate {
   /** what cancels it: DELETE /api/machines/:id/update (any update), or a setup job's cancel; empty while `queued` */
@@ -313,10 +325,13 @@ export interface MachineSettings {
    */
   set_aside?: string[];
 }
-export interface SetupRequest extends SshTarget { name?: string; machine_id?: string; update_remote?: boolean }
+export interface SetupRequest extends SshTarget { name?: string; machine_id?: string; update_remote?: boolean; start_new_herdr?: boolean }
 export type SetupPhase = "connecting" | "authentication" | "checking" | "approval" | "installing" | "starting" | "connected" | "failed" | "cancelled";
 export interface SetupChallenge { id: string; kind: "host_key" | "secret"; prompt: string }
 export interface SetupJob {
+  found_herdr_sessions?: FoundHerdrSession[];
+  found_ovis?: FoundOvis[];
+  runtime?: "herdr" | "herdr-core";
   id: string;
   machine_id: string;
   phase: SetupPhase;
@@ -423,6 +438,8 @@ export interface RemotePairingsEvent { type: "remote-pairings"; pairings: Remote
  */
 export interface BridgeHealth { ok: true; auth: HealthAuth; bridge_protocol: number; security?: SecuritySummary; web_ui?: { boot_id: string }; runtime?: "herdr" | "herdr-core"; accepted?: boolean; /** a driving owner only, as on the whole answer */ herdr_runtime?: HerdrRuntimeFacts }
 export interface BridgeIdentity {
+  /** Only on an authenticated /api/bridge?discover=herdr request. */
+  found_herdr_sessions?: FoundHerdrSession[];
   pid: number;
   managed_remote: boolean;
   bridge_protocol: number;

@@ -15,6 +15,7 @@ import { SETTING_SCOPE, telemetrySettingsSnapshot, alertPrefs, CHAT_FONT_MAX, CH
 import { applyToDocument, loadSettings, pcLoadOn, saveSettings } from "./settings.ts";
 import { sanitizeSettings as oldSanitizeSettings, saveSettings as oldSaveSettings } from "./settings.legacy-fixture.ts";
 import { themeFor } from "./themeFor.ts";
+import { readStoredAppearance, storedAppearance } from "./themeBoot.ts";
 
 describe("saved theme migration", () => {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -494,15 +495,14 @@ it("ignores what was saved for the rows Settings no longer has", () => {
   expect(telemetrySettingsSnapshot(settings).alertInApp).toBe(true);
 });
 
-it("shows each PC's load while two or more PCs are connected, until this device chooses", () => {
+it("shows no PC's load until this device chooses it, however many PCs are connected", () => {
   const pc = (state: string) => ({ state });
   expect(sanitizeSettings({}).pcLoad).toBeNull();
   for (const pcLoad of ["true", 1, null]) expect(sanitizeSettings({ pcLoad }).pcLoad).toBeNull();
   expect(sanitizeSettings({ pcLoad: false }).pcLoad).toBe(false);
-  // unchosen: a second PC that is not connected does not count
+  // unchosen: off, also with two PCs connected
   expect(pcLoadOn({ pcLoad: null }, [pc("connected")])).toBe(false);
-  expect(pcLoadOn({ pcLoad: null }, [pc("connected"), pc("disconnected")])).toBe(false);
-  expect(pcLoadOn({ pcLoad: null }, [pc("connected"), pc("connected")])).toBe(true);
+  expect(pcLoadOn({ pcLoad: null }, [pc("connected"), pc("connected")])).toBe(false);
   // a choice holds whatever the roster says
   expect(pcLoadOn({ pcLoad: true }, [pc("connected")])).toBe(true);
   expect(pcLoadOn({ pcLoad: false }, [pc("connected"), pc("connected")])).toBe(false);
@@ -807,6 +807,15 @@ describe("chat font size", () => {
     expect(sanitizeSettings({ terminalFontSize: 15 }).chatFontSize).toBeNull();
   });
 
+});
+
+describe("queued messages", () => {
+  it("sends queued messages by themselves unless that was turned off", () => {
+    expect(DEFAULT_SETTINGS.autoSendQueued).toBe(true);
+    expect(sanitizeSettings({}).autoSendQueued).toBe(true);
+    expect(sanitizeSettings({ autoSendQueued: false }).autoSendQueued).toBe(false);
+    expect(sanitizeSettings({ autoSendQueued: "yes" }).autoSendQueued).toBe(true);
+  });
 });
 
 describe("chat width", () => {
@@ -1351,6 +1360,11 @@ it("sanitizes input modes and shortcut overrides without accepting arbitrary com
   expect(sanitizeSettings({ terminalInputMode: "bad" }).terminalInputMode).toBe("auto");
   expect(sanitizeSettings({ terminalInputMode: "line" }).terminalInputMode).toBe("line");
   expect(sanitizeSettings({ shortcutOverrides: { palette: "p", settings: null, voice: "x", unknown: "x", "next-pane": "rm -rf" } }).shortcutOverrides).toEqual({ palette: "p", settings: null });
+});
+
+it("resets Theme to the theme a fresh device starts on, so Reset never shows on a fresh device or turns a light OS dark", () => {
+  const fresh = storedAppearance(readStoredAppearance(() => ({ getItem: () => null })));
+  expect(DEFAULT_SETTINGS.theme).toBe(fresh.theme);
 });
 
 describe("key bar settings", () => {

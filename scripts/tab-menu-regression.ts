@@ -97,6 +97,10 @@ async function checkDesktop(browser: Browser, origin: string, first: string, sec
     const paneButton = frame(page, first).locator(".pane-frame-menu");
     assert.equal(await paneButton.evaluate((node) => getComputedStyle(node).opacity), "0");
     await frame(page, first).focus();
+    // the title is the pane's first Tab stop (Enter or Space on it focuses the pane's input), the menu the next
+    await page.keyboard.press("Tab");
+    assert.equal(await frame(page, first).locator('.pane-frame-title [role="button"]').evaluate((node) => node === document.activeElement), true, "Tab reaches the pane's title first");
+    assert.equal(await paneButton.evaluate((node) => getComputedStyle(node).opacity), "0", "the title's focus leaves the menu button hidden");
     await page.keyboard.press("Tab");
     assert.equal(await paneButton.evaluate((node) => node === document.activeElement), true, "Tab reaches the pane menu");
     assert.equal(await paneButton.evaluate((node) => getComputedStyle(node).opacity), "1", "keyboard focus reveals the button");
@@ -392,12 +396,14 @@ async function checkDesktop(browser: Browser, origin: string, first: string, sec
     await inactive.waitFor({ state: "detached" });
     await currentPane(page, first);
     assert.equal(await strip.getByRole("tab").count(), 1, "closing an inactive tab preserves the original tab");
-    // the header's row is a browser's tab strip: a hovered resting tab's close closes it alone, at once
+    // the header's row is a browser's tab strip: only the open tab draws its close, even under the pointer, and a
+    // resting tab's middle click closes it alone, at once, as a browser's does
     const closable = await tabCreate({ workspaceId: nativeTab.workspace_id, label: "close-x" });
     const closableTab = page.getByRole("tab", { name: "close-x", exact: true });
     await closableTab.hover();
+    assert.equal(await strip.locator(".tab-strip-item:not(.is-active)").filter({ has: closableTab }).locator(".tab-strip-close:visible").count(), 0, "a hovered resting tab draws no close");
     const closingByX = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/tab/close"));
-    await strip.locator(".tab-strip-item:not(.is-active)").filter({ has: closableTab }).getByRole("button", { name: "Close close-x", exact: true }).click();
+    await closableTab.click({ button: "middle" });
     assert.deepEqual((await closingByX).request().postDataJSON(), { tab_id: closable.tab.tab_id });
     await closableTab.waitFor({ state: "detached" });
     assert.equal(await tab.getAttribute("aria-selected"), "true", "closing another tab by its close keeps the open tab");
@@ -611,9 +617,24 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
     const at = all.findIndex((item) => item === "canvas-first" || item === "canvas-second");
     const phoneItems = all.slice(at);
     assert.deepEqual(phoneItems.slice(0, 2).sort(), ["canvas-first", "canvas-second"], "the split tab's panes lead its actions in More on a phone");
-    assert.deepEqual(phoneItems.slice(-2), ["Rename tab", "Close tab"], "the tab's own actions close More; New tab is the title list's");
-    assert.deepEqual(phoneItems.slice(2, -2).filter((item) => item !== "Clear pane name"),
-      ["Rename pane", "Close pane"], "the open pane's actions, less split and zoom, sit between its panes and the tab's");
+    // the pane's and the tab's actions fold into More's last item, opening a sheet of their own (G-143)
+    assert.deepEqual(phoneItems.slice(2), ["Pane and tab…"], "More ends in Pane and tab… on a phone");
+    const paneSheet = page.getByRole("dialog", { name: "Pane and tab…", exact: true });
+    const openPaneSheet = async (): Promise<void> => {
+      await tabSheet.getByRole("button", { name: "Pane and tab…", exact: true }).tap();
+      await paneSheet.waitFor();
+      await sheetsSettled(page);
+    };
+    await sheetsSettled(page);
+    await openPaneSheet();
+    const actions = await paneSheet.locator(".row-sheet-item .row-sheet-label").allTextContents();
+    assert.deepEqual(actions.slice(-2), ["Rename tab", "Close tab"], "the tab's own actions close the list; New tab is the title list's");
+    assert.deepEqual(actions.slice(0, -2).filter((item) => item !== "Clear pane name"),
+      ["Rename pane", "Close pane"], "the open pane's actions, less split and zoom, come before the tab's");
+    await paneSheet.getByRole("button", { name: "Cancel", exact: true }).tap();
+    await paneSheet.waitFor({ state: "detached" });
+    await touchMenu.tap();
+    await tabSheet.waitFor();
     assert.equal(await tabSheet.getByRole("button", { name: "canvas-first", exact: true }).getAttribute("aria-current"), "true", "the open pane is marked");
     // More is a phone's way to the other pane, and picking one leaves herdr's layout alone.
     await sheetsSettled(page);
@@ -631,7 +652,9 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
     await sheetsSettled(page);
     const sheetBox = await rect(tabSheet, "the phone's More");
     assert.ok(sheetBox.top >= 0 && sheetBox.bottom <= viewport.height + 1);
-    await tabSheet.getByRole("button", { name: "Rename tab", exact: true }).tap();
+    // the item names the tab it renames beside its words (the sheet's hint)
+    await openPaneSheet();
+    await paneSheet.getByRole("button", { name: /^Rename tab/ }).tap();
     const name = page.getByRole("textbox", { name: "Tab name", exact: true });
     await name.waitFor();
     await page.keyboard.press("Escape");
@@ -661,25 +684,27 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
     await touchMenu.tap();
     await tabSheet.waitFor();
     await sheetsSettled(page);
-    const cancel = tabSheet.getByRole("button", { name: "Cancel", exact: true });
+    await openPaneSheet();
+    const cancel = paneSheet.getByRole("button", { name: "Cancel", exact: true });
     assert.ok((await rect(cancel, "Cancel")).bottom <= viewport.height + 1, "Cancel remains reachable");
-    await tabSheet.locator(".row-sheet-items").evaluate((node) => { node.scrollTop = node.scrollHeight; });
-    const close = tabSheet.getByRole("button", { name: "Close tab", exact: true });
+    await paneSheet.locator(".row-sheet-items").evaluate((node) => { node.scrollTop = node.scrollHeight; });
+    const close = paneSheet.getByRole("button", { name: "Close tab", exact: true });
     assert.ok((await rect(close, "Close tab")).bottom <= (await rect(cancel, "Cancel")).top + 1, "the menu's last action is reachable after scrolling");
     await screenshot(page, `canvas-phone-${viewport.width}`);
     await cancel.tap();
-    await tabSheet.waitFor({ state: "detached" });
+    await paneSheet.waitFor({ state: "detached" });
     // A zoom originating in another client must be reversible from the phone.
     // The phone hears of it from its pushed roster; a sheet opened before that came lists Zoom, so
     // the sheet is opened again until it offers Unzoom.
     await paneZoom(first, "on");
-    const unzoom = tabSheet.getByRole("button", { name: "Unzoom pane", exact: true });
+    const unzoom = paneSheet.getByRole("button", { name: "Unzoom pane", exact: true });
     await until(async () => {
       await touchMenu.tap();
       await tabSheet.waitFor();
+      await openPaneSheet();
       if (await unzoom.isVisible()) return true;
       await cancel.tap();
-      await tabSheet.waitFor({ state: "detached" });
+      await paneSheet.waitFor({ state: "detached" });
       return false;
     }, "the phone's More offers Unzoom for a zoom made elsewhere");
     await sheetsSettled(page);
@@ -687,18 +712,21 @@ async function checkPhone(browser: Browser, origin: string, first: string, secon
     const unzoomed = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/pane/zoom"));
     await unzoom.tap();
     assert.equal((await unzoomed).status(), 200);
-    await tabSheet.waitFor({ state: "detached" });
+    await paneSheet.waitFor({ state: "detached" });
     // The HTTP acknowledgement can precede the unzoomed browser snapshot. While the menu
     // still offers Unzoom, App redirects a sibling pick back to the zoomed pane. More's items are
     // read when it renders, so it is opened again until the snapshot has taken Unzoom away.
     await until(async () => {
       await touchMenu.tap();
       await tabSheet.waitFor();
-      if (!(await unzoom.isVisible())) return true;
+      await openPaneSheet();
+      const gone = !(await unzoom.isVisible());
       await cancel.tap();
-      await tabSheet.waitFor({ state: "detached" });
-      return false;
+      await paneSheet.waitFor({ state: "detached" });
+      return gone;
     }, "the phone's More stops offering Unzoom once the zoom is gone");
+    await touchMenu.tap();
+    await tabSheet.waitFor();
     await sheetsSettled(page);
     await tabSheet.getByRole("button", { name: "canvas-second", exact: true }).tap();
     await currentPane(page, second);

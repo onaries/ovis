@@ -374,6 +374,58 @@ it("holds a message for Send now on bridges that list pending-hold, and queues i
   }
 });
 
+// Alt+Enter's hold is only ever held: a PC that cannot hold one refuses it rather than queuing it to go on its own
+it("keeps capacity retry consent separate from held delivery", async () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  try {
+    socket.receive(snapshot(["submit"]));
+    expect(await client.submit("w1:p1", "continue", "continue", false, "immediate", undefined, false, undefined, undefined, false, false, true))
+      .toMatchObject({ ok: false, code: "unsupported" });
+    expect(submissions(socket)).toEqual([]);
+    socket.receive(snapshot(["submit", "codex-capacity-retry"]));
+    const sent = socket.nextSubmission();
+    const answer = client.submit("w1:p1", "continue", "continue", false, "immediate", undefined, false, undefined, undefined, false, false, true);
+    const frame = await sent;
+    expect(submissions(socket)).toEqual([{ type: "submit", id: frame.id, pane_id: "w1:p1", text: "continue", payload: "continue", capacity_retry: true }]);
+    socket.receive({ type: "submit-result", id: frame.id, pane_id: "w1:p1", ok: true });
+    expect(await answer).toEqual({ ok: true });
+  } finally { client.close(); }
+});
+
+it("refuses a hold-only message on bridges without pending-hold, writing nothing", async () => {
+  for (const features of [["submit", "pending-input"], ["submit"], []]) {
+    const client = new HerdrSocket("ws://test/ws");
+    client.connect();
+    const socket = FakeSocket.last;
+    socket.open();
+    // a hold pressed before the snapshot is decided once it says what the bridge takes
+    const result = client.submit("w1:p1", "keep this draft", "keep this draft", false, "hold", undefined, false, undefined, undefined, false, true);
+    socket.receive(snapshot(features));
+    let settled = false;
+    void result!.then(() => { settled = true; });
+    for (let turn = 0; turn < 10 && !settled && submissions(socket).length === 0; turn++) await Promise.resolve();
+    // checked before the answer is awaited: a hold sent as a queued message would wait for a receipt that never comes
+    expect(submissions(socket)).toEqual([]);
+    expect(await result).toMatchObject({ ok: false, code: "pending_hold_unsupported" });
+    expect(socket.sent.filter((frame) => JSON.stringify(frame).includes("keep this draft"))).toEqual([]);
+    client.close();
+  }
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot(["submit", "pending-input", "pending-hold"]));
+  const result = client.submit("w1:p1", "later", "later", false, "hold", undefined, false, undefined, undefined, false, true);
+  for (let turn = 0; turn < 10 && submissions(socket).length === 0; turn++) await Promise.resolve();
+  expect(submissions(socket)).toEqual([{ type: "submit", id: 1, pane_id: "w1:p1", text: "later", payload: "later", delivery: "hold" }]);
+  socket.receive({ type: "submit-result", id: 1, pane_id: "w1:p1", ok: false, code: "agent_not_ready", message: "fixture" });
+  await result;
+  client.close();
+});
+
 it("decides a hold once the snapshot arrives, so a Send before it still holds", async () => {
   const client = new HerdrSocket("ws://test/ws");
   client.connect();

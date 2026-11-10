@@ -23,6 +23,12 @@ it("leaves the folder out when the title or the PC already says its name", () =>
   expect(headerCrumb({ ...base, cwd: "/home/me/dev/Checkout-API" }).folder).toBe("Checkout-API");
 });
 
+it("does not repeat the workspace when the pane title is the workspace", () => {
+  const crumb = headerCrumb({ ...base, title: "checkout-api", cwd: "/home/me/checkout-api" });
+  expect(crumb.fullContext).toBe("workstation · checkout-api · /home/me/checkout-api");
+  expect(crumb.tooltip).toBe(crumb.fullContext);
+});
+
 it("counts the PC name as said only while the line shows it", () => {
   const devbox = { ...base, machine: "devbox", cwd: "/home/me/src/devbox" };
   // one PC: its name is not on the line, so the folder is the only place that says "devbox"
@@ -45,16 +51,16 @@ it("has no folder and no path for a pane herdr reports no folder for", () => {
     const crumb = headerCrumb({ ...base, cwd });
     expect(crumb.folder).toBeNull();
     expect(crumb.path).toBeNull();
-    expect(crumb.tooltip).toBe("checkout-api › Idempotent payments");
+    expect(crumb.tooltip).toBe("workstation · checkout-api · Idempotent payments");
   }
 });
 
 it("keeps the whole path for the tooltip and the menu, whatever the line shows", () => {
   const shown = headerCrumb({ ...base, cwd: "/srv/checkout/worktrees/retry-flag" });
   expect(shown.path).toBe("/srv/checkout/worktrees/retry-flag");
-  expect(shown.tooltip).toBe("checkout-api › Idempotent payments · /srv/checkout/worktrees/retry-flag");
+  expect(shown.tooltip).toBe("workstation · checkout-api · Idempotent payments · /srv/checkout/worktrees/retry-flag");
   const hidden = headerCrumb({ ...base, cwd: "/tmp/herdr-demo/checkout-api" });
-  expect(hidden.tooltip).toBe("checkout-api › Idempotent payments · /tmp/herdr-demo/checkout-api");
+  expect(hidden.tooltip).toBe("workstation · checkout-api · Idempotent payments · /tmp/herdr-demo/checkout-api");
   expect(headerCrumb({ ...base, cwd: "/" }).folder).toBe("/");
 });
 
@@ -62,7 +68,7 @@ it("keeps a folder name that ends in a space as it is", () => {
   const crumb = headerCrumb({ ...base, cwd: "/repo/branch " });
   expect(crumb.folder).toBe("branch ");
   expect(crumb.path).toBe("/repo/branch ");
-  expect(crumb.tooltip).toBe("checkout-api › Idempotent payments · /repo/branch ");
+  expect(crumb.tooltip).toBe("workstation · checkout-api · Idempotent payments · /repo/branch ");
   // "branch " is not the folder "branch": the title does not say it
   expect(headerCrumb({ ...base, title: "branch", cwd: "/repo/branch " }).folder).toBe("branch ");
 });

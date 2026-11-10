@@ -44,7 +44,7 @@ export async function checkDefaultView(browser: Browser, origin: string): Promis
     await page.waitForFunction(() => document.querySelector(".view-switch button[aria-pressed='true']")?.getAttribute("title")?.startsWith("Chat transcript") === true);
     assert.equal(await page.evaluate((pane) => localStorage.getItem(`ovis:view:local:${pane}`), two), null, "what a pane remembered gives way to the choice");
     // a pane switched by hand keeps its lens until the choice changes again
-    await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+    await page.getByTitle(/^Live terminal \(.+\)$/).click();
     await page.locator(`.pane-select[title^="${one} —"]`).click();
     await page.locator(`.pane-select[title^="${two} —"]`).click();
     await page.waitForFunction(() => document.querySelector(".view-switch button[aria-pressed='true']")?.getAttribute("title")?.startsWith("Live terminal") === true);

@@ -245,8 +245,8 @@ try {
     previousMask = 0;
     assert.equal(await page.locator('[data-key="Alt"]').getAttribute("aria-pressed"), "false");
     // Leaving the terminal lens clears held state on the same pane.
-    await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).tap();
-    await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).tap();
+    await page.getByTitle(/^Chat transcript \(.+\)$/).tap();
+    await page.getByTitle(/^Live terminal \(.+\)$/).tap();
     await until(async () => !(await ctrl.isDisabled()), "terminal lens ready again");
     for (const key of ["Control", "Alt", "Shift"]) assert.equal(await page.locator(`[data-key="${key}"]`).getAttribute("aria-pressed"), "false");
     previousMask = 0;

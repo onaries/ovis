@@ -55,6 +55,6 @@
   font-family: var(--font-mono);
   font-size: var(--fs-pairing);
   font-weight: var(--fw-semibold);
-  letter-spacing: 0.12em;
+  letter-spacing: var(--tracking-code);
   user-select: all;
 }

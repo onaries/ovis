@@ -1,7 +1,8 @@
 /*
- * The hosted shell's screens (RelayShell.tsx): the token gate's frame (AccessGate.css), one card
- * centered on the base surface, one sidebar wide, no entrance animation. Only tokens from the
- * styles.css :root block; the buttons are the system's .btn family.
+ * The hosted shell's screens (RelayShell.tsx, RelayShellScreens.tsx): the sign-in is one centred
+ * 368px (--relay-signin-w) unboxed column on --bg; pairing and recovery screens sit in a bordered
+ * panel card of the same width. Only tokens from the styles.css :root block; buttons and fields use
+ * the system's .btn and .input primitives.
  */
 
 .relay-shell-screen {
@@ -10,8 +11,8 @@
   min-height: 100%;
   min-height: 100dvh;
   min-height: var(--app-height, 100dvh);
-  padding: calc(var(--space-4) + env(safe-area-inset-top, 0px)) calc(var(--space-4) + env(safe-area-inset-right, 0px))
-    calc(var(--space-4) + env(safe-area-inset-bottom, 0px)) calc(var(--space-4) + env(safe-area-inset-left, 0px));
+  padding: calc(var(--space-6) + env(safe-area-inset-top, 0px)) calc(var(--space-4) + env(safe-area-inset-right, 0px))
+    calc(var(--space-6) + env(safe-area-inset-bottom, 0px)) calc(var(--space-4) + env(safe-area-inset-left, 0px));
   background: var(--bg);
 }
 
@@ -19,11 +20,20 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  width: min(100%, calc(var(--sidebar-w) + 2 * var(--space-6)));
+  width: min(100%, var(--relay-signin-w));
+  min-width: 0;
   padding: var(--space-6);
   background: var(--bg-panel);
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-md);
+}
+
+/* Sign-in is an unboxed 368px column directly on --bg: no card border, no panel background, no padding */
+.relay-shell-screen > .relay-shell.account-centered {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .relay-shell-mark {
@@ -36,11 +46,19 @@
 .relay-shell-title {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-lg);
-  font-weight: var(--fw-bold);
+  font-weight: var(--fw-semibold);
   letter-spacing: var(--tracking-tight);
   line-height: var(--lh-tight);
   color: var(--text-strong);
   overflow-wrap: anywhere;
+}
+
+.relay-shell-signin-title {
+  margin: 0 0 var(--space-6);
+  font-size: var(--fs-display);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-display);
+  line-height: var(--lh-tight);
 }
 
 .relay-shell-copy {
@@ -48,6 +66,7 @@
   font-size: var(--fs-md);
   line-height: var(--lh-base);
   color: var(--text-dim);
+  text-wrap: pretty;
 }
 
 /* the saved PCs: one row each, the whole row the link, a hairline between rows */
@@ -71,8 +90,10 @@
   text-decoration: none;
 }
 
-.relay-shell-pc:hover {
-  color: var(--accent);
+@media (hover: hover) {
+  .relay-shell-pc:hover {
+    color: var(--accent);
+  }
 }
 
 .relay-shell-pc-name {
@@ -97,6 +118,14 @@
 
 .relay-shell-actions .btn {
   width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: var(--touch-target);
+  padding-block: var(--space-2);
+  line-height: var(--lh-tight);
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .relay-shell-wait {
@@ -110,8 +139,17 @@
   margin-top: var(--space-3);
 }
 
+.relay-shell-command-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
 .relay-shell-command {
-  margin: var(--space-2) 0 0;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
   padding: var(--space-2) var(--space-3);
   background: var(--bg-input);
   border: var(--hairline) solid var(--border);
@@ -122,6 +160,11 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: all;
+}
+
+.relay-shell-copy-btn {
+  flex: none;
+  min-width: calc(var(--space-8) * 2 + var(--space-2));
 }
 
 .relay-shell-detail {
@@ -145,9 +188,9 @@
   margin: var(--space-4) 0;
   font-family: var(--font-mono);
   font-size: var(--fs-pairing);
-  font-weight: var(--fw-bold);
+  font-weight: var(--fw-semibold);
   font-variant-numeric: tabular-nums;
-  letter-spacing: var(--tracking-caps);
+  letter-spacing: var(--tracking-code);
   text-align: center;
   color: var(--text-strong);
 }
@@ -170,7 +213,7 @@
   margin: var(--space-1) 0 var(--space-3);
 }
 
-/* Pair with a code: one wide field for the code, spaced as the PC draws it */
+/* Pair with a code / typed digits: visible label and .input field */
 .relay-shell-code-form {
   margin-top: var(--space-3);
   display: flex;
@@ -178,13 +221,35 @@
   gap: var(--space-2);
 }
 
+.relay-shell-field-label {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-strong);
+  text-align: start;
+}
+
+.input.relay-shell-code-input,
 .relay-shell-code-input {
   width: 100%;
+  height: var(--touch-target);
+  min-height: var(--touch-target);
+  padding: 0 var(--space-3);
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-strong);
   font-family: var(--font-mono);
-  font-size: var(--fs-xl);
-  letter-spacing: 0.12em;
+  font-size: var(--fs-input);
+  letter-spacing: var(--tracking-code);
   text-align: center;
   text-transform: uppercase;
+}
+
+.input.relay-shell-code-input:focus-visible,
+.relay-shell-code-input:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
 }
 
 /* the ID a typed code found, in the groups the PC draws it in under its code */
@@ -192,16 +257,7 @@
   margin: var(--space-4) 0;
 }
 
-/* QR code and pairing code, for a device without an account: folded under the sign-in */
-.relay-shell-other-ways {
-  margin-top: var(--space-4);
-}
-
-.relay-shell-other-ways > p {
-  margin-top: var(--space-2);
-}
-
-.relay-shell-other-ways > summary {
-  cursor: pointer;
-  color: var(--text-dim);
+/* under the hairline: the QR route ghost button */
+.relay-shell-sign-in-links {
+  margin: 0;
 }

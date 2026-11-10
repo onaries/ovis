@@ -1,12 +1,13 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { UpdateStatus } from "../../shared/update.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
+import * as herdrUpdate from "../lib/herdrUpdate.ts";
 import { SettingsBare } from "./SettingsControls.tsx";
-import { UpdateControls } from "./UpdateControls.tsx";
+import { HerdrUpdateControls, UpdateControls, UpdateNotice } from "./UpdateControls.tsx";
 
 Object.assign(globalThis, { __APP_VERSION__: "0.4.22" });
 
@@ -21,12 +22,12 @@ const updates = (status: UpdateStatus): UpdatesModel => ({
   request: async () => undefined, failure: null, offered: null,
 } as unknown as UpdatesModel);
 
-function render(bare: boolean): string {
+function render(bare: boolean, model = updates(blocked)): string {
   const saved = Object.getOwnPropertyDescriptor(navigator, "languages");
   Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
   try {
     return renderToStaticMarkup(createElement(SettingsProvider, null,
-      createElement(SettingsBare.Provider, { value: bare }, createElement(UpdateControls, { updates: updates(blocked) }))));
+      createElement(SettingsBare.Provider, { value: bare }, createElement(UpdateControls, { updates: model }))));
   } finally {
     if (saved) Object.defineProperty(navigator, "languages", saved);
     else Reflect.deleteProperty(navigator, "languages");
@@ -47,5 +48,94 @@ describe("the Updates section's heading", () => {
     const shown = heading(render(false));
     expect(shown).not.toBe("");
     expect(shown).not.toContain("visually-hidden");
+  });
+});
+
+// the offer line closes for its release on this device (G-102), as the done line does, and offers the next one again
+describe("the update offer line", () => {
+  const offer = (revision: string, closed: string | null, model?: Partial<UpdatesModel>): string => {
+    const saved = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: { getItem: (key: string) => key === "ovis:update-offer-closed" ? closed : null } } });
+    try {
+      const status = { ...blocked, blocked_reason: null, available: true, latest_version: "0.4.23", latest_revision: revision };
+      return renderToStaticMarkup(createElement(SettingsProvider, null,
+        createElement(UpdateNotice, { updates: { ...updates(status), ...model }, onOpen: () => undefined })));
+    } finally {
+      if (saved) Object.defineProperty(globalThis, "window", saved);
+      else Reflect.deleteProperty(globalThis, "window");
+      if (languages) Object.defineProperty(navigator, "languages", languages);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
+  };
+
+  it("can be closed, and stays closed for that release only", () => {
+    expect(offer("aaaa111", null)).toContain('aria-label="Dismiss"');
+    expect(offer("aaaa111", "aaaa111")).toBe("");
+    expect(offer("bbbb222", "aaaa111")).toContain("Ovis v0.4.23 is available.");
+  });
+
+  it("keeps a failed install on the line, with no Close", () => {
+    const html = offer("aaaa111", "aaaa111", { error: "The release server could not be reached." });
+    expect(html).toContain("The update could not be installed.");
+    expect(html).not.toContain('aria-label="Dismiss"');
+  });
+});
+
+describe("update failure announcements", () => {
+  it.each(["request", "server", "offer"] as const)("announces a %s failure beside its recovery controls", (source) => {
+    const model = updates({ ...blocked, blocked_reason: null });
+    if (source === "request") model.error = "The release server could not be reached.";
+    if (source === "server") model.status = { ...blocked, error: "The downloaded release could not be verified." };
+    if (source === "offer") model.failure = "offer-changed";
+    const html = render(true, model);
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("Check for updates");
+  });
+
+  it("keeps an ordinary update check polite", () => {
+    const html = render(true, { ...updates({ ...blocked, blocked_reason: null }), busy: true });
+    expect(html).not.toContain('role="alert"');
+    expect(html).toContain('role="status"');
+  });
+
+  it.each(["request", "output"] as const)("announces a runtime update %s failure", (source) => {
+    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    const hook = spyOn(herdrUpdate, "useHerdrUpdate").mockReturnValue({
+      status: { supported: true, phase: source === "output" ? "error" : "idle", server_version: "1.0", binary_version: "1.0", stale: false, output: source === "output" ? "Download failed" : null, finished_at: null },
+      error: source === "request" ? "The update request was refused" : null,
+      busy: false, request: async () => undefined,
+    });
+    try {
+      const html = renderToStaticMarkup(createElement(SettingsProvider, null,
+        createElement(HerdrUpdateControls, { enabled: true, herdrVersion: "1.0" })));
+      expect(html).toContain('role="alert"');
+      expect(html).toContain(source === "request" ? "The update request was refused" : "Download failed");
+    } finally {
+      hook.mockRestore();
+      if (languages) Object.defineProperty(navigator, "languages", languages);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
+  });
+
+  it.each([true, false])("announces a runtime update that failed without output (bare %p)", (bare) => {
+    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    const hook = spyOn(herdrUpdate, "useHerdrUpdate").mockReturnValue({
+      status: { supported: true, phase: "error", server_version: "1.0", binary_version: "1.0", stale: false, output: null, finished_at: null },
+      error: null, busy: false, request: async () => undefined,
+    });
+    try {
+      const html = renderToStaticMarkup(createElement(SettingsProvider, null,
+        createElement(SettingsBare.Provider, { value: bare }, createElement(HerdrUpdateControls, { enabled: true, herdrVersion: "1.0" }))));
+      expect(html).toContain('role="alert"');
+      expect(html).toContain("Update herdr");
+    } finally {
+      hook.mockRestore();
+      if (languages) Object.defineProperty(navigator, "languages", languages);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
   });
 });

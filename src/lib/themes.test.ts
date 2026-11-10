@@ -42,6 +42,7 @@ describe("theme lookups", () => {
       "bg-elevated": "#0a0a0a",
       "bg-hover": "#161616",
       "bg-input": "#000000",
+      "notice-tint": "#1b150c",
       border: "#59628c",
       "border-strong": "#5a638d",
       scrim: "rgba(0, 0, 0, 0.5)",

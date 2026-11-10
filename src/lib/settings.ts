@@ -16,7 +16,7 @@ import { fontScale, sanitizeUiFontSize, uiFontStack } from "./typography.ts";
 import { sanitizeKeyBarExtras, type KeyBarExtra } from "./keys.ts";
 import { themeFor } from "./themeFor.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems, sanitizeKeyBarItems, type KeyBarItem } from "./keyBar.ts";
-import { applyThemeEntry, DARK_QUERY, readStoredAppearance, resolveTheme, sanitizeAppearance, SETTINGS_STORAGE_KEY, THEMES_STORAGE_KEY, type ResolvedTheme, type ThemeSetting } from "./themeBoot.ts";
+import { applyThemeEntry, DARK_QUERY, defaultThemeSetting, readStoredAppearance, resolveTheme, sanitizeAppearance, SETTINGS_STORAGE_KEY, THEMES_STORAGE_KEY, type ResolvedTheme, type ThemeSetting } from "./themeBoot.ts";
 
 export { resolveTheme };
 export type { ResolvedTheme, ThemeSetting };
@@ -98,8 +98,8 @@ export interface Settings {
   foldHelpers: boolean;
   /** each workspace's agents listed under its row in the PCs list (components/Sidebar.tsx), a PC > workspace > agent tree; off until chosen */
   sidebarAgentTree: boolean;
-  /** CPU, memory and the fullest disk under each open PC in the sidebar (components/MachineStats.tsx); null until
-   *  chosen on this device, which shows it while two or more PCs are connected (pcLoadOn) */
+  /** the selected PC's CPU, memory and fullest disk in the status bar (components/MachineStats.tsx PcLoadStatus); null until
+   *  chosen on this device, which keeps it off (pcLoadOn) */
   pcLoad: boolean | null;
   /** The Agents list's order. Activity is display-only: herdr's own order never changes. */
   agentOrder: AgentOrder;
@@ -448,7 +448,8 @@ export const DEFAULT_SETTINGS: Settings = {
   keyBarExpanded: false,
   shortcutOverrides: {},
   herdrPrefixKeys: false,
-  theme: "dark",
+  // the startup default (themeBoot.ts defaultThemeSetting): Reset puts back what a fresh device is drawn in
+  theme: "system",
   density: "comfortable",
   sidebarRows: "one",
   sidebarFilter: false,
@@ -997,9 +998,10 @@ function coarsePointer(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
 }
 
-/** Whether the sidebar shows each open PC's load: as chosen on this device, else while two or more PCs are connected. */
-export function pcLoadOn(settings: Pick<Settings, "pcLoad">, machines: readonly { state: string }[]): boolean {
-  return settings.pcLoad ?? machines.filter((machine) => machine.state === "connected").length >= 2;
+/** Whether the status bar shows the selected PC's load: as chosen on this device, else off. */
+export function pcLoadOn(settings: Pick<Settings, "pcLoad">, _machines: readonly { state: string }[]): boolean {
+  // off until chosen in Settings: the owner judged each PC's CPU, memory and disk line not needed by default
+  return settings.pcLoad ?? false;
 }
 
 /** Whether Enter (Return) sends from the composer: the device's choice, else not on a touch screen. */
@@ -1010,7 +1012,8 @@ export function enterSendsOn(settings: Pick<Settings, "enterSends">, touch: bool
 export function loadSettings(): Settings {
   // read as the page's boot script reads them (themeBoot.ts), so React starts on the row the first frame showed
   const stored = readStoredAppearance(() => window.localStorage);
-  const settings = stored.main === null ? DEFAULT_SETTINGS : sanitizeSettings(stored.main.value);
+  // no main record: the same theme the boot script draws (the hosted shell follows the system)
+  const settings = stored.main === null ? { ...DEFAULT_SETTINGS, theme: defaultThemeSetting() } : sanitizeSettings(stored.main.value);
   const merged = stored.themes === null ? settings : sanitizeSettings({ ...settings, ...stored.themes });
   return { ...merged, enterSends: readEnterSends(merged.enterSends), uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap(), sidebarFilter: readSidebarFilter(), pcLoad: readPcLoad(), voiceEngine: readVoiceEngine(), ...readAgentGroups(), ...readFileFont(), composerArtifacts: readComposerArtifacts(),
     expandThinking: readChatFold(EXPAND_THINKING_STORAGE_KEY, DEFAULT_SETTINGS.expandThinking), foldWork: readChatFold(FOLD_WORK_STORAGE_KEY, DEFAULT_SETTINGS.foldWork),

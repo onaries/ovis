@@ -14,7 +14,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { win32 } from "node:path";
-import { REMOTE_BUNDLE_VERSION, type SshTarget } from "../shared/machines.ts";
+import { REMOTE_BUNDLE_VERSION, type FoundHerdrSession, type SshTarget } from "../shared/machines.ts";
+import { parseFoundHerdrSessions, validHerdrSocket } from "./herdr-discovery.ts";
 import type { BridgeDescriptor } from "./bridge.ts";
 import { shellQuote } from "./machine-security.ts";
 import { bundleFile, type InstallStage } from "./remote-bundle.ts";
@@ -88,8 +89,10 @@ export interface HostInspection {
   /** this bundle version's runtime directory and the bridge registry, as absolute paths on the PC */
   runtimeDir: string;
   registryDir: string;
+  /** A unique POSIX startup attempt's result, never shared with an earlier attempt. */
+  startupResult?: string;
 }
-export interface StartOptions { session?: string; herdrPath: string; inspection: HostInspection; headless?: boolean }
+export interface StartOptions { session?: string; herdrPath: string; inspection: HostInspection; headless?: boolean; herdr_socket?: string; start_new_herdr?: boolean }
 /**
  * The Windows lock's stable reclaim prefix. It is ASCII-safe even when the state directory,
  * destination or account is not. The state directory and target outlive a restart (a PID does
@@ -122,7 +125,7 @@ export interface RemoteHost {
   /** the words the approval list uses for the runtime bundle */
   readonly bundleDescription: string;
   readonly logHint: string;
-  inspect(ssh: SshConnection, session?: string): Promise<HostInspection>;
+  inspect(ssh: SshConnection, session?: string, socket?: string): Promise<HostInspection>;
   herdrVersion(ssh: SshConnection, herdrPath: string): Promise<string>;
   alive(ssh: SshConnection, pid: number): Promise<boolean>;
   authorizeKey(ssh: SshConnection, keyLine: string): Promise<void>;
@@ -133,8 +136,17 @@ export interface RemoteHost {
   start(ssh: SshConnection, options: StartOptions): Promise<void>;
   /** A cold start needing desktop sign-in or consent after an interactive-launch failure. */
   startupNotice?(ssh: SshConnection, session?: string): Promise<string | null>;
+  /** what the bridge asked the owner to choose: herdr sessions running there, or (`gone`) that the chosen one stopped */
+  foundSessions?(ssh: SshConnection, inspection: HostInspection): Promise<{ gone: boolean; sessions: FoundHerdrSession[] } | null>;
+  /** a chosen socket checked on the PC by the rule its bridge applies (server/herdr-discovery.ts); null when it cannot be */
+  chosenSocketStatus?(ssh: SshConnection, inspection: HostInspection, socket: string): Promise<"usable" | "gone" | "refused" | null>;
+  /** Read-only discovery, including when the chosen Ovis server is stopped. */
+  discoverSessions?(ssh: SshConnection, inspection: HostInspection): Promise<FoundHerdrSession[]>;
   descriptors(ssh: SshConnection): Promise<BridgeDescriptor[]>;
 }
+
+/** the most a PC's herdr discovery answer (or its error) may send */
+const DISCOVERY_OUTPUT_BYTES = 256 * 1024;
 
 function parseDescriptors(lines: string[]): BridgeDescriptor[] {
   return lines.flatMap((line) => { try { return [JSON.parse(line) as BridgeDescriptor]; } catch { return []; } });
@@ -152,14 +164,15 @@ export const posixHost: RemoteHost = {
   kind: "posix",
   bundleDescription: "Private web bridge bundle (Bun, Node and node-pty; no build tools needed)",
   logHint: "~/.config/herdr-web-ui/bridges/bridge.log",
-  async inspect(ssh, session) {
+  async inspect(ssh, session, socket) {
     const inspection = await ssh.run(REMOTE_PATH + `printf '%s\\n' "$(uname -s)" "$(uname -m)" "$(cd -P "$HOME" && pwd -P)" "\${XDG_CONFIG_HOME:-$HOME/.config}" "$(command -v herdr || true)"; test -x "$HOME/${BUNDLE_DIR}/bin/bun" && printf 'bundle-ready\\n' || true; for d in "$HOME/.local/share/herdr-web-ui/remote-v"*; do if test -x "$d/bin/bun"; then printf 'bundle-older\\n'; break; fi; done; for f in "$HOME/.config/herdr-web-ui/bridges/"*.json; do test ! -f "$f" || cat "$f"; printf '\\n'; done`);
     const [os, arch, home, xdgConfig, herdrPath, ...lines] = inspection.split("\n");
     if (!["Linux", "Darwin"].includes(os ?? "") || !["x86_64", "aarch64", "arm64"].includes(arch ?? "")) throw new Error(UNSUPPORTED_HOST);
     if (!home?.startsWith("/")) throw new Error("The SSH account's home directory ($HOME) could not be read on this PC");
     // the same XDG_CONFIG_HOME rule remote-entry.ts and herdr itself follow
     const herdrConfig = `${xdgConfig?.startsWith("/") ? xdgConfig : `${home}/.config`}/herdr`;
-    const nominalSocket = session ? `${herdrConfig}/sessions/${session}/herdr.sock` : `${herdrConfig}/herdr.sock`;
+    if (socket !== undefined && !validHerdrSocket(socket)) throw new Error("Invalid herdr socket path");
+    const nominalSocket = socket ?? (session ? `${herdrConfig}/sessions/${session}/herdr.sock` : `${herdrConfig}/herdr.sock`);
     const expectedSocket = await ssh.run(`socket=${shellQuote(nominalSocket)}; if test -d "\${socket%/*}"; then cd -P "\${socket%/*}" && printf '%s/herdr.sock' "$PWD"; else printf '%s' "$socket"; fi`);
     return {
       platform: `${os === "Darwin" ? "darwin" : "linux"}-${arch === "x86_64" ? "x64" : "arm64"}`,
@@ -181,10 +194,36 @@ export const posixHost: RemoteHost = {
     await ssh.run(`set -eu; umask 077; base="$HOME/.local/share/herdr-web-ui"; mkdir -p "$base"; ${POSIX_INSTALL_LOCK} tmp=$(mktemp -d "$base/install.XXXXXX"); trap 'rm -rf "$tmp"; ${POSIX_INSTALL_RELEASE}' EXIT HUP INT TERM; if command -v timeout >/dev/null; then timeout ${INSTALL_UPLOAD_TIMEOUT_S} cat > "$tmp/bundle.tgz"; else cat > "$tmp/bundle.tgz"; fi; if command -v sha256sum >/dev/null; then actual=$(sha256sum "$tmp/bundle.tgz" | cut -d ' ' -f 1); else actual=$(shasum -a 256 "$tmp/bundle.tgz" | cut -d ' ' -f 1); fi; test "$actual" = ${shellQuote(asset.sha256)}; mkdir "$tmp/runtime"; tar xzf "$tmp/bundle.tgz" -C "$tmp/runtime"; test -x "$tmp/runtime/bin/bun"; test -x "$tmp/runtime/bin/node"; test -x "$tmp/runtime/bin/herdr"; "$tmp/runtime/bin/bun" --version; "$tmp/runtime/bin/herdr" --version; "$tmp/runtime/bin/node" "$tmp/runtime/server/pty/smoke.mjs"; release="$HOME/${BUNDLE_DIR}-${asset.sha256.slice(0, 16)}"; if test ! -d "$release"; then mv "$tmp/runtime" "$release"; fi; ln -s "$release" "$tmp/current"; if test -d "$HOME/${BUNDLE_DIR}" && test ! -L "$HOME/${BUNDLE_DIR}"; then mv "$HOME/${BUNDLE_DIR}" "$HOME/${BUNDLE_DIR}-legacy-$(date +%s)"; fi; "$release/bin/bun" -e 'require("node:fs").renameSync(process.argv[1], process.argv[2])' "$tmp/current" "$HOME/${BUNDLE_DIR}"`, input, 30 * 60_000);
   },
   stop: async (ssh, pid) => { await ssh.run(`kill -TERM ${pid}`); },
-  async start(ssh, { session, herdrPath, inspection }) {
+  async start(ssh, { session, herdrPath, inspection, herdr_socket, start_new_herdr }) {
     // a bundle published before the rename reads HERDR_WEB_HERDR_BIN
     const remoteHerdr = shellQuote(herdrPath || `${inspection.home}/${BUNDLE_DIR}/bin/herdr`);
-    await ssh.run(REMOTE_PATH + `umask 077; mkdir -p "$HOME/.config/herdr-web-ui/bridges"; HERDR_REMOTE_SESSION=${shellQuote(session ?? "")} OVIS_HERDR_BIN=${remoteHerdr} HERDR_WEB_HERDR_BIN=${remoteHerdr} nohup "$HOME/${BUNDLE_DIR}/bin/bun" "$HOME/${BUNDLE_DIR}/server/remote-entry.ts" </dev/null >>"$HOME/.config/herdr-web-ui/bridges/bridge.log" 2>&1 &`);
+    if (herdr_socket !== undefined && !validHerdrSocket(herdr_socket)) throw new Error("Invalid herdr socket path");
+    inspection.startupResult = `${inspection.registryDir}/startup-${randomUUID()}.result`;
+    await ssh.run(REMOTE_PATH + `umask 077; mkdir -p "$HOME/.config/herdr-web-ui/bridges"; HERDR_REMOTE_SESSION=${shellQuote(session ?? "")} HERDR_REMOTE_SOCKET=${shellQuote(herdr_socket ?? "")} HERDR_REMOTE_START_NEW=${shellQuote(start_new_herdr ? "1" : "")} HERDR_REMOTE_RESULT=${shellQuote(inspection.startupResult)} OVIS_HERDR_BIN=${remoteHerdr} HERDR_WEB_HERDR_BIN=${remoteHerdr} nohup "$HOME/${BUNDLE_DIR}/bin/bun" "$HOME/${BUNDLE_DIR}/server/remote-entry.ts" </dev/null >>"$HOME/.config/herdr-web-ui/bridges/bridge.log" 2>&1 &`);
+  },
+  async foundSessions(ssh, inspection) {
+    if (!inspection.startupResult) return null;
+    const path = shellQuote(inspection.startupResult);
+    const text = await ssh.run(`if test -f ${path}; then head -c 1048576 ${path}; rm -f ${path}; fi`);
+    if (!text) return null;
+    const result: unknown = JSON.parse(text);
+    if (typeof result !== "object" || result === null || !("code" in result) || (result.code !== "herdr_sessions_found" && result.code !== "herdr_session_gone") || !("sessions" in result)) throw new Error("The PC returned an invalid startup result");
+    const gone = result.code === "herdr_session_gone";
+    // a stopped chosen session may leave no other one running
+    return { gone, sessions: gone && Array.isArray(result.sessions) && result.sessions.length === 0 ? [] : parseFoundHerdrSessions(result.sessions) };
+  },
+  async discoverSessions(ssh, inspection) {
+    const script = `import { discoverHerdrSessions } from ${JSON.stringify(inspection.runtimeDir + "/server/herdr-discovery.ts")}; console.log(JSON.stringify(await discoverHerdrSessions()));`;
+    // at most 256 sessions of a few hundred bytes each: an answer past the cap is stopped and refused, never parsed
+    const text = await ssh.run(`if test -x ${shellQuote(inspection.runtimeDir + "/bin/bun")}; then ${shellQuote(inspection.runtimeDir + "/bin/bun")} -e ${shellQuote(script)}; else printf '[]'; fi`, undefined, undefined, DISCOVERY_OUTPUT_BYTES);
+    const sessions: unknown = JSON.parse(text);
+    return Array.isArray(sessions) && sessions.length === 0 ? [] : parseFoundHerdrSessions(sessions);
+  },
+  async chosenSocketStatus(ssh, inspection, socket) {
+    // the installed bundle holds the rule; an older or missing one cannot say
+    if (!inspection.bundleReady || !validHerdrSocket(socket)) return null;
+    const status = (await ssh.run(REMOTE_PATH + `HERDR_CHECK_SOCKET=${shellQuote(socket)} "$HOME/${BUNDLE_DIR}/bin/bun" -e 'const { chosenHerdrSocketStatus } = await import(process.env.HOME + "/${BUNDLE_DIR}/server/herdr-discovery.ts"); console.log(await chosenHerdrSocketStatus(process.env.HERDR_CHECK_SOCKET))' 2>/dev/null || true`)).trim();
+    return status === "usable" || status === "gone" || status === "refused" ? status : null;
   },
   async descriptors(ssh) {
     return parseDescriptors((await ssh.run(`for f in "$HOME/.config/herdr-web-ui/bridges/"*.json; do test ! -f "$f" || cat "$f"; printf '\\n'; done`)).split("\n"));
@@ -390,9 +429,9 @@ export const windowsHost: RemoteHost = {
  * cannot run it is asked in PowerShell, and one that answers neither gets sh's own error,
  * which names the real problem (a refused connection, a wrong key).
  */
-export async function detectHost(ssh: SshConnection, session?: string): Promise<{ host: RemoteHost; inspection: HostInspection }> {
+export async function detectHost(ssh: SshConnection, session?: string, socket?: string): Promise<{ host: RemoteHost; inspection: HostInspection }> {
   let posixError: unknown;
-  try { return { host: posixHost, inspection: await posixHost.inspect(ssh, session) }; }
+  try { return { host: posixHost, inspection: await posixHost.inspect(ssh, session, socket) }; }
   catch (error) { posixError = error; }
   try { return { host: windowsHost, inspection: await windowsHost.inspect(ssh, session) }; }
   catch (error) {

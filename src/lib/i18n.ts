@@ -5,6 +5,11 @@
  * src/lib/i18n.test.ts scans the code for every `t("…")` and fails when one is missing from
  * any dictionary.
  *
+ * One English text that another screen words differently takes a context after a "|", as gettext's
+ * msgctxt does: the key "Ovis relay|relay switch" is looked up as it is, so the switch can say what it
+ * does while the tab and the group keep the service's name; English, which has no dictionary, and a
+ * missing entry show the part before the "|" ("Ovis relay").
+ *
  * Components take `t` from `useT()`, whose identity changes with the language so memoized
  * work is redone. Helpers outside React (status labels, shortcut labels, work summaries)
  * call the module-level `t`, which reads the language the SettingsProvider last set.
@@ -56,7 +61,7 @@ export type Vars = Record<string, string | number>;
 
 /** The text for `key` in `language`, placeholders filled; pure, for tests and for both `t`s. */
 export function translate(language: Language, key: string, vars?: Vars): string {
-  const text = DICTIONARIES[language][key] ?? key;
+  const text = DICTIONARIES[language][key] ?? key.split("|", 1)[0]!;
   return vars === undefined ? text : text.replace(/\{(\w+)\}/g, (match, name: string) => (name in vars ? String(vars[name]) : match));
 }
 

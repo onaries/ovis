@@ -25,6 +25,10 @@
   grid-row: 1;
 }
 
+.settings-dialog .modal-title {
+  font-size: var(--fs-section-title);
+}
+
 .settings-nav {
   display: flex;
   grid-column: 1;
@@ -34,7 +38,7 @@
   min-height: 0;
   padding: var(--space-4) var(--space-3);
   overflow-y: auto;
-  background: var(--bg);
+  background: var(--bg-nav);
   border-right: var(--hairline) solid var(--border);
 }
 
@@ -42,14 +46,14 @@
   margin: 0;
   padding: var(--space-1) var(--space-3) 0;
   color: var(--text-strong);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-section-title);
   font-weight: var(--fw-semibold);
 }
 
 .settings-tabs {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-half);
 }
 
 .settings-tabs[hidden] {
@@ -66,8 +70,8 @@
 .settings-search > svg {
   position: absolute;
   left: var(--space-3);
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   color: var(--text-dim);
   pointer-events: none;
 }
@@ -76,7 +80,7 @@
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding-left: calc(var(--space-3) + 16px + var(--space-2));
+  padding-left: calc(var(--space-3) + var(--icon-size-md) + var(--space-2));
 }
 
 /* each page with a row that matches: its name, which opens it, over the groups it holds there */
@@ -91,9 +95,12 @@
   align-self: flex-start;
   align-items: center;
   gap: var(--space-1);
+  min-width: var(--pointer-target);
+  min-height: var(--pointer-target);
   padding: 0;
   background: transparent;
   border: 0;
+  border-radius: var(--radius-sm);
   color: var(--text-strong);
   font-size: var(--fs-md);
   font-weight: var(--fw-semibold);
@@ -101,8 +108,8 @@
 }
 
 .settings-search-page-title svg {
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   color: var(--text-dim);
 }
 
@@ -145,8 +152,8 @@
 
 .settings-tab svg {
   flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   color: var(--text-dim);
 }
 
@@ -172,6 +179,7 @@
 .settings-tab[aria-selected="true"] {
   background: var(--bg-hover);
   color: var(--text-strong);
+  font-weight: var(--fw-selected);
 }
 
 /* the open page carries the selection color on its glyph, as a chosen segment does */
@@ -304,23 +312,40 @@
 
 .settings-integration-check {
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: var(--icon-size);
+  height: var(--icon-size);
   color: var(--status-done);
 }
 
 .settings-integration-command {
   display: block;
-  margin-top: 2px;
+  margin-top: var(--space-half);
   font-family: var(--font-mono);
   color: var(--text-strong);
   overflow-wrap: anywhere;
 }
 
 .settings-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--pointer-target);
   color: var(--accent);
   font-size: var(--fs-xs);
   overflow-wrap: anywhere;
+}
+
+.settings-telemetry details:not([open]) > :not(summary) {
+  display: none;
+}
+
+.settings-telemetry details > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--pointer-target);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
 }
 
 /* a column, not a grid: a grid's track is as wide as a text field asks to be, and on a phone
@@ -503,13 +528,33 @@
 
 @media (pointer: fine) {
   .usage-accounts-actions .icon-button {
-    width: 28px;
-    height: 28px;
+    width: var(--bar-control-h);
+    height: var(--bar-control-h);
   }
 
   .usage-accounts-actions .icon-button svg {
-    width: 16px;
-    height: 16px;
+    width: var(--icon-size-md);
+    height: var(--icon-size-md);
+  }
+}
+
+@media (pointer: coarse) {
+  .settings-dialog .input {
+    min-height: var(--touch-target);
+  }
+
+  .settings-search-page-title {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+
+  .settings-link {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+
+  .settings-telemetry details > summary {
+    min-height: var(--touch-target);
   }
 }
 
@@ -685,7 +730,12 @@
   cursor: pointer;
 }
 
-.settings-font-option:hover,
+@media (hover: hover) {
+  .settings-font-option:hover {
+    background: var(--bg-hover);
+  }
+}
+
 .settings-font-option:focus-visible {
   background: var(--bg-hover);
 }
@@ -697,6 +747,19 @@
   color: var(--text-dim);
   font-size: var(--fs-xs);
   list-style: none;
+}
+
+/* the one dim line under a page's title: what the page holds (G-173) */
+.settings-page-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 640px) {
+  .settings-page-note {
+    font-size: var(--fs-sm);
+  }
 }
 
 /* a read-only fact beside its label (Phone & devices, Access): text, never a control */

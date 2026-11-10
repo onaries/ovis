@@ -165,8 +165,8 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
     console.log(`PASS a phone's chat lens leaves the shared grid at the desktop's ${desktopSize}`);
 
     // the phone's terminal lens fits the grid to the phone: the shell sees it change
-    // on a phone the lens switch shows no label: the button is known by its title
-    await phone.locator('button[title^="Live terminal"]').tap();
+    // On a phone the label is hidden, but the lens keeps its accessible name.
+    await phone.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).tap();
     await phone.waitForFunction(() => (window as unknown as { frames_: { dir: string; type: string }[] }).frames_.some((f) => f.dir === "out" && f.type === "resize"), undefined, { timeout: 10_000 });
     const deadline = Date.now() + 10_000;
     let phoneSize = desktopSize;
@@ -208,7 +208,7 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
       socket.addEventListener("message", receive);
     }, desktopSize.split(" ").map(Number));
     const chatAt = Date.now();
-    await phone.locator('button[title^="Chat transcript"]').tap();
+    await phone.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).tap();
     const restoredAt = await desktop.evaluate(() => (window as unknown as { gridRestored_: Promise<number> }).gridRestored_);
     assert.ok(restoredAt - chatAt <= 1_000, "phone Chat restores the visible desktop grid within 1 s");
     // pane-geometry announces the resize before the sidecar applies it to herdr's pty.
@@ -218,7 +218,7 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
     assert.equal(restoredSize, desktopSize, "the unfocused desktop's grid is restored in the real pty");
     assert.ok(Date.now() - chatAt <= 1_000, "the real pty restores the desktop grid within 1 s");
     console.log(`PASS phone Chat restores the visible unfocused desktop's ${desktopSize}`);
-    await phone.locator('button[title^="Live terminal"]').tap();
+    await phone.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).tap();
     let reclaimedSize = "";
     const reclaimDeadline = Date.now() + 10_000;
     while (Date.now() < reclaimDeadline && reclaimedSize !== phoneSize) reclaimedSize = await size();
@@ -230,7 +230,7 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
     const hiddenRows = () => desktop.locator(shownRow()).count();
     const phoneRows = Number(phoneSize.split(" ")[0]);
     assert.notEqual(await hiddenRows(), phoneRows, "the desktop's terminal lens kept its own grid");
-    await desktop.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+    await desktop.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
     await desktop.locator(".terminal-stack.is-chat").waitFor({ state: "attached" });
     const adopted = Date.now() + 10_000;
     while (await hiddenRows() !== phoneRows && Date.now() < adopted) await Bun.sleep(100);
@@ -695,6 +695,8 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
         }
         page = await openRecording(browser, contexts, origin, scenario === "held" ? heldPane : first,
           scenario === "pageshow-touch" ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } : { viewport: { width: 1000, height: 700 } }, { language: "en", defaultView: queueScenario ? "chat" : "terminal",
+            // These scenarios exercise the automatic queue, which is off until chosen.
+            autoSendQueued: queueScenario,
             releasePaneAway: scenario === "mount-optin" || (!fresh && !reconnect && scenario !== "switch" && scenario !== "idle-off") },
           fresh, async (recording) => {
             // a tab in use from its first attach, on the page clock from the start: its quiet spell is counted there

@@ -4,7 +4,7 @@
  * so a key lives in only one of them; its header lists the settings files and the register.
  */
 export const SETTINGS_LAYOUT_KO: Record<string, string> = {
-  "Search settings": "설정 검색",
+  "Search settings": "모든 설정 검색",
   "No settings match.": "일치하는 설정이 없습니다.",
   "Search results": "검색 결과",
   "Open {page}": "{page} 열기",
@@ -27,10 +27,10 @@ export const SETTINGS_LAYOUT_KO: Record<string, string> = {
   "The agent's reasoning blocks: left out, folded to one line, or open. One you open or fold stays that way for its message.": "에이전트의 추론 블록을 빼거나, 한 줄로 접거나, 펼쳐서 보여 줍니다. 직접 펼치거나 접은 블록은 그 메시지에서 그대로 유지됩니다.",
   "Drops fillers and fixes spacing; code and paths stay as spoken. Where it is off, the text stays exactly as transcribed.": "군말을 빼고 띄어쓰기를 고칩니다. 코드와 경로는 말한 그대로 둡니다. 꺼 둔 곳에서는 받아쓴 그대로 둡니다.",
   "Alert me when": "이럴 때 알림",
-  "Long turn finished": "긴 작업 끝남",
+  "Long turn finished": "1분 이상 작업 완료",
   "Any turn finished": "작업 끝날 때마다",
-  "Lock pinned agents": "고정 에이전트 잠그기",
-  "OMP: side conversations chip": "OMP 곁가지 대화 칩",
+  "Lock pinned agents": "에이전트 메뉴에 닫기 방지 추가",
+  "OMP: side conversations chip": "OMP 별도 대화 목록 표시",
   "A chip in an OMP pane's message box lists the side conversations its session saved with /btw.": "OMP 패널의 입력창에 세션이 /btw로 저장한 곁가지 대화 목록을 여는 칩을 표시합니다.",
   "In use": "사용 중",
   "herdr's TUI server is not running: start herdr after the switch.": "herdr의 TUI 서버가 실행 중이 아닙니다. 전환한 뒤 herdr를 시작하세요.",
@@ -38,4 +38,27 @@ export const SETTINGS_LAYOUT_KO: Record<string, string> = {
 
   // the one-line conditions Settings' bare pages show under a row's name (design pass G-095 to G-098)
   "By state applies to this device; the other orders to every browser.": "상태별만 기기별, 나머지는 공유",
+  "Auto: the chat on a touch screen, the terminal elsewhere.": "자동: 터치는 채팅, 나머지는 터미널",
+  "Beside the pane needs a wide window; on this screen a file opens in a popup.": "좁은 화면에서는 팝업으로 엽니다.",
+  "Auto: on a desktop's chat only, where dictation can work.": "자동: 받아쓰기가 되는 데스크톱 채팅에서만 표시합니다.",
+  "Separate: leaving Ovis keeps the pane attached; herdr's selection stays independent.": "따로: 떠나도 연결 유지, herdr 선택은 별개",
+  "Use alongside: leaving Ovis releases an unused pane to herdr after a short delay; herdr's selection stays independent.": "같이 쓰기: Ovis를 벗어나면 쓰지 않는 패널을 잠시 뒤 herdr에 돌려주고, herdr의 선택은 따로 둡니다.",
+  "Follow its focus: leaving Ovis releases an unused pane after a short delay; this view follows herdr's selection.": "포커스 따라: Ovis를 벗어나면 쓰지 않는 패널을 잠시 뒤 herdr에 돌려주고, 이 화면은 herdr의 선택을 따라갑니다.",
+  "Any turn finished takes in the long ones.": "매번 알림에는 1분 이상 작업도 포함",
+  "Groups you name in the Agents list, in every browser.": "직접 만든 그룹을 모든 브라우저에서 공유",
+  "Each lock is turned on from the pinned agent's own menu.": "고정한 에이전트 메뉴에서 개별 잠금",
+  "A drag in a Codex pane selects through its whole history; Shift+drag still copies in Ovis.": "Codex 드래그는 전체 기록 선택, Shift+드래그는 Ovis에서 복사",
+  "Opens the side conversations an OMP session saved with /btw.": "입력창에서 OMP의 /btw 대화 열기",
+  "A subagent counts as running until the session that started it is told it ended.": "상위 세션의 종료 확인까지 실행으로 표시",
+  // the one line under each page's title (G-173)
+  "Theme, fonts and the sidebar on this device.": "이 기기의 테마, 글꼴, 사이드바.",
+  "How conversations look and what the message box offers.": "대화가 보이는 방식과 입력칸 기능.",
+  "How terminal panes look and take input.": "터미널 패널의 모양과 입력.",
+  "When this device alerts you, and where else alerts go.": "이 기기가 언제 알릴지, 알림을 어디로 더 보낼지.",
+  "Coding agents on this PC, their accounts and plan limits.": "이 PC의 코딩 에이전트, 계정, 요금제 사용량.",
+  "Keyboard shortcuts, and herdr's prefix keys.": "단축키와 herdr 프리픽스 키.",
+  "Phones, browsers and PCs that reach this Ovis.": "이 Ovis에 연결하는 폰, 브라우저, PC.",
+  "Features still being shaped; they may change.": "다듬는 중인 기능입니다. 바뀔 수 있습니다.",
+  // the range under a typed font size it refused (G-179)
+  "Enter {min}–{max}px": "{min}–{max}px 사이로 입력하세요.",
 };

@@ -11,6 +11,21 @@
   overflow-wrap: anywhere;
 }
 
+/* the bare update row: version, state and button wrap inside the row, never clip (G-013) */
+.settings-updates .settings-row {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+.settings-updates .settings-row > .settings-fact {
+  max-width: none;
+  overflow-wrap: normal;
+}
+
+.settings-updates .settings-row > .btn {
+  margin-inline-start: auto;
+}
+
 .update-notice {
   flex: 0 0 auto;
   justify-content: space-between;
@@ -60,8 +75,10 @@
   border: 0;
   cursor: pointer;
 }
-.update-notice-text:hover,
 .update-notice-text:focus-visible { text-decoration: underline; }
+@media (hover: hover) {
+  .update-notice-text:hover { text-decoration: underline; }
+}
 
 /* the reload warning is read in full on a phone: its sentence wraps instead of being cut */
 .update-notice.is-line.is-warning { flex-wrap: wrap; }
@@ -69,6 +86,19 @@
 
 .update-notice-dismiss {
   margin-inline-end: calc(var(--space-2) * -1);
+}
+
+/* a phone's notices (install hint, alerts, update): their 44px buttons set the height, so the line's own
+   padding stays small; the buttons keep their size and place (G-195, G-103) */
+@media (pointer: coarse) {
+  .update-notice {
+    padding-block: var(--space-1);
+  }
+
+  /* the sentence that is a button takes a tap over the line's whole height, as its buttons do */
+  .update-notice.is-line > .update-notice-text {
+    min-height: var(--touch-target);
+  }
 }
 
 .update-progress {
@@ -121,16 +151,13 @@
   outline: none;
 }
 
-/* a release's notes: read in a box of their own, so a long release does not push the
-   buttons out of the dialog */
+/* a release's notes: their short summary scrolls with Settings; only the full changelog is read in a
+   box of its own (G-145) */
 .update-notes {
   --chat-fs-body: var(--fs-sm);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  max-height: min(24rem, calc(var(--app-height, 100dvh) * 0.5));
-  overflow-y: auto;
-  overscroll-behavior: contain;
   padding: var(--space-3);
   color: var(--text);
   background: var(--bg-elevated);
@@ -186,6 +213,16 @@
 /* the release's changelog section, on request */
 .update-details {
   margin-top: var(--space-2);
+}
+
+/* the full changelog: long, so it scrolls in its own box and the buttons under it stay in reach */
+.update-changelog {
+  max-height: min(24rem, calc(var(--app-height, 100dvh) * 0.5));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
 }
 
 .update-details > summary {

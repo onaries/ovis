@@ -4,7 +4,7 @@
   flex-direction: column;
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg-elevated);
+  background: var(--surface-raised);
   overflow: hidden;
 }
 
@@ -19,6 +19,9 @@
 
 .pull-request-heading {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   font-size: var(--fs-md);
 }
@@ -251,6 +254,12 @@
 .pull-request-merge .btn svg {
   width: 1rem;
   height: 1rem;
+}
+
+@media (pointer: coarse) {
+  .pull-request-note {
+    font-size: var(--fs-reading);
+  }
 }
 
 /* a phone: Merge as wide as the column, a thumb's target */

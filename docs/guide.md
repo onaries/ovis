@@ -291,7 +291,9 @@ model's window, which is the file pi reads its own providers from; a model it st
 for shows no ring rather than a guessed one, because pi answers those from a catalogue or a
 running llama.cpp server that this app cannot ask. The model and reasoning effort come from what the session recorded, never from answer text. A todo list shows where the agent recorded it, in the turn's work block: Claude Code's `TodoWrite`, Codex's `update_plan`, or omp, omo and gjc todo calls. Plain-text plans are not reconstructed, and Claude Code `TaskCreate` / `TaskUpdate` calls are not drawn in the work block: the task list they build is the pane's plan, below. Details and verification are in the [chat-mode audit](chat-mode-audit.md).
 
-Background tasks have a button by the message box, with a count while some run: an OmO pane's `task` children, a Claude Code pane's subagents (the `Agent` tool), read from the session's own files, and an OpenCode 2 pane's subagents, the child sessions OpenCode keeps of the session in its store (one whose OpenCode service went away mid-run, without ending it, reads as lost once another service starts or the pane leaves that session; on Windows, where a service's start cannot be read, only once the pane leaves that session). A Claude Code pane's background commands (`run_in_background`, Ctrl+B, or one moved there by its timeout) are listed with them. It lists what runs and the newest ten that ended in the last day, and the sidebar badge shows the running count. A Claude Code or OpenCode turn that ends while work it started still runs reads **BG**, not DONE: that work's notice starts the next turn by itself, and the finish is alerted once, when that turn ends (a turn is held at most 30 minutes). A subagent that ends leaves a card in the chat with its answer (for OpenCode, one run in the background; a foreground one's answer is its call's output), and a Claude Code or OpenCode subagent whose pane no longer runs that session reads as lost.
+Background tasks have a button by the message box, with a count while some run: an OmO pane's `task` children, a Claude Code pane's subagents (the `Agent` tool), read from the session's own files, and an OpenCode 2 pane's subagents, the child sessions OpenCode keeps of the session in its store (one whose OpenCode service went away mid-run, without ending it, reads as lost once another service starts or the pane leaves that session; on Windows, where a service's start cannot be read, only once the pane leaves that session). A Claude Code pane's background commands (`run_in_background`, Ctrl+B, or one moved there by its timeout), its `Monitor`s and background `Workflow`s, and a `/loop` wakeup it set are listed with them. It lists what runs and the newest ten that ended in the last day, and the sidebar badge shows the running count. A Claude Code or OpenCode turn that ends while work it started still runs reads **BG**, not DONE: that work's notice starts the next turn by itself, and the finish is alerted once, when that turn ends (each rest is held at most 30 minutes). A subagent that ends leaves a card in the chat with its answer (for OpenCode, one run in the background; a foreground one's answer is its call's output), and a Claude Code or OpenCode subagent whose pane no longer runs that session reads as lost.
+
+An agy pane's background tasks (a command past its `WaitMsBeforeAsync`) and `schedule` timers, and a grok pane's background tasks, are read from their session files (agy's `transcript_full.jsonl`, grok's `updates.jsonl`) and counted and held the same way: a turn that ends on one reads **BG**, and an agy timer due within a day is held until it is due rather than 30 minutes, while its agy process lasts.
 
 A pane's plan is the task list a Claude Code agent keeps (`TaskCreate` / `TaskUpdate`) or the checklist Codex keeps (`update_plan`), read back from the session's transcript. While there is one, the background-task button by the message box starts with **Plan** and how many of its steps are done (`2/5`); the same button opens one list with the plan's steps first and the background tasks below. Steps are listed so a step comes after the steps it waits on (Claude Code's `blockedBy`; a Codex step waits on the one before it). The running step says what it does now, and each step shows how long it took. The sidebar row carries the same count. Claude Code empties its task list once every task is done, and so does this: the first task after that starts a new plan. A teammate of an agent team that changes a task writes that in its own transcript, which is not read.
 
@@ -888,10 +890,20 @@ PC's panes are then the app's. One server serves one runtime, chosen as it start
    Herdr app is installed or its core runs.
 
 Ovis needs an `hc` speaking
-protocol generation 1 (checked with 0.1.14 and 0.1.17), and finds it the way the Herdr app does:
-`OVIS_HC_BIN`, then the `PATH`, then your login shell's `PATH`, then the usual install places
-(`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, mise, Nix and cargo), taking `herdr-core`
-before `hc` in each. A candidate counts only when `--version` says `hc …`, since some window
+protocol generation 1 (checked with 0.1.14 and 0.1.17), and looks for it in `OVIS_HC_BIN`, then
+the usual install places (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, mise, Nix and
+cargo), then the `PATH`, then your login shell's `PATH`, taking `herdr-core` before `hc` in each.
+On Linux and macOS a candidate found there is run only when it and every folder on the way to it
+belong to you or root and nobody else can write them; a path you set in `OVIS_HC_BIN` is run as
+you named it. Two exceptions: a folder further up may be writable by anyone when it is sticky
+(like `/tmp`), since nobody can then rename or replace what is yours in it; and on macOS, folders
+under Homebrew's `/opt/homebrew` and `/usr/local` may be writable by the `admin` group, as
+Homebrew leaves them, so another administrator of that Mac could change an `hc` found there.
+Group write by your own private group counts as yours only when `/etc/nsswitch.conf` takes
+accounts from local files alone. On a PC whose accounts also come from a directory service (sss, as on
+Fedora and RHEL by default), an installer-made `~/.local/bin` with umask 002 is group-writable and
+so is passed over: run `chmod g-w ~/.local/bin`, or set `OVIS_HC_BIN` to the `hc` you trust. When
+nothing is found, the error names each `hc` passed over and the rule it failed. A candidate counts only when `--version` says `hc …`, since some window
 managers ship an unrelated `hc`. Looking runs nothing but `--version`: every other hc command
 starts a core when none runs. When no candidate answers, Ovis does not start and says where it
 looked, rather than run an `hc` that may not be herdr-core's.
@@ -917,8 +929,9 @@ Whether the core runs is read from its socket file (`HC_SOCKET`, `socket` in hc'
 `config.toml`, else `<session>.sock` under `$XDG_RUNTIME_DIR/herdr-core/`; `HC_SESSION` names the
 session, `default` otherwise); nothing connects to it.
 
-On Windows Ovis serves herdr-core only when `OVIS_RUNTIME=herdr-core` is set, as the desktop app
-sets it: the automatic choice stays on herdr there, and Settings offers no switch.
+On Windows the automatic choice stays on herdr: Ovis serves herdr-core when it is chosen in
+Settings, or when `OVIS_RUNTIME=herdr-core` is set, as the desktop app sets it. Settings and
+`/api/health` find herdr there in `%LOCALAPPDATA%\Programs\Herdr\bin` and `%APPDATA%\herdr`.
 
 **Moving everything to herdr-core.** On a Linux or macOS PC where Ovis serves herdr's TUI through
 its own launcher and no Herdr app is installed, **Settings → About → Terminals** offers **Move

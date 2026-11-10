@@ -5,7 +5,6 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_KO: Record<string, string> = {
-  "{count} working": "작업 중 {count}개",
   "Pin agent": "에이전트 고정",
   "Unpin agent": "에이전트 고정 해제",
   "Lock agent": "에이전트 잠금",
@@ -46,9 +45,6 @@ export const SIDEBAR_KO: Record<string, string> = {
   "More for {title}": "{title} 더보기",
   "Rename workspace": "워크스페이스 이름 바꾸기",
   "Close workspace": "워크스페이스 닫기",
-  "New worktree": "새 워크트리",
-  "Open worktree…": "워크트리 열기…",
-  "Earlier sessions…": "이전 세션…",
   "Delete worktree checkout…": "워크트리 체크아웃 삭제…",
   "Delete the checkout of {name}?": "{name}의 체크아웃을 삭제할까요?",
   "The folder at {path} is deleted and the workspace closes. The branch stays.": "{path} 폴더가 삭제되고 워크스페이스가 닫힙니다. 브랜치는 남습니다.",
@@ -67,9 +63,9 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Close group": "그룹 닫기",
   "Collapse": "접기",
   "Expand": "펼치기",
-  "Working": "작업 중",
+  "Working": "실행",
   "Idle": "대기",
-  "{count} need you": "{count}개가 기다림",
+  "{count} need you": "응답 필요 {count}개",
   "Agent state unknown": "에이전트 상태 알 수 없음",
   "Move to {group}": "{group}(으)로 옮기기",
   "Remove from {group}": "{group}에서 빼기",

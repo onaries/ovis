@@ -12,8 +12,20 @@
 }
 
 .new-session-note {
+  min-height: calc(var(--fs-sm) * var(--lh-base));
+  margin: 0 0 var(--space-2);
   color: var(--text-dim);
   font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+}
+
+.new-session-submit {
+  min-width: 5.5rem;
+}
+
+.new-session-modal :is(.input, .select):focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
 }
 
 .new-session-error {
@@ -30,6 +42,7 @@
 .new-session-cwd .input {
   flex: 1 1 auto;
   min-width: 0;
+  font-family: var(--font-mono);
 }
 
 .new-session-cwd .btn {
@@ -122,12 +135,22 @@
   height: 16px;
 }
 
-.new-session-folder span {
+.new-session-folder > span {
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  direction: rtl;
+  text-align: left;
   color: var(--text);
+  font-family: var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
+  scrollbar-width: none;
+}
+
+.new-session-folder > span::-webkit-scrollbar {
+  display: none;
 }
 
 /* the launch's own choices, model and effort, side by side at every width: a column is 9rem at least, or half

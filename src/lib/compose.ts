@@ -168,6 +168,7 @@ export function submitNote(code: string, message: string, agent?: string | null)
   if (code === "input_draft") return t("Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.");
   if (code === "rewind_dialog_open") return t("Not sent: Claude Code's rewind dialog is open in the terminal. Finish or close it there (Esc), then send this message.");
   if (code === "pending_input_unsupported") return t("Update this PC to send messages in the next turn. Your draft stayed here.");
+  if (code === "pending_hold_unsupported") return t("Update this PC to hold messages. Your draft stayed here.");
   // #511: a message with comments on a reply goes only to an agent
   if (code === "agent_only_unsupported") return t("Update this PC to send comments on a reply. Your message and comments stayed here.");
   // the same code also says an agent's input state is unknown: that keeps the bridge's own words
@@ -227,6 +228,12 @@ export const QUEUE_READY_STATUS: Readonly<Partial<Record<string, true>>> = { don
  */
 export function commandListed(command: SlashCommand): boolean {
   return command.visibility !== "agent-hidden";
+}
+
+/** Whether a typed word is, or starts, a command the menu hides: it is a command all the same, never one "no command matches". */
+export function namesHiddenCommand(commands: readonly SlashCommand[], query: string): boolean {
+  const word = query.toLowerCase();
+  return word !== "" && commands.some((command) => !commandListed(command) && command.name.toLowerCase().startsWith(word));
 }
 
 /**

@@ -353,7 +353,7 @@ try {
   await picker.locator(".agent-mark.claude").waitFor();
   assert.equal(await picker.locator(".agent-picker-label").textContent(), "Claude Code");
   await dialog.locator(".session-empty").waitFor();
-  assert.equal(await dialog.locator(".session-empty").textContent(), "No earlier Claude Code sessions in this folder.");
+  assert.equal(await dialog.locator(".session-empty").textContent(), "No earlier Claude Code sessions in this folder. Choose another agent.");
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "detached" });
   console.log("PASS the agent picker lists the agents with their marks, closes its list alone on Escape and takes the keys; an empty store is said in words");

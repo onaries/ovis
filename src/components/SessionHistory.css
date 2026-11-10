@@ -1,5 +1,9 @@
 .session-modal {
-  width: min(100%, 560px);
+  width: min(100%, var(--dialog-w));
+}
+.session-modal :is(.input, .select):focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
 }
 .session-agent {
   margin-bottom: var(--space-4);
@@ -34,7 +38,7 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   min-width: 0;
 }
 .session-title {
@@ -81,6 +85,9 @@
   align-items: center;
   gap: var(--space-2);
 }
+.session-row .pill {
+  font-size: var(--fs-xs);
+}
 .session-empty {
   margin: 0;
 }
@@ -98,5 +105,17 @@
     flex-direction: column;
     align-items: flex-end;
     gap: var(--space-1);
+  }
+}
+@media (pointer: coarse), (max-width: 640px) {
+  .session-modal .input,
+  .session-modal .select,
+  .session-modal .btn,
+  .session-modal .icon-button {
+    min-height: var(--touch-target);
+    height: var(--touch-target);
+  }
+  .session-modal .icon-button {
+    min-width: var(--touch-target);
   }
 }

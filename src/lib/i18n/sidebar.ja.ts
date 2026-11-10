@@ -5,7 +5,6 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_JA: Record<string, string> = {
-  "{count} working": "作業中 {count} 件",
   "Pin agent": "エージェントを固定",
   "Unpin agent": "エージェントの固定を解除",
   "Lock agent": "エージェントをロック",
@@ -46,9 +45,6 @@ export const SIDEBAR_JA: Record<string, string> = {
   "More for {title}": "{title} のその他",
   "Rename workspace": "ワークスペース名を変更",
   "Close workspace": "ワークスペースを閉じる",
-  "New worktree": "新しいワークツリー",
-  "Open worktree…": "ワークツリーを開く…",
-  "Earlier sessions…": "以前のセッション…",
   "Delete worktree checkout…": "ワークツリーのチェックアウトを削除…",
   "Delete the checkout of {name}?": "{name} のチェックアウトを削除しますか？",
   "The folder at {path} is deleted and the workspace closes. The branch stays.": "{path} のフォルダーが削除され、ワークスペースが閉じます。ブランチは残ります。",
@@ -67,9 +63,9 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Close group": "グループを閉じる",
   "Collapse": "折りたたむ",
   "Expand": "展開",
-  "Working": "作業中",
-  "Idle": "待機",
-  "{count} need you": "{count} 件が対応待ち",
+  "Working": "実行中",
+  "Idle": "準備完了",
+  "{count} need you": "応答待ち {count} 件",
   "Agent state unknown": "エージェントの状態は不明",
   "Move to {group}": "{group} に移動",
   "Remove from {group}": "{group} から外す",

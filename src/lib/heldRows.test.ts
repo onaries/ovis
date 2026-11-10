@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { heldCountShown, heldOpenAtFold, heldOpenOnFocus, heldRefocusDue, heldRowError, heldRowsFold, heldRowsHidden, heldToggleShown, SHORT_PHONE_QUERY } from "./heldRows.ts";
+import { heldOpenAtFold, heldOpenOnFocus, heldRefocusDue, heldRowError, heldRowsFold, heldRowsHidden, heldToggleShown, SHORT_PHONE_QUERY } from "./heldRows.ts";
 
 it("the rows fold while a prompt card is open or the phone is short, and at no other time", () => {
   expect(heldRowsFold({ promptOpen: false, shortPhone: false, ready: false })).toBe(false);
@@ -77,14 +77,6 @@ it("focus on the button that went moves to its own pane's list, never to another
   // focus was not on the button
   expect(heldRefocusDue(null, "queued-list-local:1")).toBe(false);
   expect(heldRefocusDue(null, null)).toBe(false);
-});
-
-it("the caption counts from two messages, and a single one only while it can be folded", () => {
-  expect(heldCountShown(1, false)).toBe(false);
-  expect(heldCountShown(2, false)).toBe(true);
-  expect(heldCountShown(3, true)).toBe(true);
-  expect(heldCountShown(1, true)).toBe(true);
-  expect(heldCountShown(0, true)).toBe(false);
 });
 
 it("the short phone is a phone's width with a keyboard's worth of height gone", () => {

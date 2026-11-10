@@ -27,6 +27,13 @@
   min-width: 0;
 }
 
+@media (pointer: coarse) {
+  .palette-search .input {
+    height: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+}
+
 .palette-search .icon-button svg {
   width: var(--icon-size);
   height: var(--icon-size);
@@ -61,8 +68,8 @@
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-pill);
   color: var(--text-dim);
-  font-size: var(--fs-2xs);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
   letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
   white-space: nowrap;
@@ -81,7 +88,12 @@
 .palette-filter-count {
   font-family: var(--font-mono);
   font-weight: var(--fw-regular);
+  font-variant-numeric: var(--font-numeric);
   letter-spacing: 0;
+}
+
+.palette-filter:active {
+  background: var(--bg-hover);
 }
 
 @media (hover: hover) {
@@ -91,11 +103,12 @@
   }
 }
 
-/* the chosen chip reads as its badge does: the state's tint and text, All and READY in the neutral fill */
+/* the chosen chip reads as its badge does: the state's tint and text, All and READY in the neutral fill; its weight is the non-colour cue */
 .palette-filter[aria-checked="true"] {
   background: var(--bg-hover);
   border-color: var(--border-strong);
   color: var(--text-strong);
+  font-weight: var(--fw-selected);
 }
 
 .palette-filter[data-status="blocked"][aria-checked="true"] {
@@ -130,6 +143,7 @@
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
+  font-size: var(--fs-meta);
 }
 
 .palette-section-name,
@@ -148,6 +162,7 @@
 .palette-section-count {
   font-family: var(--font-mono);
   font-weight: var(--fw-regular);
+  font-variant-numeric: var(--font-numeric);
   letter-spacing: 0;
   text-transform: none;
 }
@@ -184,7 +199,7 @@
   width: var(--avatar-size);
   height: var(--avatar-size);
   color: var(--text-dim);
-  background: var(--bg-elevated);
+  background: transparent;
   border-radius: var(--radius-md);
 }
 
@@ -204,16 +219,25 @@
   font-weight: var(--fw-medium);
 }
 
+/* the name shrinks and ends in an ellipsis; the Selected mark after it keeps its width */
+.palette-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .palette-row-subtitle {
   margin-top: var(--space-1);
   color: var(--text-dim);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
 }
 
 .palette-selected {
   flex: 0 0 auto;
   color: var(--accent);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
@@ -280,7 +304,7 @@
   background: var(--bg-panel);
   border-top: var(--hairline) solid var(--border);
   color: var(--text-dim);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
 }
 
 .palette-footer-where {
@@ -303,8 +327,10 @@
 }
 
 .palette-footer-path {
+  /* An action has no path: keep its line so a hover never moves the result out from under the click. */
+  min-height: calc(1em * var(--lh-base));
   font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
 }
 
 .palette-footer-keys {
@@ -324,16 +350,10 @@
     min-height: var(--touch-target);
   }
 
-  /* the chip keeps its size; the finger gets the row's full height. The expander is measured from
-     the chip's padding box, inside its hairline edge, so the edge is counted out */
+  /* each chip is a finger tall in its own box (the gate measures the element box, not an expander) */
   .palette-filter {
-    height: calc(var(--control-h) - 2px);
-  }
-
-  .palette-filter::before {
-    content: "";
-    position: absolute;
-    inset: calc((var(--control-h) - 2px - 2 * var(--hairline) - var(--touch-target)) / 2) 0;
+    height: var(--touch-target);
+    min-height: var(--touch-target);
   }
 }
 

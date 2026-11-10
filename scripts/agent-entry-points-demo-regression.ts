@@ -80,19 +80,22 @@ try {
         await options.last().scrollIntoViewIfNeeded();
         await shot("1-picker");
         await press(options.last());
-        await dialog.locator(".add-agent .setup-tile").first().waitFor();
-        const names = await dialog.locator(".add-agent .setup-found-name strong").allTextContents();
+        // the same dialog, renamed for what it does now: installing an agent on this PC
+        const installing = page.getByRole("dialog", { name: /^Install an agent · / });
+        await installing.locator(".add-agent .setup-tile").first().waitFor();
+        assert.equal(await dialog.count(), 0, `the dialog is no longer named New workspace while it installs ${at}`);
+        const names = await installing.locator(".add-agent .setup-found-name strong").allTextContents();
         assert.ok(names.length > 0 && names.every((name) => !INSTALLED.includes(name)), `only agents the demo PC lacks: ${names.join(", ")} ${at}`);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `no sideways scroll ${at}`);
         await page.waitForFunction(() => document.activeElement?.classList.contains("setup-tile-install") ?? false);
         await shot("2-add-tiles");
         // the one tap asks the PC to install; the demo refuses, and the tile and the line say so
-        await press(dialog.getByRole("button", { name: `Install ${names[0]}`, exact: true }));
-        await dialog.locator(".add-agent [role='alert']").waitFor();
-        assert.match((await dialog.locator(".add-agent [role='alert']").textContent()) ?? "", /The demo installs nothing/, `a refused install says why ${at}`);
-        assert.equal(await dialog.getByRole("button", { name: `Try installing ${names[0]} again`, exact: true }).count(), 1, `the tile offers Try again ${at}`);
+        await press(installing.getByRole("button", { name: `Install ${names[0]}`, exact: true }));
+        await installing.locator(".add-agent [role='alert']").waitFor();
+        assert.match((await installing.locator(".add-agent [role='alert']").textContent()) ?? "", /The demo installs nothing/, `a refused install says why ${at}`);
+        assert.equal(await installing.getByRole("button", { name: `Try installing ${names[0]} again`, exact: true }).count(), 1, `the tile offers Try again ${at}`);
         await shot("3-add-refused");
-        await press(dialog.getByRole("button", { name: "Back", exact: true }));
+        await press(installing.getByRole("button", { name: "Back", exact: true }));
         await dialog.locator(".agent-picker-trigger").waitFor();
         await page.waitForFunction(() => document.activeElement?.classList.contains("agent-picker-trigger") ?? false);
         await page.keyboard.press("Escape");
@@ -143,7 +146,7 @@ try {
           await options.last().scrollIntoViewIfNeeded();
           await shot("6-worktree-picker");
           await options.last().click();
-          await worktree.locator(".add-agent .setup-tile").first().waitFor();
+          await page.getByRole("dialog", { name: /^Install an agent · / }).locator(".add-agent .setup-tile").first().waitFor();
           console.log(`PASS New worktree's picker ends with ${ADD_ROW} (${at})`);
         }
 
@@ -166,9 +169,11 @@ try {
         await press(opened.locator(".agent-picker-trigger"));
         await options.last().waitFor();
         await press(options.last());
-        await opened.locator(".add-agent .setup-tile").first().waitFor();
+        const openedInstalling = page.getByRole("dialog", { name: /^Install an agent · / });
+        await openedInstalling.locator(".add-agent .setup-tile").first().waitFor();
         await becomeWatching();
-        await opened.locator(".add-agent").waitFor({ state: "detached" });
+        await page.locator(".add-agent").waitFor({ state: "detached" });
+        await opened.waitFor();
         await press(opened.locator(".agent-picker-trigger"));
         await options.last().waitFor();
         assert.notEqual((await options.last().textContent())?.trim(), ADD_ROW, `no ${ADD_ROW} once watching ${at}`);
@@ -185,9 +190,11 @@ try {
           await worktree.waitFor();
           await worktree.locator(".agent-picker-trigger").click();
           await options.last().click();
-          await worktree.locator(".add-agent .setup-tile").first().waitFor();
+          const worktreeInstalling = page.getByRole("dialog", { name: /^Install an agent · / });
+          await worktreeInstalling.locator(".add-agent .setup-tile").first().waitFor();
           await becomeWatching();
-          await worktree.waitFor({ state: "detached" });
+          // the dialog closes: neither of its names is left
+          await page.getByRole("dialog", { name: /^(New worktree|Install an agent) · / }).waitFor({ state: "detached" });
           await driveAgain();
         }
         console.log(`PASS turning into a watching device takes away the tiles to install, Open setup guide, the Add another agent… panel${width === 1280 ? " and New worktree" : ""} (${at})`);

@@ -123,7 +123,7 @@ try {
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(url);
       await page.locator(".conn-live").waitFor({ state: "attached" });
-      if (await page.locator(".terminal-stack.is-chat").count() === 0) await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+      if (await page.locator(".terminal-stack.is-chat").count() === 0) await page.getByTitle(/^Chat transcript \(.+\)$/).click();
       await page.locator(".terminal-stack.is-chat").waitFor();
       await page.locator(".chat-turn-user").first().waitFor();
       await appFaces(page);

@@ -11,7 +11,9 @@ import { SUPPORTED_ENTRIES } from "./themes.ts";
  * colours the sidebar and tabs draw as indicators (1.4.11). It also holds the floors DESIGN.md
  * promises: `--notice` and the `--syntax-*` colours on their surfaces, and a light
  * row's ANSI colours on its `--term-bg`. The terminal's default foreground is left out: xterm
- * draws every cell with a minimum contrast ratio of its own.
+ * draws every cell with a minimum contrast ratio of its own. The hosted relay app adds its own
+ * pairs: text on `--notice-tint`, its state glyphs (StatusDot) on every surface a row can take,
+ * and the focus ring on the canvas and panel it is drawn over.
  */
 const TEXT_FLOOR = 4.5;
 const INDICATOR_FLOOR = 3;
@@ -27,6 +29,10 @@ const PAIRS: readonly { fg: string; bg: string; floor: number }[] = [
   // the chat's code blocks sit on the panels, the source viewer's on --bg (sourceTheme.ts)
   ...["syntax-function", "syntax-keyword", "syntax-string", "syntax-number", "syntax-type", "syntax-variable", "syntax-meta"]
     .flatMap((fg) => ["bg", "bg-panel", "bg-elevated"].map((bg) => ({ fg, bg, floor: TEXT_FLOOR }))),
+  ...["notice", "text", "text-strong"].map((fg) => ({ fg, bg: "notice-tint", floor: TEXT_FLOOR })),
+  ...["status-done", "notice", "text-dim", "status-working", "status-blocked"]
+    .flatMap((fg) => ["bg", "bg-panel", "bg-elevated", "bg-hover", "notice-tint"].map((bg) => ({ fg, bg, floor: INDICATOR_FLOOR }))),
+  ...["bg", "bg-panel"].map((bg) => ({ fg: "accent", bg, floor: INDICATOR_FLOOR })),
 ];
 /** Dark rows use xterm's own ANSI colours; a light row sets all sixteen. */
 const LIGHT_PAIRS = Object.values(LIGHT_ANSI_ROLES).map((fg) => ({ fg, bg: "term-bg", floor: TEXT_FLOOR }));

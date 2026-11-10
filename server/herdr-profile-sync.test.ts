@@ -327,6 +327,36 @@ describe("automatic herdr machine inheritance", () => {
     expect(job.phase).toBe("authentication");
     manager.action(job.id, { action: "cancel" });
   });
+  it.each(["catalog sync", "update offer", "bridge update"])("keeps approval during an in-flight setup for %s", async (check) => {
+    const authentication = Promise.withResolvers<void>();
+    const start = spyOn(SshConnection.prototype, "start").mockImplementation(async function (challenge) {
+      if (!challenge) throw new Error("Expected an interactive setup");
+      const answer = challenge("Fixture passphrase", false);
+      authentication.resolve();
+      await answer;
+    });
+    cleanups.push(() => start.mockRestore());
+    const { manager, internals } = fixture();
+    if (!profile.target) throw new Error("Expected SSH profile");
+    internals.profileState.allowConnection(profile.id, profile.target);
+    internals.profileState.approve(profile.id, profile.target);
+    manager.syncHerdrProfiles([profile]);
+    const machine = manager.list()[1];
+    if (!machine) throw new Error("Expected catalog machine");
+    const job = manager.setup({ ...profile.target, machine_id: machine.id });
+    try {
+      await authentication.promise;
+      if (check === "catalog sync") {
+        manager.syncHerdrProfiles([profile]);
+        expect(manager.list()[1]?.action_required).not.toBe("connect");
+      } else if (check === "update offer") {
+        machine.state = "error"; machine.action_required = "update_bridge"; machine.remote_ovis = null;
+        expect(manager.list()[1]?.ovis_update).toMatchObject({ how: "bridge", updatable: true, reason: null });
+      } else {
+        expect(() => manager.updateBridge(machine.id)).toThrow("A connection job for this PC is already running");
+      }
+    } finally { manager.action(job.id, { action: "cancel" }); }
+  });
   it("keeps polling other machines promptly when one key cleanup keeps failing", async () => {
     const { manager, internals, dir } = fixture();
     const other = { ...profile, id: "source-b", target: { destination: "other" } };

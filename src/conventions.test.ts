@@ -25,6 +25,13 @@ const NAMED_COLORS = "aliceblue antiquewhite aqua aquamarine azure beige bisque 
 const COLOR_LITERAL = new RegExp(String.raw`#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(|(?<![\w-])(?:${NAMED_COLORS.join("|")})(?![\w-])`, "i");
 
 describe("component CSS", () => {
+  it("sizes viewport fallbacks with dynamic height", () => {
+    const offenders = scan("src/**/*.css").flatMap((file) =>
+      declarationValues(read(file)).filter((value) => /\b100vh\b/i.test(value)).map((value) => `${file}: ${value}`),
+    );
+    fail(offenders, "Use var(--app-height, 100dvh), or 100dvh for a measured-room fallback, so browser chrome and the phone keyboard do not enlarge the visible viewport.");
+  });
+
   // The light theme and the opt-in palettes are only token overrides in src/styles.css: a literal
   // in a component stylesheet stays the same in every theme, and `!important` beats the order the
   // primitives rely on (src/AGENTS.md).

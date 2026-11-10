@@ -5,6 +5,7 @@
  * session waiting for you and the connection on the right. The header's one row keeps only the tabs
  * and their tools.
  */
+import type { ReactNode } from "react";
 import { CircleHelp, GitBranch, Monitor } from "lucide-react";
 
 import "./StatusBar.css";
@@ -19,6 +20,7 @@ export interface StatusBarProps {
   place: string;
   path: string | null;
   session: string | null;
+  pcLoad?: ReactNode;
   watching: boolean;
   waiting: number;
   onNextWaiting: (() => void) | null;
@@ -27,7 +29,7 @@ export interface StatusBarProps {
   connectionWord: string;
 }
 
-export function StatusBar({ machineId, workspaceId, machine, place, path, session, watching, waiting, onNextWaiting, connection, connectionWord }: StatusBarProps) {
+export function StatusBar({ machineId, workspaceId, machine, place, path, session, pcLoad, watching, waiting, onNextWaiting, connection, connectionWord }: StatusBarProps) {
   const t = useT();
   const branch = usePaneBranch(machineId, workspaceId);
   return (
@@ -41,6 +43,7 @@ export function StatusBar({ machineId, workspaceId, machine, place, path, sessio
         <span className="status-bar-text">{branch === DETACHED ? t("Detached HEAD") : branch}</span>
       </span>}
       {session !== null && <span className="status-bar-item status-bar-text">{session}</span>}
+      {pcLoad}
       <span className="status-bar-end">
         {watching && <span className="status-bar-item status-bar-watch">{t("View only")}</span>}
         {/* with no other session to open it stays a button (aria-disabled, not disabled), so the press that
@@ -48,7 +51,7 @@ export function StatusBar({ machineId, workspaceId, machine, place, path, sessio
         {waiting > 0 && <button type="button" className="status-bar-item status-bar-waiting" aria-disabled={onNextWaiting === null || undefined} onClick={() => onNextWaiting?.()}
           title={t("Open the next session waiting for you")}>
           <CircleHelp aria-hidden="true" />
-          {t("{count} waiting for you", { count: waiting })}
+          <span className="status-bar-text">{t("{count} waiting for you", { count: waiting })}</span>
         </button>}
         <span className={`status-bar-item status-bar-conn${connection === "reconnecting" || connection === "lost" ? " is-lost" : ""}`} data-state={connection}>
           <span className="status-bar-dot" aria-hidden="true" />

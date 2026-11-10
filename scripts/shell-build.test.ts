@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { pagePolicy } from "../server/file-view.ts";
 import { CONTENT_SECURITY_POLICY, IMMUTABLE_CACHE, REVALIDATE, shellContentSecurityPolicy } from "../server/static.ts";
 import { REGIONAL_APPS } from "../shared/relay-regions.ts";
+import { injectBootstrap } from "./theme-bootstrap-build.ts";
 import { ANDROID_APP_FINGERPRINTS, APP_ID, IOS_APP_ID, RENDER_PATH, SHELL_META, shellCaddyfile, shellFiles, shellHeaders, shellIndexHtml, shellManifest, shellRedirects } from "./shell-build.ts";
 
 const root = join(import.meta.dir, "..");
@@ -50,6 +51,12 @@ describe("the shell's page", () => {
     expect(html).toContain(SHELL_META);
     expect(indexHtml).not.toContain('name="ovis-shell"');
     expect(html.indexOf(SHELL_META)).toBeLessThan(html.indexOf("</head>"));
+    // the blocking theme boot script reads the mode where it stands, whichever plugin writes first
+    const script = '<script src="/boot.js">';
+    for (const page of [injectBootstrap(html, "/boot.js"), shellIndexHtml(injectBootstrap(indexHtml, "/boot.js"))]) {
+      expect(page.indexOf(SHELL_META)).toBeGreaterThan(-1);
+      expect(page.indexOf(SHELL_META)).toBeLessThan(page.indexOf(script));
+    }
   });
 
   it("links its manifest relative to the page, so a PC's scope installs its own", () => {

@@ -37,7 +37,7 @@ export function AccessGate({ reason, initialCode, consumePairCode, pairingUnconf
   const codeRef = useRef<HTMLInputElement | null>(null);
   const tokenRef = useRef<HTMLInputElement | null>(null);
   const [code, setCode] = useState(initialCode);
-  const [token, setToken] = useState("");
+  // the token lives in its field alone, read at submit and cleared once it unlocked (src/AGENTS.md, G-108)
   const [submitting, setSubmitting] = useState<"code" | "token" | null>(null);
   const [error, setError] = useState<UserError | null>(null);
   const [codeShort, setCodeShort] = useState(false);
@@ -77,11 +77,13 @@ export function AccessGate({ reason, initialCode, consumePairCode, pairingUnconf
   const submitToken = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
     if (submitting) return;
+    const token = tokenRef.current?.value ?? "";
     if (token === "") { tokenRef.current?.focus(); return; }
     setSubmitting("token");
     setError(null);
     try {
       await authenticate(token);
+      if (tokenRef.current) tokenRef.current.value = "";
       onUnlocked();
     } catch (err) {
       setError(err instanceof ApiError && err.status === 401 ? { message: t("Token does not match."), detail: null } : userErrorMessage(err));
@@ -94,8 +96,9 @@ export function AccessGate({ reason, initialCode, consumePairCode, pairingUnconf
     <main className="access-gate-screen">
       <div className="access-gate" data-testid="token-gate">
         <img src="/icons/icon-192.png?v=sheep1" alt="" width="44" height="44" className="access-gate-mark" />
+        {/* the title names the task on this screen, not the app (G-140); the mark above carries the brand */}
         <h1 id="access-gate-title" className="access-gate-title">
-          Ovis
+          {t(reason === "token_required" ? "Unlock" : "Pair this device")}
         </h1>
         {reason === "other_user" && (
           <p className="access-gate-refused" role="status">{t("Tailscale says this device belongs to someone other than this PC's owner. The owner can still let it in with a pairing code.")}</p>
@@ -138,8 +141,6 @@ export function AccessGate({ reason, initialCode, consumePairCode, pairingUnconf
               name="token"
               autoComplete="current-password"
               inputMode="text"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
             />
             <button type="submit" className="access-gate-submit" disabled={submitting !== null}>
               {t(submitting === "token" ? "Unlocking…" : "Unlock")}

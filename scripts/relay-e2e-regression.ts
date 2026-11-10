@@ -214,6 +214,11 @@ async function main(): Promise<void> {
     await page.getByRole("heading", { name: `Pair with ${offer.name}?` }).waitFor();
     assert.ok(!page.url().includes("#offer"), "the offer left the address before the question");
     await page.getByRole("button", { name: "Pair", exact: true }).click();
+    // a first pairing stops at Ready: nothing opens until Open PC (lib/relay/shell.tsx)
+    const ready = page.locator('[role=dialog][data-add-pc-phase="ready"]');
+    await ready.waitFor();
+    assert.equal(await page.locator(".app").count(), 0, "Ready is shown before the app");
+    await ready.getByRole("button", { name: "Open PC" }).click();
     await inApp(page);
   }
   /** The phone's saved record for a PC, or null. */
@@ -355,7 +360,7 @@ async function main(): Promise<void> {
       assert.equal(removed.status, 204, await removed.text());
       // the session ends; the app's next sign-in, a page timer away, is refused for good
       await frames(page, "the revoked screen", async () => await state(page, "revoked").count() === 1, 60_000);
-      await page.getByRole("heading", { name: "This phone was removed from Desk PC" }).waitFor();
+      await page.getByRole("heading", { name: "This device was removed from Desk PC" }).waitFor();
       assert.equal(await page.locator(".app").count(), 0, "the app is gone once the PC turned the phone away");
       assert.equal(await saved(page, deskOffer.server_id), null, "the revoked phone forgot its key");
       await shot(page, "revoked");

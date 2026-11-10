@@ -58,7 +58,7 @@ try {
       await page.locator(`.pane-select[title^="${pane} —"][aria-current="true"]`).first().waitFor({ state: "attached" });
     }
     const stack = chatStack(page, pane);
-    if (await stack.count() === 0) await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+    if (await stack.count() === 0) await page.getByTitle(/^Chat transcript \(.+\)$/).click();
     await stack.waitFor();
     return stack.getByRole("log");
   };

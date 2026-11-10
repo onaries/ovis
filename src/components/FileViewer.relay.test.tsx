@@ -41,7 +41,7 @@ afterEach(async () => {
  * URLs (the download link's, or an image's) fail as a file past the 64 MiB blob cap does.
  * `refused` settles once every expected full-file request has been refused.
  */
-function relayPc(info: FileInfo, expected: number): { transport: Transport; refused: Promise<string[]> } {
+function relayPc(info: FileInfo, expected: number, body: () => Response = () => new Response("hello\n", { status: 206, headers: { "content-range": "bytes 0-5/6" } }), refusal: () => Error = () => new RelayResourceTooLargeError()): { transport: Transport; refused: Promise<string[]> } {
   const paths: string[] = [];
   let done: (paths: string[]) => void = () => {};
   const refused = new Promise<string[]>((resolve) => { done = resolve; });
@@ -51,12 +51,12 @@ function relayPc(info: FileInfo, expected: number): { transport: Transport; refu
     fetch: async (input) => {
       const url = String(input);
       if (url.includes("/api/fs/stat")) return Response.json(info);
-      return new Response("hello\n", { status: 206, headers: { "content-range": "bytes 0-5/6" } });
+      return body();
     },
     resourceUrl: (path) => {
       paths.push(path);
       if (paths.length >= expected) done(paths);
-      return Promise.reject(new RelayResourceTooLargeError());
+      return Promise.reject(refusal());
     },
   };
   return { transport, refused };
@@ -64,8 +64,8 @@ function relayPc(info: FileInfo, expected: number): { transport: Transport; refu
 
 const shown = (): string => JSON.stringify(renderer?.toJSON());
 
-async function open(info: FileInfo, expected: number): Promise<string[]> {
-  const pc = relayPc(info, expected);
+async function open(info: FileInfo, expected: number, body?: () => Response, refusal?: () => Error): Promise<string[]> {
+  const pc = relayPc(info, expected, body, refusal);
   setTransport(pc.transport);
   await act(async () => {
     renderer = create(createElement(SettingsProvider, { children: createElement(FileViewer, { path: info.path, paneId: null, onClose() {}, page: true }) }));
@@ -96,4 +96,21 @@ test("an image too large to show inline is offered as a download, not fetched fo
   expect(paths).toEqual([expect.stringContaining("download=1")]);
   expect(shown()).toContain("download it to view");
   expect(shown()).not.toContain("Too large to open on the phone");
+});
+
+test("a text preview whose PC went away after its stat says the PC is unreachable, not that the file is unreadable", async () => {
+  // Given a text file whose stat answered, and whose body read the bridge refuses because the PC is offline
+  const away = () => Response.json({ error: { code: "machine_offline", message: "PC is offline" } }, { status: 502 });
+  await open({ path: "/w/a.txt", name: "a.txt", size: 6, modified: "2026-10-31T00:00:00Z", mime: "text/plain", kind: "text" }, 1, away);
+  // Then the alert names the unreachable PC
+  expect(shown()).toContain("That PC is not reachable right now.");
+  expect(shown()).not.toContain("The file could not be opened.");
+});
+
+test("a video whose relay transfer dropped does not point at a download link that has no address", async () => {
+  // Given a relay video whose one blob transfer (the body's, which the download link shares) fails in transit
+  await open({ path: "/w/clip.mp4", name: "clip.mp4", size: 6, modified: "2026-10-31T00:00:00Z", mime: "video/mp4", kind: "video" }, 1, undefined, () => new Error("relay channel closed"));
+  // Then the body says it failed, without the download advice the dead link cannot follow
+  expect(shown()).toContain("The file could not be opened.");
+  expect(shown()).not.toContain("Download it or open the raw file.");
 });

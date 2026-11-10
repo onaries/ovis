@@ -190,8 +190,9 @@ then waits for the approval. A PC that declines, or does not approve in time, le
 
 **Pairing with a typed code.** For a device with no camera pointed at the PC, **Show a code to
 type** under the QR code shows ten characters, `XXXXX-XXXXX` (Crockford base32: no I, L, O or U;
-O, I and L typed are read as 0, 1 and 1), and **Pair with a code** on app.ovis.sh's front page takes
-them. The code finds the PC and hands the device the same offer the QR code carries, then the
+O, I and L typed are read as 0, 1 and 1), and **Pair with a code** on app.ovis.sh takes them
+(on its front page, or behind **Pair with a QR or code** on the sign-in screen when the account
+service runs). The code finds the PC and hands the device the same offer the QR code carries, then the
 device pairs with the six-digit code in it as a scanned QR code does: nothing else admits it
 ([`shared/relay-pair-code.ts`](../shared/relay-pair-code.ts),
 [`server/relay/pair-code.ts`](../server/relay/pair-code.ts),
@@ -707,7 +708,10 @@ run yourself need no account and no pass.
   The request names the pass forms the PC reads (`pass_versions: [1, 2]`): the service signs a v2
   pass (one that can say new client sessions to the PC are not allowed) only for a PC that names
   it, and only once every relay runs a version that reads it. An older PC names none and gets v1.
-  Relays accept v2 but do not act on `new` yet: that is enforced by a later relay change.
+  While passes are enforced and the PC's pass says `new` 0, a relay closes a client the PC has
+  identified as a device new to it (named on its control socket with `new_session`) with `4403`
+  (`no new sessions for this server`); its own devices and the clients already connected stay. The
+  PC does not send `new_session` yet.
 - **Keeping it.** The pass lasts 48 hours. The PC keeps it in `relay/pass.json` (readable by your user
   only), so a restart or an account service outage costs nothing while it holds, and asks for the
   next one after 12 hours, backing off (and honoring `Retry-After`) when the service does not answer.

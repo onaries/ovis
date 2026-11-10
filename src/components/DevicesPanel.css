@@ -44,10 +44,44 @@
   vertical-align: middle;
 }
 
-/* Check now sits above the list's right edge, over the rows it refreshes */
+/* Check now sits above the list's right edge, over the rows it refreshes, where no PC row of its own holds it */
 .devices-check {
   display: flex;
   justify-content: flex-end;
+}
+
+/* Check now at the end of this PC's own row (SettingsDialog's MyPcRows): no line of its own, sized to the row's text */
+.my-device-check:empty {
+  display: none;
+}
+
+/* beside it, this PC's name wraps even where it is one long word (a host name without hyphens) */
+.my-device-self .settings-label {
+  overflow-wrap: anywhere;
+}
+
+.my-device-check .btn {
+  height: calc(var(--control-h) - var(--space-2));
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+}
+
+/* a finger keeps the touch target through an invisible expander, as the segmented options do (styles.css): the
+   button stays the row's size, and the two-line row is taller than the target */
+@media (pointer: coarse), (any-pointer: coarse) {
+  .my-device-check .btn {
+    position: relative;
+    height: calc(var(--control-h) - var(--space-2));
+    min-width: var(--touch-target);
+  }
+
+  /* measured from inside the button's border (100% is its padding box), so the border's width is added back on
+     each side; from the button's own height, so a button already a finger tall (pointer: coarse) reaches no further */
+  .my-device-check .btn::before {
+    content: "";
+    position: absolute;
+    inset: min(calc(-1 * var(--hairline)), calc((100% + 2 * var(--hairline) - var(--touch-target)) / 2 - var(--hairline))) 0;
+  }
 }
 
 .devices-actions,

@@ -145,7 +145,7 @@ export function ConnectPhoneDialog({ plan, pairUrl, relay, readOnly, closesGate,
     <div className="modal-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div ref={surface} className="modal connect-phone-dialog" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} tabIndex={-1}>
         <header className="modal-header">
-          <h2 className="modal-title" id={`${id}-title`} tabIndex={-1}>{t("Add a connection")}</h2>
+          <h1 className="modal-title" id={`${id}-title`} tabIndex={-1}>{t("Add a connection")}</h1>
           <button type="button" className="icon-button" aria-label={t("Close")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>
         <div className="modal-body connect-phone-body">
@@ -333,9 +333,12 @@ export function RelayTab({ relay, closesGate, signedIn, joinBySignIn, account, p
     setSwitchError(null);
     try { await relay.request(next ? "start" : "stop"); } catch (reason) { setSwitchError(failureText(reason)); }
   };
+  // the switch's own name stays Ovis relay (the tab's, and what a screen reader hears); its visible label says
+  // what turning it on does, and while the relay connects the same line says so, so on is not taken for online
+  const connecting = on && relay.status?.phase !== "online";
   const relaySwitch = switchable && (
-    <div className="connect-relay-switch" title={closesGate && !on ? t("Turning on the relay closes the device gate: a new browser then needs a pairing code or the access token.") : undefined}>
-      <span className="settings-label">{t("Ovis relay")}</span>
+    <div className="connect-relay-switch" aria-busy={connecting || undefined} title={closesGate && !on ? t("Turning on the relay closes the device gate: a new browser then needs a pairing code or the access token.") : undefined}>
+      <span className="settings-label">{t("Let this PC be reached from anywhere")}{connecting && <span className="connect-relay-state" role="status"> · {statusText(t, relay.status!)}</span>}</span>
       <Toggle label={t("Ovis relay")} checked={on} onChange={(next) => { if (!relay.pending) void switchRelay(next); }} />
     </div>
   );
@@ -444,6 +447,9 @@ export function RelayRoute({ relay, readOnly, phone = false, pairHere = false, s
   );
 }
 
+/** the newest code request of any opening: the server keeps one pending code, so an older answer is a dead code */
+let latestPairRequest = 0;
+
 /**
  * A pairing code for a phone that can already open this address, with the QR code that opens it
  * with the code filled in. The server keeps one pending code: a code started here is announced, so
@@ -456,6 +462,9 @@ export function CodeRoute({ pairUrl, startAtOnce, phone = false, compact = false
   const [left, setLeft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // a code request out: the buttons that would start another wait for it, so a second tap sends no second request
+  const [busy, setBusy] = useState(false);
+  const requesting = useRef(false);
   const linkRef = useRef<HTMLAnchorElement>(null);
   const announcing = useRef(false);
 
@@ -478,13 +487,23 @@ export function CodeRoute({ pairUrl, startAtOnce, phone = false, compact = false
   }, [code]);
 
   const pair = async () => {
+    if (requesting.current) return;
+    requesting.current = true;
+    setBusy(true);
     setError(null);
+    const request = ++latestPairRequest;
     try {
       const fresh = await startPairing();
+      // a dialog closed and opened again asked after this one: its answer is the code that pairs, not this one
+      if (request !== latestPairRequest) return;
       setCode(fresh);
       announcing.current = true;
       try { announcePairingCode(fresh); } finally { announcing.current = false; }
     } catch (reason) { setError(failureText(reason)); }
+    finally {
+      requesting.current = false;
+      setBusy(false);
+    }
   };
 
   // once per opening from Pair a device; switching back to this route later waits for the button
@@ -497,12 +516,14 @@ export function CodeRoute({ pairUrl, startAtOnce, phone = false, compact = false
 
   const spaced = code ? `${code.code.slice(0, 3)} ${code.code.slice(3)}` : "";
   const qrValue = code && pairUrl ? `${pairUrl.replace(/\/$/, "")}/?pair=${code.code}` : null;
-  const newCode = <button type="button" className="btn" onClick={() => void pair()}><RefreshCw aria-hidden="true" />{t("New code")}</button>;
+  const newCode = <button type="button" className="btn" disabled={busy} aria-busy={busy || undefined} onClick={() => void pair()}><RefreshCw aria-hidden="true" />{t("New code")}</button>;
   // Connect a device: the QR code and the code side by side, Refresh and Copy; a code that ran out leaves Refresh
   if (compact) return (
     <div className="connect-phone-code" role="status">
       <CompactPair qr={qrValue} qrLabel={code === null ? t("Pairing code") : t("QR code that pairs a phone with code {code}", { code: code.code })}
-        code={code?.code ?? null} shown={code === null ? null : spaced} codeLabel={t("Pairing code")} onRefresh={() => void pair()} />
+        code={code?.code ?? null} shown={code === null ? null : spaced} codeLabel={t("Pairing code")} busy={busy}
+        qrNote={busy ? undefined : code === null ? t("This code expired.") : pairUrl === null ? t("No address a phone can open: type the code instead.") : undefined}
+        onRefresh={() => void pair()} />
       {error !== null && <p className="settings-hint" role="alert">{error}</p>}
     </div>
   );
@@ -511,7 +532,7 @@ export function CodeRoute({ pairUrl, startAtOnce, phone = false, compact = false
       {code === null ? (
         <>
           <p className="settings-description">{t("For a phone that can already open this address: on the same Wi-Fi, or through a tunnel or proxy.")}</p>
-          <div className="phone-actions"><button type="button" className="btn btn-primary" onClick={() => void pair()}>{t("Get a pairing code")}</button></div>
+          <div className="phone-actions"><button type="button" className="btn btn-primary" disabled={busy} aria-busy={busy || undefined} onClick={() => void pair()}>{t("Get a pairing code")}</button></div>
         </>
       ) : phone ? (
         // on the phone itself the code is read off its screen and typed on the other device; its QR code waits behind Show QR code
@@ -538,9 +559,7 @@ export function CodeRoute({ pairUrl, startAtOnce, phone = false, compact = false
                 <button type="button" className="btn btn-ghost" onClick={() => void copyText(qrValue, linkRef.current).then((ok) => { if (ok) { setCopied(true); window.setTimeout(() => setCopied(false), 1600); } })}>{t(copied ? "Copied" : "Copy")}</button>
               </p>
             )}
-            <div className="phone-actions">
-              <button type="button" className="btn" onClick={() => void pair()}><RefreshCw aria-hidden="true" />{t("New code")}</button>
-            </div>
+            <div className="phone-actions">{newCode}</div>
           </div>
         </div>
       )}

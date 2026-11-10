@@ -50,9 +50,11 @@ export function accountMetas(env: Record<string, string | undefined>): string[] 
 export function shellIndexHtml(html: string, env: Record<string, string | undefined> = {}): string {
   if (!MANIFEST_LINK.test(html)) throw new Error("index.html must link /manifest.webmanifest for the shell to make it relative");
   const linked = html.replace(MANIFEST_LINK, (_, query: string | undefined) => `<link rel="manifest" href="manifest.webmanifest${query ?? ""}"`);
-  const head = linked.indexOf("</head>");
-  if (head === -1) throw new Error("index.html must hold a </head>");
-  return `${linked.slice(0, head)}${[SHELL_META, ...accountMetas(env)].map((meta) => `  ${meta}\n`).join("")}  ${linked.slice(head)}`;
+  // first in <head>: the theme boot script (scripts/theme-bootstrap-build.ts) runs where it stands and reads the mode
+  const head = /<head>\n?/.exec(linked);
+  if (head === null) throw new Error("index.html must hold a <head>");
+  const at = head.index + head[0].length;
+  return `${linked.slice(0, at)}${[SHELL_META, ...accountMetas(env)].map((meta) => `    ${meta}\n`).join("")}${linked.slice(at)}`;
 }
 
 /**

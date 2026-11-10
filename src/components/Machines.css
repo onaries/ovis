@@ -75,7 +75,7 @@ button.machine-title:focus-visible { outline-offset: calc(var(--ring-offset) * -
 .machine-menu-head {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-half);
   min-width: 0;
   line-height: var(--lh-tight);
 }
@@ -216,6 +216,14 @@ button.machine-title:focus-visible { outline-offset: calc(var(--ring-offset) * -
   }
 }
 
+/* in one-line rows the phone drawer's header has the + for a new workspace: a PC's own + there would only widen
+   its line. The fold then keeps the column a workspace row's ... stands in, the status cell's width short of the
+   edge. Two-line rows draw no header +, so each PC keeps its own */
+@media (max-width: 768px) {
+  .machine-group:not(.is-two-line) .machine-new { display: none; }
+  .machine-group:not(.is-two-line) .machine-toggle { margin-right: var(--side-box); }
+}
+
 .machine-state {
   display: flex;
   flex-direction: column;
@@ -339,6 +347,15 @@ button.machine-title:focus-visible { outline-offset: calc(var(--ring-offset) * -
   cursor: pointer;
 }
 
+/* a finger's floor (G-091): the disclosure row takes a --touch-target height by its own padding, its words and
+   marker where they were in the row */
+@media (pointer: coarse) {
+  .machine-dialog summary {
+    min-height: var(--touch-target);
+    padding-block: max(var(--space-2), calc((var(--touch-target) - 1lh) / 2));
+  }
+}
+
 .machine-challenge pre {
   font-size: var(--fs-sm);
   white-space: pre-wrap;
@@ -372,13 +389,13 @@ button.machine-title:focus-visible { outline-offset: calc(var(--ring-offset) * -
   cursor: pointer;
 }
 
-/* a finger's floor: the toggle keeps its one line and takes a --touch-target hit area, both ways,
-   through an invisible expander around it */
+/* a finger's floor (G-091): the toggle keeps its one line and takes a --touch-target height by its own padding and
+   at least that width, the words where they were */
 @media (pointer: coarse) {
-  .machine-ssh-fold > summary::before {
-    content: "";
-    position: absolute;
-    inset: calc((1lh - var(--touch-target)) / 2) min(0px, calc((100% - var(--touch-target)) / 2));
+  .machine-ssh-fold > summary {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+    padding-block: calc((var(--touch-target) - 1lh) / 2);
   }
 }
 

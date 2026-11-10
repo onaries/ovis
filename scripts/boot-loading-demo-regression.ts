@@ -3,8 +3,10 @@
  * module takes seconds, and a page that shows nothing until it runs looks frozen. Per case the entry
  * module is held by a request gate, as a slow link holds it: a loading status must show in the page
  * (index.html's own markup, under the app's Content-Security-Policy), turn once a step, keep still
- * under reduced motion, and be gone once the app has drawn. No herdr session and no user state: the
- * demo build on a loopback server on port 0 and a temporary directory, removed at the end.
+ * under reduced motion, and be gone once the app has drawn. Its colours are the first frame's theme:
+ * a device with no saved theme follows the OS colour scheme, a saved theme wins over it (themeBoot.ts
+ * DEFAULT_APPEARANCE). No herdr session and no user state: the demo build on a loopback server on
+ * port 0 and a temporary directory, removed at the end.
  *
  * UI_EVIDENCE_DIR=<dir>: also writes a screenshot of each case while the app is held.
  */
@@ -22,14 +24,18 @@ const evidence = process.env["UI_EVIDENCE_DIR"] || null;
 const app = mkdtempSync(join(tmpdir(), "herdr-boot-loading-"));
 
 interface Case { name: string; context: BrowserContextOptions; reducedMotion?: boolean; settings?: Record<string, string> }
+// an unsaved device boots on the OS scheme: the phone on a dark one, the desktop and the reduced-motion
+// phone on Playwright's light default; a saved light theme on a dark OS boots light all the same
 const CASES: Case[] = [
-  { name: "phone", context: { ...devices["iPhone 14"] } },
+  { name: "phone", context: { ...devices["iPhone 14"], colorScheme: "dark" } },
   { name: "desktop", context: { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 } },
   { name: "phone, reduced motion", context: { ...devices["iPhone 14"] }, reducedMotion: true },
-  { name: "phone, saved light theme", context: { ...devices["iPhone 14"] }, settings: { theme: "light" } },
+  { name: "phone, saved light theme", context: { ...devices["iPhone 14"], colorScheme: "dark" }, settings: { theme: "light" } },
 ];
+/** the theme a case's first frame is on: its saved choice, else the OS scheme it emulates */
+const themeOf = (item: Case): "dark" | "light" => item.settings?.["theme"] === "light" ? "light" : item.settings?.["theme"] === "dark" || item.context.colorScheme === "dark" ? "dark" : "light";
 
-/** the ring's color per case: a saved light theme must not draw the dark one's */
+/** the ring's color per case: on the same dark OS, a saved light theme must not draw the unsaved device's dark one */
 const rings = new Map<string, string>();
 let browser: Browser | null = null;
 let server: ReturnType<typeof Bun.serve> | null = null;
@@ -100,6 +106,8 @@ try {
       // a fast start does not flash it: it shows only after a moment
       assert.equal(shown.show.name, "boot-show", `${item.name}: the status waits before it shows`);
       assert.ok(shown.show.delay >= 300 && shown.show.delay <= 1000, `${item.name}: the status shows after a moment, and within a second (${shown.show.delay} ms)`);
+      // the first frame's theme is the row the app goes on drawing: the saved one, else the OS scheme
+      assert.equal(await page.evaluate(() => document.documentElement.dataset["theme"]), themeOf(item), `${item.name}: the page boots on the ${themeOf(item)} theme`);
       rings.set(item.name, shown.spinner.border);
       if (item.reducedMotion) assert.equal(shown.spinner.animation, "none", `${item.name}: under reduced motion the spinner keeps still`);
       else {
@@ -132,5 +140,5 @@ try {
   await server?.stop(true);
   rmSync(app, { recursive: true, force: true });
 }
-assert.notEqual(rings.get("phone, saved light theme"), rings.get("phone"), "the ring takes the saved theme's colors");
+assert.notEqual(rings.get("phone, saved light theme"), rings.get("phone"), "the ring takes the saved theme's colors, not the OS scheme's");
 console.log(`boot loading: ${CASES.length} cases`);

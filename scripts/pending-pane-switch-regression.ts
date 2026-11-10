@@ -247,10 +247,11 @@ try {
   {
     await report("working");
     const pending = await queue("never beside a held draft");
-    const toggle = (title: string) => page.getByTitle(title, { exact: true }).click();
+    // the lens buttons' titles name the shortcut as the platform writes it (⌘⇧J on a Mac, Ctrl+Shift+J elsewhere)
+    const toggle = (title: RegExp) => page.getByTitle(title).click();
     // keys typed while the terminal is not ready for input are held as a draft
     routed!.send(JSON.stringify({ type: "input-ready", pane_id: pane, ready: false }));
-    await toggle("Live terminal (⌘⇧J)");
+    await toggle(/^Live terminal \(.+\)$/);
     const waiting = current(pane).locator(".terminal-banner", { hasText: "Waiting for terminal input…" });
     await waiting.waitFor();
     await current(pane).locator(".xterm-helper-textarea").pressSequentially("abc");
@@ -258,7 +259,7 @@ try {
     // ready again: the draft still waits for Send or Discard
     routed!.send(JSON.stringify({ type: "input-ready", pane_id: pane, ready: true }));
     await waiting.waitFor({ state: "hidden" });
-    await toggle("Chat transcript (⌘⇧J)");
+    await toggle(/^Chat transcript \(.+\)$/);
     const row = rows().filter({ hasText: pending.text });
     const actionAt = sent.length;
     await row.getByRole("button", { name: /^Send now:/ }).click();
@@ -276,10 +277,10 @@ try {
     await composer().fill("");
     await noBytes(delivered, "a message box send beside a held draft types nothing");
     // the row is not marked unconfirmed: once the draft is discarded, Send now delivers it
-    await toggle("Live terminal (⌘⇧J)");
+    await toggle(/^Live terminal \(.+\)$/);
     await current(pane).locator(".draft-discard").click();
     await current(pane).locator(".terminal-banner-draft").waitFor({ state: "detached" });
-    await toggle("Chat transcript (⌘⇧J)");
+    await toggle(/^Chat transcript \(.+\)$/);
     await row.getByRole("button", { name: /^Send now:/ }).click();
     delivered += paste(pending.text);
     await until(() => bytes() === delivered, "Send now after the draft is discarded delivers the message once");

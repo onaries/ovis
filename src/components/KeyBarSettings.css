@@ -95,7 +95,8 @@
 }
 
 .key-bar-settings-actions .icon-button:disabled {
-  visibility: hidden;
+  opacity: 0.38;
+  cursor: default;
 }
 
 .key-bar-settings-field {
@@ -152,6 +153,7 @@
   background: var(--bg-elevated);
   border-color: var(--accent);
   color: var(--text-strong);
+  font-weight: var(--fw-selected);
 }
 
 .key-bar-settings-combo {
@@ -210,35 +212,35 @@
 .key-bar-phone {
   display: inline-flex;
   flex-direction: column;
-  gap: 1px;
-  width: 22px;
-  height: 36px;
-  padding: 2px;
-  border: 1.5px solid var(--text-dim);
-  border-radius: 5px;
+  gap: var(--hairline);
+  width: var(--mark-size);
+  height: calc(var(--control-h) + var(--space-half));
+  padding: var(--space-half);
+  border: var(--hairline) solid var(--text-dim);
+  border-radius: var(--radius-xs);
 }
 
 .key-bar-phone-screen {
   flex: 1 1 auto;
-  border-radius: 1px;
+  border-radius: var(--hairline);
   background: var(--bg-hover);
 }
 
 .key-bar-phone-bar {
   flex: none;
-  height: 4px;
-  border-radius: 1px;
+  height: var(--space-1);
+  border-radius: var(--hairline);
   background: var(--accent);
 }
 
 .key-bar-phone[data-bar="folded"] .key-bar-phone-bar {
-  height: 1px;
+  height: var(--hairline);
 }
 
 .key-bar-phone-keyboard {
   flex: none;
-  height: 12px;
-  border-radius: 1px;
+  height: var(--space-3);
+  border-radius: var(--hairline);
   background: var(--text-dim);
   opacity: 0.55;
 }

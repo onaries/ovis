@@ -133,6 +133,14 @@ describe("shortcutDisplayKeys", () => {
     expect(shortcutDisplayKeys("settings", { settings: null })).toEqual([]);
     expect(shortcutDisplayKeys("voice", { voice: "p" })).toEqual(["Mod", "Shift", "Space"]);
   });
+
+  // listed only, as voice: the composer's own Alt+Enter, never an app action or a binding to record
+  it("lists the composer's Alt+Enter hold, never dispatched or rebound", () => {
+    expect(SHORTCUTS.find((shortcut) => shortcut.id === "hold-message")?.keys).toEqual(["Alt", "Enter"]);
+    expect(shortcutDisplayKeys("hold-message", { "hold-message": "p" })).toEqual(["Alt", "Enter"]);
+    const altEnter: ShortcutEventLike = { key: "Enter", code: "Enter", ctrlKey: false, metaKey: false, shiftKey: false, altKey: true };
+    for (const mac of [false, true]) expect(matchShortcut(altEnter, mac, { "hold-message": "alt+enter" })).toBeNull();
+  });
 });
 
 describe("non-Latin keyboard layouts", () => {

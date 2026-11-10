@@ -45,7 +45,7 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
   let activeTab: { dataset: { tabId: string } };
 
   beforeEach(() => {
-    for (const key of ["window", "document", "navigator", "getComputedStyle", "localStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    for (const key of ["window", "document", "navigator", "getComputedStyle", "localStorage", "HTMLElement", "CSS", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     stored.clear();
     requested = [];
     activeTab = { dataset: { tabId: "w1:t1" } };
@@ -55,6 +55,7 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
     const define = (key: string, value: unknown) => Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
     define("IS_REACT_ACT_ENVIRONMENT", true);
     define("HTMLElement", class HTMLElement {});
+    define("CSS", { escape: (value: string) => value });
     define("localStorage", storage);
     define("navigator", { languages: ["en-US"], platform: "Linux" });
     define("window", { localStorage: storage, matchMedia: () => media, innerWidth: 1280, innerHeight: 800, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), requestAnimationFrame: () => 1, cancelAnimationFrame() {}, setTimeout, clearTimeout });
@@ -165,6 +166,26 @@ describe("the tab strip on a PC the Herdr app lays out", () => {
       expect(await menuOf()).toEqual(["move-right", "move-workspace", "new-agent-tab", "rename-tab", "close-tab"]);
       await keyDown("F2");
       expect(renameFields()).toBe(1);
+    });
+  });
+
+  it("keeps a tab's inline rename draft across Escape and blur until it is saved", async () => {
+    await withFetch(async () => {
+      await draw(TUI);
+      const input = () => renderer!.root.findByProps({ className: "input tab-strip-rename" });
+      await act(async () => tab().props.onDoubleClick());
+      expect(renameFields()).toBe(1);
+      await act(async () => input().props.onChange({ target: { value: "Escape draft survives" } }));
+      await act(async () => input().props.onKeyDown({ key: "Escape", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 27 } }));
+      expect(renameFields()).toBe(0);
+      expect(requested).toEqual([]);
+
+      await act(async () => tab().props.onDoubleClick());
+      expect(input().props.value).toBe("Escape draft survives");
+
+      await act(async () => input().props.onKeyDown({ key: "Enter", stopPropagation() {}, nativeEvent: { isComposing: false, keyCode: 13 } }));
+      expect(renameFields()).toBe(0);
+      expect(requested).toEqual(["/api/tab/rename"]);
     });
   });
 });

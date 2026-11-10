@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { FolderSearch, X } from "lucide-react";
 
 import "./FilesDialog.css";
@@ -34,12 +34,14 @@ export interface FilesDialogProps {
   panelStart?: ReactNode;
   /** docked, with a file or web page in its place: kept, folder and tab, for when that closes */
   covered?: boolean;
+  /** the PC's name where it says which PC (another PC, or this one among several): Pull request names it */
+  machineName?: string;
 }
 
 type Tab = "browse" | "changes" | "pr" | "docs";
 
 /** The files of the pane's folder (and any other), each opened in the file viewer, and the changes of its repository, each opened as a diff. */
-export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, onBrowseFolders, onClose, docked = false, panelStart, covered = false }: FilesDialogProps) {
+export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, onBrowseFolders, onClose, docked = false, panelStart, covered = false, machineName }: FilesDialogProps) {
   const t = useT();
   const machineId = useMachineId();
   const phone = useMediaQuery("(max-width: 480px)");
@@ -81,6 +83,28 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
     if (next === "pr") setPrVisited(true);
     if (next === "docs") setDocsVisited(true);
   };
+  const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ browse: null, changes: null, pr: null, docs: null });
+  const tabs: readonly { id: Tab; label: string }[] = [
+    { id: "browse", label: t("Browse") },
+    { id: "changes", label: t("Changes") },
+    { id: "pr", label: t("Pull request") },
+    { id: "docs", label: t("Documents") },
+  ];
+  const onTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
+    // Alt+Left and the like are the browser's (Back); only the bare keys move between the tabs
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const count = tabs.length;
+    const nextIndex = event.key === "ArrowRight" ? (index + 1) % count
+      : event.key === "ArrowLeft" ? (index - 1 + count) % count
+      : event.key === "Home" ? 0
+      : event.key === "End" ? count - 1
+      : null;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const next = tabs[nextIndex]!.id;
+    show(next);
+    tabRefs.current[next]?.focus();
+  };
   // the folder the browser shows now (it tells each one it opens), for the pane it showed it for;
   // else the one the dialog opened at
   const folder = useRef<{ pane: string; path: string } | null>(null);
@@ -89,24 +113,39 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
     <header className="modal-header">
       <h2 className="modal-title" id="files-dialog-title">{t("Files")}</h2>
       <div className="segmented files-dialog-tabs" role="group" aria-label={t("Show")}>
-        <button type="button" aria-pressed={tab === "browse"} onClick={() => show("browse")}>{t("Browse")}</button>
-        <button type="button" aria-pressed={tab === "changes"} onClick={() => show("changes")}>{t("Changes")}</button>
-        <button type="button" aria-pressed={tab === "pr"} onClick={() => show("pr")}>{t("Pull request")}</button>
-        <button type="button" aria-pressed={tab === "docs"} onClick={() => show("docs")}>{t("Documents")}</button>
+        {tabs.map((item, index) => {
+          const selected = tab === item.id;
+          // a panel not visited yet is not in the page: only a mounted one is named as controlled
+          const mounted = item.id === "browse" || (item.id === "changes" ? changesVisited : item.id === "pr" ? prVisited : docsVisited);
+          return (
+            <button
+              key={item.id}
+              ref={(node) => { tabRefs.current[item.id] = node; }}
+              id={`files-dialog-tab-${item.id}`}
+              type="button"
+              aria-pressed={selected}
+              aria-controls={mounted ? `files-dialog-panel-${item.id}` : undefined}
+              onClick={() => show(item.id)}
+              onKeyDown={(event) => onTabKeyDown(event, index)}
+            >
+              <span className="files-dialog-tab-label">{item.label}</span>
+            </button>
+          );
+        })}
       </div>
       {!phone && <button type="button" className="icon-button" aria-label={t("Browse folders in the palette")} title={t("Browse folders in the palette")} onClick={browseFolders}><FolderSearch aria-hidden="true" /></button>}
-      <button type="button" className="icon-button" aria-label={t("Close files")} onClick={onClose}><X aria-hidden="true" /></button>
+      <button type="button" className="icon-button" aria-label={t("Close files")} title={t("Close files")} onClick={onClose}><X aria-hidden="true" /></button>
     </header>
     <div className="modal-body">
       {/* the dialog stays open across a pane switch (Next pane): the browser starts over on the new
           pane's folder, as Changes reads the new pane, instead of listing the pane it was opened on */}
-      <div hidden={tab !== "browse"}><DirectoryBrowser key={`${machineId}:${paneId}`} start={start} onOpenFile={onOpenFile} onFolder={(path) => { folder.current = { pane: paneId, path }; }} /></div>
+      <div id="files-dialog-panel-browse" className="files-dialog-panel" role="region" aria-labelledby="files-dialog-tab-browse" hidden={tab !== "browse"}><DirectoryBrowser key={`${machineId}:${paneId}`} start={start} onOpenFile={onOpenFile} onFolder={(path) => { folder.current = { pane: paneId, path }; }} /></div>
       {/* not keyed by PC and pane: Changes keeps its scope (Branch) across a switch and itself drops answers for the target left behind */}
-      {changesVisited && <div hidden={tab !== "changes"}><RepoChanges paneId={paneId} directory={start} onOpenDiff={onOpenDiff} /></div>}
+      {changesVisited && <div id="files-dialog-panel-changes" className="files-dialog-panel" role="region" aria-labelledby="files-dialog-tab-changes" hidden={tab !== "changes"}><RepoChanges paneId={paneId} directory={start} onOpenDiff={onOpenDiff} /></div>}
       {/* one panel per PC and pane: an answer or a merge still on its way for the last pane never lands in this one */}
-      {prVisited && <div hidden={tab !== "pr"}><PullRequestPanel key={`${machineId}:${paneId}`} paneId={paneId} directory={start} /></div>}
+      {prVisited && <div id="files-dialog-panel-pr" className="files-dialog-panel" role="region" aria-labelledby="files-dialog-tab-pr" hidden={tab !== "pr"}><PullRequestPanel key={`${machineId}:${paneId}`} paneId={paneId} directory={start} machineName={machineName} /></div>}
       {/* one list per PC and pane, as the browser: a pane switch reads the new pane's folder */}
-      {docsVisited && <div hidden={tab !== "docs"}><MarkdownDocuments key={`${machineId}:${paneId}`} paneId={paneId} onOpenFile={onOpenFile} /></div>}
+      {docsVisited && <div id="files-dialog-panel-docs" className="files-dialog-panel" role="region" aria-labelledby="files-dialog-tab-docs" hidden={tab !== "docs"}><MarkdownDocuments key={`${machineId}:${paneId}`} paneId={paneId} onOpenFile={onOpenFile} /></div>}
     </div>
   </>;
   if (docked) return (

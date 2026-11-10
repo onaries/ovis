@@ -87,6 +87,7 @@ run_script scripts/ghostty-font-browser-regression.ts
 run_script scripts/mirror-fold-demo-regression.ts
 run_script scripts/chat-no-rewind-demo-regression.ts
 run_script scripts/terminal-cjk-punctuation-regression.ts
+run_script scripts/terminal-selection-cell-bg-regression.ts
 run_script scripts/terminal-late-faces-regression.ts
 run_script scripts/terminal-hangul-seam-regression.ts
 run_script scripts/terminal-sync-output-regression.ts
@@ -99,11 +100,13 @@ run_script scripts/external-link-tab-regression.ts
 run_script scripts/key-bar-customization-demo-regression.ts
 run_script scripts/key-bar-hold-repeat-regression.ts
 run_script scripts/settings-pages-demo-regression.ts
+run_script scripts/ideal-state-idle-regression.ts
 run_script scripts/agent-entry-points-demo-regression.ts
 run_script scripts/agents-sign-in-demo-regression.ts
 run_script scripts/interface-font-demo-regression.ts
 run_script scripts/file-text-size-demo-regression.ts
 run_script scripts/files-panel-demo-regression.ts
+run_script scripts/docked-file-link-demo-regression.ts
 run_script scripts/files-documents-demo-regression.ts
 run_script scripts/theme-first-paint-demo-regression.ts
 run_script scripts/boot-loading-demo-regression.ts
@@ -112,6 +115,9 @@ run_script scripts/security-summary-demo-regression.ts
 run_script scripts/push-health-demo-regression.ts
 run_script scripts/alert-webhook-demo-regression.ts
 run_script scripts/relay-direct-demo-regression.ts
+run_script scripts/relay-join-browser-qa.ts
+run_script scripts/relay-qa-teardown-regression.ts
+run_script scripts/relay-device-indexeddb-regression.ts
 run_script scripts/install-hint-demo-regression.ts
 run_script scripts/device-security-demo-regression.ts
 run_script scripts/cliproxy-settings-regression.ts
@@ -174,6 +180,8 @@ run_script scripts/droplet-demo-regression.ts
 run_script scripts/phone-glass-header-demo-regression.ts
 run_script scripts/phone-safe-area-demo-regression.ts
 run_script scripts/reconnect-header-demo-regression.ts
+run_script scripts/tab-agent-mark-demo-regression.ts
+run_script scripts/header-context-demo-regression.ts
 run_script scripts/chat-greeting-demo-regression.ts
 run_script scripts/restored-draft-demo-regression.ts
 run_script scripts/chat-local-send-follow-demo-regression.ts
@@ -199,6 +207,7 @@ run_script scripts/prompt-card-lifetime-browser-qa.ts
 run_script scripts/sidebar-activity-demo-regression.ts
 run_script scripts/sidebar-filter-demo-regression.ts
 run_script scripts/sidebar-declutter-demo-regression.ts
+run_script scripts/drawer-modal-regression.ts
 run_script scripts/sidebar-spacing-demo-regression.ts
 run_script scripts/sidebar-split-demo-regression.ts
 run_script scripts/sidebar-split-access-demo-regression.ts

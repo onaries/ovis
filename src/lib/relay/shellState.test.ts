@@ -181,6 +181,12 @@ describe("the offer fragment", () => {
     const linked = page(`${APP}/s/${"12".repeat(16)}/#pane=p1`);
     expect(takeEntryUrl(linked)).toBe(`${APP}/s/${"12".repeat(16)}/#pane=p1`);
     expect(linked.replaced).toEqual([]);
+    for (const hash of ["#overview", "#pcs?filter=needs", "#devices", "#relay", "#settings", "#relay-dash-pcs"]) {
+      const dashboard = page(`${APP}/${hash}`);
+      expect(takeEntryUrl(dashboard)).toBe(`${APP}/${hash}`);
+      expect(dashboard.replaced).toEqual([]);
+      expect(shellEntry(`${APP}/${hash}`)).toEqual({ serverId: null, offer: null, damaged: false });
+    }
   });
 
   it("takes a sign-in's return off the address before the shell loads, and the entry keeps it", () => {

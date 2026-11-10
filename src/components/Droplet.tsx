@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import { X } from "lucide-react";
 import { flickVelocity, onDroplet, type PressSample, type QueuedDroplet } from "../lib/droplet.ts";
 import { useT } from "../lib/i18n.ts";
+import { STATUS_WORD } from "../lib/status.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import "./Droplet.css";
 
@@ -159,7 +160,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   };
 
   if (!current) return <div ref={probe} className="droplet-probe" aria-hidden="true" />;
-  const what = t(current.kind === "blocked" ? "Needs input" : current.kind === "done" ? "Finished" : "terminal ended");
+  const what = t({ blocked: STATUS_WORD.blocked, done: STATUS_WORD.done, ended: "terminal ended" }[current.kind]);
   const detail = current.machine ? `${current.machine} · ${what}` : what;
   return (
     <div className="droplet" role="status" aria-live="polite" data-phase={phase} data-kind={current.kind} data-dragging={drag !== 0 ? "" : undefined} style={{ "--droplet-drag": `${drag}px`, "--droplet-top": `${top ?? 12}px`, ...(fit === null ? {} : { "--droplet-fit": `${fit}px` }), visibility: top === null ? "hidden" : "visible" } as CSSProperties} key={current.id}>

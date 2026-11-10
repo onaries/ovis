@@ -450,7 +450,7 @@ const UNUSABLE_ANSWER: Readonly<Record<string, () => string>> = {
   remote_response_invalid: () => t("The other PC's answer could not be read"),
 };
 
-async function errorFrom(url: string, response: Response): Promise<ApiError> {
+export async function errorFrom(url: string, response: Response): Promise<ApiError> {
   let detail = response.statusText;
   let code: string | null = null;
   try {
@@ -910,6 +910,8 @@ export interface HealthInfo {
   web_ui?: { boot_id: string | null; revision: string | null };
   /** Absent only on a server that predates the token gate. */
   auth?: HealthAuth;
+  /** authenticated only; absent from an older server */
+  relay?: RelayStatus;
   /** present only while this server is reachable beyond this PC with no token and nothing paired */
   lan_exposure?: LanExposure;
   /** present only while lan_exposure is not: the relay's direct carrier listens on this PC's network, for relay-paired devices only */
@@ -1209,7 +1211,19 @@ export async function fetchAgentKinds(machineId = "local"): Promise<AgentKind[]>
 
 /** GET /api/agent-catalog: every agent Ovis can install, with that PC's commands and what it has installed. */
 export async function fetchAgentCatalog(machineId = "local", signal?: AbortSignal): Promise<AgentCatalogResponse> {
-  return getJson<AgentCatalogResponse>(machinePath(machineId, "agent-catalog"), { signal, cache: "no-store" });
+  // bounded to 30 s, so a read that never answers ends and Check again can try again; joined by
+  // hand, as verifySourceBoot's: AbortSignal.any needs Safari 17.4
+  const bounded = new AbortController();
+  const end = () => bounded.abort();
+  const timer = setTimeout(end, 30_000);
+  if (signal?.aborted) end();
+  else signal?.addEventListener("abort", end, { once: true });
+  try {
+    return await getJson<AgentCatalogResponse>(machinePath(machineId, "agent-catalog"), { signal: bounded.signal, cache: "no-store" });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", end);
+  }
 }
 
 /** POST /api/agent-catalog/install: opens a tab on that PC and types the agent's official command there. */

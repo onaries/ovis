@@ -158,7 +158,7 @@ export async function checkAlertSound(browser: Browser, origin: string): Promise
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await openSettingsPage(page, "Alerts");
-    const sound = page.getByRole("switch", { name: "Sound", exact: true });
+    const sound = page.getByRole("switch", { name: "Play sounds", exact: true });
     await sound.click();
     assert.equal(await sound.getAttribute("aria-checked"), "false");
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ovis:settings") ?? "{}").alertSound), false);

@@ -5,6 +5,7 @@
  * the directory (docs/account.md, rule 6).
  */
 import type { RelayDevice } from "../relay/device.ts";
+import { enrollmentOf, type EnrollmentState } from "../relay/device.ts";
 import { exportPublicKey } from "../../../shared/relay-e2ee.ts";
 import { keyIdOf } from "../relay/shellState.ts";
 import type { DirectoryPc } from "./service.ts";
@@ -46,6 +47,7 @@ export interface MyPc {
    * reaches it; a pairing from before the account is not covered until it is linked
    */
   readonly linked: boolean;
+  readonly enrollment?: EnrollmentState;
   /**
    * For a PC this device is not paired with: its relay key (base64, as an offer carries it) and
    * relay, to compare digits with it. Only when the key is the one the PC's id is derived from,
@@ -74,7 +76,8 @@ export function myPcs(directory: readonly DirectoryPc[], paired: readonly RelayD
     const entry = listed.get(device.server_id);
     listed.delete(device.server_id);
     const lastSeen = entry?.last_seen_at ?? null;
-    rows.push({ server_id: device.server_id, name: device.name ?? device.server_id.slice(0, 8), state: stateOf(device.server_id, true, lastSeen), last_seen_at: lastSeen, added_at: entry?.added_at ?? null, listed: entry !== undefined, paired: true, linked: entry !== undefined && device.public_spki === options.accountKey && device.account !== undefined && device.account === (options.account ?? device.account) });
+    const enrollment = enrollmentOf(device, options.account);
+    rows.push({ server_id: device.server_id, name: device.name ?? device.server_id.slice(0, 8), state: stateOf(device.server_id, true, lastSeen), last_seen_at: lastSeen, added_at: entry?.added_at ?? null, listed: entry !== undefined, paired: true, linked: enrollment !== "pending" && enrollment !== "failed" && entry !== undefined && device.public_spki === options.accountKey && device.account !== undefined && device.account === (options.account ?? device.account), ...(enrollment ? { enrollment } : {}) });
   }
   for (const pc of listed.values()) {
     rows.push({ server_id: pc.server_id, name: pc.label, state: stateOf(pc.server_id, false, pc.last_seen_at), last_seen_at: pc.last_seen_at, added_at: pc.added_at, listed: true, paired: false, linked: false, ...(joinRoute(pc) ? { join: joinRoute(pc) } : {}) });

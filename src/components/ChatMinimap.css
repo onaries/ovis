@@ -21,24 +21,30 @@
   transform: translateY(-50%);
 }
 
+/* a tick is a way to its turn, so it keeps 3:1 against the page (--minimap-tick, not a rule's
+   --border-strong); under the pointer and at the current turn it grows by half, a transform
+   (the width itself never moves) */
 .chat-minimap-tick::before {
   content: "";
   position: absolute;
   top: 50%;
   left: 0;
   width: var(--space-2);
-  height: 1px;
-  background: var(--border-strong);
-  transition: width var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  height: var(--hairline);
+  background: var(--minimap-tick);
+  transform-origin: left center;
+  transition: transform var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
 }
 
-.chat-minimap-tick:hover::before {
-  width: var(--space-3);
-  background: var(--text-dim);
+@media (hover: hover) {
+  .chat-minimap-tick:hover::before {
+    transform: scaleX(1.5);
+    background: var(--text);
+  }
 }
 
 .chat-minimap-tick[aria-current="true"]::before {
-  width: var(--space-3);
+  transform: scaleX(1.5);
   background: var(--text-strong);
 }
 

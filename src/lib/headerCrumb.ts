@@ -18,7 +18,9 @@ export interface HeaderCrumb {
   place: string;
   /** the folder written out, as herdr reports it: the More menu's second line */
   path: string | null;
-  /** the context's tooltip: workspace › title, then the full path */
+  /** complete context for accessible naming: PC, workspace, pane title and full path */
+  fullContext: string;
+  /** the context's tooltip: complete context for the pane */
   tooltip: string;
 }
 
@@ -32,6 +34,7 @@ export function headerCrumb(input: { machine: string; machineCount: number; work
   // only a name the line shows can have said the folder's: a hidden PC name says nothing
   const showMachine = input.machineCount > 1;
   const said = name === null || [title, showMachine ? machine : null, workspace].includes(name);
+  const fullContext = [machine, workspace, title !== workspace ? title : null, path].filter((part): part is string => part !== null && part !== "").join(" · ");
   return {
     machine,
     showMachine,
@@ -39,7 +42,8 @@ export function headerCrumb(input: { machine: string; machineCount: number; work
     folder: said ? null : name,
     place: `${machine} › ${workspace}`,
     path,
-    tooltip: path === null ? `${workspace} › ${title}` : `${workspace} › ${title} · ${path}`,
+    fullContext,
+    tooltip: fullContext,
   };
 }
 

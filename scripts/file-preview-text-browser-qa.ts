@@ -45,7 +45,8 @@ try {
   await page.goto(`http://127.0.0.1:${server.port}`);
   const open = async (path: string) => { await page.evaluate((path) => window.previewQA.open(path), path); await page.getByRole("dialog").waitFor(); };
   await open("error");
-  await page.getByRole("alert").filter({ hasText: "The file could not be opened." }).waitFor();
+  // a 401 says what to do about it (lib/fileFailure.ts), never the body it came with
+  await page.getByRole("alert").filter({ hasText: "Pair this browser again to open the file." }).waitFor();
   assert.equal(await page.locator(".file-viewer-text").count(), 0);
   assert.ok(!(await page.locator("body").innerText()).includes("PRIVATE ERROR BODY"));
   await open("large"); await page.locator(".file-viewer-text").waitFor();
@@ -60,7 +61,7 @@ try {
   {
     // no headers by the deadline: nothing to show
     const start = performance.now(); await open("headers");
-    await page.getByRole("alert").filter({ hasText: "The file could not be opened." }).waitFor();
+    await page.getByRole("alert").filter({ hasText: "The file request timed out. Reopen it to try again." }).waitFor();
     assert.ok(performance.now() - start < 6_500, "headers has a bounded deadline");
     assert.equal(await page.locator(".file-viewer-text").count(), 0);
   }

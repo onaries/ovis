@@ -21,10 +21,10 @@ function plan(panes: MovePane[]): MovePlan {
 }
 
 describe("verdictTag", () => {
-  test("gives every verdict its own words and tone, a busy one by its reason", () => {
+  test("gives every verdict its own words and tone, a busy one by its reason; an agent waiting for an answer needs the person, as one to end by hand does", () => {
     const tags = [RESUME, FRESH, SHELL, WORKING, WAITING, COMMAND, NEEDS_YOU].map((verdict) => verdictTag(en, verdict));
     expect(new Set(tags.map((tag) => tag.text)).size).toBe(tags.length);
-    expect(tags.map((tag) => tag.tone)).toEqual(["ok", "warn", "plain", "wait", "wait", "wait", "you"]);
+    expect(tags.map((tag) => tag.tone)).toEqual(["ok", "warn", "plain", "wait", "you", "wait", "you"]);
     expect(verdictTag(en, COMMAND).text).toBe("npm run dev running");
     expect(verdictTag(en, { ...COMMAND, command: null }).text).toBe("A command is running");
   });

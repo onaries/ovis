@@ -611,10 +611,12 @@ async function captureSet(browser: Browser, base: string, bareBase: string, widt
     await page.getByRole("button", { name: "Close file", exact: true }).click();
     await page.getByText("export const viewed = true;").first().waitFor({ state: "detached" });
     await pane.getByRole("button", { name: "app/src/b.ts", exact: true }).click();
-    await page.getByRole("alert").filter({ hasText: "The file could not be opened." }).waitFor();
+    const failure = page.getByRole("alert").filter({ hasText: "The PC could not read the file. Reopen it to try again." });
+    await failure.waitFor();
+    assert.equal(await failure.textContent(), "The PC could not read the file. Reopen it to try again.");
     await shot(page, name("viewer-error"));
     await page.getByRole("button", { name: "Close file", exact: true }).click();
-    await page.getByText("The file could not be opened.").waitFor({ state: "detached" });
+    await failure.waitFor({ state: "detached" });
     // the viewer's loading state, on a file whose content waits for the script
     await viewerLoading(page, pane, name("viewer-loading"), name("viewer-loading"));
     // a pane with no folder known

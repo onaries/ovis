@@ -14,6 +14,11 @@ export const STATUS_FILTERS: readonly PaletteStatusFilter[] = ["all", "blocked",
  */
 export const FILTER_KEYS: Readonly<Record<string, PaletteStatusFilter>> = { a: "all", b: "blocked", w: "working", i: "idle", d: "done" };
 
+/** The local key that picks `filter` while the focus is on the list or the chips, or null (BG has none). */
+export function filterKeyOf(filter: PaletteStatusFilter): string | null {
+  return Object.entries(FILTER_KEYS).find(([, value]) => value === filter)?.[0] ?? null;
+}
+
 export interface PaletteQuery {
   actionsOnly: boolean;
   text: string;

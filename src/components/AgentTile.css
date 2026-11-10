@@ -9,12 +9,18 @@
   list-style: none;
 }
 
+/* a line's two tiles share its height: a name that wraps, or a version under it, lengthens both */
+.setup-found > li {
+  display: flex;
+  min-width: 0;
+}
+
 .setup-tile {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  min-height: 44px;
+  min-height: var(--touch-target);
   padding: var(--space-2) var(--space-3);
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-md);
@@ -28,20 +34,21 @@ button.setup-tile {
   cursor: pointer;
 }
 
-button.setup-tile:hover:not(:disabled),
-button.setup-tile:focus-visible {
-  border-color: var(--accent);
+@media (hover: hover) {
+  button.setup-tile:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
 }
 
+/* the one picked: its check and a tonal fill say so; the accent ring is the keyboard's focus alone */
 .setup-tile[aria-pressed="true"] {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 var(--hairline) var(--accent);
+  background: var(--accent-tint);
 }
 
 .setup-tile > svg {
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   color: var(--accent);
 }
 
@@ -54,14 +61,14 @@ button.setup-tile:focus-visible {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
-  padding: 2px var(--space-2);
+  gap: var(--space-1);
+  padding: var(--space-half) var(--space-2);
   font-size: var(--fs-xs);
 }
 
 .setup-tile-install svg {
-  width: 13px;
-  height: 13px;
+  width: calc(var(--icon-size-sm) - var(--hairline));
+  height: calc(var(--icon-size-sm) - var(--hairline));
 }
 
 .setup-found-name {
@@ -69,15 +76,16 @@ button.setup-tile:focus-visible {
   flex: 1;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 2px var(--space-2);
+  gap: var(--space-half) var(--space-2);
   min-width: 0;
 }
+/* the product's whole name, wrapped at its spaces where the tile is narrow: it is what is picked or installed */
 .setup-found-name strong {
-  overflow: hidden;
+  min-width: 0;
   color: var(--text-strong);
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
 }
 .setup-found-name span {
   color: var(--text-dim);
@@ -98,6 +106,10 @@ button.setup-tile:focus-visible {
   .setup-tile-install {
     min-width: var(--touch-target);
     justify-content: center;
+  }
+
+  .setup-found-name strong {
+    font-size: var(--fs-sm);
   }
 }
 

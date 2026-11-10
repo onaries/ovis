@@ -42,10 +42,15 @@ export function parseHerdrProfiles(text: string): HerdrMachineProfile[] {
   });
 }
 
+/** the same port by its number ("022" is 22); an omitted one matches only another omitted one */
+export function samePort(a: SshTarget["port"], b: SshTarget["port"]): boolean {
+  return a === undefined || b === undefined ? a === b : Number(a) === Number(b);
+}
+
 export function sameSshSession(a: SshTarget, b: SshTarget): boolean {
   // An omitted port is resolved by OpenSSH config, and need not be 22. Do not guess
   // that two aliases or an implicit and explicit port name the same destination.
-  return a.destination === b.destination && a.port === b.port && (a.session || "default") === (b.session || "default");
+  return a.destination === b.destination && samePort(a.port, b.port) && (a.session || "default") === (b.session || "default");
 }
 
 export async function readHerdrProfiles(): Promise<HerdrMachineProfile[]> {

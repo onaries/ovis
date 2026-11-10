@@ -11,6 +11,20 @@ export function startFakeCLIProxy(key = "test-management-key") {
   const sessions = new Map<string, { provider: string; status: string }>();
   const calls: { path: string; body: unknown; authorization: string | null }[] = [];
   let sequence = 0;
+  /** the next /credentials request waits here: `arrived` resolves when it comes, `release` answers it */
+  let held: { arrive: () => void; gate: Promise<void> } | null = null;
+  const holdCredentials = () => {
+    const arrived = Promise.withResolvers<void>(), gate = Promise.withResolvers<void>();
+    held = { arrive: arrived.resolve, gate: gate.promise };
+    return { arrived: arrived.promise, release: gate.resolve };
+  };
+  /** the same for the next account read (/requests/api-call) */
+  let heldRead: { arrive: () => void; gate: Promise<void> } | null = null;
+  const holdRead = () => {
+    const arrived = Promise.withResolvers<void>(), gate = Promise.withResolvers<void>();
+    heldRead = { arrive: arrived.resolve, gate: gate.promise };
+    return { arrived: arrived.promise, release: gate.resolve };
+  };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace("/v8/management", "");
@@ -28,8 +42,16 @@ export function startFakeCLIProxy(key = "test-management-key") {
     if (path === "/complete") { finish(url.searchParams.get("state") ?? ""); return new Response("Signed in. Return to Settings."); }
     if (down) return json({ error: "unavailable" }, 503);
     if (request.headers.get("authorization") !== `Bearer ${acceptedKey}`) return json({ error: `invalid management key ${acceptedKey}` }, 401);
-    if (path === "/credentials") return json({ files });
+    if (path === "/credentials") {
+      const hold = held;
+      held = null;
+      if (hold) { hold.arrive(); await hold.gate; }
+      return json({ files });
+    }
     if (path === "/requests/api-call") {
+      const hold = heldRead;
+      heldRead = null;
+      if (hold) { hold.arrive(); await hold.gate; }
       if (!isJsonObject(body) || typeof body["url"] !== "string" || !isJsonObject(body["header"])) return json({ error: "bad request" }, 400);
       if (body["auth_index"] === "b" && body["header"]["chatgpt-account-id"] !== "workspace-b") return json({ status_code: 400, header: {}, body: "{}" });
       return json({ status_code: 200, header: {}, body: JSON.stringify(body["url"].includes("anthropic") ? {
@@ -49,5 +71,5 @@ export function startFakeCLIProxy(key = "test-management-key") {
     }
     return json({ error: "not found" }, 404);
   } });
-  return { server, calls, files, sessions, setKey: (value: string) => { acceptedKey = value; }, setDown: (value: boolean) => { down = value; } };
+  return { server, calls, files, sessions, holdCredentials, holdRead, setKey: (value: string) => { acceptedKey = value; }, setDown: (value: boolean) => { down = value; } };
 }

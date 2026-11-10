@@ -9,7 +9,9 @@ import type { Translate } from "./i18n.ts";
 
 /**
  * How a pane's verdict reads: `ok` goes on as it was, `plain` is replaced by one like it, `warn`
- * starts over, `wait` holds the move up until it is done, `you` holds it up until the person acts.
+ * starts over, `wait` holds the move up until it is done, `you` holds it up until the person acts:
+ * an agent waiting for an answer as much as one to end by hand, in the needs-input tone the
+ * sidebar and tabs use for it.
  */
 export type MoveTone = "ok" | "plain" | "warn" | "wait" | "you";
 
@@ -30,7 +32,7 @@ export function verdictTag(t: Translate, verdict: MoveVerdict): MoveTag {
     case "busy": {
       switch (verdict.reason) {
         case "agent_working": return { text: t("Answering"), tone: "wait" };
-        case "agent_waiting": return { text: t("Waiting for an answer"), tone: "wait" };
+        case "agent_waiting": return { text: t("Waiting for an answer"), tone: "you" };
         case "command_running": return { text: verdict.command === null ? t("A command is running") : t("{command} running", { command: verdict.command }), tone: "wait" };
         default: return unreachable(verdict.reason);
       }

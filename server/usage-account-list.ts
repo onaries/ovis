@@ -42,6 +42,7 @@ export class UsageAccountList {
       const changed = next(held);
       if (changed.length !== held.length) writeStateDocument(this.path, JSON.stringify({ accounts: changed }), false);
     });
+    // told also when nothing changed: a retried removal is how a save of what depends on it that failed is tried again
     this.changed();
   }
 

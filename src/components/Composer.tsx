@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, ClipboardPaste, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, Minimize2, Package, Plus, Puzzle, Square, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
+import { ArrowUp, ClipboardPaste, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, Package, Plus, Puzzle, Square, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
 
 import "./Composer.css";
 
@@ -44,13 +44,13 @@ import {
   imageMention,
   insertLeadingMention,
   MAX_COMPOSER_CHARS,
+  namesHiddenCommand,
   rankSlashCommands,
   slashCommandReplacement,
   submitNote,
   terminalCommand,
   typedTerminalCommand,
 } from "../lib/compose.ts";
-import { compactCommandText } from "../lib/compactContext.ts";
 import { composerStrip } from "../lib/composerStrip.ts";
 import { composerLabelDraw } from "../lib/composerLabelFit.ts";
 import { composerFull, formatChars, pasteOverflow } from "../lib/composerLength.ts";
@@ -103,7 +103,7 @@ export interface ComposerProps {
   greeting?: ReactNode;
   /** the pane's notices over the input card (PaneTerminal builds them): rows of its own, above the replies */
   notices?: ReactNode;
-  /** the connection's confirmed role; PaneTerminal mounts no composer for observers */
+  /** the connection's confirmed role; "observe" also for a device that may only watch (PaneTerminal): the composer takes no input */
   role?: ClientRole;
   /** a terminal command's peek has the pane: the composer stays, with its draft, but takes no input */
   inert?: boolean;
@@ -122,8 +122,9 @@ export interface ComposerProps {
   /** true: sent, clear the box; a string: keep the text and say why; a DraftRefusal: the same, and the
    * note offers to send again with `clearDraft`, which clears that draft from the terminal first, or,
    * where it named none, with `sendAnyway`; a promise settles to any of them */
-  /** `now`: Ctrl+Enter, the queued row's Send now for this message as soon as it is queued (#2596) */
-  onSend: (text: string, clearDraft?: string, sendAnyway?: boolean, agentOnly?: boolean, now?: boolean) => boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal>;
+  /** `now`: Ctrl+Enter, the queued row's Send now for this message as soon as it is queued (#2596).
+   * `hold`: Alt+Enter, a held row in the queued list that goes only on its Send now */
+  onSend: (text: string, clearDraft?: string, sendAnyway?: boolean, agentOnly?: boolean, now?: boolean, hold?: boolean) => boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal>;
   /** a Send pressed waits for its claim (the pane's cross-tab lock, granted in a later task): +1 at the press, -1 once the claim ran, sent or not */
   onClaim?: (delta: 1 | -1) => void;
   onAbort: () => void;
@@ -182,11 +183,10 @@ function readSlashUsage(): Record<string, number> {
 
 /**
  * What is left of the context, as a ring filled by what is used (as Codex's app shows it):
- * red when little is left. The number is on hover, and on a tap beside the ring (a touch
- * screen has no hover). A window the transcript does not name draws no ring. Whether the number
- * is open is the composer's to keep: its text takes room in the row the model label is fitted to.
+ * red when little is left. It only shows: the number is in its tooltip and read to a screen
+ * reader, and a press does nothing. A window the transcript does not name draws no ring.
  */
-function ContextRing({ context, shown, readOnly = false, onToggle, onCompact }: { context: NonNullable<ConversationMetadata["context"]>; shown: boolean; readOnly?: boolean; onToggle: () => void; onCompact?: (() => void) | undefined }) {
+function ContextRing({ context }: { context: NonNullable<ConversationMetadata["context"]> }) {
   const t = useT();
   const left = contextLeftPercent(context);
   if (left === null || context.window === null) return null;
@@ -194,7 +194,7 @@ function ContextRing({ context, shown, readOnly = false, onToggle, onCompact }: 
   const detail = t("{used} of {window} tokens", { used: formatTokens(context.used), window: formatTokens(context.window) });
   const radius = 6;
   const circumference = 2 * Math.PI * radius;
-  if (readOnly) return <span className={`composer-context composer-context-readonly${left <= 20 ? " is-low" : ""}`}>
+  return <span className={`composer-context${left <= 20 ? " is-low" : ""}`} title={`${label} · ${detail}`}>
     <svg viewBox="0 0 16 16" aria-hidden="true">
       <circle className="composer-context-track" cx="8" cy="8" r={radius} />
       <circle className="composer-context-used" cx="8" cy="8" r={radius}
@@ -202,28 +202,6 @@ function ContextRing({ context, shown, readOnly = false, onToggle, onCompact }: 
     </svg>
     <span className="visually-hidden">{label} · {detail}</span>
   </span>;
-  return (
-    <>
-    <button
-      type="button"
-      className={`composer-context${left <= 20 ? " is-low" : ""}`}
-      aria-label={`${label} · ${detail}`}
-      title={`${label} · ${detail}`}
-      aria-expanded={shown}
-      onClick={onToggle}
-    >
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <circle className="composer-context-track" cx="8" cy="8" r={radius} />
-        <circle className="composer-context-used" cx="8" cy="8" r={radius}
-          strokeDasharray={`${circumference * (100 - left) / 100} ${circumference}`} transform="rotate(-90 8 8)" />
-      </svg>
-      {shown && <span className="composer-context-text">{label}</span>}
-    </button>
-    {shown && onCompact && <button type="button" className="composer-compact" title={t("Compact context")} aria-label={t("Compact context")} onClick={onCompact}>
-      <Minimize2 aria-hidden="true" />
-    </button>}
-    </>
-  );
 }
 
 function useMediaQuery(query: string): boolean {
@@ -276,6 +254,7 @@ export function Composer({
   const { fetchPaneFiles } = useMachineApi();
   const { settings, resolvedLanguage } = useSettings();
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
+  const viewOnly = role === "observe";
   // a touch screen's Return breaks the line until this device chooses otherwise; Send (or Mod+Enter) sends
   const enterSends = enterSendsOn(settings, useMediaQuery("(pointer: coarse)"));
   const usageEnabled = settings.showUsage && !mobile && machineId === "local" && planForPane(agent, metadata?.provider) !== null;
@@ -290,7 +269,6 @@ export function Composer({
   const hintRef = useRef<HTMLSpanElement | null>(null);
   /** the card's own width: a narrow one shows the task chip's count */
   const [cardWidth, setCardWidth] = useState(0);
-  const [contextShown, setContextShown] = useState(false);
   const composingRef = useRef(false);
   // the chat lens's input surface takes the keyboard when it appears (a pane switch remounts
   // it), as the grid does in the terminal lens: a pane picked from the drawer is typed into
@@ -370,7 +348,9 @@ export function Composer({
   const offlineSentence = t(connectedBefore ? "Reconnecting…" : "Connecting…");
   const placeholder = !connected
     ? offlineSentence
-    : answerHint ?? offered ?? t("Message {agent}…", { agent: agentLabel });
+    : viewOnly
+      ? t("View only")
+      : answerHint ?? offered ?? t("Message {agent}…", { agent: agentLabel });
 
   // A cancelled send the agent put back in its input box fills an empty box again — without
   // focus, which would raise a phone's keyboard. When it is gone, only the untouched fill is
@@ -556,11 +536,13 @@ export function Composer({
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, []);
 
+  /** the commands a `/` or `$` here can complete to, before the typed query narrows them */
+  const triggerCommands = useMemo(() => (trigger?.kind === "slash" ? commandsForTrigger(commands, agent, trigger) : []), [agent, commands, trigger]);
   const filteredCommands = useMemo(
     () => (trigger?.kind === "slash"
-      ? rankSlashCommands(commandsForTrigger(commands, agent, trigger), trigger.query, slashUsage, trigger.start > 0 && text[trigger.start - 1] !== "\n")
+      ? rankSlashCommands(triggerCommands, trigger.query, slashUsage, trigger.start > 0 && text[trigger.start - 1] !== "\n")
       : []),
-    [agent, commands, slashUsage, text, trigger],
+    [slashUsage, text, trigger, triggerCommands],
   );
   // a typed query lists the matches in rank order, whatever their source (a plugin command whose
   // word starts with it must not sit under a built-in that only has its letters scattered);
@@ -579,6 +561,12 @@ export function Composer({
   const menuOpen = !menuDismissed && trigger !== null && choices.length > 0;
   // a failed listing opens the menu on its one line, which no key picks; beside listed skills it is a line of theirs
   const filesFailedShown = !menuDismissed && trigger?.kind === "file" && filesFailed && files.length === 0 && !menuOpen;
+  // a typed query no listed command matches keeps the menu's place with one line saying so (G-077): a
+  // list that just vanished could as well mean the commands are not known yet, and the line's way on
+  // (type on, or change the word) is the key already under the finger; nothing here takes a key
+  const slashUnmatched = !menuDismissed && trigger?.kind === "slash" && trigger.query !== "" && choices.length === 0 && triggerCommands.length > 0
+    // a command the menu hides (Claude's /heapdump) typed by hand is still one, and is sent like any text
+    && !namesHiddenCommand(commands, trigger.query);
   // clamped as the list is drawn, not by an effect after it: a Tab or Enter typed before that
   // effect's render found no row at the old index and did nothing
   const choiceIds = choices.map((choice) => typeof choice === "string" ? `file:${choice}` : `${choice.source}:${choice.name}`);
@@ -602,7 +590,8 @@ export function Composer({
   // recording stay the terminal's
   const dictation = useDictation({
     mode: "chat",
-    active: active && !inert,
+    // a watch-only composer takes no dictation either: its shortcut would write into the draft
+    active: active && !inert && !viewOnly,
     connected,
     phone: mobile,
     polish: settings.voicePolishChat,
@@ -858,10 +847,10 @@ export function Composer({
   }, [placeWaitingMentions]);
 
   /** `clearDraft`: the terminal draft a DraftRefusal named, which the user asked to clear and send over;
-   * `sendAnyway`: the user saw the box a DraftRefusal showed and sends over it; `now`: Ctrl+Enter. */
-  const send = useCallback((clearDraft?: string, sendAnyway = false, now = false): boolean => {
+   * `sendAnyway`: the user saw the box a DraftRefusal showed and sends over it; `now`: Ctrl+Enter; `hold`: Alt+Enter. */
+  const send = useCallback((clearDraft?: string, sendAnyway = false, now = false, hold = false): boolean => {
     if (composingRef.current) return false;
-    if (role === "observe" || !connected || uploading || roomless || sending || (text.trim().length === 0 && carried.length === 0)) return false;
+    if (viewOnly || !connected || uploading || roomless || sending || (text.trim().length === 0 && carried.length === 0)) return false;
     if (terminalTyped?.name === "resume" && onOpenHistory) { setMenuDismissed(true); onOpenHistory(); return true; }
     const message = carried.length > 0 ? messageWithComments(carried, text) : text;
     if (message.length > MAX_COMPOSER_CHARS) { setNote(t("Too long with the comments: remove a comment or shorten the message.")); return false; }
@@ -905,6 +894,7 @@ export function Composer({
         // a message with comments goes only to an agent: a shell would read `> quote` as a redirect
         const agentOnly = sentComments.length > 0 || composerDrafts.isAgentOnly(draftKey);
         const result = now ? onSend(message, clearDraft, sendAnyway, agentOnly, true)
+          : hold ? onSend(message, clearDraft, sendAnyway, agentOnly, false, true)
           : agentOnly ? onSend(message, clearDraft, sendAnyway, true) : onSend(message, clearDraft, sendAnyway);
         if (!(result instanceof Promise)) { settle(result); ended(); return true; }
         // settled outside the lock: it clears the draft before it ends the lease, which a claim reads first
@@ -925,7 +915,7 @@ export function Composer({
     return underSendLock(draftKey, () => {
       try { return claim(); } finally { release(); }
     });
-  }, [attachments, carried, commentsKey, connected, dictation.forget, draftKey, onClaim, onOpenHistory, onSend, role, roomless, sending, t, terminalTyped, text, uploading]);
+  }, [attachments, carried, commentsKey, connected, dictation.forget, draftKey, onClaim, onOpenHistory, onSend, roomless, sending, t, terminalTyped, text, uploading, viewOnly]);
   const sendRef = useRef(send);
   sendRef.current = send;
   const connectedRef = useRef(connected);
@@ -1097,10 +1087,16 @@ export function Composer({
           highlightedSearchKey.current = searchKey;
           return;
         }
-        if (event.key === "Enter" || event.key === "Tab") {
+        // AltGr (Ctrl+Alt on Windows) or Cmd+Option with Enter picks nothing: the box keeps the key, as it sends nothing (#3460)
+        const altModEnter = event.key === "Enter" && event.altKey && (event.ctrlKey || event.metaKey);
+        if ((event.key === "Enter" && !altModEnter) || (event.key === "Tab" && !event.shiftKey)) {
           event.preventDefault();
           const choice = choices[selectedIndex];
           if (choice !== undefined) selectCompletion(choice, trigger);
+          return;
+        }
+        if (event.key === "Tab" && event.shiftKey) {
+          setMenuDismissed(true);
           return;
         }
         if (event.key === "Escape") {
@@ -1126,9 +1122,15 @@ export function Composer({
         acceptSuggestion();
         return;
       }
-      const shouldSend = event.key === "Enter" && (enterSends
+      // Alt+Enter (Option+Enter on a Mac) holds the message in the queued list for its Send now alone, whatever
+      // automatic sending says and also while the agent is idle. The phone layout (a coarse pointer, or a window 640px
+      // wide or less) keeps its line break: Alt+Enter is never a send there either, where Enter sends
+      const altEnter = event.key === "Enter" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+      const hold = altEnter && !mobile;
+      const shouldSend = !altEnter && event.key === "Enter" && (enterSends
         ? !event.shiftKey && !event.metaKey && !event.ctrlKey
-        : (event.metaKey || event.ctrlKey) && !event.shiftKey);
+        // not with Alt: Windows reports AltGr as Ctrl+Alt, and Cmd+Option is no send either (#3460)
+        : (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey);
       // a typed pick waits in the card above: the empty box's Enter is its Confirm and Escape its
       // Cancel, so the keyboard alone answers, as it does in the agent's own menu. A held Enter's
       // repeats confirm nothing: its first press was the pick
@@ -1147,11 +1149,11 @@ export function Composer({
       // Claude Code's own key for this during a turn: Ctrl+Enter sends now. Not Cmd on a Mac, and only while
       // Enter sends: with it off, Mod+Enter is the plain send (#2596)
       const sendNow = enterSends && event.key === "Enter" && event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
-      if (!shouldSend && !sendNow) return;
+      if (!shouldSend && !sendNow && !hold) return;
       event.preventDefault();
-      send(undefined, false, sendNow);
+      send(undefined, false, sendNow, hold);
     },
-    [acceptSuggestion, agentStatus, carried.length, choices, connected, menuDismissed, menuOpen, offered, onAbort, selectCompletion, selectedIndex, send, sendBeside, setTextAndCaret, enterSends, trigger, waitingAnswer],
+    [acceptSuggestion, agentStatus, carried.length, choices, connected, menuDismissed, menuOpen, mobile, offered, onAbort, selectCompletion, selectedIndex, send, sendBeside, setTextAndCaret, enterSends, trigger, waitingAnswer],
   );
 
   const onPaste = useCallback(
@@ -1186,9 +1188,6 @@ export function Composer({
   );
 
   const isWorking = agentStatus === "working";
-  // an explicit click sends /compact the way a typed message goes; only where the agent lists it, never while it works
-  const compactText = compactCommandText(commands);
-  const compactNow = compactText !== null && connected && !sending && !isWorking && agentStatus !== "blocked" ? () => sendQuick(compactText) : undefined;
   // what the status line says; what may be sent, queued or stopped goes by the agent's own status
   const shownStatus = paneStatus({ agent_status: agentStatus, ...(backgroundWait ? { background_wait: true as const } : {}) });
   const statusCompact = composerStatusCompact(cardWidth);
@@ -1213,12 +1212,33 @@ export function Composer({
   /** the strip under the card: the folder and the branch the caller knows; none, or a phone's screen, no strip */
   const strip = mobile ? null : composerStrip({ cwd, branch, repo: worktreeRepo });
   const worktree = worktreeRepo !== null;
-  // Fit only changes to drawn content. Streaming context usage is a fixed-size ring unless
-  // its number is open on desktop; transcript/status refreshes need no measurement layout.
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const stripElement = stripRef.current;
+    if (!stripElement) return;
+    const fit = (): void => {
+      const folder = stripElement.querySelector<HTMLElement>(".composer-strip-folder");
+      if (!folder) return;
+      const branch = stripElement.querySelector<HTMLElement>(".composer-strip-branch");
+      // Measure the full path at its natural width, then expose just the label that fits.
+      stripElement.dataset.fullPath = "";
+      stripElement.dataset.measuring = "";
+      const styles = getComputedStyle(stripElement);
+      const available = stripElement.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight);
+      const needed = folder.getBoundingClientRect().width + (branch ? branch.getBoundingClientRect().width + parseFloat(styles.columnGap) : 0);
+      stripElement.toggleAttribute("data-full-path", strip?.path != null && needed <= available);
+      delete stripElement.dataset.measuring;
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(stripElement);
+    return () => observer.disconnect();
+  }, [strip?.branch, strip?.folder, strip?.path, worktree, facesLoaded, t]);
+  // Fit only changes to drawn content. Streaming context usage is a fixed-size ring;
+  // transcript/status refreshes need no measurement layout.
   useLayoutEffect(fitStatus, [fitStatus, agent, metadata?.model, metadata?.reasoning_effort,
-    metadata?.context?.window, contextShown && !mobile && metadata?.context ? contextLeftPercent(metadata.context) : null,
-    contextShown, mobile, usageCaption, usage?.problem, hintText, dictation.shown, backgroundTasks,
-    plan?.done, plan?.total, plan?.current, statusCompact, compactNow !== undefined, facesLoaded, t]);
+    metadata?.context?.window, mobile, usageCaption, usage?.problem, hintText, dictation.shown, backgroundTasks,
+    plan?.done, plan?.total, plan?.current, statusCompact, facesLoaded, t]);
   const menuId = `composer-menu-${paneId}`;
   // the suggestions' own close, for a pointer or a phone, which has no Escape: it does what Escape does, and the
   // text and the focus stay in the box (a press never takes the focus; a key on it hands it back)
@@ -1255,7 +1275,7 @@ export function Composer({
               type="button"
               className="composer-quick-reply"
               title={t("Send “{reply}”", { reply })}
-              disabled={!connected || sending}
+              disabled={viewOnly || !connected || sending}
               onClick={() => sendQuick(reply)}
             >
               {reply}
@@ -1415,6 +1435,16 @@ export function Composer({
           </div>
         )}
 
+        {slashUnmatched && (
+          <div className="menu composer-menu">
+            {menuClose}
+            <div className="composer-menu-group">
+              <div className="menu-heading">{t("Slash commands")}</div>
+              <p className="chat-inline-state" role="status">{t("No command matches. Keep typing, or change the word.")}</p>
+            </div>
+          </div>
+        )}
+
         {/* mounted before anything settles: a live region that appears with its text is not read */}
         <p className="visually-hidden" role="alert">{filesFailedShown ? t("Couldn't load suggestions. Keep typing to try again.") : null}</p>
         <p className="visually-hidden" aria-live="polite">{announcement && <span key={announcement.id}>{announcement.text}</span>}</p>
@@ -1474,6 +1504,7 @@ export function Composer({
           spellCheck
           autoCapitalize="sentences"
           autoCorrect="on"
+          disabled={viewOnly || undefined}
           // stays editable while the socket reconnects (sending waits for it): a phone's
           // dictation keyboard opens its own app and comes back, the socket may drop meanwhile,
           // and a disabled box would lose its focus and the dictated text with it
@@ -1529,13 +1560,13 @@ export function Composer({
             className="icon-button composer-attach"
             aria-label={t("Attach files")}
             title={t("Attach files")}
-            disabled={!connected || uploading}
+            disabled={viewOnly || !connected || uploading}
             onClick={() => fileInputRef.current?.click()}
           >
             <Plus aria-hidden="true" />
           </button>
           {/* only once this device turned it on (Settings → Chat → Composer): the composer's row stays minimal */}
-          {settings.composerPasteSend && role !== "observe" && (
+          {settings.composerPasteSend && !viewOnly && (
             <button
               type="button"
               className="icon-button composer-paste-send"
@@ -1549,7 +1580,7 @@ export function Composer({
               <ClipboardPaste aria-hidden="true" />
             </button>
           )}
-          {dictation.shown && <MicButton dictation={dictation} />}
+          {dictation.shown && <MicButton dictation={dictation} disabled={viewOnly} />}
           <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} subagents={agent === "claude" || agent === "opencode" || agent === "codex"} plan={plan} />
           {agent === "claude" && <Artifacts paneId={paneId} status={agentStatus} />}
           {agent === "omp" && <OmpBtw paneId={paneId} />}
@@ -1584,7 +1615,7 @@ export function Composer({
                   </>}
                 </span>
               </span>}
-              {metadata?.context && <ContextRing context={metadata.context} shown={contextShown} readOnly={mobile} onToggle={() => setContextShown((open) => !open)} onCompact={compactNow} />}
+              {metadata?.context && <ContextRing context={metadata.context} />}
               {usage !== undefined && usage.problem === null && usageLimit !== undefined && <span
                 className={`composer-usage${usageLimit.used_percent >= HIGH_PERCENT ? " is-high" : ""}${usage.problem ? " has-problem" : ""}`}
                 title={`${usageName(usage)}\n${usageDetail}`}
@@ -1609,7 +1640,7 @@ export function Composer({
               className="composer-action composer-stop"
               aria-label={t("Stop agent")}
               title={t("Stop agent")}
-              disabled={!connected}
+              disabled={viewOnly || !connected}
               // focus stays in the text box, as for Send: this button turns into a disabled Send in
               // the same node when the turn stops, and a focused node that is disabled drops focus
               onPointerDown={(event) => event.preventDefault()}
@@ -1624,7 +1655,7 @@ export function Composer({
               aria-label={t("Send message")}
               title={sending ? t("Sending…") : t("Send message")}
               aria-busy={sending || undefined}
-              disabled={!connected || uploading || roomless !== undefined || sending || (text.trim().length === 0 && carried.length === 0)}
+              disabled={viewOnly || !connected || uploading || roomless !== undefined || sending || (text.trim().length === 0 && carried.length === 0)}
               // focus stays in the text box: leaving it closes the soft keyboard and moves the button
               // out from under the tap before the click lands
               onPointerDown={(event) => event.preventDefault()}
@@ -1638,11 +1669,12 @@ export function Composer({
       {/* the strip tucked under the card (t3code's composer context strip): the pane's working folder and its
           branch, each drawn only when the caller passes it. It only names them; nothing in it is pressed */}
       {strip !== null && (
-        <div className="composer-strip">
+        <div ref={stripRef} className="composer-strip">
           {strip.folder !== null && <span className="composer-strip-item composer-strip-folder" title={strip.path ?? undefined}>
             {worktree ? <FolderGit2 aria-hidden="true" /> : <Folder aria-hidden="true" />}
             <span className="visually-hidden">{t("Working folder")}: </span>
-            <span className="composer-strip-text">{strip.folder}</span>
+            <span className="composer-strip-text composer-strip-folder-name">{strip.folder}</span>
+            {strip.path !== null && <span className="composer-strip-text composer-strip-path">{strip.path}</span>}
             {worktree && <span className="composer-strip-kind">{t("Worktree")}</span>}
           </span>}
           {strip.branch !== null && <span className="composer-strip-item composer-strip-branch" title={strip.branch}>

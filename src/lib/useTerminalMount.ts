@@ -34,7 +34,7 @@ import { narrowPaneFontSize } from "./narrowPaneFont.ts";
 import { finalStep, HERDR_MOUSE_SCROLL_LINES, wheelSteps } from "./wheelSteps.ts";
 import { createTouchWheelPacer } from "./touchWheelPacer.ts";
 import { attachTerminalWheel, canPanTerminalGrid } from "./terminalWheel.ts";
-import { createTerminalFold, hyperlinkAt, wideGridKey, wideGrids } from "./terminalFold.ts";
+import { createTerminalFold, dimmedColor, hyperlinkAt, wideGridKey, wideGrids } from "./terminalFold.ts";
 import { userInputTracker } from "./terminalReplies.ts";
 import { visibleTerminalInputBounds } from "./terminalViewport.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
@@ -1154,6 +1154,31 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       socketRef.current = socket;
       // libghostty draws every pane; xterm draws by itself only where the module cannot (lib/ghostty/capture.ts)
       const releaseGhostty = captureForGhostty(term, socket, host);
+      let adjustingFaint = false;
+      const clampGhosttyFaint = (): void => {
+        if (adjustingFaint) return;
+        adjustingFaint = true;
+        try {
+          const currentTheme = term.options.theme ?? {};
+          const minContrast = term.options.minimumContrastRatio ?? 4.5;
+          for (const span of host.querySelectorAll<HTMLElement>('.ghostty-row [style*="50%, transparent"], .ghostty-row [data-faint-fg]')) {
+            let rawFg = span.dataset.faintFg;
+            if (rawFg === undefined) {
+              const match = /color-mix\(in srgb,\s*([^)]+?)\s+50%,\s*transparent\)/i.exec(span.getAttribute("style") ?? "");
+              rawFg = match?.[1]?.trim() ?? "currentColor";
+              span.dataset.faintFg = rawFg;
+            }
+            const fg = rawFg === "currentColor" ? (currentTheme.foreground ?? "#d8d0c3") : rawFg;
+            const bg = span.style.backgroundColor || currentTheme.background || "#181613";
+            const next = dimmedColor(fg, bg, minContrast);
+            if (span.style.color !== next) span.style.color = next;
+          }
+        } finally {
+          adjustingFaint = false;
+        }
+      };
+      const ghosttyFaintObserver = new MutationObserver(clampGhosttyFaint);
+      ghosttyFaintObserver.observe(host, { childList: true, subtree: true, attributes: true, attributeFilter: ["style"] });
       // a socket this page was connected to before this mount (a switch back to the PC): a wait is a reconnect
       setConnectedBefore(connectedSockets.has(socket));
       let outputGeneration = 0;
@@ -2619,6 +2644,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         host.removeEventListener("compositionend", compositionEnd);
         if (compositionEndTimer !== null) window.clearTimeout(compositionEndTimer);
         compositionCommitPendingRef.current = false;
+        ghosttyFaintObserver.disconnect();
         releaseGhostty();
         // A replacement mount must not share its host with the retiring terminal.
         term.element?.remove();

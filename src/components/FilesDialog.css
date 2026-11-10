@@ -3,9 +3,29 @@
   flex: none;
 }
 
+.files-dialog-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* the dialog keeps one height across its two tabs: a short list of changes does not shrink it */
 .files-dialog .modal-body {
   min-height: calc(var(--control-h) * 8);
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+
+/* one scroll owner per tab: a list (Browse, Changes, Documents) scrolls inside its card, which
+   shrinks to the body; a tab without a list of its own (Pull request) scrolls as the panel */
+.files-dialog-panel:not([hidden]) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /*
@@ -45,13 +65,13 @@
 @media (max-width: 480px) {
   .files-dialog .modal-header:has(.files-dialog-tabs > :nth-child(4)) { flex-wrap: wrap; }
   .files-dialog .files-dialog-tabs:has(> :nth-child(4)) { order: 1; flex: 1 1 100%; display: flex; }
-  .files-dialog .files-dialog-tabs:has(> :nth-child(4)) > button { flex: 1 1 auto; min-width: 0; padding-inline: var(--space-1); overflow: hidden; }
+  .files-dialog .files-dialog-tabs:has(> :nth-child(4)) > button { flex: 1 1 auto; min-width: 0; padding-inline: var(--space-1); }
 }
 
 @container file-panel (max-width: 480px) {
   .files-dialog-docked .modal-header:has(.files-dialog-tabs > :nth-child(4)) { flex-wrap: wrap; padding-block: var(--space-1); }
   .files-dialog-docked .files-dialog-tabs:has(> :nth-child(4)) { order: 1; flex: 1 1 100%; display: flex; }
-  .files-dialog-docked .files-dialog-tabs:has(> :nth-child(4)) > button { flex: 1 1 auto; min-width: 0; padding-inline: var(--space-1); overflow: hidden; }
+  .files-dialog-docked .files-dialog-tabs:has(> :nth-child(4)) > button { flex: 1 1 auto; min-width: 0; padding-inline: var(--space-1); }
   /* the title gives way below 360px: Close keeps the row's end */
   .files-dialog-docked .modal-header:has(.files-dialog-tabs > :nth-child(4)) > .icon-button:last-child { margin-left: auto; }
 }

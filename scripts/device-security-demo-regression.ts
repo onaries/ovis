@@ -16,7 +16,8 @@ import { KO } from "../src/lib/i18n.ko.ts";
 // focus, and a refused write stays in the dialog with the server's words; a confirmed revocation
 // empties the list; a device that only watches sees the words and no working button; a fictional
 // pairing (its code started from Add a connection, Phones and devices) shows one notice, whose
-// action opens Devices and PCs and whose X dismisses it. Nothing
+// action opens Devices and PCs and whose X dismisses it; with a device paired through the relay, Check now sits
+// at the end of this PC's own row, sized to it, also beside a long PC name. Nothing
 // overflows a 390 px phone, and its touch targets are 44 px. With UI_EVIDENCE_DIR set, each state
 // is captured at 390 (phone emulation) and 1440, light and dark, plus Korean at 390, with a manifest.
 // All files and HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
@@ -229,7 +230,7 @@ async function overflow(page: Page): Promise<string[]> {
     if (document.documentElement.scrollWidth > innerWidth) out.push(`the page scrolls sideways (${document.documentElement.scrollWidth} > ${innerWidth})`);
     const body = document.querySelector<HTMLElement>(".settings-body:not([hidden])");
     if (body && body.scrollWidth > body.clientWidth) out.push(`Settings scrolls sideways (${body.scrollWidth} > ${body.clientWidth})`);
-    for (const node of document.querySelectorAll<HTMLElement>(".devices-panel button, .devices-panel .settings-label, .devices-panel .settings-description, .confirm-dialog button, .confirm-dialog p, [data-testid='device-paired-notice'] *")) {
+    for (const node of document.querySelectorAll<HTMLElement>(".devices-panel button, .devices-panel .settings-label, .devices-panel .settings-description, [data-testid='this-pc'] button, [data-testid='this-pc'] .settings-label, [data-testid='this-pc'] .settings-description, .confirm-dialog button, .confirm-dialog p, [data-testid='device-paired-notice'] *")) {
       const box = node.getBoundingClientRect();
       if (box.width > 0 && (box.right > innerWidth + 0.5 || box.left < -0.5)) out.push(`${node.tagName.toLowerCase()}.${node.className} ${(node.getAttribute("aria-label") ?? node.textContent ?? "").trim().slice(0, 40)} reaches past the edge`);
     }
@@ -646,6 +647,79 @@ try {
             await page.close();
           }
 
+          // a device paired through the relay: Check now asks the devices again from the end of this PC's own row, on no
+          // line of its own, sized to the row; a PC named as long as a real one wraps beside it and nothing spills
+          {
+            const { page, errors } = await open(context, server.port, "&demo_devices=relay");
+            errorsOf.push(errors);
+            const self = page.locator('.settings-dialog [data-testid="this-pc"]');
+            const check = self.getByRole("button", { name: label("Check now"), exact: true });
+            await check.waitFor();
+            assert.equal(await page.locator(".devices-check").count(), 0, "Check now has no line of its own");
+            const placed = async (): Promise<Record<string, boolean>> => await self.evaluate((row) => {
+              const box = row.getBoundingClientRect();
+              const button = row.querySelector(".my-device-check button")!.getBoundingClientRect();
+              const name = row.querySelector(".devices-name")!.getBoundingClientRect();
+              // the name's own words, not its box (a flex item that shrinks whatever its text does)
+              const range = document.createRange();
+              range.selectNodeContents(row.querySelector(".settings-label")!.firstChild!);
+              const words = [...range.getClientRects()];
+              return {
+                atRowEnd: Math.abs(box.right - button.right) <= 0.5,
+                insideRow: button.top >= box.top - 0.5 && button.bottom <= box.bottom + 0.5,
+                besideName: button.left >= name.right - 0.5,
+                noTallerThanName: button.height <= name.height + 0.5,
+                nameBeforeButton: words.length > 0 && words.every((rect) => rect.right <= button.left + 0.5 && rect.left >= box.left - 0.5),
+              };
+            });
+            const where = { atRowEnd: true, insideRow: true, besideName: true, noTallerThanName: true, nameBeforeButton: true };
+            assert.deepEqual(await placed(), where, `Check now sits at the end of this PC's row, beside its name and no taller, at ${width}`);
+            await reveal(self);
+            await capture(page, `${prefix}-check-now`, about("check-now"));
+            // a PC named as long as a real one, then one long word: the name wraps before the button, which keeps its place
+            for (const pcName of ["devswha-ThinkStation-P620", "devswhaThinkStationP620WorkstationLab"]) {
+              await self.locator(".settings-label").evaluate((name, text) => { (name.firstChild as Text).data = text; }, pcName);
+              assert.deepEqual(await placed(), where, `with the PC name ${pcName}, Check now keeps its place at ${width}`);
+              assert.deepEqual(await overflow(page), [], `nothing reaches past the edge with the PC name ${pcName} at ${width}`);
+            }
+            if (phone) {
+              // the button keeps the row's size; a finger's 44 px reaches it through its expander, read by hit-testing
+              // half-pixel steps out from its edges (the device pixel grid may round the expander's edge by under a pixel)
+              const reach = await check.evaluate((button) => {
+                const box = button.getBoundingClientRect();
+                const x = box.left + box.width / 2;
+                let top = box.top, bottom = box.bottom;
+                while (top > box.top - 30 && button.contains(document.elementFromPoint(x, top - 0.5))) top -= 0.5;
+                while (bottom < box.bottom + 30 && button.contains(document.elementFromPoint(x, bottom + 0.5))) bottom += 0.5;
+                return { button: box.height, reach: bottom - top };
+              });
+              // a phone's buttons are a finger tall in their own box (styles.css, pointer: coarse); the expander then adds
+              // nothing past that box, so it never takes a tap meant for the rows above or below
+              assert.ok(reach.reach >= 43 && reach.reach <= Math.max(reach.button, 44) + 1, `Check now is ${reach.button}px tall and takes a finger ${reach.reach}px tall`);
+            }
+            // a press asks the PC to check: its answer is held here, so Checking… is seen holding the button, then let go
+            await page.evaluate(() => {
+              const inner = window.fetch;
+              const held = window as unknown as { checks: number; releaseCheck?: () => void };
+              held.checks = 0;
+              window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+                const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
+                if (!url.pathname.endsWith("/api/devices") || url.searchParams.get("check") !== "1") return inner(input, init);
+                held.checks += 1;
+                return new Promise<void>((resolve) => { held.releaseCheck = resolve; }).then(() => inner(input, init));
+              }) as typeof window.fetch;
+            });
+            await press(check);
+            const checking = self.getByRole("button", { name: label("Checking…"), exact: true });
+            await checking.waitFor();
+            assert.equal(await checking.isDisabled(), true, "Checking… holds the button while the PC asks");
+            assert.equal(await page.evaluate(() => (window as unknown as { checks: number }).checks), 1, "a press asks the PC to check once");
+            await page.evaluate(() => (window as unknown as { releaseCheck: () => void }).releaseCheck());
+            await check.waitFor();
+            assert.equal(await check.isEnabled(), true, "Check now is ready again after its check");
+            await page.close();
+          }
+
           // nothing paired: no row to revoke with
           {
             const { page, errors } = await open(context, server.port, "&demo_devices=empty");
@@ -747,7 +821,7 @@ try {
           }
 
           for (const errors of errorsOf) assert.deepEqual(errors, [], "the page raised no error");
-          console.log(`PASS ${width}px ${theme} ${language}: caller warning, confirmation, refused write, watch, empty, loading, revocation and the pairing notice`);
+          console.log(`PASS ${width}px ${theme} ${language}: caller warning, confirmation, refused write, watch, empty, loading, revocation, Check now in this PC's row and the pairing notice`);
         } finally {
           await context.close();
         }

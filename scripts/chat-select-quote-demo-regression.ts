@@ -29,6 +29,7 @@ const WAIT = { timeout: 10_000 } as const;
 const ASK = "Plan the offline sync rework first, no code yet.";
 const PLAN = "Here is the plan for the sync rework:\n\n1. Add a `revision` column to `notes` and backfill it from `updated_at`.\n2. On reconnect, fetch the server copy and replay the local edit on top of it.\n3. Show a conflict banner when both sides changed the same note.\n\nThe migration touches the `notes` table only. I will start with step 1 once you confirm.";
 const FIRST = "backfill it from updated_at";
+const NEAR = "backfill it from";
 const SECOND = "replay the local edit on top of it";
 const TYPED = "Before step 1:";
 
@@ -237,6 +238,54 @@ try {
           await page.locator(".selection-quote").click({ force: true });
           await frames(page);
           assert.equal(await composer.inputValue(), full, `${label}: the draft stays whole`);
+
+          if (shape.mobile) {
+            // a touch selection that ends a little above the composer: the offer is taller on a touch screen than its
+            // mouse size, and its first placement already counts that, so it stands above the selection, not over the composer
+            await composer.fill("");
+            await composer.blur();
+            await select(page, FIRST, false);
+            const tall = await page.locator(".selection-offer").evaluate((offer) => offer.getBoundingClientRect().height);
+            assert.ok(tall > 36, `${label}: a touch screen draws the offer taller than its mouse size (${tall}px)`);
+            await page.evaluate(() => getSelection()?.removeAllRanges());
+            await page.locator(".selection-offer").waitFor({ state: "detached", ...WAIT });
+            // between the room the mouse size needs below the selection (72px) and the room the drawn offer needs
+            const gap = 72 + (tall - 36) / 2;
+            const placed = await page.evaluate(([words, room]) => {
+              const turn = [...document.querySelectorAll(".chat-turn-agent")].filter((row) => (row.textContent ?? "").includes(words)).at(-1)!;
+              const bottomOf = (): number => {
+                const walker = document.createTreeWalker(turn, NodeFilter.SHOW_TEXT);
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                  const at = (node as Text).data.indexOf(words);
+                  if (at < 0) continue;
+                  const range = document.createRange();
+                  range.setStart(node, at);
+                  range.setEnd(node, at + words.length);
+                  const drawn = [...range.getClientRects()].filter((rect) => rect.width > 0);
+                  if (drawn.length > 0) return drawn.at(-1)!.bottom;
+                }
+                throw new Error(`not drawn in one text node: ${words}`);
+              };
+              const layer = turn.closest(".pane-frame")!.querySelector(".reply-comment-layer")!;
+              const composerTop = layer.closest(".pane-frame")!.querySelector(".composer")!.getBoundingClientRect().top;
+              const limit = Math.min(layer.getBoundingClientRect().bottom, composerTop);
+              let scroller: HTMLElement | null = turn.parentElement;
+              while (scroller !== null && !(scroller.scrollHeight > scroller.clientHeight && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+              scroller!.scrollTop += bottomOf() - (limit - room);
+              return { limit, gap: limit - bottomOf() };
+            }, [NEAR, gap] as const);
+            await frames(page);
+            assert.ok(Math.abs(placed.gap - gap) < 2, `${label}: the selection ends ${gap}px above the composer (${placed.gap})`);
+            // a tap in the reply first: the next selection is a touch's
+            await page.evaluate((words) => {
+              const turn = [...document.querySelectorAll(".chat-turn-agent")].filter((row) => (row.textContent ?? "").includes(words)).at(-1)!;
+              turn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }));
+              document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerType: "touch" }));
+            }, NEAR);
+            await select(page, NEAR, false);
+            const offer = await page.locator(".selection-offer").evaluate((node) => node.getBoundingClientRect().bottom);
+            assert.ok(offer <= placed.limit - 7.5, `${label}: the offer stays above the composer on its first placement (bottom ${offer}, composer at ${placed.limit})`);
+          }
           assert.deepEqual(errors, [], `${label}: no page errors`);
           console.log(`PASS ${label}`);
         } finally {

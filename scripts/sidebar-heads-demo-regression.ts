@@ -27,6 +27,7 @@ const TWO_PCS = String.raw`(() => {
     const machine = structuredClone(original.find((item) => item.id === "local"));
     machine.id = id; machine.kind = id === "local" ? "local" : "ssh";
     machine.name = id === "local" ? "Laptop" : "Work PC";
+    machine.runtime = id === "local" ? "herdr" : "herdr-core";
     machine.state = id === "work" && localStorage.getItem("heads-fixture:work-offline") === "1" ? "disconnected" : "connected";
     return machine;
   });
@@ -242,10 +243,13 @@ try {
           // no tooltip: a pointer never reaches the count (it lets presses through to the + under it, and a hover hides it)
           assert.equal(rest.countTitle, null, `${label}: the count claims no tooltip a pointer cannot reach`);
           if (phone) {
-            // under a finger nothing hovers: the actions always show, a finger's size, and the count stays out
+            // under a finger nothing hovers: the fold always shows, a finger's size, and the count stays out; the
+            // drawer's header carries the + for a new workspace, so a PC's line has none of its own
             assert.equal(rest.count, null, `${label}: no count in view under a finger`);
-            assert.ok(rest.toggle && rest.add, `${label}: the fold and + show under a finger`);
-            assert.ok(rest.addBox!.width >= 44 && rest.addBox!.height >= 44, `${label}: the + is a finger's 44 px (${rest.addBox!.width}x${rest.addBox!.height})`);
+            assert.ok(rest.toggle, `${label}: the fold shows under a finger`);
+            assert.equal(rest.add, false, `${label}: no per-PC + in the phone drawer`);
+            assert.ok(rest.toggleBox!.width >= 44 && rest.toggleBox!.height >= 44, `${label}: the fold is a finger's 44 px (${rest.toggleBox!.width}x${rest.toggleBox!.height})`);
+            assert.equal(await page.locator(".new-workspace-button").isVisible(), true, `${label}: the drawer header's + is there`);
           } else {
             assert.equal(rest.count, String(agentsOnWork), `${label}: at rest the header counts its PC's agents`);
             assert.ok(!rest.toggle && !rest.add, `${label}: at rest the fold and + are out of sight`);
@@ -342,9 +346,11 @@ try {
             assert.equal((await pcHeader(page, "Work PC")).count, null, `${label}: at rest a disconnected PC shows no agent count`);
             assert.equal(await add.evaluate((element) => getComputedStyle(element).opacity), "0", `${label}: at rest the + is out of sight`);
             await header.locator(".machine-name").hover();
+            const opacity = Number(await add.evaluate((element) => getComputedStyle(element).opacity));
+            assert.ok(opacity > 0.3 && opacity < 0.9, `${label}: the shown disabled + keeps its dim (${opacity})`);
+          } else {
+            assert.equal((await pcHeader(page, "Work PC")).add, false, `${label}: the phone drawer draws no per-PC +`);
           }
-          const opacity = Number(await add.evaluate((element) => getComputedStyle(element).opacity));
-          assert.ok(opacity > 0.3 && opacity < 0.9, `${label}: the shown disabled + keeps its dim (${opacity})`);
         });
         await check("a lone Host has no head at all", { width, mode }, async (page, label) => {
           const lone = await heads(page);

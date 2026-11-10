@@ -21,10 +21,14 @@ export type UnsentKind = "message" | "line" | "held" | "pending";
 /** `agent_only`: a message box's draft that was for an agent alone (#511), which goes back into a box as one */
 export interface UnsentText { id: string; machine_id: string; pane_id: string; pane_title?: string; kind: UnsentKind; text: string; at: number; agent_only?: true }
 
+/** text typed into a pane's prompt card and not sent (components/ChatView.tsx): JSON with the prompt it answers, its `text` the words */
+export const CARD_TEXT_PREFIX = "ovis:card-text:";
 const KINDS: readonly (readonly [string, UnsentKind])[] = [
   ["ovis:composer-draft:", "message"], ["ovis:terminal-line:", "line"], ["ovis:terminal-draft:", "held"],
   // messages held for a pane, or not confirmed (lib/pendingMessages.ts, and the older lib/messageQueue.ts)
   ["ovis:pending:", "pending"], ["ovis:queue:", "pending"],
+  // a card's text goes back into the message box, as a draft does
+  [CARD_TEXT_PREFIX, "message"],
 ];
 const LEASE_PREFIX = "ovis:composer-sending:";
 const VIEW_PREFIX = "ovis:view:";
@@ -72,6 +76,15 @@ function parseUnsent(id: string, raw: string | null): UnsentText | null {
   } catch { return null; }
 }
 
+/** A stored pane-state value's text: a card's record holds its words with the prompt they answer. */
+function storedText(key: string, value: string | null): string | null {
+  if (value === null || !key.startsWith(CARD_TEXT_PREFIX)) return value;
+  try {
+    const card: unknown = JSON.parse(value);
+    return typeof card === "object" && card !== null && "text" in card && typeof card.text === "string" ? card.text : null;
+  } catch { return null; }
+}
+
 /** A text to keep, and whether it was for an agent alone (#511). */
 interface Unsent { text: string; agentOnly: boolean }
 
@@ -91,6 +104,19 @@ function texts(kind: UnsentKind, value: string | null, now: number, marked = fal
   } catch { return [{ text: value ?? "", agentOnly: false }]; }
 }
 
+/** how long a discarded record stays restorable in place before it is gone for good */
+export const UNSENT_UNDO_WINDOW_MS = 5_000;
+
+export interface UndoTimers {
+  setTimeout: (callback: () => void, delay: number) => unknown;
+  clearTimeout: (timer: unknown) => void;
+}
+
+const defaultTimers: UndoTimers = {
+  setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay),
+  clearTimeout: (timer) => globalThis.clearTimeout(timer as number),
+};
+
 export class PaneLifetimes {
   /** the herdr each PC's panes are drawn under on this page: its latest snapshot's lifetime, null when that names none */
   private readonly generations = new Map<string, string | null>();
@@ -106,6 +132,10 @@ export class PaneLifetimes {
   private readonly memory = new Map<string, string>();
   /** text that storage refused to keep for recovery: offered from this page while it is open */
   private pageUnsent: UnsentText[] = [];
+  /** discarded records kept in memory for the undo window, each with the timer that ends it */
+  private readonly discarded = new Map<string, { record: UnsentText; timer: unknown }>();
+  /** the discarded records still restorable, newest first; one array per change so a store subscriber can compare it */
+  private undoableList: readonly UnsentText[] = [];
   private readonly retired = new Set<(machineId: string) => void>();
   private readonly listeners = new Set<() => void>();
   private unsentCache: { raw: string; list: readonly UnsentText[] } | null = null;
@@ -114,6 +144,7 @@ export class PaneLifetimes {
     private readonly storage: () => Storage = () => window.localStorage,
     private readonly now: () => number = Date.now,
     private readonly newId: () => string = () => crypto.randomUUID(),
+    private readonly timers: UndoTimers = defaultTimers,
   ) {}
 
   /** The lifetime this page draws a PC's panes under: undefined before its first snapshot, null when snapshots name none. */
@@ -260,7 +291,7 @@ export class PaneLifetimes {
       if (pane?.machineId !== machineId) continue;
       if (keepLenses && key.startsWith(VIEW_PREFIX)) continue;
       const mark = agentOnlyMark(key);
-      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, storage.getItem(key), this.now(), mark !== null && keys.includes(mark)), titles);
+      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, storedText(key, storage.getItem(key)), this.now(), mark !== null && keys.includes(mark)), titles);
       storage.removeItem(key);
     }
   }
@@ -274,7 +305,7 @@ export class PaneLifetimes {
       if (pane?.machineId !== machineId) continue;
       this.memory.delete(key);
       const mark = agentOnlyMark(key);
-      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, value, this.now(), mark !== null && held.has(mark)), titles);
+      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, storedText(key, value), this.now(), mark !== null && held.has(mark)), titles);
     }
   }
 
@@ -299,7 +330,7 @@ export class PaneLifetimes {
         if (stored === null && storage) { storage.setItem(key, value); continue; }
       } catch { /* storage refused it: recovery below */ }
       // another tab's text for the pane, or storage refused this one: neither is lost
-      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, value, this.now(), mark !== null && held.has(mark)), titles);
+      if (pane.kind !== null) this.archive(storage, pane.machineId, pane.paneId, pane.kind, texts(pane.kind, storedText(key, value), this.now(), mark !== null && held.has(mark)), titles);
     }
   }
 
@@ -377,10 +408,48 @@ export class PaneLifetimes {
     return list;
   };
 
-  discard(id: string): void {
+  /** The discarded records still inside their undo window, newest first. */
+  undoable = (): readonly UnsentText[] => this.undoableList;
+
+  private forget(id: string): void {
+    const pending = this.discarded.get(id);
+    if (pending === undefined) return;
+    this.timers.clearTimeout(pending.timer);
+    this.discarded.delete(id);
+    this.undoableList = [...this.discarded.values()].map(({ record }) => record).sort((a, b) => b.at - a.at);
+  }
+
+  /**
+   * Removes a record; for `undoWindowMs` it stays restorable in place (the list shows it with Undo), then it is gone for
+   * good. 0 removes it at once, as after its text went into a message box.
+   */
+  discard(id: string, undoWindowMs = UNSENT_UNDO_WINDOW_MS): UnsentText | null {
+    const existing = this.unsent().find((item) => item.id === id) ?? null;
+    this.forget(id);
+    if (existing !== null && undoWindowMs > 0) {
+      const timer = this.timers.setTimeout(() => { this.forget(id); this.notify(); }, undoWindowMs);
+      this.discarded.set(id, { record: existing, timer });
+      this.undoableList = [...this.discarded.values()].map(({ record }) => record).sort((a, b) => b.at - a.at);
+    }
     this.pageUnsent = this.pageUnsent.filter((item) => item.id !== id);
     try { this.storage().removeItem(UNSENT_PREFIX + id); } catch { /* storage refused */ }
     this.notify();
+    return existing;
+  }
+
+  /** Puts a record discarded inside its undo window back; false once the window has passed. */
+  restore(id: string): boolean {
+    const record = this.discarded.get(id)?.record ?? null;
+    if (record === null) return false;
+    this.forget(id);
+    const { id: key, ...stored } = record;
+    try {
+      this.storage().setItem(UNSENT_PREFIX + key, JSON.stringify(stored));
+    } catch {
+      this.pageUnsent = [...this.pageUnsent.filter((item) => item.id !== key), record];
+    }
+    this.notify();
+    return true;
   }
 }
 

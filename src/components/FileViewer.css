@@ -4,7 +4,7 @@
 }
 
 .file-viewer {
-  width: min(96vw, 1100px);
+  width: min(96vw, var(--dialog-w-lg));
   max-width: 100%;
   min-width: 0;
   max-height: min(92vh, 100%);
@@ -127,13 +127,29 @@
   z-index: 1;
   display: flex;
   flex-direction: column;
-  min-width: max-content;
+  /* as wide as its items, no wider than the screen: the path row above them wraps inside */
+  min-width: 0;
+  width: max-content;
+  max-width: min(88vw, var(--file-panel-min-w));
   margin-top: var(--space-1);
   padding: var(--space-1);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
+  background: var(--surface-overlay);
+  border: var(--hairline) solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--shadow-menu);
+}
+
+.file-viewer-more-path {
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: var(--hairline) solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .file-viewer-more-item {
@@ -155,8 +171,8 @@
 }
 
 .file-viewer-more-item svg {
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   flex: none;
 }
 
@@ -175,11 +191,22 @@
   align-items: center;
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   padding: var(--space-3);
-  background: var(--bg);
+  background: var(--surface-canvas);
 }
-/* the popup's opening focus: the content as a whole, the dialog itself already outlined by its frame */
-.file-viewer-body:focus { outline: none; }
+
+.file-viewer ::selection {
+  background: var(--selection-bg);
+  color: var(--selection-text);
+}
+
+/* pointer focus hides the outline; keyboard focus-visible draws the inset ring so the scroll owner is clear */
+.file-viewer-body:focus:not(:focus-visible) { outline: none; }
+.file-viewer-body:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-inset-offset);
+}
 
 .file-viewer-media {
   /* auto margins: media sits in the middle of a full-height viewer, text starts at the top */
@@ -389,12 +416,12 @@
 .markdown-outline {
   position: relative;
   flex: none;
-  width: 240px;
+  width: var(--outline-w);
   overflow: auto;
   overscroll-behavior: contain;
   padding: var(--space-3) var(--space-2);
   border-inline-start: var(--hairline) solid var(--border);
-  background: var(--bg);
+  background: var(--surface-canvas);
 }
 
 .markdown-outline.is-drawer {
@@ -402,9 +429,9 @@
   inset-block: 0;
   inset-inline-end: 0;
   z-index: 1;
-  width: min(85%, 320px);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-pop);
+  width: min(85%, var(--file-panel-min-w));
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-menu);
 }
 
 .markdown-outline ol {
@@ -497,6 +524,11 @@
   text-align: center;
 }
 
+/* the way on, under the sentence that says the file could not be opened */
+.file-viewer-note-hint {
+  margin-top: var(--space-1);
+}
+
 /* the file's type and size under the sentence that says it cannot be previewed */
 .file-viewer-note-meta {
   display: block;
@@ -549,12 +581,12 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  width: var(--file-panel-shown-w, min(42vw, 560px));
-  flex: 0 0 var(--file-panel-shown-w, min(42vw, 560px));
+  width: var(--file-panel-shown-w, min(42vw, var(--dialog-w)));
+  flex: 0 0 var(--file-panel-shown-w, min(42vw, var(--dialog-w)));
   min-width: 0;
   min-height: 0;
   border-left: var(--hairline) solid var(--border);
-  background: var(--bg);
+  background: var(--surface-canvas);
   /* the header yields by the panel's width, not the window's */
   container: file-panel / inline-size;
 }
@@ -607,14 +639,14 @@
 .file-viewer-header-docked .file-viewer-actions { gap: var(--space-1); }
 
 .file-viewer-header-docked .file-viewer-action {
-  width: calc(var(--control-h) - 6px);
-  height: calc(var(--control-h) - 6px);
+  width: var(--bar-control-h);
+  height: var(--bar-control-h);
   border-radius: var(--radius-sm);
 }
 
 .file-viewer-header-docked .file-viewer-action svg {
-  width: calc(var(--icon-size) - 2px);
-  height: calc(var(--icon-size) - 2px);
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
 }
 
 /* The narrowest panel (a 980px window with the sidebar at its widest, 320px kept for the pane) has
@@ -696,12 +728,16 @@
 
 /* a touch screen wide enough for the panel keeps its targets */
 @media (pointer: coarse) {
+  .file-viewer-note {
+    font-size: var(--fs-dense-row);
+  }
+
   .file-viewer-header-docked .file-viewer-action {
     width: var(--touch-target);
     height: var(--touch-target);
   }
 
-  .file-viewer-toolbar .file-viewer-modes > button { height: calc(var(--control-h) - 6px); }
+  .file-viewer-toolbar .file-viewer-modes > button { height: var(--bar-control-h); }
 }
 
 .file-viewer-choices ul {

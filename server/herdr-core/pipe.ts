@@ -11,9 +11,14 @@
  * is resolved and lowercased first.
  */
 import { createHash } from "node:crypto";
-import { join, win32 } from "node:path";
+import { join, posix, win32 } from "node:path";
 
 const PIPE_PREFIX = "\\\\.\\pipe\\";
+
+/** whether a Linux or macOS path names herdr-core's adapter socket (adapterAddress): no other name is one */
+export function isCoreAdapterSocket(path: string): boolean {
+  return posix.basename(path) === "herdr-core.sock";
+}
 
 export function adapterAddress(stateDir: string, platform: NodeJS.Platform = process.platform): string {
   if (platform !== "win32") return join(stateDir, "herdr-core.sock");

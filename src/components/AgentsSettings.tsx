@@ -201,9 +201,9 @@ function ProviderAccounts({ id, providers, removed, onLocalLogin, onFollow }: { 
           {onLocalLogin && canSignInAgain(usage) && <UsageSignInAgain usage={usage} onStarted={onLocalLogin} onFollow={onFollow} />}
         </div>
         <span className="usage-accounts-actions">
-          <button type="button" className="icon-button" aria-label={t("Move {name} up", { name })} disabled={index === 0} onClick={() => move(usage.key, -1)}><ChevronUp aria-hidden="true" /></button>
-          <button type="button" className="icon-button" aria-label={t("Move {name} down", { name })} disabled={index === ordered.length - 1} onClick={() => move(usage.key, 1)}><ChevronDown aria-hidden="true" /></button>
-          <button type="button" className="icon-button usage-accounts-visibility" role="switch" aria-checked={!hidden} aria-label={t("Show {name}", { name })}
+          <button type="button" className="icon-button" aria-label={t("Move {name} up", { name })} title={t("Move {name} up", { name })} disabled={index === 0} onClick={() => move(usage.key, -1)}><ChevronUp aria-hidden="true" /></button>
+          <button type="button" className="icon-button" aria-label={t("Move {name} down", { name })} title={t("Move {name} down", { name })} disabled={index === ordered.length - 1} onClick={() => move(usage.key, 1)}><ChevronDown aria-hidden="true" /></button>
+          <button type="button" className="icon-button usage-accounts-visibility" role="switch" aria-checked={!hidden} aria-label={t("Show {name}", { name })} title={t("Show {name}", { name })}
             onClick={() => update({ usageHidden: hidden ? settings.usageHidden.filter((key) => key !== usage.key) : [...settings.usageHidden, usage.key] })}>
             {hidden ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
           </button>
@@ -269,17 +269,19 @@ function AgentItem({ entry, open, onToggle, allProviders, removed, read, limitsO
   const defaults = launch === null ? null : launch.some((value) => value !== "") ? launch.map((value) => value || t("Agent default")).join(" · ") : t("Agent default");
   return (
     <li className="agents-item" data-agent={agent.id} data-section={provider === null ? undefined : `accounts-${provider}`} tabIndex={provider === null ? undefined : -1}>
-      <div className="agents-summary" onClick={(event) => { if (!(event.target as Element).closest(".agents-row-action, .usage-sign-in-again, .agents-toggle")) onToggle(); }}>
+      {/* the whole head is the one toggle, a real button a keyboard reaches and a focus ring goes round (G-036);
+          the one action a shut row may carry sits beside it */}
+      <div className="agents-summary">
         <button type="button" className="agents-toggle" aria-expanded={open} aria-controls={open ? detailsId : undefined} onClick={onToggle}>
           <AgentMark agent={agent.id} size={22} />
           <span className="agents-summary-text">
             <span className="agents-summary-name"><span className="settings-label">{agent.name}</span>{agent.state.version !== null && <span className="agents-version">{agent.state.version}</span>}</span>
             <span className={`agents-state is-${line.tone}`}>{line.text}</span>
           </span>
+          {defaults !== null && <span className="agents-defaults" title={defaults}>{defaults}</span>}
+          <ChevronDown className="agents-chevron" aria-hidden="true" />
         </button>
-        {defaults !== null && <span className="agents-defaults">{defaults}</span>}
         {action}
-        <ChevronDown className="agents-chevron" aria-hidden="true" />
       </div>
       {open && <div className="agents-details" id={detailsId}>
         {agent.state.meets_min_version === false && agent.min_version !== null && <p className="agents-detail-note settings-condition">{t("Ovis needs {version} or later.", { version: agent.min_version.version })}</p>}
@@ -309,11 +311,11 @@ function PlanLimits({ watching }: { watching: boolean }) {
   const { settings, update } = useSettings();
   const t = useT();
   const statusline = useStatuslineSwitch(settings.showUsage);
-  // one row: off, or on and counted one way
+  // one row: off, or on and counted one way; the row says what it shows, the sign-in sentence is the account's own (G-095, G-098)
   return (
     <SettingsGroup section="plan-limits" className="agents-limits">
       <SettingsRow icon={Gauge} label={t("Plan limits")}
-        condition={<span className="settings-condition">{t("Shows plan usage beside Settings. Sign-ins are sent to each provider's usage API; never refreshed here.")}</span>} keywords={`${t("Show plan limits")} ${t("Meters show")} ${t("Shows plan usage beside Settings. Sign-ins are sent to each provider's usage API; never refreshed here.")}`} wide reset={settings.showUsage ? ["showUsage", "usageCount"] : ["showUsage"]}>
+        condition={<span className="settings-condition">{t("Shows plan usage beside Settings. Sign-ins are sent to each provider's usage API; never refreshed here.")}</span>} keywords={`${t("Plan limits")} ${t("Show plan limits")} ${t("Meters show")} ${t("Shows plan usage beside Settings. Sign-ins are sent to each provider's usage API; never refreshed here.")}`} wide reset={settings.showUsage ? ["showUsage", "usageCount"] : ["showUsage"]}>
         <Segmented label={t("Plan limits")} value={settings.showUsage ? settings.usageCount : "off"} onChange={(shown) => update(shown === "off" ? { showUsage: false } : { showUsage: true, usageCount: shown })} options={[{ value: "off", label: t("Off") }, { value: "used", label: t("Used") }, { value: "left", label: t("Remaining") }] as const} />
       </SettingsRow>
       {settings.showUsage && <>
@@ -350,12 +352,15 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
   const [catalog, setCatalog] = useState<{ machineId: string; agents: AgentCatalogRow[] } | null>(null);
   const [catalogError, setCatalogError] = useState<UserError | null>(null);
   const [reads, setReads] = useState(0);
+  // a read under way: Check again says so and takes no second press until it lands (G-113)
+  const [checking, setChecking] = useState(false);
   // why a tile's install did not finish, by agent; a tile that runs again or is done clears its own
   const [failures, setFailures] = useState<Readonly<Record<string, string>>>({});
   const checkAgain = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const abort = new AbortController();
     setCatalogError(null);
+    setChecking(true);
     fetchAgentCatalog(machineId, abort.signal).then(
       (answer) => setCatalog({ machineId, agents: answer.agents }),
       (reason: unknown) => {
@@ -363,7 +368,7 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
         // a PC on an Ovis from before the catalog answers 404 for it
         setCatalogError(reason instanceof ApiError && reason.status === 404 ? { message: t("This PC's Ovis cannot install agents yet. Update it, then try again."), detail: null } : userErrorMessage(reason));
       },
-    );
+    ).finally(() => { if (!abort.signal.aborted) setChecking(false); });
     return () => abort.abort();
   }, [machineId, reads, t]);
   // an install that finished moves its agent up to On this PC: the focus its own tile had goes to Check again
@@ -430,7 +435,8 @@ export function AgentsSettings({ watching, onLocalLogin, onOpenPane, onOpenGuide
 
       <section className="settings-section" data-section="agents-installed" tabIndex={-1} aria-label={t("On this PC")}>
         <SectionHead>
-          <button type="button" ref={checkAgain} className="btn btn-ghost" onClick={() => setReads((count) => count + 1)}><RotateCw aria-hidden="true" />{t("Check again")}</button>
+          {/* aria-disabled, not disabled: a press keeps the focus it had instead of dropping it to the page */}
+          <button type="button" ref={checkAgain} className="btn btn-ghost agents-check-again" aria-disabled={checking || undefined} aria-busy={checking || undefined} onClick={() => { if (!checking) setReads((count) => count + 1); }}><RotateCw aria-hidden="true" />{t(checking ? "Checking…" : "Check again")}</button>
         </SectionHead>
         {/* a failed read, the first or a Check again: the rows the last good one gave stay, with the error beside them */}
         {catalogError !== null && <p className="settings-hint agents-note" role="alert">{catalogError.message}{catalogError.detail !== null && <><br /><code>{catalogError.detail}</code></>}</p>}

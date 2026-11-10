@@ -42,7 +42,7 @@
   align-items: stretch;
   flex: 1 0 auto;
   color: var(--text-dim);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
 }
 
 .tab-strip-item {
@@ -52,9 +52,9 @@
   flex: 0 0 auto;
 }
 
-/* the underline spans the name and the optional touch menu */
+/* the selected tab uses a tonal wash and weight instead of a one-sided accent stripe */
 .tab-strip-item.is-active {
-  box-shadow: inset 0 -2px 0 var(--accent);
+  background: var(--bg-elevated);
 }
 
 .tab-strip-tab {
@@ -71,13 +71,21 @@
   cursor: pointer;
 }
 
-.tab-strip-tab:hover,
+@media (hover: hover) {
+  .tab-strip-tab:hover {
+    color: var(--text-strong);
+  }
+}
+
 .tab-strip-tab:focus-visible {
   color: var(--text-strong);
+  outline: var(--ring);
+  outline-offset: var(--ring-inset-offset);
 }
 
 .tab-strip-tab[aria-selected="true"] {
   color: var(--text-strong);
+  font-weight: var(--fw-selected);
 }
 
 /* the name being typed, in the tab's own place */
@@ -85,7 +93,8 @@
   align-self: center;
   width: auto;
   min-width: 0;
-  height: var(--chip-h);
+  height: var(--pointer-target);
+  min-height: var(--pointer-target);
   margin: 0 var(--space-2);
   padding: 0 var(--space-1);
   font-size: var(--fs-sm);
@@ -127,10 +136,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .tab-strip-dot:not(.tab-strip-glyph)[data-status="working"] {
-    width: var(--dot-size);
-    height: var(--dot-size);
-    background: var(--status-working);
-    border: 0;
     animation: none;
   }
 }
@@ -139,6 +144,12 @@
 .tab-strip-agent {
   display: inline-flex;
   flex: 0 0 auto;
+}
+
+/* the mark's own span is a box too, as in the sidebar and the composer: an inline span sits its SVG
+   on the text baseline of a line box taller than the mark, which lifts the logo above the name */
+.tab-strip-agent .agent-mark {
+  display: inline-flex;
 }
 
 /* the header's tab list (a phone's sheet): the state, then the agent, in a column of their own so
@@ -153,7 +164,7 @@
 }
 
 .tab-sheet-marks > .tab-strip-dot:not(.tab-strip-glyph):is([data-status="idle"], [data-status="unknown"]) {
-  box-shadow: inset 0 0 0 1.5px var(--border-strong);
+  box-shadow: inset 0 0 0 1.5px var(--status-marker-idle);
 }
 
 /* Settings -> Status indicators, Dots or Symbols: the sidebar's herdr glyph and color, held still
@@ -182,8 +193,8 @@
   justify-content: center;
   align-self: center;
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+  width: var(--bar-control-h);
+  height: var(--bar-control-h);
   padding: 0;
   background: transparent;
   border: 0;
@@ -201,7 +212,7 @@
   flex: 0 0 auto;
   margin-left: var(--space-2);
   color: var(--status-blocked);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   white-space: nowrap;
 }
 
@@ -216,30 +227,67 @@
 }
 
 /* over the shared hover below: the hover tint sits on the strip's colour, never on a tab */
-.tab-strip .tab-strip-add:hover,
-.tab-strip .tab-strip-add:focus-visible {
-  background: linear-gradient(var(--bg-hover), var(--bg-hover)) var(--strip-bg);
+@media (hover: hover) {
+  .tab-strip .tab-strip-add:hover:not(:disabled) {
+    background: linear-gradient(var(--bg-hover), var(--bg-hover)) var(--strip-bg);
+  }
+
+  .tab-strip-menu:hover:not(:disabled),
+  .tab-strip-add:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-strong);
+  }
 }
 
-.tab-strip-menu:hover,
+.tab-strip .tab-strip-add:focus-visible {
+  background: linear-gradient(var(--bg-hover), var(--bg-hover)) var(--strip-bg);
+  outline: var(--ring);
+  outline-offset: var(--ring-inset-offset);
+}
+
 .tab-strip-menu:focus-visible,
-.tab-strip-add:hover,
 .tab-strip-add:focus-visible {
   background: var(--bg-hover);
   color: var(--text-strong);
+  outline: var(--ring);
+  outline-offset: var(--ring-inset-offset);
+}
+
+.tab-strip-more:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-inset-offset);
+}
+
+.tab-strip-add:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.header-tabs .tab-strip-item.is-active > .tab-strip-tab {
+  font-weight: var(--fw-selected);
 }
 
 .tab-strip-menu svg,
 .tab-strip-add svg {
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
 }
 
 @media (pointer: coarse), (max-width: 768px) {
   .tab-strip-menu,
-  .tab-strip-add {
+  .tab-strip-add,
+  .header-tabs .tab-strip-item > .tab-strip-menu,
+  .header-tabs .tab-strip-item.is-active > .tab-strip-close,
+  .header-tabs .tab-strip-add {
     width: var(--touch-target);
     height: var(--touch-target);
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+
+  .tab-strip-rename {
+    height: var(--touch-target);
+    min-height: var(--touch-target);
   }
 
   /* a one- or two-character name (탭 1) is still a finger's width; the ⋯ beside it is its own */
@@ -312,9 +360,26 @@
   position: absolute;
   top: var(--space-1);
   bottom: var(--space-1);
-  width: 2px;
+  width: var(--space-half);
   background: var(--accent);
   pointer-events: none;
 }
 .tab-strip-item.is-drop-before::before { left: 0; }
 .tab-strip-item.is-drop-after::after { right: 0; }
+
+/* the tab's menu names the tab it is for above its items, where the menu covers the row (G-022); a phone's sheet draws it as its title */
+.tab-strip-menu-target {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-sheet-head .tab-strip-menu-target {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+}

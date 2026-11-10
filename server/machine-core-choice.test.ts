@@ -1,0 +1,394 @@
+import { expect, it, spyOn } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { BRIDGE_PROTOCOL, REMOTE_BUNDLE_VERSION, type SetupJob, type SetupRequest } from "../shared/machines.ts";
+import { CompletionTracker } from "./completion.ts";
+import { MachineManager } from "./machines.ts";
+import type { PushService } from "./push.ts";
+import { posixHost, windowsHost } from "./remote-host.ts";
+import { SshConnection } from "./ssh.ts";
+import { readProcessBirth } from "./process-owner.ts";
+
+// quiet: the live server cannot prove itself at first (no answer, an HTTP error); open: once chosen, it no longer can
+// unanswered other name: a live server of the account's, not answering, whose socket is not the core adapter's name
+const quiet = ["unanswered", "server error", "unanswered other name"], open = ["wrong token", "redirect", "server error after proof"];
+// waits: once chosen and connected, a reconnect meets it alive but not answering (no answer, or a 500 while its core
+// adapter starts after a reboot): the saved PC tries again, starting nothing
+const waits = [...quiet, "server error later"];
+// once chosen, its adapter socket is no longer this account's own: through a link, not a socket, in a folder others may
+// enter, or another socket than the one the server reports
+// enter, or another socket than the one the server reports; or in a folder another account could swap: outside the
+// account's own roots, or below a folder others may write or another account owns
+const confinement = ["socket link", "not a socket", "open folder", "other socket id", "outside home", "writable parent", "foreign parent", "foreign root parent", "runtime dir"];
+it.each(["connect", "default bridge", "unbridged herdr", "newer bundle", "birthless", "unanswered", "server error", "server error later", "server error after proof", "older peer", "gone", "symlink", "reused pid", "changed port", "stopped after proof", "wrong token", "wrong pid", "managed", "wrong runtime", "redirect", "unanswered other name", ...confinement])("chooses the PC's own core server: %s", async (outcome) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "machine-core-choice-")));
+  const id = "12345678-1234-1234-1234-123456789abc";
+  // the core adapter's socket in its server's own state folder (server/herdr-core/runtime.ts), as startRuntime leaves it
+  const shared = join(dir, "shared");
+  const stateDir = join(shared, "state");
+  mkdirSync(shared, { mode: 0o755 });
+  mkdirSync(stateDir, { mode: 0o700 });
+  // the SSH account's home on that PC, and the PATH its commands run with (a stand-in stat, below)
+  // xdgRuntime: its XDG_RUNTIME_DIR; foreign: a folder a stand-in stat says another account owns
+  let home = dir, xdgRuntime = "", foreign = "";
+  // The PC's folders above the fixture's are root's and writable by root alone, as on a usual system (this host's own
+  // temporary folder may be shared and sticky): a stand-in stat says so, and says which folder another account owns
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "stat"), [
+    "#!/bin/sh",
+    "for last; do :; done",
+    `if [ "$1" = -c ] && [ "$2" = %u ] && [ -n "$FIXTURE_FOREIGN" ] && [ "$last" = "$FIXTURE_FOREIGN" ]; then echo 4242; exit 0; fi`,
+    `if [ "$1" = -c ] && { [ "$last" = / ] || case "$FIXTURE_DIR" in "$last"/*) true ;; *) false ;; esac; }; then`,
+    `  case "$2" in %u) echo 0; exit 0 ;; %a) echo 755; exit 0 ;; esac`,
+    "fi",
+    `exec ${JSON.stringify(Bun.which("stat"))} "$@"`,
+  ].join("\n") + "\n", { mode: 0o755 });
+  const path = `${bin}:${process.env["PATH"] ?? ""}`;
+  const socket = join(stateDir, outcome === "unanswered other name" ? "other.sock" : "herdr-core.sock");
+  let adapter = Bun.listen({ unix: socket, socket: { data() {} } });
+  // what the server reports of its socket, read as server/bridge.ts reads it (through a link)
+  const socketId = () => { try { const stat = statSync(socket); return `${stat.dev}:${stat.ino}`; } catch { return "fixture:gone"; } };
+  writeFileSync(join(dir, "machines.json"), JSON.stringify([{ id, name: "fixture", enabled: false, target: { destination: "fixture-only" } }]));
+  const birth = readProcessBirth(process.pid);
+  if (birth.state !== "identified") throw new Error("Test process birth unavailable");
+  // birthless: an older server's registration, which recorded no process birth
+  const descriptor = { socket_path: socket, pid: process.pid, ...(outcome === "birthless" ? {} : { birth: birth.birth }), port: 12345, token: "a".repeat(64), bridge_protocol: BRIDGE_PROTOCOL, bundle_version: REMOTE_BUNDLE_VERSION, managed_remote: false };
+  // default bridge: this app's bridge already serves the PC's default herdr socket, as on a saved PC that reconnects
+  const bridge = { socket_path: join(dir, ".config/herdr/herdr.sock"), pid: process.pid, port: 23456, token: "b".repeat(64), bridge_protocol: BRIDGE_PROTOCOL, bundle_version: REMOTE_BUNDLE_VERSION, managed_remote: true };
+  const listedHere = outcome === "default bridge" ? [bridge, descriptor] : [descriptor];
+  const registry = join(dir, ".config/herdr-web-ui/bridges");
+  mkdirSync(registry, { recursive: true });
+  const registration = join(registry, createHash("sha256").update(socket).digest("hex") + ".json");
+  writeFileSync(registration, JSON.stringify(descriptor), { mode: 0o600 });
+  const herdrDir = join(dir, ".config/herdr/sessions/work");
+  mkdirSync(herdrDir, { recursive: true });
+  const sessions = [{ socket_path: join(herdrDir, "herdr.sock"), session: "work", label: "work" }];
+  // no TUI herdr runs beside a quiet core server, so nothing else could be offered
+  const herdr = quiet.includes(outcome) ? undefined : Bun.listen({ unix: sessions[0]!.socket_path, socket: { data() {} } });
+  // unbridged herdr: herdr answers at the PC's own socket with no bridge in front yet (right after an app update, before
+  // this app's runtime is there again), beside the core server
+  const tui = outcome === "unbridged herdr" ? Bun.listen({ unix: join(dir, ".config/herdr/herdr.sock"), socket: { data() {} } }) : undefined;
+  if (!herdr) sessions.length = 0;
+  const runtimeDir = join(dir, "runtime");
+  mkdirSync(join(runtimeDir, "bin"), { recursive: true });
+  symlinkSync(process.execPath, join(runtimeDir, "bin/bun"));
+  symlinkSync(import.meta.dir, join(runtimeDir, "server"));
+  const relays: ReturnType<typeof Bun.serve>[] = [];
+  let selected = false, starts = 0, installs = 0, answering = !quiet.includes(outcome);
+  const commands: string[] = [];
+  const realFetch = globalThis.fetch;
+  const mocks = [
+    // a live server that cannot answer right now: its identity request times out
+    spyOn(globalThis, "fetch").mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => !answering && outcome.startsWith("unanswered") && String(input).includes("/api/bridge")
+      ? Promise.reject(new DOMException("Fixture bridge answer timed out", "TimeoutError")) : realFetch(input, init), { preconnect: realFetch.preconnect })),
+    spyOn(SshConnection.prototype, "start").mockResolvedValue(undefined),
+    spyOn(SshConnection.prototype, "close").mockImplementation(() => {}),
+    spyOn(SshConnection.prototype, "run").mockImplementation(async (command) => {
+      commands.push(command);
+      const shell = Bun.spawn(["sh", "-c", command], { env: { ...process.env, HOME: home, XDG_RUNTIME_DIR: xdgRuntime, PATH: path, FIXTURE_DIR: dir, FIXTURE_FOREIGN: foreign, XDG_CONFIG_HOME: join(dir, ".config") }, stdout: "pipe", stderr: "pipe" });
+      const [out, err, code] = await Promise.all([new Response(shell.stdout).text(), new Response(shell.stderr).text(), shell.exited]);
+      if (code !== 0) throw new Error(err);
+      return out;
+    }),
+    spyOn(posixHost, "herdrVersion").mockResolvedValue("herdr 0.9.0"),
+    spyOn(posixHost, "inspect").mockResolvedValue({ platform: "linux-x64", home: dir, herdrPath: "/fixture/herdr", expectedSocket: join(dir, ".config/herdr/herdr.sock"), bundleReady: outcome !== "unbridged herdr", bundleOlder: false, descriptors: listedHere, runtimeDir, registryDir: registry }),
+    spyOn(posixHost, "descriptors").mockResolvedValue(listedHere),
+    spyOn(posixHost, "alive").mockImplementation(async () => !selected || outcome !== "stopped after proof"),
+    spyOn(posixHost, "installBundle").mockImplementation(async () => { installs++; }),
+    spyOn(posixHost, "start").mockImplementation(async () => { starts++; throw new Error("must not start herdr"); }),
+    spyOn(SshConnection.prototype, "forward").mockImplementation(async (port, remotePort) => {
+      const served = remotePort === bridge.port && outcome === "default bridge" ? bridge : descriptor;
+      expect(remotePort).toBe(served.port);
+      relays.push(Bun.serve({ port, hostname: "127.0.0.1", fetch(request, server) {
+        expect(request.headers.get("authorization")).toBe(`Bearer ${served.token}`);
+        const path = new URL(request.url).pathname;
+        if (path === "/api/bridge" && served === bridge) return Response.json({ ...bridge, socket_id: "fixture:tui", herdr: { protocol: 22, version: "0.9.0", runtime: "herdr" } });
+        if (path === "/api/bridge") {
+          // the server cannot reach its core adapter right now: every identity request, or (after proof) the one after discovery
+          const discovering = new URL(request.url).searchParams.get("discover") === "herdr";
+          if ((!answering && outcome === "server error") || (selected && outcome === "server error later") || (selected && outcome === "server error after proof" && !discovering)) {
+            return Response.json({ error: { code: "herdr_unavailable", message: "herdr-core is not answering" } }, { status: 500 });
+          }
+          if (selected && outcome === "wrong token") return new Response(null, { status: 401 });
+          if (selected && outcome === "redirect") return Response.redirect("http://127.0.0.1:1/");
+          return Response.json({ ...descriptor, pid: selected && outcome === "wrong pid" ? process.pid + 1 : process.pid, managed_remote: selected && outcome === "managed", socket_id: selected && outcome === "other socket id" ? "1:2" : socketId(), herdr: { protocol: 22, version: "0.1.17", runtime: selected && outcome === "wrong runtime" ? "herdr" : "herdr-core" }, ...(outcome === "older peer" ? {} : { found_herdr_sessions: sessions }),
+            // newer bundle: the chosen Ovis was updated past this app since it was proven
+            ...(selected && outcome === "newer bundle" && !discovering ? { bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1) } : {}) });
+        }
+        if (path === "/api/session") return Response.json({ snapshot: { panes: [], workspaces: [{ id: "core-work", name: "Existing core work" }] } });
+        if (path === "/ws" && server.upgrade(request, { data: undefined })) return;
+        return new Response(null, { status: 404 });
+      }, websocket: { message() {} } }));
+    }),
+  ];
+  const manager = new MachineManager(dir, { seed() {} } as unknown as PushService, new CompletionTracker(null), async () => { throw new Error("isolated"); });
+  const retries = spyOn(MachineManager.prototype as unknown as { retryLater(runtime: unknown): void }, "retryLater");
+  // auto: a reconnect or an update that asks nobody; false, a setup the user started in its dialog
+  const run = (request: SetupRequest, auto = true) => new Promise<SetupJob>((resolve, reject) => {
+    let job: SetupJob | undefined;
+    const timeout = setTimeout(() => { off(); reject(new Error("setup did not settle")); }, 5000);
+    // approval: a setup the user started that goes on, as before this choice existed, to what it installs or starts there
+    const off = manager.subscribe(() => { if (job && ["failed", "connected", "approval"].includes(job.phase)) { clearTimeout(timeout); off(); resolve(job); } });
+    job = manager.setup({ ...request, machine_id: id, update_remote: true }, { auto });
+  });
+  // the saved PC's own reconnect: a retry scheduled, or a decision for the user, whichever comes first
+  const reconnect = () => {
+    const settled = Promise.withResolvers<"retry" | "decision">();
+    retries.mockImplementation(() => settled.resolve("retry"));
+    const off = manager.subscribe(() => { if (manager.list().find((pc) => pc.id === id)?.state === "error") settled.resolve("decision"); });
+    const timeout = setTimeout(() => settled.reject(new Error("the reconnect did not settle")), 5000);
+    manager.patch(id, { enabled: true });
+    return settled.promise.finally(() => { clearTimeout(timeout); off(); });
+  };
+  try {
+    if (outcome === "default bridge") {
+      // reconnects to its live bridge on its own, as before, and a setup started in its dialog connects to it too: no
+      // choice nobody needs, nothing started, no retry
+      for (const auto of [true, false]) {
+        const reconnect = await run({ destination: "fixture-only" }, auto);
+        expect(reconnect).toMatchObject({ phase: "connected", runtime: "herdr" });
+        expect(reconnect.action_required ?? null).toBeNull();
+        expect(manager.list().find((pc) => pc.id === id)).toMatchObject({ state: "connected", runtime: "herdr", action_required: null });
+      }
+      expect(starts).toBe(0);
+      return;
+    }
+    if (outcome === "unbridged herdr") {
+      // a reconnect of a PC saved without an Ovis chosen does as before this choice existed: it starts this app's bridge
+      // for its herdr (the fixture's start then fails), and offers no core server nobody asked for
+      const reconnect = await run({ destination: "fixture-only" });
+      expect(reconnect.action_required).not.toBe("choose_herdr");
+      expect(reconnect.found_ovis).toBeUndefined();
+      expect(manager.list().find((pc) => pc.id === id)?.action_required).not.toBe("choose_herdr");
+      expect(starts).toBe(1);
+      // and so does a setup the user started: the bundle there is too old to apply the socket rule, but herdr's own
+      // socket is there, so no choice nobody needs stops it
+      const asked = await run({ destination: "fixture-only" }, false);
+      expect(asked.action_required).not.toBe("choose_herdr");
+      expect(asked.found_ovis).toBeUndefined();
+      // it asks to install this app's runtime there first (that bundle is too old), as before: nothing is started yet
+      expect(asked.phase).toBe("approval");
+      expect(starts).toBe(1);
+      return;
+    }
+    // the unasked choice: offered only in a setup the user started in its dialog
+    const offer = await run({ destination: "fixture-only" }, false);
+    if (outcome === "unanswered other name") {
+      // never offered as herdr-core: no core adapter listens at another name, so choosing it could never connect
+      expect(offer.found_ovis ?? []).not.toContainEqual(expect.objectContaining({ socket_path: socket }));
+      return;
+    }
+    expect(offer).toMatchObject({ phase: "failed", action_required: "choose_herdr", found_herdr_sessions: sessions, found_ovis: [{ socket_path: socket, runtime: "herdr-core" }] });
+    expect(starts).toBe(0);
+    if (quiet.includes(outcome)) {
+      // a plain choice: neither the tunnel's address nor a reason to start Ovis on that PC (it runs)
+      expect(offer.error).not.toContain("127.0.0.1");
+      expect(offer.error).not.toBe("Start Ovis on that PC, or start a new herdr here");
+      const waiting = await run({ destination: "fixture-only", own_ovis: socket }, false);
+      expect(waiting).toMatchObject({ phase: "failed", action_required: "choose_herdr", error: offer.error, found_ovis: [{ socket_path: socket, runtime: "herdr-core" }] });
+      expect(starts).toBe(0);
+      expect(manager.endpoint(id)).toBeUndefined();
+      expect(retries).not.toHaveBeenCalled();
+      answering = true;
+    }
+    expect((await run({ destination: "fixture-only", own_ovis: socket })).phase).toBe("connected");
+    retries.mockClear();
+    selected = true;
+    if (outcome === "gone" || outcome === "symlink") rmSync(registration);
+    if (outcome === "symlink") { writeFileSync(join(dir, "outside.json"), JSON.stringify(descriptor)); symlinkSync(join(dir, "outside.json"), registration); }
+    if (outcome === "reused pid") descriptor.birth = { ...birth.birth, value: "not-this-process" };
+    if (outcome === "changed port") writeFileSync(registration, JSON.stringify({ ...descriptor, port: 12346 }));
+    if (confinement.includes(outcome)) {
+      if (outcome === "socket link" || outcome === "not a socket") { adapter.stop(true); rmSync(socket, { force: true }); }
+      if (outcome === "socket link") {
+        // another folder's socket, reached through a link where the chosen server's socket was
+        mkdirSync(join(dir, "elsewhere"), { mode: 0o700 });
+        adapter = Bun.listen({ unix: join(dir, "elsewhere/herdr-core.sock"), socket: { data() {} } });
+        symlinkSync(join(dir, "elsewhere/herdr-core.sock"), socket);
+      }
+      if (outcome === "not a socket") writeFileSync(socket, "");
+      // a folder others may enter or write is not this account's own herdr-core folder
+      if (outcome === "open folder") chmodSync(stateDir, 0o755);
+      // the account's own folder, but outside its home (and no runtime dir): a parent it does not control could swap it
+      // (its registration is still found: that home's .config is the fixture's)
+      if (outcome === "outside home") { home = join(dir, "home"); mkdirSync(home); symlinkSync(join(dir, ".config"), join(home, ".config")); }
+      if (outcome === "writable parent") chmodSync(shared, 0o777);
+      // another account owns the folder above
+      if (outcome === "foreign parent") foreign = shared;
+      // or the folder above the account's home itself (the root): it could rename that root and put another in its place
+      if (outcome === "foreign root parent") foreign = dirname(dir);
+      // an XDG_RUNTIME_DIR of the account's own that is not /run/user/<uid> is no root of its own
+      if (outcome === "runtime dir") { home = join(dir, "home"); mkdirSync(home); symlinkSync(join(dir, ".config"), join(home, ".config")); xdgRuntime = dir; }
+      // the fresh setup (it reuses the live server: its update is not needed) and the saved PC's own reconnect both refuse
+      for (const attach of [() => run({ destination: "fixture-only", own_ovis: socket }), reconnect]) {
+        retries.mockClear();
+        const settled = await attach();
+        if (typeof settled !== "string") expect(settled).toMatchObject({ phase: "failed", action_required: "choose_herdr" });
+        else expect(settled).toBe("decision");
+        expect(manager.list().find((pc) => pc.id === id)).toMatchObject({ state: "error", action_required: "choose_herdr", target: { own_ovis: socket } });
+        expect(manager.list().find((pc) => pc.id === id)?.error).not.toBe("Start Ovis on that PC, or start a new herdr here");
+        expect(manager.endpoint(id)).toBeUndefined();
+        expect(retries).not.toHaveBeenCalled();
+        manager.patch(id, { enabled: false });
+      }
+      expect(starts).toBe(0);
+      expect(installs).toBe(0);
+      return;
+    }
+    if (waits.includes(outcome)) {
+      if (quiet.includes(outcome)) answering = false;
+      expect(await reconnect()).toBe("retry");
+      expect(starts).toBe(0);
+      expect(installs).toBe(0);
+      // the plain words stay on the PC while it waits; no choice is pending
+      expect(manager.list().find((pc) => pc.id === id)).toMatchObject({ error: "Ovis on this PC is running but not answering right now. Try it again in a moment, or start a new herdr here.", action_required: null, target: { own_ovis: socket } });
+      for (const command of commands) expect(command).not.toContain(descriptor.token);
+      return;
+    }
+    // a chosen Ovis that is gone (no registration, its process stopped) asks only a setup started in its dialog; a
+    // reconnect waits for it (below)
+    // and so does one whose identity cannot be established (open)
+    const chosen = await run({ destination: "fixture-only", own_ovis: socket }, !["gone", "stopped after proof", ...open].includes(outcome));
+    const connects = ["connect", "birthless", "older peer"].includes(outcome);
+    expect(chosen.phase).toBe(connects ? "connected" : "failed");
+    expect(starts).toBe(0);
+    // the registration's token goes only in the tunnel's HTTP request, never in a command on that PC
+    expect(commands.length).toBeGreaterThan(0);
+    for (const command of commands) expect(command).not.toContain(descriptor.token);
+    if (connects) {
+      expect(chosen.runtime).toBe("herdr-core");
+      expect(manager.list().find((pc) => pc.id === chosen.machine_id)).toMatchObject({ runtime: "herdr-core", target: { own_ovis: socket }, snapshot: { workspaces: [{ id: "core-work" }] } });
+      // a PC no longer connected tells no runtime: what runs there may change while it is away
+      manager.patch(chosen.machine_id!, { enabled: false });
+      expect(manager.list().find((pc) => pc.id === chosen.machine_id)?.runtime).toBeUndefined();
+    } else if (outcome === "newer bundle") {
+      // it answered with what it is: that decision is told in its own words, not as an Ovis to start there
+      expect(chosen).toMatchObject({ phase: "failed", action_required: "setup" });
+      expect(chosen.error).not.toBe("Start Ovis on that PC, or start a new herdr here");
+      expect(chosen.found_ovis).toBeUndefined();
+      expect(manager.endpoint(chosen.machine_id!)).toBeUndefined();
+    } else if (open.includes(outcome)) {
+      // owned and live, its identity not established: still offered, never dropped, nothing started in its place
+      expect(chosen).toMatchObject({ action_required: "choose_herdr", found_herdr_sessions: sessions, found_ovis: [{ socket_path: socket, runtime: "herdr-core" }] });
+      expect(chosen.error).not.toBe("Start Ovis on that PC, or start a new herdr here");
+      expect(manager.endpoint(chosen.machine_id!)).toBeUndefined();
+      expect(manager.list().find((pc) => pc.id === id)).toMatchObject({ action_required: "choose_herdr", found_ovis: [{ socket_path: socket, runtime: "herdr-core" }] });
+      expect(retries).not.toHaveBeenCalled();
+    } else {
+      expect(chosen).toMatchObject({ action_required: "choose_herdr", error: "Start Ovis on that PC, or start a new herdr here", found_herdr_sessions: sessions });
+      expect(manager.endpoint(chosen.machine_id!)).toBeUndefined();
+      expect(manager.list().find((pc) => pc.id === id)).toMatchObject({ action_required: "choose_herdr", error: "Start Ovis on that PC, or start a new herdr here", found_herdr_sessions: sessions });
+      expect(retries).not.toHaveBeenCalled();
+    }
+  } finally {
+    manager.stop(); retries.mockRestore(); mocks.forEach((mock) => mock.mockRestore()); relays.forEach((relay) => relay.stop(true)); herdr?.stop(true); tui?.stop(true); adapter.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// After a reboot SSH answers before the user's Ovis has started: the saved PC waits for it (#2047), starting nothing
+it.each(["registration removed", "process stopped"])("retries a saved PC whose chosen Ovis is gone instead of asking: %s", async (gone) => {
+  const dir = mkdtempSync(join(tmpdir(), "machine-core-gone-"));
+  const id = "12345678-1234-1234-1234-123456789abe";
+  const socket = "/home/fixture/.config/ovis/hc-adapter.sock";
+  writeFileSync(join(dir, "machines.json"), JSON.stringify([{ id, name: "fixture", enabled: false, target: { destination: "fixture-only", own_ovis: socket } }]));
+  const descriptor = { socket_path: socket, pid: 4242, port: 12345, token: "a".repeat(64), bridge_protocol: BRIDGE_PROTOCOL, bundle_version: REMOTE_BUNDLE_VERSION, managed_remote: false };
+  const listed = gone === "registration removed" ? [] : [descriptor];
+  let starts = 0;
+  const mocks = [
+    spyOn(SshConnection.prototype, "start").mockResolvedValue(undefined),
+    spyOn(SshConnection.prototype, "close").mockImplementation(() => {}),
+    spyOn(SshConnection.prototype, "run").mockRejectedValue(new Error("no command is expected on that PC")),
+    spyOn(posixHost, "inspect").mockResolvedValue({ platform: "linux-x64", home: "/home/fixture", herdrPath: "", expectedSocket: "/home/fixture/.config/herdr/herdr.sock", bundleReady: true, bundleOlder: false, descriptors: listed, runtimeDir: "/runtime", registryDir: "/registry" }),
+    spyOn(posixHost, "descriptors").mockResolvedValue(listed),
+    spyOn(posixHost, "alive").mockResolvedValue(false),
+    spyOn(posixHost, "installBundle").mockImplementation(async () => { starts++; }),
+    spyOn(posixHost, "start").mockImplementation(async () => { starts++; }),
+  ];
+  const manager = new MachineManager(dir, { seed() {} } as unknown as PushService, new CompletionTracker(null), async () => { throw new Error("isolated"); });
+  // the PC's own reconnect ends in a retry scheduled or a decision for the user, whichever comes first
+  const settled = Promise.withResolvers<"retry" | "decision">();
+  const retries = spyOn(MachineManager.prototype as unknown as { retryLater(runtime: unknown): void }, "retryLater").mockImplementation(() => settled.resolve("retry"));
+  const off = manager.subscribe(() => { if (manager.list().find((pc) => pc.id === id)?.state === "error") settled.resolve("decision"); });
+  const timeout = setTimeout(() => settled.reject(new Error("the reconnect did not settle")), 5000);
+  try {
+    manager.patch(id, { enabled: true });
+    expect(await settled.promise).toBe("retry");
+    expect(starts).toBe(0);
+    // the plain words stay on the PC while it waits; no choice is pending
+    expect(manager.list().find((pc) => pc.id === id)).toMatchObject({ error: "Start Ovis on that PC, or start a new herdr here", action_required: null, target: { own_ovis: socket } });
+  } finally {
+    clearTimeout(timeout); off(); manager.stop(); retries.mockRestore(); mocks.forEach((mock) => mock.mockRestore()); rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The account's sessions are read on that PC for the choice: a dropped SSH connection is said as that, never as a PC with
+// no herdr sessions, while a bundle that cannot run discovery still leaves the choice, with none listed
+it.each(["connection dropped", "discovery unavailable"])("tells why the choice could not list sessions: %s", async (failure) => {
+  const dir = mkdtempSync(join(tmpdir(), "machine-core-discovery-"));
+  const id = "12345678-1234-1234-1234-123456789abc";
+  const socket = "/home/fixture/.config/ovis/hc-adapter.sock";
+  writeFileSync(join(dir, "machines.json"), JSON.stringify([{ id, name: "fixture", enabled: false, target: { destination: "fixture-only" } }]));
+  const dropped = failure === "connection dropped";
+  let starts = 0;
+  const mocks = [
+    spyOn(SshConnection.prototype, "start").mockResolvedValue(undefined),
+    spyOn(SshConnection.prototype, "close").mockImplementation(() => {}),
+    spyOn(SshConnection.prototype, "connected").mockImplementation(() => !dropped),
+    spyOn(SshConnection.prototype, "run").mockRejectedValue(new Error("no command is expected on that PC")),
+    // the chosen Ovis is gone: a setup started in its dialog gets the choice, with the sessions read there
+    spyOn(posixHost, "inspect").mockResolvedValue({ platform: "linux-x64", home: "/home/fixture", herdrPath: "", expectedSocket: "/home/fixture/.config/herdr/herdr.sock", bundleReady: true, bundleOlder: false, descriptors: [], runtimeDir: "/runtime", registryDir: "/registry" }),
+    spyOn(posixHost, "discoverSessions").mockRejectedValue(new Error(dropped ? "Connection to fixture-only closed by remote host." : "SSH command failed (1)")),
+    spyOn(posixHost, "start").mockImplementation(async () => { starts++; }),
+  ];
+  const manager = new MachineManager(dir, { seed() {} } as unknown as PushService, new CompletionTracker(null), async () => { throw new Error("isolated"); });
+  try {
+    const job = await new Promise<SetupJob>((resolve, reject) => {
+      let job: SetupJob | undefined;
+      const timeout = setTimeout(() => { off(); reject(new Error("setup did not settle")); }, 5000);
+      const off = manager.subscribe(() => { if (job && ["failed", "connected"].includes(job.phase)) { clearTimeout(timeout); off(); resolve(job); } });
+      job = manager.setup({ destination: "fixture-only", own_ovis: socket, machine_id: id }, {});
+    });
+    expect(job.phase).toBe("failed");
+    expect(starts).toBe(0);
+    if (dropped) {
+      expect(job.error).toBe("Connection to fixture-only closed by remote host.");
+      expect(job.action_required).not.toBe("choose_herdr");
+      expect(job.found_herdr_sessions).toBeUndefined();
+    } else expect(job).toMatchObject({ action_required: "choose_herdr", error: "Start Ovis on that PC, or start a new herdr here", found_herdr_sessions: [] });
+  } finally {
+    manager.stop(); mocks.forEach((mock) => mock.mockRestore()); rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("asks for a new choice instead of retrying when a saved Windows PC is set to use its own Ovis server", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "machine-core-windows-"));
+  const id = "12345678-1234-1234-1234-123456789abd";
+  writeFileSync(join(dir, "machines.json"), JSON.stringify([{ id, name: "fixture", enabled: false, target: { destination: "fixture-only", own_ovis: "/home/fixture/.config/ovis/hc-adapter.sock" } }]));
+  const mocks = [
+    spyOn(SshConnection.prototype, "start").mockResolvedValue(undefined),
+    spyOn(SshConnection.prototype, "close").mockImplementation(() => {}),
+    spyOn(SshConnection.prototype, "run").mockRejectedValue(new Error("no command is expected on that PC")),
+    spyOn(posixHost, "inspect").mockRejectedValue(new Error("not a POSIX shell")),
+    spyOn(windowsHost, "inspect").mockResolvedValue({ platform: "win32-x64", home: "C:\\Users\\fixture", herdrPath: "", expectedSocket: "\\\\.\\pipe\\herdr", bundleReady: true, bundleOlder: false, descriptors: [], runtimeDir: "C:\\runtime", registryDir: "C:\\registry" }),
+    spyOn(windowsHost, "start").mockImplementation(async () => { throw new Error("must not start herdr"); }),
+  ];
+  const manager = new MachineManager(dir, { seed() {} } as unknown as PushService, new CompletionTracker(null), async () => { throw new Error("isolated"); });
+  // the PC's own reconnect ends in a retry scheduled (the bug) or a decision for the user, whichever comes first
+  const settled = Promise.withResolvers<"retry" | "decision">();
+  const retries = spyOn(MachineManager.prototype as unknown as { retryLater(runtime: unknown): void }, "retryLater").mockImplementation(() => settled.resolve("retry"));
+  const off = manager.subscribe(() => { if (manager.list().find((pc) => pc.id === id)?.state === "error") settled.resolve("decision"); });
+  const timeout = setTimeout(() => settled.reject(new Error("the reconnect did not settle")), 5000);
+  try {
+    manager.patch(id, { enabled: true });
+    expect(await settled.promise).toBe("decision");
+    // a decision for the user, as any MachineActionRequired: the PC waits for it instead of reconnecting
+    expect(manager.list().find((pc) => pc.id === id)).toMatchObject({ state: "error", action_required: "setup" });
+    expect(retries).not.toHaveBeenCalled();
+  } finally {
+    clearTimeout(timeout); off(); manager.stop(); retries.mockRestore(); mocks.forEach((mock) => mock.mockRestore()); rmSync(dir, { recursive: true, force: true });
+  }
+});

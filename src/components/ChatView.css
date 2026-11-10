@@ -26,6 +26,11 @@
   --chat-fs-body: calc(var(--fs-chat) * var(--chat-scale, 1));
   --chat-fs-lg: calc(var(--fs-lg) * var(--chat-scale, 1));
   --chat-fs-xl: calc(var(--fs-xl) * var(--chat-scale, 1));
+  /* the page's meta floor and heading steps (styles.css --fs-meta, --fs-h3/h2/h1), scaled the same way */
+  --chat-fs-meta: calc(var(--fs-meta) * var(--chat-scale, 1));
+  --chat-fs-h3: calc(var(--fs-h3) * var(--chat-scale, 1));
+  --chat-fs-h2: calc(var(--fs-h2) * var(--chat-scale, 1));
+  --chat-fs-h1: calc(var(--fs-h1) * var(--chat-scale, 1));
   /* the space between and inside its blocks scales the same way, as iOS scales a layout's
      metrics with its Dynamic Type (UIFontMetrics): at the page's spacing a small text sat loose
      between wide gaps and a large one cramped */
@@ -40,6 +45,7 @@
   --chat-control-h: calc(var(--control-h) * var(--chat-scale, 1));
 }
 
+
 .chat-transcript,
 .file-viewer-markdown {
   --fs-2xs: var(--chat-fs-2xs);
@@ -48,6 +54,10 @@
   --fs-md: var(--chat-fs-md);
   --fs-lg: var(--chat-fs-lg);
   --fs-xl: var(--chat-fs-xl);
+  --fs-meta: var(--chat-fs-meta);
+  --fs-h3: var(--chat-fs-h3);
+  --fs-h2: var(--chat-fs-h2);
+  --fs-h1: var(--chat-fs-h1);
   /* Settings -> Chat font (lib/settings.ts): the prose only; code, work rows and paths keep --font-mono */
   font-family: var(--font-chat, var(--font-ui));
   font-size: var(--fs-md);
@@ -89,9 +99,13 @@
   padding-top: calc(var(--chat-edge) + var(--header-over, 0px));
   padding-bottom: calc(var(--chat-edge-end) + var(--composer-over, 0px));
   scroll-padding-top: var(--header-over, 0px);
-  /* and a row brought into view (an opened screen preview) stops clear of the card, not under it */
-  scroll-padding-bottom: var(--composer-over, 0px);
-  background: var(--bg);
+  /* and a row brought into view (an opened screen preview, a search match) stops clear of the card
+     and of the New messages pill that floats over the end while the reader is away from it: the
+     pill's --control-h and the space around it */
+  scroll-padding-bottom: calc(var(--composer-over, 0px) + var(--control-h) + 2 * var(--space-2));
+  background: var(--surface-canvas);
+  /* the transcript's scrollbar is thin as a document's, in the theme's colours (html, styles.css) */
+  scrollbar-width: thin;
 }
 
 /* From 769px the header over the chat has no bar and no rule (styles.css): the transcript
@@ -126,6 +140,7 @@
   --chat-image-max-h: 70vh;
 }
 
+
 .chat-turn {
   width: 100%;
 }
@@ -135,7 +150,11 @@
   font-size: var(--fs-sm);
 }
 
-.chat-terminal-fallback summary { cursor: pointer; }
+/* the toggle's own box is the pointer's target (a finger's below): the text keeps its line */
+.chat-terminal-fallback summary {
+  padding-block: calc((var(--pointer-target) - 1lh) / 2);
+  cursor: pointer;
+}
 .chat-terminal-fallback pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .chat-terminal-snapshot {
@@ -242,9 +261,11 @@
   cursor: pointer;
 }
 
-.chat-bubble-fold:hover {
-  background: var(--bg-hover);
-  color: var(--text-strong);
+@media (hover: hover) {
+  .chat-bubble-fold:hover {
+    background: var(--bg-hover);
+    color: var(--text-strong);
+  }
 }
 
 /* meta rows fade in on hover / focus: the transcript reads as text, not as controls.
@@ -255,16 +276,22 @@
   align-items: center;
   gap: var(--space-1);
   color: var(--text-dim);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-fast) var(--ease-out);
 }
 
-.chat-turn:hover .chat-turn-meta,
 .chat-turn:focus-within .chat-turn-meta {
   opacity: 1;
   pointer-events: auto;
+}
+
+@media (hover: hover) {
+  .chat-turn:hover .chat-turn-meta {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .chat-copy-error,
@@ -307,7 +334,16 @@
   margin-left: var(--space-1);
 }
 
-/* a turn's time takes focus so a keyboard reaches its full-date tooltip */
+/* a turn's time takes focus so a keyboard reaches its full-date tooltip; its own box is the
+   pointer's target (a finger's below), over the meta row's line, and its figures keep their width */
+.chat-time {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--pointer-target);
+  margin-block: calc((var(--chip-h) - var(--pointer-target)) / 2);
+  font-variant-numeric: var(--font-numeric);
+}
+
 .chat-time:focus-visible {
   outline: var(--ring);
   outline-offset: var(--ring-offset);
@@ -330,29 +366,30 @@
   cursor: pointer;
 }
 
-.chat-meta-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-strong);
+@media (hover: hover) {
+  .chat-meta-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-strong);
+  }
 }
 
-/* a mouse's floor: the copy glyph and the format buttons keep their --chip-h look and take a
-   --pointer-target hit area through an invisible expander around the button (a finger's
-   --touch-target size is set below, where the buttons touch and an expander would overlap them) */
+/* a mouse's floor: a format button's own box is the --pointer-target, reaching past the row's
+   --chip-h line unseen (it has no edge); the copy glyph keeps its --chip-h look and takes the hit
+   area through an invisible expander around it (a finger's --touch-target size is set below) */
 @media (pointer: fine) {
-  .chat-copy,
   .chat-meta-btn {
-    position: relative;
+    height: var(--pointer-target);
+    margin-block: calc((var(--chip-h) - var(--pointer-target)) / 2);
   }
 
-  .chat-copy::before,
-  .chat-meta-btn::before {
-    content: "";
-    position: absolute;
-    inset: calc((var(--chip-h) - var(--pointer-target)) / 2);
+  .chat-copy {
+    position: relative;
   }
 
   /* the copy glyph's hairline edge lies inside its box: the expander starts past it */
   .chat-copy::before {
+    content: "";
+    position: absolute;
     inset: calc((var(--chip-h) - var(--pointer-target)) / 2 - var(--hairline));
   }
 }
@@ -462,7 +499,11 @@
   position: relative;
   display: inline-block;
   max-width: 100%;
+  /* clip, not hidden: a hidden box is a scroll container, and in a phone sheet (contained
+     there) a swipe begun on it would scroll nothing (#3475). hidden stays for a WebView that
+     has no clip (before Safari 16) */
   overflow: hidden;
+  overflow: clip;
   background: var(--bg-elevated);
 }
 
@@ -524,7 +565,9 @@
 .markdown-mermaid {
   display: flex;
   justify-content: center;
+  /* clip, not hidden: no scroll container to end a sheet's swipe (#3475), as for .image-slot */
   overflow: hidden;
+  overflow: clip;
   cursor: zoom-in;
 }
 
@@ -542,15 +585,19 @@
 }
 
 .markdown p,
+.markdown blockquote,
+.markdown-list {
+  margin: 0 0 var(--space-3);
+}
+
+/* a heading belongs to what follows it: the space over it is more than 1.5× the space under it */
 .markdown-h1,
 .markdown-h2,
 .markdown-h3,
 .markdown-h4,
 .markdown-h5,
-.markdown-h6,
-.markdown blockquote,
-.markdown-list {
-  margin: 0 0 var(--space-3);
+.markdown-h6 {
+  margin: var(--space-5) 0 var(--space-3);
 }
 
 [data-conversation-source="hermes-transcript"] .markdown p {
@@ -558,22 +605,23 @@
 }
 
 /* Every agent heading is an h3 (Markdown.tsx: an agent's markdown must not shadow the app's own
-   h1/h2 outline), so the tag says nothing about the level and the level class is what these
-   rules key off — the same drawing as before the remap, level by level. */
-.markdown-h1 { font-size: var(--fs-xl); }
-.markdown-h2 { font-size: var(--fs-lg); }
-/* h3 is the prose size, and below it the size stops shrinking: the weight, then the dim colour,
-   tell the levels apart */
-.markdown-h3,
-.markdown-h4,
-.markdown-h5,
-.markdown-h6 { font-size: var(--chat-fs-body); }
+   h1/h2 outline; its aria-level keeps the levels apart for a screen reader), so the tag says
+   nothing about the level and the level class is what these rules key off. The sizes are the
+   page's heading steps (styles.css --fs-h3/h2/h1: 1.25× the prose, then 1.25× again, twice),
+   scaled with the chat's text, and below h3 the size stops shrinking: the weight, then the dim
+   colour, tell the levels apart */
+.markdown .markdown-h1 { font-size: var(--fs-h1); }
+.markdown .markdown-h2 { font-size: var(--fs-h2); }
+.markdown .markdown-h3 { font-size: var(--fs-h3); }
+.markdown .markdown-h4,
+.markdown .markdown-h5,
+.markdown .markdown-h6 { font-size: var(--chat-fs-body); }
 .markdown-h1,
 .markdown-h2,
 .markdown-h3,
 .markdown-h4,
-.markdown-h5 { color: inherit; font-weight: var(--fw-semibold); line-height: var(--lh-tight); }
-.markdown-h6 { color: var(--text-dim); font-weight: var(--fw-semibold); line-height: var(--lh-tight); }
+.markdown-h5 { color: inherit; font-weight: var(--fw-semibold); line-height: var(--lh-heading); }
+.markdown-h6 { color: var(--text-dim); font-weight: var(--fw-semibold); line-height: var(--lh-heading); }
 
 /* A marker sits outside its item, in this indent, and is drawn in the Chat font: in a monospace face
    every digit and the ". " after it take a whole cell (`1ch`), so a fixed 20px cut "1." off on the
@@ -669,9 +717,14 @@ ol.markdown-list {
   text-underline-offset: var(--space-1);
 }
 
-.markdown a:hover,
 .markdown a:focus-visible {
   text-decoration-color: currentColor;
+}
+
+@media (hover: hover) {
+  .markdown a:hover {
+    text-decoration-color: currentColor;
+  }
 }
 
 .chat-bubble .markdown pre,
@@ -704,7 +757,7 @@ ol.markdown-list {
   border-bottom: var(--hairline) solid var(--border);
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
 }
 
 /* The block's chrome is not code: its language label, "Show all" toggle, copy error and "Too
@@ -764,14 +817,16 @@ ol.markdown-list {
   background: transparent;
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   text-align: left;
   cursor: pointer;
 }
 
-.markdown-code-more:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+@media (hover: hover) {
+  .markdown-code-more:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
 }
 
 .markdown-table-wrap {
@@ -810,17 +865,17 @@ ol.markdown-list {
   width: 100%;
   display: flex;
   flex-direction: column;
-  /* the folded rule is an inset shadow in the padding that holds its place: both arrive and leave
-     at the pace of the rows' move (AnimatedHeight.css), never a frame before it, or a reader
-     pinned at the end would be pulled up by the block's momentary shrink */
-  box-shadow: inset 0 calc(-1 * var(--hairline)) 0 0 transparent;
-  transition: padding-bottom var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
+  /* the folded rule is the block's own bottom edge, whose place the block holds open and folded
+     alike: only its colour moves, at the pace of the rows' move (AnimatedHeight.css), never the
+     block's height, so a reader pinned at the end is never pulled up by a momentary shrink */
+  padding-bottom: var(--space-1);
+  border-bottom: var(--hairline) solid transparent;
+  transition: border-bottom-color var(--dur-base) var(--ease-out);
 }
 
 /* a folded block is one row with the exchange's one rule under it, where it closes the work */
 .work-block.is-folded {
-  padding-bottom: calc(var(--space-1) + var(--hairline));
-  box-shadow: inset 0 calc(-1 * var(--hairline)) 0 0 var(--border);
+  border-bottom-color: var(--border);
 }
 
 .work-block-head,
@@ -847,9 +902,11 @@ ol.markdown-list {
   margin-inline: calc(-1 * var(--space-1));
 }
 
-.work-block-head:hover,
-.work-row-head:hover {
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .work-block-head:hover,
+  .work-row-head:hover {
+    background: var(--bg-hover);
+  }
 }
 
 .work-row-caret {
@@ -871,6 +928,16 @@ ol.markdown-list {
   flex: 0 1 auto;
   color: var(--text-dim);
   font-weight: var(--fw-regular);
+  font-variant-numeric: var(--font-numeric);
+}
+
+/* the time a live block has run, after its title: its figures count in place without a shift */
+.work-block-elapsed {
+  flex: none;
+  color: var(--text-dim);
+  font-weight: var(--fw-regular);
+  font-variant-numeric: var(--font-numeric);
+  white-space: nowrap;
 }
 
 .work-block.is-live .work-block-title {
@@ -884,8 +951,8 @@ ol.markdown-list {
 /* the dot breathes, the words hold still (same rule as the RUN badge) */
 .work-block.is-live .work-block-title::before {
   content: "";
-  width: 6px;
-  height: 6px;
+  width: var(--dot-size-sm);
+  height: var(--dot-size-sm);
   border-radius: var(--radius-pill);
   background: currentColor;
   animation: pulse var(--dur-pulse) var(--ease-pulse) infinite;
@@ -910,6 +977,7 @@ ol.markdown-list {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-variant-numeric: var(--font-numeric);
 }
 
 /* a failure is never the part a narrow header cuts */
@@ -946,8 +1014,8 @@ ol.markdown-list {
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 2.5rem;
-  height: 1.5rem;
+  width: var(--thumb-w);
+  height: var(--thumb-h);
   padding: 0;
   overflow: hidden;
   border: var(--hairline) solid var(--border);
@@ -958,9 +1026,14 @@ ol.markdown-list {
   cursor: zoom-in;
 }
 
-.work-image:hover,
 .work-image:focus-visible {
   border-color: var(--border-strong);
+}
+
+@media (hover: hover) {
+  .work-image:hover {
+    border-color: var(--border-strong);
+  }
 }
 
 .work-image img {
@@ -1148,7 +1221,7 @@ ol.markdown-list {
 }
 
 .chat-tool-file { color: var(--text-strong); }
-.chat-tool-io-meta { color: var(--text-dim); font-size: var(--fs-2xs); }
+.chat-tool-io-meta { color: var(--text-dim); font-size: var(--fs-meta); }
 .chat-diff { display: block; white-space: pre; overflow-x: auto; }
 .chat-diff-add { color: var(--status-done); }
 .chat-diff-del { color: var(--status-blocked); }
@@ -1161,7 +1234,7 @@ ol.markdown-list {
 .chat-tool-output h4 {
   margin: 0 0 var(--space-1);
   color: var(--text-dim);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   font-weight: var(--fw-semibold);
   text-transform: uppercase;
   letter-spacing: var(--tracking-caps);
@@ -1275,13 +1348,23 @@ ol.markdown-list {
   margin-top: var(--space-1);
 }
 
-/* a finger's floor (the button is a .btn and grows to it in styles.css): the toggle keeps its line
-   and takes the hit area, both ways, through an invisible expander around it */
+/* the toggle's own box is the pointer's target, a finger's below (the button beside it is a .btn
+   and grows to it in styles.css): it keeps its line, the box reaching past it both ways */
+.chat-failure-details > summary {
+  min-width: var(--pointer-target);
+  padding-block: calc((var(--pointer-target) - 1lh) / 2);
+  margin-block: calc((1lh - var(--pointer-target)) / 2);
+}
+
 @media (pointer: coarse) {
-  .chat-failure-details > summary::before {
-    content: "";
-    position: absolute;
-    inset: calc((1lh - var(--touch-target)) / 2) min(0px, calc((100% - var(--touch-target)) / 2));
+  .chat-failure-details > summary,
+  .chat-terminal-fallback summary {
+    padding-block: calc((var(--touch-target) - 1lh) / 2);
+  }
+
+  .chat-failure-details > summary {
+    min-width: var(--touch-target);
+    margin-block: calc((1lh - var(--touch-target)) / 2);
   }
 }
 
@@ -1381,6 +1464,36 @@ ol.markdown-list {
   .chat-user-row .chat-copy,
   .chat-agent-meta .chat-meta-btn {
     margin-block: calc((var(--chip-h) - var(--touch-target)) / 2);
+  }
+
+  /* a finger's floor for the time: its own box, over the row's line as the copy's is */
+  .chat-time {
+    min-height: var(--touch-target);
+    margin-block: calc((var(--chip-h) - var(--touch-target)) / 2);
+  }
+
+  /* a compaction's summary and a skill's row grow to the floor in place */
+  .chat-skill > summary {
+    min-height: var(--touch-target);
+  }
+
+  /* a tap on a toggle, a copy or a path is one tap, never the start of a double-tap zoom */
+  .work-block-head,
+  .work-row-head,
+  .chat-copy,
+  .chat-meta-btn,
+  .chat-bubble-fold,
+  .chat-time,
+  .markdown-code-copy,
+  .markdown-code-more,
+  .markdown-file,
+  .chat-tool-file-link,
+  .chat-new-messages,
+  .chat-compact > summary,
+  .chat-skill > summary,
+  .chat-failure-details > summary,
+  .chat-terminal-fallback summary {
+    touch-action: manipulation;
   }
 
   /* both answer copies are --touch-target targets; the first one drops its own left inset so its
@@ -1529,10 +1642,16 @@ ol.markdown-list {
   text-underline-offset: 0.2em;
 }
 
-.markdown-code-link:hover code,
 .markdown-code-link:focus-visible code {
   text-decoration-style: solid;
   text-decoration-color: currentColor;
+}
+
+@media (hover: hover) {
+  .markdown-code-link:hover code {
+    text-decoration-style: solid;
+    text-decoration-color: currentColor;
+  }
 }
 
 .markdown-file.is-code code {
@@ -1542,13 +1661,29 @@ ol.markdown-list {
   text-underline-offset: 0.2em;
 }
 
-.markdown-file:hover,
-.markdown-file:hover code,
 .markdown-file:focus-visible,
 .markdown-file:focus-visible code {
   color: var(--accent);
   text-decoration-style: solid;
   text-decoration-color: currentColor;
+}
+
+@media (hover: hover) {
+  .markdown-file:hover,
+  .markdown-file:hover code {
+    color: var(--accent);
+    text-decoration-style: solid;
+    text-decoration-color: currentColor;
+  }
+}
+
+/* a finger's floor: the path's own box grows past its line both ways, the line keeping its height
+   (the button is an atomic inline: its margin box is what the line measures) */
+@media (pointer: coarse) {
+  .markdown-file {
+    padding-block: calc((var(--touch-target) - 1lh) / 2);
+    margin-block: calc((1lh - var(--touch-target)) / 2);
+  }
 }
 
 /* a call that failed: its name in the alert colour and a word that says so, even folded */
@@ -1610,7 +1745,7 @@ ol.markdown-list {
 .work-todo-attempts h4 {
   margin: 0 0 var(--space-1);
   color: var(--text-dim);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   font-weight: var(--fw-semibold);
   text-transform: uppercase;
   letter-spacing: var(--tracking-caps);
@@ -1635,9 +1770,11 @@ ol.markdown-list {
   -webkit-touch-callout: default;
 }
 
-.chat-tool-file-link:hover {
-  color: var(--accent);
-  text-decoration-style: solid;
+@media (hover: hover) {
+  .chat-tool-file-link:hover {
+    color: var(--accent);
+    text-decoration-style: solid;
+  }
 }
 
 /* a finger's floor: the link itself grows to it, so the files of a patch, one per line, never share
@@ -1718,19 +1855,44 @@ ol.markdown-list {
   width: calc((100% - var(--space-2)) / 2);
 }
 
-/* where a compaction folded the conversation: a quiet divider, its summary on request */
+/* where a compaction folded the conversation: a quiet divider, its summary on request. The
+   divider keeps its place: the margin gives up what the summary's target takes past its --chip-h line */
 .chat-compact {
-  margin: var(--space-4) 0;
+  margin: calc(var(--space-4) - (var(--pointer-target) - var(--chip-h)) / 2) 0;
   color: var(--text-dim);
   font-size: var(--fs-sm);
 }
 
+/* the summary's own box is the pointer's target (a finger's below) */
 .chat-compact > summary {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-height: var(--pointer-target);
   cursor: pointer;
   list-style: none;
+}
+
+@media (pointer: coarse) {
+  .chat-compact {
+    margin: calc(var(--space-4) - (var(--touch-target) - var(--chip-h)) / 2) 0;
+  }
+
+  .chat-compact > summary {
+    min-height: var(--touch-target);
+  }
+}
+
+/* the word that says what a click does, after the label, by the state: a divider gives no caret */
+.chat-compact-state {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+}
+
+.chat-compact[open] > summary .chat-compact-state-closed,
+.chat-compact:not([open]) > summary .chat-compact-state-open {
+  display: none;
 }
 
 .chat-compact > summary::before,
@@ -1738,6 +1900,11 @@ ol.markdown-list {
   content: "";
   flex: 1 1 auto;
   border-top: var(--hairline) solid var(--border);
+}
+
+/* the time keeps its one line between the label and the state word */
+.chat-compact > summary .chat-time {
+  flex: none;
 }
 
 .chat-compact > summary::-webkit-details-marker {
@@ -1804,8 +1971,8 @@ ol.markdown-list {
 }
 
 .chat-goal-wait svg {
-  width: 12px;
-  height: 12px;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
   margin-inline-end: var(--space-1);
   vertical-align: -1px;
 }
@@ -1833,9 +2000,17 @@ ol.markdown-list {
   font-size: var(--fs-xs);
 }
 
-.chat-tool-io.is-whole {
-  max-height: 60vh;
-  overflow: auto;
+/* a call's output folds by lines (ToolOutputText) instead of scrolling inside its box: the chat is
+   the only vertical scroller */
+.chat-tool-io.chat-tool-result {
+  max-height: none;
+  overflow: visible;
+}
+
+/* a folded output's tail, kept for the browser's find (hidden=until-found hides it by
+   content-visibility, which a block takes): no room until a match unfolds it */
+.chat-tool-result-tail {
+  display: block;
 }
 
 /* Skills remain discoverable when the work rows are folded. */
@@ -1860,7 +2035,7 @@ ol.markdown-list {
   padding: var(--space-2);
   cursor: pointer;
 }
-.chat-skill > summary > svg { width: 14px; height: 14px; flex-shrink: 0; }
+.chat-skill > summary > svg { width: var(--icon-size-sm); height: var(--icon-size-sm); flex-shrink: 0; }
 .chat-skill-name { overflow-wrap: anywhere; }
 .chat-skill-status { color: var(--text-dim); }
 .chat-skill.is-error { border-color: var(--status-blocked); }
@@ -1871,7 +2046,9 @@ ol.markdown-list {
 
 /* a turn's failed requests (#901): one row, their errors on request */
 .chat-failed-requests { width: fit-content; margin: var(--space-2) 0; }
-.chat-failed-requests > summary > svg:first-child { color: var(--status-blocked); }
+/* a run nothing followed keeps the alert colour; one the turn went on from is history, in the quiet register */
+.chat-failed-requests.is-error > summary > svg:first-child { color: var(--status-blocked); }
+.chat-failed-requests:not(.is-error) > summary > svg:first-child { color: var(--text-dim); }
 .chat-failed-requests-list { margin: 0; padding-inline-start: var(--space-8); font-family: var(--font-mono); white-space: pre-wrap; }
 
 /* omo's goal as the turn left it: one line beside the skills, the whole objective on request */
@@ -1938,8 +2115,10 @@ ol.markdown-list {
   list-style: none;
 }
 .chat-task-result > summary::-webkit-details-marker { display: none; }
-.chat-task-result > summary:hover { background: var(--bg-hover); }
-.chat-task-result-icon { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--text-dim); }
+@media (hover: hover) {
+  .chat-task-result > summary:hover { background: var(--bg-hover); }
+}
+.chat-task-result-icon { width: var(--icon-size-md); height: var(--icon-size-md); flex: none; margin-top: 2px; color: var(--text-dim); }
 .chat-task-result.is-completed .chat-task-result-icon,
 .chat-task-result.is-completed .chat-task-result-status { color: var(--status-done); }
 .chat-task-result.is-failed .chat-task-result-icon,
@@ -2096,7 +2275,9 @@ ol.markdown-list {
   cursor: pointer;
 }
 
-.chat-outcome-action:hover { background: var(--bg-hover); }
+@media (hover: hover) {
+  .chat-outcome-action:hover { background: var(--bg-hover); }
+}
 
 .chat-turn.chat-terminal-command {
   display: flex;

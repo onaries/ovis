@@ -416,7 +416,11 @@ async function refNote(page: Page): Promise<string> {
   await note.waitFor();
   return (await note.textContent()) ?? "";
 }
-/** The scope buttons' pressed transition has ended: a capture mid-way would show two of them lit. */
+/**
+ * The scope buttons' pressed transition has ended: a capture mid-way would show two of them lit. The
+ * pressed pill is read where it is drawn: the button's own background, or under a coarse pointer its
+ * ::before (the button a finger's height, its pill inset inside it: the segmented rule in styles.css).
+ */
 async function scopesSettled(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const probe = document.createElement("span");
@@ -424,7 +428,8 @@ async function scopesSettled(page: Page): Promise<void> {
     probe.style.backgroundColor = "var(--bg-hover)";
     const pressed = getComputedStyle(probe).backgroundColor;
     probe.remove();
-    return [...document.querySelectorAll(".repo-changes-scopes button")].every((button) => (button.getAttribute("aria-pressed") === "true") === (getComputedStyle(button).backgroundColor === pressed));
+    const pill = matchMedia("(pointer: coarse)").matches ? "::before" : null;
+    return [...document.querySelectorAll(".repo-changes-scopes button")].every((button) => (button.getAttribute("aria-pressed") === "true") === (getComputedStyle(button, pill).backgroundColor === pressed));
   });
 }
 /** The identity line under the repository line: the merge base a branch comparison was read from. */

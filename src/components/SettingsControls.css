@@ -6,7 +6,7 @@
 .settings-fold,
 .settings-row {
   --settings-inset: calc(var(--space-4) + var(--hairline));
-  --settings-icon: 16px;
+  --settings-icon: var(--icon-size-md);
   --settings-icon-column: calc(var(--settings-icon) + var(--space-2));
 }
 
@@ -21,8 +21,14 @@
   margin: 0;
   padding: 0 var(--settings-inset);
   color: var(--text-dim);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+}
+
+.settings-fold:not([open]) > :not(summary),
+.settings-details:not([open]) > :not(summary) {
+  display: none;
 }
 
 /* a page's folded groups (SettingsFold): one quiet line at the page's end, a caption's size and colour, that
@@ -45,7 +51,12 @@
   display: none;
 }
 
-.settings-fold > summary:hover,
+@media (hover: hover) {
+  .settings-fold > summary:hover {
+    color: var(--text-strong);
+  }
+}
+
 .settings-fold > summary:focus-visible {
   color: var(--text-strong);
 }
@@ -91,7 +102,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--bg-elevated);
+  background: var(--surface-raised);
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-lg);
 }
@@ -136,7 +147,7 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-half);
   min-width: 0;
 }
 
@@ -162,10 +173,13 @@
 /* the ↺ beside a label whose value moved off its default */
 .settings-reset {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  min-width: var(--pointer-target);
+  min-height: var(--pointer-target);
+  width: var(--pointer-target);
+  height: var(--pointer-target);
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -174,14 +188,16 @@
   cursor: pointer;
 }
 
-.settings-reset:hover {
-  background: var(--bg-hover);
-  color: var(--text-strong);
+@media (hover: hover) {
+  .settings-reset:hover {
+    background: var(--bg-hover);
+    color: var(--text-strong);
+  }
 }
 
 .settings-reset svg {
-  width: 13px;
-  height: 13px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
 }
 
 /* one row of theme cards that scrolls sideways (ThemePicker): never more than a card tall */
@@ -189,9 +205,10 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  padding: 4px 2px;
-  margin: -4px -2px;
+  padding: var(--space-1) var(--space-half);
+  margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-half));
   overflow-x: auto;
+  scroll-padding-inline: var(--space-half);
   scroll-snap-type: x proximity;
   scrollbar-width: none;
 }
@@ -205,18 +222,20 @@
   flex: 0 0 auto;
   align-self: stretch;
   width: var(--hairline);
-  margin: 6px 0 22px;
+  margin: var(--space-1-5) 0 var(--space-5);
   background: var(--border-strong);
 }
 
 .theme-card {
+  box-sizing: border-box;
   display: flex;
   flex: 0 0 96px;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
-  padding: 0;
-  border: 0;
+  padding: var(--space-1);
+  border: var(--hairline) solid transparent;
+  border-radius: var(--radius-md);
   background: none;
   color: var(--text-dim);
   font: inherit;
@@ -227,45 +246,39 @@
 }
 
 .theme-card[aria-checked="true"] {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
   color: var(--text-strong);
-  font-weight: var(--fw-medium);
+  font-weight: var(--fw-selected);
 }
 
 /* a sidebar beside a pane, in the theme's own colours */
 .theme-card-art {
   position: relative;
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   aspect-ratio: 16 / 10;
-  padding: 4px;
+  padding: var(--space-1);
   overflow: hidden;
   border: var(--hairline) solid;
-  border-radius: var(--radius-md);
-  outline: 2px solid transparent;
-  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
-.theme-card:hover .theme-card-art {
-  outline-color: var(--border-strong);
-}
-
-.theme-card[aria-checked="true"] .theme-card-art,
-.theme-card:focus-visible .theme-card-art {
-  outline-color: var(--accent);
-}
-
-.theme-card:focus-visible {
-  outline: none;
+@media (hover: hover) {
+  .theme-card:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
 }
 
 .theme-card-side,
 .theme-card-pane {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 4px;
+  gap: var(--space-px-3);
+  padding: var(--space-1);
   border: var(--hairline) solid;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .theme-card-side {
@@ -278,8 +291,8 @@
 
 .theme-card-art i {
   display: block;
-  height: 3px;
-  border-radius: 2px;
+  height: var(--space-px-3);
+  border-radius: var(--radius-pill);
 }
 
 .theme-card-side i:nth-child(2),
@@ -294,11 +307,11 @@
 }
 
 .theme-card-art b {
-  width: 8px;
-  height: 8px;
+  width: var(--space-2);
+  height: var(--space-2);
   margin-top: auto;
   margin-left: auto;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
 }
 
 .theme-card-name {
@@ -318,6 +331,23 @@
   min-width: 0;
 }
 
+@media (hover: hover) {
+  /* the arrows' footprints are cut out of the row rather than reserved by its margins, so nothing
+     moves when an arrow comes or goes; the snap padding keeps every stop clear of them */
+  .theme-cards {
+    scroll-padding-inline: calc(var(--space-5) + var(--space-half));
+    clip-path: inset(0 var(--theme-strip-clip-end, 0) 0 var(--theme-strip-clip-start, 0));
+  }
+
+  .theme-strip-frame:has(> .theme-strip-arrow.is-start) > .theme-cards {
+    --theme-strip-clip-start: calc(var(--space-5) + var(--space-half));
+  }
+
+  .theme-strip-frame:has(> .theme-strip-arrow.is-end) > .theme-cards {
+    --theme-strip-clip-end: calc(var(--space-5) + var(--space-half));
+  }
+}
+
 .theme-strip-arrow {
   position: absolute;
   top: 30px;
@@ -325,7 +355,7 @@
   width: 28px;
   height: 28px;
   border: var(--hairline) solid var(--border-strong);
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-card);
 }
@@ -398,9 +428,9 @@
 .sidebar-rows-preview {
   display: inline-flex;
   flex-direction: column;
-  gap: 3px;
-  width: 34px;
-  padding: 3px;
+  gap: var(--space-px-3);
+  width: var(--control-h);
+  padding: var(--space-px-3);
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg);
@@ -409,13 +439,13 @@
 .sidebar-rows-preview-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-half);
 }
 
 .sidebar-rows-preview-item i {
   display: block;
-  height: 3px;
-  border-radius: 2px;
+  height: var(--space-px-3);
+  border-radius: var(--radius-pill);
   background: var(--text-dim);
 }
 
@@ -457,9 +487,11 @@
   color: var(--text);
 }
 
-/* under a row's name it takes the sentence's size; elsewhere (a dialog's warning) it keeps its own */
+/* under a row's name it takes the sentence's size; elsewhere (a dialog's warning) it keeps its own.
+   A chips row keeps its name on one line (below); the condition is a sentence and wraps. */
 .settings-row-text > .settings-condition {
   font-size: var(--fs-xs);
+  white-space: normal;
 }
 
 /* one sentence at rest; its conditions and exceptions open under it (DESIGN.md: messages say
@@ -469,6 +501,9 @@
 }
 
 .settings-details > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--pointer-target);
   width: fit-content;
   color: var(--text-dim);
   font-size: var(--fs-xs);
@@ -494,21 +529,9 @@
   margin-bottom: var(--space-1);
 }
 
-/* fingers: the line keeps its height; an invisible expander reaches the target's height, as the
-   segmented options do (styles.css). The opened text is positioned so its link stays on top. */
 @media (pointer: coarse) {
   .settings-details > summary {
-    position: relative;
-  }
-
-  .settings-details > summary::after {
-    content: "";
-    position: absolute;
-    inset: calc((var(--fs-xs) * var(--lh-base) - var(--touch-target)) / 2) 0;
-  }
-
-  .settings-details > summary + * {
-    position: relative;
+    min-height: var(--touch-target);
   }
 }
 
@@ -523,11 +546,16 @@
   background: var(--bg-input);
 }
 
+.settings-segmented > button[aria-pressed="true"] {
+  font-weight: var(--fw-selected);
+  box-shadow: var(--shadow-thumb);
+}
+
 .settings-stepper {
   display: inline-flex;
   align-items: center;
   background: var(--bg-input);
-  border: var(--hairline) solid var(--border);
+  border: var(--hairline) solid var(--border-input);
   border-radius: var(--radius-md);
 }
 
@@ -548,6 +576,59 @@
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   text-align: center;
+}
+
+/* a size typed in the number's place (G-179): the number and its unit read as the output did */
+.settings-stepper-field {
+  display: inline-flex;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.5em;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+/* the number is a target of its own: a pointer's height and width, a finger's on a touch screen */
+.settings-stepper-value {
+  box-sizing: border-box;
+  align-self: stretch;
+  width: 2.5ch;
+  min-width: var(--pointer-target);
+  min-height: var(--pointer-target);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: end;
+}
+
+.settings-stepper-value[aria-invalid="true"] {
+  color: var(--status-blocked);
+}
+
+/* the range under a typed size it refused, until the next edit: its own line at the end of the row */
+.settings-stepper-range {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--status-blocked);
+  font-size: var(--fs-xs);
+  text-align: end;
+}
+
+@media (pointer: coarse) {
+  /* never under --fs-input, the smallest size iOS does not zoom the page for, as .input */
+  .settings-stepper-field {
+    font-size: max(var(--fs-input), var(--fs-sm));
+  }
+
+  .settings-stepper-value {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
 }
 
 /* Settings → File text size: a chosen size offers its way back to the chat's beside the stepper */
@@ -592,10 +673,52 @@
   }
 }
 
-/* fingers: a select is a finger-sized target, like the file viewer's controls */
+/* fingers: a select, a fold summary, a reset button and a segmented option are finger-sized targets */
 @media (pointer: coarse) {
   .settings-select {
     height: max(44px, var(--touch-target));
+  }
+
+  .settings-fold > summary {
+    min-height: var(--touch-target);
+  }
+
+  .settings-reset {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+    width: var(--touch-target);
+    height: var(--touch-target);
+    margin-block: calc((var(--control-h) - var(--touch-target)) / 2);
+  }
+
+  .settings-segmented > button {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+}
+
+.settings-dialog :is(.input, .select) {
+  border-color: var(--border-input);
+}
+
+.settings-dialog :is(.input, .select):focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+}
+
+@media (prefers-contrast: more) {
+  .settings-dialog :is(.input, .select),
+  .settings-stepper,
+  .settings-chip,
+  .settings-card,
+  .settings-toggle::before {
+    border-color: var(--border-contrast);
+  }
+
+  .settings-segmented > button[aria-pressed="true"],
+  .settings-chip[aria-pressed="true"],
+  .settings-tab[aria-selected="true"] {
+    box-shadow: inset 0 0 0 var(--hairline) var(--text);
   }
 }
 
@@ -631,8 +754,8 @@
 /* the thumb sits 2px inside the track's edge, off and on */
 .settings-toggle-thumb {
   position: absolute;
-  top: calc(var(--space-3) + 2px);
-  left: calc(var(--space-1) + 2px);
+  top: calc(var(--space-3) + var(--space-half));
+  left: calc(var(--space-1) + var(--space-half));
   width: var(--space-4);
   height: var(--space-4);
   background: var(--text-dim);
@@ -642,11 +765,11 @@
 
 .settings-toggle[aria-checked="true"]::before {
   background: var(--primary-tint);
-  border-color: var(--primary);
+  border-color: var(--switch-thumb-on);
 }
 
 .settings-toggle[aria-checked="true"] .settings-toggle-thumb {
-  background: var(--primary);
+  background: var(--switch-thumb-on);
   transform: translateX(var(--space-6));
 }
 
@@ -699,6 +822,16 @@
     flex-basis: 84px;
   }
 
+  .settings-label {
+    font-size: var(--fs-dense-row);
+  }
+
+  .settings-description,
+  .settings-hint,
+  .settings-row-text > .settings-condition {
+    font-size: var(--fs-sm);
+  }
+
   /* on a phone the list takes the line and its size sits under it, at the end */
   .settings-row.is-wide > .settings-font-size {
     flex-wrap: wrap;
@@ -724,7 +857,7 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: var(--space-1);
+  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -743,10 +876,22 @@
   cursor: pointer;
 }
 
+/* a finger's chips: as tall as a touch target, and further apart so a tap lands on the one meant (G-089) */
+@media (pointer: coarse) {
+  .settings-chips {
+    gap: var(--space-3);
+  }
+
+  .settings-chip {
+    min-height: var(--touch-target);
+  }
+}
+
 .settings-chip[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent-tint);
   color: var(--text-strong);
+  font-weight: var(--fw-selected);
 }
 
 /* sections read as one card: herdr-app's About list */
@@ -768,14 +913,28 @@
 
 .settings-chip svg {
   flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
 }
 
 /* a row of chips keeps its name on one line and wraps its chips beside it */
 .settings-row:has(> .settings-chips) > .settings-row-text {
   flex: none;
   white-space: nowrap;
+}
+
+/* ...unless a condition sentence sits under the name: then the name's column takes at most the left
+   half and the sentence wraps in it, so the chips keep their half instead of a sliver (G-096) */
+.settings-row:has(> .settings-chips) > .settings-row-text:has(> .settings-condition) {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+}
+
+@media (max-width: 640px) {
+  .settings-row.is-wide:has(> .settings-chips) > .settings-row-text:has(> .settings-condition) {
+    max-width: none;
+  }
 }
 
 .settings-row > .settings-chips {

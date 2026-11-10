@@ -17,7 +17,7 @@ import { VOICE_MAX_SECONDS, type VoiceMode } from "../../shared/voice.ts";
 function errorNote(t: Translate, error: VoiceError | VoiceUnavailable): string | null {
   switch (error) {
     case "insecure": return t("Voice input needs HTTPS");
-    case "permission": return t("Microphone permission was denied");
+    case "permission": return t("Microphone access was denied; allow it in the browser's site settings (the icon beside the address bar), or type your message instead.");
     case "no_mic": return t("No microphone found");
     case "speech_unavailable": return t("Speech recognition is off or unavailable on this device");
     case "not_configured": return t("Add an OpenAI API key in Settings > Voice input");
@@ -241,7 +241,7 @@ export function useDictation(options: DictationOptions): Dictation {
 }
 
 /** The mic: press to talk, held (release finishes) or tapped (tap again to finish). */
-export function MicButton({ dictation, className = "" }: { dictation: Dictation; className?: string }) {
+export function MicButton({ dictation, className = "", disabled = false }: { dictation: Dictation; className?: string; disabled?: boolean }) {
   const t = useT();
   const { voice, connected, press } = dictation;
   const recording = voice.state === "starting" || voice.state === "recording";
@@ -268,7 +268,7 @@ export function MicButton({ dictation, className = "" }: { dictation: Dictation;
         aria-label={label}
         aria-pressed={recording}
         title={reason ?? label}
-        disabled={!voice.available || !connected}
+        disabled={disabled || !voice.available || !connected}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           // focus and the soft keyboard stay where they are

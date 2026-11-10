@@ -74,11 +74,3 @@ export function heldRefocusDue(controlled: string | null, listId: string | null)
 export function heldRowsHidden(fold: boolean, opened: boolean, rowError: boolean): boolean {
   return fold && !opened && !rowError;
 }
-
-/**
- * Whether the caption says how many messages it stands for: from two on, and for a single one
- * while the caption can be all there is to see.
- */
-export function heldCountShown(count: number, fold: boolean): boolean {
-  return count > 1 || (fold && count === 1);
-}

@@ -57,6 +57,33 @@ function spoken(t: Translate, report: SystemReport): string {
   ].join(", ");
 }
 
+/** "CPU 4% · Memory 22% · Disk 50%": one compact line for the status bar. */
+export function formatPcLoad(t: Translate, report: SystemReport): string | null {
+  const disk = fullestDisk(report.disks);
+  const parts = [
+    ...(report.cpu_percent !== null ? [t("CPU {value}", { value: formatPercentValue(report.cpu_percent) })] : []),
+    ...(report.memory ? [t("Memory {value}", { value: formatPercentValue(report.memory.percent) })] : []),
+    ...(disk ? [t("Disk {value}", { value: formatPercentValue(disk.percent) })] : []),
+  ];
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/**
+ * The selected PC's CPU, memory and fullest disk as one compact status-bar line while `active` is on.
+ * Asks only while `active` (lib/system.ts), and draws nothing for a herdr-core PC (whose server runs
+ * on this PC and cannot read that machine's load: server/system-stats.ts) or a PC that cannot say.
+ */
+export function PcLoadStatus({ machine, active = true }: { machine: Machine | null; active?: boolean }) {
+  const t = useT();
+  const enabled = active && machine !== null && machine.state === "connected" && machine.kind !== "hc";
+  const retryKey = machine ? `${machine.state}:${machine.source_boot_id ?? ""}:${machine.herdr?.version ?? ""}` : "";
+  const { report, unavailable } = useSystemStats(machine?.id ?? "local", enabled, retryKey);
+  if (!enabled || unavailable || report === null) return null;
+  const line = formatPcLoad(t, report);
+  if (line === null) return null;
+  return <span className="status-bar-item status-bar-text status-bar-load">{line}</span>;
+}
+
 /**
  * The load of a PC under its name: CPU, memory and its fullest disk as three small meters, and
  * on a tap the numbers behind them. It asks only while `active` (the sidebar, the PCs list and this
@@ -86,13 +113,13 @@ export function MachineStats({ machine, active }: { machine: Machine; active: bo
 }
 
 /**
- * Settings → Devices and PCs' switch for the line above, on this device only. Until it is flipped it
- * follows the roster: on while two or more PCs are connected, where telling them apart is the point.
+ * Settings → Devices and PCs' switch for the selected PC's load in the status bar, on this device only.
+ * It stays off until it is flipped.
  */
 export function PcLoadSetting({ machines }: { machines: readonly Machine[] }) {
   const t = useT();
   const { settings, update } = useSettings();
-  return <SettingsRow label={t("PC load in the sidebar")} description={t("CPU, memory and the fullest disk under each open PC, on this device only. On by default when two or more PCs are connected.")}>
-    <Toggle label={t("PC load in the sidebar")} checked={pcLoadOn(settings, machines)} onChange={(pcLoad) => update({ pcLoad })} />
+  return <SettingsRow label={t("PC load in the status bar")} description={t("The selected PC's CPU, memory and fullest disk in the status bar, on this device only.")}>
+    <Toggle label={t("PC load in the status bar")} checked={pcLoadOn(settings, machines)} onChange={(pcLoad) => update({ pcLoad })} />
   </SettingsRow>;
 }

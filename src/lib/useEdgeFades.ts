@@ -1,5 +1,7 @@
 import { useLayoutEffect, type RefObject } from "react";
 
+import { requestShownFrame } from "./shownFrame.ts";
+
 /**
  * Says on a scrolling list which of its edges has rows past it, as `data-fade-top` and
  * `data-fade-bottom`, so its CSS fades only the edge that cuts something (SidebarSections.css):
@@ -12,14 +14,14 @@ export function useEdgeFades(ref: RefObject<HTMLElement | null>): void {
     const list = ref.current;
     // a test renderer's stand-in node is no element: nothing to read or mark
     if (list === null || typeof list.toggleAttribute !== "function" || typeof list.addEventListener !== "function") return;
-    let frame = 0;
+    let cancel: (() => void) | null = null;
     const read = (): void => {
-      frame = 0;
+      cancel = null;
       // a pixel of slack: a fractional scroll position never quite reaches the end
       list.toggleAttribute("data-fade-top", list.scrollTop > 1);
       list.toggleAttribute("data-fade-bottom", list.scrollTop + list.clientHeight < list.scrollHeight - 1);
     };
-    const schedule = (): void => { if (frame === 0) frame = requestAnimationFrame(read); };
+    const schedule = (): void => { cancel ??= requestShownFrame(read); };
     read();
     list.addEventListener("scroll", schedule, { passive: true });
     const resized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
@@ -37,7 +39,7 @@ export function useEdgeFades(ref: RefObject<HTMLElement | null>): void {
       list.removeEventListener("scroll", schedule);
       resized?.disconnect();
       changed?.disconnect();
-      if (frame !== 0) cancelAnimationFrame(frame);
+      cancel?.();
     };
   }, [ref]);
 }

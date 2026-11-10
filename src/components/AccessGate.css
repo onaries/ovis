@@ -26,7 +26,7 @@
   width: min(100%, calc(var(--sidebar-w) + 2 * var(--space-6)));
   margin: 0;
   padding: var(--space-6);
-  background: var(--bg-panel);
+  background: var(--surface-raised);
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-md);
 }
@@ -67,12 +67,17 @@
   height: var(--control-h);
   padding: 0 var(--space-3);
   background: var(--bg-elevated);
-  border: var(--hairline) solid var(--border);
+  border: var(--hairline) solid var(--border-input);
   border-radius: var(--radius-sm);
   color: var(--text-strong);
   font: inherit;
   font-size: var(--fs-input);
   transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.access-gate-input:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
 }
 
 .access-gate-input[aria-invalid="true"] {
@@ -100,9 +105,11 @@
     opacity var(--dur-fast) var(--ease-out);
 }
 
-.access-gate-submit:hover {
-  background: color-mix(in srgb, var(--accent) 88%, var(--text-strong));
-  border-color: color-mix(in srgb, var(--accent) 88%, var(--text-strong));
+@media (hover: hover) {
+  .access-gate-submit:hover {
+    background: color-mix(in srgb, var(--accent) 88%, var(--text-strong));
+    border-color: color-mix(in srgb, var(--accent) 88%, var(--text-strong));
+  }
 }
 
 .access-gate-submit:active {
@@ -126,11 +133,23 @@
   overflow-wrap: anywhere;
 }
 
-/* fingers: the two controls grow to the touch target */
+/* fingers: the controls grow to the touch target */
 @media (pointer: coarse) {
   .access-gate-input,
   .access-gate-submit {
     height: var(--touch-target);
+  }
+
+  .access-gate-alt summary {
+    min-height: var(--touch-target);
+  }
+}
+
+@media (prefers-contrast: more) {
+  .access-gate,
+  .access-gate-input,
+  .access-gate-refused {
+    border-color: var(--border-contrast);
   }
 }
 
@@ -155,7 +174,14 @@
   color: var(--text-dim);
 }
 
+.access-gate-alt:not([open]) > :not(summary) {
+  display: none;
+}
+
 .access-gate-alt summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--pointer-target);
   cursor: pointer;
   color: var(--text);
 }

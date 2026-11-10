@@ -22,5 +22,7 @@ export function submitNotTyped(code: string): boolean {
     // the wait for the bridge's snapshot ended before it said what the bridge takes: nothing left (HerdrSocket)
     "capabilities_unknown",
     // a message for an agent alone was not sent to a bridge that cannot keep that rule (HerdrSocket)
-    "agent_only_unsupported"].includes(code);
+    "agent_only_unsupported",
+    // a hold that must never go on its own was not sent to a bridge that cannot hold one (HerdrSocket)
+    "pending_hold_unsupported"].includes(code);
 }

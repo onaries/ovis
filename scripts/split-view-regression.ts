@@ -143,7 +143,7 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       await page.waitForFunction(() => document.querySelectorAll(".pane-slot").length === 1);
       await block(otherPane);
       await card.waitFor({ state: "visible" });
-      assert.match((await card.getAttribute("aria-label")) ?? "", /Needs input/);
+      assert.match((await card.getAttribute("aria-label")) ?? "", /\bINPUT\b/);
       await unblock(otherPane);
       console.log("PASS the other half's pane is spared alerts only while that half is drawn");
 

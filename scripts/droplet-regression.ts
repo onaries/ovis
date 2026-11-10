@@ -56,7 +56,7 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
 
     await block(otherPane);
     await card.waitFor({ state: "visible" });
-    assert.match((await card.getAttribute("aria-label")) ?? "", /Needs input/);
+    assert.match((await card.getAttribute("aria-label")) ?? "", /\bINPUT\b/);
     assert.equal(await droplet.getAttribute("data-kind"), "blocked");
     // the compact drop and expanded card clear both native UI and header controls
     await Bun.sleep(1_000);

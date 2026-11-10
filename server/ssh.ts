@@ -387,10 +387,11 @@ export class SshConnection {
     if (answer !== "yes") throw new Error("Host key verification failed.");
     appendFileSync(this.knownHosts(), learned + "\n", { mode: 0o600 });
   }
-  async run(script: string, input?: Uint8Array | StreamInput, timeout = 90_000): Promise<string> {
+  /** `maxOutput`: bytes its stdout and its stderr may each send; past that the command is stopped and fails */
+  async run(script: string, input?: Uint8Array | StreamInput, timeout = 90_000, maxOutput?: number): Promise<string> {
     if (this.closed) throw new Error("SSH connection closed");
     // BatchMode prevents an expired master from unexpectedly opening a new password prompt.
-    return this.exec([...(this.multiplexed ? [...this.base(), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"] : this.direct()), "-T", this.target.destination, "sh -c " + shellQuote(script)], input, timeout);
+    return this.exec([...(this.multiplexed ? [...this.base(), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"] : this.direct()), "-T", this.target.destination, "sh -c " + shellQuote(script)], input, timeout, maxOutput);
   }
   /**
    * A script for a Windows host. OpenSSH there hands the command to cmd or PowerShell,
@@ -461,7 +462,7 @@ export class SshConnection {
       await Bun.sleep(100);
     }
   }
-  private async exec(args: string[], input?: Uint8Array | StreamInput, timeout = 30_000): Promise<string> {
+  private async exec(args: string[], input?: Uint8Array | StreamInput, timeout = 30_000, maxOutput?: number): Promise<string> {
     const stream = input !== undefined && !(input instanceof Uint8Array) ? input : undefined;
     const proc = Bun.spawn(args, { stdin: stream ? "pipe" : input ? new Blob([new Uint8Array(input as Uint8Array)]) : "ignore", stdout: "pipe", stderr: "pipe", env: this.askEnv() });
     this.children.add(proc);
@@ -480,7 +481,19 @@ export class SshConnection {
       stream.onUploaded?.();
     })().then(() => null, (error: unknown) => error) : Promise.resolve(null);
     try {
-      const [out, err, code, fed] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited, feed]);
+      // a capped stream is read only up to its cap: past it the command is stopped, and nothing it sent is taken
+      const read = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
+        if (maxOutput === undefined) return new Response(stream).text();
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        for await (const chunk of stream) {
+          size += chunk.length;
+          if (size > maxOutput) { proc.kill(); throw new Error(`The PC sent more output than expected (over ${maxOutput} bytes); it was not read`); }
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks).toString("utf8");
+      };
+      const [out, err, code, fed] = await Promise.all([read(proc.stdout), read(proc.stderr), proc.exited, feed]);
       if (this.closed) throw new Error("Connection cancelled");
       // the remote side's own words say more than a broken pipe on this side
       if (code !== 0) throw new Error(err.trim().slice(-4096) || `SSH command failed (${code})`);

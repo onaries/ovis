@@ -10,6 +10,8 @@ const roots: string[] = [];
 const root = (): string => { const dir = mkdtempSync(join(tmpdir(), "herdr-preferences-")); roots.push(dir); return dir; };
 afterEach(() => {
   mock.restore();
+  blocked.clear();
+  writes = null;
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -18,6 +20,26 @@ const put = (store: PreferenceStore, body: string, headers: Record<string, strin
 const named = <T extends object>(doc: T) => ({ ...doc, state_id: expect.stringMatching(/^[0-9a-f]{32}$/) });
 
 const quietly = () => spyOn(console, "error").mockImplementation(() => undefined);
+
+/** The writes made to fail, by the folder and file name whose temporary copy they write. */
+const blocked = new Set<string>();
+const realOpenSync = fs.openSync;
+let writes: ReturnType<typeof spyOn> | null = null;
+/**
+ * Makes each write of `name`'s temporary copy in `dir` fail, as a disk refusing it would, until the returned function
+ * runs. The copy's name is a fresh one each time (state-document.ts), so nothing at a fixed name can stand in its way.
+ */
+function block(dir: string, name: string): () => void {
+  const prefix = join(dir, `${name}.`);
+  blocked.add(prefix);
+  writes ??= spyOn(fs, "openSync").mockImplementation(((path: unknown, ...rest: unknown[]) => {
+    if (typeof path === "string" && path.endsWith(".tmp") && [...blocked].some((held) => path.startsWith(held))) {
+      throw Object.assign(new Error(`EACCES: permission denied, open '${path}'`), { code: "EACCES" });
+    }
+    return (realOpenSync as (...args: unknown[]) => number)(path, ...rest);
+  }) as typeof fs.openSync);
+  return () => { blocked.delete(prefix); };
+}
 
 describe("shared preferences", () => {
   it("sends no id while its file is damaged, and leaves that file as it is", async () => {
@@ -371,10 +393,9 @@ describe("shared preferences", () => {
     const dir = root();
     const store = new PreferenceStore(dir);
     store.set({ settings: {}, tab_labels: { "w1:p1|term_a": "Private" } });
-    const blocker = join(dir, `tab-labels.json.${process.pid}.tmp`);
-    mkdirSync(blocker);
+    const unblock = block(dir, "tab-labels.json");
     expect(store.set({ settings: { autoTabNames: false } }).tab_labels).toBeUndefined();
-    rmSync(blocker, { recursive: true });
+    unblock();
     // the delete failed: the file still holds the label, a restart shows none
     expect(JSON.parse(readFileSync(join(dir, "tab-labels.json"), "utf8"))).toEqual({ tab_labels: { "w1:p1|term_a": "Private" } });
     const restarted = new PreferenceStore(dir);
@@ -389,10 +410,8 @@ describe("shared preferences", () => {
     const dir = root();
     const store = new PreferenceStore(dir);
     store.set({ settings: {}, tab_labels: { "w1:p1|term_a": "Held" } });
-    const labelBlocker = join(dir, `tab-labels.json.${process.pid}.tmp`);
-    const muteBlocker = join(dir, `muted-panes.json.${process.pid}.tmp`);
-    mkdirSync(labelBlocker);
-    mkdirSync(muteBlocker);
+    block(dir, "tab-labels.json");
+    block(dir, "muted-panes.json");
     expect(() => store.set({ settings: {}, muted_panes: ["w1:p1"], tab_labels: { "w1:p2|term_b": "Next" } })).toThrow();
     expect(store.get().tab_labels).toBeUndefined();
   });
@@ -411,11 +430,10 @@ describe("shared preferences", () => {
     const dir = root();
     const store = new PreferenceStore(dir);
     store.set({ settings: {}, tab_labels: { "w1:p1|term_a": "First" } });
-    const blocker = join(dir, `tab-labels.json.${process.pid}.tmp`);
-    mkdirSync(blocker);
+    const unblock = block(dir, "tab-labels.json");
     // the theme is saved; the labels leave memory until a change of them reads the file again
     expect(store.set({ settings: { theme: "dark" }, tab_labels: { "w1:p2|term_b": "Second" } })).toEqual(named({ revision: 2, settings: { theme: "dark" }, muted_panes: [] }));
-    rmSync(blocker, { recursive: true });
+    unblock();
     store.set({ settings: {}, tab_labels: { "w1:p2|term_b": "Second" } });
     expect(new PreferenceStore(dir).get().tab_labels).toEqual({ "w1:p1|term_a": "First", "w1:p2|term_b": "Second" });
   });
@@ -444,10 +462,9 @@ describe("shared preferences", () => {
     expect(store.set({ settings: { theme: "dark" } }).tab_labels).toBeUndefined();
     expect(store.set({ settings: {}, tab_labels: { "w1:p2|term_b": "Next" } }).tab_labels).toEqual({ "w1:p1|term_a": "Repaired", "w1:p2|term_b": "Next" });
     // the mute list cannot be written: the labels went to disk first, and the store holds them for the next save
-    const blocker = join(dir, `muted-panes.json.${process.pid}.tmp`);
-    mkdirSync(blocker);
+    const unblock = block(dir, "muted-panes.json");
     expect(() => store.set({ settings: {}, muted_panes: ["w1:p1"], tab_labels: { "w1:p3|term_c": "Kept" } })).toThrow();
-    rmSync(blocker, { recursive: true });
+    unblock();
     expect(store.get().tab_labels).toEqual({ "w1:p1|term_a": "Repaired", "w1:p2|term_b": "Next", "w1:p3|term_c": "Kept" });
     store.set({ settings: { theme: "light" } });
     expect(new PreferenceStore(dir).get().tab_labels).toEqual({ "w1:p1|term_a": "Repaired", "w1:p2|term_b": "Next", "w1:p3|term_c": "Kept" });
@@ -472,11 +489,10 @@ describe("shared preferences", () => {
     const store = new PreferenceStore(dir);
     await put(store, JSON.stringify({ settings: { theme: "light" } }));
     // preferences.json cannot be replaced: its temporary file's place is taken
-    const blocker = join(dir, `preferences.json.${process.pid}.tmp`);
-    mkdirSync(blocker);
+    const unblock = block(dir, "preferences.json");
     expect((await put(store, JSON.stringify({ settings: {}, muted_panes: ["w1:p1"] }))).status).toBe(500);
     expect(store.get()).toEqual(named({ revision: 1, settings: { theme: "light" }, muted_panes: [] }));
-    rmSync(blocker, { recursive: true });
+    unblock();
     // the next save, of something else, and a restart: the failed mute is nowhere
     expect(await (await put(store, JSON.stringify({ settings: { theme: "dark" } }))).json()).toEqual(named({ revision: 2, settings: { theme: "dark" }, muted_panes: [] }));
     expect(new PreferenceStore(dir).get()).toEqual(named({ revision: 2, settings: { theme: "dark" }, muted_panes: [] }));
@@ -489,14 +505,13 @@ describe("shared preferences", () => {
     const bytes = (name: string) => readFileSync(join(dir, name));
     const before = { preferences: bytes("preferences.json"), mutes: bytes("muted-panes.json") };
     // the second document cannot be written: its temporary file's place is taken
-    const blocker = join(dir, `muted-panes.json.${process.pid}.tmp`);
-    mkdirSync(blocker);
+    const unblock = block(dir, "muted-panes.json");
     expect((await put(store, JSON.stringify({ settings: { theme: "dark" }, pins: ["local:w1:p1"], muted_panes: ["w1:p1"] }))).status).toBe(500);
     expect(store.get()).toEqual(named({ revision: 1, settings: { theme: "light" }, muted_panes: ["w1:p0"] }));
     // both documents on disk are byte for byte what they were before the refused save
     expect(bytes("preferences.json")).toEqual(before.preferences);
     expect(bytes("muted-panes.json")).toEqual(before.mutes);
-    rmSync(blocker, { recursive: true });
+    unblock();
     expect(new PreferenceStore(dir).get()).toEqual(named({ revision: 1, settings: { theme: "light" }, muted_panes: ["w1:p0"] }));
   });
 
@@ -506,10 +521,9 @@ describe("shared preferences", () => {
     const store = new PreferenceStore(dir);
     // repaired by hand after the start
     writeFileSync(join(dir, "preferences.json"), JSON.stringify({ revision: 5, settings: { theme: "light" }, pins: ["local:w1:p1"] }));
-    const blocker = join(dir, `muted-panes.json.${process.pid}.tmp`);
-    mkdirSync(blocker);
+    const unblock = block(dir, "muted-panes.json");
     expect((await put(store, JSON.stringify({ settings: { showThinking: false }, muted_panes: ["w1:p1"] }))).status).toBe(500);
-    rmSync(blocker, { recursive: true });
+    unblock();
     // the next save is laid over the repair, not over what memory held before it
     expect(await (await put(store, JSON.stringify({ settings: { agentOrder: "activity" } }))).json()).toEqual(named({ revision: 6, settings: { theme: "light", agentOrder: "activity" }, pins: ["local:w1:p1"], muted_panes: [] }));
   });

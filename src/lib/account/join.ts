@@ -336,7 +336,7 @@ export async function planEnroll(store: AccountStore, serverId: string, account:
 const UNDECIDED = new Set(["account_unavailable", "enrolling"]);
 
 /** Another PC of the account this client is paired with, over a session signed in with the account key there. */
-export interface AccountPeer { readonly serverId: string; readonly fetch: PcFetch }
+export interface AccountPeer { readonly serverId: string; readonly fetch: PcFetch; readonly assertOwned?: () => Promise<void> }
 
 /** How long an enrollment waits for another PC of the account to say what it keeps out, before it counts that PC as not checked. */
 export const PEER_STATUS_MS = 8_000;
@@ -381,7 +381,7 @@ export interface Enrollment { readonly finished: boolean; readonly checked: numb
  * devices let in, so they sign in there. `finished` once nothing is left to send.
  */
 export async function enrollPc(options: {
-  fetch: PcFetch; store: AccountStore; account: string; serverId: string; others?: readonly AccountPeer[]; pc?: IntroducedPc;
+  fetch: PcFetch; store: AccountStore; account: string; serverId: string; others?: readonly AccountPeer[]; pc?: IntroducedPc; assertOwned?: () => Promise<void>;
   /** how many other PCs the account's directory lists: some this client cannot read keep its adds home */
   listed?: number;
   /** the new PC is from before enrollments (its status has no `enrolling`): removes only, through records */
@@ -391,7 +391,7 @@ export async function enrollPc(options: {
   const planned = (await options.store.get("enrolls"))?.[options.serverId];
   if (planned === undefined || planned.account !== options.account) return { finished: true, checked: 0, of: others.length, admitted: [] };
   // enrolled already: only introductions some PCs did not take are left
-  if (planned.introduce !== undefined) return { finished: await introduceLeft(options.store, options.serverId, others), checked: 0, of: others.length, admitted: [] };
+  if (planned.introduce !== undefined) return { finished: await introduceLeft(options, others), checked: 0, of: others.length, admitted: planned.introduce.keys };
   const answered: AccountPeer[] = [];
   const seen: PcAccountStatus[] = [];
   /** PCs that cannot say they read their whole mailbox (from before enrollments, or whose read failed): their removals are relayed, and no add goes */
@@ -441,7 +441,7 @@ export async function enrollPc(options: {
   if (options.legacyTarget) return enrollLegacy({ ...options, removes });
   const records: (AddRecord | RemoveRecord)[] = [...removes, ...adds];
   const done: string[] = [];
-  const admitted: string[] = [];
+  const admitted: string[] = [...planned.admitted ?? []];
   // an unvouched PC keeps the new PC waiting: this enrollment is sent, but not as the last part
   let sent = unvouched === 0;
   // through the enrollment, which also ends the PC's wait for this client: sent even with nothing in it
@@ -484,7 +484,7 @@ export async function enrollPc(options: {
     else rest[options.serverId] = { ...entry, done: [...entry.done, ...done], admitted: keys };
     return { devices: current.devices, removals: current.removals, enrolls: Object.keys(rest).length === 0 ? undefined : rest };
   });
-  if (finished) finished = await introduceLeft(options.store, options.serverId, answered);
+  if (finished) finished = await introduceLeft(options, answered);
   return { finished, checked: answered.length, of: others.length, admitted };
 }
 
@@ -492,7 +492,8 @@ export async function enrollPc(options: {
  * Sends the introductions a plan still holds through each of `peers` it names, and drops each PC that
  * took them all (a device a PC does not know is skipped there). True once none is left.
  */
-async function introduceLeft(store: AccountStore, serverId: string, peers: readonly AccountPeer[]): Promise<boolean> {
+async function introduceLeft(options: { store: AccountStore; serverId: string; assertOwned?: () => Promise<void> }, peers: readonly AccountPeer[]): Promise<boolean> {
+  const { store, serverId, assertOwned } = options;
   const left = (await store.get("enrolls"))?.[serverId]?.introduce;
   if (left === undefined) return true;
   const took: string[] = [];
@@ -500,6 +501,7 @@ async function introduceLeft(store: AccountStore, serverId: string, peers: reado
     if (await introduce(peer, left.keys, left.pc)) took.push(peer.serverId);
   }
   let none = false;
+  await assertOwned?.();
   await store.update("enrolls", (current) => {
     const entry = current?.[serverId];
     if (current === undefined || entry?.introduce === undefined) { none = true; return current; }
@@ -551,6 +553,8 @@ async function introduce(peer: AccountPeer, keys: readonly string[], pc: Introdu
   let all = true;
   for (const key of keys) {
     try { await post(peer.fetch, "/api/account/introduce", { key, pcs: [pc] }); } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      await peer.assertOwned?.();
       if (error instanceof AccountPcError && error.code === "introduction_unknown_key") continue;
       console.warn("Ovis: a PC did not introduce the new PC yet", error instanceof AccountPcError ? error.code : error instanceof Error ? error.name : error);
       all = false;
@@ -564,7 +568,7 @@ async function introduce(peer: AccountPeer, keys: readonly string[], pc: Introdu
  * once the PC says it belongs to the account (the link went through), enrollPc. `fetch` is a session
  * signed in with the account key there. The PC's status gives this client no record to sign.
  */
-export async function enrollOnPc(options: { fetch: PcFetch; store: AccountStore; account: string; serverId: string; others?: readonly AccountPeer[]; pc?: IntroducedPc; listed?: number }): Promise<Enrollment | null> {
+export async function enrollOnPc(options: { fetch: PcFetch; store: AccountStore; account: string; serverId: string; others?: readonly AccountPeer[]; pc?: IntroducedPc; listed?: number; assertOwned?: () => Promise<void> }): Promise<Enrollment | null> {
   const status = await pcAccountStatus(options.fetch);
   if (status.account !== options.account) return null;
   return enrollPc({ ...options, legacyTarget: status.enrolling === undefined });

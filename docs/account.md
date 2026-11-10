@@ -339,15 +339,16 @@ messages):
    a pairing window with `POST /api/relay/link` and the header `x-ovis-local-only: 1`. What that window takes is decided on
    this PC only: it is never listed to account members (`remote-pairings`) or approved by one, even
    once the PC has members. The screen keeps the window open while it waits.
-2. On any device already in the account, the PC shows as a card, **Add {name} to your account?**,
-   for 10 minutes after the directory took it. Its key comes from the directory and is checked
-   against its id, as for any PC there; the person then **types the six digits the new PC shows**
-   (not a tap: the directory's name is anyone's), and approves on the PC.
+2. On any device already in the account, the dashboard lists the PC as new in the account, with
+   **Add** on its row, for 10 minutes after the directory took it. **Add** opens the Add-a-PC sheet.
+   The PC's key comes from the directory and is checked against its id, as for any PC there; the
+   person then **types the six digits the new PC shows** (not a tap: the directory's name is
+   anyone's), and approves on the PC.
 3. The device is then the PC's first member: it links, and enrolls the PC
    ([Enrolling a PC](#enrolling-a-pc)), so the account's other devices are let in and introduced.
 
-A wrong number ends that comparison; the person starts again from the card. QR codes and pairing
-codes stay under **Other ways** for a device without an account.
+A wrong number ends that comparison; the person starts again from **Add** on the dashboard. A device without an account
+pairs with a QR code or pairing code behind **Pair with a QR or code** on the sign-in screen.
 
 ### Introductions
 

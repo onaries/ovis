@@ -281,3 +281,4 @@ it("reads usage after a Settings change only with Plan limits on, and only once 
   await searched.promise;
   expect(searches).toBe(2);
 });
+

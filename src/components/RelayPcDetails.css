@@ -1,0 +1,141 @@
+/*
+ * The PC details pane (RelayPcDetails.tsx): a 360px non-modal side panel in normal document flow
+ * from 1100px (--bg-panel, --divider left edge), and a full view with Back below 1100px.
+ * 44px location bar at top; full metadata wraps without truncation; zero resting shadows.
+ */
+
+.relay-pc-details {
+  display: flex;
+  flex-direction: column;
+  width: var(--relay-detail-w);
+  min-width: 0;
+  background: var(--bg-panel);
+  border-left: var(--hairline) solid var(--divider);
+  color: var(--text);
+}
+
+.relay-pc-details.is-full-view {
+  width: 100%;
+  border-left: 0;
+  border-top: var(--hairline) solid var(--divider);
+}
+
+.relay-pc-details-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--touch-target);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.relay-pc-details-back {
+  flex: none;
+  padding: 0 var(--space-2);
+}
+
+.relay-pc-details-location {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 8rem;
+  min-width: 0;
+}
+
+.relay-pc-details-title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  overflow-wrap: break-word;
+}
+
+.relay-pc-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-4);
+}
+
+.relay-pc-details-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.relay-pc-details-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  padding-bottom: var(--space-3);
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.relay-pc-details-row dt {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+}
+
+.relay-pc-details-row dd {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--text);
+  font-size: max(var(--relay-fs-body-min), var(--fs-md));
+  line-height: var(--lh-base);
+  overflow-wrap: break-word;
+}
+
+.relay-pc-details-value {
+  color: var(--text-strong);
+  font-weight: var(--fw-medium);
+}
+
+.relay-pc-details-sub {
+  display: block;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+}
+
+.relay-pc-details-dim {
+  color: var(--text-dim);
+}
+
+.relay-pc-details-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.relay-pc-details-key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--tracking-code);
+}
+
+@media (max-width: 319px) {
+  .relay-pc-details-key .key-id {
+    grid-template-columns: repeat(2, max-content);
+  }
+}
+
+.relay-pc-details-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+@media (max-width: 1099px) {
+  .relay-pc-details {
+    width: 100%;
+    border-left: 0;
+    border-top: var(--hairline) solid var(--divider);
+  }
+}

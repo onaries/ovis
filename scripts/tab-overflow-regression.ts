@@ -22,7 +22,7 @@ async function headerRow(page: Page): Promise<{ tabs: { name: string; width: num
         const tab = item.querySelector<HTMLElement>('[role="tab"]');
         const close = item.querySelector<HTMLElement>(".tab-strip-close");
         return {
-          name: tab?.textContent ?? "",
+          name: tab?.querySelector(".tab-strip-label")?.textContent ?? "",
           width: item.getBoundingClientRect().width,
           selected: tab?.getAttribute("aria-selected") === "true",
           closeShown: !!close && getComputedStyle(close).display !== "none" && close.getBoundingClientRect().width > 0,
@@ -66,7 +66,7 @@ export async function checkTabOverflow(browser: Browser, origin: string): Promis
 
       // the header's row with the last tab open: the row keeps it, and the rest that do not fit wait behind More
       const rowSettled = async (when: string, open: string): Promise<Awaited<ReturnType<typeof headerRow>>> => {
-        await page.locator(`${HEADER} [role="tab"][aria-selected="true"]`, { hasText: new RegExp(`^${open}$`) }).waitFor({ timeout: 15_000 });
+        await page.locator(`${HEADER} [role="tab"][aria-selected="true"]`, { has: page.locator(".tab-strip-label", { hasText: new RegExp(`^${open}$`) }) }).waitFor({ timeout: 15_000 });
         await page.locator(".header-tabs .tab-strip-more").waitFor({ timeout: 5_000 })
           .catch(() => { throw new Error(`${when}: 20 tabs that do not fit show no More button in the header's row`); });
         // the row draws fewer tabs once it has measured its new width (a resize, a split closed)
@@ -93,9 +93,24 @@ export async function checkTabOverflow(browser: Browser, origin: string): Promis
 
       // More lists every tab left out of the row; one picked from it opens and comes into the row
       await page.locator(".header-tabs .tab-strip-more").click();
-      const listed = await page.getByRole("menu").getByRole("menuitem").allTextContents();
+      const listed = await page.getByRole("menu").locator('[role="menuitem"] .menu-item-main').allTextContents();
       assert.deepEqual(listed.map((text) => text.trim()), hidden, "More lists the tabs left out of the row, in their order");
-      await page.getByRole("menu").getByRole("menuitem", { name: "metrics", exact: true }).click();
+      // a letter typed over the list moves to the next tab it starts, one tab per press, wrapping (G-160): one
+      // type-ahead owns the list, so a tab sharing its first letter with the next one is never skipped
+      const letter = [..."abcdefghijklmnopqrstuvwxyz"].find((first) => hidden.filter((name) => name.startsWith(first)).length >= 2);
+      assert.ok(letter, `two tabs behind More share a first letter: ${hidden.join(", ")}`);
+      await page.waitForFunction(() => document.activeElement?.closest(".row-menu") != null);
+      const focusedTab = () => page.evaluate(() => document.activeElement?.querySelector(".menu-item-main")?.textContent?.trim() ?? "");
+      let at = hidden.indexOf(await focusedTab());
+      const walked: string[] = [], wanted: string[] = [];
+      for (let press = 0; press <= hidden.filter((name) => name.startsWith(letter)).length; press += 1) {
+        await page.keyboard.press(letter);
+        walked.push(await focusedTab());
+        at = [...hidden.keys()].map((step) => (at + 1 + step) % hidden.length).find((index) => hidden[index]!.startsWith(letter))!;
+        wanted.push(hidden[at]!);
+      }
+      assert.deepEqual(walked, wanted, `"${letter}" pressed over More walks every tab it starts, in order`);
+      await page.getByRole("menu").getByRole("menuitem").filter({ has: page.locator(".menu-item-main", { hasText: /^metrics$/ }) }).click();
       await rowSettled("metrics picked from More", "metrics");
 
       // a narrower window keeps the tabs as wide, and fewer of them in the row
@@ -107,7 +122,7 @@ export async function checkTabOverflow(browser: Browser, origin: string): Promis
       // a split half's own strip still scrolls under the wheel
       const strip = page.locator(HALF);
       const overflowing = async (): Promise<void> => {
-        await page.locator(`${HALF} [role="tab"]`, { hasText: /^last-tab$/ }).waitFor({ state: "attached", timeout: 15_000 });
+        await page.locator(`${HALF} [role="tab"]`, { has: page.locator(".tab-strip-label", { hasText: /^last-tab$/ }) }).waitFor({ state: "attached", timeout: 15_000 });
         await page.waitForFunction((selector) => {
           const node = document.querySelector(selector);
           return !!node && node.scrollWidth - node.clientWidth > 100;
@@ -130,7 +145,7 @@ export async function checkTabOverflow(browser: Browser, origin: string): Promis
         await page.mouse.wheel(0, 10_000);
         await page.waitForFunction((selector) => {
           const node = document.querySelector(selector);
-          const end = [...(node?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])].find((tab) => tab.textContent === "last-tab");
+          const end = [...(node?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])].find((tab) => tab.querySelector(".tab-strip-label")?.textContent === "last-tab");
           const add = node?.querySelector(".tab-strip-add");
           if (!node || !end || !add) return false;
           const box = node.getBoundingClientRect();
@@ -181,13 +196,12 @@ export async function checkTabOverflow(browser: Browser, origin: string): Promis
   }
 }
 
-/** the pointer over a tab that is not open shows that tab's close, and only a full-size tab shows one */
+/** only the open tab shows its close, as the Herdr app's tab does, and it is a full-size tab: the pointer over another tab shows none */
 async function closeOnlyOnFullTabs(page: Page): Promise<void> {
-  await page.locator(`${HEADER} .tab-strip-item`).first().hover();
+  await page.locator(`${HEADER} .tab-strip-item:not(.is-active)`).first().hover();
   const hovered = await headerRow(page);
-  assert.ok(hovered.tabs[0]?.closeShown, "the hovered tab shows its close");
   for (const tab of hovered.tabs.filter((entry) => entry.closeShown)) assert.ok(tab.width >= TAB_MIN - 0.5, `${tab.name}: a close shows only on a full-size tab (${tab.width}px)`);
-  assert.deepEqual(hovered.tabs.filter((tab) => tab.closeShown && !tab.selected).map((tab) => tab.name), [hovered.tabs[0]!.name], "only the hovered and the open tab show a close");
+  assert.deepEqual(hovered.tabs.filter((tab) => tab.closeShown).map((tab) => tab.name), hovered.tabs.filter((tab) => tab.selected).map((tab) => tab.name), "only the open tab shows a close, whichever tab the pointer is over");
   await page.mouse.move(0, 400);
 }
 

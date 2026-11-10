@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, ut
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { refusalHint, SshConnection, sshClient, sweepSshDirs } from "./ssh.ts";
+import { posixHost, type HostInspection } from "./remote-host.ts";
 
 // The direct mode Windows uses (its OpenSSH has no connection sharing), run here against a
 // stand-in ssh. Windows itself runs it against real hosts; this sh stand-in needs a POSIX shell.
@@ -52,6 +53,11 @@ if [ -n "$tunnel" ]; then
   exec "$FAKE_BUN" -e "let opened = 0; Bun.listen({ hostname: '127.0.0.1', port: $port, socket: { open() { if (++opened === Number(process.env.FAKE_TUNNEL_ENDS_AT)) process.exit(0); }, data() {} } });"
 fi
 [ "$last" = "exit" ] && exit 0
+case "$FAKE_FLOOD" in
+  whitespace) head -c 8388608 /dev/zero | tr '\0' ' '; printf '[]'; exit 0 ;;
+  stdout) exec yes ;;
+  stderr) exec yes >&2 ;;
+esac
 echo ran
 `;
 
@@ -68,7 +74,7 @@ for (const line of readFileSync(process.argv.at(-1), "utf8").trim().split("\n"))
 }' "$file"
 `;
 
-const FAKE_KEYS = ["FAKE_DIR", "FAKE_BUN", "FAKE_PASSPHRASE", "FAKE_PROMPT", "FAKE_HOSTKEY_LINE", "FAKE_INTRUDER", "FAKE_CONFIG_FORWARD", "FAKE_TUNNEL_ENDS_AT"];
+const FAKE_KEYS = ["FAKE_DIR", "FAKE_BUN", "FAKE_PASSPHRASE", "FAKE_PROMPT", "FAKE_HOSTKEY_LINE", "FAKE_INTRUDER", "FAKE_CONFIG_FORWARD", "FAKE_TUNNEL_ENDS_AT", "FAKE_FLOOD"];
 
 describe.skipIf(process.platform === "win32")("SSH without connection sharing", () => {
   const cleanups: (() => void)[] = [];
@@ -110,6 +116,15 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
     const run = calls().find((line) => line.endsWith("sh -c 'true'"))!;
     expect(run).toContain("BatchMode=yes");
     expect(run).toContain("StrictHostKeyChecking=yes");
+    expect(ssh.connected()).toBe(true);
+  });
+
+  // a PC's discovery answer is read only up to its cap: past it the command is stopped, and nothing it said is taken, so a
+  // PC cannot pad a list nor stream until the command's timeout
+  it.each(["whitespace", "stdout", "stderr"])("stops reading a PC's herdr discovery past its cap: %s", async (flood) => {
+    const { ssh, ask } = fixture({ FAKE_FLOOD: flood });
+    await ssh.start(ask("unused"));
+    await expect(posixHost.discoverSessions!(ssh, { runtimeDir: "/fixture/runtime" } as HostInspection)).rejects.toThrow("more output than expected");
     expect(ssh.connected()).toBe(true);
   });
 

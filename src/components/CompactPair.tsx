@@ -12,9 +12,11 @@ const QR_SIZE = 132;
 /**
  * One way into this PC as Connect a device shows it: the QR code a camera opens, the code to type
  * beside it, and only Refresh and Copy. `code` is what Copy copies; `shown` is how it reads (grouped).
+ * `busy`: a code is on its way (Refresh waits, and says so); `qrNote`: why the QR box is empty
+ * while there is no code or no address a phone can open (the box keeps its place either way).
  */
-export function CompactPair({ qr, qrLabel, code, shown = code, codeLabel, busy = false, onRefresh }: {
-  qr: string | null; qrLabel: string; code: string | null; shown?: string | null; codeLabel: string; busy?: boolean; onRefresh: () => void;
+export function CompactPair({ qr, qrLabel, code, shown = code, codeLabel, busy = false, qrNote, onRefresh }: {
+  qr: string | null; qrLabel: string; code: string | null; shown?: string | null; codeLabel: string; busy?: boolean; qrNote?: string; onRefresh: () => void;
 }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
@@ -28,7 +30,7 @@ export function CompactPair({ qr, qrLabel, code, shown = code, codeLabel, busy =
   };
   return (
     <div className="compact-pair">
-      {qr !== null ? <QrCode value={qr} label={qrLabel} size={QR_SIZE} /> : <div className="compact-pair-qr-empty" aria-hidden="true" />}
+      {qr !== null ? <QrCode value={qr} label={qrLabel} size={QR_SIZE} /> : <div className="compact-pair-qr-empty" role="status">{qrNote ?? (busy ? t("Getting a code…") : "")}</div>}
       <div className="compact-pair-side">
         <p className="compact-pair-code" aria-label={codeLabel} aria-live="polite">{shown ?? "…"}</p>
         <div className="compact-pair-actions">

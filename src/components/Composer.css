@@ -73,6 +73,7 @@
   margin-inline: auto;
   padding-bottom: var(--space-4);
   text-align: center;
+  text-wrap: balance;
   overflow-wrap: anywhere;
 }
 
@@ -127,7 +128,7 @@
   /* the completion menu opens upward into what is left over the lifted card: it scrolls there,
      where the pane's edge would cut its first rows off */
   .terminal-stack.is-greeted .composer-menu {
-    max-height: min(calc(var(--row-h) * 5), calc(var(--composer-room, 100vh) - var(--space-2) * 2));
+    max-height: min(calc(var(--row-h) * 5), calc(var(--composer-room, 100dvh) - var(--space-2) * 2));
   }
 }
 
@@ -262,6 +263,7 @@
   padding: 0;
   overflow: hidden;
   clip: rect(0 0 0 0);
+  text-overflow: clip;
   white-space: nowrap;
   border: 0;
 }
@@ -320,33 +322,18 @@
   text-transform: uppercase;
 }
 
-/* what is left of the context: plain until a compaction is near */
-/* Context left: desktop can reveal its number; mobile keeps an inert ring. */
+/* what is left of the context: a ring that only shows (its number is in the tooltip), red when little is left */
 .composer-context {
   display: inline-flex;
-  flex: 0 1 auto;
-  min-width: 14px;
+  flex: none;
   align-items: center;
-  gap: var(--space-1);
-  padding: 0;
-  border: 0;
-  background: none;
   color: var(--text-dim);
-  font: inherit;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
 }
 
 .composer-context svg {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   flex: none;
-}
-
-.composer-context-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .composer-context-track,
@@ -372,32 +359,6 @@
 
 .composer-context.is-low {
   color: var(--status-blocked);
-}
-
-.composer-context-readonly {
-  cursor: default;
-}
-
-/* Compact context: beside the opened number, desktop only (the mobile ring is inert) */
-.composer-compact {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--text-dim);
-  cursor: pointer;
-}
-
-.composer-compact svg {
-  width: 14px;
-  height: 14px;
-}
-
-.composer-compact:hover,
-.composer-compact:focus-visible {
-  color: var(--text);
 }
 
 .composer-usage {
@@ -465,9 +426,7 @@
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-2xl);
   box-shadow: var(--shadow-card);
-  transition:
-    border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
 /* focus is the surface's: the accent border on the rounded box, not a rectangle on the
@@ -502,6 +461,7 @@
   border: 0;
   outline: 0;
   color: var(--text-strong);
+  caret-color: var(--caret-color);
   /* the chat's font, as the dock around it and the transcript have (Settings → Chat → Chat font);
      the measure copy takes it too, so the height it measures is the text drawn */
   font-family: var(--font-chat, var(--font-ui));
@@ -552,6 +512,13 @@
   outline: 0;
 }
 
+.composer-text::selection,
+.composer ::selection,
+.prompt-card ::selection {
+  background: var(--selection-bg);
+  color: var(--selection-text);
+}
+
 .composer-text::placeholder {
   color: var(--text-dim);
 }
@@ -583,6 +550,7 @@
 .composer-attachment button {
   flex: none;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .composer-controls .icon-button {
@@ -733,6 +701,28 @@
 
 .composer-strip-branch {
   margin-inline-start: auto;
+  font-family: var(--font-mono);
+}
+
+.composer-strip-path {
+  display: none;
+}
+
+.composer-strip[data-full-path] .composer-strip-folder-name {
+  display: none;
+}
+
+.composer-strip[data-full-path] .composer-strip-path {
+  display: inline;
+}
+
+.composer-strip[data-measuring] .composer-strip-item {
+  flex: 0 0 auto;
+}
+
+.composer-strip[data-measuring] .composer-strip-text {
+  overflow: visible;
+  text-overflow: clip;
 }
 
 /* the glyph is the text's size, as the task chip's is */
@@ -747,6 +737,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 .composer-menu {
@@ -777,7 +770,8 @@
 }
 
 /* the menu's close, in its top corner over whatever row scrolls under it; the first row (or group
-   heading) leaves it room, so at rest it covers nothing */
+   heading) leaves it room, so at rest it covers nothing. With a mouse it is a pointer target tall,
+   no taller than the heading beside it, so its hit box never reaches the first option (G-025) */
 .composer-menu-close {
   position: sticky;
   top: 0;
@@ -787,8 +781,8 @@
   display: inline-grid;
   place-items: center;
   width: var(--control-h);
-  height: var(--control-h);
-  margin-bottom: calc(-1 * var(--control-h));
+  height: var(--pointer-target);
+  margin-bottom: calc(-1 * var(--pointer-target));
   padding: 0;
   border: 0;
   border-radius: var(--radius-md);
@@ -819,11 +813,19 @@
   outline-offset: calc(-1 * var(--ring-offset));
 }
 
+/* a finger: the close is a touch target tall, and the first group heading reserves that height so
+   the close covers the heading alone, never the first option under it (G-025) */
 @media (pointer: coarse) {
   .composer-menu-close {
     width: var(--touch-target);
     height: var(--touch-target);
     margin-bottom: calc(-1 * var(--touch-target));
+  }
+
+  .composer-menu-list > .composer-menu-group:first-child > .menu-heading:first-child {
+    display: flex;
+    align-items: center;
+    min-height: var(--touch-target);
   }
 
   .composer-menu-list > .composer-menu-group:first-child > :first-child,
@@ -993,8 +995,8 @@
 
 .composer-note-icon {
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   color: var(--status-blocked);
 }
 
@@ -1111,6 +1113,7 @@
     flex-wrap: wrap;
     align-items: flex-start;
     row-gap: 0;
+    font-size: var(--fs-lg);
   }
 
   /* a row's description is one sentence already: one line under the name, cut if it must */
@@ -1118,20 +1121,52 @@
     flex: 1 1 100%;
     margin-left: 0;
     max-width: none;
+    font-size: var(--fs-md);
     line-height: 1.35;
   }
 
   /* under the icon, not under the row's left edge */
   .composer-menu .menu-item[data-origin] .menu-item-hint {
-    padding-left: calc(16px + var(--space-2));
+    padding-left: calc(var(--icon-size-md) + var(--space-2));
   }
 }
 
 @media (pointer: coarse) {
-  .composer-controls .icon-button,
-  .composer-attachment button {
+  .composer-controls .icon-button {
     min-width: var(--touch-target);
     min-height: calc(var(--touch-target) + var(--space-1));
+  }
+
+  /* a finger's remove: the box is a square touch target (a round one loses its corners), drawn as
+     the same --chip-h circle on the tile's corner as with a mouse (the ::after, in the box's top
+     right corner, the glyph centred on it), so the filename under it stays uncovered (G-025). The
+     box reaches --space-3 past the tile's top and right edges and no further: that is the strip's
+     own padding on a phone, and past it the strip's scroll box would clip the target */
+  .composer-attachment button {
+    top: calc(-1 * var(--space-3));
+    right: calc(-1 * var(--space-3));
+    align-items: flex-start;
+    justify-content: flex-end;
+    width: var(--touch-target);
+    height: var(--touch-target);
+    padding: calc(var(--space-1) + (var(--chip-h) - var(--icon-size)) / 2);
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    isolation: isolate;
+  }
+
+  .composer-attachment button::after {
+    content: "";
+    position: absolute;
+    top: var(--space-1);
+    right: var(--space-1);
+    width: var(--chip-h);
+    height: var(--chip-h);
+    border-radius: var(--radius-pill);
+    background: var(--bg-panel);
+    border: var(--hairline) solid var(--border-strong);
+    z-index: -1;
   }
 
   /* Keep the compact circle, with a larger transparent target for touch. */
@@ -1217,10 +1252,13 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
-.composer-queue-toggle:hover {
-  color: var(--text);
+@media (hover: hover) {
+  .composer-queue-toggle:hover {
+    color: var(--text);
+  }
 }
 
 .composer-queue-toggle:focus-visible {
@@ -1427,7 +1465,7 @@
 .composer-attachment-file {
   width: 100%;
   height: 100%;
-  padding: var(--space-1) var(--space-1) calc(var(--space-1) + var(--fs-2xs) * 1.6);
+  padding: var(--space-1) var(--space-1) calc(var(--space-1) + var(--fs-meta) * 1.5);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1435,7 +1473,7 @@
   gap: var(--space-1);
   overflow: hidden;
   color: var(--text-dim);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   line-height: var(--lh-tight);
   text-align: center;
 }
@@ -1481,10 +1519,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
-.composer-quick-reply:hover:not(:disabled) {
-  border-color: var(--accent);
+@media (hover: hover) {
+  .composer-quick-reply:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
 }
 
 .composer-quick-reply:disabled {
@@ -1534,6 +1575,15 @@
     background: var(--card-glass);
     -webkit-backdrop-filter: var(--glass-blur);
     backdrop-filter: var(--glass-blur);
+  }
+
+  @media (prefers-contrast: more) {
+    .terminal-stack.is-chat:not(.is-greeted) > .terminal-surface + .prompt-dock:empty + .composer:not(.has-notices) .composer-surface {
+      background: var(--bg-elevated);
+      border-color: var(--border-strong);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
   }
 }
 

@@ -22,7 +22,7 @@ describe("remote entry shell agents", () => {
     const servicePath = "/usr/bin:/bin";
     expect(Bun.which("gjc", { PATH: servicePath })).toBeNull();
     const session = "t51";
-    const env = { PATH: servicePath, HOME: home, SHELL: shell, XDG_CONFIG_HOME: xdg, XDG_STATE_HOME: join(root, "state"), HERDR_REMOTE_SESSION: session, OVIS_HERDR_BIN: herdr! };
+    const env = { PATH: servicePath, HOME: home, SHELL: shell, XDG_CONFIG_HOME: xdg, XDG_STATE_HOME: join(root, "state"), HERDR_REMOTE_SESSION: session, HERDR_REMOTE_START_NEW: "1", OVIS_HERDR_BIN: herdr! };
     const socket = join(xdg, "herdr/sessions", session, "herdr.sock");
     const descriptor = join(bridges, createHash("sha256").update(socket).digest("hex") + ".json");
     // subscribed before the bridge starts, so its registration cannot be missed

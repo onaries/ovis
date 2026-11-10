@@ -217,8 +217,8 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 3px;
-  height: 20px;
+  gap: var(--space-px-3);
+  height: var(--voice-wave-h);
   transform-origin: center;
   transition:
     transform var(--dur-base) var(--ease-spring),
@@ -226,7 +226,7 @@
 }
 
 .voice-bars [data-voice-bar] {
-  width: 3px;
+  width: var(--space-px-3);
   height: 100%;
   border-radius: var(--radius-pill);
   background: var(--accent);
@@ -245,8 +245,8 @@
 .voice-meter {
   display: none;
   flex: none;
-  width: 40px;
-  height: 4px;
+  width: var(--thumb-w);
+  height: var(--space-1);
   overflow: hidden;
   border-radius: var(--radius-pill);
   background: var(--accent-tint);

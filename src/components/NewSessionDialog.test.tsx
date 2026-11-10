@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { act, createElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { SettingsProvider, useSettings, type Settings } from "../lib/settings.ts";
-import { NewSessionDialog, type NewSessionDialogProps } from "./NewSessionDialog.tsx";
+import { clearNewSessionDrafts, NewSessionDialog, type NewSessionDialogProps } from "./NewSessionDialog.tsx";
 
 // App keeps the dialog mounted and flips `open`: every hook runs whether it is open or not, or React
 // refuses the render where it opens ("Rendered more hooks than during the previous render").
@@ -43,6 +43,7 @@ describe("NewSessionDialog", () => {
     } });
   });
   afterEach(async () => {
+    clearNewSessionDrafts();
     await act(async () => { renderer?.unmount(); });
     renderer = undefined;
     for (const [key, descriptor] of descriptors) {
@@ -196,6 +197,97 @@ describe("NewSessionDialog", () => {
       await act(async () => { renderer!.root.findByProps({ id: "new-session-model" }).props.onChange({ target: { value: "sonnet" } }); });
       await act(async () => { update({ claudeLaunchModel: "haiku", claudeLaunchEffort: "max" }); });
       expect([value("new-session-model"), value("new-session-effort")]).toEqual(["sonnet", "max"]);
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
+  it("restores typed directory, name, and first message after an Escape/dismiss, and clears them on Cancel (G-005)", async () => {
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => new Response(JSON.stringify({ agents: [{ kind: "claude", label: "Claude Code" }] }), { headers: { "content-type": "application/json" } }), { preconnect: globalThis.fetch.preconnect }));
+    const view = (open: boolean) => createElement(SettingsProvider, { children: createElement(NewSessionDialog, { open, defaultCwd: "/home/u", prefill: { cwd: null, name: null, agent: "claude" }, onClose: () => undefined, onCreated: () => undefined }) });
+    try {
+      await act(async () => { renderer = create(view(true)); });
+      await act(async () => { renderer!.root.findByProps({ id: "new-session-cwd" }).props.onChange({ target: { value: "/home/u/custom-dir" } }); });
+      await act(async () => { renderer!.root.findByProps({ placeholder: "custom-dir" }).props.onChange({ target: { value: "AUDIT-UNSAVED-NAME" } }); });
+      await act(async () => { renderer!.root.findByProps({ id: "new-session-prompt" }).props.onChange({ target: { value: "First draft prompt" } }); });
+      await act(async () => { renderer!.update(view(false)); });
+      await act(async () => { renderer!.update(view(true)); });
+      expect(renderer!.root.findByProps({ id: "new-session-cwd" }).props.value).toBe("/home/u/custom-dir");
+      expect(renderer!.root.findByProps({ placeholder: "custom-dir" }).props.value).toBe("AUDIT-UNSAVED-NAME");
+      expect(renderer!.root.findByProps({ id: "new-session-prompt" }).props.value).toBe("First draft prompt");
+      // Explicit Cancel clears the draft
+      const cancelBtn = renderer!.root.findAllByType("button").find((btn) => btn.props.children === "Cancel")!;
+      await act(async () => { cancelBtn.props.onClick(); });
+      await act(async () => { renderer!.update(view(false)); });
+      await act(async () => { renderer!.update(view(true)); });
+      expect(renderer!.root.findByProps({ id: "new-session-cwd" }).props.value).toBe("/home/u");
+      expect(renderer!.root.findByProps({ id: "new-session-prompt" }).props.value).toBe("");
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
+  it("keeps a dismissed draft to the server it was typed for: another server's dialog opens empty", async () => {
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => new Response(JSON.stringify({ agents: [{ kind: "claude", label: "Claude Code" }] }), { headers: { "content-type": "application/json" } }), { preconnect: globalThis.fetch.preconnect }));
+    const location = window.location as { pathname?: string };
+    const view = (open: boolean) => createElement(SettingsProvider, { children: createElement(NewSessionDialog, { open, defaultCwd: "/home/u", prefill: { cwd: null, name: null, agent: "claude" }, onClose: () => undefined, onCreated: () => undefined }) });
+    try {
+      location.pathname = `/s/${"a".repeat(32)}/`;
+      await act(async () => { renderer = create(view(true)); });
+      await act(async () => { renderer!.root.findByProps({ id: "new-session-cwd" }).props.onChange({ target: { value: "/home/u/server-a-only" } }); });
+      await act(async () => { renderer!.root.findByProps({ id: "new-session-prompt" }).props.onChange({ target: { value: "for server A" } }); });
+      await act(async () => { renderer!.update(view(false)); });
+      // the same tab, now on another PC's scope of the hosted shell
+      location.pathname = `/s/${"b".repeat(32)}/`;
+      await act(async () => { renderer!.update(view(true)); });
+      expect(renderer!.root.findByProps({ id: "new-session-cwd" }).props.value).toBe("/home/u");
+      expect(renderer!.root.findByProps({ id: "new-session-prompt" }).props.value).toBe("");
+      await act(async () => { renderer!.update(view(false)); });
+      location.pathname = `/s/${"a".repeat(32)}/`;
+      await act(async () => { renderer!.update(view(true)); });
+      expect(renderer!.root.findByProps({ id: "new-session-cwd" }).props.value).toBe("/home/u/server-a-only");
+      expect(renderer!.root.findByProps({ id: "new-session-prompt" }).props.value).toBe("for server A");
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
+  it("says a new tab's folder is gone: tab mode has no directory field, so the dialog's own alert tells it", async () => {
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request) => {
+      if (String(input).includes("tab/create")) {
+        return new Response(JSON.stringify({ error: { code: "invalid_cwd", message: "no such directory" } }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ agents: [] }), { headers: { "content-type": "application/json" } });
+    }, { preconnect: globalThis.fetch.preconnect }));
+    const tab = { workspaceId: "w1", workspaceLabel: "api", cwd: "/gone/checkout", number: 2 };
+    const view = createElement(SettingsProvider, { children: createElement(NewSessionDialog, { open: true, defaultCwd: "/gone/checkout", tab, onClose: () => undefined, onCreated: () => undefined }) });
+    try {
+      await act(async () => { renderer = create(view); });
+      await act(async () => { renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
+      const alerts = renderer!.root.findAll((node) => node.type === "p" && node.props.role === "alert");
+      expect(alerts.map((node) => node.children.filter((child) => typeof child === "string").join(""))).toEqual(["Directory not found"]);
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
+  it("connects invalid_cwd error directly to the directory input via aria-invalid and aria-describedby (G-122)", async () => {
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request) => {
+      if (String(input).includes("workspace/create")) {
+        return new Response(JSON.stringify({ error: { code: "invalid_cwd", message: "no such directory" } }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ agents: [] }), { headers: { "content-type": "application/json" } });
+    }, { preconnect: globalThis.fetch.preconnect }));
+    const view = createElement(SettingsProvider, { children: createElement(NewSessionDialog, { open: true, defaultCwd: "/missing/folder", onClose: () => undefined, onCreated: () => undefined }) });
+    try {
+      await act(async () => { renderer = create(view); });
+      await act(async () => { renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
+      const cwdInput = renderer!.root.findByProps({ id: "new-session-cwd" });
+      const cwdHint = renderer!.root.findByProps({ id: "new-session-cwd-hint" });
+      expect(cwdInput.props["aria-invalid"]).toBe(true);
+      expect(cwdInput.props["aria-describedby"]).toBe("new-session-cwd-hint");
+      expect(cwdHint.props.role).toBe("alert");
+      expect(cwdHint.props.children).toBe("Directory not found");
     } finally {
       fetch.mockRestore();
     }

@@ -181,7 +181,8 @@ async function checkFiles(page: Page, label: string, phone: boolean, paneA: stri
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "hidden" });
   // Settings opened by its shortcut over New workspace: Escape closes Settings, and New workspace stays (#3037)
-  await page.locator(".machine-new-row").click();
+  // a desktop's one-line rows (the default) put New workspace's + in the logo row
+  await page.locator(".header-side .new-workspace-button").click();
   const create = page.getByRole("dialog", { name: /^New workspace/ });
   await create.waitFor();
   await page.keyboard.press("Control+Shift+Comma");

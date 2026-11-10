@@ -4,6 +4,9 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 
 import { publishBranches } from "../lib/paneBranch.ts";
 import { SettingsProvider } from "../lib/settings.ts";
+import type { SystemReport } from "../../shared/system.ts";
+import { translate } from "../lib/i18n.ts";
+import { formatPcLoad } from "./MachineStats.tsx";
 import { StatusBar, type StatusBarProps } from "./StatusBar.tsx";
 
 const descriptors = new Map<string, PropertyDescriptor | undefined>();
@@ -73,4 +76,16 @@ it("says View only on a watching device and a lost connection in its own word", 
   const conn = root.findByProps({ "data-state": "reconnecting" });
   expect(conn.props.className).toContain("is-lost");
   expect(text(conn)).toBe("Reconnecting…");
+});
+
+it("shows the PC load line in the status bar when provided", async () => {
+  const report: SystemReport = {
+    sampled_at: 1, uptime_s: 3600, cpu_count: 8, cpu_percent: 19.2, platform: "linux",
+    memory: { used: 11, total: 32, percent: 35.4 }, load: [0.5, 0.4, 0.3],
+    disks: [{ path: "/", used: 44, total: 100, percent: 44.1 }, { path: "/boot", used: 10, total: 100, percent: 10 }],
+  };
+  const line = formatPcLoad((key, vars) => translate("ko", key, vars), report);
+  expect(line).toBe("CPU 19% · 메모리 35% · 디스크 44%");
+  const root = await draw({ pcLoad: createElement("span", { className: "status-bar-item status-bar-text status-bar-load" }, line) });
+  expect(text(root.findByProps({ className: "status-bar-item status-bar-text status-bar-load" }))).toBe("CPU 19% · 메모리 35% · 디스크 44%");
 });

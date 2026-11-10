@@ -7,7 +7,7 @@
   --side-row: var(--control-h);
   --side-row-2: calc(var(--control-h) + var(--space-3));
   --side-action: var(--space-6);
-  --side-hover: color-mix(in srgb, var(--bg-hover) 50%, var(--bg-panel));
+  --side-hover: color-mix(in srgb, var(--bg-hover) 50%, var(--bg-nav));
   --side-selected: var(--bg-hover);
   /* Until resized, Agents keeps today's half-shell allocation when both lists are long. The PCs
      take the rest, but never reserve height beyond their rows: Agents can use what they leave free.
@@ -16,7 +16,8 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--bg-panel);
+  /* the navigation column's surface (G-152): never brighter than the content beside it in the dark theme */
+  background: var(--bg-nav);
 }
 
 .sidebar-list {
@@ -252,9 +253,9 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   align-items: center;
   justify-content: center;
   /* half the caption's height above the card's edge, half below it */
-  margin: var(--space-1) 0 calc(var(--fs-2xs) * var(--lh-tight) / -2);
+  margin: var(--space-1) 0 calc(var(--fs-meta) * var(--lh-tight) / -2);
   color: var(--text-dim);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--tracking-caps);
   line-height: var(--lh-tight);
@@ -267,7 +268,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   align-items: center;
   gap: var(--space-1);
   padding-inline: var(--space-2);
-  background: var(--bg-panel);
+  background: var(--bg-nav);
 }
 
 .sidebar-pinned-label svg {
@@ -291,7 +292,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   background: transparent;
   color: var(--text-dim);
   font: inherit;
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--tracking-caps);
   line-height: var(--lh-tight);
@@ -451,7 +452,9 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   white-space: nowrap;
 }
 
-/* the title keeps a few characters in the narrowest sidebar; the tab's name and the counts give way first */
+/* the title keeps a few characters in the narrowest sidebar; the tab's name and the counts give way first.
+   Navigation text stands a step back from the state beside it (G-042); the selected row's reads in the
+   strong ink and a heavier weight (G-035) */
 .workspace-agent-title {
   flex: 0 1 auto;
   min-width: calc(4 * var(--space-4));
@@ -511,7 +514,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 
 /* the selected agent's row carries the selection's fill; its workspace's row keeps the place in its words */
 .workspace-agent.is-selected { background: var(--side-selected); }
-.workspace-agent.is-selected .workspace-agent-title { color: var(--text-strong); }
+.workspace-agent.is-selected .workspace-agent-title { color: var(--text-strong); font-weight: var(--fw-selected); }
 
 .workspace-group.is-selected.has-selected-agent > .workspace-header { background: transparent; }
 
@@ -683,8 +686,10 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   white-space: nowrap;
 }
 
+/* the selected row's name: the strong ink and a heavier weight, so the selection is not colour alone (G-035) */
 .workspace-group.is-selected > .workspace-header .workspace-name {
   color: var(--text-strong);
+  font-weight: var(--fw-selected);
 }
 
 .workspace-group.is-selected > .workspace-header .sidebar-mark {
@@ -855,7 +860,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 
 .sidebar-status-mark {
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: var(--fw-semibold);
   line-height: 1;
 }
 
@@ -874,7 +879,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   color: var(--indicator-unknown);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: var(--fw-semibold);
   line-height: 1;
 }
 
@@ -896,15 +901,18 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 
 .sidebar-status.badge-restore-error { color: var(--status-blocked); }
 
+/* the trough stays at the theme's floor (--breathe-min-opacity), so the dimmest frame of the working colour
+   still reads at 3:1 on the panel in both themes (G-028) */
 @keyframes sidebar-breathe {
   0%,
   40% { opacity: 1; }
   50%,
-  90% { opacity: 0.5; }
+  90% { opacity: var(--breathe-min-opacity); }
   100% { opacity: 1; }
 }
 
-/* background tasks still running, a pane's plan and its context left: a number beside the state, quieter than it */
+/* background tasks still running, a pane's plan and its context left: a number beside the state, quieter than
+   it, at the information floor (G-039) */
 .background-count,
 .plan-count,
 .context-count {
@@ -915,7 +923,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   margin-left: var(--space-2);
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1119,24 +1127,63 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 }
 
 /* Compact rows, the default (Settings → Sidebar rows → Two lines keeps the tall ones), as herdr-app's list: one line
-   a little lower than a control under a pointer (a finger keeps its touch target), the name, and a branch other than the default dim at the row's end */
+   a little lower than a control under a pointer (a finger keeps its touch target), the name, and a branch other than the
+   default dim right after it */
 @media (pointer: fine) {
   .machine-workspaces:not(.is-two-line) {
     --side-row: calc(var(--control-h) - var(--space-1) - var(--hairline) * 2);
   }
 }
 
+/* short of room the branch gives way first, and only then the name: a shrink this much larger than the name's leaves
+   the name whole until the branch is down to a couple of letters and its ellipsis, never a stray letter */
 .workspace-branch-tail {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 45%;
-  margin-inline-start: auto;
+  flex: 0 99999 auto;
+  min-width: 2.5em;
   overflow: hidden;
   color: var(--text-dim);
   font-size: var(--fs-sm);
   line-height: var(--lh-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* a compact row's state sits at its end in a cell its glyph's size, as far in as the mark at its start: no column wider
+   than what it holds (Two lines keeps the grid's --side-box cell) */
+.machine-workspaces:not(.is-two-line) .workspace-header { padding-right: var(--space-6); }
+
+.machine-workspaces:not(.is-two-line) .workspace-select > .sidebar-pane-meta { width: var(--space-6); }
+
+/* the badge fills that cell: a state that draws nothing (ready, unknown) keeps its box, label and tooltip */
+.machine-workspaces:not(.is-two-line) .workspace-select > .sidebar-pane-meta > .sidebar-status {
+  flex-basis: 100%;
+  width: 100%;
+}
+
+/* under a pointer the ⋯ shows just before the state's cell, over the end of the name and branch, which fade out under
+   it: nothing in the row moves and the state stays in sight. A finger and the drawer keep it in the row, the state beside it */
+@media (hover: hover) and (pointer: fine) and (min-width: 769px) {
+  .machine-workspaces:not(.is-two-line) .workspace-header > .workspace-actions {
+    position: absolute;
+    inset-block: 0;
+    right: var(--space-6);
+    width: var(--space-6);
+  }
+
+  .machine-workspaces:not(.is-two-line) .workspace-header > .workspace-actions .sidebar-row-action { width: 100%; }
+
+  /* the text ends where the state's cell starts: its last --space-6 is under the ⋯, the --space-4 before it fades */
+  .machine-workspaces:not(.is-two-line) .workspace-header:is(:hover, :focus-within) .workspace-copy,
+  .machine-workspaces:not(.is-two-line) .workspace-header:has(> .workspace-actions [aria-expanded="true"]) .workspace-copy {
+    -webkit-mask-image: linear-gradient(to left, transparent var(--space-6), var(--bg-panel) calc(var(--space-6) + var(--space-4)));
+    mask-image: linear-gradient(to left, transparent var(--space-6), var(--bg-panel) calc(var(--space-6) + var(--space-4)));
+  }
+}
+
+/* the compact sidebar (Settings → Sidebar rows → One line, the default) */
+@media (min-width: 769px) {
+  /* the palette (⌘/Ctrl+K) filters the sidebar: its glass leaves the logo row, the + for a new workspace takes it */
+  .app:not(.sidebar-collapsed) .header-side .palette-button:not(:only-child) { display: none; }
 }
 
 /* a workspace row's branch shows under the pointer or the focus; a finger keeps it */

@@ -4,7 +4,8 @@
  * edge; a token is never logged or put in an error's text.
  */
 import { accountLabel, accountOsOf, type AccountAsker, type AccountOs } from "../../../shared/account-asker.ts";
-import type { AccountRecord } from "../../../shared/account-records.ts";
+import type { AccountLimits } from "../../../shared/protocol.ts";
+import { newRecordId, type AccountRecord } from "../../../shared/account-records.ts";
 import { isWssOrigin } from "../../../shared/relay-offer.ts";
 import { GLOBAL_APP } from "../../../shared/relay-regions.ts";
 import type { AccountLock, AccountProvider, AccountSession, AccountStore } from "./store.ts";
@@ -169,6 +170,27 @@ export async function failure(response: Response): Promise<AccountServiceError> 
   return new AccountServiceError(response.status, code, `The account service answered ${response.status} (${code})`);
 }
 
+export function parseAccountLimits(value: unknown): AccountLimits | null {
+  if (!isRecord(value)) return null;
+  const { plan, pcs_max, pcs_used, data_cap_bytes, data_used_bytes, data_metering, until } = value;
+  if (typeof plan !== "string" || plan.trim() === "") return null;
+  if (typeof pcs_max !== "number" || !Number.isSafeInteger(pcs_max) || pcs_max < 0) return null;
+  if (pcs_used !== undefined && pcs_used !== null && (typeof pcs_used !== "number" || !Number.isSafeInteger(pcs_used) || pcs_used < 0)) return null;
+  if (data_cap_bytes !== undefined && data_cap_bytes !== null && (typeof data_cap_bytes !== "number" || !Number.isSafeInteger(data_cap_bytes) || data_cap_bytes < 0)) return null;
+  if (data_used_bytes !== undefined && data_used_bytes !== null && (typeof data_used_bytes !== "number" || !Number.isSafeInteger(data_used_bytes) || data_used_bytes < 0)) return null;
+  if (until !== undefined && until !== null && (typeof until !== "number" || !Number.isFinite(until))) return null;
+  const metered = data_metering === undefined || data_metering === "on";
+  return {
+    // a long name is shortened, never a reason to drop the limits
+    plan: plan.trim().length > 32 ? `${plan.trim().slice(0, 31)}…` : plan.trim(),
+    pcs_max,
+    ...(typeof pcs_used === "number" ? { pcs_used } : {}),
+    ...(typeof data_cap_bytes === "number" ? { data_cap_bytes } : {}),
+    ...(metered && typeof data_used_bytes === "number" ? { data_used_bytes } : {}),
+    ...(until !== undefined ? { until: until ?? null } : {}),
+  };
+}
+
 function parsePc(value: unknown): DirectoryPc | null {
   if (!isRecord(value) || typeof value.server_id !== "string" || !SERVER_ID.test(value.server_id)) return null;
   if (typeof value.label !== "string" || typeof value.added_at !== "string") return null;
@@ -186,7 +208,12 @@ export function sessionOf(body: unknown, service: string, now: number): AccountS
     || !ACCOUNT_PROVIDERS.includes(provider as AccountProvider)) {
     throw new AccountServiceError(502, "invalid_answer", "The account service sent an incomplete sign-in");
   }
-  return { service, account, provider: provider as AccountProvider, access_token, refresh_token, expires_at: now + expires_in * 1000 };
+  return { service, account, provider: provider as AccountProvider, access_token, refresh_token, expires_at: now + expires_in * 1000, sign_in_id: newRecordId() };
+}
+
+/** Whether `a` is `b`'s sign-in, or one of its refreshes. */
+export function sameSignIn(a: AccountSession, b: AccountSession): boolean {
+  return a.refresh_token === b.refresh_token || (a.sign_in_id !== undefined && a.sign_in_id === b.sign_in_id);
 }
 
 /** `POST /v1/token`: a code, a refresh token or a native Apple token for a session; `bearer` redeems a linking sign-in. */
@@ -205,6 +232,8 @@ export interface AccountServiceOptions {
   readonly now?: () => number;
   /** serializes refresh and sign-out between tabs; the browser's Web Locks by default */
   readonly lock?: AccountLock;
+  /** the one sign-in this service acts for (forSignIn) */
+  readonly signIn?: AccountSession;
 }
 
 /**
@@ -229,6 +258,15 @@ export class AccountService {
 
   async session(): Promise<AccountSession | undefined> {
     return this.options.store.get("session");
+  }
+
+  /**
+   * This service acting only for `session`, the sign-in a person acted on: once another one is stored
+   * (signed out and in again meanwhile), its calls throw SignedOutError without touching that one, and
+   * its sign-out ends `session` alone.
+   */
+  forSignIn(session: AccountSession): AccountService {
+    return new AccountService({ ...this.options, signIn: session });
   }
 
   async listPcs(): Promise<DirectoryPc[]> {
@@ -274,6 +312,12 @@ export class AccountService {
         : { country: null, city: null };
       return [{ key: entry.key, label, server_id: entry.server_id, at: entry.at, os: accountOsOf(entry.os), ...place }];
     });
+  }
+
+  /** The account's plan and limits (`GET /v1/account/limits`); null when the service does not report them. */
+  async limits(): Promise<AccountLimits | null> {
+    const body = await this.call("GET", "/v1/account/limits");
+    return parseAccountLimits(body);
   }
 
   /** The account's sign-in methods, one per provider. */
@@ -351,21 +395,27 @@ export class AccountService {
   /**
    * Ends the sign-in on the service, then here. An expired access token is refreshed first, so the
    * service really ends the sign-in's tokens; the session goes here whatever the service answers, and
-   * a revocation the service did not confirm throws, so the caller can say so.
+   * a revocation the service did not confirm throws, so the caller can say so. Only the session it
+   * ended goes: a new sign-in made while the service answers (the phone app's page stays open) stays.
    */
   async signOut(): Promise<void> {
     await this.lock(async () => {
-      const session = await this.session();
-      if (session === undefined) return;
+      const stored = await this.session();
+      if (stored === undefined) return;
+      // signed in again since the sign-in this service is for: that one's tokens are ended, and the new sign-in stays
+      const from = this.options.signIn;
+      const replaced = from !== undefined && !sameSignIn(stored, from);
+      const session = replaced ? from : stored;
+      let live = session;
       try {
-        const live = session.expires_at - REFRESH_EARLY_MS > this.now() ? session : await this.refreshed(session);
+        live = replaced || session.expires_at - REFRESH_EARLY_MS > this.now() ? session : await this.refreshed(session);
         const response = await this.fetch(new URL("/v1/signout", live.service), { method: "POST", headers: { authorization: `Bearer ${live.access_token}` } });
         if (!response.ok) throw await failure(response);
       } catch (error) {
         // a refresh the service refused: the sign-in had already ended there
         if (!(error instanceof SignedOutError)) throw error;
       } finally {
-        await this.options.store.set("session", undefined);
+        if (!replaced) await this.options.store.update("session", (current) => current?.refresh_token === session.refresh_token || current?.refresh_token === live.refresh_token ? undefined : current);
       }
     });
   }
@@ -385,22 +435,28 @@ export class AccountService {
       if (error instanceof AccountServiceError && (error.status === 400 || error.status === 401)) return this.signedOut(from);
       throw error;
     }
+    // the same sign-in, refreshed
+    const carried: AccountSession = from.sign_in_id === undefined ? next : { ...next, sign_in_id: from.sign_in_id };
     let kept = false;
     await this.options.store.update("session", (current) => {
       kept = current?.refresh_token === from.refresh_token;
-      return kept ? next : current;
+      return kept ? carried : current;
     });
     if (!kept) throw new SignedOutError();
-    return next;
+    return carried;
   }
 
   /** A session whose access token is good, refreshing once between tabs; `stale` is a token the service just refused. */
   private async fresh(stale?: string): Promise<AccountSession> {
+    // bound to a sign-in that is no longer the stored one: the stored one is someone else's to use or end
+    const foreign = (session: AccountSession | undefined): boolean => this.options.signIn !== undefined && (session === undefined || !sameSignIn(session, this.options.signIn));
     const session = await this.session();
+    if (foreign(session)) throw new SignedOutError();
     if (session === undefined) return this.signedOut();
     if (stale === undefined && session.expires_at - REFRESH_EARLY_MS > this.now()) return session;
     return this.lock(async () => {
       const current = await this.session();
+      if (foreign(current)) throw new SignedOutError();
       if (current === undefined) return this.signedOut();
       // another tab refreshed while this one waited: its tokens are the ones to use
       if (current.access_token !== (stale ?? session.access_token)) return current;

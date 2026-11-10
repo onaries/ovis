@@ -40,7 +40,7 @@
 .agent-section-count {
   width: var(--side-box);
   margin-left: auto;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -72,7 +72,7 @@
   margin: var(--space-2) 0 0;
   padding-left: var(--side-box);
   color: var(--text-dim);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--tracking-caps);
   line-height: var(--lh-tight);
@@ -104,7 +104,7 @@
   background: transparent;
   color: var(--text-dim);
   font: inherit;
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--tracking-caps);
   line-height: var(--lh-tight);
@@ -130,7 +130,7 @@
   background: transparent;
   color: var(--text-dim);
   font: inherit;
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--tracking-caps);
   line-height: var(--lh-tight);
@@ -215,6 +215,7 @@
 /* The trailing padding keeps the state cell, which the row draws at its right edge after the ⋯, as
    a workspace row does; the fill is the whole row's. */
 .agent-item {
+  --row-fill: var(--bg-panel);
   position: relative;
   display: flex;
   align-items: center;
@@ -244,10 +245,10 @@
 .agent-row:disabled { cursor: default; }
 
 @media (hover: hover) {
-  .agent-item:has(> .agent-row:enabled):hover { background: var(--side-hover); }
+  .agent-item:has(> .agent-row:enabled):hover { --row-fill: var(--side-hover); background: var(--side-hover); }
 }
 
-.agent-item.is-selected { background: var(--side-selected); }
+.agent-item.is-selected { --row-fill: var(--side-selected); background: var(--side-selected); }
 
 /* as a workspace row's in forced colors (Sidebar.css): a Highlight leading bar instead of the erased fill,
    drawn inside the row, since the list scrolls and would clip anything pulled into its edge; beside the focus
@@ -335,7 +336,7 @@
   font-weight: var(--fw-regular);
 }
 
-.agent-item.is-selected .agent-title { color: var(--text-strong); }
+.agent-item.is-selected .agent-title { color: var(--text-strong); font-weight: var(--fw-selected); }
 
 .agent-title-line {
   display: flex;
@@ -378,9 +379,36 @@
 
 .agents-sidebar.is-one-line .agent-title-line { flex: 0 1 auto; }
 
+/* the place gives way down to a couple of letters and its ellipsis, never a stray letter; the title then */
 .agents-sidebar.is-one-line .agent-context {
   flex: 1 1 0;
-  min-width: 0;
+  min-width: 2.5em;
+}
+
+/* as a compact workspace row's: the state at the row's end in a cell its glyph's size, and under a pointer the ⋯
+   over that cell, so the title and the place never move when it shows (Sidebar.css) */
+.agents-sidebar.is-one-line .agent-item { padding-right: var(--space-6); }
+
+.agents-sidebar.is-one-line .agent-row > .agent-row-state { width: var(--space-6); }
+
+/* the badge fills that cell: a state that draws nothing (ready, unknown) keeps its box, label and tooltip */
+.agents-sidebar.is-one-line .agent-row > .agent-row-state > .sidebar-status {
+  flex-basis: 100%;
+  width: 100%;
+}
+
+/* the ⋯ shows just before the state's cell, over the end of the row's words, which fade out under it into the row's own
+   fill (--row-fill, set with each fill above): the state stays in sight and nothing moves */
+@media (hover: hover) and (pointer: fine) and (min-width: 769px) {
+  .agents-sidebar.is-one-line .agent-item > .agent-actions {
+    position: absolute;
+    inset-block: 0;
+    right: var(--space-6);
+    padding-inline-start: var(--space-4);
+    background: linear-gradient(to right, transparent, var(--row-fill) var(--space-4));
+  }
+
+  .agents-sidebar.is-one-line .agent-item > .agent-actions .sidebar-row-action { width: var(--space-6); }
 }
 
 /* a helper an agent started (herdr-core's parent) reads under that agent on one line, a workspace

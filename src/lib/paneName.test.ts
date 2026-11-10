@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { codexThreadTitle, folderName, placeLine, shortPathTitle, tabTitle, taskRowLines, stripPaneChrome } from "./paneName.ts";
+import { codexThreadTitle, folderName, placeLine, shortPathTitle, tabTitle, taskRowLines, stripPaneChrome, unsaidLine } from "./paneName.ts";
 
 it("shows a path title as its last folder, and leaves any other title alone", () => {
   expect(shortPathTitle("/tmp/audit-oDjsU2/lms-backend")).toBe("lms-backend");
@@ -79,4 +79,11 @@ it("drops an omp title's glyph and spinner for a row, and keeps them for the bro
   // a shell's title has no mark to keep; a title that is only the mark leaves nothing
   expect(tabTitle("me@host:~/work/api", null)).toBe("api");
   expect(tabTitle("π ⠋ ", "omp")).toBe("");
+});
+
+it("says each part of a row's second line once, and never the name its first line leads with", () => {
+  // a linked worktree labelled Hotfix, its shell in fix-payment, on branch fix/payment: the Recent row leads with Hotfix
+  expect(unsaidLine("Hotfix", ["Hotfix", "fix/payment", "fix-payment"])).toBe("fix/payment · fix-payment");
+  expect(unsaidLine("api", ["Tab 2", "api"])).toBe("Tab 2");
+  expect(unsaidLine("vim", ["api", null, "api", ""])).toBe("api");
 });

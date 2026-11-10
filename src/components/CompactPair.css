@@ -8,13 +8,23 @@
 .compact-pair > .qr,
 .compact-pair-qr-empty {
   flex: none;
-  width: 132px;
-  height: 132px;
+  width: var(--qr-size);
+  height: var(--qr-size);
   border-radius: var(--radius-sm);
 }
 
+/* no QR code to draw (no address a phone can open, or the code is still on its way): the box
+   keeps its place and says which, so the code and buttons beside it never move */
 .compact-pair-qr-empty {
-  background: var(--bg-hover);
+  display: grid;
+  place-items: center;
+  padding: var(--space-2);
+  border: var(--hairline) dashed var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  text-align: center;
 }
 
 .compact-pair-side {
@@ -27,8 +37,8 @@
 .compact-pair-code {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 1.5rem;
-  font-weight: 600;
+  font-size: var(--fs-pairing);
+  font-weight: var(--fw-semibold);
   letter-spacing: 0.06em;
   overflow-wrap: anywhere;
 }

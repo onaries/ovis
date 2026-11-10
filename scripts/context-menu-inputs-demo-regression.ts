@@ -126,7 +126,8 @@ try {
 
       // control: a text field outside a pane frame, the Rename pane dialog, was never the app's
       await menu.getByRole("menuitem", { name: "Rename pane", exact: true }).click();
-      const rename = page.getByRole("dialog", { name: "Rename pane", exact: true });
+      // the dialog names the pane it renames: "Rename pane · <title>"
+      const rename = page.getByRole("dialog", { name: /^Rename pane( · |$)/ });
       await rename.waitFor();
       seen.renameInput = await rightClick(page, rename.locator("input"));
       await page.keyboard.press("Escape");

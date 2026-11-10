@@ -259,6 +259,30 @@ try {
       }
 
       {
+        // watch-only access (the bridge says so before the socket answers in observe mode): a held message offers no Send now
+        const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-US" });
+        try {
+          await context.addInitScript((queue) => {
+            localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+            localStorage.setItem("ovis:pane-lifetime:local", "demo-local");
+            localStorage.setItem(queue[0], queue[1]);
+          }, [`ovis:queue:${panes.web}`, stored(["held while watching"])] as const);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${url(panes.web)}&demo_security=watch`);
+          await page.locator(".conn-live").waitFor({ state: "attached" });
+          await page.locator(".terminal-stack.is-chat").waitFor();
+          // the watch-only composer is drawn: the held rows, drawn with it, would be there too
+          await page.locator(".composer-text[disabled]").waitFor({ state: "attached" });
+          assert.equal(await page.getByRole("button", { name: "Send now" }).count(), 0, "a watch-only view offers no Send now for a held message");
+          assert.equal(await page.locator(".composer-queue").count(), 0, "nor the held rows, as an acknowledged observe mode shows them");
+          assert.deepEqual(errors, []);
+          console.log("PASS a watch-only view offers no Send now for a held message");
+        } finally { await context.close(); }
+      }
+
+      {
         // each row's hidden label scrolls with the list: it must not grow the pane's own overflow
         const { page, errors, close } = await open({ [panes.omp]: stored(Array.from({ length: 30 }, (_, index) => `held ${index + 1}`)) }, panes.omp);
         try {

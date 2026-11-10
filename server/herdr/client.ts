@@ -409,6 +409,15 @@ export function herdrMayListen(socketPath: string = herdrSocketPath()): Promise<
   });
 }
 
+/** Discovery offers only a socket this account actually connected to, never a permission error. */
+export async function herdrAcceptsConnection(socketPath: string): Promise<boolean> {
+  try {
+    const socket = await Bun.connect({ unix: socketAddress(socketPath), socket: { data() {} } });
+    socket.end();
+    return true;
+  } catch { return false; }
+}
+
 export async function ping(socketPath?: string): Promise<HerdrIdentity> {
   const result = await herdrRpc<{ version: string; protocol: number; capabilities?: Record<string, unknown> }>("ping", {}, socketPath);
   const attach = terminalAttachSupported(result.capabilities);

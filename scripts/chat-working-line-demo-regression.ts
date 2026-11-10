@@ -354,7 +354,7 @@ try {
       await row.waitFor({ state: "attached" });
       await row.evaluate((node: HTMLElement) => node.click());
       await page.locator(`.pane-select[title^="${blank} \u2014"][aria-current="true"]`).first().waitFor({ state: "attached" });
-      await page.getByTitle("Chat transcript (\u2318\u21e7J)", { exact: true }).click();
+      await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
       const greeting = page.locator(".pane-frame.is-current .composer-greeting");
       // the demo's new agent works for a moment first: it is greeted once it rests
       await greeting.waitFor({ timeout: 8_000 });

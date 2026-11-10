@@ -42,7 +42,7 @@ const submits = (page: Page) => page.evaluate(() => (window as unknown as QaWind
 async function openChat(page: Page, url: string): Promise<void> {
   await page.goto(url);
   await page.locator(".conn-live").waitFor({ state: "attached" });
-  await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+  await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
   await page.locator(".pane-frame.is-current .terminal-stack.is-chat").waitFor();
 }
 

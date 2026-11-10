@@ -1,10 +1,12 @@
 /* the Changes tab of the Files dialog: a comparison's changed files, one row each, like the folder browser's */
 .repo-changes {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg-elevated);
+  background: var(--surface-raised);
   overflow: hidden;
 }
 
@@ -123,7 +125,7 @@
   border-bottom: var(--hairline) solid var(--border);
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   white-space: nowrap;
 }
 
@@ -138,7 +140,7 @@
 .repo-changes-branch svg {
   width: 1.1em;
   height: 1.1em;
-  color: var(--accent);
+  color: var(--text-dim);
 }
 
 /* a long root keeps its end, the part that says where you are */
@@ -173,6 +175,8 @@
    the fill stays as wide as the list, as the sidebar's worktree rows do */
 .repo-changes-list {
   --repo-change-indent: var(--space-4);
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: min(60vh, calc(var(--control-h) * 14));
   margin: 0;
   padding: var(--space-1) 0;
@@ -229,7 +233,7 @@
 }
 
 .repo-change-folder .repo-change-glyph {
-  color: var(--accent);
+  color: var(--text-dim);
 }
 
 .repo-change-folder-name {
@@ -249,8 +253,8 @@
   margin-left: auto;
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
-  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-meta);
+  font-variant-numeric: var(--font-numeric);
 }
 
 /* git's letter for the status, tinted as the rows of that kind are in the diff */
@@ -322,8 +326,8 @@
   gap: var(--space-1);
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
-  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-meta);
+  font-variant-numeric: var(--font-numeric);
 }
 
 .repo-change-added { color: var(--syntax-inserted); }
@@ -362,6 +366,12 @@
   font-size: var(--fs-sm);
 }
 
+/* the way on, a line under what the empty list says is missing */
+.repo-changes-hint {
+  display: block;
+  margin-top: var(--space-1);
+}
+
 .repo-changes-error {
   color: var(--status-blocked);
 }
@@ -372,6 +382,10 @@
   .repo-change-skeleton,
   .repo-changes-ref {
     min-height: var(--touch-target);
+  }
+
+  .repo-changes-note {
+    font-size: var(--fs-dense-row);
   }
 
   .repo-changes-bar .icon-button {

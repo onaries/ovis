@@ -11,14 +11,32 @@
 .agents-row-action {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
+}
+
+.agents-check-again {
+  min-width: 7.5rem;
+  justify-content: center;
+}
+
+/* a read under way: aria-disabled, so a press keeps the focus on the button, and it reads as a
+   disabled .btn does (styles.css) */
+.btn.agents-check-again[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+@media (hover: hover) {
+  .btn.agents-check-again[aria-disabled="true"]:hover {
+    background: transparent;
+  }
 }
 
 .agents-head .btn svg,
 .agents-detail-head .btn svg,
 .agents-row-action svg {
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
 }
 
 .agents-card {
@@ -31,14 +49,17 @@
   border-top: var(--hairline) solid var(--border);
 }
 
-/* the row's head: one toggle (mark, name, state), the one action it may have, the chevron */
+/* the row's head: one toggle (mark, name, state, defaults, chevron), and the one action it may have */
 .agents-summary {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   min-height: var(--touch-target);
-  padding: var(--space-2) var(--space-4) var(--space-2) 0;
-  cursor: pointer;
+  padding: 0 var(--space-4) 0 0;
+}
+
+.agents-summary:not(:has(> .agents-row-action, > .usage-sign-in-again)) {
+  padding-right: 0;
 }
 
 .agents-toggle {
@@ -47,13 +68,19 @@
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
-  padding: var(--space-2) 0 var(--space-2) var(--space-4);
+  min-height: var(--touch-target);
+  padding: var(--space-2) var(--space-4);
   border: 0;
+  border-radius: var(--radius-md);
   background: none;
   color: inherit;
   font: inherit;
   text-align: start;
   cursor: pointer;
+}
+
+.agents-summary:has(> .agents-row-action, > .usage-sign-in-again) > .agents-toggle {
+  padding-right: var(--space-2);
 }
 
 .agents-toggle > .agent-mark {
@@ -63,8 +90,9 @@
 
 .agents-summary-text {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-half);
   min-width: 0;
 }
 
@@ -92,9 +120,9 @@
 .agents-state.is-none::before {
   content: "";
   display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin: -2px var(--space-2) 0 0;
+  width: var(--dot-size-sm);
+  height: var(--dot-size-sm);
+  margin: calc(-1 * var(--space-half)) var(--space-2) 0 0;
   border-radius: var(--radius-pill);
   vertical-align: middle;
 }
@@ -125,12 +153,14 @@
 
 .agents-chevron {
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  margin-left: auto;
   color: var(--text-dim);
   transition: transform var(--dur-fast) ease;
 }
 
+.agents-toggle[aria-expanded="true"] .agents-chevron,
 .agents-toggle[aria-expanded="true"] ~ .agents-chevron {
   transform: rotate(180deg);
 }
@@ -140,7 +170,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: 0 var(--space-4) var(--space-4) calc(var(--space-4) + 22px + var(--space-3));
+  padding: 0 var(--space-4) var(--space-4) calc(var(--space-4) + var(--mark-size) + var(--space-3));
 }
 
 .agents-detail-head {
@@ -158,17 +188,27 @@
 }
 
 .agents-details .agents-accounts,
-.agents-detail-card {
-  border: var(--hairline) solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
+.agents-details .agents-detail-card {
+  border: 0;
+  border-top: var(--hairline) solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.agents-details .agents-detail-card > .settings-row,
+.agents-details .agents-detail-card > .settings-item {
+  padding-inline: 0;
+}
+
+.agents-details .agents-accounts > .usage-accounts-row {
+  padding-left: 0;
 }
 
 .agents-detail-note {
   margin: 0;
   color: var(--text-dim);
   font-size: var(--fs-sm);
-  line-height: 1.5;
+  line-height: var(--lh-base);
 }
 
 .agents-note {
@@ -185,6 +225,10 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.agents-more:not([open]) > :not(summary) {
+  display: none;
 }
 
 /* Install another agent: shut until asked, then the setup guide's tiles (AgentTile.css); its line is
@@ -207,13 +251,26 @@
 }
 
 .agents-more-chevron {
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   transition: transform var(--dur-fast) ease;
 }
 
 .agents-more[open] .agents-more-chevron {
   transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agents-chevron,
+  .agents-more-chevron {
+    transition: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .agents-more > summary {
+    min-height: var(--touch-target);
+  }
 }
 
 .settings-agent-error {
@@ -227,8 +284,12 @@
     padding-right: var(--space-3);
   }
 
+  .agents-summary:not(:has(> .agents-row-action, > .usage-sign-in-again)) {
+    padding-right: 0;
+  }
+
   .agents-toggle {
-    padding-left: var(--space-3);
+    padding-inline: var(--space-3);
   }
 
   .agents-details {

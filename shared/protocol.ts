@@ -46,7 +46,7 @@ export interface HerdrUiConfig {
 export type HerdrWorkspace = WorkspaceInfo;
 export type HerdrTab = TabInfo;
 /**
- * `background_tasks`: an OmO pane's tasks, Claude Code subagents/commands or parent-reported Codex subagents still running; absent when none.
+ * `background_tasks`: an OmO pane's tasks, Claude Code or OpenCode subagents and commands, parent-reported Codex subagents, or agy and grok background tasks still running; absent when none.
  * `background_wait`: the pane is at rest while work its turn started still runs, and the turn goes on when it ends (server/background-wait.ts); absent when not.
  * `plan`: how far the pane's agent's task list or checklist has progressed; absent when it keeps none.
  * `context`: how much of its context a Claude Code or Codex pane's last request filled, read from its transcript as the chat's ring reads it; absent before one reports it.
@@ -107,6 +107,10 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
 /** Machine API (same token gate; mutations require X-Herdr-Machine: 1 + same origin)
  * GET /api/health?scope=bridge -> BridgeHealth, never waits for herdr (a driving owner is told herdr_runtime too)
  * GET /api/bridge -> authenticated BridgeIdentity (socket + runtime compatibility)
+ * GET /api/bridge?discover=herdr -> owner/bridge-token only; also found_herdr_sessions on this account.
+ * SetupRequest.own_ovis chooses a registered Ovis by socket identity, reverified over SSH each time;
+ * mutually exclusive with herdr_socket/start_new_herdr. choose_herdr offers found_ovis beside sessions.
+ * Machine/SetupJob.runtime names the verified runtime (herdr or herdr-core); absent until known.
  * GET /api/machines -> MachineRoster { machines: Machine[] }; GET /api/machines/events -> MachineEvent SSE
  * GET /api/machines?verify_source_boot=:id -> MachineRoster with verified_source_boot { machine_id, boot_id }:
  *   the boot id of the server behind that PC, asked for during this request (the local one directly,
@@ -609,6 +613,19 @@ export interface RelayStatus {
     /** false while the pass in use says new client sessions to this PC are not allowed and the relay says it holds; absent otherwise */
     readonly new_sessions?: false;
   };
+}
+
+/**
+ * The account service's GET /v1/account/limits, as Settings → Account reads it: the account's plan
+ * name, PC slot limit, and optional relay data allowance as reported by the account service.
+ */
+export interface AccountLimits {
+  readonly plan: string;
+  readonly pcs_max: number;
+  readonly pcs_used?: number;
+  readonly data_cap_bytes?: number;
+  readonly data_used_bytes?: number | null;
+  readonly until?: number | null;
 }
 
 /** POST /api/devices/pair's answer to a request that accepts JSON: the device's own credential. */

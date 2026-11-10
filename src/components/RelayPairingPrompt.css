@@ -21,3 +21,17 @@
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-md);
 }
+
+.relay-pairing-prompt .relay-pairing-digits {
+  display: inline-block;
+  padding: 0 var(--space-1);
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-code);
+}
+
+.relay-pairing-prompt .relay-error {
+  color: var(--danger-text);
+}

@@ -31,7 +31,7 @@ export async function checkTerminalKeyboardSuggestions(browser: Browser, origin:
       const attributes = await field.evaluate((node) => Object.fromEntries(["autocomplete", "autocorrect", "autocapitalize", "spellcheck"].map((name) => [name, node.getAttribute(name)])));
       assert.deepEqual(attributes, { autocomplete: "off", autocorrect: "off", autocapitalize: "off", spellcheck: "false" }, `${name} asks the keyboard for no suggestions`);
     }
-    await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+    await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
     const composer = page.getByRole("textbox", { name: "Message", exact: true });
     await composer.waitFor();
     assert.notEqual(await composer.getAttribute("autocomplete"), "off", "the chat composer keeps its suggestions");

@@ -4,9 +4,12 @@
  * and which waiting one a tap on that count opens next. The counts read each pane as the sidebar
  * draws it (lib/sidebarActivity.tsx): a finish looked at is ready again, not done.
  */
-import type { AgentStatus, PaneInfo, SessionSnapshot } from "../../shared/protocol.ts";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type MutableRefObject } from "react";
+import type { Machine } from "../../shared/machines.ts";
+import type { AgentStatus, HerdrPane, PaneInfo, SessionSnapshot } from "../../shared/protocol.ts";
 import { rosterPanes } from "./dagPane.ts";
 import { knownStatus } from "./status.ts";
+import { nativeModalOver, useFocusTrap } from "./useFocusTrap.ts";
 
 type Roster = Pick<SessionSnapshot, "tabs" | "panes">;
 type Layouts = SessionSnapshot["layouts"] | undefined;
@@ -47,21 +50,134 @@ export function sessionCounts<T extends PaneInfo>(panes: readonly T[], status: (
   return counts;
 }
 
-/**
- * The waiting pane after the selected one in the roster's order, wrapping around; never the selected
- * one itself, and never one its tab's zoom hides: a pick of it lands on the zoomed pane
- * (lib/useSelection.ts useSelectedLayout), so the button would open the same pane again and again.
- */
-export function nextWaitingPane<T extends PaneInfo>(panes: readonly T[], status: (pane: T) => AgentStatus | undefined, selectedPaneId: string | null, layouts?: Layouts): string | null {
-  const shown = rosterPanes(panes, selectedPaneId);
-  const hiddenByZoom = (pane: T): boolean => {
-    const layout = layouts?.find((candidate) => candidate.tab_id === pane.tab_id);
-    return !!layout?.zoomed && layout.focused_pane_id !== pane.pane_id && panes.some((other) => other.pane_id === layout.focused_pane_id);
-  };
-  const at = shown.findIndex((pane) => pane.pane_id === selectedPaneId);
-  for (let step = 1; step <= shown.length; step += 1) {
-    const pane = shown[(at + step + shown.length) % shown.length]!;
-    if (pane.pane_id !== selectedPaneId && knownStatus(status(pane)) === "blocked" && !hiddenByZoom(pane)) return pane.pane_id;
+/** One connected PC's roster, as the header reads it: its panes, how each is drawn, and its tab layouts. */
+export interface MachineRoster<T extends PaneInfo> {
+  machineId: string;
+  panes: readonly T[];
+  status: (pane: T) => AgentStatus | undefined;
+  layouts?: Layouts;
+}
+
+/** The counts over every connected PC: the "waiting for you" pill triages all of them, as the Agents list does. */
+export function sessionCountsAcross<T extends PaneInfo>(rosters: readonly MachineRoster<T>[]): SessionCounts {
+  const total: SessionCounts = { working: 0, waiting: 0, done: 0 };
+  for (const roster of rosters) {
+    const counts = sessionCounts(roster.panes, roster.status);
+    total.working += counts.working;
+    total.waiting += counts.waiting;
+    total.done += counts.done;
   }
-  return null;
+  return total;
+}
+
+function hiddenByTabZoom<T extends PaneInfo>(panes: readonly T[], layouts: Layouts, pane: T): boolean {
+  const layout = layouts?.find((candidate) => candidate.tab_id === pane.tab_id);
+  return !!layout?.zoomed && layout.focused_pane_id !== pane.pane_id && panes.some((other) => other.pane_id === layout.focused_pane_id);
+}
+
+/**
+ * The next waiting pane over every connected PC: the selected PC's waiting panes after the selected
+ * pane first, then the other PCs in the roster's order, then the selected PC's earlier waiting panes
+ * (wrapping around). Null when no PC has one to open other than the selected pane itself.
+ */
+export function nextWaitingTarget<T extends PaneInfo>(rosters: readonly MachineRoster<T>[], selected: { machineId: string; paneId: string | null }): { machineId: string; paneId: string } | null {
+  if (rosters.length === 0) return null;
+  const pickFrom = (roster: MachineRoster<T>, candidates: readonly T[]): { machineId: string; paneId: string } | null => {
+    const own = roster.machineId === selected.machineId;
+    for (const pane of candidates) {
+      if (own && pane.pane_id === selected.paneId) continue;
+      if (knownStatus(roster.status(pane)) === "blocked" && !hiddenByTabZoom(roster.panes, roster.layouts, pane)) {
+        return { machineId: roster.machineId, paneId: pane.pane_id };
+      }
+    }
+    return null;
+  };
+  const at = rosters.findIndex((roster) => roster.machineId === selected.machineId);
+  const start = Math.max(0, at);
+  const first = rosters[start]!;
+  const firstShown = rosterPanes(first.panes, at >= 0 ? selected.paneId : null);
+  const selectedIndex = at >= 0 && selected.paneId !== null ? firstShown.findIndex((pane) => pane.pane_id === selected.paneId) : -1;
+  const afterSelected = pickFrom(first, firstShown.slice(selectedIndex + 1));
+  if (afterSelected !== null) return afterSelected;
+  for (let step = 1; step < rosters.length; step += 1) {
+    const roster = rosters[(start + step) % rosters.length]!;
+    const hit = pickFrom(roster, rosterPanes(roster.panes));
+    if (hit !== null) return hit;
+  }
+  return selectedIndex > 0 ? pickFrom(first, firstShown.slice(0, selectedIndex)) : null;
+}
+
+/**
+ * Every connected PC's roster as the header counts it, in the sidebar's stable PC order so repeated
+ * next-waiting jumps walk every PC without cycling between two. A PC that is not connected has only a
+ * cached roster, which its sidebar greys out: the header counts none of it. The selected PC counts whether
+ * the sidebar shows it or not (a link or an alert selects a hidden one): it comes after the shown ones.
+ */
+export function useWaitingRosters(shown: readonly Machine[], selected: Machine | undefined, status: (machineId: string, pane: HerdrPane) => AgentStatus | undefined): MachineRoster<HerdrPane>[] {
+  return useMemo(() => {
+    const counted = selected === undefined || shown.some((machine) => machine.id === selected.id) ? shown : [...shown, selected];
+    return counted.flatMap((machine) => machine.state === "connected" && machine.snapshot
+      ? [{ machineId: machine.id, panes: machine.snapshot.panes, status: (pane: HerdrPane) => status(machine.id, pane), layouts: machine.snapshot.layouts }] : []);
+  }, [shown, selected, status]);
+}
+
+/** The header's controls drawn over the open drawer, its top row: the toggle that closes it and New workspace's +. */
+const drawerHeaderStops = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(".app-header .drawer-toggle, .app-header .new-workspace-button")];
+
+/**
+ * A phone's open drawer is a dialog over the pane (App.tsx gives it the role): Tab goes round its own controls
+ * and the header's toggle and + drawn over it (its top row), the pane column is inert under it, and the focus
+ * goes back to the header toggle that opened it when it closes. It opens with the focus on its first control
+ * that takes no typing: the filter's field would raise the keyboard on every open. Only a header control takes
+ * the focus back: a terminal the drawer was swiped open over would raise the keyboard; a focus left in the
+ * hidden drawer (or nowhere) goes to the toggle. Escape puts it away in the capture phase, so a terminal that kept the focus never receives it;
+ * a dialog, sheet or menu over the drawer, an IME composition, a search field with words in it (the sidebar's
+ * filter clears them first) and a field that keeps its own Escape (data-own-escape) go first.
+ */
+export function useDrawerDialog(open: boolean, setOpen: (open: boolean) => void, surfaceRefs: readonly MutableRefObject<HTMLElement | null>[]): { ref: (node: HTMLElement | null) => void } {
+  const opener = useRef<HTMLElement | null>(null);
+  const escaped = useRef(false);
+  const wasOpen = useRef(false);
+  useLayoutEffect(() => {
+    if (open) { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; escaped.current = false; wasOpen.current = true; }
+  }, [open]);
+  // The trap's own return runs inside the commit, which React undoes while the drawer stays in the document (it is
+  // hidden, not unmounted): the focus goes back after the commit instead, to the header control that opened the drawer,
+  // or to the toggle when Escape closed one a tap or a swipe opened, or the focus was left in the hidden drawer or nowhere.
+  const surface = useFocusTrap<HTMLElement>(open, { shouldRestore: () => false, leadingStops: drawerHeaderStops, startOnSurface: true });
+  useEffect(() => {
+    if (open || !wasOpen.current) return;
+    const active = document.activeElement;
+    const lost = active === null || active === document.body || (surface.current?.contains(active) ?? false);
+    const back = opener.current?.closest(".app-header") != null ? opener.current : escaped.current || lost ? document.querySelector<HTMLElement>(".app-header .drawer-toggle") : null;
+    opener.current = null;
+    escaped.current = false;
+    wasOpen.current = false;
+    // a dialog the drawer closed for (New workspace's) has taken the focus: it keeps it
+    const ownedElsewhere = active instanceof Element && active.closest('[aria-modal="true"], [role="dialog"], [role="alertdialog"]') !== null && !(surface.current?.contains(active) ?? false);
+    if (back?.isConnected && !ownedElsewhere && !nativeModalOver(back)) back.focus({ preventScroll: true });
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const onEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return;
+      const drawer = surface.current;
+      if ([...document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"]')].some((node) => node !== drawer)) return;
+      if (event.target instanceof HTMLInputElement && event.target.type === "search" && event.target.value !== "") return;
+      if (event.target instanceof Element && event.target.closest("[data-own-escape]") !== null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      escaped.current = true;
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onEscape, true);
+    return () => window.removeEventListener("keydown", onEscape, true);
+  }, [open, setOpen, surface]);
+  // one ref for the drawer element, shared with whatever else holds it (the sidebar peek's)
+  const ref = useCallback((node: HTMLElement | null) => {
+    surface.current = node;
+    for (const other of surfaceRefs) other.current = node;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the refs are stable objects
+  }, [surface, ...surfaceRefs]);
+  return { ref };
 }

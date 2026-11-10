@@ -110,7 +110,8 @@ try {
         assert.ok(geometry.error.height <= geometry.viewport * 0.25 + 1, `the traceback takes at most a quarter of the screen: ${JSON.stringify(geometry)}`);
         assert.ok(geometry.error.scrolls && geometry.error.overflow === "auto", `the rest of the traceback is reached by scrolling it: ${JSON.stringify(geometry)}`);
         assert.ok(geometry.palette.bottom <= geometry.viewport + 0.5 && geometry.results.bottom <= geometry.palette.bottom + 0.5, `the palette ends on the screen: ${JSON.stringify(geometry)}`);
-        assert.ok(geometry.results.height >= 96, `the list keeps room under the traceback: ${JSON.stringify(geometry)}`);
+        // room for two finger-sized rows (--touch-target each); the footer keeps its path line (CommandPalette.css)
+        assert.ok(geometry.results.height >= 2 * 44, `the list keeps room under the traceback: ${JSON.stringify(geometry)}`);
         assert.ok(geometry.row.hit && geometry.row.bottom <= geometry.viewport + 0.5, `a plugin action is still on screen to tap: ${JSON.stringify(geometry)}`);
         if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "plugin-action-traceback-phone-keyboard.png") });
         console.log(`PASS a ${TRACEBACK.split("\n").length}-line traceback at 390x420 scrolls in ${Math.round(geometry.error.height)}px and leaves the list ${Math.round(geometry.results.height)}px`);

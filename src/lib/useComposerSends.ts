@@ -51,7 +51,7 @@ export interface ComposerSendsDeps {
   stillOpenNote: (open: { pane: string; agent: string; command: string; named: boolean; history: string | undefined }) => string;
   stillOpenNotedRef: MutableRefObject<boolean>;
   stillOpenRef: MutableRefObject<{ pane: string; agent: string; command: string; named: boolean; history: string | undefined } | null>;
-  submitComposerMessage: (text: string, delivery: SubmitDelivery, clearDraft?: string, sendAnyway?: boolean, pendingId?: string, resendGeneration?: number, agentOnly?: boolean) => Promise<SubmitResult> | null;
+  submitComposerMessage: (text: string, delivery: SubmitDelivery, clearDraft?: string, sendAnyway?: boolean, pendingId?: string, resendGeneration?: number, agentOnly?: boolean, holdOnly?: boolean) => Promise<SubmitResult> | null;
   submitRetention: PaneSubmitRetention | null;
   t: Translate;
 }
@@ -89,7 +89,8 @@ export function useComposerSends(deps: ComposerSendsDeps) {
   const sendNowRef = useRef<(id: string) => Promise<void>>(async () => {});
 
   const composerSend = useCallback(
-    (text: string, clearDraft?: string, sendAnyway = false, agentOnly = false, now = false): boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal> => {
+    // `hold`: Alt+Enter, kept in the queued list for its Send now alone, whatever automatic sending or the agent's state says
+    (text: string, clearDraft?: string, sendAnyway = false, agentOnly = false, now = false, hold = false): boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal> => {
       const pane = paneRef.current;
       // A refused send keeps the draft; no second choice goes to the card waiting on its read.
       if (pane !== null && answerPending) return false;
@@ -101,7 +102,8 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       // sends the same text). A menu opened since would take it as a choice, so it is never an answer
       const asDraft = clearDraft !== undefined && text === clearDraft;
       if (pane !== null && asDraft && answering !== null) return submitNote("agent_blocked", "");
-      if (pane !== null && answering !== null) {
+      // a hold is typed into nothing now: it is never an answer, and its Send now checks the menu then
+      if (pane !== null && answering !== null && !hold) {
         // never typed into the agent's menu: only as one of its options, or its own reply row
         const choice = answerFromText(answering, text);
         if (choice === null) return answerRefusal(answering);
@@ -119,7 +121,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       stillOpenNotedRef.current = false;
       const open = stillOpenRef.current;
       if (sendAnyway && notedStillOpen) sendAnyway = false;
-      else if (!sendAnyway && open !== null && open.pane === pane) {
+      else if (!sendAnyway && !hold && open !== null && open.pane === pane) {
         stillOpenNotedRef.current = true;
         return { note: stillOpenNote(open), anyway: true, plain: true };
       }
@@ -130,7 +132,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       // "Waiting for N background agents to finish"); its own box at rest says it can take the message
       const settled = composerDelivery(agent, agentStatus);
       const queued = settled === "queue" && inputAtRest?.() === true ? "immediate" : settled;
-      const delivery: SubmitDelivery = queued === "queue" && (agent === "omo" || !settings.autoSendQueued) ? "hold" : queued;
+      const delivery: SubmitDelivery = hold ? "hold" : queued === "queue" && (agent === "omo" || !settings.autoSendQueued) ? "hold" : queued;
       // Send anyway answered a box seen at once: an agent that started working since would queue it unchecked.
       // Send it too: queued, the draft's text could go again after the draft itself was sent in the terminal
       if ((sendAnyway || asDraft) && delivery !== "immediate") return t("Not sent: the agent started working since. Check the terminal, then send again.");
@@ -141,7 +143,8 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       const socket = socketRef.current, session = sessionRef.current;
       const sentAt = Date.now();
       const sentAfter = pane === null ? null : waitingBaseline(waitingKey(machineId, pane));
-      const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway, undefined, undefined, agentOnly);
+      // a PC that cannot hold refuses a hold rather than queuing it to go on its own (HerdrSocket `holdOnly`)
+      const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway, undefined, undefined, agentOnly, hold);
       return result === null ? false : result.then((answer) => {
         // Neither a dropped connection nor a cleared old draft proves this message was typed.
         // Without a receipt, leave the retryable composer text and report the uncertainty.

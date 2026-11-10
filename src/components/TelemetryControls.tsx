@@ -166,7 +166,10 @@ export function TelemetryControls() {
   return (
     <SettingsGroup title={t("Anonymous usage counts")} className="settings-telemetry" section="telemetry">
       {status.blocked_by_env
-        ? <p className="settings-item settings-hint">{t("Turned off on this PC by OVIS_TELEMETRY=0, DO_NOT_TRACK or a CI environment.")}</p>
+        // the row keeps its name and says its state; why it is off is the detail under it (G-100)
+        ? <SettingsRow label={t("Send anonymous usage counts")} icon={ChartColumn} description={t("Turned off on this PC by OVIS_TELEMETRY=0, DO_NOT_TRACK or a CI environment.")}>
+          <span className="settings-fact" role="status">{t("Off")}</span>
+        </SettingsRow>
         : <SettingsRow label={t("Send anonymous usage counts")} icon={ChartColumn} description={t("Once on install and once per update, with the last browser's app settings, and once a day you open the app, with the kinds of coding agents running in herdr (such as claude or codex), the kinds of screen the app was opened on, how they reached this PC, and how many prompt answers were sent and alerts delivered and tapped. Custom fonts, shortcuts and replies are reported only as customization flags or counts, never their text. Account identifiers, terminal content and files are excluded. The receiver stores the country, not the IP address.")}>
           <Toggle label={t("Send anonymous usage counts")} checked={status.enabled} onChange={toggle} disabled={saving} />
         </SettingsRow>}

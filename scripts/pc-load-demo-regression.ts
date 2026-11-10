@@ -7,13 +7,13 @@ import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { openSettingsPage } from "./settings-page.ts";
 
-// The PC load line (components/MachineStats.tsx) on the unmodified app over the demo's fixture transport, at a
-// phone's and a desktop's width. Only this disposable fixture rewrites the roster into three connected PCs: the
-// Host "Laptop", "Work PC" under load and "Lab", a herdr-core machine; no herdr session is opened. With no choice
-// made the line is on, under Laptop and Work PC and never under Lab (its server runs on the PC that reaches it).
-// Work PC's high figures are red. While the sidebar is out of view (a phone's closed drawer, a desktop's hidden
-// list) no PC is asked, however long it stays so; shown again, it asks at once. Settings -> Devices and PCs -> PC load
-// in the sidebar turns it off on this device, in a key of its own. Screenshots go to UI_EVIDENCE_DIR when set.
+// The PC load line (components/MachineStats.tsx PcLoadStatus) on the unmodified app over the demo's fixture transport,
+// at a phone's and a desktop's width. Only this disposable fixture rewrites the roster into three connected PCs: the
+// Host "Laptop", "Work PC" under load and "Lab", a herdr-core machine; no herdr session is opened. PC load lives in
+// the bottom status bar only (App.tsx StatusBar pcLoad), off until Settings -> Devices and PCs -> PC load in the
+// status bar turns it on, in a key of its own. On: the selected PC's figures in the status bar at a desktop's width,
+// none for the herdr-core machine (never asked), and no CPU, memory or disk text in the sidebar; a phone has no status
+// bar, so none in the drawer either. Off again: none anywhere. Screenshots go to UI_EVIDENCE_DIR when set.
 const app = mkdtempSync(join(tmpdir(), "ovis-pc-load-demo-"));
 const evidence = process.env.UI_EVIDENCE_DIR;
 const patch = `(() => {
@@ -94,6 +94,32 @@ async function showSidebar(page: Page, phone: boolean, shown: boolean): Promise<
   await still(page);
 }
 
+/** No CPU, memory or disk figure in the sidebar or the phone's drawer. */
+async function noSidebarLoad(page: Page, label: string): Promise<void> {
+  const shown = await page.evaluate(() => [...document.querySelectorAll("aside.sidebar *")]
+    .filter((el) => /\b(CPU|Memory|Disk)\b/.test([...el.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join("")) && el.getClientRects().length > 0)
+    .map((el) => el.outerHTML.slice(0, 120)));
+  assert.deepEqual(shown, [], `${label}: no PC load in the sidebar`);
+  assert.equal(await page.locator(".machine-stats").count(), 0, `${label}: no per-PC load line`);
+}
+/** No PC load anywhere: not in the sidebar, not in the status bar, no "CPU <n>%" on the page. */
+async function noLoadAnywhere(page: Page, label: string): Promise<void> {
+  await noSidebarLoad(page, label);
+  assert.equal(await page.locator(".status-bar-load").count(), 0, `${label}: no load in the status bar`);
+  assert.doesNotMatch(await page.evaluate(() => document.body.innerText), /CPU \d+%/, `${label}: no load on the page`);
+}
+/** Settings -> Devices and PCs -> PC load in the status bar, flipped to `on`, then the dialog closed. */
+async function setPcLoad(page: Page, on: boolean): Promise<void> {
+  await page.locator(".sidebar-footer-settings").click();
+  await openSettingsPage(page, "Devices and PCs");
+  const toggle = page.locator(".settings-dialog").getByRole("switch", { name: "PC load in the status bar", exact: true });
+  assert.equal(await toggle.getAttribute("aria-checked"), String(!on));
+  await toggle.click();
+  await page.waitForFunction((want) => document.querySelector('[role="switch"][aria-label="PC load in the status bar"]')?.getAttribute("aria-checked") === want, String(on));
+  await page.keyboard.press("Escape");
+  await page.locator(".settings-dialog").waitFor({ state: "detached" });
+}
+
 try {
   await buildDemoApp(app);
   writeFileSync(join(app, "pc-load.js"), patch);
@@ -116,80 +142,53 @@ try {
       for (const width of [390, 1280]) {
         const { page, errors, phone, close } = await open(browser, width);
         try {
+          const label = `${width}px`;
           await showSidebar(page, phone, true);
-          // no choice made, three connected PCs: on, except for the herdr-core machine
-          const work = group(page, "Work PC").locator(".machine-stats-summary");
-          await work.waitFor();
-          await group(page, "Laptop").locator(".machine-stats-summary").waitFor();
-          assert.equal(await group(page, "Lab").locator(".machine-stats").count(), 0, "a herdr-core machine shows no load");
-          assert.equal((await asks(page)).lab, 0, "and is never asked for it");
-          assert.match(await work.getAttribute("aria-label") ?? "", /CPU 93%, Memory 89%, Disk 93%$/, "the button says the figures aloud");
-          assert.equal(await work.locator(".stats-meter.is-high").count(), 3, "figures from 85% are red");
+          // nothing chosen: off, so no PC is asked and nothing shows its load
+          await page.clock.runFor(10_000);
+          await noLoadAnywhere(page, `${label} by default`);
+          assert.equal(await total(page), 0, `${label}: off by default, no PC is asked`);
 
-          await work.click();
-          await group(page, "Work PC").locator(".stats-disks .stats-disk").nth(1).waitFor();
-          assert.equal(await work.getAttribute("aria-expanded"), "true");
-          await work.click();
-
-          // out of view, nothing is asked however long it stays so; back in view, it asks at once
-          await showSidebar(page, phone, false);
-          const before = await total(page);
-          await page.clock.runFor(60_000);
-          assert.equal(await total(page), before, `no PC is asked while the ${phone ? "drawer is closed" : "workspace list is hidden"}`);
-          await showSidebar(page, phone, true);
-          await page.waitForFunction((n) => { const a = (window as unknown as { __systemAsks: Record<string, number> }).__systemAsks; return a["local"]! + a["work"]! + a["lab"]! > n; }, before);
-
-          // turned off on this device: the line leaves every PC, kept in its own key
-          await page.locator(".sidebar-footer-settings").click();
-          await openSettingsPage(page, "Devices and PCs");
-          const toggle = page.locator(".settings-dialog").getByRole("switch", { name: "PC load in the sidebar", exact: true });
-          assert.equal(await toggle.getAttribute("aria-checked"), "true");
-          await toggle.click();
-          await page.waitForFunction(() => document.querySelector('[role="switch"][aria-label="PC load in the sidebar"]')?.getAttribute("aria-checked") === "false");
-          assert.equal(await page.evaluate(() => localStorage.getItem("ovis:pc-load")), "false");
+          await setPcLoad(page, true);
+          assert.equal(await page.evaluate(() => localStorage.getItem("ovis:pc-load")), "true");
           assert.equal(await page.evaluate(() => "pcLoad" in JSON.parse(localStorage.getItem("ovis:settings") ?? "{}")), false, "not in ovis:settings");
-          await page.keyboard.press("Escape");
-          await page.locator(".settings-dialog").waitFor({ state: "detached" });
-          await showSidebar(page, phone, true);
-          assert.equal(await page.locator(".machine-stats").count(), 0, "off, no PC shows its load");
-          assert.deepEqual(errors, []);
-          console.log(`PASS ${width}px: load under Laptop and Work PC (red from 85%), none under the herdr-core machine, no ask while the sidebar is out of view, off in Settings in its own key`);
-        } finally { await close(); }
-      }
+          if (phone) {
+            // a phone has no status bar: time passes, a PC could have answered, and still nothing shows a load
+            await page.clock.runFor(10_000);
+            await showSidebar(page, phone, true);
+            await noLoadAnywhere(page, `${label} on`);
+            assert.equal(await page.locator(".status-bar").count(), 0, `${label}: no status bar on a phone`);
+            if (evidence) await page.screenshot({ path: join(evidence, "pc-load-390-on-drawer.png") });
+          } else {
+            const load = page.locator(".status-bar .status-bar-load");
+            // the selected PC (the Laptop the demo opens on): its CPU in the status bar
+            await load.waitFor();
+            assert.match(await load.textContent() ?? "", /^CPU \d+%/, `${label}: the status bar names the CPU load`);
+            // Work PC selected: its own figures, the fullest disk
+            await page.locator('.agent-item[data-machine="work"]').first().click();
+            await page.waitForFunction(() => document.querySelector(".status-bar .status-bar-load")?.textContent === "CPU 93% · Memory 89% · Disk 93%");
+            if (evidence) { await still(page); await page.screenshot({ path: join(evidence, "pc-load-1280-on-status-bar.png") }); }
+            await noSidebarLoad(page, `${label} on, the load in the status bar`);
+            // the herdr-core machine selected: no load, and it is never asked
+            await page.locator('.agent-item[data-machine="lab"]').first().click();
+            await page.waitForFunction(() => document.querySelector(".status-bar .machine-context-name")?.textContent === "Lab");
+            await page.clock.runFor(10_000);
+            assert.equal(await load.count(), 0, `${label}: a herdr-core machine shows no load`);
+            assert.equal((await asks(page)).lab, 0, `${label}: and is never asked for it`);
+            await page.locator('.agent-item[data-machine="work"]').first().click();
+            await page.waitForFunction(() => document.querySelector(".status-bar .status-bar-load")?.textContent === "CPU 93% · Memory 89% · Disk 93%");
+          }
 
-      // the narrowest sidebar a desktop can drag to, and each theme at both widths: the three meters keep their
-      // label and percent whole, side by side without touching
-      for (const [width, theme, sidebarWidth] of [[1280, "dark", 240], [390, "dark", null], [390, "light", null], [1280, "dark", null], [1280, "light", null]] as const) {
-        const { page, errors, phone, close } = await open(browser, width, theme, sidebarWidth);
-        try {
+          // turned off again: none anywhere
           await showSidebar(page, phone, true);
-          const work = group(page, "Work PC").locator(".machine-stats-summary");
-          await work.waitFor();
-          const fit = await work.evaluate((button) => {
-            const meters = [...button.querySelectorAll<HTMLElement>(":scope > .stats-meter")];
-            const boxes = meters.map((meter) => meter.getBoundingClientRect());
-            const words = (meter: HTMLElement) => [meter.querySelector(".stats-meter-label")!, meter.querySelector(".stats-meter-value")!].map((part) => part.getBoundingClientRect());
-            // each meter holds its words: nothing reaches past its box, and a label and its percent never cross
-            const whole = meters.every((meter, i) => {
-              const [label, value] = words(meter);
-              const box = boxes[i]!;
-              const crossed = label!.right > value!.left + 0.5 && label!.bottom > value!.top + 0.5;
-              return !crossed && [label!, value!].every((part) => part.left >= box.left - 0.5 && part.right <= box.right + 0.5);
-            });
-            const apart = boxes.every((box, i) => i === 0 || boxes[i - 1]!.right <= box.left);
-            const sizes = meters.map((meter, i) => [boxes[i]!, ...words(meter)].map((r) => [r.left, r.right, r.top, r.bottom].map((n) => Math.round(n * 10) / 10).join(",")).join("/")).join(" ");
-            return { count: meters.length, whole, apart, sizes };
-          });
-          assert.deepEqual({ ...fit, sizes: undefined }, { count: 3, whole: true, apart: true, sizes: undefined }, `${width}px ${theme}${sidebarWidth === null ? "" : ` ${sidebarWidth}px sidebar`}: the meters fit (box:label+percent ${fit.sizes})`);
-          const name = `pc-load-${width}${sidebarWidth === null ? "" : `-sidebar${sidebarWidth}`}-${theme}`;
-          if (evidence) { await still(page); await page.screenshot({ path: join(evidence, `${name}.png`) }); }
-          await work.click();
-          await group(page, "Work PC").locator(".stats-disks .stats-disk").nth(1).waitFor();
-          if (evidence) { await work.scrollIntoViewIfNeeded(); await still(page); await page.screenshot({ path: join(evidence, `${name}-open.png`) }); }
+          await setPcLoad(page, false);
+          assert.equal(await page.evaluate(() => localStorage.getItem("ovis:pc-load")), "false");
+          await showSidebar(page, phone, true);
+          await noLoadAnywhere(page, `${label} off`);
           assert.deepEqual(errors, []);
+          console.log(`PASS ${label}: off by default; on, ${phone ? "no load in the drawer and no status bar" : "the selected PC's load in the status bar (none for the herdr-core machine) and none in the sidebar"}; off again, none anywhere, kept in its own key`);
         } finally { await close(); }
       }
-      console.log("PASS the meters fit a 240px sidebar and a phone, light and dark");
     } finally { await browser.close(); }
   } finally { await server.stop(true); }
 } finally {

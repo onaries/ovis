@@ -34,7 +34,7 @@ export const expect = async ({ page, width, scheme, box, menu, scenario, clear, 
   const peek = page.locator(".terminal-stack.is-chat.is-peek");
   const hint = page.locator(".terminal-banner-command");
   const back = async (): Promise<void> => {
-    await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+    await page.getByTitle(/^Chat transcript \(.+\)$/).click();
     await chat.waitFor();
   };
 

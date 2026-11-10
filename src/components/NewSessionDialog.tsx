@@ -32,6 +32,7 @@ import { focusInOtherModal, nativeModalOver, useFocusTrap } from "../lib/useFocu
 import { catchTypeAhead } from "../lib/typeAhead.ts";
 import { useSheetSwipe } from "../lib/sheets.ts";
 import { passingFolder, recentDirectories } from "../lib/recent-directories.ts";
+import { serverIdOfPath } from "../lib/shellMode.ts";
 
 /** The dialog as New tab: the workspace the tab joins, whose folder it uses, and the number herdr will give it. */
 export interface NewTabTarget {
@@ -64,7 +65,7 @@ export interface NewSessionDialogProps {
   onOpenPane?: (paneId: string) => void;
   /** this device only watches: a setup types into the PC's terminal, so Add another agent is not offered */
   watching?: boolean;
-  /** Settings -> Named agent groups: which grouped keys may stay as the new pane's group is saved (lib/namedAgentGroups.ts liveGroupKeys) */
+  /** Settings -> Custom agent groups: which grouped keys may stay as the new pane's group is saved (lib/namedAgentGroups.ts liveGroupKeys) */
   groupKept?: (groupOf: Readonly<Record<string, string>>) => ReadonlySet<string>;
 }
 
@@ -73,6 +74,56 @@ export interface DialogFields {
   name: string | null;
   /** "" is a shell; null keeps the last agent picked */
   agent: string | null;
+}
+
+interface NewSessionDraft {
+  cwd: string;
+  cwdEdited: boolean;
+  name: string;
+  prompt: string;
+}
+
+const newSessionDrafts = new Map<string, NewSessionDraft>();
+
+// the hosted shell keeps every server under one origin (/s/<server_id>/), so one tab's sessionStorage spans them:
+// a draft is the server's it was typed for, never offered to the next one opened in that tab
+function newSessionDraftKey(machineId: string, tab: NewTabTarget | null): string {
+  const server = serverIdOfPath(window.location?.pathname ?? "") ?? "";
+  return `${server}\n${machineId}\n${tab ? `tab:${tab.workspaceId}` : "workspace"}`;
+}
+
+function readNewSessionDraft(key: string): NewSessionDraft | null {
+  const mem = newSessionDrafts.get(key);
+  if (mem !== undefined) return mem;
+  try {
+    const raw = window.sessionStorage?.getItem(`ovis:new-session-draft:${key}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<NewSessionDraft>;
+    if (typeof parsed.cwd === "string" && typeof parsed.name === "string" && typeof parsed.prompt === "string") {
+      return { cwd: parsed.cwd, cwdEdited: parsed.cwdEdited === true, name: parsed.name, prompt: parsed.prompt };
+    }
+  } catch { /* private mode */ }
+  return null;
+}
+
+function writeNewSessionDraft(key: string, draft: NewSessionDraft | null): void {
+  if (draft === null || (!draft.cwdEdited && draft.name === "" && draft.prompt === "")) {
+    newSessionDrafts.delete(key);
+    try { window.sessionStorage?.removeItem(`ovis:new-session-draft:${key}`); } catch { /* private mode */ }
+    return;
+  }
+  newSessionDrafts.set(key, draft);
+  try { window.sessionStorage?.setItem(`ovis:new-session-draft:${key}`, JSON.stringify(draft)); } catch { /* private mode */ }
+}
+
+/** Reset in-memory NewSessionDialog drafts (for tests). */
+export function clearNewSessionDrafts(): void {
+  newSessionDrafts.clear();
+  try {
+    for (const key of Object.keys(window.sessionStorage ?? {})) {
+      if (key.startsWith("ovis:new-session-draft:")) window.sessionStorage.removeItem(key);
+    }
+  } catch { /* private mode */ }
 }
 
 /** how long the fields rest before the address follows them: Safari refuses a burst of history writes */
@@ -115,7 +166,9 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   const effortEdited = useRef(false);
   const [ultracode, setUltracode] = useState(false);
   const [prompt, setPrompt] = useState("");
-  // Settings -> Named agent groups: the group the new pane goes in ("": none), the folder's last one until one is picked
+  const cwdEdited = useRef(false);
+  const draftKey = newSessionDraftKey(machineId, tab);
+  // Settings -> Custom agent groups: the group the new pane goes in ("": none), the folder's last one until one is picked
   const groupNames = settings.agentNamedGroups ? settings.agentGroupNames : [];
   const [group, setGroup] = useState("");
   const [groupPicked, setGroupPicked] = useState(false);
@@ -124,6 +177,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   const [skills, setSkills] = useAgentSkills(open, agentKind, skillFolder, fetchAgentCommands, t);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<UserError | null>(null);
+  const [cwdError, setCwdError] = useState<string | null>(null);
   const [createdPaneId, setCreatedPaneId] = useState<string | null>(null);
   /** the made pane runs the agent asked for: Open shows it in the agent's lens */
   const [createdStarted, setCreatedStarted] = useState(false);
@@ -166,17 +220,22 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   const prefillRef = useRef(prefill);
   prefillRef.current = prefill;
 
-  // The previous launch may have left disabled fields: reset them before the opening paint.
+  // The previous launch may have left disabled fields: reset them before the opening paint, while keeping
+  // an unsent draft from an earlier dismiss on the same target.
   useLayoutEffect(() => {
     if (!open) return;
     const filled = prefillRef.current;
-    setCwd(filled?.cwd ?? defaultCwdRef.current ?? "");
-    setName(filled?.name ?? "");
+    const saved = readNewSessionDraft(draftKey);
+    const nextCwd = filled?.cwd ?? (saved?.cwdEdited ? saved.cwd : null) ?? defaultCwdRef.current ?? "";
+    cwdEdited.current = Boolean(filled?.cwd || saved?.cwdEdited);
+    setCwd(nextCwd);
+    setName(filled?.name ?? saved?.name ?? "");
     setUltracode(false);
-    setPrompt("");
+    setPrompt(saved?.prompt ?? "");
     setGroupPicked(false);
     setSkills(null);
     setError(null);
+    setCwdError(null);
     setPending(false);
     setCreatedPaneId(null);
     setCreatedStarted(false);
@@ -229,6 +288,11 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   useEffect(() => {
     if (open && !groupPicked) setGroup(folderAgentGroup(machineId, groupFolder, groupNames) ?? "");
   }, [open, groupPicked, machineId, groupFolder, groupKey]);
+
+  useEffect(() => {
+    if (!open) return;
+    writeNewSessionDraft(draftKey, { cwd, cwdEdited: cwdEdited.current, name, prompt });
+  }, [open, draftKey, cwd, name, prompt]);
 
   useEffect(() => {
     if (!open || !onDraft) return;
@@ -362,6 +426,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
     if (launch === null) return;
     setPending(true);
     setError(null);
+    setCwdError(null);
     // a tab keeps the workspace's folder, which the dialog shows and does not ask for. The first message of an
     // agent whose command line does not take it rides on this request: the bridge queues it for the agent's first
     // ready turn and types it through this page's connection, so this page never types it itself
@@ -389,6 +454,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
       if (agentKind && !result.agent_started && result.error?.message) {
         ahead?.drop();
         setPending(false);
+        writeNewSessionDraft(draftKey, null);
         // the workspace exists: say so plainly, keep the PC's own words beneath, and Open it rather than make another
         setError({ message: t("The workspace opened, but {agent} did not start. Check that it is installed on the PC, then open it again.", { agent: agentLabel }), detail: result.error.message });
         setCreatedPaneId(result.pane_id);
@@ -401,6 +467,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
       if (outcome.kind === "not_queued") {
         // the agent runs without its first message: the text waits in the new tab's message box, and the dialog says so
         composerDrafts.set(`ovis:composer-draft:${paneStorageId(machineId, result.pane_id)}`, request.first_message!);
+        writeNewSessionDraft(draftKey, null);
         setPending(false);
         setError({
           message: outcome.error
@@ -418,6 +485,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
       const messageWaits = outcome.kind === "queued";
       // the dialog closes on this: left pending, its next opening would start a frame with the
       // fields disabled and Escape ignored, until the open effect's reset has rendered
+      writeNewSessionDraft(draftKey, null);
       setPending(false);
       ahead?.handTo(machineId, result.pane_id);
       made.current = true;
@@ -425,8 +493,12 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
     } catch (reason: unknown) {
       ahead?.drop();
       setPending(false);
-      if (reason instanceof ApiError && reason.code === "invalid_cwd") setError({ message: t("Directory not found"), detail: null });
-      else setError(userErrorMessage(reason));
+      // a new tab shows its folder without a field to mark: the dialog's own alert says it is gone
+      if (reason instanceof ApiError && reason.code === "invalid_cwd" && tab) setError({ message: t("Directory not found"), detail: null });
+      else if (reason instanceof ApiError && reason.code === "invalid_cwd") {
+        setCwdError(t("Directory not found"));
+        cwdField.current?.focus();
+      } else setError(userErrorMessage(reason));
     }
   };
 
@@ -434,16 +506,35 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
     if (!pending && event.target === event.currentTarget) onClose();
   };
 
+  const cancelDialog = (): void => {
+    writeNewSessionDraft(draftKey, null);
+    onClose();
+  };
+
+  const updateCwd = (nextCwd: string): void => {
+    cwdEdited.current = true;
+    setCwd(nextCwd);
+    setCwdError(null);
+  };
+
   const promptHint = launch?.prompt?.via === "positional" || (prompt.trim() === "" && can.positionalPrompt)
     ? t("Sent to {agent} as it starts.", { agent: agentLabel })
     : t("Queued for {agent}'s first turn: sent once it is ready, shown as a pending message until then.", { agent: agentLabel });
+
+  const pcTitle = machineName ?? machineId;
+  const dialogTitle = adding && !watching
+    ? t("Install an agent · {name}", { name: pcTitle })
+    : tab
+      ? `${t("New tab")} · ${tab.workspaceLabel}`
+      : `${t("New workspace")} · ${pcTitle}`;
+  const tabFolder = tab ? (tab.cwd ?? tab.workspaceLabel) : "";
 
   return (
     <div className="modal-scrim new-session-scrim" onMouseDown={closeFromScrim}>
       <form ref={surface} className="modal new-session-modal" role="dialog" aria-modal="true" aria-labelledby="new-session-title" tabIndex={-1} onSubmit={(event) => { event.preventDefault(); void startWorkspace(cwd); }}>
         <header className="modal-header">
-          <h2 className="modal-title" id="new-session-title">{tab ? `${t("New tab")} · ${tab.workspaceLabel}` : `${t("New workspace")} · ${machineName ?? machineId}`}</h2>
-          <button type="button" className="icon-button" aria-label={t("Close dialog")} disabled={pending} onClick={onClose}>
+          <h2 className="modal-title" id="new-session-title" title={dialogTitle}>{dialogTitle}</h2>
+          <button type="button" className="icon-button" aria-label={t("Close dialog")} title={t("Close dialog")} disabled={pending} onClick={onClose}>
             <X aria-hidden="true" />
           </button>
         </header>
@@ -457,17 +548,28 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
           {tab ? (
             <div className="field">
               <span className="field-label">{t("Directory")}</span>
-              <div className="new-session-folder">
+              <div className="new-session-folder" title={tabFolder}>
                 <FolderOpen aria-hidden="true" />
-                <span>{tab.cwd ?? tab.workspaceLabel}</span>
+                <span title={tabFolder}><span dir="ltr">{tabFolder}</span></span>
               </div>
-              <span className="field-hint">{t("Uses the workspace's folder")}</span>
             </div>
           ) : (
             <div className="field">
               <label className="field-label" htmlFor="new-session-cwd">{t("Directory")}</label>
               <div className="new-session-cwd">
-                <input ref={cwdField} id="new-session-cwd" className="input" value={cwd} placeholder="~/projects/app" disabled={fieldsDisabled} autoComplete="off" onChange={(event) => setCwd(event.target.value)} onBlur={showPathEnd} />
+                <input
+                  ref={cwdField}
+                  id="new-session-cwd"
+                  className="input"
+                  value={cwd}
+                  placeholder="~/projects/app"
+                  disabled={fieldsDisabled}
+                  autoComplete="off"
+                  aria-invalid={cwdError !== null || undefined}
+                  aria-describedby="new-session-cwd-hint"
+                  onChange={(event) => updateCwd(event.target.value)}
+                  onBlur={showPathEnd}
+                />
                 <button type="button" className="btn" aria-expanded={browsing} disabled={fieldsDisabled} onClick={() => setBrowsing((open) => !open)}>
                   <FolderOpen aria-hidden="true" />
                   {t("Browse")}
@@ -476,17 +578,19 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
               {/* Browse updates Directory as you open folders, so Start uses what the path bar shows
                   even when Use this folder was never pressed (issue #1162); a folder under home
                   keeps the `~/…` form typed or picked, rather than turning absolute on opening Browse. */}
-              {browsing && <DirectoryBrowser start={cwd} onPick={(picked) => { setCwd(picked); setBrowsing(false); }} onFolder={(path, home) => setCwd(homeRelative(path, home))} />}
-              <span className="field-hint">{t("absolute path or ~/…")}</span>
+              {browsing && <DirectoryBrowser start={cwd} onPick={(picked) => { updateCwd(picked); setBrowsing(false); }} onFolder={(path, home) => updateCwd(homeRelative(path, home))} />}
+              <span id="new-session-cwd-hint" className={`field-hint${cwdError !== null ? " new-session-error" : ""}`} role={cwdError !== null ? "alert" : undefined}>
+                {cwdError ?? t("absolute path or ~/…")}
+              </span>
             </div>
           )}
           {!tab && shownFolders.length > 0 && <div className="field new-session-recents">
             <span className="field-label" id="new-session-recents">{t("Recent folders")}</span>
             <RecentFolderChips folders={shownFolders} disabled={fieldsDisabled} labelledBy="new-session-recents" basename={directoryBasename}
-              onPick={(path) => { setCwd(path); setBrowsing(false); }} />
+              onPick={(path) => { updateCwd(path); setBrowsing(false); }} />
           </div>}
           <label className="field">
-            <span className="field-label">{t("Name")}</span>
+            <span className="field-label">{t(tab ? "Tab name (optional)" : "Optional workspace label")}</span>
             <input
               className="input"
               value={name}
@@ -496,7 +600,6 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
               placeholder={tab ? String(tab.number) : directoryBasename(cwd)}
               onChange={(event) => setName(event.target.value)}
             />
-            <span className="field-hint">{t(tab ? "Tab name (optional)" : "Optional workspace label")}</span>
           </label>
           {groupNames.length > 0 && <div className="field">
             <label className="field-label" htmlFor="new-session-group">{t("Group")}</label>
@@ -583,12 +686,12 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
             </div>}
             {skills !== null && skills.rows.length === 0 && skills.note === null && <span className="field-hint">{t("No skills for {agent} in this folder.", { agent: agentLabel })}</span>}
           </div>}
-          {pending && <p className="new-session-note" role="status">{pendingLabel}</p>}
+          <p className="new-session-note" role="status" aria-live="polite">{pending ? pendingLabel : null}</p>
           {error && <p className="field-hint new-session-error" role="alert">{error.message}{error.detail !== null && <><br /><code>{error.detail}</code></>}</p>}
         </div>
         <footer className="modal-footer">
-          <button type="button" className="btn btn-ghost" disabled={pending} onClick={onClose}>{t("Cancel")}</button>
-          <button type="submit" className="btn btn-primary" disabled={pending || refreshing || fault !== null}>{t(pending ? "Starting…" : createdPaneId !== null ? "Open" : "Start")}</button>
+          <button type="button" className="btn btn-ghost" disabled={pending} onClick={cancelDialog}>{t("Cancel")}</button>
+          <button type="submit" className="btn btn-primary new-session-submit" disabled={pending || refreshing || fault !== null}>{t(pending ? "Starting…" : createdPaneId !== null ? "Open" : "Start")}</button>
         </footer></>}
       </form>
     </div>

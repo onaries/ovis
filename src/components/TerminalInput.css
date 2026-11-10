@@ -133,6 +133,11 @@
   border-color: var(--accent);
 }
 
+.terminal-input-text:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+}
+
 /* the two actions, the last grid column from the label's row down: Insert first, Send last at
    the edge, as the composer's. Each is its words over its round target, one button */
 .terminal-input-actions {

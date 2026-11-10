@@ -47,6 +47,8 @@ export interface DevicesPanelProps {
    * revoking every device): drawn there, kept here with the list it acts on. Without one, under the list.
    */
   more?: HTMLElement | null;
+  /** the end of this PC's own row, where Check now sits beside the PC that asks every device again; without one, above the list */
+  checkSlot?: HTMLElement | null;
 }
 
 export const VIA: Record<NonNullable<HealthAuth["via"]>, string> = {
@@ -71,7 +73,7 @@ export function offersAccountRemove(devices: readonly PairedDevice[], row: Paire
 }
 
 /** Settings → Devices and PCs → My devices: the paired phones and browsers; Connect a device above it pairs one more. */
-export function DevicesPanel({ onDevicePaired, auth, onPaired, onRevokedAll, kindOf, currentAction = null, more = null }: DevicesPanelProps) {
+export function DevicesPanel({ onDevicePaired, auth, onPaired, onRevokedAll, kindOf, currentAction = null, more = null, checkSlot = null }: DevicesPanelProps) {
   const t = useT();
   const [devices, setDevices] = useState<PairedDevice[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -291,17 +293,17 @@ export function DevicesPanel({ onDevicePaired, auth, onPaired, onRevokedAll, kin
       )}
     </div>
   );
+  // Check now asks the devices paired through the relay again: at the end of this PC's own row, else above the list
+  const check = devices !== null && devices.some((d) => d.via_relay) && !watching && !guest
+    ? <button type="button" className="btn" onClick={() => void checkNow()} disabled={checking}>{checking ? t("Checking…") : t("Check now")}</button>
+    : null;
   return (
     <div className="devices-panel">
       {devices === null ? <p className="settings-hint" role="status">{t("Loading…")}</p> : devices.length === 0 ? (
         <p className="settings-hint">{t("No devices paired yet.")}</p>
       ) : (
         <>
-        {devices.some((d) => d.via_relay) && !watching && !guest && (
-          <div className="devices-check">
-            <button type="button" className="btn" onClick={() => void checkNow()} disabled={checking}>{checking ? t("Checking…") : t("Check now")}</button>
-          </div>
-        )}
+        {check !== null && (checkSlot !== null ? createPortal(check, checkSlot) : <div className="devices-check">{check}</div>)}
         <ul className="devices-list">
           {[...devices].sort((a, b) => Number(b.current) - Number(a.current)).map((d) => (
             <li key={d.id} className={!d.connection && d.via_relay && !watching && !guest && !seenLately(d.last_seen_at) ? "devices-row is-away" : "devices-row"}>

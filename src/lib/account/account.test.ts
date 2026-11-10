@@ -154,6 +154,24 @@ describe("a sign-in shared by tabs", () => {
     expect(await store.get("session")).toBeUndefined();
   });
 
+  it("keeps a new sign-in that lands while an earlier sign-out is still out", async () => {
+    const service = serviceWithSignIn();
+    const { store } = await signIn(service);
+    const asked = Promise.withResolvers<void>();
+    const answer = Promise.withResolvers<void>();
+    const slow = async (input: Request | string | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (new URL(request.url).pathname === "/v1/signout") { asked.resolve(); await answer.promise; }
+      return service.fetch(request);
+    };
+    const leaving = new AccountService({ store, fetch: slow }).signOut();
+    await asked.promise;
+    const { session } = await signIn(service, store);
+    answer.resolve();
+    await leaving;
+    expect(await store.get("session")).toEqual(session);
+  });
+
   it("keeps the service's own words out of its errors, which could echo a token", async () => {
     const store = memoryAccountStore();
     await store.set("session", { service: SERVICE, account: "acct_1", provider: "github", access_token: "secret-token", refresh_token: "r", expires_at: Date.now() + 3600_000 });

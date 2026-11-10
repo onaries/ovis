@@ -4,7 +4,7 @@
  * so a key lives in only one of them; its header lists the settings files and the register.
  */
 export const SETTINGS_LAYOUT_JA: Record<string, string> = {
-  "Search settings": "設定を検索",
+  "Search settings": "すべての設定を検索",
   "No settings match.": "一致する設定はありません。",
   "Search results": "検索結果",
   "Open {page}": "{page} を開く",
@@ -38,4 +38,27 @@ export const SETTINGS_LAYOUT_JA: Record<string, string> = {
 
   // the one-line conditions Settings' bare pages show under a row's name (design pass G-095 to G-098)
   "By state applies to this device; the other orders to every browser.": "状態別はこのデバイスだけに、ほかの並び順はすべてのブラウザーに適用されます。",
+  "Auto: the chat on a touch screen, the terminal elsewhere.": "自動: タッチ画面ではチャット、それ以外ではターミナルで開きます。",
+  "Beside the pane needs a wide window; on this screen a file opens in a popup.": "ペインの横に開くには広いウィンドウが必要です。この画面ではファイルはポップアップで開きます。",
+  "Auto: on a desktop's chat only, where dictation can work.": "自動: 音声入力が使えるデスクトップのチャットでのみ表示します。",
+  "Separate: leaving Ovis keeps the pane attached; herdr's selection stays independent.": "別々: Ovis から離れてもペインの接続を保ち、herdr の選択は別々に扱います。",
+  "Use alongside: leaving Ovis releases an unused pane to herdr after a short delay; herdr's selection stays independent.": "併用: Ovis から離れると、使っていないペインを少し後に herdr へ返し、herdr の選択は別々に扱います。",
+  "Follow its focus: leaving Ovis releases an unused pane after a short delay; this view follows herdr's selection.": "フォーカスに追従: Ovis から離れると、使っていないペインを少し後に herdr へ返し、この画面は herdr の選択に追従します。",
+  "Any turn finished takes in the long ones.": "毎ターンの完了をオンにすると、長いターンも含めて通知します。",
+  "Groups you name in the Agents list, in every browser.": "エージェント一覧を自分で名前を付けたグループに分けます。すべてのブラウザーに適用されます。",
+  "Each lock is turned on from the pinned agent's own menu.": "ロックは固定したエージェントのメニューから個別にオンにします。",
+  "A drag in a Codex pane selects through its whole history; Shift+drag still copies in Ovis.": "Codex ペインでのドラッグは履歴全体から選択します。Shift+ドラッグは引き続き Ovis でコピーします。",
+  "Opens the side conversations an OMP session saved with /btw.": "OMP セッションが /btw で保存したサイド会話を入力欄から開きます。",
+  "A subagent counts as running until the session that started it is told it ended.": "サブエージェントが待機しても、起動元のセッションに終了が伝わるまで実行中とみなします。",
+  // the one line under each page's title (G-173)
+  "Theme, fonts and the sidebar on this device.": "このデバイスのテーマ、フォント、サイドバー。",
+  "How conversations look and what the message box offers.": "会話の見え方と入力欄の機能。",
+  "How terminal panes look and take input.": "ターミナルペインの見た目と入力。",
+  "When this device alerts you, and where else alerts go.": "このデバイスがいつ通知するか、通知をほかにどこへ送るか。",
+  "Coding agents on this PC, their accounts and plan limits.": "この PC のコーディングエージェント、アカウント、プランの使用量。",
+  "Keyboard shortcuts, and herdr's prefix keys.": "ショートカットと herdr のプレフィックスキー。",
+  "Phones, browsers and PCs that reach this Ovis.": "この Ovis に接続するスマホ、ブラウザー、PC。",
+  "Features still being shaped; they may change.": "調整中の機能です。変わることがあります。",
+  // the range under a typed font size it refused (G-179)
+  "Enter {min}–{max}px": "{min}–{max}px の範囲で入力してください。",
 };

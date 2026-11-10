@@ -243,7 +243,13 @@ export function DirectoryBrowser({ start, onPick, onOpenFile, onFolder }: Direct
             </li>
           ))}
           {listing !== null && onPick !== undefined && normalizedQuery !== "" && directories?.length === 0 && <li className="dir-browser-note" role="status">{t("No matching folders")}</li>}
-          {listing !== null && normalizedQuery === "" && listing.directories.length === 0 && (listing.files ?? []).length === 0 && <li className="dir-browser-note">{t(onOpenFile ? "Nothing here" : "No folders here")}</li>}
+          {listing !== null && normalizedQuery === "" && listing.directories.length === 0 && (listing.files ?? []).length === 0 && (
+            <li className="dir-browser-note">
+              {t(onOpenFile ? "Nothing here" : "No folders here")}
+              {/* a file browser says the way on: hidden entries, or another folder */}
+              {onOpenFile && <span className="dir-browser-hint">{t(hidden ? "Go to the parent or home folder." : "Turn on Show hidden or go to the parent folder.")}</span>}
+            </li>
+          )}
           {listing?.truncated && <li className="dir-browser-note">{t("Showing the first {n} folders; type the rest of the path to go further.", { n: listing.directories.length })}</li>}
           {listing?.truncated && onPick !== undefined && <li className="dir-browser-note">{t("Search is limited to the {n} loaded folders.", { n: listing.directories.length })}</li>}
         </ul>

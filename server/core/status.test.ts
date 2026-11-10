@@ -7,6 +7,8 @@ import * as gjc from "../gjc-status.ts";
 import * as omo from "../omo.ts";
 import * as records from "../omo-records.ts";
 import * as service from "../opencode-service.ts";
+import * as agyStore from "../agy-store.ts";
+import * as processStart from "../process-start.ts";
 import { closeOpenCodeNative, openCodeNativeState, openCodePaneService, trackVerifiedOpenCodePanes } from "../opencode-native.ts";
 import type { StatusCollectorDeps } from "../collector.ts";
 import { noteSubmitted } from "../prompt.ts";
@@ -315,6 +317,34 @@ describe("the status hub's OpenCode subagents", () => {
   });
 });
 
+describe("the status hub's agy tasks", () => {
+  it("holds an agy turn that ended on its background task, and alerts its finish once the task's turn ends", async () => {
+    const path = join(root, "agy-transcript.jsonl");
+    const step = (type: string, status: string, offset: number, content: string) => line({ step_index: offset, source: type === "USER_INPUT" ? "USER_EXPLICIT" : "MODEL", type, status, created_at: new Date(at + offset).toISOString(), content });
+    writeFileSync(path, step("USER_INPUT", "DONE", 0, "deploy it") + step("GENERIC", "RUNNING", 10, "Tool is running as a background task with task id: s1/task-2\nTask Description: gh run watch 1"));
+    const h = hub();
+    const stubs = [spyOn(agyStore, "resolveAgyStore").mockResolvedValue({ root, session: "s1", path, pid: 1, started: "x" }), spyOn(processStart, "processStartUpperBoundAsync").mockResolvedValue(null)];
+    try {
+      const agy = { pane_id: "w1:p1", workspace_id: "w1", tab_id: "w1:t1", agent_status: "idle", agent: "agy" };
+      h.herdrSays(agy);
+      handlers.onBaseline([agy]);
+      await h.snapshot();
+      await h.status.taskAgents.refresh([agy as HerdrPane]);
+      handlers.onStatus("w1:p1", "working", "agy");
+      handlers.onStatus("w1:p1", "idle", "agy");
+      expect(h.last()).toEqual({ status: "done", tasks: 1, bg: true });
+      expect(h.alerts.at(-1)).toBe("working");
+      // its notice ends the task and starts the next turn
+      appendFileSync(path, step("SYSTEM_MESSAGE", "DONE", 20, "[Message] sender=s1/task-2 content=Task id \"s1/task-2\" finished"));
+      h.status.taskAgents.poll();
+      handlers.onStatus("w1:p1", "working", "agy");
+      handlers.onStatus("w1:p1", "idle", "agy");
+      expect(h.last()).toEqual({ status: "done", tasks: 0, bg: false });
+      expect(h.alerts.at(-1)).toBe("done");
+    } finally { for (const stub of stubs) stub.mockRestore(); }
+  });
+});
+
 describe("Claude rest evidence regressions (#2072)", () => {
   it("keeps a new terminal turn working before the next transcript entry", async () => {
     // Given a completed turn whose child still streams.
@@ -375,6 +405,20 @@ describe("Claude rest evidence regressions (#2072)", () => {
     // Then a skipped prompt cannot leave the previous rest in force.
     expect(h.last().status).toBe("working");
     expect(h.pending.current(h.pane.pane_id)).toBe("working");
+  });
+
+  it("keeps working when a /loop wakeup fires before its turn writes anything else", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    expect(h.last().status).toBe("done");
+    // When the wakeup fires with herdr still at working from the spinner, before the resumed turn's prompt.
+    appendFileSync(h.path, line({ type: "system", subtype: "scheduled_task_fire", taskKind: "loop", taskId: "591b6f5a", timestamp: new Date(at + 4000).toISOString() }));
+    h.poll();
+    h.pending.enqueue("owner", h.pane.pane_id, 1, "queued", null, { agent: "claude", terminalId: "test", session: h.pane.agent_session.value });
+    // Then the turn before's rest no longer stands: the pane is working and its queue holds.
+    expect(h.last().status).toBe("working");
+    expect(h.pending.current(h.pane.pane_id)).toBe("working");
+    expect(h.pending.next(h.pane.pane_id)).toBeNull();
   });
 
   it("retains raw working evidence across collector snapshot replay", async () => {

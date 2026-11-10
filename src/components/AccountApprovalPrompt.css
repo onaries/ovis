@@ -4,7 +4,7 @@
  */
 
 .account-approval {
-  width: min(100%, calc(var(--sidebar-w) + 2 * var(--space-6)));
+  width: min(100%, var(--relay-signin-w));
   padding: var(--space-6);
   text-align: center;
 }
@@ -21,14 +21,14 @@
 }
 
 .account-approval-mark svg {
-  width: calc(var(--icon-size) * 1.5);
-  height: calc(var(--icon-size) * 1.5);
+  width: var(--space-6);
+  height: var(--space-6);
 }
 
 .account-approval-title {
   margin: 0;
   font-size: var(--fs-lg);
-  font-weight: var(--fw-bold);
+  font-weight: var(--fw-semibold);
   letter-spacing: var(--tracking-tight);
   color: var(--text-strong);
   overflow-wrap: anywhere;
@@ -94,15 +94,17 @@
   border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-xl);
-  font-weight: var(--fw-bold);
+  font-weight: var(--fw-semibold);
   font-variant-numeric: tabular-nums;
-  letter-spacing: var(--tracking-caps);
+  letter-spacing: var(--tracking-code);
   color: var(--text-strong);
   cursor: pointer;
 }
 
-.account-approval-choice:hover {
-  border-color: var(--border-strong);
+@media (hover: hover) {
+  .account-approval-choice:hover {
+    border-color: var(--border-strong);
+  }
 }
 
 .account-approval-choice[aria-checked="true"] {
@@ -113,7 +115,7 @@
 .account-approval-error {
   margin: var(--space-3) 0 0;
   font-size: var(--fs-sm);
-  color: var(--status-blocked);
+  color: var(--danger-text);
 }
 
 .account-approval-actions {

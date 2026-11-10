@@ -32,9 +32,10 @@
   padding-inline: var(--space-2);
   color: var(--text-dim);
   background: var(--term-bg);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
 }
 .pane-frame.is-current .pane-frame-head { color: var(--accent); }
+.pane-frame.is-current .pane-frame-title { font-weight: var(--fw-selected); }
 /* a pane's title dragged over another pane's title of its tab: dropped there, the two trade places */
 .pane-frame-head.is-swap-target { color: var(--accent); background: var(--accent-tint); box-shadow: inset 0 0 0 calc(var(--hairline) * 2) var(--accent); }
 /* over another pane's body of its tab: the half of that pane the dragged one would take, from the nearest edge */
@@ -92,14 +93,42 @@
   border: 0;
   padding: 0;
 }
-.pane-divider.is-vertical { width: 8px; transform: translateX(-4px); cursor: col-resize; }
-.pane-divider.is-horizontal { height: 8px; transform: translateY(-4px); cursor: row-resize; }
-.pane-divider:focus-visible { outline: var(--ring); background: var(--accent-tint); }
+.pane-divider.is-vertical { width: var(--pointer-target); transform: translateX(calc(-1 * var(--pointer-target) / 2)); cursor: col-resize; }
+.pane-divider.is-horizontal { height: var(--pointer-target); transform: translateY(calc(-1 * var(--pointer-target) / 2)); cursor: row-resize; }
+.pane-divider::before {
+  content: "";
+  position: absolute;
+  background: transparent;
+}
+.pane-divider.is-vertical::before { top: 0; bottom: 0; left: calc(50% - var(--split-hit-w) / 2); width: var(--split-hit-w); }
+.pane-divider.is-horizontal::before { left: 0; right: 0; top: calc(50% - var(--split-hit-w) / 2); height: var(--split-hit-w); }
+.pane-divider:focus-visible { outline: var(--ring); outline-offset: var(--ring-inset-offset); }
+.pane-divider:focus-visible::before { background: var(--accent-tint); }
 .pane-canvas-error { position: absolute; z-index: var(--z-modal); top: var(--space-2); right: var(--space-2); max-width: min(30rem, 90%); padding: var(--space-2); background: var(--bg-elevated); color: var(--status-blocked); border: var(--hairline) solid var(--border); }
 .pane-rename-form { display: flex; flex-direction: column; gap: var(--space-3); }
+/* the shared dialog field, its caption above the input; the body's padding already spaces it */
+.pane-rename-form .field { margin-bottom: 0; }
 @media (pointer: coarse) {
   .pane-frame-head { height: var(--touch-target); }
   .pane-frame-menu { min-width: var(--touch-target); height: var(--touch-target); }
+  .pane-rename-form .input { height: var(--touch-target); min-height: var(--touch-target); }
 }
 
 .pane-canvas.is-pending { pointer-events: none; }
+
+/* the pane's menu names the pane it is for above its items (G-022); a phone's sheet draws it as its title */
+.pane-frame-menu-target {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-sheet-head .pane-frame-menu-target {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+}

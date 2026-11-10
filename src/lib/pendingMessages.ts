@@ -124,7 +124,7 @@ export class PendingMessageStore {
       const kept = this.recovery.get(`${owner}\0${message.id}`);
       if (kept === undefined) continue;
       this.recovery.delete(`${owner}\0${message.id}`);
-      this.lifetimes.discard(kept);
+      this.lifetimes.discard(kept, 0);
     }
   }
   accept(owner: string, message: PendingMessage, scope: string | null): void {
@@ -230,7 +230,7 @@ export class PendingMessageStore {
       for (const [key, record] of [...this.recovery]) {
         if (!key.startsWith(`${owner}\0`)) continue;
         this.recovery.delete(key);
-        if (durable.has(key.slice(owner.length + 1))) this.lifetimes.discard(record);
+        if (durable.has(key.slice(owner.length + 1))) this.lifetimes.discard(record, 0);
       }
       if (kept.length > 0) this.rows.set(owner, kept); else this.rows.delete(owner);
       this.saved.delete(owner);
@@ -278,7 +278,7 @@ export class PendingMessageStore {
       const kept = this.recovery.get(`${from}\0${message.id}`);
       if (kept === undefined) continue;
       this.recovery.delete(`${from}\0${message.id}`);
-      if (carriedIds.has(message.id)) this.recovery.set(`${to}\0${message.id}`, kept); else this.lifetimes.discard(kept);
+      if (carriedIds.has(message.id)) this.recovery.set(`${to}\0${message.id}`, kept); else this.lifetimes.discard(kept, 0);
     }
     while (away.size > 1024) away.delete(away.values().next().value!);
     this.movedAway.set(from, away);
@@ -369,7 +369,7 @@ export class PendingMessageStore {
     const kept = this.recovery.get(`${owner}\0${id}`);
     if (kept === undefined) return;
     this.recovery.delete(`${owner}\0${id}`);
-    this.lifetimes.discard(kept);
+    this.lifetimes.discard(kept, 0);
   }
 }
 

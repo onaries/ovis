@@ -1,0 +1,627 @@
+.relay-dash-map > #relay-dash-map-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.relay-map {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.relay-map-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+
+.relay-map-title-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.relay-map-heading {
+  font-size: max(var(--relay-fs-body-min), var(--fs-xs));
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.relay-map-security {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-ui);
+  font-size: max(var(--relay-fs-body-min), var(--fs-xs));
+  color: var(--text-dim);
+}
+
+.relay-map-security svg {
+  flex: none;
+  width: var(--relay-control-icon-size);
+  height: var(--relay-control-icon-size);
+  color: var(--status-done);
+}
+
+.relay-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: max(var(--relay-fs-body-min), var(--fs-xs));
+  color: var(--text-dim);
+}
+
+.relay-map-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.relay-map-wire-swatch {
+  display: inline-block;
+  flex: none;
+  width: var(--space-4);
+  height: calc(2 * var(--hairline));
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.relay-map-diagram {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.relay-map-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.relay-map-edge {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.relay-map-edge[data-wire="live"] {
+  stroke: var(--accent);
+  stroke-width: 1.75;
+  stroke-dasharray: none;
+}
+
+.relay-map-edge[data-wire="off"] {
+  stroke: var(--text-dim);
+  stroke-dasharray: 2 4;
+}
+
+.relay-map-edge[data-wire="checking"] {
+  stroke: var(--status-working);
+  stroke-dasharray: 5 4;
+}
+
+.relay-map-flow {
+  fill: none;
+  stroke: var(--status-working);
+  stroke-width: 2;
+  stroke-dasharray: 3 11;
+  vector-effect: non-scaling-stroke;
+  animation: relay-map-flow var(--dur-spin) steps(24) infinite reverse;
+}
+
+@keyframes relay-map-flow {
+  to { stroke-dashoffset: -28; }
+}
+
+.relay-map-svg[data-paused] .relay-map-flow {
+  animation-play-state: paused;
+}
+
+.relay-map-nodes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.relay-map-me-card,
+.relay-map-hub-btn,
+.relay-map-pc-btn {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-panel);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: max(var(--relay-fs-body-min), var(--fs-sm));
+  line-height: var(--lh-tight);
+  text-align: start;
+  transform: translate(calc(-1 * var(--space-4)), -50%);
+}
+
+.relay-map-hub-btn,
+.relay-map-pc-btn {
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.relay-map-me-card {
+  border-color: var(--accent);
+}
+
+.relay-map-me-mark,
+.relay-map-hub-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: calc(var(--avatar-size) - var(--space-2));
+  height: calc(var(--avatar-size) - var(--space-2));
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.relay-map-hub-mark {
+  background: var(--accent);
+  color: var(--bg-panel);
+}
+
+.relay-map-me-mark svg,
+.relay-map-hub-mark svg {
+  width: var(--relay-control-icon-size);
+  height: var(--relay-control-icon-size);
+}
+
+.relay-map-me-label,
+.relay-map-name {
+  font-size: max(var(--relay-fs-body-min), var(--fs-sm));
+  font-weight: var(--fw-medium);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.relay-map-hub-body,
+.relay-map-pc-body {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space-1) / 2);
+  min-width: 0;
+}
+
+.relay-map-hub-meta,
+.relay-map-word {
+  font-size: max(var(--relay-fs-body-min), var(--fs-xs));
+  font-weight: var(--fw-regular);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.relay-map-rtt {
+  font-variant-numeric: tabular-nums;
+}
+
+.relay-map-pc-btn[data-selected] {
+  background: var(--bg-elevated);
+  border-color: var(--text-dim);
+}
+
+.relay-map-routes {
+  position: relative;
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.relay-map[data-diagram="true"] .relay-map-routes {
+  position: relative;
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.relay-map[data-diagram="true"] .relay-map-routes:not(:focus-within) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.relay-map-origin,
+.relay-map-route,
+.relay-map-fan,
+.relay-map-hop {
+  min-width: 0;
+}
+
+.relay-map-origin {
+  position: relative;
+}
+
+.relay-map-origin::after {
+  content: "";
+  position: absolute;
+  top: calc(var(--avatar-size) / 2);
+  bottom: calc(-1 * var(--space-2));
+  left: calc(var(--avatar-size) / 2 - var(--hairline));
+  border-left: calc(2 * var(--hairline)) solid var(--accent);
+  pointer-events: none;
+}
+
+.relay-map-route {
+  position: relative;
+  display: grid;
+}
+
+.relay-map-fan {
+  position: relative;
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0 calc(var(--avatar-size) + var(--space-2));
+  padding: 0;
+  list-style: none;
+}
+
+.relay-map-hop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--avatar-size);
+  font-size: max(var(--relay-fs-body-min), var(--fs-md));
+}
+
+.relay-map-hop-btn {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-h);
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: var(--hairline) solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: max(var(--relay-fs-body-min), var(--fs-sm));
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.relay-map-hop-btn[data-selected] {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+
+.relay-map-hop-mark {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  flex: none;
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  place-items: center;
+}
+
+.relay-map-hop-hub-mark {
+  background: var(--accent);
+  color: var(--bg-panel);
+}
+
+.relay-map-hop-mark svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+.relay-map-hop-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relay-map-hop-hub-btn {
+  padding-inline-start: 0;
+}
+
+.relay-map-hop-hub-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+/* the host keeps its own width: a relay's name is short, and a pill that may clip measures as cut inside the collapsed route list */
+.relay-map-host {
+  flex: none;
+  width: max-content;
+  font-family: var(--font-mono);
+  font-size: max(var(--relay-fs-min), var(--fs-xs));
+  color: var(--text);
+}
+
+.relay-map-hop-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: max(var(--relay-fs-body-min), var(--fs-xs));
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.relay-map-hop-note {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  font-size: max(var(--relay-fs-body-min), var(--fs-xs));
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.relay-map-tooltip {
+  position: absolute;
+  bottom: calc(100% + var(--space-1));
+  left: 0;
+  z-index: var(--z-popover);
+  display: none;
+  flex-direction: column;
+  gap: calc(var(--space-1) / 2);
+  max-width: calc(var(--sidebar-w) - var(--space-6));
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-size: max(var(--relay-fs-body-min), var(--fs-xs));
+  line-height: var(--lh-base);
+  pointer-events: none;
+}
+
+.relay-map-tooltip strong {
+  font-weight: var(--fw-medium);
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.relay-map-tooltip span {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.relay-map-pc-btn:focus-visible,
+.relay-map-hub-btn:focus-visible,
+.relay-map-hop-btn:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+}
+
+.relay-map-pc-btn:focus-visible .relay-map-tooltip,
+.relay-map-hop-btn:focus-visible .relay-map-tooltip {
+  display: flex;
+}
+
+@media (hover: hover) {
+  .relay-map-hub-btn:hover,
+  .relay-map-pc-btn:hover,
+  .relay-map-hop-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--text-dim);
+  }
+
+  .relay-map-pc-btn:hover .relay-map-tooltip,
+  .relay-map-hop-btn:hover .relay-map-tooltip {
+    display: flex;
+  }
+}
+
+.relay-map-link {
+  position: absolute;
+  top: calc(-1 * var(--space-2));
+  bottom: 0;
+  left: 0;
+  width: var(--avatar-size);
+  pointer-events: none;
+}
+
+.relay-map-route:last-child > .relay-map-link {
+  bottom: calc(100% - var(--avatar-size) / 2);
+}
+
+.relay-map-link::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--avatar-size) / 2 - var(--hairline));
+  border-left: calc(2 * var(--hairline)) dashed var(--text-dim);
+}
+
+.relay-map-link[data-wire="live"]::before {
+  border-left-style: solid;
+  border-left-color: var(--accent);
+}
+
+.relay-map-link[data-wire="off"]::before {
+  border-left-style: dotted;
+  border-left-color: var(--text-dim);
+}
+
+.relay-map-link[data-wire="checking"]::before {
+  border-left-style: dashed;
+  border-left-color: var(--status-working);
+}
+
+.relay-map-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.relay-map-empty-icon {
+  width: calc(2 * var(--space-6));
+  height: calc(2 * var(--space-6));
+  color: var(--text-dim);
+}
+
+.relay-map-empty-copy {
+  max-width: 65ch;
+  margin: 0;
+  font-size: max(var(--relay-fs-body-min), var(--fs-md));
+}
+
+@media (pointer: coarse) {
+  .relay-map-hub-btn,
+  .relay-map-pc-btn,
+  .relay-map-hop-btn {
+    min-height: var(--touch-target);
+  }
+}
+
+@media (max-width: 1099px) {
+  .relay-map-diagram {
+    display: none;
+  }
+
+  .relay-map[data-diagram="true"] .relay-map-routes,
+  .relay-map[data-diagram="true"] .relay-map-routes:not(:focus-within) {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 768px) {
+  .relay-map-diagram {
+    display: none;
+  }
+
+  .relay-map-hop-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* a custom relay's host wider than the phone wraps inside the route instead of running off the dashboard */
+  .relay-map-host {
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    min-height: var(--chip-h);
+    border-radius: var(--radius-md);
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (forced-colors: active) {
+  .relay-map-me-card,
+  .relay-map-hub-btn,
+  .relay-map-pc-btn,
+  .relay-map-hop-btn {
+    border-color: CanvasText;
+  }
+
+  .relay-map-pc-btn[data-selected],
+  .relay-map-hop-btn[data-selected] {
+    outline: calc(2 * var(--hairline)) solid Highlight;
+  }
+
+  .relay-map-hub-mark,
+  .relay-map-hop-hub-mark {
+    forced-color-adjust: none;
+    background: Canvas;
+    color: CanvasText;
+    border: var(--hairline) solid Highlight;
+  }
+
+  .relay-map-edge,
+  .relay-map-flow {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+  }
+
+  .relay-map-edge[data-wire="live"],
+  .relay-map-flow {
+    stroke: Highlight;
+  }
+
+  .relay-map-wire-swatch {
+    forced-color-adjust: none;
+    background: Highlight;
+    border: var(--hairline) solid CanvasText;
+  }
+
+  .relay-map-link::before,
+  .relay-map-origin::after {
+    border-left-color: CanvasText;
+  }
+
+  .relay-map-link[data-wire="live"]::before {
+    border-left-color: Highlight;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .relay-map-flow {
+    display: none;
+    animation: none;
+  }
+
+  .relay-map-hub-btn,
+  .relay-map-pc-btn,
+  .relay-map-hop-btn {
+    transition: none;
+  }
+}

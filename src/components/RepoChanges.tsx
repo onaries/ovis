@@ -388,7 +388,12 @@ function RepositoryChanges({ paneId, directory, onOpenDiff, scope, setScope }: R
             </span>)}
           </li>}
           {listing !== null && answered !== null && rows(tree, listing.files, answered)}
-          {listing !== null && listing.files.length === 0 && <li className="repo-changes-note">{nothingChangedWord(t, listing.scope)}</li>}
+          {listing !== null && listing.files.length === 0 && (
+            <li className="repo-changes-note">
+              {nothingChangedWord(t, listing.scope)}
+              <span className="repo-changes-hint">{t("Choose another comparison or refresh.")}</span>
+            </li>
+          )}
           {listing?.truncated && <li className="repo-changes-note" role="status">
             {listing.total === null
               ? t("The list was cut short; only the first {count} files are shown.", { count: listing.files.length.toLocaleString(locale) })

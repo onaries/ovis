@@ -20,7 +20,7 @@ export const RUNTIME_MOVE_ZH: Record<string, string> = {
   "New shell in the same folder": "在同一文件夹新开 Shell",
   "End it yourself": "请手动退出",
   "Answering": "回答中",
-  "Waiting for an answer": "等待回答",
+  "Waiting for an answer": "需要你回答",
   "A command is running": "命令运行中",
   "{command} running": "{command} 运行中",
   "Scrollback and programs running in shells do not come along. herdr itself stays as it is.": "历史输出（回滚缓冲）和 Shell 中运行的程序不会迁移。herdr 本身保持不变。",

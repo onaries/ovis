@@ -92,23 +92,26 @@ export function AgentTile({ agent, has, picked = false, locked = false, machineI
     install();
   };
   const tab = step.kind === "installing" ? step.tab : null;
+  // a missing agent with no Install says why the row has none: the PC cannot tell whether it is there,
+  // or the vendor publishes no command Ovis may run, so it is installed by hand
+  const missingNote = state === "missing" && agent.state.installed === null ? t("Cannot check") : state === "missing" && agent.install === null ? t("Manual install") : null;
   return (
     <li ref={tile} onFocus={() => { focused.current = true; }} onBlur={(event) => { if (event.relatedTarget !== null) focused.current = false; }}>
       {state === "installed" ? (onPick === undefined ? (
         <div className="setup-tile" data-agent={agent.id}>
           <AgentMark agent={agent.id} size={20} />
-          <span className="setup-found-name"><strong>{agent.name}</strong>{agent.state.version !== null && <span>{agent.state.version}</span>}</span>
+          <span className="setup-found-name" title={agent.name}><strong>{agent.name}</strong>{agent.state.version !== null && <span>{agent.state.version}</span>}</span>
         </div>
       ) : (
         <button type="button" className="setup-tile" data-agent={agent.id} aria-pressed={picked} disabled={locked} onClick={() => onPick(agent.id)}>
           <AgentMark agent={agent.id} size={20} />
-          <span className="setup-found-name"><strong>{agent.name}</strong>{agent.state.version !== null && <span>{agent.state.version}</span>}</span>
+          <span className="setup-found-name" title={agent.name}><strong>{agent.name}</strong>{agent.state.version !== null && <span>{agent.state.version}</span>}</span>
           {picked && <Check aria-hidden="true" />}
         </button>
       )) : (
         <div className="setup-tile" data-agent={agent.id} data-missing="" data-state={state} aria-busy={state === "installing" || undefined}>
           <AgentMark agent={agent.id} size={20} />
-          <span className="setup-found-name"><strong>{agent.name}</strong></span>
+          <span className="setup-found-name" title={missingNote === null ? agent.name : agent.no_install ?? agent.name}><strong>{agent.name}</strong>{missingNote !== null && <span>{missingNote}</span>}</span>
           {(state !== "missing" || (agent.state.installed !== null && agent.install !== null)) && (
             // one button through every state, so the focus stays on it: Install, the turning ring (its tab
             // once there is one), Try again

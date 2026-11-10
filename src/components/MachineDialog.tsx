@@ -10,6 +10,7 @@ import { machineErrorText } from "../lib/userError.ts";
 import { BridgeUpdateProgress, OwnOvisAddress, ownOvisAction } from "./MachineSidebar.tsx";
 import "./Machines.css";
 import { useT } from "../lib/i18n.ts";
+import { FoundHerdrChoices, type HerdrChoice } from "./FoundHerdrChoices.tsx";
 
 export function MachineDialog({ machine, preset, updateRemote = false, onClose, onConnected }: { machine?: Machine; /** a new PC's address and name, picked under Add a connection → SSH */ preset?: AddPcPreset; updateRemote?: boolean; onClose(): void; onConnected(id: string): void }) {
   const t = useT();
@@ -20,10 +21,16 @@ export function MachineDialog({ machine, preset, updateRemote = false, onClose, 
   const [port, setPort] = useState(String(machine?.target?.port ?? ""));
   const [key, setKey] = useState(machine?.target?.identity_file ?? "");
   const [session, setSession] = useState(machine?.target?.session ?? "");
+  const [herdrSocket, setHerdrSocket] = useState(machine?.target?.herdr_socket ?? "");
+  const [ownOvis, setOwnOvis] = useState(machine?.target?.own_ovis ?? "");
+  const [startNewHerdr, setStartNewHerdr] = useState(machine?.target?.start_new_herdr === true);
   const [job, setJob] = useState<SetupJob | null>(null);
   const mounted = useRef(true);
   const jobRef = useRef(job); jobRef.current = job;
-  const [secret, setSecret] = useState("");
+  // the identity the form shows now: an answer sent for another one never offers its choices here
+  const identityRef = useRef(""); identityRef.current = [destination.trim(), port, session].join("\0");
+  // the password lives in its field alone (src/AGENTS.md): read once on submit, then cleared, never in state
+  const secretField = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const finished = !!job && ["failed", "cancelled", "connected"].includes(job.phase);
@@ -47,21 +54,38 @@ export function MachineDialog({ machine, preset, updateRemote = false, onClose, 
     let cancelled = false;
     let timer = 0;
     const poll = async () => {
-      try { const next = await fetchMachineSetup(job.id); if (!cancelled) { setJob(next); setError(null); } }
+      try {
+        const next = await fetchMachineSetup(job.id);
+        const sentFor = [next.target.destination.trim(), String(next.target.port ?? ""), next.target.session ?? ""].join("\0");
+        if (!cancelled) { setJob(next.action_required === "choose_herdr" && sentFor !== identityRef.current ? { ...next, action_required: null, found_herdr_sessions: undefined } : next); setError(null); }
+      }
       catch (e) { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); }
       if (!cancelled) timer = window.setTimeout(poll, 750);
     };
     timer = window.setTimeout(poll, 750);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [job?.id, finished]);
-  useEffect(() => setSecret(""), [job?.challenge?.id]);
+  const clearSecret = () => { if (secretField.current) secretField.current.value = ""; };
+  useEffect(clearSecret, [job?.challenge?.id]);
+  const editIdentity = (field: "destination" | "port" | "session", value: string) => {
+    setHerdrSocket(""); setStartNewHerdr(false); setOwnOvis("");
+    // A result from the old address must not offer its choices for the edited address.
+    setJob((current) => current?.action_required === "choose_herdr" ? { ...current, action_required: null, found_herdr_sessions: undefined } : current);
+    if (field === "destination") setDestination(value);
+    else if (field === "port") setPort(value);
+    else setSession(value);
+  };
 
-  const begin = async () => {
+  const begin = async (choice?: HerdrChoice) => {
     if (pending) return;
     setError(null); setPending(true);
+    if (choice && machine?.herdr_profile_id) choice = { ...choice, session: machine.target?.session };
     // a PC saved in herdr keeps its catalog name, which the server does not read from here
-    try { const next = await startMachineSetup({ destination: destination.trim(), ...(name.trim() && !machine?.herdr_profile_id ? { name: name.trim() } : {}), ...(port ? { port: Number(port) } : {}), ...(key.trim() ? { identity_file: key.trim() } : {}), ...(session.trim() ? { session: session.trim() } : {}), ...(machine ? { machine_id: machine.id } : {}), ...(needsBridgeUpdate || updateRemote ? { update_remote: true } : {}) });
-      if (mounted.current) setJob(next);
+    if (choice) { if ("session" in choice) setSession(choice.session ?? ""); setHerdrSocket(choice.herdr_socket ?? ""); setStartNewHerdr(choice.start_new_herdr === true); setOwnOvis(choice.own_ovis ?? ""); }
+    const sentFor = [destination.trim(), port, choice && "session" in choice ? choice.session ?? "" : session].join("\0");
+    try { const next = await startMachineSetup({ destination: destination.trim(), ...(name.trim() && !machine?.herdr_profile_id ? { name: name.trim() } : {}), ...(port ? { port: Number(port) } : {}), ...(key.trim() ? { identity_file: key.trim() } : {}), ...(session.trim() ? { session: session.trim() } : {}), ...(herdrSocket ? { herdr_socket: herdrSocket } : {}), ...(startNewHerdr ? { start_new_herdr: true } : {}), ...(ownOvis ? { own_ovis: ownOvis } : {}), ...choice, ...(machine ? { machine_id: machine.id } : {}), ...(needsBridgeUpdate || updateRemote ? { update_remote: true } : {}) });
+      // the address, port or session edited while it was in flight: that PC's sessions are never offered for this one
+      if (mounted.current) setJob(next.action_required === "choose_herdr" && sentFor !== identityRef.current ? { ...next, action_required: null, found_herdr_sessions: undefined } : next);
       else if (!["connected", "failed", "cancelled"].includes(next.phase) && (next.windows_startup || !["installing", "starting"].includes(next.phase))) await answerMachineSetup(next.id, { action: "cancel" });
     }
     catch (e) { if (mounted.current) setError(e instanceof Error ? e.message : String(e)); }
@@ -69,13 +93,13 @@ export function MachineDialog({ machine, preset, updateRemote = false, onClose, 
   };
   const inheritedStarted = useRef(false);
   useEffect(() => {
-    if ((!machine?.herdr_profile_id && machine?.action_required !== "windows_login" && machine?.action_required !== "windows_start_failed") || inheritedStarted.current) return;
+    if ((!machine?.herdr_profile_id && machine?.action_required !== "choose_herdr" && machine?.action_required !== "windows_login" && machine?.action_required !== "windows_start_failed") || inheritedStarted.current) return;
     inheritedStarted.current = true;
     void begin();
   }, []);
   const act = async (action: SetupAction) => {
     if (!job || pending) return;
-    setPending(true); setError(null); setSecret("");
+    setPending(true); setError(null); clearSecret();
     try { setJob(await answerMachineSetup(job.id, action)); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setPending(false); }
@@ -85,17 +109,18 @@ export function MachineDialog({ machine, preset, updateRemote = false, onClose, 
     <div className="modal-body">
       {(!job || finished && job.phase !== "connected") && <form id="machine-connect-form" onSubmit={(e) => { e.preventDefault(); void begin(); }}>
         {machine?.herdr_profile_id ? <p className="field-hint">{machine.name} — {destination} / {session}</p> : <>
-        <label className="field"><span className="field-label">{t("SSH alias or user@address")}</span><input ref={destinationField} autoFocus className="input" required autoComplete="off" value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="devbox or user@192.168.1.20" /></label>
+        <label className="field"><span className="field-label">{t("SSH alias or user@address")}</span><input ref={destinationField} autoFocus className="input" required autoComplete="off" value={destination} onChange={(e) => editIdentity("destination", e.target.value)} placeholder="devbox or user@192.168.1.20" /></label>
         <label className="field"><span className="field-label">{t("PC name")}</span><input className="input" maxLength={100} value={name} placeholder={destination || t("Filled from the SSH address")} onChange={(e) => setName(e.target.value)} /></label>
         <details><summary>{t("Advanced settings")}</summary><div className="machine-advanced">
-          <label className="field"><span className="field-label">{t("SSH port")}</span><input className="input" type="number" min="1" max="65535" placeholder={t("From SSH config (default 22)")} value={port} onChange={(e) => setPort(e.target.value)} /></label>
+          <label className="field"><span className="field-label">{t("SSH port")}</span><input className="input" type="number" min="1" max="65535" placeholder={t("From SSH config (default 22)")} value={port} onChange={(e) => editIdentity("port", e.target.value)} /></label>
           <label className="field"><span className="field-label">{t("Private key path on this web server")}</span><input className="input" value={key} placeholder="~/.ssh/id_ed25519" onChange={(e) => setKey(e.target.value)} /></label>
-          <label className="field"><span className="field-label">{t("herdr session name")}</span><input className="input" value={session} placeholder={t("Default session")} onChange={(e) => setSession(e.target.value)} /></label>
+          <label className="field"><span className="field-label">{t("herdr session name")}</span><input className="input" value={session} placeholder={t("Default session")} onChange={(e) => editIdentity("session", e.target.value)} /></label>
         </div></details>
         <p className="field-hint">{t("Uses the web server account’s SSH config and ssh-agent. Agent CLI tools and logins use the environment on the target PC.")}</p>
         </>}
       </form>}
       {job && job.challenge?.kind !== "host_key" && <div className="machine-progress" role="status">{waitingForLogin ? <strong>{t(startupFailed ? "Windows desktop startup failed" : "Waiting for Windows sign-in")}</strong> : running && job.progress ? <BridgeUpdateProgress update={{ job_id: job.id, step: job.step, progress: job.progress }} /> : <strong>{job.step === "Starting without Windows sign-in…" ? t("Starting without Windows sign-in…") : job.step}</strong>}{waitingForLogin && job.step !== "Waiting for Windows sign-in on this PC." && <p>{machineErrorText(job.step, t)}</p>}{job.error && <p>{machineErrorText(job.error, t)}</p>}{job.ssh_output && <SshOutput text={job.ssh_output} />}</div>}
+      {job?.action_required === "choose_herdr" && (job.found_herdr_sessions || job.found_ovis) && <FoundHerdrChoices sessions={job.found_herdr_sessions ?? []} ownOvis={job.found_ovis} coreRefusal={ownOvis && !job.found_ovis?.length && job.error ? machineErrorText(job.error, t) : undefined} busy={pending} onChoose={(choice) => void begin(choice)} />}
       {waitingForLogin && <p className="field-hint">{t("Starting without Windows sign-in can break Codex sandbox commands, and desktop-control tools may be unavailable. This choice applies to one start.")}</p>}
       {waitingForLogin && <p className="field-hint">{t("Signing out of Windows ends herdr and its panes; lock the PC instead.")}</p>}
       {needsBridgeUpdate && <p className="field-hint">{t(ownUpdate ? "It updates itself through its own updater, then this PC reconnects; herdr sessions keep running." : "This PC runs a bridge from a different version of Ovis. Update it to reconnect; herdr sessions keep running.")}</p>}
@@ -103,10 +128,15 @@ export function MachineDialog({ machine, preset, updateRemote = false, onClose, 
       {running && keepOpen && <p className="field-hint">{t("Keep this dialog open until the PC connects.")}</p>}
       {running && !waitingForLogin && !keepOpen && <p className="field-hint">{t("You can close this; the install keeps going and the sidebar shows it.")}</p>}
       {job?.phase === "approval" && <><ul className="machine-install-list">{job.installations.map((item) => <li key={item}>{item}</li>)}</ul><p className="field-hint">{t(ownUpdate ? "That PC's own updater installs it there. Existing herdr sessions keep running." : "Installs into your home directory. Existing herdr sessions keep running.")}</p></>}
-      {job?.challenge && <div className="machine-challenge">{job.challenge.kind === "host_key" ? <HostKeyQuestion prompt={job.challenge.prompt} host={job.target.destination} sshOutput={job.ssh_output} /> : <><pre>{job.challenge.prompt}</pre><form onSubmit={(e) => { e.preventDefault(); void act({ action: "answer", challenge_id: job.challenge!.id, answer: secret }); }}>
-        <label className="field"><span className="field-label">{t("Password or key passphrase")}</span><input autoFocus className="input" type="password" autoComplete="off" value={secret} disabled={!secretAllowed || pending} onChange={(e) => setSecret(e.target.value)} /></label>
+      {job?.challenge && <div className="machine-challenge">{job.challenge.kind === "host_key" ? <HostKeyQuestion prompt={job.challenge.prompt} host={job.target.destination} sshOutput={job.ssh_output} /> : <><pre>{job.challenge.prompt}</pre><form onSubmit={(e) => {
+        e.preventDefault();
+        const answer = secretField.current?.value ?? "";
+        if (answer === "") { secretField.current?.focus(); return; }
+        void act({ action: "answer", challenge_id: job.challenge!.id, answer });
+      }}>
+        <label className="field"><span className="field-label">{t("Password or key passphrase")}</span><input ref={secretField} autoFocus className="input" type="password" autoComplete="off" disabled={!secretAllowed || pending} /></label>
         {!secretAllowed && <p className="field-hint">{t("Open this app over HTTPS or localhost to enter a password.")}</p>}
-        <button type="submit" className="btn btn-primary" disabled={!secretAllowed || pending || !secret}>{t("Continue")}</button>
+        <button type="submit" className="btn btn-primary" disabled={!secretAllowed || pending}>{t("Continue")}</button>
       </form></>}</div>}
       {error && <p className="machine-error" role="alert">{error}</p>}
     </div>

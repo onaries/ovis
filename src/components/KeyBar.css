@@ -137,17 +137,17 @@
 }
 
 /* what Paste needs, said in the bar's own row after its fixed controls, which start with the Input
-   line key it names (KeyBar.tsx),
-   in place of the other keys for a moment: never painted over the terminal's output. Two lines
-   fit the key's height; the row does not scroll while it shows */
+   line key it names (KeyBar.tsx), beside the other keys for a moment: never painted over the
+   terminal's output. Two lines fit the key's height */
 .key-bar-note {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 0 0 auto;
+  max-width: 8.5rem;
   margin: 0;
   color: var(--text);
   font-size: var(--fs-chat);
   line-height: var(--lh-tight);
-  overflow-wrap: anywhere;
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
 /* hover only where a pointer can hover: a tapped key must not stay lit */
@@ -162,6 +162,7 @@
   background: var(--bg-elevated);
   border-color: var(--accent);
   color: var(--text-strong);
+  font-weight: var(--fw-selected, var(--fw-semibold));
 }
 
 /* a modifier held past the next key (tapped twice) is filled and underlined, as a keyboard's
@@ -178,6 +179,17 @@
   height: calc(2 * var(--hairline));
   border-radius: var(--hairline);
   background: var(--accent);
+}
+
+@media (forced-colors: active) {
+  .key.is-armed {
+    outline: var(--hairline) solid Highlight;
+    outline-offset: calc(-2 * var(--hairline));
+  }
+
+  .key.is-locked::after {
+    background: Highlight;
+  }
 }
 
 /* a key shows its press in its own colours, not with the dim other buttons take (styles.css) */

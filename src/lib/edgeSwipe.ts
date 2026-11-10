@@ -46,8 +46,11 @@ export function drawerSettles(shown: number, width: number, speed: number): bool
   return shown > width / 2;
 }
 
-/** A dialog, the palette or a sheet is up: a swipe there is theirs, not the drawer's under them. */
-const MODAL = "[aria-modal='true'], dialog[open]";
+/**
+ * A dialog, the palette or a sheet is up: a swipe there is theirs, not the drawer's under them. The phone's
+ * drawer is a modal dialog itself while it is out (App.tsx): that one is the drawer, and its swipe closes it.
+ */
+const MODAL = "[aria-modal='true']:not(#workspace-drawer), dialog[open]";
 
 /** Something under the finger scrolled sideways, a code block or a table: a swipe right scrolls it back. */
 function scrolledAside(target: EventTarget | null): boolean {

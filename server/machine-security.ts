@@ -1,5 +1,6 @@
 import type { SshTarget } from "../shared/machines.ts";
 import { deviceCookieValue, parseCookies, tokenCookie } from "./auth.ts";
+import { validHerdrSocket } from "./herdr-discovery.ts";
 
 export function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 
@@ -12,7 +13,12 @@ export function validateTarget(value: unknown): SshTarget {
   // a key on the web server: absolute (`/…`, or `C:\…` on a Windows one) or in its home (`~/…`)
   if (v.identity_file !== undefined && (typeof v.identity_file !== "string" || !/^(\/|~[\\/]|[A-Za-z]:[\\/])[^\r\n\0]{1,1024}$/.test(v.identity_file))) throw new Error("Key path must be absolute or start with ~/");
   if (v.session !== undefined && (typeof v.session !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(v.session))) throw new Error("Session names use letters, numbers, underscores and hyphens");
-  return { destination: v.destination, ...(v.port === undefined ? {} : { port: Number(v.port) }), ...(v.identity_file ? { identity_file: String(v.identity_file) } : {}), ...(v.session ? { session: String(v.session) } : {}) };
+  if (v.herdr_socket !== undefined && !validHerdrSocket(v.herdr_socket)) throw new Error("The herdr socket must be an absolute path ending in /herdr.sock");
+  if (v.start_new_herdr !== undefined && typeof v.start_new_herdr !== "boolean") throw new Error("Choose whether to start a new herdr on this PC");
+  if (v.herdr_socket && v.start_new_herdr) throw new Error("Choose a running herdr or start a new one");
+  if (v.own_ovis !== undefined && (typeof v.own_ovis !== "string" || !v.own_ovis.startsWith("/") || v.own_ovis.length > 4096 || /[\0\r\n]/.test(v.own_ovis))) throw new Error("Choose an Ovis server registered on this PC");
+  if (v.own_ovis && (v.herdr_socket || v.start_new_herdr)) throw new Error("Choose Ovis, a running herdr, or a new herdr");
+  return { destination: v.destination, ...(v.port === undefined ? {} : { port: Number(v.port) }), ...(v.identity_file ? { identity_file: String(v.identity_file) } : {}), ...(v.session ? { session: String(v.session) } : {}), ...(typeof v.herdr_socket === "string" ? { herdr_socket: v.herdr_socket } : {}), ...(typeof v.own_ovis === "string" ? { own_ovis: v.own_ovis } : {}), ...(v.start_new_herdr === true ? { start_new_herdr: true } : {}) };
 }
 
 export function sameOrigin(request: Request): boolean {

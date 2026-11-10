@@ -36,6 +36,7 @@ import { readSessionHistory } from "../lib/sessionHistoryRetry.ts";
 
 interface Props {
   workspace: WorkspaceInfo;
+  machineName?: string;
   /** the PC's panes in tab order: the one already showing a listed session is selected instead of a new tab */
   panes: readonly HerdrPane[];
   /** the agent listed first: the pane's, or the workspace row's */
@@ -58,7 +59,7 @@ const said = (reason: unknown): string => reason instanceof ApiError ? reason.de
 
 const NO_RECENT: readonly RecentResume[] = [];
 
-export function SessionHistory({ workspace, panes, agent: firstAgent, sourcePaneId: firstSourcePaneId = null, askingPaneId = firstSourcePaneId, selectedPaneId = null, recent = NO_RECENT, onClose, onSelectPane, onResumed }: Props) {
+export function SessionHistory({ workspace, machineName, panes, agent: firstAgent, sourcePaneId: firstSourcePaneId = null, askingPaneId = firstSourcePaneId, selectedPaneId = null, recent = NO_RECENT, onClose, onSelectPane, onResumed }: Props) {
   const t = useT();
   const locale = useLocale();
   const id = useId();
@@ -235,12 +236,13 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, sourcePane
   };
   const rows = answer?.sessions ?? null;
   const momentAgo = Date.now();
+  const dialogTitle = t("Earlier sessions · {name}", { name: `${workspace.label} · ${machineName ?? machineId}` });
   return createPortal(
     <div className="modal-scrim" onMouseDown={closeFromScrim}>
       <div ref={surface} className="modal session-modal" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} onKeyDown={onKeyDown}>
         <header className="modal-header">
-          <h2 className="modal-title" id={`${id}-title`}>{t("Earlier sessions · {name}", { name: workspace.label })}</h2>
-          <button type="button" className="icon-button" aria-label={t("Close session list")} disabled={pending !== null} onClick={onClose}>
+          <h2 className="modal-title" id={`${id}-title`} title={dialogTitle}>{dialogTitle}</h2>
+          <button type="button" className="icon-button" aria-label={t("Close session list")} title={t("Close session list")} disabled={pending !== null} onClick={onClose}>
             <X aria-hidden="true" />
           </button>
         </header>
@@ -253,7 +255,7 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, sourcePane
           {rows === null && !error ? (
             <p className="field-hint" role="status">{t("Reading sessions…")}</p>
           ) : rows && rows.length === 0 ? (
-            <p className="field-hint session-empty">{t("No earlier {agent} sessions in this folder.", { agent: agentLabel })}</p>
+            <p className="field-hint session-empty">{t("No earlier {agent} sessions in this folder. Choose another agent.", { agent: agentLabel })}</p>
           ) : rows && (
             <ul ref={list} className="session-list" aria-label={t("Earlier sessions")} onKeyDown={moveAlongRows}>
               {rows.map((row) => {

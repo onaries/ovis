@@ -8,8 +8,8 @@
 import { newRecordId, signAccountRecord } from "../../../shared/account-records.ts";
 import type { RemoveRecord } from "../../../shared/account-records.ts";
 import type { RelayDeviceStore } from "../relay/device.ts";
-import type { AccountService } from "./service.ts";
-import type { AccountStore } from "./store.ts";
+import { sameSignIn, SignedOutError, type AccountService } from "./service.ts";
+import type { AccountSession, AccountStore } from "./store.ts";
 import { post, rememberDevice, type PcFetch } from "./join.ts";
 
 export interface LeaveResult {
@@ -20,31 +20,57 @@ export interface LeaveResult {
   readonly queued?: readonly string[];
 }
 
-export async function leaveAccount(options: { service: AccountService; accountStore: AccountStore; relayStore: RelayDeviceStore; now?: () => number }): Promise<LeaveResult> {
-  const session = await options.service.session();
-  if (session === undefined) throw new Error("Sign in first, so every PC of the account hears of it");
+/**
+ * `session` is the sign-in the person left from, read when they asked: every call is made for it
+ * alone, so a sign-in made meanwhile is never sent removals, signed out or forgotten.
+ */
+export async function leaveAccount(options: { service: AccountService; accountStore: AccountStore; relayStore: RelayDeviceStore; session: AccountSession; now?: () => number }): Promise<LeaveResult> {
+  const { session } = options;
+  const service = options.service.forSignIn(session);
   const key = await options.accountStore.key();
   const remove: RemoveRecord = await signAccountRecord({
     v: 1, kind: "remove", account: session.account, key: key.public_spki,
     issued_at: new Date((options.now ?? Date.now)()).toISOString(), id: newRecordId(), signer: key.public_spki,
   }, key.private_key);
-  const pcs = (await options.service.listPcs()).map((pc) => pc.server_id);
-  for (let start = 0; start < pcs.length; start += 32) await options.service.postRecord(pcs.slice(start, start + 32), remove);
-  // only pairings on PCs the remove went to are forgotten: one on a PC the account does not list (or of another account) still works there
-  const listed = new Set(pcs);
+  // marked in the transaction that reads the links on their way (relay/accountController.ts takes one in the
+  // same names before it sends a link): a link recorded before is named below, and none goes out after
+  const leave = newRecordId();
+  let linking: readonly string[] | undefined;
+  await options.accountStore.updateMany(["session", "leaving", "linking"], (current) => {
+    if (current.session === undefined || !sameSignIn(current.session, session)) return current;
+    linking = Object.values(current.linking ?? {});
+    return { ...current, leaving: { ...current.leaving, [leave]: key.public_spki } };
+  });
+  if (linking === undefined) throw new SignedOutError();
   const unconfirmed: string[] = [];
-  for (const device of await options.relayStore.list()) {
-    const accountKeyed = device.public_spki === key.public_spki || device.pending_key?.public_spki === key.public_spki;
-    if (!accountKeyed) continue;
-    // reached only where the PC confirmed this pairing is a member of this account, and the remove went to it
-    if (listed.has(device.server_id) && device.account === session.account) await options.relayStore.remove(device.server_id);
-    else unconfirmed.push(device.server_id);
+  try {
+    const pcs = (await service.listPcs()).map((pc) => pc.server_id);
+    for (let start = 0; start < pcs.length; start += 32) await service.postRecord(pcs.slice(start, start + 32), remove);
+    // only pairings on PCs the remove went to are forgotten: one on a PC the account does not list (or of another account) still works there
+    const listed = new Set(pcs);
+    const forgotten = new Set<string>();
+    for (const device of await options.relayStore.list()) {
+      const accountKeyed = device.public_spki === key.public_spki || device.pending_key?.public_spki === key.public_spki;
+      if (!accountKeyed) continue;
+      // reached only where the PC confirmed this pairing is a member of this account, and the remove went to it
+      if (listed.has(device.server_id) && device.account === session.account) { await options.relayStore.remove(device.server_id); forgotten.add(device.server_id); }
+      else unconfirmed.push(device.server_id);
+    }
+    // a link already on its way may still land on its PC, whatever the pairing says now
+    for (const serverId of new Set(linking)) if (!forgotten.has(serverId) && !unconfirmed.includes(serverId)) unconfirmed.push(serverId);
+  } catch (error) {
+    // nothing was left: links with this key go out again
+    await options.accountStore.update("leaving", (current) => {
+      const { [leave]: _failed, ...rest } = current ?? {};
+      return Object.keys(rest).length > 0 ? rest : undefined;
+    });
+    throw error;
   }
   // the removes are queued: the sign-in ends here whatever the service answers to the sign-out
-  try { await options.service.signOut(); }
+  try { await service.signOut(); }
   catch (error) { console.warn("Ovis: the account service did not confirm the sign-out", error instanceof Error ? error.name : error); }
   // the account's PCs tombstone this key: never sign in with it again (a kept pairing holds its own copy of the key)
-  await options.accountStore.clear();
+  await options.accountStore.clear((current) => !sameSignIn(current, session));
   return { remove, unconfirmed };
 }
 

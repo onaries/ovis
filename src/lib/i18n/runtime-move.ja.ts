@@ -20,7 +20,7 @@ export const RUNTIME_MOVE_JA: Record<string, string> = {
   "New shell in the same folder": "同じフォルダーに新しいシェル",
   "End it yourself": "手動で終了してください",
   "Answering": "応答中",
-  "Waiting for an answer": "回答待ち",
+  "Waiting for an answer": "返答が必要",
   "A command is running": "コマンド実行中",
   "{command} running": "{command} 実行中",
   "Scrollback and programs running in shells do not come along. herdr itself stays as it is.": "過去の出力（スクロールバック）とシェルで動いていたプログラムは移りません。herdr 自体はそのまま残ります。",

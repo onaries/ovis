@@ -157,7 +157,7 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
   try {
     const words = WORDS.en;
     await openDiff(page, false, "src/money.ts");
-    assert.equal(await place(page), "Click or tap a line, or use the arrow keys, to add a note on it.", `${name}: the bar says how to pick a line`);
+    assert.equal(await place(page), "Pick a line to add a note.", `${name}: the bar says how to pick a line`);
     await shot(page, name, "rest");
 
     // the mouse: hovering the removed row shows its +, which begins a note on that line at once

@@ -44,6 +44,76 @@ export interface RepoDiffViewerProps {
 /** A note being written: the line and the quote captured when it was begun, which a later patch does not change. */
 interface Writing { line: DiffFindLine; quote: string }
 
+interface DiffNoteDraft {
+  writing: Writing;
+  text: string;
+  open: boolean;
+}
+
+const diffTargetDrafts = new Map<string, DiffNoteDraft>();
+/** a closed note's words, kept with the quote it was begun on: reopened on a changed patch it still goes with that code */
+interface DiffLineDraft { text: string; quote: string }
+const diffLineDrafts = new Map<string, DiffLineDraft>();
+
+function diffTargetDraftKey(target: RepoDiffTarget): string {
+  return `${target.machineId}\n${target.paneId ?? ""}\n${target.directory ?? ""}\n${target.scope}\n${target.base ?? ""}\n${target.head ?? ""}\n${target.path}`;
+}
+
+function diffLineDraftKey(target: RepoDiffTarget, line: Pick<DiffFindLine, "side" | "line">): string {
+  return `${diffTargetDraftKey(target)}\n${line.side}:${line.line}`;
+}
+
+function readDiffTargetDraft(target: RepoDiffTarget): DiffNoteDraft | null {
+  const key = diffTargetDraftKey(target);
+  const mem = diffTargetDrafts.get(key);
+  if (mem !== undefined) return mem;
+  try {
+    const raw = window.sessionStorage?.getItem(`ovis:diff-note-target:${key}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<DiffNoteDraft>;
+    if (parsed.writing && typeof parsed.text === "string") {
+      return { writing: parsed.writing, text: parsed.text, open: parsed.open === true };
+    }
+  } catch { /* private mode */ }
+  return null;
+}
+
+function writeDiffTargetDraft(target: RepoDiffTarget, draft: DiffNoteDraft | null): void {
+  const key = diffTargetDraftKey(target);
+  if (draft === null || draft.text.trim() === "") {
+    diffTargetDrafts.delete(key);
+    try { window.sessionStorage?.removeItem(`ovis:diff-note-target:${key}`); } catch { /* private mode */ }
+    return;
+  }
+  diffTargetDrafts.set(key, draft);
+  try { window.sessionStorage?.setItem(`ovis:diff-note-target:${key}`, JSON.stringify(draft)); } catch { /* private mode */ }
+}
+
+function readDiffLineDraft(target: RepoDiffTarget, line: Pick<DiffFindLine, "side" | "line">): DiffLineDraft | null {
+  const key = diffLineDraftKey(target, line);
+  const mem = diffLineDrafts.get(key);
+  if (mem !== undefined) return mem;
+  try {
+    const raw = window.sessionStorage?.getItem(`ovis:diff-note-line:${key}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<DiffLineDraft>;
+    if (typeof parsed.text === "string" && typeof parsed.quote === "string") return { text: parsed.text, quote: parsed.quote };
+  } catch { /* private mode, or a draft without its quote */ }
+  return null;
+}
+
+function writeDiffLineDraft(target: RepoDiffTarget, writing: Writing, text: string): void {
+  const key = diffLineDraftKey(target, writing.line);
+  if (text.trim() === "") {
+    diffLineDrafts.delete(key);
+    try { window.sessionStorage?.removeItem(`ovis:diff-note-line:${key}`); } catch { /* private mode */ }
+    return;
+  }
+  const draft = { text, quote: writing.quote };
+  diffLineDrafts.set(key, draft);
+  try { window.sessionStorage?.setItem(`ovis:diff-note-line:${key}`, JSON.stringify(draft)); } catch { /* private mode */ }
+}
+
 /** `stale`: a branch patch answered for another identity than the list's, which is never drawn as this one */
 type Load = { status: "pending" } | { status: "failed"; error: unknown } | { status: "stale" } | { status: "ready"; answer: RepoDiffFilePatch };
 const PENDING: Load = { status: "pending" };
@@ -153,9 +223,10 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
   const findingRef = useRef(finding);
   findingRef.current = finding;
   // a note on a line: the line picked (an index into the patch's logical lines), and the note being written
+  const initialDraft = readDiffTargetDraft(target);
   const [cursor, setCursor] = useState<{ index: number; quiet: boolean } | null>(null);
-  const [writing, setWriting] = useState<Writing | null>(null);
-  const [noteText, setNoteText] = useState("");
+  const [writing, setWriting] = useState<Writing | null>(() => initialDraft?.open ? initialDraft.writing : null);
+  const [noteText, setNoteText] = useState(() => initialDraft?.open ? initialDraft.text : "");
   const [noteError, setNoteError] = useState<string | null>(null);
   const [noteAdded, setNoteAdded] = useState(false);
   const writingRef = useRef<{ open: boolean; empty: boolean }>({ open: false, empty: true });
@@ -165,7 +236,19 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
   const beginNoteRef = useRef<(line: DiffFindLine) => void>(() => {});
   useSheetSwipe(surface, onClose);
 
-  const { paneId, directory, scope, base, head, comparison, path, oldPath } = target;
+  const { machineId, paneId, directory, scope, base, head, comparison, path, oldPath } = target;
+  useEffect(() => {
+    const saved = readDiffTargetDraft(target);
+    if (saved?.open) {
+      setWriting(saved.writing);
+      setNoteText(saved.text);
+    } else {
+      setWriting(null);
+      setNoteText("");
+    }
+    setNoteError(null);
+    setNoteAdded(false);
+  }, [machineId, paneId, directory, scope, base, head, path]);
   useEffect(() => {
     let live = true;
     setLoad(PENDING);
@@ -276,16 +359,31 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
     // a note being written is never replaced by another line's
     if (note === undefined || answer === null || patch === null || blocked !== null || (writing !== null && noteText.trim() !== "")) return;
     const quote = diffNoteQuote({ machine: note.machine, repository: answer.repository.root, comparison: capturedComparison(answer, patch), path, line });
-    setWriting({ line, quote });
-    setNoteText("");
+    // a note closed on this line comes back with the quote it was written against, not the code now there
+    const restored = readDiffLineDraft(target, line);
+    const nextWriting = { line, quote: restored?.quote ?? quote };
+    const text = restored?.text ?? "";
+    setWriting(nextWriting);
+    setNoteText(text);
+    writeDiffTargetDraft(target, { writing: nextWriting, text, open: text.trim() !== "" });
     setNoteError(null);
     setNoteAdded(false);
   };
   beginNoteRef.current = beginNote;
   const closeNote = (): void => {
+    if (writing !== null) writeDiffLineDraft(target, writing, noteText);
+    writeDiffTargetDraft(target, null);
     setWriting(null);
     setNoteError(null);
     bodyRef.current?.focus({ preventScroll: true });
+  };
+  const updateNoteText = (value: string): void => {
+    setNoteText(value);
+    setNoteError(null);
+    if (writing !== null) {
+      writeDiffLineDraft(target, writing, value);
+      writeDiffTargetDraft(target, { writing, text: value, open: value.trim() !== "" });
+    }
   };
   const saveNote = (): void => {
     if (writing === null || commentsKey === null || target.paneId === null || noteText.trim() === "" || blocked !== null) return;
@@ -299,8 +397,13 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
       setNoteError(t("This note could not be saved on this device."));
       return;
     }
+    writeDiffLineDraft(target, writing, "");
+    writeDiffTargetDraft(target, null);
     setNoteAdded(true);
-    closeNote();
+    setWriting(null);
+    setNoteText("");
+    setNoteError(null);
+    bodyRef.current?.focus({ preventScroll: true });
   };
   const onLine = useCallback((side: "deletions" | "additions", lineNumber: number, open: boolean): void => {
     const line = lineAtRow(findLines, side, lineNumber);
@@ -372,8 +475,8 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
           </div>
           <div className="repo-diff-actions">
             <div className="segmented repo-diff-styles" role="group" aria-label={t("Diff layout")}>
-              <button type="button" aria-pressed={style === "unified"} onClick={() => update({ diffStyle: "unified" })}><Rows3 aria-hidden="true" /><span className="repo-diff-style-word">{t("Unified")}</span></button>
-              <button type="button" aria-pressed={style === "split"} disabled={narrow} title={narrow ? t("Split view needs a wider screen") : undefined} onClick={() => update({ diffStyle: "split" })}><Columns2 aria-hidden="true" /><span className="repo-diff-style-word">{t("Split")}</span></button>
+              <button type="button" aria-pressed={style === "unified"} title={t("Unified")} onClick={() => update({ diffStyle: "unified" })}><Rows3 aria-hidden="true" /><span className="repo-diff-style-word">{t("Unified")}</span></button>
+              <button type="button" aria-pressed={style === "split"} disabled={narrow} title={narrow ? t("Split view needs a wider screen") : t("Split")} onClick={() => update({ diffStyle: "split" })}><Columns2 aria-hidden="true" /><span className="repo-diff-style-word">{t("Split")}</span></button>
             </div>
             <div className="repo-diff-group">
               <button ref={findButton} type="button" className="icon-button repo-diff-action" aria-pressed={finding} aria-label={t("Find in diff")} title={patch === null && !finding ? t("There is no loaded patch to search.") : t("Find in diff")} disabled={patch === null && !finding} onClick={() => (finding ? closeFind() : openFind())}><Search aria-hidden="true" /></button>
@@ -416,7 +519,7 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
             {noteAdded ? t("Note added. It goes first in the next message you send from this pane's Chat (not with a slash command, a ! line or an answer to a question).")
               : blocked !== null ? blocked
               : pointed !== null ? matchPlace(t, pointed)
-              : t("Click or tap a line, or use the arrow keys, to add a note on it.")}
+              : t("Pick a line to add a note.")}
           </p>
           <button type="button" className="btn repo-diff-line-note-open" disabled={pointed === null || blocked !== null} title={blocked ?? undefined}
             onClick={() => pointed !== null && beginNote(pointed)}>
@@ -424,7 +527,7 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
           </button>
         </div>}
         {writing !== null && <DiffNoteForm writing={writing} path={path} text={noteText} error={noteError ?? blocked} disabled={blocked !== null}
-          onText={(value) => { setNoteText(value); setNoteError(null); }} onSave={saveNote} onCancel={closeNote} />}
+          onText={updateNoteText} onSave={saveNote} onCancel={closeNote} />}
       </section>
     </div>
   );

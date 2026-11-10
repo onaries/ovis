@@ -12,14 +12,61 @@
   text-align: left;
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
 }
 
 .md-docs-time {
   flex: none;
   margin-left: auto;
   color: var(--text-dim);
-  font-size: var(--fs-2xs);
-  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-meta);
+  font-variant-numeric: var(--font-numeric);
   white-space: nowrap;
+}
+
+.md-docs-filter-label {
+  flex: none;
+  padding-inline-start: var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+
+.md-docs-loading {
+  display: flex;
+  flex-direction: column;
+}
+
+/* one row tall, as the rows it stands in for, so a refresh moves nothing */
+.md-docs-loading-note {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h);
+  padding-block: 0;
+}
+
+.md-docs-skeleton {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+}
+
+.md-docs-skeleton-glyph {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  border-radius: var(--radius-sm);
+}
+
+.md-docs-skeleton-time {
+  width: 3em;
+  margin-left: auto;
+}
+
+@media (pointer: coarse) {
+  .md-docs-skeleton,
+  .md-docs-loading-note {
+    min-height: var(--touch-target);
+  }
 }

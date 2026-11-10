@@ -18,6 +18,11 @@
   font-size: var(--fs-xs);
 }
 
+/* the plan's note leads, over the list (G-104) */
+.runtime-move-note:first-child {
+  margin: 0 0 var(--space-3);
+}
+
 .runtime-move-reason {
   margin: 0;
   color: var(--text);
@@ -81,7 +86,7 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-half);
   min-width: 0;
 }
 
@@ -97,7 +102,7 @@
   overflow: hidden;
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -136,7 +141,7 @@
   flex: 0 0 auto;
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-meta);
   line-height: var(--chip-h);
   white-space: nowrap;
 }
@@ -194,14 +199,14 @@
 .runtime-move-mark {
   display: inline-flex;
   flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   color: var(--status-done);
 }
 
 .runtime-move-mark svg {
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
 }
 
 .runtime-move-count {
@@ -209,7 +214,7 @@
   color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--font-numeric);
 }
 
 /* a phone: the tag goes under the pane's words, so neither is cut short */

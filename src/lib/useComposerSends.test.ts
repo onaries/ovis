@@ -282,6 +282,45 @@ it("Send it sends the named draft over itself, only at once and never as an answ
   expect(calls).toEqual([["fix the tests", "immediate", "fix the tests"], ["my new message", "hold", undefined]]);
 });
 
+// Alt+Enter: held in the queued list for its row's Send now, whatever automatic sending says and also at rest;
+// the socket refuses it on a PC that cannot hold one, never queuing it to go on its own
+it.each([
+  ["working, automatic sending on", { agentStatus: "working", inputAtRest: (): boolean => false, settings: { autoSendQueued: true } }, "queue"],
+  ["working, automatic sending off", { agentStatus: "working", inputAtRest: (): boolean => false, settings: { autoSendQueued: false } }, "hold"],
+  ["idle", { agentStatus: "idle", settings: { autoSendQueued: true } }, "immediate"],
+  ["working with Claude's box at rest", { agentStatus: "working", inputAtRest: (): boolean => true, settings: { autoSendQueued: true } }, "immediate"],
+] as const)("a hold while %s goes as held, never queued or sent at once", async (_name, extra, plain) => {
+  const calls: unknown[][] = [];
+  const submitComposerMessage = ((...args: unknown[]) => { calls.push(args); return Promise.resolve({ ok: true } as const); }) as ComposerSendsDeps["submitComposerMessage"];
+  const deps: Partial<ComposerSendsDeps> = { ...extra, submitComposerMessage };
+  expect(await sends("hold-pane", { ok: true }, [], deps).composerSend("for later", undefined, false, false, false, true)).toBe(true);
+  // control: Enter keeps its own delivery
+  expect(await sends("hold-pane", { ok: true }, [], deps).composerSend("for later")).toBe(true);
+  expect(calls.map((call) => [call[1], call[2], call[7]])).toEqual([["hold", undefined, true], [plain, undefined, false]]);
+});
+
+it("a hold is never an answer to an open menu, nor stopped by a screen a peek left open, since nothing is typed", async () => {
+  const calls: unknown[][] = [], answers: unknown[] = [];
+  const prompt: InteractivePrompt = {
+    id: "menu", agent: "claude", kind: "question", title: "Question", question: "?", body: null,
+    options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null,
+  };
+  const submitComposerMessage = ((...args: unknown[]) => { calls.push(args); return Promise.resolve({ ok: true } as const); }) as ComposerSendsDeps["submitComposerMessage"];
+  const open = { pane: "hold-open", agent: "claude", command: "/usage", named: true, history: undefined };
+  expect(await sends("hold-open", { ok: true }, [], { answering: prompt, answerPanePrompt: async (answer) => { answers.push(answer); }, submitComposerMessage, t: (text) => text })
+    .composerSend("1", undefined, false, false, false, true)).toBe(true);
+  expect(await sends("hold-open", { ok: true }, [], { stillOpenRef: { current: open }, stillOpenNote: () => "still open", submitComposerMessage })
+    .composerSend("after the peek", undefined, false, false, false, true)).toBe(true);
+  expect(answers).toEqual([]);
+  expect(calls.map((call) => [call[0], call[1], call[7]])).toEqual([["1", "hold", true], ["after the peek", "hold", true]]);
+});
+
+it("a hold a PC too old to hold refuses keeps the draft with the reason", async () => {
+  const result = await sends("hold-old", { ok: false, code: "pending_hold_unsupported", message: "Update this PC to hold messages. Nothing was sent." }, [], { agentStatus: "working", settings: { autoSendQueued: true } })
+    .composerSend("for later", undefined, false, false, false, true);
+  expect(result).toBe("Update this PC to hold messages. Your draft stayed here.");
+});
+
 // #2596: Ctrl+Enter queues the message as Enter does, then sends that same row now, as its Send now
 it.each([[true, ["steer"]], [false, []]] as const)("a queued send with now=%p steers its own row", async (now, expected) => {
   const saved = savedStorage();
@@ -306,6 +345,33 @@ it.each([[true, ["steer"]], [false, []]] as const)("a queued send with now=%p st
     expect(result).toBe(true);
     if (now) await steered;
     expect(actions).toEqual([...expected]);
+  } finally {
+    pendingMessages.removeCopy(owner, pending.id);
+    saved.restore();
+  }
+});
+
+// Alt+Enter's row stays held as its receipt left it: nothing steers it, with automatic sending on; only its Send now does
+it("a hold leaves its held row waiting for Send now, then Send now sends it", async () => {
+  const saved = savedStorage();
+  const pane = "hold-row", owner = paneStorageId("local", pane), actions: string[] = [], deliveries: unknown[] = [];
+  const pending = { id: "held-row", request_id: 1, text: "after this turn", state: "held" as const, created_at: "2026-11-09T00:00:00Z" };
+  const socket = {
+    connected: true,
+    on: () => () => {},
+    pendingAction: (_paneId: string, id: string, action: string) => { actions.push(`${action}:${id}`); return Promise.resolve({ ok: true }); },
+  } as unknown as HerdrSocket;
+  try {
+    const actionsHook = sends(pane, { ok: true }, [], {
+      agentStatus: "working", inputAtRest: () => false, settings: { autoSendQueued: true }, socketRef: { current: socket },
+      submitComposerMessage: (_text, delivery) => { deliveries.push(delivery); pendingMessages.accept(owner, pending, "scope"); return Promise.resolve({ ok: true, pending }); },
+    });
+    expect(await actionsHook.composerSend(pending.text, undefined, false, false, false, true)).toBe(true);
+    expect(deliveries).toEqual(["hold"]);
+    expect(actions).toEqual([]);
+    expect(pendingMessages.read(owner)).toMatchObject([{ id: pending.id, state: "held", serverOwned: true }]);
+    await actionsHook.actOnPending(pending.id, "steer");
+    expect(actions).toEqual(["steer:held-row"]);
   } finally {
     pendingMessages.removeCopy(owner, pending.id);
     saved.restore();

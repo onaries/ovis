@@ -41,6 +41,14 @@ const openFiles = async (page: import("playwright-core").Page) => {
 // read back first holds still: the follow undid one in looped runs. Steps that check history and
 // presentation, not pointer targeting, wait for the chat and activate the link where it is.
 const transcriptSettled = (page: Page) => page.locator(".chat-frame[data-pane-content]").waitFor({ state: "attached" });
+// A reload opens the chat where the reader left it (chatScrollMemory): one who clicked a link above the
+// end comes back there, and the chat presents nothing away from the end. The reloads before a step that
+// waits for the chat are a following reader's: the end, once the chat remembers it.
+const reloadFollowingEnd = async (page: Page): Promise<void> => {
+  await page.evaluate(() => { for (const node of document.querySelectorAll(".chat-view")) node.scrollTop = node.scrollHeight; });
+  await page.waitForFunction(() => (JSON.parse(sessionStorage.getItem("ovis:chat-positions") ?? "[]") as [string, { atEnd: boolean }][]).every(([, place]) => place.atEnd));
+  await page.reload();
+};
 const activateInTranscript = async (page: Page, link: Locator): Promise<void> => {
   await transcriptSettled(page);
   await link.dispatchEvent("click");
@@ -558,7 +566,7 @@ try {
       const { fileOpen: _, ...settings } = JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as Record<string, unknown>;
       localStorage.setItem("ovis:settings", JSON.stringify(fileOpen === null ? settings : { ...settings, fileOpen }));
     }, fileOpen);
-    await page.reload();
+    await reloadFollowingEnd(page);
   };
   // with Open files at its default, even text opens in the popup; Beside the pane is a choice
   await setFileOpen(null);
@@ -644,7 +652,7 @@ try {
   assert.ok(Math.abs(stored - (before + 100)) <= 2, `dragging the edge 100px widens the panel 100px: ${before} -> ${stored}`);
   await page.waitForFunction((want) => Math.abs((document.querySelector("aside.file-panel")?.getBoundingClientRect().width ?? 0) - want) <= 1, stored);
   // a reload restores the file from its entry, at the stored width
-  await page.reload();
+  await reloadFollowingEnd(page);
   await panel.getByText("File preview history regression", { exact: true }).waitFor();
   assert.ok(Math.abs(await panelWidth() - stored) <= 1, `a reload keeps the dragged width: ${await panelWidth()} vs ${stored}`);
   // a double-click on the edge puts the default width back and forgets the stored one, so the
@@ -862,7 +870,7 @@ try {
       const { reopenFileOnReturn: _, ...settings } = JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as Record<string, unknown>;
       localStorage.setItem("ovis:settings", JSON.stringify(on ? { ...settings, reopenFileOnReturn: true } : settings));
     }, on);
-    await page.reload();
+    await reloadFollowingEnd(page);
     await videoLink.waitFor();
     if (await showSidebar.count()) await showSidebar.click();
     await rowOf(otherPane).waitFor();
@@ -1044,7 +1052,7 @@ try {
   await page.getByRole("button", { name: "notes", exact: true }).click();
   const notes = page.getByRole("dialog", { name: "notes.txt", exact: true });
   await notes.getByText("File preview history regression", { exact: true }).waitFor();
-  await page.reload();
+  await reloadFollowingEnd(page);
   await notes.getByText("File preview history regression", { exact: true }).waitFor();
   await page.goBack();
   await notes.waitFor({ state: "hidden" });
@@ -1100,13 +1108,13 @@ try {
   });
   const chatText = await textStyle(".chat-transcript .chat-turn-agent .markdown");
   const previewText = await textStyle(".file-viewer-markdown");
-  // --fs-chat (15px), the size of prose read at length, at the chat's scale, 17 / 14
-  assert.ok(Math.abs(Number.parseFloat(chatText.fontSize) - 15 * 17 / 14) < 0.05, `the chat font size is applied in the chat: ${chatText.fontSize}`);
+  // a finger's screen reads the chat's prose one step up, --fs-lg (16px), at the chat's scale, 17 / 14
+  assert.ok(Math.abs(Number.parseFloat(chatText.fontSize) - 16 * 17 / 14) < 0.05, `the chat font size is applied in the chat: ${chatText.fontSize}`);
   assert.match(chatText.fontFamily, /^Georgia,/);
   assert.equal(previewText.fontSize, chatText.fontSize, "the preview's text has the chat's font size");
   assert.equal(previewText.fontFamily, chatText.fontFamily, "the preview's text has the chat's font");
-  // --fs-xl (18px) at the chat's scale, 17 / 14
-  assert.ok(Math.abs(Number.parseFloat(previewText.headingSize ?? "") - 18 * 17 / 14) < 0.05, `its headings scale with it: ${previewText.headingSize}`);
+  // --md-h1-size (30px) at the chat's scale, 17 / 14
+  assert.ok(Math.abs(Number.parseFloat(previewText.headingSize ?? "") - 30 * 17 / 14) < 0.05, `its headings scale with it: ${previewText.headingSize}`);
   assert.equal(await page.locator(".file-viewer-markdown").evaluate((element) => getComputedStyle(element).maxWidth), "820px", "Default is the chat's Default lane");
   // on a wide screen the Default lane follows the pane (71.43% of it, up to 60rem): the preview
   // follows with it, as wide as the chat beside it, not the 820px floor. The file is a panel beside
@@ -1217,7 +1225,7 @@ try {
     const settings = JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as Record<string, unknown>;
     localStorage.setItem("ovis:settings", JSON.stringify({ ...settings, wrapCode: true }));
   });
-  await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
+  await reloadFollowingEnd(page);
   await page.locator(".conn-live").waitFor();
   // the reloaded chat's follow to its end can take the link from under a pointer
   await activateInTranscript(page, page.getByRole("button", { name: "big code", exact: true }));
@@ -1514,8 +1522,15 @@ try {
       // nor does the document's own tab, for a PC that is not set up here
       const readerPage = await ownerContext.newPage();
       await readerPage.goto(`${origin}/?read=${encodeURIComponent(markdownPath)}&machine=${target}`);
-      await readerPage.locator(".file-reader .file-viewer-note").waitFor();
+      // The settled alert names the offline PC (503 machine_offline), without a generic error above it.
+      await readerPage.locator(".file-reader .file-viewer-note[role=alert]").waitFor();
+      assert.deepEqual(await readerPage.locator(".file-reader .file-viewer-note").allTextContents(), ["That PC is not reachable right now."]);
       assert.equal(fileRequests.some((path) => path.startsWith("/api/fs/")), false, "the reader never reads the local file for another PC");
+      const rawLink = await readerPage.getByRole("link", { name: "Open raw file", exact: true }).getAttribute("href");
+      assert.ok(rawLink, "the offline reader keeps its raw-file recovery route");
+      const rawUrl = new URL(rawLink, origin);
+      assert.equal(rawUrl.pathname, "/api/machines/missing-fixture/fs/file", "recovery stays on the file's PC");
+      assert.equal(rawUrl.searchParams.get("path"), markdownPath, "recovery keeps the requested file");
       await readerPage.close();
     } else {
       await ownerPage.locator(".file-viewer-markdown").getByRole("heading", { name: "Markdown preview", exact: true }).waitFor();
@@ -1698,7 +1713,8 @@ try {
   await page.getByRole("button", { name: "notes", exact: true }).click();
   const refused = page.getByRole("dialog", { name: "notes.txt", exact: true });
   await refused.getByRole("alert").waitFor();
-  assert.equal(await refused.getByRole("alert").innerText(), "The file could not be opened.");
+  // a PC dropped mid-read keeps its machine code (lib/fileFailure.ts): the alert names the PC as away
+  assert.equal(await refused.getByRole("alert").innerText(), "That PC is not reachable right now.");
   assert.equal(await refused.getByText("machine_unavailable").count(), 0);
   assert.equal(await refused.locator(".file-viewer-text").count(), 0);
   console.log("PASS A file whose body is refused shows an error, not the error's JSON");

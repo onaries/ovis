@@ -32,9 +32,16 @@ export const SHORTCUTS = [
   { id: "settings", label: "Settings", keys: ["Mod", "Shift", ","] },
   // listed only: held, not dispatched; VoiceInput.tsx listens for it itself (isVoiceShortcut)
   { id: "voice", label: "Dictate (hold)", keys: ["Mod", "Shift", "Space"] },
+  // listed only, as voice: the message box's own key (Composer.tsx), Option+Enter on a Mac
+  { id: "hold-message", label: "Hold message in chat", keys: ["Alt", "Enter"] },
 ] as const;
 
 export type ShortcutId = (typeof SHORTCUTS)[number]["id"];
+
+/** Shown in Settings with their fixed keys, never dispatched here or recorded: their own component listens for them. */
+export function listedOnly(id: ShortcutId): boolean {
+  return id === "voice" || id === "hold-message";
+}
 
 export interface ShortcutEventLike {
   key: string;
@@ -69,7 +76,7 @@ export function shortcutKeys(id: ShortcutId, overrides: ShortcutOverrides): stri
 
 export function shortcutDisplayKeys(id: ShortcutId, overrides: ShortcutOverrides): string[] {
   const shortcut = SHORTCUTS.find((candidate) => candidate.id === id)!;
-  if (id === "voice" || !Object.hasOwn(overrides, id)) return [...shortcut.keys];
+  if (listedOnly(id) || !Object.hasOwn(overrides, id)) return [...shortcut.keys];
   const value = overrides[id];
   return value ? bindingDisplayKeys(value) : [];
 }
@@ -138,7 +145,7 @@ export function matchShortcut(event: ShortcutEventLike, platformIsMac: boolean, 
   if (event.ctrlKey || event.altKey || event.metaKey) {
     const pressed = formatExactChord(exactChordFromEvent(event));
     for (const shortcut of SHORTCUTS) {
-      if (shortcut.id === "voice") continue;
+      if (listedOnly(shortcut.id)) continue;
       const value = Object.hasOwn(overrides, shortcut.id) ? overrides[shortcut.id] : null;
       const chord = value ? parseExactChord(value) : null;
       if (chord && formatExactChord(chord) === pressed) return shortcut.id;
@@ -148,7 +155,7 @@ export function matchShortcut(event: ShortcutEventLike, platformIsMac: boolean, 
   if (!hasMod || !event.shiftKey || event.altKey) return null;
   const key = shortcutEventKey(event);
   for (const shortcut of SHORTCUTS) {
-    if (shortcut.id === "voice") continue;
+    if (listedOnly(shortcut.id)) continue;
     if (Object.hasOwn(overrides, shortcut.id) && overrides[shortcut.id] === key) return shortcut.id;
   }
   const id = KEY_TO_ID[key];

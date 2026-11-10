@@ -108,7 +108,7 @@ async function openPaneMenu(page: Page): Promise<void> {
 async function openRecovery(page: Page) {
   await openPaneMenu(page);
   await page.getByRole("menuitem", { name: "Recover unsent text" }).click();
-  const dialog = page.getByRole("dialog", { name: "Unsent text" });
+  const dialog = page.getByRole("dialog", { name: /^Unsent text/ });
   await dialog.waitFor();
   return dialog;
 }
@@ -215,6 +215,8 @@ try {
   // The recovery list puts a text back in the box it was opened from, without sending it.
   await select(page, one);
   let dialog = await openRecovery(page);
+  assert.match(await dialog.locator(".modal-title").textContent() ?? "", /lifetime-one/, "the dialog title names the destination workspace");
+  assert.match(await dialog.locator(".unsent-lead").textContent() ?? "", /lifetime-one/, "the lead names the destination before recovery");
   const oldOne = dialog.locator(".unsent-item", { hasText: "for the old one" });
   await oldOne.getByRole("button", { name: "Put in message box" }).click();
   await box(page).waitFor();

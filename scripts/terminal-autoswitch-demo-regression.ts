@@ -140,7 +140,7 @@ const typed = async (page: Page) => (await frames(page)).filter((frame) => frame
 const lens = (page: Page) => page.evaluate((pane) => ({
   stored: localStorage.getItem(`ovis:view:${pane}`),
   address: new URL(location.href).searchParams.get("view"),
-  chatPressed: document.querySelector('.view-switch button[title^="Chat transcript"]')?.getAttribute("aria-pressed") ?? null,
+  chatPressed: document.querySelector('.view-switch .is-chat')?.getAttribute("aria-pressed") ?? null,
 }), owner);
 /** the chat's log as it is now, to tell it from a new one after a peek */
 const noteLog = (page: Page) => page.evaluate((pane) => {
@@ -327,7 +327,7 @@ try {
       await page.waitForFunction((reads) => (window as unknown as PeekWindow).promptReads >= reads + 2, reads);
       assert.equal(await peek(page).count(), 1, "a command Claude does not record closing stays until the reader leaves it");
       await capture(page, `${tag}-peek-manual`);
-      await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+      await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
       await expectReturned();
       console.log(`PASS ${tag}: an unrecorded command keeps the peek after Escape; the header's Chat ends it`);
 
@@ -369,7 +369,7 @@ try {
 
       const keepWays: [string, () => Promise<void>][] = [
         ["Keep Terminal", () => hint(page).getByRole("button", { name: "Keep Terminal", exact: true }).click()],
-        ["the header's Terminal", () => page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click()],
+        ["the header's Terminal", () => page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click()],
       ];
       for (const [way, keep] of keepWays) {
         await send(page, "/doctor");
@@ -381,7 +381,7 @@ try {
         const kept = await lens(page);
         assert.deepEqual({ stored: kept.stored, address: kept.address }, { stored: "terminal", address: "terminal" }, `${way} saves the terminal lens`);
         if (!touch) await page.waitForFunction(() => document.activeElement?.classList.contains("xterm-helper-textarea") === true);
-        await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+        await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
         await chat(page).locator(".composer").waitFor();
         assert.deepEqual(await lens(page), chatLens);
         await noteLog(page);
@@ -391,11 +391,11 @@ try {
       if (!touch) {
         // a find bar left open under the Terminal lens is not the peek's: it would take the focus,
         // the first Escape (the agent's) and a grid row
-        await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+        await page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
         await chat(page).waitFor({ state: "detached" });
         await page.keyboard.press("Control+Shift+F");
         await stack(page).locator(".find-bar input").waitFor();
-        await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+        await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
         await chat(page).locator(".composer").waitFor();
         await noteLog(page);
         // the composer is a dictation target in the chat (the mic shows), and none under a peek
@@ -685,7 +685,7 @@ try {
       await screen(owner, "Escape to dismiss").waitFor();
       await hint(page).getByRole("button", { name: "Keep Terminal", exact: true }).click();
       await of(owner).peek.waitFor({ state: "detached" });
-      await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+      await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
       await of(owner).chat.locator(".composer").waitFor();
       const kept = "Is that screen still up?";
       await sendIn(owner, kept);

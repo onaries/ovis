@@ -1,0 +1,260 @@
+/*
+ * Add a PC (AddPcSheet.tsx): the system's modal (styles.css .modal*) with four segmented bars at its
+ * head and the join's steps below the screen the shell shows for that step. Tokens only.
+ */
+
+.add-pc-sheet {
+  width: min(100%, var(--relay-sheet-w));
+}
+
+.add-pc-sheet:lang(ja) {
+  word-break: auto-phrase;
+}
+
+.add-pc-sheet:focus {
+  outline: none;
+}
+
+/* the head holds the bars, the step count, the title and its line */
+.add-pc-head {
+  display: block;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.add-pc-bars {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.add-pc-bars span {
+  height: var(--rail-w);
+  border-radius: var(--radius-pill);
+  background: var(--border);
+}
+
+.add-pc-bars span[data-bar="done"] {
+  background: var(--status-done);
+}
+
+.add-pc-bars span:is([data-bar="running"], [data-bar="current"]) {
+  background: var(--primary);
+}
+
+.add-pc-bars span[data-bar="failed"] {
+  background: var(--status-blocked);
+}
+
+.add-pc-step-count {
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+.add-pc-sub {
+  margin: var(--space-1) 0 0;
+  max-width: 65ch;
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+  color: var(--text-dim);
+  text-wrap: pretty;
+  overflow-wrap: break-word;
+}
+
+.add-pc-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* the steps: a mark, the step and what it proves, a hairline between them */
+.add-pc-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.add-pc-steps li {
+  display: grid;
+  grid-template-columns: var(--icon-size) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-3) 0;
+  border-top: var(--hairline) solid var(--border);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+
+.add-pc-steps li:first-child {
+  border-top: 0;
+}
+
+.add-pc-steps li:last-child {
+  padding-bottom: 0;
+}
+
+.add-pc-step-label {
+  display: block;
+  color: var(--text-strong);
+  font-weight: var(--fw-medium);
+  overflow-wrap: break-word;
+  text-wrap: pretty;
+}
+
+.add-pc-step-detail {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  overflow-wrap: break-word;
+  text-wrap: pretty;
+}
+
+.add-pc-steps li[data-step="done"] .add-pc-step-label {
+  color: var(--text-dim);
+}
+
+.add-pc-steps li[data-step="todo"] .add-pc-step-label {
+  color: var(--text-dim);
+  font-weight: var(--fw-regular);
+}
+
+/* the mark sits on the label's first line: a ring to do, the working colour running, a tick done, a cross failed */
+.add-pc-mark {
+  display: grid;
+  place-items: center;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  margin-top: calc((var(--fs-md) * var(--lh-base) - var(--icon-size)) / 2);
+  border-radius: var(--radius-pill);
+  box-shadow: inset 0 0 0 var(--hairline) var(--border-strong);
+  color: var(--text-dim);
+}
+
+.add-pc-mark svg {
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
+.add-pc-steps li[data-step="done"] .add-pc-mark {
+  background: var(--status-done-tint);
+  box-shadow: none;
+  color: var(--status-done);
+}
+
+.add-pc-steps li[data-step="current"] .add-pc-mark {
+  box-shadow: inset 0 0 0 calc(2 * var(--hairline)) var(--text-dim);
+  color: var(--text-strong);
+}
+
+.add-pc-steps li[data-step="running"] .add-pc-mark {
+  box-shadow: inset 0 0 0 calc(2 * var(--hairline)) var(--status-working);
+}
+
+.add-pc-steps li[data-step="running"] .add-pc-mark::after {
+  content: "";
+  width: var(--dot-size);
+  height: var(--dot-size);
+  border-radius: var(--radius-pill);
+  background: var(--status-working);
+  animation: pulse var(--dur-pulse) var(--ease-pulse) infinite;
+}
+
+.add-pc-steps li[data-step="failed"] .add-pc-mark {
+  background: var(--status-blocked-tint);
+  box-shadow: none;
+  color: var(--status-blocked);
+}
+
+/* what went wrong, in one line above the steps: the wrong number, or why the join ended */
+.add-pc-problem {
+  margin: 0 0 var(--space-1);
+  color: var(--status-blocked);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  overflow-wrap: break-word;
+  text-wrap: pretty;
+}
+
+.add-pc-typed {
+  margin-top: 0;
+}
+
+.add-pc-typed .field {
+  margin-bottom: 0;
+}
+
+.add-pc-typed .relay-shell-code-input {
+  min-height: var(--touch-target);
+  font-size: var(--fs-input);
+  letter-spacing: var(--tracking-code);
+}
+
+.add-pc-typed .relay-shell-code-input:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+}
+
+.add-pc-typed > .relay-shell-detail {
+  margin-top: 0;
+}
+
+.add-pc-sheet .relay-shell-digits {
+  margin: var(--space-2) 0;
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-code);
+}
+
+.add-pc-sheet .relay-shell-wait {
+  margin: 0;
+}
+
+.add-pc-sheet .relay-shell-wait .relay-shell-detail {
+  margin-top: var(--space-2);
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .add-pc-sheet {
+    width: 100%;
+  }
+
+  .add-pc-footer {
+    flex-direction: column;
+    align-items: stretch;
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .add-pc-footer .btn {
+    width: 100%;
+    min-height: var(--touch-target);
+  }
+}
+
+@media (forced-colors: active) {
+  .add-pc-bars span {
+    border: var(--hairline) solid CanvasText;
+  }
+
+  .add-pc-bars span:is([data-bar="done"], [data-bar="running"], [data-bar="current"]) {
+    background: Highlight;
+  }
+
+  .add-pc-mark {
+    border: var(--hairline) solid CanvasText;
+  }
+
+  .add-pc-steps li:is([data-step="running"], [data-step="current"]) .add-pc-mark {
+    border-color: Highlight;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .add-pc-steps li[data-step="running"] .add-pc-mark::after {
+    animation: none;
+  }
+}

@@ -189,15 +189,19 @@ try {
     return {
       headerChat: header.classList.contains("is-chat"), columnChat: column.classList.contains("is-chat"),
       header: getComputedStyle(header).backgroundColor, strip: getComputedStyle(document.querySelector(".tab-strip")!).backgroundColor,
-      // from 769px the tabs are the header's row, tinted, and the open tab takes the pane's surface
+      // from 769px the tabs are the header's row on the panel's surface, and the open tab is a raised pill on it
       tabRow: header.classList.contains("has-tab-row"),
       openTab: getComputedStyle(document.querySelector(".tab-strip-item.is-active")!).backgroundColor,
+      elevated: (() => { const probe = document.body.appendChild(document.createElement("div")); probe.style.background = "var(--bg-elevated)"; const color = getComputedStyle(probe).backgroundColor; probe.remove(); return color; })(),
       chat: document.querySelector(".chat-view") ? getComputedStyle(document.querySelector(".chat-view")!).backgroundColor : null,
     };
   });
   assert.equal(surfaces.columnChat, surfaces.headerChat, "the header and the pane column agree on the lens");
   assert.equal(surfaces.strip, surfaces.header, "the strip is the header's surface");
-  if (surfaces.headerChat) assert.equal(surfaces.chat, surfaces.tabRow ? surfaces.openTab : surfaces.header, surfaces.tabRow ? "the open tab under the chat lens is the transcript's surface" : "which under the chat lens is the transcript's");
+  if (surfaces.tabRow) {
+    assert.equal(surfaces.openTab, surfaces.elevated, "the open tab is a raised pill, whatever the lens");
+    assert.notEqual(surfaces.openTab, surfaces.strip, "the open tab stands apart from the strip it sits on");
+  } else if (surfaces.headerChat) assert.equal(surfaces.chat, surfaces.header, "which under the chat lens is the transcript's");
   await page.getByRole("tab", { name: "Tab 1", exact: true }).click({ button: "right" });
   const tabMenu = page.getByRole("menu", { name: "Tab 1", exact: true });
   await tabMenu.waitFor();
@@ -235,7 +239,8 @@ try {
   // Renaming a pane is still available on that pane's own menu (a mouse opens it by right-click).
   await page.locator(`[data-layout-pane=${JSON.stringify(split.pane.pane_id)}] .pane-frame-head`).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename pane", exact: true }).click();
-  const paneRename = page.getByRole("dialog", { name: "Rename pane", exact: true });
+  // the dialog's title names the pane it renames: "Rename pane · <pane>"
+  const paneRename = page.getByRole("dialog", { name: /^Rename pane · ./ });
   const paneName = paneRename.getByRole("textbox", { name: "Pane name", exact: true });
   await paneName.waitFor();
   const renamedSplit = "workspace-rows-split-task";

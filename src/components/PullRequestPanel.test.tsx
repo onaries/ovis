@@ -6,6 +6,7 @@ import { PullRequestPanel } from "./PullRequestPanel.tsx";
 import { paneStorageId } from "../../shared/machines.ts";
 import type { PullRequestCheckLog, PullRequestView } from "../../shared/pull-request.ts";
 import { composerDraftKey, composerDrafts } from "../lib/composerDraft.ts";
+import { MachineContext } from "../lib/machineContext.tsx";
 import { paneLifetimes } from "../lib/paneLifetime.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 
@@ -98,4 +99,54 @@ test("keeps Merge off, with GitHub's reason, until GitHub would merge", async ()
   serve({ ...VIEW, merge_state: "clean", mergeable: true });
   await act(async () => { renderer = create(panel()); });
   expect(renderer!.root.findAll((node) => node.type === "button" && textOf(node) === "Squash and merge")[0]!.props.disabled).toBe(false);
+});
+
+test("shows the directory in the bar instead of repeating the tab title on error, and prefixes remote PC errors with the PC id", async () => {
+  spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => {
+    return Response.json({ error: { code: "gh_signed_out", message: "not signed in" } }, { status: 409 });
+  }, globalThis.fetch));
+  await act(async () => {
+    renderer = create(createElement(SettingsProvider, {
+      children: createElement(MachineContext.Provider, {
+        value: "workstation",
+        children: createElement(PullRequestPanel, { paneId: "fixture", directory: "/repo" }),
+      }),
+    }));
+  });
+  const heading = renderer!.root.findByProps({ className: "pull-request-heading" });
+  expect(textOf(heading)).toBe("workstation · /repo");
+  const alert = renderer!.root.findByProps({ role: "alert" });
+  expect(textOf(alert)).toContain("[workstation] GitHub CLI (gh) on this PC is not signed in.");
+});
+
+test("names a remote PC by its name, not its id, and prefixes the PC's own gh words with it", async () => {
+  spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => {
+    return Response.json({ error: { code: "gh_failed", message: "HTTP 502: bad gateway" } }, { status: 502 });
+  }, globalThis.fetch));
+  await act(async () => {
+    renderer = create(createElement(SettingsProvider, {
+      children: createElement(MachineContext.Provider, {
+        value: "3f1c2b9a-6d0e-4c1a-9b7e-2f4d8a0c5e11",
+        children: createElement(PullRequestPanel, { paneId: "fixture", directory: "/repo", machineName: "Build box" }),
+      }),
+    }));
+  });
+  expect(textOf(renderer!.root.findByProps({ className: "pull-request-heading" }))).toBe("Build box · /repo");
+  expect(textOf(renderer!.root.findByProps({ role: "alert" }))).toBe("[Build box] HTTP 502: bad gateway");
+});
+
+test("names the PC by its name, not its id, where one is given", async () => {
+  spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => {
+    return Response.json({ error: { code: "gh_signed_out", message: "not signed in" } }, { status: 409 });
+  }, globalThis.fetch));
+  await act(async () => {
+    renderer = create(createElement(SettingsProvider, {
+      children: createElement(MachineContext.Provider, {
+        value: "4f1c2d9e-0b7a-4c55-9a39-2f6d1e8b7c10",
+        children: createElement(PullRequestPanel, { paneId: "fixture", directory: "/repo", machineName: "Office PC" }),
+      }),
+    }));
+  });
+  expect(textOf(renderer!.root.findByProps({ className: "pull-request-heading" }))).toBe("Office PC · /repo");
+  expect(textOf(renderer!.root.findByProps({ role: "alert" }))).toContain("[Office PC] GitHub CLI (gh) on this PC is not signed in.");
 });

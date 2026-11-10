@@ -37,6 +37,18 @@ export function taskRowLines({ paneTitle, labelled, folder, workspace, alias }: 
   return { title, place: placeLine(where, said ? "" : folder) };
 }
 
+/** A row's second line: its parts in order, each said once, none the name the first line already says. */
+export function unsaidLine(title: string, parts: readonly (string | null | undefined)[]): string {
+  const said = new Set([title]);
+  const line: string[] = [];
+  for (const part of parts) {
+    if (!part || said.has(part)) continue;
+    said.add(part);
+    line.push(part);
+  }
+  return line.join(" · ");
+}
+
 /** "workspace · folder", without saying the same name twice. */
 export function placeLine(workspace: string, folder: string): string {
   return !folder || folder === workspace ? workspace : !workspace ? folder : `${workspace} · ${folder}`;

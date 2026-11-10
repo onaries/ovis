@@ -37,6 +37,7 @@
   font-size: var(--fs-sm);
   white-space: nowrap;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .selection-quote {
@@ -56,10 +57,12 @@
   border-left: var(--hairline) solid var(--border);
 }
 
-.selection-quote:hover,
-.reply-comment-offer:hover {
-  background: var(--bg-hover);
-  color: var(--text-strong);
+@media (hover: hover) {
+  .selection-quote:hover,
+  .reply-comment-offer:hover {
+    background: var(--bg-hover);
+    color: var(--text-strong);
+  }
 }
 
 .reply-comment-layer > .selection-note {
@@ -93,8 +96,8 @@
 
 .selection-quote:focus-visible,
 .reply-comment-offer:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: var(--ring);
+  outline-offset: calc(var(--ring-offset) * -1);
 }
 
 .selection-quote svg,
@@ -111,7 +114,7 @@
   position: absolute;
   display: grid;
   gap: var(--space-2);
-  width: min(360px, calc(100% - 2 * var(--space-2)));
+  width: min(var(--popover-w), calc(100% - 2 * var(--space-2)));
   padding: var(--space-3);
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-xl);
@@ -131,7 +134,7 @@
   margin: 0;
   padding-left: var(--space-2);
   overflow: hidden;
-  border-left: 2px solid var(--accent);
+  border-left: var(--hairline) solid var(--border-strong);
   color: var(--text-dim);
   font-size: var(--fs-sm);
   white-space: pre-wrap;
@@ -156,6 +159,11 @@
 .reply-comment-field:focus {
   border-color: var(--accent);
   outline: none;
+}
+
+.reply-comment-field:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
 }
 
 .reply-comment-actions {
@@ -199,6 +207,7 @@
   color: inherit;
   font: inherit;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .reply-comments-open {
@@ -221,9 +230,11 @@
   color: var(--text-dim);
 }
 
-.reply-comments-clear:hover,
-.reply-comments-remove:hover {
-  color: var(--text-strong);
+@media (hover: hover) {
+  .reply-comments-clear:hover,
+  .reply-comments-remove:hover {
+    color: var(--text-strong);
+  }
 }
 
 .reply-comments-list {
@@ -231,8 +242,8 @@
   bottom: calc(100% + var(--space-1));
   left: 0;
   z-index: var(--z-popover);
-  width: min(420px, calc(100vw - 2 * var(--space-3)));
-  max-height: min(50vh, 420px);
+  width: min(var(--menu-w-wide), calc(100vw - 2 * var(--space-3)));
+  max-height: min(50dvh, var(--menu-w-wide));
   overflow-y: auto;
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-xl);
@@ -276,8 +287,10 @@
   align-self: start;
 }
 
-@media (pointer: coarse) {
+@media (pointer: coarse), (max-width: 640px) {
+  .selection-quote,
   .reply-comment-offer,
+  .reply-comment-actions .btn,
   .reply-comments-chip,
   .reply-comments-open,
   .reply-comments-clear,
@@ -289,5 +302,10 @@
   .reply-comments-clear,
   .reply-comments-remove {
     min-width: var(--touch-target);
+  }
+
+  .reply-comment-quote,
+  .reply-comments-list li > p {
+    font-size: var(--fs-lg);
   }
 }

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { readStateDocument, setAsideDamaged } from "./state-document.ts";
+import { privateStateFs } from "./private-state.ts";
+import { readStateDocument, setAsideDamaged, writeStateDocument } from "./state-document.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -113,6 +114,47 @@ describe("setAsideDamaged", () => {
   it("throws, naming the file and why, when it cannot be moved", () => {
     const dir = directory();
     expect(() => setAsideDamaged(join(dir, "machines.json"))).toThrow(/^machines\.json is not JSON and cannot be set aside as machines\.json\.corrupt-\S+ \(ENOENT\)$/);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe("writeStateDocument", () => {
+  it("writes through a fresh private file, never through a link left at a guessable name (#3437)", () => {
+    const dir = directory(), path = join(dir, "preferences.json"), elsewhere = join(dir, "elsewhere");
+    writeFileSync(elsewhere, "", { mode: 0o644 });
+    symlinkSync(elsewhere, `${path}.${process.pid}.tmp`);
+    writeStateDocument(path, "{\"revision\":1}", false);
+    expect(readFileSync(elsewhere, "utf8")).toBe("");
+    expect(readFileSync(path, "utf8")).toBe("{\"revision\":1}");
+    expect(lstatSync(path).isSymbolicLink()).toBe(false);
+    expect(fs.statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it("flushes the temporary file before the rename and the directory after it (#3437)", () => {
+    const dir = directory(), path = join(dir, "usage-removed.json");
+    const order: string[] = [];
+    const flush = ((fd: number) => { order.push(`fsync ${fs.fstatSync(fd).isDirectory() ? "directory" : "file"}`); }) as never;
+    // the directory is flushed through private-state.ts, as setAsideDamaged's copy is
+    const fsync = spyOn(fs, "fsyncSync").mockImplementation(flush);
+    const directoryFsync = spyOn(privateStateFs, "fsyncSync").mockImplementation(flush);
+    const rename = spyOn(fs, "renameSync");
+    rename.mockImplementation(((from: string, to: string) => { order.push("rename"); rename.mockRestore(); fs.renameSync(from, to); }) as never);
+    try { writeStateDocument(path, "[]", false); }
+    finally { fsync.mockRestore(); directoryFsync.mockRestore(); rename.mockRestore(); }
+    expect(order).toEqual(process.platform === "win32" ? ["fsync file", "rename"] : ["fsync file", "rename", "fsync directory"]);
+    expect(readFileSync(path, "utf8")).toBe("[]");
+  });
+
+  it.each([
+    ["the write", "writeFileSync", "ENOSPC"],
+    ["the flush", "fsyncSync", "EIO"],
+    ["the rename", "renameSync", "EIO"],
+    ["the close", "closeSync", "EIO"],
+  ] as const)("leaves no temporary file when %s fails (#3437)", (_name, call, code) => {
+    const dir = directory(), path = join(dir, "seen.json");
+    const spy = spyOn(fs, call).mockImplementation((() => { throw Object.assign(new Error(code), { code }); }) as never);
+    try { expect(() => writeStateDocument(path, "[]", false)).toThrow(code); }
+    finally { spy.mockRestore(); }
     expect(readdirSync(dir)).toEqual([]);
   });
 });

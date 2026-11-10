@@ -115,8 +115,20 @@ export function readableColor(fg: string, bg: string, ratio: number): string {
     ?? (contrast([255, 255, 255], under) >= contrast([0, 0, 0], under) ? "#ffffff" : "#000000");
 }
 
+/** `fg` faded halfway toward `bg` (as SGR 2's 50% alpha draws it over `bg`), then lifted to `ratio` against `bg`. */
+export function dimmedColor(fg: string, bg: string, ratio = 4.5): string {
+  // a background read back from an element's style comes serialized, as rgb(r, g, b)
+  const serialized = /^rgba?\(\s*(\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})(?:,\s*1(?:\.0+)?)?\s*\)$/i.exec(bg);
+  if (serialized) bg = `#${serialized.slice(1, 4).map((value) => hex(Math.min(Number(value), 255))).join("")}`;
+  const from = rgbOf(fg);
+  const under = rgbOf(bg);
+  if (!from || !under) return `color-mix(in srgb, ${fg} 50%, transparent)`;
+  const mixed = `#${from.map((value, index) => hex(Math.round((value + under[index]!) / 2))).join("")}`;
+  return readableColor(mixed, bg, ratio);
+}
+
 /** The inline CSS a cell draws with; "" for the terminal's plain text. `minimumContrast` is the grid's minimumContrastRatio. */
-export function cellStyle(cell: IBufferCell, theme: ITheme, minimumContrast = 1): string {
+export function cellStyle(cell: IBufferCell, theme: ITheme, minimumContrast = 4.5): string {
   const bold = cell.isBold() !== 0;
   let fgColor = colorOf(cell.isFgDefault(), cell.isFgRGB(), cell.getFgColor());
   let bgColor = colorOf(cell.isBgDefault(), cell.isBgRGB(), cell.getBgColor());
@@ -128,10 +140,10 @@ export function cellStyle(cell: IBufferCell, theme: ITheme, minimumContrast = 1)
   if (bold && fgColor !== null && "index" in fgColor && fgColor.index < 8) fgColor = { index: fgColor.index + 8 };
   let fg = cssOf(fgColor, theme);
   const bg = cssOf(bgColor, theme);
+  const text = fg ?? theme.foreground;
+  const under = bg ?? theme.background;
   // the minimum contrast holds for a default foreground on a colour of the program's, and for a colour on the default background
   if (fg !== null || bg !== null) {
-    const text = fg ?? theme.foreground;
-    const under = bg ?? theme.background;
     if (text && under) {
       const readable = readableColor(text, under, minimumContrast);
       if (fg !== null || readable !== text) fg = readable;
@@ -139,8 +151,14 @@ export function cellStyle(cell: IBufferCell, theme: ITheme, minimumContrast = 1)
   }
   let style = "";
   if (cell.isInvisible() !== 0) style += "color:transparent;";
-  // dim fades the text, not its background
-  else if (cell.isDim() !== 0) style += `color:color-mix(in srgb, ${fg ?? theme.foreground ?? "currentColor"} 50%, transparent);`;
+  // dim fades the text toward its background, clamped to the minimum contrast floor when the background is known
+  else if (cell.isDim() !== 0) {
+    const baseFg = fg ?? theme.foreground;
+    const dim = baseFg && under && (minimumContrast > 1 || theme.background !== undefined)
+      ? dimmedColor(baseFg, under, Math.max(minimumContrast, 4.5))
+      : `color-mix(in srgb, ${baseFg ?? "currentColor"} 50%, transparent)`;
+    style += `color:${dim};`;
+  }
   else if (fg) style += `color:${fg};`;
   if (bg) style += `background:${bg};`;
   if (bold) style += "font-weight:bold;";

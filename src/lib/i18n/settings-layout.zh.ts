@@ -4,7 +4,7 @@
  * so a key lives in only one of them; its header lists the settings files and the register.
  */
 export const SETTINGS_LAYOUT_ZH: Record<string, string> = {
-  "Search settings": "搜索设置",
+  "Search settings": "搜索所有设置",
   "No settings match.": "没有匹配的设置。",
   "Search results": "搜索结果",
   "Open {page}": "打开 {page}",
@@ -38,4 +38,27 @@ export const SETTINGS_LAYOUT_ZH: Record<string, string> = {
 
   // the one-line conditions Settings' bare pages show under a row's name (design pass G-095 to G-098)
   "By state applies to this device; the other orders to every browser.": "按状态仅对此设备生效，其他排序对所有浏览器生效。",
+  "Auto: the chat on a touch screen, the terminal elsewhere.": "自动：触摸屏上打开聊天，其他设备上打开终端。",
+  "Beside the pane needs a wide window; on this screen a file opens in a popup.": "在窗格旁打开需要较宽的窗口；在此屏幕上文件会以弹窗打开。",
+  "Auto: on a desktop's chat only, where dictation can work.": "自动：仅在可以听写的桌面聊天中显示。",
+  "Separate: leaving Ovis keeps the pane attached; herdr's selection stays independent.": "分开：离开 Ovis 后仍保持窗格连接，herdr 的选择独立进行。",
+  "Use alongside: leaving Ovis releases an unused pane to herdr after a short delay; herdr's selection stays independent.": "一起使用：离开 Ovis 后，未使用的窗格会在短暂延迟后交还给 herdr，herdr 的选择独立进行。",
+  "Follow its focus: leaving Ovis releases an unused pane after a short delay; this view follows herdr's selection.": "跟随焦点：离开 Ovis 后，未使用的窗格会在短暂延迟后交还给 herdr，此视图跟随 herdr 的选择。",
+  "Any turn finished takes in the long ones.": "开启每回合完成后，长回合也会一并提醒。",
+  "Groups you name in the Agents list, in every browser.": "把代理列表分成你命名的分组。对所有浏览器生效。",
+  "Each lock is turned on from the pinned agent's own menu.": "锁定在固定代理自己的菜单中逐个开启。",
+  "A drag in a Codex pane selects through its whole history; Shift+drag still copies in Ovis.": "在 Codex 窗格中拖动会在完整历史中选择；Shift+拖动仍在 Ovis 中复制。",
+  "Opens the side conversations an OMP session saved with /btw.": "从输入框打开 OMP 会话用 /btw 保存的旁支对话。",
+  "A subagent counts as running until the session that started it is told it ended.": "子代理即使空闲，也在启动它的会话被告知结束前算作运行中。",
+  // the one line under each page's title (G-173)
+  "Theme, fonts and the sidebar on this device.": "此设备的主题、字体和侧边栏。",
+  "How conversations look and what the message box offers.": "对话的显示方式和输入框功能。",
+  "How terminal panes look and take input.": "终端窗格的外观和输入。",
+  "When this device alerts you, and where else alerts go.": "此设备何时提醒你，以及提醒还发往何处。",
+  "Coding agents on this PC, their accounts and plan limits.": "此 PC 上的编程代理、账户和套餐用量。",
+  "Keyboard shortcuts, and herdr's prefix keys.": "快捷键和 herdr 前缀键。",
+  "Phones, browsers and PCs that reach this Ovis.": "连接到此 Ovis 的手机、浏览器和 PC。",
+  "Features still being shaped; they may change.": "仍在完善的功能，可能会变化。",
+  // the range under a typed font size it refused (G-179)
+  "Enter {min}–{max}px": "请输入 {min}–{max}px 之间的数值。",
 };
