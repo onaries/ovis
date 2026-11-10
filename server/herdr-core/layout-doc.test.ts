@@ -1,8 +1,16 @@
 import { describe, expect, it } from "bun:test";
-import { type LayoutNode, place, reconcile, resizeLeaf } from "./layout-doc.ts";
+import { type LayoutNode, place, reconcile, resizeLeaf, sameTopology } from "./layout-doc.ts";
 
 const leaf = (address: string): LayoutNode => ({ leaf: address });
 const split = (direction: "right" | "down", ratio: number, first: LayoutNode, second: LayoutNode): LayoutNode => ({ split: direction, ratio, first, second });
+
+it("matches saved sizes only to the same panes in the same split structure", () => {
+  const tree = split("right", 0.5, leaf("a"), split("down", 0.5, leaf("b"), leaf("c")));
+  expect(sameTopology(tree, split("right", 0.7, leaf("a"), split("down", 0.3, leaf("b"), leaf("c"))))).toBe(true);
+  expect(sameTopology(tree, split("right", 0.5, leaf("b"), split("down", 0.5, leaf("a"), leaf("c"))))).toBe(false);
+  expect(sameTopology(tree, split("down", 0.5, leaf("a"), split("down", 0.5, leaf("b"), leaf("c"))))).toBe(false);
+  expect(sameTopology(tree, leaf("a"))).toBe(false);
+});
 
 describe("place", () => {
   it("keeps every pane of a deep split at least one unit wide", () => {

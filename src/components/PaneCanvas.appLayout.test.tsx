@@ -111,10 +111,10 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
     expect(itemsOf(movable.panes[0] as HerdrPane)).toEqual(["rename", "rename-agent", "close", "new-terminal", "move-workspace", "new-agent-tab", "rename-tab", "close-tab"]);
   });
 
-  it("keeps a lone tab with no row on a PC the Herdr app lays out to Close tab, with no move or rename", async () => {
+  it("keeps agent naming in a lone app-owned tab without pane arrangement actions", async () => {
     phone = true;
     const itemsOf = await draw(APP_CORE, movable);
-    expect(itemsOf(movable.panes[0] as HerdrPane)).toEqual(["close", "new-terminal", "new-agent-tab", "close-tab"]);
+    expect(itemsOf(movable.panes[0] as HerdrPane)).toEqual(["rename-agent", "close", "new-terminal", "new-agent-tab", "close-tab"]);
   });
 
   it("gives a lone tab with no row on a core whose layout Ovis keeps the same menu as herdr's TUI", async () => {
@@ -233,20 +233,33 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
     }
   });
 
-  it("leaves a core PC's panes to the Herdr app: Close pane stays, no divider is drawn", async () => {
+  it("keeps agent naming independent of the Herdr app's pane arrangement", async () => {
     const itemsOf = await draw(APP_CORE);
-    expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["close"]);
+    expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["rename-agent", "close"]);
     expect(itemsOf(snapshot.panes[1] as HerdrPane)).toEqual(["close"]);
     expect(dividers()).toBe(0);
   });
 
-  it("does not offer call-name changes to a watching device", async () => {
-    const itemsOf = await draw(TUI, snapshot, true);
+  it("draws a resize divider without offering arrangement actions when only resizing is supported", async () => {
+    const itemsOf = await draw({ ...APP_CORE, resize: true });
+    expect(dividers()).toBe(1);
+    expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["rename-agent", "close"]);
+    expect(itemsOf(snapshot.panes[1] as HerdrPane)).toEqual(["close"]);
+  });
+
+  it("keeps both split actions on an app-owned core that supports splitting", async () => {
+    const itemsOf = await draw({ ...APP_CORE, resize: true, split: true });
+    expect(dividers()).toBe(1);
+    expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["rename-agent", "split-right", "split-down", "close"]);
+  });
+
+  it.each([TUI, APP_CORE])("does not offer call-name changes to a watching device (%j)", async (offer) => {
+    const itemsOf = await draw(offer, snapshot, true);
     expect(itemsOf(pane("p1", "named"))).not.toContain("rename-agent");
   });
 
-  it("does not offer the previous terminal's agent name on a replacement pane", async () => {
-    const itemsOf = await draw(TUI);
+  it.each([TUI, APP_CORE])("does not offer the previous terminal's agent name on a replacement pane (%j)", async (offer) => {
+    const itemsOf = await draw(offer);
     expect(itemsOf({ ...pane("p1"), terminal_id: "replacement" })).not.toContain("rename-agent");
   });
 });

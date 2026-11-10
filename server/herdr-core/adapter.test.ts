@@ -1530,6 +1530,120 @@ describe("herdr-core adapter, Ovis's layout document", () => {
   const labeled = (address: string, space = "S", tab = "T") => terminal(address, { labels: { "herdr.space": space, "herdr.tab": tab } });
   const rects = async (socket: string) => Object.fromEntries((await sessionSnapshot(socket)).layouts[0]!.panes.map((pane) => [pane.pane_id, pane.rect]));
 
+  const appLayout = () => ({ spaces: [{ id: "S", name: "workspace", tabs: [{ id: "T", name: "tab", root: {
+    type: "row", children: [
+      { type: "block", content: { terminal: "t1" } },
+      { type: "column", children: [
+        { type: "block", content: { terminal: "t2" } },
+        { type: "block", content: { terminal: "t3" } },
+      ] },
+    ],
+  } }] }] });
+
+  it("splits app-owned panes right and down while preserving native layout and resized proportions", async () => {
+    const store = documents();
+    const app = { value: appLayout(), version: 7 };
+    const original = JSON.stringify(app);
+    store.docs.set("herdr-app", app);
+    const { socket, terminals } = await core([labeled("t1"), labeled("t2"), labeled("t3")], store);
+    await herdrRpc("layout.set_split_ratio", { tab_id: "T", path: [], ratio: 0.65 }, socket);
+    const first = await herdrRpc<{ pane: { pane_id: string } }>("pane.split", { target_pane_id: "t1", direction: "down" }, socket);
+    expect(first.pane.pane_id).toBe("t4");
+    await herdrRpc("pane.split", { target_pane_id: "t4", direction: "right" }, socket);
+    const expected = {
+      t1: { x: 0, y: 0, width: 650, height: 500 },
+      t4: { x: 0, y: 500, width: 325, height: 500 },
+      t5: { x: 325, y: 500, width: 325, height: 500 },
+      t2: { x: 650, y: 0, width: 350, height: 500 },
+      t3: { x: 650, y: 500, width: 350, height: 500 },
+    };
+    expect(await rects(socket)).toEqual(expected);
+    terminals.reverse();
+    expect(await rects(socket)).toEqual(expected);
+    expect(JSON.stringify(store.docs.get("herdr-app"))).toBe(original);
+    expect(terminals).toHaveLength(5);
+    expect((await ping(socket)).layout?.split).toBe(true);
+  });
+
+  it("starts no split terminal when a newer pane layout schema owns the app view", async () => {
+    const store = documents();
+    store.docs.set("herdr-app", { value: appLayout(), version: 1 });
+    store.docs.set("ovis-pane-sizes", { value: { schema: 99, workspaces: [] }, version: 1 });
+    const { socket, terminals } = await core([labeled("t1"), labeled("t2"), labeled("t3")], store);
+    await expect(herdrRpc("pane.split", { target_pane_id: "t1", direction: "down" }, socket)).rejects.toMatchObject({ code: "unsupported" });
+    expect(terminals).toHaveLength(3);
+    expect(store.writes).toEqual([]);
+  });
+
+  it("resizes app-owned panes and preserves their native document, processes and ordering", async () => {
+    const store = documents();
+    const app = { value: appLayout(), version: 7 };
+    const original = JSON.stringify(app);
+    store.docs.set("herdr-app", app);
+    const { socket, cores } = await core([labeled("t1"), labeled("t2"), labeled("t3")], store);
+    expect((await ping(socket)).layout).toEqual({ rename: false, split: true, move: false, arrange: false, resize: true, worktrees: false });
+    await herdrRpc("layout.set_split_ratio", { tab_id: "T", path: [], ratio: 0.7 }, socket);
+    await herdrRpc("layout.set_split_ratio", { tab_id: "T", path: [true], ratio: 0.3 }, socket);
+    expect(await rects(socket)).toEqual({
+      t1: { x: 0, y: 0, width: 700, height: 1000 },
+      t2: { x: 700, y: 0, width: 300, height: 300 },
+      t3: { x: 700, y: 300, width: 300, height: 700 },
+    });
+    expect(JSON.stringify(store.docs.get("herdr-app"))).toBe(original);
+    expect(store.docs.has("ovis-layout")).toBe(false);
+    expect(store.docs.has("ovis-pane-sizes")).toBe(true);
+    expect(cores.flatMap((connection) => connection.calls).filter((call) => call.method === "doc.set").map((call) => call.params["name"])).toEqual(["ovis-pane-sizes", "ovis-pane-sizes"]);
+    expect(cores.flatMap((connection) => connection.typed)).toEqual([]);
+    expect((await sessionSnapshot(socket)).panes.map((pane) => pane.pane_id)).toEqual(["t1", "t2", "t3"]);
+    const second = await core([labeled("t1"), labeled("t2"), labeled("t3")], store);
+    expect(await rects(second.socket)).toEqual(await rects(socket));
+  });
+
+  it("drops stale size overrides when the app replaces a pane or changes the split direction", async () => {
+    const store = documents();
+    const app = appLayout();
+    store.docs.set("herdr-app", { value: app, version: 1 });
+    const { socket, terminals } = await core([labeled("t1"), labeled("t2"), labeled("t3")], store);
+    await herdrRpc("layout.set_split_ratio", { tab_id: "T", path: [], ratio: 0.8 }, socket);
+    app.spaces[0]!.tabs[0]!.root.type = "column";
+    expect((await sessionSnapshot(socket)).layouts[0]?.splits[0]?.ratio).toBe(0.5);
+    app.spaces[0]!.tabs[0]!.root.type = "row";
+    terminals.splice(0, 1, labeled("t4"));
+    expect((await sessionSnapshot(socket)).layouts[0]?.splits[0]?.ratio).not.toBe(0.8);
+  });
+
+  it("retries one conflicting pane-size save and refuses a newer schema", async () => {
+    const store = documents(1);
+    store.docs.set("herdr-app", { value: appLayout(), version: 1 });
+    const { socket } = await core([labeled("t1"), labeled("t2"), labeled("t3")], store);
+    await herdrRpc("layout.set_split_ratio", { tab_id: "T", path: [], ratio: 0.6 }, socket);
+    expect(store.writes).toHaveLength(2);
+    expect((await sessionSnapshot(socket)).layouts[0]?.splits[0]?.ratio).toBe(0.6);
+    store.docs.set("ovis-pane-sizes", { value: { schema: 99, workspaces: [] }, version: 3 });
+    expect((await ping(socket)).layout?.resize).toBeUndefined();
+    await expect(herdrRpc("layout.set_split_ratio", { tab_id: "T", path: [], ratio: 0.7 }, socket)).rejects.toMatchObject({ code: "unsupported" });
+    expect(store.writes).toHaveLength(2);
+  });
+
+  it("preserves another viewer's resized tab when a pane-size save conflicts", async () => {
+    const store = documents(0, (docs) => docs.set("ovis-pane-sizes", { version: 1, value: {
+      schema: 1, workspaces: [{ id: "S", tabs: [{ id: "U", zoomed: null, root: {
+        split: "right", ratio: 0.6, first: { leaf: "t4" }, second: { leaf: "t5" },
+      } }] }],
+    } }));
+    const app = appLayout();
+    app.spaces[0]!.tabs.push({ id: "U", name: "other tab", root: { type: "row", children: [
+      { type: "block", content: { terminal: "t4" } }, { type: "block", content: { terminal: "t5" } },
+    ] } });
+    store.docs.set("herdr-app", { value: app, version: 1 });
+    const { socket } = await core([labeled("t1"), labeled("t2"), labeled("t3"), labeled("t4", "S", "U"), labeled("t5", "S", "U")], store);
+    await herdrRpc("layout.set_split_ratio", { tab_id: "T", path: [], ratio: 0.7 }, socket);
+    const shown = await sessionSnapshot(socket);
+    expect(shown.layouts.find((tab) => tab.tab_id === "T")?.splits[0]?.ratio).toBe(0.7);
+    expect(shown.layouts.find((tab) => tab.tab_id === "U")?.splits[0]?.ratio).toBe(0.6);
+    expect(store.writes).toHaveLength(2);
+  });
+
   it("marks as its own tab exactly the panes it refuses to split: a helper's and Other terminals' (#2806)", async () => {
     const { socket } = await core([labeled("t1"), terminal("t5", { parent: "t1" }), terminal("t6")]);
     const panes = (await sessionSnapshot(socket)).panes as HerdrPane[];
@@ -1742,7 +1856,7 @@ describe("another machine of the core, as its own PC (#2497)", () => {
     const snapshot = await sessionSnapshot(socket);
     expect(snapshot.workspaces.map((w) => w.label)).toEqual(["lab work"]);
     expect(snapshot.panes.map((p) => [p.pane_id, p.cwd, p.parent_pane_id ?? null])).toEqual([["t1", "/there", null], ["t2", "/home/u", "t1"]]);
-    expect(cores[0]!.calls.filter((call) => call.method === "doc.get").map((call) => call.params["on"])).toEqual(["lab-id", "lab-id"]);
+    expect(cores[0]!.calls.filter((call) => call.method === "doc.get").map((call) => call.params["on"])).toEqual(["lab-id", "lab-id", "lab-id"]);
   });
 
   it("reaches each terminal by its address on the core, and starts a new one there", async () => {

@@ -1,5 +1,12 @@
 # Ovis Design System
 
+## Pane resize on app-owned layouts
+
+The existing split handles follow VS Code's split editor: drag the separator, or focus it and
+use the arrow keys. A core whose Herdr app owns the arrangement can offer `resize` independently
+of `arrange`. Ovis keeps those ratios in `ovis-pane-sizes`, without changing the Herdr app's
+document. Saved sizes apply only while the same panes retain the same split structure.
+
 ## DeepRelay usage
 
 DeepRelay reuses Ovis's existing subscription percentage meters, following the Codex app's
@@ -2180,7 +2187,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   It reuses the name dialog with Herdr's 32-character lowercase-name rules. Empty clears the
   call name; a duplicate keeps the input and explains how to retry. Names come from the matching
   pane and terminal in `snapshot.agents`, and disappear when the agent exits or is replaced.
-  Watching devices and PCs whose layout the Herdr app owns do not offer this action.
+  Watching devices do not offer this action. A PC whose layout the Herdr app owns still
+  offers agent call names: naming an agent does not change its pane arrangement.
   On local Linux and macOS Herdr Core, Ovis stores call names in a versioned Core document,
   bound to the terminal creation and the agent process's kernel start identity. The Ovis
   compatibility socket resolves these names for agent lookup and prompts; raw `hc` commands

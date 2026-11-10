@@ -13,6 +13,7 @@ import { isRecord } from "./snapshot.ts";
  */
 
 export const OVIS_LAYOUT_DOC = "ovis-layout";
+export const OVIS_PANE_SIZES_DOC = "ovis-pane-sizes";
 export const OVIS_LAYOUT_SCHEMA = 1;
 /** a tab's area in the snapshot: units of its own, which the client reads as shares */
 export const LAYOUT_AREA: PaneLayoutRect = Object.freeze({ x: 0, y: 0, width: 1000, height: 1000 });
@@ -70,6 +71,11 @@ export function foreignLayout(value: unknown): boolean {
 
 export function leaves(node: LayoutNode): string[] {
   return "leaf" in node ? (node.leaf ? [node.leaf] : []) : [...leaves(node.first), ...leaves(node.second)];
+}
+
+export function sameTopology(first: LayoutNode, second: LayoutNode): boolean {
+  if ("leaf" in first || "leaf" in second) return "leaf" in first && "leaf" in second && first.leaf === second.leaf;
+  return first.split === second.split && sameTopology(first.first, second.first) && sameTopology(first.second, second.second);
 }
 
 /** The tree without the leaves `keep` refuses; a split left with one side becomes that side. */

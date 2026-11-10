@@ -6,6 +6,12 @@ const tui = { version: "0.9.5" } as HerdrIdentity;
 const none = { rename: false, split: false, move: false, arrange: false, worktrees: false };
 
 describe("appLayoutOf", () => {
+  it("offers pane resizing without enabling the Herdr app's arrangement commands", () => {
+    const identity: HerdrIdentity = { ...tui, runtime: "herdr-core", layout: { ...none, resize: true } };
+    expect(appLayoutOf(identity)).toEqual({ ...none, resize: true });
+    expect(appLayoutOf({ ...identity })).toBe(appLayoutOf(identity));
+    expect(appLayoutOf(identity)).not.toBe(appLayoutOf({ ...identity, layout: none }));
+  });
   it("offers every layout call once a PC's herdr says it is herdr's TUI server", () => {
     expect(appLayoutOf(tui)).toEqual({ rename: true, split: true, move: true, arrange: true, worktrees: true });
     // health still loading: nothing to offer that a core PC would refuse

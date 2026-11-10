@@ -251,14 +251,16 @@ export interface HerdrIdentity {
  * names and places in terminal labels (`rename`, `move` a one-pane tab to another workspace) and
  * splits, ratios, zoom, swap and order in its own `ovis-layout` document (`split`, `arrange`: only
  * where the core writes documents). `worktrees`: Ovis runs git's worktree commands itself and opens
- * a checkout as a workspace it places. Where the Herdr app arranges them, they are the app's, and
- * none is offered.
+ * a checkout as a workspace it places. Where the Herdr app arranges them, Ovis can offer
+ * `split` through labeled terminals and displayed split ratios through `resize`.
  */
 export interface HerdrCoreLayout {
   rename: boolean;
   split: boolean;
   move: boolean;
   arrange: boolean;
+  /** Ovis-only split ratios, including where the Herdr app owns the pane arrangement. */
+  resize?: boolean;
   worktrees: boolean;
 }
 /**

@@ -99,7 +99,6 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   // attached panes drawn here at a grid this device does not size, wider than the screen (watched, or held under the keyboard)
   const wideGrid = useSyncExternalStore(wideGrids.subscribe, wideGrids.snapshot, wideGrids.snapshot);
   const machineId = useMachineId();
-  // the Herdr app's window owns this PC's splits (lib/machineContext.tsx): its panes are not named, swapped, split, zoomed or resized here
   const appLayout = useAppLayout();
   const apple = /Mac|iPhone|iPad/.test(navigator.platform);
   const coarse = useMediaQuery("(pointer: coarse)");
@@ -235,7 +234,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     // herdr-core names no pane, and swaps, zooms and resizes none (lib/machineContext.tsx `arrange`)
     ...(!appLayout.arrange ? [] : [{ id: "rename", label: t("Rename pane"), icon: Pencil, run: () => setRenaming(target) }]),
     ...(appLayout.arrange && target.label ? [{ id: "clear-name", label: t("Clear pane name"), icon: Eraser, run: () => run(() => api.renamePane(target.pane_id, "")) }] : []),
-    ...(appLayout.arrange && !watching && snapshot?.agents.some((entry) => entry.pane_id === target.pane_id && entry.terminal_id === target.terminal_id) ? [{ id: "rename-agent", label: t("Change agent call name"), icon: Pencil,
+    ...(!watching && snapshot?.agents.some((entry) => entry.pane_id === target.pane_id && entry.terminal_id === target.terminal_id) ? [{ id: "rename-agent", label: t("Change agent call name"), icon: Pencil,
       run: () => setRenamingAgent({ kind: "agent", pane: target, name: snapshot?.agents.find((entry) => entry.pane_id === target.pane_id && entry.terminal_id === target.terminal_id)?.name ?? null }) }] : []),
     ...(appLayout.arrange && pane && target.pane_id !== pane.pane_id ? [{ id: "swap-focused", label: t("Swap with focused pane"), icon: ArrowLeftRight,
       run: () => run(() => api.swapPaneWith(pane.pane_id, target.pane_id)) }] : []),
@@ -477,7 +476,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
         <div className="pane-frame-body"><PaneCachedContext.Provider value={cell.cached && !cell.retained}><PaneWatchedContext.Provider value={cell.cached && !cell.retained && watchedTabs.has(item.tab_id)}><PanePresentedContext.Provider value={!offTab}><PaneShownContext.Provider value={!hidden}>{renderPane(item, active, alone === null && cells.length > 1)}</PaneShownContext.Provider></PanePresentedContext.Provider></PaneWatchedContext.Provider></PaneCachedContext.Provider></div>
       </section>;
     })}
-    {alone === null && appLayout.arrange && layout?.splits.map((item) => {
+    {alone === null && (appLayout.arrange || appLayout.resize) && layout?.splits.map((item) => {
       const vertical = item.direction === "right";
       const path = splitPath(item.id);
       if (path === null) return null;

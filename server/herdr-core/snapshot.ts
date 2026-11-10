@@ -2,7 +2,7 @@ import type { AgentInfo, AgentSessionInfo, AgentStatus, PaneInfo, PaneLayoutSnap
 import { HC_OTHER_WORKSPACE_ID } from "../../shared/machines.ts";
 import type { HerdrPane } from "../../shared/protocol.ts";
 import type { Foreground, Status, Terminal } from "./hc-api.generated.ts";
-import { clampRatio, type Grouping, type LayoutNode, LAYOUT_AREA, parseOvisLayout, place, reconcile, sideBySide } from "./layout-doc.ts";
+import { clampRatio, type Grouping, type LayoutNode, LAYOUT_AREA, type OvisLayout, parseOvisLayout, place, reconcile, sameTopology, sideBySide, splitLeaf } from "./layout-doc.ts";
 import { worktreeOfLabels } from "./worktrees.ts";
 import { paneAgent, type ProgramPlatform, reportedAgent, reportedStatus } from "../agent-identity.ts";
 import { catalogPlatform, type CatalogPlatform } from "../../shared/agent-catalog.ts";
@@ -29,6 +29,8 @@ export const LAYOUT_DOC = "herdr-app";
 /** The labels the Herdr app groups its terminals by (herdr-app src/window.rs): a terminal it has not placed is adopted there. */
 export const SPACE_LABEL = "herdr.space";
 export const TAB_LABEL = "herdr.tab";
+export const SPLIT_PARENT_LABEL = "ovis.split-parent";
+export const SPLIT_DIRECTION_LABEL = "ovis.split-direction";
 /** The names a person gave a workspace or tab Ovis made: names live in the app's document, which Ovis never writes. */
 export const WORKSPACE_NAME_LABEL = "ovis.workspace";
 export const TAB_NAME_LABEL = "ovis.tab";
@@ -290,7 +292,18 @@ function groups(terminals: readonly HcTerminal[], layout: unknown): Group[] {
   // a terminal the app has not placed yet, labeled with its space (and tab) the way the app labels
   // its own (an agent's worker, a terminal Ovis started): in that space, as the app will adopt it
   const rest: HcTerminal[] = [];
-  for (const terminal of [...live.values()].filter((candidate) => !placed.has(candidate.address))) {
+  const additions = new Map([...live.values()].filter((candidate) => !placed.has(candidate.address)).map((terminal) => [terminal.address, terminal]));
+  const ordered: HcTerminal[] = [];
+  const visited = new Set<string>();
+  const append = (terminal: HcTerminal): void => {
+    if (visited.has(terminal.address)) return;
+    visited.add(terminal.address);
+    const parent = additions.get(terminal.labels?.[SPLIT_PARENT_LABEL] ?? "");
+    if (parent) append(parent);
+    ordered.push(terminal);
+  };
+  for (const terminal of additions.values()) append(terminal);
+  for (const terminal of ordered) {
     // named as a placed terminal is: `where` (`<space> / <tab>`), then Ovis's own labels
     const where = terminal.labels?.["where"]?.split(" / ").map((part) => part.trim());
     const spaceId = terminal.labels?.[SPACE_LABEL];
@@ -312,7 +325,12 @@ function groups(terminals: readonly HcTerminal[], layout: unknown): Group[] {
     if (tab && !tab.label) tab.label = where?.[1] || terminal.labels?.[TAB_NAME_LABEL] || String(group.tabs.indexOf(tab) + 1);
     // beside what the tab already shows, never over it: the app places it when it adopts it
     if (tab) {
-      tab.root = besides(tab.root, tab.terminals.length, terminal.address);
+      const parent = terminal.labels?.[SPLIT_PARENT_LABEL];
+      const direction = terminal.labels?.[SPLIT_DIRECTION_LABEL];
+      const split = parent && tab.terminals.length > 0 && (direction === "right" || direction === "down")
+        ? splitLeaf(tab.root ?? sideBySide(tab.terminals.map((item) => item.address)), parent, terminal.address, direction)
+        : null;
+      tab.root = split ?? besides(tab.root, tab.terminals.length, terminal.address);
       tab.terminals.push(terminal);
     } else {
       ids.add(tabId);
@@ -455,6 +473,17 @@ export function keptLayout(terminals: readonly HcTerminal[], ovisDoc: unknown) {
   return reconcile(parseOvisLayout(ovisDoc), keptGrouping(groups(terminals, null)));
 }
 
+export function appPaneLayout(terminals: readonly HcTerminal[], appDoc: unknown, sizesDoc: unknown): OvisLayout {
+  const sizes = new Map(parseOvisLayout(sizesDoc)?.workspaces.flatMap((workspace) => workspace.tabs.map((tab) => [tab.id, tab.root] as const)));
+  return { schema: 1, workspaces: groups(terminals, appDoc).map((group) => ({ id: group.id,
+    tabs: group.tabs.map((tab) => {
+      const root = tab.root ?? sideBySide(tab.terminals.map((terminal) => terminal.address));
+      const sized = sizes.get(tab.id);
+      return { id: tab.id, root: sized && sameTopology(root, sized) ? sized : root, zoomed: null };
+    }),
+  })) };
+}
+
 /**
  * The groups in the order Ovis's document keeps, each kept tab with its tree and zoom: workspaces
  * first by the document, then as labels made them, Other terminals last; within a workspace, its
@@ -496,7 +525,7 @@ function arranged(placed: Group[], ovisDoc: unknown): { groups: Group[]; zoomed:
  * cell, and a grid read back as the pane made panes shrink each other (#2812). `host`: where the
  * core's terminals run (agentOf).
  */
-export function buildSnapshot(terminals: readonly HcTerminal[], layout: unknown, version: string, firstTurn?: FirstTurn, ovisDoc?: unknown, sessionOf?: SessionOf, host: CoreHost = coreHost(false)): SessionSnapshot {
+export function buildSnapshot(terminals: readonly HcTerminal[], layout: unknown, version: string, firstTurn?: FirstTurn, ovisDoc?: unknown, sessionOf?: SessionOf, host: CoreHost = coreHost(false), sizesDoc?: unknown): SessionSnapshot {
   const workspaces: WorkspaceInfo[] = [];
   const tabs: TabInfo[] = [];
   const panes: PaneInfo[] = [];
@@ -504,12 +533,15 @@ export function buildSnapshot(terminals: readonly HcTerminal[], layout: unknown,
   const own = layout === null || layout === undefined;
   const grouped = groups(terminals, layout);
   const { groups: placed, zoomed } = own ? arranged(grouped, ovisDoc) : { groups: grouped, zoomed: new Map<string, string>() };
+  const sizes = new Map(parseOvisLayout(sizesDoc)?.workspaces.flatMap((workspace) => workspace.tabs.map((tab) => [tab.id, tab.root] as const)));
   const shown = new Set(placed.flatMap((group) => group.tabs.flatMap((tab) => tab.terminals.map((terminal) => terminal.address))));
   for (const [index, group] of placed.entries()) {
     const groupPanes: PaneInfo[] = [];
     for (const [tabIndex, tab] of group.tabs.entries()) {
       const byAddress = new Map(tab.terminals.map((terminal) => [terminal.address, terminal]));
-      const cut = place(tab.root ?? sideBySide(tab.terminals.map((terminal) => terminal.address)));
+      const root = tab.root ?? sideBySide(tab.terminals.map((terminal) => terminal.address));
+      const sized = sizes.get(tab.id);
+      const cut = place(!own && sized && sameTopology(root, sized) ? sized : root);
       const tabPanes = cut.panes.map(({ pane_id }) => paneOf(byAddress.get(pane_id)!, group.id, tab.id, shown, host, firstTurn, sessionOf));
       groupPanes.push(...tabPanes);
       const alone = zoomed.get(tab.id);

@@ -8,6 +8,18 @@ them keeps to the rules here, so Ovis and it do not undo each other's changes.
 Ovis never writes the Herdr app's `herdr-app` document. Where it exists, the app arranges the
 core and Ovis only reads it.
 
+Ovis may resize the panes it displays over that arrangement. It saves only resized tabs in
+`ovis-pane-sizes`, using the same schema as `ovis-layout`. The app's document remains unchanged.
+A saved tree supplies ratios only when its pane IDs, order and split directions match the live
+app tree; a changed arrangement falls back to the app's sizes. The `resize` capability enables
+the separator without enabling `arrange` actions such as swaps or zoom. Writes use the document
+version and retry one conflict so other Ovis viewers keep their changes.
+
+Ovis can also split a pane in an app-owned tab. The new terminal carries `ovis.split-parent`
+and `ovis.split-direction` (`right` or `down`) beside its workspace and tab labels. Until the
+app places it, Ovis inserts it beside that parent, preserving the saved proportions in
+`ovis-pane-sizes`. These labels are resolved parent-first, independent of terminal list order.
+
 ## Terminal labels
 
 Which workspace and tab a terminal is in, and the names a person gave, are labels on the

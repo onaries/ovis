@@ -426,7 +426,7 @@ export async function ping(socketPath?: string): Promise<HerdrIdentity> {
   // herdr-core's layout calls (shared/machines.ts HerdrCoreLayout): each one it did not say yes to is off
   const offered = result.capabilities?.["layout"];
   const said = (call: keyof HerdrCoreLayout): boolean => typeof offered === "object" && offered !== null && (offered as Record<string, unknown>)[call] === true;
-  const layout: HerdrCoreLayout = { rename: said("rename"), split: said("split"), move: said("move"), arrange: said("arrange"), worktrees: said("worktrees") };
+  const layout: HerdrCoreLayout = { rename: said("rename"), split: said("split"), move: said("move"), arrange: said("arrange"), ...(said("resize") ? { resize: true } : {}), worktrees: said("worktrees") };
   return { version: result.version, protocol: result.protocol, terminal_attach: attach, ...(attach ? {} : { terminal_mirror: true }), ...(core ? { runtime: "herdr-core" as const, layout } : {}) };
 }
 
