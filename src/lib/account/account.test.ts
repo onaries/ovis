@@ -121,6 +121,67 @@ describe("a sign-in shared by tabs", () => {
     expect(await store.get("session")).toBeDefined();
   });
 
+  it("keeps a sign-in saved without an id the same one across its first refresh, for a call bound to a copy read before it", async () => {
+    const service = serviceWithSignIn();
+    let now = Date.now();
+    const { store, session } = await signIn(service, memoryAccountStore(), () => now);
+    // as a build from before sign-ins had an id stored it
+    const { sign_in_id: _later, ...old } = session;
+    await store.set("session", old);
+    const account = new AccountService({ store, fetch: service.fetch, now: () => now, lock: memoryLock() });
+    const read = await account.session();
+    expect(read?.sign_in_id).toBeDefined();
+    expect((await store.get("session"))?.sign_in_id).toBe(read!.sign_in_id);
+    // two readers agree on the id
+    expect((await account.session())?.sign_in_id).toBe(read!.sign_in_id);
+    // the access token runs out: any call refreshes it, which changes the refresh token
+    now = session.expires_at;
+    await account.listPcs();
+    expect((await store.get("session"))?.refresh_token).not.toBe(read!.refresh_token);
+    // a call bound to the copy read before the refresh still acts: it is the same sign-in
+    expect(await account.forSignIn(read!).listPcs()).toEqual([]);
+  });
+
+  it("reads and names a sign-in saved without an id in one update of the store, so another tab's refresh cannot fall between", async () => {
+    const service = serviceWithSignIn();
+    let now = Date.now();
+    const { store: inner, session } = await signIn(service, memoryAccountStore(), () => now);
+    const { sign_in_id: _later, ...old } = session;
+    await inner.set("session", old);
+    now = session.expires_at;
+    const lock = memoryLock();
+    const other = new AccountService({ store: inner, fetch: service.fetch, now: () => now, lock });
+    // a store that would let another tab name and refresh the session after any plain read of it
+    let reads = 0;
+    const store: typeof inner = { ...inner, get: (async (name: Parameters<typeof inner.get>[0]) => {
+      const value = await inner.get(name);
+      if (name === "session" && ++reads === 1) await other.listPcs();
+      return value;
+    }) as typeof inner.get };
+    const tab = new AccountService({ store, fetch: service.fetch, now: () => now, lock });
+    const read = await tab.session();
+    // no plain read came first, and what this tab holds is the session as the store has it, id and all
+    expect(reads).toBe(0);
+    expect(read!.sign_in_id).toBeDefined();
+    expect(read).toEqual((await inner.get("session"))!);
+    // after the other tab's refresh, this tab's copy is still that sign-in: its sign-out ends the refreshed one
+    await other.listPcs();
+    expect((await inner.get("session"))?.refresh_token).not.toBe(read!.refresh_token);
+    await tab.forSignIn(read!).signOut();
+    expect(await inner.get("session")).toBeUndefined();
+  });
+
+  it("keeps the id another tab already stored for a saved sign-in, and still reads a store that takes no write", async () => {
+    const service = serviceWithSignIn();
+    const { store: inner, session } = await signIn(service);
+    const { sign_in_id: _later, ...old } = session;
+    await inner.set("session", { ...old, sign_in_id: "given-by-the-earlier-build" });
+    expect((await new AccountService({ store: inner, fetch: service.fetch, lock: memoryLock() }).session())?.sign_in_id).toBe("given-by-the-earlier-build");
+    await inner.set("session", old);
+    const full: typeof inner = { ...inner, update: (async () => { throw new DOMException("full", "QuotaExceededError"); }) as typeof inner.update };
+    expect(await new AccountService({ store: full, fetch: service.fetch, lock: memoryLock() }).session()).toEqual(old);
+  });
+
   it("ends the sign-in on the service even when its access token has run out", async () => {
     const service = serviceWithSignIn();
     let now = Date.now();

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
+import { SLEEP } from "./fixtures/sleep.ts";
 
 if (process.platform !== "linux") { console.log("SKIP Agy process fixture requires Linux"); process.exit(0); }
 const root = mkdtempSync(join(tmpdir(), "herdr-agy-activity-"));
@@ -27,11 +28,7 @@ const add = (type: string, content = "", extra = {}) => {
   appendFileSync(path, JSON.stringify({ step_index, type, content, status: "DONE", ...extra }) + "\n");
 };
 const executable = join(root, "agy");
-const runtime = Bun.which("node");
-if (!runtime) throw new Error("the Agy stand-in needs Node");
-copyFileSync(runtime, executable); chmodSync(executable, 0o755);
-const standIn = join(root, "agy-fixture.cjs");
-writeFileSync(standIn, `process.title = "agy"; require("node:fs").openSync(${JSON.stringify(lock)}, "r"); process.stdin.resume();`);
+copyFileSync(SLEEP, executable); chmodSync(executable, 0o755);
 let workspace: string | undefined;
 let server: ReturnType<typeof createServer> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -39,7 +36,7 @@ try {
   const created = await workspaceCreate({ cwd: root, label: "ovis-test-agy-activity" });
   workspace = created.workspace.workspace_id;
   const pane = created.root_pane.pane_id;
-  await herdrRpc("pane.send_text", { pane_id: pane, text: `${executable} ${standIn}\n` });
+  await herdrRpc("pane.send_text", { pane_id: pane, text: `${executable} 600 3<${lock}\n` });
   for (const deadline = Date.now() + 10_000;;) {
     if ((await sessionSnapshot()).panes.find((p) => p.pane_id === pane)?.agent === "agy") break;
     if (Date.now() > deadline) throw new Error("fictional Agy process did not start");
