@@ -176,6 +176,9 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *         (the one Devices shows, else a new one); 409 relay_off while off, relay_offline in error
  *  POST   /api/relay/link                -> { url }; a pairing link without a code, for pairing by comparing
  *         digits (docs/relay.md); 409 relay_off while off
+ *  POST   /api/relay/link/close          -> { ok: true }; ends that link's pairing window and declines the
+ *         comparisons this PC was shown under it; from this PC only (403 local_required through the relay)
+ *         500 internal_error when the saved window could not be cleared (closed until a restart)
  *  POST   /api/relay/pairing             -> { ok: true }; JSON { id, decision: "approve" | "decline" } for a phone
  *         waiting with the same digits (`relay-pairings` on /api/machines/events); 400 invalid_relay_pairing,
  *         404 relay_pairing_gone once it left, was decided or ran out of time
@@ -610,7 +613,14 @@ export interface RelayStatus {
     readonly enforce_at: string | null;
     /** the relay refused this PC for its pass (4402) and it has not been let in since */
     readonly refused: boolean;
-    /** false while the pass in use says new client sessions to this PC are not allowed and the relay says it holds; absent otherwise */
+    /**
+     * Whether the relay enforces passes now, as the PC knows it: its last `sync` said `enforce`, or an `enforce_at`
+     * that has passed by the PC's clock, or it refused this PC for its pass. While it does, and the PC is on the relay
+     * with `new_sessions: false`, the PC refuses a device new to it. Absent from a server that does not say (one that
+     * refuses no device either).
+     */
+    readonly enforced?: boolean;
+    /** false while the pass the relay holds this PC to says new client sessions to it are not allowed and the relay says it holds; absent otherwise */
     readonly new_sessions?: false;
   };
 }

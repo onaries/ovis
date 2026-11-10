@@ -7,6 +7,7 @@ import * as pty from "../pty/session.ts";
 import * as coreAttach from "../herdr-core/attach-session.ts";
 import type { CoreAttachOptions } from "../herdr-core/attach-session.ts";
 import * as herdr from "../herdr/client.ts";
+import { HERDR_CORE, serveRuntime } from "../runtime/capabilities.ts";
 import type { ServerMessage } from "../../shared/protocol.ts";
 
 let attachment: PaneAttachment;
@@ -414,9 +415,8 @@ it("passes on a pane's own takeover words when no exit follows them", async () =
 
 for (const onCore of [true, false]) {
   it(`isolates ${onCore ? "a core stream from herdr probes, with no PTY" : "herdr attach startup probes and socket env"}`, async () => {
-    const previous = process.env["OVIS_RUNTIME"];
     const previousSocketPath = process.env["HERDR_SOCKET_PATH"];
-    process.env["OVIS_RUNTIME"] = onCore ? "herdr-core" : "herdr";
+    serveRuntime(onCore ? HERDR_CORE : null);
     process.env["HERDR_SOCKET_PATH"] = "/fixture/inherited-herdr.sock";
     try {
       using pane = await resizableAttach();
@@ -440,13 +440,27 @@ for (const onCore of [true, false]) {
         expect(pane.painted()).toBe(setup + "screen");
       }
     } finally {
-      if (previous === undefined) delete process.env["OVIS_RUNTIME"];
-      else process.env["OVIS_RUNTIME"] = previous;
+      serveRuntime(null);
       if (previousSocketPath === undefined) delete process.env["HERDR_SOCKET_PATH"];
       else process.env["HERDR_SOCKET_PATH"] = previousSocketPath;
     }
   });
 }
+
+// an SSH PC's bridge starts no runtime (remote-entry.ts): an OVIS_RUNTIME its shell exports names what was
+// chosen somewhere, not what this process serves, and its panes are herdr's
+it("attaches with herdr's own command where OVIS_RUNTIME names herdr-core but no runtime was started", async () => {
+  const previous = process.env["OVIS_RUNTIME"];
+  process.env["OVIS_RUNTIME"] = "herdr-core";
+  try {
+    using pane = await resizableAttach();
+    expect(pane.core).toBeUndefined();
+    expect(pane.pty?.args).toEqual(["terminal", "attach", "term_0"]);
+  } finally {
+    if (previous === undefined) delete process.env["OVIS_RUNTIME"];
+    else process.env["OVIS_RUNTIME"] = previous;
+  }
+});
 
 // #2289: a resized attach goes out on herdr's screen at the pty's grid, not on an older one
 for (const ordering of ["a resize back to the start size", "a redraw later than the hold", "a screen queued from before a round trip"] as const) {

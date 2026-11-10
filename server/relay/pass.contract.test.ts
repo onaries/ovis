@@ -45,13 +45,20 @@ async function fixture(mode: "off" | "grace" | "enforce" = "enforce", extra: Par
   const asked: string[] = [];
   /** the accounts that list this PC */
   const listed = new Set(["acct_1"]);
-  const hooks: { refused?: () => void; limited?: () => void } = {};
+  /** `signing` holds a pass's answer back until what it returns settles, so a test decides what the pass comes after */
+  const hooks: { refused?: () => void; limited?: () => void; signing?: () => Promise<unknown> } = {};
   /** the accounts that have as many PCs on the relay as they may */
   const limited = new Set<string>();
   /** what the passes the service signs say of new client sessions (unset: a v1 pass) */
   const signing: { newSessions?: boolean } = {};
   /** the pass forms each pass request said this PC reads */
   const passVersions: unknown[] = [];
+  /**
+   * When every pass is issued: two that say the same are then the same pass, whatever second each was asked in. A PC an
+   * enforcing relay refuses at the door asks twice as it starts, and a second pass that differed from the one its
+   * control socket opened with would go out as a renewal of its own, ahead of the one a test waits for.
+   */
+  const issuedAt = Math.floor(Date.now() / 1000);
   const accountFetch = async (request: Request): Promise<Response> => {
     const path = new URL(request.url).pathname;
     const body = await request.json() as Record<string, string>;
@@ -68,7 +75,8 @@ async function fixture(mode: "off" | "grace" | "enforce" = "enforce", extra: Par
     if (!expected || !verifyServerProof(body["proof"], expected)) return Response.json({ error: { code: "proof_invalid" } }, { status: 401 });
     if (!listed.has(body["account"] ?? "")) { hooks.refused?.(); return Response.json({ error: { code: "not_listed" } }, { status: 403 }); }
     if (limited.has(body["account"] ?? "")) { hooks.limited?.(); return Response.json({ error: { code: "relay_limit" } }, { status: 409 }); }
-    return Response.json({ pass: await signRelayPass(pair.privateKey, KID, body["server_id"]!, Math.floor(Date.now() / 1000), undefined, signing), expires_in: 172_800, refresh_in: 43_200 });
+    await hooks.signing?.();
+    return Response.json({ pass: await signRelayPass(pair.privateKey, KID, body["server_id"]!, issuedAt, undefined, signing), expires_in: 172_800, refresh_in: 43_200 });
   };
   /** what each control socket heard first after its proof, and how it closed */
   const syncs: Record<string, unknown>[] = [];
@@ -129,6 +137,17 @@ async function fixture(mode: "off" | "grace" | "enforce" = "enforce", extra: Par
       const response = await fetch(`${base()}/api/relay/start`, { method: "POST", headers: { origin: base(), "x-herdr-update": "1" } });
       expect(response.status).toBe(200);
     },
+    /**
+     * Saves the pass the service signs now as one this PC kept from an earlier run. Started on it, the PC asks for
+     * none: its control socket carries the pass from the start, so the first pass it asks for later is the first
+     * renewal on that socket.
+     */
+    async savePass() {
+      const identity = loadRelayIdentity(stateDir);
+      mkdirSync(join(stateDir, "relay"), { recursive: true });
+      writeFileSync(join(stateDir, "relay", "pass.json"), JSON.stringify({ pass: await signRelayPass(pair.privateKey, KID, identity.server_id, issuedAt, undefined, signing),
+        server_id: identity.server_id, service: "https://account.test", expires_at: Date.now() + 3_600_000, refresh_at: Date.now() + 3_600_000 }));
+    },
     nameAccount: (account: string) => fetch(`${base()}/api/account/relay-account`, {
       method: "POST", headers: { origin: base(), "x-herdr-machine": "1", "content-type": "application/json" }, body: JSON.stringify({ account }),
     }),
@@ -149,17 +168,17 @@ test("an enforcing relay refuses a PC with no account to name; once its owner na
   expect(await bounded(f.refused)).toEqual({ code: 4402, reason: "relay pass required" });
   const refused = f.service.status();
   expect(refused.phase).toBe("error");
-  expect(refused.pass).toEqual({ state: "no_account", relay: null, enforce_at: null, refused: true });
+  expect(refused.pass).toEqual({ state: "no_account", relay: null, enforce_at: null, refused: true, enforced: true });
   expect(f.asked).toEqual([]);
   // an account that does not list this PC gets no pass
   expect((await f.nameAccount("acct_2")).status).toBe(204);
   expect((await f.nameAccount("not an id")).status).toBe(400);
   expect((await f.nameAccount("acct_1")).status).toBe(204);
-  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z" });
+  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z", mode: "enforce" });
   const online: RelayStatus = f.service.status();
   expect(online.phase).toBe("online");
   expect(online.error_code).toBeNull();
-  expect(online.pass).toEqual({ state: "ok", relay: "ok", enforce_at: "2099-01-01T00:00:00.000Z", refused: false });
+  expect(online.pass).toEqual({ state: "ok", relay: "ok", enforce_at: "2099-01-01T00:00:00.000Z", refused: false, enforced: true });
   // sent in a header on every PC socket, never in the address
   expect(f.headers.at(-1)?.[RELAY_PASS_HEADER]).toStartWith("ovp1.");
   expect(existsSync(join(f.stateDir, "relay", "pass.json"))).toBe(true);
@@ -215,7 +234,7 @@ test("a restarted PC goes online on the pass it saved, without asking the accoun
   expect(asked).toBeGreaterThan(0);
   await f.restart();
   await f.start();
-  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z" });
+  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z", mode: "enforce" });
   expect(f.asked).toHaveLength(asked);
 });
 
@@ -227,7 +246,7 @@ test("a pass saved before the account service's address stopped parsing still le
   // restarted with an OVIS_ACCOUNT_SERVICE_URL that does not parse: no new pass can be asked for, the saved one still holds
   await f.restart({ accountService: new Error("Invalid OVIS_ACCOUNT_SERVICE_URL") });
   await f.start();
-  expect(await bounded(Promise.race([f.synced.then((sync) => sync["relay_pass"]), f.refused]))).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z" });
+  expect(await bounded(Promise.race([f.synced.then((sync) => sync["relay_pass"]), f.refused]))).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z", mode: "enforce" });
   // the status says so too, after a refresh as well (naming another account asks again): a pass is in use, though no
   // new one can be asked for
   expect((await f.nameAccount("acct_2")).status).toBe(204);
@@ -283,7 +302,7 @@ test("a test PC on a staging copy of Ovis's relay (OVIS_RELAY_STAGING=1 with OVI
   // written by hand: any case, a trailing dot): the relay counts as Ovis's for the setting alone
   await f.restart({ relay: undefined, ovisRelays: undefined, accountService: "https://Account-Staging.devswha.workers.dev." });
   await f.start();
-  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z" });
+  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z", mode: "enforce" });
   expect(f.headers.at(-1)?.[RELAY_PASS_HEADER]).toStartWith("ovp1.");
 });
 
@@ -309,7 +328,7 @@ test("with the staging setting the PC uses the one relay OVIS_RELAY_URL names, a
   withEnv({ OVIS_RELAY_STAGING: "1", OVIS_RELAY_URL: regional });
   await f.restart({ relay: undefined, ovisRelays: undefined, accountService: STAGING_ACCOUNT_SERVICE });
   await f.start();
-  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z" });
+  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z", mode: "enforce" });
   expect(f.dialed.map((socket) => socket.origin)).toEqual(f.dialed.map(() => regional));
 });
 
@@ -333,7 +352,7 @@ test("a pass the relay refuses is dropped and a new one asked for at once", asyn
   writeFileSync(join(f.stateDir, "relay", "pass.json"), JSON.stringify({ pass: await signRelayPass(stale.privateKey, KID, identity.server_id, Math.floor(Date.now() / 1000)), server_id: identity.server_id, service: "https://account.test", expires_at: Date.now() + 3_600_000, refresh_at: Date.now() + 3_600_000 }));
   await f.start();
   expect(await bounded(f.refused)).toEqual({ code: 4402, reason: "relay pass invalid" });
-  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z" });
+  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "ok", enforce_at: "2099-01-01T00:00:00.000Z", mode: "enforce" });
   expect(f.service.status().phase).toBe("online");
 });
 
@@ -351,38 +370,46 @@ test("a pass renewed while online goes to the relay on the open control socket",
 test("in grace, a PC that signs in sends its pass on the open control socket and the sign-in notice is over", async () => {
   const f = await fixture("grace");
   await f.start();
-  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "missing", enforce_at: "2099-01-01T00:00:00.000Z" });
+  expect((await bounded(f.synced))["relay_pass"]).toEqual({ state: "missing", enforce_at: "2099-01-01T00:00:00.000Z", mode: "grace" });
   expect(f.service.status().pass).toMatchObject({ relay: "missing", enforce_at: "2099-01-01T00:00:00.000Z" });
   expect((await f.nameAccount("acct_1")).status).toBe(204);
   await bounded(f.renewal);
-  expect(f.service.status().pass).toEqual({ state: "ok", relay: "ok", enforce_at: "2099-01-01T00:00:00.000Z", refused: false });
+  expect(f.service.status().pass).toEqual({ state: "ok", relay: "ok", enforce_at: "2099-01-01T00:00:00.000Z", refused: false, enforced: false });
 });
 
 test("a pass that allows no new client sessions is told in the status; one that allows them again clears it", async () => {
   const f = await fixture();
   f.signing.newSessions = false;
   expect((await f.nameAccount("acct_1")).status).toBe(204);
+  // The PC starts on a pass it kept. With none, the relay may refuse its first control socket before the pass comes;
+  // the PC then asks twice, and the second pass going out as a renewal ended the wait below before the pass it is for
+  await f.savePass();
   await f.start();
   await bounded(f.synced);
-  // the PC says it reads both pass forms, so the service may sign it a v2 pass
-  expect(f.passVersions.length).toBeGreaterThan(0);
-  expect(f.passVersions.every((versions) => JSON.stringify(versions) === "[1,2]")).toBe(true);
-  expect(f.service.status().pass).toEqual({ state: "ok", relay: "ok", enforce_at: "2099-01-01T00:00:00.000Z", refused: false, new_sessions: false });
+  expect(f.service.status().pass).toEqual({ state: "ok", relay: "ok", enforce_at: "2099-01-01T00:00:00.000Z", refused: false, enforced: true, new_sessions: false });
   // another account (which does not list this PC), then back: the PC renews with the pass the service signs now
   f.signing.newSessions = true;
   expect((await f.nameAccount("acct_2")).status).toBe(204);
   expect((await f.nameAccount("acct_1")).status).toBe(204);
   await bounded(f.renewal);
-  expect(f.service.status().pass).toEqual({ state: "ok", relay: "ok", enforce_at: "2099-01-01T00:00:00.000Z", refused: false });
+  // the PC says it reads both pass forms, so the service may sign it a v2 pass
+  expect(f.passVersions.length).toBeGreaterThan(0);
+  expect(f.passVersions.every((versions) => JSON.stringify(versions) === "[1,2]")).toBe(true);
+  expect(f.service.status().pass).toEqual({ state: "ok", relay: "ok", enforce_at: "2099-01-01T00:00:00.000Z", refused: false, enforced: true });
 });
 
 test("with passes off on the relay, a pass that allows no new client sessions is not told in the status", async () => {
   const f = await fixture("off");
   f.signing.newSessions = false;
+  // this relay lets the PC in without its pass, so whether its sync or the pass came first was a matter of timing, and
+  // the status read after the sync said no pass was held yet. Held back until the sync, the pass always comes second
+  // and goes out on the open control socket: that frame says the PC holds it
+  f.hooks.signing = () => f.synced;
   expect((await f.nameAccount("acct_1")).status).toBe(204);
   await f.start();
   await bounded(f.synced);
-  expect(f.service.status().pass).toEqual({ state: "ok", relay: null, enforce_at: null, refused: false });
+  await bounded(f.renewal);
+  expect(f.service.status().pass).toEqual({ state: "ok", relay: null, enforce_at: null, refused: false, enforced: false });
 });
 
 test("naming the same account again asks the account service nothing more", async () => {

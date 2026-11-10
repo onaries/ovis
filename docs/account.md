@@ -338,7 +338,22 @@ messages):
    The PC lists itself in the account's directory (`PUT /v1/pcs`, its relay key and relay) and opens
    a pairing window with `POST /api/relay/link` and the header `x-ovis-local-only: 1`. What that window takes is decided on
    this PC only: it is never listed to account members (`remote-pairings`) or approved by one, even
-   once the PC has members. The screen keeps the window open while it waits.
+   once the PC has members. The screen keeps the window open while it waits: it asks for the link again
+   every 30 seconds while its page shows (that call writes nothing to the directory) and lists the PC anew
+   every nine minutes, for 30 minutes a press, then offers **Keep waiting**; **Stop waiting** ends it
+   sooner. Either way the screen does not close the window already open: it closes by itself, up to ten
+   minutes later. A reloaded tab
+   goes on waiting only for the same PC under the same sign-in. Once a device added the PC the screen says
+   so, and that the account's other devices can open it only when the PC's status no longer says `enrolling`.
+   The window is kept
+   across a restart of the PC's server (an update) for the rest of its ten minutes, local-only as it
+   was opened, and is closed by `POST /api/relay/link/close`, **Revoke all**,
+   **Reset relay identity** or turning the relay off.
+   A close declines the comparisons the PC was showing and one whose digits arrive after it, and is
+   written to disk (as is a window that ran out). A close does not reach an Add-this-PC screen that
+   is still waiting on the PC: that screen asks for its window again at its next reopen, which is an
+   act of the PC's own page, so **Stop waiting** on it (or leaving that screen) is what ends the wait.
+   A comparison approved before a close makes no device when the other side confirms after it.
 2. On any device already in the account, the dashboard lists the PC as new in the account, with
    **Add** on its row, for 10 minutes after the directory took it. **Add** opens the Add-a-PC sheet.
    The PC's key comes from the directory and is checked against its id, as for any PC there; the
@@ -624,7 +639,14 @@ directory, so mailboxes are kept per PC **and account**: the PC asks only for it
 only in that account's directory. `ack` is the highest `seq` the PC processed, whatever the
 outcome, refused included (or `null`); the service deletes those records before answering, and
 deletes any record after 30 days. The PC pulls when it starts and every five minutes while it
-belongs to an account.
+belongs to an account. It also pulls when a sign-in fails, since a member may have added that
+device on another PC a moment ago, and then checks the sign-in once more. Such sign-ins start at
+most one pull a minute (a pull that could not read the mailbox lets the next start 10 seconds after
+it began), and each waits at most five seconds for it. A sign-in that still fails is refused with
+the same `auth_failed`, so a device whose add reached the mailbox after that pull, or after another
+failed sign-in spent it, is let in up to a minute later. An unknown id and a signature that does
+not hold take the same way, so the delay does not tell which ids have a row; it does tell a PC in
+an account (the refusal may wait for the pull) from one in none (it never does).
 
 The `account` role keeps the two proofs apart: the relay verifies `control` and `data` only, so an
 answer the PC gave the account service is no use to the relay, and a relay's challenge passed on by

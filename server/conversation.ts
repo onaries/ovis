@@ -52,7 +52,8 @@ import { awaited, CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF, codexOutputPicture, cod
 import { type Held, heldOpenPlatform, openHeldDirectory } from "./held-open.ts";
 import { AmbiguousClaudeStore, claudeAttachSession, claudeProcessSession, claudeTranscriptFile, darwinProcess, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, jobClaude, processClaudeConfigDir, windowsShellClaude } from "./claude-store.ts";
 import { coreSocket } from "./herdr-core/discovery.ts";
-import { coreSocketPath, servingCore } from "./herdr-core/runtime.ts";
+import { coreSocketPath } from "./herdr-core/runtime.ts";
+import { capabilities } from "./runtime/capabilities.ts";
 import { forgetGjcPane, forgetGjcState, gjcPidUnderShell, gjcTranscriptFileForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
 import { isOmoProcess, omoProcessIdentity, omoSessionForPane, processEnviron } from "./omo.ts";
 import { processAlive, processStartedAtAsync } from "./process-start.ts";
@@ -68,7 +69,7 @@ import { agyFreshSession, resolveAgyStore, sameAgyStore, type AgyStore } from ".
 import { FileBusyError } from "./file-pool.ts";
 import { museSession, museToolOutput, MuseUnavailable, parseMuseTranscript } from "./muse.ts";
 import { resolveMuseSession } from "./muse-store.ts";
-import { LettaUnavailable, lettaToolOutput, parseLettaTranscript } from "./letta.ts";
+import { LettaUnavailable, lettaToolOutputOffThread, parseLettaTranscript } from "./letta.ts";
 import { programName } from "./agent-identity.ts";
 import { lettaLocalSettings, resolveLettaTranscript } from "./letta-store.ts";
 import { followKimiUndo, kimiToolOutput, kimiTranscriptPathForPane, parseKimiTranscript, type KimiUndo } from "./kimi.ts";
@@ -1819,7 +1820,7 @@ async function claudeProcesses(paneId: string, known?: KnownProcesses, viewed = 
   const shell = info?.shell_pid;
   if (process.platform === "win32") return typeof shell === "number" ? (await windowsShellClaude(shell).catch(() => null)) ?? [] : [];
   const leader = info?.foreground_processes?.[0];
-  if (!servingCore() || leader === undefined || typeof leader.pid !== "number") return [];
+  if (capabilities().foreground !== "leader" || leader === undefined || typeof leader.pid !== "number") return [];
   const word = viewed ? null : hcAttachWord(leader.argv);
   if (word !== null) return reachesOwnCore(leader.pid) ? claudeProcesses(word, undefined, true) : [];
   return (await jobClaude(leader.pid)) ?? [];
@@ -1982,7 +1983,7 @@ export async function ompTranscriptPath(paneId: string, cwd: string, known?: Kno
     if (route === null) throw new ConversationUnavailable("no_session_path");
   }
   // herdr names no session of this store (or another agent's): the pane's omp process does
-  const held = route === null ? null : ompRouteTranscript(await ompHeldOpen(route, servingCore()), cwd);
+  const held = route === null ? null : ompRouteTranscript(await ompHeldOpen(route, capabilities().agents === "reported"), cwd);
   if (held === null) throw new ConversationUnavailable("no_session_path");
   // the held transcript is the pane's own, in the store its process keeps: authorized there, and read so
   const authorized = authorizedTranscript(held, route!.layout.sessions);
@@ -3752,7 +3753,9 @@ export async function toolOutput(paneId: string, ref: string, codexHome?: string
       nativeRef = ref.slice(prefix.length);
       if (!nativeRef.includes("@")) return null;
     }
-    return transcript.source === "agy-transcript" ? null : transcriptToolOutput(transcript.source, transcript.path, nativeRef, transcript.codexHome ?? codexHome);
+    // Agy's and Letta's are read below, off this lookup
+    return transcript.source === "agy-transcript" || transcript.source === "letta-transcript" ? null
+      : transcriptToolOutput(transcript.source, transcript.path, nativeRef, transcript.codexHome ?? codexHome);
   };
   let output: string | null;
   // the sources whose lookup digests the transcript (transcriptGeneration) read that off the event loop first
@@ -3773,6 +3776,21 @@ export async function toolOutput(paneId: string, ref: string, codexHome?: string
     output = settled.value;
   } else if (resolved.source === "pi-transcript" || resolved.source === "cmd-transcript" || resolved.source === "codex-transcript") {
     output = readAuthorized(resolved.path, lookup);
+  } else if (resolved.source === "letta-transcript") {
+    // scanned on a file thread, which reads only the file the path names as the lookup begins: one long line
+    // took this thread, which answers every other request and terminal, for seconds (#3326). A ref in
+    // another agent's shape (Copilot's) names no call of Letta's
+    const authorized = TOOL_REF.test(ref) ? authorizedFile(resolved.path) : null;
+    output = authorized === null ? null : await lettaToolOutputOffThread(resolved.path, ref, authorized, TOOL_OUTPUT_MAX);
+    if (output !== null) {
+      // a pane bound to another conversation while its transcript was scanned (`/new`, another letta started
+      // in it) has not this output: one seen bound elsewhere is refused at once, any other resolved again
+      if (rebound(paneId, transcript)) return null;
+      let fresh: NativeTranscript;
+      try { fresh = await paneTranscript(paneId, codexHome, undefined, undefined, opencodeDb, hermesHome, grokHome, museData); }
+      catch (error) { if (error instanceof ConversationUnavailable) return null; throw error; }
+      if (fresh.source !== transcript.source || fresh.path !== transcript.path) return null;
+    }
   } else output = resolved.source === "agy-transcript" ? await agyToolOutput(resolved.path, ref) : lookup();
   if (resolved.agy && !sameAgyStore(resolved.agy, await resolveAgyStore(pane))) return null;
   if (resolved.source === "copilot-transcript") {
@@ -3785,8 +3803,11 @@ export async function toolOutput(paneId: string, ref: string, codexHome?: string
   return live() ? output : null;
 }
 
-/** The output a transcript file holds for one tool call id, whole (up to TOOL_OUTPUT_MAX). */
-export function transcriptToolOutput(source: Exclude<StreamSource, "agy-transcript">, path: string, ref: string, codexHome?: string): string | null {
+/**
+ * The output a transcript file holds for one tool call id, whole (up to TOOL_OUTPUT_MAX). Agy's and Letta's
+ * are not read here: toolOutput awaits theirs (agyToolOutput, lettaToolOutputOffThread).
+ */
+export function transcriptToolOutput(source: Exclude<StreamSource, "agy-transcript" | "letta-transcript">, path: string, ref: string, codexHome?: string): string | null {
   if (!TOOL_REF.test(ref) && !(source === "copilot-transcript" && /^[A-Za-z0-9_:.-]{1,128}@[0-9a-z]+@[0-9a-z]+@[0-9a-f]{32}$/.test(ref))) return null;
   if (source === "codex-transcript") {
     let segments: ReturnType<typeof codexHistorySegments>;
@@ -3811,10 +3832,6 @@ export function transcriptToolOutput(source: Exclude<StreamSource, "agy-transcri
   if (source === "grok-transcript") return readAuthorized(path, () => grokToolOutput(path, ref));
   if (source === "muse-transcript") {
     const output = readAuthorized(path, () => museToolOutput(path, ref));
-    return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
-  }
-  if (source === "letta-transcript") {
-    const output = readAuthorized(path, () => lettaToolOutput(path, ref));
     return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
   }
   if (source === "pi-transcript" || source === "cmd-transcript") return piToolOutput(path, ref);

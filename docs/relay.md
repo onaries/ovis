@@ -125,7 +125,7 @@ longer works**.
 PC's `server_id`, public key, relay and host name only (**Copy a link without a code** under the setup
 guide's QR code; it holds nothing secret, though whoever carries the link can read the host name). Copying it opens a 10-minute window, as a Bluetooth device's pairing mode
 does: outside it the PC refuses a comparison with `auth_failed` before any prompt, and does not count
-it as a failed pairing, so nobody the owner did not invite can raise a prompt. Such a link may have come through a channel nobody vouches
+it as a failed pairing, so nobody the owner did not invite can raise a prompt. The window is kept across a restart of the PC's server for the rest of its ten minutes (a saved deadline further ahead than that reads as closed), and `POST /api/relay/link/close`, from this PC only, ends it and declines the comparisons it was showing. Such a link may have come through a channel nobody vouches
 for, so its key is not trusted on its own: a relay, or whoever handed the link over, could have put
 its own key there and sit between the phone and the PC. Trust comes from two people looking at
 two screens instead, as in Bluetooth's numeric comparison:
@@ -281,26 +281,45 @@ terminal, with the same two ways its Settings page offers and the same rules. In
 plugin, run the plugin's script as in [In a terminal](guide.md#in-a-terminal); from a checkout:
 
 ```bash
-bun scripts/plugin.ts link            # sign in to your account, then approve the device that adds this PC
-bun scripts/plugin.ts link --google   # the same, at Google's own device page (--github: GitHub's)
+bun scripts/plugin.ts add             # sign in to your account, then approve the device that adds this PC
+bun scripts/plugin.ts add --google    # the same, at Google's own device page (--github: GitHub's)
 bun scripts/plugin.ts link --code     # a code to type and the relay QR code, renewed until Ctrl+C
 ```
 
-Both turn the relay on first when it is off, and wait until it is online.
+`add`, `login` and `link` are one command under three names. Both ways turn the relay on first when
+it is off, and wait until it is online.
 
-- **`link`** signs in the way a PC's own page does: it prints the Ovis sign-in page
+- **`add`** signs in the way a PC's own page does: it prints the Ovis sign-in page
   (`https://account.ovis.sh/link`), a code and a QR code of the page with the code filled in. On any
   device, open it, check the code, choose **Continue with GitHub** or **Continue with Google**, sign
   in, and confirm. An account service without that page, or `--github` / `--google`, uses the
   provider's own device page and its code instead. Signing in adds nothing by itself. Then it lists this PC in your
-  account ([Adding a PC](account.md#adding-a-pc)) and waits. On a phone already in your account,
-  tap **Add** on this PC; the terminal shows the request with its six digits
+  account ([Adding a PC](account.md#adding-a-pc)) and waits. On a device already signed in to this
+  account (the Ovis app or app.ovis.sh), choose **Add** on this PC; the terminal shows the request with its six digits
   (**… wants to join your account. Approve it only if its screen shows 123 456**) and asks
   y/N. That approval is this PC's own, as on its screen: the window it opens takes approvals from
-  this PC only. Every nine minutes it lists the PC anew so the account's devices keep showing it as
-  new; a renewal the account service does not take is tried again until it is, so the PC never
-  stays off the list. It ends once the PC is in the account, and the sign-in ends with it: nothing
-  of it is kept on the PC. With `OVIS_ACCOUNT_SERVICE_URL=off` it points to `--code` instead.
+  this PC only. The waiting goes on under that question: a request that stops waiting unanswered
+  is dropped with a line saying so, a line typed after it answers nothing, and an answer the server
+  did not take is asked for again rather than sent a second time. It asks for that window again every 30 seconds, and every nine minutes, and once more with its last window, it lists the
+  PC anew so the account's devices keep showing it as new until the run ends; a line typed for a request that went away answers no later request; a renewal the account service does not
+  take is tried again until it is, so the PC never stays off the list. An Ovis server that stops
+  answering meanwhile (a restart, an update) does not end the command: it waits, keeping the
+  sign-in, and asks for the window again with the first call the server answers. It ends well only
+  once the PC is in the account that signed in and the adding device has brought in the account's
+  other devices (**Added. Bringing in your account's other devices…** while it does), and names
+  the account by the start of its id. A PC that ended in another account is reported with both ids
+  and what to do (**Revoke all** in Settings → Devices and PCs), is taken off the list of the
+  account that signed in, and the command fails. After 30 minutes of waiting it stops by itself;
+  run it again to keep waiting. The server keeps a window ten minutes from when it was last asked
+  for, so the command stops asking, and stops listing the PC anew, ten minutes before its end: a run
+  that reaches the 30 minutes leaves no window behind and no card showing the PC as new, and a
+  server that goes away in those last ten minutes ends it unless the PC is in the account by then. A run
+  that ends sooner (the PC was added, Ctrl+C) leaves the window to run out by itself, within ten
+  minutes. However it ends, the sign-in ends with it: nothing of it is kept on the PC. On a PC
+  already in an account it says so, with the start of that account's id, and signs in to nothing;
+  when that account's other devices are still being brought in, it waits for them, up to 30
+  minutes, and fails if they are not in by then. With `OVIS_ACCOUNT_SERVICE_URL=off` it points to
+  `--code` instead.
 - **`link --code`** prints what **Connect a device** shows: the code to type at app.ovis.sh
   (**Pair with a code**), the relay pairing link as a QR code drawn in the terminal, and this PC's
   ID for the other device to compare. Both renew when they run out. When the relay mints no typed
@@ -314,7 +333,8 @@ Both turn the relay on first when it is off, and wait until it is online.
 plugin checkout and does not replace the checkout. `link` follows the release that runs, as
 `phone-setup` does, from the first checkout that has it on. A checkout from before `link` prints
 the usage line without it: reinstall the plugin (`herdr plugin install devswha/ovis`), which
-replaces the checkout, then run it again. A server too old for it (no account routes) is named as
+replaces the checkout, then run it again. A checkout from before `add` and `login` does the same
+for those two names, and its `link` still works. A server too old for it (no account routes) is named as
 such: `link` says to update it rather than failing on the first request.
 
 **Who counts as this PC.** `link` talks only to an Ovis on a loopback address, with the token the
@@ -710,12 +730,35 @@ run yourself need no account and no pass.
   it, and only once every relay runs a version that reads it. An older PC names none and gets v1.
   While passes are enforced and the PC's pass says `new` 0, a relay closes a client the PC has
   identified as a device new to it (named on its control socket with `new_session`) with `4403`
-  (`no new sessions for this server`); its own devices and the clients already connected stay. The
-  PC does not send `new_session` yet.
+  (`no new sessions for this server`); its own devices and the clients already connected stay.
+  The PC names a client only once a pairing on its session would make a device new to it
+  (`server/relay/link.ts` `refuseNewDevice`): a pairing code that holds, or a comparison of digits
+  both people confirmed, with a key none of its devices holds. It then makes no device, spends no
+  code and counts no failed pairing, and closes the client's socket itself after 2 s should the relay
+  not (a relay that does not hold the PC's latest pass yet, or a control socket that is reconnecting).
+  A device it knows signs in as ever, on a new socket too, and a client that has not got that far (a
+  wrong code, a comparison nobody approved) hears nothing of the pass. A device it knows that pairs
+  again with the key it saved (it opens the pairing QR once more, or forgot this PC and pairs again
+  with its account's key) is not new and is never refused. Pairing does not prove that key, so
+  whoever holds a pairing that would succeed and names a paired device's public key gets that
+  pairing's session past the limit. It cannot sign in with the key afterwards, so each further
+  session takes another pairing that succeeds (on a PC in no account, a code that session started
+  itself). The PC refuses only while the relay
+  enforces passes, which `sync` says in `relay_pass.mode` (`enforce`, or `grace` past `enforce_at`;
+  a relay that names no mode counts as enforcing only past its `enforce_at`), and the pass the
+  relay holds it to is a v2 pass with `new` 0. That pass is the PC's latest: the relay refuses only
+  whom the PC names, so the PC's pass decides. The PC stops sending a pass 5 minutes before it runs
+  out and the relay honors it until 5 minutes after: when no renewal came, the PC keeps to what
+  that pass said of new sessions for those last minutes too (timed from when it got the pass, not
+  from its own clock). The refused phone or browser can tell why from the relay's `4403` close; one
+  the PC had to close by itself hears `1012` (`server gone`), a lost connection.
 - **Keeping it.** The pass lasts 48 hours. The PC keeps it in `relay/pass.json` (readable by your user
   only), so a restart or an account service outage costs nothing while it holds, and asks for the
   next one after 12 hours, backing off (and honoring `Retry-After`) when the service does not answer.
-  A new pass goes to the relay on the open control socket; nothing reconnects. The file names the
+  A new pass goes to the relay on the open control socket; nothing reconnects. The relay takes one
+  renewal a minute on a socket and drops any sooner unanswered, so a pass that follows another
+  within that minute goes out once it has passed (65 s after the one before), and one that came
+  while a control socket was still being let in goes out as soon as that socket is. The file names the
   account service the pass came from, and a pass from another one (a staging one) is never sent.
   While `OVIS_ACCOUNT_SERVICE_URL` cannot be used, the saved pass still holds until it runs out.
 - **Sending it.** In the `x-ovis-relay-pass` header of every socket the PC opens to Ovis's relays,
@@ -728,9 +771,15 @@ run yourself need no account and no pass.
   then stops reconnecting until it gets a pass, and reconnects as soon as it does. `GET /api/relay`
   says where it stands in `pass`: `state` (`ok`, `no_account`, `not_listed`, `limit` or
   `unavailable`), what the relay last said of it (`relay`), and from when the relay will need it
-  (`enforce_at`). `new_sessions: false` there means the pass in use says new client sessions to this
-  PC are not allowed for the pass's lifetime (enforced by a later relay change), shown only while
-  the relay says passes are on and this one holds (`relay` `ok`); it is absent otherwise. `pass` is absent on a relay that is not Ovis's, and with
+  (`enforce_at`). `enforced` says whether the relay enforces passes now, as the PC knows it: its
+  last `sync` said `enforce`, or an `enforce_at` that has passed by the PC's clock, or it refused the
+  PC for its pass. `new_sessions: false` there means the pass the relay holds this PC to says new
+  client sessions to it are not allowed for the pass's lifetime, shown only while the relay says
+  passes are on and this one holds (`relay` `ok`); it is absent otherwise. While both hold on a PC
+  the relay lets in (`enforced` true, `new_sessions` false), the PC refuses every device new to it,
+  and the app says so on the PC ("This account has reached its relay data limit for new
+  connections"), whatever `enforce_at` says: a relay in `enforce` names no date, or one far ahead.
+  `pass` is absent on a relay that is not Ovis's, and with
   `OVIS_ACCOUNT_SERVICE_URL=off`. `error_code` says which of the reasons below it is.
 
 ## Why it is not online

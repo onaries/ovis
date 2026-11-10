@@ -47,13 +47,13 @@ import terminalFixture from "./fixtures/terminal.json";
 /**
  * The fictional access facts the Phone & devices page shows, picked by `?demo_security=` when the
  * demo loads, or by `ovis:demo-security` in this tab's sessionStorage, which a check changes to see
- * the next answer replace the last (scripts/security-summary-demo-regression.ts); none of them is
+ * the next answer replace the last (scripts/security-summary-demo-run.ts); none of them is
  * any real server's. `older` answers without facts, `error` fails the bridge health and `loading`
  * never answers it.
  */
 /**
  * `?demo_runtime=both`: the PC has herdr's TUI and the Herdr app's core (hc) both installed, serving
- * herdr, so Settings > About offers the switch between them (scripts/settings-pages-demo-regression.ts).
+ * herdr, so Settings > About offers the switch between them (scripts/settings-rows-demo-regression.ts).
  */
 const DEMO_RUNTIME_FACTS = new URLSearchParams(location.search).get("demo_runtime") === "both" ? {
   herdr_runtime: { serving: "herdr" as const, source: "detected" as const, tui: { installed: true, running: true }, app_installed: true, switch_to: "herdr-core" as const, locked: null },
@@ -1148,7 +1148,7 @@ function usageReport(): UsageReport {
  * and start a pairing that a fictional phone completes a moment later, which is what sends the
  * `device-paired` event every open window shows as a line (src/components/DevicePairedNotice.tsx).
  * All of it answers only with `?demo_devices=`: without it the demo has no device list (its
- * /api/devices is a 404, which scripts/security-summary-demo-regression.ts relies on). `list` is the
+ * /api/devices is a 404, which scripts/security-summary-demo-run.ts relies on). `list` is the
  * fictional devices below; another value picks a state for the browser lane's captures: `empty` (nothing paired),
  * `watch` (this browser is a device that only watches), `slow` (the list is held until the page calls
  * `herdrDemoReleaseDevices()`, so a capture of the loading state never races the answer) or `error`
@@ -1393,7 +1393,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/portal") return json(demoPortal(), 200, { "cache-control": "no-store" });
   if (path === "/api/relay") return json(demoRelayStatus(), 200, { "cache-control": "no-store" });
   if (path === "/api/relay/start" || path === "/api/relay/stop" || path === "/api/relay/offer" || path === "/api/relay/reset-identity"
-    || path === "/api/relay/link" || path === "/api/relay/pairing" || path === "/api/relay/code" || path === "/api/relay/code/cancel" || path === "/api/relay/direct") {
+    || path === "/api/relay/link" || path === "/api/relay/link/close" || path === "/api/relay/pairing" || path === "/api/relay/code" || path === "/api/relay/code/cancel" || path === "/api/relay/direct") {
     if (method !== "POST") return error("method_not_allowed", "Use GET for status and POST for relay actions.", 405);
     if (demoAuth.role === "watch") return error("read_only", "this device can only watch", 403);
     if (path === "/api/relay/offer") return demoRelayOffer();
@@ -1408,6 +1408,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
       return json({ code: "7K3QD-M2XHA", expires_at: pairing.expires_at, server_id: demoRelayServerId() }, 200, { "cache-control": "no-store" });
     }
     if (path === "/api/relay/code/cancel") return json({ ok: true }, 200, { "cache-control": "no-store" });
+    if (path === "/api/relay/link/close") return json({ ok: true }, 200, { "cache-control": "no-store" });
     // no phone ever compares digits with the demo, so none is waiting to be approved
     if (path === "/api/relay/pairing") return error("relay_pairing_gone", "That phone is no longer waiting: it left, was decided, or its time ran out.", 404);
     if (path === "/api/relay/direct") {

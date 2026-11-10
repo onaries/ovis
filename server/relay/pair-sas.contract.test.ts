@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, expect, setSystemTime, test } from "bun:test";
+import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import {
   channelBinding, exportPublicKey, generateKeyPair, openClientSecureChannel, openDaemonSecureChannel,
 } from "../../shared/relay-e2ee.ts";
@@ -16,6 +16,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { importPublicKey } from "../../shared/relay-e2ee.ts";
 import { accountDeviceId } from "../../shared/account-records.ts";
 import { RelaySession } from "./session.ts";
+import type { RelaySessionOptions } from "./session.ts";
 import { bounded, deferred, relayAccountFixture, relayConnection, relayDevice, relayFixture, TestClock } from "./test-helpers.ts";
 
 type Fixture = ReturnType<typeof relayFixture>;
@@ -74,7 +75,7 @@ class Inbox {
 }
 
 /** The PC's real session behind its Noise responder, on `transport`. */
-async function pc(f: Fixture, transport: Transport, keys: KeyPair, clock?: MuxClock) {
+async function pc(f: Fixture, transport: Transport, keys: KeyPair, clock?: MuxClock, extra: Pick<RelaySessionOptions, "refuseNewDevice"> = {}) {
   let session: RelaySession | undefined;
   const opening = openDaemonSecureChannel(transport, { daemonKeyPair: keys, events: { onmessage: (data) => session?.receive(data) } });
   return {
@@ -82,7 +83,7 @@ async function pc(f: Fixture, transport: Transport, keys: KeyPair, clock?: MuxCl
       session = new RelaySession({
         channel: await opening, services: f.app.context.services, port: f.app.port,
         serverId: "0123456789abcdef0123456789abcdef", serverVersion: "0.4.20", minSupportedClient: "0.4.20",
-        routingOverhead: 0, maxWireMessageBytes: 256 * 1024, ...(clock ? { clock } : {}),
+        routingOverhead: 0, maxWireMessageBytes: 256 * 1024, ...(clock ? { clock } : {}), ...extra,
       });
       return session;
     },
@@ -140,10 +141,10 @@ function prompts(f: Fixture, check: (list: RelayPairingRequest[]) => boolean): P
   return bounded(found.promise).finally(stop);
 }
 
-async function direct(f: Fixture, clock?: MuxClock) {
+async function direct(f: Fixture, clock?: MuxClock, extra: Pick<RelaySessionOptions, "refuseNewDevice"> = {}) {
   const keys = generateKeyPair();
   const [phoneSide, pcSide] = duplex();
-  const end = await pc(f, pcSide, keys, clock);
+  const end = await pc(f, pcSide, keys, clock, extra);
   const p = await phone(phoneSide, exportPublicKey(keys.publicKey));
   const session = await end.start();
   return { p, session };
@@ -298,6 +299,33 @@ test("a phone that did not offer the feature is not given it, and a comparison w
   expect(await sessionError(p)).toBe("protocol_error");
 });
 
+test("while its relay refuses new sessions, a comparison both people confirmed makes no device, and the relay is asked only then", async () => {
+  const f = fixture();
+  let asked = 0;
+  const { p, session } = await direct(f, undefined, { refuseNewDevice: () => { asked++; return true; } });
+  const failures = spyOn(f.app.context.services.devices, "noteRelayFailure");
+  await p.hello();
+  const waiting = prompts(f, (list) => list.length === 1);
+  await compare(p);
+  const [request] = await waiting;
+  const cleared = prompts(f, (list) => list.length === 0);
+  expect(f.app.context.services.relay.approvals.decide(request!.id, true)).toBe(true);
+  // a phone nobody vouched for is no device yet: nothing of the limit is decided, or said, before both confirmed
+  expect(asked).toBe(0);
+  await confirm(p);
+  await cleared;
+  expect(asked).toBe(1);
+  expect(f.app.context.services.devices.list(null).some((device) => device.label === "New phone")).toBe(false);
+  // no failed pairing, and no session error: the relay closes this client, and the phone hears why from it
+  expect(failures).not.toHaveBeenCalled();
+  expect(session.mux.active).toBe(true);
+  expect(session.verifying || session.pairing).toBe(false);
+  // whatever the phone sends next is not answered
+  await confirm(p);
+  await session.mux.flush();
+  expect(session.mux.active).toBe(true);
+});
+
 test("declining on the PC ends the pairing, makes no device and counts as a failed pairing", async () => {
   const f = fixture();
   const { p } = await direct(f);
@@ -342,6 +370,36 @@ test("a revealed nonce that is not the committed one is refused before any promp
   await p.send({ type: FrameType.PAIR_REVEAL, flags: 0, stream_id: 0, payload: { nonce: toBase64Url(randomPairNonce()) } });
   expect(await sessionError(p)).toBe("auth_failed");
   expect(f.app.context.services.relay.approvals.list()).toEqual([]);
+});
+
+test("a comparison taken before the window was closed raises no prompt when its digits come after the close", async () => {
+  const f = fixture();
+  const { p } = await direct(f);
+  await p.hello();
+  const nonce = randomPairNonce();
+  await p.send({ type: FrameType.PAIR_REQUEST, flags: 0, stream_id: 0,
+    payload: { label: "New phone", public_key: p.publicKey, commitment: toBase64Url(pairCommitment(p.binding(), p.publicKey, nonce)) } });
+  expect((await p.inbox.next()).type).toBe(FrameType.PAIR_CHALLENGE);
+  // the owner stops waiting, and even opens a new window, while the phone holds its reveal
+  f.app.context.services.relay.approvals.closeWindow();
+  f.app.context.services.relay.approvals.openWindow();
+  await p.send({ type: FrameType.PAIR_REVEAL, flags: 0, stream_id: 0, payload: { nonce: toBase64Url(nonce) } });
+  expect(await sessionError(p)).toBe("auth_failed");
+  expect(f.app.context.services.relay.approvals.list()).toEqual([]);
+});
+
+test("a comparison approved on the PC makes no device when the phone confirms after the window was closed", async () => {
+  const f = fixture();
+  const { p } = await direct(f);
+  await p.hello();
+  const shown = prompts(f, (list) => list.length === 1);
+  await compare(p);
+  const [prompt] = await shown;
+  expect(f.app.context.services.relay.approvals.decide(prompt!.id, true)).toBe(true);
+  f.app.context.services.relay.approvals.closeWindow();
+  await confirm(p);
+  expect(await sessionError(p)).toBe("auth_failed");
+  expect(f.app.context.services.devices.list(null).filter((device) => device.label === "New phone")).toEqual([]);
 });
 
 test("replayed or out-of-order pairing frames end the session", async () => {

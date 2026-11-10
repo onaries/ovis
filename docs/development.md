@@ -253,6 +253,8 @@ bun scripts/sticky-modifiers-regression.ts # mobile held keys through real legac
 bun scripts/key-bar-customization-demo-regression.ts # mobile key layout, handle drag/edge scrolling, cancellation, saved combinations and migration on demo fixtures
 bun scripts/key-bar-hold-repeat-regression.ts # phone touch key-bar taps, holds (arrows and editing keys), swipes and sticky Ctrl on demo fixtures
 bun scripts/settings-pages-demo-regression.ts # every Settings page on a 390px and a 320px phone, and Back stepping out of the dialog
+bun scripts/settings-palette-search-demo-regression.ts # Settings found through the command palette: 46 searches in English, Korean, Japanese and Chinese open their page and group at 1440 and 390, and no earlier search steers a later opening
+bun scripts/settings-rows-demo-regression.ts # what Settings' pages hold: the dialog's own search, folded groups, merged rows and ↺, the account's PCs and sign-in, the welcome's sign-in, About and the Alerts chips; the OpenAI key's group on React's development build too
 bun scripts/agent-entry-points-demo-regression.ts # Add another agent… in New workspace and New worktree, Settings' agent list (installed, the tiles to install) and Open setup guide, and none of it on a watching device, at 1280 and 390
 bun scripts/terminal-served-font-regression.ts # a Terminal or Chat font only the PC has, served from the state folder's fonts/, at 1280 and 390, light and dark: the terminal is measured from it and attached once; no font named asks nothing
 bun scripts/interface-font-demo-regression.ts # Interface font at 390 and 1440: System and a typed list lead --font-ui, a reload keeps it, Default restores it; the message box takes the Chat font
@@ -263,11 +265,12 @@ bun scripts/docked-file-link-demo-regression.ts # File viewer on panel at 1280: 
 bun scripts/files-documents-demo-regression.ts # Files' Documents tab, always there (a stored old off ignored), at 1280 and 390, light and dark: it lists the pane folder's Markdown files newest first, the filter narrows them and Escape clears it, a row opens the file viewer, in the dialog, beside the pane at its narrowest and on a phone's sheet with the four tabs on their own row, and closing the file after a reload under the palette goes back to the pane
 bun scripts/palette-local-page-demo-regression.ts # Web links on In the app, at 1280 and 390, light and dark: the palette opens a page this PC serves by its typed address (`localhost:<port>`) beside the pane, a phone's popup closes with Back, and Close page over two stacked pages closes it, as it does after a reload under the palette, and so does closing a file docked over them; off by default, the palette offers no page
 bun scripts/theme-first-paint-demo-regression.ts # the saved theme in every painted frame before and after the app starts, root and demo builds under the app's CSP
+bun scripts/theme-file-demo-regression.ts # Settings → Appearance → Theme file at 390 and 1440, dark and light: the example of docs/themes.md is imported and drawn in the colors derived from it, the boot script alone draws it on the next launch, a built-in card takes the side back, a Base16 YAML scheme goes to its own side, a file that is no theme changes nothing, and Remove restores the built-in theme
 bun scripts/design-gate-qa.ts --out <dir> # the design gate on demo fixtures: every main surface and Settings page at 1440 and 390, light and dark, measured for contrast, target size, names, focus rings, truncation, reduced motion, overflow and overlap, font size and where PC load shows; report.json and a picture per visit, and with --baseline <report.json> it fails only on failures the baseline lacks
 bun scripts/boot-loading-demo-regression.ts # index.html's loading spinner while the app's script is held, as on a slow link: centred, stepped, still under reduced motion, gone with the app's first frame (#2329)
 bun scripts/old-safari-demo-regression.ts # a chat pane and a terminal pane draw with the built-ins iOS 16 lacks (Promise.withResolvers, AbortSignal.any, and crypto.randomUUID on plain http) taken away before the app's script runs, under the app's CSP (#2513), and again with each lookbehind handed to RegExp as text refused, as Safari before 16.4 refuses it; the build turns every regular expression with one into such a call (#2534)
 bun scripts/alert-webhook-demo-regression.ts # Settings → Alerts → Also send to on demo fixtures: a Discord webhook saved and shown only masked, a test sent, Telegram's chat id, Off removing it, at 390 and 1280, light and dark
-bun scripts/push-health-demo-regression.ts # the alerts health notice with a stand-in PushManager: a retired subscription told once over the pane and in Settings, repaired once; a refusal, a key mismatch, denied, unsupported, offline, loading and a watching device's refused test, at 390 and 1440, light and dark, Korean at 390
+bun scripts/push-health-demo-regression.ts # the alerts health notice with a stand-in PushManager: a retired subscription told once over the pane and in Settings, repaired once; a refusal, a key mismatch, denied, unsupported, offline, loading and a watching device's refused test, at 390 and 1440, light and dark, Korean at 390; Japanese at the largest interface text on a 320 px phone keeps Close on the screen (#3498)
 bun scripts/install-hint-demo-regression.ts # the add-to-home-screen line on a phone's browser tab: iPhone steps with the share glyph, Android's menu item then one-tap Install, dismissal and install remembered, none in the home-screen app or on desktop, light and dark, Korean
 bun scripts/device-security-demo-regression.ts # Phone & devices on demo fixtures: revoking every device (the caller's warning, the confirmation, a refused write, a watching device) and the line every window gets when a device pairs
 bun scripts/chat-browser-qa.ts  # chat lens end to end
@@ -320,7 +323,9 @@ bun scripts/chat-select-quote-demo-regression.ts # Quote on a chat selection: Qu
 bun scripts/chat-selection-turn-end-demo-regression.ts # a selection in progress while the agent's turn ends under it (#2650): a bare press and a drag at 1280 and a standing touch selection at 390, in a later reply and in the ending turn below its folding work, keep the words still in every painted frame and take exactly them; the chat is back at its end once the selection goes
 bun scripts/chat-quote-selection-end-regression.ts # Quote and Comment on a triple-click and a drag past a reply's last word (Claude and Codex), quoting the words alone; a selection from a user message or another reply still offers nothing; 1280 and 390
 bun scripts/diff-line-notes-demo-regression.ts # a note on a diff line (#1603): hover +, arrow keys and Enter, a tap and a 44px Add a note; it waits with the reply comments and goes first in the next message for an agent alone; too long is refused; no agent says why; 1280 and 390, Korean, Codex palette in UI_EVIDENCE_DIR
-bun scripts/composer-fit-demo-regression.ts   # one Send/Stop control, pending Send now actions, context/label fit and Chat font sizing
+bun scripts/composer-fit-demo-regression.ts   # the message box's status row: one Send/Stop control, pending Send now actions, context/label fit and the quota
+bun scripts/composer-send-demo-regression.ts  # sending from the message box: the send key, an immediate message's paste framing, held Send receipts, and Send or a drop while the keyboard composes a word
+bun scripts/composer-draft-demo-regression.ts # the draft in the message box: upload failure alerts, the agent's suggestion, skill completion, Chat font sizing, and its height, wrapping, zoom and scrolling
 bun scripts/plan-chip-demo-regression.ts      # the plan chip's step in progress: one row at 390 and 1440, cut when long, with tasks, the list's read states, offline and in a split, Korean too
 bun scripts/held-rows-demo-regression.ts      # held messages: the fold under an approval card, its button, a row's error
 bun scripts/chat-working-line-demo-regression.ts # the Working head: none before a working pane's first read, none under an answer drawn 300 ms or 1.5 s before the pane rests or read in with the last answer's start time or drawn while blocked, a finished turn not reopened when the agent begins another by itself, a turn kept at work until its answer is read after herdr rests, and an empty chat's greeting kept through a /clear's short working status
@@ -341,14 +346,17 @@ bun scripts/sidebar-background-workspaces-demo-regression.ts # Settings → Back
 bun scripts/agent-helpers-fold-demo-regression.ts # Settings → Fold helpers under their agent (#772): off by default; on, an agent's helpers fold under a counted line that keeps a blocked helper in sight, opens and stays open on this device, and gives way to the filter; 390 and 1280, light and dark
 bun scripts/sidebar-selection-contrast-demo-regression.ts # the selected workspace and agent rows in every theme entry, selected, hovered and focused: the fill alone with no leading stroke (its contrast recorded), every text at 4.5:1, a Highlight bar at 3:1 in forced colors; the table and the Codex shots at 1280 and 390 in UI_EVIDENCE_DIR
 bun scripts/pane-mute-demo-regression.ts    # Mute alerts from an agent's row menu: one shared list for push, droplet, chime and tab notification, two tabs of one server, a second PC's same-named pane, an older server and a watching device
+bun scripts/pane-mute-captures-demo-regression.ts # with UI_EVIDENCE_DIR, every state of Mute alerts at 1440 and 390, dark and light, and Korean on a phone; with none it says so and runs nothing
 bun scripts/prompt-dock-demo-regression.ts    # the prompt card docked over the input card: its place, its height on a short phone, the grip, a typed pick
 bun scripts/plugin-actions-demo-regression.ts # a plugin action that ends after the server stopped waiting: the late failure said, a traceback's height on a phone with its keyboard up
-bun scripts/background-agent-detail-demo-regression.ts # a running Claude subagent's detail sheet from the background-task list on demo fixtures: open, Refresh, Escape, a phone's Back, focus return, late answers dropped, and the unsupported and older-bridge notes
+bun scripts/background-agent-detail-demo-regression.ts # a running Claude subagent's detail sheet from the background-task list on demo fixtures: open, Refresh, Escape, a phone's Back, focus return, late answers dropped, and the unsupported note; 1440 and 390, dark and light
+bun scripts/background-agent-states-desktop-demo-regression.ts # the states a read of that detail can end in (loading, empty, cut, gone, moved, offline, an older bridge, a failed Refresh): what each says and what to do next; 1440 dark here, 390 light in -states-phone- and the same in Korean in -states-korean-
 bun scripts/font-swap-demo-regression.ts      # the app's faces arriving late on a slow link: a reader at the end of a chat stays there, a tab strip the user scrolled stays put
 bun scripts/narrow-pane-demo-regression.ts    # a split pane under 80 columns: the smaller font, a zoom, and a pane no font can bring to 80
 bun scripts/agent-skill-menu-demo-regression.ts [agent …] # each agent's `/` (and `$`) skill menu, its origin groups and its skill chips at 1280 and 390px, one case file per agent in scripts/skill-menu-cases/, screenshots in evidence/agent-skill-menu/<agent>/
 bun scripts/install-state-demo-regression.ts  # Install app against a real CDP install on a throwaway profile and HOME: never in the sidebar; Settings > Install shows the help or the prompt before, Installed in the app window and a tab of its origin, the help again after uninstall
-bun scripts/terminal-paste-insert-demo-regression.ts # a phone's Paste key into the terminal's input line and Insert without Enter on the demo shell: the caret, a held or refused clipboard read, the acknowledged clear, an older bridge; with UI_EVIDENCE_DIR, every state at 390 and 1440, light and dark, and Korean
+bun scripts/terminal-paste-insert-demo-regression.ts # a phone's Paste key into the terminal's input line and Insert without Enter on the demo shell: the caret, a held or refused clipboard read, the acknowledged clear, an older bridge; with UI_EVIDENCE_DIR, every state on a light phone and a light desktop
+bun scripts/terminal-paste-insert-variants-demo-regression.ts # with UI_EVIDENCE_DIR, every state of the same on a dark phone, a Korean phone and a dark desktop; with none it says so and runs nothing
 bun scripts/link-menu-demo-regression.ts       # a long press on a chat link in the Android app: Copy link, Open link and, where the WebView shares, Share link; a tap, other words, a mouse's menu, a swipe and a browser keep their own; with UI_EVIDENCE_DIR, the sheet at 390 in English and Korean
 bun scripts/external-link-tab-regression.ts  # the app's link opener in Chromium on loopback pages: with Reuse tab for external links on, a second link replaces the first one's tab; off, each gets its own tab with no opener; no referrer either way
 ```
@@ -795,11 +803,74 @@ after changing the staged session. Files, images, push and remote PCs are not pa
    Release run would then ask for a follow-up PR that raises the number again and a new tag.
 4. Run **Actions → Release → Run workflow**, select `main`, and enter `X.Y.Z` without `v`.
    The CLI equivalent is `gh workflow run release.yml --ref main -f version=X.Y.Z`.
+   Tick **revalidate** (`-f revalidate=true`) to run the whole CI in the Release run even when
+   main's own CI run already passed the commit. Run it once main's CI run of the release commit is
+   green and validation takes about four minutes (Fast checks alone); run earlier, it waits for that
+   run first.
 
-The workflow validates metadata, then runs the same unit, integration and browser checks
-as PRs against the exact `main` commit selected when the run starts. Only after all checks
-pass does it create the tag and GitHub release. A failed validation creates neither. Beside the
-checks it builds the Rust PTY host (**Rust PTY host binaries**, `.github/workflows/pty-sidecar.yml`):
+The workflow validates metadata, then requires the same unit, integration and browser checks
+as PRs to have passed on the exact `main` commit selected when the run starts. Only after that
+does it create the tag and GitHub release. A failed validation creates neither.
+
+The push to `main` already ran those checks on that commit, so the Release run does not run all of
+them a second time when main's run is green (`.github/workflows/release-validate.yml`). Its first
+job asks `scripts/release-ci-reuse.ts`, which says yes only when all of this holds:
+
+- there is exactly one push run of `ci.yml` on `main` for that commit, in this repository (a pull
+  request's run, a manual run and a fork's run never count);
+- it completed with success, on its first attempt or after one rerun;
+- every job of `ci.yml` is in it and passed: a failed, cancelled, skipped or missing job is a no,
+  whatever the three required checks say.
+
+A run still going is waited for, at most 40 minutes (main's run takes 15 to 30) and only while
+none of its jobs has ended without passing. Anything else is a no at once: no run for the commit,
+a run that waits behind another run of `main`, a third attempt. An answer from GitHub that cannot
+be read is asked for twice more, five seconds apart, and is a no after the third. On a no the
+Release run runs the whole CI itself, as it did before, and with **revalidate** it always does.
+
+A release that takes main's run still runs Fast checks itself, always on GitHub's runner (**Fast
+checks (GitHub-hosted)**, the steps of `ci.yml`'s Fast checks). Main's run ran them on the
+self-hosted PC, where some unit tests skip themselves: the runner's container has no `pwsh`, no
+`setfacl` and no process of another user. Run again on GitHub's runner, those tests gate every
+release, and so does any other test that container comes to skip. The job starts with the question
+about main's run, not after its answer, so its minutes do not come on top of a wait. When the
+answer is no, `ci.yml` runs Fast checks of its own and this job's outcome is not read: it may fail
+without failing the run.
+
+The **Verdict** job then names what validated the commit: `ci` when the whole CI passed in the
+Release run, or `main-run-<id>` when main's run was verified and Fast checks passed in the Release
+run. The publish job refuses to tag without that name: a job that was skipped, failed or cancelled
+can stop a release but never pass one. The run's summary says which it was and why.
+
+A release validated by main's run (`main-run-<id>`) is made of these checks of its commit:
+
+| Check | Ran in | On |
+| --- | --- | --- |
+| Version, notes, unused tag, release guards for the whole tree (preflight) | the Release run | GitHub's runner, or the self-hosted PC when `CI_SELF_HOSTED_LABELS` holds labels |
+| Fast checks | the Release run, and main's run | GitHub's runner, and the self-hosted PC |
+| Rust PTY host build, with the crate's tests and the PtySession checks on the built Linux binaries | the Release run | GitHub's runners |
+| Integration tests, both Browser regression jobs | main's run | the self-hosted PC, unless the runner variables keep `main` on GitHub's ([Self-hosted runner](#self-hosted-runner)) |
+| herdr-core live contract | main's run | the self-hosted PC, unless the runner variables keep the light jobs on GitHub's |
+| Native Windows install, Native macOS session identity, Rust PTY host | main's run | GitHub's runners |
+
+Main's Integration tests and Browser regression jobs did not each build the client they tested:
+on the self-hosted PC they restore `dist/` from the runners' build cache, from the entry of that
+commit, which the first job of the run to build it wrote (Fast checks, as a rule). An entry is named
+after the commit and everything else the build reads, and a restore checks every file's SHA-256
+(`scripts/build-cache.ts`, [the runner's README](../scripts/self-hosted-runner/README.md#build-cache)).
+A release validated in its own run (`ci`) never reads that cache: every job of it builds.
+
+Nothing is tagged unless the Verdict job passed. When a Release run stops there, or ends without
+having created the tag for any other reason, run Release again with **revalidate**: that run
+validates the commit by itself and takes nothing from main's run.
+
+**Actions → Release validation → Run workflow** from `main` (`gh workflow run
+release-validate.yml --ref main`) is a dry run of that decision for main's newest commit. It
+tags and publishes nothing. Run it once main's CI run of that commit is green to see a release
+take it and run Fast checks on GitHub's runner; when the answer is no, or with
+`-f revalidate=true`, it runs the whole CI as a release would.
+
+Beside the checks it builds the Rust PTY host (**Rust PTY host binaries**, `.github/workflows/pty-sidecar.yml`):
 static Linux x64 and arm64 binaries, a universal macOS one, `ovis-pty-sidecar.json` (the version,
 the `crates/pty-sidecar` git tree they were built from, and each file's SHA-256) and `SHA256SUMS`,
 all attached when the release is created, so no tag is seen without them. `bun
@@ -1094,13 +1165,22 @@ build, then a summary on success or failure. The first failing script stops it.
 The parallel runner builds the demo once, prints a line when each script starts and ends (and
 every minute a script is still running), and keeps running the other scripts after one fails.
 It starts the longest scripts first, by `scripts/ci-browser-timings.json` (each script's median
-seconds on CI; one it does not list counts as the median), so the lane does not end with one slow
-script running alone while the other workers wait; `BROWSER_ORDER=listed` keeps
-`scripts/ci-browser.sh`'s order. The table only orders the scripts: a stale one costs time, not
-coverage, and a new script needs no entry. A script removed from or renamed in `ci-browser.sh`
-leaves the table too (`scripts/ci-browser-parallel.test.ts` fails on a name the lane does not
-run). When scripts get much slower, refresh it with each script's median over several recent
-runs' `[worker-N] PASS <script> (<seconds>s)` lines.
+seconds on CI), so the lane does not end with one slow script running alone while the other
+workers wait; `BROWSER_ORDER=listed` keeps `scripts/ci-browser.sh`'s order. A script the table
+does not hold starts before all of those, because nobody has measured how long it runs, and a
+`[setup]` line of the job's log names it; only for the balance of the hosted shards does it count
+as the table's median. The table only orders the scripts: a stale one costs time, not coverage,
+and a new script needs no entry. A script removed from or renamed in `ci-browser.sh` leaves the
+table too (`scripts/ci-browser-parallel.test.ts` fails on a name the lane does not run).
+`bun scripts/ci-browser-timings.ts --runs 5` refreshes it: it reads the lane's `summary.json`
+from the newest five green runs of `ci.yml` on main through `gh` and writes each listed script's
+median over them, counting only a pass on the first run; a listed script none of them holds
+keeps its seconds. It also takes `summary.json` files already on disk as arguments, and with
+neither it only sorts the table and drops what the lane no longer runs, which an entry edited by
+hand needs (`scripts/ci-browser-timings.test.ts` fails on a table the tool would write
+otherwise). Refresh it when that `[setup]` line names scripts, when scripts got much slower, and
+after a script was split, once the runs it reads are newer than the split (an older run still
+times the whole script under its old name).
 Each script's full output goes to `${CHECK_DIR:-.ci}/browser-logs/<script>.log`, with
 `summary.json` beside it; a failure prints the last 400 lines of its log and the log's path, and
 the job then fails. CI uploads `browser-logs` on success or failure; browser-main adds the evidence
@@ -1164,6 +1244,11 @@ stays on `ubuntu-24.04` unless the variable holds labels. The variable routes:
 - in `ci.yml`: Fast checks, Integration tests and both Browser regression jobs;
 - in `release.yml`: the preflight and publish jobs.
 
+`release-validate.yml`'s own three jobs are always GitHub-hosted. The one that asks about main's
+CI run may wait up to 40 minutes for that run, which needs the self-hosted runners itself. Its Fast
+checks is there to run the tests the self-hosted runner skips ([Releasing](#releasing)). The
+verdict runs for seconds.
+
 Light jobs, which wait longest in GitHub's hosted queue for the few seconds they run, take the
 self-hosted runners for every same-repository run: Detect changes, the herdr-core live contract and
 the Integration and browser summary in `ci.yml`, `pr-title.yml`, `remote-bundles.yml`'s Windows
@@ -1198,9 +1283,11 @@ falling back. `pages.yml` and `release.yml` read the variable directly.
 
 Only a `pull_request` may skip the heavy jobs as docs-only, and only when every changed file is
 under `docs/`, ends in `.md` or `.txt`, is the root `LICENSE` or sits under
-`.github/ISSUE_TEMPLATE/`. Pushes, dispatches and runs called from `release.yml` or manual
-`pages.yml` dispatches always validate in full. Automatic Website runs reuse CI's successful
-main push validation instead of calling CI again.
+`.github/ISSUE_TEMPLATE/`. Pushes, dispatches and runs called for a release
+(`release-validate.yml`) or from manual `pages.yml` dispatches always validate in full. Automatic
+Website runs reuse CI's successful main push validation instead of calling CI again, and a Release
+run calls CI only when main's push run did not pass its commit; when it did, it runs Fast checks
+alone ([Releasing](#releasing)).
 
 The runner is an ephemeral Docker container that runs one job and exits. Containers have no CPU
 quota or total-memory limit; concurrent slots share the host's available resources. The

@@ -10,8 +10,9 @@
  *   bun scripts/relay-dashboard-browser-qa.ts                     # builds the shell itself
  *   ONLY='^(table|overview)' UI_EVIDENCE_DIR=<dir> bun scripts/relay-dashboard-browser-qa.ts
  *
- * relay-shell-browser-qa.ts calls `relayDashboardQa` with its own browser and shell host. Each check prints PASS or
- * FAIL with what it measured; any FAIL fails the run after every selected check ran.
+ * The browser lane (scripts/ci-browser.sh) runs it as an entry of its own, on a shell build, a shell host and a
+ * browser it makes itself. Each check prints PASS or FAIL with what it measured; any FAIL fails the run after every
+ * selected check ran, and a run with none ends by saying how many checks passed.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -326,6 +327,42 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
     expect(await page.locator(".relay-overview-strip").count() === 0, "no count strip without PCs");
     return "one Add a PC primary across the page, QR secondary, no strip";
   });
+
+  // the steps of an account without a PC: the command keeps its width on a narrow screen (Copy wraps under it), and Check again keeps the focus its press gave it
+  for (const width of [195, 390, 1440] as const) {
+    await check(`dashboard-F0-steps-${width}`, async () => {
+      const { page, account } = await open({ fleet: "F0", width });
+      const empty = page.locator("[data-dashboard-empty]");
+      await empty.locator("[data-empty-steps]").waitFor();
+      const rows = await empty.locator(".relay-overview-empty-command-row").evaluateAll((found) => found.map((row) => {
+        const pre = row.querySelector("pre")!;
+        const command = pre.getBoundingClientRect();
+        const copy = row.querySelector("button")!.getBoundingClientRect();
+        const style = getComputedStyle(pre);
+        const text = pre.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+        return { row: row.getBoundingClientRect().width, command: command.width, lines: Math.round(text / parseFloat(style.lineHeight)), under: copy.top >= command.bottom };
+      }));
+      expect(rows.length === 2, `two installer lines (${rows.length})`);
+      for (const row of rows) {
+        // beside Copy the command has its 16rem basis at least; where the row is narrower than that, the whole row
+        expect(row.command >= Math.min(row.row, 256) - 1, `the command keeps its width: ${JSON.stringify(row)}`);
+        expect(row.under === (row.command >= row.row - 1), `Copy sits under a command that takes the row, beside one that does not: ${JSON.stringify(row)}`);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "the steps add no sideways scroll");
+      const checkAgain = empty.locator('[data-action="check-again"]');
+      const focused = (): Promise<boolean> => page.evaluate(() => document.activeElement?.getAttribute("data-action") === "check-again");
+      const reads = (): number => account.filter((request) => request === "GET /v1/pcs").length;
+      const before = reads();
+      await checkAgain.focus();
+      await page.keyboard.press("Enter");
+      await empty.locator('[data-action="check-again"][aria-disabled="true"]').waitFor();
+      expect(await focused(), "a pressed Check again keeps the focus while it reads");
+      await empty.locator('[data-action="check-again"]:not([aria-disabled])').waitFor();
+      expect(await focused(), "and once the read has landed");
+      expect(reads() === before + 1, `Check again read the account's PCs once (${reads() - before})`);
+      return `command ${rows.map((row) => `${Math.round(row.command)}/${Math.round(row.row)} px, ${row.lines} lines, Copy ${row.under ? "under" : "beside"}`).join("; ")}; Check again keeps focus`;
+    });
+  }
 
   for (const density of ["comfortable", "compact"] as const) {
     await check(`overview-disclosure-${density}`, async () => {
@@ -1272,7 +1309,10 @@ export async function relayDashboardQa({ browser, origin, evidence }: DashboardQ
   // a custom relay's host wider than the phone wraps inside the route list instead of running off the dashboard
   await check("map-long-host-390", async () => {
     const host = "relay-eu-west-dedicated-instance-for-the-studio-team.customer-internal.example.com";
-    const { page, fleet } = await open({ fleet: "F4", width: 390, directory: async (route) => {
+    // the fleet by name, not the one `open` returns: the directory is asked while `open` is still awaited, and its
+    // answer read that binding before it was set (a ReferenceError on a runner slow enough to ask that early)
+    const fleet = fleetOf("F4");
+    const { page } = await open({ fleet: "F4", width: 390, directory: async (route) => {
       const pcs = directoryOf(fleet, Date.now()).map((pc) => ({ ...pc, relay: `wss://${host}` }));
       await route.fulfill({ status: 200, headers: { "access-control-allow-origin": APP }, contentType: "application/json", body: JSON.stringify({ pcs }) });
     } });
@@ -1311,7 +1351,9 @@ if (import.meta.main) {
   const site = servePagesSite(shellDir, 0, "127.0.0.1");
   const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
   try {
-    await relayDashboardQa({ browser, origin: `http://127.0.0.1:${site.port}`, evidence: process.env["UI_EVIDENCE_DIR"] || null });
+    if (!browser) throw new Error("no browser");
+    const matrix = await relayDashboardQa({ browser, origin: `http://127.0.0.1:${site.port}`, evidence: process.env["UI_EVIDENCE_DIR"] || null });
+    console.log(`dashboard matrix: ${matrix.length} checks passed`);
   } finally {
     await closeMarked(browser);
     await site.stop(true);
