@@ -2,6 +2,10 @@
 
 ## Pane resize on app-owned layouts
 
+Pane title changes reuse the existing Rename pane dialog and menu, independently of the
+Herdr app's arrangement, following the same Paseo rename pattern as agent call names below.
+Clear pane name restores the terminal's own title; agent call names remain a separate action.
+
 The existing split handles follow VS Code's split editor: drag the separator, or focus it and
 use the arrow keys. A core whose Herdr app owns the arrangement can offer `resize` independently
 of `arrange`. Ovis keeps those ratios in `ovis-pane-sizes`, without changing the Herdr app's

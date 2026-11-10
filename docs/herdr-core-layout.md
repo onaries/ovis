@@ -8,6 +8,10 @@ them keeps to the rules here, so Ovis and it do not undo each other's changes.
 Ovis never writes the Herdr app's `herdr-app` document. Where it exists, the app arranges the
 core and Ovis only reads it.
 
+Pane display titles can still be changed or cleared using the terminal's `ovis.pane` label.
+The independent `paneRename` capability offers this without enabling workspace or tab renaming.
+Agent call names remain separate and keep their process-identity checks.
+
 Ovis may resize the panes it displays over that arrangement. It saves only resized tabs in
 `ovis-pane-sizes`, using the same schema as `ovis-layout`. The app's document remains unchanged.
 A saved tree supplies ratios only when its pane IDs, order and split directions match the live

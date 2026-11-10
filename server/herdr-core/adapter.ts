@@ -774,7 +774,8 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
       const arrange = own && layoutCalls(hello) && !foreignLayout(ovis.value);
       // a checkout opens as a workspace Ovis places: only where Ovis keeps the layout
       const resize = !own && layoutCalls(hello) && !foreignLayout(sizes.value);
-      return { version: hello.version, protocol: HERDR_PROTOCOL, capabilities: { direct_terminal_attach: true, runtime: "herdr-core", layout: { rename: own, split: arrange || resize, move: own, arrange, ...(resize ? { resize } : {}), worktrees: own && !options.otherMachine } } };
+      const paneRename = !own && hello.methods.includes("terminal.label");
+      return { version: hello.version, protocol: HERDR_PROTOCOL, capabilities: { direct_terminal_attach: true, runtime: "herdr-core", layout: { rename: own, split: arrange || resize, move: own, arrange, ...(resize ? { resize } : {}), ...(paneRename ? { paneRename } : {}), worktrees: own && !options.otherMachine } } };
     },
     async "session.snapshot"() {
       return { snapshot: await snapshot() };
@@ -1003,7 +1004,7 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
       const paneId = paneIdOf(params);
       const name = params["label"];
       if (name !== null && typeof name !== "string") throw new AdapterError("invalid_params", "label must be a string or null");
-      if (!(await ownLayout()).panes.some((pane) => pane.pane_id === paneId)) throw new AdapterError("pane_not_found", `pane ${paneId} not found`);
+      if (!(await snapshot()).panes.some((pane) => pane.pane_id === paneId)) throw new AdapterError("pane_not_found", `pane ${paneId} not found`);
       // `key: ""` takes a label off (hc terminal.label): the terminal's own name shows again
       await label([paneId], { [PANE_NAME_LABEL]: name ?? "" });
       return { type: "ok" };

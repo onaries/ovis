@@ -261,6 +261,7 @@ export interface HerdrCoreLayout {
   arrange: boolean;
   /** Ovis-only split ratios, including where the Herdr app owns the pane arrangement. */
   resize?: boolean;
+  paneRename?: boolean;
   worktrees: boolean;
 }
 /**

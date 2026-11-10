@@ -231,9 +231,8 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   });
   const target = menu ? snapshot?.panes.find((item) => item.pane_id === menu.paneId) : null;
   const layoutItems = (target: HerdrPane): RowMenuItem[] => [
-    // herdr-core names no pane, and swaps, zooms and resizes none (lib/machineContext.tsx `arrange`)
-    ...(!appLayout.arrange ? [] : [{ id: "rename", label: t("Rename pane"), icon: Pencil, run: () => setRenaming(target) }]),
-    ...(appLayout.arrange && target.label ? [{ id: "clear-name", label: t("Clear pane name"), icon: Eraser, run: () => run(() => api.renamePane(target.pane_id, "")) }] : []),
+    ...(!(appLayout.rename || appLayout.paneRename) ? [] : [{ id: "rename", label: t("Rename pane"), icon: Pencil, run: () => setRenaming(target) }]),
+    ...((appLayout.rename || appLayout.paneRename) && target.label ? [{ id: "clear-name", label: t("Clear pane name"), icon: Eraser, run: () => run(() => api.renamePane(target.pane_id, "")) }] : []),
     ...(!watching && snapshot?.agents.some((entry) => entry.pane_id === target.pane_id && entry.terminal_id === target.terminal_id) ? [{ id: "rename-agent", label: t("Change agent call name"), icon: Pencil,
       run: () => setRenamingAgent({ kind: "agent", pane: target, name: snapshot?.agents.find((entry) => entry.pane_id === target.pane_id && entry.terminal_id === target.terminal_id)?.name ?? null }) }] : []),
     ...(appLayout.arrange && pane && target.pane_id !== pane.pane_id ? [{ id: "swap-focused", label: t("Swap with focused pane"), icon: ArrowLeftRight,

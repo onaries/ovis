@@ -14,7 +14,7 @@ export const useMachineId = () => useContext(MachineContext);
  * herdr-core (shared/machines.ts HerdrIdentity.runtime) only as its `layout` says. App provides it per PC beside MachineContext (the selected PC, each half of
  * the split view, each PC's sidebar); everything outside App, as for herdr's own TUI server.
  */
-export interface LayoutOffer { rename: boolean; split: boolean; move: boolean; arrange: boolean; resize?: boolean; worktrees: boolean }
+export interface LayoutOffer { rename: boolean; split: boolean; move: boolean; arrange: boolean; resize?: boolean; paneRename?: boolean; worktrees: boolean }
 export const FULL_LAYOUT: LayoutOffer = Object.freeze({ rename: true, split: true, move: true, arrange: true, worktrees: true });
 const NO_LAYOUT: LayoutOffer = Object.freeze({ rename: false, split: false, move: false, arrange: false, worktrees: false });
 /** one object per herdr-core offer, so a context value or a hook's dependency stays the same between renders */
@@ -26,10 +26,10 @@ export const useAppLayout = () => useContext(AppLayoutContext);
 export const appLayoutOf = (herdr: HerdrIdentity | undefined): LayoutOffer => {
   if (herdr === undefined) return NO_LAYOUT;
   if (herdr.runtime !== "herdr-core") return FULL_LAYOUT;
-  const { rename = false, split = false, move = false, arrange = false, resize = false, worktrees = false } = herdr.layout ?? {};
-  const key = `${rename}:${split}:${move}:${arrange}:${resize}:${worktrees}`;
+  const { rename = false, split = false, move = false, arrange = false, resize = false, paneRename = false, worktrees = false } = herdr.layout ?? {};
+  const key = `${rename}:${split}:${move}:${arrange}:${resize}:${paneRename}:${worktrees}`;
   let offer = coreOffers.get(key);
-  if (!offer) coreOffers.set(key, offer = Object.freeze({ rename, split, move, arrange, ...(resize ? { resize } : {}), worktrees }));
+  if (!offer) coreOffers.set(key, offer = Object.freeze({ rename, split, move, arrange, ...(resize ? { resize } : {}), ...(paneRename ? { paneRename } : {}), worktrees }));
   return offer;
 };
 /** App's workspace order for every PC (lib/workspaceOrder.ts); a Sidebar outside App gets its own */

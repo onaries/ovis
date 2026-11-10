@@ -1581,7 +1581,7 @@ describe("herdr-core adapter, Ovis's layout document", () => {
     const original = JSON.stringify(app);
     store.docs.set("herdr-app", app);
     const { socket, cores } = await core([labeled("t1"), labeled("t2"), labeled("t3")], store);
-    expect((await ping(socket)).layout).toEqual({ rename: false, split: true, move: false, arrange: false, resize: true, worktrees: false });
+    expect((await ping(socket)).layout).toEqual({ rename: false, split: true, move: false, arrange: false, resize: true, paneRename: true, worktrees: false });
     await herdrRpc("layout.set_split_ratio", { tab_id: "T", path: [], ratio: 0.7 }, socket);
     await herdrRpc("layout.set_split_ratio", { tab_id: "T", path: [true], ratio: 0.3 }, socket);
     expect(await rects(socket)).toEqual({
@@ -1836,13 +1836,18 @@ describe("herdr-core adapter, Ovis's layout document", () => {
     expect(store.writes).toEqual([]);
   });
 
-  it("names a pane in a label, and shows the terminal's own name once it is cleared", async () => {
-    const { socket, terminals } = await core([terminal("t1", { name: "shell", labels: { "herdr.space": "S", "herdr.tab": "T" } })]);
+  it.each([false, true])("names a pane independently of app-owned layout (%j) and restores its terminal name", async (appOwned) => {
+    const store = documents();
+    const app = { value: appLayout(), version: 7 };
+    if (appOwned) store.docs.set("herdr-app", app);
+    const { socket, terminals } = await core([terminal("t1", { name: "shell", labels: { "herdr.space": "S", "herdr.tab": "T" } })], store);
     await herdrRpc("pane.rename", { pane_id: "t1", label: "logs" }, socket);
     expect(terminals[0]!.labels).toMatchObject({ "ovis.pane": "logs" });
     expect((await paneGet("t1", socket)).label).toBe("logs");
     await herdrRpc("pane.rename", { pane_id: "t1", label: null }, socket);
     expect((await paneGet("t1", socket)).label).toBe("shell");
+    if (appOwned) expect(store.docs.get("herdr-app")).toEqual(app);
+    expect(store.writes).toEqual([]);
   });
 });
 

@@ -240,6 +240,13 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
     expect(dividers()).toBe(0);
   });
 
+  it("offers pane title changes independently while retaining agent call names", async () => {
+    const itemsOf = await draw({ ...APP_CORE, paneRename: true });
+    expect(itemsOf(snapshot.panes[0] as HerdrPane)).toEqual(["rename", "clear-name", "rename-agent", "close"]);
+    expect(itemsOf(snapshot.panes[1] as HerdrPane)).toEqual(["rename", "close"]);
+    expect(dividers()).toBe(0);
+  });
+
   it("draws a resize divider without offering arrangement actions when only resizing is supported", async () => {
     const itemsOf = await draw({ ...APP_CORE, resize: true });
     expect(dividers()).toBe(1);
