@@ -22,7 +22,7 @@ import { listHcMachines, startMachineBridge } from "../herdr-core/machine-bridge
 import { coreConnection } from "../herdr-core/runtime.ts";
 import { capabilities } from "../runtime/capabilities.ts";
 import { Finishes, herdrLifetime } from "../finishes.ts";
-import { claudePanePid, claudePaneSession, forgetPaneTranscriptState } from "../conversation.ts";
+import { claudePanePid, claudePaneSession, forgetPaneTranscriptState, stoppedAgentJob } from "../conversation.ts";
 import { openCodeNativeState, openCodeVerificationCheckpoint, releaseOpenCodePane, trackVerifiedOpenCodePanes } from "../opencode-native.ts";
 import { opencodeDatabasePath } from "../opencode.ts";
 import { OpencodeSubagentStatus } from "../opencode-subagents.ts";
@@ -47,6 +47,7 @@ import { type AlertTiming, createPushService, defaultStateDir } from "../push.ts
 import { SessionPlans } from "../session-plan.ts";
 import { readStatuslineContext } from "../statusline.ts";
 import { userHome } from "../user-home.ts";
+import { notePaneFolders } from "../windows-share.ts";
 import type { Telemetry } from "../telemetry.ts";
 import type { UsageLoginService } from "../usage-login.ts";
 import type { UsageService } from "../usage.ts";
@@ -252,9 +253,10 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   /**
    * The status the pane's queued input goes by: a Claude pane shown at rest while a busy signal
    * whose turn was never written holds it (ClaudeSubagentStatus.holdsQueue) is not ready for it.
-   * Nor is one whose turn Claude resumed by itself (a /loop wakeup, a scheduled task) and no rest was
-   * written since, which herdr may still read at rest, or at rest again (loopHolds, #3494): that
-   * hold is the transcript's alone, so no word of herdr's begins or ends it.
+   * Nor is one whose turn Claude resumed by itself (a /loop wakeup, a scheduled task, a background
+   * task's notice) and no rest was written since, which herdr may still read at rest, or at rest
+   * again (loopHolds, #3494): that hold is the transcript's alone, so no word of herdr's begins or
+   * ends it.
    */
   function queueStatus(paneId: string, status: AgentStatus): AgentStatus {
     if (agentNow.get(paneId) !== "claude" || (status !== "idle" && status !== "done")) return status;
@@ -354,6 +356,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     // reads overlap (the collector's, each client's): only one newer than every read applied before tells title turns
     const newest = titleRead > titleApplied;
     if (newest) titleApplied = titleRead;
+    // a share a pane works on is the PC's own to read (windows-share.ts): as the newest read tells the folders
+    if (newest) notePaneFolders(named.panes.flatMap((pane) => [pane.cwd, pane.foreground_cwd]));
     if (capabilities().agents === "reported") for (const { paneId, status } of lettaTitleStatus(named, (paneId) => letta.tracks(paneId), lettaTitled, newest)) {
       const rest = status === "idle" ? lettaRests.get(paneId) : undefined;
       if (status !== "blocked") lettaRests.delete(paneId);
@@ -706,9 +710,11 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       // only a verified pane holds the stream: a verification still in flight settles for itself, and
       // a snapshot read before it started must not cancel it
       const verified = new Set(openCodeNativeState().panes);
+      // herdr can keep calling a pane OpenCode after it left (0.9.3 on a loaded host): the shell alone in front says it did
       for (const pane of panes) {
-        if (!verified.has(pane.pane_id) || pane.agent === "opencode") continue;
-        if (pane.agent || pane.agent_status !== "unknown" || shellSnapshots.has(pane)) releaseOpenCodePane(pane.pane_id, snapshotVerifications.get(pane));
+        if (!verified.has(pane.pane_id)) continue;
+        const left = pane.agent === "opencode" ? shellSnapshots.has(pane) : pane.agent || pane.agent_status !== "unknown" || shellSnapshots.has(pane);
+        if (left) releaseOpenCodePane(pane.pane_id, snapshotVerifications.get(pane));
       }
       if (machines) machines.localAgents(panes); else bridgeAgents!.reconciled(panes);
     },
@@ -749,13 +755,15 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     if (process.platform !== "win32") {
       const verified = new Set(openCodeNativeState().panes);
       await Promise.all(snapshot.panes.map(async (pane) => {
-        if (pane.agent || pane.agent_status !== "unknown" || !verified.has(pane.pane_id)) return;
+        if (!verified.has(pane.pane_id) || (pane.agent ? pane.agent !== "opencode" : pane.agent_status !== "unknown")) return;
         const info = await paneProcessInfo(pane.pane_id).catch(() => undefined);
         const front = info?.foreground_processes?.[0];
         // `exec opencode` keeps the shell's pid, but not its process identity.
         const shell = /(?:^|\/)-?(?:sh|bash|dash|zsh|fish|ksh|mksh|csh|tcsh|ash|nu)$/u;
         if (info?.shell_pid != null && info.foreground_processes?.length === 1 && front?.pid === info.shell_pid
-          && shell.test(front.name) && shell.test(front.argv?.[0] ?? front.argv0 ?? front.name)) shellSnapshots.add(pane);
+          && shell.test(front.name) && shell.test(front.argv?.[0] ?? front.argv0 ?? front.name)
+          // OpenCode stopped with Ctrl+Z leaves the shell alone in front too, and herdr's label stays: it has not left
+          && !(await stoppedAgentJob(info.shell_pid, "opencode"))) shellSnapshots.add(pane);
       }));
     }
     return snapshot;
@@ -771,19 +779,20 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   plans.start();
 
   // a verified OpenCode pane is tracked like a usage-login pane: its end or close reaches paneGone above
-  const untrackOpenCode = trackVerifiedOpenCodePanes((paneId) => collector.trackPane(paneId));
+  const untrackOpenCode = trackVerifiedOpenCodePanes((paneId) => collector.trackPane(paneId), () => collector.refresh());
   const tracked = { ...collector, stop() { untrackOpenCode(); stopMutes(); stopSubmitted(); desktopActivity?.stop(); taskAgents.stop(); collector.stop(); } };
 
   /**
    * Whether a pane shown at rest holds its queue (queueStatus), as its last poll left it. `fresh`: whether a
    * turn Claude resumed by itself holds it, as the pane's transcript says now, read before answering: a /loop
-   * wakeup or a scheduled task may have fired since that poll (#3494). Only that hold is read anew, and only
-   * it is answered for: it is the one a transcript line begins with no word of herdr's, and a pane with no
-   * such line is asked nothing it was not asked before. A hold that read finds begun or ended is told to the
-   * queue, as by any poll (ClaudeSubagentStatus.loopHoldsNow). A pane whose transcript is not found has none
-   * to read, and none is looked for here (a snapshot does, ClaudeSubagentStatus.ensure): nothing holds it
-   * until then. `fresh` is asked of every caller: a wiring that dropped it would make delivery's last checks
-   * read an answer up to a poll old, with every test still passing.
+   * wakeup or a scheduled task may have fired since that poll, or a background task ended (#3494). Only that
+   * hold is read anew, and only it is answered for: it is the one a transcript line begins with no word of
+   * herdr's, and a pane with no such line is asked nothing it was not asked before. A hold that read finds
+   * begun or ended is told to the queue, as by any poll (ClaudeSubagentStatus.loopHoldsNow). A pane whose
+   * transcript is not found has none to read, and none is looked for here (a snapshot does,
+   * ClaudeSubagentStatus.ensure): nothing holds it until then. `fresh` is asked of every caller: a wiring
+   * that dropped it would make delivery's last checks read an answer up to a poll old, with every test still
+   * passing.
    */
   const queueHeld = (paneId: string, fresh: boolean): boolean =>
     fresh ? agentNow.get(paneId) === "claude" && claudeAgents.loopHoldsNow(paneId) : queueStatus(paneId, "idle") === "working";

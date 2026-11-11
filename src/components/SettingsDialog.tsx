@@ -38,7 +38,7 @@ import { UI_FONT_MAX, UI_FONT_MIN, UI_FONT_PRESET_FAMILY, uiFontPreset, type UiF
 import { canListInstalledFonts, filterFamilies, isMonospaceFamily, queryInstalledFonts } from "../lib/installedFonts.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
 import type { UserError } from "../lib/userError.ts";
-import { LOCAL_MACHINE, pcAlertKey, type HerdrCoreFacts, type HerdrRuntimeFacts, type Machine, type MachineSettings } from "../../shared/machines.ts";
+import { LOCAL_MACHINE, pcAlertKey, type HerdrCoreFacts, type HerdrRuntimeFacts, type Machine, type MachineSettings, type RuntimeName } from "../../shared/machines.ts";
 import { canHideMachine, isMachineShown, setHiddenMachines, useHiddenMachines, withMachineHidden } from "../lib/hiddenMachines.ts";
 import { alertFiltersChanged, updateAlertFilters, useAlertFilters } from "../lib/alertFilters.ts";
 import { fetchMachines, fetchRemoteAccess, requestRelayOffer, fetchVoiceStatus, machineRequest, saveVoiceConfig, switchRuntime, fetchBridgeHealth } from "../lib/api.ts";
@@ -55,12 +55,15 @@ import { RuntimeMove } from "./RuntimeMove.tsx";
 import { SignOutRow } from "./SignOutRow.tsx";
 import { failureText, openOwnOffer, RelayDirectRow, statusText } from "./RelayPanel.tsx";
 import { AccountSection, accountServiceHere, type AccountState } from "./AccountSection.tsx";
-import { listedPcStateText } from "./AccountPcs.tsx";
+import { AccountPcRows, NoAccountPcHint, removePcFromAccount } from "./AccountPcs.tsx";
 import { STATE_WORD } from "./MachineSidebar.tsx";
 import { pcAccountStatus } from "../lib/account/join.ts";
+import { AccountService } from "../lib/account/service.ts";
+import { indexedAccountStore } from "../lib/account/store.ts";
 import { apiFetch } from "../lib/api-request-id.ts";
 import type { MyPc } from "../lib/account/myPcs.ts";
 import { ConnectPhoneDialog, relayOffered } from "./ConnectPhoneDialog.tsx";
+import { ACCOUNT_QR_WATCH_EVENT, accountQrNoticeWaiting } from "../lib/accountQrWatch.ts";
 import { PushTestControls } from "./PushTestControls.tsx";
 import { AlertWebhookGroup } from "./AlertWebhookGroup.tsx";
 import { previewAlertSound, unlockAlertSound } from "../lib/alertSound.ts";
@@ -651,11 +654,11 @@ function ChatPage() {
         </SettingsRow>
         {/* the message box's optional buttons and chips, each off by default; the suggestion chip is drawn on a touch screen only (Composer.tsx) */}
         <SettingsRow icon={TextCursorInput} label={t("Composer buttons")} wide reset={touch ? ["composerPasteSend", "composerArtifacts", "suggestionChip"] : ["composerPasteSend", "composerArtifacts"]}
-          keywords={[t("Paste and send button"), t("A button in the empty message box sends the text copied on this device as a message."), t("Artifacts chip"), t("A chip in a Claude Code pane's message box lists the pages its session published with the Artifact tool."), ...(touch ? [t("Suggestion chip"), t("A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.")] : [])].join(" ")}>
+          keywords={[t("Paste and send button"), t("A button in the empty message box sends the text copied on this device as a message."), t("Artifacts chip"), t("A chip in a Claude Code pane's message box lists the pages its session published with the Artifact tool."), ...(touch ? [t("Suggestion chip"), t("A chip above the message box puts the prompt the agent suggests next (Claude Code, GJC or omp) into the box. With a keyboard, Tab does it.")] : [])].join(" ")}>
           <span className="settings-chips">
             {chip(ClipboardPaste, t("Paste and send"), settings.composerPasteSend, (composerPasteSend) => update({ composerPasteSend }))}
             {chip(Layers, t("Artifacts (Claude Code)"), settings.composerArtifacts, (composerArtifacts) => update({ composerArtifacts }))}
-            {touch && chip(Sparkles, t("Suggestion (Claude Code)"), settings.suggestionChip, (suggestionChip) => update({ suggestionChip }))}
+            {touch && chip(Sparkles, t("Suggestion"), settings.suggestionChip, (suggestionChip) => update({ suggestionChip }))}
           </span>
         </SettingsRow>
       </SettingsGroup>
@@ -1370,10 +1373,25 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
   /** the end of this PC's own row, for the device list's Check now (DevicesPanel `checkSlot`) */
   const [devicesCheck, setDevicesCheck] = useState<HTMLDivElement | null>(null);
   const closeConnect = useCallback(() => setConnecting(false), []);
+  // the relay tab's QR code may have put this PC in an account: Add a connection stays up to say which, and by which device
+  const pairingHeld = useRef(false);
+  const holdPairing = useCallback((held: boolean) => { pairingHeld.current = held; }, []);
+  const closeConnectOnPair = useCallback(() => { if (!pairingHeld.current) setConnecting(false); }, []);
+  const accountService = accountServiceHere();
   // a reset relay identity is a new ID for this PC: My devices reads it again
   const [identityResets, setIdentityResets] = useState(0);
   // the account as AccountSection reads it: signed in or not, and the account's PCs for the list
-  const [account, setAccount] = useState<AccountState>({ signedIn: false, account: null, pcs: null, reachable: true });
+  const [account, setAccount] = useState<AccountState>({ signedIn: false, account: null, pcs: null, provider: null, noPcs: false, reachable: true });
+  // the relay tab's QR code let a device in after it came down (lib/accountQrWatch.ts): Add a connection opens again
+  // to say so, where its relay tab can
+  const tellsQrNotice = accountService !== null && account.reachable && relayOffered(relay) && !relayReadOnly;
+  useEffect(() => {
+    if (!tellsQrNotice) return;
+    const open = () => { if (accountQrNoticeWaiting()) setConnecting(true); };
+    open();
+    window.addEventListener(ACCOUNT_QR_WATCH_EVENT, open);
+    return () => window.removeEventListener(ACCOUNT_QR_WATCH_EVENT, open);
+  }, [tellsQrNotice]);
   // a new device joins by signing in only to a PC in the account this browser is signed in to (docs/account.md
   // "Joining through the account"): read again each time the dialog opens, since this PC may have joined meanwhile
   const [pcAccount, setPcAccount] = useState<string | null>(null);
@@ -1386,27 +1404,27 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
   const joinBySignIn = account.account !== null && pcAccount === account.account && relay.status?.phase === "online";
   const openAccount = useCallback(() => {
     setConnecting(false);
-    // the account's own group, at the top of this page: Add this PC is there
+    // the account's own group, at the top of this page: the sign-in and Add this PC are there
     const group = document.querySelector<HTMLElement>('.settings-dialog [data-section="account"]');
-    // the account waits in More settings: opened first, so the sign-in shows
-    const fold = group?.closest("details");
-    if (fold) fold.open = true;
     group?.scrollIntoView({ block: "start" });
     group?.querySelector<HTMLElement>("button")?.focus();
   }, []);
-  const accountService = accountServiceHere();
   const readAccountAgain = useCallback(() => setAccountChecks((count) => count + 1), []);
   // a touch phone on this PC's own address pairs itself through the relay in one tap: beside its own row
   const touchPhone = useMediaQuery("(pointer: coarse)");
   const selfRelay = touchPhone && relayOffered(relay) && relay.status?.phase === "online" && !relayReadOnly ? <UseRelayHere /> : null;
   return (
     <>
+      {/* the account first: the sign-in the relay depends on is not left in More settings */}
+      <AccountSection onAccount={setAccount} recheck={accountChecks} />
+
       {/* what is connected to this PC: its name atop one list of the other PCs, phones and browsers, the one in use first */}
       <SettingsGroup section="devices">
         <div className="settings-item my-devices">
-          <MyPcRows machines={machines} accountPcs={account.pcs} watching={auth?.role === "watch"} relayKey={`${relay.status?.phase ?? ""}:${identityResets}`} selfAction={setDevicesCheck}>
-            <DevicesPanel onDevicePaired={closeConnect} auth={auth} onRevokedAll={onRevokedAll} kindOf={(label) => deviceKind(label, t)} currentAction={selfRelay} more={devicesMore} checkSlot={devicesCheck} />
+          <MyPcRows machines={machines} account={account.account} accountPcs={account.pcs} onAccountChanged={readAccountAgain} watching={auth?.role === "watch"} relayKey={`${relay.status?.phase ?? ""}:${identityResets}`} selfAction={setDevicesCheck}>
+            <DevicesPanel onDevicePaired={closeConnectOnPair} auth={auth} onRevokedAll={onRevokedAll} kindOf={(label) => deviceKind(label, t)} currentAction={selfRelay} more={devicesMore} checkSlot={devicesCheck} />
           </MyPcRows>
+          {account.noPcs && account.provider !== null && <NoAccountPcHint provider={account.provider} />}
         </div>
         {/* how anything else gets connected: one button, its sheet picks the way; a search finds it as a row by every way it holds */}
         {searching ? (
@@ -1448,7 +1466,6 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
           </SettingsGroup>
         )}
 
-        <AccountSection onAccount={setAccount} recheck={accountChecks} />
         <SettingsGroup title={t("Devices and access")} section="devices-more">
           {/* in the hosted shell too (a phone reaching this PC through the relay or directly), there without the switch */}
           {(relayOffered(relay) || inRelayShell()) && <RelayDirectRow relay={relay} readOnly={relayReadOnly || inRelayShell()} />}
@@ -1473,10 +1490,11 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
       {connecting && (
         <ConnectPhoneDialog plan={plan} pairUrl={pairUrl}
           relay={relay} readOnly={relayReadOnly} closesGate={closesGate} canPair={auth?.via !== "portal"}
-          signedIn={account.signedIn} joinBySignIn={joinBySignIn}
+          signedIn={account.signedIn} accountId={account.account} joinBySignIn={joinBySignIn}
           account={accountService !== null && account.reachable ? { service: accountService, onOpen: openAccount, onSignedIn: readAccountAgain } : null}
           onAddPc={(preset) => { setConnecting(false); openAddPc(preset); }} machines={machines}
-          onConnectMachine={(machine) => { setConnecting(false); connectPc(machine); }} onClose={closeConnect} />
+          onConnectMachine={(machine) => { setConnecting(false); connectPc(machine); }}
+          onPairingHeld={holdPairing} onRevokedAll={onRevokedAll} onClose={closeConnect} />
       )}
     </>
   );
@@ -1553,7 +1571,11 @@ const removablePc = (machine: Machine): boolean => machine.state !== "connected"
  * (a reset in another window) is read again too. Removing a PC stays
  * in the sidebar's PC menu, which moves the selection off it first and knows the PCs herdr manages.
  */
-function MyPcRows({ machines, accountPcs, relayKey, watching, selfAction, children }: { machines: readonly Machine[]; accountPcs: readonly MyPc[] | null; relayKey: string;
+function MyPcRows({ machines, account, accountPcs, onAccountChanged, relayKey, watching, selfAction, children }: { machines: readonly Machine[]; accountPcs: readonly MyPc[] | null; relayKey: string;
+  /** the account whose PCs these are; null signed out */
+  account: string | null;
+  /** a PC was taken out of the account: its list is read again */
+  onAccountChanged: () => void;
   /** a watching device: the server refuses it the removal, so it is not offered */
   watching: boolean;
   /** takes the end of this PC's own row, where the device list puts its Check now */
@@ -1602,14 +1624,8 @@ function MyPcRows({ machines, accountPcs, relayKey, watching, selfAction, childr
           )}
         </li>
       ))}
-      {fromAccount.map((pc) => (
-        <li key={pc.server_id} className={pc.state === "paired" || pc.state === "needs-approval" ? "devices-row" : "devices-row is-away"} data-pc-state={pc.state}>
-          <div className="devices-name">
-            <span className="settings-label">{pc.name}<span className="devices-kind">PC</span></span>
-            <span className="settings-description">{listedPcStateText(pc, t)}</span>
-          </div>
-        </li>
-      ))}
+      {account !== null && <AccountPcRows pcs={fromAccount} watching={watching} onRemoved={onAccountChanged}
+        remove={(serverId) => removePcFromAccount(new AccountService({ store: indexedAccountStore }), account, serverId)} />}
     </ul>
     {removing !== null && <ConfirmDialog title={t("Remove PC {name}?", { name: removing.name })} body={t(removing.kind === "relay" ? "Removes this PC here. To end its access too, revoke it under Phone & devices on that PC." : "Removes this registration. Remote sessions keep running.")} confirmLabel={t("Remove PC")}
       onConfirm={async () => { await machineRequest(`/${encodeURIComponent(removing.id)}`, "DELETE"); setRemoving(null); }} onClose={() => setRemoving(null)} />}
@@ -1756,6 +1772,7 @@ function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onSe
   const target = facts?.switch_to ?? null;
   // under the fact, not beside it: the fact keeps its one line on a phone
   const hint = facts?.fallback === "no_herdr_core" ? t("The Herdr app was chosen here, but no herdr-core answered, so herdr TUI is shown.")
+    : facts?.fallback === "no_alt_runtime" ? t("alt-runtime was chosen here, but this Ovis cannot start it, so herdr TUI is shown.")
     : facts?.locked === "env" ? t("OVIS_RUNTIME in Ovis's environment decides which terminals this PC shows; change it there to switch.")
     // where the OS does not serve herdr-core, setting OVIS_RUNTIME=herdr-core would stop Ovis: no how-to
     : target !== null || onCore || !core?.version || facts?.locked === "platform" ? null
@@ -1766,9 +1783,9 @@ function RuntimeFacts({ version, runtime, core, facts: healthFacts, bootId, onSe
   // others it found installed. With two installed the choice between them is right on the first line.
   const coreInstalled = core?.version != null;
   const tuiInstalled = facts?.tui.installed ?? !onCore;
-  const name = (runtime: "herdr" | "herdr-core") => (runtime === "herdr-core" ? "herdr-core" : "herdr");
-  const versionOf = (runtime: "herdr" | "herdr-core") => (runtime === served ? known ?? (onCore ? core?.version ?? null : null) : runtime === "herdr-core" ? core?.version ?? null : null);
-  const titled = (runtime: "herdr" | "herdr-core") => [name(runtime), versionOf(runtime)].filter(Boolean).join(" ");
+  const name = (runtime: RuntimeName) => runtime;
+  const versionOf = (runtime: RuntimeName) => (runtime === served ? known ?? (onCore ? core?.version ?? null : null) : runtime === "herdr-core" ? core?.version ?? null : null);
+  const titled = (runtime: RuntimeName) => [name(runtime), versionOf(runtime)].filter(Boolean).join(" ");
   // the switch names both runtimes with their versions; another one installed gets its own line only when there is no switch
   const others = (["herdr", "herdr-core"] as const).filter((runtime) => runtime !== served && runtime !== target && (runtime === "herdr-core" ? coreInstalled : tuiInstalled));
   return (

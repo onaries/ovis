@@ -144,10 +144,10 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *                                          only: which runtime this server serves and what Settings may switch it to) } (boot_id: this server
  *                                          lifetime's id, the supervisor's when managed; older servers sent null unmanaged)
  *  GET    /api/session                   -> { snapshot: SessionSnapshot }
- *  POST   /api/runtime                   -> 202 { accepted: true }; body { runtime: "herdr" | "herdr-core" }, X-Herdr-Update: 1,
+ *  POST   /api/runtime                   -> 202 { accepted: true }; body { runtime: "herdr" | "herdr-core" | "alt-runtime" }, X-Herdr-Update: 1,
  *         a driving owner only (not watch, not an open install's stranger): saves the choice (runtime-<port>.json) and has
  *         the launcher restart the server on it (server/herdr-core/runtime-choice.ts); 409 runtime_locked (OVIS_RUNTIME,
- *         no launcher, the OS), runtime_unavailable (this PC lacks it, or serves it already), runtime_switching
+ *         no launcher, the OS), runtime_unavailable (this PC lacks it, or serves it already; alt-runtime until this Ovis can start it), runtime_switching
  *  GET    /api/herdr-ui                  -> HerdrUiConfig (this server PC's herdr [ui] copy_on_select and
  *         [keys] prefix bindings, for local and remote panes alike), no-store
  *  GET    /api/access                    -> RemoteAccess (how a phone can reach this server: what
@@ -173,7 +173,9 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *  POST   /api/relay/start               -> RelayStatus; closes an ungated tokenless device gate first
  *  POST   /api/relay/stop                -> RelayStatus; closes sessions with shutdown and WS 1001
  *  POST   /api/relay/offer               -> { url, expires_at }; an offer carrying the active one-time pairing code
- *         (the one Devices shows, else a new one); 409 relay_off while off, relay_offline in error
+ *         (the one Devices shows, else a new one); with x-ovis-no-account-only: 1, a code of its own made only
+ *         while the PC is in no account (409 in_account otherwise), ended when the PC joins one; 409 relay_off
+ *         while off, relay_offline in error
  *  POST   /api/relay/link                -> { url }; a pairing link without a code, for pairing by comparing
  *         digits (docs/relay.md); 409 relay_off while off
  *  POST   /api/relay/link/close          -> { ok: true }; ends that link's pairing window and declines the
@@ -1190,6 +1192,9 @@ export interface PendingMessage {
    * it. Kept while uncertain; gone once it is queued or held again, and from older bridges. */
   sending_at?: string;
   error?: { code: string; message: string };
+  /** What it waits for besides its turn: `omp_starting`, an omp that does not take input yet (a queued row at a
+   * pane at rest, or one on its way). Gone once that is over. */
+  waiting?: "omp_starting";
   /** its submit was `agent_only`: a resend of a saved copy says so again */
   agent_only?: true;
 }
@@ -1237,6 +1242,9 @@ export type ClientMessage =
    * `delivery:hold` (feature "pending-hold") is the same, except the message is kept as held, also
    * when it arrives after the turn ended: it never goes on its own, only when the owner steers it.
    * Omission keeps the legacy immediate submission. Queued messages never resume after lease loss.
+   * An immediate chat submit is accepted as a queued row (`pending` in its result) instead of typed while the
+   * pane's queue waits for its omp to take input: it goes behind what waits there. Once the terminal was typed
+   * into during that start, it (and a queue request) is accepted as a held row instead, as what waited there is.
    * Queue request ids increase monotonically per connection; recent duplicates replay their
    * receipt, and retired ids are rejected rather than executed after history eviction.
    * `delivery:agent-queue` requires "agent-queue" and a live interact attachment to an actual

@@ -2269,8 +2269,17 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `--accent` around the selected pane. The compact header names its pane and, on a screen that takes touch
   (`any-pointer: coarse`), the ellipsis; a mouse opens the same menu by right-click. Keyboard users
   tab to the pane's ellipsis, which becomes visible on keyboard focus, and press Enter.
-  Shift+F10 in the terminal goes to the terminal program, not the app menu. A lone or zoomed
-  pane is borderless; its actions live in the tab's `⋯` menu rather than a second ellipsis, on a desktop as on touch.
+  Where every pane of a split tab is drawn (wider than 768px, on a PC whose layout Ovis keeps),
+  each header ends with two buttons always in sight: Zoom pane / Unzoom pane (`Maximize2` /
+  `Minimize2`), then Close pane (`X`) in the corner, where a window closes: the order of a
+  Windows or GNOME title bar, Maximize just left of Close. Close is the menu's Close pane, with its confirmation (the workspace's last
+  pane, an agent `working` or `blocked`), and is drawn only where the menu offers it (not on a
+  locked agent's pane); a watching device sees it disabled. A pane narrower than its header gives up
+  its title, then its ellipsis, never the corner's Close. `--space-2` more than the header's gap stands between the two, so a press
+  meant for Zoom does not land on Close; each is a `--control-h` square, `--touch-target` under a
+  coarse pointer. herdr's zoomed pane keeps that header, Unzoom and Close included.
+  Shift+F10 in the terminal goes to the terminal program, not the app menu. A lone pane, and a
+  zoomed one where panes are shown one at a time, is borderless and draws neither button; its actions live in the tab's `⋯` menu rather than a second ellipsis, on a desktop as on touch.
 - A left click or keyboard focus selects the actual pane. Right-click opens the clicked pane's
   menu without changing the selected pane: Rename pane, Clear pane name when named, Swap with
   focused pane when another is selected, Split right, Split down, Zoom/Unzoom pane, Recover
@@ -4228,8 +4237,25 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   devices** stacks, under a hairline each, the Tailscale address and QR code, the six-digit pairing
   code (`components/CompactPair.tsx`, started when the tab first opens) and Portal where the server
   offers it. **Ovis relay** is the account's: signed out one sentence and **Sign in to Ovis** (which
-  opens the account's sign-in in More settings), signed in how a new device joins, or the relay's
-  switch and **Open the account** while this PC cannot admit one yet. Relay pairing without the
+  opens the account's sign-in in More settings), signed in the relay's switch and **Open the
+  account** while this PC is in no account. Under either, behind a hairline (none where nothing is
+  drawn above it), one part (`.connect-account-qr`) that depends on the PC, not on the sign-in. On a PC in no account it is
+  **Add with a QR code**: one sentence and a neutral **Show the QR code**, which draws the relay's
+  QR code alone (`--qr-size`, its countdown, **New code**; no code to type). The QR code gives way
+  to a notice box (`.connect-account-qr-notice`: `--bg-elevated`, a hairline, `--radius-md`) that
+  says which account the PC joined and which device added it, or asks about a device nobody
+  vouched for. In a notice the `.btn-danger` (**Not me: remove it**, **Not me: revoke every
+  device**) comes first whenever the page cannot call the device or the account its own; the
+  primary **Done** is only for the browser's own account, and no **Done** or **Keep it** shows
+  while a device is unanswered (one still being checked is named in a plain line). Another
+  account's notice takes the `--status-blocked` border on `--danger-tint`. On a PC that is in an
+  account the part has no button and no QR code: its label says which account (the browser's own,
+  another one, or one it cannot tell while signed out), one sentence says to sign in to that
+  account on the device, and a hint says the QR code is only for a PC in no account; the
+  relay's switch stays above while the relay is not online. Linked-device apps draw the same
+  line (WhatsApp shows its linking QR code on the device being added, never on one already
+  linked), and it is deliberate here: a QR code on a PC with members would let in whoever scans
+  it with nobody approving. Relay pairing without the
   account, a code from another PC and Tailscale PCs added through the relay are gone from it. A phone
   opens on Phones and devices, a PC's window on SSH; a tab once opened stays mounted, so its code
   is not minted again. The dialog closes by itself once My devices sees the device a code let in.
@@ -5384,6 +5410,8 @@ command opens on a typed address; no code is copied.
 ## Touch prompt suggestions
 
 The empty composer follows Claude Code's [prompt suggestion model](https://code.claude.com/docs/en/interactive-mode): accept into an editable draft, then send separately. On a touch screen with Settings → Chat → Composer buttons → Suggestion on (off by default), the grey words also accept a tap; with it off, a tap there only focuses the box, so a user who taps the words to write their own reply never gets the suggestion inserted. Only the words receive taps; the surrounding input keeps native focus and scrolling. Tab and the optional suggestion chip share the same acceptance function. A focused inline suggestion also accepts Enter and Space. A suggestion that exceeds the message limit leaves the draft unchanged and shows the limit in the existing alert. No code or visual assets are copied.
+
+gjc's `promptSuggestions` and omp's `composer.predictions` draw their suggestion the same way, as ghost text in the theme's dim color in their empty box, and the composer offers it as it offers Claude's; one they cut short at the box's edge (ending in `…`) is not offered, since only part of it would go into the draft. Typed text there must never read as a suggestion, so omp's is offered only in the `dim` of one of its built-in themes and in no color any of them types in; the dim `Queueing` header of a queue draft is not offered either. The theme on screen is not known, so a custom omp theme whose text color is exactly one of those dim colors is a known limit: its typed text reads as a suggestion.
 
 ### Manually connecting Codex chat
 

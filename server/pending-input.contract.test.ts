@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, mock, spyOn } fro
 import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { createServer } from "./index.ts";
+import { createServer, TYPED_SETTLE_MS } from "./index.ts";
 import * as herdrClient from "./herdr/client.ts";
 import { herdrRpc, paneRead, paneScrollInfo, sessionSnapshot } from "./herdr/client.ts";
 import { noteSubmitted, parseInteractivePrompt } from "./prompt.ts";
@@ -154,17 +154,25 @@ afterEach(async () => {
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-async function setup(label: string, agent = "claude", screen = "› Message\n", options: Parameters<typeof createServer>[0] = {}, replaceable: boolean | "launcher" = false, piTranscript?: string) {
+/** `ompStarting`: an omp that loads herdr's integration (by its own arguments) and has not reported its session, as one that does not take input yet */
+async function setup(label: string, agent = "claude", screen = "› Message\n", options: Parameters<typeof createServer>[0] = {}, replaceable: boolean | "launcher" = false, piTranscript?: string, ompStarting = false) {
   const id = ++next;
   const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>("workspace.create", { label: `ovis-test-pending-${label}`, cwd: root, focus: false });
   // registered before anything below can throw, so afterEach closes the workspace of a setup that failed
   const entry: (typeof active)[number] = { stop: () => {}, sockets: [], workspace: created.workspace.workspace_id }; active.push(entry);
   const pane = created.root_pane.pane_id;
   let piSeq = 1;
+  /** herdr's omp integration reports the pane's session, as it does once omp takes input */
+  const ompReports = () => herdrRpc("pane.report_agent_session", { pane_id: pane, source: "herdr:omp", agent: "omp", seq: Date.now() * 1000,
+    agent_session_path: join(root, `${id}-omp-session.jsonl`), session_start_source: "startup" });
   const log = join(root, `${id}.jsonl`);
   const screenFile = join(root, `${id}.screen`);
   writeFileSync(screenFile, "");
-  const command = `'${join(root, agent)}' '${join(root, "record.cjs")}' '${log}' '${screen.replace(/\n/g, "\r\n")}' '${screenFile}'`;
+  const command = `'${join(root, agent)}' '${join(root, "record.cjs")}' '${log}' '${screen.replace(/\n/g, "\r\n")}' '${screenFile}'${ompStarting ? ` -e '${join(root, "herdr-omp-agent-state.ts")}'`
+    // any other omp loads no integration, also where one is installed (a PC with omp): no send waits for it to report a
+    // session (composer.ts untilOmpReported), and no session is reported, after which herdr drops the manual state
+    // reports `state` makes about half the time, and a queued message never sees its turn end
+    : agent === "omp" ? " --no-extensions" : ""}`;
   // The shell immediately starts SESSION2 once SESSION1 exits, preserving terminal and lease.
   const replacementLog = join(root, `${id}-replacement.jsonl`);
   await herdrRpc("pane.send_text", { pane_id: pane, text: replaceable === "launcher"
@@ -218,7 +226,7 @@ async function setup(label: string, agent = "claude", screen = "› Message\n", 
   const removed = (id: string, outcome = "sent", reader = socket) => reader.wait((frame) => frame.type === "pending-messages" && frame.pane_id === pane
     && (outcome === "held" ? frame.held?.includes(id) : frame.removed?.some((entry: any) => entry.id === id && entry.outcome === outcome)));
   const another = async (attach = true, chat = false) => { const reader = new Socket(server.port); entry.sockets.push(reader); if (attach) await reader.attach(pane, chat); else await reader.wait((frame) => frame.type === "snapshot"); return reader; };
-  return { screenFile, pane, port: server.port, server, socket, bytes, waitBytes, state, showScreen, queue, removed, another, replacementLog };
+  return { screenFile, pane, port: server.port, server, socket, bytes, waitBytes, state, showScreen, queue, removed, another, replacementLog, ompReports };
 }
 
 describe("resumable follow-up receipts (#2421)", () => {
@@ -581,6 +589,8 @@ describe("Ovis-origin Pi transcript receipts", () => {
       && frame.messages.some((item: PendingMessage) => item.text === "after the switch" && item.error?.code === "pi_transcript_pending"), from);
     const receipt = sent.messages.find((item: PendingMessage) => item.text === "after the switch" && item.error?.code === "pi_transcript_pending");
     expect(receipt.id).not.toBe(message.id);
+    // the receipt follows herdr's answer to the Enter, but the recorder in the pane may not have logged it yet
+    await f.waitBytes(`${paste("after the switch")}\r`);
     expect(f.bytes()).toBe(`${paste("/model sonnet")}\r${paste("after the switch")}\r`);
     const receipts = f.socket.seen.slice(from).flatMap((frame) => frame.type === "pending-messages" ? frame.messages as PendingMessage[] : []);
     expect(receipts.filter((item) => item.text === "/model sonnet" && item.error?.code?.includes("transcript"))).toEqual([]);
@@ -640,6 +650,8 @@ describe("Ovis-origin Pi transcript receipts", () => {
     expect((await other.result(911)).ok).toBe(true);
     await other.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.text === "other owner"));
 
+    // the receipt follows herdr's answer to the Enter, but the recorder in the pane may not have logged it yet
+    await f.waitBytes(`${paste("other owner")}\r`);
     const before = f.bytes();
     f.socket.send({ type: "submit", id: 912, pane_id: f.pane, text: "over limit", payload: "over limit", delivery: "immediate" });
     expect(await f.socket.result(912)).toMatchObject({ ok: false, code: "pending_limit" });
@@ -803,6 +815,44 @@ describe("connection-owned pending input", () => {
     // Then the terminal receives the same command the immediate path would send.
     expect(f.bytes()).toBe(`${paste(expected)}\r`);
   });
+
+  it("sends a queued message to an omp still starting only once omp reports its session, and says meanwhile what it waits for", async () => {
+    // omp draws its input box, and herdr shows it at rest, before it takes an Enter: typed then, the message stays in
+    // the box and never runs while its row says sent
+    const f = await setup("omp-starting", "omp", "", {}, false, undefined, true);
+    const message = await f.queue(1477, "queued words");
+    await f.state("idle");
+    // the row is still queued at a pane at rest, and says why
+    await f.socket.event((frame) => frame.messages.some((row) => row.id === message.id && row.state === "queued" && row.waiting === "omp_starting"));
+    expect(f.bytes()).toBe("");
+    await f.ompReports();
+    await f.removed(message.id);
+    await f.waitBytes("\r");
+    expect(f.bytes()).toBe(`${paste("queued words")}\r`);
+  }, 30_000);
+
+  it("holds a message that waits for a starting omp once the terminal is typed into, and types those keys at once", async () => {
+    const f = await setup("omp-starting-typed", "omp", "", {}, false, undefined, true);
+    const message = await f.queue(1478, "queued words");
+    await f.state("idle");
+    await f.socket.event((frame) => frame.messages.some((row) => row.id === message.id && row.waiting === "omp_starting"));
+    // the queue waits with nothing of the pane held: a key typed in the terminal goes at once
+    f.socket.send({ type: "input", pane_id: f.pane, text: "x" });
+    await f.waitBytes("x");
+    // and the message is not pasted behind it, where omp's Enter would send both as one: it is held for its sender
+    const held = await f.socket.event((frame) => frame.messages.some((row) => row.id === message.id && row.state === "held"));
+    expect(held.messages.find((row) => row.id === message.id)).toMatchObject({ state: "held", error: { code: "typed_while_waiting" } });
+    await f.ompReports();
+    // omp takes input now, and the message still waits: a key typed after the report comes right behind the first
+    f.socket.send({ type: "input", pane_id: f.pane, text: "z" });
+    await f.waitBytes("z");
+    expect(f.bytes()).toBe("xz");
+    // sent by hand, it goes
+    f.socket.send({ type: "pending-action", id: 9, pane_id: f.pane, pending_id: message.id, action: "steer" });
+    expect(await f.socket.action(9)).toMatchObject({ ok: true });
+    await f.waitBytes("\r");
+    expect(f.bytes()).toBe(`xz${paste("queued words")}\r`);
+  }, 30_000);
 
   it("holds a queued message when a hookless agent process is replaced in the same terminal (regression #540)", async () => {
     const f = await setup("process-replaced", "claude", "SESSION1", {}, true);
@@ -1676,11 +1726,33 @@ describe("connection-owned pending input", () => {
 
   for (const stop of [false, true]) it(`checks a new blocked state after the ${stop ? "composer's Stop" : "typed ESC"}'s settling gap, before pasting`, async () => {
     const f = await setup(stop ? "stop-gap-intent" : "stop-gap"); const message = await f.queue(1, "must not paste");
-    f.socket.send(stop ? { type: "input", pane_id: f.pane, text: "\u001b", stop: true } : { type: "input", pane_id: f.pane, text: "\u001b" });
-    f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: message.id, action: "steer" });
-    await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.id === message.id && item.state === "sending"));
-    await f.state("blocked");
-    expect(await f.socket.action(10)).toMatchObject({ ok: false, code: "agent_blocked" });
+    // The state comes up as the gap ends. herdr is told at the first status read that starts after the claim and no
+    // sooner than the gap after the ESC, and that read waits for herdr's answer. Every read before it says the agent
+    // works, so a bridge that checks before the gap, or waits out none, pastes. Told to herdr only when the "sending"
+    // frame had arrived here, the state raced the gap, which runs from the ESC: on a busy PC the gap was over first
+    // and the message was pasted.
+    const claim = pendingInput.PendingInputs.prototype.claim;
+    const snapshot = herdrClient.sessionSnapshot;
+    let typedAt = Infinity, claimed = false;
+    let blocked: Promise<unknown> | undefined;
+    const claiming = spyOn(pendingInput.PendingInputs.prototype, "claim").mockImplementation(function (this: pendingInput.PendingInputs<unknown, unknown>, item, automatic) {
+      const taken = claim.call(this, item, automatic);
+      if (taken && item.message.id === message.id) claimed = true;
+      return taken;
+    });
+    const reading = spyOn(herdrClient, "sessionSnapshot").mockImplementation(async (...args) => {
+      // timers count whole milliseconds: the gap's may fire up to a millisecond before Date.now() says it is due
+      if (claimed && Date.now() - typedAt >= TYPED_SETTLE_MS - 1) await (blocked ??= herdrRpc("pane.report_agent", { pane_id: f.pane, source: "manual", agent: "claude", state: "blocked" }));
+      return snapshot(...args);
+    });
+    try {
+      typedAt = Date.now();
+      f.socket.send(stop ? { type: "input", pane_id: f.pane, text: "\u001b", stop: true } : { type: "input", pane_id: f.pane, text: "\u001b" });
+      f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: message.id, action: "steer" });
+      await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) => item.id === message.id && item.state === "sending"));
+      expect(await f.socket.action(10)).toMatchObject({ ok: false, code: "agent_blocked" });
+      await f.socket.wait((frame) => frame.type === "pane-status" && frame.pane_id === f.pane && frame.agent_status === "blocked");
+    } finally { claiming.mockRestore(); reading.mockRestore(); }
     await f.waitBytes("\u001b"); expect(f.bytes()).toBe("\u001b");
   }, 30_000);
 

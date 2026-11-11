@@ -186,7 +186,11 @@ pairing. A comparison that pairs this PC only counts toward the same 20 failures
 a wrong code, after which the PC takes no such pairing for 10 minutes. One that asks to join the
 account (`pair-intent-account`) counts toward 20 of its own, so a flood of those cannot pause
 pairing with a QR code or a code. A relay in the middle can spend both, so it gets about 40 tries
-in 10 minutes, one in twenty-five thousand, before both pause.
+in 10 minutes, one in twenty-five thousand, before both pause. A comparison from another PC of the
+account (`pair-intent-pc-vouched`, [Adding a PC of your account](account.md#adding-a-pc-of-your-account))
+counts toward 20 of its own too, but gives a relay no tries: the PC takes one only for a key that a
+device signed in to the account named in an admission, and the PC asking holds the other's key from
+the account's directory, checked against its id, so a relay cannot stand in for either end.
 **Revoke all** ends every comparison under way, an approved one included, and withdraws its prompt. The prompt lives in memory only. The relay learns nothing new: the comparison travels inside the
 encrypted channel, so it sees only a few more frames and their sizes and timing.
 
@@ -266,6 +270,10 @@ paired device with drive access instead.
 The hosted shell hides the group because mutations
 over the relay answer 403 `local_required`. While the relay is off an offer answers 409
 `relay_off`; while it is in error it answers 409 `relay_offline`, so wait for **Online** before pairing.
+An offer asked for with the header `x-ovis-no-account-only: 1` (the QR code of Add a connection's
+relay tab, which puts the PC in the account of whoever scans it) is made only while the PC is in no
+account: a PC in one answers 409 `in_account`, and the code of such an offer ends when the PC joins
+an account ([account.md](account.md#who-may-admit-a-device)).
 
 **A start that fails.** If a start fails before the PC's relay link exists, the switch stays
 off and the panel shows **The relay did not start: …** with the reason and **Try again**. Nothing
