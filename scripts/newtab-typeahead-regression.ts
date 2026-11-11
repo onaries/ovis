@@ -117,8 +117,18 @@ async function typeAhead(browser: Browser, origin: string, item: Case): Promise<
     const lines = async () => (await paneRead({ paneId: second!, source: "recent", lines: 30, stripAnsi: true })).text.split("\n").map((line) => line.trim());
     if (item.ran !== null) {
       const ran = item.ran;
-      await until(async () => (await lines()).includes(ran), `${item.name}: the new tab ran the command typed ahead`);
-      if (item.sent !== undefined) assert.equal(textOf(sent, second!), item.sent, `${item.name}: every key reaches the new tab, in order`);
+      await until(async () => (await lines()).includes(ran), `${item.name}: the new tab ran the command typed ahead`).catch(async (error: unknown) => {
+        // CI has seen this time out without saying why: what the page sent the new tab, and whether it held the keys
+        const held = await page.getByRole("button", { name: "Discard held input", exact: true }).count();
+        throw new Error(`${(error as Error).message}; sent to it: ${JSON.stringify(textOf(sent, second!))}, held for review: ${held > 0}, its last lines: ${JSON.stringify((await lines()).filter(Boolean).slice(-4))}`);
+      });
+      if (item.sent !== undefined) {
+        // the shell's line is read through herdr, the page's frames through the browser's own events, which can come
+        // later on a busy machine: what the page sent is read once it has sent as many keys as were typed
+        const expected = item.sent;
+        await until(() => textOf(sent, second!).length >= expected.length, `${item.name}: the page's frames for the new tab are all heard`);
+        assert.equal(textOf(sent, second!), expected, `${item.name}: every key reaches the new tab, in order`);
+      }
     } else {
       // held for review as typing offline is: the new tab offers it with Send and Discard
       const frame = page.locator(`[data-layout-pane=${JSON.stringify(second!)}]`);
