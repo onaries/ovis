@@ -581,7 +581,7 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
     if (lastPrompt !== null && !lastPrompt.answered && typeof entry.parentUuid === "string" && entry.parentUuid === lastPrompt.parent) {
       const index = turns.indexOf(lastPrompt.turn);
       if (index !== -1) turns.splice(index, 1);
-    }
+    } else handbacks.clear();
     turns.push(turn);
     state.lastPrompt = { turn, parent: entry.parentUuid, answered: false };
   };
@@ -593,11 +593,15 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
     // another session's message: its own turn, so the work it started is not appended to the answer before it
     const peer = claudePeerNotice(entry);
     if (peer !== null) {
-      const id = claudePeerId(entry);
-      if (id !== null) { if (peersSeen.has(id)) return; peersSeen.add(id); }
       // a subagent's hand-back is its card's report: into the card when the card came first, else
       // shown as the message until the card comes
       const handback = claudeHandback(entry);
+      // A hand-back and its notification pair only within one turn, as the page reader parses a
+      // settled turn on its own (transcript-turns.ts turnStarts): a record that starts a turn there (a
+      // prompt, any other session's message) ends the wait, so a warm read and a cold one agree (#3658)
+      if (handback === null) handbacks.clear();
+      const id = claudePeerId(entry);
+      if (id !== null) { if (peersSeen.has(id)) return; peersSeen.add(id); }
       const held = handback === null ? undefined : handbacks.get(handback.taskId);
       if (handback !== null && held?.report === handback.report) return;
       if (handback !== null && held?.card !== undefined && held.report === undefined) {

@@ -316,6 +316,29 @@ describe("a subagent's hand-back through the page reader (#3658)", () => {
     });
   }
 
+  const peerSays = { ...user("Review ready"), isMeta: true, origin: { kind: "peer", from: "reviewer", name: "Reviewer", body: "Review ready" } };
+  for (const [order, between] of [["a prompt", () => [user("next"), assistant([{ type: "text", text: "On it." }], "end_turn")]], ["another session's message", () => [peerSays]]] as const) {
+    it(`pairs a hand-back with its notification only within one turn, warm as cold, with ${order} between them`, () => {
+      const { handback, ended, pointer } = handbackRecords();
+      const root = mkdtempSync(join(tmpdir(), "ovis-handback-page-")); roots.push(root);
+      const path = join(root, "session.jsonl");
+      const head = [user("Price it"), assistant([{ type: "text", text: "Started." }], "end_turn")];
+      // each way round: the hand-back before the turn opener and the notification after, and the reverse
+      for (const [first, second] of [[[handback], [user(ended)]], [[enqueue(ended), user(ended)], [handback]]] as const) {
+        writeFileSync(path, `${jsonl(...head, ...first)}\n`);
+        transcriptPage("claude-transcript", path);
+        appendFileSync(path, `${jsonl(...between(), ...second, user("Thanks"), assistant([{ type: "text", text: "Sure." }], "end_turn"))}\n`);
+        const warm = transcriptPage("claude-transcript", path).turns;
+        forgetTranscriptState();
+        const cold = transcriptPage("claude-transcript", path).turns;
+        expect(warm).toEqual(cold);
+        expect(tasks(cold).map((task) => task.result)).toEqual([pointer.trim()]);
+        expect(cold.flatMap((turn) => turn.parts.filter((part) => part.kind === "notice" && part.text.startsWith("[Subagent hand-back]"))).length).toBe(1);
+        forgetTranscriptState();
+      }
+    });
+  }
+
   it("keeps the first line's own indentation, a report that opens with code", () => {
     const { handback, ended } = handbackRecords(["", "    const x = 1;", "", "That is the line."]);
     expect(tasks(parseClaudeTranscript(jsonl(enqueue(ended), handback, user(ended)))).map((task) => task.result)).toEqual(["    const x = 1;\n\nThat is the line."]);
