@@ -85,6 +85,10 @@ async function desktop(browser: Browser, theme: "light" | "dark"): Promise<void>
     const pane = (await page.locator("main").first().boundingBox())!;
     assert.ok(Math.abs(box.x + box.width - 1280) <= 1, `the panel ends at the window's right edge (${box.x + box.width})`);
     assert.ok(pane.x + pane.width <= box.x + 1, `the pane ends where the panel starts (${pane.x + pane.width} vs ${box.x})`);
+    const browserBox = (await panel.locator(".dir-browser").boundingBox())!;
+    const footerBox = (await panel.locator(".dir-browser-footer").boundingBox())!;
+    assert.ok(Math.abs(browserBox.y + browserBox.height - footerBox.y - footerBox.height) <= 2,
+      "the docked file list fills the panel and leaves its footer at the bottom");
     await shot(page, `files-panel-1280-${theme}`);
 
     // Escape from the pane is the pane's

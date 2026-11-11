@@ -2752,6 +2752,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the Codex app keeps its files in a right sidebar beside the conversation; the button is then a
   toggle (`aria-pressed`). A file docking from it takes its place and closing the file shows the
   list again; the panel keeps the docked viewer's hairline column, resize edge and compact header.
+  In this full-height panel, Browse's list fills the space above the fixed Show hidden row;
+  the popup dialog's list height cap does not apply.
 - At `<=768px` the drawer toggle and More are `--touch-target-header` squares. The lens buttons
   are not: they keep the switch's track and inset, as the segmented control entry describes.
 - Connection is one quiet chip, drawn only while the bridge is not live: a pulsing dot plus the

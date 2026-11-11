@@ -60,6 +60,10 @@
   padding: var(--space-3);
 }
 
+.files-dialog.files-dialog-docked .dir-browser-list {
+  max-height: none;
+}
+
 /* with Documents, four tabs do not fit beside the title and Close on
    a phone or a narrow panel: they take the row under them, each an equal share of it */
 @media (max-width: 480px) {
