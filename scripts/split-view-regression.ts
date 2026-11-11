@@ -980,8 +980,10 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
               if (shows) present = true;
               else if (data.type === "machines" && present && !without && data.machines!.some((machine) => machine.snapshot)) {
                 without = true;
-                // told once that roster's render and its effects have run, as a later message would be
-                if (held.length > 0) release(handler, this);
+                // told once that roster's render and its effects have run, as a later message would be; with nothing
+                // held yet too: the half then follows from this roster alone, and a notice that comes later is let
+                // through at once (without), so the flag never waits for a notice that may not come
+                release(handler, this);
               }
             });
           },
