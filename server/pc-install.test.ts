@@ -5,6 +5,7 @@ import { createServer as listenOn } from "node:net";
 import { tmpdir } from "node:os";
 import { readProcessBirth } from "./process-owner.ts";
 import { join } from "node:path";
+import { quietPort } from "../scripts/quiet-port.ts";
 import { BRIDGE_PROTOCOL, REMOTE_BUNDLE_VERSION, type Machine, type PcInstallFailure, type PcInstallJob } from "../shared/machines.ts";
 import type { CompletionTracker } from "./completion.ts";
 import { MachineManager } from "./machines.ts";
@@ -90,14 +91,12 @@ interface Pc {
 }
 
 const cleanups: (() => void)[] = [];
-/** a port nothing listens on now, for a stand-in server's own address */
-async function freePort(): Promise<number> {
-  const probe = listenOn(() => {});
-  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", () => resolve()));
-  const { port } = probe.address() as { port: number };
-  await new Promise<void>((resolve) => probe.close(() => resolve()));
-  return port;
-}
+/**
+ * A port nothing listens on now, for a stand-in server's own address, which no stand-in ever binds: outside the ports the
+ * system hands out for port 0. One taken with port 0 and let go is handed to the next `port: 0` server (this file's relay,
+ * or another test file's beside it in `bun run check`), and the restore then finds its address taken.
+ */
+const freePort = quietPort;
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
 
 function fixture(pc: Pc) {
