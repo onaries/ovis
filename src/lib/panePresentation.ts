@@ -10,10 +10,11 @@ type ConversationProof = { source: ConversationResponse["source"] | undefined; h
 
 function finalAnswer(conversation: ConversationProof): ConversationTurn | undefined {
   let index = conversation.turns.length - 1;
-  // These Claude notices, and an OmO goal's wait, do not start another model turn. Runtime wakes and real prompts do.
+  // These Claude notices, a compaction's summary (#3675) and an OmO goal's wait do not start another model turn.
+  // Runtime wakes and real prompts do.
   while (index >= 0) {
     const turn = conversation.turns[index];
-    if (turn?.role !== "user" || turn.parts.length === 0 || !turn.parts.every((part) => part.kind === "goal_wait" ||
+    if (turn?.role !== "user" || turn.parts.length === 0 || !turn.parts.every((part) => part.kind === "goal_wait" || part.kind === "compact" ||
       part.kind === "notice" && (part.source === "informational" || part.source === "local-command"))) break;
     index--;
   }
@@ -27,12 +28,23 @@ export function conversationFinishPresented(conversation: ConversationProof): bo
   return finalAnswer(conversation) !== undefined;
 }
 
-function answerIdentity(conversation: ConversationProof): string | undefined {
+/** The compactions after the newest final answer, oldest first. */
+function compactionsAfter(conversation: ConversationProof, turn: ConversationTurn): ConversationTurn[] {
+  return conversation.turns.slice(conversation.turns.indexOf(turn) + 1).filter((later) => later.parts.some((part) => part.kind === "compact"));
+}
+
+/** `compaction`: the one after the answer that dates the proof, by its place among them; the last by default, -1 for none. */
+function answerIdentity(conversation: ConversationProof, compaction?: number): string | undefined {
   const turn = finalAnswer(conversation);
   if (!turn) return undefined;
+  // A compaction after the answer (Claude Code's /compact) is a finish of its own: the proof is dated from it, so the
+  // finish it brings is not refused as the answer's earlier one (#3675)
+  const compactions = compactionsAfter(conversation, turn);
+  const compacted = compaction === undefined ? compactions.at(-1) : compactions[compaction];
   // Do not date a finish from later tool-result decoration or a trailing informational notice.
-  return JSON.stringify([conversation.source, conversation.history_id, turn.end_ts ?? turn.ts, turnRevision({
-    role: turn.role, ts: turn.ts, parts: turn.parts.filter((part) => part.kind === "text" && part.phase === "final_answer"),
+  return JSON.stringify([conversation.source, conversation.history_id, compacted?.ts ?? turn.end_ts ?? turn.ts, turnRevision({
+    role: turn.role, ts: turn.ts, parts: [...turn.parts.filter((part) => part.kind === "text" && part.phase === "final_answer"),
+      ...compacted?.parts.filter((part) => part.kind === "compact") ?? []],
   })]);
 }
 
@@ -79,6 +91,15 @@ export class ConversationFinishEvidence {
         return typeof started === "string" && started !== "" && previous !== undefined && previous.identity === current?.identity;
       }
       if (answer === known.answer) return false;
+      // a proof that rests on a compaction proves only the finish right after the one its answer, or a compaction
+      // before it, was seen at (or one seen from the terminal, which keeps no answer): the compaction's own. A later
+      // finish may be another task's, whose turn is not in this transcript yet (#3675)
+      const answered = answerIdentity(conversation, -1);
+      if (answer !== answered) {
+        const turn = finalAnswer(conversation)!;
+        const before = compactionsAfter(conversation, turn).slice(0, -1).map((_, index) => answerIdentity(conversation, index));
+        if (id !== known.id + 1 || (known.answer !== undefined && known.answer !== answered && !before.includes(known.answer))) return false;
+      }
       if (known.answer !== undefined) {
         if (!previous || !current || current.identity === previous.identity || current.time <= previous.time) return false;
       }

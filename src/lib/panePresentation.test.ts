@@ -42,6 +42,59 @@ it("looks past only informational and local-command notices, never new user work
   ] })).toBe(true);
 });
 
+it("looks past a compaction's summary and its notices to the answer before them (#3675)", () => {
+  const answered = { source: "claude-transcript", history_id: "session", turns: [
+    { role: "assistant", ts: "2026-10-19T00:00:00Z", end_ts: "2026-10-19T00:00:05Z", parts: [{ kind: "text", text: "Finished", phase: "final_answer" }] },
+  ] } satisfies Parameters<typeof conversationFinishPresented>[0];
+  const compacted = { ...answered, turns: [...answered.turns,
+    { role: "user", ts: "2026-10-19T01:00:00Z", parts: [{ kind: "compact", text: "Summary of the earlier session" }] },
+    { role: "user", ts: "2026-10-19T01:00:01Z", parts: [{ kind: "notice", text: "Compacted", source: "informational" }] },
+    { role: "user", ts: "2026-10-19T02:00:00Z", parts: [{ kind: "notice", text: "Updated", source: "local-command" }] },
+  ] } satisfies Parameters<typeof conversationFinishPresented>[0];
+  expect(conversationFinishPresented(compacted)).toBe(true);
+  expect(new ConversationFinishEvidence().accept("compact-unseen", 40, compacted)).toBe(true);
+  // the answer was seen at its own finish; /compact then brings another, which the compaction proves
+  const seen = new ConversationFinishEvidence();
+  expect(seen.accept("compact-seen", 40, answered)).toBe(true);
+  expect(seen.accept("compact-seen", 41, answered)).toBe(false);
+  expect(seen.accept("compact-seen", 41, compacted)).toBe(true);
+  // and the same compaction proves no finish after it
+  expect(seen.accept("compact-seen", 42, structuredClone(compacted))).toBe(false);
+  // a finish after the compaction's, before its own turn is in the transcript, is not the compaction's to prove
+  const skipped = new ConversationFinishEvidence();
+  expect(skipped.accept("compact-skipped", 40, answered)).toBe(true);
+  expect(skipped.accept("compact-skipped", 42, compacted)).toBe(false);
+  // nor when the answer seen at the last finish is another one
+  const other = new ConversationFinishEvidence();
+  const older = { ...answered, turns: [{ ...answered.turns[0]!, ts: "2026-10-18T00:00:00Z", end_ts: "2026-10-18T00:00:05Z", parts: [{ kind: "text" as const, text: "Older", phase: "final_answer" as const }] }] };
+  expect(other.accept("compact-other", 40, older)).toBe(true);
+  expect(other.accept("compact-other", 41, compacted)).toBe(false);
+  // a second /compact in a row is the next finish's, proved by its own compaction
+  const twice = new ConversationFinishEvidence();
+  const again = { ...compacted, turns: [...compacted.turns,
+    { role: "user", ts: "2026-10-19T04:00:00Z", parts: [{ kind: "compact", text: "Summary of the summary" }] }] } satisfies Parameters<typeof conversationFinishPresented>[0];
+  expect(twice.accept("compact-twice", 40, answered)).toBe(true);
+  expect(twice.accept("compact-twice", 41, compacted)).toBe(true);
+  expect(twice.accept("compact-twice", 42, again)).toBe(true);
+  expect(twice.accept("compact-twice", 43, structuredClone(again))).toBe(false);
+  // the finish was seen in the terminal view, which stores no answer: the compaction still proves the next one
+  const local = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    getItem: (key: string) => key === "compact-terminal" ? JSON.stringify({ id: 40, at: 1 }) : null,
+  } });
+  try {
+    expect(new ConversationFinishEvidence().accept("compact-terminal", 41, compacted)).toBe(true);
+    expect(new ConversationFinishEvidence().accept("compact-terminal", 42, compacted)).toBe(false);
+  } finally {
+    if (local) Object.defineProperty(globalThis, "localStorage", local);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  }
+  const prompted = { ...compacted, turns: [...compacted.turns,
+    { role: "user", ts: "2026-10-19T03:00:00Z", parts: [{ kind: "text", text: "Next request" }] }] } satisfies Parameters<typeof conversationFinishPresented>[0];
+  expect(conversationFinishPresented(prompted)).toBe(false);
+  expect(new ConversationFinishEvidence().accept("compact-prompted", 40, prompted)).toBe(false);
+});
+
 it("binds a completed answer to one finish and rejects unchanged new-finish responses", () => {
   const evidence = new ConversationFinishEvidence();
   const first = { source: "pi-transcript" as const, history_id: "session", turns: [
