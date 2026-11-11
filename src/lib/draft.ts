@@ -53,8 +53,8 @@ function isPrintableChar(data: string): boolean {
 /** xterm's bracketed paste: the pasted text between the frames, which is what the user gave. */
 const BRACKETED_PASTE = /^\x1b\[200~([\s\S]*)\x1b\[201~$/;
 
-/** Backspace as the terminal sends it: DEL, or BS for Ctrl+H. */
-const ERASE = /^[\x7f\b]+/;
+/** Backspace as the terminal sends it: DEL, or BS for Ctrl+H; Ctrl+Backspace's Ctrl+W erases a word. */
+const ERASE = /^[\x7f\b\x17]+/;
 
 /** A typed Enter, or the line breaks of a paste: CRLF, CR or LF, a run of them read as one. */
 const LINE_BREAKS = /[\r\n]+/g;
@@ -62,7 +62,7 @@ const LINE_BREAKS = /[\r\n]+/g;
 /**
  * Folds one onData chunk into the draft: printable text accumulates, a paste by the text
  * inside its bracketed-paste frames, a tab in it held as a space so Send never completes.
- * Backspace deletes the last code point held, so the draft matches what was typed, and erasing
+ * Backspace deletes the last code point held (Ctrl+W, Ctrl+Backspace's, the last word), so the draft matches what was typed, and erasing
  * all of it clears the draft, left-out break included; once text was left out for want of room, Backspace may be meant for that text, so it no longer edits the
  * draft. An Enter or a line break is never held, because Send must never run a command: the text
  * on either side is kept, a space where the break was, and the draft says that a break was left
@@ -83,7 +83,14 @@ export function applyToDraft(draft: InputDraft, data: string): InputDraft {
     // after a loss the draft cannot tell which text a Backspace was meant for: it keeps what it holds
     // code points, not UTF-16 units: one Backspace never leaves half of an emoji behind
     if (!draft.truncated) {
-      const kept = Array.from(draft.text).slice(0, -erase).join("");
+      const points = Array.from(draft.text);
+      for (const key of text.slice(0, erase)) {
+        if (key !== "\x17") { points.pop(); continue; }
+        // a word as a shell's Ctrl+W takes it: the blanks before the cursor, then the word before them
+        while (points.length > 0 && /\s/u.test(points.at(-1)!)) points.pop();
+        while (points.length > 0 && !/\s/u.test(points.at(-1)!)) points.pop();
+      }
+      const kept = points.join("");
       // erased to nothing: a line break left out between text that is gone separates nothing either
       next = kept.length === 0 ? EMPTY_DRAFT : { ...draft, text: kept };
     }
