@@ -126,7 +126,9 @@ async function typeAhead(browser: Browser, origin: string, item: Case): Promise<
         // the shell's line is read through herdr, the page's frames through the browser's own events, which can come
         // later on a busy machine: what the page sent is read once it has sent as many keys as were typed
         const expected = item.sent;
-        await until(() => textOf(sent, second!).length >= expected.length, `${item.name}: the page's frames for the new tab are all heard`);
+        await until(() => textOf(sent, second!).length >= expected.length, `${item.name}: the page's frames for the new tab are all heard`).catch((error: unknown) => {
+          throw new Error(`${(error as Error).message}; expected ${JSON.stringify(expected)}, heard ${JSON.stringify(textOf(sent, second!))}`);
+        });
         assert.equal(textOf(sent, second!), expected, `${item.name}: every key reaches the new tab, in order`);
       }
     } else {
